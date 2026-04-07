@@ -435,6 +435,107 @@ def run_pitcher_diagnostics(
 
 
 # ============================================================================
+# Fielder Diagnostics
+# ============================================================================
+
+def run_fielder_diagnostics(
+    engine: Any,
+    n_query_samples: int = 50,
+    seed: int = 42,
+    position: str | None = None,
+) -> DiagnosticReport:
+    """
+    Run full diagnostics on a built FielderSimilarityEngine.
+
+    Samples n_query_samples random profiles per position (or for a
+    specific position if provided), queries each against all same-position
+    profiles, and analyzes the distribution of all sub-scores and the
+    composite.
+
+    Parameters
+    ----------
+    engine : FielderSimilarityEngine
+        Must have build() already called.
+    n_query_samples : int
+        Number of random profiles per position to use as query seeds.
+    seed : int
+        Random seed for reproducible sampling.
+    position : str or None
+        If specified, only diagnose this position. Otherwise diagnose all.
+    """
+    t0 = time.time()
+    report = DiagnosticReport(engine_type="fielder", n_profiles=engine.profile_count)
+
+    all_ids = engine.profile_ids()
+    if not all_ids:
+        log.warning("Engine has no profiles. Cannot run diagnostics.")
+        return report
+
+    # Group by position
+    if position:
+        positions_to_check = [position]
+    else:
+        positions_to_check = sorted(set(k[1] for k in all_ids))
+
+    rng = np.random.default_rng(seed)
+
+    all_composite = []
+    all_range = []
+    all_secondary = []
+    all_tertiary = []
+    all_quaternary = []
+    total_queries = 0
+
+    for pos in positions_to_check:
+        pos_ids = [k for k in all_ids if k[1] == pos]
+        if not pos_ids:
+            continue
+
+        n_samples = min(n_query_samples, len(pos_ids))
+        sample_indices = rng.choice(len(pos_ids), size=n_samples, replace=False)
+        sample_ids = [pos_ids[i] for i in sample_indices]
+        total_queries += n_samples
+
+        for player_id, p, season in sample_ids:
+            results = engine.query(player_id, p, season)
+            for r in results:
+                all_composite.append(r.score)
+                all_range.append(r.range_score)
+                all_secondary.append(r.secondary_score)
+                all_tertiary.append(r.tertiary_score)
+                all_quaternary.append(r.quaternary_score)
+
+    report.n_queries_sampled = total_queries
+    report.n_total_scores = len(all_composite)
+
+    # Build distributions
+    composite_arr = np.array(all_composite)
+    sub_arrays = {
+        "composite": composite_arr,
+        "range": np.array(all_range),
+        "secondary": np.array(all_secondary),
+        "tertiary": np.array(all_tertiary),
+        "quaternary": np.array(all_quaternary),
+    }
+
+    for name, arr in sub_arrays.items():
+        report.distributions.append(ScoreDistribution.from_array(name, arr))
+
+    # Dimensional balance check
+    _check_dimensional_balance(report)
+
+    # Cross-season self-similarity
+    # For fielder, the key is (player_id, position, season) — group by (player_id, position)
+    _check_cross_season_fielder(engine, all_ids, composite_arr, report)
+
+    # Symmetry check
+    _check_symmetry_fielder(engine, all_ids, rng, report)
+
+    report.elapsed_sec = time.time() - t0
+    return report
+
+
+# ============================================================================
 # Shared Check Functions
 # ============================================================================
 
@@ -523,6 +624,55 @@ def _check_cross_season(
     report.cross_season_ok = report.cross_season_above_median_frac >= CROSS_SEASON_PASS_RATE
 
 
+def _check_cross_season_fielder(
+    engine: Any,
+    all_ids: list[tuple[int, str, int]],
+    composite_scores: NDArray[np.float64],
+    report: DiagnosticReport,
+) -> None:
+    """
+    Check that same-player same-position cross-season pairs score above
+    the population median.
+    """
+    pop_median = float(np.median(composite_scores)) if len(composite_scores) > 0 else 0.5
+
+    # Group by (player_id, position) to find multi-season entries
+    player_pos_seasons: dict[tuple[int, str], list[int]] = defaultdict(list)
+    for pid, pos, season in all_ids:
+        player_pos_seasons[(pid, pos)].append(season)
+
+    multi = {
+        k: sorted(seasons)
+        for k, seasons in player_pos_seasons.items()
+        if len(seasons) >= 2
+    }
+
+    if not multi:
+        report.n_cross_season_pairs = 0
+        return
+
+    cross_scores = []
+    for (pid, pos), seasons in multi.items():
+        for i in range(len(seasons)):
+            for j in range(i + 1, len(seasons)):
+                result = engine.query_pair(
+                    (pid, pos, seasons[i]),
+                    (pid, pos, seasons[j]),
+                )
+                if result is not None:
+                    cross_scores.append(result.score)
+
+    if not cross_scores:
+        report.n_cross_season_pairs = 0
+        return
+
+    cross_arr = np.array(cross_scores)
+    report.n_cross_season_pairs = len(cross_arr)
+    report.cross_season_mean_score = float(np.mean(cross_arr))
+    report.cross_season_above_median_frac = float(np.mean(cross_arr > pop_median))
+    report.cross_season_ok = report.cross_season_above_median_frac >= CROSS_SEASON_PASS_RATE
+
+
 def _check_symmetry_batter(
     engine: Any,
     all_ids: list[tuple[int, int]],
@@ -562,13 +712,47 @@ def _check_symmetry_pitcher(
     _check_symmetry_batter(engine, all_ids, rng, report, n_checks)
 
 
+def _check_symmetry_fielder(
+    engine: Any,
+    all_ids: list[tuple[int, str, int]],
+    rng: np.random.Generator,
+    report: DiagnosticReport,
+    n_checks: int = 100,
+) -> None:
+    """Spot-check that score(A, B) == score(B, A) for random same-position pairs."""
+    # Group by position for valid pairing
+    by_pos: dict[str, list[tuple[int, str, int]]] = defaultdict(list)
+    for k in all_ids:
+        by_pos[k[1]].append(k)
+
+    max_asym = 0.0
+    checks_done = 0
+
+    for pos, ids in by_pos.items():
+        if len(ids) < 2:
+            continue
+        pos_checks = min(n_checks // max(len(by_pos), 1), len(ids) * (len(ids) - 1) // 2)
+        for _ in range(pos_checks):
+            i, j = rng.choice(len(ids), size=2, replace=False)
+            r_ab = engine.query_pair(ids[i], ids[j])
+            r_ba = engine.query_pair(ids[j], ids[i])
+            if r_ab is not None and r_ba is not None:
+                asym = abs(r_ab.score - r_ba.score)
+                max_asym = max(max_asym, asym)
+                checks_done += 1
+
+    report.n_symmetry_checks = checks_done
+    report.max_asymmetry = max_asym
+    report.symmetry_ok = max_asym <= SYMMETRY_TOLERANCE
+
+
 # ============================================================================
 # Synthetic Self-Test
 # ============================================================================
 
 def _run_synthetic_batter_test() -> DiagnosticReport:
     """Build a synthetic batter engine and run diagnostics on it."""
-    from batter_similarity import (
+    from similarity.engines.batter_similarity import (
         BatterSimilarityEngine,
         BatterPartition,
         BatterProfile,
@@ -669,7 +853,7 @@ def _run_synthetic_batter_test() -> DiagnosticReport:
 
 def _run_synthetic_pitcher_test() -> DiagnosticReport:
     """Build a synthetic pitcher engine and run diagnostics on it."""
-    from pitcher_similarity import (
+    from similarity.engines.pitcher_similarity import (
         PitcherSimilarityEngine,
         PitcherProfile,
         GMMModel,
@@ -773,6 +957,159 @@ def _run_synthetic_pitcher_test() -> DiagnosticReport:
     engine._partition_r.build(profiles_r, engine._normalizer)
 
     return run_pitcher_diagnostics(engine, n_query_samples=25, seed=42)
+
+
+def _run_synthetic_fielder_test() -> DiagnosticReport:
+    """Build a synthetic fielder engine and run diagnostics on it."""
+    from similarity.engines.fielder_similarity import (
+        FielderSimilarityEngine,
+        FielderProfile,
+        FeatureNormalizer,
+        EmpiricalBayesShrinkage,
+        PositionPartition,
+        WeightedRBFSimilarity,
+        IF_RANGE_FEATURES, IF_DP_FEATURES, IF_PIVOT_FEATURES,
+        IF_ERROR_FEATURES, IF_SPECIALTY_FEATURES,
+        OF_RANGE_FEATURES, OF_ARM_FEATURES, OF_STAR_FEATURES, OF_ERROR_FEATURES,
+        RBF_SIGMA_IF_RANGE, RBF_SIGMA_IF_DP, RBF_SIGMA_IF_ERRORS,
+        RBF_SIGMA_IF_SPECIALTY,
+        RBF_SIGMA_OF_RANGE, RBF_SIGMA_OF_ARM, RBF_SIGMA_OF_STARS,
+        RBF_SIGMA_OF_ERRORS,
+        INFIELD_POSITIONS, OUTFIELD_POSITIONS, ALL_POSITIONS,
+    )
+
+    rng = np.random.default_rng(42)
+    seasons = [2023, 2024]
+    profiles = []
+
+    # Generate 20 players per position × 2 seasons
+    pid = 1
+    for pos in sorted(ALL_POSITIONS):
+        is_if = pos in INFIELD_POSITIONS
+        is_middle = pos in ("2B", "SS")
+
+        for _ in range(20):
+            # Base talent
+            base_range = rng.normal(0, 3, len(IF_RANGE_FEATURES if is_if else OF_RANGE_FEATURES))
+            base_error = rng.beta(2, 50, len(IF_ERROR_FEATURES if is_if else OF_ERROR_FEATURES))
+
+            if is_if:
+                dp_dim = len(IF_DP_FEATURES) + (len(IF_PIVOT_FEATURES) if is_middle else 0)
+                base_dp = rng.normal(0, 2, dp_dim)
+                base_spec = rng.beta(5, 5, len(IF_SPECIALTY_FEATURES))
+                base_arm = None
+                base_star = None
+            else:
+                base_dp = None
+                base_spec = None
+                base_arm = np.concatenate([
+                    rng.beta(5, 5, 3),
+                    rng.normal(0, 1, 1),
+                ])
+                base_star = rng.beta(5, 5, len(OF_STAR_FEATURES))
+
+            for season in seasons:
+                noise = 0.3
+                range_vec = base_range + rng.normal(0, noise, base_range.shape)
+                error_vec = np.clip(base_error + rng.normal(0, 0.005, base_error.shape), 0, 0.2)
+                bb = rng.integers(80, 400)
+
+                dp_vec = None
+                specialty_vec = None
+                arm_vec = None
+                star_vec = None
+
+                if is_if:
+                    dp_vec = (base_dp + rng.normal(0, noise, base_dp.shape)).astype(np.float64)
+                    specialty_vec = np.clip(
+                        base_spec + rng.normal(0, 0.03, base_spec.shape), 0, 1
+                    ).astype(np.float64)
+                else:
+                    arm_vec = np.concatenate([
+                        np.clip(base_arm[:3] + rng.normal(0, 0.03, 3), 0, 1),
+                        base_arm[3:] + rng.normal(0, 0.3, 1),
+                    ]).astype(np.float64)
+                    star_vec = np.clip(
+                        base_star + rng.normal(0, 0.05, base_star.shape), 0, 1
+                    ).astype(np.float64)
+
+                profiles.append(FielderProfile(
+                    player_id=pid,
+                    position=pos,
+                    season=season,
+                    innings_played=float(rng.integers(200, 1200)),
+                    sample_batted_balls=int(bb),
+                    range_vec=range_vec.astype(np.float64),
+                    error_vec=error_vec.astype(np.float64),
+                    dp_vec=dp_vec,
+                    specialty_vec=specialty_vec,
+                    arm_vec=arm_vec,
+                    star_vec=star_vec,
+                    eb_alpha=float(bb / (bb + 15)),
+                ))
+
+            pid += 1
+
+    # Assemble engine without DuckDB
+    engine = FielderSimilarityEngine.__new__(FielderSimilarityEngine)
+    engine._duckdb_path = ""
+    engine._profiles = {(p.player_id, p.position, p.season): p for p in profiles}
+    engine._pos_avg = {g: {} for g in ["range", "error", "dp", "specialty", "arm", "star"]}
+    engine._normalizer = FeatureNormalizer()
+    engine._shrinkage = EmpiricalBayesShrinkage()
+    engine._partitions = {pos: PositionPartition(pos) for pos in ALL_POSITIONS}
+
+    # Build RBF scorers
+    engine._if_range_rbf = WeightedRBFSimilarity(
+        sigma=RBF_SIGMA_IF_RANGE,
+        reliability_weights=np.array([w for _, w in IF_RANGE_FEATURES]),
+    )
+    engine._if_dp_rbf = WeightedRBFSimilarity(
+        sigma=RBF_SIGMA_IF_DP,
+        reliability_weights=np.array(
+            [w for _, w in IF_DP_FEATURES] + [w for _, w in IF_PIVOT_FEATURES]
+        ),
+    )
+    engine._if_dp_rbf_corner = WeightedRBFSimilarity(
+        sigma=RBF_SIGMA_IF_DP,
+        reliability_weights=np.array([w for _, w in IF_DP_FEATURES]),
+    )
+    engine._if_error_rbf = WeightedRBFSimilarity(
+        sigma=RBF_SIGMA_IF_ERRORS,
+        reliability_weights=np.array([w for _, w in IF_ERROR_FEATURES]),
+    )
+    engine._if_specialty_rbf = WeightedRBFSimilarity(
+        sigma=RBF_SIGMA_IF_SPECIALTY,
+        reliability_weights=np.array([w for _, w in IF_SPECIALTY_FEATURES]),
+    )
+    engine._of_range_rbf = WeightedRBFSimilarity(
+        sigma=RBF_SIGMA_OF_RANGE,
+        reliability_weights=np.array([w for _, w in OF_RANGE_FEATURES]),
+    )
+    engine._of_arm_rbf = WeightedRBFSimilarity(
+        sigma=RBF_SIGMA_OF_ARM,
+        reliability_weights=np.array([w for _, w in OF_ARM_FEATURES]),
+    )
+    engine._of_star_rbf = WeightedRBFSimilarity(
+        sigma=RBF_SIGMA_OF_STARS,
+        reliability_weights=np.array([w for _, w in OF_STAR_FEATURES]),
+    )
+    engine._of_error_rbf = WeightedRBFSimilarity(
+        sigma=RBF_SIGMA_OF_ERRORS,
+        reliability_weights=np.array([w for _, w in OF_ERROR_FEATURES]),
+    )
+
+    # Group by position, fit normalizer, build partitions
+    profiles_by_pos: dict[str, list[FielderProfile]] = {pos: [] for pos in ALL_POSITIONS}
+    for p in profiles:
+        profiles_by_pos[p.position].append(p)
+
+    engine._normalizer.fit(profiles_by_pos)
+
+    for pos, partition in engine._partitions.items():
+        partition.build(profiles_by_pos.get(pos, []), engine._normalizer)
+
+    return run_fielder_diagnostics(engine, n_query_samples=15, seed=42)
 
 
 # ============================================================================

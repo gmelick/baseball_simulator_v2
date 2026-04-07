@@ -60,7 +60,6 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -72,8 +71,6 @@ import psycopg2
 import psycopg2.extras
 import requests
 import json
-
-from sklearn.utils._repr_html import params
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -784,7 +781,6 @@ def _fetch_game_pitches(
                         elif c == "f_error_dropped_ball":
                             dropped_ball = pid
                     if runner["movement"]["end"] == "score":
-                        orig = runner["movement"]["originBase"]
                         rid  = runner["details"]["runner"]["id"]
                         runs += 1
                         if runner["details"].get("earned", False):
@@ -795,15 +791,15 @@ def _fetch_game_pitches(
                             away_score_after += 1
                         else:
                             home_score_after += 1
-                        if orig == "1B":
+                        if rid == pre_runner_1b:
                             runner_on_first_score = True
                             if rid == post_runner_1b:
                                 post_runner_1b = ""
-                        if orig == "2B":
+                        if rid == pre_runner_2b:
                             runner_on_second_score = True
                             if rid == post_runner_2b:
                                 post_runner_2b = ""
-                        if orig == "3B":
+                        if rid == pre_runner_3b:
                             runner_on_third_score = True
                             if rid == post_runner_3b:
                                 post_runner_3b = ""
