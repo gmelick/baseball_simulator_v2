@@ -398,20 +398,50 @@ CREATE TABLE IF NOT EXISTS derived.baserunner_season_metrics (
 
     sprint_speed                FLOAT,      -- ft/s from Statcast
 
-    -- Extra-base advancement
-    extra_base_taken_rate       FLOAT,      -- Times took extra base / opportunities
-    first_to_third_rate         FLOAT,      -- On singles
-    second_to_home_rate         FLOAT,      -- On singles
-    first_to_home_rate          FLOAT,      -- On doubles
-    tag_up_rate                 FLOAT,      -- On fly balls
+        -- =========================================================================
+    -- Extra-base advancement — attempt / success split per situation
+    -- attempt = runner tried to advance (succeeded OR was thrown out)
+    -- success = runner reached the next base safely
+    -- =========================================================================
+
+    -- Overall extra-base
+    extra_base_attempt_rate     FLOAT,      -- attempts / opportunities
+    extra_base_success_rate     FLOAT,      -- successes / attempts
+
+    -- First-to-third on singles
+    first_to_third_attempt_rate FLOAT,
+    first_to_third_success_rate FLOAT,
+
+    -- Score from second on singles
+    second_to_home_attempt_rate FLOAT,
+    second_to_home_success_rate FLOAT,
+
+    -- Score from first on doubles
+    first_to_home_attempt_rate  FLOAT,
+    first_to_home_success_rate  FLOAT,
+
+    -- Tag-up on fly balls (3B→home)
+    tag_up_attempt_rate         FLOAT,
+    tag_up_success_rate         FLOAT,
+
+    -- Stop rate on close plays: fraction of advancement opportunities where
+    -- the runner held up.  Computed as 1 - attempt_rate.  Stored explicitly
+    -- for the similarity engine feature vector.
+    stop_rate                   FLOAT,
 
     -- Stolen base
     sb_attempt_rate             FLOAT,
     sb_success_rate             FLOAT,
     cs_rate                     FLOAT,
 
-    -- Sample sizes for confidence weighting
+     -- =========================================================================
+    -- Per-situation sample sizes for confidence weighting
+    -- =========================================================================
     sample_advancement_opps     INTEGER     NOT NULL DEFAULT 0,
+    sample_first_to_third_opps  INTEGER     NOT NULL DEFAULT 0,
+    sample_second_to_home_opps  INTEGER     NOT NULL DEFAULT 0,
+    sample_first_to_home_opps   INTEGER     NOT NULL DEFAULT 0,
+    sample_tag_up_opps          INTEGER     NOT NULL DEFAULT 0,
     sample_sb_attempts          INTEGER     NOT NULL DEFAULT 0,
 
     below_minimum_sample        BOOLEAN     NOT NULL DEFAULT FALSE,
@@ -423,7 +453,8 @@ CREATE TABLE IF NOT EXISTS derived.baserunner_season_metrics (
 CREATE INDEX IF NOT EXISTS idx_brm_season         ON derived.baserunner_season_metrics(season);
 CREATE INDEX IF NOT EXISTS idx_brm_speed          ON derived.baserunner_season_metrics(sprint_speed);
 
-COMMENT ON TABLE  derived.baserunner_season_metrics IS 'Per-runner per-season metrics. Drives Steps 1 (SB decision) and 5 (extra-base advancement).';
+COMMENT ON TABLE  derived.baserunner_season_metrics IS 'Per-runner per-season metrics with attempt/success splits. Drives Steps 1 (SB decision) and 5 (extra-base advancement). Step 2.4 Baserunner-to-Baserunner similarity engine.';
+COMMENT ON COLUMN derived.baserunner_season_metrics.stop_rate IS 'Fraction of advancement opportunities where runner held up. 1 - extra_base_attempt_rate. Captures conservative vs aggressive baserunning tendency.';
 COMMENT ON COLUMN derived.baserunner_season_metrics.below_minimum_sample IS 'TRUE when sample_advancement_opps < 20 or sample_sb_attempts < 5. Falls back to speed-bucket average.';
 
 -- =============================================================================

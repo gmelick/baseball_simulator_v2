@@ -353,6 +353,13 @@ CREATE TABLE raw.pitches (
     runner_2b_scored            BOOLEAN     NOT NULL DEFAULT FALSE,
     runner_3b_scored            BOOLEAN     NOT NULL DEFAULT FALSE,
 
+    -- Runner out advancing (thrown out attempting extra base, NOT stolen bases)
+    -- Parsed from play description during ETL.  Required to split
+    -- baserunner attempt rate vs success rate in derived metrics.
+    runner_1b_out_advancing     BOOLEAN     NOT NULL DEFAULT FALSE,
+    runner_2b_out_advancing     BOOLEAN     NOT NULL DEFAULT FALSE,
+    runner_3b_out_advancing     BOOLEAN     NOT NULL DEFAULT FALSE,
+
     -- Stolen base
     sb_attempt_2b               BOOLEAN     NOT NULL DEFAULT FALSE,
     sb_attempt_3b               BOOLEAN     NOT NULL DEFAULT FALSE,

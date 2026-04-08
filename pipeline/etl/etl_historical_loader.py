@@ -361,6 +361,11 @@ def _build_row_dict(raw: dict[str, Any], game_pk: int, season: int, game_date: s
         "runner_2b_scored":         _to_bool(renamed.get("runner_2b_scored")),
         "runner_3b_scored":         _to_bool(renamed.get("runner_3b_scored")),
 
+        # --- Runner out advancing (thrown out attempting extra base) ---
+        "runner_1b_out_advancing": _to_bool(renamed.get("runner_1b_out_advancing")),
+        "runner_2b_out_advancing": _to_bool(renamed.get("runner_2b_out_advancing")),
+        "runner_3b_out_advancing": _to_bool(renamed.get("runner_3b_out_advancing")),
+
         # --- Stolen base ---
         "sb_attempt_2b":            _to_bool(renamed.get("sb_attempt_2b")),
         "sb_attempt_3b":            _to_bool(renamed.get("sb_attempt_3b")),
@@ -755,6 +760,7 @@ def _fetch_game_pitches(
             post_runner_1b = pre_runner_1b
             post_runner_2b = pre_runner_2b
             post_runner_3b = pre_runner_3b
+            runner_1b_out_advancing = runner_2b_out_advancing = runner_3b_out_advancing = False
 
             for runner in play["runners"]:
                 if i <= runner["details"]["playIndex"] <= max_play_index:
@@ -815,6 +821,20 @@ def _fetch_game_pitches(
                             post_runner_1b = ""
                     if runner["movement"]["end"] == "1B":
                         post_runner_1b = runner["details"]["runner"]["id"]
+                    # Detect runner thrown out advancing on a batted ball
+                    # (not stolen base, not the batter-runner).  The API sets
+                    # isOut=True and movement.end="" for these plays.
+                    if runner["details"].get("isOut", False):
+                        rid = runner["details"]["runner"]["id"]
+                        is_sb_play = (sb_attempt_2b or sb_attempt_3b or sb_attempt_home)
+                        is_batter = (rid == batter)
+                        if not is_sb_play and not is_batter:
+                            if rid == pre_runner_1b:
+                                runner_1b_out_advancing = True
+                            elif rid == pre_runner_2b:
+                                runner_2b_out_advancing = True
+                            elif rid == pre_runner_3b:
+                                runner_3b_out_advancing = True
             # Assemble raw dict using YOUR variable names — COLUMN_RENAME handles
             # the mapping to schema names in _build_row_dict().
             raw_row = {
@@ -910,6 +930,9 @@ def _fetch_game_pitches(
                 "runner_on_first_score":  runner_on_first_score,   # → runner_1b_scored
                 "runner_on_second_score": runner_on_second_score,
                 "runner_on_third_score":  runner_on_third_score,
+                "runner_1b_out_advancing": runner_1b_out_advancing,
+                "runner_2b_out_advancing": runner_2b_out_advancing,
+                "runner_3b_out_advancing": runner_3b_out_advancing,
                 "sb_attempt_2b":        sb_attempt_2b,
                 "sb_attempt_3b":        sb_attempt_3b,
                 "sb_attempt_home":      sb_attempt_home,
@@ -1038,6 +1061,7 @@ class HistoricalDataLoader:
             fielder_7, fielder_8, fielder_9,
             runs_on_pitch, outs_on_pitch, rbis_on_pitch, earned_runs_on_pitch,
             runner_1b_scored, runner_2b_scored, runner_3b_scored,
+            runner_1b_out_advancing, runner_2b_out_advancing, runner_3b_out_advancing,
             sb_attempt_2b, sb_attempt_3b, sb_attempt_home,
             sb_success_2b, sb_success_3b, sb_success_home,
             passed_ball_wild_pitch, pinch_hitter, pinch_runner,
@@ -1076,6 +1100,7 @@ class HistoricalDataLoader:
             %(runs_on_pitch)s, %(outs_on_pitch)s, %(rbis_on_pitch)s,
             %(earned_runs_on_pitch)s,
             %(runner_1b_scored)s, %(runner_2b_scored)s, %(runner_3b_scored)s,
+            %(runner_1b_out_advancing)s, %(runner_2b_out_advancing)s, %(runner_3b_out_advancing)s,
             %(sb_attempt_2b)s, %(sb_attempt_3b)s, %(sb_attempt_home)s,
             %(sb_success_2b)s, %(sb_success_3b)s, %(sb_success_home)s,
             %(passed_ball_wild_pitch)s, %(pinch_hitter)s, %(pinch_runner)s,

@@ -1559,12 +1559,17 @@ class PlayerProfileComputor:
 
     def _compute_baserunner_profiles(self, seasons: list[int]) -> None:
         """
-        Computes extra-base advancement rates and stolen base rates from
-        the post-play runner columns and SB columns in raw.pitches.
+        Computes extra-base advancement rates (attempt/success split) and
+        stolen base rates from post-play runner columns, runner-out-advancing
+        flags, and SB columns in raw.pitches.
+
+        Attempt = runner tried to advance (succeeded OR thrown out).
+        Success = runner reached the next base safely.
+        Stop rate = 1 - attempt_rate (held up on advancement opportunity).
 
         Sprint speed: not directly available in raw.pitches.  Derived as a
-        proxy from advancement aggressiveness (extra_base_taken_rate weighted
-        by runner type).  Phase 2 can inject Statcast sprint speed data if
+        proxy from advancement aggressiveness (extra_base_attempt_rate weighted
+        by situation).  Phase 2 can inject Statcast sprint speed data if
         a separate fetch is added to the ETL.
         """
         log.info("Computing baserunner profiles …")
@@ -1582,6 +1587,8 @@ class PlayerProfileComputor:
                     post_on_1b, post_on_2b, post_on_3b,
                     -- Runner scoring flags
                     runner_1b_scored, runner_2b_scored, runner_3b_scored,
+                    -- Runner thrown out advancing
+                    runner_1b_out_advancing, runner_2b_out_advancing, runner_3b_out_advancing,
                     -- Hit type for advancement context
                     events, bb_type,
                     -- SB data
@@ -1595,12 +1602,15 @@ class PlayerProfileComputor:
                       OR sb_attempt_2b = TRUE OR sb_attempt_3b = TRUE OR sb_attempt_home = TRUE
                   )
             ),
-            -- First-to-third advancement on singles
+            -- First-to-third on singles (runner on 1B, no one on 2B)
             first_to_third AS (
                 SELECT season, on_1b AS player_id,
                     COUNT(*) AS opps,
                     SUM(CASE WHEN runner_1b_scored = TRUE
-                             OR (post_on_3b = on_1b) THEN 1 ELSE 0 END) AS success
+                             OR post_on_3b = on_1b
+                             OR runner_1b_out_advancing = TRUE THEN 1 ELSE 0 END) AS attempts,
+                    SUM(CASE WHEN runner_1b_scored = TRUE
+                             OR post_on_3b = on_1b THEN 1 ELSE 0 END) AS success
                 FROM runner_events
                 WHERE events = 'single' AND on_1b IS NOT NULL AND on_2b IS NULL
                 GROUP BY season, on_1b
@@ -1609,6 +1619,8 @@ class PlayerProfileComputor:
             second_to_home AS (
                 SELECT season, on_2b AS player_id,
                     COUNT(*) AS opps,
+                    SUM(CASE WHEN runner_2b_scored = TRUE
+                             OR runner_2b_out_advancing = TRUE THEN 1 ELSE 0 END) AS attempts,
                     SUM(CASE WHEN runner_2b_scored = TRUE THEN 1 ELSE 0 END) AS success
                 FROM runner_events
                 WHERE events = 'single' AND on_2b IS NOT NULL
@@ -1618,6 +1630,8 @@ class PlayerProfileComputor:
             first_to_home AS (
                 SELECT season, on_1b AS player_id,
                     COUNT(*) AS opps,
+                    SUM(CASE WHEN runner_1b_scored = TRUE
+                             OR runner_1b_out_advancing = TRUE THEN 1 ELSE 0 END) AS attempts,
                     SUM(CASE WHEN runner_1b_scored = TRUE THEN 1 ELSE 0 END) AS success
                 FROM runner_events
                 WHERE events = 'double' AND on_1b IS NOT NULL
@@ -1627,6 +1641,8 @@ class PlayerProfileComputor:
             tag_up AS (
                 SELECT season, on_3b AS player_id,
                     COUNT(*) AS opps,
+                    SUM(CASE WHEN runner_3b_scored = TRUE
+                             OR runner_3b_out_advancing = TRUE THEN 1 ELSE 0 END) AS attempts,
                     SUM(CASE WHEN runner_3b_scored = TRUE THEN 1 ELSE 0 END) AS success
                 FROM runner_events
                 WHERE bb_type IN ('fly_ball','popup') AND on_3b IS NOT NULL
@@ -1636,15 +1652,16 @@ class PlayerProfileComputor:
             extra_base AS (
                 SELECT season, player_id,
                     SUM(opps) AS total_opps,
+                    SUM(attempts) AS total_attempts,
                     SUM(success) AS total_success
                 FROM (
-                    SELECT season, player_id, opps, success FROM first_to_third
+                    SELECT season, player_id, opps, attempts, success FROM first_to_third
                     UNION ALL
-                    SELECT season, player_id, opps, success FROM second_to_home
+                    SELECT season, player_id, opps, attempts, success FROM second_to_home
                     UNION ALL
-                    SELECT season, player_id, opps, success FROM first_to_home
+                    SELECT season, player_id, opps, attempts, success FROM first_to_home
                     UNION ALL
-                    SELECT season, player_id, opps, success FROM tag_up
+                    SELECT season, player_id, opps, attempts, success FROM tag_up
                 ) combined
                 GROUP BY season, player_id
             ),
@@ -1682,27 +1699,47 @@ class PlayerProfileComputor:
                 ap.player_id,
                 ap.season,
                 -- Sprint speed proxy: scale from extra-base aggression
-                -- (higher extra_base_taken_rate → faster implied sprint speed)
+                -- (higher attempt rate + success rate → faster implied sprint speed)
                 -- Bounded to reasonable ft/s range: 24-31 ft/s
                 CASE WHEN eb.total_opps >= 5 THEN
                     24.0 + (eb.total_success * 1.0 / eb.total_opps) * 14.0
                 ELSE NULL END                                   AS sprint_speed,
 
-                eb.total_success * 1.0 / NULLIF(eb.total_opps, 0)
-                                                                AS extra_base_taken_rate,
+                -- Overall extra-base attempt / success
+                eb.total_attempts * 1.0 / NULLIF(eb.total_opps, 0)
+                                                                AS extra_base_attempt_rate,
+                eb.total_success * 1.0 / NULLIF(eb.total_attempts, 0)
+                                                                AS extra_base_success_rate,
 
-                ftt.success * 1.0 / NULLIF(ftt.opps, 0)        AS first_to_third_rate,
-                sth.success * 1.0 / NULLIF(sth.opps, 0)        AS second_to_home_rate,
-                fth.success * 1.0 / NULLIF(fth.opps, 0)        AS first_to_home_rate,
-                tu.success  * 1.0 / NULLIF(tu.opps, 0)         AS tag_up_rate,
+                -- Per-situation attempt / success rates
+                ftt.attempts * 1.0 / NULLIF(ftt.opps, 0)       AS first_to_third_attempt_rate,
+                ftt.success  * 1.0 / NULLIF(ftt.attempts, 0)   AS first_to_third_success_rate,
 
-                -- SB rates (per opportunity on base, approximated as per PA)
+                sth.attempts * 1.0 / NULLIF(sth.opps, 0)       AS second_to_home_attempt_rate,
+                sth.success  * 1.0 / NULLIF(sth.attempts, 0)   AS second_to_home_success_rate,
+
+                fth.attempts * 1.0 / NULLIF(fth.opps, 0)       AS first_to_home_attempt_rate,
+                fth.success  * 1.0 / NULLIF(fth.attempts, 0)   AS first_to_home_success_rate,
+
+                tu.attempts  * 1.0 / NULLIF(tu.opps, 0)        AS tag_up_attempt_rate,
+                tu.success   * 1.0 / NULLIF(tu.attempts, 0)    AS tag_up_success_rate,
+
+                -- Stop rate = 1 - overall attempt rate
+                1.0 - COALESCE(eb.total_attempts * 1.0 / NULLIF(eb.total_opps, 0), 0)
+                                                                AS stop_rate,
+
+                -- SB rates
                 sba.sb_attempts * 1.0 / NULLIF(eb.total_opps, 0)    AS sb_attempt_rate,
                 sba.sb_successes * 1.0 / NULLIF(sba.sb_attempts, 0) AS sb_success_rate,
                 (sba.sb_attempts - sba.sb_successes) * 1.0
                     / NULLIF(sba.sb_attempts, 0)                AS cs_rate,
 
+                -- Per-situation sample sizes
                 COALESCE(eb.total_opps, 0)                      AS sample_advancement_opps,
+                COALESCE(ftt.opps, 0)                           AS sample_first_to_third_opps,
+                COALESCE(sth.opps, 0)                           AS sample_second_to_home_opps,
+                COALESCE(fth.opps, 0)                           AS sample_first_to_home_opps,
+                COALESCE(tu.opps, 0)                            AS sample_tag_up_opps,
                 COALESCE(sba.sb_attempts, 0)                    AS sample_sb_attempts,
 
                 (COALESCE(eb.total_opps, 0) < {MIN_RUNNER_ADV_OPPS}
@@ -3676,11 +3713,17 @@ class LeagueAverageProfiles:
                 SELECT
                     'baserunner' AS entity_type, season,
                     JSON_OBJECT(
-                        'sprint_speed',           AVG(sprint_speed),
-                        'extra_base_taken_rate',  AVG(extra_base_taken_rate),
-                        'first_to_third_rate',    AVG(first_to_third_rate),
-                        'second_to_home_rate',    AVG(second_to_home_rate),
-                        'sb_success_rate',        AVG(sb_success_rate)
+                        'sprint_speed',                AVG(sprint_speed),
+                        'extra_base_attempt_rate',     AVG(extra_base_attempt_rate),
+                        'extra_base_success_rate',     AVG(extra_base_success_rate),
+                        'first_to_third_attempt_rate', AVG(first_to_third_attempt_rate),
+                        'first_to_third_success_rate', AVG(first_to_third_success_rate),
+                        'second_to_home_attempt_rate', AVG(second_to_home_attempt_rate),
+                        'second_to_home_success_rate', AVG(second_to_home_success_rate),
+                        'first_to_home_attempt_rate',  AVG(first_to_home_attempt_rate),
+                        'first_to_home_success_rate',  AVG(first_to_home_success_rate),
+                        'stop_rate',                   AVG(stop_rate),
+                        'sb_success_rate',             AVG(sb_success_rate)
                     ) AS profile_json,
                     CURRENT_TIMESTAMP AS updated_at
                 FROM derived.baserunner_season_metrics
