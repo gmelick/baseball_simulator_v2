@@ -516,6 +516,10 @@ class CalibrationReport:
     sigma_of_arm: float = 0.0
     sigma_of_stars: float = 0.0
     sigma_of_errors: float = 0.0
+    sigma_baserunner_speed: float = 0.0
+    sigma_baserunner_aggression: float = 0.0
+    sigma_baserunner_success: float = 0.0
+    eb_n_prior_baserunner: float = 0.0
     reliability_weights_if_range: NDArray | None = None
     reliability_weights_if_dp: NDArray | None = None
     reliability_weights_if_pivot: NDArray | None = None
@@ -525,6 +529,9 @@ class CalibrationReport:
     reliability_weights_of_arm: NDArray | None = None
     reliability_weights_of_star: NDArray | None = None
     reliability_weights_of_error: NDArray | None = None
+    reliability_weights_baserunner_speed: NDArray | None = None
+    reliability_weights_baserunner_aggression: NDArray | None = None
+    reliability_weights_baserunner_success: NDArray | None = None
 
     # Tier 2
     batter_subscores: NDArray | None = None
@@ -573,9 +580,15 @@ class CalibrationReport:
             f"    Stars:       {self.sigma_of_stars}",
             f"    Errors:      {self.sigma_of_errors}",
             "",
-            f"  Arsenal Gamma:        {self.arsenal_gamma:.4f}",
-            f"  EB N_PRIOR (batter):  {self.eb_n_prior_batter:.1f}",
-            f"  EB N_PRIOR (pitcher): {self.eb_n_prior_pitcher:.1f}",
+            "  RBF Sigma (baserunner):",
+            f"    Speed:       {self.sigma_baserunner_speed:.4f}",
+            f"    Aggression:  {self.sigma_baserunner_aggression:.4f}",
+            f"    Success:     {self.sigma_baserunner_success:.4f}",
+            "",
+            f"  Arsenal Gamma:           {self.arsenal_gamma:.4f}",
+            f"  EB N_PRIOR (batter):     {self.eb_n_prior_batter:.1f}",
+            f"  EB N_PRIOR (pitcher):    {self.eb_n_prior_pitcher:.1f}",
+            f"  EB N_PRIOR (baserunner): {self.eb_n_prior_baserunner:.1f}",
             "",
         ]
 
@@ -670,6 +683,27 @@ class CalibrationReport:
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
+        if self.reliability_weights_baserunner_speed is not None:
+            lines.append("  Reliability Weights (Baserunner Speed):")
+            from similarity.engines.baserunner_similarity import SPEED_FEATURES as BR_SPEED_FEATURES
+            for (name, _), w in zip(BR_SPEED_FEATURES, self.reliability_weights_baserunner_speed):
+                lines.append(f"    {name:<25} {w:.3f}")
+            lines.append("")
+
+        if self.reliability_weights_baserunner_aggression is not None:
+            lines.append("  Reliability Weights (Baserunner Aggression):")
+            from similarity.engines.baserunner_similarity import AGGRESSION_FEATURES as BR_AGG_FEATURES
+            for (name, _), w in zip(BR_AGG_FEATURES, self.reliability_weights_baserunner_aggression):
+                lines.append(f"    {name:<25} {w:.3f}")
+            lines.append("")
+
+        if self.reliability_weights_baserunner_success is not None:
+            lines.append("  Reliability Weights (Baserunner Success):")
+            from similarity.engines.baserunner_similarity import SUCCESS_FEATURES as BR_SUC_FEATURES
+            for (name, _), w in zip(BR_SUC_FEATURES, self.reliability_weights_baserunner_success):
+                lines.append(f"    {name:<25} {w:.3f}")
+            lines.append("")
+
         if self.batter_subscores is not None:
             lines.extend([
                 "--- Tier 2: Optimized Sub-Score Weights ---",
@@ -711,7 +745,11 @@ class CalibrationReport:
             "sigma_of_range": self.sigma_of_range,
             "sigma_of_arm": self.sigma_of_arm,
             "sigma_of_stars": self.sigma_of_stars,
-            "sigma_of_errors": self.sigma_of_errors
+            "sigma_of_errors": self.sigma_of_errors,
+            "sigma_baserunner_speed": self.sigma_baserunner_speed,
+            "sigma_baserunner_aggression": self.sigma_baserunner_aggression,
+            "sigma_baserunner_success": self.sigma_baserunner_success,
+            "eb_n_prior_baserunner": self.eb_n_prior_baserunner,
         }
         if self.reliability_weights_discipline is not None:
             d["reliability_weights_discipline"] = self.reliability_weights_discipline.tolist()
@@ -739,6 +777,12 @@ class CalibrationReport:
             d["reliability_weights_of_star"] = self.reliability_weights_of_star.tolist()
         if self.reliability_weights_of_error is not None:
             d["reliability_weights_of_error"] = self.reliability_weights_of_error.tolist()
+        if self.reliability_weights_baserunner_speed is not None:
+            d["reliability_weights_baserunner_speed"] = self.reliability_weights_baserunner_speed.tolist()
+        if self.reliability_weights_baserunner_aggression is not None:
+            d["reliability_weights_baserunner_aggression"] = self.reliability_weights_baserunner_aggression.tolist()
+        if self.reliability_weights_baserunner_success is not None:
+            d["reliability_weights_baserunner_success"] = self.reliability_weights_baserunner_success.tolist()
         if self.batter_subscores is not None:
             d["batter_subscores"] = self.batter_subscores.tolist()
         if self.pitcher_subscores is not None:
@@ -792,6 +836,7 @@ class SimilarityCalibrator:
             report = self._calibrate_batter_params(conn, seasons, target_median_score, report)
             report = self._calibrate_pitcher_params(conn, seasons, target_median_score, report)
             report = self._calibrate_fielder_params(conn, seasons, target_median_score, report)
+            report = self._calibrate_baserunner_params(conn, seasons, target_median_score, report)
         finally:
             conn.close()
 
@@ -1113,12 +1158,97 @@ class SimilarityCalibrator:
 
         return report
 
+    def _calibrate_baserunner_params(
+            self,
+            conn: Any,
+            seasons: list[int],
+            target_median_score: float,
+            report: CalibrationReport,
+    ) -> CalibrationReport:
+        """
+        Tier 1 calibration for baserunner extra-base similarity engine.
+
+        Loads baserunner profiles from DuckDB, z-score normalizes per
+        sub-score, and calibrates RBF sigma for speed, aggression, and
+        success dimensions.
+        """
+        from similarity.engines.baserunner_similarity import SPEED_FEATURES, AGGRESSION_FEATURES, SUCCESS_FEATURES
+
+        sl = ", ".join(str(s) for s in seasons)
+        rows = conn.execute(f"""
+            SELECT
+                player_id, season, sample_advancement_opps,
+                -- Speed (1)
+                sprint_speed,
+                -- Aggression (6)
+                extra_base_attempt_rate, first_to_third_attempt_rate,
+                second_to_home_attempt_rate, first_to_home_attempt_rate,
+                tag_up_attempt_rate, stop_rate,
+                -- Success (5)
+                extra_base_success_rate, first_to_third_success_rate,
+                second_to_home_success_rate, first_to_home_success_rate,
+                tag_up_success_rate
+            FROM derived.baserunner_season_metrics
+            WHERE season IN ({sl}) AND NOT below_minimum_sample
+        """).fetchall()
+
+        if not rows:
+            log.warning("No baserunner profiles found for calibration.")
+            return report
+
+        ids = np.array([r[0] for r in rows])
+        samples = np.array([r[2] for r in rows])
+
+        n_speed = len(SPEED_FEATURES)
+        n_agg = len(AGGRESSION_FEATURES)
+        n_suc = len(SUCCESS_FEATURES)
+
+        col = 3
+        speed_raw = np.array([[r[col + i] or 0.0 for i in range(n_speed)] for r in rows])
+        col += n_speed
+        agg_raw = np.array([[r[col + i] or 0.0 for i in range(n_agg)] for r in rows])
+        col += n_agg
+        suc_raw = np.array([[r[col + i] or 0.0 for i in range(n_suc)] for r in rows])
+
+        def _zscore(mat):
+            m = np.nanmean(mat, axis=0)
+            s = np.nanstd(mat, axis=0)
+            s[s == 0] = 1.0
+            return (mat - m) / s
+
+        report.sigma_baserunner_speed = calibrate_sigma(
+            _zscore(speed_raw), target_median_score=target_median_score,
+        )
+        report.sigma_baserunner_aggression = calibrate_sigma(
+            _zscore(agg_raw), target_median_score=target_median_score,
+        )
+        report.sigma_baserunner_success = calibrate_sigma(
+            _zscore(suc_raw), target_median_score=target_median_score,
+        )
+
+        # EB prior
+        all_raw = np.hstack([speed_raw, agg_raw, suc_raw])
+        report.eb_n_prior_baserunner = calibrate_eb_prior(all_raw, samples, min_sample=20)
+
+        # Reliability weights
+        report.reliability_weights_baserunner_speed = calibrate_reliability_weights(speed_raw, ids)
+        report.reliability_weights_baserunner_aggression = calibrate_reliability_weights(agg_raw, ids)
+        report.reliability_weights_baserunner_success = calibrate_reliability_weights(suc_raw, ids)
+
+        log.info(
+            "Baserunner calibration complete: %d profiles, sigma_speed=%.3f, "
+            "sigma_agg=%.3f, sigma_suc=%.3f, eb_prior=%.1f",
+            len(rows), report.sigma_baserunner_speed, report.sigma_baserunner_aggression,
+            report.sigma_baserunner_success, report.eb_n_prior_baserunner,
+        )
+        return report
+
 
 # ============================================================================
 # CLI
 # ============================================================================
 if __name__ == "__main__":
-    cal = SimilarityCalibrator(duckdb_path='../db/baseball_simulator.duckdb')
+    cal = SimilarityCalibrator(duckdb_path='../db/schemas/baseball_simulator.duckdb')
     report = cal.calibrate_from_population(
         seasons=[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017],
         target_median_score=.5,

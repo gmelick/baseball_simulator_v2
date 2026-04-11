@@ -1027,7 +1027,7 @@ def build_similarity_matrix(
 # CLI
 # ============================================================================
 if __name__ == "__main__":
-    engine = BatterSimilarityEngine(duckdb_path='../data/schemas/baseball_simulator.duckdb')
+    engine = BatterSimilarityEngine(duckdb_path='../../db/schemas/baseball_simulator.duckdb')
     engine.build(seasons=[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017])
     report = run_batter_diagnostics(engine, n_query_samples=50)
     print(report)

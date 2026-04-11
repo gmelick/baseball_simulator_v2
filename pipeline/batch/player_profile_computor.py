@@ -787,7 +787,7 @@ class PlayerProfileComputor:
             pass
 
         schema_file = os.path.join(
-            os.path.dirname(__file__), "schemas", "02_duckdb_schema.sql"
+            os.getcwd(), "db", "schemas", "02_duckdb_schema.sql"
         )
         if os.path.exists(schema_file):
             with open(schema_file) as f:
@@ -1266,7 +1266,7 @@ class PlayerProfileComputor:
         from concurrent.futures import ProcessPoolExecutor, as_completed
 
         # n_workers = max(1, (os.cpu_count() or 2) - 1)
-        n_workers = 6
+        n_workers = 8
         log.info("  Fitting GMMs in parallel with %d workers …", n_workers)
 
         gmm_success = 0
@@ -3761,10 +3761,11 @@ class LeagueAverageProfiles:
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    os.chdir('../..')
     computor = PlayerProfileComputor(
         pg_dsn='postgresql://localhost/baseball_simulator?user=postgres&password=baseball',
-        duckdb_path='schemas/baseball_simulator.duckdb',
+        duckdb_path='db/schemas/baseball_simulator.duckdb',
     )
     computor.run(seasons=[2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025], full_rebuild=True)
     # if not args.skip_league_averages:
-    LeagueAverageProfiles('schemas/baseball_simulator.duckdb').compute([2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025])
+    LeagueAverageProfiles('db/schemas/baseball_simulator.duckdb').compute([2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025])

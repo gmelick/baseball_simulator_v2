@@ -536,6 +536,79 @@ def run_fielder_diagnostics(
 
 
 # ============================================================================
+# Baserunner Diagnostics
+# ============================================================================
+
+def run_baserunner_diagnostics(
+        engine: Any,
+        n_query_samples: int = 50,
+        seed: int = 42,
+) -> DiagnosticReport:
+    """
+    Run full diagnostics on a built BaserunnerSimilarityEngine.
+
+    Samples n_query_samples random profiles, queries each against all
+    others, and analyzes the distribution of all sub-scores and the
+    composite.
+
+    Parameters
+    ----------
+    engine : BaserunnerSimilarityEngine
+        Must have build() already called.
+    n_query_samples : int
+        Number of random profiles to use as query seeds.
+    seed : int
+        Random seed for reproducible sampling.
+    """
+    t0 = time.time()
+    report = DiagnosticReport(engine_type="baserunner", n_profiles=engine.profile_count)
+
+    all_ids = engine.profile_ids()
+    if not all_ids:
+        log.warning("Engine has no profiles. Cannot run diagnostics.")
+        return report
+
+    rng = np.random.default_rng(seed)
+    n_samples = min(n_query_samples, len(all_ids))
+    sample_indices = rng.choice(len(all_ids), size=n_samples, replace=False)
+    sample_ids = [all_ids[i] for i in sample_indices]
+    report.n_queries_sampled = n_samples
+
+    all_composite = []
+    all_speed = []
+    all_aggression = []
+    all_success = []
+
+    for player_id, season in sample_ids:
+        results = engine.query(player_id, season)
+        for r in results:
+            all_composite.append(r.score)
+            all_speed.append(r.speed_score)
+            all_aggression.append(r.aggression_score)
+            all_success.append(r.success_score)
+
+    report.n_total_scores = len(all_composite)
+
+    composite_arr = np.array(all_composite)
+    sub_arrays = {
+        "composite": composite_arr,
+        "speed": np.array(all_speed),
+        "aggression": np.array(all_aggression),
+        "success": np.array(all_success),
+    }
+
+    for name, arr in sub_arrays.items():
+        report.distributions.append(ScoreDistribution.from_array(name, arr))
+
+    _check_dimensional_balance(report)
+    _check_cross_season(engine, all_ids, composite_arr, report, entity_type="baserunner")
+    _check_symmetry_batter(engine, all_ids, rng, report)  # same (player_id, season) key shape
+
+    report.elapsed_sec = time.time() - t0
+    return report
+
+
+# ============================================================================
 # Shared Check Functions
 # ============================================================================
 
@@ -1112,6 +1185,86 @@ def _run_synthetic_fielder_test() -> DiagnosticReport:
     return run_fielder_diagnostics(engine, n_query_samples=15, seed=42)
 
 
+def _run_synthetic_baserunner_test() -> DiagnosticReport:
+    """Build a synthetic baserunner engine and run diagnostics on it."""
+    from similarity.engines.baserunner_similarity import (
+        BaserunnerSimilarityEngine,
+        BaserunnerProfile,
+        FeatureNormalizer,
+        EmpiricalBayesShrinkage,
+        BaserunnerPartition,
+        WeightedRBFSimilarity,
+        SPEED_FEATURES, AGGRESSION_FEATURES, SUCCESS_FEATURES,
+        RBF_SIGMA_SPEED, RBF_SIGMA_AGGRESSION, RBF_SIGMA_SUCCESS,
+    )
+
+    rng = np.random.default_rng(42)
+    seasons = [2023, 2024]
+    profiles = []
+
+    # Generate 60 runners × 2 seasons with correlated base talent
+    for pid in range(1, 61):
+        # Base talent: sprint speed drives everything
+        base_speed = rng.normal(27.5, 1.5)  # ft/s, realistic range ~24-31
+        # Faster runners attempt more and succeed more
+        speed_factor = (base_speed - 25.0) / 6.0  # normalized ~[-0.17, 1.0]
+        base_attempt = np.clip(0.45 + speed_factor * 0.2 + rng.normal(0, 0.08, 6), 0.05, 0.95)
+        base_success = np.clip(0.70 + speed_factor * 0.15 + rng.normal(0, 0.06, 5), 0.30, 0.99)
+
+        for season in seasons:
+            noise = 0.03
+            speed = np.array([base_speed + rng.normal(0, 0.3)], dtype=np.float64)
+            agg = np.clip(base_attempt + rng.normal(0, noise, 6), 0.0, 1.0).astype(np.float64)
+            suc = np.clip(base_success + rng.normal(0, noise, 5), 0.0, 1.0).astype(np.float64)
+
+            # Make stop_rate consistent: 1 - attempt_rate
+            agg[5] = 1.0 - agg[0]
+
+            opps = int(rng.integers(25, 120))
+
+            profiles.append(BaserunnerProfile(
+                player_id=pid,
+                season=season,
+                sample_advancement_opps=opps,
+                speed_vec=speed,
+                aggression_vec=agg,
+                success_vec=suc,
+                sample_first_to_third_opps=int(rng.integers(5, 40)),
+                sample_second_to_home_opps=int(rng.integers(5, 30)),
+                sample_first_to_home_opps=int(rng.integers(2, 15)),
+                sample_tag_up_opps=int(rng.integers(2, 10)),
+                eb_alpha=float(opps / (opps + 15)),
+            ))
+
+    # Assemble engine without DuckDB
+    engine = BaserunnerSimilarityEngine.__new__(BaserunnerSimilarityEngine)
+    engine._duckdb_path = ""
+    engine._profiles = {(p.player_id, p.season): p for p in profiles}
+    engine._league_avg = {"speed": {}, "aggression": {}, "success": {}}
+    engine._normalizer = FeatureNormalizer()
+    engine._shrinkage = EmpiricalBayesShrinkage()
+    engine._partition = BaserunnerPartition()
+
+    engine._speed_rbf = WeightedRBFSimilarity(
+        sigma=RBF_SIGMA_SPEED,
+        reliability_weights=np.array([w for _, w in SPEED_FEATURES]),
+    )
+    engine._agg_rbf = WeightedRBFSimilarity(
+        sigma=RBF_SIGMA_AGGRESSION,
+        reliability_weights=np.array([w for _, w in AGGRESSION_FEATURES]),
+    )
+    engine._success_rbf = WeightedRBFSimilarity(
+        sigma=RBF_SIGMA_SUCCESS,
+        reliability_weights=np.array([w for _, w in SUCCESS_FEATURES]),
+    )
+
+    all_p = list(engine._profiles.values())
+    engine._normalizer.fit(all_p)
+    engine._partition.build(all_p, engine._normalizer)
+
+    return run_baserunner_diagnostics(engine, n_query_samples=25, seed=42)
+
+
 # ============================================================================
 # CLI
 # ============================================================================
@@ -1134,8 +1287,20 @@ if __name__ == "__main__":
     pitcher_report = _run_synthetic_pitcher_test()
     print(pitcher_report)
 
+    print("\n\n")
+
+    print("Running synthetic fielder diagnostics …\n")
+    fielder_report = _run_synthetic_fielder_test()
+    print(fielder_report)
+
+    print("\n\n")
+
+    print("Running synthetic baserunner diagnostics …\n")
+    baserunner_report = _run_synthetic_baserunner_test()
+    print(baserunner_report)
+
     # Exit with non-zero if any flags
-    total_flags = batter_report.n_flags + pitcher_report.n_flags
+    total_flags = batter_report.n_flags + pitcher_report.n_flags + fielder_report.n_flags + baserunner_report.n_flags
     if total_flags > 0:
-        print(f"\n{total_flags} total flag(s) across both engines.")
+        print(f"\n{total_flags} total flag(s) across all engines.")
     sys.exit(min(total_flags, 1))

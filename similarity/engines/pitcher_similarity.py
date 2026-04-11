@@ -1703,7 +1703,7 @@ def build_similarity_matrix(
 # Entry Point — CLI for testing
 # ============================================================================
 if __name__ == "__main__":
-    engine = PitcherSimilarityEngine(duckdb_path="../data/schemas/baseball_simulator.duckdb")
+    engine = PitcherSimilarityEngine(duckdb_path="../../db/schemas/baseball_simulator.duckdb")
     engine.build(seasons=[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017])
     # engine.precompute_arsenal_cache(n_workers=8)
     # w2_scores = engine._arsenal_cache.finite_distances()
