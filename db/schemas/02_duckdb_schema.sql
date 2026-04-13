@@ -98,8 +98,10 @@ CREATE TABLE IF NOT EXISTS derived.pitcher_season_metrics (
     bb_rate                     FLOAT,
     k_rate                      FLOAT,
     csw_rate                    FLOAT,      -- Called Strike + Whiff Rate
-    zone_rate                   FLOAT,
+    zone_take_rate              FLOAT,
     chase_rate                  FLOAT,      -- O-swing rate
+    zone_rate                   FLOAT,
+    whiff_rate                  FLOAT,
 
     -- -------------------------------------------------------------------------
     -- Results

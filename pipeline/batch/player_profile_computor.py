@@ -1084,7 +1084,7 @@ class PlayerProfileComputor:
                 INSERT OR REPLACE INTO derived.pitcher_season_metrics (
                     pitcher_id, season, p_throws, sample_pitches,
                     gmm_model,
-                    bb_rate, k_rate, csw_rate, zone_rate, chase_rate,
+                    bb_rate, k_rate, csw_rate, zone_take_rate, chase_rate, zone_rate, whiff_rate,
                     era, fip, xfip, ground_ball_rate, fly_ball_rate,
                     line_drive_rate, hr_per_9, whip,
                     below_minimum_sample
@@ -1098,55 +1098,43 @@ class PlayerProfileComputor:
 
                         -- Command metrics
                         -- O-swing: swung at pitches outside zone / pitches outside zone
-                        SUM(CASE WHEN zone NOT BETWEEN 1 AND 9
-                                 AND type IN ('S','X') THEN 1 ELSE 0 END)
-                            * 1.0 / NULLIF(SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 THEN 1 ELSE 0 END),0)
-                                                        AS chase_rate,
+                        SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 AND type IN ('D','E','F','L','M','O','S','T','W','X') 
+                            THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 THEN 1 ELSE 0 END),0) 
+                            AS chase_rate,
 
-                        -- Z-swing not needed for pitcher profile but kept for symmetry
-                        SUM(CASE WHEN zone BETWEEN 1 AND 9
-                                 AND type IN ('S','X') THEN 1 ELSE 0 END)
-                            * 1.0 / NULLIF(SUM(CASE WHEN zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END),0)
-                                                        AS zone_swing_rate,
+                        -- Z-take: pitches taken inside the zone / pitches inside the zone
+                        SUM(CASE WHEN zone BETWEEN 1 AND 9 AND type = 'C' THEN 1.0 ELSE 0 END) / 
+                            NULLIF(SUM(CASE WHEN zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END),0) AS zone_take_rate,
+                            
+                        -- Whiff Rate
+                        SUM(CASE WHEN type = 'C' THEN 1.0 ELSE 0 END) / COUNT(*) AS whiff_rate,
 
                         -- Zone rate: pitches in zone / total
-                        SUM(CASE WHEN zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END)
-                            * 1.0 / COUNT(*)            AS zone_rate,
+                        SUM(CASE WHEN zone BETWEEN 1 AND 9 THEN 1.0 ELSE 0 END) / COUNT(*) AS zone_rate,
 
                         -- Called Strike + Whiff Rate
-                        SUM(CASE WHEN type IN ('C','S') THEN 1 ELSE 0 END)
-                            * 1.0 / COUNT(*)            AS csw_rate,
+                        SUM(CASE WHEN type IN ('C','M','O','S','T','W') THEN 1.0 ELSE 0 END) / COUNT(*) AS csw_rate,
 
                         -- Count PA-level outcomes (use last pitch of each PA)
-                        COUNT(DISTINCT CASE WHEN events IS NOT NULL
-                              THEN game_pk || '-' || at_bat_number END)
-                                                        AS total_pa,
+                        COUNT(DISTINCT CASE WHEN events IS NOT NULL THEN game_pk||'-'||at_bat_number END) AS total_pa,
 
-                        SUM(CASE WHEN events IN ('walk','intent_walk') THEN 1 ELSE 0 END)
-                                                        AS walks,
-                        SUM(CASE WHEN events IN ('strikeout','strikeout_double_play') THEN 1 ELSE 0 END)
-                                                        AS strikeouts,
-                        SUM(CASE WHEN events = 'home_run' THEN 1 ELSE 0 END)
-                                                        AS home_runs,
-                        SUM(CASE WHEN events IN ('single','double','triple','home_run') THEN 1 ELSE 0 END)
-                                                        AS hits,
-                        SUM(CASE WHEN events = 'hit_by_pitch' THEN 1 ELSE 0 END)
-                                                        AS hbp,
-                        SUM(runs_on_pitch)              AS earned_runs,
+                        SUM(CASE WHEN events IN ('walk','intent_walk') THEN 1 ELSE 0 END) AS walks,
+                        SUM(CASE WHEN events IN ('strikeout','strikeout_double_play') THEN 1 ELSE 0 END) AS strikeouts,
+                        SUM(CASE WHEN events = 'home_run' THEN 1 ELSE 0 END) AS home_runs,
+                        SUM(CASE WHEN events IN ('single','double','triple','home_run') THEN 1 ELSE 0 END) AS hits,
+                        SUM(CASE WHEN events = 'hit_by_pitch' THEN 1 ELSE 0 END) AS hbp,
+                        
+                        SUM(earned_runs_on_pitch)       AS earned_runs,
                         SUM(outs_on_pitch)              AS outs_recorded,
 
                         -- Batted ball types (of balls in play only)
-                        SUM(CASE WHEN bb_type = 'ground_ball' THEN 1 ELSE 0 END)
-                            * 1.0 / NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END),0)
-                                                        AS ground_ball_rate,
-                        SUM(CASE WHEN bb_type IN ('fly_ball','popup') THEN 1 ELSE 0 END)
-                            * 1.0 / NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END),0)
-                                                        AS fly_ball_rate,
-                        SUM(CASE WHEN bb_type = 'line_drive' THEN 1 ELSE 0 END)
-                            * 1.0 / NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END),0)
-                                                        AS line_drive_rate,
-                        SUM(CASE WHEN bb_type IN ('fly_ball','popup') THEN 1 ELSE 0 END)
-                                                        AS fly_balls_total
+                        SUM(CASE WHEN bb_type = 'ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type='X' 
+                            THEN 1 ELSE 0 END),0) AS ground_ball_rate,
+                        SUM(CASE WHEN bb_type IN ('fly_ball','popup') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN 
+                            type='X' THEN 1 ELSE 0 END),0) AS fly_ball_rate,
+                        SUM(CASE WHEN bb_type = 'line_drive' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type='X' 
+                            THEN 1 ELSE 0 END),0) AS line_drive_rate,
+                        SUM(CASE WHEN bb_type IN ('fly_ball','popup') THEN 1 ELSE 0 END) AS fly_balls_total
 
                     FROM pg.raw.pitches
                     WHERE data_quality_flag = FALSE
@@ -1165,22 +1153,23 @@ class PlayerProfileComputor:
                     walks * 1.0 / NULLIF(total_pa, 0)      AS bb_rate,
                     strikeouts * 1.0 / NULLIF(total_pa, 0) AS k_rate,
                     csw_rate,
-                    zone_rate,
+                    zone_take_rate,
                     chase_rate,
+                    zone_rate,
+                    whiff_rate,
 
                     -- ERA: (earned_runs / outs_recorded) * 27
                     (earned_runs * 27.0) / NULLIF(outs_recorded, 0)  AS era,
 
                     -- FIP = (13*HR + 3*(BB+HBP) - 2*K) / IP + FIP_CONSTANT
                     -- IP = outs_recorded / 3
-                    ({FIP_CONSTANT} + (13.0*home_runs + 3.0*(walks + hbp) - 2.0*strikeouts)
-                        / NULLIF(outs_recorded / 3.0, 0))             AS fip,
+                    ({FIP_CONSTANT} + (13.0 * home_runs + 3.0 * (walks + hbp) - 2.0 * strikeouts) / 
+                        NULLIF(outs_recorded / 3.0, 0)) AS fip,
 
                     -- xFIP: substitute expected HR (league HR/FB * actual FB) for actual HR
                     -- Uses a fixed league HR/FB rate of ~0.105 (MLB average)
-                    ({FIP_CONSTANT} + (13.0*(fly_balls_total * 0.105)
-                        + 3.0*(walks + hbp) - 2.0*strikeouts)
-                        / NULLIF(outs_recorded / 3.0, 0))             AS xfip,
+                    ({FIP_CONSTANT} + (13.0 * (fly_balls_total * 0.105) + 3.0 * (walks + hbp) - 2.0 * strikeouts)
+                        / NULLIF(outs_recorded / 3.0, 0)) AS xfip,
 
                     ground_ball_rate,
                     fly_ball_rate,

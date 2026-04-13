@@ -403,7 +403,6 @@ def run_pitcher_diagnostics(
     all_composite = []
     all_arsenal = []
     all_command = []
-    all_results = []
 
     for pitcher_id, season in sample_ids:
         results = engine.query(pitcher_id, season)
@@ -411,7 +410,6 @@ def run_pitcher_diagnostics(
             all_composite.append(r.score)
             all_arsenal.append(r.arsenal_score)
             all_command.append(r.command_score)
-            all_results.append(r.results_score)
 
     report.n_total_scores = len(all_composite)
 
@@ -420,7 +418,6 @@ def run_pitcher_diagnostics(
         "composite": composite_arr,
         "arsenal": np.array(all_arsenal),
         "command": np.array(all_command),
-        "results": np.array(all_results),
     }
 
     for name, arr in sub_arrays.items():

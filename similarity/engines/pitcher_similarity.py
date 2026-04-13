@@ -45,9 +45,8 @@ Architecture
 
 Performance Model
 -----------------
-  RBF sub-scores (command, result) are vectorized as matrix
-  operations against the full handedness partition. For 2,400 RHP profiles
-  this takes <1ms.
+  RBF sub-scores are vectorized as matrix operations against the
+  full handedness partition. For 2,400 RHP profiles this takes <1ms.
 
   Arsenal W2 is the expensive path (~0.5ms per pair due to 8×8 matrix
   square roots). Two strategies:
@@ -124,19 +123,15 @@ import logging
 import os
 import pickle
 import time
-import warnings
-from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
 
 import duckdb
 import numpy as np
 from numpy.typing import NDArray
 from scipy.linalg import sqrtm
 
-from similarity_calibration import calibrate_arsenal_norm_scale
-from similarity_diagnostics import run_pitcher_diagnostics
+from similarity.similarity_diagnostics import run_pitcher_diagnostics
 import ot
 
 # ---------------------------------------------------------------------------
@@ -156,34 +151,25 @@ log = logging.getLogger("pitcher_similarity")
 
 # Feature names inside GMM (must match GMM_FEATURE_NAMES in player_profile_computor)
 GMM_FEATURE_NAMES = [
-    "velo", "ivb", "hb", "spin_rate", "spin_axis",
-    "release_x", "release_z", "release_ext",
+    "velo", "ivb", "hb", "spin_rate", "spin_axis", "release_x", "release_z", "release_ext",
 ]
 GMM_FEATURE_DIM = len(GMM_FEATURE_NAMES)
 
 # Command features used for the RBF command sub-score
 COMMAND_FEATURES = [
-    "bb_rate", "k_rate", "csw_rate", "zone_rate", "chase_rate",
-]
-
-# Result features (lower weight — captures outcomes but noisier)
-RESULT_FEATURES = [
-    "ground_ball_rate", "fly_ball_rate", "line_drive_rate",
-    "whip", "hr_per_9",
+    "bb_rate", "k_rate", "csw_rate", "zone_take_rate", "chase_rate", "zone_rate", "whiff_rate",
 ]
 
 # Sub-score weights — arsenal most weighted per project spec
-WEIGHT_ARSENAL   = 0.60
-WEIGHT_COMMAND   = 0.30
-WEIGHT_RESULTS   = 0.10
-_TOTAL_WEIGHT    = WEIGHT_ARSENAL + WEIGHT_COMMAND + WEIGHT_RESULTS
+WEIGHT_ARSENAL   = 0.65
+WEIGHT_COMMAND   = 0.35
+_TOTAL_WEIGHT    = WEIGHT_ARSENAL + WEIGHT_COMMAND
 assert abs(_TOTAL_WEIGHT - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
 # RBF bandwidth parameters (gamma = 1 / (2 * sigma²))
 # Calibrated so that the median MLB pitcher pair gets a score
 # around 0.4–0.6 (useful discrimination range).
 RBF_SIGMA_COMMAND  = 1.0453   # tighter — command is lower-dimensional
-RBF_SIGMA_RESULTS  = 0.9912   # looser — results are noisier
 
 # Arsenal W2 distance → similarity score transform.
 #
@@ -216,7 +202,6 @@ MIN_CLUSTER_SIZE = 30
 
 # Minimum sample for similarity (matches player_profile_computor.py)
 MIN_PITCHER_PITCHES = 200
-
 
 # ============================================================================
 # Data Structures
@@ -284,7 +269,6 @@ class PitcherProfile:
 
     # Command vector (normalized externally before scoring)
     command_vec: NDArray[np.float64]        # shape (len(COMMAND_FEATURES),)
-    result_vec: NDArray[np.float64]         # shape (len(RESULT_FEATURES),)
 
     # Empirical Bayes shrinkage weight (1.0 = fully own data, 0.0 = fully league avg)
     eb_alpha: float = 1.0
@@ -302,7 +286,6 @@ class SimilarityResult:
     score: float                           # composite [0, 1], 1 = identical
     arsenal_score: float
     command_score: float
-    results_score: float
     sample_pitches: int
 
 
@@ -715,8 +698,6 @@ class FeatureNormalizer:
     """
     command_mean: NDArray[np.float64] | None = None
     command_std: NDArray[np.float64] | None = None
-    result_mean: NDArray[np.float64] | None = None
-    result_std: NDArray[np.float64] | None = None
 
     def fit(self, profiles: list[PitcherProfile]) -> None:
         """Compute population statistics from all profiles."""
@@ -724,26 +705,15 @@ class FeatureNormalizer:
             return
 
         cmd = np.array([p.command_vec for p in profiles], dtype=np.float64)
-        res = np.array([p.result_vec for p in profiles], dtype=np.float64)
 
         self.command_mean = np.nanmean(cmd, axis=0)
         self.command_std = np.nanstd(cmd, axis=0)
         self.command_std[self.command_std == 0] = 1.0
 
-        self.result_mean = np.nanmean(res, axis=0)
-        self.result_std = np.nanstd(res, axis=0)
-        self.result_std[self.result_std == 0] = 1.0
-
     def normalize_command(self, vec: NDArray) -> NDArray:
         if self.command_mean is None:
             return vec
         normed = (vec - self.command_mean) / self.command_std
-        return np.nan_to_num(normed, nan=0.0)
-
-    def normalize_result(self, vec: NDArray) -> NDArray:
-        if self.result_mean is None:
-            return vec
-        normed = (vec - self.result_mean) / self.result_std
         return np.nan_to_num(normed, nan=0.0)
 
 
@@ -1025,7 +995,6 @@ class HandednessPartition:
 
         # Normalized feature matrices — shape (N, feature_dim)
         self._cmd_matrix: NDArray | None = None
-        self._res_matrix: NDArray | None = None
 
         # Confidence (EB alpha) array — shape (N,)
         self._eb_alphas: NDArray | None = None
@@ -1043,16 +1012,13 @@ class HandednessPartition:
             return
 
         cmd_rows = []
-        res_rows = []
         alphas = []
 
         for p in profiles:
             cmd_rows.append(normalizer.normalize_command(p.command_vec))
-            res_rows.append(normalizer.normalize_result(p.result_vec))
             alphas.append(p.eb_alpha)
 
         self._cmd_matrix = np.array(cmd_rows, dtype=np.float64)
-        self._res_matrix = np.array(res_rows, dtype=np.float64)
         self._eb_alphas = np.array(alphas, dtype=np.float64)
 
     def score_all(
@@ -1061,7 +1027,6 @@ class HandednessPartition:
         normalizer: FeatureNormalizer,
         arsenal_cache: ArsenalCache,
         command_rbf: RBFSimilarity,
-        result_rbf: RBFSimilarity,
     ) -> list[SimilarityResult]:
         """
         Score the query profile against EVERY profile in this partition.
@@ -1082,10 +1047,8 @@ class HandednessPartition:
 
         # --- Vectorized RBF sub-scores (< 1ms for thousands of profiles) ---
         cmd_q = normalizer.normalize_command(query_profile.command_vec)
-        res_q = normalizer.normalize_result(query_profile.result_vec)
 
         command_scores = command_rbf.score_batch(cmd_q, self._cmd_matrix)
-        result_scores = result_rbf.score_batch(res_q, self._res_matrix)
 
         # --- Arsenal W2 scores (from cache, lazy-compute on miss) ---
         arsenal_scores = np.zeros(n, dtype=np.float64)
@@ -1120,15 +1083,13 @@ class HandednessPartition:
         composite[mask_full] = (
             WEIGHT_ARSENAL * arsenal_scores[mask_full]
             + WEIGHT_COMMAND * command_scores[mask_full]
-            + WEIGHT_RESULTS * result_scores[mask_full]
         )
 
         # Path 2: missing GMM — redistribute arsenal weight
         mask_no_arsenal = ~has_arsenal
-        remaining = WEIGHT_COMMAND + WEIGHT_RESULTS
+        remaining = WEIGHT_COMMAND
         composite[mask_no_arsenal] = (
             (WEIGHT_COMMAND / remaining) * command_scores[mask_no_arsenal]
-            + (WEIGHT_RESULTS / remaining) * result_scores[mask_no_arsenal]
         )
 
         # Confidence discount: sqrt(min(alpha_query, alpha_candidate))
@@ -1150,7 +1111,6 @@ class HandednessPartition:
                 score=float(composite[i]),
                 arsenal_score=float(arsenal_scores[i]),
                 command_score=float(command_scores[i]),
-                results_score=float(result_scores[i]),
                 sample_pitches=cand.sample_pitches,
             ))
 
@@ -1169,7 +1129,6 @@ class PitcherSimilarityEngine:
     pitcher-season profiles using:
       1. Arsenal similarity (GMM-to-GMM Wasserstein-2 optimal transport)
       2. Command similarity (RBF kernel over discipline metrics)
-      3. Results similarity (RBF kernel over outcome metrics)
 
     Scores are computed EXHAUSTIVELY against all same-handedness
     pitcher-season profiles. Cross-season comparisons (e.g. 2025
@@ -1194,12 +1153,10 @@ class PitcherSimilarityEngine:
         self._duckdb_path = duckdb_path
         self._profiles: dict[tuple[int, int], PitcherProfile] = {}
         self._league_avg_command: dict[int, NDArray] = {}
-        self._league_avg_result: dict[int, NDArray] = {}
 
         self._normalizer = FeatureNormalizer()
         self._shrinkage = EmpiricalBayesShrinkage()
         self._command_rbf = RBFSimilarity(sigma=RBF_SIGMA_COMMAND)
-        self._result_rbf = RBFSimilarity(sigma=RBF_SIGMA_RESULTS)
 
         # Handedness partitions with vectorized matrices
         self._partition_l = HandednessPartition("L")
@@ -1341,10 +1298,6 @@ class PitcherSimilarityEngine:
                 pj.get(f, 0.0) or 0.0 for f in COMMAND_FEATURES
             ], dtype=np.float64)
 
-            self._league_avg_result[season] = np.array([
-                pj.get(f, 0.0) or 0.0 for f in RESULT_FEATURES
-            ], dtype=np.float64)
-
         log.info("Loaded league averages for %d seasons.", len(rows))
 
     def _load_profiles(
@@ -1366,8 +1319,10 @@ class PitcherSimilarityEngine:
                 psm.bb_rate,
                 psm.k_rate,
                 psm.csw_rate,
-                psm.zone_rate,
                 psm.chase_rate,
+                psm.zone_take_rate,
+                psm.zone_rate,
+                psm.whiff_rate,
                 psm.ground_ball_rate,
                 psm.fly_ball_rate,
                 psm.line_drive_rate,
@@ -1385,7 +1340,7 @@ class PitcherSimilarityEngine:
             (
                 pitcher_id, season, p_throws, sample_pitches,
                 gmm_model_raw,
-                bb_rate, k_rate, csw_rate, zone_rate, chase_rate,
+                bb_rate, k_rate, csw_rate, zone_take_rate, chase_rate, zone_rate, whiff_rate,
                 gb_rate, fb_rate, ld_rate, whip, hr_per_9,
                 below_min,
             ) = row
@@ -1401,12 +1356,7 @@ class PitcherSimilarityEngine:
 
             command_vec = np.array([
                 bb_rate or 0.0, k_rate or 0.0, csw_rate or 0.0,
-                zone_rate or 0.0, chase_rate or 0.0,
-            ], dtype=np.float64)
-
-            result_vec = np.array([
-                gb_rate or 0.0, fb_rate or 0.0, ld_rate or 0.0,
-                whip or 0.0, hr_per_9 or 0.0,
+                zone_take_rate or 0.0, chase_rate or 0.0, zone_rate or 0.0, whiff_rate or 0.0
             ], dtype=np.float64)
 
             self._profiles[(pitcher_id, season)] = PitcherProfile(
@@ -1416,7 +1366,6 @@ class PitcherSimilarityEngine:
                 sample_pitches=sample_pitches,
                 gmm=gmm,
                 command_vec=command_vec,
-                result_vec=result_vec,
                 eb_alpha=self._shrinkage.alpha(sample_pitches),
                 below_minimum=bool(below_min),
             )
@@ -1426,15 +1375,10 @@ class PitcherSimilarityEngine:
         for key, profile in self._profiles.items():
             season = profile.season
             la_cmd = self._league_avg_command.get(season)
-            la_res = self._league_avg_result.get(season)
 
             if la_cmd is not None:
                 profile.command_vec = self._shrinkage.shrink(
                     profile.command_vec, la_cmd, profile.sample_pitches,
-                )
-            if la_res is not None:
-                profile.result_vec = self._shrinkage.shrink(
-                    profile.result_vec, la_res, profile.sample_pitches,
                 )
 
     def _standardize_arsenals(self) -> None:
@@ -1537,7 +1481,6 @@ class PitcherSimilarityEngine:
             normalizer=self._normalizer,
             arsenal_cache=self._arsenal_cache,
             command_rbf=self._command_rbf,
-            result_rbf=self._result_rbf,
         )
 
         results.sort(key=lambda r: r.score, reverse=True)
@@ -1568,7 +1511,7 @@ class PitcherSimilarityEngine:
         if pa is None or pb is None:
             return None
 
-        composite, arsenal_s, command_s, results_s = (
+        composite, arsenal_s, command_s = (
             self._score_pair(pa, pb)
         )
 
@@ -1579,7 +1522,6 @@ class PitcherSimilarityEngine:
             score=composite,
             arsenal_score=arsenal_s,
             command_score=command_s,
-            results_score=results_s,
             sample_pitches=pb.sample_pitches,
         )
 
@@ -1611,22 +1553,16 @@ class PitcherSimilarityEngine:
         cmd_c = self._normalizer.normalize_command(candidate.command_vec)
         command_s = self._command_rbf.score(cmd_q, cmd_c)
 
-        res_q = self._normalizer.normalize_result(query.result_vec)
-        res_c = self._normalizer.normalize_result(candidate.result_vec)
-        results_s = self._result_rbf.score(res_q, res_c)
-
         has_arsenal = query.gmm is not None and candidate.gmm is not None
         if has_arsenal:
             composite = (
                 WEIGHT_ARSENAL * arsenal_s
                 + WEIGHT_COMMAND * command_s
-                + WEIGHT_RESULTS * results_s
             )
         else:
-            remaining = WEIGHT_COMMAND + WEIGHT_RESULTS
+            remaining = WEIGHT_COMMAND
             composite = (
                 (WEIGHT_COMMAND / remaining) * command_s
-                + (WEIGHT_RESULTS / remaining) * results_s
             )
 
         confidence = min(query.eb_alpha, candidate.eb_alpha)
@@ -1636,7 +1572,6 @@ class PitcherSimilarityEngine:
             float(np.clip(composite, 0.0, 1.0)),
             float(arsenal_s),
             float(command_s),
-            float(results_s)
         )
 
     # ------------------------------------------------------------------
@@ -1710,4 +1645,5 @@ if __name__ == "__main__":
     # gamma = calibrate_arsenal_norm_scale(w2_scores, .5)
     report = run_pitcher_diagnostics(engine, n_query_samples=50)
     print(report)
-    results = engine.query(pitcher_id=453286, season=2025)
+    results = engine.query(pitcher_id=694973, season=2025, n=20)
+    print(results)
