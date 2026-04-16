@@ -1334,168 +1334,138 @@ class PlayerProfileComputor:
                     COUNT(*)                            AS sample_pitches,
 
                     -- PA count (events is non-null on the last pitch of each PA)
-                    COUNT(DISTINCT CASE WHEN events IS NOT NULL
-                          THEN game_pk || '-' || at_bat_number END) AS sample_pa,
+                    COUNT(DISTINCT CASE WHEN events IS NOT NULL THEN game_pk || '-' || at_bat_number END) AS sample_pa,
 
                     -- Plate discipline
                     -- First-pitch take: did NOT swing on pitch_number=1
-                    SUM(CASE WHEN pitch_number = 1
-                             AND type NOT IN ('S','X') THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(COUNT(CASE WHEN pitch_number = 1 THEN 1 END), 0)
-                                                        AS first_pitch_take_rate,
+                    SUM(CASE WHEN pitch_number = 1 AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 ELSE 0 END) / 
+                        NULLIF(COUNT(CASE WHEN pitch_number = 1 THEN 1 END), 0) AS first_pitch_take_rate,
 
                     -- O-swing
-                    SUM(CASE WHEN zone NOT BETWEEN 1 AND 9
-                             AND type IN ('S','X') THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
-                                                        AS o_swing_rate,
+                    SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 ELSE 0 
+                        END) / NULLIF(SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0) AS o_swing_rate,
 
                     -- Z-swing
-                    SUM(CASE WHEN zone BETWEEN 1 AND 9
-                             AND type IN ('S','X') THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
-                                                        AS z_swing_rate,
+                    SUM(CASE WHEN zone BETWEEN 1 AND 9 AND type IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 ELSE 0 END)
+                        * 1.0 / NULLIF(SUM(CASE WHEN zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0) AS z_swing_rate,
 
                     -- Whiff: swinging strikes / swings
-                    SUM(CASE WHEN type = 'S' THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN type IN ('S','X') THEN 1 ELSE 0 END), 0)
-                                                        AS whiff_rate,
+                    SUM(CASE WHEN type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type NOT IN 
+                        ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0) AS whiff_rate,
 
                     -- Contact: in-play / swings
-                    SUM(CASE WHEN type = 'X' THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN type IN ('S','X') THEN 1 ELSE 0 END), 0)
-                                                        AS contact_rate,
+                    SUM(CASE WHEN type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type NOT IN 
+                        ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0) AS contact_rate,
 
                     -- Walk / K rates (per PA)
-                    SUM(CASE WHEN events IN ('walk','intent_walk') THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(COUNT(DISTINCT CASE WHEN events IS NOT NULL
-                          THEN game_pk || '-' || at_bat_number END), 0)
-                                                        AS walk_rate,
+                    SUM(CASE WHEN events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) / 
+                        NULLIF(COUNT(DISTINCT CASE WHEN events IS NOT NULL THEN game_pk || '-' || at_bat_number END), 0) 
+                        AS walk_rate,
 
-                    SUM(CASE WHEN events IN ('strikeout','strikeout_double_play') THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(COUNT(DISTINCT CASE WHEN events IS NOT NULL
-                          THEN game_pk || '-' || at_bat_number END), 0)
-                                                        AS k_rate,
+                    SUM(CASE WHEN events IN ('strikeout','strikeout_double_play') THEN 1.0 ELSE 0 END) / 
+                        NULLIF(COUNT(DISTINCT CASE WHEN events IS NOT NULL THEN game_pk || '-' || at_bat_number END), 0) 
+                        AS k_rate,
 
                     -- Batted ball profile (of BIP)
-                    SUM(CASE WHEN bb_type = 'ground_ball' THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0)
-                                                        AS gb_rate,
-                    SUM(CASE WHEN bb_type = 'fly_ball' THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0)
-                                                        AS fb_rate,
-                    SUM(CASE WHEN bb_type = 'line_drive' THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0)
-                                                        AS ld_rate,
-                    SUM(CASE WHEN bb_type = 'popup' THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0)
-                                                        AS iffb_rate,
+                    SUM(CASE WHEN bb_type = 'ground_ball' THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS gb_rate,
+                    
+                    SUM(CASE WHEN bb_type = 'fly_ball' THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS fb_rate,
 
                     -- Spray direction (hc_x relative to center of field = 125.42)
-                    SUM(CASE WHEN spray_angle < -15 THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0)
-                                                        AS pull_rate,
-                    SUM(CASE WHEN spray_angle BETWEEN -15 AND 15 THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0)
-                                                        AS center_rate,
-                    SUM(CASE WHEN spray_angle > 15 THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0)
-                                                        AS oppo_rate,
+                    SUM(CASE WHEN spray_angle < -15 THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS pull_rate,
+                    
+                    SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS oppo_rate,
 
                     -- Exit velocity & launch angle (on contact only)
-                    AVG(CASE WHEN launch_speed IS NOT NULL THEN launch_speed END)
-                                                        AS avg_exit_velo,
+                    AVG(CASE WHEN launch_speed IS NOT NULL THEN launch_speed END) AS avg_exit_velo,
                     MAX(launch_speed)                   AS max_exit_velo,
-                    AVG(CASE WHEN launch_angle IS NOT NULL THEN launch_angle END)
-                                                        AS avg_launch_angle,
+                    AVG(CASE WHEN launch_angle IS NOT NULL THEN launch_angle END) AS avg_launch_angle,
 
                     -- Hard hit rate (>= 95 mph exit velo)
-                    SUM(CASE WHEN launch_speed >= {HARD_HIT_MIN_VELO} THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0)
-                                                        AS hard_hit_rate,
+                    SUM(CASE WHEN launch_speed >= {HARD_HIT_MIN_VELO} THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS hard_hit_rate,
 
                     -- Barrel rate (exit_velo >= 98 AND launch_angle 26–30)
-                    SUM(CASE WHEN launch_speed >= {BARREL_MIN_VELO}
-                             AND launch_angle BETWEEN {BARREL_MIN_LA} AND {BARREL_MAX_LA}
-                             THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0)
-                                                        AS barrel_rate,
+                    SUM(CASE WHEN launch_speed >= {BARREL_MIN_VELO} AND launch_angle BETWEEN {BARREL_MIN_LA} 
+                        AND {BARREL_MAX_LA} THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS barrel_rate,
 
                     -- HR rate per PA
-                    SUM(CASE WHEN events = 'home_run' THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(COUNT(DISTINCT CASE WHEN events IS NOT NULL
-                          THEN game_pk || '-' || at_bat_number END), 0)
-                                                        AS hr_rate,
+                    SUM(CASE WHEN events = 'home_run' THEN 1.0 ELSE 0 END) / 
+                        NULLIF(COUNT(DISTINCT CASE WHEN events IS NOT NULL THEN game_pk || '-' || at_bat_number END), 0) 
+                        AS hr_rate,
 
                     -- Platoon split sample sizes
-                    COUNT(DISTINCT CASE WHEN p_throws = 'L' AND events IS NOT NULL
-                          THEN game_pk || '-' || at_bat_number END) AS sample_pa_vs_l,
-                    COUNT(DISTINCT CASE WHEN p_throws = 'R' AND events IS NOT NULL
-                          THEN game_pk || '-' || at_bat_number END) AS sample_pa_vs_r,
+                    COUNT(DISTINCT CASE WHEN p_throws = 'L' AND events IS NOT NULL THEN game_pk || '-' || at_bat_number 
+                        END) AS sample_pa_vs_l,
+                    COUNT(DISTINCT CASE WHEN p_throws = 'R' AND events IS NOT NULL THEN game_pk || '-' || at_bat_number 
+                        END) AS sample_pa_vs_r,
 
                     -- Platoon splits — vs LHP
-                    SUM(CASE WHEN p_throws='L' AND zone NOT BETWEEN 1 AND 9
-                             AND type IN ('S','X') THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN p_throws='L'
-                             AND zone NOT BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
-                                                        AS o_swing_rate_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9
-                             AND type IN ('S','X') THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN p_throws='L'
-                             AND zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
-                                                        AS z_swing_rate_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND type='S' THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN p_throws='L'
-                             AND type IN ('S','X') THEN 1 ELSE 0 END), 0)
-                                                        AS whiff_rate_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND events IN ('walk','intent_walk') THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN p_throws='L' AND events IS NOT NULL
-                             THEN 1 ELSE 0 END), 0)     AS walk_rate_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND events IN ('strikeout','strikeout_double_play') THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN p_throws='L' AND events IS NOT NULL
-                             THEN 1 ELSE 0 END), 0)     AS k_rate_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND bb_type='ground_ball' THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN p_throws='L' AND type='X' THEN 1 ELSE 0 END), 0)
-                                                        AS gb_rate_vs_l,
-                    AVG(CASE WHEN p_throws='L' AND launch_speed IS NOT NULL THEN launch_speed END)
-                                                        AS avg_exit_velo_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND launch_speed >= {BARREL_MIN_VELO}
-                             AND launch_angle BETWEEN {BARREL_MIN_LA} AND {BARREL_MAX_LA}
-                             THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN p_throws='L' AND type='X' THEN 1 ELSE 0 END), 0)
-                                                        AS barrel_rate_vs_l,
+                    SUM(CASE WHEN p_throws='L' AND zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
+                        THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND zone NOT BETWEEN 1 AND 9 THEN 1 
+                        ELSE 0 END), 0) AS o_swing_rate_vs_l,
+                    SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9 AND type IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 
+                        ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
+                        AS z_swing_rate_vs_l,
+                    SUM(CASE WHEN p_throws='L' AND type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE 
+                        WHEN p_throws='L' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0) 
+                        AS whiff_rate_vs_l,
+                    SUM(CASE WHEN p_throws='L' AND type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN p_throws='L' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END)
+                        , 0) AS contact_rate_vs_l,
+                    SUM(CASE WHEN p_throws='L' AND events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN p_throws='L' AND events IS NOT NULL THEN 1 ELSE 0 END), 0) 
+                        AS walk_rate_vs_l,
+                    SUM(CASE WHEN p_throws='L' AND events IN ('strikeout','strikeout_double_play') THEN 1.0 ELSE 0 END)
+                        / NULLIF(SUM(CASE WHEN p_throws='L' AND events IS NOT NULL THEN 1 ELSE 0 END), 0) AS k_rate_vs_l,
+                    SUM(CASE WHEN p_throws='L' AND bb_type='ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN 
+                        p_throws='L' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS gb_rate_vs_l,
+                    SUM(CASE WHEN p_throws='L' AND bb_type = 'fly_ball' THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN p_throws='L' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS fb_rate_vs_l,
+                    SUM(CASE WHEN spray_angle < -15 THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS pull_rate_vs_l,
+                    SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS oppo_rate_vs_l,
+                    AVG(CASE WHEN p_throws='L' AND launch_speed IS NOT NULL THEN launch_speed END) AS avg_exit_velo_vs_l,
+                    SUM(CASE WHEN p_throws='L' AND launch_speed >= {BARREL_MIN_VELO} AND launch_angle BETWEEN 
+                        {BARREL_MIN_LA} AND {BARREL_MAX_LA} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND 
+                        type='X' THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_l,
 
                     -- Platoon splits — vs RHP
-                    SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9
-                             AND type IN ('S','X') THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN p_throws='R'
-                             AND zone NOT BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
-                                                        AS o_swing_rate_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9
-                             AND type IN ('S','X') THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN p_throws='R'
-                             AND zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
-                                                        AS z_swing_rate_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND type='S' THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN p_throws='R'
-                             AND type IN ('S','X') THEN 1 ELSE 0 END), 0)
-                                                        AS whiff_rate_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND events IN ('walk','intent_walk') THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN p_throws='R' AND events IS NOT NULL
-                             THEN 1 ELSE 0 END), 0)     AS walk_rate_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND events IN ('strikeout','strikeout_double_play') THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN p_throws='R' AND events IS NOT NULL
-                             THEN 1 ELSE 0 END), 0)     AS k_rate_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND bb_type='ground_ball' THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN p_throws='R' AND type='X' THEN 1 ELSE 0 END), 0)
-                                                        AS gb_rate_vs_r,
-                    AVG(CASE WHEN p_throws='R' AND launch_speed IS NOT NULL THEN launch_speed END)
-                                                        AS avg_exit_velo_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND launch_speed >= {BARREL_MIN_VELO}
-                             AND launch_angle BETWEEN {BARREL_MIN_LA} AND {BARREL_MAX_LA}
-                             THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN p_throws='R' AND type='X' THEN 1 ELSE 0 END), 0)
-                                                        AS barrel_rate_vs_r
+                    SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
+                        THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws'R' AND zone NOT BETWEEN 1 AND 9 THEN 1 
+                        ELSE 0 END), 0) AS o_swing_rate_vs_r,
+                    SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 AND type IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 
+                        ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws'R' AND zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
+                        AS z_swing_rate_vs_r,
+                    SUM(CASE WHEN p_throws'R' AND type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE 
+                        WHEN p_throws'R' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0) 
+                        AS whiff_rate_vs_r,
+                    SUM(CASE WHEN p_throws'R' AND type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN p_throws'R' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END)
+                        , 0) AS contact_rate_vs_r,
+                    SUM(CASE WHEN p_throws'R' AND events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN p_throws'R' AND events IS NOT NULL THEN 1 ELSE 0 END), 0) 
+                        AS walk_rate_vs_r,
+                    SUM(CASE WHEN p_throws'R' AND events IN ('strikeout','strikeout_double_play') THEN 1.0 ELSE 0 END)
+                        / NULLIF(SUM(CASE WHEN p_throws'R' AND events IS NOT NULL THEN 1 ELSE 0 END), 0) AS k_rate_vs_r,
+                    SUM(CASE WHEN p_throws'R' AND bb_type='ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN 
+                        p_throws'R' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS gb_rate_vs_r,
+                    SUM(CASE WHEN p_throws'R' AND bb_type = 'fly_ball' THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN p_throws'R' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS fb_rate_vs_r,
+                    SUM(CASE WHEN spray_angle < -15 THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS pull_rate_vs_r,
+                    SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS oppo_rate_vs_r,
+                    AVG(CASE WHEN p_throws'R' AND launch_speed IS NOT NULL THEN launch_speed END) AS avg_exit_velo_vs_r,
+                    SUM(CASE WHEN p_throws'R' AND launch_speed >= {BARREL_MIN_VELO} AND launch_angle BETWEEN 
+                        {BARREL_MIN_LA} AND {BARREL_MAX_LA} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws'R' AND 
+                        type='X' THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_r
 
                 FROM pg.raw.pitches
                 WHERE data_quality_flag = FALSE
@@ -1528,18 +1498,34 @@ class PlayerProfileComputor:
                 hard_hit_rate,
                 barrel_rate,
                 hr_rate,
-                -- xBA / xSLG: simple linear proxy based on barrel+hard-hit rates
-                -- Phase 2 can replace with a proper model
-                LEAST(0.380, GREATEST(0.150,
-                    0.220 + barrel_rate * 0.8 + hard_hit_rate * 0.15))   AS xba,
-                LEAST(0.750, GREATEST(0.250,
-                    0.350 + barrel_rate * 2.5 + hard_hit_rate * 0.3))    AS xslg,
                 -- vs LHP
-                o_swing_rate_vs_l, z_swing_rate_vs_l, whiff_rate_vs_l, walk_rate_vs_l,
-                k_rate_vs_l, gb_rate_vs_l, avg_exit_velo_vs_l, barrel_rate_vs_l, sample_pa_vs_l,
+                o_swing_rate_vs_l,
+                z_swing_rate_vs_l,
+                whiff_rate_vs_l,
+                contact_rate_vs_l,
+                walk_rate_vs_l,
+                k_rate_vs_l,
+                gb_rate_vs_l,
+                fb_rate_vs_l,
+                pull_rate_vs_l,
+                oppo_rate_vs_l,
+                avg_exit_velo_vs_l,
+                barrel_rate_vs_l,
+                sample_pa_vs_l,
                 -- vs RHP
-                o_swing_rate_vs_r, z_swing_rate_vs_r, whiff_rate_vs_r, walk_rate_vs_r,
-                k_rate_vs_r, gb_rate_vs_r, avg_exit_velo_vs_r, barrel_rate_vs_r, sample_pa_vs_r,
+                o_swing_rate_vs_r,
+                z_swing_rate_vs_r,
+                whiff_rate_vs_r,
+                contact_rate_vs_r,
+                walk_rate_vs_r,
+                k_rate_vs_r,
+                gb_rate_vs_r,
+                fb_rate_vs_r,
+                pull_rate_vs_r,
+                oppo_rate_vs_r,
+                avg_exit_velo_vs_r,
+                barrel_rate_vs_r,
+                sample_pa_vs_r,,
                 (sample_pa < {MIN_BATTER_PA}) AS below_minimum_sample,
                 CURRENT_TIMESTAMP                                        AS updated_at
             FROM batter_pitches
@@ -2687,8 +2673,11 @@ class PlayerProfileComputor:
 
         # Batter sprint speed lookup
         batter_speeds = self._conn.execute(f"""
-            SELECT player_id, season, sprint_speed
-            FROM derived.baserunner_season_metrics
+            SELECT bsm.player_id, bsm.season, COALESCE(ss.sprint_speed, 27.0)
+            FROM derived.baserunner_season_metrics bsm
+            LEFT JOIN pg.raw.sprint_speed ss
+                ON bsm.player_id = ss.player_id
+                AND bsm.season = ss.season
             WHERE season IN ({", ".join(str(s) for s in seasons)})
         """).fetchdf()
         speed_map = {}

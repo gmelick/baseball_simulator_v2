@@ -218,6 +218,23 @@ COMMENT ON COLUMN raw.game_lineups.sequence   IS '1=original entry. Increments e
 COMMENT ON COLUMN raw.game_lineups.pinch_role IS 'PH=Pinch Hitter, PR=Pinch Runner, DEF=Defensive replacement.';
 
 -- =============================================================================
+-- RAW.SPRINT_SPEED
+-- =============================================================================
+
+CREATE TABLE raw.sprint_speed (
+    player_id           INTEGER     NOT NULL REFERENCES raw.players(player_id),
+    season              INTEGER     NOT NULL,
+    sprint_speed        FLOAT       NOT NULL,     -- ft/s, Savant's 2-best-run avg
+    competitive_runs    INTEGER     NOT NULL,     -- Savant's sample count
+    bolts               INTEGER,                  -- runs ≥ 30 ft/s (optional)
+    hp_to_1b            FLOAT,                    -- home-to-first avg (optional)
+    scraped_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (player_id, season)
+);
+
+CREATE INDEX idx_sprint_speed_season ON raw.sprint_speed(season);
+
+-- =============================================================================
 -- RAW.PITCHES
 -- Direct 1:1 ingestion target for Statcast data. Never modified after write.
 -- ~700K rows/season. pitch_type stored for reference only — similarity engine
@@ -430,6 +447,8 @@ CREATE INDEX idx_pitches_count_state    ON raw.pitches(balls, strikes, outs);
 COMMENT ON TABLE  raw.pitches IS 'Direct Statcast ingestion target. Never modified after write. ~700K rows/season.';
 COMMENT ON COLUMN raw.pitches.pitch_type IS 'Statcast classification stored for reference/audit only. Similarity engine uses GMM components in derived.pitcher_season_metrics.';
 COMMENT ON COLUMN raw.pitches.data_quality_flag IS 'Auto-set by insert trigger. Flagged rows excluded from sim pool but retained for audit.';
+
+
 
 -- =============================================================================
 -- SIM.LINEUP_STATE

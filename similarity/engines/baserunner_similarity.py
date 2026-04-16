@@ -513,7 +513,7 @@ class BaserunnerSimilarityEngine:
                 brm.player_id, brm.season,
                 brm.sample_advancement_opps,
                 -- Speed
-                brm.sprint_speed,
+                ss.sprint_speed,
                 -- Aggression
                 brm.extra_base_attempt_rate,
                 brm.first_to_third_attempt_rate,
@@ -534,6 +534,9 @@ class BaserunnerSimilarityEngine:
                 brm.sample_tag_up_opps,
                 brm.below_minimum_sample
             FROM derived.baserunner_season_metrics brm
+            LEFT JOIN pg.raw.sprint_speed ss
+                ON ss.player_id = brm.player_id
+                AND ss.season = brm.season
             WHERE NOT brm.below_minimum_sample
               {season_filter}
         """).fetchall()

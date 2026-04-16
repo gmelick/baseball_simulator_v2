@@ -71,6 +71,8 @@ import psycopg2
 import psycopg2.extras
 import requests
 import json
+import pandas as pd
+import io
 
 # ---------------------------------------------------------------------------
 # Logging
