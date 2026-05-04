@@ -1438,33 +1438,33 @@ class PlayerProfileComputor:
 
                     -- Platoon splits — vs RHP
                     SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
-                        THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws'R' AND zone NOT BETWEEN 1 AND 9 THEN 1 
+                        THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9 THEN 1 
                         ELSE 0 END), 0) AS o_swing_rate_vs_r,
                     SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 AND type IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 
-                        ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws'R' AND zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
+                        ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
                         AS z_swing_rate_vs_r,
-                    SUM(CASE WHEN p_throws'R' AND type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE 
-                        WHEN p_throws'R' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0) 
+                    SUM(CASE WHEN p_throws='R' AND type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE 
+                        WHEN p_throws='R' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0) 
                         AS whiff_rate_vs_r,
-                    SUM(CASE WHEN p_throws'R' AND type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) / 
-                        NULLIF(SUM(CASE WHEN p_throws'R' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END)
+                    SUM(CASE WHEN p_throws='R' AND type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN p_throws='R' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END)
                         , 0) AS contact_rate_vs_r,
-                    SUM(CASE WHEN p_throws'R' AND events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) / 
-                        NULLIF(SUM(CASE WHEN p_throws'R' AND events IS NOT NULL THEN 1 ELSE 0 END), 0) 
+                    SUM(CASE WHEN p_throws='R' AND events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN p_throws='R' AND events IS NOT NULL THEN 1 ELSE 0 END), 0) 
                         AS walk_rate_vs_r,
-                    SUM(CASE WHEN p_throws'R' AND events IN ('strikeout','strikeout_double_play') THEN 1.0 ELSE 0 END)
-                        / NULLIF(SUM(CASE WHEN p_throws'R' AND events IS NOT NULL THEN 1 ELSE 0 END), 0) AS k_rate_vs_r,
-                    SUM(CASE WHEN p_throws'R' AND bb_type='ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN 
-                        p_throws'R' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS gb_rate_vs_r,
-                    SUM(CASE WHEN p_throws'R' AND bb_type = 'fly_ball' THEN 1.0 ELSE 0 END) / 
-                        NULLIF(SUM(CASE WHEN p_throws'R' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS fb_rate_vs_r,
+                    SUM(CASE WHEN p_throws='R' AND events IN ('strikeout','strikeout_double_play') THEN 1.0 ELSE 0 END)
+                        / NULLIF(SUM(CASE WHEN p_throws='R' AND events IS NOT NULL THEN 1 ELSE 0 END), 0) AS k_rate_vs_r,
+                    SUM(CASE WHEN p_throws='R' AND bb_type='ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN 
+                        p_throws='R' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS gb_rate_vs_r,
+                    SUM(CASE WHEN p_throws='R' AND bb_type = 'fly_ball' THEN 1.0 ELSE 0 END) / 
+                        NULLIF(SUM(CASE WHEN p_throws='R' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS fb_rate_vs_r,
                     SUM(CASE WHEN spray_angle < -15 THEN 1.0 ELSE 0 END) / 
                         NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS pull_rate_vs_r,
                     SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) / 
                         NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS oppo_rate_vs_r,
-                    AVG(CASE WHEN p_throws'R' AND launch_speed IS NOT NULL THEN launch_speed END) AS avg_exit_velo_vs_r,
-                    SUM(CASE WHEN p_throws'R' AND launch_speed >= {BARREL_MIN_VELO} AND launch_angle BETWEEN 
-                        {BARREL_MIN_LA} AND {BARREL_MAX_LA} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws'R' AND 
+                    AVG(CASE WHEN p_throws='R' AND launch_speed IS NOT NULL THEN launch_speed END) AS avg_exit_velo_vs_r,
+                    SUM(CASE WHEN p_throws='R' AND launch_speed >= {BARREL_MIN_VELO} AND launch_angle BETWEEN 
+                        {BARREL_MIN_LA} AND {BARREL_MAX_LA} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND 
                         type='X' THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_r
 
                 FROM pg.raw.pitches
@@ -1487,10 +1487,7 @@ class PlayerProfileComputor:
                 k_rate,
                 gb_rate,
                 fb_rate,
-                ld_rate,
-                iffb_rate,
                 pull_rate,
-                center_rate,
                 oppo_rate,
                 avg_exit_velo,
                 max_exit_velo,
@@ -1525,7 +1522,7 @@ class PlayerProfileComputor:
                 oppo_rate_vs_r,
                 avg_exit_velo_vs_r,
                 barrel_rate_vs_r,
-                sample_pa_vs_r,,
+                sample_pa_vs_r,
                 (sample_pa < {MIN_BATTER_PA}) AS below_minimum_sample,
                 CURRENT_TIMESTAMP                                        AS updated_at
             FROM batter_pitches
@@ -1676,9 +1673,7 @@ class PlayerProfileComputor:
                 -- Sprint speed proxy: scale from extra-base aggression
                 -- (higher attempt rate + success rate → faster implied sprint speed)
                 -- Bounded to reasonable ft/s range: 24-31 ft/s
-                CASE WHEN eb.total_opps >= 5 THEN
-                    24.0 + (eb.total_success * 1.0 / eb.total_opps) * 14.0
-                ELSE NULL END                                   AS sprint_speed,
+                ss.sprint_speed                                   AS sprint_speed,
 
                 -- Overall extra-base attempt / success
                 eb.total_attempts * 1.0 / NULLIF(eb.total_opps, 0)
@@ -1728,6 +1723,7 @@ class PlayerProfileComputor:
             LEFT JOIN first_to_home fth  ON ap.player_id = fth.player_id AND ap.season = fth.season
             LEFT JOIN tag_up tu          ON ap.player_id = tu.player_id  AND ap.season = tu.season
             LEFT JOIN sb_agg sba         ON ap.player_id = sba.player_id AND ap.season = sba.season
+            LEFT JOIN pg.raw.sprint_speed ss ON ap.player_id = ss.player_id AND ap.season = ss.season
         """)
         log.info("  Baserunner profiles done.")
 
@@ -2478,7 +2474,7 @@ class PlayerProfileComputor:
         # Look up batter sprint speeds
         batter_speeds = self._conn.execute(f"""
             SELECT player_id, season, sprint_speed
-            FROM derived.baserunner_season_metrics
+            FROM pg.raw.sprint_speed
             WHERE season IN ({", ".join(str(s) for s in seasons)})
         """).fetchdf()
         speed_map = {}
@@ -2673,12 +2669,12 @@ class PlayerProfileComputor:
 
         # Batter sprint speed lookup
         batter_speeds = self._conn.execute(f"""
-            SELECT bsm.player_id, bsm.season, COALESCE(ss.sprint_speed, 27.0)
+            SELECT bsm.player_id, bsm.season, COALESCE(ss.sprint_speed, 27.0) AS sprint_speed
             FROM derived.baserunner_season_metrics bsm
             LEFT JOIN pg.raw.sprint_speed ss
                 ON bsm.player_id = ss.player_id
                 AND bsm.season = ss.season
-            WHERE season IN ({", ".join(str(s) for s in seasons)})
+            WHERE bsm.season IN ({", ".join(str(s) for s in seasons)})
         """).fetchdf()
         speed_map = {}
         for _, r in batter_speeds.iterrows():
@@ -3558,7 +3554,7 @@ class PlayerProfileComputor:
                 s.velo,
                 s.ivb,
                 -- Denormalized runner metrics (most recent season available)
-                brm.sprint_speed            AS runner_sprint_speed,
+                ss.sprint_speed             AS runner_sprint_speed,
                 brm.sb_success_rate         AS runner_sb_success_rate,
                 -- Denormalized catcher metrics
                 csm.pop_time_mean           AS catcher_pop_time_mean,
@@ -3574,6 +3570,8 @@ class PlayerProfileComputor:
                 ON brm.player_id = s.runner_id AND brm.season = s.season
             LEFT JOIN derived.catcher_season_metrics csm
                 ON csm.player_id = s.catcher_id AND csm.season = s.season
+            LEFT JOIN pg.raw.sprint_speed ss
+                ON ss.player_id = s.runner_id AND ss.season = s.season
             WHERE s.runner_id IS NOT NULL
               AND s.base_attempted IS NOT NULL
         """)
@@ -3650,9 +3648,7 @@ class LeagueAverageProfiles:
                         'k_rate',                AVG(k_rate),
                         'gb_rate',               AVG(gb_rate),
                         'fb_rate',               AVG(fb_rate),
-                        'ld_rate',               AVG(ld_rate),
                         'pull_rate',             AVG(pull_rate),
-                        'center_rate',           AVG(center_rate),
                         'oppo_rate',             AVG(oppo_rate),
                         'avg_exit_velo',         AVG(avg_exit_velo),
                         'hard_hit_rate',         AVG(hard_hit_rate),
