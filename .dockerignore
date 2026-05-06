@@ -1,0 +1,64 @@
+# =============================================================================
+# .dockerignore — files excluded from Docker build context
+# Keep the build context small: no tests, docs, or dev artifacts in image.
+# =============================================================================
+
+# Secrets — never bake into image
+.env
+.env.*
+
+# Version control
+.git/
+.gitignore
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.hypothesis/
+.benchmarks/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE & editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Tests (not in runtime image — run via make test in separate container)
+tests/
+
+# Docs & planning
+*.md
+*.docx
+*.xlsx
+baseball_sim_project_plan.docx
+agent_team.md
+CHANGES.md
+
+# Large data / model artifacts
+data/
+*.faiss
+*.pkl
+*.joblib
+*.duckdb
+*.duckdb.wal
+
+# Frontend source (served separately in Phase 6)
+frontend/
+
+# Type checking caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/

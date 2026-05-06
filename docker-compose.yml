@@ -1,0 +1,154 @@
+# =============================================================================
+# MLB Baseball Simulation Platform — Docker Compose
+# Local development stack
+#
+# Usage:
+#   make dev          → build + start all services (foreground)
+#   make down         → stop + remove containers
+#   docker compose up -d          → start detached
+#   docker compose logs -f app    → tail app logs
+#
+# Services:
+#   db    — PostgreSQL 15 (port 5432)
+#   redis — Redis 7      (port 6379)
+#   app   — FastAPI app  (port 8000)
+#
+# DuckDB is intentionally absent — it runs in-process inside the app container.
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 15
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-baseball_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-baseball_pass}
+      POSTGRES_DB:       ${POSTGRES_DB:-baseball_sim}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Schema is applied via 'make migrate' (alembic upgrade head)
+      # NOT via /docker-entrypoint-initdb.d/ — Alembic is the single source of truth
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-baseball_user} -d ${POSTGRES_DB:-baseball_sim}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - baseball_net
+
+  # ---------------------------------------------------------------------------
+  # Redis 7
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --save 60 1
+      --loglevel warning
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - baseball_net
+
+  # ---------------------------------------------------------------------------
+  # FastAPI application
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Override DB host to use the compose service name, not localhost
+      BASEBALL_DB_DSN: postgresql://${POSTGRES_USER:-baseball_user}:${POSTGRES_PASSWORD:-baseball_pass}@db:5432/${POSTGRES_DB:-baseball_sim}
+      REDIS_URL:       redis://redis:6379/0
+      ENVIRONMENT:     ${ENVIRONMENT:-development}
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount source for hot-reload in development
+      # Comment out for a production-like build test
+      - ./api:/app/api
+      - ./pipeline:/app/pipeline
+      - ./similarity:/app/similarity
+      - ./simulator:/app/simulator
+      - ./db:/app/db
+    command: >
+      uvicorn api.main:app
+        --host 0.0.0.0
+        --port 8000
+        --reload
+        --log-level info
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - baseball_net
+
+  # ---------------------------------------------------------------------------
+  # Migration runner (one-shot service)
+  # Run via: docker compose run --rm migrate
+  # Or:      make migrate
+  # ---------------------------------------------------------------------------
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    env_file:
+      - .env
+    environment:
+      BASEBALL_DB_DSN: postgresql+psycopg2://${POSTGRES_USER:-baseball_user}:${POSTGRES_PASSWORD:-baseball_pass}@db:5432/${POSTGRES_DB:-baseball_sim}
+    command: alembic upgrade head
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - baseball_net
+    profiles:
+      - tools     # only runs when explicitly invoked: make migrate
+
+# ---------------------------------------------------------------------------
+# Volumes — persist data across container restarts
+# ---------------------------------------------------------------------------
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# ---------------------------------------------------------------------------
+# Networks
+# ---------------------------------------------------------------------------
+networks:
+  baseball_net:
+    driver: bridge

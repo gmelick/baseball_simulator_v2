@@ -487,9 +487,162 @@ CREATE INDEX idx_lineup_state_live           ON sim.lineup_state(is_live_game, u
 CREATE INDEX idx_lineup_state_expires        ON sim.lineup_state(expires_at);
 CREATE INDEX idx_lineup_state_game_state_gin ON sim.lineup_state USING GIN(game_state);
 
+-- SIM-082: Unique partial index required for ON CONFLICT (game_pk) WHERE is_live_game=TRUE
+-- in _upsert_lineup_state().  Without this index PostgreSQL raises a constraint error and
+-- live game state is never persisted.
+CREATE UNIQUE INDEX idx_lineup_state_live_game
+    ON sim.lineup_state(game_pk)
+    WHERE is_live_game = TRUE;
+
 COMMENT ON TABLE  sim.lineup_state IS 'Ephemeral simulation sessions. Expire after 24h unless is_live_game=TRUE.';
 COMMENT ON COLUMN sim.lineup_state.selected_at_bat IS 'Set when user clicks historical play. NULL = current/live state.';
 COMMENT ON COLUMN sim.lineup_state.pending_substitution IS 'Managerial move staged for what-if simulation. Not committed to game_state until confirmed.';
+
+-- =============================================================================
+-- RAW.ETL_DATA_FRESHNESS
+-- SIM-083: Moved from FRESHNESS_TABLE_DDL string constant in etl_historical_loader.py.
+-- Tracks the last loaded game per pitcher/batter so stale player profiles can
+-- be detected without scanning all of raw.pitches.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS raw.etl_data_freshness (
+    entity_type  VARCHAR(10)  NOT NULL,   -- 'pitcher' or 'batter'
+    entity_id    INTEGER      NOT NULL,
+    last_game_pk INTEGER      NOT NULL,
+    last_date    DATE         NOT NULL,
+    updated_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    PRIMARY KEY  (entity_type, entity_id)
+);
+
+COMMENT ON TABLE raw.etl_data_freshness IS
+    'Tracks last loaded game per pitcher/batter. Used to detect stale profiles.';
+
+-- =============================================================================
+-- RAW.GAME_ODDS
+-- SIM-083: Moved from GAME_ODDS_DDL string constant in live_ingestion_pipeline.py.
+-- Odds snapshots per game.  See SIM-133 for the CLV-enabling column extensions
+-- (book, line_type, market_type, is_sharp_book) applied as migration 0003.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS raw.game_odds (
+    id              BIGSERIAL       PRIMARY KEY,
+    game_pk         INTEGER         NOT NULL REFERENCES raw.games(game_pk),
+    fetched_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    source          VARCHAR(50)     NOT NULL DEFAULT 'consensus',
+    is_mock         BOOLEAN         NOT NULL DEFAULT TRUE,
+
+    -- Moneyline (American odds: negative = favourite)
+    home_ml         INTEGER,        -- e.g. -150
+    away_ml         INTEGER,        -- e.g. +130
+
+    -- Run line / spread
+    home_spread     FLOAT,          -- e.g. -1.5
+    home_spread_ml  INTEGER,        -- e.g. -110
+    away_spread     FLOAT,          -- e.g. +1.5
+    away_spread_ml  INTEGER,        -- e.g. -110
+
+    -- Total (over/under)
+    total_line      FLOAT,          -- e.g.  8.5
+    over_ml         INTEGER,        -- e.g. -110
+    under_ml        INTEGER,        -- e.g. -110
+
+    -- SIM-133: CLV columns (added via migration 0003)
+    book            VARCHAR(50)     NOT NULL DEFAULT 'consensus',
+    line_type       VARCHAR(20)     NOT NULL DEFAULT 'current'
+                        CHECK (line_type IN ('opening','current','closing','bet_placement')),
+    market_type     VARCHAR(20)     NOT NULL DEFAULT 'moneyline'
+                        CHECK (market_type IN ('moneyline','runline','total')),
+    is_sharp_book   BOOLEAN         NOT NULL DEFAULT FALSE
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_odds_game_pk
+    ON raw.game_odds(game_pk, fetched_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_game_odds_line_type
+    ON raw.game_odds(game_pk, line_type);
+
+COMMENT ON TABLE raw.game_odds IS
+    'Odds snapshots per game. source=mock until Phase 7 real provider integration.';
+COMMENT ON COLUMN raw.game_odds.line_type IS
+    'opening=first line posted; current=live snapshot; closing=final line before first_pitch; bet_placement=line at time a bet was placed.';
+COMMENT ON COLUMN raw.game_odds.is_sharp_book IS
+    'TRUE for sharp/respected books (Pinnacle, Circa) whose closing lines are used as CLV reference.';
+
+-- =============================================================================
+-- RAW.PROP_ODDS
+-- Player prop odds snapshots.  Parallel to raw.game_odds.
+-- line_type='opening' captured by nightly job (SIM-138) when starter announced.
+--
+-- SIM-134: prop_type renamed to prop_stat with CHECK constraint.
+--          Betting Analyst (Agent 8) confirmed 7-value scope — see CHANGES.md.
+--          Migration 0004 applies these changes to live databases.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS raw.prop_odds (
+    id              BIGSERIAL       PRIMARY KEY,
+    game_pk         INTEGER         NOT NULL REFERENCES raw.games(game_pk),
+    player_id       INTEGER         NOT NULL REFERENCES raw.players(player_id),
+    fetched_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    source          VARCHAR(50)     NOT NULL DEFAULT 'consensus',
+    is_mock         BOOLEAN         NOT NULL DEFAULT TRUE,
+    -- SIM-134: renamed from prop_type; CHECK constraint enforces known markets.
+    -- 7 values confirmed by Betting Analyst (Agent 8).
+    -- innings_pitched deferred to Phase 4 (requires pitch-count model).
+    prop_stat       VARCHAR(30)     NOT NULL
+                        CHECK (prop_stat IN (
+                            'strikeouts',
+                            'hits',
+                            'home_runs',
+                            'earned_runs',
+                            'walks',
+                            'total_bases',
+                            'rbis'
+                        )),
+    line            FLOAT           NOT NULL,
+    over_ml         INTEGER,
+    under_ml        INTEGER,
+    book            VARCHAR(50)     NOT NULL DEFAULT 'consensus',
+    line_type       VARCHAR(20)     NOT NULL DEFAULT 'current'
+                        CHECK (line_type IN ('opening','current','closing','bet_placement')),
+    is_sharp_book   BOOLEAN         NOT NULL DEFAULT FALSE
+);
+
+-- SIM-134: compound index supports per-player-per-prop time-series queries
+-- and efficient CLV lookups (opening vs. closing for same game/player/stat).
+-- Replaces the weaker (game_pk, player_id)-only index from migration 0003.
+CREATE INDEX IF NOT EXISTS idx_prop_odds_game_player
+    ON raw.prop_odds(game_pk, player_id, prop_stat, fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_prop_odds_line_type
+    ON raw.prop_odds(game_pk, line_type);
+
+COMMENT ON TABLE raw.prop_odds IS
+    'Player prop odds snapshots. Opening lines captured nightly when starter is announced (SIM-138). prop_stat CHECK constraint enforces 7 known markets (SIM-134).';
+
+-- =============================================================================
+-- RAW.PIPELINE_RUN_LOG
+-- ETL/pipeline job run log referenced by SIM-138 for opening_line_games_captured.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS raw.pipeline_run_log (
+    id                          BIGSERIAL       PRIMARY KEY,
+    job_name                    VARCHAR(100)    NOT NULL,
+    started_at                  TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    finished_at                 TIMESTAMPTZ,
+    status                      VARCHAR(20)     NOT NULL DEFAULT 'running'
+                                    CHECK (status IN ('running','success','partial','error')),
+    games_processed             INTEGER         NOT NULL DEFAULT 0,
+    pitches_inserted            INTEGER         NOT NULL DEFAULT 0,
+    pitches_skipped             INTEGER         NOT NULL DEFAULT 0,
+    opening_line_games_captured INTEGER         NOT NULL DEFAULT 0,
+    opening_prop_lines_captured INTEGER         NOT NULL DEFAULT 0,
+    error_message               TEXT,
+    metadata                    JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_run_log_job ON raw.pipeline_run_log(job_name, started_at DESC);
+
+COMMENT ON TABLE raw.pipeline_run_log IS
+    'One row per ETL/pipeline job run. opening_line_games_captured logged by nightly opening line job (SIM-138).';
 
 -- =============================================================================
 -- TRIGGERS

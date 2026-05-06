@@ -1,0 +1,81 @@
+# =============================================================================
+# MLB Baseball Simulation Platform — Weekly Integration Tests (SIM-146)
+#
+# Runs the full testcontainers-based integration suite:
+#   - Spins up ephemeral PostgreSQL 15 + Redis 7 containers
+#   - Applies all Alembic migrations (alembic upgrade head)
+#   - Runs tests/integration/ (schema validation, upsert behaviour, ETL flow)
+#
+# Schedule: Every Monday at 03:00 UTC (off-peak, avoids weekend ingestion jobs)
+# Also manually dispatchable via workflow_dispatch.
+#
+# These are separated from the main CI pipeline because testcontainers
+# add ~3-4 minutes to each run — too slow for push feedback loops.
+# =============================================================================
+
+name: Integration Tests (weekly)
+
+on:
+  schedule:
+    # Monday 03:00 UTC
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual trigger'
+        required: false
+        default: 'Manual integration test run'
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  integration:
+    name: Integration tests (testcontainers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      # testcontainers pulls Docker images at runtime — ensure Docker is available
+      - name: Verify Docker daemon
+        run: docker info
+
+      - name: Run integration suite
+        env:
+          # testcontainers uses DOCKER_HOST if set; default socket is fine on ubuntu-latest
+          TESTCONTAINERS_RYUK_DISABLED: 'false'
+        run: |
+          pytest tests/integration/ \
+            -v \
+            --tb=long \
+            --timeout=120 \
+            -m integration \
+            --junit-xml=test-results-integration.xml
+
+      - name: Upload integration test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results-${{ github.run_id }}
+          path: test-results-integration.xml
+          retention-days: 30
+
+      - name: Notify on failure (workflow summary)
+        if: failure()
+        run: |
+          echo "## ❌ Integration Test Failure" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The weekly integration suite failed. Check the uploaded JUnit report for details." >> $GITHUB_STEP_SUMMARY
+          echo "Run \`make test-integration\` locally to reproduce." >> $GITHUB_STEP_SUMMARY

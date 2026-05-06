@@ -1,0 +1,72 @@
+# =============================================================================
+# MLB Baseball Simulation Platform — pyproject.toml
+#
+# Tool configuration only — no build backend (project uses pip + requirements.txt).
+# Covers: pytest, ruff, mypy.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths  = ["tests"]
+asyncio_mode = "auto"           # pytest-asyncio: all async test functions run as coroutines
+
+# Custom marks — prevents PytestUnknownMarkWarning
+markers = [
+    "integration: marks tests as integration tests (require live DB + Redis via testcontainers)",
+    "unit: marks tests as unit tests (no external services required)",
+    "slow: marks tests as slow (>1s) — excluded from default local run",
+    "benchmark: marks tests that use pytest-benchmark",
+    "regression: marks tests as regression/golden-file tests (detect engine drift between commits)",
+]
+
+# Show short traceback by default; full tracebacks available with -v --tb=long
+addopts = [
+    "--tb=short",
+    "--strict-markers",          # fail if unknown mark is used
+    "--strict-config",           # fail if unknown ini option is used
+    "-q",                        # quiet output — suppress dots, show only failures
+]
+
+# ---------------------------------------------------------------------------
+# ruff — linting + formatting
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py311"
+line-length    = 100
+src            = ["api", "pipeline", "similarity", "simulator", "db", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+    "TID", # flake8-tidy-imports
+    "PTH", # flake8-use-pathlib
+]
+ignore = [
+    "E501",  # line-length handled by formatter, not linter
+    "B008",  # FastAPI depends() pattern triggers this
+    "B904",  # raise from not always appropriate in async code
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["api", "pipeline", "similarity", "simulator", "db"]
+
+# ---------------------------------------------------------------------------
+# mypy — static type checking
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version         = "3.11"
+strict                 = false
+ignore_missing_imports = true
+warn_return_any        = true
+warn_unused_configs    = true
+exclude                = ["tests/", "db/migrations/"]

@@ -1,0 +1,153 @@
+{
+  "engine": "situation",
+  "generated_at": "2026-05-05T19:12:43.985520+00:00",
+  "seed": 2026,
+  "n_situations": 50,
+  "queries": [
+    {
+      "situation_vector": {
+        "inning": 7,
+        "top_or_bottom": 0,
+        "outs": 1,
+        "runner_on_1b": 0,
+        "runner_on_2b": 1,
+        "runner_on_3b": 0,
+        "score_differential": 0.0,
+        "leverage_index": 2.1,
+        "pitcher_pitch_count": 55,
+        "batter_pa_count": 2,
+        "park_factor_runs": 1.02
+      },
+      "top5_play_ids": [
+        "8",
+        "36",
+        "12",
+        "31",
+        "5"
+      ],
+      "top5_distances": [
+        2.306190311041825,
+        2.3870042946409273,
+        2.4821566843109424,
+        2.5702547241484677,
+        2.6583370479614072
+      ]
+    },
+    {
+      "situation_vector": {
+        "inning": 3,
+        "top_or_bottom": 1,
+        "outs": 0,
+        "runner_on_1b": 1,
+        "runner_on_2b": 0,
+        "runner_on_3b": 0,
+        "score_differential": -1.0,
+        "leverage_index": 0.8,
+        "pitcher_pitch_count": 30,
+        "batter_pa_count": 1,
+        "park_factor_runs": 0.95
+      },
+      "top5_play_ids": [
+        "32",
+        "22",
+        "4",
+        "3",
+        "7"
+      ],
+      "top5_distances": [
+        2.02765534124162,
+        2.294243399471273,
+        2.3182023412680985,
+        2.513811436750882,
+        2.702379877130602
+      ]
+    },
+    {
+      "situation_vector": {
+        "inning": 9,
+        "top_or_bottom": 0,
+        "outs": 2,
+        "runner_on_1b": 1,
+        "runner_on_2b": 1,
+        "runner_on_3b": 1,
+        "score_differential": 1.0,
+        "leverage_index": 3.2,
+        "pitcher_pitch_count": 75,
+        "batter_pa_count": 3,
+        "park_factor_runs": 1.05
+      },
+      "top5_play_ids": [
+        "11",
+        "18",
+        "9",
+        "21",
+        "48"
+      ],
+      "top5_distances": [
+        2.3592230528336637,
+        2.6984469326400338,
+        3.0747428804736274,
+        3.1809790040353723,
+        3.554755947501412
+      ]
+    },
+    {
+      "situation_vector": {
+        "inning": 1,
+        "top_or_bottom": 0,
+        "outs": 0,
+        "runner_on_1b": 0,
+        "runner_on_2b": 0,
+        "runner_on_3b": 0,
+        "score_differential": 0.0,
+        "leverage_index": 0.5,
+        "pitcher_pitch_count": 0,
+        "batter_pa_count": 0,
+        "park_factor_runs": 1.0
+      },
+      "top5_play_ids": [
+        "3",
+        "4",
+        "22",
+        "10",
+        "41"
+      ],
+      "top5_distances": [
+        2.6341599255356,
+        2.9035678956287643,
+        2.998936051865948,
+        3.2021838761994608,
+        3.2074409246606614
+      ]
+    },
+    {
+      "situation_vector": {
+        "inning": 5,
+        "top_or_bottom": 1,
+        "outs": 1,
+        "runner_on_1b": 0,
+        "runner_on_2b": 0,
+        "runner_on_3b": 0,
+        "score_differential": 2.0,
+        "leverage_index": 0.7,
+        "pitcher_pitch_count": 45,
+        "batter_pa_count": 2,
+        "park_factor_runs": 0.98
+      },
+      "top5_play_ids": [
+        "10",
+        "3",
+        "36",
+        "27",
+        "5"
+      ],
+      "top5_distances": [
+        1.085461824992807,
+        1.1204430079831176,
+        1.7880253881335442,
+        1.9985555142235585,
+        2.280455595649622
+      ]
+    }
+  ]
+}

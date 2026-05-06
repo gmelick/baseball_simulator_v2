@@ -1835,17 +1835,10 @@ class HistoricalDataLoader:
         Upserts raw.etl_data_freshness so the system knows the last loaded
         game_date per pitcher and per batter.
 
-        Requires this table to exist (create once, not in the main schema file
-        since it's ETL-owned metadata):
-
-            CREATE TABLE IF NOT EXISTS raw.etl_data_freshness (
-                entity_type  VARCHAR(10) NOT NULL,   -- 'pitcher' or 'batter'
-                entity_id    INTEGER     NOT NULL,
-                last_game_pk INTEGER     NOT NULL,
-                last_date    DATE        NOT NULL,
-                updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                PRIMARY KEY  (entity_type, entity_id)
-            );
+        Table DDL lives in db/schemas/01_postgres_schema.sql and is applied via
+        Alembic migration 0003.  SIM-083 removed the dead FRESHNESS_TABLE_DDL
+        string constant that previously appeared at module level — it was never
+        executed and caused UndefinedTable errors in _process_and_insert().
         """
         if not rows:
             return
@@ -1917,25 +1910,12 @@ class HistoricalDataLoader:
 
 
 # ---------------------------------------------------------------------------
-# Freshness table DDL  (run once, separate from main schema)
-# ---------------------------------------------------------------------------
-
-FRESHNESS_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS raw.etl_data_freshness (
-    entity_type  VARCHAR(10)  NOT NULL,
-    entity_id    INTEGER      NOT NULL,
-    last_game_pk INTEGER      NOT NULL,
-    last_date    DATE         NOT NULL,
-    updated_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    PRIMARY KEY  (entity_type, entity_id)
-);
-COMMENT ON TABLE raw.etl_data_freshness IS
-    'Tracks last loaded game per pitcher/batter. Used to detect stale profiles.';
-"""
-
-
-# ---------------------------------------------------------------------------
 # Entry point
+# ---------------------------------------------------------------------------
+# NOTE (SIM-083): FRESHNESS_TABLE_DDL was removed from this file.
+# The raw.etl_data_freshness CREATE TABLE DDL now lives in:
+#   db/schemas/01_postgres_schema.sql
+# Applied via Alembic migration 0003 (db/migrations/versions/0003_*.py).
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":

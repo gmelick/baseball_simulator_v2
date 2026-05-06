@@ -96,7 +96,7 @@ import duckdb
 import numpy as np
 from numpy.typing import NDArray
 
-from similarity_diagnostics import run_batter_diagnostics
+from similarity.similarity_diagnostics import run_batter_diagnostics
 
 # ---------------------------------------------------------------------------
 # Logging

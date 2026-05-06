@@ -22,7 +22,7 @@
 
 ## Overview
 
-This platform ingests real Statcast pitch-by-pitch data (117-column schema), constructs a suite of **11 similarity engines** across nine player and situation dimensions, and runs a **stochastic pitch-by-pitch game simulator** capable of generating 100 independent game iterations in near-real time.
+This platform ingests real Statcast pitch-by-pitch data (117-column schema), constructs a suite of **11 similarity engines** across eleven player and situation dimensions, and runs a **stochastic pitch-by-pitch game simulator** capable of generating 100 independent game iterations in near-real time.
 
 The frontend presents live game dashboards, pre-game win probability estimates, full play-by-play replay, and an interactive managerial override tool — allowing users to substitute players mid-game and instantly see how simulation outcomes shift.
 
@@ -69,7 +69,7 @@ The frontend presents live game dashboards, pre-game win probability estimates, 
         └────────────────────────────────────────┘
 ```
 
-**Hybrid database design:**  PostgreSQL handles all operational/transactional concerns (raw ingestion, live game state). DuckDB attaches directly to PostgreSQL via its `postgres` extension to run bulk analytical aggregations without full data loads into Python memory. A nightly ETL job owns the DuckDB lifecycle and populates the play pool and player profile tables.
+**Hybrid database design:** PostgreSQL handles all operational/transactional concerns (raw ingestion, live game state). DuckDB attaches directly to PostgreSQL via its `postgres` extension to run bulk analytical aggregations without full data loads into Python memory. A nightly ETL job owns the DuckDB lifecycle and populates the play pool and player profile tables.
 
 ---
 
@@ -112,19 +112,21 @@ Continue until game over. Handles inning transitions, extra innings (ghost runne
 
 All engines share a unified interface: `engine.query(entity_features, n=50) -> List[SimilarityResult]`
 
-| # | Engine | Method | Key Features |
-|---|--------|--------|--------------|
-| 1 | **Pitcher → Pitcher** (Command & Arsenal) | W₂ / Bures-Wasserstein on GMMs | Velocity, IVB, horizontal break, spin rate, release angle, pitch mix |
-| 2 | **Batter → Batter** | RBF kernel, z-score normalized | First-pitch take rate, O-swing%, whiff%, K%, BB%, batted ball profile, platoon splits |
-| 3 | **Fielder → Fielder** | RBF kernel (position-specific) | OAA components, range factor, error rate by zone, arm strength proxy |
-| 4 | **Baserunner → Baserunner** (Extra Base) | RBF kernel | Extra-base rate by situation, sprint speed, stop rate, score-from-second rate |
-| 5 | **Baserunner → Baserunner** (Stealing) | RBF kernel | SB attempt rate, SB success rate, lead distance proxy, sprint speed |
-| 6 | **Catcher → Catcher** (Throwing) | RBF kernel | Caught-stealing rate by base, arm strength proxy, pop time proxy |
-| 7 | **Pitcher → Pitcher** (Allowing SBs) | RBF kernel | Slide step mix, time to plate, SB allowed rate, pickoff attempt rate |
-| 8 | **Manager → Manager** | Cosine similarity | PH usage rate, bullpen leverage patterns, defensive replacement freq, SB green-light rate |
-| 9 | **Situation → Situation** | KD-Tree, weighted Euclidean | Count, outs, inning, score differential (capped ±5), base state (8 combos), leverage index |
-| 10 | **Pitch → Pitch** | FAISS flat index | Pitch type, velocity, pfx_x, IVB, release position, spin axis, extension, plate location |
-| 11 | **Batted Ball → Batted Ball** | FAISS flat index | Exit velocity, launch angle, spray angle, batted ball type, venue |
+| # | Engine | Method | Key Features | Status |
+|---|--------|--------|--------------|--------|
+| 1 | **Pitcher → Pitcher** (Command & Arsenal) | W₂ / Bures-Wasserstein on GMMs | Velocity, IVB, horizontal break, spin rate, release angle, pitch mix | ✅ Complete |
+| 2 | **Batter → Batter** | RBF kernel, z-score normalized | First-pitch take rate, O-swing%, whiff%, K%, BB%, batted ball profile, platoon splits | ✅ Complete |
+| 3 | **Fielder → Fielder** | RBF kernel (position-specific) | OAA components, range factor, error rate by zone, arm strength proxy | ✅ Complete |
+| 4 | **Baserunner → Baserunner** (Extra Base) | RBF kernel | Extra-base rate by situation, sprint speed, stop rate, score-from-second rate | ✅ Complete |
+| 5 | **Baserunner → Baserunner** (Stealing) | RBF kernel | SB attempt rate, SB success rate, lead distance proxy, sprint speed | 🔲 Planned (SIM-044) |
+| 6 | **Catcher → Catcher** (Throwing) | RBF kernel | Caught-stealing rate by base, arm strength proxy, pop time proxy | 🔲 Planned (SIM-043) |
+| 7 | **Pitcher → Pitcher** (Allowing SBs) | RBF kernel | Slide step mix, time to plate, SB allowed rate, pickoff attempt rate | 🔲 Planned (SIM-045) |
+| 8 | **Manager → Manager** | Cosine similarity | PH usage rate, bullpen leverage patterns, defensive replacement freq, SB green-light rate | 🔲 Planned (SIM-046) |
+| 9 | **Situation → Situation** | KD-Tree, weighted Euclidean | Count, outs, inning, score differential (capped ±5), base state, leverage index | 🔲 Planned (SIM-047) |
+| 10 | **Pitch → Pitch** | FAISS flat index | Pitch type, velocity, pfx_x, IVB, release position, spin axis, extension, plate location | 🔲 Planned (SIM-041) |
+| 11 | **Batted Ball → Batted Ball** | FAISS flat index | Exit velocity, launch angle, spray angle, batted ball type, venue | 🔲 Planned (SIM-042) |
+
+**`SimilarityEngineRegistry`** (`similarity/registry.py`) — instantiates and caches all 11 engines with unified query interface. *(Phase 2 final deliverable — planned, SIM-048)*
 
 **Key modeling decisions:**
 - GMM covariances stored in **standardized space** with saved `feature_means` / `feature_stds` — prevents dominant features (spin rate) from corrupting arsenal distances
@@ -146,16 +148,22 @@ All engines share a unified interface: `engine.query(entity_features, n=50) -> L
 - **Source:** MLB Stats API (REST polling + WebSocket change signal)
 - **Cadence:** ~30 seconds for in-progress games
 - **Ingest:** Game state, current lineup, bullpen availability, base/out/count state, live score, betting odds
-- **Re-simulation trigger:** End of every plate appearance; also triggered by WebSocket pitch events in final 3 innings or within 2 runs
+- **Re-simulation trigger:** End of every plate appearance; also triggered by WebSocket pitch events
 
 ### Nightly Batch
 - Pre-compute aggregated player profiles (pitch mix %, velocity percentiles, whiff/chase rates, batted ball profiles, sprint speed, arm strength)
-- Rebuild FAISS indices over full pitch pool (~1M+ rows)
+- Sprint speed loaded from Baseball Savant CSV endpoint into `raw.sprint_speed` table
+- Defensive metrics computed via `defensive_metrics_computor.py` (OAA, DP conversion, framing, blocking)
+- Rebuild FAISS indices over full pitch pool (~1M+ rows) *(Phase 3)*
 - Recency weighting: last 2 seasons weighted 2× vs. older data
+
+**Caching:** Simulation results cached 60s (live games) / longer (completed). Play pool queries cached 5 min. Odds data cached 5 min.
 
 ---
 
 ## API Reference
+
+> **Note:** All API endpoints below are planned deliverables for Phase 5. They are not yet implemented.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -169,11 +177,11 @@ All engines share a unified interface: `engine.query(entity_features, n=50) -> L
 
 **Simulation results include:** `home_win_pct`, `away_win_pct`, `avg_home_score`, `avg_away_score`, score distribution histogram, and per-player projected stats across all iterations.
 
-**Caching:** Simulation results cached 60s (live games) / longer (completed). Play pool queries cached 5 min. Odds data cached 5 min.
-
 ---
 
 ## Frontend
+
+> **Note:** Frontend components below are planned deliverables for Phase 6. They are not yet implemented.
 
 ### Day Summary Page
 
@@ -199,10 +207,10 @@ The landing page shows all MLB games for a selected date with three distinct car
 
 All Day Summary information plus:
 
-- **Expanded simulation boxscore** — per-player projected stats across 100 simulations (avg AB, H, HR, RBI for batters; avg K, IP, BB, ER for pitchers)
+- **Expanded simulation boxscore** — per-player projected stats across 100 simulations
 - **Play-by-play scroll panel** — at-bat level by default, expandable to individual pitches
 - **Historical replay** — click any play or pitch to rewind the full page to that game state and re-run simulations from there
-- **Managerial override panel** — substitute a pitcher, pinch hitter, pinch runner, or defensive replacement and instantly see updated simulation projections with a clear visual indicator distinguishing override scenarios from actual game state
+- **Managerial override panel** — substitute a pitcher, pinch hitter, pinch runner, or defensive replacement and instantly see updated simulation projections
 
 ---
 
@@ -227,15 +235,15 @@ All Day Summary information plus:
 
 The platform is organized into 7 sequential phases across ~24 weeks:
 
-| Phase | Name | Key Output | Duration |
-|-------|------|------------|----------|
-| **1** | Data Infrastructure & Pipeline | Populated play pool DB + data API layer | 2 weeks |
-| **2** | Similarity Engine Suite | 11 similarity models, fully tested | 5 weeks |
-| **3** | Play Pool Architecture | Indexed, query-optimized play pool | 1 week |
-| **4** | Core Simulation Loop | Full pitch-by-pitch game simulator | 4 weeks |
-| **5** | Simulation Runner & Backend API | FastAPI endpoints, 100-iteration runner | 3 weeks |
-| **6** | Frontend Build | Day Summary + Game pages, all UI components | 6 weeks |
-| **7** | Integration, Testing & Deployment | Production-ready deployed system | 3 weeks |
+| Phase | Name | Key Output | Duration | Status |
+|-------|------|------------|----------|--------|
+| **1** | Data Infrastructure & Pipeline | Populated play pool DB + data API layer | 2 weeks | ✅ Complete |
+| **2** | Similarity Engine Suite | 11 similarity models, fully tested | 5 weeks | 🔄 In progress (4/11) |
+| **3** | Play Pool Architecture | Indexed, query-optimized play pool | 1 week | 🔲 Not started |
+| **4** | Core Simulation Loop | Full pitch-by-pitch game simulator | 4 weeks | 🔲 Not started |
+| **5** | Simulation Runner & Backend API | FastAPI endpoints, 100-iteration runner | 3 weeks | 🔲 Not started |
+| **6** | Frontend Build | Day Summary + Game pages, all UI components | 6 weeks | 🔲 Not started |
+| **7** | Integration, Testing & Deployment | Production-ready deployed system | 3 weeks | 🔲 Not started |
 
 ### Validation Framework
 - Backtesting on held-out historical data: MAE on simulated prop distributions, calibration curves (ECE), Brier Score, log-loss
@@ -253,7 +261,7 @@ The platform is organized into 7 sequential phases across ~24 weeks:
 - Python 3.11+
 - PostgreSQL 15+
 - Docker & docker-compose
-- Node.js (for frontend tooling)
+- Node.js (for frontend tooling, Phase 6)
 
 ### Installation
 
@@ -264,7 +272,7 @@ cd baseball_simulator
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Start infrastructure (PostgreSQL, Redis, DuckDB)
+# Start infrastructure (PostgreSQL, Redis)
 docker-compose up -d
 
 # Run database migrations
@@ -273,15 +281,19 @@ alembic upgrade head
 # Load historical Statcast data (2022–2024)
 python pipeline/etl/load_historical.py --seasons 2022 2023 2024
 
-# Pre-compute player profiles and similarity indices
-python pipeline/batch/build_profiles.py
-python pipeline/batch/build_indices.py
+# Load sprint speed data from Baseball Savant
+python pipeline/etl/etl_sprint_speed_loader.py --seasons 2022 2023 2024
 
-# Start the backend API
-uvicorn api.main:app --reload
+# Pre-compute player profiles and defensive metrics
+python pipeline/batch/build_profiles.py
+
+# Build similarity indices (Phase 3 deliverable — not yet available)
+# python pipeline/batch/build_indices.py
 ```
 
 ### Running Simulations
+
+> **Note:** The simulation runner below is a Phase 4/5 deliverable and is not yet implemented.
 
 ```python
 from simulator.core import simulate_game
@@ -303,24 +315,24 @@ print(f"Home win probability: {results.home_win_pct:.1%}")
 ```
 baseball_simulator/
 ├── pipeline/
-│   ├── etl/                  # Historical Statcast ingestion
+│   ├── etl/                  # Historical Statcast ingestion + sprint speed loader
 │   ├── live/                 # MLB Stats API live ingestion
-│   └── batch/                # Nightly profile + index computation
+│   └── batch/                # Nightly profile + defensive metrics computation
 ├── similarity/
-│   ├── registry.py           # SimilarityEngineRegistry
+│   ├── registry.py           # SimilarityEngineRegistry [Phase 2 — planned]
 │   ├── engines/              # One module per engine (pitcher, batter, fielder, ...)
-│   └── indices/              # FAISS + KD-Tree index management
-├── simulator/
+│   └── indices/              # FAISS + KD-Tree index management [Phase 3 — planned]
+├── simulator/                # [Phase 4 — planned]
 │   ├── core.py               # simulate_game()
 │   ├── state.py              # GameState dataclass + advance_state()
 │   ├── steps/                # 8-step loop (steal, pitch, outcome, fielding, ...)
 │   ├── manager.py            # Manager decision logic
 │   └── runner.py             # run_simulations() parallel runner
-├── api/
+├── api/                      # [Phase 5 — planned]
 │   ├── main.py               # FastAPI app
 │   ├── routes/               # REST endpoints
 │   └── websocket/            # Live game WebSocket channels
-├── frontend/
+├── frontend/                 # [Phase 6 — planned]
 │   ├── components/           # Shared UI components
 │   ├── pages/                # Day Summary + Game pages
 │   └── graphics/             # SVG baseball field, linescore

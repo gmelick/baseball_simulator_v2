@@ -1263,41 +1263,100 @@ def _run_synthetic_baserunner_test() -> DiagnosticReport:
 
 
 # ============================================================================
-# CLI
+# Generic Diagnostics — works with BaserunnerSteal, Catcher, PitcherSteal,
+# Manager, and any future RBF engine that exposes:
+#   - profile_ids() → list[tuple[int, int]]
+#   - query(player_id, season) → list with .score and sub-score attributes
+#   - query_pair(key_a, key_b) → SimilarityResult | None
+#   - profile_count → int
 # ============================================================================
-if __name__ == "__main__":
-    import sys
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s  %(levelname)-8s  %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+def run_generic_diagnostics(
+    engine: Any,
+    sub_score_names: list[str],
+    n_query_samples: int = 50,
+    seed: int = 42,
+    engine_name: str = "generic",
+) -> DiagnosticReport:
+    """
+    Run full diagnostics on any RBF similarity engine.
 
-    print("Running synthetic batter diagnostics …\n")
-    batter_report = _run_synthetic_batter_test()
-    print(batter_report)
+    Works with BaserunnerStealSimilarityEngine, CatcherSimilarityEngine,
+    PitcherStealSimilarityEngine, ManagerSimilarityEngine, and any future
+    engine with the standard interface:
+        - profile_ids()  -> list[tuple[int, int]]
+        - query(player_id, season) -> list[SimilarityResult]
+        - query_pair(key_a, key_b) -> SimilarityResult | None
+        - profile_count -> int
 
-    print("\n\n")
+    Parameters
+    ----------
+    engine
+        Built similarity engine instance.
+    sub_score_names : list[str]
+        Names of sub-score attributes on each SimilarityResult.
+        E.g. ["tendency_score", "jump_score", "success_score"] for steal engine.
+    n_query_samples : int
+        Number of random profiles to query. Capped at profile_count.
+    seed : int
+        RNG seed for reproducible sampling.
+    engine_name : str
+        Label used in DiagnosticReport.engine_type.
 
-    print("Running synthetic pitcher diagnostics …\n")
-    pitcher_report = _run_synthetic_pitcher_test()
-    print(pitcher_report)
+    Returns
+    -------
+    DiagnosticReport
+        Populated with score distributions, dimensional balance check,
+        cross-season self-similarity check, and symmetry check.
+    """
+    t0 = time.time()
+    report = DiagnosticReport(engine_type=engine_name, n_profiles=engine.profile_count)
 
-    print("\n\n")
+    all_ids = engine.profile_ids()
+    if not all_ids:
+        log.warning("Engine '%s' has no profiles. Cannot run diagnostics.", engine_name)
+        return report
 
-    print("Running synthetic fielder diagnostics …\n")
-    fielder_report = _run_synthetic_fielder_test()
-    print(fielder_report)
+    rng = np.random.default_rng(seed)
+    n_samples = min(n_query_samples, len(all_ids))
+    sample_indices = rng.choice(len(all_ids), size=n_samples, replace=False)
+    sample_ids = [all_ids[i] for i in sample_indices]
+    report.n_queries_sampled = n_samples
 
-    print("\n\n")
+    # Collect composite + per-sub-score arrays
+    all_composite: list[float] = []
+    sub_score_arrays: dict[str, list[float]] = {name: [] for name in sub_score_names}
 
-    print("Running synthetic baserunner diagnostics …\n")
-    baserunner_report = _run_synthetic_baserunner_test()
-    print(baserunner_report)
+    for player_id, season in sample_ids:
+        try:
+            results = engine.query(player_id, season)
+        except Exception as exc:
+            log.warning(
+                "query(%d, %d) raised %s -- skipping.", player_id, season, exc,
+            )
+            continue
+        for r in results:
+            all_composite.append(r.score)
+            for name in sub_score_names:
+                sub_score_arrays[name].append(getattr(r, name, float("nan")))
 
-    # Exit with non-zero if any flags
-    total_flags = batter_report.n_flags + pitcher_report.n_flags + fielder_report.n_flags + baserunner_report.n_flags
-    if total_flags > 0:
-        print(f"\n{total_flags} total flag(s) across all engines.")
-    sys.exit(min(total_flags, 1))
+    report.n_total_scores = len(all_composite)
+
+    # Build ScoreDistribution objects
+    composite_arr = np.array(all_composite, dtype=np.float64)
+    report.distributions.append(ScoreDistribution.from_array("composite", composite_arr))
+    for name in sub_score_names:
+        arr = np.array(sub_score_arrays[name], dtype=np.float64)
+        report.distributions.append(ScoreDistribution.from_array(name, arr))
+
+    # Shared checks (same infrastructure as existing engine-specific runners)
+    if len(report.distributions) > 1:
+        _check_dimensional_balance(report)
+
+    _check_cross_season(engine, all_ids, composite_arr, report, entity_type=engine_name)
+
+    # Symmetry uses the (player_id, season) key shape -- same as batter/baserunner
+    _check_symmetry_batter(engine, all_ids, rng, report)
+
+    report.elapsed_sec = time.time() - t0
+    return report

@@ -21,7 +21,7 @@ Architecture
        ├── _cache_to_redis()        → 60s TTL (rate-limit fallback)   │
        │                                                               │
        └── _should_resimulate()?                                       │
-               │ inning >= 7  OR  |score_diff| <= 2                   │
+               │ fires at end of every plate appearance (PA complete)  │
                ▼                                                        │
        simulation_requested signal  ─────────────────────────────────┘
        (consumed by Phase 5 runner)
@@ -109,39 +109,13 @@ REDIS_TTL_DONE_S  = 3600    # cache TTL for completed game states
 GAME_TYPES = ["R", "F", "D", "L", "W", "C", "P"]
 
 # ---------------------------------------------------------------------------
-# DDL helpers  (run once against your database before starting the pipeline)
+# DDL helpers
 # ---------------------------------------------------------------------------
-
-GAME_ODDS_DDL = """
-CREATE TABLE IF NOT EXISTS raw.game_odds (
-    id              BIGSERIAL       PRIMARY KEY,
-    game_pk         INTEGER         NOT NULL REFERENCES raw.games(game_pk),
-    fetched_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    source          VARCHAR(50)     NOT NULL DEFAULT 'mock',
-    is_mock         BOOLEAN         NOT NULL DEFAULT TRUE,
-
-    -- Moneyline (American odds: negative = favourite)
-    home_ml         INTEGER,        -- e.g. -150
-    away_ml         INTEGER,        -- e.g. +130
-
-    -- Run line / spread
-    home_spread     FLOAT,          -- e.g. -1.5
-    home_spread_ml  INTEGER,        -- e.g. -110
-    away_spread     FLOAT,          -- e.g. +1.5
-    away_spread_ml  INTEGER,        -- e.g. -110
-
-    -- Total (over/under)
-    total_line      FLOAT,          -- e.g.  8.5
-    over_ml         INTEGER,        -- e.g. -110
-    under_ml        INTEGER         -- e.g. -110
-);
-
-CREATE INDEX IF NOT EXISTS idx_game_odds_game_pk
-    ON raw.game_odds(game_pk, fetched_at DESC);
-
-COMMENT ON TABLE raw.game_odds IS
-    'Odds snapshots per game. source=mock until Phase 7 real provider integration.';
-"""
+# NOTE (SIM-083): GAME_ODDS_DDL has been removed from this file.
+# raw.game_odds DDL (including SIM-133 CLV columns) now lives in:
+#   db/schemas/01_postgres_schema.sql
+# Applied via Alembic migration 0003 (db/migrations/versions/0003_*.py).
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -156,12 +130,40 @@ class MockOddsAPI:
 
     To swap in a real provider in Phase 7:
       1. Replace `_fetch_odds()` in LiveIngestionPipeline with a real HTTP call.
-      2. Keep this class for local dev / testing.
+      2. Replace `get_prop_odds()` with a real provider call.
+      3. Keep this class for local dev / testing.
 
     American odds encoding:
       Favourite:  odds = -(prob / (1-prob)) * 100  (negative integer)
       Underdog:   odds = ((1-prob) / prob) * 100   (positive integer)
+
+    SIM-134: Added get_prop_odds() for all 7 Betting-Analyst-confirmed prop markets.
     """
+
+    # ------------------------------------------------------------------
+    # SIM-134: Prop line configuration
+    # Betting Analyst (Agent 8) approved centers and vig ranges.
+    # Format: (line_center, half_spread, over_vig_range, under_vig_range)
+    #   line_center:  base prop line (snapped to nearest 0.5 by get_prop_odds)
+    #   half_spread:  ± RNG window added to line_center before snapping
+    #   over/under vig: (min, max) tuple for American odds juice
+    #
+    # Design notes:
+    #   - Strikeouts: widest window; pitcher quality variance is large.
+    #   - Home runs / RBIs set at 0.5; these are binary-feel props.
+    #   - Juice asymmetry on HR (books shade the under) reflects sharp-book
+    #     behaviour Betting Analyst observed in real markets.
+    # ------------------------------------------------------------------
+    _PROP_CONFIG: dict[str, tuple[float, float, tuple[int, int], tuple[int, int]]] = {
+        #  prop_stat       center  ±spread  over_vig        under_vig
+        "strikeouts":    (5.5,    1.0,     (-125, -105),   (-125, -105)),
+        "hits":          (0.5,    0.5,     (-115, -105),   (-115, -105)),
+        "home_runs":     (0.5,    0.0,     (-130, -110),   (+100, +110)),
+        "earned_runs":   (3.5,    1.0,     (-115, -105),   (-115, -105)),
+        "walks":         (2.5,    0.5,     (-115, -105),   (-115, -105)),
+        "total_bases":   (1.5,    0.5,     (-120, -105),   (-115, -105)),
+        "rbis":          (0.5,    0.5,     (-120, -110),   (-110, -100)),
+    }
 
     @staticmethod
     def _prob_to_american(prob: float) -> int:
@@ -172,15 +174,52 @@ class MockOddsAPI:
             return round(((1.0 - prob) / prob) * 100)
 
     @staticmethod
-    def get_odds(game_pk: int) -> dict[str, Any]:
+    def get_odds(
+        game_pk: int,
+        *,
+        line_type: str = "current",
+        market_type: str = "moneyline",
+        book: str = "consensus",
+        is_sharp_book: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Returns mock betting lines for a game.
+
+        SIM-133: Added book, line_type, market_type, is_sharp_book fields so all
+        raw.game_odds inserts populate the four CLV-enabling columns.
+
+        Parameters
+        ----------
+        game_pk       : MLB game identifier (seeds the RNG for determinism)
+        line_type     : 'opening' | 'current' | 'closing' | 'bet_placement'
+        market_type   : 'moneyline' | 'runline' | 'total'
+        book          : book identifier (e.g. 'consensus', 'pinnacle', 'draftkings')
+        is_sharp_book : TRUE for sharp books used as CLV reference (e.g. Pinnacle, Circa)
+        """
         rng = random.Random(game_pk)
 
         # Home win probability: slight home-field edge built in
         home_win_prob = rng.uniform(0.38, 0.64)
         away_win_prob = 1.0 - home_win_prob
 
-        home_ml = MockOddsAPI._prob_to_american(home_win_prob)
-        away_ml = MockOddsAPI._prob_to_american(away_win_prob)
+        # SIM-132: Apply realistic book vig so mock lines don't produce zero-
+        # overround prices.  Without vig, implied probs sum to exactly 1.0 —
+        # no real book prices this way.  Every edge calculation, calibration
+        # target, and display component built through Phase 6 would be trained
+        # against lines that don't exist in real markets; when Phase 7 swaps
+        # in real lines the edge estimates shrink 3–8 pp overnight.
+        #
+        # vig is the total overround, split evenly between home and away:
+        #   home_inflated = home_win_prob * (1 + vig/2)
+        #   away_inflated = away_win_prob * (1 + vig/2)
+        #   sum of inflated probs = 1 + vig/2  ∈ [1.03, 1.05]
+        #
+        # Range chosen so (home_implied + away_implied) > 1.03 for every
+        # game_pk — the acceptance-criteria assertion in test_live_pipeline.py.
+        # Real sharp-book MLB overround is ~3–5 %; soft-book ~6–8 %.
+        vig = rng.uniform(0.06, 0.10)
+        home_ml = MockOddsAPI._prob_to_american(home_win_prob * (1 + vig / 2))
+        away_ml = MockOddsAPI._prob_to_american(away_win_prob * (1 + vig / 2))
 
         # Run line: home -1.5 if heavy fav, else pick randomly
         if home_win_prob > 0.58:
@@ -202,6 +241,12 @@ class MockOddsAPI:
             "game_pk":        game_pk,
             "source":         "mock",
             "is_mock":        True,
+            # SIM-133 CLV columns
+            "book":           book,
+            "line_type":      line_type,
+            "market_type":    market_type,
+            "is_sharp_book":  is_sharp_book,
+            # Odds values
             "home_ml":        home_ml,
             "away_ml":        away_ml,
             "home_spread":    home_spread,
@@ -211,6 +256,82 @@ class MockOddsAPI:
             "total_line":     total_line,
             "over_ml":        total_juice,
             "under_ml":       total_juice,
+        }
+
+    @staticmethod
+    def get_prop_odds(
+        game_pk: int,
+        player_id: int,
+        prop_stat: str,
+        *,
+        line_type: str = "current",
+        book: str = "consensus",
+        is_sharp_book: bool = False,
+    ) -> dict[str, Any]:
+        """
+        SIM-134: Returns a deterministic mock prop line for a player.
+
+        The RNG is seeded on (game_pk, player_id, prop_stat) so the same
+        combination always returns the same line — frontend and tests never
+        see flicker.
+
+        Parameters
+        ----------
+        game_pk       : MLB game identifier
+        player_id     : MLB player identifier
+        prop_stat     : one of the 7 Betting-Analyst-confirmed markets:
+                        'strikeouts' | 'hits' | 'home_runs' | 'earned_runs'
+                        | 'walks' | 'total_bases' | 'rbis'
+        line_type     : 'opening' | 'current' | 'closing' | 'bet_placement'
+        book          : book identifier (default 'consensus')
+        is_sharp_book : True for sharp reference books (Pinnacle, Circa)
+
+        Returns
+        -------
+        dict with all columns required by a raw.prop_odds INSERT:
+          game_pk, player_id, prop_stat, line,
+          over_ml, under_ml, book, line_type, is_sharp_book,
+          source, is_mock
+
+        Raises
+        ------
+        ValueError
+            If prop_stat is not in the 7 known markets.  Prevents silent
+            schema violations before the DB CHECK constraint catches them.
+        """
+        if prop_stat not in MockOddsAPI._PROP_CONFIG:
+            known = ", ".join(sorted(MockOddsAPI._PROP_CONFIG))
+            raise ValueError(
+                f"Unknown prop_stat '{prop_stat}'. Known values: {known}"
+            )
+
+        center, half_spread, over_vig_range, under_vig_range = (
+            MockOddsAPI._PROP_CONFIG[prop_stat]
+        )
+
+        # Deterministic RNG: same game + player + prop always → same line
+        rng = random.Random(game_pk * 1_000_000 + player_id + hash(prop_stat))
+
+        # Line: add jitter to center then snap to nearest 0.5
+        raw_line = center + rng.uniform(-half_spread, half_spread)
+        line = round(raw_line * 2) / 2  # snap to nearest 0.5
+
+        # Vig: independent random draws within Betting-Analyst-approved ranges
+        over_ml  = rng.randint(*over_vig_range)
+        under_ml = rng.randint(*under_vig_range)
+
+        return {
+            "game_pk":      game_pk,
+            "player_id":    player_id,
+            "prop_stat":    prop_stat,
+            "line":         line,
+            "over_ml":      over_ml,
+            "under_ml":     under_ml,
+            "book":         book,
+            "line_type":    line_type,
+            "is_sharp_book": is_sharp_book,
+            "source":       "mock",
+            "is_mock":      True,
         }
 
 
@@ -277,6 +398,14 @@ class GameStateBuilder:
         home_team_id = game_data["teams"]["home"]["id"]
         away_team_id = game_data["teams"]["away"]["id"]
 
+        # SIM-100: extract game_date for replay-safe days_rest calculation.
+        # officialDate is "YYYY-MM-DD"; None-safe for edge cases.
+        _game_date_str = game_data.get("datetime", {}).get("officialDate")
+        try:
+            _game_date: date | None = date.fromisoformat(_game_date_str) if _game_date_str else None
+        except ValueError:
+            _game_date = None
+
         # ---- Inning state --------------------------------------------------
         inning       = linescore.get("currentInning", 1)
         half         = linescore.get("inningHalf", "Top")          # "Top" | "Bottom"
@@ -297,20 +426,42 @@ class GameStateBuilder:
         on_3b = runners.get("third",  {}).get("id")
 
         # ---- Current participants ------------------------------------------
-        current_batter_id  = offense.get("batter",  {}).get("id")
-        current_pitcher_id = offense.get("pitcher", {}).get("id")
-        # Note: matchup is batter-centric; pitcher is the defending pitcher
+        current_batter_id = offense.get("batter", {}).get("id")
+
+        # SIM-099: removed dead first assignment from offense dict (matchup is
+        # batter-centric; the "pitcher" key there was silently overwritten by
+        # the lookup chain below).
+        #
+        # Resolution order (most authoritative → least):
+        #   1. currentPlay.matchup.pitcher  — set mid-PA, most reliable
+        #   2. linescore.defense.pitcher    — set between PAs
+        #   3. allPlays[-1].matchup.pitcher — final fallback from last recorded play
+        #   4. None → WARNING logged; simulation layer handles gracefully
+        _all_plays = live_data.get("plays", {}).get("allPlays", [])
+        _last_play_pitcher = (
+            _all_plays[-1].get("matchup", {}).get("pitcher", {}).get("id")
+            if _all_plays else None
+        )
         current_pitcher_id = (
             current_play.get("matchup", {}).get("pitcher", {}).get("id")
             or live_data.get("linescore", {}).get("defense", {}).get("pitcher", {}).get("id")
+            or _last_play_pitcher
         )
+        if current_pitcher_id is None:
+            log.warning(
+                "game %s: could not resolve current_pitcher_id from matchup, "
+                "linescore.defense, or allPlays — game state may be incomplete",
+                game_pk,
+            )
 
         # ---- Lineups -------------------------------------------------------
+        # SIM-100: pass game_date so days_rest is anchored to the game date,
+        # not date.today() — required for correct historical replay behaviour.
         home_lineup, home_bullpen, home_bench = await self._parse_roster(
-            boxscore, game_pk, side="home", team_id=home_team_id
+            boxscore, game_pk, side="home", team_id=home_team_id, game_date=_game_date
         )
         away_lineup, away_bullpen, away_bench = await self._parse_roster(
-            boxscore, game_pk, side="away", team_id=away_team_id
+            boxscore, game_pk, side="away", team_id=away_team_id, game_date=_game_date
         )
 
         # ---- Play history (at-bat level summary) ---------------------------
@@ -356,24 +507,36 @@ class GameStateBuilder:
         game_pk: int,
         side: str,
         team_id: int,
+        *,
+        game_date: date | None = None,
     ) -> tuple[list, list, list]:
         """
         Returns (lineup, bullpen, bench) for one team.
 
         lineup  — [{player_id, batting_order, position, name, stats_today}]
-        bullpen — [{player_id, name, pitch_count_today, days_rest, role}]
+        bullpen — [{player_id, name, pitch_count_today, days_rest, role, available}]
         bench   — [{player_id, name, position}]
+
+        SIM-100 fixes applied here:
+          - N+1 query eliminated: all bullpen pitcher days_rest fetched in one
+            batch query via ``_batch_days_rest()`` rather than one query per pitcher.
+          - ``used_pitcher_ids`` dead-code set removed entirely.
+          - Availability corrected: a pitcher is available if they haven't thrown
+            today OR if they've rested ≥1 day and thrown fewer than 30 pitches
+            (single-inning appearances by fresh arms).
+          - ``game_date`` passed through to ``_batch_days_rest()`` so historical
+            replay calculates rest relative to game_date, not date.today().
         """
         team_box = boxscore.get("teams", {}).get(side, {})
-        players  = team_box.get("players", {})          # keyed "ID{player_id}"
+        players       = team_box.get("players", {})     # keyed "ID{player_id}"
         batting_order = team_box.get("battingOrder", [])
 
         lineup:  list[dict] = []
-        bullpen: list[dict] = []
         bench:   list[dict] = []
 
-        # Collect pitcher IDs already used in this game (for pitch counts)
-        used_pitcher_ids: set[int] = set()
+        # SIM-100: two-pass approach — collect pitchers first, then batch-query
+        # days_rest for all of them in a single DB round-trip.
+        bullpen_candidates: list[tuple] = []  # (pid, name, pitching_stats, game_stats, pitch_count)
 
         for key, player_data in players.items():
             pid        = player_data["person"]["id"]
@@ -381,11 +544,11 @@ class GameStateBuilder:
             position   = player_data.get("position", {}).get("abbreviation", "")
             stats      = player_data.get("stats", {})
             game_stats = player_data.get("gameStats", {})
-            seq        = player_data.get("battingOrder")         # "100", "200" … or None
+            seq        = player_data.get("battingOrder")     # "100", "200" … or None
 
             # Batting lineup
             if seq is not None:
-                batting_pos = int(seq) // 100   # "100" → 1
+                batting_pos   = int(seq) // 100   # "100" → 1
                 batting_stats = stats.get("batting", {}).get("summary", "")
                 lineup.append({
                     "player_id":     pid,
@@ -397,58 +560,113 @@ class GameStateBuilder:
                 })
                 continue
 
-            # Pitchers not in batting order → bullpen or bench
             if position == "P":
-                pitching_stats = stats.get("pitching", {})
+                pitching_stats    = stats.get("pitching", {})
                 pitch_count_today = pitching_stats.get("pitchesThrown", 0)
-                if pitch_count_today > 0:
-                    used_pitcher_ids.add(pid)
-
-                days_rest = await self._get_days_rest(pid, game_pk)
-                role      = self._infer_role(pitching_stats, game_stats)
-
-                bullpen.append({
-                    "player_id":         pid,
-                    "name":              name,
-                    "pitch_count_today": pitch_count_today,
-                    "days_rest":         days_rest,
-                    "role":              role,
-                    "era":               pitching_stats.get("era", ""),
-                    "available":         pitch_count_today == 0,
-                })
+                # SIM-100: removed used_pitcher_ids.add(pid) — set was populated
+                # but never read anywhere; dead code confirmed by full-file grep.
+                bullpen_candidates.append(
+                    (pid, name, pitching_stats, game_stats, pitch_count_today)
+                )
             else:
                 bench.append({
-                    "player_id": pid,
-                    "name":      name,
-                    "position":  position,
+                    "player_id":   pid,
+                    "name":        name,
+                    "position":    position,
                     "stats_today": stats.get("batting", {}).get("summary", ""),
                 })
+
+        # SIM-100: single batch query replaces N per-pitcher queries
+        pitcher_ids     = [c[0] for c in bullpen_candidates]
+        days_rest_cache = await self._batch_days_rest(
+            pitcher_ids, game_pk, as_of_date=game_date
+        )
+
+        bullpen: list[dict] = []
+        for pid, name, pitching_stats, game_stats, pitch_count_today in bullpen_candidates:
+            days_rest = days_rest_cache.get(pid)    # int | None
+            role      = self._infer_role(pitching_stats, game_stats)
+
+            # SIM-100: corrected availability logic.
+            # Old (wrong): pitch_count_today == 0
+            #   → marks every pitcher who has thrown even 1 pitch as unavailable,
+            #     so most of the bullpen is unavailable mid-game.
+            # New (correct): fresh arm OR rested arm with light usage
+            #   pitch_count_today == 0                           → fully fresh
+            #   days_rest >= 1 AND pitch_count_today < 30        → 1+ days rest,
+            #     light usage (single short outing) → manager can bring back
+            available = pitch_count_today == 0 or (
+                days_rest is not None and days_rest >= 1 and pitch_count_today < 30
+            )
+
+            bullpen.append({
+                "player_id":         pid,
+                "name":              name,
+                "pitch_count_today": pitch_count_today,
+                "days_rest":         days_rest,
+                "role":              role,
+                "era":               pitching_stats.get("era", ""),
+                "available":         available,
+            })
 
         lineup.sort(key=lambda x: x["batting_order"])
         return lineup, bullpen, bench
 
-    async def _get_days_rest(self, player_id: int, current_game_pk: int) -> int | None:
+    async def _batch_days_rest(
+        self,
+        pitcher_ids: list[int],
+        current_game_pk: int,
+        *,
+        as_of_date: date | None = None,
+    ) -> dict[int, int | None]:
         """
-        Queries raw.pitches to find the last game_date this pitcher appeared,
-        then returns the number of rest days relative to today.
-        Returns None if no historical record found.
+        SIM-100: Batch replacement for the old per-pitcher ``_get_days_rest()``.
+
+        Issues a *single* DB query for all bullpen pitchers on a team instead of
+        one query per pitcher.  With a 13-man bullpen, this reduces DB round-trips
+        per WS refresh from 26 (2 teams × 13) to 2 (one per team).
+
+        Parameters
+        ----------
+        pitcher_ids
+            Player IDs for all pitchers on one team's roster.
+        current_game_pk
+            Excluded from the look-back so today's game doesn't count as a rest day.
+        as_of_date
+            Date to calculate rest relative to.  Pass ``game_date`` for historical
+            replay; defaults to ``date.today()`` for live games.
+            (SIM-100: old code always used date.today(), breaking replay.)
+
+        Returns
+        -------
+        dict mapping player_id → days_rest (int) or None if no prior appearance.
         """
+        if not pitcher_ids:
+            return {}
+
+        anchor = as_of_date or date.today()
+
         try:
-            row = await self._db.fetchrow(
+            rows = await self._db.fetch(
                 """
-                SELECT MAX(game_date) AS last_date
-                FROM raw.pitches
-                WHERE pitcher = $1
-                  AND game_pk != $2
+                SELECT pitcher, MAX(game_date) AS last_date
+                FROM   raw.pitches
+                WHERE  pitcher = ANY($1)
+                  AND  game_pk  != $2
+                GROUP  BY pitcher
                 """,
-                player_id, current_game_pk,
+                pitcher_ids,
+                current_game_pk,
             )
-            if row and row["last_date"]:
-                delta = date.today() - row["last_date"]
-                return delta.days
         except Exception as exc:
-            log.warning("days_rest query failed for player %s: %s", player_id, exc)
-        return None
+            log.warning("batch days_rest query failed: %s", exc)
+            return {}
+
+        result: dict[int, int | None] = {}
+        for row in rows:
+            if row["last_date"]:
+                result[row["pitcher"]] = (anchor - row["last_date"]).days
+        return result
 
     @staticmethod
     def _infer_role(pitching_stats: dict, game_stats: dict) -> str:
@@ -829,7 +1047,12 @@ class LiveIngestionPipeline:
                 odds       = await self._fetch_odds(game_pk)
 
                 await self._upsert_lineup_state(game_pk, game_state)
-                await self._cache_to_redis(game_pk, game_state, feed["gameData"]["status"]["abstractGameState"])
+                # SIM-099: pass both feed (for _fetch_feed fallback) and
+                # game_state (for resimulate endpoint) — see _cache_to_redis.
+                await self._cache_to_redis(
+                    game_pk, feed, game_state,
+                    feed["gameData"]["status"]["abstractGameState"],
+                )
                 await self._persist_odds(game_pk, odds)
 
                 # Determine whether this update marks the end of a plate
@@ -1021,19 +1244,32 @@ class LiveIngestionPipeline:
         )
 
     async def _persist_odds(self, game_pk: int, odds: dict) -> None:
-        """Inserts a fresh odds snapshot into raw.game_odds."""
+        """
+        Inserts a fresh odds snapshot into raw.game_odds.
+
+        SIM-133: Now writes all four CLV-enabling columns:
+          book, line_type, market_type, is_sharp_book.
+        The live pipeline always writes line_type='current'.  Opening lines are
+        captured by the nightly opening line job (SIM-138).  Closing lines are
+        designated by mark_closing_lines() which runs post-game.
+        """
         await self._db.execute(
             """
             INSERT INTO raw.game_odds
                 (game_pk, source, is_mock,
+                 book, line_type, market_type, is_sharp_book,
                  home_ml, away_ml,
                  home_spread, home_spread_ml, away_spread, away_spread_ml,
                  total_line, over_ml, under_ml)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
             """,
             game_pk,
             odds.get("source", "mock"),
             odds.get("is_mock", True),
+            odds.get("book", "consensus"),
+            odds.get("line_type", "current"),
+            odds.get("market_type", "moneyline"),
+            odds.get("is_sharp_book", False),
             odds.get("home_ml"),
             odds.get("away_ml"),
             odds.get("home_spread"),
@@ -1045,20 +1281,121 @@ class LiveIngestionPipeline:
             odds.get("under_ml"),
         )
 
+    async def _persist_prop_odds(self, prop: dict) -> None:
+        """
+        SIM-134: Inserts a fresh player prop odds snapshot into raw.prop_odds.
+
+        Parameters
+        ----------
+        prop : dict returned by MockOddsAPI.get_prop_odds() (or a real provider
+               in Phase 7).  Required keys:
+                 game_pk, player_id, prop_stat, line,
+                 over_ml, under_ml, book, line_type, is_sharp_book,
+                 source, is_mock
+
+        Notes
+        -----
+        The live pipeline writes line_type='current' during active game windows.
+        Opening lines are captured by the nightly opening_line_job (SIM-138).
+        Closing lines are designated by mark_closing_prop_lines() (Phase 5).
+
+        The DB enforces prop_stat values via CHECK constraint (migration 0004).
+        Any unknown prop_stat will fail here with a clear IntegrityError before
+        the invalid value reaches the application layer.
+        """
+        await self._db.execute(
+            """
+            INSERT INTO raw.prop_odds
+                (game_pk, player_id, source, is_mock,
+                 prop_stat, line, over_ml, under_ml,
+                 book, line_type, is_sharp_book)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+            """,
+            prop["game_pk"],
+            prop["player_id"],
+            prop.get("source", "mock"),
+            prop.get("is_mock", True),
+            prop["prop_stat"],
+            prop["line"],
+            prop.get("over_ml"),
+            prop.get("under_ml"),
+            prop.get("book", "consensus"),
+            prop.get("line_type", "current"),
+            prop.get("is_sharp_book", False),
+        )
+
+    async def mark_closing_lines(self, game_pk: int, first_pitch_at: datetime) -> int:
+        """
+        SIM-133: Closing line designation job.
+
+        Finds the most recent raw.game_odds snapshot with line_type='current'
+        that was fetched before first_pitch_at and updates its line_type to
+        'closing'.  This row becomes the reference line for CLV calculation.
+
+        Should be called once per game immediately after first pitch is detected
+        (when feed/live status transitions from 'Preview' to 'Live').
+
+        Returns the number of rows updated (0 or 1 per market_type).
+        """
+        result = await self._db.execute(
+            """
+            WITH last_pre_pitch AS (
+                SELECT id
+                FROM raw.game_odds
+                WHERE game_pk = $1
+                  AND line_type = 'current'
+                  AND fetched_at <= $2
+                ORDER BY fetched_at DESC
+                LIMIT 1
+            )
+            UPDATE raw.game_odds
+               SET line_type = 'closing'
+             WHERE id IN (SELECT id FROM last_pre_pitch)
+            """,
+            game_pk,
+            first_pitch_at,
+        )
+        updated = int(result.split()[-1]) if result else 0
+        if updated:
+            log.info(
+                "Closing line designated: game %s at %s (%d row updated)",
+                game_pk, first_pitch_at.isoformat(), updated,
+            )
+        return updated
+
     # ------------------------------------------------------------------
     # Redis cache
     # ------------------------------------------------------------------
 
     async def _cache_to_redis(
-        self, game_pk: int, game_state: dict, status: str
+        self, game_pk: int, feed: dict, game_state: dict, status: str
     ) -> None:
         """
-        Caches the raw feed (not the built game_state) so _fetch_feed can fall
-        back to it if the MLB API rate-limits us mid-game.
+        SIM-099: Writes two Redis keys per game refresh:
+
+        1. ``game_feed:{game_pk}``   — raw MLB Stats API feed/live dict.
+           Used by ``_fetch_feed()`` as a rate-limit fallback: when a
+           subsequent HTTP call returns 429/error, the pipeline returns the
+           last known feed rather than dropping the refresh cycle entirely.
+
+        2. ``game_state:{game_pk}``  — built game_state JSONB.
+           Used by the manual resimulate endpoint
+           (POST /api/games/{game_pk}/resimulate) to serve the last known
+           state without hitting the DB.
+
+        Root cause of SIM-099: previously only ``game_state:{game_pk}`` was
+        written, but ``_fetch_feed()`` read ``game_feed:{game_pk}`` — a key
+        that was never written.  The rate-limit fallback silently returned
+        None for every live game, dropping every refresh cycle under load.
         """
         ttl = REDIS_TTL_DONE_S if status == "Final" else REDIS_TTL_LIVE_S
         await self._redis.setex(
-            f"game_state:{game_pk}",
+            f"game_feed:{game_pk}",     # fallback consumed by _fetch_feed()
+            ttl,
+            json.dumps(feed),
+        )
+        await self._redis.setex(
+            f"game_state:{game_pk}",    # consumed by resimulate endpoint
             ttl,
             json.dumps(game_state),
         )
@@ -1277,21 +1614,27 @@ def lifespan_factory(
 
 
 # ---------------------------------------------------------------------------
-# Supporting DDL — run once before starting the pipeline
+# Supporting DDL reference  (SIM-082, SIM-083)
 # ---------------------------------------------------------------------------
-
-LIVE_PIPELINE_DDL = """
--- Run this once against your database before starting the pipeline.
--- (raw.game_odds only — sim.lineup_state already exists in 01_postgres_schema.sql)
-
-""" + GAME_ODDS_DDL + """
-
--- Partial unique index that enforces one active live session per game.
--- Needed for the ON CONFLICT clause in _upsert_lineup_state().
-CREATE UNIQUE INDEX IF NOT EXISTS uq_lineup_state_live_game
-    ON sim.lineup_state(game_pk)
-    WHERE is_live_game = TRUE;
-"""
+# All DDL previously held here has been migrated to the canonical schema and
+# applied via Alembic migrations:
+#
+#   Migration 0002 (SIM-082):
+#     CREATE UNIQUE INDEX idx_lineup_state_live_game ON sim.lineup_state(game_pk)
+#     WHERE is_live_game = TRUE
+#     — fixes ON CONFLICT in _upsert_lineup_state()
+#
+#   Migration 0003 (SIM-083):
+#     raw.game_odds   — with SIM-133 CLV columns (book, line_type, market_type, is_sharp_book)
+#     raw.prop_odds   — prop lines supporting SIM-138 opening-line job
+#     raw.pipeline_run_log
+#
+# To apply: export BASEBALL_DB_DSN=... && alembic upgrade head
+# ---------------------------------------------------------------------------
+LIVE_PIPELINE_DDL = (
+    "-- All pipeline DDL has been migrated to db/schemas/01_postgres_schema.sql.\n"
+    "-- Apply via: alembic upgrade head  (set BASEBALL_DB_DSN env var first)\n"
+)
 
 
 # ---------------------------------------------------------------------------
