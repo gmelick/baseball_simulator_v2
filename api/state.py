@@ -23,7 +23,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Iterable, Protocol
+from collections.abc import Iterable
+from typing import Any, Protocol
 
 import asyncpg
 import redis.asyncio as aioredis
@@ -70,11 +71,7 @@ def build_pitcher_engine(duckdb_path: str | None = None):
     # (e.g. ruff lint workers) doesn't require the heavy similarity deps.
     from similarity.engines.pitcher_similarity import PitcherSimilarityEngine
 
-    path = (
-        duckdb_path
-        or os.environ.get("BASEBALL_DUCKDB_PATH")
-        or DEFAULT_DUCKDB_PATH
-    )
+    path = duckdb_path or os.environ.get("BASEBALL_DUCKDB_PATH") or DEFAULT_DUCKDB_PATH
 
     log.info("Building PitcherSimilarityEngine from %s ...", path)
     engine = PitcherSimilarityEngine(duckdb_path=path)
@@ -117,9 +114,7 @@ def make_pg_name_resolver(pool: asyncpg.Pool) -> NameResolver:
         if not id_list:
             return {}
         rows = await pool.fetch(
-            "SELECT player_id, full_name "
-            "FROM   raw.players "
-            "WHERE  player_id = ANY($1::int[])",
+            "SELECT player_id, full_name FROM   raw.players WHERE  player_id = ANY($1::int[])",
             id_list,
         )
         return {int(r["player_id"]): r["full_name"] for r in rows}
@@ -152,8 +147,7 @@ class SimilarityCache(Protocol):
     """
 
     async def get_json(self, key: str) -> Any | None: ...
-    async def set_json(self, key: str, value: Any,
-                       ttl_s: int = CACHE_TTL_SECONDS) -> None: ...
+    async def set_json(self, key: str, value: Any, ttl_s: int = CACHE_TTL_SECONDS) -> None: ...
 
 
 class RedisSimilarityCache:

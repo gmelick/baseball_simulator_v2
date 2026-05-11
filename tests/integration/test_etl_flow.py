@@ -108,13 +108,17 @@ def _write_freshness(
 
 
 def _read_freshness(conn: sa.Connection, source_name: str) -> dict[str, Any] | None:
-    row = conn.execute(
-        text(
-            "SELECT source_name, rows_loaded_last_run, pipeline_version, notes "
-            "FROM raw.etl_data_freshness WHERE source_name = :s"
-        ),
-        {"s": source_name},
-    ).mappings().fetchone()
+    row = (
+        conn.execute(
+            text(
+                "SELECT source_name, rows_loaded_last_run, pipeline_version, notes "
+                "FROM raw.etl_data_freshness WHERE source_name = :s"
+            ),
+            {"s": source_name},
+        )
+        .mappings()
+        .fetchone()
+    )
     return dict(row) if row else None
 
 
@@ -154,9 +158,7 @@ class TestEtlFreshnessTable:
             "pipeline_version",
         }
         missing = required - found
-        assert not missing, (
-            f"raw.etl_data_freshness is missing columns: {missing}"
-        )
+        assert not missing, f"raw.etl_data_freshness is missing columns: {missing}"
 
 
 class TestEtlFreshnessWritePath:
@@ -188,9 +190,7 @@ class TestEtlFreshnessWritePath:
 
         # Confirm there's still only one row for this source
         count = pg_connection.execute(
-            text(
-                "SELECT COUNT(*) FROM raw.etl_data_freshness WHERE source_name = :s"
-            ),
+            text("SELECT COUNT(*) FROM raw.etl_data_freshness WHERE source_name = :s"),
             {"s": source},
         ).scalar()
         assert count == 1
@@ -234,13 +234,17 @@ class TestPipelineRunLog:
                 "error_message": None,
             },
         )
-        row = pg_connection.execute(
-            text(
-                "SELECT pipeline_name, status, rows_inserted "
-                "FROM raw.pipeline_run_log WHERE run_id = :r"
-            ),
-            {"r": run_id},
-        ).mappings().fetchone()
+        row = (
+            pg_connection.execute(
+                text(
+                    "SELECT pipeline_name, status, rows_inserted "
+                    "FROM raw.pipeline_run_log WHERE run_id = :r"
+                ),
+                {"r": run_id},
+            )
+            .mappings()
+            .fetchone()
+        )
         assert row is not None
         assert row["pipeline_name"] == "historical_loader_test"
         assert row["status"] == "success"
@@ -264,13 +268,14 @@ class TestPipelineRunLog:
                 "error_message": error,
             },
         )
-        row = pg_connection.execute(
-            text(
-                "SELECT status, error_message "
-                "FROM raw.pipeline_run_log WHERE run_id = :r"
-            ),
-            {"r": run_id},
-        ).mappings().fetchone()
+        row = (
+            pg_connection.execute(
+                text("SELECT status, error_message FROM raw.pipeline_run_log WHERE run_id = :r"),
+                {"r": run_id},
+            )
+            .mappings()
+            .fetchone()
+        )
         assert row is not None
         assert row["status"] == "error"
         assert row["error_message"] == error

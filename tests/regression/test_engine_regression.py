@@ -47,14 +47,12 @@ from __future__ import annotations
 
 import json
 import math
-from pathlib import Path
 
 import numpy as np
 import pytest
 
 from tests.regression.regression_config import (
     FIXTURES_DIR,
-    REGRESSION_SEED,
     SCORE_ABS_TOLERANCE,
     SYMMETRY_TOLERANCE,
     TOP_K_STABLE,
@@ -66,6 +64,7 @@ pytestmark = pytest.mark.regression
 # ============================================================================
 # Helpers
 # ============================================================================
+
 
 def _load_fixture(name: str) -> dict:
     path = FIXTURES_DIR / f"{name}.json"
@@ -80,22 +79,21 @@ def _load_fixture(name: str) -> dict:
 
 def _assert_scores_finite(results, engine_name: str) -> None:
     for r in results:
-        assert math.isfinite(r.score), (
-            f"{engine_name}: NaN/Inf composite score for result {r}"
-        )
+        assert math.isfinite(r.score), f"{engine_name}: NaN/Inf composite score for result {r}"
 
 
 def _assert_monotone(results, engine_name: str) -> None:
     for i in range(len(results) - 1):
         assert results[i].score >= results[i + 1].score - 1e-12, (
             f"{engine_name}: result[{i}].score={results[i].score:.6f} < "
-            f"result[{i+1}].score={results[i+1].score:.6f} — not sorted"
+            f"result[{i + 1}].score={results[i + 1].score:.6f} — not sorted"
         )
 
 
 # ============================================================================
 # Property Tests — BaserunnerStealSimilarityEngine
 # ============================================================================
+
 
 class TestStealEngineProperties:
     """Mathematical invariants for the steal engine."""
@@ -151,6 +149,7 @@ class TestStealEngineProperties:
     def test_identical_profiles_score_near_one(self, steal_engine):
         """Duplicate a profile — query it vs itself should return score ≈ 1.0."""
         from similarity.engines.baserunner_steal_similarity import BaserunnerStealProfile
+
         ids = steal_engine.profile_ids()
         orig_key = ids[0]
         orig = steal_engine._profiles[orig_key]
@@ -191,8 +190,8 @@ class TestStealEngineProperties:
 # Property Tests — CatcherSimilarityEngine
 # ============================================================================
 
-class TestCatcherEngineProperties:
 
+class TestCatcherEngineProperties:
     def test_scores_bounded(self, catcher_engine):
         ids = catcher_engine.profile_ids()
         cid, season = ids[0]
@@ -230,8 +229,11 @@ class TestCatcherEngineProperties:
         results = catcher_engine.query(cid, season)
         r = results[0]
         for attr in (
-            "framing_score", "blocking_score", "throwing_score",
-            "deterrence_score", "offense_score",
+            "framing_score",
+            "blocking_score",
+            "throwing_score",
+            "deterrence_score",
+            "offense_score",
         ):
             val = getattr(r, attr)
             assert math.isfinite(val)
@@ -247,8 +249,8 @@ class TestCatcherEngineProperties:
 # Property Tests — PitcherStealSimilarityEngine
 # ============================================================================
 
-class TestPitcherStealEngineProperties:
 
+class TestPitcherStealEngineProperties:
     def test_scores_bounded(self, pitcher_steal_engine):
         ids = pitcher_steal_engine.profile_ids()
         pid, season = ids[0]
@@ -303,8 +305,8 @@ class TestPitcherStealEngineProperties:
 # Property Tests — ManagerSimilarityEngine
 # ============================================================================
 
-class TestManagerEngineProperties:
 
+class TestManagerEngineProperties:
     def test_scores_bounded(self, manager_engine):
         ids = manager_engine.profile_ids()
         mid, season = ids[0]
@@ -342,6 +344,7 @@ class TestManagerEngineProperties:
 
     def test_eb_prior_is_30(self):
         from similarity.engines.manager_similarity import EB_N_PRIOR
+
         assert EB_N_PRIOR == 30, (
             f"EB_N_PRIOR changed from 30 to {EB_N_PRIOR}. "
             "This is a fundamental calibration parameter — update golden files if intentional."
@@ -357,16 +360,24 @@ class TestManagerEngineProperties:
 # Property Tests — SituationSimilarityEngine
 # ============================================================================
 
+
 class TestSituationEngineProperties:
     """KDTree-based engine has different properties than RBF engines."""
 
     def _make_query(self):
         from similarity.engines.situation_similarity import SituationVector
+
         return SituationVector(
-            inning=7, top_or_bottom=0, outs=1,
-            runner_on_1b=0, runner_on_2b=1, runner_on_3b=0,
-            score_differential=0.0, leverage_index=2.1,
-            pitcher_pitch_count=55, batter_pa_count=2,
+            inning=7,
+            top_or_bottom=0,
+            outs=1,
+            runner_on_1b=0,
+            runner_on_2b=1,
+            runner_on_3b=0,
+            score_differential=0.0,
+            leverage_index=2.1,
+            pitcher_pitch_count=55,
+            batter_pa_count=2,
             park_factor_runs=1.02,
         )
 
@@ -381,7 +392,7 @@ class TestSituationEngineProperties:
         for i in range(len(results) - 1):
             assert results[i].distance <= results[i + 1].distance + 1e-12, (
                 f"Not sorted: [{i}].distance={results[i].distance:.6f} > "
-                f"[{i+1}].distance={results[i+1].distance:.6f}"
+                f"[{i + 1}].distance={results[i + 1].distance:.6f}"
             )
 
     def test_k_capped_at_index_size(self, situation_engine):
@@ -402,13 +413,19 @@ class TestSituationEngineProperties:
 
     def test_score_diff_clipped(self, situation_engine):
         """Extreme score differentials should not produce infinitely large distances."""
-        from similarity.engines.situation_similarity import SituationVector, SCORE_DIFF_CLIP
+        from similarity.engines.situation_similarity import SituationVector
+
         extreme_q = SituationVector(
-            inning=9, top_or_bottom=1, outs=2,
-            runner_on_1b=0, runner_on_2b=0, runner_on_3b=0,
-            score_differential=99.0,   # way above SCORE_DIFF_CLIP
+            inning=9,
+            top_or_bottom=1,
+            outs=2,
+            runner_on_1b=0,
+            runner_on_2b=0,
+            runner_on_3b=0,
+            score_differential=99.0,  # way above SCORE_DIFF_CLIP
             leverage_index=0.1,
-            pitcher_pitch_count=90, batter_pa_count=4,
+            pitcher_pitch_count=90,
+            batter_pa_count=4,
             park_factor_runs=1.00,
         )
         results = situation_engine.query(extreme_q, k=5)
@@ -418,27 +435,36 @@ class TestSituationEngineProperties:
             assert math.isfinite(r.distance)
 
     def test_feature_vector_length(self):
-        from similarity.engines.situation_similarity import SituationVector
         sv = self._make_query()
         arr = sv.to_array()
         assert len(arr) == 11, f"SituationVector.to_array() has {len(arr)} elements, expected 11"
 
     def test_batch_equals_individual(self, situation_engine):
         from similarity.engines.situation_similarity import SituationVector
-        queries = [self._make_query(), SituationVector(
-            inning=3, top_or_bottom=1, outs=0,
-            runner_on_1b=1, runner_on_2b=0, runner_on_3b=0,
-            score_differential=-1.0, leverage_index=0.8,
-            pitcher_pitch_count=30, batter_pa_count=1,
-            park_factor_runs=0.95,
-        )]
+
+        queries = [
+            self._make_query(),
+            SituationVector(
+                inning=3,
+                top_or_bottom=1,
+                outs=0,
+                runner_on_1b=1,
+                runner_on_2b=0,
+                runner_on_3b=0,
+                score_differential=-1.0,
+                leverage_index=0.8,
+                pitcher_pitch_count=30,
+                batter_pa_count=1,
+                park_factor_runs=0.95,
+            ),
+        ]
         k = 5
         batch_results = situation_engine.query_batch(queries, k=k)
         for i, q in enumerate(queries):
             individual = situation_engine.query(q, k=k)
             batch = batch_results[i]
             assert len(individual) == len(batch)
-            for r_ind, r_bat in zip(individual, batch):
+            for r_ind, r_bat in zip(individual, batch, strict=False):
                 assert abs(r_ind.distance - r_bat.distance) < 1e-10, (
                     f"Batch/individual distance mismatch at query {i}: "
                     f"{r_ind.distance} vs {r_bat.distance}"
@@ -448,6 +474,7 @@ class TestSituationEngineProperties:
 # ============================================================================
 # Golden-file Snapshot Tests
 # ============================================================================
+
 
 class TestStealEngineGoldenFile:
     """Detect numeric drift in steal engine outputs vs committed snapshot."""
@@ -470,7 +497,7 @@ class TestStealEngineGoldenFile:
             qk = tuple(q["query_key"])
             results = steal_engine.query(qk[0], qk[1])
             for i, (actual, expected) in enumerate(
-                zip(results[:TOP_K_STABLE], q["top5_scores"])
+                zip(results[:TOP_K_STABLE], q["top5_scores"], strict=False)
             ):
                 assert abs(actual.score - expected) <= SCORE_ABS_TOLERANCE, (
                     f"Score drift at query {qk} result[{i}]: "
@@ -480,7 +507,6 @@ class TestStealEngineGoldenFile:
 
 
 class TestCatcherEngineGoldenFile:
-
     def test_top_k_keys_stable(self, catcher_engine):
         fixture = _load_fixture("catcher")
         for q in fixture["queries"]:
@@ -488,9 +514,7 @@ class TestCatcherEngineGoldenFile:
             results = catcher_engine.query(qk[0], qk[1])
             actual_keys = [(r.catcher_id, r.season) for r in results[:TOP_K_STABLE]]
             expected_keys = [tuple(k) for k in q["top5_keys"]]
-            assert actual_keys == expected_keys, (
-                f"Top-{TOP_K_STABLE} drift for query {qk}"
-            )
+            assert actual_keys == expected_keys, f"Top-{TOP_K_STABLE} drift for query {qk}"
 
     def test_composite_scores_stable(self, catcher_engine):
         fixture = _load_fixture("catcher")
@@ -498,7 +522,7 @@ class TestCatcherEngineGoldenFile:
             qk = tuple(q["query_key"])
             results = catcher_engine.query(qk[0], qk[1])
             for i, (actual, expected) in enumerate(
-                zip(results[:TOP_K_STABLE], q["top5_scores"])
+                zip(results[:TOP_K_STABLE], q["top5_scores"], strict=False)
             ):
                 assert abs(actual.score - expected) <= SCORE_ABS_TOLERANCE, (
                     f"Score drift at query {qk} result[{i}]: "
@@ -507,7 +531,6 @@ class TestCatcherEngineGoldenFile:
 
 
 class TestPitcherStealEngineGoldenFile:
-
     def test_top_k_keys_stable(self, pitcher_steal_engine):
         fixture = _load_fixture("pitcher_steal")
         for q in fixture["queries"]:
@@ -522,8 +545,8 @@ class TestPitcherStealEngineGoldenFile:
         for q in fixture["queries"]:
             qk = tuple(q["query_key"])
             results = pitcher_steal_engine.query(qk[0], qk[1])
-            for i, (actual, expected) in enumerate(
-                zip(results[:TOP_K_STABLE], q["top5_scores"])
+            for _i, (actual, expected) in enumerate(
+                zip(results[:TOP_K_STABLE], q["top5_scores"], strict=False)
             ):
                 assert abs(actual.score - expected) <= SCORE_ABS_TOLERANCE, (
                     f"Score drift delta={abs(actual.score - expected):.2e}"
@@ -531,7 +554,6 @@ class TestPitcherStealEngineGoldenFile:
 
 
 class TestManagerEngineGoldenFile:
-
     def test_top_k_keys_stable(self, manager_engine):
         fixture = _load_fixture("manager")
         for q in fixture["queries"]:
@@ -546,8 +568,8 @@ class TestManagerEngineGoldenFile:
         for q in fixture["queries"]:
             qk = tuple(q["query_key"])
             results = manager_engine.query(qk[0], qk[1])
-            for i, (actual, expected) in enumerate(
-                zip(results[:TOP_K_STABLE], q["top5_scores"])
+            for _i, (actual, expected) in enumerate(
+                zip(results[:TOP_K_STABLE], q["top5_scores"], strict=False)
             ):
                 assert abs(actual.score - expected) <= SCORE_ABS_TOLERANCE, (
                     f"Score drift delta={abs(actual.score - expected):.2e}"
@@ -555,10 +577,10 @@ class TestManagerEngineGoldenFile:
 
 
 class TestSituationEngineGoldenFile:
-
     def test_nearest_play_ids_stable(self, situation_engine):
         fixture = _load_fixture("situation")
         from similarity.engines.situation_similarity import SituationVector
+
         for q_data in fixture["queries"]:
             sv = SituationVector(**q_data["situation_vector"])
             results = situation_engine.query(sv, k=TOP_K_STABLE)
@@ -572,11 +594,12 @@ class TestSituationEngineGoldenFile:
     def test_nearest_distances_stable(self, situation_engine):
         fixture = _load_fixture("situation")
         from similarity.engines.situation_similarity import SituationVector
+
         for q_data in fixture["queries"]:
             sv = SituationVector(**q_data["situation_vector"])
             results = situation_engine.query(sv, k=TOP_K_STABLE)
             for i, (actual, expected) in enumerate(
-                zip(results, q_data["top5_distances"])
+                zip(results, q_data["top5_distances"], strict=False)
             ):
                 assert abs(actual.distance - expected) <= SCORE_ABS_TOLERANCE, (
                     f"Situation distance drift at result[{i}]: "
@@ -587,6 +610,7 @@ class TestSituationEngineGoldenFile:
 # ============================================================================
 # Cross-engine weight constants regression
 # ============================================================================
+
 
 class TestWeightConstants:
     """
@@ -599,8 +623,11 @@ class TestWeightConstants:
 
     def test_steal_weights_sum_to_one(self):
         from similarity.engines.baserunner_steal_similarity import (
-            WEIGHT_TENDENCY, WEIGHT_JUMP, WEIGHT_SUCCESS,
+            WEIGHT_JUMP,
+            WEIGHT_SUCCESS,
+            WEIGHT_TENDENCY,
         )
+
         total = WEIGHT_TENDENCY + WEIGHT_JUMP + WEIGHT_SUCCESS
         assert abs(total - 1.0) < 1e-9, f"steal weights sum to {total}"
 
@@ -611,21 +638,28 @@ class TestWeightConstants:
         Offense 15 = 100.
         """
         from similarity.engines.catcher_similarity import (
-            WEIGHT_FRAMING, WEIGHT_BLOCKING, WEIGHT_THROWING,
-            WEIGHT_DETERRENCE, WEIGHT_OFFENSE,
+            WEIGHT_BLOCKING,
+            WEIGHT_DETERRENCE,
+            WEIGHT_FRAMING,
+            WEIGHT_OFFENSE,
+            WEIGHT_THROWING,
         )
+
         total = (
-            WEIGHT_FRAMING + WEIGHT_BLOCKING + WEIGHT_THROWING
-            + WEIGHT_DETERRENCE + WEIGHT_OFFENSE
+            WEIGHT_FRAMING + WEIGHT_BLOCKING + WEIGHT_THROWING + WEIGHT_DETERRENCE + WEIGHT_OFFENSE
         )
         assert abs(total - 1.0) < 1e-9, f"catcher weights sum to {total}"
 
     def test_catcher_v2_split_weights(self):
         """SIM-072: Throwing was split 20% → 12% execution + 8% deterrence."""
         from similarity.engines.catcher_similarity import (
-            WEIGHT_FRAMING, WEIGHT_BLOCKING, WEIGHT_THROWING,
-            WEIGHT_DETERRENCE, WEIGHT_OFFENSE,
+            WEIGHT_BLOCKING,
+            WEIGHT_DETERRENCE,
+            WEIGHT_FRAMING,
+            WEIGHT_OFFENSE,
+            WEIGHT_THROWING,
         )
+
         assert WEIGHT_FRAMING == 0.45
         assert WEIGHT_BLOCKING == 0.20
         assert WEIGHT_THROWING == 0.12
@@ -636,23 +670,32 @@ class TestWeightConstants:
 
     def test_pitcher_steal_weights_sum_to_one(self):
         from similarity.engines.pitcher_steal_similarity import (
-            WEIGHT_DELIVERY, WEIGHT_PICKOFF, WEIGHT_OUTCOME,
+            WEIGHT_DELIVERY,
+            WEIGHT_OUTCOME,
+            WEIGHT_PICKOFF,
         )
+
         total = WEIGHT_DELIVERY + WEIGHT_PICKOFF + WEIGHT_OUTCOME
         assert abs(total - 1.0) < 1e-9, f"pitcher_steal weights sum to {total}"
 
     def test_manager_weights_sum_to_one(self):
         from similarity.engines.manager_similarity import (
-            WEIGHT_USAGE, WEIGHT_AGGRESSION, WEIGHT_PLATOON,
+            WEIGHT_AGGRESSION,
+            WEIGHT_PLATOON,
+            WEIGHT_USAGE,
         )
+
         total = WEIGHT_USAGE + WEIGHT_AGGRESSION + WEIGHT_PLATOON
         assert abs(total - 1.0) < 1e-9, f"manager weights sum to {total}"
 
     def test_pitcher_steal_delivery_dominates(self):
         """Delivery is the highest-weight sub-score (50%) per spec."""
         from similarity.engines.pitcher_steal_similarity import (
-            WEIGHT_DELIVERY, WEIGHT_PICKOFF, WEIGHT_OUTCOME,
+            WEIGHT_DELIVERY,
+            WEIGHT_OUTCOME,
+            WEIGHT_PICKOFF,
         )
+
         assert WEIGHT_DELIVERY > WEIGHT_PICKOFF, (
             f"Delivery ({WEIGHT_DELIVERY}) should outweigh Pickoff ({WEIGHT_PICKOFF})"
         )
@@ -663,9 +706,13 @@ class TestWeightConstants:
     def test_catcher_framing_dominates(self):
         """Framing is the highest-weight sub-score (45%) per spec."""
         from similarity.engines.catcher_similarity import (
-            WEIGHT_FRAMING, WEIGHT_BLOCKING, WEIGHT_THROWING,
-            WEIGHT_DETERRENCE, WEIGHT_OFFENSE,
+            WEIGHT_BLOCKING,
+            WEIGHT_DETERRENCE,
+            WEIGHT_FRAMING,
+            WEIGHT_OFFENSE,
+            WEIGHT_THROWING,
         )
+
         assert WEIGHT_FRAMING > WEIGHT_BLOCKING
         assert WEIGHT_FRAMING > WEIGHT_THROWING
         assert WEIGHT_FRAMING > WEIGHT_DETERRENCE
@@ -673,16 +720,20 @@ class TestWeightConstants:
 
     def test_manager_eb_prior(self):
         from similarity.engines.manager_similarity import EB_N_PRIOR
+
         assert EB_N_PRIOR == 30
 
     def test_steal_eb_prior(self):
         from similarity.engines.baserunner_steal_similarity import EB_N_PRIOR
+
         assert EB_N_PRIOR == 20
 
     def test_pitcher_steal_eb_prior(self):
         from similarity.engines.pitcher_steal_similarity import EB_N_PRIOR
+
         assert EB_N_PRIOR == 25
 
     def test_catcher_eb_prior(self):
         from similarity.engines.catcher_similarity import EB_N_PRIOR
+
         assert EB_N_PRIOR == 15

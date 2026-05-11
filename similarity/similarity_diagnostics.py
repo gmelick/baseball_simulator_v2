@@ -74,21 +74,23 @@ from numpy.typing import NDArray
 log = logging.getLogger("similarity_diagnostics")
 
 # Thresholds for flagging problems
-MEDIAN_COLLAPSED_THRESHOLD = 0.05    # sub-score median below this = collapsed
-MEDIAN_INFLATED_THRESHOLD  = 0.95    # sub-score median above this = inflated
-STD_NO_DISCRIMINATION      = 0.05   # sub-score std below this = no spread
-MEDIAN_BALANCE_RATIO       = 2.5    # max ratio between any sub-score median and overall
-CROSS_SEASON_PASS_RATE     = 0.70   # fraction of cross-season pairs above pop median
-SYMMETRY_TOLERANCE         = 1e-6   # max allowed asymmetry in score(A,B) vs score(B,A)
+MEDIAN_COLLAPSED_THRESHOLD = 0.05  # sub-score median below this = collapsed
+MEDIAN_INFLATED_THRESHOLD = 0.95  # sub-score median above this = inflated
+STD_NO_DISCRIMINATION = 0.05  # sub-score std below this = no spread
+MEDIAN_BALANCE_RATIO = 2.5  # max ratio between any sub-score median and overall
+CROSS_SEASON_PASS_RATE = 0.70  # fraction of cross-season pairs above pop median
+SYMMETRY_TOLERANCE = 1e-6  # max allowed asymmetry in score(A,B) vs score(B,A)
 
 
 # ============================================================================
 # Distribution Statistics
 # ============================================================================
 
+
 @dataclass
 class ScoreDistribution:
     """Statistics for one score dimension."""
+
     name: str
     n_values: int = 0
     mean: float = 0.0
@@ -102,10 +104,10 @@ class ScoreDistribution:
     p95: float = 0.0
     n_nan: int = 0
     n_inf: int = 0
-    n_zero: int = 0          # exactly 0.0
-    n_one: int = 0            # exactly 1.0
-    n_below_01: int = 0       # < 0.1
-    n_above_09: int = 0       # > 0.9
+    n_zero: int = 0  # exactly 0.0
+    n_one: int = 0  # exactly 1.0
+    n_below_01: int = 0  # < 0.1
+    n_above_09: int = 0  # > 0.9
 
     # Flags
     is_collapsed: bool = False
@@ -177,10 +179,12 @@ class ScoreDistribution:
 # Diagnostic Report
 # ============================================================================
 
+
 @dataclass
 class DiagnosticReport:
     """Full diagnostic output for one engine."""
-    engine_type: str = ""                               # "batter" or "pitcher"
+
+    engine_type: str = ""  # "batter" or "pitcher"
     n_profiles: int = 0
     n_queries_sampled: int = 0
     n_total_scores: int = 0
@@ -245,7 +249,9 @@ class DiagnosticReport:
                 f"Above pop median: {pct:.1f}%"
             )
             if self.cross_season_ok:
-                lines.append("  OK: Cross-season self-pairs score above population median at acceptable rate.")
+                lines.append(
+                    "  OK: Cross-season self-pairs score above population median at acceptable rate."
+                )
             else:
                 lines.append(
                     f"  !! FAIL: Only {pct:.1f}% of cross-season self-pairs beat the population "
@@ -258,8 +264,7 @@ class DiagnosticReport:
         # Symmetry
         lines.append("--- Score Symmetry ---")
         lines.append(
-            f"  {self.n_symmetry_checks} pairs checked.  "
-            f"Max asymmetry: {self.max_asymmetry:.2e}"
+            f"  {self.n_symmetry_checks} pairs checked.  Max asymmetry: {self.max_asymmetry:.2e}"
         )
         if self.symmetry_ok:
             lines.append("  OK: All checked pairs are symmetric within tolerance.")
@@ -271,7 +276,15 @@ class DiagnosticReport:
         lines.append("")
 
         # Summary
-        self.n_flags = sum(1 for d in self.distributions if d.is_collapsed or d.is_inflated or d.is_no_discrimination or d.n_nan > 0 or d.n_inf > 0)
+        self.n_flags = sum(
+            1
+            for d in self.distributions
+            if d.is_collapsed
+            or d.is_inflated
+            or d.is_no_discrimination
+            or d.n_nan > 0
+            or d.n_inf > 0
+        )
         if not self.median_balance_ok:
             self.n_flags += 1
         if not self.cross_season_ok and self.n_cross_season_pairs > 0:
@@ -292,6 +305,7 @@ class DiagnosticReport:
 # ============================================================================
 # Batter Diagnostics
 # ============================================================================
+
 
 def run_batter_diagnostics(
     engine: Any,
@@ -378,6 +392,7 @@ def run_batter_diagnostics(
 # Pitcher Diagnostics
 # ============================================================================
 
+
 def run_pitcher_diagnostics(
     engine: Any,
     n_query_samples: int = 50,
@@ -435,6 +450,7 @@ def run_pitcher_diagnostics(
 # Fielder Diagnostics
 # ============================================================================
 
+
 def run_fielder_diagnostics(
     engine: Any,
     n_query_samples: int = 50,
@@ -469,10 +485,7 @@ def run_fielder_diagnostics(
         return report
 
     # Group by position
-    if position:
-        positions_to_check = [position]
-    else:
-        positions_to_check = sorted(set(k[1] for k in all_ids))
+    positions_to_check = [position] if position else sorted({k[1] for k in all_ids})
 
     rng = np.random.default_rng(seed)
 
@@ -536,10 +549,11 @@ def run_fielder_diagnostics(
 # Baserunner Diagnostics
 # ============================================================================
 
+
 def run_baserunner_diagnostics(
-        engine: Any,
-        n_query_samples: int = 50,
-        seed: int = 42,
+    engine: Any,
+    n_query_samples: int = 50,
+    seed: int = 42,
 ) -> DiagnosticReport:
     """
     Run full diagnostics on a built BaserunnerSimilarityEngine.
@@ -609,6 +623,7 @@ def run_baserunner_diagnostics(
 # Shared Check Functions
 # ============================================================================
 
+
 def _check_dimensional_balance(report: DiagnosticReport) -> None:
     """
     Verify sub-score medians are in comparable ranges.
@@ -666,9 +681,7 @@ def _check_cross_season(
         player_seasons[pid].append(season)
 
     multi_season_players = {
-        pid: sorted(seasons)
-        for pid, seasons in player_seasons.items()
-        if len(seasons) >= 2
+        pid: sorted(seasons) for pid, seasons in player_seasons.items() if len(seasons) >= 2
     }
 
     if not multi_season_players:
@@ -711,11 +724,7 @@ def _check_cross_season_fielder(
     for pid, pos, season in all_ids:
         player_pos_seasons[(pid, pos)].append(season)
 
-    multi = {
-        k: sorted(seasons)
-        for k, seasons in player_pos_seasons.items()
-        if len(seasons) >= 2
-    }
+    multi = {k: sorted(seasons) for k, seasons in player_pos_seasons.items() if len(seasons) >= 2}
 
     if not multi:
         report.n_cross_season_pairs = 0
@@ -798,7 +807,7 @@ def _check_symmetry_fielder(
     max_asym = 0.0
     checks_done = 0
 
-    for pos, ids in by_pos.items():
+    for _pos, ids in by_pos.items():
         if len(ids) < 2:
             continue
         pos_checks = min(n_checks // max(len(by_pos), 1), len(ids) * (len(ids) - 1) // 2)
@@ -820,23 +829,24 @@ def _check_symmetry_fielder(
 # Synthetic Self-Test
 # ============================================================================
 
+
 def _run_synthetic_batter_test() -> DiagnosticReport:
     """Build a synthetic batter engine and run diagnostics on it."""
     from similarity.engines.batter_similarity import (
-        BatterSimilarityEngine,
+        BATTED_BALL_FEATURES,
+        DISCIPLINE_FEATURES,
+        PLATOON_FEATURES,
+        POWER_FEATURES,
+        RBF_SIGMA_BATTED_BALL,
+        RBF_SIGMA_DISCIPLINE,
+        RBF_SIGMA_PLATOON,
+        RBF_SIGMA_POWER,
         BatterPartition,
         BatterProfile,
+        BatterSimilarityEngine,
         EmpiricalBayesShrinkage,
         FeatureNormalizer,
         WeightedRBFSimilarity,
-        DISCIPLINE_FEATURES,
-        BATTED_BALL_FEATURES,
-        POWER_FEATURES,
-        PLATOON_FEATURES,
-        RBF_SIGMA_DISCIPLINE,
-        RBF_SIGMA_BATTED_BALL,
-        RBF_SIGMA_PLATOON,
-        RBF_SIGMA_POWER,
     )
 
     rng = np.random.default_rng(42)
@@ -848,18 +858,22 @@ def _run_synthetic_batter_test() -> DiagnosticReport:
     for pid in range(1, n_players + 1):
         # Each player has a "true talent" baseline + per-season noise
         base_disc = rng.beta(5, 5, len(DISCIPLINE_FEATURES))
-        base_bb = np.concatenate([
-            rng.beta(5, 5, 4),                     # rate stats
-            rng.normal(89, 3, 1),                   # exit velo
-            rng.normal(12, 5, 1),                   # launch angle
-            rng.beta(5, 5, 2),                      # hard hit, barrel
-        ])
-        base_power = np.concatenate([
-            rng.beta(2, 20, 1),                     # HR rate
-            rng.beta(10, 30, 1) + 0.2,              # xba
-            rng.beta(5, 8, 1) + 0.3,                # xslg
-            rng.normal(108, 4, 1),                   # max EV
-        ])
+        base_bb = np.concatenate(
+            [
+                rng.beta(5, 5, 4),  # rate stats
+                rng.normal(89, 3, 1),  # exit velo
+                rng.normal(12, 5, 1),  # launch angle
+                rng.beta(5, 5, 2),  # hard hit, barrel
+            ]
+        )
+        base_power = np.concatenate(
+            [
+                rng.beta(2, 20, 1),  # HR rate
+                rng.beta(10, 30, 1) + 0.2,  # xba
+                rng.beta(5, 8, 1) + 0.3,  # xslg
+                rng.normal(108, 4, 1),  # max EV
+            ]
+        )
         base_plat = rng.beta(5, 5, len(PLATOON_FEATURES))
 
         bats = rng.choice(["L", "R", "R", "R", "S"])  # ~60% R, ~25% L, ~15% S
@@ -867,34 +881,47 @@ def _run_synthetic_batter_test() -> DiagnosticReport:
         for season in seasons:
             noise_scale = 0.03
             disc = np.clip(base_disc + rng.normal(0, noise_scale, len(DISCIPLINE_FEATURES)), 0, 1)
-            bb = base_bb + rng.normal(0, [noise_scale]*4 + [1.0, 1.5] + [noise_scale]*2, len(BATTED_BALL_FEATURES))
+            bb = base_bb + rng.normal(
+                0, [noise_scale] * 4 + [1.0, 1.5] + [noise_scale] * 2, len(BATTED_BALL_FEATURES)
+            )
             power = base_power + rng.normal(0, [0.01, 0.01, 0.02, 1.5], len(POWER_FEATURES))
-            plat_l = np.clip(base_plat + rng.normal(0, noise_scale * 1.5, len(PLATOON_FEATURES)), 0, 1)
-            plat_r = np.clip(base_plat + rng.normal(0, noise_scale * 1.5, len(PLATOON_FEATURES)), 0, 1)
+            plat_l = np.clip(
+                base_plat + rng.normal(0, noise_scale * 1.5, len(PLATOON_FEATURES)), 0, 1
+            )
+            plat_r = np.clip(
+                base_plat + rng.normal(0, noise_scale * 1.5, len(PLATOON_FEATURES)), 0, 1
+            )
             pa = rng.integers(200, 650)
 
-            profiles.append(BatterProfile(
-                batter_id=pid,
-                season=season,
-                bats=str(bats),
-                sample_pa=int(pa),
-                sample_pitches=int(pa * 4),
-                discipline_vec=disc.astype(np.float64),
-                batted_ball_vec=bb.astype(np.float64),
-                power_vec=power.astype(np.float64),
-                platoon_vs_l_vec=plat_l.astype(np.float64),
-                platoon_vs_r_vec=plat_r.astype(np.float64),
-                sample_pa_vs_l=int(pa * 0.3),
-                sample_pa_vs_r=int(pa * 0.7),
-                eb_alpha=float(pa / (pa + 30)),
-            ))
+            profiles.append(
+                BatterProfile(
+                    batter_id=pid,
+                    season=season,
+                    bats=str(bats),
+                    sample_pa=int(pa),
+                    sample_pitches=int(pa * 4),
+                    discipline_vec=disc.astype(np.float64),
+                    batted_ball_vec=bb.astype(np.float64),
+                    power_vec=power.astype(np.float64),
+                    platoon_vs_l_vec=plat_l.astype(np.float64),
+                    platoon_vs_r_vec=plat_r.astype(np.float64),
+                    sample_pa_vs_l=int(pa * 0.3),
+                    sample_pa_vs_r=int(pa * 0.7),
+                    eb_alpha=float(pa / (pa + 30)),
+                )
+            )
 
     # Assemble engine without DuckDB
     engine = BatterSimilarityEngine.__new__(BatterSimilarityEngine)
     engine._duckdb_path = ""
     engine._profiles = {(p.batter_id, p.season): p for p in profiles}
-    engine._league_avg = {"discipline": {}, "batted_ball": {}, "power": {},
-                          "platoon_l": {}, "platoon_r": {}}
+    engine._league_avg = {
+        "discipline": {},
+        "batted_ball": {},
+        "power": {},
+        "platoon_l": {},
+        "platoon_r": {},
+    }
     engine._normalizer = FeatureNormalizer()
     engine._shrinkage = EmpiricalBayesShrinkage()
     engine._partition = BatterPartition()
@@ -924,22 +951,22 @@ def _run_synthetic_batter_test() -> DiagnosticReport:
 def _run_synthetic_pitcher_test() -> DiagnosticReport:
     """Build a synthetic pitcher engine and run diagnostics on it."""
     from similarity.engines.pitcher_similarity import (
-        PitcherSimilarityEngine,
-        PitcherProfile,
-        GMMModel,
-        GMMComponent,
-        ArsenalCache,
-        HandednessPartition,
-        FeatureNormalizer,
-        EmpiricalBayesShrinkage,
-        RBFSimilarity,
-        enforce_min_cluster_size,
+        COMMAND_FEATURES,
         GMM_FEATURE_DIM,
         GMM_FEATURE_NAMES,
-        COMMAND_FEATURES,
-        RESULT_FEATURES,
         RBF_SIGMA_COMMAND,
         RBF_SIGMA_RESULTS,
+        RESULT_FEATURES,
+        ArsenalCache,
+        EmpiricalBayesShrinkage,
+        FeatureNormalizer,
+        GMMComponent,
+        GMMModel,
+        HandednessPartition,
+        PitcherProfile,
+        PitcherSimilarityEngine,
+        RBFSimilarity,
+        enforce_min_cluster_size,
     )
 
     rng = np.random.default_rng(42)
@@ -958,10 +985,12 @@ def _run_synthetic_pitcher_test() -> DiagnosticReport:
         weights = rng.dirichlet(np.ones(n_comp))
         base_means = []
         for c in range(n_comp):
-            base_means.append(rng.normal(
-                [92 - c*4, 10 - c*5, -5 + c*3, 2300, 200, rx_sign*1.5, 6.0, 6.3],
-                [2, 3, 3, 200, 30, 0.2, 0.2, 0.3],
-            ))
+            base_means.append(
+                rng.normal(
+                    [92 - c * 4, 10 - c * 5, -5 + c * 3, 2300, 200, rx_sign * 1.5, 6.0, 6.3],
+                    [2, 3, 3, 200, 30, 0.2, 0.2, 0.3],
+                )
+            )
 
         for season in seasons:
             cmd = np.clip(base_cmd + rng.normal(0, 0.02, len(COMMAND_FEATURES)), 0, 1)
@@ -972,13 +1001,15 @@ def _run_synthetic_pitcher_test() -> DiagnosticReport:
             for c in range(n_comp):
                 m = base_means[c] + rng.normal(0, [0.5, 1, 1, 50, 5, 0.05, 0.05, 0.05])
                 cov = np.diag(rng.uniform(0.5, 3.0, GMM_FEATURE_DIM))
-                components.append(GMMComponent(
-                    component_id=c,
-                    weight=float(weights[c]),
-                    mean=m.astype(np.float64),
-                    covariance=cov.astype(np.float64),
-                    n_pitches=int(pitches * weights[c]),
-                ))
+                components.append(
+                    GMMComponent(
+                        component_id=c,
+                        weight=float(weights[c]),
+                        mean=m.astype(np.float64),
+                        covariance=cov.astype(np.float64),
+                        n_pitches=int(pitches * weights[c]),
+                    )
+                )
 
             gmm = GMMModel(
                 n_components=n_comp,
@@ -988,16 +1019,18 @@ def _run_synthetic_pitcher_test() -> DiagnosticReport:
                 components=components,
             )
 
-            profiles.append(PitcherProfile(
-                pitcher_id=pid,
-                season=season,
-                p_throws=hand,
-                sample_pitches=int(pitches),
-                gmm=gmm,
-                command_vec=cmd.astype(np.float64),
-                result_vec=res.astype(np.float64),
-                eb_alpha=float(pitches / (pitches + 50)),
-            ))
+            profiles.append(
+                PitcherProfile(
+                    pitcher_id=pid,
+                    season=season,
+                    p_throws=hand,
+                    sample_pitches=int(pitches),
+                    gmm=gmm,
+                    command_vec=cmd.astype(np.float64),
+                    result_vec=res.astype(np.float64),
+                    eb_alpha=float(pitches / (pitches + 50)),
+                )
+            )
 
     engine = PitcherSimilarityEngine.__new__(PitcherSimilarityEngine)
     engine._duckdb_path = ""
@@ -1032,20 +1065,31 @@ def _run_synthetic_pitcher_test() -> DiagnosticReport:
 def _run_synthetic_fielder_test() -> DiagnosticReport:
     """Build a synthetic fielder engine and run diagnostics on it."""
     from similarity.engines.fielder_similarity import (
-        FielderSimilarityEngine,
-        FielderProfile,
-        FeatureNormalizer,
+        ALL_POSITIONS,
+        IF_DP_FEATURES,
+        IF_ERROR_FEATURES,
+        IF_PIVOT_FEATURES,
+        IF_RANGE_FEATURES,
+        IF_SPECIALTY_FEATURES,
+        INFIELD_POSITIONS,
+        OF_ARM_FEATURES,
+        OF_ERROR_FEATURES,
+        OF_RANGE_FEATURES,
+        OF_STAR_FEATURES,
+        RBF_SIGMA_IF_DP,
+        RBF_SIGMA_IF_ERRORS,
+        RBF_SIGMA_IF_RANGE,
+        RBF_SIGMA_IF_SPECIALTY,
+        RBF_SIGMA_OF_ARM,
+        RBF_SIGMA_OF_ERRORS,
+        RBF_SIGMA_OF_RANGE,
+        RBF_SIGMA_OF_STARS,
         EmpiricalBayesShrinkage,
+        FeatureNormalizer,
+        FielderProfile,
+        FielderSimilarityEngine,
         PositionPartition,
         WeightedRBFSimilarity,
-        IF_RANGE_FEATURES, IF_DP_FEATURES, IF_PIVOT_FEATURES,
-        IF_ERROR_FEATURES, IF_SPECIALTY_FEATURES,
-        OF_RANGE_FEATURES, OF_ARM_FEATURES, OF_STAR_FEATURES, OF_ERROR_FEATURES,
-        RBF_SIGMA_IF_RANGE, RBF_SIGMA_IF_DP, RBF_SIGMA_IF_ERRORS,
-        RBF_SIGMA_IF_SPECIALTY,
-        RBF_SIGMA_OF_RANGE, RBF_SIGMA_OF_ARM, RBF_SIGMA_OF_STARS,
-        RBF_SIGMA_OF_ERRORS,
-        INFIELD_POSITIONS, OUTFIELD_POSITIONS, ALL_POSITIONS,
     )
 
     rng = np.random.default_rng(42)
@@ -1072,10 +1116,12 @@ def _run_synthetic_fielder_test() -> DiagnosticReport:
             else:
                 base_dp = None
                 base_spec = None
-                base_arm = np.concatenate([
-                    rng.beta(5, 5, 3),
-                    rng.normal(0, 1, 1),
-                ])
+                base_arm = np.concatenate(
+                    [
+                        rng.beta(5, 5, 3),
+                        rng.normal(0, 1, 1),
+                    ]
+                )
                 base_star = rng.beta(5, 5, len(OF_STAR_FEATURES))
 
             for season in seasons:
@@ -1095,28 +1141,32 @@ def _run_synthetic_fielder_test() -> DiagnosticReport:
                         base_spec + rng.normal(0, 0.03, base_spec.shape), 0, 1
                     ).astype(np.float64)
                 else:
-                    arm_vec = np.concatenate([
-                        np.clip(base_arm[:3] + rng.normal(0, 0.03, 3), 0, 1),
-                        base_arm[3:] + rng.normal(0, 0.3, 1),
-                    ]).astype(np.float64)
+                    arm_vec = np.concatenate(
+                        [
+                            np.clip(base_arm[:3] + rng.normal(0, 0.03, 3), 0, 1),
+                            base_arm[3:] + rng.normal(0, 0.3, 1),
+                        ]
+                    ).astype(np.float64)
                     star_vec = np.clip(
                         base_star + rng.normal(0, 0.05, base_star.shape), 0, 1
                     ).astype(np.float64)
 
-                profiles.append(FielderProfile(
-                    player_id=pid,
-                    position=pos,
-                    season=season,
-                    innings_played=float(rng.integers(200, 1200)),
-                    sample_batted_balls=int(bb),
-                    range_vec=range_vec.astype(np.float64),
-                    error_vec=error_vec.astype(np.float64),
-                    dp_vec=dp_vec,
-                    specialty_vec=specialty_vec,
-                    arm_vec=arm_vec,
-                    star_vec=star_vec,
-                    eb_alpha=float(bb / (bb + 15)),
-                ))
+                profiles.append(
+                    FielderProfile(
+                        player_id=pid,
+                        position=pos,
+                        season=season,
+                        innings_played=float(rng.integers(200, 1200)),
+                        sample_batted_balls=int(bb),
+                        range_vec=range_vec.astype(np.float64),
+                        error_vec=error_vec.astype(np.float64),
+                        dp_vec=dp_vec,
+                        specialty_vec=specialty_vec,
+                        arm_vec=arm_vec,
+                        star_vec=star_vec,
+                        eb_alpha=float(bb / (bb + 15)),
+                    )
+                )
 
             pid += 1
 
@@ -1185,14 +1235,18 @@ def _run_synthetic_fielder_test() -> DiagnosticReport:
 def _run_synthetic_baserunner_test() -> DiagnosticReport:
     """Build a synthetic baserunner engine and run diagnostics on it."""
     from similarity.engines.baserunner_similarity import (
-        BaserunnerSimilarityEngine,
-        BaserunnerProfile,
-        FeatureNormalizer,
-        EmpiricalBayesShrinkage,
+        AGGRESSION_FEATURES,
+        RBF_SIGMA_AGGRESSION,
+        RBF_SIGMA_SPEED,
+        RBF_SIGMA_SUCCESS,
+        SPEED_FEATURES,
+        SUCCESS_FEATURES,
         BaserunnerPartition,
+        BaserunnerProfile,
+        BaserunnerSimilarityEngine,
+        EmpiricalBayesShrinkage,
+        FeatureNormalizer,
         WeightedRBFSimilarity,
-        SPEED_FEATURES, AGGRESSION_FEATURES, SUCCESS_FEATURES,
-        RBF_SIGMA_SPEED, RBF_SIGMA_AGGRESSION, RBF_SIGMA_SUCCESS,
     )
 
     rng = np.random.default_rng(42)
@@ -1219,19 +1273,21 @@ def _run_synthetic_baserunner_test() -> DiagnosticReport:
 
             opps = int(rng.integers(25, 120))
 
-            profiles.append(BaserunnerProfile(
-                player_id=pid,
-                season=season,
-                sample_advancement_opps=opps,
-                speed_vec=speed,
-                aggression_vec=agg,
-                success_vec=suc,
-                sample_first_to_third_opps=int(rng.integers(5, 40)),
-                sample_second_to_home_opps=int(rng.integers(5, 30)),
-                sample_first_to_home_opps=int(rng.integers(2, 15)),
-                sample_tag_up_opps=int(rng.integers(2, 10)),
-                eb_alpha=float(opps / (opps + 15)),
-            ))
+            profiles.append(
+                BaserunnerProfile(
+                    player_id=pid,
+                    season=season,
+                    sample_advancement_opps=opps,
+                    speed_vec=speed,
+                    aggression_vec=agg,
+                    success_vec=suc,
+                    sample_first_to_third_opps=int(rng.integers(5, 40)),
+                    sample_second_to_home_opps=int(rng.integers(5, 30)),
+                    sample_first_to_home_opps=int(rng.integers(2, 15)),
+                    sample_tag_up_opps=int(rng.integers(2, 10)),
+                    eb_alpha=float(opps / (opps + 15)),
+                )
+            )
 
     # Assemble engine without DuckDB
     engine = BaserunnerSimilarityEngine.__new__(BaserunnerSimilarityEngine)
@@ -1270,6 +1326,7 @@ def _run_synthetic_baserunner_test() -> DiagnosticReport:
 #   - query_pair(key_a, key_b) → SimilarityResult | None
 #   - profile_count → int
 # ============================================================================
+
 
 def run_generic_diagnostics(
     engine: Any,
@@ -1332,7 +1389,10 @@ def run_generic_diagnostics(
             results = engine.query(player_id, season)
         except Exception as exc:
             log.warning(
-                "query(%d, %d) raised %s -- skipping.", player_id, season, exc,
+                "query(%d, %d) raised %s -- skipping.",
+                player_id,
+                season,
+                exc,
             )
             continue
         for r in results:

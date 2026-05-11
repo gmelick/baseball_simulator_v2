@@ -11,9 +11,8 @@ Usage:
 import os
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool
-
 from alembic import context
+from sqlalchemy import engine_from_config, pool
 
 # ---------------------------------------------------------------------------
 # Alembic Config object — provides access to values within alembic.ini
@@ -34,7 +33,7 @@ config = context.config
 _dsn = os.environ.get("BASEBALL_DB_DSN")
 if _dsn:
     if _dsn.startswith("postgresql://"):
-        _dsn = "postgresql+psycopg2://" + _dsn[len("postgresql://"):]
+        _dsn = "postgresql+psycopg2://" + _dsn[len("postgresql://") :]
     config.set_main_option("sqlalchemy.url", _dsn)
 
 # Interpret the config file for Python logging.
@@ -54,6 +53,7 @@ target_metadata = None
 # ---------------------------------------------------------------------------
 # Offline mode — generates SQL script without a live DB connection
 # ---------------------------------------------------------------------------
+
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
@@ -79,6 +79,7 @@ def run_migrations_offline() -> None:
 # ---------------------------------------------------------------------------
 # Online mode — applies migrations directly against a live DB connection
 # ---------------------------------------------------------------------------
+
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode.

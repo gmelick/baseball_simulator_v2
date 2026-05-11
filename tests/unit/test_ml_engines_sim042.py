@@ -16,14 +16,21 @@ import duckdb
 import numpy as np
 
 
-def _make_engine(profiles_matrix: np.ndarray, meta_rows: list[dict],
-                 *, index_kind: str = "flat",
-                 spray_column: str = "spray_angle"):
-    from similarity.engines.batted_ball_similarity import (
-        BattedBallSimilarityEngine, BattedBallNormalizer,
-        NearestBattedBall, FEATURE_DIM,
-    )
+def _make_engine(
+    profiles_matrix: np.ndarray,
+    meta_rows: list[dict],
+    *,
+    index_kind: str = "flat",
+    spray_column: str = "spray_angle",
+):
     import faiss
+
+    from similarity.engines.batted_ball_similarity import (
+        FEATURE_DIM,
+        BattedBallNormalizer,
+        BattedBallSimilarityEngine,
+        NearestBattedBall,
+    )
 
     engine = BattedBallSimilarityEngine.__new__(BattedBallSimilarityEngine)
     engine._duckdb_path = ""
@@ -39,10 +46,16 @@ def _make_engine(profiles_matrix: np.ndarray, meta_rows: list[dict],
     engine._index = idx
     engine._index_meta = [
         NearestBattedBall(
-            pitch_id=r["pitch_id"], game_pk=r["game_pk"], season=r["season"],
-            batter_id=r["batter_id"], pitcher_id=r["pitcher_id"],
-            distance=0.0, bb_type=r["bb_type"], result_hits=r["result_hits"],
-        ) for r in meta_rows
+            pitch_id=r["pitch_id"],
+            game_pk=r["game_pk"],
+            season=r["season"],
+            batter_id=r["batter_id"],
+            pitcher_id=r["pitcher_id"],
+            distance=0.0,
+            bb_type=r["bb_type"],
+            result_hits=r["result_hits"],
+        )
+        for r in meta_rows
     ]
     engine._index_size = len(meta_rows)
     engine._spray_column_used = spray_column
@@ -51,11 +64,13 @@ def _make_engine(profiles_matrix: np.ndarray, meta_rows: list[dict],
 
 def _synthetic_pool(n: int = 500, seed: int = 42):
     rng = np.random.default_rng(seed)
-    matrix = np.column_stack([
-        rng.uniform(60.0, 115.0, n),    # exit_velo
-        rng.uniform(-25.0, 50.0, n),    # launch_angle
-        rng.uniform(-45.0, 45.0, n),    # spray_angle
-    ]).astype(np.float64)
+    matrix = np.column_stack(
+        [
+            rng.uniform(60.0, 115.0, n),  # exit_velo
+            rng.uniform(-25.0, 50.0, n),  # launch_angle
+            rng.uniform(-45.0, 45.0, n),  # spray_angle
+        ]
+    ).astype(np.float64)
 
     meta = []
     bb_types = ["ground_ball", "fly_ball", "line_drive", "popup"]
@@ -64,27 +79,28 @@ def _synthetic_pool(n: int = 500, seed: int = 42):
         ev = matrix[i, 0]
         la = matrix[i, 1]
         if ev > 105 and 22 <= la <= 35:
-            hits = 4   # HR
+            hits = 4  # HR
         elif ev > 95 and la > 0:
             hits = np.random.RandomState(seed + i).choice([1, 2, 3], p=[0.6, 0.35, 0.05])
         elif la < 0:
-            hits = 0   # ground out
+            hits = 0  # ground out
         else:
             hits = int(np.random.RandomState(seed + i).choice([0, 1], p=[0.7, 0.3]))
-        meta.append({
-            "pitch_id": 2_000_000 + i,
-            "game_pk": 800_000 + (i % 100),
-            "season": 2022 + (i % 3),
-            "batter_id": 660000 + (i % 30),
-            "pitcher_id": 605000 + (i % 30),
-            "bb_type": bb_types[i % len(bb_types)],
-            "result_hits": int(hits),
-        })
+        meta.append(
+            {
+                "pitch_id": 2_000_000 + i,
+                "game_pk": 800_000 + (i % 100),
+                "season": 2022 + (i % 3),
+                "batter_id": 660000 + (i % 30),
+                "pitcher_id": 605000 + (i % 30),
+                "bb_type": bb_types[i % len(bb_types)],
+                "result_hits": int(hits),
+            }
+        )
     return matrix, meta
 
 
 class TestBattedBallEngineBasic(unittest.TestCase):
-
     def test_query_returns_k_results_sorted(self):
         m, meta = _synthetic_pool()
         engine = _make_engine(m, meta)
@@ -142,15 +158,17 @@ class TestBattedBallEngineBasic(unittest.TestCase):
         # Barreled-ball distribution should weight HR (4) more heavily
         # than weak-grounder distribution.
         self.assertGreater(
-            barreled.get(4, 0.0), weak.get(4, 0.0),
-            f"barreled HR rate {barreled.get(4, 0.0)} not > weak HR rate "
-            f"{weak.get(4, 0.0)}",
+            barreled.get(4, 0.0),
+            weak.get(4, 0.0),
+            f"barreled HR rate {barreled.get(4, 0.0)} not > weak HR rate {weak.get(4, 0.0)}",
         )
 
     def test_empty_engine_returns_empty(self):
         from similarity.engines.batted_ball_similarity import (
-            BattedBallSimilarityEngine, BattedBallVector,
+            BattedBallSimilarityEngine,
+            BattedBallVector,
         )
+
         engine = BattedBallSimilarityEngine.__new__(BattedBallSimilarityEngine)
         engine._index = None
         engine._index_meta = []
@@ -163,6 +181,7 @@ class TestBattedBallEngineBasic(unittest.TestCase):
         m, meta = _synthetic_pool()
         engine = _make_engine(m, meta)
         from similarity.engines.batted_ball_similarity import BattedBallVector
+
         queries = [
             BattedBallVector(*m[0].tolist()),
             BattedBallVector(*m[7].tolist()),
@@ -171,7 +190,7 @@ class TestBattedBallEngineBasic(unittest.TestCase):
         for i, q in enumerate(queries):
             individual = engine.query(q, k=5)
             self.assertEqual(len(batch[i]), len(individual))
-            for r_b, r_i in zip(batch[i], individual):
+            for r_b, r_i in zip(batch[i], individual, strict=False):
                 self.assertEqual(r_b.pitch_id, r_i.pitch_id)
 
 
@@ -207,17 +226,21 @@ class TestBattedBallSpray051Readiness(unittest.TestCase):
             la = float(rng.uniform(-25, 45))
             sa = float(rng.uniform(-45, 45))
             row = (
-                2_000_000 + i, 800_000 + i, 2024,
-                660000 + (i % 30), 605000 + (i % 30),
-                ev, la, sa,
+                2_000_000 + i,
+                800_000 + i,
+                2024,
+                660000 + (i % 30),
+                605000 + (i % 30),
+                ev,
+                la,
+                sa,
             )
             if with_pull_relative:
                 # Pull-relative is just `sa` flipped on R-handed batters in
                 # the real pipeline, but for this test we just plug in
                 # something distinguishable.
                 row = row + (sa * 0.95,)  # pull_relative_spray_angle
-            row = row + ("line_drive" if la > 0 else "ground_ball",
-                         int(rng.integers(0, 5)))
+            row = row + ("line_drive" if la > 0 else "ground_ball", int(rng.integers(0, 5)))
             placeholders = ", ".join(["?"] * len(row))
             conn.execute(f"INSERT INTO sim.outcome_pool VALUES ({placeholders})", row)
 
@@ -225,6 +248,7 @@ class TestBattedBallSpray051Readiness(unittest.TestCase):
         from similarity.engines.batted_ball_similarity import (
             BattedBallSimilarityEngine,
         )
+
         conn = duckdb.connect(":memory:")
         self._build_outcome_pool(conn, with_pull_relative=False)
         chosen = BattedBallSimilarityEngine._select_spray_column(conn)
@@ -235,6 +259,7 @@ class TestBattedBallSpray051Readiness(unittest.TestCase):
         from similarity.engines.batted_ball_similarity import (
             BattedBallSimilarityEngine,
         )
+
         conn = duckdb.connect(":memory:")
         self._build_outcome_pool(conn, with_pull_relative=True)
         chosen = BattedBallSimilarityEngine._select_spray_column(conn)
@@ -243,16 +268,18 @@ class TestBattedBallSpray051Readiness(unittest.TestCase):
 
 
 class TestBattedBallFeatureContract(unittest.TestCase):
-
     def test_feature_dim_is_3(self):
         from similarity.engines.batted_ball_similarity import (
-            FEATURE_DIM, FEATURE_NAMES,
+            FEATURE_DIM,
+            FEATURE_NAMES,
         )
+
         self.assertEqual(FEATURE_DIM, 3)
         self.assertEqual(FEATURE_NAMES, ["exit_velo", "launch_angle", "spray_angle"])
 
     def test_default_k_is_50(self):
         from similarity.engines.batted_ball_similarity import DEFAULT_K
+
         self.assertEqual(DEFAULT_K, 50)
 
 

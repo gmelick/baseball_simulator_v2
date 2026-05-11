@@ -65,6 +65,7 @@ def validate_environment() -> None:
 # Lifespan — startup / shutdown
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -153,6 +154,7 @@ async def lifespan(app: FastAPI):
 # App factory
 # ---------------------------------------------------------------------------
 
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="MLB Baseball Simulation Platform",
@@ -187,6 +189,7 @@ def create_app() -> FastAPI:
     # Spec: docs/similarity_visualization_spec.md. The lifespan above
     # attaches the engine, name resolver, and Redis cache to app.state.
     from api.routes.similarity import router as similarity_router
+
     app.include_router(similarity_router)
 
     # Phase 5:
@@ -199,7 +202,11 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["ops"], summary="Liveness probe")
     async def health() -> dict:
-        return {"status": "ok", "phase": "2", "environment": os.environ.get("ENVIRONMENT", "development")}
+        return {
+            "status": "ok",
+            "phase": "2",
+            "environment": os.environ.get("ENVIRONMENT", "development"),
+        }
 
     @app.get("/ready", tags=["ops"], summary="Readiness probe")
     async def ready() -> JSONResponse:
@@ -244,8 +251,7 @@ def create_app() -> FastAPI:
 
         # Pitcher engine (informational only — not a readiness blocker)
         checks["pitcher_engine"] = (
-            "ok" if getattr(app.state, "pitcher_engine", None) is not None
-            else "not_initialized"
+            "ok" if getattr(app.state, "pitcher_engine", None) is not None else "not_initialized"
         )
 
         status_code = 200 if all_ok else 503

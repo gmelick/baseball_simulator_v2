@@ -62,7 +62,6 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 import duckdb
 import numpy as np
@@ -70,6 +69,7 @@ from numpy.typing import NDArray
 
 try:  # pragma: no cover
     import faiss
+
     _FAISS_AVAILABLE = True
 except ImportError as e:  # pragma: no cover
     faiss = None  # type: ignore[assignment]
@@ -97,15 +97,15 @@ log = logging.getLogger("batted_ball_similarity")
 # FAISS L2 indexing.  Calibration of these weights is BA-owned territory.
 BATTED_BALL_FEATURES = [
     # name,         weight   notes
-    ("exit_velo",   1.30),   # mph; primary driver of HR/extra-base outcome
+    ("exit_velo", 1.30),  # mph; primary driver of HR/extra-base outcome
     ("launch_angle", 1.10),  # degrees; defines bb_type implicitly
-    ("spray_angle",  0.80),  # degrees; pull / oppo / center axis
+    ("spray_angle", 0.80),  # degrees; pull / oppo / center axis
 ]
 
-FEATURE_NAMES   = [f for f, _ in BATTED_BALL_FEATURES]
+FEATURE_NAMES = [f for f, _ in BATTED_BALL_FEATURES]
 FEATURE_WEIGHTS = np.array([w for _, w in BATTED_BALL_FEATURES], dtype=np.float64)
-FEATURE_SCALE   = np.sqrt(FEATURE_WEIGHTS)
-FEATURE_DIM     = len(BATTED_BALL_FEATURES)
+FEATURE_SCALE = np.sqrt(FEATURE_WEIGHTS)
+FEATURE_DIM = len(BATTED_BALL_FEATURES)
 
 DEFAULT_K = 50
 MIN_INDEX_SIZE = 1_000
@@ -115,16 +115,18 @@ RECENCY_BOOST_SEASONS = 2
 # `spray_angle` (raw) to `pull_relative_spray_angle` (handedness-corrected).
 # The build loader detects which exists and selects accordingly.
 PREFERRED_SPRAY_COLUMN = "pull_relative_spray_angle"
-FALLBACK_SPRAY_COLUMN  = "spray_angle"
+FALLBACK_SPRAY_COLUMN = "spray_angle"
 
 
 # ============================================================================
 # Data Structures
 # ============================================================================
 
+
 @dataclass(frozen=True, slots=True)
 class BattedBallVector:
     """Query vector for the batted-ball FAISS index."""
+
     exit_velo: float
     launch_angle: float
     spray_angle: float
@@ -139,25 +141,28 @@ class BattedBallVector:
 @dataclass(frozen=True, slots=True)
 class NearestBattedBall:
     """One entry in the batted-ball K-nearest-neighbor query output."""
-    pitch_id: int           # FK into sim.outcome_pool / sim.pitch_pool
+
+    pitch_id: int  # FK into sim.outcome_pool / sim.pitch_pool
     game_pk: int
     season: int
     batter_id: int
     pitcher_id: int
-    distance: float         # Euclidean distance in normalized + weighted space
-    bb_type: Optional[str]  # ground_ball / fly_ball / line_drive / popup
-    result_hits: int        # 0 / 1 / 2 / 3 / 4 — the labeled outcome
+    distance: float  # Euclidean distance in normalized + weighted space
+    bb_type: str | None  # ground_ball / fly_ball / line_drive / popup
+    result_hits: int  # 0 / 1 / 2 / 3 / 4 — the labeled outcome
 
 
 # ============================================================================
 # Feature Normalization
 # ============================================================================
 
+
 @dataclass(slots=True)
 class BattedBallNormalizer:
     """Z-score normalizer for batted-ball feature vectors."""
-    mean: Optional[NDArray] = None
-    std: Optional[NDArray] = None
+
+    mean: NDArray | None = None
+    std: NDArray | None = None
 
     def fit(self, matrix: NDArray[np.float64]) -> None:
         self.mean = np.nanmean(matrix, axis=0)
@@ -174,13 +179,13 @@ class BattedBallNormalizer:
         if self.mean is None:
             return (matrix * FEATURE_SCALE[np.newaxis, :]).astype(np.float32)
         normed = (matrix - self.mean[np.newaxis, :]) / self.std[np.newaxis, :]
-        return (np.nan_to_num(normed, nan=0.0)
-                * FEATURE_SCALE[np.newaxis, :]).astype(np.float32)
+        return (np.nan_to_num(normed, nan=0.0) * FEATURE_SCALE[np.newaxis, :]).astype(np.float32)
 
 
 # ============================================================================
 # Main Engine
 # ============================================================================
+
 
 class BattedBallSimilarityEngine:
     """
@@ -207,8 +212,7 @@ class BattedBallSimilarityEngine:
     ) -> None:
         if not _FAISS_AVAILABLE:  # pragma: no cover
             raise RuntimeError(
-                "faiss-cpu is not installed. "
-                f"Original import error: {_FAISS_IMPORT_ERROR!r}"
+                f"faiss-cpu is not installed. Original import error: {_FAISS_IMPORT_ERROR!r}"
             )
         if index_kind not in (self.INDEX_KIND_FLAT, self.INDEX_KIND_HNSW):
             raise ValueError(f"unknown index_kind: {index_kind!r}")
@@ -216,12 +220,12 @@ class BattedBallSimilarityEngine:
         self._duckdb_path = duckdb_path
         self._index_kind = index_kind
         self._normalizer = BattedBallNormalizer()
-        self._index: Optional["faiss.Index"] = None
+        self._index: faiss.Index | None = None
         self._index_meta: list[NearestBattedBall] = []
         self._index_size = 0
         # Recorded after build() so introspection shows whether the
         # SIM-051 column was used.
-        self._spray_column_used: Optional[str] = None
+        self._spray_column_used: str | None = None
 
     # ------------------------------------------------------------------
     # Build
@@ -229,7 +233,7 @@ class BattedBallSimilarityEngine:
 
     def build(
         self,
-        seasons: Optional[list[int]] = None,
+        seasons: list[int] | None = None,
         *,
         recency_boost: bool = False,
     ) -> None:
@@ -246,7 +250,8 @@ class BattedBallSimilarityEngine:
             log.warning(
                 "BattedBallSimilarityEngine: only %d batted balls loaded "
                 "(minimum %d). Build may not be reliable.",
-                len(raw_matrix), MIN_INDEX_SIZE,
+                len(raw_matrix),
+                MIN_INDEX_SIZE,
             )
 
         if recency_boost and seasons:
@@ -263,7 +268,10 @@ class BattedBallSimilarityEngine:
         log.info(
             "BattedBallSimilarityEngine built: %d batted balls indexed (%s) "
             "via spray-column=%r in %.2fs.",
-            self._index_size, self._index_kind, spray_col, elapsed,
+            self._index_size,
+            self._index_kind,
+            spray_col,
+            elapsed,
         )
 
     @staticmethod
@@ -272,7 +280,8 @@ class BattedBallSimilarityEngine:
         fall back to raw `spray_angle` and warn."""
         try:
             cols = {
-                r[0] for r in conn.execute("""
+                r[0]
+                for r in conn.execute("""
                     SELECT column_name FROM information_schema.columns
                      WHERE table_schema = 'sim' AND table_name = 'outcome_pool'
                 """).fetchall()
@@ -286,14 +295,15 @@ class BattedBallSimilarityEngine:
             "BattedBallSimilarityEngine: SIM-051 column %r not found; "
             "falling back to raw %r.  Outcomes will be slightly biased "
             "by handedness until SIM-051 ships.",
-            PREFERRED_SPRAY_COLUMN, FALLBACK_SPRAY_COLUMN,
+            PREFERRED_SPRAY_COLUMN,
+            FALLBACK_SPRAY_COLUMN,
         )
         return FALLBACK_SPRAY_COLUMN
 
     def _load_pool(
         self,
         conn: duckdb.DuckDBPyConnection,
-        seasons: Optional[list[int]],
+        seasons: list[int] | None,
         spray_col: str,
     ) -> tuple[NDArray[np.float64], list[NearestBattedBall]]:
         sf = ""
@@ -317,20 +327,31 @@ class BattedBallSimilarityEngine:
         matrix = np.empty((n, FEATURE_DIM), dtype=np.float64)
         meta: list[NearestBattedBall] = []
         for i, r in enumerate(rows):
-            (pitch_id, game_pk, season, batter_id, pitcher_id,
-             exit_velo, launch_angle, spray_angle,
-             bb_type, result_hits) = r
+            (
+                pitch_id,
+                game_pk,
+                season,
+                batter_id,
+                pitcher_id,
+                exit_velo,
+                launch_angle,
+                spray_angle,
+                bb_type,
+                result_hits,
+            ) = r
             matrix[i, :] = [_f(exit_velo), _f(launch_angle), _f(spray_angle)]
-            meta.append(NearestBattedBall(
-                pitch_id=pitch_id,
-                game_pk=game_pk,
-                season=season,
-                batter_id=batter_id,
-                pitcher_id=pitcher_id,
-                distance=0.0,
-                bb_type=bb_type,
-                result_hits=int(result_hits or 0),
-            ))
+            meta.append(
+                NearestBattedBall(
+                    pitch_id=pitch_id,
+                    game_pk=game_pk,
+                    season=season,
+                    batter_id=batter_id,
+                    pitcher_id=pitcher_id,
+                    distance=0.0,
+                    bb_type=bb_type,
+                    result_hits=int(result_hits or 0),
+                )
+            )
         return matrix, meta
 
     def _apply_recency_boost(
@@ -341,7 +362,8 @@ class BattedBallSimilarityEngine:
     ) -> tuple[NDArray[np.float64], list[NearestBattedBall]]:
         recent_cutoff = max(seasons) - (RECENCY_BOOST_SEASONS - 1)
         recent_mask = np.array(
-            [m.season >= recent_cutoff for m in meta], dtype=bool,
+            [m.season >= recent_cutoff for m in meta],
+            dtype=bool,
         )
         if not recent_mask.any():
             return raw_matrix, meta
@@ -349,7 +371,7 @@ class BattedBallSimilarityEngine:
         boosted_meta = list(meta) + [meta[i] for i in np.flatnonzero(recent_mask)]
         return boosted_matrix, boosted_meta
 
-    def _build_faiss_index(self, scaled: NDArray[np.float32]) -> "faiss.Index":
+    def _build_faiss_index(self, scaled: NDArray[np.float32]) -> faiss.Index:
         if self._index_kind == self.INDEX_KIND_HNSW:
             index = faiss.IndexHNSWFlat(FEATURE_DIM, 32)
         else:
@@ -380,20 +402,22 @@ class BattedBallSimilarityEngine:
         distances, indices = self._index.search(scaled, k_eff)
 
         results: list[NearestBattedBall] = []
-        for d, idx in zip(distances[0], indices[0]):
+        for d, idx in zip(distances[0], indices[0], strict=False):
             if idx < 0:
                 continue
             base = self._index_meta[idx]
-            results.append(NearestBattedBall(
-                pitch_id=base.pitch_id,
-                game_pk=base.game_pk,
-                season=base.season,
-                batter_id=base.batter_id,
-                pitcher_id=base.pitcher_id,
-                distance=float(np.sqrt(max(d, 0.0))),
-                bb_type=base.bb_type,
-                result_hits=base.result_hits,
-            ))
+            results.append(
+                NearestBattedBall(
+                    pitch_id=base.pitch_id,
+                    game_pk=base.game_pk,
+                    season=base.season,
+                    batter_id=base.batter_id,
+                    pitcher_id=base.pitcher_id,
+                    distance=float(np.sqrt(max(d, 0.0))),
+                    bb_type=base.bb_type,
+                    result_hits=base.result_hits,
+                )
+            )
         return results
 
     def query_batch(
@@ -414,22 +438,24 @@ class BattedBallSimilarityEngine:
         distances, indices = self._index.search(scaled, k_eff)
 
         out: list[list[NearestBattedBall]] = []
-        for row_d, row_i in zip(distances, indices):
+        for row_d, row_i in zip(distances, indices, strict=False):
             row_results: list[NearestBattedBall] = []
-            for d, idx in zip(row_d, row_i):
+            for d, idx in zip(row_d, row_i, strict=False):
                 if idx < 0:
                     continue
                 base = self._index_meta[idx]
-                row_results.append(NearestBattedBall(
-                    pitch_id=base.pitch_id,
-                    game_pk=base.game_pk,
-                    season=base.season,
-                    batter_id=base.batter_id,
-                    pitcher_id=base.pitcher_id,
-                    distance=float(np.sqrt(max(d, 0.0))),
-                    bb_type=base.bb_type,
-                    result_hits=base.result_hits,
-                ))
+                row_results.append(
+                    NearestBattedBall(
+                        pitch_id=base.pitch_id,
+                        game_pk=base.game_pk,
+                        season=base.season,
+                        batter_id=base.batter_id,
+                        pitcher_id=base.pitcher_id,
+                        distance=float(np.sqrt(max(d, 0.0))),
+                        bb_type=base.bb_type,
+                        result_hits=base.result_hits,
+                    )
+                )
             out.append(row_results)
         return out
 
@@ -467,7 +493,7 @@ class BattedBallSimilarityEngine:
         return self._index is not None and self._index_size > 0
 
     @property
-    def spray_column_used(self) -> Optional[str]:
+    def spray_column_used(self) -> str | None:
         """Which spray column was selected by the loader.  Useful for
         operators verifying that SIM-051 has actually shipped."""
         return self._spray_column_used
@@ -476,6 +502,7 @@ class BattedBallSimilarityEngine:
 # ============================================================================
 # Helpers
 # ============================================================================
+
 
 def _f(value) -> float:
     if value is None:

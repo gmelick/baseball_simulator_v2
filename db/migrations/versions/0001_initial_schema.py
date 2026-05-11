@@ -115,9 +115,15 @@ def upgrade() -> None:
         )
     """)
     op.execute("CREATE INDEX IF NOT EXISTS idx_players_last_name      ON raw.players(last_name)")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_players_full_name_trgm ON raw.players USING GIN (full_name gin_trgm_ops)")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_players_active         ON raw.players(active) WHERE active = TRUE")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_players_position       ON raw.players(primary_position)")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_players_full_name_trgm ON raw.players USING GIN (full_name gin_trgm_ops)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_players_active         ON raw.players(active) WHERE active = TRUE"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_players_position       ON raw.players(primary_position)"
+    )
 
     # -----------------------------------------------------------------
     # raw.managers
@@ -137,7 +143,9 @@ def upgrade() -> None:
         )
     """)
     op.execute("CREATE INDEX IF NOT EXISTS idx_managers_team   ON raw.managers(team_id)")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_managers_active ON raw.managers(team_id) WHERE season_end IS NULL")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_managers_active ON raw.managers(team_id) WHERE season_end IS NULL"
+    )
 
     # -----------------------------------------------------------------
     # raw.games
@@ -212,11 +220,19 @@ def upgrade() -> None:
             FOREIGN KEY (team_id, season) REFERENCES raw.teams(team_id, season)
         )
     """)
-    op.execute("CREATE INDEX IF NOT EXISTS idx_game_lineups_game_team ON raw.game_lineups(game_pk, team_id)")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_game_lineups_player    ON raw.game_lineups(player_id)")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_game_lineups_game_team ON raw.game_lineups(game_pk, team_id)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_game_lineups_player    ON raw.game_lineups(player_id)"
+    )
     op.execute("CREATE INDEX IF NOT EXISTS idx_game_lineups_game      ON raw.game_lineups(game_pk)")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_game_lineups_starters  ON raw.game_lineups(game_pk, team_id) WHERE is_starter = TRUE")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_game_lineups_pinch     ON raw.game_lineups(game_pk) WHERE pinch_role IS NOT NULL")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_game_lineups_starters  ON raw.game_lineups(game_pk, team_id) WHERE is_starter = TRUE"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_game_lineups_pinch     ON raw.game_lineups(game_pk) WHERE pinch_role IS NOT NULL"
+    )
 
     # -----------------------------------------------------------------
     # raw.sprint_speed
@@ -383,15 +399,33 @@ def upgrade() -> None:
     op.execute("CREATE INDEX IF NOT EXISTS idx_pitches_game_date      ON raw.pitches(game_date)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_pitches_venue          ON raw.pitches(venue_id)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_pitches_pitch_type     ON raw.pitches(pitch_type)")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_pitches_events         ON raw.pitches(events) WHERE events IS NOT NULL")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_pitches_pitcher_season ON raw.pitches(pitcher, game_date)")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_pitches_batter_season  ON raw.pitches(batter, game_date)")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_pitches_pitcher_type   ON raw.pitches(pitcher, pitch_type)")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_pitches_sb_attempts    ON raw.pitches(pitcher, fielder_2) WHERE sb_attempt_2b OR sb_attempt_3b OR sb_attempt_home")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_pitches_subs           ON raw.pitches(game_pk) WHERE pitcher_sub OR pinch_hitter OR pinch_runner OR defensive_sub")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_pitches_batted_balls   ON raw.pitches(batter, pitcher, game_date) WHERE type = 'X'")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_pitches_quality_clean  ON raw.pitches(game_date) WHERE data_quality_flag = FALSE")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_pitches_count_state    ON raw.pitches(balls, strikes, outs)")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pitches_events         ON raw.pitches(events) WHERE events IS NOT NULL"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pitches_pitcher_season ON raw.pitches(pitcher, game_date)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pitches_batter_season  ON raw.pitches(batter, game_date)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pitches_pitcher_type   ON raw.pitches(pitcher, pitch_type)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pitches_sb_attempts    ON raw.pitches(pitcher, fielder_2) WHERE sb_attempt_2b OR sb_attempt_3b OR sb_attempt_home"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pitches_subs           ON raw.pitches(game_pk) WHERE pitcher_sub OR pinch_hitter OR pinch_runner OR defensive_sub"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pitches_batted_balls   ON raw.pitches(batter, pitcher, game_date) WHERE type = 'X'"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pitches_quality_clean  ON raw.pitches(game_date) WHERE data_quality_flag = FALSE"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pitches_count_state    ON raw.pitches(balls, strikes, outs)"
+    )
 
     # -----------------------------------------------------------------
     # sim.lineup_state
@@ -412,10 +446,18 @@ def upgrade() -> None:
             expires_at              TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours')
         )
     """)
-    op.execute("CREATE INDEX IF NOT EXISTS idx_lineup_state_game_pk        ON sim.lineup_state(game_pk) WHERE game_pk IS NOT NULL")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_lineup_state_live           ON sim.lineup_state(is_live_game, updated_at) WHERE is_live_game = TRUE")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_lineup_state_expires        ON sim.lineup_state(expires_at)")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_lineup_state_game_state_gin ON sim.lineup_state USING GIN(game_state)")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_lineup_state_game_pk        ON sim.lineup_state(game_pk) WHERE game_pk IS NOT NULL"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_lineup_state_live           ON sim.lineup_state(is_live_game, updated_at) WHERE is_live_game = TRUE"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_lineup_state_expires        ON sim.lineup_state(expires_at)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_lineup_state_game_state_gin ON sim.lineup_state USING GIN(game_state)"
+    )
 
     # -----------------------------------------------------------------
     # Triggers
@@ -426,8 +468,15 @@ def upgrade() -> None:
         BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
         $$
     """)
-    for tbl in ("raw.venues", "raw.teams", "raw.players", "raw.managers",
-                "raw.games", "raw.game_lineups", "sim.lineup_state"):
+    for tbl in (
+        "raw.venues",
+        "raw.teams",
+        "raw.players",
+        "raw.managers",
+        "raw.games",
+        "raw.game_lineups",
+        "sim.lineup_state",
+    ):
         short = tbl.split(".")[1]
         op.execute(f"""
             CREATE TRIGGER trg_{short}_updated_at

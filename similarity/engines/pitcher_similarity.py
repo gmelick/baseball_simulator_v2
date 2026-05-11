@@ -120,19 +120,19 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import pickle
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
+from pathlib import Path
 
 import duckdb
 import numpy as np
+import ot
 from numpy.typing import NDArray
 from scipy.linalg import sqrtm
 
 from similarity.similarity_diagnostics import run_pitcher_diagnostics
-import ot
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -151,25 +151,38 @@ log = logging.getLogger("pitcher_similarity")
 
 # Feature names inside GMM (must match GMM_FEATURE_NAMES in player_profile_computor)
 GMM_FEATURE_NAMES = [
-    "velo", "ivb", "hb", "spin_rate", "spin_axis", "release_x", "release_z", "release_ext",
+    "velo",
+    "ivb",
+    "hb",
+    "spin_rate",
+    "spin_axis",
+    "release_x",
+    "release_z",
+    "release_ext",
 ]
 GMM_FEATURE_DIM = len(GMM_FEATURE_NAMES)
 
 # Command features used for the RBF command sub-score
 COMMAND_FEATURES = [
-    "bb_rate", "k_rate", "csw_rate", "zone_take_rate", "chase_rate", "zone_rate", "whiff_rate",
+    "bb_rate",
+    "k_rate",
+    "csw_rate",
+    "zone_take_rate",
+    "chase_rate",
+    "zone_rate",
+    "whiff_rate",
 ]
 
 # Sub-score weights — arsenal most weighted per project spec
-WEIGHT_ARSENAL   = 0.65
-WEIGHT_COMMAND   = 0.35
-_TOTAL_WEIGHT    = WEIGHT_ARSENAL + WEIGHT_COMMAND
+WEIGHT_ARSENAL = 0.65
+WEIGHT_COMMAND = 0.35
+_TOTAL_WEIGHT = WEIGHT_ARSENAL + WEIGHT_COMMAND
 assert abs(_TOTAL_WEIGHT - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
 # RBF bandwidth parameters (gamma = 1 / (2 * sigma²))
 # Calibrated so that the median MLB pitcher pair gets a score
 # around 0.4–0.6 (useful discrimination range).
-RBF_SIGMA_COMMAND  = 1.0453   # tighter — command is lower-dimensional
+RBF_SIGMA_COMMAND = 1.0453  # tighter — command is lower-dimensional
 
 # Arsenal W2 distance → similarity score transform.
 #
@@ -207,23 +220,26 @@ MIN_PITCHER_PITCHES = 200
 # Data Structures
 # ============================================================================
 
+
 @dataclass(frozen=True, slots=True)
 class GMMComponent:
     """One component of a pitcher's Gaussian Mixture Model."""
+
     component_id: int
-    weight: float                          # mixing proportion (sums to 1.0)
-    mean: NDArray[np.float64]              # shape (8,) — original feature units
-    covariance: NDArray[np.float64]        # shape (8, 8) — full covariance
+    weight: float  # mixing proportion (sums to 1.0)
+    mean: NDArray[np.float64]  # shape (8,) — original feature units
+    covariance: NDArray[np.float64]  # shape (8, 8) — full covariance
     n_pitches: int
 
 
 @dataclass(slots=True)
 class GMMModel:
     """Full GMM for one pitcher/season."""
+
     n_components: int
     feature_names: list[str]
-    feature_means: NDArray[np.float64]     # global standardization mean
-    feature_stds: NDArray[np.float64]      # global standardization std
+    feature_means: NDArray[np.float64]  # global standardization mean
+    feature_stds: NDArray[np.float64]  # global standardization std
     components: list[GMMComponent]
     bic: float = 0.0
 
@@ -232,13 +248,15 @@ class GMMModel:
         """Deserialize from the JSON stored in pitcher_season_metrics.gmm_model."""
         components = []
         for c in model_json.get("components", []):
-            components.append(GMMComponent(
-                component_id=c["component_id"],
-                weight=c["weight"],
-                mean=np.array(c["mean"], dtype=np.float64),
-                covariance=np.array(c["covariance"], dtype=np.float64),
-                n_pitches=c.get("n_pitches", 0),
-            ))
+            components.append(
+                GMMComponent(
+                    component_id=c["component_id"],
+                    weight=c["weight"],
+                    mean=np.array(c["mean"], dtype=np.float64),
+                    covariance=np.array(c["covariance"], dtype=np.float64),
+                    n_pitches=c.get("n_pitches", 0),
+                )
+            )
         diag = model_json.get("fit_diagnostics", {})
         return cls(
             n_components=model_json.get("n_components", 0),
@@ -259,16 +277,17 @@ class GMMModel:
 @dataclass(slots=True)
 class PitcherProfile:
     """Complete pitcher profile for similarity scoring."""
+
     pitcher_id: int
     season: int
-    p_throws: str                          # "L" or "R"
+    p_throws: str  # "L" or "R"
     sample_pitches: int
 
     # Sub-models
     gmm: GMMModel | None
 
     # Command vector (normalized externally before scoring)
-    command_vec: NDArray[np.float64]        # shape (len(COMMAND_FEATURES),)
+    command_vec: NDArray[np.float64]  # shape (len(COMMAND_FEATURES),)
 
     # Empirical Bayes shrinkage weight (1.0 = fully own data, 0.0 = fully league avg)
     eb_alpha: float = 1.0
@@ -280,10 +299,11 @@ class PitcherProfile:
 @dataclass(frozen=True, slots=True)
 class SimilarityResult:
     """One entry in the similarity query output."""
+
     pitcher_id: int
     season: int
     p_throws: str
-    score: float                           # composite [0, 1], 1 = identical
+    score: float  # composite [0, 1], 1 = identical
     arsenal_score: float
     command_score: float
     sample_pitches: int
@@ -292,6 +312,7 @@ class SimilarityResult:
 # ============================================================================
 # Arsenal Similarity — Wasserstein-2 Optimal Transport
 # ============================================================================
+
 
 class ArsenalSimilarity:
     """
@@ -308,8 +329,10 @@ class ArsenalSimilarity:
 
     @staticmethod
     def bures_wasserstein_sq(
-        m1: NDArray, C1: NDArray,
-        m2: NDArray, C2: NDArray,
+        m1: NDArray,
+        C1: NDArray,
+        m2: NDArray,
+        C2: NDArray,
     ) -> float:
         """
         Squared Bures–Wasserstein distance between N(m1, C1) and N(m2, C2):
@@ -361,8 +384,10 @@ class ArsenalSimilarity:
         for i, ca in enumerate(gmm_a.components):
             for j, cb in enumerate(gmm_b.components):
                 cost[i, j] = cls.bures_wasserstein_sq(
-                    ca.mean, ca.covariance,
-                    cb.mean, cb.covariance,
+                    ca.mean,
+                    ca.covariance,
+                    cb.mean,
+                    cb.covariance,
                 )
         return cost
 
@@ -401,7 +426,9 @@ class ArsenalSimilarity:
 
     @staticmethod
     def _greedy_transport(
-        wa: NDArray, wb: NDArray, cost: NDArray,
+        wa: NDArray,
+        wb: NDArray,
+        cost: NDArray,
     ) -> float:
         """
         Greedy approximation to optimal transport when POT is unavailable.
@@ -450,6 +477,7 @@ class ArsenalSimilarity:
 # Command / Result Similarity — Gaussian RBF Kernel
 # ============================================================================
 
+
 class RBFSimilarity:
     """
     Gaussian RBF (Radial Basis Function) kernel similarity with
@@ -463,7 +491,7 @@ class RBFSimilarity:
 
     def __init__(self, sigma: float = 1.0) -> None:
         self.sigma = sigma
-        self.gamma = 1.0 / (2.0 * sigma ** 2)
+        self.gamma = 1.0 / (2.0 * sigma**2)
 
     def score(self, x: NDArray, y: NDArray) -> float:
         """Compute RBF similarity between two vectors. Returns [0, 1]."""
@@ -473,7 +501,9 @@ class RBFSimilarity:
         return float(np.exp(-self.gamma * mean_dist_sq))
 
     def score_batch(
-        self, query: NDArray, candidates: NDArray,
+        self,
+        query: NDArray,
+        candidates: NDArray,
     ) -> NDArray[np.float64]:
         """
         Compute RBF similarity between one query vector and an array of
@@ -482,13 +512,14 @@ class RBFSimilarity:
         diff = candidates - query[np.newaxis, :]
         diff = np.nan_to_num(diff, nan=0.0)
         n_features = diff.shape[1]
-        mean_dist_sq = np.sum(diff ** 2, axis=1) / n_features
+        mean_dist_sq = np.sum(diff**2, axis=1) / n_features
         return np.exp(-self.gamma * mean_dist_sq)
 
 
 # ============================================================================
 # Empirical Bayes Shrinkage
 # ============================================================================
+
 
 class EmpiricalBayesShrinkage:
     """
@@ -535,6 +566,7 @@ class EmpiricalBayesShrinkage:
 # GMM Post-Processing — Minimum Cluster Size Enforcement
 # ============================================================================
 
+
 def standardize_gmm(
     gmm: GMMModel,
     pop_mean: NDArray[np.float64],
@@ -578,13 +610,15 @@ def standardize_gmm(
     for c in gmm.components:
         z_mean = (c.mean - pop_mean) / safe_std
         z_cov = D_inv @ c.covariance @ D_inv
-        new_components.append(GMMComponent(
-            component_id=c.component_id,
-            weight=c.weight,
-            mean=z_mean,
-            covariance=z_cov,
-            n_pitches=c.n_pitches,
-        ))
+        new_components.append(
+            GMMComponent(
+                component_id=c.component_id,
+                weight=c.weight,
+                mean=z_mean,
+                covariance=z_cov,
+                n_pitches=c.n_pitches,
+            )
+        )
 
     return GMMModel(
         n_components=gmm.n_components,
@@ -594,6 +628,7 @@ def standardize_gmm(
         components=new_components,
         bic=gmm.bic,
     )
+
 
 def enforce_min_cluster_size(gmm: GMMModel) -> GMMModel:
     """
@@ -641,9 +676,8 @@ def enforce_min_cluster_size(gmm: GMMModel) -> GMMModel:
             merged_mean = frac_s * s.mean + frac_n * nearest.mean
             diff_s = (s.mean - merged_mean).reshape(-1, 1)
             diff_n = (nearest.mean - merged_mean).reshape(-1, 1)
-            merged_cov = (
-                frac_s * (s.covariance + diff_s @ diff_s.T)
-                + frac_n * (nearest.covariance + diff_n @ diff_n.T)
+            merged_cov = frac_s * (s.covariance + diff_s @ diff_s.T) + frac_n * (
+                nearest.covariance + diff_n @ diff_n.T
             )
 
             merged = GMMComponent(
@@ -687,6 +721,7 @@ def enforce_min_cluster_size(gmm: GMMModel) -> GMMModel:
 # Feature Normalization
 # ============================================================================
 
+
 @dataclass(slots=True)
 class FeatureNormalizer:
     """
@@ -696,6 +731,7 @@ class FeatureNormalizer:
     Missing values (NaN) are filled with the population
     mean (i.e. z-score of 0) so they contribute nothing to distance.
     """
+
     command_mean: NDArray[np.float64] | None = None
     command_std: NDArray[np.float64] | None = None
 
@@ -721,8 +757,10 @@ class FeatureNormalizer:
 # Arsenal Distance Cache
 # ============================================================================
 
+
 def _cache_key(
-    a: tuple[int, int], b: tuple[int, int],
+    a: tuple[int, int],
+    b: tuple[int, int],
 ) -> tuple[tuple[int, int], tuple[int, int]]:
     """Canonical symmetric key: always smaller tuple first."""
     return (a, b) if a <= b else (b, a)
@@ -745,13 +783,18 @@ class ArsenalCache:
         self._cache: dict[tuple[tuple[int, int], tuple[int, int]], float] = {}
 
     def get(
-        self, a: tuple[int, int], b: tuple[int, int],
+        self,
+        a: tuple[int, int],
+        b: tuple[int, int],
     ) -> float | None:
         """Look up cached distance. Returns None on miss."""
         return self._cache.get(_cache_key(a, b))
 
     def put(
-        self, a: tuple[int, int], b: tuple[int, int], distance: float,
+        self,
+        a: tuple[int, int],
+        b: tuple[int, int],
+        distance: float,
     ) -> None:
         """Store a distance in the cache."""
         self._cache[_cache_key(a, b)] = distance
@@ -815,7 +858,8 @@ class ArsenalCache:
 
         log.info(
             "  Precomputing %d arsenal W2 distances (%d workers) …",
-            len(pairs_to_compute), n_workers,
+            len(pairs_to_compute),
+            n_workers,
         )
         t0 = time.time()
 
@@ -836,7 +880,10 @@ class ArsenalCache:
                     remaining = (len(pairs_to_compute) - idx - 1) / rate
                     log.info(
                         "    %d/%d pairs (%.0f/sec, ~%.0fs remaining)",
-                        idx + 1, len(pairs_to_compute), rate, remaining,
+                        idx + 1,
+                        len(pairs_to_compute),
+                        rate,
+                        remaining,
                     )
         else:
             # Parallel computation via multiprocessing
@@ -848,7 +895,7 @@ class ArsenalCache:
 
             chunk_size = max(1, len(pairs_to_compute) // (n_workers * 4))
             chunks = [
-                pairs_to_compute[i:i + chunk_size]
+                pairs_to_compute[i : i + chunk_size]
                 for i in range(0, len(pairs_to_compute), chunk_size)
             ]
 
@@ -858,7 +905,10 @@ class ArsenalCache:
                 futures = {}
                 for chunk in chunks:
                     future = executor.submit(
-                        _compute_w2_chunk, chunk, keys, gmm_data,
+                        _compute_w2_chunk,
+                        chunk,
+                        keys,
+                        gmm_data,
                     )
                     futures[future] = chunk
 
@@ -872,7 +922,8 @@ class ArsenalCache:
         elapsed = time.time() - t0
         log.info(
             "  Arsenal cache precomputed: %d pairs in %.1fs (%.0f pairs/sec).",
-            len(pairs_to_compute), elapsed,
+            len(pairs_to_compute),
+            elapsed,
             len(pairs_to_compute) / max(elapsed, 0.001),
         )
 
@@ -904,22 +955,24 @@ class ArsenalCache:
 
     def save(self, path: str) -> None:
         """Persist cache to disk (pickle)."""
-        with open(path, "wb") as f:
+        with Path(path).open("wb") as f:
             pickle.dump(self._cache, f, protocol=pickle.HIGHEST_PROTOCOL)
         log.info("Arsenal cache saved: %d entries → %s", len(self._cache), path)
 
     def load(self, path: str) -> None:
         """Load cache from disk. Merges with existing entries."""
-        if not os.path.exists(path):
+        p = Path(path)
+        if not p.exists():
             log.warning("Cache file not found: %s", path)
             return
-        with open(path, "rb") as f:
+        with p.open("rb") as f:
             loaded = pickle.load(f)
         self._cache.update(loaded)
         log.info("Arsenal cache loaded: %d entries from %s", len(loaded), path)
 
 
 # --- Multiprocessing helpers (module-level for pickling) ---
+
 
 def _serialize_gmm(gmm: GMMModel) -> dict:
     """Serialize GMM to a plain dict for cross-process pickling."""
@@ -981,6 +1034,7 @@ def _compute_w2_chunk(
 # Handedness Partition — Vectorized RBF Matrices
 # ============================================================================
 
+
 class HandednessPartition:
     """
     Stores all profiles for one handedness (L or R) with pre-built
@@ -995,7 +1049,7 @@ class HandednessPartition:
     def __init__(self, hand: str) -> None:
         self.hand = hand
         self.profiles: list[PitcherProfile] = []
-        self.keys: list[tuple[int, int]] = []           # parallel to profiles
+        self.keys: list[tuple[int, int]] = []  # parallel to profiles
 
         # Normalized feature matrices — shape (N, feature_dim)
         self._cmd_matrix: NDArray | None = None
@@ -1065,8 +1119,10 @@ class HandednessPartition:
                 continue
 
             w2_dist = arsenal_cache.get_or_compute(
-                query_key, cand_key,
-                query_profile.gmm, cand.gmm,
+                query_key,
+                cand_key,
+                query_profile.gmm,
+                cand.gmm,
             )
 
             if np.isfinite(w2_dist):
@@ -1085,16 +1141,13 @@ class HandednessPartition:
         # Path 1: both GMMs present — full weighted sum
         mask_full = has_arsenal
         composite[mask_full] = (
-            WEIGHT_ARSENAL * arsenal_scores[mask_full]
-            + WEIGHT_COMMAND * command_scores[mask_full]
+            WEIGHT_ARSENAL * arsenal_scores[mask_full] + WEIGHT_COMMAND * command_scores[mask_full]
         )
 
         # Path 2: missing GMM — redistribute arsenal weight
         mask_no_arsenal = ~has_arsenal
         remaining = WEIGHT_COMMAND
-        composite[mask_no_arsenal] = (
-            (WEIGHT_COMMAND / remaining) * command_scores[mask_no_arsenal]
-        )
+        composite[mask_no_arsenal] = (WEIGHT_COMMAND / remaining) * command_scores[mask_no_arsenal]
 
         # Confidence discount: sqrt(min(alpha_query, alpha_candidate))
         query_alpha = query_profile.eb_alpha
@@ -1108,15 +1161,17 @@ class HandednessPartition:
             if self.keys[i] == query_key:
                 continue
             cand = self.profiles[i]
-            results.append(SimilarityResult(
-                pitcher_id=cand.pitcher_id,
-                season=cand.season,
-                p_throws=cand.p_throws,
-                score=float(composite[i]),
-                arsenal_score=float(arsenal_scores[i]),
-                command_score=float(command_scores[i]),
-                sample_pitches=cand.sample_pitches,
-            ))
+            results.append(
+                SimilarityResult(
+                    pitcher_id=cand.pitcher_id,
+                    season=cand.season,
+                    p_throws=cand.p_throws,
+                    score=float(composite[i]),
+                    arsenal_score=float(arsenal_scores[i]),
+                    command_score=float(command_scores[i]),
+                    sample_pitches=cand.sample_pitches,
+                )
+            )
 
         return results
 
@@ -1124,6 +1179,7 @@ class HandednessPartition:
 # ============================================================================
 # Main Engine
 # ============================================================================
+
 
 class PitcherSimilarityEngine:
     """
@@ -1230,10 +1286,10 @@ class PitcherSimilarityEngine:
 
         elapsed = time.time() - t0
         log.info(
-            "PitcherSimilarityEngine built: %d profiles "
-            "(%d LHP, %d RHP) in %.2fs.",
+            "PitcherSimilarityEngine built: %d profiles (%d LHP, %d RHP) in %.2fs.",
             len(self._profiles),
-            len(profiles_l), len(profiles_r),
+            len(profiles_l),
+            len(profiles_r),
             elapsed,
         )
 
@@ -1273,7 +1329,9 @@ class PitcherSimilarityEngine:
     # ------------------------------------------------------------------
 
     def _load_league_averages(
-        self, conn: duckdb.DuckDBPyConnection, seasons: list[int] | None,
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        seasons: list[int] | None,
     ) -> None:
         """Load league-average profiles from derived.league_averages."""
         try:
@@ -1298,14 +1356,16 @@ class PitcherSimilarityEngine:
             else:
                 pj = profile_json_raw
 
-            self._league_avg_command[season] = np.array([
-                pj.get(f, 0.0) or 0.0 for f in COMMAND_FEATURES
-            ], dtype=np.float64)
+            self._league_avg_command[season] = np.array(
+                [pj.get(f, 0.0) or 0.0 for f in COMMAND_FEATURES], dtype=np.float64
+            )
 
         log.info("Loaded league averages for %d seasons.", len(rows))
 
     def _load_profiles(
-        self, conn: duckdb.DuckDBPyConnection, seasons: list[int] | None,
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        seasons: list[int] | None,
     ) -> None:
         """Load pitcher profiles from DuckDB."""
         season_filter = ""
@@ -1342,10 +1402,23 @@ class PitcherSimilarityEngine:
 
         for row in rows:
             (
-                pitcher_id, season, p_throws, sample_pitches,
+                pitcher_id,
+                season,
+                p_throws,
+                sample_pitches,
                 gmm_model_raw,
-                bb_rate, k_rate, csw_rate, zone_take_rate, chase_rate, zone_rate, whiff_rate,
-                gb_rate, fb_rate, ld_rate, whip, hr_per_9,
+                bb_rate,
+                k_rate,
+                csw_rate,
+                zone_take_rate,
+                chase_rate,
+                zone_rate,
+                whiff_rate,
+                gb_rate,
+                fb_rate,
+                ld_rate,
+                whip,
+                hr_per_9,
                 below_min,
             ) = row
 
@@ -1358,10 +1431,18 @@ class PitcherSimilarityEngine:
                 if gmm_dict.get("n_components", 0) > 0:
                     gmm = GMMModel.from_json(gmm_dict)
 
-            command_vec = np.array([
-                bb_rate or 0.0, k_rate or 0.0, csw_rate or 0.0,
-                zone_take_rate or 0.0, chase_rate or 0.0, zone_rate or 0.0, whiff_rate or 0.0
-            ], dtype=np.float64)
+            command_vec = np.array(
+                [
+                    bb_rate or 0.0,
+                    k_rate or 0.0,
+                    csw_rate or 0.0,
+                    zone_take_rate or 0.0,
+                    chase_rate or 0.0,
+                    zone_rate or 0.0,
+                    whiff_rate or 0.0,
+                ],
+                dtype=np.float64,
+            )
 
             self._profiles[(pitcher_id, season)] = PitcherProfile(
                 pitcher_id=pitcher_id,
@@ -1376,13 +1457,15 @@ class PitcherSimilarityEngine:
 
     def _apply_shrinkage(self) -> None:
         """Apply Empirical Bayes shrinkage to command and result vectors."""
-        for key, profile in self._profiles.items():
+        for _key, profile in self._profiles.items():
             season = profile.season
             la_cmd = self._league_avg_command.get(season)
 
             if la_cmd is not None:
                 profile.command_vec = self._shrinkage.shrink(
-                    profile.command_vec, la_cmd, profile.sample_pitches,
+                    profile.command_vec,
+                    la_cmd,
+                    profile.sample_pitches,
                 )
 
     def _standardize_arsenals(self) -> None:
@@ -1431,7 +1514,9 @@ class PitcherSimilarityEngine:
         for key, profile in self._profiles.items():
             if profile.gmm is not None:
                 self._profiles[key].gmm = standardize_gmm(
-                    profile.gmm, pop_mean, pop_std,
+                    profile.gmm,
+                    pop_mean,
+                    pop_std,
                 )
 
     # ------------------------------------------------------------------
@@ -1471,14 +1556,12 @@ class PitcherSimilarityEngine:
             log.warning(
                 "Pitcher %d season %d not found in engine. "
                 "Ensure build() was called with that season.",
-                pitcher_id, season,
+                pitcher_id,
+                season,
             )
             return []
 
-        partition = (
-            self._partition_l if query_profile.p_throws == "L"
-            else self._partition_r
-        )
+        partition = self._partition_l if query_profile.p_throws == "L" else self._partition_r
 
         results = partition.score_all(
             query_profile=query_profile,
@@ -1515,9 +1598,7 @@ class PitcherSimilarityEngine:
         if pa is None or pb is None:
             return None
 
-        composite, arsenal_s, command_s = (
-            self._score_pair(pa, pb)
-        )
+        composite, arsenal_s, command_s = self._score_pair(pa, pb)
 
         return SimilarityResult(
             pitcher_id=pb.pitcher_id,
@@ -1556,13 +1637,13 @@ class PitcherSimilarityEngine:
         key_q = (query.pitcher_id, query.season)
         key_c = (candidate.pitcher_id, candidate.season)
         w2_dist = self._arsenal_cache.get_or_compute(
-            key_q, key_c, query.gmm, candidate.gmm,
+            key_q,
+            key_c,
+            query.gmm,
+            candidate.gmm,
         )
 
-        if np.isfinite(w2_dist):
-            arsenal_s = float(np.exp(-w2_dist / ARSENAL_SCALE))
-        else:
-            arsenal_s = 0.0
+        arsenal_s = float(np.exp(-w2_dist / ARSENAL_SCALE)) if np.isfinite(w2_dist) else 0.0
 
         cmd_q = self._normalizer.normalize_command(query.command_vec)
         cmd_c = self._normalizer.normalize_command(candidate.command_vec)
@@ -1570,15 +1651,10 @@ class PitcherSimilarityEngine:
 
         has_arsenal = query.gmm is not None and candidate.gmm is not None
         if has_arsenal:
-            composite = (
-                WEIGHT_ARSENAL * arsenal_s
-                + WEIGHT_COMMAND * command_s
-            )
+            composite = WEIGHT_ARSENAL * arsenal_s + WEIGHT_COMMAND * command_s
         else:
             remaining = WEIGHT_COMMAND
-            composite = (
-                (WEIGHT_COMMAND / remaining) * command_s
-            )
+            composite = (WEIGHT_COMMAND / remaining) * command_s
 
         confidence = min(query.eb_alpha, candidate.eb_alpha)
         composite *= np.sqrt(confidence)
@@ -1615,6 +1691,7 @@ class PitcherSimilarityEngine:
 # ============================================================================
 # Convenience: Batch Similarity Matrix
 # ============================================================================
+
 
 def build_similarity_matrix(
     engine: PitcherSimilarityEngine,
@@ -1660,5 +1737,5 @@ if __name__ == "__main__":
     # gamma = calibrate_arsenal_norm_scale(w2_scores, .5)
     report = run_pitcher_diagnostics(engine, n_query_samples=50)
     print(report)
-    results = engine.query(pitcher_id=694973, season=2025, n=20)
+    results = engine.query(pitcher_id=694973, season=2025)
     print(results)

@@ -93,9 +93,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Optional
 
 import duckdb
 import numpy as np
@@ -130,20 +128,20 @@ ALL_POSITIONS = INFIELD_POSITIONS | OUTFIELD_POSITIONS
 # charging plays etc.), which is more diagnostic than aggregate OAA alone.
 IF_RANGE_FEATURES = [
     # feature_name,          reliability_weight
-    ("oaa_glove_side",       0.103),   # stabilizes ~300 opps
-    ("oaa_arm_side",         0.107),   # stabilizes ~300 opps
-    ("oaa_charging",         0.100),   # stabilizes ~400 opps (fewer opps)
-    ("oaa_deep",             0.100),   # stabilizes ~350 opps
-    ("catch_pct_added",      0.100),   # stabilizes fastest — aggregate stat
+    ("oaa_glove_side", 0.103),  # stabilizes ~300 opps
+    ("oaa_arm_side", 0.107),  # stabilizes ~300 opps
+    ("oaa_charging", 0.100),  # stabilizes ~400 opps (fewer opps)
+    ("oaa_deep", 0.100),  # stabilizes ~350 opps
+    ("catch_pct_added", 0.100),  # stabilizes fastest — aggregate stat
 ]
 
 # Double Play: conversion skill separates great infielders
 # dp_above_expected is the core metric; attempt rate and success rate
 # add discrimination for aggressiveness vs reliability.
 IF_DP_FEATURES = [
-    ("dp_above_expected",    0.400),   # stabilizes ~150 DP opps
-    ("dp_attempt_rate",      0.100),   # stabilizes ~100 DP opps
-    ("dp_success_rate",      0.500),   # noisier — depends on runner speed
+    ("dp_above_expected", 0.400),  # stabilizes ~150 DP opps
+    ("dp_attempt_rate", 0.100),  # stabilizes ~100 DP opps
+    ("dp_success_rate", 0.500),  # noisier — depends on runner speed
 ]
 
 # Pivot-specific features (2B/SS only — NULL for corner IF)
@@ -154,25 +152,25 @@ IF_PIVOT_FEATURES = [
 
 # Errors: decomposed into fielding (hands/footwork) vs throwing (arm accuracy)
 IF_ERROR_FEATURES = [
-    ("fielding_error_rate",  0.100),   # stabilizes slowly (~1000 innings)
-    ("throwing_error_rate",  0.100),   # slightly more stable — discrete throws
+    ("fielding_error_rate", 0.100),  # stabilizes slowly (~1000 innings)
+    ("throwing_error_rate", 0.100),  # slightly more stable — discrete throws
 ]
 
 # Specialty: position-specific niche skills
 # 1B/3B: bunt defense. 1B additionally: scooping throws.
 # 2B/SS: neutral (features filled with positional average).
 IF_SPECIALTY_FEATURES = [
-    ("bunt_fielding_rate",   0.100),   # stabilizes ~80 bunt opps
-    ("scoop_success_rate",   0.713),   # 1B only; stabilizes ~100 scoop opps
+    ("bunt_fielding_rate", 0.100),  # stabilizes ~80 bunt opps
+    ("scoop_success_rate", 0.713),  # 1B only; stabilizes ~100 scoop opps
 ]
 
 # --- Outfield feature definitions ---
 OF_RANGE_FEATURES = [
-    ("oaa_glove_side",       0.100),
-    ("oaa_arm_side",         0.100),
-    ("oaa_charging",         0.100),   # coming-in plays
-    ("oaa_deep",             0.100),   # going-back — most discriminating for OF
-    ("catch_pct_added",      0.100),
+    ("oaa_glove_side", 0.100),
+    ("oaa_arm_side", 0.100),
+    ("oaa_charging", 0.100),  # coming-in plays
+    ("oaa_deep", 0.100),  # going-back — most discriminating for OF
+    ("catch_pct_added", 0.100),
 ]
 
 # Arm: deterrence + execution + run value
@@ -180,38 +178,38 @@ OF_RANGE_FEATURES = [
 # Thrown-out rate captures arm accuracy on actual attempts.
 # of_arm_runs is the RE24-based total value.
 OF_ARM_FEATURES = [
-    ("arm_hold_rate",            0.500),
-    ("arm_thrown_out_rate",      0.500),
+    ("arm_hold_rate", 0.500),
+    ("arm_thrown_out_rate", 0.500),
     ("arm_advancement_prevention", 0.500),
-    ("of_arm_runs",              0.500),
+    ("of_arm_runs", 0.500),
 ]
 
 # Star Plays: success rates on plays bucketed by difficulty
 # Separates "highlight reel range" from "fundamentally sound"
 OF_STAR_FEATURES = [
-    ("five_star_catch_rate",     0.100),   # very low sample — high noise
-    ("four_star_catch_rate",     0.500),
-    ("routine_catch_rate",       0.500),   # most stable — high-opportunity bucket
+    ("five_star_catch_rate", 0.100),  # very low sample — high noise
+    ("four_star_catch_rate", 0.500),
+    ("routine_catch_rate", 0.500),  # most stable — high-opportunity bucket
 ]
 
 OF_ERROR_FEATURES = [
-    ("fielding_error_rate",  0.100),
-    ("throwing_error_rate",  0.100),
+    ("fielding_error_rate", 0.100),
+    ("throwing_error_rate", 0.100),
 ]
 
 # --- Sub-score weights (sum to 1.0 within each position type) ---
 # Infield
-WEIGHT_IF_RANGE     = 0.45
-WEIGHT_IF_DP        = 0.30
-WEIGHT_IF_ERRORS    = 0.15
+WEIGHT_IF_RANGE = 0.45
+WEIGHT_IF_DP = 0.30
+WEIGHT_IF_ERRORS = 0.15
 WEIGHT_IF_SPECIALTY = 0.10
 _IF_TOTAL = WEIGHT_IF_RANGE + WEIGHT_IF_DP + WEIGHT_IF_ERRORS + WEIGHT_IF_SPECIALTY
 assert abs(_IF_TOTAL - 1.0) < 1e-9, "IF sub-score weights must sum to 1.0"
 
 # Outfield
-WEIGHT_OF_RANGE  = 0.40
-WEIGHT_OF_ARM    = 0.30
-WEIGHT_OF_STARS  = 0.15
+WEIGHT_OF_RANGE = 0.40
+WEIGHT_OF_ARM = 0.30
+WEIGHT_OF_STARS = 0.15
 WEIGHT_OF_ERRORS = 0.15
 _OF_TOTAL = WEIGHT_OF_RANGE + WEIGHT_OF_ARM + WEIGHT_OF_STARS + WEIGHT_OF_ERRORS
 assert abs(_OF_TOTAL - 1.0) < 1e-9, "OF sub-score weights must sum to 1.0"
@@ -219,14 +217,14 @@ assert abs(_OF_TOTAL - 1.0) < 1e-9, "OF sub-score weights must sum to 1.0"
 # --- RBF bandwidth parameters ---
 # Defensive metrics are noisier than batting/pitching, so sigmas are
 # slightly wider to avoid over-discriminating on noise.
-RBF_SIGMA_IF_RANGE     = 1.033
-RBF_SIGMA_IF_DP        = 0.372
-RBF_SIGMA_IF_ERRORS    = 1.000
+RBF_SIGMA_IF_RANGE = 1.033
+RBF_SIGMA_IF_DP = 0.372
+RBF_SIGMA_IF_ERRORS = 1.000
 RBF_SIGMA_IF_SPECIALTY = 1.000
 
-RBF_SIGMA_OF_RANGE  = 1.027
-RBF_SIGMA_OF_ARM    = 1.000
-RBF_SIGMA_OF_STARS  = 0.449
+RBF_SIGMA_OF_RANGE = 1.027
+RBF_SIGMA_OF_ARM = 1.000
+RBF_SIGMA_OF_STARS = 0.449
 RBF_SIGMA_OF_ERRORS = 1.000
 
 # --- Empirical Bayes ---
@@ -243,11 +241,13 @@ MIN_FIELDER_BATTED_BALLS = 50
 # Data Structures
 # ============================================================================
 
+
 @dataclass(slots=True)
 class FielderProfile:
     """Complete fielder-position-season profile for similarity scoring."""
+
     player_id: int
-    position: str                          # 1B, 2B, 3B, SS, LF, CF, RF
+    position: str  # 1B, 2B, 3B, SS, LF, CF, RF
     season: int
     innings_played: float
     sample_batted_balls: int
@@ -272,20 +272,22 @@ class FielderProfile:
 @dataclass(frozen=True, slots=True)
 class SimilarityResult:
     """One entry in the similarity query output."""
+
     player_id: int
     position: str
     season: int
-    score: float                           # composite [0, 1], 1 = identical
+    score: float  # composite [0, 1], 1 = identical
     range_score: float
-    secondary_score: float                 # DP (IF) or Arm (OF)
-    tertiary_score: float                  # Errors (IF) or Stars (OF)
-    quaternary_score: float                # Specialty (IF) or Errors (OF)
+    secondary_score: float  # DP (IF) or Arm (OF)
+    tertiary_score: float  # Errors (IF) or Stars (OF)
+    quaternary_score: float  # Specialty (IF) or Errors (OF)
     sample_batted_balls: int
 
 
 # ============================================================================
 # Reliability-Weighted RBF Kernel (shared implementation)
 # ============================================================================
+
 
 class WeightedRBFSimilarity:
     """
@@ -305,7 +307,7 @@ class WeightedRBFSimilarity:
         reliability_weights: NDArray[np.float64],
     ) -> None:
         self.sigma = sigma
-        self.gamma = 1.0 / (2.0 * sigma ** 2)
+        self.gamma = 1.0 / (2.0 * sigma**2)
         total = reliability_weights.sum()
         if total > 0:
             self.weights = reliability_weights / total
@@ -320,7 +322,9 @@ class WeightedRBFSimilarity:
         return float(np.exp(-self.gamma * dist_sq))
 
     def score_batch(
-        self, query: NDArray, candidates: NDArray,
+        self,
+        query: NDArray,
+        candidates: NDArray,
     ) -> NDArray[np.float64]:
         """
         Compute weighted RBF between one query and an array of candidates.
@@ -328,13 +332,14 @@ class WeightedRBFSimilarity:
         """
         diff = candidates - query[np.newaxis, :]
         diff = np.nan_to_num(diff, nan=0.0)
-        dist_sq = np.sum(self.weights[np.newaxis, :] * diff ** 2, axis=1)
+        dist_sq = np.sum(self.weights[np.newaxis, :] * diff**2, axis=1)
         return np.exp(-self.gamma * dist_sq)
 
 
 # ============================================================================
 # Empirical Bayes Shrinkage
 # ============================================================================
+
 
 class EmpiricalBayesShrinkage:
     """Shrinks raw feature vectors toward positional average based on sample size."""
@@ -360,6 +365,7 @@ class EmpiricalBayesShrinkage:
 # Feature Normalization
 # ============================================================================
 
+
 @dataclass(slots=True)
 class FeatureNormalizer:
     """
@@ -369,6 +375,7 @@ class FeatureNormalizer:
     distributions differ substantially (e.g. CF range distribution is
     different from 1B range distribution).
     """
+
     # Keys: position string → (mean_array, std_array)
     range_params: dict[str, tuple[NDArray, NDArray]] = field(default_factory=dict)
     error_params: dict[str, tuple[NDArray, NDArray]] = field(default_factory=dict)
@@ -438,6 +445,7 @@ class FeatureNormalizer:
 # Position Partition — Vectorized Batch Scoring
 # ============================================================================
 
+
 class PositionPartition:
     """
     Stores all fielder profiles for one specific position with pre-built
@@ -453,8 +461,8 @@ class PositionPartition:
         # Normalized feature matrices
         self._range_matrix: NDArray | None = None
         self._error_matrix: NDArray | None = None
-        self._secondary_matrix: NDArray | None = None   # DP (IF) or Arm (OF)
-        self._tertiary_matrix: NDArray | None = None     # Specialty (IF) or Stars (OF)
+        self._secondary_matrix: NDArray | None = None  # DP (IF) or Arm (OF)
+        self._tertiary_matrix: NDArray | None = None  # Specialty (IF) or Stars (OF)
 
         self._eb_alphas: NDArray | None = None
 
@@ -479,27 +487,38 @@ class PositionPartition:
             alphas.append(p.eb_alpha)
 
             if self.is_infield:
-                sec_rows.append(normalizer.normalize_dp(
-                    p.dp_vec if p.dp_vec is not None
-                    else np.zeros(len(IF_DP_FEATURES) + (len(IF_PIVOT_FEATURES) if pos in ("2B", "SS") else 0)),
-                    pos,
-                ))
-                tert_rows.append(normalizer.normalize_specialty(
-                    p.specialty_vec if p.specialty_vec is not None
-                    else np.zeros(len(IF_SPECIALTY_FEATURES)),
-                    pos,
-                ))
+                sec_rows.append(
+                    normalizer.normalize_dp(
+                        p.dp_vec
+                        if p.dp_vec is not None
+                        else np.zeros(
+                            len(IF_DP_FEATURES)
+                            + (len(IF_PIVOT_FEATURES) if pos in ("2B", "SS") else 0)
+                        ),
+                        pos,
+                    )
+                )
+                tert_rows.append(
+                    normalizer.normalize_specialty(
+                        p.specialty_vec
+                        if p.specialty_vec is not None
+                        else np.zeros(len(IF_SPECIALTY_FEATURES)),
+                        pos,
+                    )
+                )
             else:
-                sec_rows.append(normalizer.normalize_arm(
-                    p.arm_vec if p.arm_vec is not None
-                    else np.zeros(len(OF_ARM_FEATURES)),
-                    pos,
-                ))
-                tert_rows.append(normalizer.normalize_star(
-                    p.star_vec if p.star_vec is not None
-                    else np.zeros(len(OF_STAR_FEATURES)),
-                    pos,
-                ))
+                sec_rows.append(
+                    normalizer.normalize_arm(
+                        p.arm_vec if p.arm_vec is not None else np.zeros(len(OF_ARM_FEATURES)),
+                        pos,
+                    )
+                )
+                tert_rows.append(
+                    normalizer.normalize_star(
+                        p.star_vec if p.star_vec is not None else np.zeros(len(OF_STAR_FEATURES)),
+                        pos,
+                    )
+                )
 
         self._range_matrix = np.array(range_rows, dtype=np.float64)
         self._error_matrix = np.array(error_rows, dtype=np.float64)
@@ -534,13 +553,15 @@ class PositionPartition:
         # Secondary: DP (IF) or Arm (OF)
         if self.is_infield:
             sec_q = normalizer.normalize_dp(
-                query.dp_vec if query.dp_vec is not None
+                query.dp_vec
+                if query.dp_vec is not None
                 else np.zeros(self._secondary_matrix.shape[1]),
                 pos,
             )
         else:
             sec_q = normalizer.normalize_arm(
-                query.arm_vec if query.arm_vec is not None
+                query.arm_vec
+                if query.arm_vec is not None
                 else np.zeros(self._secondary_matrix.shape[1]),
                 pos,
             )
@@ -549,13 +570,15 @@ class PositionPartition:
         # Tertiary: Specialty (IF) or Stars (OF)
         if self.is_infield:
             tert_q = normalizer.normalize_specialty(
-                query.specialty_vec if query.specialty_vec is not None
+                query.specialty_vec
+                if query.specialty_vec is not None
                 else np.zeros(self._tertiary_matrix.shape[1]),
                 pos,
             )
         else:
             tert_q = normalizer.normalize_star(
-                query.star_vec if query.star_vec is not None
+                query.star_vec
+                if query.star_vec is not None
                 else np.zeros(self._tertiary_matrix.shape[1]),
                 pos,
             )
@@ -590,29 +613,33 @@ class PositionPartition:
             cand = self.profiles[i]
 
             if self.is_infield:
-                results.append(SimilarityResult(
-                    player_id=cand.player_id,
-                    position=cand.position,
-                    season=cand.season,
-                    score=float(composite[i]),
-                    range_score=float(range_scores[i]),
-                    secondary_score=float(secondary_scores[i]),     # DP
-                    tertiary_score=float(error_scores[i]),          # Errors
-                    quaternary_score=float(tertiary_scores[i]),     # Specialty
-                    sample_batted_balls=cand.sample_batted_balls,
-                ))
+                results.append(
+                    SimilarityResult(
+                        player_id=cand.player_id,
+                        position=cand.position,
+                        season=cand.season,
+                        score=float(composite[i]),
+                        range_score=float(range_scores[i]),
+                        secondary_score=float(secondary_scores[i]),  # DP
+                        tertiary_score=float(error_scores[i]),  # Errors
+                        quaternary_score=float(tertiary_scores[i]),  # Specialty
+                        sample_batted_balls=cand.sample_batted_balls,
+                    )
+                )
             else:
-                results.append(SimilarityResult(
-                    player_id=cand.player_id,
-                    position=cand.position,
-                    season=cand.season,
-                    score=float(composite[i]),
-                    range_score=float(range_scores[i]),
-                    secondary_score=float(secondary_scores[i]),     # Arm
-                    tertiary_score=float(tertiary_scores[i]),       # Stars
-                    quaternary_score=float(error_scores[i]),        # Errors
-                    sample_batted_balls=cand.sample_batted_balls,
-                ))
+                results.append(
+                    SimilarityResult(
+                        player_id=cand.player_id,
+                        position=cand.position,
+                        season=cand.season,
+                        score=float(composite[i]),
+                        range_score=float(range_scores[i]),
+                        secondary_score=float(secondary_scores[i]),  # Arm
+                        tertiary_score=float(tertiary_scores[i]),  # Stars
+                        quaternary_score=float(error_scores[i]),  # Errors
+                        sample_batted_balls=cand.sample_batted_balls,
+                    )
+                )
 
         return results
 
@@ -620,6 +647,7 @@ class PositionPartition:
 # ============================================================================
 # Main Engine
 # ============================================================================
+
 
 class FielderSimilarityEngine:
     """
@@ -648,8 +676,12 @@ class FielderSimilarityEngine:
         # Per-position positional-average vectors for shrinkage
         # Keys: (position, season) → NDArray
         self._pos_avg: dict[str, dict[str, dict[int, NDArray]]] = {
-            "range": {}, "error": {}, "dp": {},
-            "specialty": {}, "arm": {}, "star": {},
+            "range": {},
+            "error": {},
+            "dp": {},
+            "specialty": {},
+            "arm": {},
+            "star": {},
         }
 
         self._normalizer = FeatureNormalizer()
@@ -719,17 +751,15 @@ class FielderSimilarityEngine:
         self._apply_shrinkage()
 
         # Group profiles by position for normalization and partition building
-        profiles_by_pos: dict[str, list[FielderProfile]] = {
-            pos: [] for pos in ALL_POSITIONS
-        }
-        for key, p in self._profiles.items():
+        profiles_by_pos: dict[str, list[FielderProfile]] = {pos: [] for pos in ALL_POSITIONS}
+        for _key, p in self._profiles.items():
             profiles_by_pos[p.position].append(p)
 
         self._normalizer.fit(profiles_by_pos)
 
         for pos, partition in self._partitions.items():
             profs = profiles_by_pos.get(pos, [])
-            rbfs = self._get_rbfs_for_position(pos)
+            self._get_rbfs_for_position(pos)
             partition.build(profs, self._normalizer)
 
         elapsed = time.time() - t0
@@ -749,7 +779,9 @@ class FielderSimilarityEngine:
     # ------------------------------------------------------------------
 
     def _load_positional_averages(
-        self, conn: duckdb.DuckDBPyConnection, seasons: list[int] | None,
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        seasons: list[int] | None,
     ) -> None:
         """
         Load per-position per-season average feature vectors from
@@ -783,37 +815,39 @@ class FielderSimilarityEngine:
                     self._pos_avg[group][pos] = {}
 
             if pos in INFIELD_POSITIONS:
-                self._pos_avg["range"][pos][season] = np.array([
-                    pj.get(f, 0.0) or 0.0 for f, _ in IF_RANGE_FEATURES
-                ], dtype=np.float64)
+                self._pos_avg["range"][pos][season] = np.array(
+                    [pj.get(f, 0.0) or 0.0 for f, _ in IF_RANGE_FEATURES], dtype=np.float64
+                )
                 dp_feats = IF_DP_FEATURES + (IF_PIVOT_FEATURES if pos in ("2B", "SS") else [])
-                self._pos_avg["dp"][pos][season] = np.array([
-                    pj.get(f, 0.0) or 0.0 for f, _ in dp_feats
-                ], dtype=np.float64)
-                self._pos_avg["error"][pos][season] = np.array([
-                    pj.get(f, 0.0) or 0.0 for f, _ in IF_ERROR_FEATURES
-                ], dtype=np.float64)
-                self._pos_avg["specialty"][pos][season] = np.array([
-                    pj.get(f, 0.0) or 0.0 for f, _ in IF_SPECIALTY_FEATURES
-                ], dtype=np.float64)
+                self._pos_avg["dp"][pos][season] = np.array(
+                    [pj.get(f, 0.0) or 0.0 for f, _ in dp_feats], dtype=np.float64
+                )
+                self._pos_avg["error"][pos][season] = np.array(
+                    [pj.get(f, 0.0) or 0.0 for f, _ in IF_ERROR_FEATURES], dtype=np.float64
+                )
+                self._pos_avg["specialty"][pos][season] = np.array(
+                    [pj.get(f, 0.0) or 0.0 for f, _ in IF_SPECIALTY_FEATURES], dtype=np.float64
+                )
             else:
-                self._pos_avg["range"][pos][season] = np.array([
-                    pj.get(f, 0.0) or 0.0 for f, _ in OF_RANGE_FEATURES
-                ], dtype=np.float64)
-                self._pos_avg["arm"][pos][season] = np.array([
-                    pj.get(f, 0.0) or 0.0 for f, _ in OF_ARM_FEATURES
-                ], dtype=np.float64)
-                self._pos_avg["error"][pos][season] = np.array([
-                    pj.get(f, 0.0) or 0.0 for f, _ in OF_ERROR_FEATURES
-                ], dtype=np.float64)
-                self._pos_avg["star"][pos][season] = np.array([
-                    pj.get(f, 0.0) or 0.0 for f, _ in OF_STAR_FEATURES
-                ], dtype=np.float64)
+                self._pos_avg["range"][pos][season] = np.array(
+                    [pj.get(f, 0.0) or 0.0 for f, _ in OF_RANGE_FEATURES], dtype=np.float64
+                )
+                self._pos_avg["arm"][pos][season] = np.array(
+                    [pj.get(f, 0.0) or 0.0 for f, _ in OF_ARM_FEATURES], dtype=np.float64
+                )
+                self._pos_avg["error"][pos][season] = np.array(
+                    [pj.get(f, 0.0) or 0.0 for f, _ in OF_ERROR_FEATURES], dtype=np.float64
+                )
+                self._pos_avg["star"][pos][season] = np.array(
+                    [pj.get(f, 0.0) or 0.0 for f, _ in OF_STAR_FEATURES], dtype=np.float64
+                )
 
         log.info("Loaded fielder positional averages for %d season-position combos.", len(rows))
 
     def _load_profiles(
-        self, conn: duckdb.DuckDBPyConnection, seasons: list[int] | None,
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        seasons: list[int] | None,
     ) -> None:
         season_filter = ""
         if seasons:
@@ -854,22 +888,40 @@ class FielderSimilarityEngine:
 
         for row in rows:
             (
-                player_id, position, season,
-                innings, sample_bb,
+                player_id,
+                position,
+                season,
+                innings,
+                sample_bb,
                 # Range (5)
-                oaa_gs, oaa_as, oaa_ch, oaa_deep, cpct_add,
+                oaa_gs,
+                oaa_as,
+                oaa_ch,
+                oaa_deep,
+                cpct_add,
                 # Errors (2)
-                f_err_rate, t_err_rate,
+                f_err_rate,
+                t_err_rate,
                 # DP (4)
-                dp_above, dp_att_rate, dp_suc_rate, dp_pivot_above,
+                dp_above,
+                dp_att_rate,
+                dp_suc_rate,
+                dp_pivot_above,
                 # Specialty (2)
-                bunt_rate, scoop_rate,
+                bunt_rate,
+                scoop_rate,
                 # Arm (4)
-                arm_hold, arm_throw_out, arm_adv_prev, of_arm_runs,
+                arm_hold,
+                arm_throw_out,
+                arm_adv_prev,
+                of_arm_runs,
                 # Star play counts (6)
-                five_opps, five_catches,
-                four_opps, four_catches,
-                routine_opps, routine_catches,
+                five_opps,
+                five_catches,
+                four_opps,
+                four_catches,
+                routine_opps,
+                routine_catches,
                 # Meta
                 below_min,
             ) = row
@@ -880,7 +932,9 @@ class FielderSimilarityEngine:
             # Compute star play rates from counts
             five_star_rate = (five_catches / five_opps) if five_opps and five_opps > 0 else np.nan
             four_star_rate = (four_catches / four_opps) if four_opps and four_opps > 0 else np.nan
-            routine_rate = (routine_catches / routine_opps) if routine_opps and routine_opps > 0 else np.nan
+            routine_rate = (
+                (routine_catches / routine_opps) if routine_opps and routine_opps > 0 else np.nan
+            )
 
             if position not in ALL_POSITIONS:
                 continue
@@ -921,7 +975,7 @@ class FielderSimilarityEngine:
 
     def _apply_shrinkage(self) -> None:
         """Apply EB shrinkage to all feature vectors using positional averages."""
-        for key, p in self._profiles.items():
+        for _key, p in self._profiles.items():
             pos = p.position
             s = p.season
             n = p.sample_batted_balls
@@ -958,9 +1012,11 @@ class FielderSimilarityEngine:
     # ------------------------------------------------------------------
 
     def _get_rbfs_for_position(
-        self, position: str,
-    ) -> tuple[WeightedRBFSimilarity, WeightedRBFSimilarity,
-               WeightedRBFSimilarity, WeightedRBFSimilarity]:
+        self,
+        position: str,
+    ) -> tuple[
+        WeightedRBFSimilarity, WeightedRBFSimilarity, WeightedRBFSimilarity, WeightedRBFSimilarity
+    ]:
         """Return (range_rbf, secondary_rbf, tertiary_rbf, error_rbf) for a position."""
         if position in INFIELD_POSITIONS:
             dp_rbf = self._if_dp_rbf if position in ("2B", "SS") else self._if_dp_rbf_corner
@@ -1008,7 +1064,9 @@ class FielderSimilarityEngine:
         if query_profile is None:
             log.warning(
                 "Fielder %d at %s season %d not found. Ensure build() was called.",
-                player_id, position, season,
+                player_id,
+                position,
+                season,
             )
             return []
 
@@ -1052,7 +1110,8 @@ class FielderSimilarityEngine:
         if pa.position != pb.position:
             log.warning(
                 "Cannot compare cross-position: %s vs %s.",
-                pa.position, pb.position,
+                pa.position,
+                pb.position,
             )
             return None
 
@@ -1090,15 +1149,31 @@ class FielderSimilarityEngine:
 
         if pos in INFIELD_POSITIONS:
             # DP
-            dp_q_vec = query.dp_vec if query.dp_vec is not None else np.zeros(self._partitions[pos]._secondary_matrix.shape[1] if self._partitions[pos]._secondary_matrix is not None else len(IF_DP_FEATURES))
+            dp_q_vec = (
+                query.dp_vec
+                if query.dp_vec is not None
+                else np.zeros(
+                    self._partitions[pos]._secondary_matrix.shape[1]
+                    if self._partitions[pos]._secondary_matrix is not None
+                    else len(IF_DP_FEATURES)
+                )
+            )
             dp_c_vec = candidate.dp_vec if candidate.dp_vec is not None else np.zeros_like(dp_q_vec)
             dp_q = self._normalizer.normalize_dp(dp_q_vec, pos)
             dp_c = self._normalizer.normalize_dp(dp_c_vec, pos)
             secondary_s = secondary_rbf.score(dp_q, dp_c)
 
             # Specialty
-            spec_q_vec = query.specialty_vec if query.specialty_vec is not None else np.zeros(len(IF_SPECIALTY_FEATURES))
-            spec_c_vec = candidate.specialty_vec if candidate.specialty_vec is not None else np.zeros(len(IF_SPECIALTY_FEATURES))
+            spec_q_vec = (
+                query.specialty_vec
+                if query.specialty_vec is not None
+                else np.zeros(len(IF_SPECIALTY_FEATURES))
+            )
+            spec_c_vec = (
+                candidate.specialty_vec
+                if candidate.specialty_vec is not None
+                else np.zeros(len(IF_SPECIALTY_FEATURES))
+            )
             spec_q = self._normalizer.normalize_specialty(spec_q_vec, pos)
             spec_c = self._normalizer.normalize_specialty(spec_c_vec, pos)
             tertiary_s = tertiary_rbf.score(spec_q, spec_c)
@@ -1111,15 +1186,27 @@ class FielderSimilarityEngine:
             )
         else:
             # Arm
-            arm_q_vec = query.arm_vec if query.arm_vec is not None else np.zeros(len(OF_ARM_FEATURES))
-            arm_c_vec = candidate.arm_vec if candidate.arm_vec is not None else np.zeros(len(OF_ARM_FEATURES))
+            arm_q_vec = (
+                query.arm_vec if query.arm_vec is not None else np.zeros(len(OF_ARM_FEATURES))
+            )
+            arm_c_vec = (
+                candidate.arm_vec
+                if candidate.arm_vec is not None
+                else np.zeros(len(OF_ARM_FEATURES))
+            )
             arm_q = self._normalizer.normalize_arm(arm_q_vec, pos)
             arm_c = self._normalizer.normalize_arm(arm_c_vec, pos)
             secondary_s = secondary_rbf.score(arm_q, arm_c)
 
             # Stars
-            star_q_vec = query.star_vec if query.star_vec is not None else np.zeros(len(OF_STAR_FEATURES))
-            star_c_vec = candidate.star_vec if candidate.star_vec is not None else np.zeros(len(OF_STAR_FEATURES))
+            star_q_vec = (
+                query.star_vec if query.star_vec is not None else np.zeros(len(OF_STAR_FEATURES))
+            )
+            star_c_vec = (
+                candidate.star_vec
+                if candidate.star_vec is not None
+                else np.zeros(len(OF_STAR_FEATURES))
+            )
             star_q = self._normalizer.normalize_star(star_q_vec, pos)
             star_c = self._normalizer.normalize_star(star_c_vec, pos)
             tertiary_s = tertiary_rbf.score(star_q, star_c)
@@ -1166,6 +1253,7 @@ class FielderSimilarityEngine:
 # Convenience: Batch Similarity Matrix
 # ============================================================================
 
+
 def build_similarity_matrix(
     engine: FielderSimilarityEngine,
     fielder_ids: list[tuple[int, str, int]],
@@ -1191,6 +1279,6 @@ def build_similarity_matrix(
 if __name__ == "__main__":
     engine = FielderSimilarityEngine(duckdb_path="../../db/baseball_simulator.duckdb")
     engine.build(seasons=[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017])
-    results = engine.query(592743, 'SS', 2018, 25)
+    results = engine.query(592743, "SS", 2018, 25)
     report = run_fielder_diagnostics(engine, n_query_samples=50)
     print(report)

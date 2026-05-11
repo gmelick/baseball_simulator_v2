@@ -68,13 +68,14 @@ log = logging.getLogger("venue_backfill_job")
 # ---------------------------------------------------------------------------
 
 MLB_SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
-JOB_NAME         = "venue_backfill_job"
+JOB_NAME = "venue_backfill_job"
 DEFAULT_INTERVAL_HOURS = 6
 
 
 # ---------------------------------------------------------------------------
 # Job
 # ---------------------------------------------------------------------------
+
 
 class VenueBackfillJob:
     """
@@ -87,8 +88,8 @@ class VenueBackfillJob:
         dry_run: bool = False,
         http_timeout: float = 10.0,
     ) -> None:
-        self._dsn          = dsn
-        self._dry_run      = dry_run
+        self._dsn = dsn
+        self._dry_run = dry_run
         self._http_timeout = http_timeout
         self._db: asyncpg.Pool | None = None
 
@@ -116,9 +117,9 @@ class VenueBackfillJob:
         await self._connect()
         summary = {
             "games_processed": 0,
-            "venues_filled":   0,
-            "still_unknown":   0,
-            "http_errors":     0,
+            "venues_filled": 0,
+            "still_unknown": 0,
+            "http_errors": 0,
         }
         run_id: int | None = None
         try:
@@ -140,8 +141,7 @@ class VenueBackfillJob:
                         )
                     except Exception as exc:
                         summary["http_errors"] += 1
-                        log.warning("game_pk=%s: HTTP error fetching venue: %s",
-                                    game_pk, exc)
+                        log.warning("game_pk=%s: HTTP error fetching venue: %s", game_pk, exc)
                         continue
 
                     if venue_id is None:
@@ -150,8 +150,9 @@ class VenueBackfillJob:
                         continue
 
                     if self._dry_run:
-                        log.info("[dry-run] would fill game_pk=%s with venue_id=%s",
-                                 game_pk, venue_id)
+                        log.info(
+                            "[dry-run] would fill game_pk=%s with venue_id=%s", game_pk, venue_id
+                        )
                         summary["venues_filled"] += 1
                         continue
 
@@ -202,7 +203,8 @@ class VenueBackfillJob:
             log.warning(
                 "game_pk=%s: venue_id=%s not present in raw.venues — skipping update. "
                 "Seed raw.venues then re-run.",
-                game_pk, venue_id,
+                game_pk,
+                venue_id,
             )
             return
 
@@ -214,7 +216,8 @@ class VenueBackfillJob:
             WHERE  game_pk  = $1
               AND  venue_id IS NULL
             """,
-            game_pk, venue_id,
+            game_pk,
+            venue_id,
         )
 
     async def _start_log_row(self) -> int | None:
@@ -261,10 +264,10 @@ class VenueBackfillJob:
         game_date: date,
     ) -> int | None:
         params = {
-            "gamePk":   str(game_pk),
-            "sportId":  "1",
-            "date":     game_date.isoformat(),
-            "hydrate":  "venue",
+            "gamePk": str(game_pk),
+            "sportId": "1",
+            "date": game_date.isoformat(),
+            "hydrate": "venue",
         }
         timeout = aiohttp.ClientTimeout(total=self._http_timeout)
         async with session.get(MLB_SCHEDULE_URL, params=params, timeout=timeout) as resp:
@@ -286,6 +289,7 @@ class VenueBackfillJob:
 # Scheduler integration
 # ---------------------------------------------------------------------------
 
+
 def schedule_venue_backfill_job(
     *,
     dsn: str,
@@ -298,6 +302,7 @@ def schedule_venue_backfill_job(
     Cadence default of every 6 hours catches venue assignments within a
     quarter of a day of the MLB API publishing them, with negligible API load.
     """
+
     async def _runner() -> None:
         job = VenueBackfillJob(dsn=dsn)
         await job.run()
@@ -316,12 +321,15 @@ def schedule_venue_backfill_job(
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Backfill NULL venue_id rows on raw.games")
-    p.add_argument("--dsn", default=os.environ.get("BASEBALL_DB_DSN"),
-                   help="asyncpg DSN; defaults to $BASEBALL_DB_DSN")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Print would-be UPDATEs without writing")
+    p.add_argument(
+        "--dsn",
+        default=os.environ.get("BASEBALL_DB_DSN"),
+        help="asyncpg DSN; defaults to $BASEBALL_DB_DSN",
+    )
+    p.add_argument("--dry-run", action="store_true", help="Print would-be UPDATEs without writing")
     return p.parse_args()
 
 

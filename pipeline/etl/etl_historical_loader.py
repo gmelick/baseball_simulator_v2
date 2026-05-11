@@ -58,6 +58,7 @@ Usage
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -71,9 +72,6 @@ import numpy as np
 import psycopg2
 import psycopg2.extras
 import requests
-import json
-import pandas as pd
-import io
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -91,18 +89,31 @@ log = logging.getLogger("etl_historical_loader")
 # Config
 # ---------------------------------------------------------------------------
 
-BATCH_SIZE = 500          # rows per executemany call
-MAX_API_RETRIES = 10      # infinite-retry inherited from original; capped here
-RETRY_BACKOFF_S = 2.0     # seconds between retries
+BATCH_SIZE = 500  # rows per executemany call
+MAX_API_RETRIES = 10  # infinite-retry inherited from original; capped here
+RETRY_BACKOFF_S = 2.0  # seconds between retries
 
 GAME_TYPES = ["R", "F", "D", "L", "W", "C", "P"]
 
 # Columns that must be non-null on every pitch row regardless of pitch type.
 ALWAYS_REQUIRED: set[str] = {
-    "game_pk", "at_bat_number", "pitch_number", "game_date",
-    "venue_id", "pitcher", "p_throws", "batter", "stand", "bat_hand",
-    "inning", "inning_topbot", "balls", "strikes", "outs",
-    "home_score", "away_score",
+    "game_pk",
+    "at_bat_number",
+    "pitch_number",
+    "game_date",
+    "venue_id",
+    "pitcher",
+    "p_throws",
+    "batter",
+    "stand",
+    "bat_hand",
+    "inning",
+    "inning_topbot",
+    "balls",
+    "strikes",
+    "outs",
+    "home_score",
+    "away_score",
 }
 
 # Columns that must be present when type == 'X' (ball in play).
@@ -115,72 +126,73 @@ IN_PLAY_REQUIRED: set[str] = {"launch_speed", "launch_angle", "bb_type"}
 
 COLUMN_RENAME: dict[str, str] = {
     # pitch identity
-    "pitch_code":               "type",
-    "pitch_code_description":   "description",
-    "pitch_type_description":   "pitch_name",
+    "pitch_code": "type",
+    "pitch_code_description": "description",
+    "pitch_type_description": "pitch_name",
     # strike zone
-    "strike_zone_top":          "sz_top",
-    "strike_zone_bottom":       "sz_bot",
+    "strike_zone_top": "sz_top",
+    "strike_zone_bottom": "sz_bot",
     # physics
-    "start_speed":              "release_speed",
-    "release_x":                "release_pos_x",
-    "release_y":                "release_pos_y",
-    "release_z":                "release_pos_z",
-    "velocity_x":               "vx0",
-    "velocity_y":               "vy0",
-    "velocity_z":               "vz0",
-    "acceleration_x":           "ax",
-    "acceleration_y":           "ay",
-    "acceleration_z":           "az",
-    "p_x":                      "plate_x",
-    "p_z":                      "plate_z",
-    "spin_rate":                "release_spin_rate",
-    "spin_direction":           "spin_axis",
+    "start_speed": "release_speed",
+    "release_x": "release_pos_x",
+    "release_y": "release_pos_y",
+    "release_z": "release_pos_z",
+    "velocity_x": "vx0",
+    "velocity_y": "vy0",
+    "velocity_z": "vz0",
+    "acceleration_x": "ax",
+    "acceleration_y": "ay",
+    "acceleration_z": "az",
+    "p_x": "plate_x",
+    "p_z": "plate_z",
+    "spin_rate": "release_spin_rate",
+    "spin_direction": "spin_axis",
     # batted ball
-    "total_distance":           "hit_distance_sc",
-    "coord_x":                  "hc_x",
-    "coord_y":                  "hc_y",
-    "batted_ball_type":         "bb_type",
-    "play_description":         "des",
+    "total_distance": "hit_distance_sc",
+    "coord_x": "hc_x",
+    "coord_y": "hc_y",
+    "batted_ball_type": "bb_type",
+    "play_description": "des",
     # baserunners
-    "pre_play_runner_on_first":  "on_1b",
+    "pre_play_runner_on_first": "on_1b",
     "pre_play_runner_on_second": "on_2b",
-    "pre_play_runner_on_third":  "on_3b",
+    "pre_play_runner_on_third": "on_3b",
     "post_play_runner_on_first": "post_on_1b",
-    "post_play_runner_on_second":"post_on_2b",
+    "post_play_runner_on_second": "post_on_2b",
     "post_play_runner_on_third": "post_on_3b",
     # fielders (positional → positional number)
-    "catcher":                  "fielder_2",
-    "first_base":               "fielder_3",
-    "second_base":              "fielder_4",
-    "third_base":               "fielder_5",
-    "shortstop":                "fielder_6",
-    "left_field":               "fielder_7",
-    "center_field":             "fielder_8",
-    "right_field":              "fielder_9",
+    "catcher": "fielder_2",
+    "first_base": "fielder_3",
+    "second_base": "fielder_4",
+    "third_base": "fielder_5",
+    "shortstop": "fielder_6",
+    "left_field": "fielder_7",
+    "center_field": "fielder_8",
+    "right_field": "fielder_9",
     # outcome counts
-    "runs":                     "runs_on_pitch",
-    "rbis":                     "rbis_on_pitch",
-    "earned_runs":              "earned_runs_on_pitch",
+    "runs": "runs_on_pitch",
+    "rbis": "rbis_on_pitch",
+    "earned_runs": "earned_runs_on_pitch",
     # runner scoring flags
-    "runner_on_first_score":    "runner_1b_scored",
-    "runner_on_second_score":   "runner_2b_scored",
-    "runner_on_third_score":    "runner_3b_scored",
+    "runner_on_first_score": "runner_1b_scored",
+    "runner_on_second_score": "runner_2b_scored",
+    "runner_on_third_score": "runner_3b_scored",
     # misc
-    "wild_pitch_passed_ball":   "passed_ball_wild_pitch",
-    "extension":                "release_extension",
-    "top_bot":                  "_inning_topbot_raw",   # transformed separately below
+    "wild_pitch_passed_ball": "passed_ball_wild_pitch",
+    "extension": "release_extension",
+    "top_bot": "_inning_topbot_raw",  # transformed separately below
 }
 
 # inning_topbot value normalisation  (API → schema)
 HALF_INNING_MAP = {
-    "top":    "Top",
+    "top": "Top",
     "bottom": "Bot",
 }
 
 # ---------------------------------------------------------------------------
 # Float / int coercion helpers
 # ---------------------------------------------------------------------------
+
 
 def _to_float(v: Any) -> float | None:
     """Convert API value to float; return None for empty/missing."""
@@ -216,7 +228,10 @@ def _to_str(v: Any) -> str | None:
 # Row builder — rename + coerce every field
 # ---------------------------------------------------------------------------
 
-def _build_row_dict(raw: dict[str, Any], game_pk: int, season: int, game_date: str) -> dict[str, Any]:
+
+def _build_row_dict(
+    raw: dict[str, Any], game_pk: int, season: int, game_date: str
+) -> dict[str, Any]:
     """
     Takes the flat dict produced by write_rows() for a single pitch and
     returns a dict whose keys match raw.pitches column names exactly.
@@ -232,9 +247,7 @@ def _build_row_dict(raw: dict[str, Any], game_pk: int, season: int, game_date: s
 
     # inning_topbot normalisation
     raw_half = renamed.pop("_inning_topbot_raw", None)
-    renamed["inning_topbot"] = HALF_INNING_MAP.get(
-        str(raw_half).lower() if raw_half else "", None
-    )
+    renamed["inning_topbot"] = HALF_INNING_MAP.get(str(raw_half).lower() if raw_half else "")
 
     # Ensure primary key fields are present
     renamed["game_pk"] = game_pk
@@ -242,166 +255,147 @@ def _build_row_dict(raw: dict[str, Any], game_pk: int, season: int, game_date: s
 
     row: dict[str, Any] = {
         # --- Natural key ---
-        "game_pk":                  _to_int(renamed.get("game_pk")),
-        "at_bat_number":            _to_int(renamed.get("at_bat_number")),
-        "pitch_number":             _to_int(renamed.get("pitch_number")),
-
+        "game_pk": _to_int(renamed.get("game_pk")),
+        "at_bat_number": _to_int(renamed.get("at_bat_number")),
+        "pitch_number": _to_int(renamed.get("pitch_number")),
         # --- Game context ---
-        "game_date":                renamed.get("game_date"),
-        "season":                   _to_int(season),
-        "venue_id":                 _to_int(renamed.get("venue_id")),
-        "venue":                    _to_str(renamed.get("venue")),
-        "home_id":                  _to_int(renamed.get("home_id")),
-        "home_team":                _to_str(renamed.get("home_team")),
-        "away_id":                  _to_int(renamed.get("away_id")),
-        "away_team":                _to_str(renamed.get("away_team")),
-        "home_manager_id":          _to_int(renamed.get("home_manager_id")),
-        "home_manager_name":        _to_str(renamed.get("home_manager_name")),
-        "away_manager_id":          _to_int(renamed.get("away_manager_id")),
-        "away_manager_name":        _to_str(renamed.get("away_manager_name")),
-
+        "game_date": renamed.get("game_date"),
+        "season": _to_int(season),
+        "venue_id": _to_int(renamed.get("venue_id")),
+        "venue": _to_str(renamed.get("venue")),
+        "home_id": _to_int(renamed.get("home_id")),
+        "home_team": _to_str(renamed.get("home_team")),
+        "away_id": _to_int(renamed.get("away_id")),
+        "away_team": _to_str(renamed.get("away_team")),
+        "home_manager_id": _to_int(renamed.get("home_manager_id")),
+        "home_manager_name": _to_str(renamed.get("home_manager_name")),
+        "away_manager_id": _to_int(renamed.get("away_manager_id")),
+        "away_manager_name": _to_str(renamed.get("away_manager_name")),
         # --- Inning state ---
-        "inning":                   _to_int(renamed.get("inning")),
-        "inning_topbot":            _to_str(renamed.get("inning_topbot")),
-
+        "inning": _to_int(renamed.get("inning")),
+        "inning_topbot": _to_str(renamed.get("inning_topbot")),
         # --- Pitcher / batter ---
-        "pitcher":                  _to_int(renamed.get("pitcher")),
-        "p_throws":                 _to_str(renamed.get("p_throws")),
-        "batter":                   _to_int(renamed.get("batter")),
-        "stand":                    _to_str(renamed.get("stand")),
-        "bat_hand":                 _to_str(renamed.get("bat_hand")),
-
+        "pitcher": _to_int(renamed.get("pitcher")),
+        "p_throws": _to_str(renamed.get("p_throws")),
+        "batter": _to_int(renamed.get("batter")),
+        "stand": _to_str(renamed.get("stand")),
+        "bat_hand": _to_str(renamed.get("bat_hand")),
         # --- Score state ---
-        "home_score":               _to_int(renamed.get("home_score")) or 0,
-        "away_score":               _to_int(renamed.get("away_score")) or 0,
-        "bat_score":                _to_int(renamed.get("bat_score")) or 0,
-        "fld_score":                _to_int(renamed.get("fld_score")) or 0,
-
+        "home_score": _to_int(renamed.get("home_score")) or 0,
+        "away_score": _to_int(renamed.get("away_score")) or 0,
+        "bat_score": _to_int(renamed.get("bat_score")) or 0,
+        "fld_score": _to_int(renamed.get("fld_score")) or 0,
         # --- Count ---
-        "balls":                    _to_int(renamed.get("balls")) or 0,
-        "strikes":                  _to_int(renamed.get("strikes")) or 0,
-        "outs":                     _to_int(renamed.get("outs")) or 0,
-
+        "balls": _to_int(renamed.get("balls")) or 0,
+        "strikes": _to_int(renamed.get("strikes")) or 0,
+        "outs": _to_int(renamed.get("outs")) or 0,
         # --- Pitch result ---
-        "type":                     _to_str(renamed.get("type")),
-        "description":              _to_str(renamed.get("description")),
-        "pitch_type":               _to_str(renamed.get("pitch_type")),
-        "pitch_name":               _to_str(renamed.get("pitch_name")),
-        "events":                   _to_str(renamed.get("events")) or _to_str(renamed.get("event")),
-
+        "type": _to_str(renamed.get("type")),
+        "description": _to_str(renamed.get("description")),
+        "pitch_type": _to_str(renamed.get("pitch_type")),
+        "pitch_name": _to_str(renamed.get("pitch_name")),
+        "events": _to_str(renamed.get("events")) or _to_str(renamed.get("event")),
         # --- Strike zone ---
-        "sz_top":                   _to_float(renamed.get("sz_top")),
-        "sz_bot":                   _to_float(renamed.get("sz_bot")),
-
+        "sz_top": _to_float(renamed.get("sz_top")),
+        "sz_bot": _to_float(renamed.get("sz_bot")),
         # --- Physics ---
-        "release_speed":            _to_float(renamed.get("release_speed")),
-        "end_speed":                _to_float(renamed.get("end_speed")),
-        "release_pos_x":            _to_float(renamed.get("release_pos_x")),
-        "release_pos_y":            _to_float(renamed.get("release_pos_y")),
-        "release_pos_z":            _to_float(renamed.get("release_pos_z")),
-        "vx0":                      _to_float(renamed.get("vx0")),
-        "vy0":                      _to_float(renamed.get("vy0")),
-        "vz0":                      _to_float(renamed.get("vz0")),
-        "ax":                       _to_float(renamed.get("ax")),
-        "ay":                       _to_float(renamed.get("ay")),
-        "az":                       _to_float(renamed.get("az")),
-
+        "release_speed": _to_float(renamed.get("release_speed")),
+        "end_speed": _to_float(renamed.get("end_speed")),
+        "release_pos_x": _to_float(renamed.get("release_pos_x")),
+        "release_pos_y": _to_float(renamed.get("release_pos_y")),
+        "release_pos_z": _to_float(renamed.get("release_pos_z")),
+        "vx0": _to_float(renamed.get("vx0")),
+        "vy0": _to_float(renamed.get("vy0")),
+        "vz0": _to_float(renamed.get("vz0")),
+        "ax": _to_float(renamed.get("ax")),
+        "ay": _to_float(renamed.get("ay")),
+        "az": _to_float(renamed.get("az")),
         # --- Movement ---
-        "pfx_x":                    _to_float(renamed.get("pfx_x")),
-        "pfx_z":                    _to_float(renamed.get("pfx_z")),
-        "plate_x":                  _to_float(renamed.get("plate_x")),
-        "plate_z":                  _to_float(renamed.get("plate_z")),
-        "x":                        _to_float(renamed.get("x")),
-        "y":                        _to_float(renamed.get("y")),
-        "release_spin_rate":        _to_int(renamed.get("release_spin_rate")),
-        "spin_axis":                _to_int(renamed.get("spin_axis")),
-        "break_angle":              _to_float(renamed.get("break_angle")),
-        "break_length":             _to_float(renamed.get("break_length")),
-        "break_y":                  _to_float(renamed.get("break_y")),
-        "break_vertical":           _to_float(renamed.get("break_vertical")),
-        "break_vertical_induced":   _to_float(renamed.get("break_vertical_induced")),
-        "break_horizontal":         _to_float(renamed.get("break_horizontal")),
-        "zone":                     _to_int(renamed.get("zone")),
-        "release_extension":        _to_float(renamed.get("release_extension")),
-
+        "pfx_x": _to_float(renamed.get("pfx_x")),
+        "pfx_z": _to_float(renamed.get("pfx_z")),
+        "plate_x": _to_float(renamed.get("plate_x")),
+        "plate_z": _to_float(renamed.get("plate_z")),
+        "x": _to_float(renamed.get("x")),
+        "y": _to_float(renamed.get("y")),
+        "release_spin_rate": _to_int(renamed.get("release_spin_rate")),
+        "spin_axis": _to_int(renamed.get("spin_axis")),
+        "break_angle": _to_float(renamed.get("break_angle")),
+        "break_length": _to_float(renamed.get("break_length")),
+        "break_y": _to_float(renamed.get("break_y")),
+        "break_vertical": _to_float(renamed.get("break_vertical")),
+        "break_vertical_induced": _to_float(renamed.get("break_vertical_induced")),
+        "break_horizontal": _to_float(renamed.get("break_horizontal")),
+        "zone": _to_int(renamed.get("zone")),
+        "release_extension": _to_float(renamed.get("release_extension")),
         # --- Batted ball ---
-        "launch_speed":             _to_float(renamed.get("launch_speed")),
-        "launch_angle":             _to_float(renamed.get("launch_angle")),
-        "hit_distance_sc":          _to_float(renamed.get("hit_distance_sc")),
-        "hc_x":                     _to_float(renamed.get("hc_x")),
-        "hc_y":                     _to_float(renamed.get("hc_y")),
-        "spray_angle":              _to_float(renamed.get("spray_angle")),
-        "bb_type":                  _to_str(renamed.get("bb_type")),
-        "hit_location":             _to_float(renamed.get("hit_location")),
-        "des":                      _to_str(renamed.get("des")),
-
+        "launch_speed": _to_float(renamed.get("launch_speed")),
+        "launch_angle": _to_float(renamed.get("launch_angle")),
+        "hit_distance_sc": _to_float(renamed.get("hit_distance_sc")),
+        "hc_x": _to_float(renamed.get("hc_x")),
+        "hc_y": _to_float(renamed.get("hc_y")),
+        "spray_angle": _to_float(renamed.get("spray_angle")),
+        "bb_type": _to_str(renamed.get("bb_type")),
+        "hit_location": _to_float(renamed.get("hit_location")),
+        "des": _to_str(renamed.get("des")),
         # --- Baserunners ---
-        "on_1b":                    _to_int(renamed.get("on_1b")) or None,
-        "on_2b":                    _to_int(renamed.get("on_2b")) or None,
-        "on_3b":                    _to_int(renamed.get("on_3b")) or None,
-        "post_on_1b":               _to_int(renamed.get("post_on_1b")) or None,
-        "post_on_2b":               _to_int(renamed.get("post_on_2b")) or None,
-        "post_on_3b":               _to_int(renamed.get("post_on_3b")) or None,
-
+        "on_1b": _to_int(renamed.get("on_1b")) or None,
+        "on_2b": _to_int(renamed.get("on_2b")) or None,
+        "on_3b": _to_int(renamed.get("on_3b")) or None,
+        "post_on_1b": _to_int(renamed.get("post_on_1b")) or None,
+        "post_on_2b": _to_int(renamed.get("post_on_2b")) or None,
+        "post_on_3b": _to_int(renamed.get("post_on_3b")) or None,
         # --- Fielders ---
-        "fielder_2":                _to_int(renamed.get("fielder_2")),
-        "fielder_3":                _to_int(renamed.get("fielder_3")),
-        "fielder_4":                _to_int(renamed.get("fielder_4")),
-        "fielder_5":                _to_int(renamed.get("fielder_5")),
-        "fielder_6":                _to_int(renamed.get("fielder_6")),
-        "fielder_7":                _to_int(renamed.get("fielder_7")),
-        "fielder_8":                _to_int(renamed.get("fielder_8")),
-        "fielder_9":                _to_int(renamed.get("fielder_9")),
-
+        "fielder_2": _to_int(renamed.get("fielder_2")),
+        "fielder_3": _to_int(renamed.get("fielder_3")),
+        "fielder_4": _to_int(renamed.get("fielder_4")),
+        "fielder_5": _to_int(renamed.get("fielder_5")),
+        "fielder_6": _to_int(renamed.get("fielder_6")),
+        "fielder_7": _to_int(renamed.get("fielder_7")),
+        "fielder_8": _to_int(renamed.get("fielder_8")),
+        "fielder_9": _to_int(renamed.get("fielder_9")),
         # --- Outcome counts ---
-        "runs_on_pitch":            _to_int(renamed.get("runs_on_pitch")) or 0,
-        "outs_on_pitch":            _to_int(renamed.get("outs_on_pitch")) or 0,
-        "rbis_on_pitch":            _to_int(renamed.get("rbis_on_pitch")) or 0,
-        "earned_runs_on_pitch":     _to_int(renamed.get("earned_runs_on_pitch")) or 0,
-
+        "runs_on_pitch": _to_int(renamed.get("runs_on_pitch")) or 0,
+        "outs_on_pitch": _to_int(renamed.get("outs_on_pitch")) or 0,
+        "rbis_on_pitch": _to_int(renamed.get("rbis_on_pitch")) or 0,
+        "earned_runs_on_pitch": _to_int(renamed.get("earned_runs_on_pitch")) or 0,
         # --- Runner scoring flags ---
-        "runner_1b_scored":         _to_bool(renamed.get("runner_1b_scored")),
-        "runner_2b_scored":         _to_bool(renamed.get("runner_2b_scored")),
-        "runner_3b_scored":         _to_bool(renamed.get("runner_3b_scored")),
-
+        "runner_1b_scored": _to_bool(renamed.get("runner_1b_scored")),
+        "runner_2b_scored": _to_bool(renamed.get("runner_2b_scored")),
+        "runner_3b_scored": _to_bool(renamed.get("runner_3b_scored")),
         # --- Runner out advancing (thrown out attempting extra base) ---
         "runner_1b_out_advancing": _to_bool(renamed.get("runner_1b_out_advancing")),
         "runner_2b_out_advancing": _to_bool(renamed.get("runner_2b_out_advancing")),
         "runner_3b_out_advancing": _to_bool(renamed.get("runner_3b_out_advancing")),
-
         # --- Stolen base ---
-        "sb_attempt_2b":            _to_bool(renamed.get("sb_attempt_2b")),
-        "sb_attempt_3b":            _to_bool(renamed.get("sb_attempt_3b")),
-        "sb_attempt_home":          _to_bool(renamed.get("sb_attempt_home")),
-        "sb_success_2b":            _to_bool(renamed.get("sb_success_2b")),
-        "sb_success_3b":            _to_bool(renamed.get("sb_success_3b")),
-        "sb_success_home":          _to_bool(renamed.get("sb_success_home")),
-
+        "sb_attempt_2b": _to_bool(renamed.get("sb_attempt_2b")),
+        "sb_attempt_3b": _to_bool(renamed.get("sb_attempt_3b")),
+        "sb_attempt_home": _to_bool(renamed.get("sb_attempt_home")),
+        "sb_success_2b": _to_bool(renamed.get("sb_success_2b")),
+        "sb_success_3b": _to_bool(renamed.get("sb_success_3b")),
+        "sb_success_home": _to_bool(renamed.get("sb_success_home")),
         # --- Substitution flags ---
-        "passed_ball_wild_pitch":   _to_bool(renamed.get("passed_ball_wild_pitch")),
-        "pinch_hitter":             _to_bool(renamed.get("pinch_hitter")),
-        "pinch_runner":             _to_bool(renamed.get("pinch_runner")),
-        "pitcher_sub":              _to_bool(renamed.get("pitcher_sub")),
-        "defensive_sub":            _to_bool(renamed.get("defensive_sub")),
-
+        "passed_ball_wild_pitch": _to_bool(renamed.get("passed_ball_wild_pitch")),
+        "pinch_hitter": _to_bool(renamed.get("pinch_hitter")),
+        "pinch_runner": _to_bool(renamed.get("pinch_runner")),
+        "pitcher_sub": _to_bool(renamed.get("pitcher_sub")),
+        "defensive_sub": _to_bool(renamed.get("defensive_sub")),
         # --- Fielding detail ---
-        "fielded_by":               _to_float(renamed.get("fielded_by")),
-        "fielding_error":           _to_float(renamed.get("fielding_error")),
-        "dropped_ball":             _to_float(renamed.get("dropped_ball")),
-        "of_assist":                _to_float(renamed.get("of_assist")),
-        "field_assist_1":           _to_float(renamed.get("field_assist_1")),
-        "field_assist_2":           _to_float(renamed.get("field_assist_2")),
-        "field_assist_3":           _to_float(renamed.get("field_assist_3")),
-        "field_assist_4":           _to_float(renamed.get("field_assist_4")),
-        "field_assist_5":           _to_float(renamed.get("field_assist_5")),
-        "field_putout_1":           _to_float(renamed.get("field_putout_1")),
-        "field_putout_2":           _to_float(renamed.get("field_putout_2")),
-        "field_putout_3":           _to_float(renamed.get("field_putout_3")),
-        "throwing_error_1":         _to_float(renamed.get("throwing_error_1")),
-        "throwing_error_2":         _to_float(renamed.get("throwing_error_2")),
-
+        "fielded_by": _to_float(renamed.get("fielded_by")),
+        "fielding_error": _to_float(renamed.get("fielding_error")),
+        "dropped_ball": _to_float(renamed.get("dropped_ball")),
+        "of_assist": _to_float(renamed.get("of_assist")),
+        "field_assist_1": _to_float(renamed.get("field_assist_1")),
+        "field_assist_2": _to_float(renamed.get("field_assist_2")),
+        "field_assist_3": _to_float(renamed.get("field_assist_3")),
+        "field_assist_4": _to_float(renamed.get("field_assist_4")),
+        "field_assist_5": _to_float(renamed.get("field_assist_5")),
+        "field_putout_1": _to_float(renamed.get("field_putout_1")),
+        "field_putout_2": _to_float(renamed.get("field_putout_2")),
+        "field_putout_3": _to_float(renamed.get("field_putout_3")),
+        "throwing_error_1": _to_float(renamed.get("throwing_error_1")),
+        "throwing_error_2": _to_float(renamed.get("throwing_error_2")),
         # DB trigger sets data_quality_flag on insert; initialised to FALSE here.
-        "data_quality_flag":        False,
+        "data_quality_flag": False,
     }
 
     return row
@@ -411,10 +405,11 @@ def _build_row_dict(raw: dict[str, Any], game_pk: int, season: int, game_date: s
 # Pre-insert validation
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ValidationResult:
-    hard_errors: list[str] = field(default_factory=list)   # skip the row
-    warnings: list[str]    = field(default_factory=list)   # insert flagged
+    hard_errors: list[str] = field(default_factory=list)  # skip the row
+    warnings: list[str] = field(default_factory=list)  # insert flagged
 
     @property
     def is_valid(self) -> bool:
@@ -446,9 +441,7 @@ def _validate_row(row: dict[str, Any]) -> ValidationResult:
 
     # inning_topbot must be one of the two valid values
     if row.get("inning_topbot") not in ("Top", "Bot"):
-        result.hard_errors.append(
-            f"Invalid inning_topbot: {row.get('inning_topbot')!r}"
-        )
+        result.hard_errors.append(f"Invalid inning_topbot: {row.get('inning_topbot')!r}")
 
     # Inning range check
     inning = row.get("inning")
@@ -466,12 +459,10 @@ def _validate_row(row: dict[str, Any]) -> ValidationResult:
     # Stolen base logic: success requires attempt
     for base in ("2b", "3b", "home"):
         if row.get(f"sb_success_{base}") and not row.get(f"sb_attempt_{base}"):
-            result.hard_errors.append(
-                f"sb_success_{base}=TRUE but sb_attempt_{base}=FALSE"
-            )
+            result.hard_errors.append(f"sb_success_{base}=TRUE but sb_attempt_{base}=FALSE")
 
     if result.hard_errors:
-        return result   # don't bother with warnings if we're skipping the row
+        return result  # don't bother with warnings if we're skipping the row
 
     # ---- WARNINGS (insert with data_quality_flag=TRUE) ---------------------
 
@@ -479,9 +470,7 @@ def _validate_row(row: dict[str, Any]) -> ValidationResult:
     if row.get("type") == "X":
         for col in IN_PLAY_REQUIRED:
             if row.get(col) is None:
-                result.warnings.append(
-                    f"type='X' (ball in play) but {col} is NULL"
-                )
+                result.warnings.append(f"type='X' (ball in play) but {col} is NULL")
 
     # Physics plausibility (mirrors DB trigger thresholds — caught pre-insert
     # so the ETL log shows them explicitly rather than relying on trigger only).
@@ -512,6 +501,7 @@ def _validate_row(row: dict[str, Any]) -> ValidationResult:
 # API helpers  (preserve original retry-forever behaviour, now with cap + backoff)
 # ---------------------------------------------------------------------------
 
+
 def _connect(url: str, params: dict | None = None) -> dict:
     for attempt in range(1, MAX_API_RETRIES + 1):
         try:
@@ -531,6 +521,7 @@ def _connect(url: str, params: dict | None = None) -> dict:
 # Returns a list of raw dicts (one per pitch) instead of writing to a file.
 # ---------------------------------------------------------------------------
 
+
 def _fetch_game_pitches(
     game_pk: int,
     batter_hand_cache: dict[int, str],
@@ -547,13 +538,13 @@ def _fetch_game_pitches(
         f"https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live?hydrate=alignment"
     )
 
-    game_date   = game_dict["gameData"]["datetime"]["officialDate"]
+    game_date = game_dict["gameData"]["datetime"]["officialDate"]
     home_team_id = game_dict["gameData"]["teams"]["home"]["id"]
-    home_team    = game_dict["gameData"]["teams"]["home"]["abbreviation"]
+    home_team = game_dict["gameData"]["teams"]["home"]["abbreviation"]
     away_team_id = game_dict["gameData"]["teams"]["away"]["id"]
-    away_team    = game_dict["gameData"]["teams"]["away"]["abbreviation"]
-    venue_id     = game_dict["gameData"]["venue"]["id"]
-    venue_name   = game_dict["gameData"]["venue"]["name"]
+    away_team = game_dict["gameData"]["teams"]["away"]["abbreviation"]
+    venue_id = game_dict["gameData"]["venue"]["id"]
+    venue_name = game_dict["gameData"]["venue"]["name"]
 
     home_manager_id, home_manager_name = "", ""
     away_manager_id, away_manager_name = "", ""
@@ -565,16 +556,16 @@ def _fetch_game_pitches(
     temp_manager_name = home_coaches[0]["person"]["fullName"]
     for coach in home_coaches:
         if coach["jobId"] == "NTRM":
-            home_manager_id   = coach["person"]["id"]
+            home_manager_id = coach["person"]["id"]
             home_manager_name = coach["person"]["fullName"]
             break
         if coach["jobId"] == "MNGR":
-            home_manager_id   = coach["person"]["id"]
-            home_manager_name = coach["person"]["fullName"]
-        if coach["jobId"] == "COAB" and home_manager_name == '':
             home_manager_id = coach["person"]["id"]
             home_manager_name = coach["person"]["fullName"]
-    if home_manager_name == '':
+        if coach["jobId"] == "COAB" and home_manager_name == "":
+            home_manager_id = coach["person"]["id"]
+            home_manager_name = coach["person"]["fullName"]
+    if home_manager_name == "":
         home_manager_id = temp_manager_id
         home_manager_name = temp_manager_name
 
@@ -585,28 +576,28 @@ def _fetch_game_pitches(
     temp_manager_name = away_coaches[0]["person"]["fullName"]
     for coach in away_coaches:
         if coach["jobId"] == "NTRM":
-            away_manager_id   = coach["person"]["id"]
+            away_manager_id = coach["person"]["id"]
             away_manager_name = coach["person"]["fullName"]
             break
         if coach["jobId"] == "MNGR":
-            away_manager_id   = coach["person"]["id"]
-            away_manager_name = coach["person"]["fullName"]
-        if coach["jobId"] == "COAB" and away_manager_name == '':
             away_manager_id = coach["person"]["id"]
             away_manager_name = coach["person"]["fullName"]
-    if away_manager_name == '':
+        if coach["jobId"] == "COAB" and away_manager_name == "":
+            away_manager_id = coach["person"]["id"]
+            away_manager_name = coach["person"]["fullName"]
+    if away_manager_name == "":
         away_manager_id = temp_manager_id
         away_manager_name = temp_manager_name
 
     home_score_before, away_score_before = 0, 0
-    outs      = 0
+    outs = 0
     prev_half = "bottom"
     pitch_rows: list[dict[str, Any]] = []
 
     for play in game_dict["liveData"]["plays"]["allPlays"]:
         at_bat_number = play["atBatIndex"] + 1
-        inning        = play["about"]["inning"]
-        top_bot       = play["about"]["halfInning"]
+        inning = play["about"]["inning"]
+        top_bot = play["about"]["halfInning"]
         if top_bot != prev_half:
             outs = 0
         balls, strikes = 0, 0
@@ -641,9 +632,9 @@ def _fetch_game_pitches(
 
             # --- Pre-pitch runner state ---
             offense = play["playEvents"][i]["offense"]
-            pre_runner_1b = offense.get("first",  {}).get("id", "")
+            pre_runner_1b = offense.get("first", {}).get("id", "")
             pre_runner_2b = offense.get("second", {}).get("id", "")
-            pre_runner_3b = offense.get("third",  {}).get("id", "")
+            pre_runner_3b = offense.get("third", {}).get("id", "")
 
             # --- Mid-pitch events (SB, WP/PB) ---
             sb_attempt_2b = sb_attempt_3b = sb_attempt_home = False
@@ -674,14 +665,14 @@ def _fetch_game_pitches(
 
             play_event = play["playEvents"][i]
 
-            bat_score   = away_score_before if top_bot == "top" else home_score_before
+            bat_score = away_score_before if top_bot == "top" else home_score_before
             field_score = home_score_before if top_bot == "top" else away_score_before
 
-            pitch_number  = play_event["pitchNumber"]
-            pitcher       = play_event["defense"]["pitcher"]["id"]
-            pitcher_hand  = play_event["defense"]["pitcher"]["pitchHand"]["code"]
-            batter        = play_event["offense"]["batter"]["id"]
-            bat_side      = play_event["offense"]["batter"]["batSide"]["code"]
+            pitch_number = play_event["pitchNumber"]
+            pitcher = play_event["defense"]["pitcher"]["id"]
+            pitcher_hand = play_event["defense"]["pitcher"]["pitchHand"]["code"]
+            batter = play_event["offense"]["batter"]["id"]
+            bat_side = play_event["offense"]["batter"]["batSide"]["code"]
 
             if batter in batter_hand_cache:
                 bat_hand = batter_hand_cache[batter]
@@ -691,56 +682,64 @@ def _fetch_game_pitches(
                 )["people"][0]["batSide"]["code"]
                 batter_hand_cache[batter] = bat_hand
 
-            defense      = play_event["defense"]
-            catcher      = defense["catcher"]["id"]
-            first_base   = defense["first"]["id"]
-            second_base  = defense["second"]["id"]
-            third_base   = defense["third"]["id"]
-            shortstop    = defense["shortstop"]["id"]
-            left_field   = defense["left"]["id"]
+            defense = play_event["defense"]
+            catcher = defense["catcher"]["id"]
+            first_base = defense["first"]["id"]
+            second_base = defense["second"]["id"]
+            third_base = defense["third"]["id"]
+            shortstop = defense["shortstop"]["id"]
+            left_field = defense["left"]["id"]
             center_field = defense["center"]["id"]
-            right_field  = defense["right"]["id"]
+            right_field = defense["right"]["id"]
 
             if play_event["index"] == play["pitchIndex"][-1]:
                 event = play["result"]["eventType"]
 
             pd_data = play_event["pitchData"]
-            pitch_code             = play_event["details"]["code"]
+            pitch_code = play_event["details"]["code"]
             pitch_code_description = play_event["details"]["description"].replace(",", "")
-            pitch_type             = play_event["details"].get("type", {"code": ""}).get("code", "")
-            pitch_type_description = play_event["details"].get("type", {"description": ""})["description"]
-            strike_zone_top        = pd_data["strikeZoneTop"]
-            strike_zone_bottom     = pd_data["strikeZoneBottom"]
-            start_speed    = pd_data.get("startSpeed", "")
-            end_speed      = pd_data.get("endSpeed", "")
+            pitch_type = play_event["details"].get("type", {"code": ""}).get("code", "")
+            pitch_type_description = play_event["details"].get("type", {"description": ""})[
+                "description"
+            ]
+            strike_zone_top = pd_data["strikeZoneTop"]
+            strike_zone_bottom = pd_data["strikeZoneBottom"]
+            start_speed = pd_data.get("startSpeed", "")
+            end_speed = pd_data.get("endSpeed", "")
             coords = pd_data["coordinates"]
-            release_x = coords.get("x0", "");  release_y = coords.get("y0", "")
+            release_x = coords.get("x0", "")
+            release_y = coords.get("y0", "")
             release_z = coords.get("z0", "")
-            velocity_x = coords.get("vX0", ""); velocity_y = coords.get("vY0", "")
+            velocity_x = coords.get("vX0", "")
+            velocity_y = coords.get("vY0", "")
             velocity_z = coords.get("vZ0", "")
-            acceleration_x = coords.get("aX", ""); acceleration_y = coords.get("aY", "")
+            acceleration_x = coords.get("aX", "")
+            acceleration_y = coords.get("aY", "")
             acceleration_z = coords.get("aZ", "")
-            pfx_x = coords.get("pfxX", "");    pfx_z = coords.get("pfxZ", "")
-            p_x   = coords.get("pX", "");       p_z   = coords.get("pZ", "")
-            x = coords.get("x", "");             y = coords.get("y", "")
+            pfx_x = coords.get("pfxX", "")
+            pfx_z = coords.get("pfxZ", "")
+            p_x = coords.get("pX", "")
+            p_z = coords.get("pZ", "")
+            x = coords.get("x", "")
+            y = coords.get("y", "")
             breaks = pd_data["breaks"]
-            spin_rate    = breaks.get("spinRate", "")
+            spin_rate = breaks.get("spinRate", "")
             spin_direction = breaks.get("spinDirection", "")
-            break_angle  = breaks.get("breakAngle", "")
+            break_angle = breaks.get("breakAngle", "")
             break_length = breaks.get("breakLength", "")
-            break_y      = breaks.get("breakY", "")
-            break_vertical          = breaks.get("breakVertical", "")
-            break_vertical_induced  = breaks.get("breakVerticalInduced", "")
-            break_horizontal        = breaks.get("breakHorizontal", "")
-            zone      = pd_data.get("zone", "")
+            break_y = breaks.get("breakY", "")
+            break_vertical = breaks.get("breakVertical", "")
+            break_vertical_induced = breaks.get("breakVerticalInduced", "")
+            break_horizontal = breaks.get("breakHorizontal", "")
+            zone = pd_data.get("zone", "")
             extension = pd_data.get("extension", "")
 
             launch_speed = launch_angle = total_distance = ""
             coord_x = coord_y = spray_angle = batted_ball_type = hit_location = ""
             if "hitData" in play_event:
                 hd = play_event["hitData"]
-                launch_speed   = hd.get("launchSpeed", "")
-                launch_angle   = hd.get("launchAngle", "")
+                launch_speed = hd.get("launchSpeed", "")
+                launch_angle = hd.get("launchAngle", "")
                 total_distance = hd.get("totalDistance", "")
                 coord_x = hd["coordinates"].get("coordX", "")
                 coord_y = hd["coordinates"].get("coordY", "")
@@ -748,11 +747,11 @@ def _fetch_game_pitches(
                     if coord_y == 198.27:
                         spray_angle = 90 if coord_x > 125.42 else -90
                     else:
-                        spray_angle = np.arctan(
-                            (coord_x - 125.42) / (198.27 - coord_y)
-                        ) * (180 / np.pi)
+                        spray_angle = np.arctan((coord_x - 125.42) / (198.27 - coord_y)) * (
+                            180 / np.pi
+                        )
                 batted_ball_type = hd["trajectory"]
-                hit_location     = hd.get("location", "")
+                hit_location = hd.get("location", "")
 
             outs_on_pitch = play_event["count"]["outs"] - outs
             runner_on_first_score = runner_on_second_score = runner_on_third_score = False
@@ -794,7 +793,7 @@ def _fetch_game_pitches(
                         elif c == "f_error_dropped_ball":
                             dropped_ball = pid
                     if runner["movement"]["end"] == "score":
-                        rid  = runner["details"]["runner"]["id"]
+                        rid = runner["details"]["runner"]["id"]
                         runs += 1
                         if runner["details"].get("earned", False):
                             earned_runs += 1
@@ -833,8 +832,8 @@ def _fetch_game_pitches(
                     # isOut=True and movement.end="" for these plays.
                     if runner["details"].get("isOut", False):
                         rid = runner["details"]["runner"]["id"]
-                        is_sb_play = (sb_attempt_2b or sb_attempt_3b or sb_attempt_home)
-                        is_batter = (rid == batter)
+                        is_sb_play = sb_attempt_2b or sb_attempt_3b or sb_attempt_home
+                        is_batter = rid == batter
                         if not is_sb_play and not is_batter:
                             if rid == pre_runner_1b:
                                 runner_1b_out_advancing = True
@@ -845,116 +844,116 @@ def _fetch_game_pitches(
             # Assemble raw dict using YOUR variable names — COLUMN_RENAME handles
             # the mapping to schema names in _build_row_dict().
             raw_row = {
-                "game_pk":              game_pk,
-                "game_date":            game_date,
-                "venue_id":             venue_id,
-                "venue":                venue_name,
-                "home_id":              home_team_id,
-                "home_team":            home_team,
-                "away_id":              away_team_id,
-                "away_team":            away_team,
-                "home_manager_id":      home_manager_id,
-                "home_manager_name":    home_manager_name,
-                "away_manager_id":      away_manager_id,
-                "away_manager_name":    away_manager_name,
-                "inning":               inning,
-                "top_bot":              top_bot,            # → inning_topbot via rename
-                "at_bat_number":        at_bat_number,
-                "pitch_number":         pitch_number,
-                "pitcher":              pitcher,
-                "p_throws":             pitcher_hand,
-                "batter":               batter,
-                "stand":                bat_side,
-                "bat_hand":             bat_hand,
-                "home_score":           home_score_before,
-                "away_score":           away_score_before,
-                "bat_score":            bat_score,
-                "fld_score":            field_score,
-                "balls":                balls,
-                "strikes":              strikes,
-                "outs":                 outs,
-                "pitch_code":           pitch_code,         # → type
+                "game_pk": game_pk,
+                "game_date": game_date,
+                "venue_id": venue_id,
+                "venue": venue_name,
+                "home_id": home_team_id,
+                "home_team": home_team,
+                "away_id": away_team_id,
+                "away_team": away_team,
+                "home_manager_id": home_manager_id,
+                "home_manager_name": home_manager_name,
+                "away_manager_id": away_manager_id,
+                "away_manager_name": away_manager_name,
+                "inning": inning,
+                "top_bot": top_bot,  # → inning_topbot via rename
+                "at_bat_number": at_bat_number,
+                "pitch_number": pitch_number,
+                "pitcher": pitcher,
+                "p_throws": pitcher_hand,
+                "batter": batter,
+                "stand": bat_side,
+                "bat_hand": bat_hand,
+                "home_score": home_score_before,
+                "away_score": away_score_before,
+                "bat_score": bat_score,
+                "fld_score": field_score,
+                "balls": balls,
+                "strikes": strikes,
+                "outs": outs,
+                "pitch_code": pitch_code,  # → type
                 "pitch_code_description": pitch_code_description,  # → description
-                "pitch_type":           pitch_type,
+                "pitch_type": pitch_type,
                 "pitch_type_description": pitch_type_description,  # → pitch_name
-                "event":                event,
-                "strike_zone_top":      strike_zone_top,    # → sz_top
-                "strike_zone_bottom":   strike_zone_bottom, # → sz_bot
-                "start_speed":          start_speed,        # → release_speed
-                "end_speed":            end_speed,
-                "release_x":            release_x,          # → release_pos_x
-                "release_y":            release_y,
-                "release_z":            release_z,
-                "velocity_x":           velocity_x,         # → vx0
-                "velocity_y":           velocity_y,
-                "velocity_z":           velocity_z,
-                "acceleration_x":       acceleration_x,     # → ax
-                "acceleration_y":       acceleration_y,
-                "acceleration_z":       acceleration_z,
-                "pfx_x":                pfx_x,
-                "pfx_z":                pfx_z,
-                "p_x":                  p_x,                # → plate_x
-                "p_z":                  p_z,
-                "x":                    x,
-                "y":                    y,
-                "spin_rate":            spin_rate,          # → release_spin_rate
-                "spin_direction":       spin_direction,     # → spin_axis
-                "break_angle":          break_angle,
-                "break_length":         break_length,
-                "break_y":              break_y,
-                "break_vertical":       break_vertical,
+                "event": event,
+                "strike_zone_top": strike_zone_top,  # → sz_top
+                "strike_zone_bottom": strike_zone_bottom,  # → sz_bot
+                "start_speed": start_speed,  # → release_speed
+                "end_speed": end_speed,
+                "release_x": release_x,  # → release_pos_x
+                "release_y": release_y,
+                "release_z": release_z,
+                "velocity_x": velocity_x,  # → vx0
+                "velocity_y": velocity_y,
+                "velocity_z": velocity_z,
+                "acceleration_x": acceleration_x,  # → ax
+                "acceleration_y": acceleration_y,
+                "acceleration_z": acceleration_z,
+                "pfx_x": pfx_x,
+                "pfx_z": pfx_z,
+                "p_x": p_x,  # → plate_x
+                "p_z": p_z,
+                "x": x,
+                "y": y,
+                "spin_rate": spin_rate,  # → release_spin_rate
+                "spin_direction": spin_direction,  # → spin_axis
+                "break_angle": break_angle,
+                "break_length": break_length,
+                "break_y": break_y,
+                "break_vertical": break_vertical,
                 "break_vertical_induced": break_vertical_induced,
-                "break_horizontal":     break_horizontal,
-                "zone":                 zone,
-                "extension":            extension,          # → release_extension
-                "launch_speed":         launch_speed,
-                "launch_angle":         launch_angle,
-                "total_distance":       total_distance,     # → hit_distance_sc
-                "coord_x":              coord_x,            # → hc_x
-                "coord_y":              coord_y,            # → hc_y
-                "spray_angle":          spray_angle,
-                "batted_ball_type":     batted_ball_type,   # → bb_type
-                "hit_location":         hit_location,
-                "play_description":     play_description,   # → des
-                "pre_play_runner_on_first":  pre_runner_1b,     # → on_1b
+                "break_horizontal": break_horizontal,
+                "zone": zone,
+                "extension": extension,  # → release_extension
+                "launch_speed": launch_speed,
+                "launch_angle": launch_angle,
+                "total_distance": total_distance,  # → hit_distance_sc
+                "coord_x": coord_x,  # → hc_x
+                "coord_y": coord_y,  # → hc_y
+                "spray_angle": spray_angle,
+                "batted_ball_type": batted_ball_type,  # → bb_type
+                "hit_location": hit_location,
+                "play_description": play_description,  # → des
+                "pre_play_runner_on_first": pre_runner_1b,  # → on_1b
                 "pre_play_runner_on_second": pre_runner_2b,
-                "pre_play_runner_on_third":  pre_runner_3b,
-                "post_play_runner_on_first":  post_runner_1b,   # → post_on_1b
+                "pre_play_runner_on_third": pre_runner_3b,
+                "post_play_runner_on_first": post_runner_1b,  # → post_on_1b
                 "post_play_runner_on_second": post_runner_2b,
-                "post_play_runner_on_third":  post_runner_3b,
-                "catcher":              catcher,            # → fielder_2
-                "first_base":           first_base,         # → fielder_3
-                "second_base":          second_base,        # → fielder_4
-                "third_base":           third_base,         # → fielder_5
-                "shortstop":            shortstop,          # → fielder_6
-                "left_field":           left_field,         # → fielder_7
-                "center_field":         center_field,       # → fielder_8
-                "right_field":          right_field,        # → fielder_9
-                "runs":                 runs,               # → runs_on_pitch
-                "outs_on_pitch":        outs_on_pitch,
-                "rbis":                 rbis,               # → rbis_on_pitch
-                "earned_runs":          earned_runs,        # → earned_runs_on_pitch
-                "runner_on_first_score":  runner_on_first_score,   # → runner_1b_scored
+                "post_play_runner_on_third": post_runner_3b,
+                "catcher": catcher,  # → fielder_2
+                "first_base": first_base,  # → fielder_3
+                "second_base": second_base,  # → fielder_4
+                "third_base": third_base,  # → fielder_5
+                "shortstop": shortstop,  # → fielder_6
+                "left_field": left_field,  # → fielder_7
+                "center_field": center_field,  # → fielder_8
+                "right_field": right_field,  # → fielder_9
+                "runs": runs,  # → runs_on_pitch
+                "outs_on_pitch": outs_on_pitch,
+                "rbis": rbis,  # → rbis_on_pitch
+                "earned_runs": earned_runs,  # → earned_runs_on_pitch
+                "runner_on_first_score": runner_on_first_score,  # → runner_1b_scored
                 "runner_on_second_score": runner_on_second_score,
-                "runner_on_third_score":  runner_on_third_score,
+                "runner_on_third_score": runner_on_third_score,
                 "runner_1b_out_advancing": runner_1b_out_advancing,
                 "runner_2b_out_advancing": runner_2b_out_advancing,
                 "runner_3b_out_advancing": runner_3b_out_advancing,
-                "sb_attempt_2b":        sb_attempt_2b,
-                "sb_attempt_3b":        sb_attempt_3b,
-                "sb_attempt_home":      sb_attempt_home,
-                "sb_success_2b":        sb_success_2b,
-                "sb_success_3b":        sb_success_3b,
-                "sb_success_home":      sb_success_home,
+                "sb_attempt_2b": sb_attempt_2b,
+                "sb_attempt_3b": sb_attempt_3b,
+                "sb_attempt_home": sb_attempt_home,
+                "sb_success_2b": sb_success_2b,
+                "sb_success_3b": sb_success_3b,
+                "sb_success_home": sb_success_home,
                 "wild_pitch_passed_ball": wild_pitch_passed_ball,  # → passed_ball_wild_pitch
-                "pinch_hitter":         pinch_hitter,
-                "pinch_runner":         pinch_runner,
-                "pitcher_sub":          pitcher_sub,
-                "defensive_sub":        defensive_sub,
-                "fielded_by":           fielded_by,
-                "fielding_error":       fielding_error,
-                "dropped_ball":         dropped_ball,
-                "of_assist":            of_assist,
+                "pinch_hitter": pinch_hitter,
+                "pinch_runner": pinch_runner,
+                "pitcher_sub": pitcher_sub,
+                "defensive_sub": defensive_sub,
+                "fielded_by": fielded_by,
+                "fielding_error": fielding_error,
+                "dropped_ball": dropped_ball,
+                "of_assist": of_assist,
                 **assist_dict,
                 **putout_dict,
                 **throwing_error_dict,
@@ -964,9 +963,9 @@ def _fetch_game_pitches(
 
             # Reset per-pitch substitution flags (matches original behaviour)
             pinch_hitter = pinch_runner = pitcher_sub = defensive_sub = False
-            balls    = play_event["count"]["balls"]
-            strikes  = play_event["count"]["strikes"]
-            outs     = play_event["count"]["outs"]
+            balls = play_event["count"]["balls"]
+            strikes = play_event["count"]["strikes"]
+            outs = play_event["count"]["outs"]
             home_score_before = home_score_after
             away_score_before = away_score_after
             prev_half = top_bot
@@ -986,6 +985,7 @@ def _fetch_game_pitches(
 # ---------------------------------------------------------------------------
 # Module-level helpers used by _ensure_prerequisites
 # ---------------------------------------------------------------------------
+
 
 def _parse_height(height_str: str | None) -> int | None:
     """
@@ -1008,11 +1008,11 @@ def _map_game_status(gd: dict) -> str:
     Maps the MLB API abstractGameState to the raw.games status enum.
     """
     abstract = gd.get("status", {}).get("abstractGameState", "Preview")
-    coded    = gd.get("status", {}).get("codedGameState", "")
+    coded = gd.get("status", {}).get("codedGameState", "")
     status_map = {
         "Preview": "Preview",
-        "Live":    "Live",
-        "Final":   "Final",
+        "Live": "Live",
+        "Final": "Final",
     }
     base = status_map.get(abstract, "Preview")
     # Handle edge cases that share abstractGameState="Final"
@@ -1028,6 +1028,7 @@ def _map_game_status(gd: dict) -> str:
 # ---------------------------------------------------------------------------
 # Main ETL class
 # ---------------------------------------------------------------------------
+
 
 class HistoricalDataLoader:
     """
@@ -1169,17 +1170,20 @@ class HistoricalDataLoader:
         result = self._process_and_insert(game_pk, season, raw_rows)
         log.info(
             "  game %s: %d inserted, %d skipped (hard errors), %d flagged",
-            game_pk, result["inserted"], result["skipped"], result["flagged"],
+            game_pk,
+            result["inserted"],
+            result["skipped"],
+            result["flagged"],
         )
         return result
 
     def load_date_range(self, start_date: date, end_date: date) -> None:
         """Incremental loader — fetches all games between two dates."""
         params = {
-            "sportId":    1,
-            "gameTypes":  GAME_TYPES,
-            "startDate":  start_date.strftime("%Y-%m-%d"),
-            "endDate":    end_date.strftime("%Y-%m-%d"),
+            "sportId": 1,
+            "gameTypes": GAME_TYPES,
+            "startDate": start_date.strftime("%Y-%m-%d"),
+            "endDate": end_date.strftime("%Y-%m-%d"),
         }
         schedule = _connect("https://statsapi.mlb.com/api/v1/schedule", params)["dates"]
         batter_hand_cache: dict[int, str] = {}
@@ -1198,14 +1202,14 @@ class HistoricalDataLoader:
         script.  Skips games that are already fully loaded.
         """
         if end_year is None:
-            end_year = datetime.today().year - 1   # don't include current season here
+            end_year = datetime.today().year - 1  # don't include current season here
 
         for season in range(start_year, end_year + 1):
             log.info("=== Season %d ===", season)
             params = {
-                "sportId":    1,
-                "gameTypes":  GAME_TYPES,
-                "season":     season,
+                "sportId": 1,
+                "gameTypes": GAME_TYPES,
+                "season": season,
             }
             schedule = _connect("https://statsapi.mlb.com/api/v1/schedule", params)["dates"]
             batter_hand_cache: dict[int, str] = {}
@@ -1260,19 +1264,21 @@ class HistoricalDataLoader:
         Fetches full venue details (dimensions, surface, roof) from the
         MLB venues endpoint when the record is missing.
         """
-        with self._get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT 1 FROM raw.venues WHERE venue_id = %s AND season = %s", (venue_id, season)
-                )
-                if cur.fetchone() is not None:
-                    return  # already exists
+        with self._get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM raw.venues WHERE venue_id = %s AND season = %s", (venue_id, season)
+            )
+            if cur.fetchone() is not None:
+                return  # already exists
 
         log.info("  Fetching missing venue %s, season %s", venue_id, season)
         resp = None
         for attempt in range(1, MAX_API_RETRIES + 1):
             try:
-                resp = requests.get(f'https://baseballsavant.mlb.com/leaderboard/statcast-park-factors?type=dimensions&year={season}&parks=All&fenceStatType=distance', timeout=30)
+                resp = requests.get(
+                    f"https://baseballsavant.mlb.com/leaderboard/statcast-park-factors?type=dimensions&year={season}&parks=All&fenceStatType=distance",
+                    timeout=30,
+                )
                 resp.raise_for_status()
             except Exception as exc:
                 if attempt == MAX_API_RETRIES:
@@ -1281,7 +1287,9 @@ class HistoricalDataLoader:
                 time.sleep(RETRY_BACKOFF_S * attempt)
         if resp is None:
             raise
-        venue_data = json.loads(resp.text[resp.text.find('var data = [')+11:resp.text.find('}];')+2])
+        venue_data = json.loads(
+            resp.text[resp.text.find("var data = [") + 11 : resp.text.find("}];") + 2]
+        )
         dimensions = None
         for venue in venue_data:
             if venue["venue_id"] != venue_id:
@@ -1293,21 +1301,27 @@ class HistoricalDataLoader:
             for attempt in range(1, MAX_API_RETRIES + 1):
                 try:
                     resp = requests.get(
-                        f'https://baseballsavant.mlb.com/leaderboard/statcast-venue?venueId={venue_id}', timeout=30)
+                        f"https://baseballsavant.mlb.com/leaderboard/statcast-venue?venueId={venue_id}",
+                        timeout=30,
+                    )
                     resp.raise_for_status()
                 except Exception as exc:
                     if attempt == MAX_API_RETRIES:
                         raise
-                    log.warning("API call failed (attempt %d/%d): %s", attempt, MAX_API_RETRIES, exc)
+                    log.warning(
+                        "API call failed (attempt %d/%d): %s", attempt, MAX_API_RETRIES, exc
+                    )
                     time.sleep(RETRY_BACKOFF_S * attempt)
             if resp is None:
                 raise
-            venue_data = json.loads(resp.text[resp.text.find('var data = {') + 11:resp.text.find(']};') + 2])
-            dimensions = venue_data['venues'][0]
+            venue_data = json.loads(
+                resp.text[resp.text.find("var data = {") + 11 : resp.text.find("]};") + 2]
+            )
+            dimensions = venue_data["venues"][0]
 
         data = _connect(
-            f'https://statsapi.mlb.com/api/v1/venues/{venue_id}',
-            params={'hydrate': 'location,fieldInfo,timezone'}
+            f"https://statsapi.mlb.com/api/v1/venues/{venue_id}",
+            params={"hydrate": "location,fieldInfo,timezone"},
         )
         v = data["venues"][0]
 
@@ -1316,7 +1330,11 @@ class HistoricalDataLoader:
 
         # Surface: API returns "Artificial Turf" or "Grass" variants
         surface_raw = field.get("turfType", "Grass")
-        surface = "Turf" if "turf" in surface_raw.lower() or "artificial" in surface_raw.lower() else "Grass"
+        surface = (
+            "Turf"
+            if "turf" in surface_raw.lower() or "artificial" in surface_raw.lower()
+            else "Grass"
+        )
 
         # Roof type mapping
         roof_raw = field.get("roofType", "Open")
@@ -1325,7 +1343,7 @@ class HistoricalDataLoader:
 
         # Foul territory: not directly in API; default to Medium
         foul_map = {"Large": "Large", "Medium": "Medium", "Small": "Small"}
-        foul_terr = foul_map.get(field.get("leftLine", ""), "Medium")
+        foul_map.get(field.get("leftLine", ""), "Medium")
 
         coords = location.get("defaultCoordinates", {})
         elevation = location.get("elevation", 0) or 0
@@ -1357,7 +1375,7 @@ class HistoricalDataLoader:
                     (
                         venue_id,
                         season,
-                        dimensions.get('venu_name_short', ' '),
+                        dimensions.get("venu_name_short", " "),
                         location.get("city", ""),
                         location.get("stateAbbrev", ""),
                         surface,
@@ -1382,21 +1400,21 @@ class HistoricalDataLoader:
 
     # --- 2. Teams -----------------------------------------------------------
 
-    def _ensure_teams(
-            self, home_team_id: int, away_team_id: int, season: int, gd: dict
-    ) -> None:
+    def _ensure_teams(self, home_team_id: int, away_team_id: int, season: int, gd: dict) -> None:
         """
         Upserts raw.teams for any team not already in the DB.
         All required data is present in the game_dict — no extra API call needed.
         """
         needed = {home_team_id, away_team_id}
-        with self._get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT team_id FROM raw.teams WHERE season = %s AND team_id = ANY(%s)",
-                    (season, list(needed),),
-                )
-                existing = {r[0] for r in cur.fetchall()}
+        with self._get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT team_id FROM raw.teams WHERE season = %s AND team_id = ANY(%s)",
+                (
+                    season,
+                    list(needed),
+                ),
+            )
+            existing = {r[0] for r in cur.fetchall()}
 
         missing = needed - existing
         if not missing:
@@ -1425,7 +1443,9 @@ class HistoricalDataLoader:
             venue_id = t.get("venue", {}).get("id") or gd["venue"]["id"]
             self._ensure_venue(venue_id, season)
 
-            rows.append((tid, season, t["name"], t["abbreviation"], league_code, division, venue_id))
+            rows.append(
+                (tid, season, t["name"], t["abbreviation"], league_code, division, venue_id)
+            )
 
         if not rows:
             return
@@ -1462,7 +1482,7 @@ class HistoricalDataLoader:
         players_raw: dict[int, dict] = {}
 
         for side in ("home", "away"):
-            for key, pd in boxscore.get(side, {}).get("players", {}).items():
+            for _key, pd in boxscore.get(side, {}).get("players", {}).items():
                 pid = pd["person"]["id"]
                 players_raw[pid] = pd
 
@@ -1470,13 +1490,12 @@ class HistoricalDataLoader:
             return
 
         # Batch existence check
-        with self._get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT player_id FROM raw.players WHERE player_id = ANY(%s)",
-                    (list(players_raw.keys()),),
-                )
-                existing = {r[0] for r in cur.fetchall()}
+        with self._get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT player_id FROM raw.players WHERE player_id = ANY(%s)",
+                (list(players_raw.keys()),),
+            )
+            existing = {r[0] for r in cur.fetchall()}
 
         missing_ids = set(players_raw.keys()) - existing
         if not missing_ids:
@@ -1497,9 +1516,7 @@ class HistoricalDataLoader:
 
             if not bats or not throws:
                 try:
-                    detail = _connect(
-                        f"https://statsapi.mlb.com/api/v1/people/{pid}"
-                    )["people"][0]
+                    detail = _connect(f"https://statsapi.mlb.com/api/v1/people/{pid}")["people"][0]
                     bats = detail.get("batSide", {}).get("code", "R")
                     throws = detail.get("pitchHand", {}).get("code", "R")
                     first = detail.get("firstName", "")
@@ -1523,11 +1540,21 @@ class HistoricalDataLoader:
                 height_in = _parse_height(person.get("height"))
                 weight = person.get("weight")
 
-            rows.append((
-                pid, name, first or name, last or name,
-                birth, bats or "R", throws or "R",
-                position, height_in, weight, debut,
-            ))
+            rows.append(
+                (
+                    pid,
+                    name,
+                    first or name,
+                    last or name,
+                    birth,
+                    bats or "R",
+                    throws or "R",
+                    position,
+                    height_in,
+                    weight,
+                    debut,
+                )
+            )
 
         with self._get_conn() as conn:
             with conn.cursor() as cur:
@@ -1550,12 +1577,7 @@ class HistoricalDataLoader:
         # --- 4. Managers --------------------------------------------------------
 
     def _ensure_managers(
-            self,
-            managers: dict,
-            home_team_id: int,
-            away_team_id: int,
-            season: int,
-            game_date: str
+        self, managers: dict, home_team_id: int, away_team_id: int, season: int, game_date: str
     ) -> None:
         """
         Upserts raw.managers for the home and away managers of this game.
@@ -1572,23 +1594,24 @@ class HistoricalDataLoader:
         if not candidates:
             return
         check_managers = []
-        if managers["home_manager_id"] != '':
+        if managers["home_manager_id"] != "":
             check_managers.append(managers["home_manager_id"])
-        if managers["away_manager_id"] != '':
+        if managers["away_manager_id"] != "":
             check_managers.append(managers["away_manager_id"])
-        with self._get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
+        with self._get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
                     SELECT manager_id, season
                     FROM raw.managers
                     WHERE season = %s AND manager_id = ANY(%s)
                     """,
-                    (season, check_managers),
-                )
-                existing = {(r[0], r[1]) for r in cur.fetchall()}
+                (season, check_managers),
+            )
+            existing = {(r[0], r[1]) for r in cur.fetchall()}
 
-        missing = [(mid, name, tid) for mid, name, tid in candidates if (mid, season) not in existing]
+        missing = [
+            (mid, name, tid) for mid, name, tid in candidates if (mid, season) not in existing
+        ]
         if not missing:
             return
 
@@ -1604,7 +1627,7 @@ class HistoricalDataLoader:
                         AND season = %s
                         AND team_id = %s
                         """,
-                        (mid, season, tid)
+                        (mid, season, tid),
                     )
                     m = cur.fetchone()
                     if m is not None:
@@ -1616,11 +1639,11 @@ class HistoricalDataLoader:
                             AND season = %s
                             AND team_id = %s
                             """,
-                            (date.fromisoformat(game_date), m[0], season, tid)
+                            (date.fromisoformat(game_date), m[0], season, tid),
                         )
                         cur.execute(
                             """
-                            INSERT INTO raw.managers 
+                            INSERT INTO raw.managers
                                 (manager_id, season, full_name, team_id, season_start)
                             VALUES (%s, %s, %s, %s, %s)
                             ON CONFLICT (manager_id, season) DO UPDATE SET
@@ -1628,7 +1651,7 @@ class HistoricalDataLoader:
                                 season_end = EXCLUDED.season_end,
                                 updated_at = NOW()
                             """,
-                            (mid, season, name, tid, date.fromisoformat(game_date))
+                            (mid, season, name, tid, date.fromisoformat(game_date)),
                         )
                     else:
                         cur.execute(
@@ -1646,9 +1669,7 @@ class HistoricalDataLoader:
 
         # --- 5. Game record -----------------------------------------------------
 
-    def _ensure_game(
-            self, game_pk: int, season: int, gd: dict, managers: dict
-    ) -> None:
+    def _ensure_game(self, game_pk: int, season: int, gd: dict, managers: dict) -> None:
         """
         Upserts raw.games.  Called after venues/teams/managers are guaranteed
         to exist so all FKs resolve cleanly.
@@ -1656,21 +1677,18 @@ class HistoricalDataLoader:
         For completed games, also populates final score and pitcher W/L/S
         fields if available in the game_dict.
         """
-        with self._get_conn() as conn:
-            with conn.cursor() as cur:
+        with self._get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM raw.games WHERE game_pk = %s", (game_pk,))
+            if cur.fetchone() is not None:
+                # Game already exists — only update status in case it changed
+                # (Preview → Live → Final progression)
+                status = _map_game_status(gd)
                 cur.execute(
-                    "SELECT 1 FROM raw.games WHERE game_pk = %s", (game_pk,)
+                    "UPDATE raw.games SET status = %s, updated_at = NOW() WHERE game_pk = %s",
+                    (status, game_pk),
                 )
-                if cur.fetchone() is not None:
-                    # Game already exists — only update status in case it changed
-                    # (Preview → Live → Final progression)
-                    status = _map_game_status(gd)
-                    cur.execute(
-                        "UPDATE raw.games SET status = %s, updated_at = NOW() WHERE game_pk = %s",
-                        (status, game_pk),
-                    )
-                    conn.commit()
-                    return
+                conn.commit()
+                return
 
         game_date = gd["datetime"]["officialDate"]
         venue_id = gd["venue"]["id"]
@@ -1691,10 +1709,14 @@ class HistoricalDataLoader:
 
         # Inning-by-inning scores as JSONB
         innings_data = linescore.get("innings", [])
-        inning_scores = {
-            "home": [i.get("home", {}).get("runs") for i in innings_data],
-            "away": [i.get("away", {}).get("runs") for i in innings_data],
-        } if innings_data else None
+        inning_scores = (
+            {
+                "home": [i.get("home", {}).get("runs") for i in innings_data],
+                "away": [i.get("away", {}).get("runs") for i in innings_data],
+            }
+            if innings_data
+            else None
+        )
 
         # Winning / losing / save pitcher
         decisions = gd.get("decisions", {})
@@ -1710,6 +1732,7 @@ class HistoricalDataLoader:
         with self._get_conn() as conn:
             with conn.cursor() as cur:
                 import json as _json
+
                 cur.execute(
                     """
                     INSERT INTO raw.games (
@@ -1773,13 +1796,9 @@ class HistoricalDataLoader:
 
     def _game_already_loaded(self, game_pk: int) -> bool:
         """Returns True if any pitch rows exist for this game_pk."""
-        with self._get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT 1 FROM raw.pitches WHERE game_pk = %s LIMIT 1",
-                    (game_pk,)
-                )
-                return cur.fetchone() is not None
+        with self._get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM raw.pitches WHERE game_pk = %s LIMIT 1", (game_pk,))
+            return cur.fetchone() is not None
 
     def _process_and_insert(
         self,
@@ -1795,13 +1814,13 @@ class HistoricalDataLoader:
         as logged.  Without this, skipped rows had no audit trail and there
         was no way to find which pitches a re-ingest would need to recover.
         """
-        to_insert:    list[dict[str, Any]] = []
-        hard_errors:  list[tuple[int, int, list[str]]] = []   # (at_bat, pitch, errors)
+        to_insert: list[dict[str, Any]] = []
+        hard_errors: list[tuple[int, int, list[str]]] = []  # (at_bat, pitch, errors)
         flagged_count = 0
 
         for raw_row in raw_rows:
             row = _build_row_dict(raw_row, game_pk, season, raw_row.get("game_date", ""))
-            vr  = _validate_row(row)
+            vr = _validate_row(row)
 
             if not vr.is_valid:
                 hard_errors.append(
@@ -1814,7 +1833,10 @@ class HistoricalDataLoader:
                 for w in vr.warnings:
                     log.warning(
                         "  game=%s ab=%s pitch=%s — %s",
-                        game_pk, row.get("at_bat_number"), row.get("pitch_number"), w
+                        game_pk,
+                        row.get("at_bat_number"),
+                        row.get("pitch_number"),
+                        w,
                     )
 
             to_insert.append(row)
@@ -1822,19 +1844,20 @@ class HistoricalDataLoader:
         if hard_errors:
             log.error(
                 "  game %s: %d rows skipped due to hard validation errors:",
-                game_pk, len(hard_errors)
+                game_pk,
+                len(hard_errors),
             )
             for ab, pitch_num, errs in hard_errors:
-                log.error("    ab=%s pitch_number=%s: %s",
-                          ab, pitch_num, "; ".join(errs))
+                log.error("    ab=%s pitch_number=%s: %s", ab, pitch_num, "; ".join(errs))
             # SIM-093: Persist the audit trail.  Best-effort — never let a
             # logging failure prevent the rest of the game from loading.
             try:
                 self._log_etl_errors(game_pk, hard_errors)
-            except Exception as exc:                       # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 log.error(
                     "  game %s: failed to write etl_errors audit rows: %s",
-                    game_pk, exc,
+                    game_pk,
+                    exc,
                 )
 
         inserted = self._batch_insert(to_insert)
@@ -1842,8 +1865,8 @@ class HistoricalDataLoader:
 
         return {
             "inserted": inserted,
-            "skipped":  len(hard_errors),
-            "flagged":  flagged_count,
+            "skipped": len(hard_errors),
+            "flagged": flagged_count,
         }
 
     def _log_etl_errors(
@@ -1866,10 +1889,7 @@ class HistoricalDataLoader:
                 (game_pk, at_bat_number, pitch_number, error_type, error_messages)
             VALUES (%s, %s, %s, 'HARD', %s)
         """
-        rows = [
-            (game_pk, ab, pitch_num, list(msgs))
-            for (ab, pitch_num, msgs) in errors
-        ]
+        rows = [(game_pk, ab, pitch_num, list(msgs)) for (ab, pitch_num, msgs) in errors]
         with self._get_conn() as conn:
             with conn.cursor() as cur:
                 psycopg2.extras.execute_batch(cur, sql, rows)
@@ -1891,10 +1911,9 @@ class HistoricalDataLoader:
               AND  game_pk IS NOT NULL
             ORDER BY game_pk
         """
-        with self._get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, (since,))
-                return [r[0] for r in cur.fetchall()]
+        with self._get_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, (since,))
+            return [r[0] for r in cur.fetchall()]
 
     def _batch_insert(self, rows: list[dict[str, Any]]) -> int:
         """Inserts rows in BATCH_SIZE chunks.  Returns total rows inserted."""
@@ -1927,7 +1946,7 @@ class HistoricalDataLoader:
 
         game_date = rows[0].get("game_date")
         pitcher_ids = {r["pitcher"] for r in rows if r.get("pitcher")}
-        batter_ids  = {r["batter"]  for r in rows if r.get("batter")}
+        batter_ids = {r["batter"] for r in rows if r.get("batter")}
 
         upsert_sql = """
             INSERT INTO raw.etl_data_freshness (entity_type, entity_id, last_game_pk, last_date)
@@ -1938,10 +1957,9 @@ class HistoricalDataLoader:
                     updated_at   = NOW()
             WHERE EXCLUDED.last_date > raw.etl_data_freshness.last_date;
         """
-        entries = (
-            [("pitcher", pid, game_pk, game_date) for pid in pitcher_ids] +
-            [("batter",  bid, game_pk, game_date) for bid in batter_ids]
-        )
+        entries = [("pitcher", pid, game_pk, game_date) for pid in pitcher_ids] + [
+            ("batter", bid, game_pk, game_date) for bid in batter_ids
+        ]
 
         with self._get_conn() as conn:
             with conn.cursor() as cur:
@@ -1957,29 +1975,28 @@ class HistoricalDataLoader:
         Prints a summary of data_quality_flag=TRUE rows.
         Scoped to a specific game if game_pk is provided.
         """
-        with self._get_conn() as conn:
-            with conn.cursor() as cur:
-                if game_pk:
-                    cur.execute(
-                        """
+        with self._get_conn() as conn, conn.cursor() as cur:
+            if game_pk:
+                cur.execute(
+                    """
                         SELECT pitcher, COUNT(*) AS flagged_pitches
                         FROM raw.pitches
                         WHERE data_quality_flag = TRUE AND game_pk = %s
                         GROUP BY pitcher ORDER BY flagged_pitches DESC
                         """,
-                        (game_pk,)
-                    )
-                else:
-                    cur.execute(
-                        """
+                    (game_pk,),
+                )
+            else:
+                cur.execute(
+                    """
                         SELECT game_date, COUNT(*) AS flagged_pitches
                         FROM raw.pitches
                         WHERE data_quality_flag = TRUE
                         GROUP BY game_date ORDER BY game_date DESC
                         LIMIT 30
                         """
-                    )
-                rows = cur.fetchall()
+                )
+            rows = cur.fetchall()
 
         if not rows:
             log.info("No flagged rows found.")
@@ -2001,5 +2018,7 @@ class HistoricalDataLoader:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    loader = HistoricalDataLoader('postgresql://localhost/baseball_simulator?user=postgres&password=baseball')
+    loader = HistoricalDataLoader(
+        "postgresql://localhost/baseball_simulator?user=postgres&password=baseball"
+    )
     loader.refresh_seasons()

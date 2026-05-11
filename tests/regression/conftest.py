@@ -24,26 +24,26 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Steal engine (BaserunnerStealSimilarityEngine)
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def steal_engine():
     """BaserunnerStealSimilarityEngine — 12 synthetic profiles, seed=2026."""
     from similarity.engines.baserunner_steal_similarity import (
-        BaserunnerStealSimilarityEngine,
+        JUMP_FEATURES,
+        RBF_SIGMA_JUMP,
+        RBF_SIGMA_SUCCESS,
+        RBF_SIGMA_TENDENCY,
+        SUCCESS_FEATURES,
+        TENDENCY_FEATURES,
         BaserunnerStealProfile,
+        BaserunnerStealSimilarityEngine,
         FeatureNormalizer,
         StealPartition,
         WeightedRBFSimilarity,
-        TENDENCY_FEATURES,
-        JUMP_FEATURES,
-        SUCCESS_FEATURES,
-        RBF_SIGMA_TENDENCY,
-        RBF_SIGMA_JUMP,
-        RBF_SIGMA_SUCCESS,
     )
 
     rng = np.random.default_rng(2026)
@@ -88,25 +88,26 @@ def steal_engine():
 # Catcher engine (CatcherSimilarityEngine)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def catcher_engine():
     """CatcherSimilarityEngine — 12 synthetic profiles, seed=2026."""
     from similarity.engines.catcher_similarity import (
-        CatcherSimilarityEngine,
-        CatcherProfile,
-        FeatureNormalizer,
-        CatcherPartition,
-        WeightedRBFSimilarity,
-        FRAMING_FEATURES,
         BLOCKING_FEATURES,
-        THROWING_FEATURES,
         DETERRENCE_FEATURES,
+        FRAMING_FEATURES,
         OFFENSE_FEATURES,
-        RBF_SIGMA_FRAMING,
         RBF_SIGMA_BLOCKING,
-        RBF_SIGMA_THROWING,
         RBF_SIGMA_DETERRENCE,
+        RBF_SIGMA_FRAMING,
         RBF_SIGMA_OFFENSE,
+        RBF_SIGMA_THROWING,
+        THROWING_FEATURES,
+        CatcherPartition,
+        CatcherProfile,
+        CatcherSimilarityEngine,
+        FeatureNormalizer,
+        WeightedRBFSimilarity,
     )
 
     rng = np.random.default_rng(2026)
@@ -160,21 +161,22 @@ def catcher_engine():
 # Pitcher-steal engine (PitcherStealSimilarityEngine)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def pitcher_steal_engine():
     """PitcherStealSimilarityEngine — 12 synthetic profiles, seed=2026."""
     from similarity.engines.pitcher_steal_similarity import (
-        PitcherStealSimilarityEngine,
-        PitcherStealProfile,
+        DELIVERY_FEATURES,
+        OUTCOME_FEATURES,
+        PICKOFF_FEATURES,
+        RBF_SIGMA_DELIVERY,
+        RBF_SIGMA_OUTCOME,
+        RBF_SIGMA_PICKOFF,
         FeatureNormalizer,
         PitcherStealPartition,
+        PitcherStealProfile,
+        PitcherStealSimilarityEngine,
         WeightedRBFSimilarity,
-        DELIVERY_FEATURES,
-        PICKOFF_FEATURES,
-        OUTCOME_FEATURES,
-        RBF_SIGMA_DELIVERY,
-        RBF_SIGMA_PICKOFF,
-        RBF_SIGMA_OUTCOME,
     )
 
     rng = np.random.default_rng(2026)
@@ -218,21 +220,22 @@ def pitcher_steal_engine():
 # Manager engine (ManagerSimilarityEngine)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def manager_engine():
     """ManagerSimilarityEngine — 12 synthetic profiles, seed=2026."""
     from similarity.engines.manager_similarity import (
-        ManagerSimilarityEngine,
-        ManagerProfile,
-        FeatureNormalizer,
-        ManagerPartition,
-        WeightedRBFSimilarity,
-        USAGE_FEATURES,
         AGGRESSION_FEATURES,
         PLATOON_FEATURES,
-        RBF_SIGMA_USAGE,
         RBF_SIGMA_AGGRESSION,
         RBF_SIGMA_PLATOON,
+        RBF_SIGMA_USAGE,
+        USAGE_FEATURES,
+        FeatureNormalizer,
+        ManagerPartition,
+        ManagerProfile,
+        ManagerSimilarityEngine,
+        WeightedRBFSimilarity,
     )
 
     rng = np.random.default_rng(2026)
@@ -276,18 +279,20 @@ def manager_engine():
 # Situation engine (SituationSimilarityEngine)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def situation_engine():
     """SituationSimilarityEngine — 50 synthetic situations, seed=2026."""
+    from scipy.spatial import KDTree
+
     from similarity.engines.situation_similarity import (
-        SituationSimilarityEngine,
-        SituationVector,
-        SituationNormalizer,
-        NearestSituation,
         FEATURE_WEIGHTS,
         SCORE_DIFF_CLIP,
+        NearestSituation,
+        SituationNormalizer,
+        SituationSimilarityEngine,
+        SituationVector,
     )
-    from scipy.spatial import KDTree
 
     rng = np.random.default_rng(2026)
     n = 50
@@ -314,17 +319,21 @@ def situation_engine():
     raw_rows = []
     for i, sv in enumerate(situations):
         runners = (sv.runner_on_1b * 0b001) | (sv.runner_on_2b * 0b010) | (sv.runner_on_3b * 0b100)
-        score_diff_clipped = float(np.clip(sv.score_differential, -SCORE_DIFF_CLIP, SCORE_DIFF_CLIP))
-        index_meta.append(NearestSituation(
-            play_id=str(i),
-            game_pk=700000 + i,
-            distance=0.0,
-            inning=sv.inning,
-            outs=sv.outs,
-            runners=runners,
-            leverage_index=sv.leverage_index,
-            score_differential=score_diff_clipped,
-        ))
+        score_diff_clipped = float(
+            np.clip(sv.score_differential, -SCORE_DIFF_CLIP, SCORE_DIFF_CLIP)
+        )
+        index_meta.append(
+            NearestSituation(
+                play_id=str(i),
+                game_pk=700000 + i,
+                distance=0.0,
+                inning=sv.inning,
+                outs=sv.outs,
+                runners=runners,
+                leverage_index=sv.leverage_index,
+                score_differential=score_diff_clipped,
+            )
+        )
         raw_rows.append(sv.to_array())
 
     raw_matrix = np.array(raw_rows, dtype=np.float64)

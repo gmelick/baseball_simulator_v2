@@ -33,36 +33,57 @@ Test categories:
 
 from __future__ import annotations
 
-import copy
-import math
-import pytest
 import numpy as np
+import pytest
 from numpy.typing import NDArray
 
-from fielder_similarity import (
+from similarity.engines.fielder_similarity import (
+    ALL_POSITIONS,
+    EB_N_PRIOR,
+    IF_DP_FEATURES,
+    IF_ERROR_FEATURES,
+    IF_PIVOT_FEATURES,
+    IF_RANGE_FEATURES,
+    IF_SPECIALTY_FEATURES,
     # Config constants
-    INFIELD_POSITIONS, OUTFIELD_POSITIONS, ALL_POSITIONS,
-    IF_RANGE_FEATURES, IF_DP_FEATURES, IF_PIVOT_FEATURES,
-    IF_ERROR_FEATURES, IF_SPECIALTY_FEATURES,
-    OF_RANGE_FEATURES, OF_ARM_FEATURES, OF_STAR_FEATURES, OF_ERROR_FEATURES,
-    WEIGHT_IF_RANGE, WEIGHT_IF_DP, WEIGHT_IF_ERRORS, WEIGHT_IF_SPECIALTY,
-    WEIGHT_OF_RANGE, WEIGHT_OF_ARM, WEIGHT_OF_STARS, WEIGHT_OF_ERRORS,
-    RBF_SIGMA_IF_RANGE, RBF_SIGMA_IF_DP, RBF_SIGMA_IF_ERRORS,
+    INFIELD_POSITIONS,
+    MIN_FIELDER_BATTED_BALLS,
+    OF_ARM_FEATURES,
+    OF_ERROR_FEATURES,
+    OF_RANGE_FEATURES,
+    OF_STAR_FEATURES,
+    OUTFIELD_POSITIONS,
+    RBF_SIGMA_IF_DP,
+    RBF_SIGMA_IF_ERRORS,
+    RBF_SIGMA_IF_RANGE,
     RBF_SIGMA_IF_SPECIALTY,
-    RBF_SIGMA_OF_RANGE, RBF_SIGMA_OF_ARM, RBF_SIGMA_OF_STARS,
+    RBF_SIGMA_OF_ARM,
     RBF_SIGMA_OF_ERRORS,
-    EB_N_PRIOR, MIN_FIELDER_BATTED_BALLS,
+    RBF_SIGMA_OF_RANGE,
+    RBF_SIGMA_OF_STARS,
+    WEIGHT_IF_DP,
+    WEIGHT_IF_ERRORS,
+    WEIGHT_IF_RANGE,
+    WEIGHT_IF_SPECIALTY,
+    WEIGHT_OF_ARM,
+    WEIGHT_OF_ERRORS,
+    WEIGHT_OF_RANGE,
+    WEIGHT_OF_STARS,
+    EmpiricalBayesShrinkage,
+    FeatureNormalizer,
     # Classes
-    FielderProfile, SimilarityResult,
-    WeightedRBFSimilarity, EmpiricalBayesShrinkage, FeatureNormalizer,
-    PositionPartition, FielderSimilarityEngine,
+    FielderProfile,
+    FielderSimilarityEngine,
+    PositionPartition,
+    SimilarityResult,
+    WeightedRBFSimilarity,
     build_similarity_matrix,
 )
-
 
 # ============================================================================
 # Helpers — build profiles and engines without DuckDB
 # ============================================================================
+
 
 def _make_if_profile(
     player_id: int = 1,
@@ -84,10 +105,14 @@ def _make_if_profile(
         season=season,
         innings_played=600.0,
         sample_batted_balls=sample_bb,
-        range_vec=range_vec if range_vec is not None else np.zeros(len(IF_RANGE_FEATURES), dtype=np.float64),
+        range_vec=range_vec
+        if range_vec is not None
+        else np.zeros(len(IF_RANGE_FEATURES), dtype=np.float64),
         error_vec=error_vec if error_vec is not None else np.array([0.02, 0.01], dtype=np.float64),
         dp_vec=dp_vec if dp_vec is not None else np.zeros(dp_dim, dtype=np.float64),
-        specialty_vec=specialty_vec if specialty_vec is not None else np.array([0.5, 0.9], dtype=np.float64),
+        specialty_vec=specialty_vec
+        if specialty_vec is not None
+        else np.array([0.5, 0.9], dtype=np.float64),
         arm_vec=None,
         star_vec=None,
         eb_alpha=eb_alpha if eb_alpha is not None else sample_bb / (sample_bb + EB_N_PRIOR),
@@ -112,11 +137,15 @@ def _make_of_profile(
         season=season,
         innings_played=800.0,
         sample_batted_balls=sample_bb,
-        range_vec=range_vec if range_vec is not None else np.zeros(len(OF_RANGE_FEATURES), dtype=np.float64),
+        range_vec=range_vec
+        if range_vec is not None
+        else np.zeros(len(OF_RANGE_FEATURES), dtype=np.float64),
         error_vec=error_vec if error_vec is not None else np.array([0.01, 0.005], dtype=np.float64),
         dp_vec=None,
         specialty_vec=None,
-        arm_vec=arm_vec if arm_vec is not None else np.array([0.6, 0.1, 0.5, 0.0], dtype=np.float64),
+        arm_vec=arm_vec
+        if arm_vec is not None
+        else np.array([0.6, 0.1, 0.5, 0.0], dtype=np.float64),
         star_vec=star_vec if star_vec is not None else np.array([0.1, 0.4, 0.98], dtype=np.float64),
         eb_alpha=eb_alpha if eb_alpha is not None else sample_bb / (sample_bb + EB_N_PRIOR),
     )
@@ -201,16 +230,22 @@ def _generate_ss_population(n: int = 20, seed: int = 42) -> list[FielderProfile]
     for i in range(1, n + 1):
         for season in [2023, 2024]:
             bb = rng.integers(80, 400)
-            profiles.append(_make_if_profile(
-                player_id=i,
-                position="SS",
-                season=season,
-                sample_bb=int(bb),
-                range_vec=rng.normal(0, 3, len(IF_RANGE_FEATURES)).astype(np.float64),
-                error_vec=np.clip(rng.beta(2, 50, len(IF_ERROR_FEATURES)), 0, 0.2).astype(np.float64),
-                dp_vec=rng.normal(0, 2, len(IF_DP_FEATURES) + len(IF_PIVOT_FEATURES)).astype(np.float64),
-                specialty_vec=rng.beta(5, 5, len(IF_SPECIALTY_FEATURES)).astype(np.float64),
-            ))
+            profiles.append(
+                _make_if_profile(
+                    player_id=i,
+                    position="SS",
+                    season=season,
+                    sample_bb=int(bb),
+                    range_vec=rng.normal(0, 3, len(IF_RANGE_FEATURES)).astype(np.float64),
+                    error_vec=np.clip(rng.beta(2, 50, len(IF_ERROR_FEATURES)), 0, 0.2).astype(
+                        np.float64
+                    ),
+                    dp_vec=rng.normal(0, 2, len(IF_DP_FEATURES) + len(IF_PIVOT_FEATURES)).astype(
+                        np.float64
+                    ),
+                    specialty_vec=rng.beta(5, 5, len(IF_SPECIALTY_FEATURES)).astype(np.float64),
+                )
+            )
     return profiles
 
 
@@ -221,25 +256,32 @@ def _generate_cf_population(n: int = 20, seed: int = 99) -> list[FielderProfile]
     for i in range(100, 100 + n):
         for season in [2023, 2024]:
             bb = rng.integers(80, 400)
-            profiles.append(_make_of_profile(
-                player_id=i,
-                position="CF",
-                season=season,
-                sample_bb=int(bb),
-                range_vec=rng.normal(0, 3, len(OF_RANGE_FEATURES)).astype(np.float64),
-                error_vec=np.clip(rng.beta(2, 50, len(OF_ERROR_FEATURES)), 0, 0.2).astype(np.float64),
-                arm_vec=np.concatenate([
-                    rng.beta(5, 5, 3),
-                    rng.normal(0, 1, 1),
-                ]).astype(np.float64),
-                star_vec=rng.beta(5, 5, len(OF_STAR_FEATURES)).astype(np.float64),
-            ))
+            profiles.append(
+                _make_of_profile(
+                    player_id=i,
+                    position="CF",
+                    season=season,
+                    sample_bb=int(bb),
+                    range_vec=rng.normal(0, 3, len(OF_RANGE_FEATURES)).astype(np.float64),
+                    error_vec=np.clip(rng.beta(2, 50, len(OF_ERROR_FEATURES)), 0, 0.2).astype(
+                        np.float64
+                    ),
+                    arm_vec=np.concatenate(
+                        [
+                            rng.beta(5, 5, 3),
+                            rng.normal(0, 1, 1),
+                        ]
+                    ).astype(np.float64),
+                    star_vec=rng.beta(5, 5, len(OF_STAR_FEATURES)).astype(np.float64),
+                )
+            )
     return profiles
 
 
 # ============================================================================
 # 1. Configuration & Constants
 # ============================================================================
+
 
 class TestConfig:
     """Validate module-level constants and feature definitions."""
@@ -254,18 +296,25 @@ class TestConfig:
 
     def test_position_groups_complete(self):
         assert ALL_POSITIONS == INFIELD_POSITIONS | OUTFIELD_POSITIONS
-        assert INFIELD_POSITIONS == {"1B", "2B", "3B", "SS"}
-        assert OUTFIELD_POSITIONS == {"LF", "CF", "RF"}
+        assert {"1B", "2B", "3B", "SS"} == INFIELD_POSITIONS
+        assert {"LF", "CF", "RF"} == OUTFIELD_POSITIONS
 
     def test_no_position_overlap(self):
-        assert INFIELD_POSITIONS & OUTFIELD_POSITIONS == set()
+        assert set() == INFIELD_POSITIONS & OUTFIELD_POSITIONS
 
     def test_feature_lists_nonempty(self):
-        for features in [IF_RANGE_FEATURES, IF_DP_FEATURES, IF_PIVOT_FEATURES,
-                         IF_ERROR_FEATURES, IF_SPECIALTY_FEATURES,
-                         OF_RANGE_FEATURES, OF_ARM_FEATURES, OF_STAR_FEATURES,
-                         OF_ERROR_FEATURES]:
-            assert len(features) > 0, f"Empty feature list"
+        for features in [
+            IF_RANGE_FEATURES,
+            IF_DP_FEATURES,
+            IF_PIVOT_FEATURES,
+            IF_ERROR_FEATURES,
+            IF_SPECIALTY_FEATURES,
+            OF_RANGE_FEATURES,
+            OF_ARM_FEATURES,
+            OF_STAR_FEATURES,
+            OF_ERROR_FEATURES,
+        ]:
+            assert len(features) > 0, "Empty feature list"
 
     def test_reliability_weights_positive(self):
         for name, features in [
@@ -284,9 +333,16 @@ class TestConfig:
                 assert weight <= 1.0, f"{name}.{feat_name} has weight > 1.0: {weight}"
 
     def test_sigma_values_positive(self):
-        for sigma in [RBF_SIGMA_IF_RANGE, RBF_SIGMA_IF_DP, RBF_SIGMA_IF_ERRORS,
-                      RBF_SIGMA_IF_SPECIALTY, RBF_SIGMA_OF_RANGE, RBF_SIGMA_OF_ARM,
-                      RBF_SIGMA_OF_STARS, RBF_SIGMA_OF_ERRORS]:
+        for sigma in [
+            RBF_SIGMA_IF_RANGE,
+            RBF_SIGMA_IF_DP,
+            RBF_SIGMA_IF_ERRORS,
+            RBF_SIGMA_IF_SPECIALTY,
+            RBF_SIGMA_OF_RANGE,
+            RBF_SIGMA_OF_ARM,
+            RBF_SIGMA_OF_STARS,
+            RBF_SIGMA_OF_ERRORS,
+        ]:
             assert sigma > 0
 
     def test_eb_n_prior_positive(self):
@@ -299,6 +355,7 @@ class TestConfig:
 # ============================================================================
 # 2. WeightedRBFSimilarity
 # ============================================================================
+
 
 class TestWeightedRBFSimilarity:
     """Unit tests for the RBF kernel implementation."""
@@ -356,11 +413,13 @@ class TestWeightedRBFSimilarity:
     def test_batch_matches_scalar(self):
         rbf = WeightedRBFSimilarity(sigma=1.0, reliability_weights=np.array([0.3, 0.5, 0.2]))
         query = np.array([1.0, 2.0, 3.0])
-        candidates = np.array([
-            [1.0, 2.0, 3.0],
-            [4.0, 5.0, 6.0],
-            [0.0, 0.0, 0.0],
-        ])
+        candidates = np.array(
+            [
+                [1.0, 2.0, 3.0],
+                [4.0, 5.0, 6.0],
+                [0.0, 0.0, 0.0],
+            ]
+        )
         batch_scores = rbf.score_batch(query, candidates)
         for i in range(3):
             scalar_score = rbf.score(query, candidates[i])
@@ -398,8 +457,8 @@ class TestWeightedRBFSimilarity:
 # 3. EmpiricalBayesShrinkage
 # ============================================================================
 
-class TestEmpiricalBayesShrinkage:
 
+class TestEmpiricalBayesShrinkage:
     def test_alpha_zero_samples(self):
         eb = EmpiricalBayesShrinkage(n_prior=15)
         assert eb.alpha(0) == pytest.approx(0.0)
@@ -456,18 +515,28 @@ class TestEmpiricalBayesShrinkage:
 # 4. FeatureNormalizer
 # ============================================================================
 
-class TestFeatureNormalizer:
 
+class TestFeatureNormalizer:
     def _make_profiles(self) -> dict[str, list[FielderProfile]]:
         """Create a small population for normalization fitting."""
         ss_profiles = [
-            _make_if_profile(player_id=1, position="SS", range_vec=np.array([1.0, 2.0, 3.0, 4.0, 5.0])),
-            _make_if_profile(player_id=2, position="SS", range_vec=np.array([3.0, 4.0, 5.0, 6.0, 7.0])),
-            _make_if_profile(player_id=3, position="SS", range_vec=np.array([5.0, 6.0, 7.0, 8.0, 9.0])),
+            _make_if_profile(
+                player_id=1, position="SS", range_vec=np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+            ),
+            _make_if_profile(
+                player_id=2, position="SS", range_vec=np.array([3.0, 4.0, 5.0, 6.0, 7.0])
+            ),
+            _make_if_profile(
+                player_id=3, position="SS", range_vec=np.array([5.0, 6.0, 7.0, 8.0, 9.0])
+            ),
         ]
         cf_profiles = [
-            _make_of_profile(player_id=10, position="CF", range_vec=np.array([10.0, 20.0, 30.0, 40.0, 50.0])),
-            _make_of_profile(player_id=11, position="CF", range_vec=np.array([20.0, 30.0, 40.0, 50.0, 60.0])),
+            _make_of_profile(
+                player_id=10, position="CF", range_vec=np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+            ),
+            _make_of_profile(
+                player_id=11, position="CF", range_vec=np.array([20.0, 30.0, 40.0, 50.0, 60.0])
+            ),
         ]
         return {"SS": ss_profiles, "CF": cf_profiles}
 
@@ -523,8 +592,9 @@ class TestFeatureNormalizer:
         """If a feature is identical across all profiles, std is set to 1.0."""
         profiles = {
             "SS": [
-                _make_if_profile(player_id=i, position="SS",
-                                 range_vec=np.array([0.0, float(i), 0.0, 0.0, 0.0]))
+                _make_if_profile(
+                    player_id=i, position="SS", range_vec=np.array([0.0, float(i), 0.0, 0.0, 0.0])
+                )
                 for i in range(5)
             ]
         }
@@ -559,8 +629,8 @@ class TestFeatureNormalizer:
 # 5. FielderProfile
 # ============================================================================
 
-class TestFielderProfile:
 
+class TestFielderProfile:
     def test_if_profile_has_dp_no_arm(self):
         p = _make_if_profile()
         assert p.dp_vec is not None
@@ -595,8 +665,8 @@ class TestFielderProfile:
 # 6. PositionPartition
 # ============================================================================
 
-class TestPositionPartition:
 
+class TestPositionPartition:
     def test_empty_partition_returns_empty(self):
         part = PositionPartition("SS")
         norm = FeatureNormalizer()
@@ -637,22 +707,34 @@ class TestPositionPartition:
 # 7. SimilarityResult
 # ============================================================================
 
-class TestSimilarityResult:
 
+class TestSimilarityResult:
     def test_result_frozen(self):
         r = SimilarityResult(
-            player_id=1, position="SS", season=2024, score=0.75,
-            range_score=0.8, secondary_score=0.7, tertiary_score=0.6,
-            quaternary_score=0.9, sample_batted_balls=200,
+            player_id=1,
+            position="SS",
+            season=2024,
+            score=0.75,
+            range_score=0.8,
+            secondary_score=0.7,
+            tertiary_score=0.6,
+            quaternary_score=0.9,
+            sample_batted_balls=200,
         )
         with pytest.raises(AttributeError):
             r.score = 0.5  # type: ignore
 
     def test_result_fields_accessible(self):
         r = SimilarityResult(
-            player_id=42, position="CF", season=2023, score=0.55,
-            range_score=0.6, secondary_score=0.5, tertiary_score=0.4,
-            quaternary_score=0.7, sample_batted_balls=150,
+            player_id=42,
+            position="CF",
+            season=2023,
+            score=0.55,
+            range_score=0.6,
+            secondary_score=0.5,
+            tertiary_score=0.4,
+            quaternary_score=0.7,
+            sample_batted_balls=150,
         )
         assert r.player_id == 42
         assert r.position == "CF"
@@ -663,6 +745,7 @@ class TestSimilarityResult:
 # ============================================================================
 # 8. FielderSimilarityEngine — Integration Tests
 # ============================================================================
+
 
 class TestEnginePositionGating:
     """Cross-position comparisons must be blocked."""
@@ -732,7 +815,6 @@ class TestEngineCrossSeasonInclusion:
 
 
 class TestEngineTopN:
-
     def test_top_n_limits_results(self):
         profiles = _generate_ss_population(20, seed=1)
         engine = _build_test_engine(if_profiles=profiles)
@@ -790,13 +872,31 @@ class TestEngineIdenticalProfiles:
         vec_e = np.array([0.02, 0.01])
         vec_dp = np.array([1.0, 0.6, 0.7, 0.5])
         vec_sp = np.array([0.5, 0.9])
-        p1 = _make_if_profile(player_id=1, range_vec=vec_r.copy(), error_vec=vec_e.copy(),
-                              dp_vec=vec_dp.copy(), specialty_vec=vec_sp.copy(), sample_bb=500)
-        p2 = _make_if_profile(player_id=2, range_vec=vec_r.copy(), error_vec=vec_e.copy(),
-                              dp_vec=vec_dp.copy(), specialty_vec=vec_sp.copy(), sample_bb=500)
+        p1 = _make_if_profile(
+            player_id=1,
+            range_vec=vec_r.copy(),
+            error_vec=vec_e.copy(),
+            dp_vec=vec_dp.copy(),
+            specialty_vec=vec_sp.copy(),
+            sample_bb=500,
+        )
+        p2 = _make_if_profile(
+            player_id=2,
+            range_vec=vec_r.copy(),
+            error_vec=vec_e.copy(),
+            dp_vec=vec_dp.copy(),
+            specialty_vec=vec_sp.copy(),
+            sample_bb=500,
+        )
         # Need a third profile so normalization has variance
-        p3 = _make_if_profile(player_id=3, range_vec=vec_r + 5, error_vec=vec_e + 0.05,
-                              dp_vec=vec_dp + 3, specialty_vec=1 - vec_sp, sample_bb=500)
+        p3 = _make_if_profile(
+            player_id=3,
+            range_vec=vec_r + 5,
+            error_vec=vec_e + 0.05,
+            dp_vec=vec_dp + 3,
+            specialty_vec=1 - vec_sp,
+            sample_bb=500,
+        )
         engine = _build_test_engine(if_profiles=[p1, p2, p3])
         result = engine.query_pair((1, "SS", 2024), (2, "SS", 2024))
         assert result is not None
@@ -807,12 +907,30 @@ class TestEngineIdenticalProfiles:
         vec_e = np.array([0.01, 0.005])
         vec_arm = np.array([0.7, 0.15, 0.6, 1.5])
         vec_star = np.array([0.15, 0.45, 0.97])
-        p1 = _make_of_profile(player_id=10, range_vec=vec_r.copy(), error_vec=vec_e.copy(),
-                              arm_vec=vec_arm.copy(), star_vec=vec_star.copy(), sample_bb=500)
-        p2 = _make_of_profile(player_id=11, range_vec=vec_r.copy(), error_vec=vec_e.copy(),
-                              arm_vec=vec_arm.copy(), star_vec=vec_star.copy(), sample_bb=500)
-        p3 = _make_of_profile(player_id=12, range_vec=vec_r + 5, error_vec=vec_e + 0.05,
-                              arm_vec=vec_arm * 0.5, star_vec=1 - vec_star, sample_bb=500)
+        p1 = _make_of_profile(
+            player_id=10,
+            range_vec=vec_r.copy(),
+            error_vec=vec_e.copy(),
+            arm_vec=vec_arm.copy(),
+            star_vec=vec_star.copy(),
+            sample_bb=500,
+        )
+        p2 = _make_of_profile(
+            player_id=11,
+            range_vec=vec_r.copy(),
+            error_vec=vec_e.copy(),
+            arm_vec=vec_arm.copy(),
+            star_vec=vec_star.copy(),
+            sample_bb=500,
+        )
+        p3 = _make_of_profile(
+            player_id=12,
+            range_vec=vec_r + 5,
+            error_vec=vec_e + 0.05,
+            arm_vec=vec_arm * 0.5,
+            star_vec=1 - vec_star,
+            sample_bb=500,
+        )
         engine = _build_test_engine(of_profiles=[p1, p2, p3])
         result = engine.query_pair((10, "CF", 2024), (11, "CF", 2024))
         assert result is not None
@@ -823,18 +941,30 @@ class TestEngineDivergentProfiles:
     """Very different profiles should score low."""
 
     def test_divergent_if_profiles_low_score(self):
-        p1 = _make_if_profile(player_id=1, range_vec=np.array([10, 10, 10, 10, 10.0]),
-                              error_vec=np.array([0.0, 0.0]),
-                              dp_vec=np.array([5.0, 0.9, 0.9, 3.0]),
-                              specialty_vec=np.array([0.95, 0.99]), sample_bb=500)
-        p2 = _make_if_profile(player_id=2, range_vec=np.array([-10, -10, -10, -10, -10.0]),
-                              error_vec=np.array([0.15, 0.12]),
-                              dp_vec=np.array([-5.0, 0.1, 0.1, -3.0]),
-                              specialty_vec=np.array([0.1, 0.3]), sample_bb=500)
-        p3 = _make_if_profile(player_id=3, range_vec=np.zeros(5),
-                              error_vec=np.array([0.05, 0.05]),
-                              dp_vec=np.zeros(4), specialty_vec=np.array([0.5, 0.6]),
-                              sample_bb=500)
+        p1 = _make_if_profile(
+            player_id=1,
+            range_vec=np.array([10, 10, 10, 10, 10.0]),
+            error_vec=np.array([0.0, 0.0]),
+            dp_vec=np.array([5.0, 0.9, 0.9, 3.0]),
+            specialty_vec=np.array([0.95, 0.99]),
+            sample_bb=500,
+        )
+        p2 = _make_if_profile(
+            player_id=2,
+            range_vec=np.array([-10, -10, -10, -10, -10.0]),
+            error_vec=np.array([0.15, 0.12]),
+            dp_vec=np.array([-5.0, 0.1, 0.1, -3.0]),
+            specialty_vec=np.array([0.1, 0.3]),
+            sample_bb=500,
+        )
+        p3 = _make_if_profile(
+            player_id=3,
+            range_vec=np.zeros(5),
+            error_vec=np.array([0.05, 0.05]),
+            dp_vec=np.zeros(4),
+            specialty_vec=np.array([0.5, 0.6]),
+            sample_bb=500,
+        )
         engine = _build_test_engine(if_profiles=[p1, p2, p3])
         result = engine.query_pair((1, "SS", 2024), (2, "SS", 2024))
         assert result is not None
@@ -851,20 +981,40 @@ class TestEngineConfidenceDiscount:
         base_spec = np.array([0.5, 0.8])
 
         # High-sample pair
-        p_high_a = _make_if_profile(player_id=1, range_vec=base_range.copy(),
-                                    error_vec=base_err.copy(), dp_vec=base_dp.copy(),
-                                    specialty_vec=base_spec.copy(), sample_bb=500)
-        p_high_b = _make_if_profile(player_id=2, range_vec=base_range.copy(),
-                                    error_vec=base_err.copy(), dp_vec=base_dp.copy(),
-                                    specialty_vec=base_spec.copy(), sample_bb=500)
+        p_high_a = _make_if_profile(
+            player_id=1,
+            range_vec=base_range.copy(),
+            error_vec=base_err.copy(),
+            dp_vec=base_dp.copy(),
+            specialty_vec=base_spec.copy(),
+            sample_bb=500,
+        )
+        p_high_b = _make_if_profile(
+            player_id=2,
+            range_vec=base_range.copy(),
+            error_vec=base_err.copy(),
+            dp_vec=base_dp.copy(),
+            specialty_vec=base_spec.copy(),
+            sample_bb=500,
+        )
         # Low-sample twin
-        p_low = _make_if_profile(player_id=3, range_vec=base_range.copy(),
-                                 error_vec=base_err.copy(), dp_vec=base_dp.copy(),
-                                 specialty_vec=base_spec.copy(), sample_bb=20)
+        p_low = _make_if_profile(
+            player_id=3,
+            range_vec=base_range.copy(),
+            error_vec=base_err.copy(),
+            dp_vec=base_dp.copy(),
+            specialty_vec=base_spec.copy(),
+            sample_bb=20,
+        )
         # Need divergent profile for normalization variance
-        p_diff = _make_if_profile(player_id=4, range_vec=base_range + 8,
-                                  error_vec=base_err + 0.1, dp_vec=base_dp + 5,
-                                  specialty_vec=1 - base_spec, sample_bb=500)
+        p_diff = _make_if_profile(
+            player_id=4,
+            range_vec=base_range + 8,
+            error_vec=base_err + 0.1,
+            dp_vec=base_dp + 5,
+            specialty_vec=1 - base_spec,
+            sample_bb=500,
+        )
 
         engine = _build_test_engine(if_profiles=[p_high_a, p_high_b, p_low, p_diff])
         score_high = engine.query_pair((1, "SS", 2024), (2, "SS", 2024))
@@ -923,7 +1073,6 @@ class TestEngineMiddleIFPivot:
 
 
 class TestEngineMissingProfile:
-
     def test_query_missing_player_returns_empty(self):
         engine = _build_test_engine(if_profiles=_generate_ss_population(3))
         results = engine.query(99999, "SS", 2024)
@@ -946,8 +1095,8 @@ class TestEngineMissingProfile:
 # 8h. Mixed Population — IF and OF coexist without interference
 # ============================================================================
 
-class TestEngineMixedPopulation:
 
+class TestEngineMixedPopulation:
     def test_if_query_ignores_of_profiles(self):
         ss = _generate_ss_population(5, seed=1)
         cf = _generate_cf_population(5, seed=1)
@@ -975,8 +1124,8 @@ class TestEngineMixedPopulation:
 # 8i. Utility methods
 # ============================================================================
 
-class TestEngineUtilities:
 
+class TestEngineUtilities:
     def test_get_profile(self):
         profiles = _generate_ss_population(3)
         engine = _build_test_engine(if_profiles=profiles)
@@ -1011,8 +1160,8 @@ class TestEngineUtilities:
 # 9. build_similarity_matrix
 # ============================================================================
 
-class TestBuildSimilarityMatrix:
 
+class TestBuildSimilarityMatrix:
     def test_diagonal_is_one(self):
         profiles = _generate_ss_population(5, seed=1)
         engine = _build_test_engine(if_profiles=profiles)
@@ -1047,6 +1196,7 @@ class TestBuildSimilarityMatrix:
 # 10. Regression / Stability — deterministic under fixed seed
 # ============================================================================
 
+
 class TestRegression:
     """Ensure the engine produces deterministic, reproducible scores."""
 
@@ -1058,7 +1208,7 @@ class TestRegression:
         r1 = engine1.query(1, "SS", 2024)
         r2 = engine2.query(1, "SS", 2024)
         assert len(r1) == len(r2)
-        for a, b in zip(r1, r2):
+        for a, b in zip(r1, r2, strict=False):
             assert a.player_id == b.player_id
             assert a.season == b.season
             assert a.score == pytest.approx(b.score, abs=1e-15)
@@ -1091,8 +1241,8 @@ class TestRegression:
 # 11. Edge cases
 # ============================================================================
 
-class TestEdgeCases:
 
+class TestEdgeCases:
     def test_single_profile_query_returns_empty(self):
         """Only one profile at a position → query returns empty (self excluded)."""
         p = _make_if_profile(player_id=1, position="3B")
@@ -1101,10 +1251,12 @@ class TestEdgeCases:
         assert results == []
 
     def test_two_profiles_one_result(self):
-        p1 = _make_if_profile(player_id=1, position="3B",
-                              range_vec=np.array([1.0, 2.0, 3.0, 4.0, 5.0]))
-        p2 = _make_if_profile(player_id=2, position="3B",
-                              range_vec=np.array([2.0, 3.0, 4.0, 5.0, 6.0]))
+        p1 = _make_if_profile(
+            player_id=1, position="3B", range_vec=np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        )
+        p2 = _make_if_profile(
+            player_id=2, position="3B", range_vec=np.array([2.0, 3.0, 4.0, 5.0, 6.0])
+        )
         engine = _build_test_engine(if_profiles=[p1, p2])
         results = engine.query(1, "3B", 2024)
         assert len(results) == 1
@@ -1125,11 +1277,14 @@ class TestEdgeCases:
         """When all profiles are identical, all scores should be very high."""
         vec = np.array([2.0, 1.0, 0.5, -1.0, 3.0])
         profiles = [
-            _make_of_profile(player_id=i, range_vec=vec.copy(),
-                             error_vec=np.array([0.02, 0.01]),
-                             arm_vec=np.array([0.5, 0.1, 0.4, 0.5]),
-                             star_vec=np.array([0.1, 0.3, 0.95]),
-                             sample_bb=400)
+            _make_of_profile(
+                player_id=i,
+                range_vec=vec.copy(),
+                error_vec=np.array([0.02, 0.01]),
+                arm_vec=np.array([0.5, 0.1, 0.4, 0.5]),
+                star_vec=np.array([0.1, 0.3, 0.95]),
+                sample_bb=400,
+            )
             for i in range(10, 15)
         ]
         engine = _build_test_engine(of_profiles=profiles)
@@ -1151,6 +1306,7 @@ class TestEdgeCases:
 # 12. Score Composition Verification
 # ============================================================================
 
+
 class TestScoreComposition:
     """Verify that the composite score correctly combines sub-scores."""
 
@@ -1168,7 +1324,7 @@ class TestScoreComposition:
         # The composite should be a confidence-discounted weighted average
         # of sub-scores. Verify it's between the min and max sub-scores
         # (after confidence discount).
-        sub_min = min(r.range_score, r.secondary_score, r.tertiary_score, r.quaternary_score)
+        min(r.range_score, r.secondary_score, r.tertiary_score, r.quaternary_score)
         sub_max = max(r.range_score, r.secondary_score, r.tertiary_score, r.quaternary_score)
         # After confidence discount, composite <= sub_max
         assert r.score <= sub_max + 0.01  # small tolerance for rounding
@@ -1185,18 +1341,30 @@ class TestScoreComposition:
                     if is_if:
                         is_mid = pos in ("2B", "SS")
                         dp_dim = len(IF_DP_FEATURES) + (len(IF_PIVOT_FEATURES) if is_mid else 0)
-                        all_profiles.append(_make_if_profile(
-                            player_id=pid, position=pos, season=season,
-                            sample_bb=int(rng.integers(80, 400)),
-                            range_vec=rng.normal(0, 2, len(IF_RANGE_FEATURES)).astype(np.float64),
-                            dp_vec=rng.normal(0, 1, dp_dim).astype(np.float64),
-                        ))
+                        all_profiles.append(
+                            _make_if_profile(
+                                player_id=pid,
+                                position=pos,
+                                season=season,
+                                sample_bb=int(rng.integers(80, 400)),
+                                range_vec=rng.normal(0, 2, len(IF_RANGE_FEATURES)).astype(
+                                    np.float64
+                                ),
+                                dp_vec=rng.normal(0, 1, dp_dim).astype(np.float64),
+                            )
+                        )
                     else:
-                        all_profiles.append(_make_of_profile(
-                            player_id=pid, position=pos, season=season,
-                            sample_bb=int(rng.integers(80, 400)),
-                            range_vec=rng.normal(0, 2, len(OF_RANGE_FEATURES)).astype(np.float64),
-                        ))
+                        all_profiles.append(
+                            _make_of_profile(
+                                player_id=pid,
+                                position=pos,
+                                season=season,
+                                sample_bb=int(rng.integers(80, 400)),
+                                range_vec=rng.normal(0, 2, len(OF_RANGE_FEATURES)).astype(
+                                    np.float64
+                                ),
+                            )
+                        )
                 pid += 1
 
         engine = _build_test_engine(

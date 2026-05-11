@@ -63,7 +63,6 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 import duckdb
 import numpy as np
@@ -91,40 +90,40 @@ log = logging.getLogger("baserunner_steal_similarity")
 # How frequently and aggressively the runner initiates steal attempts.
 TENDENCY_FEATURES = [
     # feature_name,                 reliability_weight
-    ("steal_attempt_rate",          0.800),   # attempts / first_base_opps; stabilizes ~50 opps
-    ("steal_attempt_rate_2b",       0.500),   # 2B→3B steal attempt rate; sparser
-    ("lead_distance_tendency",      0.600),   # avg lead in feet (proxy: aggressive vs. conservative)
-    ("disengagement_response_rate", 0.400),   # how often runner re-sets after pitcher disengages
+    ("steal_attempt_rate", 0.800),  # attempts / first_base_opps; stabilizes ~50 opps
+    ("steal_attempt_rate_2b", 0.500),  # 2B→3B steal attempt rate; sparser
+    ("lead_distance_tendency", 0.600),  # avg lead in feet (proxy: aggressive vs. conservative)
+    ("disengagement_response_rate", 0.400),  # how often runner re-sets after pitcher disengages
 ]
 
 # --- Jump / First Step features ---
 # Quality of the initial burst off the base.  These are the biggest
 # discriminators for steal success independent of top-end sprint speed.
 JUMP_FEATURES = [
-    ("reaction_time_ms",            0.900),   # time from first-move to initial stride; most reliable
-    ("burst_distance_ft",           0.700),   # distance covered in first 1.0s of steal attempt
-    ("break_angle_deg",             0.500),   # sharpness of first-step angle toward target base
+    ("reaction_time_ms", 0.900),  # time from first-move to initial stride; most reliable
+    ("burst_distance_ft", 0.700),  # distance covered in first 1.0s of steal attempt
+    ("break_angle_deg", 0.500),  # sharpness of first-step angle toward target base
 ]
 
 # --- Success / Efficiency features ---
 # Given the runner attempted, how often did he arrive safe?
 SUCCESS_FEATURES = [
-    ("steal_success_rate",          0.700),   # overall success rate
-    ("steal_success_rate_2b",       0.400),   # 2B→3B success; sparser, noisier
+    ("steal_success_rate", 0.700),  # overall success rate
+    ("steal_success_rate_2b", 0.400),  # 2B→3B success; sparser, noisier
 ]
 
 # --- Sub-score weights (sum to 1.0) ---
 WEIGHT_TENDENCY = 0.40
-WEIGHT_JUMP     = 0.35
-WEIGHT_SUCCESS  = 0.25
+WEIGHT_JUMP = 0.35
+WEIGHT_SUCCESS = 0.25
 _TOTAL = WEIGHT_TENDENCY + WEIGHT_JUMP + WEIGHT_SUCCESS
 assert abs(_TOTAL - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
 # RBF bandwidth parameters (gamma = 1 / (2σ²))
 # Calibrated to keep median similarity score near 0.50 across the population.
 RBF_SIGMA_TENDENCY = 1.0500
-RBF_SIGMA_JUMP     = 0.9800
-RBF_SIGMA_SUCCESS  = 1.0200
+RBF_SIGMA_JUMP = 0.9800
+RBF_SIGMA_SUCCESS = 1.0200
 
 # Empirical Bayes shrinkage: at EB_N_PRIOR steal attempts, α = 0.5
 EB_N_PRIOR = 20
@@ -137,18 +136,20 @@ MIN_STEAL_ATTEMPTS = 10
 # Data Structures
 # ============================================================================
 
+
 @dataclass(slots=True)
 class BaserunnerStealProfile:
     """Complete baserunner-season profile for stolen-base similarity scoring."""
+
     player_id: int
     season: int
-    sample_steal_attempts: int       # total steal attempts (1B→2B + 2B→3B)
-    sample_first_base_opps: int      # first-base opportunities (denominator for tendency)
+    sample_steal_attempts: int  # total steal attempts (1B→2B + 2B→3B)
+    sample_first_base_opps: int  # first-base opportunities (denominator for tendency)
 
     # Feature vectors (raw — normalized at query time)
-    tendency_vec: NDArray[np.float64]   # shape (len(TENDENCY_FEATURES),)
-    jump_vec: NDArray[np.float64]       # shape (len(JUMP_FEATURES),)
-    success_vec: NDArray[np.float64]    # shape (len(SUCCESS_FEATURES),)
+    tendency_vec: NDArray[np.float64]  # shape (len(TENDENCY_FEATURES),)
+    jump_vec: NDArray[np.float64]  # shape (len(JUMP_FEATURES),)
+    success_vec: NDArray[np.float64]  # shape (len(SUCCESS_FEATURES),)
 
     # Empirical Bayes
     eb_alpha: float = 1.0
@@ -158,9 +159,10 @@ class BaserunnerStealProfile:
 @dataclass(frozen=True, slots=True)
 class SimilarityResult:
     """One entry in the similarity query output."""
+
     player_id: int
     season: int
-    score: float                        # composite [0, 1], 1 = identical
+    score: float  # composite [0, 1], 1 = identical
     tendency_score: float
     jump_score: float
     success_score: float
@@ -170,6 +172,7 @@ class SimilarityResult:
 # ============================================================================
 # Reliability-Weighted RBF Kernel
 # ============================================================================
+
 
 class WeightedRBFSimilarity:
     """
@@ -182,10 +185,12 @@ class WeightedRBFSimilarity:
 
     def __init__(self, sigma: float, reliability_weights: NDArray[np.float64]) -> None:
         self.sigma = sigma
-        self.gamma = 1.0 / (2.0 * sigma ** 2)
+        self.gamma = 1.0 / (2.0 * sigma**2)
         total = reliability_weights.sum()
-        self.weights = reliability_weights / total if total > 0 else (
-            np.ones_like(reliability_weights) / len(reliability_weights)
+        self.weights = (
+            reliability_weights / total
+            if total > 0
+            else (np.ones_like(reliability_weights) / len(reliability_weights))
         )
 
     def score(self, x: NDArray, y: NDArray) -> float:
@@ -194,13 +199,14 @@ class WeightedRBFSimilarity:
 
     def score_batch(self, query: NDArray, candidates: NDArray) -> NDArray[np.float64]:
         diff = np.nan_to_num(candidates - query[np.newaxis, :], nan=0.0)
-        dist_sq = np.sum(self.weights[np.newaxis, :] * diff ** 2, axis=1)
+        dist_sq = np.sum(self.weights[np.newaxis, :] * diff**2, axis=1)
         return np.exp(-self.gamma * dist_sq)
 
 
 # ============================================================================
 # Empirical Bayes Shrinkage
 # ============================================================================
+
 
 class EmpiricalBayesShrinkage:
     def __init__(self, n_prior: int = EB_N_PRIOR) -> None:
@@ -223,6 +229,7 @@ class EmpiricalBayesShrinkage:
 # ============================================================================
 # Feature Normalization
 # ============================================================================
+
 
 @dataclass(slots=True)
 class FeatureNormalizer:
@@ -267,6 +274,7 @@ class FeatureNormalizer:
 # Scoring Partition
 # ============================================================================
 
+
 class StealPartition:
     """Vectorized batch scoring across all steal profiles."""
 
@@ -309,9 +317,7 @@ class StealPartition:
         succ_scores = succ_rbf.score_batch(q_succ, self._success_mat)
 
         composite = (
-            WEIGHT_TENDENCY * tend_scores
-            + WEIGHT_JUMP * jump_scores
-            + WEIGHT_SUCCESS * succ_scores
+            WEIGHT_TENDENCY * tend_scores + WEIGHT_JUMP * jump_scores + WEIGHT_SUCCESS * succ_scores
         )
 
         pair_conf = np.minimum(query.eb_alpha, self._eb_alphas)
@@ -336,6 +342,7 @@ class StealPartition:
 # Main Engine
 # ============================================================================
 
+
 class BaserunnerStealSimilarityEngine:
     """
     Baserunner Stolen-Base Similarity Engine (Step 2.5).
@@ -354,7 +361,9 @@ class BaserunnerStealSimilarityEngine:
         self._duckdb_path = duckdb_path
         self._profiles: dict[tuple[int, int], BaserunnerStealProfile] = {}
         self._league_avg: dict[str, dict[int, NDArray]] = {
-            "tendency": {}, "jump": {}, "success": {},
+            "tendency": {},
+            "jump": {},
+            "success": {},
         }
         self._normalizer = FeatureNormalizer()
         self._shrinkage = EmpiricalBayesShrinkage()
@@ -394,11 +403,14 @@ class BaserunnerStealSimilarityEngine:
 
         log.info(
             "BaserunnerStealSimilarityEngine built: %d profiles in %.2fs.",
-            len(self._profiles), time.time() - t0,
+            len(self._profiles),
+            time.time() - t0,
         )
 
     def _load_league_averages(
-        self, conn: duckdb.DuckDBPyConnection, seasons: list[int] | None,
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        seasons: list[int] | None,
     ) -> None:
         try:
             sf = ""
@@ -415,6 +427,7 @@ class BaserunnerStealSimilarityEngine:
             return
 
         import json
+
         for season, pj_raw in rows:
             pj = json.loads(pj_raw) if isinstance(pj_raw, str) else pj_raw
             self._league_avg["tendency"][season] = np.array(
@@ -429,7 +442,9 @@ class BaserunnerStealSimilarityEngine:
         log.info("Loaded steal league averages for %d seasons.", len(rows))
 
     def _load_profiles(
-        self, conn: duckdb.DuckDBPyConnection, seasons: list[int] | None,
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        seasons: list[int] | None,
     ) -> None:
         sf = ""
         if seasons:
@@ -463,10 +478,19 @@ class BaserunnerStealSimilarityEngine:
 
         for row in rows:
             (
-                pid, season, n_attempts, n_opps,
-                sar, sar2, lead, diseng,
-                react, burst, angle,
-                suc, suc2,
+                pid,
+                season,
+                n_attempts,
+                n_opps,
+                sar,
+                sar2,
+                lead,
+                diseng,
+                react,
+                burst,
+                angle,
+                suc,
+                suc2,
                 below_min,
             ) = row
 
@@ -495,9 +519,15 @@ class BaserunnerStealSimilarityEngine:
             ]:
                 avg = self._league_avg[group].get(s)
                 if avg is not None:
-                    setattr(p, attr, self._shrinkage.shrink(
-                        getattr(p, attr), avg, p.sample_steal_attempts,
-                    ))
+                    setattr(
+                        p,
+                        attr,
+                        self._shrinkage.shrink(
+                            getattr(p, attr),
+                            avg,
+                            p.sample_steal_attempts,
+                        ),
+                    )
 
     # ------------------------------------------------------------------
     # Query
@@ -522,13 +552,17 @@ class BaserunnerStealSimilarityEngine:
         if profile is None:
             log.warning(
                 "Steal runner %d season %d not found. Ensure build() was called.",
-                player_id, season,
+                player_id,
+                season,
             )
             return []
 
         results = self._partition.score_all(
-            profile, self._normalizer,
-            self._tend_rbf, self._jump_rbf, self._succ_rbf,
+            profile,
+            self._normalizer,
+            self._tend_rbf,
+            self._jump_rbf,
+            self._succ_rbf,
         )
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:n] if n is not None else results
@@ -557,9 +591,7 @@ class BaserunnerStealSimilarityEngine:
             norm.normalize_success(pa.success_vec),
             norm.normalize_success(pb.success_vec),
         )
-        composite = (
-            WEIGHT_TENDENCY * tend_s + WEIGHT_JUMP * jump_s + WEIGHT_SUCCESS * succ_s
-        )
+        composite = WEIGHT_TENDENCY * tend_s + WEIGHT_JUMP * jump_s + WEIGHT_SUCCESS * succ_s
         composite = float(np.clip(composite * np.sqrt(min(pa.eb_alpha, pb.eb_alpha)), 0.0, 1.0))
 
         return SimilarityResult(
@@ -590,6 +622,7 @@ class BaserunnerStealSimilarityEngine:
 # ============================================================================
 # Convenience: Batch Similarity Matrix
 # ============================================================================
+
 
 def build_similarity_matrix(
     engine: BaserunnerStealSimilarityEngine,

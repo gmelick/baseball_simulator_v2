@@ -25,8 +25,6 @@ import sys
 from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 # ---------------------------------------------------------------------------
 # Ensure repo root is on sys.path
 # ---------------------------------------------------------------------------
@@ -35,7 +33,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 _PG_SCHEMA_PATH = _ROOT / "db" / "schemas" / "01_postgres_schema.sql"
-_MIG_DIR        = _ROOT / "db" / "migrations" / "versions"
+_MIG_DIR = _ROOT / "db" / "migrations" / "versions"
 
 
 def _read(p: pathlib.Path) -> str:
@@ -46,6 +44,7 @@ def _read(p: pathlib.Path) -> str:
 # SIM-092 — Deduplicate raw.game_odds via odds_hash
 # ===========================================================================
 
+
 class TestSim092OddsDedup:
     """odds_hash column + partial unique index + ON CONFLICT DO NOTHING."""
 
@@ -55,7 +54,8 @@ class TestSim092OddsDedup:
         sql = _read(_PG_SCHEMA_PATH)
         match = re.search(
             r"CREATE TABLE IF NOT EXISTS raw\.game_odds\s*\((.*?)\n\);",
-            sql, re.DOTALL,
+            sql,
+            re.DOTALL,
         )
         assert match, "raw.game_odds CREATE TABLE block missing"
         body = match.group(1)
@@ -69,7 +69,8 @@ class TestSim092OddsDedup:
             r"CREATE\s+UNIQUE\s+INDEX\s+(IF\s+NOT\s+EXISTS\s+)?idx_game_odds_dedup"
             r".*?ON\s+raw\.game_odds\s*\(\s*game_pk\s*,\s*source\s*,\s*odds_hash\s*\)"
             r"\s*WHERE\s+odds_hash\s+IS\s+NOT\s+NULL",
-            sql, re.DOTALL | re.IGNORECASE,
+            sql,
+            re.DOTALL | re.IGNORECASE,
         ), "SIM-092: idx_game_odds_dedup partial unique index missing or wrong shape"
 
     def test_migration_0010_creates_column_and_index(self) -> None:
@@ -83,25 +84,46 @@ class TestSim092OddsDedup:
 
     def test_odds_hash_is_deterministic(self) -> None:
         from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
-        h1 = LiveIngestionPipeline._odds_hash({
-            "home_ml": -150, "away_ml": 130, "home_spread": -1.5,
-            "total_line": 8.5, "book": "consensus", "line_type": "current",
-            "market_type": "moneyline", "is_sharp_book": False,
-        })
-        h2 = LiveIngestionPipeline._odds_hash({
-            "home_ml": -150, "away_ml": 130, "home_spread": -1.5,
-            "total_line": 8.5, "book": "consensus", "line_type": "current",
-            "market_type": "moneyline", "is_sharp_book": False,
-        })
+
+        h1 = LiveIngestionPipeline._odds_hash(
+            {
+                "home_ml": -150,
+                "away_ml": 130,
+                "home_spread": -1.5,
+                "total_line": 8.5,
+                "book": "consensus",
+                "line_type": "current",
+                "market_type": "moneyline",
+                "is_sharp_book": False,
+            }
+        )
+        h2 = LiveIngestionPipeline._odds_hash(
+            {
+                "home_ml": -150,
+                "away_ml": 130,
+                "home_spread": -1.5,
+                "total_line": 8.5,
+                "book": "consensus",
+                "line_type": "current",
+                "market_type": "moneyline",
+                "is_sharp_book": False,
+            }
+        )
         assert h1 == h2, "Same payload must produce the same hash"
         assert len(h1) == 64, "SHA-256 hex digest must be 64 chars"
 
     def test_odds_hash_changes_when_line_moves(self) -> None:
         from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+
         base = {
-            "home_ml": -150, "away_ml": 130, "home_spread": -1.5,
-            "total_line": 8.5, "book": "consensus", "line_type": "current",
-            "market_type": "moneyline", "is_sharp_book": False,
+            "home_ml": -150,
+            "away_ml": 130,
+            "home_spread": -1.5,
+            "total_line": 8.5,
+            "book": "consensus",
+            "line_type": "current",
+            "market_type": "moneyline",
+            "is_sharp_book": False,
         }
         h0 = LiveIngestionPipeline._odds_hash(base)
         h1 = LiveIngestionPipeline._odds_hash({**base, "home_ml": -160})
@@ -110,6 +132,7 @@ class TestSim092OddsDedup:
     def test_odds_hash_normalizes_float_precision(self) -> None:
         """1.5 and 1.50 must hash identically — same line."""
         from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+
         h1 = LiveIngestionPipeline._odds_hash({"home_spread": 1.5})
         h2 = LiveIngestionPipeline._odds_hash({"home_spread": 1.50})
         assert h1 == h2
@@ -117,28 +140,45 @@ class TestSim092OddsDedup:
     def test_odds_hash_independent_of_dict_order(self) -> None:
         """Iteration order of the source dict must not change the hash."""
         from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
-        a = LiveIngestionPipeline._odds_hash({
-            "home_ml": -150, "away_ml": 130, "total_line": 8.5,
-        })
-        b = LiveIngestionPipeline._odds_hash({
-            "total_line": 8.5, "away_ml": 130, "home_ml": -150,
-        })
+
+        a = LiveIngestionPipeline._odds_hash(
+            {
+                "home_ml": -150,
+                "away_ml": 130,
+                "total_line": 8.5,
+            }
+        )
+        b = LiveIngestionPipeline._odds_hash(
+            {
+                "total_line": 8.5,
+                "away_ml": 130,
+                "home_ml": -150,
+            }
+        )
         assert a == b
 
     def test_odds_hash_differs_by_book(self) -> None:
         """Two books at the same price are still distinct quotes."""
         from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
-        h_consensus = LiveIngestionPipeline._odds_hash({
-            "home_ml": -150, "book": "consensus",
-        })
-        h_pinnacle = LiveIngestionPipeline._odds_hash({
-            "home_ml": -150, "book": "pinnacle",
-        })
+
+        h_consensus = LiveIngestionPipeline._odds_hash(
+            {
+                "home_ml": -150,
+                "book": "consensus",
+            }
+        )
+        h_pinnacle = LiveIngestionPipeline._odds_hash(
+            {
+                "home_ml": -150,
+                "book": "pinnacle",
+            }
+        )
         assert h_consensus != h_pinnacle
 
     def test_odds_hash_handles_missing_keys_consistently(self) -> None:
         """A payload missing every key still hashes — to a stable value."""
         from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+
         h1 = LiveIngestionPipeline._odds_hash({})
         h2 = LiveIngestionPipeline._odds_hash({})
         assert h1 == h2 and len(h1) == 64
@@ -163,10 +203,15 @@ class TestSim092OddsDedup:
             "line_type": "current",
             "market_type": "moneyline",
             "is_sharp_book": False,
-            "home_ml": -150, "away_ml": 130,
-            "home_spread": -1.5, "home_spread_ml": -110,
-            "away_spread":  1.5, "away_spread_ml": -110,
-            "total_line": 8.5, "over_ml": -110, "under_ml": -110,
+            "home_ml": -150,
+            "away_ml": 130,
+            "home_spread": -1.5,
+            "home_spread_ml": -110,
+            "away_spread": 1.5,
+            "away_spread_ml": -110,
+            "total_line": 8.5,
+            "over_ml": -110,
+            "under_ml": -110,
         }
 
         asyncio.run(pipeline._persist_odds(745001, odds_payload))
@@ -177,9 +222,7 @@ class TestSim092OddsDedup:
         assert "ON CONFLICT" in sql_text and "DO NOTHING" in sql_text, (
             "SIM-092: _persist_odds must use ON CONFLICT … DO NOTHING"
         )
-        assert "odds_hash" in sql_text, (
-            "SIM-092: INSERT must include odds_hash column"
-        )
+        assert "odds_hash" in sql_text, "SIM-092: INSERT must include odds_hash column"
         # Last positional arg is the hash; must be a 64-char hex string.
         actual_hash = call.args[-1]
         assert isinstance(actual_hash, str) and len(actual_hash) == 64
@@ -212,6 +255,7 @@ class TestSim092OddsDedup:
 # SIM-093 — raw.etl_errors table + ETL wiring + reprocess_errored_games()
 # ===========================================================================
 
+
 class TestSim093EtlErrorsTable:
     """raw.etl_errors must exist in canonical schema and have the right shape."""
 
@@ -219,7 +263,8 @@ class TestSim093EtlErrorsTable:
         sql = _read(_PG_SCHEMA_PATH)
         match = re.search(
             r"CREATE TABLE IF NOT EXISTS raw\.etl_errors\s*\((.*?)\);",
-            sql, re.DOTALL,
+            sql,
+            re.DOTALL,
         )
         assert match, "SIM-093: raw.etl_errors CREATE TABLE missing"
         body = match.group(1)
@@ -237,7 +282,8 @@ class TestSim093EtlErrorsTable:
             )
         assert re.search(
             r"CHECK\s*\(\s*error_type\s+IN\s*\(\s*'HARD'\s*,\s*'WARN'\s*\)\s*\)",
-            body, re.IGNORECASE,
+            body,
+            re.IGNORECASE,
         ), "SIM-093: error_type CHECK constraint missing or malformed"
 
     def test_canonical_schema_has_etl_errors_indexes(self) -> None:
@@ -245,7 +291,8 @@ class TestSim093EtlErrorsTable:
         assert re.search(
             r"CREATE\s+INDEX\s+(IF\s+NOT\s+EXISTS\s+)?idx_etl_errors_game_pk"
             r"\s+ON\s+raw\.etl_errors\s*\(\s*game_pk\s*,\s*created_at\s*\)",
-            sql, re.IGNORECASE,
+            sql,
+            re.IGNORECASE,
         ), "SIM-093: idx_etl_errors_game_pk(game_pk, created_at) missing"
 
     def test_migration_0011_creates_table(self) -> None:
@@ -263,12 +310,14 @@ class TestSim093EtlErrorsTable:
 
     def test_loader_has_log_etl_errors_method(self) -> None:
         from pipeline.etl.etl_historical_loader import HistoricalDataLoader
+
         assert callable(getattr(HistoricalDataLoader, "_log_etl_errors", None)), (
             "SIM-093: HistoricalDataLoader._log_etl_errors() missing"
         )
 
     def test_loader_has_reprocess_errored_games_method(self) -> None:
         from pipeline.etl.etl_historical_loader import HistoricalDataLoader
+
         assert callable(getattr(HistoricalDataLoader, "reprocess_errored_games", None)), (
             "SIM-093: HistoricalDataLoader.reprocess_errored_games() missing"
         )
@@ -287,8 +336,10 @@ class TestSim093EtlErrorsTable:
         class _CtxManager:
             def __init__(self, target):
                 self.target = target
+
             def __enter__(self):
                 return self.target
+
             def __exit__(self, *a):
                 return False
 
@@ -296,10 +347,12 @@ class TestSim093EtlErrorsTable:
             def __init__(self):
                 self.mogrify_calls: list[tuple] = []
                 self.execute_calls: list[tuple] = []
+
             def mogrify(self, sql, params=None):
                 self.mogrify_calls.append((sql, params))
                 # Real psycopg2.extras.execute_batch joins these with b";"
                 return b"INSERT INTO raw.etl_errors VALUES ()"
+
             def execute(self, sql):
                 self.execute_calls.append((sql,))
 
@@ -307,8 +360,10 @@ class TestSim093EtlErrorsTable:
             def __init__(self):
                 self.cur = _StubCursor()
                 self.commit_count = 0
+
             def cursor(self):
                 return _CtxManager(self.cur)
+
             def commit(self):
                 self.commit_count += 1
 
@@ -338,11 +393,14 @@ class TestSim093EtlErrorsTable:
 
     def test_log_etl_errors_no_op_on_empty_input(self) -> None:
         from pipeline.etl.etl_historical_loader import HistoricalDataLoader
+
         loader = HistoricalDataLoader.__new__(HistoricalDataLoader)
-        loader._get_conn = MagicMock(side_effect=AssertionError(
-            "SIM-093: _log_etl_errors must short-circuit on empty input — "
-            "it should never open a DB connection just to write zero rows."
-        ))
+        loader._get_conn = MagicMock(
+            side_effect=AssertionError(
+                "SIM-093: _log_etl_errors must short-circuit on empty input — "
+                "it should never open a DB connection just to write zero rows."
+            )
+        )
         loader._log_etl_errors(745001, [])  # no AssertionError → pass
 
     def test_reprocess_errored_games_returns_distinct_game_pks(self) -> None:
@@ -379,47 +437,29 @@ class TestSim093EtlErrorsTable:
 # Migration chain integrity
 # ===========================================================================
 
+
 class TestMigrationChain:
     """The 0001 → 0011 chain must be unbroken."""
 
     def test_chain_unbroken(self) -> None:
         chain = {
-            "0001_initial_schema.py":                              None,
-            "0002_sim082_lineup_state_live_game_unique_index.py":  "0001",
-            "0003_sim083_etl_freshness_and_game_odds_to_schema.py":"0002",
+            "0001_initial_schema.py": None,
+            "0002_sim082_lineup_state_live_game_unique_index.py": "0001",
+            "0003_sim083_etl_freshness_and_game_odds_to_schema.py": "0002",
             "0004_sim134_prop_odds_prop_stat_column_and_index.py": "0003",
-            "0005_sim085_pitches_situation_index.py":              "0004",
-            "0006_sim086_games_venue_id_nullable.py":              "0005",
-            "0007_sim087_release_speed_threshold.py":              "0006",
-            "0008_sim088_drop_pitches_pitch_type_index.py":        "0007",
-            "0009_sim089_pitches_pitcher_season_clean_index.py":   "0008",
-            "0010_sim092_game_odds_dedup.py":                      "0009",
-            "0011_sim093_etl_errors_table.py":                     "0010",
+            "0005_sim085_pitches_situation_index.py": "0004",
+            "0006_sim086_games_venue_id_nullable.py": "0005",
+            "0007_sim087_release_speed_threshold.py": "0006",
+            "0008_sim088_drop_pitches_pitch_type_index.py": "0007",
+            "0009_sim089_pitches_pitcher_season_clean_index.py": "0008",
+            "0010_sim092_game_odds_dedup.py": "0009",
+            "0011_sim093_etl_errors_table.py": "0010",
         }
         for filename, expected_parent in chain.items():
             mig = _read(_MIG_DIR / filename)
             if expected_parent is None:
-                assert "down_revision = None" in mig, (
-                    f"{filename}: expected down_revision = None"
-                )
+                assert "down_revision = None" in mig, f"{filename}: expected down_revision = None"
             else:
                 assert f'down_revision = "{expected_parent}"' in mig, (
-                    f"{filename}: expected down_revision = \"{expected_parent}\""
-                )
-            "0006_sim086_games_venue_id_nullable.py":              "0005",
-            "0007_sim087_release_speed_threshold.py":              "0006",
-            "0008_sim088_drop_pitches_pitch_type_index.py":        "0007",
-            "0009_sim089_pitches_pitcher_season_clean_index.py":   "0008",
-            "0010_sim092_game_odds_dedup.py":                      "0009",
-            "0011_sim093_etl_errors_table.py":                     "0010",
-        }
-        for filename, expected_parent in chain.items():
-            mig = _read(_MIG_DIR / filename)
-            if expected_parent is None:
-                assert "down_revision = None" in mig, (
-                    f"{filename}: expected down_revision = None"
-                )
-            else:
-                assert f'down_revision = "{expected_parent}"' in mig, (
-                    f"{filename}: expected down_revision = \"{expected_parent}\""
+                    f'{filename}: expected down_revision = "{expected_parent}"'
                 )

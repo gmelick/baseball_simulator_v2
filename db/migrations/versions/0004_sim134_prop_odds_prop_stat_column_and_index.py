@@ -35,22 +35,19 @@ Deferred:
 """
 
 from alembic import op
-import sqlalchemy as sa
 
 # revision identifiers
-revision      = "0004"
+revision = "0004"
 down_revision = "0003"
 branch_labels = None
-depends_on    = None
+depends_on = None
 
 
 def upgrade() -> None:
     # ------------------------------------------------------------------
     # 1. Rename column prop_type → prop_stat
     # ------------------------------------------------------------------
-    op.execute(
-        "ALTER TABLE raw.prop_odds RENAME COLUMN prop_type TO prop_stat"
-    )
+    op.execute("ALTER TABLE raw.prop_odds RENAME COLUMN prop_type TO prop_stat")
 
     # ------------------------------------------------------------------
     # 2. Add CHECK constraint on prop_stat
@@ -84,9 +81,7 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
     # 3. Drop the weak (game_pk, player_id) index from migration 0003
     # ------------------------------------------------------------------
-    op.execute(
-        "DROP INDEX IF EXISTS raw.idx_prop_odds_game_player"
-    )
+    op.execute("DROP INDEX IF EXISTS raw.idx_prop_odds_game_player")
 
     # ------------------------------------------------------------------
     # 4. Create compound index for per-player-per-stat time-series queries
@@ -102,9 +97,7 @@ def downgrade() -> None:
     # ------------------------------------------------------------------
     # 4 (reverse). Drop compound index
     # ------------------------------------------------------------------
-    op.execute(
-        "DROP INDEX IF EXISTS raw.idx_prop_odds_game_player"
-    )
+    op.execute("DROP INDEX IF EXISTS raw.idx_prop_odds_game_player")
 
     # ------------------------------------------------------------------
     # 3 (reverse). Re-create the old weak index
@@ -117,13 +110,9 @@ def downgrade() -> None:
     # ------------------------------------------------------------------
     # 2 (reverse). Drop CHECK constraint
     # ------------------------------------------------------------------
-    op.execute(
-        "ALTER TABLE raw.prop_odds DROP CONSTRAINT IF EXISTS ck_prop_odds_prop_stat"
-    )
+    op.execute("ALTER TABLE raw.prop_odds DROP CONSTRAINT IF EXISTS ck_prop_odds_prop_stat")
 
     # ------------------------------------------------------------------
     # 1 (reverse). Rename column prop_stat → prop_type
     # ------------------------------------------------------------------
-    op.execute(
-        "ALTER TABLE raw.prop_odds RENAME COLUMN prop_stat TO prop_type"
-    )
+    op.execute("ALTER TABLE raw.prop_odds RENAME COLUMN prop_stat TO prop_type")

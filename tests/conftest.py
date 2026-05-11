@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Shared lightweight fixtures
 # ---------------------------------------------------------------------------
@@ -27,6 +26,6 @@ def sample_player_ids() -> dict[str, list[int]]:
     """A small set of fake player IDs for unit test data construction."""
     return {
         "pitchers": [100001, 100002, 100003],
-        "batters":  [200001, 200002, 200003, 200004, 200005, 200006, 200007, 200008, 200009],
+        "batters": [200001, 200002, 200003, 200004, 200005, 200006, 200007, 200008, 200009],
         "fielders": [200001, 200002, 200003],
     }

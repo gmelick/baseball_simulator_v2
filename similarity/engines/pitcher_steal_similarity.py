@@ -68,7 +68,6 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 import duckdb
 import numpy as np
@@ -97,39 +96,39 @@ log = logging.getLogger("pitcher_steal_similarity")
 # Lower time = less steal opportunity.
 DELIVERY_FEATURES = [
     # feature_name,                   reliability_weight
-    ("delivery_time_to_plate_s",       1.000),   # set-position time 1st move → receive; primary signal
-    ("stretch_delivery_time_s",        0.800),   # stretch-only subset; most situationally relevant
-    ("lhp_first_to_home_time_s",       0.700),   # LHP: 1st→home time (if LHP, else 0 or league avg)
-    ("quick_pitch_rate",               0.400),   # % of pitches in stretch thrown with minimal delay
+    ("delivery_time_to_plate_s", 1.000),  # set-position time 1st move → receive; primary signal
+    ("stretch_delivery_time_s", 0.800),  # stretch-only subset; most situationally relevant
+    ("lhp_first_to_home_time_s", 0.700),  # LHP: 1st→home time (if LHP, else 0 or league avg)
+    ("quick_pitch_rate", 0.400),  # % of pitches in stretch thrown with minimal delay
 ]
 
 # --- Pickoff / Disengagement features ---
 # How aggressively the pitcher challenges baserunners.
 PICKOFF_FEATURES = [
-    ("disengagement_rate_per_pa",      0.800),   # stepoffs + disengagements / PA with runner on 1B
-    ("pickoff_attempt_rate",           0.700),   # actual throws to base per baserunner event
-    ("pickoff_success_rate",           0.500),   # pickoffs recorded / pickoff attempts (noisier)
-    ("slide_step_usage_rate",          0.600),   # % stretch pitches thrown from slide step
+    ("disengagement_rate_per_pa", 0.800),  # stepoffs + disengagements / PA with runner on 1B
+    ("pickoff_attempt_rate", 0.700),  # actual throws to base per baserunner event
+    ("pickoff_success_rate", 0.500),  # pickoffs recorded / pickoff attempts (noisier)
+    ("slide_step_usage_rate", 0.600),  # % stretch pitches thrown from slide step
 ]
 
 # --- Steal Prevention Outcome features ---
 OUTCOME_FEATURES = [
-    ("sb_against_per_9",               0.700),   # stolen bases allowed per 9 innings pitched
-    ("cs_rate_forced",                 0.500),   # CS rate when runners challenged this pitcher
-    ("steal_attempt_rate_allowed",     0.600),   # how often runners even tried against this pitcher
+    ("sb_against_per_9", 0.700),  # stolen bases allowed per 9 innings pitched
+    ("cs_rate_forced", 0.500),  # CS rate when runners challenged this pitcher
+    ("steal_attempt_rate_allowed", 0.600),  # how often runners even tried against this pitcher
 ]
 
 # --- Sub-score weights (sum to 1.0) ---
 WEIGHT_DELIVERY = 0.50
-WEIGHT_PICKOFF  = 0.30
-WEIGHT_OUTCOME  = 0.20
+WEIGHT_PICKOFF = 0.30
+WEIGHT_OUTCOME = 0.20
 _TOTAL = WEIGHT_DELIVERY + WEIGHT_PICKOFF + WEIGHT_OUTCOME
 assert abs(_TOTAL - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
 # RBF bandwidth parameters
 RBF_SIGMA_DELIVERY = 0.9000
-RBF_SIGMA_PICKOFF  = 1.0200
-RBF_SIGMA_OUTCOME  = 1.1000
+RBF_SIGMA_PICKOFF = 1.0200
+RBF_SIGMA_OUTCOME = 1.1000
 
 # EB_N_PRIOR — holds runners well stabilizes by ~80 baserunner events
 EB_N_PRIOR = 25
@@ -142,19 +141,21 @@ MIN_BASERUNNER_EVENTS = 30
 # Data Structures
 # ============================================================================
 
+
 @dataclass(slots=True)
 class PitcherStealProfile:
     """Pitcher-season profile for steal-prevention similarity scoring."""
+
     pitcher_id: int
     season: int
-    throws: str                          # "L" or "R"
-    sample_baserunner_events: int        # PA with runner on base (denominator)
-    sample_steal_attempts_against: int   # steal attempts against this pitcher
+    throws: str  # "L" or "R"
+    sample_baserunner_events: int  # PA with runner on base (denominator)
+    sample_steal_attempts_against: int  # steal attempts against this pitcher
 
     # Feature vectors (raw — normalized at query time)
-    delivery_vec: NDArray[np.float64]    # shape (len(DELIVERY_FEATURES),)
-    pickoff_vec: NDArray[np.float64]     # shape (len(PICKOFF_FEATURES),)
-    outcome_vec: NDArray[np.float64]     # shape (len(OUTCOME_FEATURES),)
+    delivery_vec: NDArray[np.float64]  # shape (len(DELIVERY_FEATURES),)
+    pickoff_vec: NDArray[np.float64]  # shape (len(PICKOFF_FEATURES),)
+    outcome_vec: NDArray[np.float64]  # shape (len(OUTCOME_FEATURES),)
 
     # Empirical Bayes
     eb_alpha: float = 1.0
@@ -164,6 +165,7 @@ class PitcherStealProfile:
 @dataclass(frozen=True, slots=True)
 class SimilarityResult:
     """One entry in the similarity query output."""
+
     pitcher_id: int
     season: int
     throws: str
@@ -178,13 +180,16 @@ class SimilarityResult:
 # WeightedRBFSimilarity, EmpiricalBayesShrinkage, FeatureNormalizer
 # ============================================================================
 
+
 class WeightedRBFSimilarity:
     def __init__(self, sigma: float, reliability_weights: NDArray[np.float64]) -> None:
         self.sigma = sigma
-        self.gamma = 1.0 / (2.0 * sigma ** 2)
+        self.gamma = 1.0 / (2.0 * sigma**2)
         total = reliability_weights.sum()
-        self.weights = reliability_weights / total if total > 0 else (
-            np.ones_like(reliability_weights) / len(reliability_weights)
+        self.weights = (
+            reliability_weights / total
+            if total > 0
+            else (np.ones_like(reliability_weights) / len(reliability_weights))
         )
 
     def score(self, x: NDArray, y: NDArray) -> float:
@@ -193,7 +198,7 @@ class WeightedRBFSimilarity:
 
     def score_batch(self, query: NDArray, candidates: NDArray) -> NDArray[np.float64]:
         diff = np.nan_to_num(candidates - query[np.newaxis, :], nan=0.0)
-        return np.exp(-self.gamma * np.sum(self.weights[np.newaxis, :] * diff ** 2, axis=1))
+        return np.exp(-self.gamma * np.sum(self.weights[np.newaxis, :] * diff**2, axis=1))
 
 
 class EmpiricalBayesShrinkage:
@@ -237,14 +242,20 @@ class FeatureNormalizer:
             return v
         return np.nan_to_num((v - m) / s, nan=0.0)
 
-    def normalize_delivery(self, v): return self._norm(v, self.delivery_mean, self.delivery_std)
-    def normalize_pickoff(self, v): return self._norm(v, self.pickoff_mean, self.pickoff_std)
-    def normalize_outcome(self, v): return self._norm(v, self.outcome_mean, self.outcome_std)
+    def normalize_delivery(self, v):
+        return self._norm(v, self.delivery_mean, self.delivery_std)
+
+    def normalize_pickoff(self, v):
+        return self._norm(v, self.pickoff_mean, self.pickoff_std)
+
+    def normalize_outcome(self, v):
+        return self._norm(v, self.outcome_mean, self.outcome_std)
 
 
 # ============================================================================
 # Scoring Partition
 # ============================================================================
+
 
 class PitcherStealPartition:
     def __init__(self) -> None:
@@ -305,6 +316,7 @@ class PitcherStealPartition:
 # Main Engine
 # ============================================================================
 
+
 class PitcherStealSimilarityEngine:
     """
     Pitcher Hold-Runner / Steal-Prevention Similarity Engine (Step 2.7).
@@ -319,7 +331,9 @@ class PitcherStealSimilarityEngine:
         self._duckdb_path = duckdb_path
         self._profiles: dict[tuple[int, int], PitcherStealProfile] = {}
         self._league_avg: dict[str, dict[int, NDArray]] = {
-            "delivery": {}, "pickoff": {}, "outcome": {},
+            "delivery": {},
+            "pickoff": {},
+            "outcome": {},
         }
         self._normalizer = FeatureNormalizer()
         self._shrinkage = EmpiricalBayesShrinkage()
@@ -351,7 +365,8 @@ class PitcherStealSimilarityEngine:
 
         log.info(
             "PitcherStealSimilarityEngine built: %d profiles in %.2fs.",
-            len(self._profiles), time.time() - t0,
+            len(self._profiles),
+            time.time() - t0,
         )
 
     def _load_league_averages(self, conn, seasons):
@@ -407,10 +422,22 @@ class PitcherStealSimilarityEngine:
 
         for row in rows:
             (
-                pid, season, throws, n_br_events, n_steal_against,
-                del_time, stretch_time, lhp_time, quick_pitch,
-                diseng, pickoff_rate, pickoff_sr, slide_step,
-                sb_per_9, cs_rate, steal_rate,
+                pid,
+                season,
+                throws,
+                n_br_events,
+                n_steal_against,
+                del_time,
+                stretch_time,
+                lhp_time,
+                quick_pitch,
+                diseng,
+                pickoff_rate,
+                pickoff_sr,
+                slide_step,
+                sb_per_9,
+                cs_rate,
+                steal_rate,
                 below_min,
             ) = row
 
@@ -440,9 +467,15 @@ class PitcherStealSimilarityEngine:
             ]:
                 avg = self._league_avg[group].get(s)
                 if avg is not None:
-                    setattr(p, attr, self._shrinkage.shrink(
-                        getattr(p, attr), avg, p.sample_baserunner_events,
-                    ))
+                    setattr(
+                        p,
+                        attr,
+                        self._shrinkage.shrink(
+                            getattr(p, attr),
+                            avg,
+                            p.sample_baserunner_events,
+                        ),
+                    )
 
     def query(
         self,
@@ -456,8 +489,11 @@ class PitcherStealSimilarityEngine:
             return []
 
         results = self._partition.score_all(
-            profile, self._normalizer,
-            self._del_rbf, self._pick_rbf, self._out_rbf,
+            profile,
+            self._normalizer,
+            self._del_rbf,
+            self._pick_rbf,
+            self._out_rbf,
         )
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:n] if n is not None else results
@@ -473,16 +509,27 @@ class PitcherStealSimilarityEngine:
             return None
 
         norm = self._normalizer
-        del_s = self._del_rbf.score(norm.normalize_delivery(pa.delivery_vec), norm.normalize_delivery(pb.delivery_vec))
-        pick_s = self._pick_rbf.score(norm.normalize_pickoff(pa.pickoff_vec), norm.normalize_pickoff(pb.pickoff_vec))
-        out_s = self._out_rbf.score(norm.normalize_outcome(pa.outcome_vec), norm.normalize_outcome(pb.outcome_vec))
+        del_s = self._del_rbf.score(
+            norm.normalize_delivery(pa.delivery_vec), norm.normalize_delivery(pb.delivery_vec)
+        )
+        pick_s = self._pick_rbf.score(
+            norm.normalize_pickoff(pa.pickoff_vec), norm.normalize_pickoff(pb.pickoff_vec)
+        )
+        out_s = self._out_rbf.score(
+            norm.normalize_outcome(pa.outcome_vec), norm.normalize_outcome(pb.outcome_vec)
+        )
 
         composite = WEIGHT_DELIVERY * del_s + WEIGHT_PICKOFF * pick_s + WEIGHT_OUTCOME * out_s
         composite = float(np.clip(composite * np.sqrt(min(pa.eb_alpha, pb.eb_alpha)), 0.0, 1.0))
 
         return SimilarityResult(
-            pitcher_id=pb.pitcher_id, season=pb.season, throws=pb.throws, score=composite,
-            delivery_score=del_s, pickoff_score=pick_s, outcome_score=out_s,
+            pitcher_id=pb.pitcher_id,
+            season=pb.season,
+            throws=pb.throws,
+            score=composite,
+            delivery_score=del_s,
+            pickoff_score=pick_s,
+            outcome_score=out_s,
             sample_baserunner_events=pb.sample_baserunner_events,
         )
 
@@ -500,6 +547,7 @@ class PitcherStealSimilarityEngine:
 # ============================================================================
 # Convenience: Batch Similarity Matrix
 # ============================================================================
+
 
 def build_similarity_matrix(
     engine: PitcherStealSimilarityEngine,
@@ -520,9 +568,7 @@ def build_similarity_matrix(
 # CLI
 # ============================================================================
 if __name__ == "__main__":
-    engine = PitcherStealSimilarityEngine(
-        duckdb_path="../../db/schemas/baseball_simulator.duckdb"
-    )
+    engine = PitcherStealSimilarityEngine(duckdb_path="../../db/schemas/baseball_simulator.duckdb")
     engine.build(seasons=[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017])
     report = run_generic_diagnostics(
         engine,

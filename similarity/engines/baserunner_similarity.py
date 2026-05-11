@@ -58,9 +58,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections import defaultdict
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
 
 import duckdb
 import numpy as np
@@ -88,7 +86,7 @@ log = logging.getLogger("baserunner_similarity")
 # Sprint speed is dominant. One feature, extremely reliable.
 SPEED_FEATURES = [
     # feature_name,           reliability_weight
-    ("sprint_speed",          0.202),   # nearly constant within season
+    ("sprint_speed", 0.202),  # nearly constant within season
 ]
 
 # --- Aggression features (attempt rates + stop rate) ---
@@ -97,37 +95,37 @@ SPEED_FEATURES = [
 # stop_rate is the overall inverse (stored for interpretability but
 # redundant with extra_base_attempt_rate — low weight to avoid double-counting).
 AGGRESSION_FEATURES = [
-    ("extra_base_attempt_rate",     0.202),   # overall attempt rate — most stable
-    ("first_to_third_attempt_rate", 0.167),   # specific situations — moderate sample
+    ("extra_base_attempt_rate", 0.202),  # overall attempt rate — most stable
+    ("first_to_third_attempt_rate", 0.167),  # specific situations — moderate sample
     ("second_to_home_attempt_rate", 0.100),
-    ("first_to_home_attempt_rate",  0.112),   # rarer situation — noisier
-    ("tag_up_attempt_rate",         0.100),   # rarest — noisiest
-    ("stop_rate",                   0.202),   # low weight — redundant with overall
+    ("first_to_home_attempt_rate", 0.112),  # rarer situation — noisier
+    ("tag_up_attempt_rate", 0.100),  # rarest — noisiest
+    ("stop_rate", 0.202),  # low weight — redundant with overall
 ]
 
 # --- Success / efficiency features ---
 # Given the runner attempted, how often did he succeed?
 # Noisier because it's conditional on the attempt.
 SUCCESS_FEATURES = [
-    ("extra_base_success_rate",     0.500),   # overall success rate
+    ("extra_base_success_rate", 0.500),  # overall success rate
     ("first_to_third_success_rate", 0.100),
     ("second_to_home_success_rate", 0.100),
-    ("first_to_home_success_rate",  0.100),
-    ("tag_up_success_rate",         0.100),
+    ("first_to_home_success_rate", 0.100),
+    ("tag_up_success_rate", 0.100),
 ]
 
 # --- Sub-score weights (sum to 1.0) ---
-WEIGHT_SPEED       = 0.35
-WEIGHT_AGGRESSION  = 0.40
-WEIGHT_SUCCESS     = 0.25
+WEIGHT_SPEED = 0.35
+WEIGHT_AGGRESSION = 0.40
+WEIGHT_SUCCESS = 0.25
 _TOTAL = WEIGHT_SPEED + WEIGHT_AGGRESSION + WEIGHT_SUCCESS
 assert abs(_TOTAL - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
 # RBF bandwidth parameters (gamma = 1 / (2σ²))
 # Calibrated via similarity_calibration.py; these are initial values.
-RBF_SIGMA_SPEED      = 0.8171
+RBF_SIGMA_SPEED = 0.8171
 RBF_SIGMA_AGGRESSION = 1.0478
-RBF_SIGMA_SUCCESS    = 1.0000
+RBF_SIGMA_SUCCESS = 1.0000
 
 # Empirical Bayes shrinkage prior strength
 # At EB_N_PRIOR advancement opportunities, shrinkage weight α = 0.5
@@ -141,17 +139,19 @@ MIN_ADVANCEMENT_OPPS = 20
 # Data Structures
 # ============================================================================
 
+
 @dataclass(slots=True)
 class BaserunnerProfile:
     """Complete baserunner-season profile for extra-base similarity scoring."""
+
     player_id: int
     season: int
     sample_advancement_opps: int
 
     # Feature vectors (raw values — normalized at query time)
-    speed_vec: NDArray[np.float64]         # shape (len(SPEED_FEATURES),)
-    aggression_vec: NDArray[np.float64]    # shape (len(AGGRESSION_FEATURES),)
-    success_vec: NDArray[np.float64]       # shape (len(SUCCESS_FEATURES),)
+    speed_vec: NDArray[np.float64]  # shape (len(SPEED_FEATURES),)
+    aggression_vec: NDArray[np.float64]  # shape (len(AGGRESSION_FEATURES),)
+    success_vec: NDArray[np.float64]  # shape (len(SUCCESS_FEATURES),)
 
     # Per-situation sample sizes for confidence weighting
     sample_first_to_third_opps: int = 0
@@ -167,9 +167,10 @@ class BaserunnerProfile:
 @dataclass(frozen=True, slots=True)
 class SimilarityResult:
     """One entry in the similarity query output."""
+
     player_id: int
     season: int
-    score: float                  # composite [0, 1], 1 = identical
+    score: float  # composite [0, 1], 1 = identical
     speed_score: float
     aggression_score: float
     success_score: float
@@ -179,6 +180,7 @@ class SimilarityResult:
 # ============================================================================
 # Reliability-Weighted RBF Kernel
 # ============================================================================
+
 
 class WeightedRBFSimilarity:
     """
@@ -198,7 +200,7 @@ class WeightedRBFSimilarity:
         reliability_weights: NDArray[np.float64],
     ) -> None:
         self.sigma = sigma
-        self.gamma = 1.0 / (2.0 * sigma ** 2)
+        self.gamma = 1.0 / (2.0 * sigma**2)
         total = reliability_weights.sum()
         if total > 0:
             self.weights = reliability_weights / total
@@ -212,17 +214,20 @@ class WeightedRBFSimilarity:
         return float(np.exp(-self.gamma * dist_sq))
 
     def score_batch(
-        self, query: NDArray, candidates: NDArray,
+        self,
+        query: NDArray,
+        candidates: NDArray,
     ) -> NDArray[np.float64]:
         diff = candidates - query[np.newaxis, :]
         diff = np.nan_to_num(diff, nan=0.0)
-        dist_sq = np.sum(self.weights[np.newaxis, :] * diff ** 2, axis=1)
+        dist_sq = np.sum(self.weights[np.newaxis, :] * diff**2, axis=1)
         return np.exp(-self.gamma * dist_sq)
 
 
 # ============================================================================
 # Empirical Bayes Shrinkage
 # ============================================================================
+
 
 class EmpiricalBayesShrinkage:
     def __init__(self, n_prior: int = EB_N_PRIOR) -> None:
@@ -246,9 +251,11 @@ class EmpiricalBayesShrinkage:
 # Feature Normalization
 # ============================================================================
 
+
 @dataclass(slots=True)
 class FeatureNormalizer:
     """Z-score normalizer fit on the population of baserunner profiles."""
+
     speed_mean: NDArray | None = None
     speed_std: NDArray | None = None
     aggression_mean: NDArray | None = None
@@ -267,15 +274,9 @@ class FeatureNormalizer:
             s[s == 0] = 1.0
             return m, s
 
-        self.speed_mean, self.speed_std = _fit_group(
-            [p.speed_vec for p in profiles]
-        )
-        self.aggression_mean, self.aggression_std = _fit_group(
-            [p.aggression_vec for p in profiles]
-        )
-        self.success_mean, self.success_std = _fit_group(
-            [p.success_vec for p in profiles]
-        )
+        self.speed_mean, self.speed_std = _fit_group([p.speed_vec for p in profiles])
+        self.aggression_mean, self.aggression_std = _fit_group([p.aggression_vec for p in profiles])
+        self.success_mean, self.success_std = _fit_group([p.success_vec for p in profiles])
 
     def _normalize(self, vec: NDArray, mean: NDArray | None, std: NDArray | None) -> NDArray:
         if mean is None:
@@ -296,6 +297,7 @@ class FeatureNormalizer:
 # ============================================================================
 # Scoring Partition — Vectorized Batch Scoring
 # ============================================================================
+
 
 class BaserunnerPartition:
     """
@@ -379,15 +381,17 @@ class BaserunnerPartition:
             if self.keys[i] == query_key:
                 continue
             cand = self.profiles[i]
-            results.append(SimilarityResult(
-                player_id=cand.player_id,
-                season=cand.season,
-                score=float(composite[i]),
-                speed_score=float(speed_scores[i]),
-                aggression_score=float(agg_scores[i]),
-                success_score=float(success_scores[i]),
-                sample_advancement_opps=cand.sample_advancement_opps,
-            ))
+            results.append(
+                SimilarityResult(
+                    player_id=cand.player_id,
+                    season=cand.season,
+                    score=float(composite[i]),
+                    speed_score=float(speed_scores[i]),
+                    aggression_score=float(agg_scores[i]),
+                    success_score=float(success_scores[i]),
+                    sample_advancement_opps=cand.sample_advancement_opps,
+                )
+            )
 
         return results
 
@@ -395,6 +399,7 @@ class BaserunnerPartition:
 # ============================================================================
 # Main Engine
 # ============================================================================
+
 
 class BaserunnerSimilarityEngine:
     """
@@ -413,7 +418,9 @@ class BaserunnerSimilarityEngine:
         self._duckdb_path = duckdb_path
         self._profiles: dict[tuple[int, int], BaserunnerProfile] = {}
         self._league_avg: dict[str, dict[int, NDArray]] = {
-            "speed": {}, "aggression": {}, "success": {},
+            "speed": {},
+            "aggression": {},
+            "success": {},
         }
         self._normalizer = FeatureNormalizer()
         self._shrinkage = EmpiricalBayesShrinkage()
@@ -457,7 +464,8 @@ class BaserunnerSimilarityEngine:
         elapsed = time.time() - t0
         log.info(
             "BaserunnerSimilarityEngine built: %d profiles in %.2fs.",
-            len(self._profiles), elapsed,
+            len(self._profiles),
+            elapsed,
         )
 
     # ------------------------------------------------------------------
@@ -465,7 +473,9 @@ class BaserunnerSimilarityEngine:
     # ------------------------------------------------------------------
 
     def _load_league_averages(
-        self, conn: duckdb.DuckDBPyConnection, seasons: list[int] | None,
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        seasons: list[int] | None,
     ) -> None:
         try:
             season_filter = ""
@@ -486,22 +496,24 @@ class BaserunnerSimilarityEngine:
         for season, pj_raw in rows:
             pj = json.loads(pj_raw) if isinstance(pj_raw, str) else pj_raw
 
-            self._league_avg["speed"][season] = np.array([
-                pj.get(f, 0.0) or 0.0 for f, _ in SPEED_FEATURES
-            ], dtype=np.float64)
+            self._league_avg["speed"][season] = np.array(
+                [pj.get(f, 0.0) or 0.0 for f, _ in SPEED_FEATURES], dtype=np.float64
+            )
 
-            self._league_avg["aggression"][season] = np.array([
-                pj.get(f, 0.0) or 0.0 for f, _ in AGGRESSION_FEATURES
-            ], dtype=np.float64)
+            self._league_avg["aggression"][season] = np.array(
+                [pj.get(f, 0.0) or 0.0 for f, _ in AGGRESSION_FEATURES], dtype=np.float64
+            )
 
-            self._league_avg["success"][season] = np.array([
-                pj.get(f, 0.0) or 0.0 for f, _ in SUCCESS_FEATURES
-            ], dtype=np.float64)
+            self._league_avg["success"][season] = np.array(
+                [pj.get(f, 0.0) or 0.0 for f, _ in SUCCESS_FEATURES], dtype=np.float64
+            )
 
         log.info("Loaded baserunner league averages for %d seasons.", len(rows))
 
     def _load_profiles(
-        self, conn: duckdb.DuckDBPyConnection, seasons: list[int] | None,
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        seasons: list[int] | None,
     ) -> None:
         season_filter = ""
         if seasons:
@@ -545,11 +557,25 @@ class BaserunnerSimilarityEngine:
 
         for row in rows:
             (
-                player_id, season, sample_adv,
+                player_id,
+                season,
+                sample_adv,
                 sprint_speed,
-                eb_attempt, ftt_attempt, sth_attempt, fth_attempt, tu_attempt, stop,
-                eb_success, ftt_success, sth_success, fth_success, tu_success,
-                ftt_opps, sth_opps, fth_opps, tu_opps,
+                eb_attempt,
+                ftt_attempt,
+                sth_attempt,
+                fth_attempt,
+                tu_attempt,
+                stop,
+                eb_success,
+                ftt_success,
+                sth_success,
+                fth_success,
+                tu_success,
+                ftt_opps,
+                sth_opps,
+                fth_opps,
+                tu_opps,
                 below_min,
             ) = row
 
@@ -561,10 +587,10 @@ class BaserunnerSimilarityEngine:
                 season=season,
                 sample_advancement_opps=sample_adv or 0,
                 speed_vec=_v([sprint_speed]),
-                aggression_vec=_v([eb_attempt, ftt_attempt, sth_attempt,
-                                   fth_attempt, tu_attempt, stop]),
-                success_vec=_v([eb_success, ftt_success, sth_success,
-                                fth_success, tu_success]),
+                aggression_vec=_v(
+                    [eb_attempt, ftt_attempt, sth_attempt, fth_attempt, tu_attempt, stop]
+                ),
+                success_vec=_v([eb_success, ftt_success, sth_success, fth_success, tu_success]),
                 sample_first_to_third_opps=ftt_opps or 0,
                 sample_second_to_home_opps=sth_opps or 0,
                 sample_first_to_home_opps=fth_opps or 0,
@@ -575,7 +601,7 @@ class BaserunnerSimilarityEngine:
 
     def _apply_shrinkage(self) -> None:
         """Apply EB shrinkage to all feature vectors."""
-        for key, p in self._profiles.items():
+        for _key, p in self._profiles.items():
             s = p.season
             for group, vec_attr in [
                 ("speed", "speed_vec"),
@@ -584,9 +610,15 @@ class BaserunnerSimilarityEngine:
             ]:
                 avg = self._league_avg[group].get(s)
                 if avg is not None:
-                    setattr(p, vec_attr, self._shrinkage.shrink(
-                        getattr(p, vec_attr), avg, p.sample_advancement_opps,
-                    ))
+                    setattr(
+                        p,
+                        vec_attr,
+                        self._shrinkage.shrink(
+                            getattr(p, vec_attr),
+                            avg,
+                            p.sample_advancement_opps,
+                        ),
+                    )
 
     # ------------------------------------------------------------------
     # Query
@@ -614,7 +646,8 @@ class BaserunnerSimilarityEngine:
         if query_profile is None:
             log.warning(
                 "Baserunner %d season %d not found. Ensure build() was called.",
-                player_id, season,
+                player_id,
+                season,
             )
             return []
 
@@ -669,11 +702,7 @@ class BaserunnerSimilarityEngine:
         suc_c = self._normalizer.normalize_success(candidate.success_vec)
         suc_s = self._success_rbf.score(suc_q, suc_c)
 
-        composite = (
-            WEIGHT_SPEED * speed_s
-            + WEIGHT_AGGRESSION * agg_s
-            + WEIGHT_SUCCESS * suc_s
-        )
+        composite = WEIGHT_SPEED * speed_s + WEIGHT_AGGRESSION * agg_s + WEIGHT_SUCCESS * suc_s
 
         confidence = min(query.eb_alpha, candidate.eb_alpha)
         composite *= np.sqrt(confidence)
@@ -704,6 +733,7 @@ class BaserunnerSimilarityEngine:
 # Convenience: Batch Similarity Matrix
 # ============================================================================
 
+
 def build_similarity_matrix(
     engine: BaserunnerSimilarityEngine,
     runner_ids: list[tuple[int, int]],
@@ -724,7 +754,7 @@ def build_similarity_matrix(
 # CLI
 # ============================================================================
 if __name__ == "__main__":
-    engine = BaserunnerSimilarityEngine(duckdb_path='../../db/schemas/baseball_simulator.duckdb')
+    engine = BaserunnerSimilarityEngine(duckdb_path="../../db/schemas/baseball_simulator.duckdb")
     engine.build(seasons=[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017])
     report = run_baserunner_diagnostics(engine, n_query_samples=50)
     print(report)

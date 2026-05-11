@@ -20,11 +20,9 @@ Run:
 from __future__ import annotations
 
 import json
-import sys
 import pathlib
-from datetime import date
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch, call
+import sys
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -35,16 +33,16 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from pipeline.live.live_ingestion_pipeline import (
+from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
     GameStateBuilder,
     LiveIngestionPipeline,
     MockOddsAPI,
 )
 
-
 # ===========================================================================
 # Helpers
 # ===========================================================================
+
 
 def _american_to_implied(american: int) -> float:
     """Convert American odds integer to implied probability."""
@@ -74,18 +72,22 @@ def _make_minimal_feed(
         },
         "liveData": {
             "linescore": {
-                "currentInning":  inning,
-                "inningHalf":     "Top",
-                "outs":           2,
+                "currentInning": inning,
+                "inningHalf": "Top",
+                "outs": 2,
                 "teams": {
                     "home": {"runs": home_score},
                     "away": {"runs": away_score},
                 },
-                "offense":  {},
-                "defense":  {"pitcher": {"id": 999}},
+                "offense": {},
+                "defense": {"pitcher": {"id": 999}},
             },
-            "boxscore": {"teams": {"home": {"players": {}, "battingOrder": []},
-                                   "away": {"players": {}, "battingOrder": []}}},
+            "boxscore": {
+                "teams": {
+                    "home": {"players": {}, "battingOrder": []},
+                    "away": {"players": {}, "battingOrder": []},
+                }
+            },
             "plays": {
                 "currentPlay": {
                     "matchup": {"batter": {"id": 101}, "pitcher": {"id": 999}},
@@ -101,6 +103,7 @@ def _make_minimal_feed(
 # ===========================================================================
 # SIM-099 — Redis key mismatch
 # ===========================================================================
+
 
 class TestSIM099RedisKeyMismatch:
     """
@@ -121,7 +124,7 @@ class TestSIM099RedisKeyMismatch:
         pipeline = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
         pipeline._redis = mock_redis
 
-        feed       = {"gamePk": 745000, "gameData": {"status": {}}}
+        feed = {"gamePk": 745000, "gameData": {"status": {}}}
         game_state = {"inning": 3}
 
         await pipeline._cache_to_redis(745000, feed, game_state, status="Live")
@@ -159,8 +162,8 @@ class TestSIM099RedisKeyMismatch:
         pipeline = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
         pipeline._redis = mock_redis
 
-        game_pk    = 745001
-        feed       = {"gamePk": game_pk, "gameData": {"status": {"abstractGameState": "Live"}}}
+        game_pk = 745001
+        feed = {"gamePk": game_pk, "gameData": {"status": {"abstractGameState": "Live"}}}
         game_state = {"inning": 5}
 
         # --- write side ---
@@ -182,7 +185,6 @@ class TestSIM099RedisKeyMismatch:
         When the MLB API returns a 429 (or raises), _fetch_feed() MUST return
         the previously cached feed from Redis 'game_feed:{pk}', not None.
         """
-        import aiohttp
 
         cached_feed = {"gamePk": 745002, "gameData": {"status": {"abstractGameState": "Live"}}}
 
@@ -193,14 +195,14 @@ class TestSIM099RedisKeyMismatch:
         mock_resp = AsyncMock()
         mock_resp.status = 429
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__  = AsyncMock(return_value=False)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
 
         mock_http = MagicMock()
         mock_http.get.return_value = mock_resp
 
         pipeline = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
         pipeline._redis = mock_redis
-        pipeline._http  = mock_http
+        pipeline._http = mock_http
 
         result = await pipeline._fetch_feed(745002)
 
@@ -221,7 +223,7 @@ class TestSIM099RedisKeyMismatch:
         pipeline = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
         pipeline._redis = mock_redis
 
-        feed       = {"gamePk": 745003, "sentinel": "feed_payload"}
+        feed = {"gamePk": 745003, "sentinel": "feed_payload"}
         game_state = {"inning": 7, "sentinel": "game_state_payload"}
 
         await pipeline._cache_to_redis(745003, feed, game_state, status="Live")
@@ -243,6 +245,7 @@ class TestSIM099RedisKeyMismatch:
 # SIM-100 — Roster parsing bugs
 # ===========================================================================
 
+
 class TestSIM100RosterParsing:
     """
     Tests for the four roster parsing bugs fixed in SIM-100.
@@ -260,12 +263,12 @@ class TestSIM100RosterParsing:
         This is the core N+1 regression test for SIM-100.
         """
         mock_db = AsyncMock()
-        mock_db.fetch.return_value = []   # no prior appearances
+        mock_db.fetch.return_value = []  # no prior appearances
 
         builder = GameStateBuilder.__new__(GameStateBuilder)
         builder._db = mock_db
 
-        pitcher_ids = list(range(100001, 100013))   # 12 pitchers
+        pitcher_ids = list(range(100001, 100013))  # 12 pitchers
         await builder._batch_days_rest(pitcher_ids, game_pk=745000)
 
         assert mock_db.fetch.await_count == 1, (
@@ -293,8 +296,8 @@ class TestSIM100RosterParsing:
         """
         from datetime import date as dt
 
-        anchor     = dt(2024, 8, 15)
-        last_pitch = dt(2024, 8, 12)   # 3 days before anchor
+        anchor = dt(2024, 8, 15)
+        last_pitch = dt(2024, 8, 12)  # 3 days before anchor
 
         mock_db = AsyncMock()
         mock_db.fetch.return_value = [
@@ -304,9 +307,7 @@ class TestSIM100RosterParsing:
         builder = GameStateBuilder.__new__(GameStateBuilder)
         builder._db = mock_db
 
-        result = await builder._batch_days_rest(
-            [100001], game_pk=745000, as_of_date=anchor
-        )
+        result = await builder._batch_days_rest([100001], game_pk=745000, as_of_date=anchor)
 
         assert result[100001] == 3, (
             f"Expected 3 days rest, got {result.get(100001)}. "
@@ -317,7 +318,7 @@ class TestSIM100RosterParsing:
     async def test_batch_days_rest_returns_none_for_no_prior_appearance(self) -> None:
         """Pitcher with no historical data → None (not 0) in the result dict."""
         mock_db = AsyncMock()
-        mock_db.fetch.return_value = []   # DB returned nothing
+        mock_db.fetch.return_value = []  # DB returned nothing
 
         builder = GameStateBuilder.__new__(GameStateBuilder)
         builder._db = mock_db
@@ -341,8 +342,8 @@ class TestSIM100RosterParsing:
         )
         return {
             "pitch_count_today": pitch_count_today,
-            "days_rest":         days_rest,
-            "available":         available,
+            "days_rest": days_rest,
+            "available": available,
         }
 
     def test_availability_fresh_arm_is_available(self) -> None:
@@ -398,6 +399,7 @@ class TestSIM100RosterParsing:
 # SIM-132 — MockOddsAPI vig + resim trigger
 # ===========================================================================
 
+
 class TestSIM132MockOddsVig:
     """
     Tests that MockOddsAPI moneylines carry realistic book overround.
@@ -422,8 +424,8 @@ class TestSIM132MockOddsVig:
     # AND not absurdly high", which is the SIM-132 invariant we actually care
     # about — they reject zero-vig (1.0) and unrealistic vig (> 1.06) without
     # flaking on rounding.
-    _VIG_LOWER = 1.025   # 1.030 - rounding slack
-    _VIG_UPPER = 1.055   # 1.050 + rounding slack
+    _VIG_LOWER = 1.025  # 1.030 - rounding slack
+    _VIG_UPPER = 1.055  # 1.050 + rounding slack
 
     def test_moneyline_implied_probs_sum_exceeds_1_03(self) -> None:
         """
@@ -466,21 +468,29 @@ class TestSIM132MockOddsVig:
         Total implied should be < 1.12 (even the softest books don't exceed that).
         """
         odds = MockOddsAPI.get_odds(745000)
-        total = (
-            _american_to_implied(odds["home_ml"])
-            + _american_to_implied(odds["away_ml"])
-        )
+        total = _american_to_implied(odds["home_ml"]) + _american_to_implied(odds["away_ml"])
         assert total < 1.12, f"Implied sum = {total:.4f} — vig is unrealistically high"
 
     def test_get_odds_returns_all_required_keys(self) -> None:
         """get_odds() must still return all fields required by _persist_odds()."""
         odds = MockOddsAPI.get_odds(745000)
         required = {
-            "game_pk", "source", "is_mock", "book", "line_type",
-            "market_type", "is_sharp_book",
-            "home_ml", "away_ml",
-            "home_spread", "home_spread_ml", "away_spread", "away_spread_ml",
-            "total_line", "over_ml", "under_ml",
+            "game_pk",
+            "source",
+            "is_mock",
+            "book",
+            "line_type",
+            "market_type",
+            "is_sharp_book",
+            "home_ml",
+            "away_ml",
+            "home_spread",
+            "home_spread_ml",
+            "away_spread",
+            "away_spread_ml",
+            "total_line",
+            "over_ml",
+            "under_ml",
         }
         missing = required - odds.keys()
         assert not missing, f"get_odds() is missing keys: {missing}"

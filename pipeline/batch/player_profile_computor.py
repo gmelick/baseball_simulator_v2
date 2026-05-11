@@ -62,9 +62,9 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
 import time
 from datetime import date, datetime
+from pathlib import Path
 
 import duckdb
 import numpy as np
@@ -81,95 +81,115 @@ logging.basicConfig(
 log = logging.getLogger("player_profile_computor")
 
 # GMM
-GMM_MIN_K               = 2
-GMM_MAX_K               = 7
-GMM_MIN_PITCHES_PER_K   = 50    # minimum pitches per component to attempt K
-GMM_IVB_CAP_SD          = 3.0   # cap IVB at ±N standard deviations before fitting
-GMM_FEATURE_NAMES       = ["velo", "ivb", "hb", "spin_rate", "spin_axis",
-                            "release_x", "release_z", "release_ext"]
+GMM_MIN_K = 2
+GMM_MAX_K = 7
+GMM_MIN_PITCHES_PER_K = 50  # minimum pitches per component to attempt K
+GMM_IVB_CAP_SD = 3.0  # cap IVB at ±N standard deviations before fitting
+GMM_FEATURE_NAMES = [
+    "velo",
+    "ivb",
+    "hb",
+    "spin_rate",
+    "spin_axis",
+    "release_x",
+    "release_z",
+    "release_ext",
+]
 
 # Minimum sample thresholds (from schema comments)
-MIN_PITCHER_PITCHES     = 200
-MIN_BATTER_PA           = 100
-MIN_FIELDER_BIP         = 50
-MIN_RUNNER_ADV_OPPS     = 20
-MIN_RUNNER_SB_ATTEMPTS  = 5
-MIN_FIELDER_PLAYS       = 50
+MIN_PITCHER_PITCHES = 200
+MIN_BATTER_PA = 100
+MIN_FIELDER_BIP = 50
+MIN_RUNNER_ADV_OPPS = 20
+MIN_RUNNER_SB_ATTEMPTS = 5
+MIN_FIELDER_PLAYS = 50
 MIN_CATCHER_SB_ATTEMPTS = 10
-MIN_MANAGER_GAMES       = 50
+MIN_MANAGER_GAMES = 50
 
 # FIP constant — approximation; update per-season if desired
-FIP_CONSTANT            = 3.17
+FIP_CONSTANT = 3.17
 
 # Park factor Bayesian shrinkage — weight of prior (1.0 = league average)
 # At sample_pa = PARK_PRIOR_PA, posterior is 50/50 between prior and observed.
-PARK_PRIOR_PA           = 2000
+PARK_PRIOR_PA = 2000
 
 # Leverage index simplified bins (used for manager profiles)
-LI_LOW      = 0.7
-LI_HIGH     = 1.5
+LI_LOW = 0.7
+LI_HIGH = 1.5
 
 # Barrel: exit_velo >= 98 mph AND launch_angle between 26–30 deg (tight zone)
 # Hard hit: exit_velo >= 95 mph
-BARREL_MIN_VELO         = 98.0
-BARREL_MIN_LA           = 26.0
-BARREL_MAX_LA           = 30.0
-HARD_HIT_MIN_VELO       = 95.0
+BARREL_MIN_VELO = 98.0
+BARREL_MIN_LA = 26.0
+BARREL_MAX_LA = 30.0
+HARD_HIT_MIN_VELO = 95.0
 
 
 # ---------------------------------------------------------------------------
 # Defensive Metrics Constants
 # ---------------------------------------------------------------------------
 
-HC_SCALE    = 2.48   # hc units per foot
-HOME_PLATE  = (125.42, 199.27)
+HC_SCALE = 2.48  # hc units per foot
+HOME_PLATE = (125.42, 199.27)
 SECOND_BASE = (125.42, 108.27)
-FIRST_BASE  = (162.5,  153.5)
-THIRD_BASE  = (88.3,   153.5)
+FIRST_BASE = (162.5, 153.5)
+THIRD_BASE = (88.3, 153.5)
 
 AVG_FIELDER_POS = {
-    'SS':  {'R': (112.0, 152.0), 'L': (118.0, 149.0)},
-    '2B':  {'R': (141.0, 152.0), 'L': (136.0, 149.0)},
-    '3B':  {'R': (96.0,  165.0), 'L': (90.0,  168.0)},
-    '1B':  {'R': (157.0, 165.0), 'L': (162.0, 162.0)},
-    'LF':  {'R': (80.0,  115.0), 'L': (75.0,  118.0)},
-    'CF':  {'R': (125.0, 80.0),  'L': (125.0, 82.0)},
-    'RF':  {'R': (170.0, 115.0), 'L': (175.0, 118.0)},
+    "SS": {"R": (112.0, 152.0), "L": (118.0, 149.0)},
+    "2B": {"R": (141.0, 152.0), "L": (136.0, 149.0)},
+    "3B": {"R": (96.0, 165.0), "L": (90.0, 168.0)},
+    "1B": {"R": (157.0, 165.0), "L": (162.0, 162.0)},
+    "LF": {"R": (80.0, 115.0), "L": (75.0, 118.0)},
+    "CF": {"R": (125.0, 80.0), "L": (125.0, 82.0)},
+    "RF": {"R": (170.0, 115.0), "L": (175.0, 118.0)},
 }
 
 AVG_THROW_VELO = {
-    'SS': 85.0, '2B': 75.0, '3B': 83.0, '1B': 65.0,
-    'LF': 82.0, 'CF': 84.0, 'RF': 86.0,
+    "SS": 85.0,
+    "2B": 75.0,
+    "3B": 83.0,
+    "1B": 65.0,
+    "LF": 82.0,
+    "CF": 84.0,
+    "RF": 86.0,
 }
 
-INFIELD_EXCHANGE_TIME      = 0.80
-OUTFIELD_EXCHANGE_TIME     = 1.00
-RUNS_PER_OAA_INFIELD       = 0.75
-RUNS_PER_OAA_OUTFIELD      = 0.90
-RUNS_PER_BLOCK_SAVED       = 0.25
-RUNS_PER_STRIKE_ABOVE_AVG  = 0.125
-FRAMING_SHADOW_INNER       = 0.0
-FRAMING_SHADOW_OUTER       = 0.5
-ZONE_HALF_WIDTH            = 0.833
-OF_GOING_BACK_PENALTY_FPS  = 1.0
+INFIELD_EXCHANGE_TIME = 0.80
+OUTFIELD_EXCHANGE_TIME = 1.00
+RUNS_PER_OAA_INFIELD = 0.75
+RUNS_PER_OAA_OUTFIELD = 0.90
+RUNS_PER_BLOCK_SAVED = 0.25
+RUNS_PER_STRIKE_ABOVE_AVG = 0.125
+FRAMING_SHADOW_INNER = 0.0
+FRAMING_SHADOW_OUTER = 0.5
+ZONE_HALF_WIDTH = 0.833
+OF_GOING_BACK_PENALTY_FPS = 1.0
 IF_AWAY_FROM_BAG_PENALTY_S = 0.20
-GRAVITY_FPS2               = 32.174
-DEFAULT_SPRINT_SPEED_FPS   = 27.0
-MIN_CATCHER_PITCHES        = 500
-MIN_DP_OPPORTUNITIES       = 20
+GRAVITY_FPS2 = 32.174
+DEFAULT_SPRINT_SPEED_FPS = 27.0
+MIN_CATCHER_PITCHES = 500
+MIN_DP_OPPORTUNITIES = 20
 
 RE24_APPROX = {
-    (0, 0b001): 0.83, (0, 0b011): 1.45, (0, 0b111): 2.20,
-    (1, 0b001): 0.50, (1, 0b011): 0.90, (1, 0b111): 1.50,
-    (2, 0b000): 0.10, (0, 0b000): 0.48, (1, 0b000): 0.26,
+    (0, 0b001): 0.83,
+    (0, 0b011): 1.45,
+    (0, 0b111): 2.20,
+    (1, 0b001): 0.50,
+    (1, 0b011): 0.90,
+    (1, 0b111): 1.50,
+    (2, 0b000): 0.10,
+    (0, 0b000): 0.48,
+    (1, 0b000): 0.26,
     (2, 0b001): 0.22,
 }
+
 
 def compute_leverage_index(
     inning: int,
     outs: int,
-    runners_state: int,   # bitmask 0-7
-    score_diff: int,      # bat_score - fld_score, capped
+    runners_state: int,  # bitmask 0-7
+    score_diff: int,  # bat_score - fld_score, capped
 ) -> float:
     """
     Simplified leverage index based on the Tango/Litchman framework.
@@ -192,7 +212,7 @@ def compute_leverage_index(
     elif inning <= 8:
         inning_factor = 1.3
     else:
-        inning_factor = 1.5   # 9th+
+        inning_factor = 1.5  # 9th+
 
     # Score differential factor: close games have higher leverage
     abs_diff = min(abs(score_diff), 5)
@@ -211,6 +231,7 @@ def compute_leverage_index(
 # ---------------------------------------------------------------------------
 # Defensive utility functions
 # ---------------------------------------------------------------------------
+
 
 def _hc_to_feet(hc_dist: float) -> float:
     """Convert distance in hc_x/hc_y coordinate units to feet."""
@@ -270,7 +291,7 @@ def _estimate_hang_time(launch_speed: float, launch_angle: float) -> float | Non
     else:
         drag_factor = 0.95
 
-    discriminant = vz ** 2 + 2 * GRAVITY_FPS2 * (h0 - h_catch)
+    discriminant = vz**2 + 2 * GRAVITY_FPS2 * (h0 - h_catch)
     if discriminant < 0:
         return None
 
@@ -299,7 +320,7 @@ def _estimate_gb_travel_time(
     b = -v_ground
     c = distance_ft
 
-    disc = b ** 2 - 4 * a * c
+    disc = b**2 - 4 * a * c
     if disc < 0:
         return None  # ball stops before reaching fielder
 
@@ -308,8 +329,10 @@ def _estimate_gb_travel_time(
 
 
 def _classify_direction_of(
-    fielder_x: float, fielder_y: float,
-    ball_x: float, ball_y: float,
+    fielder_x: float,
+    fielder_y: float,
+    ball_x: float,
+    ball_y: float,
     position: str,
 ) -> tuple[str, bool]:
     """
@@ -327,33 +350,33 @@ def _classify_direction_of(
     dy = ball_y - fielder_y
 
     # Angle from fielder to ball: 0° = toward home plate, 180° = away
-    angle = math.degrees(math.atan2(dx, -dy))  # -dy because y decreases toward OF
+    math.degrees(math.atan2(dx, -dy))  # -dy because y decreases toward OF
 
-    if position in ('LF', 'CF', 'RF'):
+    if position in ("LF", "CF", "RF"):
         # Outfield: going_back = ball is further from home plate than fielder
         going_back = ball_y < fielder_y  # smaller y = deeper outfield
         if going_back:
-            category = 'deep'
+            category = "deep"
         elif ball_y > fielder_y + 10:
-            category = 'charging'
-        elif (position == 'LF' and dx > 0) or (position == 'RF' and dx < 0):
-            category = 'glove_side'  # toward center field
+            category = "charging"
+        elif (position == "LF" and dx > 0) or (position == "RF" and dx < 0):
+            category = "glove_side"  # toward center field
         else:
-            category = 'arm_side'  # toward foul line
+            category = "arm_side"  # toward foul line
     else:
         # Infield
         if abs(dy) > abs(dx) and dy > 0:
-            category = 'charging'  # coming toward home plate
+            category = "charging"  # coming toward home plate
         elif abs(dy) > abs(dx) and dy < 0:
-            category = 'deep'  # ranging back into outfield grass
+            category = "deep"  # ranging back into outfield grass
         else:
             # Lateral movement
-            if position in ('SS', '3B'):
-                category = 'glove_side' if dx > 0 else 'arm_side'
+            if position in ("SS", "3B"):
+                category = "glove_side" if dx > 0 else "arm_side"
             else:  # 2B, 1B
-                category = 'glove_side' if dx < 0 else 'arm_side'
+                category = "glove_side" if dx < 0 else "arm_side"
 
-        going_back = (category == 'deep')
+        going_back = category == "deep"
 
     return category, going_back
 
@@ -365,9 +388,14 @@ def _sigmoid(x: np.ndarray, L: float, k: float, x0: float) -> np.ndarray:
 
 def _asymmetric_sigmoid(
     x: np.ndarray,
-    L_left: float, k_left: float, x0_left: float,
-    L_right: float, k_right: float, x0_right: float,
-    blend_k: float, blend_x0: float,
+    L_left: float,
+    k_left: float,
+    x0_left: float,
+    L_right: float,
+    k_right: float,
+    x0_right: float,
+    blend_k: float,
+    blend_x0: float,
 ) -> np.ndarray:
     """
     Tango's two-sigmoid blend for asymmetric probability curves.
@@ -393,7 +421,7 @@ def _fit_logistic_model(
     try:
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
-        model = LogisticRegression(max_iter=max_iter, solver='lbfgs')
+        model = LogisticRegression(max_iter=max_iter, solver="lbfgs")
         model.fit(X_scaled, y)
         # Store scaler as attribute for later prediction
         model._scaler = scaler
@@ -409,10 +437,10 @@ def _predict_proba(model: LogisticRegression, X: np.ndarray) -> np.ndarray:
     return model.predict_proba(X_scaled)[:, 1]
 
 
-
 # ---------------------------------------------------------------------------
 # Run expectancy matrix builder
 # ---------------------------------------------------------------------------
+
 
 def build_run_expectancy_matrix(conn: duckdb.DuckDBPyConnection, seasons: list[int]) -> dict:
     """
@@ -478,18 +506,26 @@ def build_run_expectancy_matrix(conn: duckdb.DuckDBPyConnection, seasons: list[i
     season_range = f"{min(seasons)}-{max(seasons)}"
 
     for _, row in df.iterrows():
-        key = (int(row['outs']), int(row['runners_state']))
-        re_matrix[key] = float(row['expected_runs'])
+        key = (int(row["outs"]), int(row["runners_state"]))
+        re_matrix[key] = float(row["expected_runs"])
 
     # Write to DuckDB table
     conn.execute("DELETE FROM derived.run_expectancy_matrix WHERE season_range = ?", [season_range])
     for _, row in df.iterrows():
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO derived.run_expectancy_matrix
             (season_range, outs, runners_state, expected_runs, sample_size)
             VALUES (?, ?, ?, ?, ?)
-        """, [season_range, int(row['outs']), int(row['runners_state']),
-              float(row['expected_runs']), int(row['sample_size'])])
+        """,
+            [
+                season_range,
+                int(row["outs"]),
+                int(row["runners_state"]),
+                float(row["expected_runs"]),
+                int(row["sample_size"]),
+            ],
+        )
 
     log.info("  RE matrix built: %d states", len(re_matrix))
     return re_matrix
@@ -499,22 +535,24 @@ def build_run_expectancy_matrix(conn: duckdb.DuckDBPyConnection, seasons: list[i
 # Quick AUC helper
 # ---------------------------------------------------------------------------
 
+
 def _quick_auc(y_true: np.ndarray, y_score: np.ndarray) -> float:
     """Fast AUC approximation without importing sklearn.metrics."""
     try:
         from sklearn.metrics import roc_auc_score
+
         return roc_auc_score(y_true, y_score)
     except Exception:
         return 0.0
 
 
-
 # ---------------------------------------------------------------------------
 # GMM helpers
 # ---------------------------------------------------------------------------
 
 # GMM helpers
 # ---------------------------------------------------------------------------
+
 
 def _fit_gmm_for_pitcher(
     pitches_df: pd.DataFrame,
@@ -538,7 +576,9 @@ def _fit_gmm_for_pitcher(
     if len(features) < GMM_MIN_PITCHES_PER_K * GMM_MIN_K:
         log.debug(
             "  pitcher %s season %s: only %d clean pitches — skipping GMM",
-            pitcher_id, season, len(features),
+            pitcher_id,
+            season,
+            len(features),
         )
         return None, []
 
@@ -547,15 +587,15 @@ def _fit_gmm_for_pitcher(
     # Cap IVB at ±GMM_IVB_CAP_SD standard deviations (index 1 in feature order)
     ivb_col = GMM_FEATURE_NAMES.index("ivb")
     ivb_mean = X[:, ivb_col].mean()
-    ivb_std  = X[:, ivb_col].std()
+    ivb_std = X[:, ivb_col].std()
     if ivb_std > 0:
         cap = GMM_IVB_CAP_SD * ivb_std
         X[:, ivb_col] = np.clip(X[:, ivb_col], ivb_mean - cap, ivb_mean + cap)
 
     # Standardize (store global mean/std for de-standardization at query time)
     feature_means = X.mean(axis=0)
-    feature_stds  = X.std(axis=0)
-    feature_stds[feature_stds == 0] = 1.0   # avoid divide-by-zero
+    feature_stds = X.std(axis=0)
+    feature_stds[feature_stds == 0] = 1.0  # avoid divide-by-zero
     X_std = (X - feature_means) / feature_stds
 
     # BIC-select K in range [GMM_MIN_K, GMM_MAX_K]
@@ -563,9 +603,9 @@ def _fit_gmm_for_pitcher(
     max_k = min(GMM_MAX_K, len(features) // GMM_MIN_PITCHES_PER_K)
     max_k = max(max_k, GMM_MIN_K)
 
-    best_gmm  = None
-    best_bic  = np.inf
-    best_k    = GMM_MIN_K
+    best_gmm = None
+    best_bic = np.inf
+    best_k = GMM_MIN_K
 
     for k in range(GMM_MIN_K, max_k + 1):
         try:
@@ -579,13 +619,16 @@ def _fit_gmm_for_pitcher(
             gmm.fit(X_std)
             bic = gmm.bic(X_std)
             if bic < best_bic:
-                best_bic  = bic
-                best_gmm  = gmm
-                best_k    = k
+                best_bic = bic
+                best_gmm = gmm
+                best_k = k
         except Exception as exc:
             log.warning(
                 "  GMM fit failed: pitcher=%s season=%s k=%s: %s",
-                pitcher_id, season, k, exc,
+                pitcher_id,
+                season,
+                k,
+                exc,
             )
             continue
 
@@ -593,7 +636,7 @@ def _fit_gmm_for_pitcher(
         return None, []
 
     # Soft-assign pitches to components for n_pitches_assigned
-    responsibilities = best_gmm.predict_proba(X_std)   # shape (n_pitches, K)
+    responsibilities = best_gmm.predict_proba(X_std)  # shape (n_pitches, K)
     soft_counts = responsibilities.sum(axis=0)
 
     # Build model JSON (means stored in original feature units for readability;
@@ -611,28 +654,30 @@ def _fit_gmm_for_pitcher(
         mean_orig = mean_std * feature_stds + feature_means  # original units (display only)
         cov_std = best_gmm.covariances_[c]  # standardized — stored as-is
 
-        components_json.append({
-            "component_id": c,
-            "weight": float(best_gmm.weights_[c]),
-            "mean": mean_orig.tolist(),  # original units for display
-            "mean_std": mean_std.tolist(),  # standardized — use for distance calc
-            "covariance": cov_std.tolist(),  # standardized covariance
-            "n_pitches": int(round(soft_counts[c])),
-        })
+        components_json.append(
+            {
+                "component_id": c,
+                "weight": float(best_gmm.weights_[c]),
+                "mean": mean_orig.tolist(),  # original units for display
+                "mean_std": mean_std.tolist(),  # standardized — use for distance calc
+                "covariance": cov_std.tolist(),  # standardized covariance
+                "n_pitches": int(round(soft_counts[c])),
+            }
+        )
 
     model_json = {
-        "n_components":  best_k,
+        "n_components": best_k,
         "feature_names": GMM_FEATURE_NAMES,
         "feature_means": feature_means.tolist(),
-        "feature_stds":  feature_stds.tolist(),
-        "components":    components_json,
+        "feature_stds": feature_stds.tolist(),
+        "components": components_json,
         "fit_diagnostics": {
-            "bic":            float(best_bic),
-            "aic":            float(best_gmm.aic(X_std)),
+            "bic": float(best_bic),
+            "aic": float(best_gmm.aic(X_std)),
             "log_likelihood": float(best_gmm.lower_bound_),
-            "n_iter":         int(best_gmm.n_iter_),
-            "converged":      bool(best_gmm.converged_),
-            "fit_date":       date.today().isoformat(),
+            "n_iter": int(best_gmm.n_iter_),
+            "converged": bool(best_gmm.converged_),
+            "fit_date": date.today().isoformat(),
         },
     }
 
@@ -647,32 +692,34 @@ def _fit_gmm_for_pitcher(
         variances_std = np.diag(cov_std).tolist()  # standardized variances — O(1) scale
         fi = {name: i for i, name in enumerate(GMM_FEATURE_NAMES)}
 
-        component_rows.append({
-            "pitcher_id": pitcher_id,
-            "season": season,
-            "component_id": c_json["component_id"],
-            "weight": c_json["weight"],
-            "mean_velo": mean_orig[fi["velo"]],
-            "mean_ivb": mean_orig[fi["ivb"]],
-            "mean_hb": mean_orig[fi["hb"]],
-            "mean_spin_rate": mean_orig[fi["spin_rate"]],
-            "mean_spin_axis": mean_orig[fi["spin_axis"]],
-            "mean_release_x": mean_orig[fi["release_x"]],
-            "mean_release_z": mean_orig[fi["release_z"]],
-            "mean_release_ext": mean_orig[fi["release_ext"]],
-            # Standardized variances — safe for SQL distance scoring
-            "var_velo": variances_std[fi["velo"]],
-            "var_ivb": variances_std[fi["ivb"]],
-            "var_hb": variances_std[fi["hb"]],
-            "var_spin_rate": variances_std[fi["spin_rate"]],
-            "var_spin_axis": variances_std[fi["spin_axis"]],
-            "var_release_x": variances_std[fi["release_x"]],
-            "var_release_z": variances_std[fi["release_z"]],
-            "var_release_ext": variances_std[fi["release_ext"]],
-            "n_pitches_assigned": c_json["n_pitches"],
-            "display_label": _label_component(mean_orig, fi),
-            "display_label_confidence": 0.7,   # heuristic labeler confidence
-        })
+        component_rows.append(
+            {
+                "pitcher_id": pitcher_id,
+                "season": season,
+                "component_id": c_json["component_id"],
+                "weight": c_json["weight"],
+                "mean_velo": mean_orig[fi["velo"]],
+                "mean_ivb": mean_orig[fi["ivb"]],
+                "mean_hb": mean_orig[fi["hb"]],
+                "mean_spin_rate": mean_orig[fi["spin_rate"]],
+                "mean_spin_axis": mean_orig[fi["spin_axis"]],
+                "mean_release_x": mean_orig[fi["release_x"]],
+                "mean_release_z": mean_orig[fi["release_z"]],
+                "mean_release_ext": mean_orig[fi["release_ext"]],
+                # Standardized variances — safe for SQL distance scoring
+                "var_velo": variances_std[fi["velo"]],
+                "var_ivb": variances_std[fi["ivb"]],
+                "var_hb": variances_std[fi["hb"]],
+                "var_spin_rate": variances_std[fi["spin_rate"]],
+                "var_spin_axis": variances_std[fi["spin_axis"]],
+                "var_release_x": variances_std[fi["release_x"]],
+                "var_release_z": variances_std[fi["release_z"]],
+                "var_release_ext": variances_std[fi["release_ext"]],
+                "n_pitches_assigned": c_json["n_pitches"],
+                "display_label": _label_component(mean_orig, fi),
+                "display_label_confidence": 0.7,  # heuristic labeler confidence
+            }
+        )
 
     return model_json, component_rows
 
@@ -684,8 +731,8 @@ def _label_component(mean: list[float], fi: dict[str, int]) -> str | None:
     Heuristic rules based on velocity and movement signature.
     """
     velo = mean[fi["velo"]]
-    ivb  = mean[fi["ivb"]]
-    hb   = mean[fi["hb"]]
+    ivb = mean[fi["ivb"]]
+    hb = mean[fi["hb"]]
 
     if velo is None or ivb is None or hb is None:
         return None
@@ -739,7 +786,6 @@ class PlayerProfileComputor:
     All results are written to the DuckDB file at duckdb_path.
     """
 
-
     def __init__(self, pg_dsn: str, duckdb_path: str) -> None:
         """
         Parameters
@@ -749,10 +795,10 @@ class PlayerProfileComputor:
         duckdb_path : str
             Path to the DuckDB file. Created if it does not exist.
         """
-        self._pg_dsn      = pg_dsn
+        self._pg_dsn = pg_dsn
         self._duckdb_path = duckdb_path
         self._conn: duckdb.DuckDBPyConnection | None = None
-        self._re_matrix: dict = {}   # populated before defensive steps
+        self._re_matrix: dict = {}  # populated before defensive steps
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -762,9 +808,7 @@ class PlayerProfileComputor:
         log.info("Opening DuckDB at %s …", self._duckdb_path)
         self._conn = duckdb.connect(self._duckdb_path)
         self._conn.execute("INSTALL postgres; LOAD postgres;")
-        self._conn.execute(
-            f"ATTACH '{self._pg_dsn}' AS pg (TYPE postgres, READ_ONLY);"
-        )
+        self._conn.execute(f"ATTACH '{self._pg_dsn}' AS pg (TYPE postgres, READ_ONLY);")
         log.info("PostgreSQL attached as 'pg'.")
         self._run_schema_ddl()
 
@@ -786,20 +830,15 @@ class PlayerProfileComputor:
         except Exception:
             pass
 
-        schema_file = os.path.join(
-            os.getcwd(), "db", "schemas", "02_duckdb_schema.sql"
-        )
-        if os.path.exists(schema_file):
-            with open(schema_file) as f:
-                ddl = f.read()
+        schema_file = Path.cwd() / "db" / "schemas" / "02_duckdb_schema.sql"
+        if schema_file.exists():
+            ddl = schema_file.read_text()
             self._conn.execute(ddl)
             log.info("Schema DDL applied from 02_duckdb_schema.sql.")
         else:
             self._conn.execute("CREATE SCHEMA IF NOT EXISTS derived;")
             self._conn.execute("CREATE SCHEMA IF NOT EXISTS sim;")
-            log.warning(
-                "02_duckdb_schema.sql not found. Tables must already exist in DuckDB."
-            )
+            log.warning("02_duckdb_schema.sql not found. Tables must already exist in DuckDB.")
 
     # ------------------------------------------------------------------
     # Public interface
@@ -833,11 +872,11 @@ class PlayerProfileComputor:
                 self._delete_seasons(seasons)
 
             # ── Non-defensive profiles (ordered for dependency satisfaction) ──
-            self._compute_park_factors(seasons)         # 1. no dependencies
-            self._compute_pitcher_profiles(seasons)     # 2. GMM — most expensive
-            self._compute_batter_profiles(seasons)      # 3.
+            self._compute_park_factors(seasons)  # 1. no dependencies
+            self._compute_pitcher_profiles(seasons)  # 2. GMM — most expensive
+            self._compute_batter_profiles(seasons)  # 3.
             self._compute_baserunner_profiles(seasons)  # 4. infield/DP need sprint speeds
-            self._compute_manager_profiles(seasons)     # 5.
+            self._compute_manager_profiles(seasons)  # 5.
 
             # ── Defensive metrics ────────────────────────────────────────────
             # RE matrix first — DP run value and OF arm runs depend on it
@@ -940,7 +979,6 @@ class PlayerProfileComputor:
             log.info("  Recreated %d secondary indexes after DELETE.", len(saved_indexes))
 
         log.info("Cleared existing rows for seasons %s.", seasons)
-
 
     def _compute_park_factors(self, seasons: list[int]) -> None:
         """
@@ -1109,14 +1147,14 @@ class PlayerProfileComputor:
 
                         -- Command metrics
                         -- O-swing: swung at pitches outside zone / pitches outside zone
-                        SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 AND type IN ('D','E','F','L','M','O','S','T','W','X') 
-                            THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 THEN 1 ELSE 0 END),0) 
+                        SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 AND type IN ('D','E','F','L','M','O','S','T','W','X')
+                            THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 THEN 1 ELSE 0 END),0)
                             AS chase_rate,
 
                         -- Z-take: pitches taken inside the zone / pitches inside the zone
-                        SUM(CASE WHEN zone BETWEEN 1 AND 9 AND type = 'C' THEN 1.0 ELSE 0 END) / 
+                        SUM(CASE WHEN zone BETWEEN 1 AND 9 AND type = 'C' THEN 1.0 ELSE 0 END) /
                             NULLIF(SUM(CASE WHEN zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END),0) AS zone_take_rate,
-                            
+
                         -- Whiff Rate
                         SUM(CASE WHEN type = 'C' THEN 1.0 ELSE 0 END) / COUNT(*) AS whiff_rate,
 
@@ -1134,16 +1172,16 @@ class PlayerProfileComputor:
                         SUM(CASE WHEN events = 'home_run' THEN 1 ELSE 0 END) AS home_runs,
                         SUM(CASE WHEN events IN ('single','double','triple','home_run') THEN 1 ELSE 0 END) AS hits,
                         SUM(CASE WHEN events = 'hit_by_pitch' THEN 1 ELSE 0 END) AS hbp,
-                        
+
                         SUM(earned_runs_on_pitch)       AS earned_runs,
                         SUM(outs_on_pitch)              AS outs_recorded,
 
                         -- Batted ball types (of balls in play only)
-                        SUM(CASE WHEN bb_type = 'ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type='X' 
+                        SUM(CASE WHEN bb_type = 'ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type='X'
                             THEN 1 ELSE 0 END),0) AS ground_ball_rate,
-                        SUM(CASE WHEN bb_type IN ('fly_ball','popup') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN 
+                        SUM(CASE WHEN bb_type IN ('fly_ball','popup') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN
                             type='X' THEN 1 ELSE 0 END),0) AS fly_ball_rate,
-                        SUM(CASE WHEN bb_type = 'line_drive' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type='X' 
+                        SUM(CASE WHEN bb_type = 'line_drive' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type='X'
                             THEN 1 ELSE 0 END),0) AS line_drive_rate,
                         SUM(CASE WHEN bb_type IN ('fly_ball','popup') THEN 1 ELSE 0 END) AS fly_balls_total
 
@@ -1174,7 +1212,7 @@ class PlayerProfileComputor:
 
                     -- FIP = (13*HR + 3*(BB+HBP) - 2*K) / IP + FIP_CONSTANT
                     -- IP = outs_recorded / 3
-                    ({FIP_CONSTANT} + (13.0 * home_runs + 3.0 * (walks + hbp) - 2.0 * strikeouts) / 
+                    ({FIP_CONSTANT} + (13.0 * home_runs + 3.0 * (walks + hbp) - 2.0 * strikeouts) /
                         NULLIF(outs_recorded / 3.0, 0)) AS fip,
 
                     -- xFIP: substitute expected HR (league HR/FB * actual FB) for actual HR
@@ -1223,6 +1261,7 @@ class PlayerProfileComputor:
         # Group by season so we issue one bulk fetch per season rather than
         # one per pitcher. A single season is ~700K rows — well within memory.
         from collections import defaultdict
+
         by_season: dict[int, list[int]] = defaultdict(list)
         for pitcher_id, season in qualifying:
             by_season[season].append(pitcher_id)
@@ -1232,8 +1271,9 @@ class PlayerProfileComputor:
 
         for season, pitcher_ids in sorted(by_season.items()):
             id_list = ", ".join(str(p) for p in pitcher_ids)
-            log.info("  Fetching pitch vectors for season %s (%d pitchers) …",
-                     season, len(pitcher_ids))
+            log.info(
+                "  Fetching pitch vectors for season %s (%d pitchers) …", season, len(pitcher_ids)
+            )
 
             season_df = self._conn.execute(
                 f"""
@@ -1262,7 +1302,6 @@ class PlayerProfileComputor:
                 fit_tasks.append((pitcher_id, season, pitcher_df))
 
         # Parallel GMM fitting — one process per CPU core (minus one for the parent)
-        import os
         from concurrent.futures import ProcessPoolExecutor, as_completed
 
         # n_workers = max(1, (os.cpu_count() or 2) - 1)
@@ -1284,8 +1323,9 @@ class PlayerProfileComputor:
                 try:
                     model_json, component_rows = future.result()
                 except Exception as exc:
-                    log.error("GMM worker crashed: pitcher=%s season=%s: %s",
-                              pitcher_id, season, exc)
+                    log.error(
+                        "GMM worker crashed: pitcher=%s season=%s: %s", pitcher_id, season, exc
+                    )
                     gmm_fallback += 1
                     self._conn.execute(
                         f"""
@@ -1317,17 +1357,18 @@ class PlayerProfileComputor:
                 )
 
                 if component_rows:
-                    comp_df = pd.DataFrame(component_rows)
+                    pd.DataFrame(component_rows)
                     self._conn.execute(
                         "INSERT OR REPLACE INTO derived.pitcher_gmm_components "
-                        f"SELECT * FROM comp_df"
+                        "SELECT * FROM comp_df"
                     )
 
                 gmm_success += 1
 
         log.info(
             "  GMM fitting complete: %d fitted, %d fell back to minimum-sample flag.",
-            gmm_success, gmm_fallback,
+            gmm_success,
+            gmm_fallback,
         )
 
     def _compute_batter_profiles(self, seasons: list[int]) -> None:
@@ -1349,11 +1390,11 @@ class PlayerProfileComputor:
 
                     -- Plate discipline
                     -- First-pitch take: did NOT swing on pitch_number=1
-                    SUM(CASE WHEN pitch_number = 1 AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 ELSE 0 END) / 
+                    SUM(CASE WHEN pitch_number = 1 AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 ELSE 0 END) /
                         NULLIF(COUNT(CASE WHEN pitch_number = 1 THEN 1 END), 0) AS first_pitch_take_rate,
 
                     -- O-swing
-                    SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 ELSE 0 
+                    SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 ELSE 0
                         END) / NULLIF(SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0) AS o_swing_rate,
 
                     -- Z-swing
@@ -1361,34 +1402,34 @@ class PlayerProfileComputor:
                         * 1.0 / NULLIF(SUM(CASE WHEN zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0) AS z_swing_rate,
 
                     -- Whiff: swinging strikes / swings
-                    SUM(CASE WHEN type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type NOT IN 
+                    SUM(CASE WHEN type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type NOT IN
                         ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0) AS whiff_rate,
 
                     -- Contact: in-play / swings
-                    SUM(CASE WHEN type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type NOT IN 
+                    SUM(CASE WHEN type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type NOT IN
                         ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0) AS contact_rate,
 
                     -- Walk / K rates (per PA)
-                    SUM(CASE WHEN events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) / 
-                        NULLIF(COUNT(DISTINCT CASE WHEN events IS NOT NULL THEN game_pk || '-' || at_bat_number END), 0) 
+                    SUM(CASE WHEN events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) /
+                        NULLIF(COUNT(DISTINCT CASE WHEN events IS NOT NULL THEN game_pk || '-' || at_bat_number END), 0)
                         AS walk_rate,
 
-                    SUM(CASE WHEN events IN ('strikeout','strikeout_double_play') THEN 1.0 ELSE 0 END) / 
-                        NULLIF(COUNT(DISTINCT CASE WHEN events IS NOT NULL THEN game_pk || '-' || at_bat_number END), 0) 
+                    SUM(CASE WHEN events IN ('strikeout','strikeout_double_play') THEN 1.0 ELSE 0 END) /
+                        NULLIF(COUNT(DISTINCT CASE WHEN events IS NOT NULL THEN game_pk || '-' || at_bat_number END), 0)
                         AS k_rate,
 
                     -- Batted ball profile (of BIP)
-                    SUM(CASE WHEN bb_type = 'ground_ball' THEN 1.0 ELSE 0 END) / 
+                    SUM(CASE WHEN bb_type = 'ground_ball' THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS gb_rate,
-                    
-                    SUM(CASE WHEN bb_type = 'fly_ball' THEN 1.0 ELSE 0 END) / 
+
+                    SUM(CASE WHEN bb_type = 'fly_ball' THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS fb_rate,
 
                     -- Spray direction (hc_x relative to center of field = 125.42)
-                    SUM(CASE WHEN spray_angle < -15 THEN 1.0 ELSE 0 END) / 
+                    SUM(CASE WHEN spray_angle < -15 THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS pull_rate,
-                    
-                    SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) / 
+
+                    SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS oppo_rate,
 
                     -- Exit velocity & launch angle (on contact only)
@@ -1397,85 +1438,85 @@ class PlayerProfileComputor:
                     AVG(CASE WHEN launch_angle IS NOT NULL THEN launch_angle END) AS avg_launch_angle,
 
                     -- Hard hit rate (>= 95 mph exit velo)
-                    SUM(CASE WHEN launch_speed >= {HARD_HIT_MIN_VELO} THEN 1.0 ELSE 0 END) / 
+                    SUM(CASE WHEN launch_speed >= {HARD_HIT_MIN_VELO} THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS hard_hit_rate,
 
                     -- Barrel rate (exit_velo >= 98 AND launch_angle 26–30)
-                    SUM(CASE WHEN launch_speed >= {BARREL_MIN_VELO} AND launch_angle BETWEEN {BARREL_MIN_LA} 
-                        AND {BARREL_MAX_LA} THEN 1.0 ELSE 0 END) / 
+                    SUM(CASE WHEN launch_speed >= {BARREL_MIN_VELO} AND launch_angle BETWEEN {BARREL_MIN_LA}
+                        AND {BARREL_MAX_LA} THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS barrel_rate,
 
                     -- HR rate per PA
-                    SUM(CASE WHEN events = 'home_run' THEN 1.0 ELSE 0 END) / 
-                        NULLIF(COUNT(DISTINCT CASE WHEN events IS NOT NULL THEN game_pk || '-' || at_bat_number END), 0) 
+                    SUM(CASE WHEN events = 'home_run' THEN 1.0 ELSE 0 END) /
+                        NULLIF(COUNT(DISTINCT CASE WHEN events IS NOT NULL THEN game_pk || '-' || at_bat_number END), 0)
                         AS hr_rate,
 
                     -- Platoon split sample sizes
-                    COUNT(DISTINCT CASE WHEN p_throws = 'L' AND events IS NOT NULL THEN game_pk || '-' || at_bat_number 
+                    COUNT(DISTINCT CASE WHEN p_throws = 'L' AND events IS NOT NULL THEN game_pk || '-' || at_bat_number
                         END) AS sample_pa_vs_l,
-                    COUNT(DISTINCT CASE WHEN p_throws = 'R' AND events IS NOT NULL THEN game_pk || '-' || at_bat_number 
+                    COUNT(DISTINCT CASE WHEN p_throws = 'R' AND events IS NOT NULL THEN game_pk || '-' || at_bat_number
                         END) AS sample_pa_vs_r,
 
                     -- Platoon splits — vs LHP
                     SUM(CASE WHEN p_throws='L' AND zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
-                        THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND zone NOT BETWEEN 1 AND 9 THEN 1 
+                        THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND zone NOT BETWEEN 1 AND 9 THEN 1
                         ELSE 0 END), 0) AS o_swing_rate_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9 AND type IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 
+                    SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9 AND type IN ('B', 'C', 'H', 'P', '*B') THEN 1.0
                         ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
                         AS z_swing_rate_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE 
-                        WHEN p_throws='L' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0) 
+                    SUM(CASE WHEN p_throws='L' AND type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE
+                        WHEN p_throws='L' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0)
                         AS whiff_rate_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) / 
+                    SUM(CASE WHEN p_throws='L' AND type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN p_throws='L' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END)
                         , 0) AS contact_rate_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) / 
-                        NULLIF(SUM(CASE WHEN p_throws='L' AND events IS NOT NULL THEN 1 ELSE 0 END), 0) 
+                    SUM(CASE WHEN p_throws='L' AND events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) /
+                        NULLIF(SUM(CASE WHEN p_throws='L' AND events IS NOT NULL THEN 1 ELSE 0 END), 0)
                         AS walk_rate_vs_l,
                     SUM(CASE WHEN p_throws='L' AND events IN ('strikeout','strikeout_double_play') THEN 1.0 ELSE 0 END)
                         / NULLIF(SUM(CASE WHEN p_throws='L' AND events IS NOT NULL THEN 1 ELSE 0 END), 0) AS k_rate_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND bb_type='ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN 
+                    SUM(CASE WHEN p_throws='L' AND bb_type='ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN
                         p_throws='L' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS gb_rate_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND bb_type = 'fly_ball' THEN 1.0 ELSE 0 END) / 
+                    SUM(CASE WHEN p_throws='L' AND bb_type = 'fly_ball' THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN p_throws='L' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS fb_rate_vs_l,
-                    SUM(CASE WHEN spray_angle < -15 THEN 1.0 ELSE 0 END) / 
+                    SUM(CASE WHEN spray_angle < -15 THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS pull_rate_vs_l,
-                    SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) / 
+                    SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS oppo_rate_vs_l,
                     AVG(CASE WHEN p_throws='L' AND launch_speed IS NOT NULL THEN launch_speed END) AS avg_exit_velo_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND launch_speed >= {BARREL_MIN_VELO} AND launch_angle BETWEEN 
-                        {BARREL_MIN_LA} AND {BARREL_MAX_LA} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND 
+                    SUM(CASE WHEN p_throws='L' AND launch_speed >= {BARREL_MIN_VELO} AND launch_angle BETWEEN
+                        {BARREL_MIN_LA} AND {BARREL_MAX_LA} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND
                         type='X' THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_l,
 
                     -- Platoon splits — vs RHP
                     SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
-                        THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9 THEN 1 
+                        THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9 THEN 1
                         ELSE 0 END), 0) AS o_swing_rate_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 AND type IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 
+                    SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 AND type IN ('B', 'C', 'H', 'P', '*B') THEN 1.0
                         ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
                         AS z_swing_rate_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE 
-                        WHEN p_throws='R' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0) 
+                    SUM(CASE WHEN p_throws='R' AND type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE
+                        WHEN p_throws='R' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0)
                         AS whiff_rate_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) / 
+                    SUM(CASE WHEN p_throws='R' AND type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN p_throws='R' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END)
                         , 0) AS contact_rate_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) / 
-                        NULLIF(SUM(CASE WHEN p_throws='R' AND events IS NOT NULL THEN 1 ELSE 0 END), 0) 
+                    SUM(CASE WHEN p_throws='R' AND events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) /
+                        NULLIF(SUM(CASE WHEN p_throws='R' AND events IS NOT NULL THEN 1 ELSE 0 END), 0)
                         AS walk_rate_vs_r,
                     SUM(CASE WHEN p_throws='R' AND events IN ('strikeout','strikeout_double_play') THEN 1.0 ELSE 0 END)
                         / NULLIF(SUM(CASE WHEN p_throws='R' AND events IS NOT NULL THEN 1 ELSE 0 END), 0) AS k_rate_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND bb_type='ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN 
+                    SUM(CASE WHEN p_throws='R' AND bb_type='ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN
                         p_throws='R' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS gb_rate_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND bb_type = 'fly_ball' THEN 1.0 ELSE 0 END) / 
+                    SUM(CASE WHEN p_throws='R' AND bb_type = 'fly_ball' THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN p_throws='R' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS fb_rate_vs_r,
-                    SUM(CASE WHEN spray_angle < -15 THEN 1.0 ELSE 0 END) / 
+                    SUM(CASE WHEN spray_angle < -15 THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS pull_rate_vs_r,
-                    SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) / 
+                    SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS oppo_rate_vs_r,
                     AVG(CASE WHEN p_throws='R' AND launch_speed IS NOT NULL THEN launch_speed END) AS avg_exit_velo_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND launch_speed >= {BARREL_MIN_VELO} AND launch_angle BETWEEN 
-                        {BARREL_MIN_LA} AND {BARREL_MAX_LA} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND 
+                    SUM(CASE WHEN p_throws='R' AND launch_speed >= {BARREL_MIN_VELO} AND launch_angle BETWEEN
+                        {BARREL_MIN_LA} AND {BARREL_MAX_LA} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND
                         type='X' THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_r
 
                 FROM pg.raw.pitches
@@ -1939,36 +1980,41 @@ class PlayerProfileComputor:
         log.info("  Loaded %d taken pitches for framing model", len(df))
 
         # Compute distance from zone edges (the key framing features)
-        df['zone_dist_x'] = (df['plate_x'].abs() - ZONE_HALF_WIDTH).clip(lower=0)
-        df['zone_dist_z_top'] = (df['plate_z'] - df['sz_top']).clip(lower=0)
-        df['zone_dist_z_bot'] = (df['sz_bot'] - df['plate_z']).clip(lower=0)
-        df['zone_dist_z'] = df[['zone_dist_z_top', 'zone_dist_z_bot']].max(axis=1)
-        df['zone_distance'] = np.sqrt(df['zone_dist_x'] ** 2 + df['zone_dist_z'] ** 2)
+        df["zone_dist_x"] = (df["plate_x"].abs() - ZONE_HALF_WIDTH).clip(lower=0)
+        df["zone_dist_z_top"] = (df["plate_z"] - df["sz_top"]).clip(lower=0)
+        df["zone_dist_z_bot"] = (df["sz_bot"] - df["plate_z"]).clip(lower=0)
+        df["zone_dist_z"] = df[["zone_dist_z_top", "zone_dist_z_bot"]].max(axis=1)
+        df["zone_distance"] = np.sqrt(df["zone_dist_x"] ** 2 + df["zone_dist_z"] ** 2)
 
         # Additional features
-        df['in_zone'] = (
-            (df['plate_x'].abs() <= ZONE_HALF_WIDTH) &
-            (df['plate_z'] >= df['sz_bot']) &
-            (df['plate_z'] <= df['sz_top'])
+        df["in_zone"] = (
+            (df["plate_x"].abs() <= ZONE_HALF_WIDTH)
+            & (df["plate_z"] >= df["sz_bot"])
+            & (df["plate_z"] <= df["sz_top"])
         ).astype(int)
-        df['count_state'] = df['balls'] * 3 + df['strikes']  # 0-11 encoding
-        df['p_throws_enc'] = (df['p_throws'] == 'R').astype(int)
-        df['stand_enc'] = (df['stand'] == 'R').astype(int)
-        df['pitch_side'] = df['plate_x'] * np.where(df['stand'] == 'R', 1, -1)
+        df["count_state"] = df["balls"] * 3 + df["strikes"]  # 0-11 encoding
+        df["p_throws_enc"] = (df["p_throws"] == "R").astype(int)
+        df["stand_enc"] = (df["stand"] == "R").astype(int)
+        df["pitch_side"] = df["plate_x"] * np.where(df["stand"] == "R", 1, -1)
 
         # Zone location categories for breakdown
-        df['zone_low'] = (df['plate_z'] < df['sz_bot'] + 0.25).astype(int)
-        df['zone_high'] = (df['plate_z'] > df['sz_top'] - 0.25).astype(int)
-        df['zone_inside'] = (df['pitch_side'] > 0.4).astype(int)
-        df['zone_outside'] = (df['pitch_side'] < -0.4).astype(int)
+        df["zone_low"] = (df["plate_z"] < df["sz_bot"] + 0.25).astype(int)
+        df["zone_high"] = (df["plate_z"] > df["sz_top"] - 0.25).astype(int)
+        df["zone_inside"] = (df["pitch_side"] > 0.4).astype(int)
+        df["zone_outside"] = (df["pitch_side"] < -0.4).astype(int)
 
         # Fit the logistic model: P(called_strike) = f(location, count, handedness)
         feature_cols = [
-            'plate_x', 'plate_z', 'zone_distance', 'in_zone',
-            'count_state', 'p_throws_enc', 'stand_enc',
+            "plate_x",
+            "plate_z",
+            "zone_distance",
+            "in_zone",
+            "count_state",
+            "p_throws_enc",
+            "stand_enc",
         ]
         X = df[feature_cols].values
-        y = df['is_strike'].values
+        y = df["is_strike"].values
 
         model = _fit_logistic_model(X, y)
         if model is None:
@@ -1976,38 +2022,66 @@ class PlayerProfileComputor:
             return
 
         # Predict expected strike probability for each pitch
-        df['expected_strike'] = _predict_proba(model, X)
+        df["expected_strike"] = _predict_proba(model, X)
 
         # Per-catcher aggregation
-        framing_agg = df.groupby(['catcher_id', 'season']).agg(
-            called_pitches=('is_strike', 'count'),
-            called_strikes=('is_strike', 'sum'),
-            expected_called_strikes=('expected_strike', 'sum'),
-            # Zone breakdowns
-            strikes_low=('is_strike', lambda x: x[df.loc[x.index, 'zone_low'] == 1].sum()),
-            expected_low=('expected_strike', lambda x: x[df.loc[x.index, 'zone_low'] == 1].sum()),
-            strikes_high=('is_strike', lambda x: x[df.loc[x.index, 'zone_high'] == 1].sum()),
-            expected_high=('expected_strike', lambda x: x[df.loc[x.index, 'zone_high'] == 1].sum()),
-            strikes_inside=('is_strike', lambda x: x[df.loc[x.index, 'zone_inside'] == 1].sum()),
-            expected_inside=('expected_strike', lambda x: x[df.loc[x.index, 'zone_inside'] == 1].sum()),
-            strikes_outside=('is_strike', lambda x: x[df.loc[x.index, 'zone_outside'] == 1].sum()),
-            expected_outside=('expected_strike', lambda x: x[df.loc[x.index, 'zone_outside'] == 1].sum()),
-        ).reset_index()
+        framing_agg = (
+            df.groupby(["catcher_id", "season"])
+            .agg(
+                called_pitches=("is_strike", "count"),
+                called_strikes=("is_strike", "sum"),
+                expected_called_strikes=("expected_strike", "sum"),
+                # Zone breakdowns
+                strikes_low=("is_strike", lambda x: x[df.loc[x.index, "zone_low"] == 1].sum()),
+                expected_low=(
+                    "expected_strike",
+                    lambda x: x[df.loc[x.index, "zone_low"] == 1].sum(),
+                ),
+                strikes_high=("is_strike", lambda x: x[df.loc[x.index, "zone_high"] == 1].sum()),
+                expected_high=(
+                    "expected_strike",
+                    lambda x: x[df.loc[x.index, "zone_high"] == 1].sum(),
+                ),
+                strikes_inside=(
+                    "is_strike",
+                    lambda x: x[df.loc[x.index, "zone_inside"] == 1].sum(),
+                ),
+                expected_inside=(
+                    "expected_strike",
+                    lambda x: x[df.loc[x.index, "zone_inside"] == 1].sum(),
+                ),
+                strikes_outside=(
+                    "is_strike",
+                    lambda x: x[df.loc[x.index, "zone_outside"] == 1].sum(),
+                ),
+                expected_outside=(
+                    "expected_strike",
+                    lambda x: x[df.loc[x.index, "zone_outside"] == 1].sum(),
+                ),
+            )
+            .reset_index()
+        )
 
-        framing_agg['strikes_above_average'] = (
-            framing_agg['called_strikes'] - framing_agg['expected_called_strikes']
+        framing_agg["strikes_above_average"] = (
+            framing_agg["called_strikes"] - framing_agg["expected_called_strikes"]
         )
-        framing_agg['framing_runs'] = (
-            framing_agg['strikes_above_average'] * RUNS_PER_STRIKE_ABOVE_AVG
+        framing_agg["framing_runs"] = (
+            framing_agg["strikes_above_average"] * RUNS_PER_STRIKE_ABOVE_AVG
         )
-        framing_agg['framing_low'] = framing_agg['strikes_low'] - framing_agg['expected_low']
-        framing_agg['framing_high'] = framing_agg['strikes_high'] - framing_agg['expected_high']
-        framing_agg['framing_inside'] = framing_agg['strikes_inside'] - framing_agg['expected_inside']
-        framing_agg['framing_outside'] = framing_agg['strikes_outside'] - framing_agg['expected_outside']
+        framing_agg["framing_low"] = framing_agg["strikes_low"] - framing_agg["expected_low"]
+        framing_agg["framing_high"] = framing_agg["strikes_high"] - framing_agg["expected_high"]
+        framing_agg["framing_inside"] = (
+            framing_agg["strikes_inside"] - framing_agg["expected_inside"]
+        )
+        framing_agg["framing_outside"] = (
+            framing_agg["strikes_outside"] - framing_agg["expected_outside"]
+        )
 
         # Store framing results in a temp table for later aggregation
         self._conn.execute("DROP TABLE IF EXISTS _tmp_framing")
-        self._conn.execute("CREATE TABLE _tmp_framing AS SELECT * FROM framing_agg",)
+        self._conn.execute(
+            "CREATE TABLE _tmp_framing AS SELECT * FROM framing_agg",
+        )
         self._conn.register("framing_agg", framing_agg)
         self._conn.execute("""
             DROP TABLE IF EXISTS _tmp_framing;
@@ -2070,76 +2144,88 @@ class PlayerProfileComputor:
 
         # Estimate height at catcher position (~3.9 ft behind front of plate)
         # Using the simple drop approximation from end_speed
-        extra_time = 3.9 / (df['end_speed'].clip(lower=50) * 1.467)
-        gravity_drop = 0.5 * GRAVITY_FPS2 * extra_time ** 2
+        extra_time = 3.9 / (df["end_speed"].clip(lower=50) * 1.467)
+        gravity_drop = 0.5 * GRAVITY_FPS2 * extra_time**2
         # Additional drop from downward pitch velocity (vz0 at 50ft plane is often negative)
-        pitch_drop = df['vz0'].clip(upper=0).abs() * extra_time * 0.3  # partial effect
-        df['height_at_catcher'] = df['plate_z'] - gravity_drop - pitch_drop
+        pitch_drop = df["vz0"].clip(upper=0).abs() * extra_time * 0.3  # partial effect
+        df["height_at_catcher"] = df["plate_z"] - gravity_drop - pitch_drop
 
         # Classify: bounced vs reached
-        df['bounced'] = (df['height_at_catcher'] <= 0.3).astype(int)
+        df["bounced"] = (df["height_at_catcher"] <= 0.3).astype(int)
 
         # Catcher's effective "radius" — distance from zone center
-        df['dist_from_center'] = np.sqrt(df['plate_x'] ** 2 + (df['plate_z'] - 2.0) ** 2)
+        df["dist_from_center"] = np.sqrt(df["plate_x"] ** 2 + (df["plate_z"] - 2.0) ** 2)
 
         # Lateral distance from center
-        df['lateral_dist'] = df['plate_x'].abs()
+        df["lateral_dist"] = df["plate_x"].abs()
 
         # Target variable
-        df['pbwp'] = df['passed_ball_wild_pitch'].astype(int)
+        df["pbwp"] = df["passed_ball_wild_pitch"].astype(int)
 
         # Features for the blocking model
         feature_cols = [
-            'height_at_catcher', 'bounced', 'dist_from_center',
-            'lateral_dist', 'end_speed',
-            'break_horizontal', 'break_vertical',
+            "height_at_catcher",
+            "bounced",
+            "dist_from_center",
+            "lateral_dist",
+            "end_speed",
+            "break_horizontal",
+            "break_vertical",
         ]
-        df_model = df.dropna(subset=feature_cols + ['pbwp'])
+        df_model = df.dropna(subset=feature_cols + ["pbwp"])
         X = df_model[feature_cols].fillna(0).values
-        y = df_model['pbwp'].values
+        y = df_model["pbwp"].values
 
         model = _fit_logistic_model(X, y)
         if model is None:
             log.error("  Blocking model fit failed — skipping")
             return
 
-        df_model['expected_pbwp'] = _predict_proba(model, X)
+        df_model["expected_pbwp"] = _predict_proba(model, X)
 
         # Per-catcher aggregation
-        blocking_agg = df_model.groupby(['catcher_id', 'season']).agg(
-            pitches_received=('pbwp', 'count'),
-            expected_pbwp=('expected_pbwp', 'sum'),
-            actual_pbwp=('pbwp', 'sum'),
-        ).reset_index()
+        blocking_agg = (
+            df_model.groupby(["catcher_id", "season"])
+            .agg(
+                pitches_received=("pbwp", "count"),
+                expected_pbwp=("expected_pbwp", "sum"),
+                actual_pbwp=("pbwp", "sum"),
+            )
+            .reset_index()
+        )
 
-        blocking_agg['blocks_above_average'] = (
-            blocking_agg['expected_pbwp'] - blocking_agg['actual_pbwp']
+        blocking_agg["blocks_above_average"] = (
+            blocking_agg["expected_pbwp"] - blocking_agg["actual_pbwp"]
         )
-        blocking_agg['blocking_runs'] = (
-            blocking_agg['blocks_above_average'] * RUNS_PER_BLOCK_SAVED
-        )
+        blocking_agg["blocking_runs"] = blocking_agg["blocks_above_average"] * RUNS_PER_BLOCK_SAVED
 
         # Category breakdowns
-        for cat_name, cat_mask_col in [
-            ('bounced', 'bounced'),
-            ('high', 'height_at_catcher'),
-            ('lateral', 'lateral_dist'),
+        for cat_name, _cat_mask_col in [
+            ("bounced", "bounced"),
+            ("high", "height_at_catcher"),
+            ("lateral", "lateral_dist"),
         ]:
-            if cat_name == 'bounced':
-                mask = df_model['bounced'] == 1
-            elif cat_name == 'high':
-                mask = df_model['height_at_catcher'] > 4.0
+            if cat_name == "bounced":
+                mask = df_model["bounced"] == 1
+            elif cat_name == "high":
+                mask = df_model["height_at_catcher"] > 4.0
             else:
-                mask = df_model['lateral_dist'] > 1.5
+                mask = df_model["lateral_dist"] > 1.5
 
-            cat_agg = df_model[mask].groupby(['catcher_id', 'season']).agg(
-                cat_expected=('expected_pbwp', 'sum'),
-                cat_actual=('pbwp', 'sum'),
-            ).reset_index()
-            cat_agg[f'blocks_aa_{cat_name}'] = cat_agg['cat_expected'] - cat_agg['cat_actual']
+            cat_agg = (
+                df_model[mask]
+                .groupby(["catcher_id", "season"])
+                .agg(
+                    cat_expected=("expected_pbwp", "sum"),
+                    cat_actual=("pbwp", "sum"),
+                )
+                .reset_index()
+            )
+            cat_agg[f"blocks_aa_{cat_name}"] = cat_agg["cat_expected"] - cat_agg["cat_actual"]
             blocking_agg = blocking_agg.merge(
-                cat_agg[['catcher_id', 'season', f'blocks_aa_{cat_name}']],
-                on=['catcher_id', 'season'], how='left'
+                cat_agg[["catcher_id", "season", f"blocks_aa_{cat_name}"]],
+                on=["catcher_id", "season"],
+                how="left",
             )
 
         self._conn.register("blocking_agg", blocking_agg)
@@ -2340,28 +2426,28 @@ class PlayerProfileComputor:
         rows = []
         for _, r in df.iterrows():
             # Assign to closest OF position based on ball landing location
-            stand = r['stand'] if r['stand'] in ('L', 'R') else 'R'
+            stand = r["stand"] if r["stand"] in ("L", "R") else "R"
             best_pos = None
-            best_dist = float('inf')
+            best_dist = float("inf")
 
-            for pos in ('LF', 'CF', 'RF'):
-                fx, fy = AVG_FIELDER_POS[pos].get(stand, AVG_FIELDER_POS[pos]['R'])
-                d = _euclidean_hc(r['hc_x'], r['hc_y'], fx, fy)
+            for pos in ("LF", "CF", "RF"):
+                fx, fy = AVG_FIELDER_POS[pos].get(stand, AVG_FIELDER_POS[pos]["R"])
+                d = _euclidean_hc(r["hc_x"], r["hc_y"], fx, fy)
                 if d < best_dist:
                     best_dist = d
                     best_pos = pos
 
             # Map position to fielder ID
-            pos_to_col = {'LF': 'fielder_7', 'CF': 'fielder_8', 'RF': 'fielder_9'}
+            pos_to_col = {"LF": "fielder_7", "CF": "fielder_8", "RF": "fielder_9"}
             fielder_id = r[pos_to_col[best_pos]]
             if pd.isna(fielder_id):
                 continue
 
-            fx, fy = AVG_FIELDER_POS[best_pos].get(stand, AVG_FIELDER_POS[best_pos]['R'])
-            distance_hc = _euclidean_hc(r['hc_x'], r['hc_y'], fx, fy)
+            fx, fy = AVG_FIELDER_POS[best_pos].get(stand, AVG_FIELDER_POS[best_pos]["R"])
+            distance_hc = _euclidean_hc(r["hc_x"], r["hc_y"], fx, fy)
             distance_ft = _hc_to_feet(distance_hc)
 
-            hang_time = _estimate_hang_time(r['launch_speed'], r['launch_angle'])
+            hang_time = _estimate_hang_time(r["launch_speed"], r["launch_angle"])
             if hang_time is None or hang_time < 1.0:
                 continue
 
@@ -2375,27 +2461,29 @@ class PlayerProfileComputor:
 
             # Direction adjustment
             direction_cat, going_back = _classify_direction_of(
-                fx, fy, r['hc_x'], r['hc_y'], best_pos
+                fx, fy, r["hc_x"], r["hc_y"], best_pos
             )
             if going_back:
                 speed_needed += OF_GOING_BACK_PENALTY_FPS
 
             # Outcome
-            caught = (r['outs_on_pitch'] > 0 and pd.isna(r.get('fielding_error')))
+            caught = r["outs_on_pitch"] > 0 and pd.isna(r.get("fielding_error"))
 
-            rows.append({
-                'pitch_id_str': r['pitch_id_str'],
-                'game_pk': r['game_pk'],
-                'season': r['season'],
-                'fielder_id': int(fielder_id),
-                'position': best_pos,
-                'hang_time': hang_time,
-                'distance_needed': distance_ft,
-                'speed_needed': speed_needed,
-                'direction_back': going_back,
-                'direction_cat': direction_cat,
-                'caught': caught,
-            })
+            rows.append(
+                {
+                    "pitch_id_str": r["pitch_id_str"],
+                    "game_pk": r["game_pk"],
+                    "season": r["season"],
+                    "fielder_id": int(fielder_id),
+                    "position": best_pos,
+                    "hang_time": hang_time,
+                    "distance_needed": distance_ft,
+                    "speed_needed": speed_needed,
+                    "direction_back": going_back,
+                    "direction_cat": direction_cat,
+                    "caught": caught,
+                }
+            )
 
         plays = pd.DataFrame(rows)
         if len(plays) < 200:
@@ -2403,31 +2491,31 @@ class PlayerProfileComputor:
             return
 
         # Fit the catch probability model: P(catch) = sigmoid(speed_needed)
-        X = plays[['speed_needed']].values
-        y = plays['caught'].astype(int).values
+        X = plays[["speed_needed"]].values
+        y = plays["caught"].astype(int).values
 
         model = _fit_logistic_model(X, y)
         if model is None:
             log.error("  OF catch probability model fit failed")
             return
 
-        plays['catch_probability'] = _predict_proba(model, X)
+        plays["catch_probability"] = _predict_proba(model, X)
 
         # Clamp to [0.01, 0.99] to avoid extreme credits
-        plays['catch_probability'] = plays['catch_probability'].clip(0.01, 0.99)
+        plays["catch_probability"] = plays["catch_probability"].clip(0.01, 0.99)
 
         # Star ratings
-        plays['star_rating'] = pd.cut(
-            plays['catch_probability'],
+        plays["star_rating"] = pd.cut(
+            plays["catch_probability"],
             bins=[0, 0.25, 0.50, 0.75, 0.90, 1.01],
             labels=[5, 4, 3, 2, 1],
         ).astype(int)
 
         # OAA credit per play
-        plays['oaa_credit'] = np.where(
-            plays['caught'],
-            1.0 - plays['catch_probability'],
-            -plays['catch_probability'],
+        plays["oaa_credit"] = np.where(
+            plays["caught"],
+            1.0 - plays["catch_probability"],
+            -plays["catch_probability"],
         )
 
         # Write per-play detail table
@@ -2441,7 +2529,7 @@ class PlayerProfileComputor:
         log.info(
             "  OF catch probability computed: %d plays, model AUC ~%.3f",
             len(plays),
-            _quick_auc(y, plays['catch_probability'].values),
+            _quick_auc(y, plays["catch_probability"].values),
         )
 
     # ------------------------------------------------------------------
@@ -2556,41 +2644,46 @@ class PlayerProfileComputor:
         """).fetchdf()
         speed_map = {}
         for _, r in batter_speeds.iterrows():
-            speed_map[(int(r['player_id']), int(r['season']))] = (
-                r['sprint_speed'] if pd.notna(r['sprint_speed']) else DEFAULT_SPRINT_SPEED_FPS
+            speed_map[(int(r["player_id"]), int(r["season"]))] = (
+                r["sprint_speed"] if pd.notna(r["sprint_speed"]) else DEFAULT_SPRINT_SPEED_FPS
             )
 
         rows = []
         for _, r in df.iterrows():
-            stand = r['stand'] if r['stand'] in ('L', 'R') else 'R'
+            stand = r["stand"] if r["stand"] in ("L", "R") else "R"
 
             # Determine which infielder is responsible
             best_pos = None
-            best_dist = float('inf')
-            for pos in ('1B', '2B', '3B', 'SS'):
-                fx, fy = AVG_FIELDER_POS[pos].get(stand, AVG_FIELDER_POS[pos]['R'])
-                d = _euclidean_hc(r['hc_x'], r['hc_y'], fx, fy)
+            best_dist = float("inf")
+            for pos in ("1B", "2B", "3B", "SS"):
+                fx, fy = AVG_FIELDER_POS[pos].get(stand, AVG_FIELDER_POS[pos]["R"])
+                d = _euclidean_hc(r["hc_x"], r["hc_y"], fx, fy)
                 if d < best_dist:
                     best_dist = d
                     best_pos = pos
 
             # Map position to fielder column
-            pos_to_col = {'1B': 'fielder_3', '2B': 'fielder_4', '3B': 'fielder_5', 'SS': 'fielder_6'}
+            pos_to_col = {
+                "1B": "fielder_3",
+                "2B": "fielder_4",
+                "3B": "fielder_5",
+                "SS": "fielder_6",
+            }
             fielder_id = r[pos_to_col[best_pos]]
             if pd.isna(fielder_id):
                 continue
 
-            fx, fy = AVG_FIELDER_POS[best_pos].get(stand, AVG_FIELDER_POS[best_pos]['R'])
-            fielder_dist_hc = _euclidean_hc(r['hc_x'], r['hc_y'], fx, fy)
+            fx, fy = AVG_FIELDER_POS[best_pos].get(stand, AVG_FIELDER_POS[best_pos]["R"])
+            fielder_dist_hc = _euclidean_hc(r["hc_x"], r["hc_y"], fx, fy)
             fielder_dist_ft = _hc_to_feet(fielder_dist_hc)
 
             # Throw distance to 1B
-            throw_dist_hc = _euclidean_hc(r['hc_x'], r['hc_y'], FIRST_BASE[0], FIRST_BASE[1])
+            throw_dist_hc = _euclidean_hc(r["hc_x"], r["hc_y"], FIRST_BASE[0], FIRST_BASE[1])
             throw_dist_ft = _hc_to_feet(throw_dist_hc)
 
             # Time for ball to reach fielder
             ball_travel_time = _estimate_gb_travel_time(
-                r['launch_speed'], r['launch_angle'], fielder_dist_ft
+                r["launch_speed"], r["launch_angle"], fielder_dist_ft
             )
             if ball_travel_time is None:
                 continue
@@ -2602,7 +2695,7 @@ class PlayerProfileComputor:
 
             # Batter-runner time to 1B
             batter_speed = speed_map.get(
-                (int(r['batter']), int(r['season'])), DEFAULT_SPRINT_SPEED_FPS
+                (int(r["batter"]), int(r["season"])), DEFAULT_SPRINT_SPEED_FPS
             )
             runner_time = 90.0 / batter_speed  # seconds from home to first
 
@@ -2611,46 +2704,48 @@ class PlayerProfileComputor:
 
             # Direction classification
             direction_cat, going_back = _classify_direction_of(
-                fx, fy, r['hc_x'], r['hc_y'], best_pos
+                fx, fy, r["hc_x"], r["hc_y"], best_pos
             )
             if going_back:
                 time_margin -= IF_AWAY_FROM_BAG_PENALTY_S
 
             # Lateral movement: moving away from throw target also costs time
-            fx_to_ball = (r['hc_x'] - fx, r['hc_y'] - fy)
+            fx_to_ball = (r["hc_x"] - fx, r["hc_y"] - fy)
             fx_to_base = (FIRST_BASE[0] - fx, FIRST_BASE[1] - fy)
             dot = fx_to_ball[0] * fx_to_base[0] + fx_to_ball[1] * fx_to_base[1]
-            mag1 = math.sqrt(fx_to_ball[0]**2 + fx_to_ball[1]**2)
-            mag2 = math.sqrt(fx_to_base[0]**2 + fx_to_base[1]**2)
+            mag1 = math.sqrt(fx_to_ball[0] ** 2 + fx_to_ball[1] ** 2)
+            mag2 = math.sqrt(fx_to_base[0] ** 2 + fx_to_base[1] ** 2)
             if mag1 > 0 and mag2 > 0:
                 cos_angle = dot / (mag1 * mag2)
                 if cos_angle < -0.3:  # moving substantially away from 1B
                     time_margin -= 0.10
 
             # Outcome
-            out_recorded = r['outs_on_pitch'] > 0
-            is_error = pd.notna(r.get('fielding_error')) or pd.notna(r.get('throwing_error_1'))
+            out_recorded = r["outs_on_pitch"] > 0
+            is_error = pd.notna(r.get("fielding_error")) or pd.notna(r.get("throwing_error_1"))
             error_type = None
-            if pd.notna(r.get('throwing_error_1')) or pd.notna(r.get('throwing_error_2')):
-                error_type = 'throwing'
-            elif pd.notna(r.get('fielding_error')):
-                error_type = 'fielding'
+            if pd.notna(r.get("throwing_error_1")) or pd.notna(r.get("throwing_error_2")):
+                error_type = "throwing"
+            elif pd.notna(r.get("fielding_error")):
+                error_type = "fielding"
 
-            rows.append({
-                'pitch_id_str': r['pitch_id_str'],
-                'game_pk': r['game_pk'],
-                'season': r['season'],
-                'fielder_id': int(fielder_id),
-                'position': best_pos,
-                'fielder_distance': fielder_dist_ft,
-                'throw_distance': throw_dist_ft,
-                'time_margin': time_margin,
-                'runner_speed': batter_speed,
-                'direction_category': direction_cat,
-                'out_recorded': out_recorded,
-                'is_error': is_error,
-                'error_type': error_type,
-            })
+            rows.append(
+                {
+                    "pitch_id_str": r["pitch_id_str"],
+                    "game_pk": r["game_pk"],
+                    "season": r["season"],
+                    "fielder_id": int(fielder_id),
+                    "position": best_pos,
+                    "fielder_distance": fielder_dist_ft,
+                    "throw_distance": throw_dist_ft,
+                    "time_margin": time_margin,
+                    "runner_speed": batter_speed,
+                    "direction_category": direction_cat,
+                    "out_recorded": out_recorded,
+                    "is_error": is_error,
+                    "error_type": error_type,
+                }
+            )
 
         plays = pd.DataFrame(rows)
         if len(plays) < 200:
@@ -2658,21 +2753,21 @@ class PlayerProfileComputor:
             return
 
         # Fit the out probability model: P(out) = sigmoid(time_margin)
-        X = plays[['time_margin']].values
-        y = plays['out_recorded'].astype(int).values
+        X = plays[["time_margin"]].values
+        y = plays["out_recorded"].astype(int).values
 
         model = _fit_logistic_model(X, y)
         if model is None:
             log.error("  Infield OAA model fit failed")
             return
 
-        plays['out_probability'] = _predict_proba(model, X)
-        plays['out_probability'] = plays['out_probability'].clip(0.01, 0.99)
+        plays["out_probability"] = _predict_proba(model, X)
+        plays["out_probability"] = plays["out_probability"].clip(0.01, 0.99)
 
-        plays['oaa_credit'] = np.where(
-            plays['out_recorded'],
-            1.0 - plays['out_probability'],
-            -plays['out_probability'],
+        plays["oaa_credit"] = np.where(
+            plays["out_recorded"],
+            1.0 - plays["out_probability"],
+            -plays["out_probability"],
         )
 
         self._conn.register("if_plays", plays)
@@ -2685,7 +2780,7 @@ class PlayerProfileComputor:
         log.info(
             "  Infield OAA computed: %d plays, model AUC ~%.3f",
             len(plays),
-            _quick_auc(y, plays['out_probability'].values),
+            _quick_auc(y, plays["out_probability"].values),
         )
 
     # ------------------------------------------------------------------
@@ -2755,23 +2850,28 @@ class PlayerProfileComputor:
         """).fetchdf()
         speed_map = {}
         for _, r in batter_speeds.iterrows():
-            speed_map[(int(r['player_id']), int(r['season']))] = (
-                r['sprint_speed'] if pd.notna(r['sprint_speed']) else DEFAULT_SPRINT_SPEED_FPS
+            speed_map[(int(r["player_id"]), int(r["season"]))] = (
+                r["sprint_speed"] if pd.notna(r["sprint_speed"]) else DEFAULT_SPRINT_SPEED_FPS
             )
 
         # Runner on 1B speed lookup
-        runner_speeds = speed_map.copy()
+        speed_map.copy()
 
         rows = []
         for _, r in df.iterrows():
-            stand = r['stand'] if r['stand'] in ('L', 'R') else 'R'
+            stand = r["stand"] if r["stand"] in ("L", "R") else "R"
 
             # Identify initiator (who fielded the ball)
-            fielded_by = r['fielded_by']
+            fielded_by = r["fielded_by"]
             if pd.isna(fielded_by):
                 continue
 
-            pos_to_col = {'1B': 'fielder_3', '2B': 'fielder_4', '3B': 'fielder_5', 'SS': 'fielder_6'}
+            pos_to_col = {
+                "1B": "fielder_3",
+                "2B": "fielder_4",
+                "3B": "fielder_5",
+                "SS": "fielder_6",
+            }
             initiator_pos = None
             for pos, col in pos_to_col.items():
                 if r[col] == fielded_by:
@@ -2782,34 +2882,44 @@ class PlayerProfileComputor:
 
             # Fielder distance to ball
             fx, fy = AVG_FIELDER_POS.get(initiator_pos, {}).get(stand, (125, 155))
-            fielder_dist_ft = _hc_to_feet(_euclidean_hc(r['hc_x'], r['hc_y'], fx, fy))
+            fielder_dist_ft = _hc_to_feet(_euclidean_hc(r["hc_x"], r["hc_y"], fx, fy))
 
             # Distance from ball to 2B bag
-            dist_to_2b_ft = _hc_to_feet(_euclidean_hc(r['hc_x'], r['hc_y'], SECOND_BASE[0], SECOND_BASE[1]))
+            dist_to_2b_ft = _hc_to_feet(
+                _euclidean_hc(r["hc_x"], r["hc_y"], SECOND_BASE[0], SECOND_BASE[1])
+            )
 
             # Distance from 2B bag to 1B
-            dist_2b_to_1b_ft = _hc_to_feet(_euclidean_hc(SECOND_BASE[0], SECOND_BASE[1], FIRST_BASE[0], FIRST_BASE[1]))
+            dist_2b_to_1b_ft = _hc_to_feet(
+                _euclidean_hc(SECOND_BASE[0], SECOND_BASE[1], FIRST_BASE[0], FIRST_BASE[1])
+            )
 
             # Ball travel time to fielder
-            ball_time = _estimate_gb_travel_time(r['launch_speed'], r['launch_angle'], fielder_dist_ft)
+            ball_time = _estimate_gb_travel_time(
+                r["launch_speed"], r["launch_angle"], fielder_dist_ft
+            )
             if ball_time is None:
                 continue
 
             # Defense time: field + throw to 2B + pivot exchange + throw to 1B
             throw_velo_to_2b = AVG_THROW_VELO.get(initiator_pos, 80.0)
-            time_to_2b = ball_time + INFIELD_EXCHANGE_TIME + _throw_time(dist_to_2b_ft, throw_velo_to_2b)
+            time_to_2b = (
+                ball_time + INFIELD_EXCHANGE_TIME + _throw_time(dist_to_2b_ft, throw_velo_to_2b)
+            )
 
             pivot_exchange = 0.60  # pivot man faster exchange than initial fielder
             throw_to_1b_time = _throw_time(dist_2b_to_1b_ft, 78.0)  # pivot throw ~78mph
             total_defense_time = time_to_2b + pivot_exchange + throw_to_1b_time
 
             # Runner on 1B time to 2B
-            runner_1b_id = int(r['on_1b']) if pd.notna(r['on_1b']) else 0
-            runner_speed = speed_map.get((runner_1b_id, int(r['season'])), DEFAULT_SPRINT_SPEED_FPS)
+            runner_1b_id = int(r["on_1b"]) if pd.notna(r["on_1b"]) else 0
+            runner_speed = speed_map.get((runner_1b_id, int(r["season"])), DEFAULT_SPRINT_SPEED_FPS)
             runner_time_to_2b = 90.0 / runner_speed
 
             # Batter time to 1B
-            batter_speed = speed_map.get((int(r['batter']), int(r['season'])), DEFAULT_SPRINT_SPEED_FPS)
+            batter_speed = speed_map.get(
+                (int(r["batter"]), int(r["season"])), DEFAULT_SPRINT_SPEED_FPS
+            )
             batter_time_to_1b = 90.0 / batter_speed
 
             # Combined time margin: both runner must be beaten at 2B AND batter at 1B
@@ -2819,58 +2929,62 @@ class PlayerProfileComputor:
             time_margin = min(time_margin_2b, time_margin_1b)
 
             # Direction adjustment: moving toward or away from 2B bag
-            toward_2b = (r['hc_y'] < fy)  # ball is closer to 2B than fielder start
-            if not toward_2b and initiator_pos in ('3B', '1B'):
+            toward_2b = r["hc_y"] < fy  # ball is closer to 2B than fielder start
+            if not toward_2b and initiator_pos in ("3B", "1B"):
                 time_margin -= 0.15
 
             # Outcome
-            dp_turned = r['outs_on_pitch'] >= 2
+            dp_turned = r["outs_on_pitch"] >= 2
 
             # Identify pivot man
             pivot_id = None
             pivot_pos = None
-            if pd.notna(r.get('field_assist_2')):
+            if pd.notna(r.get("field_assist_2")):
                 for pos, col in pos_to_col.items():
-                    if r[col] == r['field_assist_2']:
-                        pivot_id = int(r['field_assist_2'])
+                    if r[col] == r["field_assist_2"]:
+                        pivot_id = int(r["field_assist_2"])
                         pivot_pos = pos
                         break
 
             # RE24 run value
-            pre_outs = int(r['outs'])
-            pre_runners = int(r['runners_state'])
-            re_start = self._re_matrix.get((pre_outs, pre_runners), RE24_APPROX.get((pre_outs, pre_runners), 0.5))
+            pre_outs = int(r["outs"])
+            pre_runners = int(r["runners_state"])
+            re_start = self._re_matrix.get(
+                (pre_outs, pre_runners), RE24_APPROX.get((pre_outs, pre_runners), 0.5)
+            )
 
             if dp_turned:
                 post_outs = pre_outs + 2
                 post_runners = 0  # DP clears runners
                 re_end = self._re_matrix.get((min(post_outs, 2), post_runners), 0.10)
             else:
-                post_outs = pre_outs + (1 if r['outs_on_pitch'] > 0 else 0)
+                post_outs = pre_outs + (1 if r["outs_on_pitch"] > 0 else 0)
                 # Approximate: force at 2B successful, runner safe at 1B
-                post_runners = 0b001 if r['outs_on_pitch'] == 1 else pre_runners
+                post_runners = 0b001 if r["outs_on_pitch"] == 1 else pre_runners
                 re_end = self._re_matrix.get((min(post_outs, 2), post_runners), 0.30)
 
             dp_run_value = re_start - re_end  # positive = runs prevented
 
-            rows.append({
-                'pitch_id_str': r['pitch_id_str'],
-                'game_pk': r['game_pk'],
-                'season': r['season'],
-                'initiator_id': int(fielded_by),
-                'initiator_position': initiator_pos,
-                'pivot_id': pivot_id,
-                'pivot_position': pivot_pos,
-                'time_margin': time_margin,
-                'runner_speed': runner_speed,
-                'batter_speed': batter_speed,
-                'fielder_toward_2b': toward_2b,
-                'dp_turned': dp_turned,
-                'outs_recorded': int(r['outs_on_pitch']),
-                're24_start': re_start,
-                're24_end': re_end,
-                'dp_run_value': dp_run_value,
-            })
+            rows.append(
+                {
+                    "pitch_id_str": r["pitch_id_str"],
+                    "game_pk": r["game_pk"],
+                    "season": r["season"],
+                    "initiator_id": int(fielded_by),
+                    "initiator_position": initiator_pos,
+                    "pivot_id": pivot_id,
+                    "pivot_position": pivot_pos,
+                    "time_margin": time_margin,
+                    "runner_speed": runner_speed,
+                    "batter_speed": batter_speed,
+                    "fielder_toward_2b": toward_2b,
+                    "dp_turned": dp_turned,
+                    "outs_recorded": int(r["outs_on_pitch"]),
+                    "re24_start": re_start,
+                    "re24_end": re_end,
+                    "dp_run_value": dp_run_value,
+                }
+            )
 
         dp_plays = pd.DataFrame(rows)
         if len(dp_plays) < 100:
@@ -2878,17 +2992,17 @@ class PlayerProfileComputor:
             return
 
         # Fit DP probability model: P(DP) = sigmoid(time_margin)
-        X = dp_plays[['time_margin']].values
-        y = dp_plays['dp_turned'].astype(int).values
+        X = dp_plays[["time_margin"]].values
+        y = dp_plays["dp_turned"].astype(int).values
 
         model = _fit_logistic_model(X, y)
         if model is not None:
-            dp_plays['dp_probability'] = _predict_proba(model, X)
-            dp_plays['dp_probability'] = dp_plays['dp_probability'].clip(0.01, 0.99)
+            dp_plays["dp_probability"] = _predict_proba(model, X)
+            dp_plays["dp_probability"] = dp_plays["dp_probability"].clip(0.01, 0.99)
         else:
             # Fallback: use league average DP rate
             league_dp_rate = y.mean()
-            dp_plays['dp_probability'] = league_dp_rate
+            dp_plays["dp_probability"] = league_dp_rate
 
         self._conn.register("dp_plays", dp_plays)
         self._conn.execute("""
@@ -2897,8 +3011,11 @@ class PlayerProfileComputor:
         """)
         self._conn.unregister("dp_plays")
 
-        log.info("  DP metrics computed: %d opportunities, DP rate %.1f%%",
-                 len(dp_plays), dp_plays['dp_turned'].mean() * 100)
+        log.info(
+            "  DP metrics computed: %d opportunities, DP rate %.1f%%",
+            len(dp_plays),
+            dp_plays["dp_turned"].mean() * 100,
+        )
 
     # ------------------------------------------------------------------
     # BUNT DEFENSE
@@ -3364,13 +3481,21 @@ class PlayerProfileComputor:
         """)
 
         # Clean up temp tables
-        for t in ['_tmp_framing', '_tmp_blocking', '_tmp_catcher_throwing',
-                   '_tmp_of_plays', '_tmp_if_plays', '_tmp_dp_plays',
-                   '_tmp_of_arm', '_tmp_bunt_defense', '_tmp_1b_scoop', '_tmp_errors']:
+        for t in [
+            "_tmp_framing",
+            "_tmp_blocking",
+            "_tmp_catcher_throwing",
+            "_tmp_of_plays",
+            "_tmp_if_plays",
+            "_tmp_dp_plays",
+            "_tmp_of_arm",
+            "_tmp_bunt_defense",
+            "_tmp_1b_scoop",
+            "_tmp_errors",
+        ]:
             self._conn.execute(f"DROP TABLE IF EXISTS {t}")
 
         log.info("  Catcher season metrics aggregated.")
-
 
     def _build_pitch_pool(self, seasons: list[int]) -> None:
         """
@@ -3386,9 +3511,7 @@ class PlayerProfileComputor:
         season_list = ", ".join(str(s) for s in seasons)
 
         # Delete existing rows for these seasons, then insert
-        self._conn.execute(
-            f"DELETE FROM sim.pitch_pool WHERE season IN ({season_list})"
-        )
+        self._conn.execute(f"DELETE FROM sim.pitch_pool WHERE season IN ({season_list})")
 
         self._conn.execute(f"""
             INSERT INTO sim.pitch_pool
@@ -3434,7 +3557,7 @@ class PlayerProfileComputor:
                     LAG(break_vertical_induced, 1) OVER w AS prev_pitch_ivb,
                     LAG(break_horizontal,       1) OVER w AS prev_pitch_hb,
                     LAG(type,                   1) OVER w AS prev_pitch_outcome,
-                    
+
                     -- Outcome type classification from pitch code
                     CASE
                         WHEN type = 'B' THEN 'ball'
@@ -3474,9 +3597,7 @@ class PlayerProfileComputor:
         log.info("Building sim.outcome_pool …")
         season_list = ", ".join(str(s) for s in seasons)
 
-        self._conn.execute(
-            f"DELETE FROM sim.outcome_pool WHERE season IN ({season_list})"
-        )
+        self._conn.execute(f"DELETE FROM sim.outcome_pool WHERE season IN ({season_list})")
 
         self._conn.execute(f"""
             INSERT INTO sim.outcome_pool
@@ -3560,9 +3681,7 @@ class PlayerProfileComputor:
         log.info("Building sim.stolen_base_pool …")
         season_list = ", ".join(str(s) for s in seasons)
 
-        self._conn.execute(
-            f"DELETE FROM sim.stolen_base_pool WHERE season IN ({season_list})"
-        )
+        self._conn.execute(f"DELETE FROM sim.stolen_base_pool WHERE season IN ({season_list})")
 
         self._conn.execute(f"""
             INSERT INTO sim.stolen_base_pool

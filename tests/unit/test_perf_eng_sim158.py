@@ -68,8 +68,8 @@ Execution Time: 27.83 ms
 # Tests
 # ---------------------------------------------------------------------------
 
-class TestPlanParsing(unittest.TestCase):
 
+class TestPlanParsing(unittest.TestCase):
     def test_extract_total_ms_pass(self):
         h = _load_harness()
         self.assertAlmostEqual(h._extract_total_ms(SITUATION_PASS_PLAN), 12.41)
@@ -94,12 +94,10 @@ class TestPlanParsing(unittest.TestCase):
         h = _load_harness()
         self.assertTrue(h._plan_uses_index(PITCHER_PASS_PLAN, h.PITCHER_INDEX_NAME))
         self.assertFalse(h._plan_is_seq_scan(PITCHER_PASS_PLAN))
-        self.assertLess(h._extract_total_ms(PITCHER_PASS_PLAN),
-                        h.PITCHER_LATENCY_MS_BUDGET)
+        self.assertLess(h._extract_total_ms(PITCHER_PASS_PLAN), h.PITCHER_LATENCY_MS_BUDGET)
 
 
 class TestAcceptanceBudgets(unittest.TestCase):
-
     def test_locked_in_thresholds(self):
         """Budgets must match the SIM-158 acceptance criteria text."""
         h = _load_harness()

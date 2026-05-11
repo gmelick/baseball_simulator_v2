@@ -71,7 +71,6 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 import duckdb
 import numpy as np
@@ -83,6 +82,7 @@ from numpy.typing import NDArray
 # callers can detect it cleanly without crashing on import.
 try:  # pragma: no cover — import-time concern
     import faiss
+
     _FAISS_AVAILABLE = True
 except ImportError as e:  # pragma: no cover
     faiss = None  # type: ignore[assignment]
@@ -112,22 +112,22 @@ log = logging.getLogger("pitch_pitch_similarity")
 # used in SIM-001 (pitcher engine).
 PITCH_FEATURES = [
     # feature_name,      weight   description
-    ("velo",             1.20),   # release_speed (mph)
-    ("ivb",              1.10),   # induced vertical break (gravity-removed)
-    ("hb",               1.00),   # horizontal break
-    ("spin_rate",        0.70),   # rpm
-    ("spin_axis",        0.50),   # degrees, 0–360 (handled w/ wrap-around offset)
-    ("release_x",        0.60),   # release_pos_x (ft)
-    ("release_z",        0.60),   # release_pos_z (ft)
-    ("release_ext",      0.40),   # release_extension (ft)
-    ("plate_x",          0.90),   # location at plate
-    ("plate_z",          0.90),
+    ("velo", 1.20),  # release_speed (mph)
+    ("ivb", 1.10),  # induced vertical break (gravity-removed)
+    ("hb", 1.00),  # horizontal break
+    ("spin_rate", 0.70),  # rpm
+    ("spin_axis", 0.50),  # degrees, 0–360 (handled w/ wrap-around offset)
+    ("release_x", 0.60),  # release_pos_x (ft)
+    ("release_z", 0.60),  # release_pos_z (ft)
+    ("release_ext", 0.40),  # release_extension (ft)
+    ("plate_x", 0.90),  # location at plate
+    ("plate_z", 0.90),
 ]
 
-FEATURE_NAMES   = [f for f, _ in PITCH_FEATURES]
+FEATURE_NAMES = [f for f, _ in PITCH_FEATURES]
 FEATURE_WEIGHTS = np.array([w for _, w in PITCH_FEATURES], dtype=np.float64)
-FEATURE_SCALE   = np.sqrt(FEATURE_WEIGHTS)
-FEATURE_DIM     = len(PITCH_FEATURES)
+FEATURE_SCALE = np.sqrt(FEATURE_WEIGHTS)
+FEATURE_DIM = len(PITCH_FEATURES)
 
 # Default K for nearest-neighbor query
 DEFAULT_K = 50
@@ -143,9 +143,11 @@ RECENCY_BOOST_SEASONS = 2
 # Data Structures
 # ============================================================================
 
+
 @dataclass(frozen=True, slots=True)
 class PitchVector:
     """Query vector for the pitch-to-pitch FAISS index."""
+
     velo: float
     ivb: float
     hb: float
@@ -158,41 +160,47 @@ class PitchVector:
     plate_z: float
 
     def to_array(self) -> NDArray[np.float64]:
-        return np.array([
-            float(self.velo),
-            float(self.ivb),
-            float(self.hb),
-            float(self.spin_rate),
-            float(self.spin_axis),
-            float(self.release_x),
-            float(self.release_z),
-            float(self.release_ext),
-            float(self.plate_x),
-            float(self.plate_z),
-        ], dtype=np.float64)
+        return np.array(
+            [
+                float(self.velo),
+                float(self.ivb),
+                float(self.hb),
+                float(self.spin_rate),
+                float(self.spin_axis),
+                float(self.release_x),
+                float(self.release_z),
+                float(self.release_ext),
+                float(self.plate_x),
+                float(self.plate_z),
+            ],
+            dtype=np.float64,
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class NearestPitch:
     """One entry in the pitch-to-pitch K-nearest-neighbor query output."""
-    pitch_id: int           # FK into sim.pitch_pool
+
+    pitch_id: int  # FK into sim.pitch_pool
     game_pk: int
     season: int
     pitcher_id: int
     batter_id: int
-    distance: float         # L2 distance in normalized + weighted space
-    outcome_type: str       # ball / called_strike / swinging_strike / foul / in_play
+    distance: float  # L2 distance in normalized + weighted space
+    outcome_type: str  # ball / called_strike / swinging_strike / foul / in_play
 
 
 # ============================================================================
 # Feature Normalization
 # ============================================================================
 
+
 @dataclass(slots=True)
 class PitchNormalizer:
     """Z-score normalizer for pitch feature vectors."""
-    mean: Optional[NDArray] = None
-    std: Optional[NDArray] = None
+
+    mean: NDArray | None = None
+    std: NDArray | None = None
 
     def fit(self, matrix: NDArray[np.float64]) -> None:
         # NaN-aware so missing features (e.g. spin_axis on bunt-foul rows)
@@ -212,13 +220,13 @@ class PitchNormalizer:
         if self.mean is None:
             return (matrix * FEATURE_SCALE[np.newaxis, :]).astype(np.float32)
         normed = (matrix - self.mean[np.newaxis, :]) / self.std[np.newaxis, :]
-        return (np.nan_to_num(normed, nan=0.0)
-                * FEATURE_SCALE[np.newaxis, :]).astype(np.float32)
+        return (np.nan_to_num(normed, nan=0.0) * FEATURE_SCALE[np.newaxis, :]).astype(np.float32)
 
 
 # ============================================================================
 # Main Engine
 # ============================================================================
+
 
 class PitchPitchSimilarityEngine:
     """
@@ -244,8 +252,7 @@ class PitchPitchSimilarityEngine:
     ) -> None:
         if not _FAISS_AVAILABLE:  # pragma: no cover
             raise RuntimeError(
-                "faiss-cpu is not installed. "
-                f"Original import error: {_FAISS_IMPORT_ERROR!r}"
+                f"faiss-cpu is not installed. Original import error: {_FAISS_IMPORT_ERROR!r}"
             )
         if index_kind not in (self.INDEX_KIND_FLAT, self.INDEX_KIND_HNSW):
             raise ValueError(f"unknown index_kind: {index_kind!r}")
@@ -253,8 +260,8 @@ class PitchPitchSimilarityEngine:
         self._duckdb_path = duckdb_path
         self._index_kind = index_kind
         self._normalizer = PitchNormalizer()
-        self._index: Optional["faiss.Index"] = None
-        self._index_meta: list[NearestPitch] = []   # parallel to FAISS row order
+        self._index: faiss.Index | None = None
+        self._index_meta: list[NearestPitch] = []  # parallel to FAISS row order
         self._index_size = 0
 
     # ------------------------------------------------------------------
@@ -263,7 +270,7 @@ class PitchPitchSimilarityEngine:
 
     def build(
         self,
-        seasons: Optional[list[int]] = None,
+        seasons: list[int] | None = None,
         *,
         recency_boost: bool = False,
     ) -> None:
@@ -279,7 +286,8 @@ class PitchPitchSimilarityEngine:
             log.warning(
                 "PitchPitchSimilarityEngine: only %d pitches loaded "
                 "(minimum %d). Build may not be reliable.",
-                len(raw_matrix), MIN_INDEX_SIZE,
+                len(raw_matrix),
+                MIN_INDEX_SIZE,
             )
 
         if recency_boost and seasons:
@@ -295,13 +303,15 @@ class PitchPitchSimilarityEngine:
         elapsed = time.time() - t0
         log.info(
             "PitchPitchSimilarityEngine built: %d pitches indexed (%s) in %.2fs.",
-            self._index_size, self._index_kind, elapsed,
+            self._index_size,
+            self._index_kind,
+            elapsed,
         )
 
     def _load_pool(
         self,
         conn: duckdb.DuckDBPyConnection,
-        seasons: Optional[list[int]],
+        seasons: list[int] | None,
     ) -> tuple[NDArray[np.float64], list[NearestPitch]]:
         sf = ""
         if seasons:
@@ -323,25 +333,47 @@ class PitchPitchSimilarityEngine:
         matrix = np.empty((n, FEATURE_DIM), dtype=np.float64)
         meta: list[NearestPitch] = []
         for i, r in enumerate(rows):
-            (pitch_id, game_pk, season, pitcher_id, batter_id,
-             velo, ivb, hb, spin_rate, spin_axis,
-             release_x, release_z, release_ext,
-             plate_x, plate_z,
-             outcome_type) = r
+            (
+                pitch_id,
+                game_pk,
+                season,
+                pitcher_id,
+                batter_id,
+                velo,
+                ivb,
+                hb,
+                spin_rate,
+                spin_axis,
+                release_x,
+                release_z,
+                release_ext,
+                plate_x,
+                plate_z,
+                outcome_type,
+            ) = r
             matrix[i, :] = [
-                _f(velo), _f(ivb), _f(hb), _f(spin_rate), _f(spin_axis),
-                _f(release_x), _f(release_z), _f(release_ext),
-                _f(plate_x), _f(plate_z),
+                _f(velo),
+                _f(ivb),
+                _f(hb),
+                _f(spin_rate),
+                _f(spin_axis),
+                _f(release_x),
+                _f(release_z),
+                _f(release_ext),
+                _f(plate_x),
+                _f(plate_z),
             ]
-            meta.append(NearestPitch(
-                pitch_id=pitch_id,
-                game_pk=game_pk,
-                season=season,
-                pitcher_id=pitcher_id,
-                batter_id=batter_id,
-                distance=0.0,
-                outcome_type=outcome_type,
-            ))
+            meta.append(
+                NearestPitch(
+                    pitch_id=pitch_id,
+                    game_pk=game_pk,
+                    season=season,
+                    pitcher_id=pitcher_id,
+                    batter_id=batter_id,
+                    distance=0.0,
+                    outcome_type=outcome_type,
+                )
+            )
         return matrix, meta
 
     def _apply_recency_boost(
@@ -355,7 +387,8 @@ class PitchPitchSimilarityEngine:
         toward recent data without changing FAISS's distance metric."""
         recent_cutoff = max(seasons) - (RECENCY_BOOST_SEASONS - 1)
         recent_mask = np.array(
-            [m.season >= recent_cutoff for m in meta], dtype=bool,
+            [m.season >= recent_cutoff for m in meta],
+            dtype=bool,
         )
         if not recent_mask.any():
             return raw_matrix, meta
@@ -363,7 +396,7 @@ class PitchPitchSimilarityEngine:
         boosted_meta = list(meta) + [meta[i] for i in np.flatnonzero(recent_mask)]
         return boosted_matrix, boosted_meta
 
-    def _build_faiss_index(self, scaled: NDArray[np.float32]) -> "faiss.Index":
+    def _build_faiss_index(self, scaled: NDArray[np.float32]) -> faiss.Index:
         if self._index_kind == self.INDEX_KIND_HNSW:
             # 32 neighbors per node is FAISS's default for HNSW.
             index = faiss.IndexHNSWFlat(FEATURE_DIM, 32)
@@ -396,20 +429,22 @@ class PitchPitchSimilarityEngine:
         distances, indices = self._index.search(scaled, k_eff)
 
         results: list[NearestPitch] = []
-        for d, idx in zip(distances[0], indices[0]):
+        for d, idx in zip(distances[0], indices[0], strict=False):
             if idx < 0:
                 continue
             base = self._index_meta[idx]
             # FAISS returns squared L2 distance for IndexFlatL2; emit Euclidean.
-            results.append(NearestPitch(
-                pitch_id=base.pitch_id,
-                game_pk=base.game_pk,
-                season=base.season,
-                pitcher_id=base.pitcher_id,
-                batter_id=base.batter_id,
-                distance=float(np.sqrt(max(d, 0.0))),
-                outcome_type=base.outcome_type,
-            ))
+            results.append(
+                NearestPitch(
+                    pitch_id=base.pitch_id,
+                    game_pk=base.game_pk,
+                    season=base.season,
+                    pitcher_id=base.pitcher_id,
+                    batter_id=base.batter_id,
+                    distance=float(np.sqrt(max(d, 0.0))),
+                    outcome_type=base.outcome_type,
+                )
+            )
         return results
 
     def query_batch(
@@ -431,21 +466,23 @@ class PitchPitchSimilarityEngine:
         distances, indices = self._index.search(scaled, k_eff)
 
         out: list[list[NearestPitch]] = []
-        for row_d, row_i in zip(distances, indices):
+        for row_d, row_i in zip(distances, indices, strict=False):
             row_results: list[NearestPitch] = []
-            for d, idx in zip(row_d, row_i):
+            for d, idx in zip(row_d, row_i, strict=False):
                 if idx < 0:
                     continue
                 base = self._index_meta[idx]
-                row_results.append(NearestPitch(
-                    pitch_id=base.pitch_id,
-                    game_pk=base.game_pk,
-                    season=base.season,
-                    pitcher_id=base.pitcher_id,
-                    batter_id=base.batter_id,
-                    distance=float(np.sqrt(max(d, 0.0))),
-                    outcome_type=base.outcome_type,
-                ))
+                row_results.append(
+                    NearestPitch(
+                        pitch_id=base.pitch_id,
+                        game_pk=base.game_pk,
+                        season=base.season,
+                        pitcher_id=base.pitcher_id,
+                        batter_id=base.batter_id,
+                        distance=float(np.sqrt(max(d, 0.0))),
+                        outcome_type=base.outcome_type,
+                    )
+                )
             out.append(row_results)
         return out
 
@@ -465,6 +502,7 @@ class PitchPitchSimilarityEngine:
 # ============================================================================
 # Helpers
 # ============================================================================
+
 
 def _f(value) -> float:
     """DuckDB returns Decimals or None for some numeric columns — coerce to

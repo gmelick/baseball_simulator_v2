@@ -48,7 +48,6 @@ TOP_K_STABLE = 5
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -93,7 +92,7 @@ ENGINE_REGISTRY: list[dict] = [
         "module": "similarity.engines.baserunner_steal_similarity",
         "class": "BaserunnerStealSimilarityEngine",
         "sub_score_names": ["tendency_score", "jump_score", "success_score"],
-        "query_signature": ("player_id", "season"),   # positional arg names
+        "query_signature": ("player_id", "season"),  # positional arg names
     },
     {
         "name": "catcher",

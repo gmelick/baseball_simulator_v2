@@ -97,43 +97,43 @@ log = logging.getLogger("manager_similarity")
 # Rate-based metrics; all normalized per 9 innings or per opportunity.
 USAGE_FEATURES = [
     # feature_name,                             reliability_weight
-    ("starter_avg_pitch_count",                  0.800),   # avg pitches before first hook; stable
-    ("starter_pull_pct_before_100",              0.700),   # % starts ended before 100 pitches
-    ("closer_entry_leverage_index",              0.600),   # avg LI when closer enters; role usage
-    ("high_leverage_reliever_rate",              0.600),   # % high-LI PA handled by top 2 relievers
-    ("opener_usage_rate",                        0.500),   # openers used / total starts
-    ("bulk_innings_rate",                        0.500),   # games with bulk-inning reliever after opener
+    ("starter_avg_pitch_count", 0.800),  # avg pitches before first hook; stable
+    ("starter_pull_pct_before_100", 0.700),  # % starts ended before 100 pitches
+    ("closer_entry_leverage_index", 0.600),  # avg LI when closer enters; role usage
+    ("high_leverage_reliever_rate", 0.600),  # % high-LI PA handled by top 2 relievers
+    ("opener_usage_rate", 0.500),  # openers used / total starts
+    ("bulk_innings_rate", 0.500),  # games with bulk-inning reliever after opener
 ]
 
 # --- Offensive Aggressiveness features ---
 AGGRESSION_FEATURES = [
-    ("steal_order_rate_per_1b_opp",              0.700),   # steal signs given / 1B opportunity
-    ("hit_and_run_rate_per_opportunity",         0.600),   # H&R per 1B+runner opportunity
-    ("sac_bunt_rate_high_leverage",              0.650),   # bunts in high-LI situations (> 1.5 LI)
-    ("sac_bunt_rate_low_leverage",               0.500),   # bunts in low-LI (small-ball vs. not)
-    ("squeeze_play_rate_per_3b_opp",             0.400),   # squeeze attempts / runner-on-3rd-<2-out
+    ("steal_order_rate_per_1b_opp", 0.700),  # steal signs given / 1B opportunity
+    ("hit_and_run_rate_per_opportunity", 0.600),  # H&R per 1B+runner opportunity
+    ("sac_bunt_rate_high_leverage", 0.650),  # bunts in high-LI situations (> 1.5 LI)
+    ("sac_bunt_rate_low_leverage", 0.500),  # bunts in low-LI (small-ball vs. not)
+    ("squeeze_play_rate_per_3b_opp", 0.400),  # squeeze attempts / runner-on-3rd-<2-out
 ]
 
 # --- Platoon / Matchup Management features ---
 PLATOON_FEATURES = [
-    ("pinch_hit_rate_vs_same_hand",              0.700),   # PH rate when platoon disadvantage exists
-    ("pinch_hit_rate_high_leverage",             0.650),   # PH rate in high-LI at-bats
-    ("defensive_sub_rate_late_innings",          0.550),   # defensive replacement rate in 7th+ innings
-    ("double_switch_rate_per_reliever_change",   0.600),   # double switches / reliever change event
-    ("platoon_advantage_exploitation_rate",      0.700),   # matchup changes made when adv. available
+    ("pinch_hit_rate_vs_same_hand", 0.700),  # PH rate when platoon disadvantage exists
+    ("pinch_hit_rate_high_leverage", 0.650),  # PH rate in high-LI at-bats
+    ("defensive_sub_rate_late_innings", 0.550),  # defensive replacement rate in 7th+ innings
+    ("double_switch_rate_per_reliever_change", 0.600),  # double switches / reliever change event
+    ("platoon_advantage_exploitation_rate", 0.700),  # matchup changes made when adv. available
 ]
 
 # --- Sub-score weights (sum to 1.0) ---
-WEIGHT_USAGE      = 0.40
+WEIGHT_USAGE = 0.40
 WEIGHT_AGGRESSION = 0.35
-WEIGHT_PLATOON    = 0.25
+WEIGHT_PLATOON = 0.25
 _TOTAL = WEIGHT_USAGE + WEIGHT_AGGRESSION + WEIGHT_PLATOON
 assert abs(_TOTAL - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
 # RBF bandwidth parameters
-RBF_SIGMA_USAGE      = 1.0000
+RBF_SIGMA_USAGE = 1.0000
 RBF_SIGMA_AGGRESSION = 1.0500
-RBF_SIGMA_PLATOON    = 1.0200
+RBF_SIGMA_PLATOON = 1.0200
 
 # EB_N_PRIOR = 30: manager decisions stabilize more slowly than player stats
 EB_N_PRIOR = 30
@@ -146,18 +146,20 @@ MIN_GAMES_MANAGED = 50
 # Data Structures
 # ============================================================================
 
+
 @dataclass(slots=True)
 class ManagerProfile:
     """Manager-season profile for similarity scoring."""
+
     manager_id: int
     season: int
     sample_games: int
-    sample_starter_decisions: int     # number of starts with pull decision recorded
+    sample_starter_decisions: int  # number of starts with pull decision recorded
 
     # Feature vectors (raw — normalized at query time)
-    usage_vec: NDArray[np.float64]       # shape (len(USAGE_FEATURES),)
+    usage_vec: NDArray[np.float64]  # shape (len(USAGE_FEATURES),)
     aggression_vec: NDArray[np.float64]  # shape (len(AGGRESSION_FEATURES),)
-    platoon_vec: NDArray[np.float64]     # shape (len(PLATOON_FEATURES),)
+    platoon_vec: NDArray[np.float64]  # shape (len(PLATOON_FEATURES),)
 
     # Empirical Bayes
     eb_alpha: float = 1.0
@@ -167,6 +169,7 @@ class ManagerProfile:
 @dataclass(frozen=True, slots=True)
 class SimilarityResult:
     """One entry in the similarity query output."""
+
     manager_id: int
     season: int
     score: float
@@ -180,13 +183,16 @@ class SimilarityResult:
 # WeightedRBFSimilarity, EmpiricalBayesShrinkage, FeatureNormalizer
 # ============================================================================
 
+
 class WeightedRBFSimilarity:
     def __init__(self, sigma: float, reliability_weights: NDArray[np.float64]) -> None:
         self.sigma = sigma
-        self.gamma = 1.0 / (2.0 * sigma ** 2)
+        self.gamma = 1.0 / (2.0 * sigma**2)
         total = reliability_weights.sum()
-        self.weights = reliability_weights / total if total > 0 else (
-            np.ones_like(reliability_weights) / len(reliability_weights)
+        self.weights = (
+            reliability_weights / total
+            if total > 0
+            else (np.ones_like(reliability_weights) / len(reliability_weights))
         )
 
     def score(self, x: NDArray, y: NDArray) -> float:
@@ -195,7 +201,7 @@ class WeightedRBFSimilarity:
 
     def score_batch(self, query: NDArray, candidates: NDArray) -> NDArray[np.float64]:
         diff = np.nan_to_num(candidates - query[np.newaxis, :], nan=0.0)
-        return np.exp(-self.gamma * np.sum(self.weights[np.newaxis, :] * diff ** 2, axis=1))
+        return np.exp(-self.gamma * np.sum(self.weights[np.newaxis, :] * diff**2, axis=1))
 
 
 class EmpiricalBayesShrinkage:
@@ -239,14 +245,20 @@ class FeatureNormalizer:
             return v
         return np.nan_to_num((v - m) / s, nan=0.0)
 
-    def normalize_usage(self, v): return self._norm(v, self.usage_mean, self.usage_std)
-    def normalize_aggression(self, v): return self._norm(v, self.aggression_mean, self.aggression_std)
-    def normalize_platoon(self, v): return self._norm(v, self.platoon_mean, self.platoon_std)
+    def normalize_usage(self, v):
+        return self._norm(v, self.usage_mean, self.usage_std)
+
+    def normalize_aggression(self, v):
+        return self._norm(v, self.aggression_mean, self.aggression_std)
+
+    def normalize_platoon(self, v):
+        return self._norm(v, self.platoon_mean, self.platoon_std)
 
 
 # ============================================================================
 # Scoring Partition
 # ============================================================================
+
 
 class ManagerPartition:
     def __init__(self) -> None:
@@ -263,7 +275,9 @@ class ManagerPartition:
         if not profiles:
             return
         self._usage_mat = np.array([norm.normalize_usage(p.usage_vec) for p in profiles])
-        self._aggression_mat = np.array([norm.normalize_aggression(p.aggression_vec) for p in profiles])
+        self._aggression_mat = np.array(
+            [norm.normalize_aggression(p.aggression_vec) for p in profiles]
+        )
         self._platoon_mat = np.array([norm.normalize_platoon(p.platoon_vec) for p in profiles])
         self._eb_alphas = np.array([p.eb_alpha for p in profiles], dtype=np.float64)
 
@@ -280,7 +294,9 @@ class ManagerPartition:
 
         query_key = (query.manager_id, query.season)
         u_s = usage_rbf.score_batch(norm.normalize_usage(query.usage_vec), self._usage_mat)
-        a_s = agg_rbf.score_batch(norm.normalize_aggression(query.aggression_vec), self._aggression_mat)
+        a_s = agg_rbf.score_batch(
+            norm.normalize_aggression(query.aggression_vec), self._aggression_mat
+        )
         p_s = plat_rbf.score_batch(norm.normalize_platoon(query.platoon_vec), self._platoon_mat)
 
         composite = WEIGHT_USAGE * u_s + WEIGHT_AGGRESSION * a_s + WEIGHT_PLATOON * p_s
@@ -306,6 +322,7 @@ class ManagerPartition:
 # Main Engine
 # ============================================================================
 
+
 class ManagerSimilarityEngine:
     """
     Manager-to-Manager Similarity Engine (Step 2.8).
@@ -324,7 +341,9 @@ class ManagerSimilarityEngine:
         self._duckdb_path = duckdb_path
         self._profiles: dict[tuple[int, int], ManagerProfile] = {}
         self._league_avg: dict[str, dict[int, NDArray]] = {
-            "usage": {}, "aggression": {}, "platoon": {},
+            "usage": {},
+            "aggression": {},
+            "platoon": {},
         }
         self._normalizer = FeatureNormalizer()
         self._shrinkage = EmpiricalBayesShrinkage()
@@ -356,7 +375,8 @@ class ManagerSimilarityEngine:
 
         log.info(
             "ManagerSimilarityEngine built: %d profiles in %.2fs.",
-            len(self._profiles), time.time() - t0,
+            len(self._profiles),
+            time.time() - t0,
         )
 
     def _load_league_averages(self, conn, seasons):
@@ -416,10 +436,26 @@ class ManagerSimilarityEngine:
 
         for row in rows:
             (
-                mid, season, n_games, n_start_dec,
-                avg_pc, pull_b100, closer_li, hl_rate, opener_rate, bulk_rate,
-                steal_rate, hnr_rate, bunt_hl, bunt_ll, squeeze_rate,
-                ph_sh, ph_hl, def_sub, dbl_sw, plat_exploit,
+                mid,
+                season,
+                n_games,
+                n_start_dec,
+                avg_pc,
+                pull_b100,
+                closer_li,
+                hl_rate,
+                opener_rate,
+                bulk_rate,
+                steal_rate,
+                hnr_rate,
+                bunt_hl,
+                bunt_ll,
+                squeeze_rate,
+                ph_sh,
+                ph_hl,
+                def_sub,
+                dbl_sw,
+                plat_exploit,
                 below_min,
             ) = row
 
@@ -448,9 +484,15 @@ class ManagerSimilarityEngine:
             ]:
                 avg = self._league_avg[group].get(s)
                 if avg is not None:
-                    setattr(p, attr, self._shrinkage.shrink(
-                        getattr(p, attr), avg, p.sample_games,
-                    ))
+                    setattr(
+                        p,
+                        attr,
+                        self._shrinkage.shrink(
+                            getattr(p, attr),
+                            avg,
+                            p.sample_games,
+                        ),
+                    )
 
     def query(
         self,
@@ -464,8 +506,11 @@ class ManagerSimilarityEngine:
             return []
 
         results = self._partition.score_all(
-            profile, self._normalizer,
-            self._usage_rbf, self._agg_rbf, self._plat_rbf,
+            profile,
+            self._normalizer,
+            self._usage_rbf,
+            self._agg_rbf,
+            self._plat_rbf,
         )
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:n] if n is not None else results
@@ -481,16 +526,27 @@ class ManagerSimilarityEngine:
             return None
 
         norm = self._normalizer
-        u = self._usage_rbf.score(norm.normalize_usage(pa.usage_vec), norm.normalize_usage(pb.usage_vec))
-        a = self._agg_rbf.score(norm.normalize_aggression(pa.aggression_vec), norm.normalize_aggression(pb.aggression_vec))
-        p = self._plat_rbf.score(norm.normalize_platoon(pa.platoon_vec), norm.normalize_platoon(pb.platoon_vec))
+        u = self._usage_rbf.score(
+            norm.normalize_usage(pa.usage_vec), norm.normalize_usage(pb.usage_vec)
+        )
+        a = self._agg_rbf.score(
+            norm.normalize_aggression(pa.aggression_vec),
+            norm.normalize_aggression(pb.aggression_vec),
+        )
+        p = self._plat_rbf.score(
+            norm.normalize_platoon(pa.platoon_vec), norm.normalize_platoon(pb.platoon_vec)
+        )
 
         composite = WEIGHT_USAGE * u + WEIGHT_AGGRESSION * a + WEIGHT_PLATOON * p
         composite = float(np.clip(composite * np.sqrt(min(pa.eb_alpha, pb.eb_alpha)), 0.0, 1.0))
 
         return SimilarityResult(
-            manager_id=pb.manager_id, season=pb.season, score=composite,
-            usage_score=u, aggression_score=a, platoon_score=p,
+            manager_id=pb.manager_id,
+            season=pb.season,
+            score=composite,
+            usage_score=u,
+            aggression_score=a,
+            platoon_score=p,
             sample_games=pb.sample_games,
         )
 
@@ -508,6 +564,7 @@ class ManagerSimilarityEngine:
 # ============================================================================
 # Convenience: Batch Similarity Matrix
 # ============================================================================
+
 
 def build_similarity_matrix(
     engine: ManagerSimilarityEngine,
@@ -528,9 +585,7 @@ def build_similarity_matrix(
 # CLI
 # ============================================================================
 if __name__ == "__main__":
-    engine = ManagerSimilarityEngine(
-        duckdb_path="../../db/schemas/baseball_simulator.duckdb"
-    )
+    engine = ManagerSimilarityEngine(duckdb_path="../../db/schemas/baseball_simulator.duckdb")
     engine.build(seasons=[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017])
     report = run_generic_diagnostics(
         engine,

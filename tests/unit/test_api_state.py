@@ -30,28 +30,23 @@ from api.state import (
     make_pg_name_resolver,
 )
 
-
 # ---------------------------------------------------------------------------
 # make_cache_key
 # ---------------------------------------------------------------------------
 
 
 class TestCacheKey:
-
     def test_format_matches_spec(self):
         # Spec: docs/similarity_visualization_spec.md §3 caching.
-        assert (
-            make_cache_key(694973, 2025, 20, 20)
-            == "simviz:pitcher:694973:2025:bins=20:top_n=20"
-        )
+        assert make_cache_key(694973, 2025, 20, 20) == "simviz:pitcher:694973:2025:bins=20:top_n=20"
 
     def test_different_params_yield_different_keys(self):
         keys = {
             make_cache_key(1, 2024, 20, 20),
-            make_cache_key(1, 2025, 20, 20),   # season diff
-            make_cache_key(2, 2024, 20, 20),   # pitcher diff
-            make_cache_key(1, 2024, 40, 20),   # bins diff
-            make_cache_key(1, 2024, 20, 50),   # top_n diff
+            make_cache_key(1, 2025, 20, 20),  # season diff
+            make_cache_key(2, 2024, 20, 20),  # pitcher diff
+            make_cache_key(1, 2024, 40, 20),  # bins diff
+            make_cache_key(1, 2024, 20, 50),  # top_n diff
         }
         assert len(keys) == 5
 
@@ -97,10 +92,12 @@ async def test_name_resolver_dedupes_and_casts_ids():
     the query — protects against duplicate ids from set() iteration
     order and against str ids leaking in from a JSON layer.
     """
-    pool = _StubPool(rows=[
-        {"player_id": 100, "full_name": "Alice"},
-        {"player_id": 200, "full_name": "Bob"},
-    ])
+    pool = _StubPool(
+        rows=[
+            {"player_id": 100, "full_name": "Alice"},
+            {"player_id": 200, "full_name": "Bob"},
+        ]
+    )
     resolve = make_pg_name_resolver(pool)
     result = await resolve([100, 100, "200", 200])
     assert result == {100: "Alice", 200: "Bob"}
@@ -115,10 +112,12 @@ async def test_name_resolver_handles_missing_ids():
     missing — those ids are simply absent from the result dict.
     The route falls back to a placeholder name.
     """
-    pool = _StubPool(rows=[
-        {"player_id": 100, "full_name": "Alice"},
-        # 200 deliberately absent
-    ])
+    pool = _StubPool(
+        rows=[
+            {"player_id": 100, "full_name": "Alice"},
+            # 200 deliberately absent
+        ]
+    )
     resolve = make_pg_name_resolver(pool)
     result = await resolve([100, 200])
     assert result == {100: "Alice"}
@@ -227,6 +226,7 @@ def test_build_pitcher_engine_uses_arg_over_env(monkeypatch):
     against a real DuckDB file in a unit test.
     """
     import api.state as state_mod
+
     monkeypatch.setenv("BASEBALL_DUCKDB_PATH", "/from/env.duckdb")
 
     seen = {}
@@ -240,7 +240,9 @@ def test_build_pitcher_engine_uses_arg_over_env(monkeypatch):
             seen["built"] = True
 
     # Patch the lazy import target by injecting a fake module.
-    import sys, types
+    import sys
+    import types
+
     fake_mod = types.ModuleType("similarity.engines.pitcher_similarity")
     fake_mod.PitcherSimilarityEngine = _StubEngine
     monkeypatch.setitem(sys.modules, "similarity.engines.pitcher_similarity", fake_mod)
@@ -252,6 +254,7 @@ def test_build_pitcher_engine_uses_arg_over_env(monkeypatch):
 
 def test_build_pitcher_engine_falls_back_to_env(monkeypatch):
     import api.state as state_mod
+
     monkeypatch.setenv("BASEBALL_DUCKDB_PATH", "/from/env.duckdb")
     seen = {}
 
@@ -263,7 +266,9 @@ def test_build_pitcher_engine_falls_back_to_env(monkeypatch):
         def build(self):
             pass
 
-    import sys, types
+    import sys
+    import types
+
     fake_mod = types.ModuleType("similarity.engines.pitcher_similarity")
     fake_mod.PitcherSimilarityEngine = _StubEngine
     monkeypatch.setitem(sys.modules, "similarity.engines.pitcher_similarity", fake_mod)
@@ -274,6 +279,7 @@ def test_build_pitcher_engine_falls_back_to_env(monkeypatch):
 
 def test_build_pitcher_engine_default_path_when_no_env(monkeypatch):
     import api.state as state_mod
+
     monkeypatch.delenv("BASEBALL_DUCKDB_PATH", raising=False)
     seen = {}
 
@@ -285,7 +291,9 @@ def test_build_pitcher_engine_default_path_when_no_env(monkeypatch):
         def build(self):
             pass
 
-    import sys, types
+    import sys
+    import types
+
     fake_mod = types.ModuleType("similarity.engines.pitcher_similarity")
     fake_mod.PitcherSimilarityEngine = _StubEngine
     monkeypatch.setitem(sys.modules, "similarity.engines.pitcher_similarity", fake_mod)

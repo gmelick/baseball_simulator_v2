@@ -61,22 +61,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import math
 import os
 import random
-import time
+from collections.abc import Callable, Coroutine
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
-from typing import Any, Awaitable, Callable, Coroutine
-
-# SIM-106: Type alias for the simulation callback. It MUST be an async
-# function — passing a sync function would either raise TypeError when the
-# pipeline awaits it, or silently no-op if the coroutine isn't awaited.
-# The runtime check in LiveIngestionPipeline.__init__ catches misuse at
-# construction time so the failure surfaces immediately during Phase 5
-# wiring rather than during the first re-sim signal in production.
-SimulationCallback = Callable[[int, dict], Coroutine[Any, Any, None]]
+from datetime import UTC, date, datetime
+from typing import Any
 
 import aiohttp
 import asyncpg
@@ -85,6 +75,14 @@ import websockets
 import websockets.exceptions
 from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
 from fastapi.routing import APIRouter
+
+# SIM-106: Type alias for the simulation callback. It MUST be an async
+# function — passing a sync function would either raise TypeError when the
+# pipeline awaits it, or silently no-op if the coroutine isn't awaited.
+# The runtime check in LiveIngestionPipeline.__init__ catches misuse at
+# construction time so the failure surfaces immediately during Phase 5
+# wiring rather than during the first re-sim signal in production.
+SimulationCallback = Callable[[int, dict], Coroutine[Any, Any, None]]
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -101,16 +99,16 @@ log = logging.getLogger("live_ingestion")
 # Config
 # ---------------------------------------------------------------------------
 
-MLB_BASE          = "https://statsapi.mlb.com"
-MLB_WS_TEMPLATE   = "wss://ws.statsapi.mlb.com/api/v1/game/push/subscribe/gameday/{game_pk}"
-SCHEDULE_URL      = f"{MLB_BASE}/api/v1/schedule"
+MLB_BASE = "https://statsapi.mlb.com"
+MLB_WS_TEMPLATE = "wss://ws.statsapi.mlb.com/api/v1/game/push/subscribe/gameday/{game_pk}"
+SCHEDULE_URL = f"{MLB_BASE}/api/v1/schedule"
 
-SCHEDULE_POLL_S   = 30      # how often to check for newly-live games
-WS_RECONNECT_BASE = 2.0     # base seconds for WS reconnect backoff
-WS_RECONNECT_MAX  = 60.0    # cap on WS reconnect backoff
-HTTP_TIMEOUT_S    = 10      # aiohttp request timeout
-REDIS_TTL_LIVE_S  = 60      # cache TTL for live game states
-REDIS_TTL_DONE_S  = 3600    # cache TTL for completed game states
+SCHEDULE_POLL_S = 30  # how often to check for newly-live games
+WS_RECONNECT_BASE = 2.0  # base seconds for WS reconnect backoff
+WS_RECONNECT_MAX = 60.0  # cap on WS reconnect backoff
+HTTP_TIMEOUT_S = 10  # aiohttp request timeout
+REDIS_TTL_LIVE_S = 60  # cache TTL for live game states
+REDIS_TTL_DONE_S = 3600  # cache TTL for completed game states
 
 # SIM-104: per-game cooldown applied to the manual /resimulate endpoint.
 # 10 seconds is generous enough to avoid frustrating legitimate users
@@ -136,6 +134,7 @@ GAME_TYPES = ["R", "F", "D", "L", "W", "C", "P"]
 # ---------------------------------------------------------------------------
 # Mock Odds API
 # ---------------------------------------------------------------------------
+
 
 class MockOddsAPI:
     """
@@ -171,13 +170,13 @@ class MockOddsAPI:
     # ------------------------------------------------------------------
     _PROP_CONFIG: dict[str, tuple[float, float, tuple[int, int], tuple[int, int]]] = {
         #  prop_stat       center  ±spread  over_vig        under_vig
-        "strikeouts":    (5.5,    1.0,     (-125, -105),   (-125, -105)),
-        "hits":          (0.5,    0.5,     (-115, -105),   (-115, -105)),
-        "home_runs":     (0.5,    0.0,     (-130, -110),   (+100, +110)),
-        "earned_runs":   (3.5,    1.0,     (-115, -105),   (-115, -105)),
-        "walks":         (2.5,    0.5,     (-115, -105),   (-115, -105)),
-        "total_bases":   (1.5,    0.5,     (-120, -105),   (-115, -105)),
-        "rbis":          (0.5,    0.5,     (-120, -110),   (-110, -100)),
+        "strikeouts": (5.5, 1.0, (-125, -105), (-125, -105)),
+        "hits": (0.5, 0.5, (-115, -105), (-115, -105)),
+        "home_runs": (0.5, 0.0, (-130, -110), (+100, +110)),
+        "earned_runs": (3.5, 1.0, (-115, -105), (-115, -105)),
+        "walks": (2.5, 0.5, (-115, -105), (-115, -105)),
+        "total_bases": (1.5, 0.5, (-120, -105), (-115, -105)),
+        "rbis": (0.5, 0.5, (-120, -110), (-110, -100)),
     }
 
     @staticmethod
@@ -253,24 +252,24 @@ class MockOddsAPI:
         total_juice = rng.randint(-115, -105)
 
         return {
-            "game_pk":        game_pk,
-            "source":         "mock",
-            "is_mock":        True,
+            "game_pk": game_pk,
+            "source": "mock",
+            "is_mock": True,
             # SIM-133 CLV columns
-            "book":           book,
-            "line_type":      line_type,
-            "market_type":    market_type,
-            "is_sharp_book":  is_sharp_book,
+            "book": book,
+            "line_type": line_type,
+            "market_type": market_type,
+            "is_sharp_book": is_sharp_book,
             # Odds values
-            "home_ml":        home_ml,
-            "away_ml":        away_ml,
-            "home_spread":    home_spread,
+            "home_ml": home_ml,
+            "away_ml": away_ml,
+            "home_spread": home_spread,
             "home_spread_ml": spread_juice,
-            "away_spread":    away_spread,
+            "away_spread": away_spread,
             "away_spread_ml": spread_juice,
-            "total_line":     total_line,
-            "over_ml":        total_juice,
-            "under_ml":       total_juice,
+            "total_line": total_line,
+            "over_ml": total_juice,
+            "under_ml": total_juice,
         }
 
     @staticmethod
@@ -316,13 +315,9 @@ class MockOddsAPI:
         """
         if prop_stat not in MockOddsAPI._PROP_CONFIG:
             known = ", ".join(sorted(MockOddsAPI._PROP_CONFIG))
-            raise ValueError(
-                f"Unknown prop_stat '{prop_stat}'. Known values: {known}"
-            )
+            raise ValueError(f"Unknown prop_stat '{prop_stat}'. Known values: {known}")
 
-        center, half_spread, over_vig_range, under_vig_range = (
-            MockOddsAPI._PROP_CONFIG[prop_stat]
-        )
+        center, half_spread, over_vig_range, under_vig_range = MockOddsAPI._PROP_CONFIG[prop_stat]
 
         # Deterministic RNG: same game + player + prop always → same line
         rng = random.Random(game_pk * 1_000_000 + player_id + hash(prop_stat))
@@ -332,26 +327,27 @@ class MockOddsAPI:
         line = round(raw_line * 2) / 2  # snap to nearest 0.5
 
         # Vig: independent random draws within Betting-Analyst-approved ranges
-        over_ml  = rng.randint(*over_vig_range)
+        over_ml = rng.randint(*over_vig_range)
         under_ml = rng.randint(*under_vig_range)
 
         return {
-            "game_pk":      game_pk,
-            "player_id":    player_id,
-            "prop_stat":    prop_stat,
-            "line":         line,
-            "over_ml":      over_ml,
-            "under_ml":     under_ml,
-            "book":         book,
-            "line_type":    line_type,
+            "game_pk": game_pk,
+            "player_id": player_id,
+            "prop_stat": prop_stat,
+            "line": line,
+            "over_ml": over_ml,
+            "under_ml": under_ml,
+            "book": book,
+            "line_type": line_type,
             "is_sharp_book": is_sharp_book,
-            "source":       "mock",
-            "is_mock":      True,
+            "source": "mock",
+            "is_mock": True,
         }
 
 
 # FastAPI router — mounts at /api/odds
 odds_router = APIRouter(prefix="/api/odds", tags=["odds"])
+
 
 @odds_router.get("/{game_pk}")
 async def get_game_odds(game_pk: int) -> dict:
@@ -361,16 +357,21 @@ async def get_game_odds(game_pk: int) -> dict:
     """
     return MockOddsAPI.get_odds(game_pk)
 
+
 @odds_router.get("/today/all")
 async def get_todays_odds() -> list[dict]:
     """Returns mock odds for every game scheduled today."""
     async with aiohttp.ClientSession() as session:
         today = date.today().strftime("%Y-%m-%d")
         params = {"sportId": 1, "gameTypes": GAME_TYPES, "date": today}
-        async with session.get(SCHEDULE_URL, params=params, timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_S)) as resp:
+        async with session.get(
+            SCHEDULE_URL, params=params, timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_S)
+        ) as resp:
             data = await resp.json()
     games = [
-        g for d in data.get("dates", []) for g in d.get("games", [])
+        g
+        for d in data.get("dates", [])
+        for g in d.get("games", [])
         if "rescheduleGameDate" not in g and "resumeGameDate" not in g
     ]
     return [MockOddsAPI.get_odds(g["gamePk"]) for g in games]
@@ -379,6 +380,7 @@ async def get_todays_odds() -> list[dict]:
 # ---------------------------------------------------------------------------
 # Game State Builder
 # ---------------------------------------------------------------------------
+
 
 class GameStateBuilder:
     """
@@ -413,7 +415,7 @@ class GameStateBuilder:
         # SIM-101: per-game caches.  Reset implicitly each time a fresh
         # builder is constructed (one per game_pk).
         self._history: list[dict] = []
-        self._last_at_bat_index: int = -1   # -1 = nothing seen yet
+        self._last_at_bat_index: int = -1  # -1 = nothing seen yet
         self._game_date: date | None = None
 
     async def build(self, feed: dict[str, Any]) -> dict[str, Any]:
@@ -424,10 +426,10 @@ class GameStateBuilder:
         game_data = feed["gameData"]
         live_data = feed["liveData"]
 
-        game_pk      = feed["gamePk"]
-        game_status  = game_data["status"]["abstractGameState"]   # Live / Final / Preview
-        linescore    = live_data.get("linescore", {})
-        boxscore     = live_data.get("boxscore", {})
+        game_pk = feed["gamePk"]
+        game_status = game_data["status"]["abstractGameState"]  # Live / Final / Preview
+        linescore = live_data.get("linescore", {})
+        boxscore = live_data.get("boxscore", {})
         current_play = live_data["plays"].get("currentPlay", {})
 
         home_team_id = game_data["teams"]["home"]["id"]
@@ -442,23 +444,23 @@ class GameStateBuilder:
             _game_date = None
 
         # ---- Inning state --------------------------------------------------
-        inning       = linescore.get("currentInning", 1)
-        half         = linescore.get("inningHalf", "Top")          # "Top" | "Bottom"
-        outs         = linescore.get("outs", 0)
-        balls        = current_play.get("count", {}).get("balls", 0)
-        strikes      = current_play.get("count", {}).get("strikes", 0)
-        home_score   = linescore.get("teams", {}).get("home", {}).get("runs", 0)
-        away_score   = linescore.get("teams", {}).get("away", {}).get("runs", 0)
+        inning = linescore.get("currentInning", 1)
+        half = linescore.get("inningHalf", "Top")  # "Top" | "Bottom"
+        outs = linescore.get("outs", 0)
+        balls = current_play.get("count", {}).get("balls", 0)
+        strikes = current_play.get("count", {}).get("strikes", 0)
+        home_score = linescore.get("teams", {}).get("home", {}).get("runs", 0)
+        away_score = linescore.get("teams", {}).get("away", {}).get("runs", 0)
 
-        batting_team_id  = away_team_id if half == "Top" else home_team_id
+        batting_team_id = away_team_id if half == "Top" else home_team_id
         fielding_team_id = home_team_id if half == "Top" else away_team_id
 
         # ---- Baserunners ---------------------------------------------------
-        offense  = current_play.get("matchup", {})
-        runners  = linescore.get("offense", {})
-        on_1b = runners.get("first",  {}).get("id")
+        offense = current_play.get("matchup", {})
+        runners = linescore.get("offense", {})
+        on_1b = runners.get("first", {}).get("id")
         on_2b = runners.get("second", {}).get("id")
-        on_3b = runners.get("third",  {}).get("id")
+        on_3b = runners.get("third", {}).get("id")
 
         # ---- Current participants ------------------------------------------
         current_batter_id = offense.get("batter", {}).get("id")
@@ -474,8 +476,7 @@ class GameStateBuilder:
         #   4. None → WARNING logged; simulation layer handles gracefully
         _all_plays = live_data.get("plays", {}).get("allPlays", [])
         _last_play_pitcher = (
-            _all_plays[-1].get("matchup", {}).get("pitcher", {}).get("id")
-            if _all_plays else None
+            _all_plays[-1].get("matchup", {}).get("pitcher", {}).get("id") if _all_plays else None
         )
         current_pitcher_id = (
             current_play.get("matchup", {}).get("pitcher", {}).get("id")
@@ -512,33 +513,33 @@ class GameStateBuilder:
 
         return {
             # Core state
-            "game_pk":            game_pk,
-            "game_status":        game_status,
-            "inning":             inning,
-            "half":               half,
-            "outs":               outs,
-            "balls":              balls,
-            "strikes":            strikes,
-            "home_score":         home_score,
-            "away_score":         away_score,
-            "batting_team_id":    batting_team_id,
-            "fielding_team_id":   fielding_team_id,
-            "on_1b":              on_1b,
-            "on_2b":              on_2b,
-            "on_3b":              on_3b,
-            "current_batter_id":  current_batter_id,
+            "game_pk": game_pk,
+            "game_status": game_status,
+            "inning": inning,
+            "half": half,
+            "outs": outs,
+            "balls": balls,
+            "strikes": strikes,
+            "home_score": home_score,
+            "away_score": away_score,
+            "batting_team_id": batting_team_id,
+            "fielding_team_id": fielding_team_id,
+            "on_1b": on_1b,
+            "on_2b": on_2b,
+            "on_3b": on_3b,
+            "current_batter_id": current_batter_id,
             "current_pitcher_id": current_pitcher_id,
             # Rosters
-            "home_lineup":   home_lineup,
-            "away_lineup":   away_lineup,
-            "home_bullpen":  home_bullpen,
-            "away_bullpen":  away_bullpen,
-            "home_bench":    home_bench,
-            "away_bench":    away_bench,
+            "home_lineup": home_lineup,
+            "away_lineup": away_lineup,
+            "home_bullpen": home_bullpen,
+            "away_bullpen": away_bullpen,
+            "home_bench": home_bench,
+            "away_bench": away_bench,
             # History / display
-            "play_history":    play_history,
-            "inning_scores":   inning_scores,
-            "last_updated_at": datetime.now(timezone.utc).isoformat(),
+            "play_history": play_history,
+            "inning_scores": inning_scores,
+            "last_updated_at": datetime.now(UTC).isoformat(),
         }
 
     async def _parse_roster(
@@ -568,40 +569,42 @@ class GameStateBuilder:
             replay calculates rest relative to game_date, not date.today().
         """
         team_box = boxscore.get("teams", {}).get(side, {})
-        players       = team_box.get("players", {})     # keyed "ID{player_id}"
+        players = team_box.get("players", {})  # keyed "ID{player_id}"
         batting_order = team_box.get("battingOrder", [])
 
-        lineup:  list[dict] = []
-        bench:   list[dict] = []
+        lineup: list[dict] = []
+        bench: list[dict] = []
 
         # SIM-100: two-pass approach — collect pitchers first, then batch-query
         # days_rest for all of them in a single DB round-trip.
         bullpen_candidates: list[tuple] = []  # (pid, name, pitching_stats, game_stats, pitch_count)
 
-        for key, player_data in players.items():
-            pid        = player_data["person"]["id"]
-            name       = player_data["person"]["fullName"]
-            position   = player_data.get("position", {}).get("abbreviation", "")
-            stats      = player_data.get("stats", {})
+        for _key, player_data in players.items():
+            pid = player_data["person"]["id"]
+            name = player_data["person"]["fullName"]
+            position = player_data.get("position", {}).get("abbreviation", "")
+            stats = player_data.get("stats", {})
             game_stats = player_data.get("gameStats", {})
-            seq        = player_data.get("battingOrder")     # "100", "200" … or None
+            seq = player_data.get("battingOrder")  # "100", "200" … or None
 
             # Batting lineup
             if seq is not None:
-                batting_pos   = int(seq) // 100   # "100" → 1
+                batting_pos = int(seq) // 100  # "100" → 1
                 batting_stats = stats.get("batting", {}).get("summary", "")
-                lineup.append({
-                    "player_id":     pid,
-                    "name":          name,
-                    "batting_order": batting_pos,
-                    "position":      position,
-                    "stats_today":   batting_stats,
-                    "is_current":    pid in batting_order,
-                })
+                lineup.append(
+                    {
+                        "player_id": pid,
+                        "name": name,
+                        "batting_order": batting_pos,
+                        "position": position,
+                        "stats_today": batting_stats,
+                        "is_current": pid in batting_order,
+                    }
+                )
                 continue
 
             if position == "P":
-                pitching_stats    = stats.get("pitching", {})
+                pitching_stats = stats.get("pitching", {})
                 pitch_count_today = pitching_stats.get("pitchesThrown", 0)
                 # SIM-100: removed used_pitcher_ids.add(pid) — set was populated
                 # but never read anywhere; dead code confirmed by full-file grep.
@@ -609,23 +612,23 @@ class GameStateBuilder:
                     (pid, name, pitching_stats, game_stats, pitch_count_today)
                 )
             else:
-                bench.append({
-                    "player_id":   pid,
-                    "name":        name,
-                    "position":    position,
-                    "stats_today": stats.get("batting", {}).get("summary", ""),
-                })
+                bench.append(
+                    {
+                        "player_id": pid,
+                        "name": name,
+                        "position": position,
+                        "stats_today": stats.get("batting", {}).get("summary", ""),
+                    }
+                )
 
         # SIM-100: single batch query replaces N per-pitcher queries
-        pitcher_ids     = [c[0] for c in bullpen_candidates]
-        days_rest_cache = await self._batch_days_rest(
-            pitcher_ids, game_pk, as_of_date=game_date
-        )
+        pitcher_ids = [c[0] for c in bullpen_candidates]
+        days_rest_cache = await self._batch_days_rest(pitcher_ids, game_pk, as_of_date=game_date)
 
         bullpen: list[dict] = []
         for pid, name, pitching_stats, game_stats, pitch_count_today in bullpen_candidates:
-            days_rest = days_rest_cache.get(pid)    # int | None
-            role      = self._infer_role(pitching_stats, game_stats)
+            days_rest = days_rest_cache.get(pid)  # int | None
+            role = self._infer_role(pitching_stats, game_stats)
 
             # SIM-100: corrected availability logic.
             # Old (wrong): pitch_count_today == 0
@@ -639,15 +642,17 @@ class GameStateBuilder:
                 days_rest is not None and days_rest >= 1 and pitch_count_today < 30
             )
 
-            bullpen.append({
-                "player_id":         pid,
-                "name":              name,
-                "pitch_count_today": pitch_count_today,
-                "days_rest":         days_rest,
-                "role":              role,
-                "era":               pitching_stats.get("era", ""),
-                "available":         available,
-            })
+            bullpen.append(
+                {
+                    "player_id": pid,
+                    "name": name,
+                    "pitch_count_today": pitch_count_today,
+                    "days_rest": days_rest,
+                    "role": role,
+                    "era": pitching_stats.get("era", ""),
+                    "available": available,
+                }
+            )
 
         lineup.sort(key=lambda x: x["batting_order"])
         return lineup, bullpen, bench
@@ -807,7 +812,9 @@ class GameStateBuilder:
         if new_appended:
             log.debug(
                 "SIM-101: parsed %d new plays (cache had %d); replaced_current=%s",
-                new_appended, len(self._history) - new_appended, replaced_current,
+                new_appended,
+                len(self._history) - new_appended,
+                replaced_current,
             )
 
         return list(self._history)
@@ -817,35 +824,35 @@ class GameStateBuilder:
         """SIM-101: extracted from the old parser so both the incremental
         path and any consumer that wants to reformat a single play stay in
         sync."""
-        about   = play.get("about", {})
-        result  = play.get("result", {})
+        about = play.get("about", {})
+        result = play.get("result", {})
         matchup = play.get("matchup", {})
         pitches = [
             {
-                "pitch_number":  e.get("pitchNumber"),
-                "pitch_type":    e.get("details", {}).get("type", {}).get("code"),
-                "pitch_name":    e.get("details", {}).get("type", {}).get("description"),
-                "description":   e.get("details", {}).get("description"),
-                "speed":         e.get("pitchData", {}).get("startSpeed"),
-                "balls":         e.get("count", {}).get("balls"),
-                "strikes":       e.get("count", {}).get("strikes"),
-                "outs":          e.get("count", {}).get("outs"),
+                "pitch_number": e.get("pitchNumber"),
+                "pitch_type": e.get("details", {}).get("type", {}).get("code"),
+                "pitch_name": e.get("details", {}).get("type", {}).get("description"),
+                "description": e.get("details", {}).get("description"),
+                "speed": e.get("pitchData", {}).get("startSpeed"),
+                "balls": e.get("count", {}).get("balls"),
+                "strikes": e.get("count", {}).get("strikes"),
+                "outs": e.get("count", {}).get("outs"),
             }
             for e in play.get("playEvents", [])
             if e.get("isPitch")
         ]
         return {
             "at_bat_number": about.get("atBatIndex", 0) + 1,
-            "inning":        about.get("inning"),
-            "half":          about.get("halfInning", "").capitalize(),
-            "batter_id":     matchup.get("batter", {}).get("id"),
-            "batter_name":   matchup.get("batter", {}).get("fullName"),
-            "pitcher_id":    matchup.get("pitcher", {}).get("id"),
-            "pitcher_name":  matchup.get("pitcher", {}).get("fullName"),
-            "event":         result.get("eventType"),
-            "description":   result.get("description"),
-            "rbi":           result.get("rbi", 0),
-            "pitches":       pitches,
+            "inning": about.get("inning"),
+            "half": about.get("halfInning", "").capitalize(),
+            "batter_id": matchup.get("batter", {}).get("id"),
+            "batter_name": matchup.get("batter", {}).get("fullName"),
+            "pitcher_id": matchup.get("pitcher", {}).get("id"),
+            "pitcher_name": matchup.get("pitcher", {}).get("fullName"),
+            "event": result.get("eventType"),
+            "description": result.get("description"),
+            "rbi": result.get("rbi", 0),
+            "pitches": pitches,
         }
 
     @staticmethod
@@ -857,11 +864,11 @@ class GameStateBuilder:
         return {
             "home": home_innings,
             "away": away_innings,
-            "home_runs":   linescore.get("teams", {}).get("home", {}).get("runs", 0),
-            "home_hits":   linescore.get("teams", {}).get("home", {}).get("hits", 0),
+            "home_runs": linescore.get("teams", {}).get("home", {}).get("runs", 0),
+            "home_hits": linescore.get("teams", {}).get("home", {}).get("hits", 0),
             "home_errors": linescore.get("teams", {}).get("home", {}).get("errors", 0),
-            "away_runs":   linescore.get("teams", {}).get("away", {}).get("runs", 0),
-            "away_hits":   linescore.get("teams", {}).get("away", {}).get("hits", 0),
+            "away_runs": linescore.get("teams", {}).get("away", {}).get("runs", 0),
+            "away_hits": linescore.get("teams", {}).get("away", {}).get("hits", 0),
             "away_errors": linescore.get("teams", {}).get("away", {}).get("errors", 0),
         }
 
@@ -869,6 +876,7 @@ class GameStateBuilder:
 # ---------------------------------------------------------------------------
 # MLB Game WebSocket Client
 # ---------------------------------------------------------------------------
+
 
 class MLBGameWebSocket:
     """
@@ -887,18 +895,18 @@ class MLBGameWebSocket:
     def __init__(
         self,
         game_pk: int,
-        on_update: callable,   # async callback(game_pk: int) -> None
+        on_update: Callable[
+            [int], Coroutine[Any, Any, None]
+        ],  # async callback(game_pk: int) -> None
     ) -> None:
-        self.game_pk   = game_pk
+        self.game_pk = game_pk
         self.on_update = on_update
-        self._stop     = asyncio.Event()
-        self._task:  asyncio.Task | None = None
+        self._stop = asyncio.Event()
+        self._task: asyncio.Task | None = None
 
     def start(self) -> None:
         self._stop.clear()
-        self._task = asyncio.create_task(
-            self._run(), name=f"ws-game-{self.game_pk}"
-        )
+        self._task = asyncio.create_task(self._run(), name=f"ws-game-{self.game_pk}")
 
     def stop(self) -> None:
         self._stop.set()
@@ -906,7 +914,7 @@ class MLBGameWebSocket:
             self._task.cancel()
 
     async def _run(self) -> None:
-        url     = MLB_WS_TEMPLATE.format(game_pk=self.game_pk)
+        url = MLB_WS_TEMPLATE.format(game_pk=self.game_pk)
         backoff = WS_RECONNECT_BASE
 
         while not self._stop.is_set():
@@ -914,7 +922,7 @@ class MLBGameWebSocket:
                 log.info("WS connecting: game %s", self.game_pk)
                 async with websockets.connect(url, ping_interval=30, ping_timeout=10) as ws:
                     log.info("WS connected:  game %s", self.game_pk)
-                    backoff = WS_RECONNECT_BASE   # reset on successful connect
+                    backoff = WS_RECONNECT_BASE  # reset on successful connect
                     async for message in ws:
                         if self._stop.is_set():
                             break
@@ -927,13 +935,12 @@ class MLBGameWebSocket:
                 return
             except websockets.exceptions.ConnectionClosedOK:
                 log.info("WS closed normally: game %s", self.game_pk)
-                return   # game probably ended
+                return  # game probably ended
             except Exception as exc:
                 if self._stop.is_set():
                     return
                 log.warning(
-                    "WS error game %s (%s) — reconnecting in %.1fs",
-                    self.game_pk, exc, backoff
+                    "WS error game %s (%s) — reconnecting in %.1fs", self.game_pk, exc, backoff
                 )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, WS_RECONNECT_MAX)
@@ -942,6 +949,7 @@ class MLBGameWebSocket:
 # ---------------------------------------------------------------------------
 # Frontend WebSocket Connection Manager
 # ---------------------------------------------------------------------------
+
 
 class ConnectionManager:
     """
@@ -958,14 +966,16 @@ class ConnectionManager:
     async def connect(self, game_pk: int, ws: WebSocket) -> None:
         await ws.accept()
         self._subscriptions.setdefault(game_pk, set()).add(ws)
-        log.info("Frontend WS connected: game %s (%d subscribers)",
-                 game_pk, len(self._subscriptions[game_pk]))
+        log.info(
+            "Frontend WS connected: game %s (%d subscribers)",
+            game_pk,
+            len(self._subscriptions[game_pk]),
+        )
 
     def disconnect(self, game_pk: int, ws: WebSocket) -> None:
         subs = self._subscriptions.get(game_pk, set())
         subs.discard(ws)
-        log.info("Frontend WS disconnected: game %s (%d remaining)",
-                 game_pk, len(subs))
+        log.info("Frontend WS disconnected: game %s (%d remaining)", game_pk, len(subs))
 
     async def broadcast(self, game_pk: int, payload: dict) -> None:
         """Send a JSON payload to all clients watching this game.
@@ -980,7 +990,7 @@ class ConnectionManager:
         live_subs = self._subscriptions.get(game_pk, set())
         if not live_subs:
             return
-        subs_snapshot = set(live_subs)   # SIM-103: iteration-safe snapshot
+        subs_snapshot = set(live_subs)  # SIM-103: iteration-safe snapshot
         dead: set[WebSocket] = set()
         message = json.dumps(payload)
         for ws in subs_snapshot:
@@ -1006,6 +1016,7 @@ connection_manager = ConnectionManager()
 # Live Ingestion Pipeline
 # ---------------------------------------------------------------------------
 
+
 class LiveIngestionPipeline:
     """
     Orchestrates the full live data ingestion loop.
@@ -1020,7 +1031,7 @@ class LiveIngestionPipeline:
 
     def __init__(
         self,
-        dsn:       str | None = None,
+        dsn: str | None = None,
         redis_url: str | None = None,
         simulation_callback: SimulationCallback | None = None,
     ) -> None:
@@ -1054,7 +1065,7 @@ class LiveIngestionPipeline:
 
         # SIM-153: dsn / redis_url default to env vars when omitted.
         # Tests pass explicit values; production uses .env / docker-compose env.
-        self._dsn       = dsn       or os.environ.get("BASEBALL_DB_DSN")
+        self._dsn = dsn or os.environ.get("BASEBALL_DB_DSN")
         self._redis_url = redis_url or os.environ.get("REDIS_URL")
         if not self._dsn:
             raise RuntimeError(
@@ -1068,9 +1079,9 @@ class LiveIngestionPipeline:
             )
         self._sim_cb: SimulationCallback | None = simulation_callback
 
-        self._db:    asyncpg.Pool | None = None
+        self._db: asyncpg.Pool | None = None
         self._redis: aioredis.Redis | None = None
-        self._http:  aiohttp.ClientSession | None = None
+        self._http: aiohttp.ClientSession | None = None
 
         # game_pk -> MLBGameWebSocket
         self._ws_clients: dict[int, MLBGameWebSocket] = {}
@@ -1090,7 +1101,7 @@ class LiveIngestionPipeline:
         # SIM-101: per-game cached GameStateBuilder.  Built lazily on first
         # refresh; preserves last-processed at-bat index across refreshes so
         # _parse_play_history() only walks new plays.
-        self._builders: dict[int, "GameStateBuilder"] = {}
+        self._builders: dict[int, GameStateBuilder] = {}
 
         self._schedule_task: asyncio.Task | None = None
         self._running = False
@@ -1101,19 +1112,15 @@ class LiveIngestionPipeline:
 
     async def start(self) -> None:
         log.info("Starting live ingestion pipeline …")
-        self._db    = await asyncpg.create_pool(self._dsn, min_size=2, max_size=10)
+        self._db = await asyncpg.create_pool(self._dsn, min_size=2, max_size=10)
         self._redis = aioredis.from_url(self._redis_url, decode_responses=True)
-        self._http  = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_S)
-        )
+        self._http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_S))
         # SIM-105: pre-populate _completed_games from today's already-Final
         # games so a pipeline restart mid-afternoon doesn't trigger an
         # upsert storm for every game finished earlier in the day.
         await self._hydrate_completed_games()
         self._running = True
-        self._schedule_task = asyncio.create_task(
-            self._schedule_poller(), name="schedule-poller"
-        )
+        self._schedule_task = asyncio.create_task(self._schedule_poller(), name="schedule-poller")
         log.info("Pipeline started.")
 
     async def _hydrate_completed_games(self) -> None:
@@ -1137,10 +1144,11 @@ class LiveIngestionPipeline:
                     "their _upsert_game_record() polls.",
                     len(self._completed_games),
                 )
-        except Exception as exc:                       # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             log.warning(
                 "SIM-105: could not hydrate _completed_games on boot: %s "
-                "(restart will trigger one-time upsert storm)", exc,
+                "(restart will trigger one-time upsert storm)",
+                exc,
             )
 
     async def stop(self) -> None:
@@ -1151,10 +1159,10 @@ class LiveIngestionPipeline:
         for ws in self._ws_clients.values():
             ws.stop()
         self._ws_clients.clear()
-        if self._http  and not self._http.closed:
+        if self._http and not self._http.closed:
             await self._http.close()
         if self._redis:
-            await self._redis.aclose()
+            await self._redis.aclose()  # type: ignore[attr-defined]
         if self._db:
             await self._db.close()
         log.info("Pipeline stopped.")
@@ -1179,7 +1187,7 @@ class LiveIngestionPipeline:
             await asyncio.sleep(SCHEDULE_POLL_S)
 
     async def _sync_live_games(self) -> None:
-        today  = date.today().strftime("%Y-%m-%d")
+        today = date.today().strftime("%Y-%m-%d")
         params = {"sportId": 1, "gameTypes": GAME_TYPES, "date": today}
 
         async with self._http.get(SCHEDULE_URL, params=params) as resp:
@@ -1193,7 +1201,7 @@ class LiveIngestionPipeline:
                     continue
 
                 game_pk = game["gamePk"]
-                status  = game.get("status", {}).get("abstractGameState", "")
+                status = game.get("status", {}).get("abstractGameState", "")
 
                 if status == "Live":
                     current_live.add(game_pk)
@@ -1237,7 +1245,7 @@ class LiveIngestionPipeline:
         self._ws_clients[game_pk] = ws
         ws.start()
 
-    def _get_or_create_builder(self, game_pk: int) -> "GameStateBuilder":
+    def _get_or_create_builder(self, game_pk: int) -> GameStateBuilder:
         """SIM-101: cache one GameStateBuilder per game.  Disposed when the
         game transitions to Final (see _sync_live_games)."""
         builder = self._builders.get(game_pk)
@@ -1276,13 +1284,15 @@ class LiveIngestionPipeline:
                 # incrementally instead of being rebuilt from scratch every WS msg.
                 builder = self._get_or_create_builder(game_pk)
                 game_state = await builder.build(feed)
-                odds       = await self._fetch_odds(game_pk)
+                odds = await self._fetch_odds(game_pk)
 
                 await self._upsert_lineup_state(game_pk, game_state)
                 # SIM-099: pass both feed (for _fetch_feed fallback) and
                 # game_state (for resimulate endpoint) — see _cache_to_redis.
                 await self._cache_to_redis(
-                    game_pk, feed, game_state,
+                    game_pk,
+                    feed,
+                    game_state,
                     feed["gameData"]["status"]["abstractGameState"],
                 )
                 await self._persist_odds(game_pk, odds)
@@ -1296,10 +1306,10 @@ class LiveIngestionPipeline:
                 # resim_triggered=True tells the frontend to show a loading
                 # indicator while it waits for new simulation results.
                 broadcast_payload = {
-                    "type":            "game_state_update",
-                    "game_pk":         game_pk,
-                    "game_state":      game_state,
-                    "odds":            odds,
+                    "type": "game_state_update",
+                    "game_pk": game_pk,
+                    "game_state": game_state,
+                    "odds": odds,
                     "resim_triggered": pa_ended,
                 }
                 await connection_manager.broadcast(game_pk, broadcast_payload)
@@ -1348,9 +1358,7 @@ class LiveIngestionPipeline:
         """
         return MockOddsAPI.get_odds(game_pk)
 
-    def _should_resimulate(
-        self, game_pk: int, feed: dict
-    ) -> tuple[bool, int]:
+    def _should_resimulate(self, game_pk: int, feed: dict) -> tuple[bool, int]:
         """
         Returns (should_resim: bool, at_bat_number: int).
 
@@ -1373,12 +1381,12 @@ class LiveIngestionPipeline:
         if game_status not in ("Live",):
             return False, -1
 
-        live_data    = feed.get("liveData", {})
+        live_data = feed.get("liveData", {})
         current_play = live_data.get("plays", {}).get("currentPlay", {})
-        about        = current_play.get("about", {})
+        about = current_play.get("about", {})
 
-        is_complete   = about.get("isComplete", False)
-        at_bat_number = about.get("atBatIndex", -1) + 1   # 0-indexed in API, 1-indexed here
+        is_complete = about.get("isComplete", False)
+        at_bat_number = about.get("atBatIndex", -1) + 1  # 0-indexed in API, 1-indexed here
 
         if not is_complete:
             return False, at_bat_number
@@ -1406,7 +1414,8 @@ class LiveIngestionPipeline:
                 "Re-sim signal (PA complete): game %s | at_bat %s | inning %s | score %s-%s",
                 game_pk,
                 game_state.get("play_history", [{}])[-1].get("at_bat_number", "?")
-                    if game_state.get("play_history") else "?",
+                if game_state.get("play_history")
+                else "?",
                 game_state.get("inning"),
                 game_state.get("home_score"),
                 game_state.get("away_score"),
@@ -1445,16 +1454,14 @@ class LiveIngestionPipeline:
         """
         gd = game
         status_map = {
-            "Preview":   "Preview",
-            "Live":      "Live",
-            "Final":     "Final",
+            "Preview": "Preview",
+            "Live": "Live",
+            "Final": "Final",
             "Postponed": "Postponed",
             "Cancelled": "Cancelled",
             "Suspended": "Suspended",
         }
-        status = status_map.get(
-            gd.get("status", {}).get("abstractGameState", "Preview"), "Preview"
-        )
+        status = status_map.get(gd.get("status", {}).get("abstractGameState", "Preview"), "Preview")
 
         await self._db.execute(
             """
@@ -1497,15 +1504,24 @@ class LiveIngestionPipeline:
         snapshot the pipeline has already written.
         """
         import hashlib
+
         # Keys in fixed order — do NOT change order without bumping the hash
         # space (would invalidate every previously stored hash, but the
         # partial unique index tolerates NULL so a re-fingerprint is safe).
         ordered_keys = (
-            "book", "line_type", "market_type", "is_sharp_book",
-            "home_ml", "away_ml",
-            "home_spread", "home_spread_ml",
-            "away_spread", "away_spread_ml",
-            "total_line", "over_ml", "under_ml",
+            "book",
+            "line_type",
+            "market_type",
+            "is_sharp_book",
+            "home_ml",
+            "away_ml",
+            "home_spread",
+            "home_spread_ml",
+            "away_spread",
+            "away_spread_ml",
+            "total_line",
+            "over_ml",
+            "under_ml",
         )
 
         def _fmt(v: object) -> str:
@@ -1651,7 +1667,9 @@ class LiveIngestionPipeline:
         if updated:
             log.info(
                 "Closing line designated: game %s at %s (%d row updated)",
-                game_pk, first_pitch_at.isoformat(), updated,
+                game_pk,
+                first_pitch_at.isoformat(),
+                updated,
             )
         return updated
 
@@ -1709,7 +1727,7 @@ async def game_state_ws(websocket: WebSocket, game_pk: int) -> None:
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
                 if data.strip().lower() == "ping":
                     await websocket.send_text(json.dumps({"type": "pong"}))
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 await websocket.send_text(json.dumps({"type": "ping"}))
     except WebSocketDisconnect:
         connection_manager.disconnect(game_pk, websocket)
@@ -1718,7 +1736,9 @@ async def game_state_ws(websocket: WebSocket, game_pk: int) -> None:
 def create_app(dsn=None, redis_url=None, simulation_callback=None) -> FastAPI:
     """SIM-104 + SIM-153: rate-limited resimulate endpoint + env-var DSN."""
     pipeline = LiveIngestionPipeline(
-        dsn=dsn, redis_url=redis_url, simulation_callback=simulation_callback,
+        dsn=dsn,
+        redis_url=redis_url,
+        simulation_callback=simulation_callback,
     )
 
     @asynccontextmanager
@@ -1750,20 +1770,24 @@ def create_app(dsn=None, redis_url=None, simulation_callback=None) -> FastAPI:
                     "status": "rate_limited",
                     "retry_after_seconds": int(ttl),
                     "detail": (
-                        "Manual re-simulation for game " + str(game_pk)
-                        + " is on cooldown. Try again in " + str(int(ttl)) + "s."
+                        "Manual re-simulation for game "
+                        + str(game_pk)
+                        + " is on cooldown. Try again in "
+                        + str(int(ttl))
+                        + "s."
                     ),
                 }
             await pipeline._redis.setex(cooldown_key, RESIM_COOLDOWN_S, "1")
 
         if not pipeline.is_watching(game_pk):
             cached = (
-                await pipeline._redis.get("game_state:" + str(game_pk))
-                if pipeline._redis else None
+                await pipeline._redis.get("game_state:" + str(game_pk)) if pipeline._redis else None
             )
             if not cached:
-                return {"status": "error",
-                        "detail": "game " + str(game_pk) + " is not live and has no cached state"}
+                return {
+                    "status": "error",
+                    "detail": "game " + str(game_pk) + " is not live and has no cached state",
+                }
             game_state = json.loads(cached)
             await pipeline._signal_resimulation(game_pk, game_state)
             return {"status": "triggered", "source": "cache"}
@@ -1775,22 +1799,27 @@ def create_app(dsn=None, redis_url=None, simulation_callback=None) -> FastAPI:
         builder = pipeline._get_or_create_builder(game_pk)  # SIM-101
         game_state = await builder.build(feed)
         await pipeline._signal_resimulation(game_pk, game_state)
-        await connection_manager.broadcast(game_pk, {
-            "type": "resim_pending", "game_pk": game_pk, "trigger": "manual",
-            "inning": game_state.get("inning"),
-            "half": game_state.get("half"),
-            "balls": game_state.get("balls"),
-            "strikes": game_state.get("strikes"),
-            "outs": game_state.get("outs"),
-        })
+        await connection_manager.broadcast(
+            game_pk,
+            {
+                "type": "resim_pending",
+                "game_pk": game_pk,
+                "trigger": "manual",
+                "inning": game_state.get("inning"),
+                "half": game_state.get("half"),
+                "balls": game_state.get("balls"),
+                "strikes": game_state.get("strikes"),
+                "outs": game_state.get("outs"),
+            },
+        )
         return {"status": "triggered", "source": "live"}
 
     return app
 
 
-def run(dsn=None, redis_url=None, simulation_callback=None,
-        host="0.0.0.0", port=8001) -> None:
+def run(dsn=None, redis_url=None, simulation_callback=None, host="0.0.0.0", port=8001) -> None:
     import uvicorn
+
     app = create_app(dsn=dsn, redis_url=redis_url, simulation_callback=simulation_callback)
     uvicorn.run(app, host=host, port=port)
 

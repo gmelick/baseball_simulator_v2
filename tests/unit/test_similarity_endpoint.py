@@ -21,8 +21,8 @@ lightweight stub object that exposes the two attributes the route uses
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 import pytest
 
@@ -30,16 +30,15 @@ import pytest
 # package is importable because the project root is on sys.path
 # (ruff/pytest src config in pyproject.toml).
 from api.routes.similarity import (
+    COLLAPSED_MAX_BIN_FRACTION,
+    DIAGNOSTIC_MEDIAN_TARGET,
+    NO_SPREAD_STD_THRESHOLD,
     _BinSpec,
     build_bins,
     build_top_n,
     classify_diagnostic,
     compute_score_summary,
-    COLLAPSED_MAX_BIN_FRACTION,
-    DIAGNOSTIC_MEDIAN_TARGET,
-    NO_SPREAD_STD_THRESHOLD,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers — minimal stand-ins for SimilarityResult and the engine
@@ -49,6 +48,7 @@ from api.routes.similarity import (
 @dataclass(frozen=True)
 class _StubResult:
     """Duck-types similarity.engines.pitcher_similarity.SimilarityResult."""
+
     pitcher_id: int
     season: int
     p_throws: str
@@ -61,6 +61,7 @@ class _StubResult:
 @dataclass(frozen=True)
 class _StubProfile:
     """Duck-types PitcherProfile, only exposes what the route reads."""
+
     p_throws: str
 
 
@@ -87,8 +88,10 @@ class _StubEngine:
 
 def _name_resolver_factory(names: dict[int, str]):
     """Async name resolver — matches the NameResolver Protocol used by the route."""
+
     async def _resolve(ids: Iterable[int]) -> dict[int, str]:
         return {pid: names.get(pid, f"Pitcher #{pid}") for pid in ids}
+
     return _resolve
 
 
@@ -119,7 +122,6 @@ class _InMemoryCache:
 
 
 class TestBinSpec:
-
     def test_linear_bins_have_uniform_width(self):
         spec = _BinSpec.linear(20)
         assert spec.n_bins == 20
@@ -167,11 +169,17 @@ class TestBinSpec:
 
 
 class TestScoreSummary:
-
     def test_empty_returns_zeros(self):
         s = compute_score_summary([])
-        assert s == dict(min=0.0, p25=0.0, median=0.0, p75=0.0,
-                         max=0.0, mean=0.0, std=0.0)
+        assert s == {
+            "min": 0.0,
+            "p25": 0.0,
+            "median": 0.0,
+            "p75": 0.0,
+            "max": 0.0,
+            "mean": 0.0,
+            "std": 0.0,
+        }
 
     def test_singleton_population(self):
         s = compute_score_summary([0.42])
@@ -200,10 +208,16 @@ class TestScoreSummary:
 
 
 class TestBuildBins:
-
     @staticmethod
-    def _result(pid: int, season: int, score: float, arsenal: float = 0.5,
-                command: float = 0.5, p_throws: str = "R", n: int = 500):
+    def _result(
+        pid: int,
+        season: int,
+        score: float,
+        arsenal: float = 0.5,
+        command: float = 0.5,
+        p_throws: str = "R",
+        n: int = 500,
+    ):
         return _StubResult(pid, season, p_throws, score, arsenal, command, n)
 
     def test_every_bin_present_even_if_empty(self):
@@ -256,15 +270,14 @@ class TestBuildBins:
 
 
 class TestBuildTopN:
-
     def test_top_n_returns_first_n_engine_results(self):
         # build_top_n trusts the engine's pre-sorted order — it does NOT
         # re-sort. This test pins that contract.
         results = [
             _StubResult(1, 2024, "R", 0.91, 0.94, 0.86, 1000),
             _StubResult(2, 2024, "R", 0.88, 0.91, 0.79, 1500),
-            _StubResult(3, 2024, "R", 0.86, 0.86, 0.82,  900),
-            _StubResult(4, 2024, "R", 0.10, 0.05, 0.20,  800),
+            _StubResult(3, 2024, "R", 0.86, 0.86, 0.82, 900),
+            _StubResult(4, 2024, "R", 0.10, 0.05, 0.20, 800),
         ]
         out = build_top_n(results, names={1: "A", 2: "B", 3: "C", 4: "D"}, n=3)
         assert [m["pitcher_id"] for m in out] == [1, 2, 3]
@@ -277,7 +290,6 @@ class TestBuildTopN:
 
 
 class TestDiagnostic:
-
     def test_healthy_distribution(self):
         # Spread roughly normal around 0.5 — should be HEALTHY.
         scores = [0.1, 0.3, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7, 0.9]
@@ -316,10 +328,11 @@ class TestDiagnostic:
 @pytest.fixture()
 def app_with_stub_engine():
     """Build a FastAPI app, attach a stub engine + name resolver."""
-    fastapi = pytest.importorskip("fastapi")
+    pytest.importorskip("fastapi")
     pytest.importorskip("starlette")  # FastAPI's test client dep
 
     from fastapi import FastAPI
+
     from api.routes.similarity import router
 
     app = FastAPI()
@@ -331,32 +344,35 @@ def app_with_stub_engine():
         # Top-3: clearly the most similar
         _StubResult(594798, 2024, "R", 0.91, 0.94, 0.86, 1842),  # deGrom
         _StubResult(657277, 2023, "R", 0.88, 0.91, 0.79, 1505),  # Glasnow
-        _StubResult(675911, 2024, "R", 0.86, 0.86, 0.82,  920),  # Strider
+        _StubResult(675911, 2024, "R", 0.86, 0.86, 0.82, 920),  # Strider
         # Mid-pack
         _StubResult(111, 2024, "R", 0.62, 0.65, 0.58, 1200),
         _StubResult(112, 2024, "R", 0.55, 0.50, 0.60, 1100),
         _StubResult(113, 2024, "R", 0.51, 0.49, 0.53, 1000),
-        _StubResult(114, 2024, "R", 0.48, 0.45, 0.51,  900),
-        _StubResult(115, 2024, "R", 0.42, 0.40, 0.44,  800),
+        _StubResult(114, 2024, "R", 0.48, 0.45, 0.51, 900),
+        _StubResult(115, 2024, "R", 0.42, 0.40, 0.44, 800),
         # Long left tail
-        _StubResult(201, 2024, "R", 0.18, 0.10, 0.26,  700),
-        _StubResult(202, 2024, "R", 0.05, 0.02, 0.08,  600),
+        _StubResult(201, 2024, "R", 0.18, 0.10, 0.26, 700),
+        _StubResult(202, 2024, "R", 0.05, 0.02, 0.08, 600),
     ]
     app.state.pitcher_engine = _StubEngine(
         query_result_map={skenes_key: comps},
         profiles_map={skenes_key: _StubProfile(p_throws="R")},
     )
-    app.state.player_name_resolver = _name_resolver_factory({
-        694973: "Paul Skenes",
-        594798: "Jacob deGrom",
-        657277: "Tyler Glasnow",
-        675911: "Spencer Strider",
-    })
+    app.state.player_name_resolver = _name_resolver_factory(
+        {
+            694973: "Paul Skenes",
+            594798: "Jacob deGrom",
+            657277: "Tyler Glasnow",
+            675911: "Spencer Strider",
+        }
+    )
     return app
 
 
 def test_endpoint_returns_documented_shape(app_with_stub_engine):
     from fastapi.testclient import TestClient
+
     client = TestClient(app_with_stub_engine)
 
     resp = client.get("/api/similarity/pitcher/694973/2025?bins=20&top_n=3")
@@ -365,13 +381,21 @@ def test_endpoint_returns_documented_shape(app_with_stub_engine):
 
     # Top-level shape exactly matches the spec.
     assert set(body.keys()) == {
-        "query", "engine", "engine_version", "population_size",
-        "score_summary", "bins", "top_n", "diagnostic",
+        "query",
+        "engine",
+        "engine_version",
+        "population_size",
+        "score_summary",
+        "bins",
+        "top_n",
+        "diagnostic",
     }
     assert body["engine"] == "pitcher_similarity"
     assert body["query"] == {
-        "pitcher_id": 694973, "season": 2025,
-        "p_throws": "R", "full_name": "Paul Skenes",
+        "pitcher_id": 694973,
+        "season": 2025,
+        "p_throws": "R",
+        "full_name": "Paul Skenes",
     }
     assert body["population_size"] == 10
 
@@ -387,6 +411,7 @@ def test_endpoint_returns_documented_shape(app_with_stub_engine):
 
 def test_endpoint_returns_404_for_unknown_pitcher(app_with_stub_engine):
     from fastapi.testclient import TestClient
+
     client = TestClient(app_with_stub_engine)
 
     resp = client.get("/api/similarity/pitcher/999999/2025")
@@ -397,6 +422,7 @@ def test_endpoint_returns_404_for_unknown_pitcher(app_with_stub_engine):
 def test_endpoint_returns_503_when_engine_not_attached():
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+
     from api.routes.similarity import router
 
     app = FastAPI()
@@ -411,6 +437,7 @@ def test_endpoint_returns_503_when_engine_not_attached():
 
 def test_top_n_param_caps_results(app_with_stub_engine):
     from fastapi.testclient import TestClient
+
     client = TestClient(app_with_stub_engine)
 
     resp = client.get("/api/similarity/pitcher/694973/2025?top_n=2")
@@ -421,6 +448,7 @@ def test_top_n_param_caps_results(app_with_stub_engine):
 def test_invalid_bins_param_rejected(app_with_stub_engine):
     """bins is bounded in [4, 100] by the route validator."""
     from fastapi.testclient import TestClient
+
     client = TestClient(app_with_stub_engine)
 
     # Below floor → 422 from FastAPI's query-param validator.
@@ -440,6 +468,7 @@ def test_cache_miss_invokes_engine_and_writes_through(app_with_stub_engine):
     to the cache under the spec-defined key.
     """
     from fastapi.testclient import TestClient
+
     from api.state import make_cache_key
 
     cache = _InMemoryCache()
@@ -466,6 +495,7 @@ def test_cache_hit_skips_engine(app_with_stub_engine):
     called.
     """
     from fastapi.testclient import TestClient
+
     from api.state import make_cache_key
 
     class _ExplodingEngine:
@@ -475,21 +505,20 @@ def test_cache_hit_skips_engine(app_with_stub_engine):
             raise AssertionError("engine.query should not be called on cache hit")
 
     canned_payload = {
-        "query": {"pitcher_id": 1, "season": 2025, "p_throws": "R",
-                  "full_name": "From Cache"},
+        "query": {"pitcher_id": 1, "season": 2025, "p_throws": "R", "full_name": "From Cache"},
         "engine": "pitcher_similarity",
         "engine_version": "0.1.0-phase2",
         "population_size": 0,
-        "score_summary": {"min": 0, "p25": 0, "median": 0, "p75": 0,
-                          "max": 0, "mean": 0, "std": 0},
+        "score_summary": {"min": 0, "p25": 0, "median": 0, "p75": 0, "max": 0, "mean": 0, "std": 0},
         "bins": [],
         "top_n": [],
-        "diagnostic": {"status": "HEALTHY", "median_target": 0.5,
-                       "median_observed": 0.0},
+        "diagnostic": {"status": "HEALTHY", "median_target": 0.5, "median_observed": 0.0},
     }
-    cache = _InMemoryCache(preload={
-        make_cache_key(1, 2025, 20, 20): canned_payload,
-    })
+    cache = _InMemoryCache(
+        preload={
+            make_cache_key(1, 2025, 20, 20): canned_payload,
+        }
+    )
     app_with_stub_engine.state.pitcher_engine = _ExplodingEngine()
     app_with_stub_engine.state.similarity_cache = cache
 
@@ -523,6 +552,7 @@ def test_different_bin_counts_use_different_cache_keys(app_with_stub_engine):
     format pins this contract for the eventual nightly invalidator.
     """
     from fastapi.testclient import TestClient
+
     from api.state import make_cache_key
 
     cache = _InMemoryCache()

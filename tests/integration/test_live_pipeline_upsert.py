@@ -24,7 +24,6 @@ Run:
 from __future__ import annotations
 
 import json
-import datetime
 from typing import Any
 
 import pytest
@@ -110,24 +109,25 @@ def _upsert_lineup(
 
 def _row_count(conn: sa.Connection, game_pk: int) -> int:
     row = conn.execute(
-        text(
-            "SELECT COUNT(*) FROM sim.lineup_state "
-            "WHERE game_pk = :g AND is_live_game = TRUE"
-        ),
+        text("SELECT COUNT(*) FROM sim.lineup_state WHERE game_pk = :g AND is_live_game = TRUE"),
         {"g": game_pk},
     ).fetchone()
     return row[0] if row else 0
 
 
 def _get_row(conn: sa.Connection, game_pk: int) -> dict[str, Any] | None:
-    row = conn.execute(
-        text(
-            "SELECT inning, inning_half, outs, home_score, away_score "
-            "FROM sim.lineup_state "
-            "WHERE game_pk = :g AND is_live_game = TRUE"
-        ),
-        {"g": game_pk},
-    ).mappings().fetchone()
+    row = (
+        conn.execute(
+            text(
+                "SELECT inning, inning_half, outs, home_score, away_score "
+                "FROM sim.lineup_state "
+                "WHERE game_pk = :g AND is_live_game = TRUE"
+            ),
+            {"g": game_pk},
+        )
+        .mappings()
+        .fetchone()
+    )
     return dict(row) if row else None
 
 

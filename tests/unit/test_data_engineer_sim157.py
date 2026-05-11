@@ -20,7 +20,6 @@ import sys
 import unittest
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -44,24 +43,40 @@ class TestOddsHashConsistency(unittest.TestCase):
 
     def test_backfill_hash_matches_live_pipeline_hash(self):
         from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+
         mod = _load_script_module()
         # Sanity: the script's column ordering matches the live pipeline's.
         live_keys = (
-            "book", "line_type", "market_type", "is_sharp_book",
-            "home_ml", "away_ml",
-            "home_spread", "home_spread_ml",
-            "away_spread", "away_spread_ml",
-            "total_line", "over_ml", "under_ml",
+            "book",
+            "line_type",
+            "market_type",
+            "is_sharp_book",
+            "home_ml",
+            "away_ml",
+            "home_spread",
+            "home_spread_ml",
+            "away_spread",
+            "away_spread_ml",
+            "total_line",
+            "over_ml",
+            "under_ml",
         )
         self.assertEqual(mod.ODDS_COLUMNS, live_keys)
 
         payload = {
-            "book": "consensus", "line_type": "current",
-            "market_type": "moneyline", "is_sharp_book": False,
-            "home_ml": -150, "away_ml": +130,
-            "home_spread": -1.5, "home_spread_ml": +120,
-            "away_spread": +1.5, "away_spread_ml": -140,
-            "total_line": 9.0, "over_ml": -110, "under_ml": -110,
+            "book": "consensus",
+            "line_type": "current",
+            "market_type": "moneyline",
+            "is_sharp_book": False,
+            "home_ml": -150,
+            "away_ml": +130,
+            "home_spread": -1.5,
+            "home_spread_ml": +120,
+            "away_spread": +1.5,
+            "away_spread_ml": -140,
+            "total_line": 9.0,
+            "over_ml": -110,
+            "under_ml": -110,
         }
         h_live = LiveIngestionPipeline._odds_hash(payload)
         # Backfill calls the same function — confirm it's wired correctly
@@ -72,11 +87,23 @@ class TestOddsHashConsistency(unittest.TestCase):
 
     def test_hash_is_stable_across_dict_orderings(self):
         from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
-        keys = ("book", "line_type", "market_type", "is_sharp_book",
-                "home_ml", "away_ml", "home_spread", "home_spread_ml",
-                "away_spread", "away_spread_ml", "total_line",
-                "over_ml", "under_ml")
-        payload_a = {k: 1 for k in keys}
+
+        keys = (
+            "book",
+            "line_type",
+            "market_type",
+            "is_sharp_book",
+            "home_ml",
+            "away_ml",
+            "home_spread",
+            "home_spread_ml",
+            "away_spread",
+            "away_spread_ml",
+            "total_line",
+            "over_ml",
+            "under_ml",
+        )
+        payload_a = dict.fromkeys(keys, 1)
         payload_b = {k: payload_a[k] for k in reversed(keys)}
         self.assertEqual(
             LiveIngestionPipeline._odds_hash(payload_a),
@@ -85,13 +112,21 @@ class TestOddsHashConsistency(unittest.TestCase):
 
     def test_distinct_payloads_produce_distinct_hashes(self):
         from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+
         base = {
-            "book": "consensus", "line_type": "current",
-            "market_type": "moneyline", "is_sharp_book": False,
-            "home_ml": -150, "away_ml": +130,
-            "home_spread": -1.5, "home_spread_ml": +120,
-            "away_spread": +1.5, "away_spread_ml": -140,
-            "total_line": 9.0, "over_ml": -110, "under_ml": -110,
+            "book": "consensus",
+            "line_type": "current",
+            "market_type": "moneyline",
+            "is_sharp_book": False,
+            "home_ml": -150,
+            "away_ml": +130,
+            "home_spread": -1.5,
+            "home_spread_ml": +120,
+            "away_spread": +1.5,
+            "away_spread_ml": -140,
+            "total_line": 9.0,
+            "over_ml": -110,
+            "under_ml": -110,
         }
         modified = dict(base, home_ml=-160)  # 1pp price change → different hash
         self.assertNotEqual(

@@ -76,7 +76,6 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 import duckdb
 import numpy as np
@@ -106,27 +105,27 @@ log = logging.getLogger("catcher_similarity")
 # AND high volume, giving large runs saved).
 FRAMING_FEATURES = [
     # feature_name,                   reliability_weight
-    ("strike_rate_vs_expected",        0.900),   # called strike rate - xCSR; strongest signal
-    ("runs_saved_framing",             0.600),   # runs above average; volume-adjusted
-    ("shadow_zone_strike_rate",        0.700),   # border-pitch framing; most discriminating zone
-    ("heart_zone_strike_rate",         0.400),   # heart zone: everyone frames these (less signal)
+    ("strike_rate_vs_expected", 0.900),  # called strike rate - xCSR; strongest signal
+    ("runs_saved_framing", 0.600),  # runs above average; volume-adjusted
+    ("shadow_zone_strike_rate", 0.700),  # border-pitch framing; most discriminating zone
+    ("heart_zone_strike_rate", 0.400),  # heart zone: everyone frames these (less signal)
 ]
 
 # --- Blocking features ---
 BLOCKING_FEATURES = [
-    ("block_success_rate",             0.700),   # blocked / total block opps
-    ("passed_ball_rate_per_9",         0.600),   # PB per 9 innings caught
-    ("wild_pitch_prevention_rate",     0.500),   # WPs saved vs. expected
+    ("block_success_rate", 0.700),  # blocked / total block opps
+    ("passed_ball_rate_per_9", 0.600),  # PB per 9 innings caught
+    ("wild_pitch_prevention_rate", 0.500),  # WPs saved vs. expected
 ]
 
 # --- Throwing — Execution features (mechanics of the throw itself) ---
 # These four features stay together as the v2 "execution" sub-score
 # (field name `throwing_score` retained per SIM-072 acceptance criteria).
 THROWING_FEATURES = [
-    ("pop_time_avg",                   0.900),   # avg seconds release → glove at 2B; most stable
-    ("cs_rate",                        0.600),   # caught stealing rate; conditional on attempts
-    ("exchange_time_avg",              0.700),   # pure exchange speed component
-    ("arm_strength_mph",               0.800),   # Statcast throw velocity; very stable (physical)
+    ("pop_time_avg", 0.900),  # avg seconds release → glove at 2B; most stable
+    ("cs_rate", 0.600),  # caught stealing rate; conditional on attempts
+    ("exchange_time_avg", 0.700),  # pure exchange speed component
+    ("arm_strength_mph", 0.800),  # Statcast throw velocity; very stable (physical)
 ]
 
 # --- Throwing — Deterrence features (do runners even try?) ---
@@ -135,38 +134,35 @@ THROWING_FEATURES = [
 # group to balance against.  Magnitude calibration is handled by
 # RBF_SIGMA_DETERRENCE below.
 DETERRENCE_FEATURES = [
-    ("steal_attempt_rate_against",     1.000),   # PA-level steal-attempt rate (SIM-073)
+    ("steal_attempt_rate_against", 1.000),  # PA-level steal-attempt rate (SIM-073)
 ]
 
 # --- Offensive Profile features ---
 # Minimal — used only to distinguish catcher offensive archetypes.
 # (Elite hitters like Realmuto vs. defense-first catchers like Trevino)
 OFFENSE_FEATURES = [
-    ("k_rate",                         0.701),
-    ("walk_rate",                       0.558),
-    ("avg_exit_velo",                  0.675),
-    ("hard_hit_rate",                  0.628),
+    ("k_rate", 0.701),
+    ("walk_rate", 0.558),
+    ("avg_exit_velo", 0.675),
+    ("hard_hit_rate", 0.628),
 ]
 
 # --- Sub-score weights (SIM-072 v2 — must sum to 1.0) ---
 # Framing 45 + Blocking 20 + Execution 12 + Deterrence 8 + Offense 15 = 100
-WEIGHT_FRAMING    = 0.45
-WEIGHT_BLOCKING   = 0.20
-WEIGHT_THROWING   = 0.12   # execution mechanics (was 0.20 in v1)
-WEIGHT_DETERRENCE = 0.08   # NEW — runners' willingness to challenge
-WEIGHT_OFFENSE    = 0.15
-_TOTAL = (
-    WEIGHT_FRAMING + WEIGHT_BLOCKING + WEIGHT_THROWING
-    + WEIGHT_DETERRENCE + WEIGHT_OFFENSE
-)
+WEIGHT_FRAMING = 0.45
+WEIGHT_BLOCKING = 0.20
+WEIGHT_THROWING = 0.12  # execution mechanics (was 0.20 in v1)
+WEIGHT_DETERRENCE = 0.08  # NEW — runners' willingness to challenge
+WEIGHT_OFFENSE = 0.15
+_TOTAL = WEIGHT_FRAMING + WEIGHT_BLOCKING + WEIGHT_THROWING + WEIGHT_DETERRENCE + WEIGHT_OFFENSE
 assert abs(_TOTAL - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
 # RBF bandwidth parameters
-RBF_SIGMA_FRAMING     = 0.9200
-RBF_SIGMA_BLOCKING    = 1.0500
-RBF_SIGMA_THROWING    = 0.9800
-RBF_SIGMA_DETERRENCE  = 1.0000   # 1σ ≈ ~1 SD of standardized steal_attempt_rate_against
-RBF_SIGMA_OFFENSE     = 1.1000
+RBF_SIGMA_FRAMING = 0.9200
+RBF_SIGMA_BLOCKING = 1.0500
+RBF_SIGMA_THROWING = 0.9800
+RBF_SIGMA_DETERRENCE = 1.0000  # 1σ ≈ ~1 SD of standardized steal_attempt_rate_against
+RBF_SIGMA_OFFENSE = 1.1000
 
 # EB_N_PRIOR = 15: defensive metrics stabilize more slowly than offensive ones.
 # This is the established value for fielder/catcher engines per the ML Engineer spec.
@@ -180,9 +176,11 @@ MIN_PITCHES_RECEIVED = 300
 # Data Structures
 # ============================================================================
 
+
 @dataclass(slots=True)
 class CatcherProfile:
     """Complete catcher-season profile for similarity scoring."""
+
     catcher_id: int
     season: int
     sample_pitches_received: int
@@ -190,10 +188,10 @@ class CatcherProfile:
     sample_steal_attempts_against: int
 
     # Feature vectors (raw — normalized at query time)
-    framing_vec: NDArray[np.float64]      # shape (len(FRAMING_FEATURES),)
-    blocking_vec: NDArray[np.float64]     # shape (len(BLOCKING_FEATURES),)
-    throwing_vec: NDArray[np.float64]     # shape (len(THROWING_FEATURES),)
-    offense_vec: NDArray[np.float64]      # shape (len(OFFENSE_FEATURES),)
+    framing_vec: NDArray[np.float64]  # shape (len(FRAMING_FEATURES),)
+    blocking_vec: NDArray[np.float64]  # shape (len(BLOCKING_FEATURES),)
+    throwing_vec: NDArray[np.float64]  # shape (len(THROWING_FEATURES),)
+    offense_vec: NDArray[np.float64]  # shape (len(OFFENSE_FEATURES),)
     # SIM-072 v2: deterrence sub-score (single-feature for v1)
     deterrence_vec: NDArray[np.float64] | None = None  # shape (len(DETERRENCE_FEATURES),)
 
@@ -205,13 +203,14 @@ class CatcherProfile:
 @dataclass(frozen=True, slots=True)
 class SimilarityResult:
     """One entry in the similarity query output."""
+
     catcher_id: int
     season: int
     score: float
     framing_score: float
     blocking_score: float
-    throwing_score: float       # execution mechanics (12% weight in v2)
-    deterrence_score: float     # NEW (SIM-072) — 8% weight
+    throwing_score: float  # execution mechanics (12% weight in v2)
+    deterrence_score: float  # NEW (SIM-072) — 8% weight
     offense_score: float
     sample_pitches_received: int
 
@@ -225,13 +224,16 @@ CatcherSimilarityResult = SimilarityResult
 # (Same structure as other RBF engines — reproduced for module self-containment)
 # ============================================================================
 
+
 class WeightedRBFSimilarity:
     def __init__(self, sigma: float, reliability_weights: NDArray[np.float64]) -> None:
         self.sigma = sigma
-        self.gamma = 1.0 / (2.0 * sigma ** 2)
+        self.gamma = 1.0 / (2.0 * sigma**2)
         total = reliability_weights.sum()
-        self.weights = reliability_weights / total if total > 0 else (
-            np.ones_like(reliability_weights) / len(reliability_weights)
+        self.weights = (
+            reliability_weights / total
+            if total > 0
+            else (np.ones_like(reliability_weights) / len(reliability_weights))
         )
 
     def score(self, x: NDArray, y: NDArray) -> float:
@@ -240,7 +242,7 @@ class WeightedRBFSimilarity:
 
     def score_batch(self, query: NDArray, candidates: NDArray) -> NDArray[np.float64]:
         diff = np.nan_to_num(candidates - query[np.newaxis, :], nan=0.0)
-        return np.exp(-self.gamma * np.sum(self.weights[np.newaxis, :] * diff ** 2, axis=1))
+        return np.exp(-self.gamma * np.sum(self.weights[np.newaxis, :] * diff**2, axis=1))
 
 
 class EmpiricalBayesShrinkage:
@@ -295,10 +297,18 @@ class FeatureNormalizer:
             return v
         return np.nan_to_num((v - m) / s, nan=0.0)
 
-    def normalize_framing(self, v): return self._norm(v, self.framing_mean, self.framing_std)
-    def normalize_blocking(self, v): return self._norm(v, self.blocking_mean, self.blocking_std)
-    def normalize_throwing(self, v): return self._norm(v, self.throwing_mean, self.throwing_std)
-    def normalize_offense(self, v): return self._norm(v, self.offense_mean, self.offense_std)
+    def normalize_framing(self, v):
+        return self._norm(v, self.framing_mean, self.framing_std)
+
+    def normalize_blocking(self, v):
+        return self._norm(v, self.blocking_mean, self.blocking_std)
+
+    def normalize_throwing(self, v):
+        return self._norm(v, self.throwing_mean, self.throwing_std)
+
+    def normalize_offense(self, v):
+        return self._norm(v, self.offense_mean, self.offense_std)
+
     def normalize_deterrence(self, v):
         return self._norm(v, self.deterrence_mean, self.deterrence_std)
 
@@ -306,6 +316,7 @@ class FeatureNormalizer:
 # ============================================================================
 # Scoring Partition
 # ============================================================================
+
 
 class CatcherPartition:
     def __init__(self) -> None:
@@ -335,12 +346,14 @@ class CatcherPartition:
         # zero-vector in standardized space (i.e. league average) so they
         # neither help nor hurt their matches.
         det_dim = len(DETERRENCE_FEATURES)
-        self._deterrence_mat = np.array([
-            norm.normalize_deterrence(p.deterrence_vec)
-            if p.deterrence_vec is not None
-            else self._zero_vec(det_dim)
-            for p in profiles
-        ])
+        self._deterrence_mat = np.array(
+            [
+                norm.normalize_deterrence(p.deterrence_vec)
+                if p.deterrence_vec is not None
+                else self._zero_vec(det_dim)
+                for p in profiles
+            ]
+        )
         self._eb_alphas = np.array([p.eb_alpha for p in profiles], dtype=np.float64)
 
     def score_all(
@@ -365,18 +378,26 @@ class CatcherPartition:
             else self._zero_vec(det_dim)
         )
 
-        fr_scores = framing_rbf.score_batch(norm.normalize_framing(query.framing_vec), self._framing_mat)
-        bl_scores = blocking_rbf.score_batch(norm.normalize_blocking(query.blocking_vec), self._blocking_mat)
-        th_scores = throwing_rbf.score_batch(norm.normalize_throwing(query.throwing_vec), self._throwing_mat)
+        fr_scores = framing_rbf.score_batch(
+            norm.normalize_framing(query.framing_vec), self._framing_mat
+        )
+        bl_scores = blocking_rbf.score_batch(
+            norm.normalize_blocking(query.blocking_vec), self._blocking_mat
+        )
+        th_scores = throwing_rbf.score_batch(
+            norm.normalize_throwing(query.throwing_vec), self._throwing_mat
+        )
         det_scores = deterrence_rbf.score_batch(q_det, self._deterrence_mat)
-        of_scores = offense_rbf.score_batch(norm.normalize_offense(query.offense_vec), self._offense_mat)
+        of_scores = offense_rbf.score_batch(
+            norm.normalize_offense(query.offense_vec), self._offense_mat
+        )
 
         composite = (
-            WEIGHT_FRAMING    * fr_scores
+            WEIGHT_FRAMING * fr_scores
             + WEIGHT_BLOCKING * bl_scores
             + WEIGHT_THROWING * th_scores
             + WEIGHT_DETERRENCE * det_scores
-            + WEIGHT_OFFENSE  * of_scores
+            + WEIGHT_OFFENSE * of_scores
         )
 
         pair_conf = np.minimum(query.eb_alpha, self._eb_alphas)
@@ -403,6 +424,7 @@ class CatcherPartition:
 # Main Engine
 # ============================================================================
 
+
 class CatcherSimilarityEngine:
     """
     Catcher-to-Catcher Similarity Engine (Step 2.6).
@@ -420,8 +442,11 @@ class CatcherSimilarityEngine:
         self._duckdb_path = duckdb_path
         self._profiles: dict[tuple[int, int], CatcherProfile] = {}
         self._league_avg: dict[str, dict[int, NDArray]] = {
-            "framing": {}, "blocking": {}, "throwing": {},
-            "deterrence": {}, "offense": {},
+            "framing": {},
+            "blocking": {},
+            "throwing": {},
+            "deterrence": {},
+            "offense": {},
         }
         self._normalizer = FeatureNormalizer()
         self._shrinkage = EmpiricalBayesShrinkage()
@@ -460,7 +485,8 @@ class CatcherSimilarityEngine:
 
         log.info(
             "CatcherSimilarityEngine built: %d profiles in %.2fs.",
-            len(self._profiles), time.time() - t0,
+            len(self._profiles),
+            time.time() - t0,
         )
 
     def _load_league_averages(self, conn, seasons):
@@ -526,12 +552,27 @@ class CatcherSimilarityEngine:
 
         for row in rows:
             (
-                cid, season, n_pitches, n_block_opps, n_steal_against,
-                strike_vs_exp, runs_framing, shadow_sr, heart_sr,
-                block_sr, pb_rate, wp_prev,
-                pop_time, cs_rate, exchange, arm_mph,
+                cid,
+                season,
+                n_pitches,
+                n_block_opps,
+                n_steal_against,
+                strike_vs_exp,
+                runs_framing,
+                shadow_sr,
+                heart_sr,
+                block_sr,
+                pb_rate,
+                wp_prev,
+                pop_time,
+                cs_rate,
+                exchange,
+                arm_mph,
                 steal_attempt_rate_against,
-                k_rate, walk_rate, avg_ev, hh_rate,
+                k_rate,
+                walk_rate,
+                avg_ev,
+                hh_rate,
                 below_min,
             ) = row
 
@@ -542,9 +583,7 @@ class CatcherSimilarityEngine:
             # NULL (sub-100-PA min-sample guard from SIM-073) so the engine
             # falls back to league-average behavior in standardized space.
             deterrence_vec = (
-                _v(steal_attempt_rate_against)
-                if steal_attempt_rate_against is not None
-                else None
+                _v(steal_attempt_rate_against) if steal_attempt_rate_against is not None else None
             )
 
             self._profiles[(cid, season)] = CatcherProfile(
@@ -582,9 +621,15 @@ class CatcherSimilarityEngine:
                 if current is None:
                     setattr(p, attr, avg.copy())
                     continue
-                setattr(p, attr, self._shrinkage.shrink(
-                    current, avg, p.sample_pitches_received,
-                ))
+                setattr(
+                    p,
+                    attr,
+                    self._shrinkage.shrink(
+                        current,
+                        avg,
+                        p.sample_pitches_received,
+                    ),
+                )
 
     def query(
         self,
@@ -599,9 +644,13 @@ class CatcherSimilarityEngine:
             return []
 
         results = self._partition.score_all(
-            profile, self._normalizer,
-            self._framing_rbf, self._blocking_rbf,
-            self._throwing_rbf, self._deterrence_rbf, self._offense_rbf,
+            profile,
+            self._normalizer,
+            self._framing_rbf,
+            self._blocking_rbf,
+            self._throwing_rbf,
+            self._deterrence_rbf,
+            self._offense_rbf,
         )
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:n] if n is not None else results
@@ -617,17 +666,33 @@ class CatcherSimilarityEngine:
             return None
 
         norm = self._normalizer
-        fr = self._framing_rbf.score(norm.normalize_framing(pa.framing_vec), norm.normalize_framing(pb.framing_vec))
-        bl = self._blocking_rbf.score(norm.normalize_blocking(pa.blocking_vec), norm.normalize_blocking(pb.blocking_vec))
-        th = self._throwing_rbf.score(norm.normalize_throwing(pa.throwing_vec), norm.normalize_throwing(pb.throwing_vec))
-        of = self._offense_rbf.score(norm.normalize_offense(pa.offense_vec), norm.normalize_offense(pb.offense_vec))
+        fr = self._framing_rbf.score(
+            norm.normalize_framing(pa.framing_vec), norm.normalize_framing(pb.framing_vec)
+        )
+        bl = self._blocking_rbf.score(
+            norm.normalize_blocking(pa.blocking_vec), norm.normalize_blocking(pb.blocking_vec)
+        )
+        th = self._throwing_rbf.score(
+            norm.normalize_throwing(pa.throwing_vec), norm.normalize_throwing(pb.throwing_vec)
+        )
+        of = self._offense_rbf.score(
+            norm.normalize_offense(pa.offense_vec), norm.normalize_offense(pb.offense_vec)
+        )
 
         # SIM-072 deterrence sub-score.  Profiles missing the signal contribute
         # the league-average vector (zero in standardized space), so the pair
         # scores as deterrence-similar without injecting noise.
         det_dim = len(DETERRENCE_FEATURES)
-        a_det = norm.normalize_deterrence(pa.deterrence_vec) if pa.deterrence_vec is not None else np.zeros(det_dim)
-        b_det = norm.normalize_deterrence(pb.deterrence_vec) if pb.deterrence_vec is not None else np.zeros(det_dim)
+        a_det = (
+            norm.normalize_deterrence(pa.deterrence_vec)
+            if pa.deterrence_vec is not None
+            else np.zeros(det_dim)
+        )
+        b_det = (
+            norm.normalize_deterrence(pb.deterrence_vec)
+            if pb.deterrence_vec is not None
+            else np.zeros(det_dim)
+        )
         det = self._deterrence_rbf.score(a_det, b_det)
 
         composite = (
@@ -640,9 +705,14 @@ class CatcherSimilarityEngine:
         composite = float(np.clip(composite * np.sqrt(min(pa.eb_alpha, pb.eb_alpha)), 0.0, 1.0))
 
         return SimilarityResult(
-            catcher_id=pb.catcher_id, season=pb.season, score=composite,
-            framing_score=fr, blocking_score=bl, throwing_score=th,
-            deterrence_score=det, offense_score=of,
+            catcher_id=pb.catcher_id,
+            season=pb.season,
+            score=composite,
+            framing_score=fr,
+            blocking_score=bl,
+            throwing_score=th,
+            deterrence_score=det,
+            offense_score=of,
             sample_pitches_received=pb.sample_pitches_received,
         )
 
@@ -660,6 +730,7 @@ class CatcherSimilarityEngine:
 # ============================================================================
 # Convenience: Batch Similarity Matrix
 # ============================================================================
+
 
 def build_similarity_matrix(
     engine: CatcherSimilarityEngine,
@@ -680,15 +751,16 @@ def build_similarity_matrix(
 # CLI
 # ============================================================================
 if __name__ == "__main__":
-    engine = CatcherSimilarityEngine(
-        duckdb_path="../../db/schemas/baseball_simulator.duckdb"
-    )
+    engine = CatcherSimilarityEngine(duckdb_path="../../db/schemas/baseball_simulator.duckdb")
     engine.build(seasons=[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017])
     report = run_generic_diagnostics(
         engine,
         sub_score_names=[
-            "framing_score", "blocking_score", "throwing_score",
-            "deterrence_score", "offense_score",
+            "framing_score",
+            "blocking_score",
+            "throwing_score",
+            "deterrence_score",
+            "offense_score",
         ],
         n_query_samples=50,
         engine_name="Catcher",

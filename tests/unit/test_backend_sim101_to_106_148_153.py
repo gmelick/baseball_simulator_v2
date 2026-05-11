@@ -24,7 +24,6 @@ import os
 import pathlib
 import re
 import sys
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -44,11 +43,13 @@ def _read(p: pathlib.Path) -> str:
 # SIM-102 — _infer_role() opener classification
 # ===========================================================================
 
+
 class TestSim102OpenerRole:
     """Opener slot must sit between SP and MRP."""
 
     def _infer(self, ip: str | float, bf: int) -> str:
         from pipeline.live.live_ingestion_pipeline import GameStateBuilder
+
         return GameStateBuilder._infer_role(
             {"inningsPitched": str(ip), "battersFaced": bf},
             {},
@@ -74,6 +75,7 @@ class TestSim102OpenerRole:
 
     def test_missing_battersfaced_falls_back_safely(self) -> None:
         from pipeline.live.live_ingestion_pipeline import GameStateBuilder
+
         # No battersFaced key — must not crash; falls back to old IP-only logic
         role = GameStateBuilder._infer_role({"inningsPitched": "2.0"}, {})
         assert role in ("MRP", "RP", "SP")  # graceful, no Opener miss
@@ -82,6 +84,7 @@ class TestSim102OpenerRole:
 # ===========================================================================
 # SIM-103 — broadcast() set snapshot
 # ===========================================================================
+
 
 class TestSim103BroadcastSnapshot:
     """broadcast() must iterate over a copy of the subscriber set."""
@@ -102,6 +105,7 @@ class TestSim103BroadcastSnapshot:
         class _StubWS:
             def __init__(self, name: str) -> None:
                 self.name = name
+
             async def send_text(self, msg: str) -> None:
                 sent.append(self.name)
                 # Simulate a concurrent connect during the send: append to
@@ -130,12 +134,14 @@ class TestSim103BroadcastSnapshot:
 # SIM-104 — /resimulate endpoint Redis rate limit
 # ===========================================================================
 
+
 class TestSim104ResimulateRateLimit:
     """Pre-SIM-104 the manual resimulate endpoint had no debouncing.  We
     assert the Redis cooldown key is set and a TTL > 0 returns 429."""
 
     def test_constant_present(self) -> None:
         from pipeline.live import live_ingestion_pipeline as lip
+
         assert hasattr(lip, "RESIM_COOLDOWN_S")
         assert lip.RESIM_COOLDOWN_S >= 5  # at least a few seconds
 
@@ -158,11 +164,13 @@ class TestSim104ResimulateRateLimit:
 # SIM-105 — _completed_games skip set + hydration
 # ===========================================================================
 
+
 class TestSim105CompletedGamesSkip:
     """Polls must skip _upsert_game_record() for finalized games."""
 
     def test_pipeline_has_completed_games_set(self) -> None:
         from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+
         pipeline = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
         # Manually invoke the init parts we need without DSN side effects
         pipeline._completed_games = set()  # mirror what __init__ sets
@@ -171,12 +179,14 @@ class TestSim105CompletedGamesSkip:
     def test_hydrate_completed_games_method_exists(self) -> None:
         """SIM-105 acceptance: pipeline must hydrate from raw.games on boot."""
         from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+
         assert callable(getattr(LiveIngestionPipeline, "_hydrate_completed_games", None))
 
 
 # ===========================================================================
 # SIM-106 — Async-callable simulation_callback type
 # ===========================================================================
+
 
 class TestSim106AsyncCallback:
     """Sync callbacks must raise TypeError at construction time."""
@@ -210,6 +220,7 @@ class TestSim106AsyncCallback:
 
     def test_no_callback_is_fine(self) -> None:
         from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+
         pipeline = LiveIngestionPipeline(
             dsn="postgresql://x:y@localhost/z",
             redis_url="redis://localhost",
@@ -222,11 +233,13 @@ class TestSim106AsyncCallback:
 # SIM-101 — Builder cache + incremental play history
 # ===========================================================================
 
+
 class TestSim101BuilderCache:
     """GameStateBuilder must cache history across refreshes."""
 
     def test_builder_holds_history_state(self) -> None:
         from pipeline.live.live_ingestion_pipeline import GameStateBuilder
+
         b = GameStateBuilder.__new__(GameStateBuilder)
         b._history = []
         b._last_at_bat_index = -1
@@ -254,6 +267,7 @@ class TestSim101BuilderCache:
         """Mid-PA refresh: same atBatIndex with updated event must overwrite
         the last cached entry, not append a duplicate."""
         from pipeline.live.live_ingestion_pipeline import GameStateBuilder
+
         b = GameStateBuilder.__new__(GameStateBuilder)
         b._history = []
         b._last_at_bat_index = -1
@@ -266,15 +280,17 @@ class TestSim101BuilderCache:
         completed = _make_play(idx=0, batter_id=100, event="single")
         h = b._parse_play_history([completed])
 
-        assert len(h) == 1   # NOT duplicated
+        assert len(h) == 1  # NOT duplicated
         assert h[-1]["event"] == "single"
         assert b._last_at_bat_index == 0
 
     def test_pipeline_caches_builders_per_game(self) -> None:
         """Two refreshes for the same game_pk return the SAME builder."""
         from pipeline.live.live_ingestion_pipeline import (
-            LiveIngestionPipeline, GameStateBuilder,
+            GameStateBuilder,
+            LiveIngestionPipeline,
         )
+
         pipeline = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
         pipeline._db = None
         pipeline._builders = {}
@@ -292,13 +308,16 @@ class TestSim101BuilderCache:
 def _make_play(idx: int, batter_id: int, event: str | None) -> dict:
     """Helper: build a minimal allPlays entry with the keys our parser uses."""
     return {
-        "about":   {"atBatIndex": idx, "inning": 1, "halfInning": "top",
-                    "isComplete": event is not None},
-        "result":  {"eventType": event, "description": event or "in progress",
-                    "rbi": 0},
+        "about": {
+            "atBatIndex": idx,
+            "inning": 1,
+            "halfInning": "top",
+            "isComplete": event is not None,
+        },
+        "result": {"eventType": event, "description": event or "in progress", "rbi": 0},
         "matchup": {
-            "batter":  {"id": batter_id, "fullName": f"Batter{batter_id}"},
-            "pitcher": {"id": 999,       "fullName": "Pitcher999"},
+            "batter": {"id": batter_id, "fullName": f"Batter{batter_id}"},
+            "pitcher": {"id": 999, "fullName": "Pitcher999"},
         },
         "playEvents": [],
     }
@@ -351,8 +370,7 @@ class TestSim148PitcherSimilarityCleanup:
         # SimilarityResult class.
         # Confine the search to between "class SimilarityResult" and the
         # next blank line after a closing of that block.
-        m = re.search(r"class SimilarityResult.*?(?=\n\n[A-Z@])",
-                      src, re.DOTALL)
+        m = re.search(r"class SimilarityResult.*?(?=\n\n[A-Z@])", src, re.DOTALL)
         body = m.group(0) if m else src
         assert "release_score" not in body, (
             "SIM-148/SIM-067: SimilarityResult must NOT declare release_score "
@@ -361,14 +379,17 @@ class TestSim148PitcherSimilarityCleanup:
 
     @pytest.mark.skipif(not _SCIPY_AVAILABLE, reason="scipy not installed")
     def test_no_release_score_field_on_similarity_result(self) -> None:
-        from similarity.engines.pitcher_similarity import SimilarityResult
         from dataclasses import fields
+
+        from similarity.engines.pitcher_similarity import SimilarityResult
+
         names = {f.name for f in fields(SimilarityResult)}
         assert "release_score" not in names
 
     @pytest.mark.skipif(not _SCIPY_AVAILABLE, reason="scipy not installed")
     def test_finite_distances_docstring_uses_calibrate_arsenal_scale(self) -> None:
         from similarity.engines.pitcher_similarity import ArsenalCache
+
         doc = ArsenalCache.finite_distances.__doc__ or ""
         assert "calibrate_arsenal_scale" in doc, (
             "SIM-148 AC #4: finite_distances() docstring must reference the "
@@ -386,6 +407,7 @@ class TestSim148PitcherSimilarityCleanup:
 # SIM-153 — Secrets management baseline
 # ===========================================================================
 
+
 class TestSim153SecretsBaseline:
     """The secrets baseline depends on file-system artefacts; we assert
     each one is in place."""
@@ -395,9 +417,7 @@ class TestSim153SecretsBaseline:
         assert path.exists(), "SIM-153: .env.example missing"
         text = _read(path)
         for required in ("BASEBALL_DB_DSN", "REDIS_URL"):
-            assert required in text, (
-                f"SIM-153: .env.example must document {required}"
-            )
+            assert required in text, f"SIM-153: .env.example must document {required}"
 
     def test_gitignore_excludes_dotenv(self) -> None:
         path = _ROOT / ".gitignore"
@@ -408,12 +428,11 @@ class TestSim153SecretsBaseline:
 
     def test_python_dotenv_in_requirements(self) -> None:
         text = _read(_ROOT / "requirements.txt")
-        assert "python-dotenv" in text, (
-            "SIM-153: python-dotenv must be in requirements.txt"
-        )
+        assert "python-dotenv" in text, "SIM-153: python-dotenv must be in requirements.txt"
 
     def test_validate_environment_function_exists(self) -> None:
         from api.main import validate_environment
+
         # Save current state, force-clear, call, expect RuntimeError.
         saved = {k: os.environ.pop(k, None) for k in ("BASEBALL_DB_DSN", "REDIS_URL")}
         try:
@@ -426,9 +445,7 @@ class TestSim153SecretsBaseline:
 
     def test_ci_workflow_has_secrets_check_job(self) -> None:
         ci = _read(_ROOT / ".github" / "workflows" / "ci.yml")
-        assert "secrets-check" in ci, (
-            "SIM-153: CI workflow must define a `secrets-check` job"
-        )
+        assert "secrets-check" in ci, "SIM-153: CI workflow must define a `secrets-check` job"
         assert "Reject committed .env" in ci or "committed .env" in ci, (
             "SIM-153: secrets-check job must reject committed .env files"
         )
@@ -437,6 +454,7 @@ class TestSim153SecretsBaseline:
         """SIM-153 AC #4: HistoricalDataLoader reads BASEBALL_DB_DSN from env
         when no explicit dsn parameter is passed."""
         from pipeline.etl.etl_historical_loader import HistoricalDataLoader
+
         saved = os.environ.pop("BASEBALL_DB_DSN", None)
         try:
             with pytest.raises(RuntimeError, match="BASEBALL_DB_DSN"):

@@ -24,32 +24,41 @@ import unittest
 
 import numpy as np
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_engine_with_profiles(profiles):
     """Construct a CatcherSimilarityEngine via __new__ with the supplied
     profiles injected directly (no DuckDB dependency)."""
     from similarity.engines.catcher_similarity import (
+        BLOCKING_FEATURES,
+        DETERRENCE_FEATURES,
+        FRAMING_FEATURES,
+        OFFENSE_FEATURES,
+        RBF_SIGMA_BLOCKING,
+        RBF_SIGMA_DETERRENCE,
+        RBF_SIGMA_FRAMING,
+        RBF_SIGMA_OFFENSE,
+        RBF_SIGMA_THROWING,
+        THROWING_FEATURES,
+        CatcherPartition,
         CatcherSimilarityEngine,
         EmpiricalBayesShrinkage,
         FeatureNormalizer,
-        CatcherPartition,
         WeightedRBFSimilarity,
-        FRAMING_FEATURES, BLOCKING_FEATURES, THROWING_FEATURES,
-        DETERRENCE_FEATURES, OFFENSE_FEATURES,
-        RBF_SIGMA_FRAMING, RBF_SIGMA_BLOCKING, RBF_SIGMA_THROWING,
-        RBF_SIGMA_DETERRENCE, RBF_SIGMA_OFFENSE,
     )
 
     engine = CatcherSimilarityEngine.__new__(CatcherSimilarityEngine)
     engine._duckdb_path = ""
     engine._profiles = {(p.catcher_id, p.season): p for p in profiles}
     engine._league_avg = {
-        "framing": {}, "blocking": {}, "throwing": {},
-        "deterrence": {}, "offense": {},
+        "framing": {},
+        "blocking": {},
+        "throwing": {},
+        "deterrence": {},
+        "offense": {},
     }
     engine._normalizer = FeatureNormalizer()
     engine._shrinkage = EmpiricalBayesShrinkage()
@@ -78,32 +87,40 @@ def _make_engine_with_profiles(profiles):
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestCatcherV2DeterrenceSplit(unittest.TestCase):
     """SIM-072 acceptance tests."""
 
     def test_deterrence_field_present_on_results(self):
         """AC #1: deterrence_score is a first-class field on results."""
         from similarity.engines.catcher_similarity import (
-            CatcherProfile, CatcherSimilarityResult,
-            FRAMING_FEATURES, BLOCKING_FEATURES, THROWING_FEATURES,
-            DETERRENCE_FEATURES, OFFENSE_FEATURES,
+            BLOCKING_FEATURES,
+            DETERRENCE_FEATURES,
+            FRAMING_FEATURES,
+            OFFENSE_FEATURES,
+            THROWING_FEATURES,
+            CatcherProfile,
+            CatcherSimilarityResult,
         )
 
         rng = np.random.default_rng(72)
         profiles = []
         for cid in range(1, 6):
-            profiles.append(CatcherProfile(
-                catcher_id=cid, season=2024,
-                sample_pitches_received=2000,
-                sample_block_opps=80,
-                sample_steal_attempts_against=30,
-                framing_vec=rng.normal(0.0, 0.02, len(FRAMING_FEATURES)),
-                blocking_vec=rng.beta(8, 2, len(BLOCKING_FEATURES)),
-                throwing_vec=rng.normal(2.0, 0.05, len(THROWING_FEATURES)),
-                deterrence_vec=rng.uniform(0.04, 0.12, len(DETERRENCE_FEATURES)),
-                offense_vec=rng.beta(5, 5, len(OFFENSE_FEATURES)),
-                eb_alpha=1.0,
-            ))
+            profiles.append(
+                CatcherProfile(
+                    catcher_id=cid,
+                    season=2024,
+                    sample_pitches_received=2000,
+                    sample_block_opps=80,
+                    sample_steal_attempts_against=30,
+                    framing_vec=rng.normal(0.0, 0.02, len(FRAMING_FEATURES)),
+                    blocking_vec=rng.beta(8, 2, len(BLOCKING_FEATURES)),
+                    throwing_vec=rng.normal(2.0, 0.05, len(THROWING_FEATURES)),
+                    deterrence_vec=rng.uniform(0.04, 0.12, len(DETERRENCE_FEATURES)),
+                    offense_vec=rng.beta(5, 5, len(OFFENSE_FEATURES)),
+                    eb_alpha=1.0,
+                )
+            )
 
         engine = _make_engine_with_profiles(profiles)
         results = engine.query(1, 2024)
@@ -137,7 +154,8 @@ class TestCatcherV2DeterrenceSplit(unittest.TestCase):
 
         # "Cannon" — every axis at the elite end of the envelope.
         cannon = CatcherProfile(
-            catcher_id=1001, season=2024,
+            catcher_id=1001,
+            season=2024,
             sample_pitches_received=3000,
             sample_block_opps=120,
             sample_steal_attempts_against=20,
@@ -151,7 +169,8 @@ class TestCatcherV2DeterrenceSplit(unittest.TestCase):
 
         # "Welcome Mat" — every axis at the replacement-level end.
         welcome_mat = CatcherProfile(
-            catcher_id=1002, season=2024,
+            catcher_id=1002,
+            season=2024,
             sample_pitches_received=3000,
             sample_block_opps=120,
             sample_steal_attempts_against=120,
@@ -169,44 +188,53 @@ class TestCatcherV2DeterrenceSplit(unittest.TestCase):
         # endpoint axes and normalization degenerates.
         pool = []
         for cid in range(2000, 2030):
-            pool.append(CatcherProfile(
-                catcher_id=cid, season=2024,
-                sample_pitches_received=2000,
-                sample_block_opps=100,
-                sample_steal_attempts_against=40,
-                framing_vec=np.array([
-                    rng.uniform(-0.02, 0.10),
-                    rng.uniform(-3.0, 12.0),
-                    rng.uniform(0.42, 0.52),
-                    rng.uniform(0.82, 0.90),
-                ]),
-                blocking_vec=np.array([
-                    rng.uniform(0.88, 0.94),
-                    rng.uniform(0.25, 0.45),
-                    rng.uniform(0.55, 0.70),
-                ]),
-                throwing_vec=np.array([
-                    rng.uniform(1.90, 2.15),
-                    rng.uniform(0.20, 0.35),
-                    rng.uniform(0.65, 0.75),
-                    rng.uniform(80.0, 86.0),
-                ]),
-                deterrence_vec=np.array([rng.uniform(0.06, 0.13)]),
-                offense_vec=np.array([
-                    rng.uniform(0.20, 0.27),
-                    rng.uniform(0.06, 0.09),
-                    rng.uniform(86.0, 89.0),
-                    rng.uniform(0.32, 0.40),
-                ]),
-                eb_alpha=1.0,
-            ))
+            pool.append(
+                CatcherProfile(
+                    catcher_id=cid,
+                    season=2024,
+                    sample_pitches_received=2000,
+                    sample_block_opps=100,
+                    sample_steal_attempts_against=40,
+                    framing_vec=np.array(
+                        [
+                            rng.uniform(-0.02, 0.10),
+                            rng.uniform(-3.0, 12.0),
+                            rng.uniform(0.42, 0.52),
+                            rng.uniform(0.82, 0.90),
+                        ]
+                    ),
+                    blocking_vec=np.array(
+                        [
+                            rng.uniform(0.88, 0.94),
+                            rng.uniform(0.25, 0.45),
+                            rng.uniform(0.55, 0.70),
+                        ]
+                    ),
+                    throwing_vec=np.array(
+                        [
+                            rng.uniform(1.90, 2.15),
+                            rng.uniform(0.20, 0.35),
+                            rng.uniform(0.65, 0.75),
+                            rng.uniform(80.0, 86.0),
+                        ]
+                    ),
+                    deterrence_vec=np.array([rng.uniform(0.06, 0.13)]),
+                    offense_vec=np.array(
+                        [
+                            rng.uniform(0.20, 0.27),
+                            rng.uniform(0.06, 0.09),
+                            rng.uniform(86.0, 89.0),
+                            rng.uniform(0.32, 0.40),
+                        ]
+                    ),
+                    eb_alpha=1.0,
+                )
+            )
 
         profiles = [cannon, welcome_mat] + pool
         engine = _make_engine_with_profiles(profiles)
 
-        result = engine.query_pair(
-            (cannon.catcher_id, 2024), (welcome_mat.catcher_id, 2024)
-        )
+        result = engine.query_pair((cannon.catcher_id, 2024), (welcome_mat.catcher_id, 2024))
         self.assertIsNotNone(result)
 
         diag = (
@@ -223,11 +251,13 @@ class TestCatcherV2DeterrenceSplit(unittest.TestCase):
         # Both throwing axes must independently score low — the whole point
         # of the SIM-072 split is that *neither* alone hides the difference.
         self.assertLess(
-            result.throwing_score, 0.5,
+            result.throwing_score,
+            0.5,
             msg=f"throwing_score={result.throwing_score:.3f} too high",
         )
         self.assertLess(
-            result.deterrence_score, 0.5,
+            result.deterrence_score,
+            0.5,
             msg=f"deterrence_score={result.deterrence_score:.3f} too high",
         )
 
@@ -236,29 +266,34 @@ class TestCatcherV2DeterrenceSplit(unittest.TestCase):
         guard from SIM-073) must still produce finite scores and not
         crash the engine."""
         from similarity.engines.catcher_similarity import (
+            BLOCKING_FEATURES,
+            DETERRENCE_FEATURES,
+            FRAMING_FEATURES,
+            OFFENSE_FEATURES,
+            THROWING_FEATURES,
             CatcherProfile,
-            FRAMING_FEATURES, BLOCKING_FEATURES, THROWING_FEATURES,
-            DETERRENCE_FEATURES, OFFENSE_FEATURES,
         )
 
         rng = np.random.default_rng(73)
         profiles = []
         for cid in range(1, 8):
-            profiles.append(CatcherProfile(
-                catcher_id=cid, season=2024,
-                sample_pitches_received=2000,
-                sample_block_opps=80,
-                sample_steal_attempts_against=40,
-                framing_vec=rng.normal(0.0, 0.02, len(FRAMING_FEATURES)),
-                blocking_vec=rng.beta(8, 2, len(BLOCKING_FEATURES)),
-                throwing_vec=rng.normal(2.0, 0.05, len(THROWING_FEATURES)),
-                deterrence_vec=(
-                    None if cid == 1
-                    else rng.uniform(0.04, 0.13, len(DETERRENCE_FEATURES))
-                ),
-                offense_vec=rng.beta(5, 5, len(OFFENSE_FEATURES)),
-                eb_alpha=1.0,
-            ))
+            profiles.append(
+                CatcherProfile(
+                    catcher_id=cid,
+                    season=2024,
+                    sample_pitches_received=2000,
+                    sample_block_opps=80,
+                    sample_steal_attempts_against=40,
+                    framing_vec=rng.normal(0.0, 0.02, len(FRAMING_FEATURES)),
+                    blocking_vec=rng.beta(8, 2, len(BLOCKING_FEATURES)),
+                    throwing_vec=rng.normal(2.0, 0.05, len(THROWING_FEATURES)),
+                    deterrence_vec=(
+                        None if cid == 1 else rng.uniform(0.04, 0.13, len(DETERRENCE_FEATURES))
+                    ),
+                    offense_vec=rng.beta(5, 5, len(OFFENSE_FEATURES)),
+                    eb_alpha=1.0,
+                )
+            )
 
         engine = _make_engine_with_profiles(profiles)
         results = engine.query(1, 2024)
@@ -272,23 +307,27 @@ class TestCatcherV2DeterrenceSplit(unittest.TestCase):
     def test_v2_weight_constants(self):
         """Spot-check the new weight constants (also asserted in regression)."""
         from similarity.engines.catcher_similarity import (
-            WEIGHT_FRAMING, WEIGHT_BLOCKING, WEIGHT_THROWING,
-            WEIGHT_DETERRENCE, WEIGHT_OFFENSE,
+            WEIGHT_BLOCKING,
+            WEIGHT_DETERRENCE,
+            WEIGHT_FRAMING,
+            WEIGHT_OFFENSE,
+            WEIGHT_THROWING,
         )
+
         self.assertEqual(WEIGHT_FRAMING, 0.45)
         self.assertEqual(WEIGHT_BLOCKING, 0.20)
         self.assertEqual(WEIGHT_THROWING, 0.12)
         self.assertEqual(WEIGHT_DETERRENCE, 0.08)
         self.assertEqual(WEIGHT_OFFENSE, 0.15)
         total = (
-            WEIGHT_FRAMING + WEIGHT_BLOCKING + WEIGHT_THROWING
-            + WEIGHT_DETERRENCE + WEIGHT_OFFENSE
+            WEIGHT_FRAMING + WEIGHT_BLOCKING + WEIGHT_THROWING + WEIGHT_DETERRENCE + WEIGHT_OFFENSE
         )
         self.assertAlmostEqual(total, 1.0, places=9)
 
     def test_eb_n_prior_unchanged(self):
         """AC #5: EB_N_PRIOR=15 retained for both throwing-derived sub-scores."""
         from similarity.engines.catcher_similarity import EB_N_PRIOR
+
         self.assertEqual(EB_N_PRIOR, 15)
 
 

@@ -82,8 +82,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 import duckdb
 import numpy as np
@@ -112,17 +111,17 @@ log = logging.getLogger("situation_similarity")
 # which scales Euclidean distance proportionally to feature importance.
 SITUATION_FEATURES = [
     # feature_name,             weight   description
-    ("inning",                  0.80),   # 1-9 (or extra innings up to 12)
-    ("top_or_bottom",           0.50),   # 0 = top, 1 = bottom
-    ("outs",                    1.00),   # 0, 1, or 2
-    ("runner_on_1b",            0.80),   # 0 or 1
-    ("runner_on_2b",            1.00),   # 0 or 1 (RISP — higher impact)
-    ("runner_on_3b",            0.90),   # 0 or 1 (run about to score)
-    ("score_differential",      0.70),   # home - away score; clipped [-5, 5]
-    ("leverage_index",          1.20),   # real-valued LI; strong discriminator
-    ("pitcher_pitch_count",     0.60),   # proxy for fatigue and stuff decay
-    ("batter_pa_count",         0.40),   # times through order effect
-    ("park_factor_runs",        0.50),   # 1.0 = average; range ~0.85-1.15
+    ("inning", 0.80),  # 1-9 (or extra innings up to 12)
+    ("top_or_bottom", 0.50),  # 0 = top, 1 = bottom
+    ("outs", 1.00),  # 0, 1, or 2
+    ("runner_on_1b", 0.80),  # 0 or 1
+    ("runner_on_2b", 1.00),  # 0 or 1 (RISP — higher impact)
+    ("runner_on_3b", 0.90),  # 0 or 1 (run about to score)
+    ("score_differential", 0.70),  # home - away score; clipped [-5, 5]
+    ("leverage_index", 1.20),  # real-valued LI; strong discriminator
+    ("pitcher_pitch_count", 0.60),  # proxy for fatigue and stuff decay
+    ("batter_pa_count", 0.40),  # times through order effect
+    ("park_factor_runs", 0.50),  # 1.0 = average; range ~0.85-1.15
 ]
 
 FEATURE_NAMES = [f for f, _ in SITUATION_FEATURES]
@@ -146,6 +145,7 @@ MIN_INDEX_SIZE = 1000
 # Data Structures
 # ============================================================================
 
+
 @dataclass(frozen=True, slots=True)
 class SituationVector:
     """
@@ -154,43 +154,48 @@ class SituationVector:
     All fields should be set to the current values at the moment of the
     pitch (i.e., BEFORE the play outcome is known).
     """
-    inning: int                  # 1-based inning number
-    top_or_bottom: int           # 0 = top (away batting), 1 = bottom (home batting)
-    outs: int                    # 0, 1, or 2
-    runner_on_1b: int            # 1 if occupied, 0 otherwise
+
+    inning: int  # 1-based inning number
+    top_or_bottom: int  # 0 = top (away batting), 1 = bottom (home batting)
+    outs: int  # 0, 1, or 2
+    runner_on_1b: int  # 1 if occupied, 0 otherwise
     runner_on_2b: int
     runner_on_3b: int
-    score_differential: float    # home_score - away_score at moment of pitch
-    leverage_index: float        # pre-pitch LI (0.0 to ~10.0, typical range 0.1-4.0)
-    pitcher_pitch_count: int     # pitches thrown so far this appearance
-    batter_pa_count: int         # plate appearances by this batter this game
-    park_factor_runs: float      # park run factor (1.0 = league average)
+    score_differential: float  # home_score - away_score at moment of pitch
+    leverage_index: float  # pre-pitch LI (0.0 to ~10.0, typical range 0.1-4.0)
+    pitcher_pitch_count: int  # pitches thrown so far this appearance
+    batter_pa_count: int  # plate appearances by this batter this game
+    park_factor_runs: float  # park run factor (1.0 = league average)
 
     def to_array(self) -> NDArray[np.float64]:
-        return np.array([
-            float(self.inning),
-            float(self.top_or_bottom),
-            float(self.outs),
-            float(self.runner_on_1b),
-            float(self.runner_on_2b),
-            float(self.runner_on_3b),
-            float(np.clip(self.score_differential, -SCORE_DIFF_CLIP, SCORE_DIFF_CLIP)),
-            float(self.leverage_index),
-            float(self.pitcher_pitch_count),
-            float(self.batter_pa_count),
-            float(self.park_factor_runs),
-        ], dtype=np.float64)
+        return np.array(
+            [
+                float(self.inning),
+                float(self.top_or_bottom),
+                float(self.outs),
+                float(self.runner_on_1b),
+                float(self.runner_on_2b),
+                float(self.runner_on_3b),
+                float(np.clip(self.score_differential, -SCORE_DIFF_CLIP, SCORE_DIFF_CLIP)),
+                float(self.leverage_index),
+                float(self.pitcher_pitch_count),
+                float(self.batter_pa_count),
+                float(self.park_factor_runs),
+            ],
+            dtype=np.float64,
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class NearestSituation:
     """One entry in the K-nearest-neighbor query output."""
-    play_id: str            # foreign key into the play pool / play-by-play table
-    game_pk: int            # game identifier
-    distance: float         # Euclidean distance in normalized+weighted space
+
+    play_id: str  # foreign key into the play pool / play-by-play table
+    game_pk: int  # game identifier
+    distance: float  # Euclidean distance in normalized+weighted space
     inning: int
     outs: int
-    runners: int            # bitmask: 0b001=1B, 0b010=2B, 0b100=3B
+    runners: int  # bitmask: 0b001=1B, 0b010=2B, 0b100=3B
     leverage_index: float
     score_differential: float
 
@@ -199,9 +204,11 @@ class NearestSituation:
 # Feature Normalization (fit on indexed situations, apply to query)
 # ============================================================================
 
+
 @dataclass(slots=True)
 class SituationNormalizer:
     """Z-score normalizer for situation feature vectors."""
+
     mean: NDArray | None = None
     std: NDArray | None = None
 
@@ -230,6 +237,7 @@ class SituationNormalizer:
 # Main Engine
 # ============================================================================
 
+
 class SituationSimilarityEngine:
     """
     Situation-to-Situation KDTree Engine (Step 2.9).
@@ -251,7 +259,7 @@ class SituationSimilarityEngine:
         self._duckdb_path = duckdb_path
         self._normalizer = SituationNormalizer()
         self._kdtree: KDTree | None = None
-        self._index_meta: list[NearestSituation] = []   # parallel to kdtree leafs
+        self._index_meta: list[NearestSituation] = []  # parallel to kdtree leafs
         self._index_size = 0
 
     # ------------------------------------------------------------------
@@ -278,7 +286,8 @@ class SituationSimilarityEngine:
             log.warning(
                 "SituationSimilarityEngine: only %d situations loaded "
                 "(minimum %d). Build may not be reliable.",
-                len(raw_matrix), MIN_INDEX_SIZE,
+                len(raw_matrix),
+                MIN_INDEX_SIZE,
             )
 
         # Fit normalizer and build scaled matrix
@@ -292,7 +301,8 @@ class SituationSimilarityEngine:
         elapsed = time.time() - t0
         log.info(
             "SituationSimilarityEngine built: %d situations indexed in %.2fs.",
-            self._index_size, elapsed,
+            self._index_size,
+            elapsed,
         )
 
     def _load_situations(
@@ -342,17 +352,25 @@ class SituationSimilarityEngine:
 
         for idx, row in enumerate(rows):
             (
-                play_id, game_pk, inning, top_or_bottom,
-                outs, on_1b, on_2b, on_3b,
-                score_diff, li, pc, pa_count, park_factor,
+                play_id,
+                game_pk,
+                inning,
+                top_or_bottom,
+                outs,
+                on_1b,
+                on_2b,
+                on_3b,
+                score_diff,
+                li,
+                pc,
+                pa_count,
+                park_factor,
             ) = row
 
-            runners_bitmask = (
-                (1 if on_1b else 0)
-                | (2 if on_2b else 0)
-                | (4 if on_3b else 0)
+            runners_bitmask = (1 if on_1b else 0) | (2 if on_2b else 0) | (4 if on_3b else 0)
+            score_diff_clipped = float(
+                np.clip(score_diff or 0.0, -SCORE_DIFF_CLIP, SCORE_DIFF_CLIP)
             )
-            score_diff_clipped = float(np.clip(score_diff or 0.0, -SCORE_DIFF_CLIP, SCORE_DIFF_CLIP))
 
             matrix[idx] = [
                 float(inning or 1),
@@ -367,16 +385,18 @@ class SituationSimilarityEngine:
                 float(pa_count or 1),
                 float(park_factor or 1.0),
             ]
-            meta.append(NearestSituation(
-                play_id=str(play_id or ""),
-                game_pk=int(game_pk or 0),
-                distance=0.0,   # filled at query time
-                inning=int(inning or 1),
-                outs=int(outs or 0),
-                runners=runners_bitmask,
-                leverage_index=float(li or 1.0),
-                score_differential=score_diff_clipped,
-            ))
+            meta.append(
+                NearestSituation(
+                    play_id=str(play_id or ""),
+                    game_pk=int(game_pk or 0),
+                    distance=0.0,  # filled at query time
+                    inning=int(inning or 1),
+                    outs=int(outs or 0),
+                    runners=runners_bitmask,
+                    leverage_index=float(li or 1.0),
+                    score_differential=score_diff_clipped,
+                )
+            )
 
         return matrix, meta
 
@@ -420,18 +440,20 @@ class SituationSimilarityEngine:
             indices = np.array([indices])
 
         results = []
-        for dist, idx in zip(distances, indices):
+        for dist, idx in zip(distances, indices, strict=False):
             base = self._index_meta[idx]
-            results.append(NearestSituation(
-                play_id=base.play_id,
-                game_pk=base.game_pk,
-                distance=float(dist),
-                inning=base.inning,
-                outs=base.outs,
-                runners=base.runners,
-                leverage_index=base.leverage_index,
-                score_differential=base.score_differential,
-            ))
+            results.append(
+                NearestSituation(
+                    play_id=base.play_id,
+                    game_pk=base.game_pk,
+                    distance=float(dist),
+                    inning=base.inning,
+                    outs=base.outs,
+                    runners=base.runners,
+                    leverage_index=base.leverage_index,
+                    score_differential=base.score_differential,
+                )
+            )
 
         return results
 
@@ -452,9 +474,9 @@ class SituationSimilarityEngine:
             return [[] for _ in situations]
 
         effective_k = min(k, self._index_size)
-        query_matrix = np.array([
-            self._normalizer.normalize(s.to_array()) for s in situations
-        ], dtype=np.float64)
+        query_matrix = np.array(
+            [self._normalizer.normalize(s.to_array()) for s in situations], dtype=np.float64
+        )
 
         all_distances, all_indices = self._kdtree.query(query_matrix, k=effective_k)
 
@@ -464,20 +486,22 @@ class SituationSimilarityEngine:
             all_indices = all_indices[:, np.newaxis]
 
         results = []
-        for distances, indices in zip(all_distances, all_indices):
+        for distances, indices in zip(all_distances, all_indices, strict=False):
             row = []
-            for dist, idx in zip(distances, indices):
+            for dist, idx in zip(distances, indices, strict=False):
                 base = self._index_meta[idx]
-                row.append(NearestSituation(
-                    play_id=base.play_id,
-                    game_pk=base.game_pk,
-                    distance=float(dist),
-                    inning=base.inning,
-                    outs=base.outs,
-                    runners=base.runners,
-                    leverage_index=base.leverage_index,
-                    score_differential=base.score_differential,
-                ))
+                row.append(
+                    NearestSituation(
+                        play_id=base.play_id,
+                        game_pk=base.game_pk,
+                        distance=float(dist),
+                        inning=base.inning,
+                        outs=base.outs,
+                        runners=base.runners,
+                        leverage_index=base.leverage_index,
+                        score_differential=base.score_differential,
+                    )
+                )
             results.append(row)
 
         return results
@@ -517,6 +541,7 @@ def sorted_dict(d: dict) -> dict:
 # Convenience: Inning/Outs coverage summary
 # ============================================================================
 
+
 def build_coverage_report(engine: SituationSimilarityEngine) -> str:
     """
     Human-readable coverage summary showing how many historical situations
@@ -524,15 +549,18 @@ def build_coverage_report(engine: SituationSimilarityEngine) -> str:
     has good coverage for all game states the simulation will encounter.
     """
     from collections import Counter
+
     counter: Counter = Counter()
     for meta in engine._index_meta:
         counter[(meta.inning, meta.outs)] += 1
 
-    lines = ["SituationSimilarityEngine Coverage Report",
-             "=" * 50,
-             f"Total indexed situations: {engine.index_size:,}",
-             "",
-             f"{'Inning':<8} {'Outs=0':>8} {'Outs=1':>8} {'Outs=2':>8}"]
+    lines = [
+        "SituationSimilarityEngine Coverage Report",
+        "=" * 50,
+        f"Total indexed situations: {engine.index_size:,}",
+        "",
+        f"{'Inning':<8} {'Outs=0':>8} {'Outs=1':>8} {'Outs=2':>8}",
+    ]
     for inning in range(1, 13):
         row = [
             counter.get((inning, 0), 0),
@@ -549,23 +577,29 @@ def build_coverage_report(engine: SituationSimilarityEngine) -> str:
 # CLI
 # ============================================================================
 if __name__ == "__main__":
-    engine = SituationSimilarityEngine(
-        duckdb_path="../../db/schemas/baseball_simulator.duckdb"
-    )
+    engine = SituationSimilarityEngine(duckdb_path="../../db/schemas/baseball_simulator.duckdb")
     engine.build(seasons=[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017])
     print(build_coverage_report(engine))
 
     # Example query: 7th inning, 1 out, runner on 2nd, tie game
     query = SituationVector(
-        inning=7, top_or_bottom=0, outs=1,
-        runner_on_1b=0, runner_on_2b=1, runner_on_3b=0,
-        score_differential=0.0, leverage_index=2.1,
-        pitcher_pitch_count=82, batter_pa_count=2,
+        inning=7,
+        top_or_bottom=0,
+        outs=1,
+        runner_on_1b=0,
+        runner_on_2b=1,
+        runner_on_3b=0,
+        score_differential=0.0,
+        leverage_index=2.1,
+        pitcher_pitch_count=82,
+        batter_pa_count=2,
         park_factor_runs=1.0,
     )
     nearest = engine.query(query, k=20)
-    print(f"\nTop 20 nearest situations:")
+    print("\nTop 20 nearest situations:")
     for r in nearest[:5]:
-        print(f"  play_id={r.play_id}  game_pk={r.game_pk}  "
-              f"inn={r.inning}  outs={r.outs}  runners={r.runners:03b}  "
-              f"li={r.leverage_index:.2f}  dist={r.distance:.4f}")
+        print(
+            f"  play_id={r.play_id}  game_pk={r.game_pk}  "
+            f"inn={r.inning}  outs={r.outs}  runners={r.runners:03b}  "
+            f"li={r.leverage_index:.2f}  dist={r.distance:.4f}"
+        )

@@ -108,8 +108,12 @@ def upgrade() -> None:
             is_sharp_book   BOOLEAN         NOT NULL DEFAULT FALSE
         )
     """)
-    op.execute("CREATE INDEX IF NOT EXISTS idx_prop_odds_game_player ON raw.prop_odds(game_pk, player_id)")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_prop_odds_line_type   ON raw.prop_odds(game_pk, line_type)")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_prop_odds_game_player ON raw.prop_odds(game_pk, player_id)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_prop_odds_line_type   ON raw.prop_odds(game_pk, line_type)"
+    )
 
     # -----------------------------------------------------------------
     # raw.pipeline_run_log  (SIM-138 dependency)
@@ -131,7 +135,9 @@ def upgrade() -> None:
             metadata                    JSONB
         )
     """)
-    op.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_run_log_job ON raw.pipeline_run_log(job_name, started_at DESC)")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pipeline_run_log_job ON raw.pipeline_run_log(job_name, started_at DESC)"
+    )
 
 
 def downgrade() -> None:

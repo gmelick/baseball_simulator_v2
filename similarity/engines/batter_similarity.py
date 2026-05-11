@@ -88,9 +88,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections import defaultdict
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
 
 import duckdb
 import numpy as np
@@ -121,76 +119,76 @@ log = logging.getLogger("batter_similarity")
 # because they carry more true-talent signal per PA.
 DISCIPLINE_FEATURES = [
     # feature_name,           reliability_weight
-    ("first_pitch_take_rate", 0.680),   # stabilizes ~60 PA (swing% family)
-    ("o_swing_rate",          0.689),   # stabilizes ~80 PA
-    ("z_swing_rate",          0.533),   # stabilizes ~80 PA
-    ("contact_rate",          0.776),   # stabilizes ~100 PA
-    ("whiff_rate",            0.776),   # stabilizes ~100 PA
-    ("k_rate",                0.701),   # stabilizes ~150 PA
-    ("walk_rate",             0.558),   # stabilizes ~200 PA
+    ("first_pitch_take_rate", 0.680),  # stabilizes ~60 PA (swing% family)
+    ("o_swing_rate", 0.689),  # stabilizes ~80 PA
+    ("z_swing_rate", 0.533),  # stabilizes ~80 PA
+    ("contact_rate", 0.776),  # stabilizes ~100 PA
+    ("whiff_rate", 0.776),  # stabilizes ~100 PA
+    ("k_rate", 0.701),  # stabilizes ~150 PA
+    ("walk_rate", 0.558),  # stabilizes ~200 PA
 ]
 
 # --- Batted Ball Profile features (stabilize 100-300 BIP) ---
 BATTED_BALL_FEATURES = [
-    ("gb_rate",               0.563),   # stabilizes ~100 BIP (fastest BB metric)
-    ("fb_rate",               0.544),   # stabilizes ~150 BIP
-    ("pull_rate",             0.760),   # spray direction — moderate
-    ("oppo_rate",             0.792),
-    ("avg_exit_velo",         0.675),   # stabilizes ~50 BBE (Statcast-era reliable)
-    ("avg_launch_angle",      0.662),   # stabilizes ~100 BBE
-    ("hard_hit_rate",         0.628),   # stabilizes ~50 BBE
-    ("barrel_rate",           0.333),   # stabilizes ~150 BBE
+    ("gb_rate", 0.563),  # stabilizes ~100 BIP (fastest BB metric)
+    ("fb_rate", 0.544),  # stabilizes ~150 BIP
+    ("pull_rate", 0.760),  # spray direction — moderate
+    ("oppo_rate", 0.792),
+    ("avg_exit_velo", 0.675),  # stabilizes ~50 BBE (Statcast-era reliable)
+    ("avg_launch_angle", 0.662),  # stabilizes ~100 BBE
+    ("hard_hit_rate", 0.628),  # stabilizes ~50 BBE
+    ("barrel_rate", 0.333),  # stabilizes ~150 BBE
 ]
 
 # --- Power / Results features (noisier, 300+ PA) ---
 POWER_FEATURES = [
-    ("hr_rate",               0.470),   # stabilizes ~300 PA
-    ("xba",                   0.596),   # expected stats — moderate noise
-    ("xslg",                  0.554),   # expected stats — moderate noise
-    ("max_exit_velo",         0.690),   # very stable — physical attribute
+    ("hr_rate", 0.470),  # stabilizes ~300 PA
+    ("xba", 0.596),  # expected stats — moderate noise
+    ("xslg", 0.554),  # expected stats — moderate noise
+    ("max_exit_velo", 0.690),  # very stable — physical attribute
 ]
 
 # --- Platoon split features (compared per-hand: vs_L and vs_R) ---
 # Focus on approach/discipline differences by hand, not contact quality
 # which is already captured in the batted_ball sub-score.
 PLATOON_FEATURES = [
-    ("o_swing_rate",          0.649),
-    ("z_swing_rate",          0.482),
-    ("whiff_rate",            0.734),
-    ("walk_rate",             0.503),
-    ("k_rate",                0.656),
-    ("gb_rate",               0.496),
-    ("barrel_rate",           0.239),
+    ("o_swing_rate", 0.649),
+    ("z_swing_rate", 0.482),
+    ("whiff_rate", 0.734),
+    ("walk_rate", 0.503),
+    ("k_rate", 0.656),
+    ("gb_rate", 0.496),
+    ("barrel_rate", 0.239),
 ]
 
 # --- Sub-score weights (sum to 1.0) ---
-WEIGHT_DISCIPLINE  = 0.40
+WEIGHT_DISCIPLINE = 0.40
 WEIGHT_BATTED_BALL = 0.35
-WEIGHT_PLATOON     = 0.15
-WEIGHT_POWER       = 0.10
+WEIGHT_PLATOON = 0.15
+WEIGHT_POWER = 0.10
 _TOTAL = WEIGHT_DISCIPLINE + WEIGHT_BATTED_BALL + WEIGHT_PLATOON + WEIGHT_POWER
 assert abs(_TOTAL - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
 # When vs_hand is specified, platoon weight is boosted and discipline/BB
 # weights are partially shifted to reflect that the matchup context matters
 # more than the overall profile.
-WEIGHT_DISCIPLINE_PLATOON  = 0.30
+WEIGHT_DISCIPLINE_PLATOON = 0.30
 WEIGHT_BATTED_BALL_PLATOON = 0.25
-WEIGHT_PLATOON_PLATOON     = 0.35   # platoon becomes the dominant signal
-WEIGHT_POWER_PLATOON       = 0.10
+WEIGHT_PLATOON_PLATOON = 0.35  # platoon becomes the dominant signal
+WEIGHT_POWER_PLATOON = 0.10
 
 # RBF bandwidth parameters (gamma = 1 / (2σ²))
-RBF_SIGMA_DISCIPLINE  = 1.0389
+RBF_SIGMA_DISCIPLINE = 1.0389
 RBF_SIGMA_BATTED_BALL = 1.0828
-RBF_SIGMA_PLATOON     = 1.0866
-RBF_SIGMA_POWER       = 0.9591
+RBF_SIGMA_PLATOON = 1.0866
+RBF_SIGMA_POWER = 0.9591
 
 # Bats-mismatch penalty: when comparing L-to-R or R-to-L batters,
 # spray angle distributions are mirrored. This multiplicative penalty
 # accounts for that. L-to-S or R-to-S gets a milder penalty.
-BATS_PENALTY_OPPOSITE = 0.92    # L↔R
-BATS_PENALTY_SWITCH   = 0.97    # L↔S or R↔S
-BATS_PENALTY_SAME     = 1.00    # L↔L, R↔R, S↔S
+BATS_PENALTY_OPPOSITE = 0.92  # L↔R
+BATS_PENALTY_SWITCH = 0.97  # L↔S or R↔S
+BATS_PENALTY_SAME = 1.00  # L↔L, R↔R, S↔S
 
 # Empirical Bayes shrinkage prior strength
 # At EB_N_PRIOR PA, shrinkage weight α = 0.5
@@ -204,19 +202,21 @@ MIN_BATTER_PA = 100
 # Data Structures
 # ============================================================================
 
+
 @dataclass(slots=True)
 class BatterProfile:
     """Complete batter-season profile for similarity scoring."""
+
     batter_id: int
     season: int
-    bats: str                              # "L", "R", or "S"
+    bats: str  # "L", "R", or "S"
     sample_pa: int
     sample_pitches: int
 
     # Feature vectors (raw values — normalized at query time)
-    discipline_vec: NDArray[np.float64]    # shape (len(DISCIPLINE_FEATURES),)
-    batted_ball_vec: NDArray[np.float64]   # shape (len(BATTED_BALL_FEATURES),)
-    power_vec: NDArray[np.float64]         # shape (len(POWER_FEATURES),)
+    discipline_vec: NDArray[np.float64]  # shape (len(DISCIPLINE_FEATURES),)
+    batted_ball_vec: NDArray[np.float64]  # shape (len(BATTED_BALL_FEATURES),)
+    power_vec: NDArray[np.float64]  # shape (len(POWER_FEATURES),)
 
     # Platoon split vectors
     platoon_vs_l_vec: NDArray[np.float64]  # shape (len(PLATOON_FEATURES),)
@@ -232,10 +232,11 @@ class BatterProfile:
 @dataclass(frozen=True, slots=True)
 class SimilarityResult:
     """One entry in the similarity query output."""
+
     batter_id: int
     season: int
     bats: str
-    score: float                           # composite [0, 1], 1 = identical
+    score: float  # composite [0, 1], 1 = identical
     discipline_score: float
     batted_ball_score: float
     platoon_score: float
@@ -246,6 +247,7 @@ class SimilarityResult:
 # ============================================================================
 # Reliability-Weighted RBF Kernel
 # ============================================================================
+
 
 class WeightedRBFSimilarity:
     """
@@ -275,7 +277,7 @@ class WeightedRBFSimilarity:
         reliability_weights: NDArray[np.float64],
     ) -> None:
         self.sigma = sigma
-        self.gamma = 1.0 / (2.0 * sigma ** 2)
+        self.gamma = 1.0 / (2.0 * sigma**2)
         # Normalize weights to sum to 1.0 so the kernel computes
         # the weighted-average per-feature distance (dimensionality-invariant)
         total = reliability_weights.sum()
@@ -292,7 +294,9 @@ class WeightedRBFSimilarity:
         return float(np.exp(-self.gamma * dist_sq))
 
     def score_batch(
-        self, query: NDArray, candidates: NDArray,
+        self,
+        query: NDArray,
+        candidates: NDArray,
     ) -> NDArray[np.float64]:
         """
         Compute weighted RBF between one query and an array of candidates.
@@ -301,13 +305,14 @@ class WeightedRBFSimilarity:
         diff = candidates - query[np.newaxis, :]
         diff = np.nan_to_num(diff, nan=0.0)
         # weighted squared distances: sum_i w_i * (x_i - y_i)^2
-        dist_sq = np.sum(self.weights[np.newaxis, :] * diff ** 2, axis=1)
+        dist_sq = np.sum(self.weights[np.newaxis, :] * diff**2, axis=1)
         return np.exp(-self.gamma * dist_sq)
 
 
 # ============================================================================
 # Empirical Bayes Shrinkage
 # ============================================================================
+
 
 class EmpiricalBayesShrinkage:
     """Shrinks raw feature vectors toward league average based on sample size."""
@@ -333,6 +338,7 @@ class EmpiricalBayesShrinkage:
 # Feature Normalization
 # ============================================================================
 
+
 @dataclass(slots=True)
 class FeatureNormalizer:
     """
@@ -342,6 +348,7 @@ class FeatureNormalizer:
     each feature has mean 0 and std 1 within its group. NaN is treated
     as neutral (z-score of 0).
     """
+
     discipline_mean: NDArray | None = None
     discipline_std: NDArray | None = None
     batted_ball_mean: NDArray | None = None
@@ -364,15 +371,11 @@ class FeatureNormalizer:
             s[s == 0] = 1.0
             return m, s
 
-        self.discipline_mean, self.discipline_std = _fit_group(
-            [p.discipline_vec for p in profiles]
-        )
+        self.discipline_mean, self.discipline_std = _fit_group([p.discipline_vec for p in profiles])
         self.batted_ball_mean, self.batted_ball_std = _fit_group(
             [p.batted_ball_vec for p in profiles]
         )
-        self.power_mean, self.power_std = _fit_group(
-            [p.power_vec for p in profiles]
-        )
+        self.power_mean, self.power_std = _fit_group([p.power_vec for p in profiles])
         # Platoon — fit on profiles with sufficient platoon sample
         vs_l_vecs = [p.platoon_vs_l_vec for p in profiles if p.sample_pa_vs_l >= 30]
         vs_r_vecs = [p.platoon_vs_r_vec for p in profiles if p.sample_pa_vs_r >= 30]
@@ -407,6 +410,7 @@ class FeatureNormalizer:
 # Bats-Mismatch Penalty
 # ============================================================================
 
+
 def bats_penalty(bats_a: str, bats_b: str) -> float:
     """
     Multiplicative penalty for comparing batters with different handedness.
@@ -434,6 +438,7 @@ def bats_penalty_vector(query_bats: str, all_bats: list[str]) -> NDArray[np.floa
 # ============================================================================
 # Scoring Partition — Vectorized Batch Scoring
 # ============================================================================
+
 
 class BatterPartition:
     """
@@ -580,10 +585,7 @@ class BatterPartition:
 
         # --- Composite score ---
         composite = (
-            w_disc * disc_scores
-            + w_bb * bb_scores
-            + w_plat * platoon_scores
-            + w_pow * power_scores
+            w_disc * disc_scores + w_bb * bb_scores + w_plat * platoon_scores + w_pow * power_scores
         )
 
         # Bats-mismatch penalty
@@ -601,17 +603,19 @@ class BatterPartition:
             if self.keys[i] == query_key:
                 continue
             cand = self.profiles[i]
-            results.append(SimilarityResult(
-                batter_id=cand.batter_id,
-                season=cand.season,
-                bats=cand.bats,
-                score=float(composite[i]),
-                discipline_score=float(disc_scores[i]),
-                batted_ball_score=float(bb_scores[i]),
-                platoon_score=float(platoon_scores[i]),
-                power_score=float(power_scores[i]),
-                sample_pa=cand.sample_pa,
-            ))
+            results.append(
+                SimilarityResult(
+                    batter_id=cand.batter_id,
+                    season=cand.season,
+                    bats=cand.bats,
+                    score=float(composite[i]),
+                    discipline_score=float(disc_scores[i]),
+                    batted_ball_score=float(bb_scores[i]),
+                    platoon_score=float(platoon_scores[i]),
+                    power_score=float(power_scores[i]),
+                    sample_pa=cand.sample_pa,
+                )
+            )
 
         return results
 
@@ -619,6 +623,7 @@ class BatterPartition:
 # ============================================================================
 # Main Engine
 # ============================================================================
+
 
 class BatterSimilarityEngine:
     """
@@ -644,8 +649,11 @@ class BatterSimilarityEngine:
         self._duckdb_path = duckdb_path
         self._profiles: dict[tuple[int, int], BatterProfile] = {}
         self._league_avg: dict[str, dict[int, NDArray]] = {
-            "discipline": {}, "batted_ball": {}, "power": {},
-            "platoon_l": {}, "platoon_r": {},
+            "discipline": {},
+            "batted_ball": {},
+            "power": {},
+            "platoon_l": {},
+            "platoon_r": {},
         }
         self._normalizer = FeatureNormalizer()
         self._shrinkage = EmpiricalBayesShrinkage()
@@ -693,7 +701,8 @@ class BatterSimilarityEngine:
         elapsed = time.time() - t0
         log.info(
             "BatterSimilarityEngine built: %d profiles in %.2fs.",
-            len(self._profiles), elapsed,
+            len(self._profiles),
+            elapsed,
         )
 
     # ------------------------------------------------------------------
@@ -701,7 +710,9 @@ class BatterSimilarityEngine:
     # ------------------------------------------------------------------
 
     def _load_league_averages(
-        self, conn: duckdb.DuckDBPyConnection, seasons: list[int] | None,
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        seasons: list[int] | None,
     ) -> None:
         try:
             season_filter = ""
@@ -722,28 +733,30 @@ class BatterSimilarityEngine:
         for season, pj_raw in rows:
             pj = json.loads(pj_raw) if isinstance(pj_raw, str) else pj_raw
 
-            self._league_avg["discipline"][season] = np.array([
-                pj.get(f, 0.0) or 0.0 for f, _ in DISCIPLINE_FEATURES
-            ], dtype=np.float64)
+            self._league_avg["discipline"][season] = np.array(
+                [pj.get(f, 0.0) or 0.0 for f, _ in DISCIPLINE_FEATURES], dtype=np.float64
+            )
 
-            self._league_avg["batted_ball"][season] = np.array([
-                pj.get(f, 0.0) or 0.0 for f, _ in BATTED_BALL_FEATURES
-            ], dtype=np.float64)
+            self._league_avg["batted_ball"][season] = np.array(
+                [pj.get(f, 0.0) or 0.0 for f, _ in BATTED_BALL_FEATURES], dtype=np.float64
+            )
 
-            self._league_avg["power"][season] = np.array([
-                pj.get(f, 0.0) or 0.0 for f, _ in POWER_FEATURES
-            ], dtype=np.float64)
+            self._league_avg["power"][season] = np.array(
+                [pj.get(f, 0.0) or 0.0 for f, _ in POWER_FEATURES], dtype=np.float64
+            )
 
-            platoon_avg = np.array([
-                pj.get(f, 0.0) or 0.0 for f, _ in PLATOON_FEATURES
-            ], dtype=np.float64)
+            platoon_avg = np.array(
+                [pj.get(f, 0.0) or 0.0 for f, _ in PLATOON_FEATURES], dtype=np.float64
+            )
             self._league_avg["platoon_l"][season] = platoon_avg
             self._league_avg["platoon_r"][season] = platoon_avg.copy()
 
         log.info("Loaded batter league averages for %d seasons.", len(rows))
 
     def _load_profiles(
-        self, conn: duckdb.DuckDBPyConnection, seasons: list[int] | None,
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        seasons: list[int] | None,
     ) -> None:
         season_filter = ""
         if seasons:
@@ -784,18 +797,51 @@ class BatterSimilarityEngine:
 
         for row in rows:
             (
-                batter_id, season, bats, sample_pa, sample_pitches,
+                batter_id,
+                season,
+                bats,
+                sample_pa,
+                sample_pitches,
                 # Discipline (7)
-                fptr, o_swing, z_swing, contact, whiff, k_rate, walk_rate,
+                fptr,
+                o_swing,
+                z_swing,
+                contact,
+                whiff,
+                k_rate,
+                walk_rate,
                 # Batted ball (8)
-                gb, fb, pull, oppo,
-                avg_ev, avg_la, hh, barrel,
+                gb,
+                fb,
+                pull,
+                oppo,
+                avg_ev,
+                avg_la,
+                hh,
+                barrel,
                 # Power (4)
-                hr_rate, xba, xslg, max_ev,
+                hr_rate,
+                xba,
+                xslg,
+                max_ev,
                 # Platoon vs L (7 + sample)
-                o_sw_l, z_sw_l, whiff_l, walk_l, k_l, gb_l, barrel_l, pa_l,
+                o_sw_l,
+                z_sw_l,
+                whiff_l,
+                walk_l,
+                k_l,
+                gb_l,
+                barrel_l,
+                pa_l,
                 # Platoon vs R (7 + sample)
-                o_sw_r, z_sw_r, whiff_r, walk_r, k_r, gb_r, barrel_r, pa_r,
+                o_sw_r,
+                z_sw_r,
+                whiff_r,
+                walk_r,
+                k_r,
+                gb_r,
+                barrel_r,
+                pa_r,
                 below_min,
             ) = row
 
@@ -821,7 +867,7 @@ class BatterSimilarityEngine:
 
     def _apply_shrinkage(self) -> None:
         """Apply EB shrinkage to all feature vectors."""
-        for key, p in self._profiles.items():
+        for _key, p in self._profiles.items():
             s = p.season
             for group, vec_attr in [
                 ("discipline", "discipline_vec"),
@@ -830,20 +876,30 @@ class BatterSimilarityEngine:
             ]:
                 avg = self._league_avg[group].get(s)
                 if avg is not None:
-                    setattr(p, vec_attr, self._shrinkage.shrink(
-                        getattr(p, vec_attr), avg, p.sample_pa,
-                    ))
+                    setattr(
+                        p,
+                        vec_attr,
+                        self._shrinkage.shrink(
+                            getattr(p, vec_attr),
+                            avg,
+                            p.sample_pa,
+                        ),
+                    )
 
             # Platoon vectors shrunk with their own sample sizes
             avg_l = self._league_avg["platoon_l"].get(s)
             avg_r = self._league_avg["platoon_r"].get(s)
             if avg_l is not None:
                 p.platoon_vs_l_vec = self._shrinkage.shrink(
-                    p.platoon_vs_l_vec, avg_l, p.sample_pa_vs_l,
+                    p.platoon_vs_l_vec,
+                    avg_l,
+                    p.sample_pa_vs_l,
                 )
             if avg_r is not None:
                 p.platoon_vs_r_vec = self._shrinkage.shrink(
-                    p.platoon_vs_r_vec, avg_r, p.sample_pa_vs_r,
+                    p.platoon_vs_r_vec,
+                    avg_r,
+                    p.sample_pa_vs_r,
                 )
 
     # ------------------------------------------------------------------
@@ -882,7 +938,8 @@ class BatterSimilarityEngine:
         if query_profile is None:
             log.warning(
                 "Batter %d season %d not found. Ensure build() was called.",
-                batter_id, season,
+                batter_id,
+                season,
             )
             return []
 
@@ -957,21 +1014,30 @@ class BatterSimilarityEngine:
             pl_c = self._normalizer.normalize_platoon_l(candidate.platoon_vs_l_vec)
             pr_q = self._normalizer.normalize_platoon_r(query.platoon_vs_r_vec)
             pr_c = self._normalizer.normalize_platoon_r(candidate.platoon_vs_r_vec)
-            platoon_s = 0.5 * self._platoon_rbf.score(pl_q, pl_c) + \
-                        0.5 * self._platoon_rbf.score(pr_q, pr_c)
+            platoon_s = 0.5 * self._platoon_rbf.score(pl_q, pl_c) + 0.5 * self._platoon_rbf.score(
+                pr_q, pr_c
+            )
 
         # Weights
         query_platoon_valid = (
-            (vs_hand == "L" and query.sample_pa_vs_l >= 30) or
-            (vs_hand == "R" and query.sample_pa_vs_r >= 30) or
-            (vs_hand is not None and (query.sample_pa_vs_l >= 30 or query.sample_pa_vs_r >= 30))
+            (vs_hand == "L" and query.sample_pa_vs_l >= 30)
+            or (vs_hand == "R" and query.sample_pa_vs_r >= 30)
+            or (vs_hand is not None and (query.sample_pa_vs_l >= 30 or query.sample_pa_vs_r >= 30))
         )
         if vs_hand is not None and query_platoon_valid:
-            w_d, w_b, w_p, w_pw = (WEIGHT_DISCIPLINE_PLATOON, WEIGHT_BATTED_BALL_PLATOON,
-                                    WEIGHT_PLATOON_PLATOON, WEIGHT_POWER_PLATOON)
+            w_d, w_b, w_p, w_pw = (
+                WEIGHT_DISCIPLINE_PLATOON,
+                WEIGHT_BATTED_BALL_PLATOON,
+                WEIGHT_PLATOON_PLATOON,
+                WEIGHT_POWER_PLATOON,
+            )
         else:
-            w_d, w_b, w_p, w_pw = (WEIGHT_DISCIPLINE, WEIGHT_BATTED_BALL,
-                                    WEIGHT_PLATOON, WEIGHT_POWER)
+            w_d, w_b, w_p, w_pw = (
+                WEIGHT_DISCIPLINE,
+                WEIGHT_BATTED_BALL,
+                WEIGHT_PLATOON,
+                WEIGHT_POWER,
+            )
 
         composite = w_d * disc_s + w_b * bb_s + w_p * platoon_s + w_pw * power_s
         composite *= bats_penalty(query.bats, candidate.bats)
@@ -1006,6 +1072,7 @@ class BatterSimilarityEngine:
 # Convenience: Batch Similarity Matrix
 # ============================================================================
 
+
 def build_similarity_matrix(
     engine: BatterSimilarityEngine,
     batter_ids: list[tuple[int, int]],
@@ -1027,7 +1094,7 @@ def build_similarity_matrix(
 # CLI
 # ============================================================================
 if __name__ == "__main__":
-    engine = BatterSimilarityEngine(duckdb_path='../../db/schemas/baseball_simulator.duckdb')
+    engine = BatterSimilarityEngine(duckdb_path="../../db/schemas/baseball_simulator.duckdb")
     engine.build(seasons=[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017])
     report = run_batter_diagnostics(engine, n_query_samples=50)
     print(report)

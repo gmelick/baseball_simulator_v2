@@ -35,8 +35,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
@@ -72,9 +72,9 @@ router = APIRouter(prefix="/api/similarity", tags=["similarity"])
 # docs/similarity_visualization_spec.md §3 "Diagnostic logic".
 # ---------------------------------------------------------------------------
 
-DIAGNOSTIC_MEDIAN_TARGET = 0.50          # project-wide engine target
-COLLAPSED_MAX_BIN_FRACTION = 0.80        # ≥80% of scores in one bin = COLLAPSED
-NO_SPREAD_STD_THRESHOLD = 0.05           # std < 0.05 = NO_SPREAD
+DIAGNOSTIC_MEDIAN_TARGET = 0.50  # project-wide engine target
+COLLAPSED_MAX_BIN_FRACTION = 0.80  # ≥80% of scores in one bin = COLLAPSED
+NO_SPREAD_STD_THRESHOLD = 0.05  # std < 0.05 = NO_SPREAD
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +84,7 @@ NO_SPREAD_STD_THRESHOLD = 0.05           # std < 0.05 = NO_SPREAD
 
 class _Member(BaseModel):
     """One pitcher's appearance in a bin / preview / top-N list."""
+
     pitcher_id: int
     season: int
     full_name: str
@@ -128,6 +129,7 @@ class _Query(BaseModel):
 
 class SimilarityDistributionResponse(BaseModel):
     """Top-level response for the histogram endpoint."""
+
     query: _Query
     engine: str
     engine_version: str
@@ -207,11 +209,12 @@ def get_similarity_cache(request: Request) -> SimilarityCache | None:
 @dataclass(frozen=True, slots=True)
 class _BinSpec:
     """Bin edges; rightmost bin is inclusive of 1.0."""
+
     n_bins: int
     width: float
 
     @classmethod
-    def linear(cls, n_bins: int) -> "_BinSpec":
+    def linear(cls, n_bins: int) -> _BinSpec:
         if n_bins <= 0:
             raise ValueError(f"n_bins must be positive, got {n_bins}")
         return cls(n_bins=n_bins, width=1.0 / n_bins)
@@ -241,8 +244,15 @@ def compute_score_summary(scores: list[float]) -> dict[str, float]:
     module).
     """
     if not scores:
-        return dict(min=0.0, p25=0.0, median=0.0, p75=0.0,
-                    max=0.0, mean=0.0, std=0.0)
+        return {
+            "min": 0.0,
+            "p25": 0.0,
+            "median": 0.0,
+            "p75": 0.0,
+            "max": 0.0,
+            "mean": 0.0,
+            "std": 0.0,
+        }
 
     s = sorted(scores)
     n = len(s)
@@ -263,15 +273,15 @@ def compute_score_summary(scores: list[float]) -> dict[str, float]:
     var = sum((x - mean) ** 2 for x in s) / n  # population std, matches numpy.std default
     std = math.sqrt(var)
 
-    return dict(
-        min=s[0],
-        p25=_percentile(0.25),
-        median=_percentile(0.50),
-        p75=_percentile(0.75),
-        max=s[-1],
-        mean=mean,
-        std=std,
-    )
+    return {
+        "min": s[0],
+        "p25": _percentile(0.25),
+        "median": _percentile(0.50),
+        "p75": _percentile(0.75),
+        "max": s[-1],
+        "mean": mean,
+        "std": std,
+    }
 
 
 def classify_diagnostic(
@@ -289,8 +299,11 @@ def classify_diagnostic(
     contract.
     """
     if not scores:
-        return dict(status="HEALTHY", median_target=DIAGNOSTIC_MEDIAN_TARGET,
-                    median_observed=0.0)
+        return {
+            "status": "HEALTHY",
+            "median_target": DIAGNOSTIC_MEDIAN_TARGET,
+            "median_observed": 0.0,
+        }
 
     summary = compute_score_summary(scores)
 
@@ -304,32 +317,32 @@ def classify_diagnostic(
         max_frac = max(counts) / len(scores)
         status_label = "COLLAPSED" if max_frac >= COLLAPSED_MAX_BIN_FRACTION else "HEALTHY"
 
-    return dict(
-        status=status_label,
-        median_target=DIAGNOSTIC_MEDIAN_TARGET,
-        median_observed=summary["median"],
-    )
+    return {
+        "status": status_label,
+        "median_target": DIAGNOSTIC_MEDIAN_TARGET,
+        "median_observed": summary["median"],
+    }
 
 
 def _result_to_member(
     result,  # SimilarityResult duck-typed (pitcher_id, season, p_throws,
-             # score, arsenal_score, command_score, sample_pitches)
+    # score, arsenal_score, command_score, sample_pitches)
     names: dict[int, str],
 ) -> dict:
-    return dict(
-        pitcher_id=result.pitcher_id,
-        season=result.season,
-        full_name=names.get(result.pitcher_id, f"Pitcher #{result.pitcher_id}"),
-        p_throws=result.p_throws,
-        score=float(result.score),
-        arsenal_score=float(result.arsenal_score),
-        command_score=float(result.command_score),
-        sample_pitches=int(result.sample_pitches),
-    )
+    return {
+        "pitcher_id": result.pitcher_id,
+        "season": result.season,
+        "full_name": names.get(result.pitcher_id, f"Pitcher #{result.pitcher_id}"),
+        "p_throws": result.p_throws,
+        "score": float(result.score),
+        "arsenal_score": float(result.arsenal_score),
+        "command_score": float(result.command_score),
+        "sample_pitches": int(result.sample_pitches),
+    }
 
 
 def build_bins(
-    results: list,                          # list[SimilarityResult]
+    results: list,  # list[SimilarityResult]
     names: dict[int, str],
     n_bins: int = 20,
     preview_size: int = 5,
@@ -353,20 +366,22 @@ def build_bins(
         bucket.sort(key=lambda r: float(r.score), reverse=True)
         members = [_result_to_member(r, names) for r in bucket]
         lo, hi = spec.edges(i)
-        bins_payload.append(dict(
-            bin_index=i,
-            lo=lo,
-            hi=hi,
-            count=len(members),
-            preview=members[:preview_size],
-            members=members,
-        ))
+        bins_payload.append(
+            {
+                "bin_index": i,
+                "lo": lo,
+                "hi": hi,
+                "count": len(members),
+                "preview": members[:preview_size],
+                "members": members,
+            }
+        )
 
     return bins_payload
 
 
 def build_top_n(
-    results: list,                          # already sorted desc by engine
+    results: list,  # already sorted desc by engine
     names: dict[int, str],
     n: int,
 ) -> list[dict]:
@@ -450,21 +465,21 @@ async def get_pitcher_similarity_distribution(
 
     scores = [float(r.score) for r in results]
 
-    payload = dict(
-        query=dict(
-            pitcher_id=pitcher_id,
-            season=season,
-            p_throws=query_profile.p_throws,
-            full_name=names.get(pitcher_id, f"Pitcher #{pitcher_id}"),
-        ),
-        engine="pitcher_similarity",
-        engine_version="0.1.0-phase2",
-        population_size=len(results),
-        score_summary=compute_score_summary(scores),
-        bins=build_bins(results, names, n_bins=bins),
-        top_n=build_top_n(results, names, n=top_n),
-        diagnostic=classify_diagnostic(scores, n_bins=bins),
-    )
+    payload = {
+        "query": {
+            "pitcher_id": pitcher_id,
+            "season": season,
+            "p_throws": query_profile.p_throws,
+            "full_name": names.get(pitcher_id, f"Pitcher #{pitcher_id}"),
+        },
+        "engine": "pitcher_similarity",
+        "engine_version": "0.1.0-phase2",
+        "population_size": len(results),
+        "score_summary": compute_score_summary(scores),
+        "bins": build_bins(results, names, n_bins=bins),
+        "top_n": build_top_n(results, names, n=top_n),
+        "diagnostic": classify_diagnostic(scores, n_bins=bins),
+    }
 
     # ---- Cache write-through ----
     if cache is not None:

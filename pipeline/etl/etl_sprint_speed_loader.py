@@ -34,12 +34,12 @@ Run cadence
 
 from __future__ import annotations
 
-import argparse
 import csv
 import io
 import logging
 import time
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -55,6 +55,7 @@ logging.basicConfig(
 log = logging.getLogger("sprint_speed_loader")
 
 SAVANT_URL = "https://baseballsavant.mlb.com/leaderboard/sprint_speed"
+
 
 # Savant returns empty strings for missing numerics; handle uniformly.
 def _to_float(v: Any) -> float | None:
@@ -129,7 +130,9 @@ class SprintSpeedLoader:
     # ------------------------------------------------------------------
 
     def _refresh_one_season(
-        self, conn: psycopg2.extensions.connection, season: int,
+        self,
+        conn: psycopg2.extensions.connection,
+        season: int,
     ) -> int:
         log.info("Fetching Savant sprint_speed CSV for season %d …", season)
         csv_text = self._fetch_csv(season)
@@ -148,7 +151,8 @@ class SprintSpeedLoader:
         if n_skipped > 0:
             log.warning(
                 "Season %d: %d rows skipped (player_id not in raw.players).",
-                season, n_skipped,
+                season,
+                n_skipped,
             )
 
         if not valid_rows:
@@ -182,10 +186,13 @@ class SprintSpeedLoader:
         url = f"{SAVANT_URL}?{urlencode(params)}"
 
         # Savant blocks the default urllib User-Agent.
-        req = Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (baseball-sim-etl)",
-            "Accept": "text/csv,application/octet-stream,*/*",
-        })
+        req = Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (baseball-sim-etl)",
+                "Accept": "text/csv,application/octet-stream,*/*",
+            },
+        )
 
         max_retries = 3
         for attempt in range(1, max_retries + 1):
@@ -199,10 +206,13 @@ class SprintSpeedLoader:
                 if attempt == max_retries:
                     log.error("Savant fetch failed for season %d: %s", season, e)
                     raise
-                wait = 2 ** attempt
+                wait = 2**attempt
                 log.warning(
                     "Savant fetch attempt %d/%d failed (%s). Retrying in %ds …",
-                    attempt, max_retries, e, wait,
+                    attempt,
+                    max_retries,
+                    e,
+                    wait,
                 )
                 time.sleep(wait)
 
@@ -240,12 +250,12 @@ class SprintSpeedLoader:
                 continue
 
             yield {
-                "player_id":        player_id,
-                "season":           season,
-                "sprint_speed":     sprint_speed,
+                "player_id": player_id,
+                "season": season,
+                "sprint_speed": sprint_speed,
                 "competitive_runs": comp_runs,
-                "bolts":            _to_int(raw.get("bolts")),
-                "hp_to_1b":         _to_float(raw.get("hp_to_1b"))
+                "bolts": _to_int(raw.get("bolts")),
+                "hp_to_1b": _to_float(raw.get("hp_to_1b")),
             }
 
     # ------------------------------------------------------------------
@@ -273,7 +283,9 @@ class SprintSpeedLoader:
 
 
 if __name__ == "__main__":
-    loader = SprintSpeedLoader('postgresql://localhost/baseball_simulator?user=postgres&password=baseball')
+    loader = SprintSpeedLoader(
+        "postgresql://localhost/baseball_simulator?user=postgres&password=baseball"
+    )
     results = loader.refresh_seasons([2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025])
     for season, n in sorted(results.items()):
         log.info("  season %d → %d rows", season, n)

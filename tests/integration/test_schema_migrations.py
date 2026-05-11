@@ -83,9 +83,7 @@ class TestSchemaMigrations:
         The head revision is the last migration applied (0003 at time of writing).
         This test will pass for any future head as long as the chain is unbroken.
         """
-        row = pg_connection.execute(
-            text("SELECT version_num FROM alembic_version")
-        ).fetchone()
+        row = pg_connection.execute(text("SELECT version_num FROM alembic_version")).fetchone()
         assert row is not None, "alembic_version table is empty — did migrations run?"
         # Verify the version string is non-empty and looks like a revision ID
         version_num: str = row[0]
@@ -151,10 +149,7 @@ class TestSchemaMigrations:
         """Both 'raw' and 'sim' schemas must exist."""
         for schema in ("raw", "sim"):
             row = pg_connection.execute(
-                text(
-                    "SELECT 1 FROM information_schema.schemata "
-                    "WHERE schema_name = :s"
-                ),
+                text("SELECT 1 FROM information_schema.schemata WHERE schema_name = :s"),
                 {"s": schema},
             ).fetchone()
             assert row is not None, f"Schema '{schema}' does not exist after migration"

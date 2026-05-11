@@ -46,23 +46,23 @@ import argparse
 import asyncio
 import logging
 import os
-from datetime import date, datetime, timedelta, timezone
-from typing import Any
-
-import asyncpg
+import pathlib
 
 # MockOddsAPI lives in live_ingestion_pipeline; import it from there so mock
 # logic stays in a single place.  In Phase 7, swap _fetch_current_odds() to
 # call a real provider.
 import sys
-import pathlib
+from datetime import date, timedelta
+from typing import Any
+
+import asyncpg
 
 # Ensure project root is on sys.path when run as a standalone script.
 _PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from pipeline.live.live_ingestion_pipeline import MockOddsAPI
+from pipeline.live.live_ingestion_pipeline import MockOddsAPI  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -80,8 +80,8 @@ log = logging.getLogger("opening_line_job")
 # ---------------------------------------------------------------------------
 
 MLB_SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
-GAME_TYPES        = ["R", "F", "D", "L", "W", "P"]
-LOOKAHEAD_DAYS    = 7   # how many days ahead to capture opening lines
+GAME_TYPES = ["R", "F", "D", "L", "W", "P"]
+LOOKAHEAD_DAYS = 7  # how many days ahead to capture opening lines
 
 # SIM-134: Prop stat lists aligned with the 7-value CHECK constraint on raw.prop_odds.
 # Betting Analyst (Agent 8) confirmed scope — see CHANGES.md.
@@ -89,7 +89,7 @@ LOOKAHEAD_DAYS    = 7   # how many days ahead to capture opening lines
 # Pitcher props captured when a starter is announced (starting pitcher known at schedule time).
 # Batter props deferred: lineup position not reliably known 5–7 days out.
 PITCHER_PROP_TYPES = ["strikeouts", "earned_runs", "walks"]
-BATTER_PROP_TYPES  = ["hits", "home_runs", "total_bases", "rbis"]
+BATTER_PROP_TYPES = ["hits", "home_runs", "total_bases", "rbis"]
 
 # Legacy _MOCK_PROP_LINES and local _mock_prop_odds() removed in SIM-134.
 # All mock prop generation is now delegated to MockOddsAPI.get_prop_odds()
@@ -102,6 +102,7 @@ BATTER_PROP_TYPES  = ["hits", "home_runs", "total_bases", "rbis"]
 # ---------------------------------------------------------------------------
 # Main job class
 # ---------------------------------------------------------------------------
+
 
 class OpeningLineJob:
     """
@@ -127,9 +128,9 @@ class OpeningLineJob:
         lookahead_days: int = LOOKAHEAD_DAYS,
         dry_run: bool = False,
     ) -> None:
-        self._dsn           = dsn
-        self._lookahead     = lookahead_days
-        self._dry_run       = dry_run
+        self._dsn = dsn
+        self._lookahead = lookahead_days
+        self._dry_run = dry_run
         self._db: asyncpg.Pool | None = None
 
     # ------------------------------------------------------------------
@@ -162,10 +163,10 @@ class OpeningLineJob:
         await self._connect()
         run_id: int | None = None
         summary = {
-            "games_checked":               0,
+            "games_checked": 0,
             "opening_line_games_captured": 0,
             "opening_prop_lines_captured": 0,
-            "games_already_had_opening":   0,
+            "games_already_had_opening": 0,
         }
 
         try:
@@ -173,7 +174,8 @@ class OpeningLineJob:
             games = await self._fetch_upcoming_games()
             log.info(
                 "Opening line job: found %d games in next %d days",
-                len(games), self._lookahead,
+                len(games),
+                self._lookahead,
             )
 
             for game in games:
@@ -204,7 +206,7 @@ class OpeningLineJob:
             await self._finish_log_row(run_id, "success", summary)
             log.info(
                 "Opening line job complete: %s",
-                {k: v for k, v in summary.items()},
+                dict(summary.items()),
             )
 
         except Exception as exc:
@@ -230,20 +232,24 @@ class OpeningLineJob:
         """
         import aiohttp
 
-        today     = date.today()
-        end_date  = today + timedelta(days=self._lookahead)
-        params    = {
-            "sportId":    1,
-            "gameTypes":  ",".join(GAME_TYPES),
-            "startDate":  today.strftime("%Y-%m-%d"),
-            "endDate":    end_date.strftime("%Y-%m-%d"),
-            "hydrate":    "probablePitcher(note)",
+        today = date.today()
+        end_date = today + timedelta(days=self._lookahead)
+        params = {
+            "sportId": 1,
+            "gameTypes": ",".join(GAME_TYPES),
+            "startDate": today.strftime("%Y-%m-%d"),
+            "endDate": end_date.strftime("%Y-%m-%d"),
+            "hydrate": "probablePitcher(note)",
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(MLB_SCHEDULE_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(
+                MLB_SCHEDULE_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp,
+        ):
+            resp.raise_for_status()
+            data = await resp.json()
 
         games: list[dict[str, Any]] = []
         for date_entry in data.get("dates", []):
@@ -251,25 +257,25 @@ class OpeningLineJob:
                 if "rescheduleGameDate" in g or "resumeGameDate" in g:
                     continue
                 game_pk = g["gamePk"]
-                status  = g.get("status", {}).get("abstractGameState", "Preview")
+                status = g.get("status", {}).get("abstractGameState", "Preview")
 
                 # Extract probable pitchers if announced
                 home_pitcher_id = (
-                    g.get("teams", {}).get("home", {})
-                     .get("probablePitcher", {}).get("id")
+                    g.get("teams", {}).get("home", {}).get("probablePitcher", {}).get("id")
                 )
                 away_pitcher_id = (
-                    g.get("teams", {}).get("away", {})
-                     .get("probablePitcher", {}).get("id")
+                    g.get("teams", {}).get("away", {}).get("probablePitcher", {}).get("id")
                 )
 
-                games.append({
-                    "game_pk":          game_pk,
-                    "game_date":        date_entry["date"],
-                    "status":           status,
-                    "home_pitcher_id":  home_pitcher_id,
-                    "away_pitcher_id":  away_pitcher_id,
-                })
+                games.append(
+                    {
+                        "game_pk": game_pk,
+                        "game_date": date_entry["date"],
+                        "status": status,
+                        "home_pitcher_id": home_pitcher_id,
+                        "away_pitcher_id": away_pitcher_id,
+                    }
+                )
 
         return games
 
@@ -374,12 +380,14 @@ class OpeningLineJob:
                 WHERE game_pk = $1 AND player_id = $2 AND line_type = 'opening'
                 LIMIT 1
                 """,
-                game_pk, pitcher_id,
+                game_pk,
+                pitcher_id,
             )
             if existing:
                 log.debug(
                     "Opening prop lines already exist for pitcher %s game %s — skipping",
-                    pitcher_id, game_pk,
+                    pitcher_id,
+                    game_pk,
                 )
                 continue
 
@@ -402,7 +410,7 @@ class OpeningLineJob:
                         pitcher_id,
                         prop.get("source", "mock"),
                         prop.get("is_mock", True),
-                        prop["prop_stat"],          # SIM-134: was prop["prop_type"]
+                        prop["prop_stat"],  # SIM-134: was prop["prop_type"]
                         prop["line"],
                         prop.get("over_ml"),
                         prop.get("under_ml"),
@@ -413,12 +421,18 @@ class OpeningLineJob:
                     inserted += 1
                     log.debug(
                         "Inserted opening prop %s=%.1f for pitcher %s game %s",
-                        prop_stat, prop["line"], pitcher_id, game_pk,
+                        prop_stat,
+                        prop["line"],
+                        pitcher_id,
+                        game_pk,
                     )
                 else:
                     log.info(
                         "[DRY RUN] Would insert opening prop %s=%.1f for pitcher %s game %s",
-                        prop_stat, prop["line"], pitcher_id, game_pk,
+                        prop_stat,
+                        prop["line"],
+                        pitcher_id,
+                        game_pk,
                     )
 
         return inserted
@@ -468,6 +482,7 @@ class OpeningLineJob:
 # APScheduler integration — call from FastAPI lifespan
 # ---------------------------------------------------------------------------
 
+
 def schedule_opening_line_job(
     dsn: str,
     scheduler: Any,  # APScheduler AsyncIOScheduler
@@ -507,17 +522,20 @@ def schedule_opening_line_job(
         id="opening_line_job",
         name="Nightly Opening Line Capture (SIM-138)",
         replace_existing=True,
-        misfire_grace_time=3600,   # allow up to 1 hour late (e.g. restart after 08:00)
+        misfire_grace_time=3600,  # allow up to 1 hour late (e.g. restart after 08:00)
     )
     log.info(
         "Opening line job scheduled: daily at %02d:%02d %s",
-        hour, minute, timezone_str,
+        hour,
+        minute,
+        timezone_str,
     )
 
 
 # ---------------------------------------------------------------------------
 # Standalone entry point
 # ---------------------------------------------------------------------------
+
 
 async def _main(dsn: str, days: int, dry_run: bool) -> None:
     job = OpeningLineJob(dsn=dsn, lookahead_days=days, dry_run=dry_run)
@@ -528,9 +546,7 @@ async def _main(dsn: str, days: int, dry_run: bool) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="SIM-138: Nightly Opening Line Ingestion Job"
-    )
+    parser = argparse.ArgumentParser(description="SIM-138: Nightly Opening Line Ingestion Job")
     parser.add_argument(
         "--dsn",
         default=os.environ.get("BASEBALL_DB_DSN", "postgresql://localhost/baseball"),

@@ -51,20 +51,28 @@ sys.path.insert(0, str(REPO_ROOT))
 
 # `LiveIngestionPipeline._odds_hash` is the canonical hash function — reuse
 # it so backfill hashes are byte-identical to live-pipeline hashes.
-from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
-
 import asyncpg  # noqa: E402
+
+from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline  # noqa: E402
 
 log = logging.getLogger("backfill_odds_hash")
 
 # Column ordering must match the LiveIngestionPipeline._odds_hash() input
 # `odds` dict — these are the keys used to compute the fingerprint.
 ODDS_COLUMNS = (
-    "book", "line_type", "market_type", "is_sharp_book",
-    "home_ml", "away_ml",
-    "home_spread", "home_spread_ml",
-    "away_spread", "away_spread_ml",
-    "total_line", "over_ml", "under_ml",
+    "book",
+    "line_type",
+    "market_type",
+    "is_sharp_book",
+    "home_ml",
+    "away_ml",
+    "home_spread",
+    "home_spread_ml",
+    "away_spread",
+    "away_spread_ml",
+    "total_line",
+    "over_ml",
+    "under_ml",
 )
 
 BATCH_SIZE = 10_000
@@ -77,9 +85,7 @@ async def _connect(dsn: str) -> asyncpg.Connection:
 async def _row_counts(conn: asyncpg.Connection) -> tuple[int, int]:
     """Return (total_rows, null_hash_rows)."""
     total = await conn.fetchval("SELECT COUNT(*) FROM raw.game_odds")
-    null_count = await conn.fetchval(
-        "SELECT COUNT(*) FROM raw.game_odds WHERE odds_hash IS NULL"
-    )
+    null_count = await conn.fetchval("SELECT COUNT(*) FROM raw.game_odds WHERE odds_hash IS NULL")
     return total, null_count
 
 
@@ -113,8 +119,9 @@ async def _backfill_hashes(conn: asyncpg.Connection, dry_run: bool) -> int:
 
         if dry_run:
             total_updated += len(updates)
-            log.info("  [dry-run] would update %d rows (running total %d)",
-                     len(updates), total_updated)
+            log.info(
+                "  [dry-run] would update %d rows (running total %d)", len(updates), total_updated
+            )
             # In dry-run we cannot actually write, so we'd loop forever.
             # Bail after the first batch — it's enough to confirm the path.
             break
@@ -122,8 +129,7 @@ async def _backfill_hashes(conn: asyncpg.Connection, dry_run: bool) -> int:
         async with conn.transaction():
             await conn.executemany(update_sql, updates)
         total_updated += len(updates)
-        log.info("  updated %d rows (running total %d)",
-                 len(updates), total_updated)
+        log.info("  updated %d rows (running total %d)", len(updates), total_updated)
 
     return total_updated
 
@@ -155,8 +161,7 @@ async def _dedup_rows(conn: asyncpg.Connection, dry_run: bool) -> tuple[int, int
         return groups, 0
 
     if dry_run:
-        log.info("  [dry-run] would DELETE %d row(s) across %d duplicate groups",
-                 extras, groups)
+        log.info("  [dry-run] would DELETE %d row(s) across %d duplicate groups", extras, groups)
         return groups, extras
 
     # Use a CTE that picks the smallest id per duplicate group as the survivor
@@ -185,9 +190,7 @@ async def _dedup_rows(conn: asyncpg.Connection, dry_run: bool) -> tuple[int, int
 
 async def _validate(conn: asyncpg.Connection) -> bool:
     """SIM-157 acceptance gates.  Returns True iff both pass."""
-    null_count = await conn.fetchval(
-        "SELECT COUNT(*) FROM raw.game_odds WHERE odds_hash IS NULL"
-    )
+    null_count = await conn.fetchval("SELECT COUNT(*) FROM raw.game_odds WHERE odds_hash IS NULL")
     dup_count = await conn.fetchval(
         """
         SELECT COUNT(*)
@@ -217,21 +220,22 @@ async def main_async(dsn: str, dry_run: bool) -> int:
         t0 = time.time()
         log.info("Pass 1 — backfilling odds_hash on legacy rows ...")
         updated = await _backfill_hashes(conn, dry_run=dry_run)
-        log.info("  pass 1 completed: %d row(s) updated in %.1fs",
-                 updated, time.time() - t0)
+        log.info("  pass 1 completed: %d row(s) updated in %.1fs", updated, time.time() - t0)
 
         t0 = time.time()
         log.info("Pass 2 — collapsing duplicate (game_pk, source, odds_hash) groups ...")
         groups, deleted = await _dedup_rows(conn, dry_run=dry_run)
-        log.info("  pass 2 completed: %d duplicate group(s), %d row(s) "
-                 "deleted in %.1fs", groups, deleted, time.time() - t0)
+        log.info(
+            "  pass 2 completed: %d duplicate group(s), %d row(s) deleted in %.1fs",
+            groups,
+            deleted,
+            time.time() - t0,
+        )
 
         after_total, after_null = await _row_counts(conn)
         log.info("Post-backfill row counts:")
-        log.info("  total rows           : %d (delta %+d)",
-                 after_total, after_total - before_total)
-        log.info("  rows with NULL hash  : %d (delta %+d)",
-                 after_null, after_null - before_null)
+        log.info("  total rows           : %d (delta %+d)", after_total, after_total - before_total)
+        log.info("  rows with NULL hash  : %d (delta %+d)", after_null, after_null - before_null)
 
         if dry_run:
             log.info("Dry-run — skipping acceptance-gate validation.")
@@ -245,13 +249,17 @@ async def main_async(dsn: str, dry_run: bool) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Report what would be backfilled / deleted "
-                             "but do not write to the database.")
-    parser.add_argument("--dsn", default=os.environ.get("BASEBALL_DB_DSN"),
-                        help="PostgreSQL DSN (defaults to $BASEBALL_DB_DSN).")
-    parser.add_argument("--verbose", "-v", action="store_true",
-                        help="Enable DEBUG-level logging.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would be backfilled / deleted but do not write to the database.",
+    )
+    parser.add_argument(
+        "--dsn",
+        default=os.environ.get("BASEBALL_DB_DSN"),
+        help="PostgreSQL DSN (defaults to $BASEBALL_DB_DSN).",
+    )
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable DEBUG-level logging.")
     args = parser.parse_args()
 
     logging.basicConfig(

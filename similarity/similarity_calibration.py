@@ -55,6 +55,7 @@ log = logging.getLogger("similarity_calibration")
 # Tier 1: RBF Sigma Calibration
 # ============================================================================
 
+
 def calibrate_sigma(
     feature_matrix: NDArray[np.float64],
     weights: NDArray[np.float64] | None = None,
@@ -110,7 +111,7 @@ def calibrate_sigma(
     # Compute weighted mean squared distances
     diff = feature_matrix[idx_a] - feature_matrix[idx_b]
     diff = np.nan_to_num(diff, nan=0.0)
-    mean_dist_sq = np.sum(weights[np.newaxis, :] * diff ** 2, axis=1)
+    mean_dist_sq = np.sum(weights[np.newaxis, :] * diff**2, axis=1)
 
     median_dist_sq = np.median(mean_dist_sq)
 
@@ -169,7 +170,7 @@ def calibrate_arsenal_gamma(
 
     # Solve: target = exp(-γ × median²)
     #        γ = -ln(target) / median²
-    gamma = -np.log(target_median_score) / (median_dist ** 2)
+    gamma = -np.log(target_median_score) / (median_dist**2)
     return float(gamma)
 
 
@@ -192,6 +193,7 @@ def calibrate_arsenal_norm_scale(
 # ============================================================================
 # Tier 1: Empirical Bayes N_PRIOR Calibration
 # ============================================================================
+
 
 def calibrate_eb_prior(
     feature_matrix: NDArray[np.float64],
@@ -285,6 +287,7 @@ def calibrate_eb_prior(
 # Tier 1: Reliability Weight Calibration
 # ============================================================================
 
+
 def calibrate_reliability_weights(
     raw_feature_matrix: NDArray[np.float64],
     player_ids: NDArray[np.int64],
@@ -336,6 +339,7 @@ def calibrate_reliability_weights(
     # For each multi-season player, pair consecutive seasons
     # and compute the correlation of each feature across pairs.
     from collections import defaultdict
+
     player_rows: dict[int, list[int]] = defaultdict(list)
     for i in range(n):
         pid = int(player_ids[i])
@@ -344,7 +348,7 @@ def calibrate_reliability_weights(
 
     # Build paired feature matrices
     rows_a, rows_b = [], []
-    for pid, row_indices in player_rows.items():
+    for _pid, row_indices in player_rows.items():
         if len(row_indices) >= 2:
             # Use first two seasons as the pair
             rows_a.append(raw_feature_matrix[row_indices[0]])
@@ -383,6 +387,7 @@ def calibrate_reliability_weights(
 # ============================================================================
 # Tier 2: Sub-Score Weight Optimization
 # ============================================================================
+
 
 def optimize_subscore_weights(
     sub_scores: NDArray[np.float64],
@@ -432,7 +437,8 @@ def optimize_subscore_weights(
     bounds = [(0.02, 0.80)] * n_subscores
 
     result = minimize(
-        neg_correlation, w0,
+        neg_correlation,
+        w0,
         method="SLSQP",
         bounds=bounds,
         constraints=constraints,
@@ -448,6 +454,7 @@ def optimize_subscore_weights(
 # ============================================================================
 # Tier 3: Bats Penalty Measurement
 # ============================================================================
+
 
 def measure_bats_penalty(
     spray_angles_l: NDArray[np.float64],
@@ -490,6 +497,7 @@ def measure_bats_penalty(
 # Calibration Report
 # ============================================================================
 
+
 @dataclass
 class CalibrationReport:
     """Holds all calibrated parameters with their derivation context."""
@@ -499,8 +507,8 @@ class CalibrationReport:
     sigma_batted_ball: float = 0.0
     sigma_platoon: float = 0.0
     sigma_power: float = 0.0
-    sigma_command: float = 0.0    # pitcher
-    sigma_results: float = 0.0    # pitcher
+    sigma_command: float = 0.0  # pitcher
+    sigma_results: float = 0.0  # pitcher
     arsenal_gamma: float = 0.0
     eb_n_prior_batter: float = 0.0
     eb_n_prior_pitcher: float = 0.0
@@ -595,131 +603,179 @@ class CalibrationReport:
         if self.reliability_weights_discipline is not None:
             lines.append("  Reliability Weights (discipline):")
             from similarity.engines.batter_similarity import DISCIPLINE_FEATURES
-            for (name, _), w in zip(DISCIPLINE_FEATURES, self.reliability_weights_discipline):
+
+            for (name, _), w in zip(
+                DISCIPLINE_FEATURES, self.reliability_weights_discipline, strict=False
+            ):
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
         if self.reliability_weights_batted_ball is not None:
             lines.append("  Reliability Weights (batted ball):")
             from similarity.engines.batter_similarity import BATTED_BALL_FEATURES
-            for (name, _), w in zip(BATTED_BALL_FEATURES, self.reliability_weights_batted_ball):
+
+            for (name, _), w in zip(
+                BATTED_BALL_FEATURES, self.reliability_weights_batted_ball, strict=False
+            ):
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
         if self.reliability_weights_power is not None:
             lines.append("  Reliability Weights (power):")
             from similarity.engines.batter_similarity import POWER_FEATURES
-            for (name, _), w in zip(POWER_FEATURES, self.reliability_weights_power):
+
+            for (name, _), w in zip(POWER_FEATURES, self.reliability_weights_power, strict=False):
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
         if self.reliability_weights_platoon is not None:
             lines.append("  Reliability Weights (platoon):")
             from similarity.engines.batter_similarity import PLATOON_FEATURES
-            for (name, _), w in zip(PLATOON_FEATURES, self.reliability_weights_platoon):
+
+            for (name, _), w in zip(
+                PLATOON_FEATURES, self.reliability_weights_platoon, strict=False
+            ):
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
         if self.reliability_weights_if_range is not None:
             lines.append("  Reliability Weights (IF Range):")
             from similarity.engines.fielder_similarity import IF_RANGE_FEATURES
-            for (name, _), w in zip(IF_RANGE_FEATURES, self.reliability_weights_if_range):
+
+            for (name, _), w in zip(
+                IF_RANGE_FEATURES, self.reliability_weights_if_range, strict=False
+            ):
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
         if self.reliability_weights_if_dp is not None:
             lines.append("  Reliability Weights (IF DP):")
             from similarity.engines.fielder_similarity import IF_DP_FEATURES
-            for (name, _), w in zip(IF_DP_FEATURES, self.reliability_weights_if_dp):
+
+            for (name, _), w in zip(IF_DP_FEATURES, self.reliability_weights_if_dp, strict=False):
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
         if self.reliability_weights_if_pivot is not None:
             lines.append("  Reliability Weights (IF Pivot):")
             from similarity.engines.fielder_similarity import IF_PIVOT_FEATURES
-            for (name, _), w in zip(IF_PIVOT_FEATURES, self.reliability_weights_if_pivot):
+
+            for (name, _), w in zip(
+                IF_PIVOT_FEATURES, self.reliability_weights_if_pivot, strict=False
+            ):
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
         if self.reliability_weights_if_error is not None:
             lines.append("  Reliability Weights (IF Error):")
             from similarity.engines.fielder_similarity import IF_ERROR_FEATURES
-            for (name, _), w in zip(IF_ERROR_FEATURES, self.reliability_weights_if_error):
+
+            for (name, _), w in zip(
+                IF_ERROR_FEATURES, self.reliability_weights_if_error, strict=False
+            ):
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
         if self.reliability_weights_if_specialty is not None:
             lines.append("  Reliability Weights (IF Specialty):")
             from similarity.engines.fielder_similarity import IF_SPECIALTY_FEATURES
-            for (name, _), w in zip(IF_SPECIALTY_FEATURES, self.reliability_weights_if_specialty):
+
+            for (name, _), w in zip(
+                IF_SPECIALTY_FEATURES, self.reliability_weights_if_specialty, strict=False
+            ):
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
         if self.reliability_weights_of_range is not None:
             lines.append("  Reliability Weights (OF Range):")
             from similarity.engines.fielder_similarity import OF_RANGE_FEATURES
-            for (name, _), w in zip(OF_RANGE_FEATURES, self.reliability_weights_of_range):
+
+            for (name, _), w in zip(
+                OF_RANGE_FEATURES, self.reliability_weights_of_range, strict=False
+            ):
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
         if self.reliability_weights_of_arm is not None:
             lines.append("  Reliability Weights (OF Arm):")
             from similarity.engines.fielder_similarity import OF_ARM_FEATURES
-            for (name, _), w in zip(OF_ARM_FEATURES, self.reliability_weights_of_arm):
+
+            for (name, _), w in zip(OF_ARM_FEATURES, self.reliability_weights_of_arm, strict=False):
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
         if self.reliability_weights_of_star is not None:
             lines.append("  Reliability Weights (OF Star):")
             from similarity.engines.fielder_similarity import OF_STAR_FEATURES
-            for (name, _), w in zip(OF_STAR_FEATURES, self.reliability_weights_of_star):
+
+            for (name, _), w in zip(
+                OF_STAR_FEATURES, self.reliability_weights_of_star, strict=False
+            ):
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
         if self.reliability_weights_of_error is not None:
             lines.append("  Reliability Weights (OF Error):")
             from similarity.engines.fielder_similarity import OF_ERROR_FEATURES
-            for (name, _), w in zip(OF_ERROR_FEATURES, self.reliability_weights_of_error):
+
+            for (name, _), w in zip(
+                OF_ERROR_FEATURES, self.reliability_weights_of_error, strict=False
+            ):
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
         if self.reliability_weights_baserunner_speed is not None:
             lines.append("  Reliability Weights (Baserunner Speed):")
             from similarity.engines.baserunner_similarity import SPEED_FEATURES as BR_SPEED_FEATURES
-            for (name, _), w in zip(BR_SPEED_FEATURES, self.reliability_weights_baserunner_speed):
+
+            for (name, _), w in zip(
+                BR_SPEED_FEATURES, self.reliability_weights_baserunner_speed, strict=False
+            ):
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
         if self.reliability_weights_baserunner_aggression is not None:
             lines.append("  Reliability Weights (Baserunner Aggression):")
-            from similarity.engines.baserunner_similarity import AGGRESSION_FEATURES as BR_AGG_FEATURES
-            for (name, _), w in zip(BR_AGG_FEATURES, self.reliability_weights_baserunner_aggression):
+            from similarity.engines.baserunner_similarity import (
+                AGGRESSION_FEATURES as BR_AGG_FEATURES,
+            )
+
+            for (name, _), w in zip(
+                BR_AGG_FEATURES, self.reliability_weights_baserunner_aggression, strict=False
+            ):
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
         if self.reliability_weights_baserunner_success is not None:
             lines.append("  Reliability Weights (Baserunner Success):")
             from similarity.engines.baserunner_similarity import SUCCESS_FEATURES as BR_SUC_FEATURES
-            for (name, _), w in zip(BR_SUC_FEATURES, self.reliability_weights_baserunner_success):
+
+            for (name, _), w in zip(
+                BR_SUC_FEATURES, self.reliability_weights_baserunner_success, strict=False
+            ):
                 lines.append(f"    {name:<25} {w:.3f}")
             lines.append("")
 
         if self.batter_subscores is not None:
-            lines.extend([
-                "--- Tier 2: Optimized Sub-Score Weights ---",
-                "",
-                "  Batter: [discipline, batted_ball, platoon, power]",
-                f"    {self.batter_subscores}",
-                "",
-            ])
+            lines.extend(
+                [
+                    "--- Tier 2: Optimized Sub-Score Weights ---",
+                    "",
+                    "  Batter: [discipline, batted_ball, platoon, power]",
+                    f"    {self.batter_subscores}",
+                    "",
+                ]
+            )
 
         if self.bats_penalty_lr > 0:
-            lines.extend([
-                "--- Tier 3: Design Choice Measurements ---",
-                "",
-                f"  Bats penalty (L↔R): {self.bats_penalty_lr:.4f}",
-                "",
-            ])
+            lines.extend(
+                [
+                    "--- Tier 3: Design Choice Measurements ---",
+                    "",
+                    f"  Bats penalty (L↔R): {self.bats_penalty_lr:.4f}",
+                    "",
+                ]
+            )
 
         lines.append("=" * 70)
         return "\n".join(lines)
@@ -778,11 +834,17 @@ class CalibrationReport:
         if self.reliability_weights_of_error is not None:
             d["reliability_weights_of_error"] = self.reliability_weights_of_error.tolist()
         if self.reliability_weights_baserunner_speed is not None:
-            d["reliability_weights_baserunner_speed"] = self.reliability_weights_baserunner_speed.tolist()
+            d["reliability_weights_baserunner_speed"] = (
+                self.reliability_weights_baserunner_speed.tolist()
+            )
         if self.reliability_weights_baserunner_aggression is not None:
-            d["reliability_weights_baserunner_aggression"] = self.reliability_weights_baserunner_aggression.tolist()
+            d["reliability_weights_baserunner_aggression"] = (
+                self.reliability_weights_baserunner_aggression.tolist()
+            )
         if self.reliability_weights_baserunner_success is not None:
-            d["reliability_weights_baserunner_success"] = self.reliability_weights_baserunner_success.tolist()
+            d["reliability_weights_baserunner_success"] = (
+                self.reliability_weights_baserunner_success.tolist()
+            )
         if self.batter_subscores is not None:
             d["batter_subscores"] = self.batter_subscores.tolist()
         if self.pitcher_subscores is not None:
@@ -793,6 +855,7 @@ class CalibrationReport:
 # ============================================================================
 # Main Calibrator
 # ============================================================================
+
 
 class SimilarityCalibrator:
     """
@@ -852,8 +915,10 @@ class SimilarityCalibrator:
     ) -> CalibrationReport:
         """Load batter profiles and calibrate all batter constants."""
         from similarity.engines.batter_similarity import (
-            DISCIPLINE_FEATURES, BATTED_BALL_FEATURES,
-            POWER_FEATURES, PLATOON_FEATURES,
+            BATTED_BALL_FEATURES,
+            DISCIPLINE_FEATURES,
+            PLATOON_FEATURES,
+            POWER_FEATURES,
         )
 
         sl = ", ".join(str(s) for s in seasons)
@@ -937,17 +1002,21 @@ class SimilarityCalibrator:
 
         # Calibrate reliability weights
         report.reliability_weights_discipline = calibrate_reliability_weights(
-            disc_raw, ids,
+            disc_raw,
+            ids,
         )
         report.reliability_weights_batted_ball = calibrate_reliability_weights(
-            bb_raw, ids,
+            bb_raw,
+            ids,
         )
         report.reliability_weights_power = calibrate_reliability_weights(
-            pow_raw, ids,
+            pow_raw,
+            ids,
         )
         if len(plat_filtered) >= 20:
             report.reliability_weights_platoon = calibrate_reliability_weights(
-                plat_filtered, plat_ids,
+                plat_filtered,
+                plat_ids,
             )
         else:
             log.warning("Insufficient platoon data for reliability calibration; using defaults.")
@@ -955,8 +1024,12 @@ class SimilarityCalibrator:
         log.info(
             "Batter calibration complete: %d profiles, sigma_disc=%.3f, "
             "sigma_bb=%.3f, sigma_plat=%.3f, sigma_pow=%.3f, eb_prior=%.1f",
-            len(rows), report.sigma_discipline, report.sigma_batted_ball,
-            report.sigma_platoon, report.sigma_power, report.eb_n_prior_batter,
+            len(rows),
+            report.sigma_discipline,
+            report.sigma_batted_ball,
+            report.sigma_platoon,
+            report.sigma_power,
+            report.eb_n_prior_batter,
         )
         return report
 
@@ -984,7 +1057,7 @@ class SimilarityCalibrator:
             log.warning("No pitcher profiles found for calibration.")
             return report
 
-        ids = np.array([r[0] for r in rows])
+        np.array([r[0] for r in rows])
         samples = np.array([r[2] for r in rows])
 
         n_cmd = len(COMMAND_FEATURES)
@@ -1012,17 +1085,19 @@ class SimilarityCalibrator:
         log.info(
             "Pitcher calibration complete: %d profiles, sigma_cmd=%.3f, "
             "sigma_res=%.3f, eb_prior=%.1f",
-            len(rows), report.sigma_command, report.sigma_results,
+            len(rows),
+            report.sigma_command,
+            report.sigma_results,
             report.eb_n_prior_pitcher,
         )
         return report
 
     def _calibrate_fielder_params(
-            self,
-            conn: Any,
-            seasons: list[int],
-            target_median_score: float,
-            report: CalibrationReport,
+        self,
+        conn: Any,
+        seasons: list[int],
+        target_median_score: float,
+        report: CalibrationReport,
     ) -> CalibrationReport:
         """
         Tier 1 calibration for fielder similarity engine parameters.
@@ -1034,11 +1109,13 @@ class SimilarityCalibrator:
         Returns a dict with calibrated sigma values keyed by sub-score name.
         """
         from similarity.engines.fielder_similarity import (
-            IF_RANGE_FEATURES, IF_DP_FEATURES, IF_ERROR_FEATURES,
+            IF_DP_FEATURES,
+            IF_ERROR_FEATURES,
+            IF_RANGE_FEATURES,
             IF_SPECIALTY_FEATURES,
-            OF_RANGE_FEATURES, OF_ARM_FEATURES, OF_STAR_FEATURES,
+            OF_ARM_FEATURES,
             OF_ERROR_FEATURES,
-            INFIELD_POSITIONS, OUTFIELD_POSITIONS,
+            OF_RANGE_FEATURES,
         )
 
         sl = ", ".join(str(s) for s in seasons)
@@ -1089,16 +1166,37 @@ class SimilarityCalibrator:
 
             range_raw = np.array([[r[4 + i] or 0.0 for i in range(n_range)] for r in if_rows])
             err_raw = np.array([[r[4 + n_range + i] or 0.0 for i in range(n_err)] for r in if_rows])
-            dp_raw = np.array([[r[4 + n_range + n_err + i] or 0.0 for i in range(n_dp)] for r in if_rows])
-            pivot_raw = np.array([[r[4 + n_range + n_err + n_dp + i] or 0.0 for i in range(n_pivot)] for r in if_rows])
-            spec_raw = np.array([[r[4 + n_range + n_err + n_dp + n_pivot + i] or 0.0 for i in range(n_spec)] for r in if_rows])
+            dp_raw = np.array(
+                [[r[4 + n_range + n_err + i] or 0.0 for i in range(n_dp)] for r in if_rows]
+            )
+            pivot_raw = np.array(
+                [
+                    [r[4 + n_range + n_err + n_dp + i] or 0.0 for i in range(n_pivot)]
+                    for r in if_rows
+                ]
+            )
+            spec_raw = np.array(
+                [
+                    [r[4 + n_range + n_err + n_dp + n_pivot + i] or 0.0 for i in range(n_spec)]
+                    for r in if_rows
+                ]
+            )
 
             ids = np.array([r[0] for r in if_rows])
 
-            report.sigma_if_range = calibrate_sigma(_zscore(range_raw), target_median_score=target_median_score)
-            report.sigma_if_dp = calibrate_sigma(_zscore(np.concatenate((dp_raw, pivot_raw), axis=1)), target_median_score=target_median_score)
-            report.sigma_if_errors = calibrate_sigma(_zscore(err_raw), target_median_score=target_median_score)
-            report.sigma_if_specialty = calibrate_sigma(_zscore(spec_raw), target_median_score=target_median_score)
+            report.sigma_if_range = calibrate_sigma(
+                _zscore(range_raw), target_median_score=target_median_score
+            )
+            report.sigma_if_dp = calibrate_sigma(
+                _zscore(np.concatenate((dp_raw, pivot_raw), axis=1)),
+                target_median_score=target_median_score,
+            )
+            report.sigma_if_errors = calibrate_sigma(
+                _zscore(err_raw), target_median_score=target_median_score
+            )
+            report.sigma_if_specialty = calibrate_sigma(
+                _zscore(spec_raw), target_median_score=target_median_score
+            )
 
             report.reliability_weights_if_range = calibrate_reliability_weights(range_raw, ids)
             report.reliability_weights_if_dp = calibrate_reliability_weights(dp_raw, ids)
@@ -1109,8 +1207,11 @@ class SimilarityCalibrator:
             log.info(
                 "IF calibration: %d profiles, sigma_range=%.3f, sigma_dp=%.3f, "
                 "sigma_err=%.3f, sigma_spec=%.3f",
-                len(if_rows), report.sigma_if_range, report.sigma_if_dp,
-                report.sigma_if_errors, report.sigma_if_specialty,
+                len(if_rows),
+                report.sigma_if_range,
+                report.sigma_if_dp,
+                report.sigma_if_errors,
+                report.sigma_if_specialty,
             )
 
         # Calibrate OF sigmas
@@ -1121,7 +1222,9 @@ class SimilarityCalibrator:
 
             range_raw = np.array([[r[4 + i] or 0.0 for i in range(n_range)] for r in of_rows])
             err_raw = np.array([[r[4 + n_range + i] or 0.0 for i in range(n_err)] for r in of_rows])
-            arm_raw = np.array([[r[4 + n_range + n_err + i] or 0.0 for i in range(n_arm)] for r in of_rows])
+            arm_raw = np.array(
+                [[r[4 + n_range + n_err + i] or 0.0 for i in range(n_arm)] for r in of_rows]
+            )
 
             # Star rates
             star_raw = []
@@ -1130,19 +1233,29 @@ class SimilarityCalibrator:
                 f5o, f5c = r[base], r[base + 1]
                 f4o, f4c = r[base + 2], r[base + 3]
                 ro, rc = r[base + 4], r[base + 5]
-                star_raw.append([
-                    (f5c / f5o) if f5o and f5o > 0 else 0.0,
-                    (f4c / f4o) if f4o and f4o > 0 else 0.0,
-                    (rc / ro) if ro and ro > 0 else 0.0,
-                ])
+                star_raw.append(
+                    [
+                        (f5c / f5o) if f5o and f5o > 0 else 0.0,
+                        (f4c / f4o) if f4o and f4o > 0 else 0.0,
+                        (rc / ro) if ro and ro > 0 else 0.0,
+                    ]
+                )
             star_raw = np.array(star_raw)
 
             ids = np.array([r[0] for r in of_rows])
 
-            report.sigma_of_range = calibrate_sigma(_zscore(range_raw), target_median_score=target_median_score)
-            report.sigma_of_arm = calibrate_sigma(_zscore(arm_raw), target_median_score=target_median_score)
-            report.sigma_of_stars = calibrate_sigma(_zscore(star_raw), target_median_score=target_median_score)
-            report.sigma_of_errors = calibrate_sigma(_zscore(err_raw), target_median_score=target_median_score)
+            report.sigma_of_range = calibrate_sigma(
+                _zscore(range_raw), target_median_score=target_median_score
+            )
+            report.sigma_of_arm = calibrate_sigma(
+                _zscore(arm_raw), target_median_score=target_median_score
+            )
+            report.sigma_of_stars = calibrate_sigma(
+                _zscore(star_raw), target_median_score=target_median_score
+            )
+            report.sigma_of_errors = calibrate_sigma(
+                _zscore(err_raw), target_median_score=target_median_score
+            )
 
             report.reliability_weights_of_range = calibrate_reliability_weights(range_raw, ids)
             report.reliability_weights_of_arm = calibrate_reliability_weights(arm_raw, ids)
@@ -1152,18 +1265,21 @@ class SimilarityCalibrator:
             log.info(
                 "OF calibration: %d profiles, sigma_range=%.3f, sigma_arm=%.3f, "
                 "sigma_stars=%.3f, sigma_err=%.3f",
-                len(of_rows), report.sigma_of_range, report.sigma_of_arm,
-                report.sigma_of_stars, report.sigma_of_errors,
+                len(of_rows),
+                report.sigma_of_range,
+                report.sigma_of_arm,
+                report.sigma_of_stars,
+                report.sigma_of_errors,
             )
 
         return report
 
     def _calibrate_baserunner_params(
-            self,
-            conn: Any,
-            seasons: list[int],
-            target_median_score: float,
-            report: CalibrationReport,
+        self,
+        conn: Any,
+        seasons: list[int],
+        target_median_score: float,
+        report: CalibrationReport,
     ) -> CalibrationReport:
         """
         Tier 1 calibration for baserunner extra-base similarity engine.
@@ -1172,7 +1288,11 @@ class SimilarityCalibrator:
         sub-score, and calibrates RBF sigma for speed, aggression, and
         success dimensions.
         """
-        from similarity.engines.baserunner_similarity import SPEED_FEATURES, AGGRESSION_FEATURES, SUCCESS_FEATURES
+        from similarity.engines.baserunner_similarity import (
+            AGGRESSION_FEATURES,
+            SPEED_FEATURES,
+            SUCCESS_FEATURES,
+        )
 
         sl = ", ".join(str(s) for s in seasons)
         rows = conn.execute(f"""
@@ -1217,13 +1337,16 @@ class SimilarityCalibrator:
             return (mat - m) / s
 
         report.sigma_baserunner_speed = calibrate_sigma(
-            _zscore(speed_raw), target_median_score=target_median_score,
+            _zscore(speed_raw),
+            target_median_score=target_median_score,
         )
         report.sigma_baserunner_aggression = calibrate_sigma(
-            _zscore(agg_raw), target_median_score=target_median_score,
+            _zscore(agg_raw),
+            target_median_score=target_median_score,
         )
         report.sigma_baserunner_success = calibrate_sigma(
-            _zscore(suc_raw), target_median_score=target_median_score,
+            _zscore(suc_raw),
+            target_median_score=target_median_score,
         )
 
         # EB prior
@@ -1232,14 +1355,19 @@ class SimilarityCalibrator:
 
         # Reliability weights
         report.reliability_weights_baserunner_speed = calibrate_reliability_weights(speed_raw, ids)
-        report.reliability_weights_baserunner_aggression = calibrate_reliability_weights(agg_raw, ids)
+        report.reliability_weights_baserunner_aggression = calibrate_reliability_weights(
+            agg_raw, ids
+        )
         report.reliability_weights_baserunner_success = calibrate_reliability_weights(suc_raw, ids)
 
         log.info(
             "Baserunner calibration complete: %d profiles, sigma_speed=%.3f, "
             "sigma_agg=%.3f, sigma_suc=%.3f, eb_prior=%.1f",
-            len(rows), report.sigma_baserunner_speed, report.sigma_baserunner_aggression,
-            report.sigma_baserunner_success, report.eb_n_prior_baserunner,
+            len(rows),
+            report.sigma_baserunner_speed,
+            report.sigma_baserunner_aggression,
+            report.sigma_baserunner_success,
+            report.eb_n_prior_baserunner,
         )
         return report
 
@@ -1248,9 +1376,9 @@ class SimilarityCalibrator:
 # CLI
 # ============================================================================
 if __name__ == "__main__":
-    cal = SimilarityCalibrator(duckdb_path='../db/schemas/baseball_simulator.duckdb')
+    cal = SimilarityCalibrator(duckdb_path="../db/schemas/baseball_simulator.duckdb")
     report = cal.calibrate_from_population(
         seasons=[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017],
-        target_median_score=.5,
+        target_median_score=0.5,
     )
     print(report.summary())

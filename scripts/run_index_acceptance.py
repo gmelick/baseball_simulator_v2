@@ -39,22 +39,26 @@ from pathlib import Path
 
 import asyncpg
 
-
 # ---------------------------------------------------------------------------
 # Acceptance thresholds (locked in by SIM-085 / SIM-089 acceptance criteria)
 # ---------------------------------------------------------------------------
 
-SITUATION_LATENCY_MS_BUDGET = 30.0   # SIM-085
-PITCHER_LATENCY_MS_BUDGET   = 50.0   # SIM-089
-SITUATION_INDEX_NAME        = "idx_pitches_situation"
-PITCHER_INDEX_NAME          = "idx_pitches_pitcher_season_clean"
+SITUATION_LATENCY_MS_BUDGET = 30.0  # SIM-085
+PITCHER_LATENCY_MS_BUDGET = 50.0  # SIM-089
+SITUATION_INDEX_NAME = "idx_pitches_situation"
+PITCHER_INDEX_NAME = "idx_pitches_pitcher_season_clean"
 
 
 # Representative situation: 7th inning, 1 out, runner on 2B only.
-DEFAULT_SITUATION = dict(
-    inning=7, outs=1, balls=1, strikes=2,
-    on_1b=None, on_2b=12345, on_3b=None,
-)
+DEFAULT_SITUATION = {
+    "inning": 7,
+    "outs": 1,
+    "balls": 1,
+    "strikes": 2,
+    "on_1b": None,
+    "on_2b": 12345,
+    "on_3b": None,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +94,7 @@ SELECT pitch_id, velo, ivb, hb, spin_rate, plate_x, plate_z
 # ---------------------------------------------------------------------------
 
 _TOTAL_TIME_RE = re.compile(r"Execution Time:\s+([\d.]+)\s+ms", re.MULTILINE)
-_PLAN_TIME_RE  = re.compile(r"Planning Time:\s+([\d.]+)\s+ms", re.MULTILINE)
+_PLAN_TIME_RE = re.compile(r"Planning Time:\s+([\d.]+)\s+ms", re.MULTILINE)
 
 
 def _extract_total_ms(plan_text: str) -> float:
@@ -101,9 +105,11 @@ def _extract_total_ms(plan_text: str) -> float:
 
 
 def _plan_uses_index(plan_text: str, index_name: str) -> bool:
-    return f"Index Scan using {index_name}" in plan_text or \
-           f"Index Only Scan using {index_name}" in plan_text or \
-           f"Bitmap Index Scan on {index_name}" in plan_text
+    return (
+        f"Index Scan using {index_name}" in plan_text
+        or f"Index Only Scan using {index_name}" in plan_text
+        or f"Bitmap Index Scan on {index_name}" in plan_text
+    )
 
 
 def _plan_is_seq_scan(plan_text: str) -> bool:
@@ -115,6 +121,7 @@ def _plan_is_seq_scan(plan_text: str) -> bool:
 # ---------------------------------------------------------------------------
 # Gate runner
 # ---------------------------------------------------------------------------
+
 
 async def _run_gate(
     conn: asyncpg.Connection,
@@ -130,7 +137,7 @@ async def _run_gate(
     measured_ms = _extract_total_ms(plan_text)
 
     used_index = _plan_uses_index(plan_text, expected_index)
-    used_seq   = _plan_is_seq_scan(plan_text)
+    used_seq = _plan_is_seq_scan(plan_text)
     latency_ok = measured_ms < latency_budget_ms
 
     passed = used_index and not used_seq and latency_ok
@@ -150,6 +157,7 @@ async def _run_gate(
 # Markdown emission
 # ---------------------------------------------------------------------------
 
+
 def _make_markdown(
     *,
     season: int,
@@ -162,8 +170,12 @@ def _make_markdown(
     sim089_plan: str,
     sim089_ms: float,
 ) -> str:
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
-    overall = "✅ Both gates passed" if (sim085_pass and sim089_pass) else "❌ At least one gate failed — see below"
+    now = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
+    overall = (
+        "✅ Both gates passed"
+        if (sim085_pass and sim089_pass)
+        else "❌ At least one gate failed — see below"
+    )
     return f"""# SIM-158 — Index Acceptance Gates (sprint 2026-05-13)
 
 *Generated: {now} (UTC)*
@@ -222,6 +234,7 @@ The script exits non-zero when either gate fails so it can be wired into CI.
 # Main
 # ---------------------------------------------------------------------------
 
+
 async def main_async(
     dsn: str,
     season: int,
@@ -236,9 +249,13 @@ async def main_async(
             label="SIM-085: idx_pitches_situation",
             sql=SITUATION_QUERY,
             params=(
-                situation["inning"], situation["outs"],
-                situation["balls"],  situation["strikes"],
-                situation["on_1b"],  situation["on_2b"], situation["on_3b"],
+                situation["inning"],
+                situation["outs"],
+                situation["balls"],
+                situation["strikes"],
+                situation["on_1b"],
+                situation["on_2b"],
+                situation["on_3b"],
             ),
             expected_index=SITUATION_INDEX_NAME,
             latency_budget_ms=SITUATION_LATENCY_MS_BUDGET,
@@ -254,9 +271,15 @@ async def main_async(
         )
 
         report = _make_markdown(
-            season=season, pitcher_id=pitcher_id, situation=situation,
-            sim085_pass=sim085_pass, sim085_plan=sim085_plan, sim085_ms=sim085_ms,
-            sim089_pass=sim089_pass, sim089_plan=sim089_plan, sim089_ms=sim089_ms,
+            season=season,
+            pitcher_id=pitcher_id,
+            situation=situation,
+            sim085_pass=sim085_pass,
+            sim085_plan=sim085_plan,
+            sim085_ms=sim085_ms,
+            sim089_pass=sim089_pass,
+            sim089_plan=sim089_plan,
+            sim089_ms=sim089_ms,
         )
         if out_path is not None:
             out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -274,23 +297,33 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dsn", default=os.environ.get("BASEBALL_DB_DSN"))
     p.add_argument("--season", type=int, default=2024)
-    p.add_argument("--pitcher-id", type=int, required=False, default=605400,
-                   help="MLBAM player_id of a pitcher with ~3,000 clean pitches "
-                        "in the given season (per SIM-089 AC).")
-    p.add_argument("--out", type=Path, default=None,
-                   help="Optional Markdown report path "
-                        "(e.g. docs/perf/2026-05-13-index-acceptance.md).")
+    p.add_argument(
+        "--pitcher-id",
+        type=int,
+        required=False,
+        default=605400,
+        help="MLBAM player_id of a pitcher with ~3,000 clean pitches "
+        "in the given season (per SIM-089 AC).",
+    )
+    p.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Optional Markdown report path (e.g. docs/perf/2026-05-13-index-acceptance.md).",
+    )
     args = p.parse_args()
     if not args.dsn:
         p.error("DSN required: pass --dsn or set BASEBALL_DB_DSN")
 
-    rc = asyncio.run(main_async(
-        dsn=args.dsn,
-        season=args.season,
-        pitcher_id=args.pitcher_id,
-        situation=DEFAULT_SITUATION,
-        out_path=args.out,
-    ))
+    rc = asyncio.run(
+        main_async(
+            dsn=args.dsn,
+            season=args.season,
+            pitcher_id=args.pitcher_id,
+            situation=DEFAULT_SITUATION,
+            out_path=args.out,
+        )
+    )
     sys.exit(rc)
 
 

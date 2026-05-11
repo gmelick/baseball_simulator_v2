@@ -34,10 +34,7 @@ from __future__ import annotations
 import pathlib
 import re
 import sys
-from typing import Iterable
 from unittest.mock import AsyncMock, MagicMock
-
-import pytest
 
 # ---------------------------------------------------------------------------
 # Ensure repo root is on sys.path so package imports work
@@ -47,9 +44,9 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 # Source files this suite reasons about
-_PG_SCHEMA_PATH      = _ROOT / "db" / "schemas" / "01_postgres_schema.sql"
-_DUCKDB_SCHEMA_PATH  = _ROOT / "db" / "schemas" / "02_duckdb_schema.sql"
-_MIG_DIR             = _ROOT / "db" / "migrations" / "versions"
+_PG_SCHEMA_PATH = _ROOT / "db" / "schemas" / "01_postgres_schema.sql"
+_DUCKDB_SCHEMA_PATH = _ROOT / "db" / "schemas" / "02_duckdb_schema.sql"
+_MIG_DIR = _ROOT / "db" / "migrations" / "versions"
 
 
 def _read(p: pathlib.Path) -> str:
@@ -59,6 +56,7 @@ def _read(p: pathlib.Path) -> str:
 # ===========================================================================
 # SIM-085 — Composite situation index on raw.pitches
 # ===========================================================================
+
 
 class TestSim085SituationIndex:
     """Composite partial index for the situation similarity engine."""
@@ -91,6 +89,7 @@ class TestSim085SituationIndex:
 # SIM-086 — venue_id nullable + None fallback in _upsert_game_record
 # ===========================================================================
 
+
 class TestSim086VenueIdFallback:
     """Live pipeline must not insert venue_id=0 sentinel."""
 
@@ -98,7 +97,9 @@ class TestSim086VenueIdFallback:
         sql = _read(_PG_SCHEMA_PATH)
         # Find the raw.games CREATE TABLE block
         match = re.search(
-            r"CREATE TABLE raw\.games\s*\((.*?)\n\);", sql, re.DOTALL,
+            r"CREATE TABLE raw\.games\s*\((.*?)\n\);",
+            sql,
+            re.DOTALL,
         )
         assert match, "raw.games CREATE TABLE block not found in canonical schema"
         body = match.group(1)
@@ -109,8 +110,7 @@ class TestSim086VenueIdFallback:
         )
         assert venue_line is not None, "venue_id column missing from raw.games"
         assert "NOT NULL" not in venue_line.upper(), (
-            "SIM-086: raw.games.venue_id must be nullable. Current line: "
-            f"{venue_line!r}"
+            f"SIM-086: raw.games.venue_id must be nullable. Current line: {venue_line!r}"
         )
 
     def test_migration_0006_drops_not_null(self) -> None:
@@ -133,11 +133,11 @@ class TestSim086VenueIdFallback:
 
         # Game dict with NO venue key — the production failure mode
         game = {
-            "gamePk":   745001,
+            "gamePk": 745001,
             "gameDate": "2026-05-06T18:05:00Z",
             "gameType": "R",
-            "status":   {"abstractGameState": "Preview"},
-            "teams":    {
+            "status": {"abstractGameState": "Preview"},
+            "teams": {
                 "home": {"team": {"id": 147}},
                 "away": {"team": {"id": 111}},
             },
@@ -145,6 +145,7 @@ class TestSim086VenueIdFallback:
         }
 
         import asyncio
+
         asyncio.run(pipeline._upsert_game_record(game))
 
         # The fifth positional argument to execute() (after the SQL string and
@@ -168,18 +169,19 @@ class TestSim086VenueIdFallback:
         pipeline._db.execute = AsyncMock()
 
         game = {
-            "gamePk":   745002,
+            "gamePk": 745002,
             "gameDate": "2026-05-06T18:05:00Z",
             "gameType": "R",
-            "status":   {"abstractGameState": "Live"},
-            "venue":    {"id": 4169, "name": "Yankee Stadium"},
-            "teams":    {
+            "status": {"abstractGameState": "Live"},
+            "venue": {"id": 4169, "name": "Yankee Stadium"},
+            "teams": {
                 "home": {"team": {"id": 147}},
                 "away": {"team": {"id": 111}},
             },
         }
 
         import asyncio
+
         asyncio.run(pipeline._upsert_game_record(game))
 
         venue_id_arg = pipeline._db.execute.call_args.args[5]
@@ -192,6 +194,7 @@ class TestSim086VenueIdFallback:
             VenueBackfillJob,
             schedule_venue_backfill_job,
         )
+
         # Sanity: class is constructible with a bogus DSN (no connection happens at __init__)
         job = VenueBackfillJob(dsn="postgresql://u:p@localhost/db", dry_run=True)
         assert job._dry_run is True
@@ -210,28 +213,28 @@ class TestSim086VenueIdFallback:
 # functions in this file, so we use dict() copy + update at call sites
 # rather than a helper function.
 _MINIMAL_CLEAN_PITCH_ROW: dict = {
-    "game_pk":         745000,
-    "at_bat_number":   1,
-    "pitch_number":    1,
-    "game_date":       "2024-08-15",
-    "venue_id":        4169,
-    "pitcher":         100001,
-    "p_throws":        "R",
-    "batter":          200001,
-    "stand":           "R",
-    "bat_hand":        "R",
-    "inning":          1,
-    "inning_topbot":   "Top",
-    "balls":           0,
-    "strikes":         0,
-    "outs":            0,
-    "home_score":      0,
-    "away_score":      0,
-    "type":            "B",          # ball — bypasses IN_PLAY_REQUIRED check
-    "release_speed":   95.0,
-    "launch_speed":    None,
-    "launch_angle":    None,
-    "bb_type":         None,
+    "game_pk": 745000,
+    "at_bat_number": 1,
+    "pitch_number": 1,
+    "game_date": "2024-08-15",
+    "venue_id": 4169,
+    "pitcher": 100001,
+    "p_throws": "R",
+    "batter": 200001,
+    "stand": "R",
+    "bat_hand": "R",
+    "inning": 1,
+    "inning_topbot": "Top",
+    "balls": 0,
+    "strikes": 0,
+    "outs": 0,
+    "home_score": 0,
+    "away_score": 0,
+    "type": "B",  # ball — bypasses IN_PLAY_REQUIRED check
+    "release_speed": 95.0,
+    "launch_speed": None,
+    "launch_angle": None,
+    "bb_type": None,
     "break_vertical_induced": None,
 }
 
@@ -288,8 +291,7 @@ class TestSim087ReleaseSpeedThreshold:
         result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": 35.0})
         rs_warnings = [w for w in result.warnings if "release_speed" in w]
         assert any("60" in w for w in rs_warnings), (
-            "SIM-087: warning text should reference the new 60 mph bound, got: "
-            f"{rs_warnings}"
+            f"SIM-087: warning text should reference the new 60 mph bound, got: {rs_warnings}"
         )
 
     def test_canonical_schema_trigger_threshold(self) -> None:
@@ -319,6 +321,7 @@ class TestSim087ReleaseSpeedThreshold:
 # ===========================================================================
 # SIM-088 — Drop idx_pitches_pitch_type
 # ===========================================================================
+
 
 class TestSim088DropPitchTypeIndex:
     """The audit-only pitch_type column should not carry a write-overhead index."""
@@ -373,6 +376,7 @@ class TestSim088DropPitchTypeIndex:
 # ===========================================================================
 # SIM-089 — Composite (pitcher, season) partial index
 # ===========================================================================
+
 
 class TestSim089PitcherSeasonCleanIndex:
     """Profile-computor hot path needs (pitcher, season) WHERE clean."""
@@ -473,9 +477,9 @@ class TestSim091DeleteSeasonsCoverage:
         the table is added to _delete_seasons() — preventing silent stale-row
         pollution on the next full_rebuild.
         """
-        schema_tables   = _parse_derived_tables_with_season()
-        delete_listed   = set(_parse_delete_seasons_table_list())
-        expected        = schema_tables - _EXCLUDED_FROM_DELETE_SEASONS
+        schema_tables = _parse_derived_tables_with_season()
+        delete_listed = set(_parse_delete_seasons_table_list())
+        expected = schema_tables - _EXCLUDED_FROM_DELETE_SEASONS
 
         missing = sorted(expected - delete_listed)
         assert not missing, (
@@ -483,6 +487,6 @@ class TestSim091DeleteSeasonsCoverage:
             "`season` column but are not in _delete_seasons():\n  "
             + "\n  ".join(missing)
             + "\n\nAdd them to the `tables` list in player_profile_computor.py "
-              "or, if intentional, add them to _EXCLUDED_FROM_DELETE_SEASONS "
-              "in this test with a comment explaining why."
+            "or, if intentional, add them to _EXCLUDED_FROM_DELETE_SEASONS "
+            "in this test with a comment explaining why."
         )

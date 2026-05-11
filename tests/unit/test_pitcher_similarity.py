@@ -24,13 +24,16 @@ Run with:
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
-from pitcher_similarity import (
+from similarity.engines.pitcher_similarity import (
+    GMM_FEATURE_DIM,
+    GMM_FEATURE_NAMES,
+    MIN_CLUSTER_SIZE,
     ArsenalCache,
     ArsenalSimilarity,
     EmpiricalBayesShrinkage,
@@ -45,17 +48,12 @@ from pitcher_similarity import (
     build_similarity_matrix,
     enforce_min_cluster_size,
     standardize_gmm,
-    GMM_FEATURE_DIM,
-    GMM_FEATURE_NAMES,
-    COMMAND_FEATURES,
-    RESULT_FEATURES,
-    MIN_CLUSTER_SIZE,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_component(
     cid: int,
@@ -92,10 +90,12 @@ def _make_profile(
     p_throws: str = "R",
     gmm: GMMModel | None = None,
     command: list[float] | None = None,
-    results: list[float] | None = None,
-    release: list[float] | None = None,
+    results: list[float] | None = None,  # noqa: ARG001 — kept for back-compat with older test call sites
+    release: list[float] | None = None,  # noqa: ARG001
     sample_pitches: int = 500,
 ) -> PitcherProfile:
+    # NOTE: result_vec / release_vec were removed from PitcherProfile during
+    # the SIM-148 refactor; older tests still pass them but they are ignored.
     return PitcherProfile(
         pitcher_id=pitcher_id,
         season=season,
@@ -103,16 +103,22 @@ def _make_profile(
         sample_pitches=sample_pitches,
         gmm=gmm,
         command_vec=np.array(command or [0.08, 0.22, 0.30, 0.45, 0.28], dtype=np.float64),
-        result_vec=np.array(results or [0.45, 0.35, 0.20, 1.20, 1.0], dtype=np.float64),
-        release_vec=np.array(release or [-1.5, 6.0], dtype=np.float64),
     )
 
 
 # Reusable components
-POWER_FB = _make_component(0, 0.55, [96.0, 16.0, -8.0, 2400, 210, -1.5, 6.2, 6.5], var_diag=2.0, n_pitches=600)
-SLIDER = _make_component(1, 0.30, [86.0, -2.0, 6.0, 2500, 140, -1.3, 6.0, 6.2], var_diag=1.5, n_pitches=350)
-CHANGEUP = _make_component(2, 0.15, [88.0, 8.0, -14.0, 1800, 220, -1.6, 6.1, 5.9], var_diag=1.0, n_pitches=180)
-TINY_OUTLIER = _make_component(3, 0.02, [72.0, -20.0, 2.0, 3000, 300, -1.0, 5.5, 5.0], var_diag=0.5, n_pitches=15)
+POWER_FB = _make_component(
+    0, 0.55, [96.0, 16.0, -8.0, 2400, 210, -1.5, 6.2, 6.5], var_diag=2.0, n_pitches=600
+)
+SLIDER = _make_component(
+    1, 0.30, [86.0, -2.0, 6.0, 2500, 140, -1.3, 6.0, 6.2], var_diag=1.5, n_pitches=350
+)
+CHANGEUP = _make_component(
+    2, 0.15, [88.0, 8.0, -14.0, 1800, 220, -1.6, 6.1, 5.9], var_diag=1.0, n_pitches=180
+)
+TINY_OUTLIER = _make_component(
+    3, 0.02, [72.0, -20.0, 2.0, 3000, 300, -1.0, 5.5, 5.0], var_diag=0.5, n_pitches=15
+)
 
 # Population statistics computed from the reusable components above.
 # Used to standardize GMMs in unit tests so ArsenalSimilarity.score()
@@ -121,7 +127,9 @@ _ALL_TEST_MEANS = np.array([c.mean for c in [POWER_FB, SLIDER, CHANGEUP, TINY_OU
 _ALL_TEST_WEIGHTS = np.array([c.weight for c in [POWER_FB, SLIDER, CHANGEUP, TINY_OUTLIER]])
 _ALL_TEST_WEIGHTS = _ALL_TEST_WEIGHTS / _ALL_TEST_WEIGHTS.sum()
 _POP_MEAN = np.average(_ALL_TEST_MEANS, axis=0, weights=_ALL_TEST_WEIGHTS)
-_POP_STD = np.sqrt(np.average((_ALL_TEST_MEANS - _POP_MEAN) ** 2, axis=0, weights=_ALL_TEST_WEIGHTS))
+_POP_STD = np.sqrt(
+    np.average((_ALL_TEST_MEANS - _POP_MEAN) ** 2, axis=0, weights=_ALL_TEST_WEIGHTS)
+)
 _POP_STD[_POP_STD == 0] = 1.0
 
 
@@ -134,8 +142,8 @@ def _std_gmm(gmm: GMMModel) -> GMMModel:
 # Tests: Bures–Wasserstein Distance
 # ============================================================================
 
-class TestBuresWasserstein(unittest.TestCase):
 
+class TestBuresWasserstein(unittest.TestCase):
     def test_identical_gaussians_distance_zero(self):
         mean = np.array([95.0, 14.0, -7.0, 2300, 200, -1.5, 6.0, 6.5])
         cov = np.eye(8) * 2.0
@@ -175,6 +183,7 @@ class TestBuresWasserstein(unittest.TestCase):
 # ============================================================================
 # Tests: GMM-to-GMM Optimal Transport
 # ============================================================================
+
 
 class TestArsenalSimilarity(unittest.TestCase):
     """Test the full GMM-to-GMM arsenal similarity.
@@ -224,8 +233,8 @@ class TestArsenalSimilarity(unittest.TestCase):
         (mean ~0, std ~1) so no additional standardization is needed."""
         rng = np.random.default_rng(42)
         for _ in range(10):
-            comps_a = [_make_component(i, 1/3, rng.standard_normal(8).tolist()) for i in range(3)]
-            comps_b = [_make_component(i, 1/2, rng.standard_normal(8).tolist()) for i in range(2)]
+            comps_a = [_make_component(i, 1 / 3, rng.standard_normal(8).tolist()) for i in range(3)]
+            comps_b = [_make_component(i, 1 / 2, rng.standard_normal(8).tolist()) for i in range(2)]
             s = ArsenalSimilarity.score(_make_gmm(comps_a), _make_gmm(comps_b))
             self.assertGreaterEqual(s, 0.0)
             self.assertLessEqual(s, 1.0)
@@ -235,8 +244,8 @@ class TestArsenalSimilarity(unittest.TestCase):
 # Tests: RBF Kernel
 # ============================================================================
 
-class TestRBFSimilarity(unittest.TestCase):
 
+class TestRBFSimilarity(unittest.TestCase):
     def test_identical_vectors(self):
         rbf = RBFSimilarity(sigma=1.0)
         v = np.array([0.3, 0.2, 0.5])
@@ -269,8 +278,8 @@ class TestRBFSimilarity(unittest.TestCase):
 # Tests: Empirical Bayes Shrinkage
 # ============================================================================
 
-class TestEmpiricalBayes(unittest.TestCase):
 
+class TestEmpiricalBayes(unittest.TestCase):
     def test_large_sample_minimal_shrinkage(self):
         eb = EmpiricalBayesShrinkage(n_prior=50)
         self.assertGreater(eb.alpha(5000), 0.98)
@@ -295,8 +304,8 @@ class TestEmpiricalBayes(unittest.TestCase):
 # Tests: Minimum Cluster Size Enforcement
 # ============================================================================
 
-class TestMinClusterSize(unittest.TestCase):
 
+class TestMinClusterSize(unittest.TestCase):
     def test_all_large_components_unchanged(self):
         gmm = _make_gmm([POWER_FB, SLIDER, CHANGEUP])
         cleaned = enforce_min_cluster_size(gmm)
@@ -325,8 +334,8 @@ class TestMinClusterSize(unittest.TestCase):
 # Tests: Feature Normalization
 # ============================================================================
 
-class TestFeatureNormalizer(unittest.TestCase):
 
+class TestFeatureNormalizer(unittest.TestCase):
     def test_fit_normalizes_to_zscore(self):
         profiles = [
             _make_profile(1, 2024, command=[0.08, 0.22, 0.30, 0.45, 0.28]),
@@ -344,8 +353,8 @@ class TestFeatureNormalizer(unittest.TestCase):
 # Tests: Arsenal Cache
 # ============================================================================
 
-class TestArsenalCache(unittest.TestCase):
 
+class TestArsenalCache(unittest.TestCase):
     def test_put_and_get(self):
         cache = ArsenalCache()
         cache.put((100, 2024), (200, 2024), 5.5)
@@ -398,7 +407,7 @@ class TestArsenalCache(unittest.TestCase):
             self.assertAlmostEqual(cache2.get((100, 2024), (200, 2024)), 5.5)
             self.assertAlmostEqual(cache2.get((100, 2024), (300, 2024)), 7.2)
         finally:
-            os.unlink(path)
+            Path(path).unlink()
 
     def test_precompute_serial(self):
         """Batch precompute should fill the cache for all pairs."""
@@ -422,6 +431,7 @@ class TestArsenalCache(unittest.TestCase):
 # Tests: Full Engine Integration (Synthetic Data)
 # ============================================================================
 
+
 def _build_synthetic_engine():
     """Create an engine with synthetic profiles — no DuckDB needed."""
     engine = PitcherSimilarityEngine.__new__(PitcherSimilarityEngine)
@@ -442,33 +452,46 @@ def _build_synthetic_engine():
     # Pitcher A: Power righty 2024
     gmm_a = _make_gmm([POWER_FB, SLIDER])
     prof_a_2024 = _make_profile(
-        100, 2024, "R", gmm_a,
+        100,
+        2024,
+        "R",
+        gmm_a,
         command=[0.07, 0.28, 0.32, 0.47, 0.30],
         results=[0.40, 0.38, 0.22, 1.10, 0.90],
         release=[-1.5, 6.2],
     )
 
     # Pitcher A: same pitcher, 2025 season (slightly different profile)
-    gmm_a_25 = _make_gmm([
-        _make_component(0, 0.50, [95.0, 15.0, -9.0, 2350, 215, -1.5, 6.2, 6.5]),
-        _make_component(1, 0.35, [85.0, -3.0, 7.0, 2450, 138, -1.3, 6.0, 6.1]),
-        CHANGEUP,
-    ])
+    gmm_a_25 = _make_gmm(
+        [
+            _make_component(0, 0.50, [95.0, 15.0, -9.0, 2350, 215, -1.5, 6.2, 6.5]),
+            _make_component(1, 0.35, [85.0, -3.0, 7.0, 2450, 138, -1.3, 6.0, 6.1]),
+            CHANGEUP,
+        ]
+    )
     prof_a_2025 = _make_profile(
-        100, 2025, "R", gmm_a_25,
+        100,
+        2025,
+        "R",
+        gmm_a_25,
         command=[0.08, 0.26, 0.31, 0.46, 0.29],
         results=[0.42, 0.36, 0.22, 1.15, 0.95],
         release=[-1.5, 6.1],
     )
 
     # Pitcher B: Similar power righty 2024
-    gmm_b = _make_gmm([
-        _make_component(0, 0.50, [95.5, 15.5, -7.5, 2380, 212, -1.4, 6.1, 6.4]),
-        _make_component(1, 0.35, [85.5, -1.5, 5.5, 2480, 142, -1.2, 5.9, 6.1]),
-        CHANGEUP,
-    ])
+    gmm_b = _make_gmm(
+        [
+            _make_component(0, 0.50, [95.5, 15.5, -7.5, 2380, 212, -1.4, 6.1, 6.4]),
+            _make_component(1, 0.35, [85.5, -1.5, 5.5, 2480, 142, -1.2, 5.9, 6.1]),
+            CHANGEUP,
+        ]
+    )
     prof_b = _make_profile(
-        200, 2024, "R", gmm_b,
+        200,
+        2024,
+        "R",
+        gmm_b,
         command=[0.08, 0.26, 0.31, 0.46, 0.29],
         results=[0.42, 0.36, 0.22, 1.15, 0.95],
         release=[-1.4, 6.1],
@@ -480,7 +503,10 @@ def _build_synthetic_engine():
     slow_change = _make_component(2, 0.25, [82.0, 6.0, -10.0, 1700, 230, -1.7, 5.8, 5.7])
     gmm_c = _make_gmm([finesse_fb, big_curve, slow_change])
     prof_c = _make_profile(
-        300, 2024, "R", gmm_c,
+        300,
+        2024,
+        "R",
+        gmm_c,
         command=[0.06, 0.20, 0.28, 0.42, 0.25],
         results=[0.50, 0.30, 0.20, 1.30, 0.70],
         release=[-1.8, 5.9],
@@ -491,7 +517,10 @@ def _build_synthetic_engine():
     curve = _make_component(1, 0.5, [77.0, -16.0, 5.0, 2600, 320, 1.3, 5.6, 5.3])
     gmm_d = _make_gmm([soft_fb, curve])
     prof_d = _make_profile(
-        400, 2024, "L", gmm_d,
+        400,
+        2024,
+        "L",
+        gmm_d,
         command=[0.10, 0.18, 0.26, 0.40, 0.25],
         results=[0.50, 0.30, 0.20, 1.30, 0.70],
         release=[1.5, 5.8],
@@ -499,7 +528,10 @@ def _build_synthetic_engine():
 
     # Another lefty for partition
     prof_e = _make_profile(
-        500, 2024, "L", _make_gmm([soft_fb, curve]),
+        500,
+        2024,
+        "L",
+        _make_gmm([soft_fb, curve]),
         command=[0.09, 0.19, 0.27, 0.41, 0.26],
         results=[0.48, 0.32, 0.20, 1.28, 0.72],
         release=[1.4, 5.7],
@@ -580,8 +612,11 @@ class TestCrossSeasonComparisons(unittest.TestCase):
         # With synthetic data the cross-season score won't be super high
         # because the arsenal changed (2→3 components). The key assertion
         # is that it IS included in results and has a positive score.
-        self.assertGreater(cross_season.score, 0.1,
-                           "Same pitcher across adjacent seasons should have positive similarity")
+        self.assertGreater(
+            cross_season.score,
+            0.1,
+            "Same pitcher across adjacent seasons should have positive similarity",
+        )
 
     def test_cross_season_ranked_above_dissimilar(self):
         """Same pitcher across seasons should be more similar than a
@@ -608,7 +643,6 @@ class TestCrossSeasonComparisons(unittest.TestCase):
 
 
 class TestHandednessPartition(unittest.TestCase):
-
     def setUp(self):
         self.engine = _build_synthetic_engine()
 
@@ -631,7 +665,6 @@ class TestHandednessPartition(unittest.TestCase):
 
 
 class TestScoreProperties(unittest.TestCase):
-
     def setUp(self):
         self.engine = _build_synthetic_engine()
 
@@ -663,11 +696,13 @@ class TestScoreProperties(unittest.TestCase):
         # Use dataclasses.fields if available; fall back to __annotations__
         try:
             from dataclasses import fields
+
             field_names = {f.name for f in fields(SimilarityResult)}
         except TypeError:
             field_names = set(SimilarityResult.__annotations__.keys())
         self.assertNotIn(
-            "release_score", field_names,
+            "release_score",
+            field_names,
             "SIM-067/SIM-148: SimilarityResult must NOT have release_score; "
             "re-adding it re-introduces a double-counted signal.",
         )
@@ -684,14 +719,14 @@ class TestScoreProperties(unittest.TestCase):
         pb = self.engine.get_profile(*ids[1])
         pair = self.engine._score_pair(pa, pb)
         self.assertEqual(
-            len(pair), 3,
+            len(pair),
+            3,
             "SIM-148: _score_pair must return 3 elements (composite, arsenal, command). "
             "Pre-SIM-067 it returned 5; re-introducing release/results sub-scores "
-            "double-counts signal already inside the GMM."
+            "double-counts signal already inside the GMM.",
         )
         composite, arsenal, command = pair
-        for v, name in [(composite, "composite"), (arsenal, "arsenal"),
-                        (command, "command")]:
+        for v, name in [(composite, "composite"), (arsenal, "arsenal"), (command, "command")]:
             self.assertGreaterEqual(v, 0.0, f"{name} must be in [0, 1]")
             self.assertLessEqual(v, 1.0, f"{name} must be in [0, 1]")
 
@@ -759,7 +794,9 @@ class TestArsenalCacheIntegration(unittest.TestCase):
         self.engine.query(100, 2024)  # caches (100,2024)↔(200,2024), (100,2024)↔(300,2024), etc.
         cache_after_first = self.engine.arsenal_cache_size
 
-        self.engine.query(200, 2024)  # needs (200,2024)↔(300,2024) but (200,2024)↔(100,2024) is cached
+        self.engine.query(
+            200, 2024
+        )  # needs (200,2024)↔(300,2024) but (200,2024)↔(100,2024) is cached
         cache_after_second = self.engine.arsenal_cache_size
 
         # Some entries should have been reused (cache grew by less than
@@ -774,8 +811,8 @@ class TestArsenalCacheIntegration(unittest.TestCase):
 # Tests: GMM Serialization Round-Trip
 # ============================================================================
 
-class TestGMMSerialization(unittest.TestCase):
 
+class TestGMMSerialization(unittest.TestCase):
     def test_round_trip(self):
         original = _make_gmm([POWER_FB, SLIDER])
         model_json = {
@@ -800,35 +837,16 @@ class TestGMMSerialization(unittest.TestCase):
         self.assertEqual(restored.n_components, original.n_components)
         self.assertEqual(len(restored.components), len(original.components))
 
-        for orig_c, rest_c in zip(original.components, restored.components):
+        for orig_c, rest_c in zip(original.components, restored.components, strict=False):
             np.testing.assert_allclose(rest_c.mean, orig_c.mean)
             np.testing.assert_allclose(rest_c.covariance, orig_c.covariance)
             self.assertAlmostEqual(rest_c.weight, orig_c.weight)
 
 
-# ============================================================================
-# Run
-# ============================================================================
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-0 should partially reuse cache from pitcher 100's query."""
-        self.engine.query(100, 2024)
-        cache_after_first = self.engine.arsenal_cache_size
-
-        # Querying pitcher 200 in 2024 — overlaps with pairs already
-        # computed for pitcher 100.  We expect new entries to be small.
-        self.engine.query(200, 2024)
-        cache_after_second = self.engine.arsenal_cache_size
-
-        new_entries = cache_after_second - cache_after_first
-        # Sanity: cache grew by less than naive "all pairs" count.
-        self.assertLessEqual(new_entries, cache_after_first)
-
-
 # ---------------------------------------------------------------------------
 # SIM-148 — Doctest sentinel for pitcher_similarity.py
 # ---------------------------------------------------------------------------
+
 
 class TestPitcherSimilarityDoctests(unittest.TestCase):
     """SIM-148: catch docstring drift in pitcher_similarity.py automatically.
@@ -840,10 +858,13 @@ class TestPitcherSimilarityDoctests(unittest.TestCase):
 
     def test_doctests_in_pitcher_similarity_module(self):
         import doctest
+
         import similarity.engines.pitcher_similarity as mod
+
         results = doctest.testmod(mod, verbose=False)
         self.assertEqual(
-            results.failed, 0,
+            results.failed,
+            0,
             f"SIM-148: {results.failed} doctest(s) failed in pitcher_similarity.py "
             f"(of {results.attempted} attempted). Run "
             "`python -m doctest similarity/engines/pitcher_similarity.py -v` to debug.",

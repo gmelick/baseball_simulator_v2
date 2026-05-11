@@ -33,8 +33,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-import time
-from typing import Generator, AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 
 import pytest
 import pytest_asyncio
@@ -105,9 +104,7 @@ def pg_container():
         )
         if result.returncode != 0:
             raise RuntimeError(
-                f"Alembic migrations failed:\n"
-                f"stdout: {result.stdout}\n"
-                f"stderr: {result.stderr}"
+                f"Alembic migrations failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
             )
 
         yield postgres
