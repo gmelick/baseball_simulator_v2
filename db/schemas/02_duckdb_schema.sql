@@ -521,6 +521,14 @@ CREATE TABLE IF NOT EXISTS derived.catcher_season_metrics (
     sb_attempts_3b              INTEGER     DEFAULT 0,
     cs_rate_3b                  FLOAT,
 
+    -- Deterrence: rate at which opposing runners attempt to steal against this
+    -- catcher per PA-level opportunity.  Lower = better arm reputation.
+    -- Formula (SIM-073, BA-approved): (SB + CS) / (opp_1B + opp_2B), where
+    --   opp_1B = PAs with runner on 1B and 2B empty
+    --   opp_2B = PAs with runner on 2B and 3B empty
+    -- Min-sample guard: NULL if opportunity denominator < 100 PA opportunities.
+    steal_attempt_rate_against  FLOAT,
+
     -- Pickoffs
     pickoff_attempts            INTEGER     DEFAULT 0,
     pickoff_successes           INTEGER     DEFAULT 0,

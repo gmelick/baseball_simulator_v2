@@ -83,3 +83,42 @@ EXPOSE 8000
 # Default: run the FastAPI app with uvicorn.
 # Override CMD in docker-compose for worker count / reload flags.
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 — dev (extends runtime with pytest / ruff / mypy / etc.)
+#
+# Used by docker-compose for ``make test``, ``make lint``, ``make format``,
+# ``make type-check``.  The lean ``runtime`` stage above stays the production
+# default so prod images don't ship pytest + dev tooling (smaller, smaller
+# attack surface, faster pulls).
+#
+# Layered as a separate stage rather than baking dev deps into runtime so
+# the runtime tag remains trustworthy for ``docker push`` / production use.
+# ---------------------------------------------------------------------------
+FROM runtime AS dev
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-dev.txt /tmp/requirements-dev.txt
+# pytest + pytest-asyncio + ruff + mypy + httpx + testcontainers + ...
+# The -r requirements.txt inside requirements-dev.txt re-resolves runtime
+# deps, but pip is a no-op when versions already match.
+RUN pip install --no-cache-dir -r /tmp/requirements-dev.txt \
+ && rm /tmp/requirements-dev.txt
+
+# Test files aren't part of the runtime image — copy them into the dev image
+# so the ``app`` service can run pytest without bind-mounting the host.
+COPY tests/        /app/tests/
+COPY pyproject.toml /app/pyproject.toml
+
+# Drop privileges back to the non-root user for tests + tooling.
+USER appuser
+
+# Tests get the same default CMD as runtime; ``make test`` overrides with
+# ``pytest ...`` via docker-compose run.
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+

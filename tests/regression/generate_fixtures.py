@@ -125,8 +125,10 @@ def _build_catcher_engine():
     from similarity.engines.catcher_similarity import (
         CatcherSimilarityEngine, CatcherProfile,
         FeatureNormalizer, CatcherPartition, WeightedRBFSimilarity,
-        FRAMING_FEATURES, BLOCKING_FEATURES, THROWING_FEATURES, OFFENSE_FEATURES,
-        RBF_SIGMA_FRAMING, RBF_SIGMA_BLOCKING, RBF_SIGMA_THROWING, RBF_SIGMA_OFFENSE,
+        FRAMING_FEATURES, BLOCKING_FEATURES, THROWING_FEATURES,
+        DETERRENCE_FEATURES, OFFENSE_FEATURES,
+        RBF_SIGMA_FRAMING, RBF_SIGMA_BLOCKING, RBF_SIGMA_THROWING,
+        RBF_SIGMA_DETERRENCE, RBF_SIGMA_OFFENSE,
     )
     rng = np.random.default_rng(REGRESSION_SEED)
     n = 12
@@ -139,6 +141,8 @@ def _build_catcher_engine():
             framing_vec=rng.uniform(-0.05, 0.15, len(FRAMING_FEATURES)),
             blocking_vec=rng.uniform(0.0, 0.05, len(BLOCKING_FEATURES)),
             throwing_vec=rng.uniform(0.0, 1.0, len(THROWING_FEATURES)),
+            # SIM-072: steal_attempt_rate_against ~ [0.02, 0.18] for MLB catchers
+            deterrence_vec=rng.uniform(0.02, 0.18, len(DETERRENCE_FEATURES)),
             offense_vec=rng.uniform(0.0, 1.0, len(OFFENSE_FEATURES)),
             eb_alpha=1.0,
         ) for i in range(n)
@@ -150,6 +154,7 @@ def _build_catcher_engine():
     engine._framing_rbf = WeightedRBFSimilarity(RBF_SIGMA_FRAMING, np.array([w for _, w in FRAMING_FEATURES]))
     engine._blocking_rbf = WeightedRBFSimilarity(RBF_SIGMA_BLOCKING, np.array([w for _, w in BLOCKING_FEATURES]))
     engine._throwing_rbf = WeightedRBFSimilarity(RBF_SIGMA_THROWING, np.array([w for _, w in THROWING_FEATURES]))
+    engine._deterrence_rbf = WeightedRBFSimilarity(RBF_SIGMA_DETERRENCE, np.array([w for _, w in DETERRENCE_FEATURES]))
     engine._offense_rbf = WeightedRBFSimilarity(RBF_SIGMA_OFFENSE, np.array([w for _, w in OFFENSE_FEATURES]))
     return engine, "catcher"
 

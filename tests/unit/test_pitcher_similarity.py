@@ -636,6 +636,16 @@ class TestScoreProperties(unittest.TestCase):
         self.engine = _build_synthetic_engine()
 
     def test_all_scores_in_range(self):
+        """SIM-148: removed vacuous release_score / results_score asserts.
+
+        Pre-SIM-148 this method asserted ``r.release_score >= 0.0`` and
+        ``r.results_score >= 0.0`` against fields that had been removed
+        from SimilarityResult by SIM-067.  Either path was useless:
+          * If a stale field default was still 0.0 → assertion passes vacuously.
+          * If the field was actually removed → AttributeError, false negative.
+        Real coverage of engine correctness now lives below in
+        ``test_score_pair_returns_three_subscores``.
+        """
         results = self.engine.query(100, 2024)
         for r in results:
             self.assertGreaterEqual(r.score, 0.0)
@@ -644,10 +654,46 @@ class TestScoreProperties(unittest.TestCase):
             self.assertLessEqual(r.arsenal_score, 1.0)
             self.assertGreaterEqual(r.command_score, 0.0)
             self.assertLessEqual(r.command_score, 1.0)
-            self.assertGreaterEqual(r.release_score, 0.0)
-            self.assertLessEqual(r.release_score, 1.0)
-            self.assertGreaterEqual(r.results_score, 0.0)
-            self.assertLessEqual(r.results_score, 1.0)
+
+    def test_similarity_result_has_no_release_score_field(self):
+        """SIM-148 / SIM-067 regression: ``release_score`` removed from the
+        SimilarityResult dataclass (release-point info is captured inside
+        the GMM components).  Re-introducing the field would silently
+        re-double-count the signal."""
+        # Use dataclasses.fields if available; fall back to __annotations__
+        try:
+            from dataclasses import fields
+            field_names = {f.name for f in fields(SimilarityResult)}
+        except TypeError:
+            field_names = set(SimilarityResult.__annotations__.keys())
+        self.assertNotIn(
+            "release_score", field_names,
+            "SIM-067/SIM-148: SimilarityResult must NOT have release_score; "
+            "re-adding it re-introduces a double-counted signal.",
+        )
+
+    def test_score_pair_returns_three_subscores(self):
+        """SIM-148 / SIM-067 regression: ``_score_pair`` returns
+        ``(composite, arsenal, command)`` — a 3-tuple.  Restoring the old
+        5-tuple (with separate release / results sub-scores) would break
+        every caller that unpacks the result."""
+        # Build two synthetic profiles that the engine already loaded.
+        ids = self.engine.profile_ids()
+        self.assertGreaterEqual(len(ids), 2, "synthetic engine needs >=2 profiles")
+        pa = self.engine.get_profile(*ids[0])
+        pb = self.engine.get_profile(*ids[1])
+        pair = self.engine._score_pair(pa, pb)
+        self.assertEqual(
+            len(pair), 3,
+            "SIM-148: _score_pair must return 3 elements (composite, arsenal, command). "
+            "Pre-SIM-067 it returned 5; re-introducing release/results sub-scores "
+            "double-counts signal already inside the GMM."
+        )
+        composite, arsenal, command = pair
+        for v, name in [(composite, "composite"), (arsenal, "arsenal"),
+                        (command, "command")]:
+            self.assertGreaterEqual(v, 0.0, f"{name} must be in [0, 1]")
+            self.assertLessEqual(v, 1.0, f"{name} must be in [0, 1]")
 
     def test_similar_pitcher_ranked_above_dissimilar(self):
         """Pitcher B (similar power righty) should rank above Pitcher C
@@ -766,3 +812,43 @@ class TestGMMSerialization(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+0 should partially reuse cache from pitcher 100's query."""
+        self.engine.query(100, 2024)
+        cache_after_first = self.engine.arsenal_cache_size
+
+        # Querying pitcher 200 in 2024 — overlaps with pairs already
+        # computed for pitcher 100.  We expect new entries to be small.
+        self.engine.query(200, 2024)
+        cache_after_second = self.engine.arsenal_cache_size
+
+        new_entries = cache_after_second - cache_after_first
+        # Sanity: cache grew by less than naive "all pairs" count.
+        self.assertLessEqual(new_entries, cache_after_first)
+
+
+# ---------------------------------------------------------------------------
+# SIM-148 — Doctest sentinel for pitcher_similarity.py
+# ---------------------------------------------------------------------------
+
+class TestPitcherSimilarityDoctests(unittest.TestCase):
+    """SIM-148: catch docstring drift in pitcher_similarity.py automatically.
+
+    Per ticket AC #5, runs every doctest in similarity/engines/pitcher_similarity.py.
+    Implemented as a unittest.TestCase wrapper so it integrates into the existing
+    suite without needing the global ``--doctest-modules`` pytest flag (which
+    would scan the whole repo)."""
+
+    def test_doctests_in_pitcher_similarity_module(self):
+        import doctest
+        import similarity.engines.pitcher_similarity as mod
+        results = doctest.testmod(mod, verbose=False)
+        self.assertEqual(
+            results.failed, 0,
+            f"SIM-148: {results.failed} doctest(s) failed in pitcher_similarity.py "
+            f"(of {results.attempted} attempted). Run "
+            "`python -m doctest similarity/engines/pitcher_similarity.py -v` to debug.",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

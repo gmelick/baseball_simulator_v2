@@ -29,7 +29,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-baseball_pass}
       POSTGRES_DB:       ${POSTGRES_DB:-baseball_sim}
     ports:
-      - "5432:5432"
+      # Host port is overridable via DB_HOST_PORT in .env so contributors
+      # already running PostgreSQL on 5432 can pick a free port (eg 5433).
+      - "${DB_HOST_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       # Schema is applied via 'make migrate' (alembic upgrade head)
@@ -50,7 +52,11 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      # Host port is overridable via REDIS_HOST_PORT in .env so contributors
+      # already running Redis on 6379 (Memurai/WSL/another project) can pick
+      # a free port without editing this file.  The app container always
+      # reaches Redis at the in-network address ``redis:6379`` regardless.
+      - "${REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     command: >
@@ -75,17 +81,24 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: runtime
+      # ``dev`` extends ``runtime`` with pytest / ruff / mypy / testcontainers
+      # so make test, make lint, make format, make type-check work without
+      # bind-mounting host Python.  Production deployments override this to
+      # ``target: runtime`` for a leaner image.
+      target: dev
     restart: unless-stopped
     env_file:
       - .env
     environment:
-      # Override DB host to use the compose service name, not localhost
-      BASEBALL_DB_DSN: postgresql://${POSTGRES_USER:-baseball_user}:${POSTGRES_PASSWORD:-baseball_pass}@db:5432/${POSTGRES_DB:-baseball_sim}
+      # BASEBALL_DB_DSN comes from .env (env_file above). Keep it set to
+      # ``postgresql://baseball_user:baseball_pass@db:5432/baseball_sim`` so
+      # the in-network host name ``db`` resolves to the compose Postgres
+      # service.  alembic auto-coerces to the +psycopg2 driver in env.py.
       REDIS_URL:       redis://redis:6379/0
       ENVIRONMENT:     ${ENVIRONMENT:-development}
     ports:
-      - "8000:8000"
+      # Host port is overridable via APP_HOST_PORT (default 8000).
+      - "${APP_HOST_PORT:-8000}:8000"
     volumes:
       # Mount source for hot-reload in development
       # Comment out for a production-like build test
@@ -126,8 +139,10 @@ services:
       target: runtime
     env_file:
       - .env
-    environment:
-      BASEBALL_DB_DSN: postgresql+psycopg2://${POSTGRES_USER:-baseball_user}:${POSTGRES_PASSWORD:-baseball_pass}@db:5432/${POSTGRES_DB:-baseball_sim}
+    # No environment: override here.  BASEBALL_DB_DSN comes straight from .env
+    # and alembic env.py auto-coerces postgresql:// to postgresql+psycopg2://
+    # (see db/migrations/env.py).  This avoids the docker-compose ${VAR:-default}
+    # substitution path that broke on some Windows / Compose v2 combinations.
     command: alembic upgrade head
     depends_on:
       db:

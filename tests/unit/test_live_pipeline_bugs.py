@@ -407,6 +407,24 @@ class TestSIM132MockOddsVig:
     MLB ML).
     """
 
+    # SIM-159 calibration: MockOddsAPI samples vig from rng.uniform(0.06, 0.10)
+    # so the underlying overround `1 + vig/2` lives in [1.030, 1.050].  After
+    # the line is round-tripped through `_prob_to_american()` (which rounds to
+    # an integer) and then back via `_american_to_implied()`, the recovered
+    # implied-probability sum drifts by up to ±0.003 from that range — so the
+    # observed sum sits in roughly [1.027, 1.053].  Strict `> 1.03` therefore
+    # flakes at the lower edge (game_pk=12345 hits 1.0286).
+    #
+    # PM-approved fix (sprint 2026-05-13): keep the [0.06, 0.10] RNG range so
+    # the mock spans both sharp-book (3–5 %) and soft-book (6–8 %) overround
+    # ranges, and weaken the test bounds to absorb the ~0.003 American-odds
+    # rounding error.  The bounds below assert "vig is meaningfully present
+    # AND not absurdly high", which is the SIM-132 invariant we actually care
+    # about — they reject zero-vig (1.0) and unrealistic vig (> 1.06) without
+    # flaking on rounding.
+    _VIG_LOWER = 1.025   # 1.030 - rounding slack
+    _VIG_UPPER = 1.055   # 1.050 + rounding slack
+
     def test_moneyline_implied_probs_sum_exceeds_1_03(self) -> None:
         """
         SIM-132: Zero-vig check.  Before fix, home_implied + away_implied == 1.0
@@ -418,20 +436,28 @@ class TestSIM132MockOddsVig:
         away_implied = _american_to_implied(odds["away_ml"])
         total = home_implied + away_implied
 
-        assert total > 1.03, (
-            f"Implied prob sum = {total:.4f} (≤ 1.03). "
+        assert total >= self._VIG_LOWER, (
+            f"Implied prob sum = {total:.4f} (< {self._VIG_LOWER}). "
             "MockOddsAPI is producing zero/near-zero-vig lines. "
             "Edge calculations will be inflated by 3–8 pp vs. real markets."
         )
+        assert total <= self._VIG_UPPER, (
+            f"Implied prob sum = {total:.4f} (> {self._VIG_UPPER}). "
+            "MockOddsAPI vig is unrealistically high for any real book."
+        )
 
     @pytest.mark.parametrize("game_pk", [100001, 234567, 745000, 999999, 12345])
-    def test_moneyline_sum_exceeds_1_03_for_multiple_game_pks(self, game_pk: int) -> None:
-        """Vig must be present for every game_pk — not just a specific seed."""
+    def test_moneyline_sum_in_realistic_vig_band(self, game_pk: int) -> None:
+        """Vig must be present and realistic for every game_pk — not just a
+        specific seed.  Bounds account for American-odds integer rounding
+        (see _VIG_LOWER / _VIG_UPPER comment above)."""
         odds = MockOddsAPI.get_odds(game_pk)
         home_implied = _american_to_implied(odds["home_ml"])
         away_implied = _american_to_implied(odds["away_ml"])
-        assert home_implied + away_implied > 1.03, (
-            f"game_pk={game_pk}: implied sum = {home_implied + away_implied:.4f}"
+        total = home_implied + away_implied
+        assert self._VIG_LOWER <= total <= self._VIG_UPPER, (
+            f"game_pk={game_pk}: implied sum = {total:.4f} outside "
+            f"[{self._VIG_LOWER}, {self._VIG_UPPER}]"
         )
 
     def test_moneyline_vig_is_not_excessive(self) -> None:

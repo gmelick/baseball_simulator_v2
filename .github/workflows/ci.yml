@@ -215,6 +215,69 @@ jobs:
   # Verifies the multi-stage Dockerfile builds to the runtime target without error.
   # Does NOT push. Push is handled by docker-release.yml on main.
   # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # Job 4b — Secrets / credential leak check (SIM-153)
+  # Greps the working tree for literal secrets and committed .env files.
+  # Catches accidental credential leaks before they reach main.
+  # Decoupled from lint so a leak fails the build with a clear error.
+  # ---------------------------------------------------------------------------
+  secrets-check:
+    name: Secrets check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reject committed .env files
+        run: |
+          # SIM-153: .env must NEVER be committed.  .env.example is fine.
+          if git ls-files | grep -E '^\.env$|/\.env$|\.env\.local$|\.env\.production$'; then
+            echo "::error::SIM-153: a committed .env file was found in the repo. .env must be in .gitignore."
+            exit 1
+          fi
+          echo "OK — no committed .env files."
+
+      - name: Grep for literal credential patterns
+        run: |
+          # SIM-153: catch obvious literal secrets in source.  Scans all source
+          # except this workflow file (it's allowed to mention "secret" in
+          # comments referencing GitHub Secrets) and the example template.
+          # Exits 1 if any HIGH-confidence pattern is found.
+          set +e
+          MATCHES=$(grep -nIE \
+            -e 'password\s*=\s*["'\''][^"'\'' $][^"'\'']{2,}["'\'']' \
+            -e 'api[_-]?key\s*=\s*["'\''][A-Za-z0-9_-]{16,}["'\'']' \
+            -e 'secret\s*=\s*["'\''][A-Za-z0-9_-]{16,}["'\'']' \
+            -e 'AKIA[0-9A-Z]{16}' \
+            -e 'AIza[0-9A-Za-z_-]{35}' \
+            -e 'BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY' \
+            --exclude-dir=.git \
+            --exclude-dir=.github \
+            --exclude-dir=node_modules \
+            --exclude-dir=htmlcov \
+            --exclude='*.lock' \
+            --exclude='.env.example' \
+            --exclude='*.md' \
+            -r .)
+          set -e
+          if [ -n "$MATCHES" ]; then
+            echo "::error::SIM-153: literal credential(s) found in source:"
+            echo "$MATCHES"
+            exit 1
+          fi
+          echo "OK — no literal credentials detected."
+
+      - name: Verify .env is in .gitignore
+        run: |
+          # SIM-153 AC #6: .env must be explicitly listed in .gitignore.
+          if ! grep -qE '^\.env$|^\.env\b' .gitignore; then
+            echo "::error::SIM-153: .gitignore must explicitly list '.env'."
+            exit 1
+          fi
+          echo "OK — .env is in .gitignore."
+
   docker-build-check:
     name: Docker build check
     runs-on: ubuntu-latest
@@ -222,6 +285,7 @@ jobs:
     needs:
       - lint
       - unit-tests
+      - secrets-check
 
     steps:
       - name: Checkout

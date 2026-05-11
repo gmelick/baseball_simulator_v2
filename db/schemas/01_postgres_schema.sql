@@ -144,7 +144,12 @@ CREATE TABLE raw.games (
     status                  VARCHAR(20)     NOT NULL
                                 CHECK (status IN ('Preview','Warmup','Pre-Game','Live',
                                                   'Final','Postponed','Suspended','Cancelled')),
-    venue_id                INTEGER         NOT NULL,
+    -- SIM-086: Nullable.  The live pipeline upserts game rows from the schedule API
+    -- before venue assignment is published (international/spring-training games).
+    -- Pre-SIM-086 the live pipeline silently dropped these games because venue_id=0
+    -- raised an FK violation.  pipeline/etl/venue_backfill_job.py fills NULL rows
+    -- once the MLB API publishes the venue.
+    venue_id                INTEGER,
     home_team_id            INTEGER         NOT NULL,
     away_team_id            INTEGER         NOT NULL,
     home_manager_id         INTEGER,
@@ -431,9 +436,23 @@ CREATE INDEX idx_pitches_pitcher        ON raw.pitches(pitcher);
 CREATE INDEX idx_pitches_batter         ON raw.pitches(batter);
 CREATE INDEX idx_pitches_game_date      ON raw.pitches(game_date);
 CREATE INDEX idx_pitches_venue          ON raw.pitches(venue_id);
-CREATE INDEX idx_pitches_pitch_type     ON raw.pitches(pitch_type);
+-- SIM-088: idx_pitches_pitch_type intentionally absent.
+-- pitch_type is stored for reference/audit only — the similarity engine uses
+-- GMM components in derived.pitcher_season_metrics, not the Statcast string.
+-- No hot path filters by pitch_type, so a single-column index added ~15 MB of
+-- write overhead per season for zero query benefit.  Re-add CONCURRENTLY for
+-- ad-hoc debugging if ever needed; (pitcher, pitch_type) compound stays.
 CREATE INDEX idx_pitches_events         ON raw.pitches(events) WHERE events IS NOT NULL;
 CREATE INDEX idx_pitches_pitcher_season ON raw.pitches(pitcher, game_date);
+-- SIM-089: Composite partial index for the player-profile computor's hot path
+-- (one query per pitcher/season filtered by data_quality_flag).  Without this,
+-- the planner picks idx_pitches_pitcher_season above and applies the
+-- data_quality_flag filter post-scan, which scans every pitch for the pitcher
+-- across all seasons.  With this index a 3,000-pitch pitcher's season fetch is
+-- < 50 ms.
+CREATE INDEX idx_pitches_pitcher_season_clean
+    ON raw.pitches(pitcher, season)
+    WHERE data_quality_flag = FALSE;
 CREATE INDEX idx_pitches_batter_season  ON raw.pitches(batter, game_date);
 CREATE INDEX idx_pitches_pitcher_type   ON raw.pitches(pitcher, pitch_type);
 CREATE INDEX idx_pitches_sb_attempts    ON raw.pitches(pitcher, fielder_2)
@@ -443,6 +462,13 @@ CREATE INDEX idx_pitches_subs           ON raw.pitches(game_pk)
 CREATE INDEX idx_pitches_batted_balls   ON raw.pitches(batter, pitcher, game_date) WHERE type = 'X';
 CREATE INDEX idx_pitches_quality_clean  ON raw.pitches(game_date) WHERE data_quality_flag = FALSE;
 CREATE INDEX idx_pitches_count_state    ON raw.pitches(balls, strikes, outs);
+-- SIM-085: Composite situation index for the situation-to-situation engine (SIM-070).
+-- Partial — flagged rows are excluded from the simulation pool anyway.
+-- Without this index, situation similarity queries fall back to a sequential scan
+-- over ~700K rows per season.
+CREATE INDEX idx_pitches_situation
+    ON raw.pitches(inning, outs, balls, strikes, on_1b, on_2b, on_3b)
+    WHERE data_quality_flag = FALSE;
 
 COMMENT ON TABLE  raw.pitches IS 'Direct Statcast ingestion target. Never modified after write. ~700K rows/season.';
 COMMENT ON COLUMN raw.pitches.pitch_type IS 'Statcast classification stored for reference/audit only. Similarity engine uses GMM components in derived.pitcher_season_metrics.';
@@ -552,7 +578,13 @@ CREATE TABLE IF NOT EXISTS raw.game_odds (
                         CHECK (line_type IN ('opening','current','closing','bet_placement')),
     market_type     VARCHAR(20)     NOT NULL DEFAULT 'moneyline'
                         CHECK (market_type IN ('moneyline','runline','total')),
-    is_sharp_book   BOOLEAN         NOT NULL DEFAULT FALSE
+    is_sharp_book   BOOLEAN         NOT NULL DEFAULT FALSE,
+    -- SIM-092: SHA-256 of the concatenated odds payload.  Application code
+    -- (_persist_odds) computes this and uses
+    --   ON CONFLICT (game_pk, source, odds_hash) DO NOTHING
+    -- so identical successive snapshots are no-ops.  Pre-SIM-092 rows have
+    -- NULL hashes; backfill is left to a future cleanup ticket.
+    odds_hash       VARCHAR(64)
 );
 
 CREATE INDEX IF NOT EXISTS idx_game_odds_game_pk
@@ -560,6 +592,12 @@ CREATE INDEX IF NOT EXISTS idx_game_odds_game_pk
 
 CREATE INDEX IF NOT EXISTS idx_game_odds_line_type
     ON raw.game_odds(game_pk, line_type);
+
+-- SIM-092: Partial unique index on hashed payload — only enforced on rows
+-- with a non-NULL hash so legacy NULL-hash rows do not violate it.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_game_odds_dedup
+    ON raw.game_odds(game_pk, source, odds_hash)
+    WHERE odds_hash IS NOT NULL;
 
 COMMENT ON TABLE raw.game_odds IS
     'Odds snapshots per game. source=mock until Phase 7 real provider integration.';
@@ -619,6 +657,41 @@ COMMENT ON TABLE raw.prop_odds IS
     'Player prop odds snapshots. Opening lines captured nightly when starter is announced (SIM-138). prop_stat CHECK constraint enforces 7 known markets (SIM-134).';
 
 -- =============================================================================
+-- RAW.ETL_ERRORS
+-- SIM-093: Audit trail for the ETL hard-error path.  Originally referenced
+-- by an etl_historical_loader.py docstring as the destination for skipped
+-- rows, but the table did not exist before SIM-093.
+--
+-- Loose-coupled by design: NO FK to raw.games so an error row survives
+-- when the game itself never landed (eg. FK prereq missing).
+--
+-- error_type='HARD'  → row was skipped entirely (validator rejected it)
+-- error_type='WARN'  → row inserted with data_quality_flag=TRUE, but the
+--                       reason set is captured here for full provenance.
+--                       Reserved for future use; current loader writes HARD only.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS raw.etl_errors (
+    id              BIGSERIAL       PRIMARY KEY,
+    game_pk         INTEGER,
+    at_bat_number   INTEGER,
+    pitch_number    INTEGER,
+    error_type      VARCHAR(10)     NOT NULL
+                        CHECK (error_type IN ('HARD','WARN')),
+    error_messages  TEXT[]          NOT NULL,
+    created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_etl_errors_game_pk
+    ON raw.etl_errors(game_pk, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_etl_errors_recent
+    ON raw.etl_errors(created_at DESC);
+
+COMMENT ON TABLE raw.etl_errors IS
+    'One row per pitch skipped by the ETL hard-error path. Audit trail for HistoricalDataLoader.reprocess_errored_games(). Loose-coupled (no FK to raw.games) so an error row survives even if the game itself never landed.';
+
+-- =============================================================================
 -- RAW.PIPELINE_RUN_LOG
 -- ETL/pipeline job run log referenced by SIM-138 for opening_line_games_captured.
 -- =============================================================================
@@ -661,11 +734,15 @@ CREATE TRIGGER trg_games_updated_at         BEFORE UPDATE ON raw.games         F
 CREATE TRIGGER trg_game_lineups_updated_at  BEFORE UPDATE ON raw.game_lineups  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER trg_lineup_state_updated_at  BEFORE UPDATE ON sim.lineup_state  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+-- SIM-087: release_speed lower bound is < 50 (impossible) so legitimate eephus
+-- pitches and slow curveballs (60–65 mph) are NOT flagged.  The ETL Python
+-- validator uses 60 as a softer warn-only floor; the DB trigger only flags
+-- the truly impossible.  Migration 0007 applies this change to live DBs.
 CREATE OR REPLACE FUNCTION raw.flag_pitch_quality()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
     IF (
-        (NEW.release_speed IS NOT NULL AND (NEW.release_speed > 102 OR NEW.release_speed < 60)) OR
+        (NEW.release_speed IS NOT NULL AND (NEW.release_speed > 102 OR NEW.release_speed < 50)) OR
         (NEW.launch_speed  IS NOT NULL AND NEW.launch_speed > 125) OR
         (NEW.break_vertical_induced IS NOT NULL AND
             (NEW.break_vertical_induced < -25 OR NEW.break_vertical_induced > 25))

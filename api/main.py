@@ -3,11 +3,12 @@ api/main.py
 ===========
 MLB Baseball Simulation Platform — FastAPI Application Entry Point
 
-Phase status: stub.  Full implementation in Phase 5 (SIM-Backend Developer tickets).
-This file exists so that:
-  - Dockerfile CMD (uvicorn api.main:app) resolves without ImportError
-  - CI docker-build job can run: python -c 'import api.main'
-  - make dev starts a live server with clear "coming in Phase 5" messaging
+Current wiring:
+  - Lifespan opens the asyncpg pool, the Redis client + cache, and
+    builds the PitcherSimilarityEngine (Backend Developer slice of
+    Phase 5; spec: docs/similarity_visualization_spec.md).
+  - Similarity Explorer router is registered and serves real engine
+    output against the live DuckDB profiles.
 
 Routers added here as phases complete:
   Phase 5: simulation runner, game state, managerial override
@@ -17,6 +18,7 @@ Routers added here as phases complete:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -24,6 +26,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
+from api.state import (
+    build_pitcher_engine,
+    make_pg_name_resolver,
+    open_pg_pool,
+    open_redis_cache,
+)
 
 log = logging.getLogger("api.main")
 
@@ -63,10 +72,14 @@ async def lifespan(app: FastAPI):
 
     On startup:
       - Validates environment variables (SIM-153)
-      - Will initialize DB pool, Redis, and live pipeline in Phase 5
+      - Opens the asyncpg Postgres pool
+      - Opens the aioredis client + Similarity payload cache
+      - Builds the PitcherSimilarityEngine (under asyncio.to_thread
+        so the event loop stays responsive during the multi-second
+        DuckDB load)
 
     On shutdown:
-      - Will cleanly close all connections in Phase 5
+      - Closes the Redis client and the Postgres pool in reverse order.
     """
     # Validate env at boot; fail fast on misconfiguration
     validate_environment()
@@ -77,12 +90,41 @@ async def lifespan(app: FastAPI):
     )
 
     # ----------------------------------------------------------------
+    # Similarity Explorer resources (v1: pitcher engine).
+    # Spec: docs/similarity_visualization_spec.md.
+    #
+    # The three attributes set on app.state are the contract consumed
+    # by api/routes/similarity.py:
+    #   - pitcher_engine          (built PitcherSimilarityEngine)
+    #   - player_name_resolver    (async: pitcher_ids -> {id: name})
+    #   - similarity_cache        (Redis-backed TTL cache; optional —
+    #                              route degrades gracefully if missing)
+    #
+    # Failures here are fatal — same fail-fast posture as
+    # validate_environment(). A misconfigured DuckDB path or
+    # unreachable Postgres should crash boot loudly rather than serve
+    # 5xxs at request time.
+    # ----------------------------------------------------------------
+    dsn = os.environ["BASEBALL_DB_DSN"]
+    redis_url = os.environ["REDIS_URL"]
+
+    log.info("Opening Postgres pool ...")
+    app.state.pg_pool = await open_pg_pool(dsn)
+    app.state.player_name_resolver = make_pg_name_resolver(app.state.pg_pool)
+
+    log.info("Opening Redis cache ...")
+    app.state.redis_client, app.state.similarity_cache = await open_redis_cache(redis_url)
+
+    log.info("Building pitcher similarity engine (this may take a few seconds) ...")
+    app.state.pitcher_engine = await asyncio.to_thread(build_pitcher_engine)
+
+    # ----------------------------------------------------------------
     # Phase 5: Uncomment to wire in the live ingestion pipeline
     # ----------------------------------------------------------------
     # from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
     # pipeline = LiveIngestionPipeline(
-    #     dsn=os.environ["BASEBALL_DB_DSN"],
-    #     redis_url=os.environ["REDIS_URL"],
+    #     dsn=dsn,
+    #     redis_url=redis_url,
     # )
     # await pipeline.start()
     # app.state.pipeline = pipeline
@@ -91,6 +133,13 @@ async def lifespan(app: FastAPI):
     yield
 
     log.info("MLB Simulation Platform shutting down.")
+
+    # Reverse order of acquisition for shutdown — engine has no
+    # explicit close, just drop the reference.
+    if hasattr(app.state, "redis_client"):
+        await app.state.redis_client.aclose()
+    if hasattr(app.state, "pg_pool"):
+        await app.state.pg_pool.close()
 
     # ----------------------------------------------------------------
     # Phase 5: Uncomment to cleanly stop the pipeline
@@ -134,6 +183,12 @@ def create_app() -> FastAPI:
     # ----------------------------------------------------------------
     # Routers — registered as phases complete
     # ----------------------------------------------------------------
+    # Similarity Score Explorer (v1: pitcher engine).
+    # Spec: docs/similarity_visualization_spec.md. The lifespan above
+    # attaches the engine, name resolver, and Redis cache to app.state.
+    from api.routes.similarity import router as similarity_router
+    app.include_router(similarity_router)
+
     # Phase 5:
     # from pipeline.live.live_ingestion_pipeline import ws_router, odds_router
     # app.include_router(ws_router)
@@ -150,9 +205,54 @@ def create_app() -> FastAPI:
     async def ready() -> JSONResponse:
         """
         Returns 200 when the application is ready to serve traffic.
-        Phase 5: will also check DB pool and Redis connectivity.
+        Confirms the Postgres pool, the Redis cache, and the pitcher
+        similarity engine are all attached and (for DB/Redis) live.
+
+        Returns 503 with a per-component status if any check fails. A
+        missing pitcher_engine is reported but does NOT cause /ready to
+        fail — the similarity route surfaces that via its own 503.
         """
-        return JSONResponse({"status": "ready"})
+        checks: dict[str, str] = {}
+        all_ok = True
+
+        # Postgres
+        pool = getattr(app.state, "pg_pool", None)
+        if pool is None:
+            checks["postgres"] = "not_initialized"
+            all_ok = False
+        else:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.fetchval("SELECT 1")
+                checks["postgres"] = "ok"
+            except Exception as exc:  # noqa: BLE001
+                checks["postgres"] = f"error: {type(exc).__name__}"
+                all_ok = False
+
+        # Redis
+        redis_client = getattr(app.state, "redis_client", None)
+        if redis_client is None:
+            checks["redis"] = "not_initialized"
+            all_ok = False
+        else:
+            try:
+                await redis_client.ping()
+                checks["redis"] = "ok"
+            except Exception as exc:  # noqa: BLE001
+                checks["redis"] = f"error: {type(exc).__name__}"
+                all_ok = False
+
+        # Pitcher engine (informational only — not a readiness blocker)
+        checks["pitcher_engine"] = (
+            "ok" if getattr(app.state, "pitcher_engine", None) is not None
+            else "not_initialized"
+        )
+
+        status_code = 200 if all_ok else 503
+        return JSONResponse(
+            {"status": "ready" if all_ok else "degraded", "checks": checks},
+            status_code=status_code,
+        )
 
     @app.get("/", tags=["ops"], include_in_schema=False)
     async def root() -> dict:

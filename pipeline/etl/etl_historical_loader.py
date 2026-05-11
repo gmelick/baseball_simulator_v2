@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -483,10 +484,14 @@ def _validate_row(row: dict[str, Any]) -> ValidationResult:
                 )
 
     # Physics plausibility (mirrors DB trigger thresholds — caught pre-insert
-    # so the ETL log shows them explicitly rather than relying on trigger only)
+    # so the ETL log shows them explicitly rather than relying on trigger only).
+    # SIM-087: Validator floor lowered from 70 → 60 mph so legitimate slow
+    # curveballs (60–65 mph) are not flagged as bad data.  The DB trigger uses
+    # 50 mph as its impossible-floor — if you change the validator floor here,
+    # also update raw.flag_pitch_quality() in 01_postgres_schema.sql.
     rs = row.get("release_speed")
-    if rs is not None and not (70 <= rs <= 102):
-        result.warnings.append(f"release_speed={rs} outside 70–102 mph range")
+    if rs is not None and not (60 <= rs <= 102):
+        result.warnings.append(f"release_speed={rs} outside 60–102 mph range")
 
     ls = row.get("launch_speed")
     if ls is not None and ls > 125:
@@ -1119,11 +1124,22 @@ class HistoricalDataLoader:
 
     def __init__(
         self,
-        dsn: str,
+        dsn: str | None = None,
         write_csv: bool = False,
         csv_output_dir: str = ".",
     ) -> None:
-        self.dsn = dsn
+        # SIM-153: dsn is now optional — falls back to BASEBALL_DB_DSN env var.
+        # Pass an explicit DSN to override (test fixtures, ad-hoc backfills).
+        # Raises a clear error if neither is set, rather than letting psycopg2
+        # surface a confusing "could not connect" error mid-run.
+        resolved = dsn or os.environ.get("BASEBALL_DB_DSN")
+        if not resolved:
+            raise RuntimeError(
+                "HistoricalDataLoader: no DSN provided and BASEBALL_DB_DSN "
+                "environment variable is not set.  Pass dsn=… or set "
+                "BASEBALL_DB_DSN per .env.example."
+            )
+        self.dsn = resolved
         self.write_csv = write_csv
         self.csv_output_dir = csv_output_dir
 
@@ -1774,9 +1790,13 @@ class HistoricalDataLoader:
         """
         Validates, builds, and batch-inserts all pitch rows for a game.
         Returns count summary.
+
+        SIM-093: Hard-error rows are now persisted to raw.etl_errors as well
+        as logged.  Without this, skipped rows had no audit trail and there
+        was no way to find which pitches a re-ingest would need to recover.
         """
         to_insert:    list[dict[str, Any]] = []
-        hard_errors:  list[tuple[int, list[str]]] = []   # (pitch_number, errors)
+        hard_errors:  list[tuple[int, int, list[str]]] = []   # (at_bat, pitch, errors)
         flagged_count = 0
 
         for raw_row in raw_rows:
@@ -1784,7 +1804,9 @@ class HistoricalDataLoader:
             vr  = _validate_row(row)
 
             if not vr.is_valid:
-                hard_errors.append((row.get("pitch_number"), vr.hard_errors))
+                hard_errors.append(
+                    (row.get("at_bat_number"), row.get("pitch_number"), vr.hard_errors)
+                )
                 continue
 
             if vr.warnings:
@@ -1802,8 +1824,18 @@ class HistoricalDataLoader:
                 "  game %s: %d rows skipped due to hard validation errors:",
                 game_pk, len(hard_errors)
             )
-            for pitch_num, errs in hard_errors:
-                log.error("    pitch_number=%s: %s", pitch_num, "; ".join(errs))
+            for ab, pitch_num, errs in hard_errors:
+                log.error("    ab=%s pitch_number=%s: %s",
+                          ab, pitch_num, "; ".join(errs))
+            # SIM-093: Persist the audit trail.  Best-effort — never let a
+            # logging failure prevent the rest of the game from loading.
+            try:
+                self._log_etl_errors(game_pk, hard_errors)
+            except Exception as exc:                       # noqa: BLE001
+                log.error(
+                    "  game %s: failed to write etl_errors audit rows: %s",
+                    game_pk, exc,
+                )
 
         inserted = self._batch_insert(to_insert)
         self._log_freshness(game_pk, to_insert)
@@ -1813,6 +1845,56 @@ class HistoricalDataLoader:
             "skipped":  len(hard_errors),
             "flagged":  flagged_count,
         }
+
+    def _log_etl_errors(
+        self,
+        game_pk: int,
+        errors: list[tuple[int | None, int | None, list[str]]],
+    ) -> None:
+        """
+        SIM-093: Bulk-insert one raw.etl_errors row per skipped pitch.
+
+        Schema lives in db/schemas/01_postgres_schema.sql and is created via
+        Alembic migration 0011.  This is a fail-soft path — caller wraps in
+        try/except so an etl_errors write failure never aborts the ingest.
+        """
+        if not errors:
+            return
+
+        sql = """
+            INSERT INTO raw.etl_errors
+                (game_pk, at_bat_number, pitch_number, error_type, error_messages)
+            VALUES (%s, %s, %s, 'HARD', %s)
+        """
+        rows = [
+            (game_pk, ab, pitch_num, list(msgs))
+            for (ab, pitch_num, msgs) in errors
+        ]
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                psycopg2.extras.execute_batch(cur, sql, rows)
+            conn.commit()
+
+    def reprocess_errored_games(self, since: date) -> list[int]:
+        """
+        SIM-093: Return distinct game_pks that have raw.etl_errors rows
+        on or after ``since``.  Caller iterates the list and reruns
+        load_game(game_pk, season) for each — typical use is "after a
+        validator bug-fix, find all games that were affected and re-ingest".
+
+        Returns an empty list if no errors are recorded in the window.
+        """
+        sql = """
+            SELECT DISTINCT game_pk
+            FROM   raw.etl_errors
+            WHERE  created_at >= %s
+              AND  game_pk IS NOT NULL
+            ORDER BY game_pk
+        """
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (since,))
+                return [r[0] for r in cur.fetchall()]
 
     def _batch_insert(self, rows: list[dict[str, Any]]) -> int:
         """Inserts rows in BATCH_SIZE chunks.  Returns total rows inserted."""

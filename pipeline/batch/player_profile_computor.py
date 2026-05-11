@@ -879,7 +879,18 @@ class PlayerProfileComputor:
     # ------------------------------------------------------------------
 
     def _delete_seasons(self, seasons: list[int]) -> None:
-        """Remove existing rows for the given seasons from all derived + sim tables."""
+        """Remove existing rows for the given seasons from all derived + sim tables.
+
+        SIM-091: Per-play detail tables (outfield/infield/dp) are explicitly
+        enumerated below.  When you add a new derived.* table with a `season`
+        column, also add it here OR add it to _EXCLUDED_FROM_DELETE_SEASONS in
+        tests/unit/test_data_engineer_sim085_to_091.py with a comment — the
+        SIM-091 regression test enforces this.
+
+        Intentionally omitted:
+          - derived.run_expectancy_matrix — keyed by season_range, not season.
+          - sim.* pools — each has its own DELETE in its own build method.
+        """
         season_list = ", ".join(str(s) for s in seasons)
         tables = [
             # FK-ordered: children before parents
@@ -891,7 +902,7 @@ class PlayerProfileComputor:
             "derived.catcher_season_metrics",
             "derived.manager_season_metrics",
             "derived.park_factors",
-            # Per-play detail tables
+            # Per-play detail tables (SIM-091 explicit enumeration)
             "derived.outfield_play_detail",
             "derived.infield_play_detail",
             "derived.dp_play_detail",
@@ -2145,7 +2156,12 @@ class PlayerProfileComputor:
     # ------------------------------------------------------------------
 
     def _compute_catcher_throwing(self, seasons: list[int]) -> None:
-        """Compute SB prevention metrics broken down by base attempted."""
+        """Compute SB prevention metrics broken down by base attempted.
+
+        Includes the SIM-073 PA-level deterrence rate
+        (steal_attempt_rate_against) used by the catcher similarity engine v2
+        as a Deterrence sub-score (SIM-072).
+        """
         log.info("Computing catcher throwing metrics …")
         season_list = ", ".join(str(s) for s in seasons)
 
@@ -2163,45 +2179,106 @@ class PlayerProfileComputor:
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
                   AND (sb_attempt_2b = TRUE OR sb_attempt_3b = TRUE OR sb_attempt_home = TRUE)
+            ),
+            sb_aggregated AS (
+                SELECT
+                    catcher_id,
+                    season,
+                    COUNT(*) AS sb_attempts_faced,
+
+                    -- Overall CS
+                    SUM(CASE WHEN (sb_attempt_2b AND NOT sb_success_2b)
+                               OR (sb_attempt_3b AND NOT sb_success_3b)
+                               OR (sb_attempt_home AND NOT sb_success_home)
+                             THEN 1 ELSE 0 END) AS cs_total,
+
+                    -- 2B attempts
+                    SUM(CASE WHEN sb_attempt_2b THEN 1 ELSE 0 END) AS sb_attempts_2b,
+                    SUM(CASE WHEN sb_attempt_2b AND NOT sb_success_2b THEN 1 ELSE 0 END)
+                        * 1.0 / NULLIF(SUM(CASE WHEN sb_attempt_2b THEN 1 ELSE 0 END), 0)
+                        AS cs_rate_2b,
+
+                    -- 3B attempts
+                    SUM(CASE WHEN sb_attempt_3b THEN 1 ELSE 0 END) AS sb_attempts_3b,
+                    SUM(CASE WHEN sb_attempt_3b AND NOT sb_success_3b THEN 1 ELSE 0 END)
+                        * 1.0 / NULLIF(SUM(CASE WHEN sb_attempt_3b THEN 1 ELSE 0 END), 0)
+                        AS cs_rate_3b,
+
+                    -- Overall rates
+                    SUM(CASE WHEN (sb_attempt_2b AND NOT sb_success_2b)
+                               OR (sb_attempt_3b AND NOT sb_success_3b)
+                               OR (sb_attempt_home AND NOT sb_success_home)
+                             THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0) AS cs_rate,
+
+                    1.0 - (SUM(CASE WHEN (sb_attempt_2b AND NOT sb_success_2b)
+                                      OR (sb_attempt_3b AND NOT sb_success_3b)
+                                      OR (sb_attempt_home AND NOT sb_success_home)
+                                    THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0))
+                        AS sb_allowed_rate,
+
+                    -- SIM-073 numerator: total steal *attempts* against this catcher
+                    -- across 2B + 3B (home steal attempts excluded — they're a
+                    -- different baseball action, not a catcher-arm decision).
+                    SUM(CASE WHEN sb_attempt_2b OR sb_attempt_3b THEN 1 ELSE 0 END)
+                        AS steal_attempts_2b_or_3b
+                FROM sb_events
+                GROUP BY catcher_id, season
+            ),
+            -- SIM-073: PA-level opportunity counter.  One row per
+            -- (catcher, game, at-bat) regardless of pitch count, so a
+            -- 7-pitch PA contributes exactly 1 opportunity.
+            catcher_pa_state AS (
+                SELECT DISTINCT
+                    fielder_2 AS catcher_id,
+                    season,
+                    game_pk,
+                    at_bat_number,
+                    on_1b,
+                    on_2b,
+                    on_3b
+                FROM pg.raw.pitches
+                WHERE season IN ({season_list})
+                  AND fielder_2 IS NOT NULL
+            ),
+            catcher_opportunities AS (
+                SELECT
+                    catcher_id,
+                    season,
+                    -- 1B opportunity: runner on 1B with 2B empty.  Excludes
+                    -- forced-advance scenarios (2B occupied) where the runner
+                    -- has no stealing lane.
+                    SUM(CASE WHEN on_1b IS NOT NULL AND on_2b IS NULL
+                             THEN 1 ELSE 0 END) AS opp_1b_pa,
+                    -- 2B opportunity: runner on 2B with 3B empty.
+                    SUM(CASE WHEN on_2b IS NOT NULL AND on_3b IS NULL
+                             THEN 1 ELSE 0 END) AS opp_2b_pa
+                FROM catcher_pa_state
+                GROUP BY catcher_id, season
             )
             SELECT
-                catcher_id,
-                season,
+                COALESCE(sa.catcher_id, co.catcher_id) AS catcher_id,
+                COALESCE(sa.season, co.season)         AS season,
+                COALESCE(sa.sb_attempts_faced, 0)      AS sb_attempts_faced,
+                COALESCE(sa.cs_total, 0)               AS cs_total,
+                sa.sb_attempts_2b,
+                sa.cs_rate_2b,
+                sa.sb_attempts_3b,
+                sa.cs_rate_3b,
+                sa.cs_rate,
+                sa.sb_allowed_rate,
 
-                COUNT(*) AS sb_attempts_faced,
-
-                -- Overall
-                SUM(CASE WHEN (sb_attempt_2b AND NOT sb_success_2b)
-                           OR (sb_attempt_3b AND NOT sb_success_3b)
-                           OR (sb_attempt_home AND NOT sb_success_home)
-                         THEN 1 ELSE 0 END) AS cs_total,
-
-                -- 2B attempts
-                SUM(CASE WHEN sb_attempt_2b THEN 1 ELSE 0 END) AS sb_attempts_2b,
-                SUM(CASE WHEN sb_attempt_2b AND NOT sb_success_2b THEN 1 ELSE 0 END)
-                    * 1.0 / NULLIF(SUM(CASE WHEN sb_attempt_2b THEN 1 ELSE 0 END), 0)
-                    AS cs_rate_2b,
-
-                -- 3B attempts
-                SUM(CASE WHEN sb_attempt_3b THEN 1 ELSE 0 END) AS sb_attempts_3b,
-                SUM(CASE WHEN sb_attempt_3b AND NOT sb_success_3b THEN 1 ELSE 0 END)
-                    * 1.0 / NULLIF(SUM(CASE WHEN sb_attempt_3b THEN 1 ELSE 0 END), 0)
-                    AS cs_rate_3b,
-
-                -- Overall rates
-                SUM(CASE WHEN (sb_attempt_2b AND NOT sb_success_2b)
-                           OR (sb_attempt_3b AND NOT sb_success_3b)
-                           OR (sb_attempt_home AND NOT sb_success_home)
-                         THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0) AS cs_rate,
-
-                1.0 - (SUM(CASE WHEN (sb_attempt_2b AND NOT sb_success_2b)
-                                  OR (sb_attempt_3b AND NOT sb_success_3b)
-                                  OR (sb_attempt_home AND NOT sb_success_home)
-                                THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0))
-                    AS sb_allowed_rate
-
-            FROM sb_events
-            GROUP BY catcher_id, season
+                -- SIM-073 deterrence rate
+                COALESCE(co.opp_1b_pa, 0) + COALESCE(co.opp_2b_pa, 0)
+                    AS sb_opportunities_pa,
+                CASE WHEN COALESCE(co.opp_1b_pa, 0) + COALESCE(co.opp_2b_pa, 0) >= 100
+                     THEN COALESCE(sa.steal_attempts_2b_or_3b, 0) * 1.0
+                          / NULLIF(COALESCE(co.opp_1b_pa, 0) + COALESCE(co.opp_2b_pa, 0), 0)
+                     ELSE NULL
+                END AS steal_attempt_rate_against
+            FROM sb_aggregated sa
+            FULL OUTER JOIN catcher_opportunities co
+                ON sa.catcher_id = co.catcher_id
+               AND sa.season     = co.season
         """)
 
         log.info("  Catcher throwing metrics computed.")
@@ -3263,6 +3340,11 @@ class PlayerProfileComputor:
                 CAST(t.sb_attempts_3b AS INTEGER),
                 t.cs_rate_3b,
 
+                -- SIM-073 deterrence rate (PA-level steal-attempt rate).
+                -- Min-sample guard already enforced inside _tmp_catcher_throwing
+                -- (NULL when sb_opportunities_pa < 100).
+                t.steal_attempt_rate_against,
+
                 -- Pickoffs (not yet computed — placeholder)
                 NULL::INTEGER AS pickoff_attempts,
                 NULL::INTEGER AS pickoff_successes,
@@ -3675,71 +3757,12 @@ class LeagueAverageProfiles:
                         ) AS profile_json,
                         CURRENT_TIMESTAMP AS updated_at
                     FROM derived.fielder_season_metrics
-                    WHERE position = '{position}'
-                      AND season IN ({season_list})
+                    WHERE season IN ({season_list})
+                      AND position = '{position}'
                       AND below_minimum_sample = FALSE
                     GROUP BY season
                 """)
 
-            # Baserunner average
-            conn.execute(f"""
-                INSERT OR REPLACE INTO derived.league_averages
-                SELECT
-                    'baserunner' AS entity_type, season,
-                    JSON_OBJECT(
-                        'sprint_speed',                AVG(sprint_speed),
-                        'extra_base_attempt_rate',     AVG(extra_base_attempt_rate),
-                        'extra_base_success_rate',     AVG(extra_base_success_rate),
-                        'first_to_third_attempt_rate', AVG(first_to_third_attempt_rate),
-                        'first_to_third_success_rate', AVG(first_to_third_success_rate),
-                        'second_to_home_attempt_rate', AVG(second_to_home_attempt_rate),
-                        'second_to_home_success_rate', AVG(second_to_home_success_rate),
-                        'first_to_home_attempt_rate',  AVG(first_to_home_attempt_rate),
-                        'first_to_home_success_rate',  AVG(first_to_home_success_rate),
-                        'stop_rate',                   AVG(stop_rate),
-                        'sb_success_rate',             AVG(sb_success_rate)
-                    ) AS profile_json,
-                    CURRENT_TIMESTAMP AS updated_at
-                FROM derived.baserunner_season_metrics
-                WHERE season IN ({season_list})
-                  AND below_minimum_sample = FALSE
-                GROUP BY season
-            """)
-
-            # Catcher average
-            conn.execute(f"""
-                INSERT OR REPLACE INTO derived.league_averages
-                SELECT
-                    'catcher' AS entity_type, season,
-                    JSON_OBJECT(
-                        'pop_time_mean',  AVG(pop_time_mean),
-                        'pop_time_std',   AVG(pop_time_std),
-                        'cs_rate',        AVG(cs_rate),
-                        'sb_allowed_rate',    AVG(sb_allowed_rate),
-                        'framing_runs',      AVG(framing_runs),
-                        'blocking_runs',     AVG(blocking_runs)
-                    ) AS profile_json,
-                    CURRENT_TIMESTAMP AS updated_at
-                FROM derived.catcher_season_metrics
-                WHERE season IN ({season_list})
-                  AND below_minimum_sample = FALSE
-                GROUP BY season
-            """)
-
-            log.info("League-average profiles computed for seasons %s.", seasons)
+            log.info("  League averages done.")
         finally:
             conn.close()
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-if __name__ == "__main__":
-    os.chdir('../..')
-    computor = PlayerProfileComputor(
-        pg_dsn='postgresql://localhost/baseball_simulator?user=postgres&password=baseball',
-        duckdb_path='db/schemas/baseball_simulator.duckdb',
-    )
-    computor.run(seasons=[2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025], full_rebuild=True)
-    # if not args.skip_league_averages:
-    LeagueAverageProfiles('db/schemas/baseball_simulator.duckdb').compute([2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025])

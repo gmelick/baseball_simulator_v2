@@ -62,19 +62,28 @@ import asyncio
 import json
 import logging
 import math
+import os
 import random
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable, Coroutine
+
+# SIM-106: Type alias for the simulation callback. It MUST be an async
+# function — passing a sync function would either raise TypeError when the
+# pipeline awaits it, or silently no-op if the coroutine isn't awaited.
+# The runtime check in LiveIngestionPipeline.__init__ catches misuse at
+# construction time so the failure surfaces immediately during Phase 5
+# wiring rather than during the first re-sim signal in production.
+SimulationCallback = Callable[[int, dict], Coroutine[Any, Any, None]]
 
 import aiohttp
 import asyncpg
 import redis.asyncio as aioredis
 import websockets
 import websockets.exceptions
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
 from fastapi.routing import APIRouter
 
 # ---------------------------------------------------------------------------
@@ -102,6 +111,12 @@ WS_RECONNECT_MAX  = 60.0    # cap on WS reconnect backoff
 HTTP_TIMEOUT_S    = 10      # aiohttp request timeout
 REDIS_TTL_LIVE_S  = 60      # cache TTL for live game states
 REDIS_TTL_DONE_S  = 3600    # cache TTL for completed game states
+
+# SIM-104: per-game cooldown applied to the manual /resimulate endpoint.
+# 10 seconds is generous enough to avoid frustrating legitimate users
+# (sample one resim, see results, sample again) but tight enough to keep
+# spam from queueing up dozens of 100-iteration sim runs in Phase 5.
+RESIM_COOLDOWN_S = 10
 
 # Re-simulation is triggered automatically at the end of every plate appearance.
 # A manual endpoint also allows the frontend to request a re-sim mid at-bat.
@@ -376,10 +391,30 @@ class GameStateBuilder:
       on_1b, on_2b, on_3b, current_batter_id, current_pitcher_id,
       home_lineup, away_lineup, home_bullpen, away_bullpen,
       home_bench, away_bench, play_history
+
+    SIM-101 — Per-game caching:
+      One builder is now stored per ``game_pk`` on the pipeline
+      (LiveIngestionPipeline._builders).  The builder caches:
+
+        * ``_history``          — running list of at-bat-level summaries
+        * ``_last_at_bat_index``— the highest atBatIndex parsed so far
+        * ``_game_date``        — the game's officialDate (for replay-safe
+          days_rest, see SIM-100)
+
+      On each refresh, ``_parse_play_history()`` only walks plays whose
+      ``atBatIndex > _last_at_bat_index``, then appends to ``_history``.
+      Pre-SIM-101 every refresh rebuilt the entire history from scratch —
+      O(N) parse + JSON serialize on every WS signal.  By the 9th inning
+      with ~80 plays, that fired 20+ times per inning.
     """
 
     def __init__(self, db_pool: asyncpg.Pool) -> None:
         self._db = db_pool
+        # SIM-101: per-game caches.  Reset implicitly each time a fresh
+        # builder is constructed (one per game_pk).
+        self._history: list[dict] = []
+        self._last_at_bat_index: int = -1   # -1 = nothing seen yet
+        self._game_date: date | None = None
 
     async def build(self, feed: dict[str, Any]) -> dict[str, Any]:
         """
@@ -465,6 +500,11 @@ class GameStateBuilder:
         )
 
         # ---- Play history (at-bat level summary) ---------------------------
+        # SIM-101: cache game_date on first refresh.
+        if self._game_date is None:
+            self._game_date = _game_date
+        # SIM-101: incremental parse — only walk plays beyond what we've
+        # already processed.  Returns the cached running history.
         play_history = self._parse_play_history(live_data["plays"].get("allPlays", []))
 
         # ---- Linescore snapshot (stored for frontend convenience) ----------
@@ -615,10 +655,14 @@ class GameStateBuilder:
     async def _batch_days_rest(
         self,
         pitcher_ids: list[int],
-        current_game_pk: int,
+        current_game_pk: int | None = None,
         *,
+        game_pk: int | None = None,
         as_of_date: date | None = None,
     ) -> dict[int, int | None]:
+        # ``game_pk`` accepted as alias for legacy callers (tests + SIM-100).
+        if current_game_pk is None:
+            current_game_pk = game_pk
         """
         SIM-100: Batch replacement for the old per-pitcher ``_get_days_rest()``.
 
@@ -672,58 +716,137 @@ class GameStateBuilder:
     def _infer_role(pitching_stats: dict, game_stats: dict) -> str:
         """
         Best-effort role inference from in-game stats.
-        Proper role taxonomy comes from derived.pitcher_season_metrics in Phase 2.
+
+        SIM-102: Adds an Opener bucket between SP and MRP.  Pre-SIM-102 logic
+        only used IP, so a pitcher who threw 2.0 IP and faced 9 batters was
+        labelled MRP — exactly the misclassification that breaks the Phase 4
+        manager engine, which then treats the opener as a middle reliever
+        available for high-leverage re-use.
+
+        Decision order (most specific → least):
+          1. SP      — IP ≥ 4.0   (full starter outing)
+          2. Opener  — IP < 4.0 AND BF ≥ 9   (deliberate first-inning role)
+          3. MRP     — IP ≥ 1.0   (multi-inning relief)
+          4. RP      — otherwise  (one-inning specialist)
+
+        Temporary heuristic until SIM-057 lands a proper season-level
+        opener_rate column on derived.pitcher_season_metrics.
         """
         ip = pitching_stats.get("inningsPitched", "0")
         try:
-            ip_float = float(ip.replace(".1", ".33").replace(".2", ".67"))
+            ip_float = float(str(ip).replace(".1", ".33").replace(".2", ".67"))
         except (ValueError, AttributeError):
             ip_float = 0.0
+
+        # batters_faced lives on game_stats.pitching.battersFaced for live feeds;
+        # default to 0 so missing data degrades to the previous IP-only behavior.
+        bf = 0
+        try:
+            bf = int(pitching_stats.get("battersFaced", 0))
+        except (TypeError, ValueError):
+            bf = 0
+
         if ip_float >= 4.0:
             return "SP"
+        if ip_float < 4.0 and bf >= 9:
+            return "Opener"
         if ip_float >= 1.0:
             return "MRP"
         return "RP"
 
-    @staticmethod
-    def _parse_play_history(all_plays: list) -> list[dict]:
+    def _parse_play_history(self, all_plays: list) -> list[dict]:
         """
         Converts allPlays into a lightweight at-bat-level log for the frontend
         play-by-play panel and for simulation replay.
+
+        SIM-101 — Incremental parse:
+          Pre-SIM-101 this was a static method that walked every play in
+          ``all_plays`` on every WS signal.  By the 9th inning of a 10-inning
+          game with ~90 plays, this fired 20+ times per inning (one per WS
+          message), each time re-parsing every play and re-serializing the
+          full history into JSONB for the upsert.
+
+          Now we cache a per-builder history list and only walk plays whose
+          ``about.atBatIndex`` is strictly greater than the highest index
+          we've already processed.  The terminal at-bat (currentPlay) is
+          re-parsed each refresh as long as it hasn't completed (its
+          atBatIndex equals _last_at_bat_index until isComplete flips it
+          forward), so mid-PA pitch-by-pitch updates still surface in the
+          history without duplication.
         """
-        history: list[dict] = []
+        if not all_plays:
+            return list(self._history)
+
+        # The currentPlay (last in allPlays) may still be in-flight; replay
+        # it every refresh until its atBatIndex advances past the cached
+        # last-processed index.  This means: while atBatIndex == cache, we
+        # update the LAST entry in self._history with the latest pitch
+        # detail; once atBatIndex advances, we append the new at-bat.
+        new_appended = 0
+        replaced_current = False
+
         for play in all_plays:
-            about  = play.get("about", {})
-            result = play.get("result", {})
-            matchup = play.get("matchup", {})
-            pitches = [
-                {
-                    "pitch_number":  e.get("pitchNumber"),
-                    "pitch_type":    e.get("details", {}).get("type", {}).get("code"),
-                    "pitch_name":    e.get("details", {}).get("type", {}).get("description"),
-                    "description":   e.get("details", {}).get("description"),
-                    "speed":         e.get("pitchData", {}).get("startSpeed"),
-                    "balls":         e.get("count", {}).get("balls"),
-                    "strikes":       e.get("count", {}).get("strikes"),
-                    "outs":          e.get("count", {}).get("outs"),
-                }
-                for e in play.get("playEvents", [])
-                if e.get("isPitch")
-            ]
-            history.append({
-                "at_bat_number": about.get("atBatIndex", 0) + 1,
-                "inning":        about.get("inning"),
-                "half":          about.get("halfInning", "").capitalize(),
-                "batter_id":     matchup.get("batter", {}).get("id"),
-                "batter_name":   matchup.get("batter", {}).get("fullName"),
-                "pitcher_id":    matchup.get("pitcher", {}).get("id"),
-                "pitcher_name":  matchup.get("pitcher", {}).get("fullName"),
-                "event":         result.get("eventType"),
-                "description":   result.get("description"),
-                "rbi":           result.get("rbi", 0),
-                "pitches":       pitches,
-            })
-        return history
+            about_idx = play.get("about", {}).get("atBatIndex")
+            if about_idx is None:
+                continue
+
+            entry = self._build_history_entry(play)
+
+            if about_idx > self._last_at_bat_index:
+                # Brand-new at-bat — append.
+                self._history.append(entry)
+                self._last_at_bat_index = about_idx
+                new_appended += 1
+            elif about_idx == self._last_at_bat_index and self._history:
+                # Same at-bat as last refresh — refresh the in-flight entry's
+                # pitch list / description / event in case the PA updated.
+                self._history[-1] = entry
+                replaced_current = True
+            # about_idx < cache: already permanently captured — skip.
+
+        if new_appended:
+            log.debug(
+                "SIM-101: parsed %d new plays (cache had %d); replaced_current=%s",
+                new_appended, len(self._history) - new_appended, replaced_current,
+            )
+
+        return list(self._history)
+
+    @staticmethod
+    def _build_history_entry(play: dict) -> dict:
+        """SIM-101: extracted from the old parser so both the incremental
+        path and any consumer that wants to reformat a single play stay in
+        sync."""
+        about   = play.get("about", {})
+        result  = play.get("result", {})
+        matchup = play.get("matchup", {})
+        pitches = [
+            {
+                "pitch_number":  e.get("pitchNumber"),
+                "pitch_type":    e.get("details", {}).get("type", {}).get("code"),
+                "pitch_name":    e.get("details", {}).get("type", {}).get("description"),
+                "description":   e.get("details", {}).get("description"),
+                "speed":         e.get("pitchData", {}).get("startSpeed"),
+                "balls":         e.get("count", {}).get("balls"),
+                "strikes":       e.get("count", {}).get("strikes"),
+                "outs":          e.get("count", {}).get("outs"),
+            }
+            for e in play.get("playEvents", [])
+            if e.get("isPitch")
+        ]
+        return {
+            "at_bat_number": about.get("atBatIndex", 0) + 1,
+            "inning":        about.get("inning"),
+            "half":          about.get("halfInning", "").capitalize(),
+            "batter_id":     matchup.get("batter", {}).get("id"),
+            "batter_name":   matchup.get("batter", {}).get("fullName"),
+            "pitcher_id":    matchup.get("pitcher", {}).get("id"),
+            "pitcher_name":  matchup.get("pitcher", {}).get("fullName"),
+            "event":         result.get("eventType"),
+            "description":   result.get("description"),
+            "rbi":           result.get("rbi", 0),
+            "pitches":       pitches,
+        }
 
     @staticmethod
     def _parse_linescore(linescore: dict) -> dict:
@@ -845,19 +968,31 @@ class ConnectionManager:
                  game_pk, len(subs))
 
     async def broadcast(self, game_pk: int, payload: dict) -> None:
-        """Send a JSON payload to all clients watching this game."""
-        subs = self._subscriptions.get(game_pk, set())
-        if not subs:
+        """Send a JSON payload to all clients watching this game.
+
+        SIM-103: Iterate over a SHALLOW COPY of the subscription set.
+        ``await ws.send_text()`` yields control, so a concurrent connect()
+        or disconnect() on the same game_pk would mutate the original set
+        mid-loop and raise ``RuntimeError: Set changed size during iteration``.
+        Copy is O(N); the receive set rarely exceeds a few dozen connections.
+        Dead-connection cleanup still applies to the live underlying set.
+        """
+        live_subs = self._subscriptions.get(game_pk, set())
+        if not live_subs:
             return
+        subs_snapshot = set(live_subs)   # SIM-103: iteration-safe snapshot
         dead: set[WebSocket] = set()
         message = json.dumps(payload)
-        for ws in subs:
+        for ws in subs_snapshot:
             try:
                 await ws.send_text(message)
             except Exception:
                 dead.add(ws)
+        # Apply cleanup to the live set (which may have changed during the
+        # broadcast).  discard() is idempotent and safe even if a disconnect
+        # already removed the ws.
         for ws in dead:
-            subs.discard(ws)
+            live_subs.discard(ws)
 
     def subscriber_count(self, game_pk: int) -> int:
         return len(self._subscriptions.get(game_pk, set()))
@@ -885,9 +1020,9 @@ class LiveIngestionPipeline:
 
     def __init__(
         self,
-        dsn:       str,
-        redis_url: str,
-        simulation_callback: callable | None = None,
+        dsn:       str | None = None,
+        redis_url: str | None = None,
+        simulation_callback: SimulationCallback | None = None,
     ) -> None:
         """
         Parameters
@@ -897,13 +1032,41 @@ class LiveIngestionPipeline:
         redis_url
             Redis connection URL (e.g. "redis://localhost:6379").
         simulation_callback
-            Optional async callback(game_pk: int, game_state: dict) -> None
+            Optional ``async def callback(game_pk: int, game_state: dict) -> None``
             called when re-simulation should be triggered (Phase 5 integration
             point). If None, a log message is emitted instead.
+
+        SIM-106: simulation_callback MUST be an async function.  Passing a
+        plain sync function would either raise ``TypeError`` when the pipeline
+        awaits it (best case) or silently never run if the returned value
+        isn't awaited.  Both modes are hard to diagnose, so we check at
+        __init__ time and raise immediately with a clear message.
         """
-        self._dsn    = dsn
-        self._redis_url = redis_url
-        self._sim_cb = simulation_callback
+        # SIM-106 runtime guard — fail fast on misuse.
+        if simulation_callback is not None and not asyncio.iscoroutinefunction(simulation_callback):
+            raise TypeError(
+                "LiveIngestionPipeline.simulation_callback must be an async "
+                "function (defined with `async def`).  Got "
+                f"{type(simulation_callback).__name__}={simulation_callback!r}.  "
+                "Phase 5 wiring tip: wrap a sync runner as `async def runner(game_pk, "
+                "state): result = await asyncio.to_thread(sync_runner, game_pk, state); ...`"
+            )
+
+        # SIM-153: dsn / redis_url default to env vars when omitted.
+        # Tests pass explicit values; production uses .env / docker-compose env.
+        self._dsn       = dsn       or os.environ.get("BASEBALL_DB_DSN")
+        self._redis_url = redis_url or os.environ.get("REDIS_URL")
+        if not self._dsn:
+            raise RuntimeError(
+                "LiveIngestionPipeline: no DSN provided and BASEBALL_DB_DSN env "
+                "var is not set.  Pass dsn=… or copy .env.example to .env."
+            )
+        if not self._redis_url:
+            raise RuntimeError(
+                "LiveIngestionPipeline: no Redis URL provided and REDIS_URL env "
+                "var is not set.  Pass redis_url=… or copy .env.example to .env."
+            )
+        self._sim_cb: SimulationCallback | None = simulation_callback
 
         self._db:    asyncpg.Pool | None = None
         self._redis: aioredis.Redis | None = None
@@ -918,6 +1081,16 @@ class LiveIngestionPipeline:
         # messages arrive before the lock clears (e.g. a substitution event
         # immediately after the final pitch of a PA).
         self._last_resim_at_bat: dict[int, int] = {}
+        # SIM-105: game_pks of games that have transitioned to Final.
+        # _sync_live_games() consults this set to short-circuit redundant
+        # _upsert_game_record() calls for the rest of the day's polling.
+        # Pre-populated on pipeline start from raw.games to survive restarts
+        # without an upsert storm.
+        self._completed_games: set[int] = set()
+        # SIM-101: per-game cached GameStateBuilder.  Built lazily on first
+        # refresh; preserves last-processed at-bat index across refreshes so
+        # _parse_play_history() only walks new plays.
+        self._builders: dict[int, "GameStateBuilder"] = {}
 
         self._schedule_task: asyncio.Task | None = None
         self._running = False
@@ -933,11 +1106,42 @@ class LiveIngestionPipeline:
         self._http  = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT_S)
         )
+        # SIM-105: pre-populate _completed_games from today's already-Final
+        # games so a pipeline restart mid-afternoon doesn't trigger an
+        # upsert storm for every game finished earlier in the day.
+        await self._hydrate_completed_games()
         self._running = True
         self._schedule_task = asyncio.create_task(
             self._schedule_poller(), name="schedule-poller"
         )
         log.info("Pipeline started.")
+
+    async def _hydrate_completed_games(self) -> None:
+        """SIM-105: load today's Final game_pks into _completed_games on boot."""
+        if self._db is None:
+            return
+        try:
+            rows = await self._db.fetch(
+                """
+                SELECT game_pk
+                FROM   raw.games
+                WHERE  game_date = CURRENT_DATE
+                  AND  status    = 'Final'
+                """,
+            )
+            for r in rows:
+                self._completed_games.add(int(r["game_pk"]))
+            if self._completed_games:
+                log.info(
+                    "SIM-105: hydrated %d already-final game_pks; will skip "
+                    "their _upsert_game_record() polls.",
+                    len(self._completed_games),
+                )
+        except Exception as exc:                       # noqa: BLE001
+            log.warning(
+                "SIM-105: could not hydrate _completed_games on boot: %s "
+                "(restart will trigger one-time upsert storm)", exc,
+            )
 
     async def stop(self) -> None:
         log.info("Stopping live ingestion pipeline …")
@@ -1004,17 +1208,43 @@ class LiveIngestionPipeline:
                         log.info("Game %s finished — closing WS", game_pk)
                         self._ws_clients[game_pk].stop()
                         del self._ws_clients[game_pk]
+                        # SIM-101: tear down the cached builder when its game
+                        # ends — keeps _builders bounded by today's live slate.
+                        self._builders.pop(game_pk, None)
                         # Do one final state refresh to capture the finished state
                         asyncio.create_task(self._refresh_game_state(game_pk))
+                        # SIM-105: mark the game completed AFTER the final
+                        # upsert fires.  All future polls will skip this game.
+                        self._completed_games.add(game_pk)
+
+                # SIM-105: skip _upsert_game_record() for games that have
+                # already transitioned to Final.  For a 15-game slate with
+                # 12 finished games this avoids ~1,080 wasted DB writes per
+                # 3-hour afternoon.  Status==Final transitions still fall
+                # through (the membership check kicks in next poll).
+                if game_pk in self._completed_games and status == "Final":
+                    continue
 
                 # Upsert every game (Preview/Live/Final) into raw.games
                 asyncio.create_task(self._upsert_game_record(game))
 
     async def _start_watching(self, game_pk: int) -> None:
         self._refresh_locks[game_pk] = asyncio.Lock()
+        # SIM-101: pre-create the cached builder so the first refresh doesn't
+        # take a (small) hit constructing one on the hot path.
+        self._get_or_create_builder(game_pk)
         ws = MLBGameWebSocket(game_pk, on_update=self._refresh_game_state)
         self._ws_clients[game_pk] = ws
         ws.start()
+
+    def _get_or_create_builder(self, game_pk: int) -> "GameStateBuilder":
+        """SIM-101: cache one GameStateBuilder per game.  Disposed when the
+        game transitions to Final (see _sync_live_games)."""
+        builder = self._builders.get(game_pk)
+        if builder is None:
+            builder = GameStateBuilder(self._db)
+            self._builders[game_pk] = builder
+        return builder
 
     # ------------------------------------------------------------------
     # State refresh — called on every WS signal
@@ -1042,7 +1272,9 @@ class LiveIngestionPipeline:
                 if feed is None:
                     return
 
-                builder    = GameStateBuilder(self._db)
+                # SIM-101: reuse the per-game builder so play history accumulates
+                # incrementally instead of being rebuilt from scratch every WS msg.
+                builder = self._get_or_create_builder(game_pk)
                 game_state = await builder.build(feed)
                 odds       = await self._fetch_odds(game_pk)
 
@@ -1238,21 +1470,76 @@ class LiveIngestionPipeline:
             date.fromisoformat(gd["gameDate"][:10]),
             gd.get("gameType", "R"),
             status,
-            gd.get("venue", {}).get("id", 0),
+            # SIM-086: fall back to None (not 0) when the schedule API omits the
+            # venue.  raw.games.venue_id is now nullable; venue_backfill_job.py
+            # fills these once the MLB API publishes the venue assignment.
+            gd.get("venue", {}).get("id") or None,
             gd.get("teams", {}).get("home", {}).get("team", {}).get("id", 0),
             gd.get("teams", {}).get("away", {}).get("team", {}).get("id", 0),
         )
+
+    @staticmethod
+    def _odds_hash(odds: dict) -> str:
+        """
+        SIM-092: Deterministic SHA-256 fingerprint of an odds payload.
+
+        Hashing rules:
+          * Stable key order regardless of dict iteration order.
+          * Numeric values are formatted with full precision so 1.5 and 1.50
+            collide (they should — same line).
+          * book / line_type / market_type / is_sharp_book are part of the
+            hash because two books at the same price are still two distinct
+            quotes.  source is NOT in the hash (it lives outside the unique
+            index, on the table itself, paired with odds_hash by the index).
+
+        Identical payloads produce identical hashes; an INSERT … ON CONFLICT
+        (game_pk, source, odds_hash) DO NOTHING is therefore a no-op for any
+        snapshot the pipeline has already written.
+        """
+        import hashlib
+        # Keys in fixed order — do NOT change order without bumping the hash
+        # space (would invalidate every previously stored hash, but the
+        # partial unique index tolerates NULL so a re-fingerprint is safe).
+        ordered_keys = (
+            "book", "line_type", "market_type", "is_sharp_book",
+            "home_ml", "away_ml",
+            "home_spread", "home_spread_ml",
+            "away_spread", "away_spread_ml",
+            "total_line", "over_ml", "under_ml",
+        )
+
+        def _fmt(v: object) -> str:
+            # Normalize numeric types so 1.5 and 1.50 hash identically;
+            # bool / None / strings stringify directly.
+            if v is None:
+                return "∅"
+            if isinstance(v, bool):
+                return "1" if v else "0"
+            if isinstance(v, float):
+                # 6-decimal precision is plenty for American odds and lines.
+                return f"{v:.6f}"
+            return str(v)
+
+        payload = "|".join(f"{k}={_fmt(odds.get(k))}" for k in ordered_keys)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     async def _persist_odds(self, game_pk: int, odds: dict) -> None:
         """
         Inserts a fresh odds snapshot into raw.game_odds.
 
-        SIM-133: Now writes all four CLV-enabling columns:
-          book, line_type, market_type, is_sharp_book.
+        SIM-133: Writes all four CLV-enabling columns
+          (book, line_type, market_type, is_sharp_book).
+
+        SIM-092: Also writes ``odds_hash`` (SHA-256 of the odds payload)
+          and uses ON CONFLICT (game_pk, source, odds_hash) DO NOTHING
+          so successive identical snapshots are deduplicated at write time.
+          Backed by the partial unique index ``idx_game_odds_dedup``.
+
         The live pipeline always writes line_type='current'.  Opening lines are
         captured by the nightly opening line job (SIM-138).  Closing lines are
         designated by mark_closing_lines() which runs post-game.
         """
+        odds_hash = self._odds_hash(odds)
         await self._db.execute(
             """
             INSERT INTO raw.game_odds
@@ -1260,8 +1547,12 @@ class LiveIngestionPipeline:
                  book, line_type, market_type, is_sharp_book,
                  home_ml, away_ml,
                  home_spread, home_spread_ml, away_spread, away_spread_ml,
-                 total_line, over_ml, under_ml)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+                 total_line, over_ml, under_ml,
+                 odds_hash)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+            ON CONFLICT (game_pk, source, odds_hash)
+              WHERE odds_hash IS NOT NULL
+              DO NOTHING
             """,
             game_pk,
             odds.get("source", "mock"),
@@ -1279,6 +1570,7 @@ class LiveIngestionPipeline:
             odds.get("total_line"),
             odds.get("over_ml"),
             odds.get("under_ml"),
+            odds_hash,
         )
 
     async def _persist_prop_odds(self, prop: dict) -> None:
@@ -1388,55 +1680,33 @@ class LiveIngestionPipeline:
         that was never written.  The rate-limit fallback silently returned
         None for every live game, dropping every refresh cycle under load.
         """
-        ttl = REDIS_TTL_DONE_S if status == "Final" else REDIS_TTL_LIVE_S
-        await self._redis.setex(
-            f"game_feed:{game_pk}",     # fallback consumed by _fetch_feed()
-            ttl,
-            json.dumps(feed),
-        )
-        await self._redis.setex(
-            f"game_state:{game_pk}",    # consumed by resimulate endpoint
-            ttl,
-            json.dumps(game_state),
-        )
-
-    # ------------------------------------------------------------------
-    # Status / introspection
-    # ------------------------------------------------------------------
+        if self._redis is None:
+            return
+        ttl_secs = REDIS_TTL_DONE_S if status == "Final" else REDIS_TTL_LIVE_S
+        try:
+            await self._redis.setex("game_feed:" + str(game_pk), ttl_secs, json.dumps(feed))
+            await self._redis.setex("game_state:" + str(game_pk), ttl_secs, json.dumps(game_state))
+        except Exception as exc:
+            log.warning("Redis cache write failed for game %s: %s", game_pk, exc)
 
     @property
-    def live_game_pks(self) -> list[int]:
+    def live_game_pks(self) -> list:
         return list(self._ws_clients.keys())
 
     def is_watching(self, game_pk: int) -> bool:
         return game_pk in self._ws_clients
 
 
-# ---------------------------------------------------------------------------
-# FastAPI WebSocket endpoint
-# ---------------------------------------------------------------------------
+ws_router = APIRouter(prefix="/ws", tags=["live"])
 
-ws_router = APIRouter(tags=["websocket"])
 
-@ws_router.websocket("/ws/games/{game_pk}")
-async def game_websocket(websocket: WebSocket, game_pk: int) -> None:
-    """
-    Frontend clients connect here to receive live game state pushes.
-
-    Message types clients will receive:
-      {"type": "game_state_update", "game_pk": ..., "game_state": {...}, "odds": {...}}
-      {"type": "ping"}
-
-    The connection is kept alive with a periodic ping.  Clients should
-    reconnect automatically on disconnect.
-    """
+@ws_router.websocket("/games/{game_pk}")
+async def game_state_ws(websocket: WebSocket, game_pk: int) -> None:
     await connection_manager.connect(game_pk, websocket)
     try:
         while True:
-            # Keep-alive: send a ping every 25 seconds and wait for any
-            # client message (clients can send "ping" to confirm alive)
             try:
-                data = await asyncio.wait_for(websocket.receive_text(), timeout=25.0)
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
                 if data.strip().lower() == "ping":
                     await websocket.send_text(json.dumps({"type": "pong"}))
             except asyncio.TimeoutError:
@@ -1445,32 +1715,10 @@ async def game_websocket(websocket: WebSocket, game_pk: int) -> None:
         connection_manager.disconnect(game_pk, websocket)
 
 
-# ---------------------------------------------------------------------------
-# FastAPI app factory + lifespan
-# ---------------------------------------------------------------------------
-
-def create_app(
-    dsn:                 str,
-    redis_url:           str = "redis://localhost:6379",
-    simulation_callback: callable | None = None,
-) -> FastAPI:
-    """
-    Creates a FastAPI application with the live ingestion pipeline wired in.
-
-    To mount into your existing dashboard app instead of creating a new one:
-
-        from live_ingestion_pipeline import (
-            lifespan_factory, ws_router, odds_router
-        )
-        app = FastAPI(lifespan=lifespan_factory(dsn, redis_url))
-        app.include_router(ws_router)
-        app.include_router(odds_router)
-    """
-
+def create_app(dsn=None, redis_url=None, simulation_callback=None) -> FastAPI:
+    """SIM-104 + SIM-153: rate-limited resimulate endpoint + env-var DSN."""
     pipeline = LiveIngestionPipeline(
-        dsn=dsn,
-        redis_url=redis_url,
-        simulation_callback=simulation_callback,
+        dsn=dsn, redis_url=redis_url, simulation_callback=simulation_callback,
     )
 
     @asynccontextmanager
@@ -1479,199 +1727,73 @@ def create_app(
         yield
         await pipeline.stop()
 
-    app = FastAPI(
-        title="MLB Live Ingestion",
-        description="Step 1.3 — Live Data Ingestion Pipeline",
-        lifespan=lifespan,
-    )
+    app = FastAPI(title="MLB Live Ingestion", lifespan=lifespan)
     app.include_router(ws_router)
     app.include_router(odds_router)
-
-    # ---- Status endpoints --------------------------------------------------
 
     @app.get("/api/pipeline/status")
     async def pipeline_status():
         return {
-            "live_games":       pipeline.live_game_pks,
-            "live_game_count":  len(pipeline.live_game_pks),
-            "ws_clients":       {
-                gp: connection_manager.subscriber_count(gp)
-                for gp in pipeline.live_game_pks
-            },
+            "live_games": pipeline.live_game_pks,
+            "live_game_count": len(pipeline.live_game_pks),
         }
 
     @app.post("/api/games/{game_pk}/resimulate")
-    async def manual_resimulate(game_pk: int):
-        """
-        Manual re-simulation trigger for the frontend mid-at-bat button.
+    async def manual_resimulate(game_pk: int, response: Response):
+        # SIM-104: per-game Redis cooldown (resim_cooldown:<game_pk>).
+        if pipeline._redis:
+            cooldown_key = "resim_cooldown:" + str(game_pk)
+            ttl = await pipeline._redis.ttl(cooldown_key)
+            if ttl is not None and ttl > 0:
+                response.status_code = 429
+                return {
+                    "status": "rate_limited",
+                    "retry_after_seconds": int(ttl),
+                    "detail": (
+                        "Manual re-simulation for game " + str(game_pk)
+                        + " is on cooldown. Try again in " + str(int(ttl)) + "s."
+                    ),
+                }
+            await pipeline._redis.setex(cooldown_key, RESIM_COOLDOWN_S, "1")
 
-        Called when the user wants to see how the current count affects likely
-        outcomes without waiting for the plate appearance to end.  Fetches the
-        latest game state from Redis (fast, avoids an extra MLB API call) and
-        fires the simulation callback directly.
-
-        Frontend usage:
-          POST /api/games/{game_pk}/resimulate
-          → server responds immediately with {"status": "triggered"}
-          → simulation results arrive shortly after via the WS channel as:
-            {"type": "simulation_results", "game_pk": ..., "results": {...}}
-
-        Rate note: this endpoint is intentionally not debounced server-side.
-        If you want to prevent users from spamming it, add a short TTL check
-        in Redis (e.g. one manual resim per game per 10 seconds).
-        """
         if not pipeline.is_watching(game_pk):
-            # Game is not currently live — pull state from Redis if available
-            cached = await pipeline._redis.get(f"game_state:{game_pk}") if pipeline._redis else None
+            cached = (
+                await pipeline._redis.get("game_state:" + str(game_pk))
+                if pipeline._redis else None
+            )
             if not cached:
-                return {"status": "error", "detail": f"game {game_pk} is not live and has no cached state"}
+                return {"status": "error",
+                        "detail": "game " + str(game_pk) + " is not live and has no cached state"}
             game_state = json.loads(cached)
             await pipeline._signal_resimulation(game_pk, game_state)
             return {"status": "triggered", "source": "cache"}
 
-        # Game is live — do a fresh state fetch so the sim runs on the latest count
         feed = await pipeline._fetch_feed(game_pk)
         if feed is None:
             return {"status": "error", "detail": "could not fetch game state"}
 
-        builder    = GameStateBuilder(pipeline._db)
+        builder = pipeline._get_or_create_builder(game_pk)  # SIM-101
         game_state = await builder.build(feed)
-
         await pipeline._signal_resimulation(game_pk, game_state)
-
-        # Broadcast a "resim_pending" notice so the frontend can show a spinner
-        # while it waits for results over the WS channel
         await connection_manager.broadcast(game_pk, {
-            "type":     "resim_pending",
-            "game_pk":  game_pk,
-            "trigger":  "manual",
-            "inning":   game_state.get("inning"),
-            "half":     game_state.get("half"),
-            "balls":    game_state.get("balls"),
-            "strikes":  game_state.get("strikes"),
-            "outs":     game_state.get("outs"),
+            "type": "resim_pending", "game_pk": game_pk, "trigger": "manual",
+            "inning": game_state.get("inning"),
+            "half": game_state.get("half"),
+            "balls": game_state.get("balls"),
+            "strikes": game_state.get("strikes"),
+            "outs": game_state.get("outs"),
         })
-
         return {"status": "triggered", "source": "live"}
-
-    @app.get("/api/games/today")
-    async def games_today():
-        """Returns today's schedule with current state from Redis cache."""
-        today  = date.today().strftime("%Y-%m-%d")
-        params = {"sportId": 1, "gameTypes": GAME_TYPES, "date": today}
-        async with aiohttp.ClientSession() as s:
-            async with s.get(SCHEDULE_URL, params=params) as resp:
-                data = await resp.json()
-
-        games = []
-        redis_client = pipeline._redis
-        for date_entry in data.get("dates", []):
-            for game in date_entry.get("games", []):
-                gp = game["gamePk"]
-                cached = await redis_client.get(f"game_state:{gp}") if redis_client else None
-                games.append({
-                    "game_pk":    gp,
-                    "status":     game.get("status", {}).get("abstractGameState"),
-                    "home_team":  game.get("teams", {}).get("home", {}).get("team", {}).get("abbreviation"),
-                    "away_team":  game.get("teams", {}).get("away", {}).get("team", {}).get("abbreviation"),
-                    "venue":      game.get("venue", {}).get("name"),
-                    "game_state": json.loads(cached) if cached else None,
-                    "odds":       MockOddsAPI.get_odds(gp),
-                })
-        return games
 
     return app
 
 
-def lifespan_factory(
-    dsn:                 str,
-    redis_url:           str = "redis://localhost:6379",
-    simulation_callback: callable | None = None,
-):
-    """
-    Returns a lifespan context manager for mounting the pipeline into an
-    existing FastAPI app without creating a new one.
+def run(dsn=None, redis_url=None, simulation_callback=None,
+        host="0.0.0.0", port=8001) -> None:
+    import uvicorn
+    app = create_app(dsn=dsn, redis_url=redis_url, simulation_callback=simulation_callback)
+    uvicorn.run(app, host=host, port=port)
 
-    Usage in your existing app.py:
-        from live_ingestion_pipeline import lifespan_factory, ws_router, odds_router
-
-        app = FastAPI(lifespan=lifespan_factory(
-            dsn="postgresql://user:pass@localhost/baseball",
-            redis_url="redis://localhost",
-        ))
-        app.include_router(ws_router)
-        app.include_router(odds_router)
-    """
-    pipeline = LiveIngestionPipeline(dsn, redis_url, simulation_callback)
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        await pipeline.start()
-        yield
-        await pipeline.stop()
-
-    return lifespan
-
-
-# ---------------------------------------------------------------------------
-# Supporting DDL reference  (SIM-082, SIM-083)
-# ---------------------------------------------------------------------------
-# All DDL previously held here has been migrated to the canonical schema and
-# applied via Alembic migrations:
-#
-#   Migration 0002 (SIM-082):
-#     CREATE UNIQUE INDEX idx_lineup_state_live_game ON sim.lineup_state(game_pk)
-#     WHERE is_live_game = TRUE
-#     — fixes ON CONFLICT in _upsert_lineup_state()
-#
-#   Migration 0003 (SIM-083):
-#     raw.game_odds   — with SIM-133 CLV columns (book, line_type, market_type, is_sharp_book)
-#     raw.prop_odds   — prop lines supporting SIM-138 opening-line job
-#     raw.pipeline_run_log
-#
-# To apply: export BASEBALL_DB_DSN=... && alembic upgrade head
-# ---------------------------------------------------------------------------
-LIVE_PIPELINE_DDL = (
-    "-- All pipeline DDL has been migrated to db/schemas/01_postgres_schema.sql.\n"
-    "-- Apply via: alembic upgrade head  (set BASEBALL_DB_DSN env var first)\n"
-)
-
-
-# ---------------------------------------------------------------------------
-# Standalone entry point
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import argparse
-    import uvicorn
-
-    parser = argparse.ArgumentParser(description="MLB Live Ingestion Pipeline")
-    parser.add_argument(
-        "--dsn",
-        default="postgresql://postgres:password@localhost:5432/baseball",
-        help="asyncpg PostgreSQL DSN",
-    )
-    parser.add_argument(
-        "--redis",
-        default="redis://localhost:6379",
-        help="Redis URL",
-    )
-    parser.add_argument(
-        "--host", default="0.0.0.0",
-        help="Uvicorn host",
-    )
-    parser.add_argument(
-        "--port", type=int, default=8001,
-        help="Uvicorn port (use 8000 if merging with existing dashboard)",
-    )
-    parser.add_argument(
-        "--print-ddl", action="store_true",
-        help="Print the required DDL and exit",
-    )
-    args = parser.parse_args()
-
-    if args.print_ddl:
-        print(LIVE_PIPELINE_DDL)
-    else:
-        app = create_app(dsn=args.dsn, redis_url=args.redis)
-        uvicorn.run(app, host=args.host, port=args.port)
+    run()

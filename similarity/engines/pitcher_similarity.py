@@ -887,13 +887,17 @@ class ArsenalCache:
         inf values (which represent pairs where one or both GMMs were
         missing).
 
-        This is the array you pass to calibrate_arsenal_gamma():
+        SIM-148: docstring updated to use ``calibrate_arsenal_scale``
+        (the current API).  ``calibrate_arsenal_gamma`` was renamed during
+        SIM-066; pre-SIM-148 docstring still referenced the dead name.
 
-            from similarity_calibration import calibrate_arsenal_gamma
+        This is the array you pass to calibrate_arsenal_scale():
+
+            from similarity.similarity_calibration import calibrate_arsenal_scale
 
             engine.precompute_arsenal_cache()
             dists = engine._arsenal_cache.finite_distances()
-            optimal_gamma = calibrate_arsenal_gamma(dists, target_median_score=0.50)
+            optimal_scale = calibrate_arsenal_scale(dists, target_median_score=0.50)
         """
         all_dists = np.array(list(self._cache.values()), dtype=np.float64)
         return all_dists[np.isfinite(all_dists)]
@@ -1529,14 +1533,25 @@ class PitcherSimilarityEngine:
         self,
         query: PitcherProfile,
         candidate: PitcherProfile,
-    ) -> tuple[float, float, float, float, float]:
+    ) -> tuple[float, float, float]:
         """
         Compute all sub-scores and the weighted composite between two
         pitcher profiles. Used by query_pair() for ad-hoc comparisons.
 
         Returns
         -------
-        (composite, arsenal, command, release, results) — all in [0, 1].
+        (composite, arsenal, command) — all in [0, 1].
+
+        SIM-148 / SIM-067: pre-SIM-067 this returned a 5-tuple including
+        a separate ``release`` and ``results`` sub-score.  SIM-067 removed
+        the release sub-score (release-point information is already inside
+        the per-component GMM means and was double-counting); ``results``
+        was folded into the composite via the empirical-Bayes confidence
+        multiplier rather than carried as a separate sub-score.
+
+        Permanent regression test:
+            tests/unit/test_pitcher_similarity.py::TestScoreProperties::
+            test_score_pair_returns_three_subscores  guards this shape.
         """
         key_q = (query.pitcher_id, query.season)
         key_c = (candidate.pitcher_id, candidate.season)

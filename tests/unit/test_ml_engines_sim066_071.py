@@ -181,8 +181,10 @@ class TestCatcherEngine(unittest.TestCase):
             FeatureNormalizer,
             CatcherPartition,
             WeightedRBFSimilarity,
-            FRAMING_FEATURES, BLOCKING_FEATURES, THROWING_FEATURES, OFFENSE_FEATURES,
-            RBF_SIGMA_FRAMING, RBF_SIGMA_BLOCKING, RBF_SIGMA_THROWING, RBF_SIGMA_OFFENSE,
+            FRAMING_FEATURES, BLOCKING_FEATURES, THROWING_FEATURES,
+            DETERRENCE_FEATURES, OFFENSE_FEATURES,
+            RBF_SIGMA_FRAMING, RBF_SIGMA_BLOCKING, RBF_SIGMA_THROWING,
+            RBF_SIGMA_DETERRENCE, RBF_SIGMA_OFFENSE,
             EB_N_PRIOR,
         )
 
@@ -194,6 +196,7 @@ class TestCatcherEngine(unittest.TestCase):
             base_fr = rng.normal(0.0, 0.02, len(FRAMING_FEATURES))   # centered near 0
             base_bl = rng.beta(8, 2, len(BLOCKING_FEATURES))
             base_th = rng.normal(0.0, 0.03, len(THROWING_FEATURES))
+            base_det = rng.uniform(0.05, 0.12, len(DETERRENCE_FEATURES))
             base_of = rng.beta(5, 5, len(OFFENSE_FEATURES))
 
             for season in seasons:
@@ -206,6 +209,10 @@ class TestCatcherEngine(unittest.TestCase):
                     framing_vec=(base_fr + rng.normal(0, 0.005, len(FRAMING_FEATURES))).astype(np.float64),
                     blocking_vec=np.clip(base_bl + rng.normal(0, 0.02, len(BLOCKING_FEATURES)), 0, 1).astype(np.float64),
                     throwing_vec=(base_th + rng.normal(0, 0.005, len(THROWING_FEATURES))).astype(np.float64),
+                    deterrence_vec=np.clip(
+                        base_det + rng.normal(0, 0.005, len(DETERRENCE_FEATURES)),
+                        0.0, 1.0,
+                    ).astype(np.float64),
                     offense_vec=np.clip(base_of + rng.normal(0, 0.02, len(OFFENSE_FEATURES)), 0, 1).astype(np.float64),
                     eb_alpha=float(n_pitches / (n_pitches + EB_N_PRIOR)),
                 ))
@@ -213,13 +220,17 @@ class TestCatcherEngine(unittest.TestCase):
         engine = CatcherSimilarityEngine.__new__(CatcherSimilarityEngine)
         engine._duckdb_path = ""
         engine._profiles = {(p.catcher_id, p.season): p for p in profiles}
-        engine._league_avg = {"framing": {}, "blocking": {}, "throwing": {}, "offense": {}}
+        engine._league_avg = {
+            "framing": {}, "blocking": {}, "throwing": {},
+            "deterrence": {}, "offense": {},
+        }
         engine._normalizer = FeatureNormalizer()
         engine._shrinkage = EmpiricalBayesShrinkage()
         engine._partition = CatcherPartition()
         engine._framing_rbf = WeightedRBFSimilarity(RBF_SIGMA_FRAMING, np.array([w for _, w in FRAMING_FEATURES]))
         engine._blocking_rbf = WeightedRBFSimilarity(RBF_SIGMA_BLOCKING, np.array([w for _, w in BLOCKING_FEATURES]))
         engine._throwing_rbf = WeightedRBFSimilarity(RBF_SIGMA_THROWING, np.array([w for _, w in THROWING_FEATURES]))
+        engine._deterrence_rbf = WeightedRBFSimilarity(RBF_SIGMA_DETERRENCE, np.array([w for _, w in DETERRENCE_FEATURES]))
         engine._offense_rbf = WeightedRBFSimilarity(RBF_SIGMA_OFFENSE, np.array([w for _, w in OFFENSE_FEATURES]))
         engine._normalizer.fit(profiles)
         engine._partition.build(profiles, engine._normalizer)
@@ -232,7 +243,8 @@ class TestCatcherEngine(unittest.TestCase):
             self.assertGreaterEqual(r.score, 0.0)
             self.assertLessEqual(r.score, 1.0 + 1e-9)
 
-    def test_four_sub_scores_present(self):
+    def test_five_sub_scores_present(self):
+        """SIM-072 v2: deterrence_score joined the prior four sub-scores."""
         engine = self._make_engine()
         results = engine.query(1, 2023)
         self.assertGreater(len(results), 0)
@@ -240,6 +252,7 @@ class TestCatcherEngine(unittest.TestCase):
         self.assertIsNotNone(r.framing_score)
         self.assertIsNotNone(r.blocking_score)
         self.assertIsNotNone(r.throwing_score)
+        self.assertIsNotNone(r.deterrence_score)
         self.assertIsNotNone(r.offense_score)
 
     def test_symmetry(self):

@@ -24,8 +24,17 @@ config = context.config
 # Inject BASEBALL_DB_DSN env var into the SQLAlchemy URL before anything else
 # reads it.  This lets CI, Docker, and dev environments all use the same
 # alembic.ini without modification.
+#
+# DSN format coercion: the app (asyncpg) wants ``postgresql://...``; SQLAlchemy
+# + psycopg2 (used here by alembic) wants ``postgresql+psycopg2://...``.
+# Auto-add the driver suffix if it's missing so contributors only need to set
+# ONE env var (``BASEBALL_DB_DSN``) regardless of which consumer reads it.
+# This eliminates the docker-compose ${VAR:-default} substitution dance for
+# the migrate service that broke on some platforms.
 _dsn = os.environ.get("BASEBALL_DB_DSN")
 if _dsn:
+    if _dsn.startswith("postgresql://"):
+        _dsn = "postgresql+psycopg2://" + _dsn[len("postgresql://"):]
     config.set_main_option("sqlalchemy.url", _dsn)
 
 # Interpret the config file for Python logging.
@@ -93,6 +102,10 @@ def run_migrations_online() -> None:
         with context.begin_transaction():
             context.run_migrations()
 
+
+# ---------------------------------------------------------------------------
+# Dispatch — alembic chooses offline vs online based on the invocation.
+# ---------------------------------------------------------------------------
 
 if context.is_offline_mode():
     run_migrations_offline()

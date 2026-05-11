@@ -3,6 +3,639 @@
 
 ---
 
+# Backend / QA / DevOps Sprint — 2026-05-07
+**Authors: Backend Developer (Agent 5), ML Engineer (Agent 3), QA/DevOps (Agent 9)**
+
+Eight tickets across the live ingestion pipeline, the pitcher similarity test
+suite, and the secrets-management baseline.  All shipped together because they
+share the same files (`pipeline/live/live_ingestion_pipeline.py`,
+`api/main.py`, the CI workflow) and individually-shipping each one would have
+caused merge churn.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-101 | Bug | Backend | Per-game GameStateBuilder cache + incremental play history (was O(N) full rebuild every WS message) |
+| SIM-102 | Bug | Backend | _infer_role() now classifies Openers (was misclassified as MRP) |
+| SIM-103 | Bug | Backend | ConnectionManager.broadcast() iterates a snapshot — fixes "Set changed size during iteration" race |
+| SIM-104 | Improvement | Backend | /resimulate endpoint Redis cooldown — HTTP 429 with retry_after_seconds |
+| SIM-105 | Improvement (P2) | Backend | Skip _upsert_game_record() for already-finalized games + boot-time hydration |
+| SIM-106 | Improvement | Backend | simulation_callback type-hinted as async + iscoroutinefunction guard at __init__ |
+| SIM-148 | Bug | ML+QA | Removed vacuous release_score asserts; added _score_pair 3-tuple regression + finite_distances() docstring fix + doctest sentinel |
+| SIM-153 | Gap | QA+Backend | Secrets baseline: validate_environment(), env-fallback DSN, CI secrets-check job, .env in .gitignore |
+
+---
+
+## SIM-101 — Per-Game GameStateBuilder Cache + Incremental Play History
+
+**Type:** Bug | **Effort:** M | **Status:** ✅ Complete
+
+### Problem
+Two related issues in the live pipeline:
+
+1. **O(N) full history rebuild on every WS signal.** `_parse_play_history()` was a
+   `@staticmethod` that walked every play in `allPlays` on every refresh.
+   By the 9th inning of a 10-inning game with ~80 plays, this fired 20+ times
+   per inning (one per WS message), each time re-parsing every play and
+   re-serializing the full history into JSONB for the upsert.
+2. **No per-game state cache.** A fresh `GameStateBuilder` was instantiated
+   inside `_refresh_game_state()` on every WS signal, preventing any
+   per-game state caching (history, last-processed at-bat index, game_date).
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `pipeline/live/live_ingestion_pipeline.py` — `GameStateBuilder.__init__` | Updated | Adds `_history`, `_last_at_bat_index`, `_game_date` instance state. |
+| `pipeline/live/live_ingestion_pipeline.py` — `_parse_play_history` | Refactored | Now an instance method.  Walks only plays whose `atBatIndex > self._last_at_bat_index`.  In-flight at-bats (same atBatIndex as the cache) refresh the trailing entry rather than appending a duplicate. |
+| `pipeline/live/live_ingestion_pipeline.py` — `_build_history_entry` | Added | Static helper extracted from the old parser so the incremental path and any external consumer stay in sync. |
+| `pipeline/live/live_ingestion_pipeline.py` — `LiveIngestionPipeline._builders` | Added | `dict[int, GameStateBuilder]`.  Lifecycle managed by `_get_or_create_builder()`, `_start_watching()`, and the Final-game branch of `_sync_live_games()`. |
+| `pipeline/live/live_ingestion_pipeline.py` — `_get_or_create_builder` | Added | Lazy per-game cache.  Disposed when game transitions to Final. |
+| `pipeline/live/live_ingestion_pipeline.py` — `_refresh_game_state` + `manual_resimulate` | Updated | Both now reuse the cached builder via `_get_or_create_builder()`. |
+
+### Acceptance gate
+By the 9th inning, each WS refresh parses **at most 1–2 new plays** (the
+in-flight current PA + at most one new entry), not 80.  Verified by
+the `test_builder_holds_history_state` and `test_builder_replaces_in_flight_at_bat`
+regression tests.
+
+---
+
+## SIM-102 — `_infer_role()` Opener Classification
+
+**Type:** Bug | **Effort:** S | **Status:** ✅ Complete
+
+### Problem
+`_infer_role()` classified pitchers from in-game stats using IP only:
+`SP (≥4.0 IP) → MRP (≥1.0 IP) → RP (otherwise)`.  An opener who throws 2.0 IP
+faces 9 batters and gets pulled would be flagged **MRP**.  The Phase 4
+manager decision engine downstream of this would then treat the opener as
+a middle reliever available for high-leverage re-use later in the game.
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `pipeline/live/live_ingestion_pipeline.py` — `GameStateBuilder._infer_role` | Updated | Adds Opener bucket between SP and MRP using `battersFaced` from the live boxscore.  Decision order: SP (IP≥4.0) → Opener (IP<4.0 AND BF≥9) → MRP (IP≥1.0) → RP. |
+
+### Truth table
+
+| IP | BF | Role | Why |
+|----|----|------|-----|
+| 5.1 | 18 | SP | Full starter outing |
+| 2.0 | 9 | Opener | First-inning opener pulled deep into the order |
+| 0.2 | 10 | Opener | Lots of runners, quick hook |
+| 2.0 | 6 | MRP | Multi-inning relief |
+| 0.2 | 3 | RP | One-inning specialist |
+| 2.0 | (missing) | MRP | Graceful fallback to old IP-only logic |
+
+### Note
+This is a temporary heuristic.  SIM-057 will land a season-level
+`opener_rate` column on `derived.pitcher_season_metrics` — once that ships,
+the live `_infer_role()` should defer to the season-level role tag and only
+fall back to this BF heuristic for first-time-this-season usage.
+
+---
+
+## SIM-103 — ConnectionManager.broadcast() Set Snapshot
+
+**Type:** Bug | **Effort:** S | **Status:** ✅ Complete
+
+### Problem
+`broadcast()` iterated over the live `_subscriptions[game_pk]` set directly.
+Since `await ws.send_text()` yields control to the event loop, a concurrent
+`connect()` or `disconnect()` for the same game_pk would mutate the
+underlying set mid-iteration and raise `RuntimeError: Set changed size
+during iteration`.
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `pipeline/live/live_ingestion_pipeline.py` — `ConnectionManager.broadcast` | Fixed | Iterate over `set(live_subs)` (a shallow copy).  Cleanup of dead connections still operates on the live underlying set. |
+
+### Test
+`TestSim103BroadcastSnapshot::test_broadcast_uses_set_copy` simulates a
+concurrent connect during the broadcast loop and asserts no
+`RuntimeError` + remaining clients still receive the message + the
+intruder is *not* spuriously sent to in the current call (snapshot
+semantics).
+
+---
+
+## SIM-104 — Redis-Based Rate Limiting on `/resimulate`
+
+**Type:** Improvement | **Effort:** S | **Status:** ✅ Complete
+
+### Problem
+The manual resimulate endpoint had no debouncing.  Users spamming the
+"resimulate now" button could queue up dozens of 100-iteration sim runs
+behind the Phase 5 simulation runner before any backpressure kicks in.
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `pipeline/live/live_ingestion_pipeline.py` — `RESIM_COOLDOWN_S` constant | Added | 10-second cooldown.  Comment justifies the value (generous enough for legitimate resample-then-resample patterns, tight enough to throttle spam). |
+| `pipeline/live/live_ingestion_pipeline.py` — `manual_resimulate` endpoint | Updated | On entry: `redis.ttl("resim_cooldown:{pk}")`.  TTL > 0 → return HTTP 429 with `{"status": "rate_limited", "retry_after_seconds": <ttl>, "detail": ...}`.  Otherwise: `redis.setex(key, RESIM_COOLDOWN_S, "1")` before triggering the sim — sets the cooldown even if the sim path raises. |
+
+### Error envelope (matches SIM-109)
+```json
+HTTP/1.1 429 Too Many Requests
+{
+  "status":              "rate_limited",
+  "retry_after_seconds": 7,
+  "detail":              "Manual re-simulation for game 745001 is on cooldown. Try again in 7s."
+}
+```
+
+---
+
+## SIM-105 — Skip Redundant Upserts for Completed Games
+
+**Type:** Improvement (P2) | **Effort:** S | **Status:** ✅ Complete
+
+### Problem
+`_sync_live_games()` called `_upsert_game_record()` for *every* game in the
+schedule on every 30-second poll — including games that finished hours ago.
+For a 15-game slate with 12 finished games, that's ~1,080 unnecessary DB
+writes over a 3-hour afternoon window.
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `pipeline/live/live_ingestion_pipeline.py` — `LiveIngestionPipeline._completed_games` | Added | `set[int]`.  Mutated only at Final transitions (`_sync_live_games` Final branch) and on boot. |
+| `pipeline/live/live_ingestion_pipeline.py` — `_sync_live_games` | Updated | When `status == "Final"` and `game_pk in self._completed_games`, skip the upsert via `continue`. |
+| `pipeline/live/live_ingestion_pipeline.py` — `_hydrate_completed_games` | Added | Called from `start()`.  `SELECT game_pk FROM raw.games WHERE game_date = CURRENT_DATE AND status = 'Final'` populates the set so a mid-afternoon pipeline restart doesn't trigger an upsert storm. |
+
+### Acceptance
+- A 15-game slate with 12 Final games processes ≤ 3 upserts per poll instead of 15.
+- Pipeline restart at 19:00 hydrates `_completed_games` from `raw.games`; the
+  next poll skips upserts for all 12 already-final games.
+
+---
+
+## SIM-106 — Async-Callable Type on `simulation_callback`
+
+**Type:** Improvement | **Effort:** S | **Status:** ✅ Complete
+
+### Problem
+`simulation_callback` was typed as `callable | None` with no argument or
+return-type spec.  When Phase 5 wires up the real simulation runner, passing
+a sync function instead of `async def` would either raise a confusing
+`TypeError` mid-PA (when the pipeline tries to `await` it), or silently
+no-op if the returned coroutine was discarded.  Both modes are hard to
+diagnose in production logs.
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `pipeline/live/live_ingestion_pipeline.py` — `SimulationCallback` type alias | Added | `Callable[[int, dict], Coroutine[Any, Any, None]]`.  Used everywhere the callback type appears (pipeline `__init__`, `create_app`, `lifespan_factory`, `run`). |
+| `pipeline/live/live_ingestion_pipeline.py` — `LiveIngestionPipeline.__init__` | Updated | Runtime guard: if the supplied callback is not None and `not asyncio.iscoroutinefunction(simulation_callback)`, raise `TypeError` with a clear message and a Phase 5 wiring tip about `asyncio.to_thread`. |
+
+### Test
+- `test_sync_callback_rejected` — passing a sync function raises TypeError at
+  construction time with a helpful message.
+- `test_async_callback_accepted` — `async def` callbacks construct cleanly.
+- `test_no_callback_is_fine` — None is permitted (logs the signal instead).
+
+---
+
+## SIM-148 — Pitcher Similarity Test Cleanup
+
+**Type:** Bug | **Effort:** S | **Status:** ✅ Complete
+
+### Problem
+`test_all_scores_in_range` asserted `r.release_score >= 0.0` against a field
+that had been removed from `SimilarityResult` by SIM-067.  Either path was
+dead coverage:
+* If a stale field default was still 0.0 → assertion passes vacuously.
+* If the field was actually removed → AttributeError, which would mask any
+  *real* score-bounds regression.
+
+The SIM-067 fix had no permanent regression test — `_score_pair` could
+silently regress back to a 5-tuple (re-introducing the double-counted
+release/results sub-scores).  Additionally `ArsenalCache.finite_distances()`'s
+docstring still pointed to the old `calibrate_arsenal_gamma` API
+(deleted in SIM-066).
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `tests/unit/test_pitcher_similarity.py` — `test_all_scores_in_range` | Cleaned up | Removed `release_score` / `results_score` assertions.  Asserts only the surviving 3 sub-scores (composite, arsenal, command) plus bounds. |
+| `tests/unit/test_pitcher_similarity.py` — `test_similarity_result_has_no_release_score_field` | Added | Reflects on the dataclass via `dataclasses.fields()` to confirm `release_score` is permanently removed. |
+| `tests/unit/test_pitcher_similarity.py` — `test_score_pair_returns_three_subscores` | Added | SIM-067 regression guard: `len(engine._score_pair(pa, pb)) == 3`.  Re-introducing release/results sub-scores would double-count signal already inside the GMM. |
+| `tests/unit/test_pitcher_similarity.py` — `TestPitcherSimilarityDoctests` | Added | Runs `doctest.testmod(pitcher_similarity)` so future docstring drift is caught automatically (per AC #5).  Targeted to the one module instead of a global `--doctest-modules` flag that would scan the whole repo. |
+| `similarity/engines/pitcher_similarity.py` — `_score_pair` docstring | Updated | Now advertises the 3-tuple return plus a SIM-148/SIM-067 historical note explaining why release/results were removed. |
+| `similarity/engines/pitcher_similarity.py` — `ArsenalCache.finite_distances` docstring | Updated | References the current `calibrate_arsenal_scale` API (post-SIM-066 rename). |
+
+---
+
+## SIM-153 — Secrets Management Baseline
+
+**Type:** Gap | **Effort:** S | **Status:** ✅ Complete
+
+### Problem
+Credentials (DB DSN, Redis URL, future API keys) were passed as bare strings
+in pipeline constructors with no environment-variable pattern and no
+startup validation.  As Phase 5 adds real odds-API keys and Phase 7 adds
+production credentials, this gap becomes a security risk: there's no
+gate against committing a `.env`, and no check that the running container
+has the right env vars set before the first request.
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `pipeline/etl/etl_historical_loader.py` — `HistoricalDataLoader.__init__` | Updated | `dsn` parameter now optional.  Falls back to `os.environ["BASEBALL_DB_DSN"]`.  Raises `RuntimeError` with a clear message when neither is set, instead of letting psycopg2 produce a confusing connect-fail mid-run. |
+| `pipeline/live/live_ingestion_pipeline.py` — `LiveIngestionPipeline.__init__` | Updated | `dsn` and `redis_url` parameters now optional.  Both fall back to environment variables.  Clear error if neither is set. |
+| `.github/workflows/ci.yml` — `secrets-check` job | Added | Three checks: (1) reject committed `.env*` files; (2) grep the source tree for literal credential patterns (`password=`, `api_key=`, AKIA-prefixed AWS keys, AIza-prefixed Google keys, BEGIN PRIVATE KEY headers); (3) verify `.env` is explicitly listed in `.gitignore`.  Job blocks `docker-build-check`, so a secret leak fails the build. |
+| `tests/unit/test_backend_sim101_to_106_148_153.py` — `TestSim153SecretsBaseline` | Added | Six tests: `.env.example` documents required vars; `.gitignore` excludes `.env`; `python-dotenv` in requirements; `validate_environment()` raises when required vars missing; CI workflow contains the `secrets-check` job; `HistoricalDataLoader` falls back to `BASEBALL_DB_DSN` when constructed without a dsn. |
+
+### Verification
+
+```bash
+# Loader env fallback
+$ unset BASEBALL_DB_DSN
+$ python -c "from pipeline.etl.etl_historical_loader import HistoricalDataLoader; HistoricalDataLoader()"
+RuntimeError: HistoricalDataLoader: no DSN provided and BASEBALL_DB_DSN environment variable is not set...
+
+# CI secrets-check (local dry run)
+$ git ls-files | grep -E '^\.env$|/\.env$'   # should be empty
+$ grep -rE 'password\s*=\s*"[^"$][^"]{2,}"' --exclude='.env.example' .   # should be empty
+```
+
+---
+
+## Files Modified / Created (this sprint)
+
+| File | Status |
+|------|--------|
+| `pipeline/live/live_ingestion_pipeline.py` | Updated — SIM-101..106 + SIM-153 |
+| `pipeline/etl/etl_historical_loader.py` | Updated — SIM-153 (env fallback) |
+| `similarity/engines/pitcher_similarity.py` | Updated — SIM-148 (docstrings) |
+| `tests/unit/test_pitcher_similarity.py` | Updated — SIM-148 |
+| `tests/unit/test_backend_sim101_to_106_148_153.py` | Created — 27 tests across all 8 tickets |
+| `.github/workflows/ci.yml` | Updated — SIM-153 secrets-check job |
+
+### Test verification
+
+```
+$ pytest tests/unit/test_backend_sim101_to_106_148_153.py
+============================== 25 passed, 2 skipped in 1.21s ==============================
+```
+*(2 skipped: scipy-dependent SIM-148 dataclass-reflection tests — skip when sandbox lacks scipy; full source-grep regression checks still run unconditionally.)*
+
+```
+$ pytest tests/unit/test_data_engineer_sim085_to_091.py \
+         tests/unit/test_data_engineer_sim092_sim093.py \
+         tests/unit/test_backend_sim101_to_106_148_153.py
+============================== 66 passed, 2 skipped in 2.40s ==============================
+```
+
+Migration chain (0001 → 0011) unchanged this sprint; no schema changes
+required for SIM-101 through SIM-106 / SIM-148 / SIM-153.
+
+---
+
+# Data Engineer Changelog — Sprint 2026-05-07
+**Author: Data Engineer (Agent 4)**
+
+Two P1 tickets in the SIM-080–099 (data-eng infrastructure) band, addressing
+data-quality audit trail gaps surfaced after the 2026-05-06 sprint.
+
+| Ticket | Type | Status | One-liner |
+|--------|------|--------|-----------|
+| SIM-092 | Improvement | ✅ Complete | `raw.game_odds` deduplicated via SHA-256 `odds_hash` + partial unique index |
+| SIM-093 | Gap | ✅ Complete | `raw.etl_errors` audit table + ETL hard-error wiring + `reprocess_errored_games()` helper |
+
+---
+
+## SIM-092 — Deduplicate `raw.game_odds` Inserts
+
+**Type:** Improvement | **Effort:** S | **Status:** ✅ Complete
+
+### Problem
+`_persist_odds()` always INSERTed a new row with no ON CONFLICT clause. The live pipeline refreshes a game every 30 seconds, so a 3-hour game produced ~360 identical odds rows per game. Lines move infrequently relative to that cadence, so almost every snapshot was a duplicate of the previous. Over a full 162-game season × 30 games/day, millions of duplicate rows would accumulate, blowing up storage and slowing every CLV query that scans `raw.game_odds`.
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `db/migrations/versions/0010_sim092_game_odds_dedup.py` | Created | Adds `odds_hash VARCHAR(64)` column + partial unique index `idx_game_odds_dedup ON (game_pk, source, odds_hash) WHERE odds_hash IS NOT NULL`. Partial so legacy NULL-hash rows don't trip the constraint. |
+| `db/schemas/01_postgres_schema.sql` | Updated | `raw.game_odds` now declares `odds_hash` and the partial unique index inline. |
+| `pipeline/live/live_ingestion_pipeline.py` — `LiveIngestionPipeline._odds_hash()` | Added | Static method computing SHA-256 of the canonicalised odds payload. Stable key order, float precision normalised to 6 decimals (so `1.5` and `1.50` collide), `book / line_type / market_type / is_sharp_book` part of the hash. |
+| `pipeline/live/live_ingestion_pipeline.py` — `_persist_odds()` | Updated | Computes `odds_hash` before INSERT; SQL now ends with `ON CONFLICT (game_pk, source, odds_hash) WHERE odds_hash IS NOT NULL DO NOTHING`. Identical successive snapshots are server-side no-ops. |
+
+### Hash design rationale
+
+| Field | In hash? | Reason |
+|-------|---------|--------|
+| `home_ml`, `away_ml`, spreads, total | ✅ | Core line — the thing we're deduping on |
+| `book`, `line_type`, `market_type`, `is_sharp_book` | ✅ | Two books at the same price are distinct quotes; opening vs. closing is a different snapshot even at the same price |
+| `source` | ❌ | Lives outside the hash, paired with it in the unique index — keeps the index leaner and matches "INSERT into the namespace this source owns" semantics |
+| `is_mock`, `fetched_at` | ❌ | Operational metadata, not the line itself |
+
+### Backfill / cleanup
+Pre-SIM-092 rows have NULL `odds_hash`; they remain in the table. Filling them retroactively + deduping history is a separate cleanup pass — out of scope here. The partial unique index tolerates NULL, so the new rule applies forward only without breaking any existing data.
+
+### Verification
+```python
+from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+h1 = LiveIngestionPipeline._odds_hash({"home_ml": -150, "away_ml": 130, "total_line": 8.5})
+h2 = LiveIngestionPipeline._odds_hash({"home_ml": -150, "away_ml": 130, "total_line": 8.5})
+assert h1 == h2 and len(h1) == 64    # ✅
+```
+
+---
+
+## SIM-093 — Create `raw.etl_errors` + Wire into ETL Hard-Error Path
+
+**Type:** Gap | **Effort:** S | **Status:** ✅ Complete
+
+### Problem
+The ETL pipeline's docstring explicitly said it *"logs to etl_errors table"* but the table did not exist. Hard validation errors were only sent to the Python logger; skipped pitch rows were lost with no audit trail and no reprocessing path. After a validator bug fix, there was no way to identify which games were affected — the only signal was log files, which are not always retained and lack structured metadata.
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `db/migrations/versions/0011_sim093_etl_errors_table.py` | Created | `raw.etl_errors (id, game_pk, at_bat_number, pitch_number, error_type CHECK ('HARD','WARN'), error_messages TEXT[], created_at)` + `idx_etl_errors_game_pk(game_pk, created_at)` + `idx_etl_errors_recent(created_at DESC)`. **No FK to `raw.games`** — audit trail must outlive game-row deletes / replace operations. |
+| `db/schemas/01_postgres_schema.sql` | Updated | Canonical schema declares `raw.etl_errors` with explanatory comment block. |
+| `pipeline/etl/etl_historical_loader.py` — `_process_and_insert()` | Updated | Hard-error rows now include `at_bat_number` alongside `pitch_number` and are persisted via the new `_log_etl_errors()` method. The persistence call is wrapped in `try/except` so a logging failure never aborts a successful pitch ingest. |
+| `pipeline/etl/etl_historical_loader.py` — `_log_etl_errors()` | Added | Bulk-INSERT one row per skipped pitch via `psycopg2.extras.execute_batch`. Schema-stable; reuses the loader's `_get_conn()` connection helper. |
+| `pipeline/etl/etl_historical_loader.py` — `reprocess_errored_games()` | Added | Public method. `reprocess_errored_games(since: date) -> list[int]` returns distinct `game_pk`s with errors in the window. Operator workflow: after a validator bug-fix, run this and re-ingest each game with `load_game()`. |
+
+### Schema choices
+
+- `error_type CHECK ('HARD', 'WARN')` — only `HARD` is written today; `WARN` is reserved for a future pass that captures every flagged-row reason (currently those are logger-only).
+- `error_messages TEXT[]` — preserves the multi-message list from `ValidationResult` without losing structure to a join string. Postgres array types are queryable (`array_length`, `unnest`, etc.) for ad-hoc analysis.
+- **No FK to `raw.games`** — deliberate. The whole point of `etl_errors` is to capture what *failed*, including cases where the game itself never landed (FK prereq missing, etc.). A FK + ON DELETE CASCADE here would silently delete the audit trail when an operator wipes-and-reloads a game — exactly the wrong behaviour for an audit table.
+
+### Operator workflow (post-validator-fix)
+```python
+from datetime import date
+from pipeline.etl.etl_historical_loader import HistoricalDataLoader
+
+loader = HistoricalDataLoader(...)
+to_replay = loader.reprocess_errored_games(since=date(2026, 5, 1))
+for game_pk in to_replay:
+    loader.load_game(game_pk, season=2026, batter_hand_cache=…)
+```
+
+---
+
+## Migration Sequence (Updated through SIM-093)
+
+| Migration | Ticket | Description |
+|-----------|--------|-------------|
+| `0001_initial_schema.py` | SIM-084 | Full PostgreSQL schema baseline |
+| `0002_sim082_…py` | SIM-082 | Unique partial index on sim.lineup_state |
+| `0003_sim083_…py` | SIM-083 + SIM-133 | raw.etl_data_freshness, raw.game_odds (CLV columns), raw.prop_odds, raw.pipeline_run_log |
+| `0004_sim134_…py` | SIM-134 | raw.prop_odds: prop_type→prop_stat, CHECK, compound index |
+| `0005_sim085_…py` | SIM-085 | Composite situation partial index on raw.pitches |
+| `0006_sim086_…py` | SIM-086 | raw.games.venue_id → nullable |
+| `0007_sim087_…py` | SIM-087 | flag_pitch_quality() trigger: release_speed floor 60 → 50 mph |
+| `0008_sim088_…py` | SIM-088 | Drop idx_pitches_pitch_type |
+| `0009_sim089_…py` | SIM-089 | Composite (pitcher, season) partial index |
+| **`0010_sim092_…py`** | **SIM-092** | **raw.game_odds: odds_hash column + partial unique dedup index** |
+| **`0011_sim093_…py`** | **SIM-093** | **raw.etl_errors audit table + indexes** |
+
+Apply all: `alembic upgrade head`. Chain integrity verified by the new
+`TestMigrationChain::test_chain_unbroken` regression test.
+
+## Files Modified / Created (this sprint)
+
+| File | Status |
+|------|--------|
+| `db/migrations/versions/0010_sim092_game_odds_dedup.py` | Created |
+| `db/migrations/versions/0011_sim093_etl_errors_table.py` | Created |
+| `db/schemas/01_postgres_schema.sql` | Updated (SIM-092 dedup; SIM-093 etl_errors table) |
+| `pipeline/live/live_ingestion_pipeline.py` | Updated (SIM-092 `_odds_hash` + `_persist_odds` ON CONFLICT) |
+| `pipeline/etl/etl_historical_loader.py` | Updated (SIM-093 `_log_etl_errors`, `reprocess_errored_games`, hardened `_process_and_insert`) |
+| `tests/unit/test_data_engineer_sim092_sim093.py` | Created (20 tests, all passing) |
+
+### Test verification
+
+```
+$ pytest tests/unit/test_data_engineer_sim092_sim093.py -v
+============================== 20 passed in 1.35s ==============================
+
+$ pytest tests/unit/test_data_engineer_sim085_to_091.py tests/unit/test_data_engineer_sim092_sim093.py
+============================== 41 passed in 1.39s ==============================
+```
+
+Migration chain (0001 → 0011) confirmed unbroken; `down_revision` references
+all line up.
+
+---
+
+# Data Engineer Changelog — Sprint 2026-05-06
+**Author: Data Engineer (Agent 4)**
+
+Six P1 tickets in the SIM-080–099 (data-eng infrastructure / migrations) band.
+All ride on the Alembic framework established in SIM-084 (sprint 2026-05-05).
+
+| Ticket | Type | Status | One-liner |
+|--------|------|--------|-----------|
+| SIM-085 | Bug | ✅ Complete | Composite partial situation index on `raw.pitches` for SIM-070 engine |
+| SIM-086 | Bug | ✅ Complete | Live pipeline silently dropped venue-less games — `venue_id` now nullable + backfill job |
+| SIM-087 | Bug | ✅ Complete | Slow curveballs (60–65 mph) wrongly flagged as bad data — validator + trigger thresholds lowered |
+| SIM-088 | Improvement | ✅ Complete | Dropped `idx_pitches_pitch_type` — wasted ~15 MB/season write overhead on an audit-only column |
+| SIM-089 | Improvement | ✅ Complete | Composite `(pitcher, season)` partial index — profile computor hot path now < 50 ms |
+| SIM-091 | Bug | ✅ Complete | Confirmed per-play detail tables in `_delete_seasons()` + regression test on schema coverage |
+
+---
+
+## SIM-085 — Composite Situation Index on `raw.pitches`
+
+**Type:** Bug | **Effort:** S | **Status:** ✅ Complete
+
+### Problem
+The project plan Step 1.1 explicitly requires a composite index covering the full situation vector (count + outs + baserunner state) used by the situation similarity engine (SIM-070). The schema only had `idx_pitches_count_state` on `(balls, strikes, outs)`. Situation similarity queries were falling back to a sequential scan over ~700 K rows per season — well above the < 30 ms simulation-step latency target the Performance Engineer holds us to.
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `db/migrations/versions/0005_sim085_pitches_situation_index.py` | Created | Alembic migration. Partial index: `(inning, outs, balls, strikes, on_1b, on_2b, on_3b) WHERE data_quality_flag = FALSE`. Flagged rows are excluded from the sim pool anyway, so a partial index keeps it lean. |
+| `db/schemas/01_postgres_schema.sql` | Updated | Added `idx_pitches_situation` with explanatory comment. Authoritative schema now matches the migration. |
+
+### Acceptance gate
+After `alembic upgrade head`, EXPLAIN ANALYZE on a representative situation lookup must report `Index Scan using idx_pitches_situation`, not `Seq Scan on pitches`.
+
+---
+
+## SIM-086 — Fix Live Pipeline `venue_id=0` FK Violation
+
+**Type:** Bug | **Effort:** S | **Status:** ✅ Complete
+
+### Problem
+`_upsert_game_record()` in `live_ingestion_pipeline.py` inserted `venue_id=0` whenever the schedule API response was missing the `venue` key. No matching `raw.venues(venue_id=0)` row exists, so the FK raised a violation that was caught by the outer `except` and silently logged. The game row was **never inserted**. International / spring-training games that appear on the schedule before venue assignment were lost from `raw.games` entirely.
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `db/migrations/versions/0006_sim086_games_venue_id_nullable.py` | Created | `ALTER TABLE raw.games ALTER COLUMN venue_id DROP NOT NULL`. PostgreSQL's FK accepts NULL through without requiring a parent row, which is exactly the behaviour we want. |
+| `db/schemas/01_postgres_schema.sql` | Updated | `raw.games.venue_id` declared nullable with explanatory comment. |
+| `pipeline/live/live_ingestion_pipeline.py` — `_upsert_game_record()` | Fixed | `gd.get("venue", {}).get("id", 0)` → `gd.get("venue", {}).get("id") or None`. Live pipeline now writes NULL when the venue is unknown. |
+| `pipeline/etl/venue_backfill_job.py` | Created | Standalone job. Selects `raw.games` rows with `venue_id IS NULL`, re-fetches `/api/v1/schedule?gamePk=…&hydrate=venue` per game, fills the row when the MLB API returns a venue. Idempotent. APScheduler integration helper provided (`schedule_venue_backfill_job`). Default cadence: every 6 hours. Pre-checks the FK target before UPDATE so a missing `raw.venues` row produces a clean log warning instead of an asyncpg exception. |
+
+### Verification
+After migration 0006 + the live-pipeline fix:
+1. Insert a game from the schedule API with no `venue` key → row appears in `raw.games` with `venue_id = NULL`. Pre-SIM-086 the row was silently dropped.
+2. Run the backfill job; once the MLB API publishes the venue, the row's `venue_id` is filled.
+
+---
+
+## SIM-087 — Lower `release_speed` Validator + Trigger Thresholds
+
+**Type:** Bug | **Effort:** S | **Status:** ✅ Complete
+
+### Problem
+The ETL validator warned on `release_speed < 70` mph and the DB trigger flagged `< 60` mph as bad data, setting `data_quality_flag = TRUE`. Slow curveballs (60–65 mph) and eephus pitches are legitimate pitch types — flagging them excluded those rows from `sim.pitch_pool` and biased the pool toward hard-throwing pitchers. Direct downstream impact on the GMM-based pitcher similarity engine (SIM-066+ family) and on simulated K-rate distributions for soft-tossing pitchers.
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `pipeline/etl/etl_historical_loader.py` — `_validate_row()` | Fixed | Validator floor `70 → 60` mph. Warning text updated to match. Comment notes the trigger uses a separate `< 50` threshold. |
+| `db/schemas/01_postgres_schema.sql` — `raw.flag_pitch_quality()` | Fixed | Trigger floor `60 → 50` mph. Eephus + slow curveballs now pass clean. |
+| `db/migrations/versions/0007_sim087_release_speed_threshold.py` | Created | `CREATE OR REPLACE FUNCTION raw.flag_pitch_quality()`. Two-tier scheme: validator at 60 mph (warn-only), trigger at 50 mph (impossible-floor). |
+
+### Two-tier rationale
+The validator is *advisory* (logs to ETL warnings); the DB trigger is the hard data-quality gate. Mirrors the launch-speed pattern (warns at 125 mph, no trigger). Existing rows already flagged with the old 60 mph threshold retain their flag — backfill of historical rows is out of scope; if anyone needs it, file a separate ticket.
+
+### Sanity check
+```python
+from pipeline.etl.etl_historical_loader import _validate_row
+# 68 mph slow curve — should be CLEAN now
+result = _validate_row({..., "release_speed": 68.0})
+assert not [w for w in result.warnings if "release_speed" in w]   # ✅ no warning
+```
+
+---
+
+## SIM-088 — Drop `idx_pitches_pitch_type` (Wasted Write Overhead)
+
+**Type:** Improvement | **Effort:** S | **Status:** ✅ Complete
+
+### Problem
+The schema comment on `raw.pitches.pitch_type` explicitly says it is *"stored for reference/audit only. Similarity engine uses GMM components."* No hot path in any pipeline file filters by `pitch_type` as a primary predicate. Yet the standalone single-column index `idx_pitches_pitch_type` added ~15 MB of write overhead per season per ingest. The index directly contradicted its own column documentation.
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `db/migrations/versions/0008_sim088_drop_pitches_pitch_type_index.py` | Created | `DROP INDEX IF EXISTS idx_pitches_pitch_type`. `downgrade()` restores it for symmetry. |
+| `db/schemas/01_postgres_schema.sql` | Updated | Standalone index removed; explanatory comment in its place documents *why* it's intentionally absent and how to re-add `CONCURRENTLY` for ad-hoc debugging. |
+
+### What we kept
+The compound `(pitcher, pitch_type)` index `idx_pitches_pitcher_type` is retained — it supports per-pitcher pitch-type breakdown queries that are common in ad-hoc analysis, at low maintenance cost.
+
+### Audit
+The new regression test `TestSim088DropPitchTypeIndex::test_no_sql_where_clause_filters_by_pitch_type` greps the entire `pipeline/` package for `WHERE …pitch_type = …` and `WHERE …pitch_type IN (…)`. Currently zero matches. If this test ever fails, do **not** drop the index again without restoring a CONCURRENTLY-built replacement first.
+
+---
+
+## SIM-089 — Composite `(pitcher, season)` Partial Index
+
+**Type:** Improvement | **Effort:** S | **Status:** ✅ Complete
+
+### Problem
+The player-profile computor's most frequent query is *"all clean pitches for pitcher X in season Y"*. The existing `idx_pitches_pitcher_season` indexes `(pitcher, game_date)` — `season` is a denormalized SMALLINT filtered directly, not implied by a date range. The `data_quality_flag = FALSE` filter is applied *after* the index scan, not as part of it. For a pitcher with 3,000 pitches, the planner scans every row for that pitcher and filters ~50 flagged rows at runtime, wasting ~95 % of block reads on the hot nightly batch path.
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `db/migrations/versions/0009_sim089_pitches_pitcher_season_clean_index.py` | Created | `CREATE INDEX idx_pitches_pitcher_season_clean ON raw.pitches(pitcher, season) WHERE data_quality_flag = FALSE`. Partial — same partial-index pattern as SIM-085. |
+| `db/schemas/01_postgres_schema.sql` | Updated | Composite partial index added below the existing `idx_pitches_pitcher_season`. Comment documents why both exist (date-range vs season-equality access patterns). |
+
+### Acceptance gate
+EXPLAIN ANALYZE on `_compute_pitcher_profiles()`'s primary fetch query must show `Index Scan using idx_pitches_pitcher_season_clean`. Per-pitcher fetch (≈3,000 pitches) target: < 50 ms.
+
+---
+
+## SIM-091 — Per-Play Detail Tables in `_delete_seasons()` + Regression Guard
+
+**Type:** Bug | **Effort:** S | **Status:** ✅ Complete
+
+### Problem
+`_delete_seasons()` in `player_profile_computor.py` hardcodes a list of derived/sim tables to clear before a `full_rebuild=True` run. Without the per-play detail tables (`derived.outfield_play_detail`, `derived.infield_play_detail`, `derived.dp_play_detail`), a full rebuild silently mixed old and new defensive metric data — a quiet source of cross-season contamination invisible to existing tests.
+
+### Status of the table list
+Audit at SIM-091 ship time confirmed all three play_detail tables were already present in the `tables` list (lines 894–897 of `player_profile_computor.py`). The substantive deliverable for SIM-091 is therefore the **regression guard**: a test that fails the next time someone adds a season-keyed `derived.*` table without remembering to update `_delete_seasons()`.
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `pipeline/batch/player_profile_computor.py` — `_delete_seasons()` | Documented | Added explicit docstring listing intentionally omitted tables (`derived.run_expectancy_matrix` because it's keyed by `season_range`; `sim.*` pools because they DELETE in their own build methods). |
+| `tests/unit/test_data_engineer_sim085_to_091.py` — `TestSim091DeleteSeasonsCoverage` | Created | Two tests. (1) Asserts the three play_detail tables are explicitly listed. (2) Parses `02_duckdb_schema.sql`, finds every `derived.*` table with a `season` column, and asserts each one is listed in `_delete_seasons()` (or in `_EXCLUDED_FROM_DELETE_SEASONS` with a comment). |
+
+### How the guard works
+When a new derived table with a `season` column is added to `02_duckdb_schema.sql` but not to `_delete_seasons()`, the test fails with:
+```
+SIM-091 regression: the following derived.* tables have a `season` column
+but are not in _delete_seasons():
+  derived.<new_table_name>
+```
+Forces an intentional decision (add it to the delete list, or document the exclusion).
+
+---
+
+## Migration Sequence (Updated through SIM-089)
+
+| Migration | Ticket | Description |
+|-----------|--------|-------------|
+| `0001_initial_schema.py` | SIM-084 | Full PostgreSQL schema baseline |
+| `0002_sim082_…py` | SIM-082 | Unique partial index on sim.lineup_state |
+| `0003_sim083_…py` | SIM-083 + SIM-133 | raw.etl_data_freshness, raw.game_odds (CLV columns), raw.prop_odds, raw.pipeline_run_log |
+| `0004_sim134_…py` | SIM-134 | raw.prop_odds: prop_type→prop_stat, CHECK, compound index |
+| **`0005_sim085_…py`** | **SIM-085** | **Composite situation partial index on raw.pitches** |
+| **`0006_sim086_…py`** | **SIM-086** | **raw.games.venue_id → nullable** |
+| **`0007_sim087_…py`** | **SIM-087** | **flag_pitch_quality() trigger: release_speed floor 60 → 50 mph** |
+| **`0008_sim088_…py`** | **SIM-088** | **Drop idx_pitches_pitch_type** |
+| **`0009_sim089_…py`** | **SIM-089** | **Composite (pitcher, season) partial index** |
+
+Apply all: `alembic upgrade head`.
+
+## Files Modified / Created (this sprint)
+
+| File | Status |
+|------|--------|
+| `db/migrations/versions/0005_sim085_pitches_situation_index.py` | Created |
+| `db/migrations/versions/0006_sim086_games_venue_id_nullable.py` | Created |
+| `db/migrations/versions/0007_sim087_release_speed_threshold.py` | Created |
+| `db/migrations/versions/0008_sim088_drop_pitches_pitch_type_index.py` | Created |
+| `db/migrations/versions/0009_sim089_pitches_pitcher_season_clean_index.py` | Created |
+| `db/schemas/01_postgres_schema.sql` | Updated (SIM-085, SIM-086, SIM-087, SIM-088, SIM-089) |
+| `pipeline/live/live_ingestion_pipeline.py` | Updated (SIM-086 fallback fix) |
+| `pipeline/etl/etl_historical_loader.py` | Updated (SIM-087 validator threshold) |
+| `pipeline/etl/venue_backfill_job.py` | Created (SIM-086 backfill job) |
+| `pipeline/batch/player_profile_computor.py` | Updated (SIM-091 docstring) |
+| `tests/unit/test_data_engineer_sim085_to_091.py` | Created (21 tests across all 6 tickets — passes locally) |
+
+### Test verification
+
+```
+$ pytest tests/unit/test_data_engineer_sim085_to_091.py -v
+============================== 21 passed in 1.04s ==============================
+```
+
+All five new migrations parse cleanly; `down_revision` chain is intact (0004 → 0005 → 0006 → 0007 → 0008 → 0009). Run `alembic upgrade head` against a target DB to apply.
+
+---
+
+# Data Engineer Changelog — Sprint 2026-05-05
+**Author: Data Engineer (Agent 4)**
+
+---
+
 ## SIM-084 — Initialize Alembic Migration Framework
 
 **Type:** Gap | **Effort:** M | **Status:** ✅ Complete

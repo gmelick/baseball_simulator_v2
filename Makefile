@@ -13,31 +13,13 @@
 .PHONY: help dev down build migrate test test-unit test-integration test-regression lint \
         type-check format shell logs clean nuke
 
-# Default target — show help
+# Default target — show help.
+##
+## Cross-platform: uses Python `print()` instead of multiple `@echo` lines.
+## Windows cmd.exe prints the literal "" instead of a blank line for
+## `echo ""`, so the bash form was visually broken under Windows GNU Make.
 help:
-	@echo ""
-	@echo "MLB Baseball Simulation Platform"
-	@echo "================================="
-	@echo ""
-	@echo "  make dev               Build + start all services (foreground)"
-	@echo "  make down              Stop and remove containers + networks"
-	@echo "  make build             Force rebuild Docker images"
-	@echo "  make migrate           Apply all Alembic migrations (requires db healthy)"
-	@echo ""
-	@echo "  make test              Run full test suite (unit + integration)"
-	@echo "  make test-unit         Unit tests only (no Docker deps)"
-	@echo "  make test-regression   Regression gate (golden-file engine drift detection)"
-	@echo "  make test-integration  Integration tests (spins up testcontainers)"
-	@echo ""
-	@echo "  make lint              Ruff lint check"
-	@echo "  make format            Ruff auto-format"
-	@echo "  make type-check        Mypy static type analysis"
-	@echo ""
-	@echo "  make shell             Open a bash shell inside the app container"
-	@echo "  make logs              Tail logs for all services"
-	@echo "  make clean             Remove Python artifacts (__pycache__, .coverage, etc.)"
-	@echo "  make nuke              Full teardown: containers + volumes (destructive!)"
-	@echo ""
+	@python -c "print('''\nMLB Baseball Simulation Platform\n=================================\n\n  make dev               Build + start all services (foreground)\n  make down              Stop and remove containers + networks\n  make build             Force rebuild Docker images\n  make migrate           Apply all Alembic migrations (requires db healthy)\n\n  make test              Run full test suite (unit + integration)\n  make test-unit         Unit tests only (no Docker deps)\n  make test-regression   Regression gate (golden-file engine drift detection)\n  make test-integration  Integration tests (spins up testcontainers)\n\n  make lint              Ruff lint check\n  make format            Ruff auto-format\n  make type-check        Mypy static type analysis\n\n  make shell             Open a bash shell inside the app container\n  make logs              Tail logs for all services\n  make clean             Remove Python artifacts (__pycache__, .coverage, etc.)\n  make nuke              Full teardown: containers + volumes (destructive!)\n''')"
 
 # ---------------------------------------------------------------------------
 # Docker Compose shortcuts
@@ -63,11 +45,15 @@ build:
 
 ## Apply all Alembic migrations to the PostgreSQL database.
 ## Uses the 'migrate' one-shot service defined in docker-compose.yml.
+##
+## Cross-platform note: BASEBALL_DB_DSN is read from .env by the migrate
+## container (env_file in docker-compose.yml).  alembic env.py auto-coerces
+## the postgresql:// scheme to postgresql+psycopg2:// for SQLAlchemy.
+## This avoids the bash $${VAR:-default} substitution that doesn't expand
+## under cmd.exe on Windows GNU Make.
 migrate: _require_env_file
 	@echo "Applying Alembic migrations..."
-	docker compose run --rm \
-	  -e BASEBALL_DB_DSN=postgresql+psycopg2://$${POSTGRES_USER:-baseball_user}:$${POSTGRES_PASSWORD:-baseball_pass}@db:5432/$${POSTGRES_DB:-baseball_sim} \
-	  app alembic upgrade head
+	docker compose run --rm app alembic upgrade head
 	@echo "Migrations complete."
 
 ## Tail logs for all services (Ctrl-C to exit)
@@ -83,11 +69,12 @@ shell:
 # ---------------------------------------------------------------------------
 
 ## Run the full test suite inside Docker (unit + integration)
+##
+## BASEBALL_DB_DSN and REDIS_URL come from .env via env_file (docker-compose.yml).
+## Cross-platform: no bash $${VAR:-default} substitution that breaks on cmd.exe.
 test: _require_env_file
-	docker compose run --rm \
-	  -e BASEBALL_DB_DSN=postgresql+psycopg2://$${POSTGRES_USER:-baseball_user}:$${POSTGRES_PASSWORD:-baseball_pass}@db:5432/$${POSTGRES_DB:-baseball_sim} \
-	  -e REDIS_URL=redis://redis:6379/0 \
-	  app pytest tests/ -v --tb=short --timeout=60 \
+	docker compose run --rm app \
+	  pytest tests/ -v --tb=short --timeout=60 \
 	       --cov=similarity --cov=pipeline --cov=api \
 	       --cov-report=term-missing --cov-report=xml:coverage.xml
 
@@ -135,32 +122,51 @@ type-check:
 # Cleanup
 # ---------------------------------------------------------------------------
 
-## Remove Python build artifacts from the working directory
+## Remove Python build artifacts from the working directory.
+##
+## Cross-platform: uses Python instead of `find` + `rm -rf` so it works
+## under cmd.exe (Windows GNU Make has no `find` and no `rm`).  Walks the
+## tree exactly once; ignores PermissionError / FileNotFoundError so a
+## locked .pyc or already-deleted dir doesn't fail the recipe.
 clean:
-	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-	find . -type f -name "*.pyc" -delete 2>/dev/null || true
-	rm -rf .coverage coverage.xml htmlcov/ .pytest_cache/ .ruff_cache/ .mypy_cache/
-	@echo "Clean done."
+	@python -c "import os, shutil, pathlib; \
+	root = pathlib.Path('.'); \
+	[shutil.rmtree(p, ignore_errors=True) for p in root.rglob('__pycache__') if p.is_dir()]; \
+	[p.unlink(missing_ok=True) for p in root.rglob('*.pyc') if p.is_file()]; \
+	[shutil.rmtree(d, ignore_errors=True) for d in ('htmlcov', '.pytest_cache', '.ruff_cache', '.mypy_cache')]; \
+	[pathlib.Path(f).unlink(missing_ok=True) for f in ('.coverage', 'coverage.xml')]; \
+	print('Clean done.')"
 
 ## Full teardown — stops containers AND removes volumes (drops PostgreSQL data!)
 ## Use with caution. You will need to run 'make migrate' again afterward.
+##
+## The Y/N prompt is a Python one-liner so the recipe works under both bash
+## (Linux / macOS / WSL / Git Bash) AND cmd.exe (Windows GNU Make).  The
+## previous bash ``read -p ... case ... esac`` form failed on Windows with
+## "'read' is not recognized as an internal or external command" because
+## cmd.exe has no ``read`` builtin.  Python (already a project prerequisite)
+## provides input() that behaves identically across all shells.
+##
+## Non-interactive override: ``make nuke NUKE_CONFIRM=yes`` skips the prompt,
+## useful for CI / scripted teardowns.
 nuke:
 	@echo "WARNING: This will delete all Docker volumes including the PostgreSQL database."
-	@read -p "Are you sure? [y/N] " yn; \
-	  case $$yn in [Yy]*) docker compose down -v; echo "Done.";; \
-	  *) echo "Aborted.";; esac
+	@python -c "import sys, os; ans = os.environ.get('NUKE_CONFIRM') or input('Are you sure? [y/N] '); sys.exit(0 if ans.strip().lower() in ('y','yes') else 1)" \
+	  && docker compose down -v && echo "Done." \
+	  || echo "Aborted."
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
 ## Ensure .env exists before any command that reads it
+##
+## Implemented as a Python one-liner so the recipe works under both bash
+## (Linux / macOS / WSL / Git Bash) and cmd.exe (Windows GNU Make).  The
+## previous `if [ ! -f .env ]; then ...` form failed on Windows because
+## cmd.exe interprets `!` as delayed-expansion and exited 255 with the
+## error "! was unexpected at this time."  Python is already a project
+## prerequisite (see requirements.txt + Dockerfile), so introducing it
+## here adds no new dependency.
 _require_env_file:
-	@if [ ! -f .env ]; then \
-	  echo ""; \
-	  echo "ERROR: .env file not found."; \
-	  echo "  Run: cp .env.example .env"; \
-	  echo "  Then edit .env with your database credentials."; \
-	  echo ""; \
-	  exit 1; \
-	fi
+	@python -c "import os, sys; os.path.isfile('.env') or print('\nERROR: .env file not found.\n  Run: cp .env.example .env\n  Then edit .env with your database credentials.\n', file=sys.stderr) or sys.exit(1)"
