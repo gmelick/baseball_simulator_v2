@@ -46,9 +46,9 @@ FROM python:3.11-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    # Tell Python where to find the packages installed in stage 1
-    PYTHONPATH=/app \
-    PATH="/install/bin:$PATH"
+    # Tell Python where to find the application source (installed packages
+    # are copied from the builder into /usr/local, which is already on PATH).
+    PYTHONPATH=/app
 
 # libgomp is needed at runtime for faiss-cpu
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -121,4 +121,3 @@ USER appuser
 # Tests get the same default CMD as runtime; ``make test`` overrides with
 # ``pytest ...`` via docker-compose run.
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
-

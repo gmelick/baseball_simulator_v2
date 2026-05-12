@@ -47,7 +47,7 @@ pandas>=2.2,<3.0
 scikit-learn>=1.4,<2.0
 scipy>=1.13,<2.0
 faiss-cpu>=1.8,<2.0
-POT>=0.9,<1.0                   # Wasserstein distance for GMM arsenal similarity
+POT>=0.9.5,<1.0                 # Wasserstein distance for GMM arsenal similarity (>=0.9.5 ships cp311 manylinux2014 wheels — works on python:3.11-slim without compiling from source)
 
 # ---------------------------------------------------------------------------
 # Baseball data ingestion
