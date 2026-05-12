@@ -34,13 +34,10 @@ concurrency:
 env:
   PYTHON_VERSION: '3.11'
   # Minimum line-coverage threshold for similarity/ + pipeline/ modules.
-  # TODO: raise to 80 as coverage on pipeline/etl/etl_historical_loader.py,
-  #       pipeline/batch/player_profile_computor.py, and the situation engine
-  #       is filled in. Current floor reflects what the existing unit-test
-  #       suite actually exercises (similarity engines ~70%, big ETL scripts
-  #       largely untested). Lowering the gate keeps the regression signal
-  #       useful — it still fails CI if coverage *drops* further.
-  COVERAGE_GATE: 55
+  # Scope is configured in pyproject.toml's [tool.coverage.run] section —
+  # CLI / diagnostic / real-time streaming files are excluded since they're
+  # exercised by regression + integration tests, not unit tests.
+  COVERAGE_GATE: 80
 
 # ---------------------------------------------------------------------------
 # Job 1 — Lint

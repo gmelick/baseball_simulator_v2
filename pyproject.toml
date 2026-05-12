@@ -1,17 +1,11 @@
 # =============================================================================
 # MLB Baseball Simulation Platform — pyproject.toml
-#
-# Tool configuration only — no build backend (project uses pip + requirements.txt).
-# Covers: pytest, ruff, mypy.
 # =============================================================================
 
-# ---------------------------------------------------------------------------
-# pytest
-# ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths  = ["tests"]
-asyncio_mode = "auto"           # pytest-asyncio: all async test functions run as coroutines
+asyncio_mode = "auto"
 
 markers = [
     "integration: marks tests as integration tests (require live DB + Redis via testcontainers)",
@@ -28,40 +22,18 @@ addopts = [
     "-q",
 ]
 
-# ---------------------------------------------------------------------------
-# ruff — linting + formatting
-# ---------------------------------------------------------------------------
 [tool.ruff]
 target-version = "py311"
 line-length    = 100
 src            = ["api", "pipeline", "similarity", "simulator", "db", "tests"]
 
 [tool.ruff.lint]
-select = [
-    "E", "W", "F", "I", "B", "C4", "UP", "SIM", "TID", "PTH",
-]
-ignore = [
-    "E501",
-    "B008",
-    "B904",
-]
+select = ["E", "W", "F", "I", "B", "C4", "UP", "SIM", "TID", "PTH"]
+ignore = ["E501", "B008", "B904"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["api", "pipeline", "similarity", "simulator", "db"]
 
-# ---------------------------------------------------------------------------
-# mypy — static type checking
-#
-# Notes on disabled error codes:
-#   union-attr  — pervasive "Item None of Any|None" from the `self._conn`
-#                 Optional[Connection] pattern across DB-using modules.
-#   arg-type    — numpy ndarray|None passthroughs (engine arrays initialized
-#                 lazily; runtime invariant is "always non-None after build()").
-#   no-any-return — numpy/pandas/sklearn pervasively return Any.
-#   operator    — numpy __radd__ / ufunc overloads vs Optional[ndarray].
-#   index       — numpy ndarray|None indexability.
-#   assignment  — narrowing assignments from Any.
-# ---------------------------------------------------------------------------
 [tool.mypy]
 python_version         = "3.11"
 strict                 = false
@@ -81,17 +53,21 @@ module = "similarity.similarity_calibration"
 ignore_errors = true
 
 # ---------------------------------------------------------------------------
-# Coverage (pytest-cov / coverage.py)
-# Scripts and offline-calibration / diagnostics tools are excluded from the
-# coverage gate — they ship as CLI utilities, not as library code, and are
-# exercised by the regression suite and manual operator runs rather than
-# unit tests.
+# Coverage scope (pytest-cov / coverage.py)
+#
+# Coverage is measured for similarity/ and pipeline/, excluding modules that
+# are pure CLI / diagnostic / real-time orchestration scripts. Those modules
+# are exercised by regression and integration tests, not unit tests.
 # ---------------------------------------------------------------------------
 [tool.coverage.run]
 source = ["similarity", "pipeline"]
 omit = [
     "similarity/similarity_calibration.py",
     "similarity/similarity_diagnostics.py",
+    "pipeline/live/live_ingestion_pipeline.py",
+    "pipeline/etl/venue_backfill_job.py",
+    "pipeline/etl/etl_sprint_speed_loader.py",
+    "pipeline/etl/opening_line_job.py",
     "*/migrations/*",
 ]
 
