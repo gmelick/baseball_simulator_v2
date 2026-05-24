@@ -71,6 +71,7 @@ from typing import Any
 import numpy as np
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 import requests
 
 # ---------------------------------------------------------------------------
@@ -92,6 +93,13 @@ log = logging.getLogger("etl_historical_loader")
 BATCH_SIZE = 500  # rows per executemany call
 MAX_API_RETRIES = 10  # infinite-retry inherited from original; capped here
 RETRY_BACKOFF_S = 2.0  # seconds between retries
+
+# SIM-090: connection pool sizing.  A historical backfill issues many short
+# DB round-trips per game (one per FK-existence check, plus inserts and the
+# freshness upsert).  Re-connecting for every one of those is wasteful, so we
+# borrow from a pool instead.  Sized via env so ops can tune for the box.
+ETL_DB_POOL_MIN = int(os.environ.get("ETL_DB_POOL_MIN", "1"))
+ETL_DB_POOL_MAX = int(os.environ.get("ETL_DB_POOL_MAX", "8"))
 
 GAME_TYPES = ["R", "F", "D", "L", "W", "C", "P"]
 
@@ -1144,13 +1152,53 @@ class HistoricalDataLoader:
         self.write_csv = write_csv
         self.csv_output_dir = csv_output_dir
 
+        # SIM-090: lazily-initialised connection pool.  Created on first DB use
+        # (see _ensure_pool) and shared across every game in a backfill run,
+        # rather than opening/closing a fresh psycopg2 connection per round-trip.
+        self._pool: psycopg2.pool.ThreadedConnectionPool | None = None
+
+    def _ensure_pool(self) -> psycopg2.pool.ThreadedConnectionPool:
+        """Create the pool exactly once, on first DB access.
+
+        ThreadedConnectionPool is used (over SimpleConnectionPool) so the loader
+        stays safe if a caller ever fans games out across threads; for the
+        single-threaded backfill it behaves identically.  Pool bounds come from
+        ETL_DB_POOL_MIN / ETL_DB_POOL_MAX (resolved at import time).
+        """
+        if self._pool is None:
+            self._pool = psycopg2.pool.ThreadedConnectionPool(
+                minconn=ETL_DB_POOL_MIN,
+                maxconn=ETL_DB_POOL_MAX,
+                dsn=self.dsn,
+            )
+        return self._pool
+
     @contextmanager
     def _get_conn(self):
-        conn = psycopg2.connect(self.dsn)
+        """Borrow a pooled connection for the duration of the ``with`` block.
+
+        The connection is returned to the pool (``putconn``) on exit rather than
+        closed, so the underlying socket is reused by the next round-trip.
+        Existing transaction semantics are unchanged: callers still own
+        commit/rollback exactly as before.
+        """
+        pool = self._ensure_pool()
+        conn = pool.getconn()
         try:
             yield conn
         finally:
-            conn.close()
+            pool.putconn(conn)
+
+    def close(self) -> None:
+        """Shut the pool down, closing every pooled connection.
+
+        Safe to call multiple times and on a loader that never touched the DB.
+        Call this once a backfill / load run is complete so file descriptors
+        aren't held open.
+        """
+        if self._pool is not None:
+            self._pool.closeall()
+            self._pool = None
 
     # ------------------------------------------------------------------
     # Public interface
@@ -2005,7 +2053,7 @@ class HistoricalDataLoader:
         header = "pitcher / flagged" if game_pk else "date / flagged"
         log.info("Quality report (%s):", header)
         for r in rows:
-            log.info("  %s → %s flagged rows", r[0], r[1])
+            log.info("  %s -> %s flagged rows", r[0], r[1])
 
 
 # ---------------------------------------------------------------------------
@@ -2015,10 +2063,15 @@ class HistoricalDataLoader:
 # The raw.etl_data_freshness CREATE TABLE DDL now lives in:
 #   db/schemas/01_postgres_schema.sql
 # Applied via Alembic migration 0003 (db/migrations/versions/0003_*.py).
+# SIM-090: connection pooling — see HistoricalDataLoader._ensure_pool / .close().
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     loader = HistoricalDataLoader(
-        "postgresql://localhost/baseball_simulator?user=postgres&password=baseball"
+        "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim"
     )
-    loader.refresh_seasons()
+    try:
+        loader.refresh_seasons()
+    finally:
+        # SIM-090: tear the pool down so all pooled sockets are released.
+        loader.close()

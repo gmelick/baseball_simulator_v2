@@ -642,7 +642,10 @@ CREATE TABLE IF NOT EXISTS raw.prop_odds (
     book            VARCHAR(50)     NOT NULL DEFAULT 'consensus',
     line_type       VARCHAR(20)     NOT NULL DEFAULT 'current'
                         CHECK (line_type IN ('opening','current','closing','bet_placement')),
-    is_sharp_book   BOOLEAN         NOT NULL DEFAULT FALSE
+    is_sharp_book   BOOLEAN         NOT NULL DEFAULT FALSE,
+    -- SIM-340: SHA-256 fingerprint of the prop payload for write-time dedup.
+    -- Applied via Alembic migration 0013. Mirrors raw.game_odds.odds_hash.
+    odds_hash       VARCHAR(64)
 );
 
 -- SIM-134: compound index supports per-player-per-prop time-series queries
@@ -652,6 +655,11 @@ CREATE INDEX IF NOT EXISTS idx_prop_odds_game_player
     ON raw.prop_odds(game_pk, player_id, prop_stat, fetched_at DESC);
 CREATE INDEX IF NOT EXISTS idx_prop_odds_line_type
     ON raw.prop_odds(game_pk, line_type);
+-- SIM-340: write-time dedup index (partial; legacy NULL-hash rows tolerated).
+-- Applied via Alembic migration 0013. Mirrors idx_game_odds_dedup (SIM-092).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prop_odds_dedup
+    ON raw.prop_odds(game_pk, player_id, source, odds_hash)
+    WHERE odds_hash IS NOT NULL;
 
 COMMENT ON TABLE raw.prop_odds IS
     'Player prop odds snapshots. Opening lines captured nightly when starter is announced (SIM-138). prop_stat CHECK constraint enforces 7 known markets (SIM-134).';

@@ -87,6 +87,16 @@ dmypy.json
 *.pid
 
 # ---------------------------------------------------------------------------
+# Scratch / temporary output (SIM-344) — never commit captured test/CLI output
+#   e.g. smoke_output.txt, test_output.txt, *.clean, *.tmp
+# ---------------------------------------------------------------------------
+*_output.txt
+*.clean
+*.tmp
+*.bak
+*.orig
+
+# ---------------------------------------------------------------------------
 # Data & model artifacts (large files belong in DVC / S3, not git)
 # ---------------------------------------------------------------------------
 data/

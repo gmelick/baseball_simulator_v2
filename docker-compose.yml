@@ -107,6 +107,11 @@ services:
       - ./similarity:/app/similarity
       - ./simulator:/app/simulator
       - ./db:/app/db
+      # Persistent /data volume so the DuckDB file produced by
+      # pipeline/batch/player_profile_computor.py survives container
+      # restarts and is visible to both the `app` service and any
+      # one-off `docker compose run --rm app ...` invocations.
+      - duckdb_data:/data
     command: >
       uvicorn api.main:app
         --host 0.0.0.0
@@ -159,6 +164,8 @@ volumes:
   postgres_data:
     driver: local
   redis_data:
+    driver: local
+  duckdb_data:
     driver: local
 
 # ---------------------------------------------------------------------------

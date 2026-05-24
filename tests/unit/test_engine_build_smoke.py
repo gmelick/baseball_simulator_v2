@@ -13,6 +13,14 @@ requiring complex synthetic profile data.
 
 The CatalogException branch is also exercised for each engine that has
 one — guards the case where the derived tables haven't been created yet.
+
+Skip semantics
+--------------
+Some engines pull in optional native deps that don't yet publish wheels
+for newer Pythons (POT/`ot` and `faiss-cpu` lag behind cp313).  Tests
+that exercise those engines skip cleanly rather than fail when the
+optional dep isn't installed — the engines themselves expose a
+`_POT_AVAILABLE` / `_FAISS_AVAILABLE` boolean we can introspect.
 """
 
 from __future__ import annotations
@@ -21,9 +29,6 @@ from unittest.mock import MagicMock, patch
 
 import duckdb
 import pytest
-
-# Sentinel: a `duckdb.connect(...)` mock that yields a conn whose
-# execute().fetchall() returns [] (empty result set).
 
 
 def _patch_empty_duckdb(module_path: str):
@@ -74,15 +79,10 @@ class TestFielderEngineBuild:
 
         with _patch_catalog_error("similarity.engines.fielder_similarity"):
             engine = mod.FielderSimilarityEngine(duckdb_path="/tmp/x.duckdb")
-            # If build() does not absorb the CatalogException from the second
-            # load step, that's acceptable — we only care about exercising
-            # the first guard.  Skip if the engine propagates.
             try:
                 engine.build()
             except ddb_mod.CatalogException:
-                import pytest as _pytest
-
-                _pytest.skip("engine.build() requires both derived tables present")
+                pytest.skip("engine.build() requires both derived tables present")
         assert engine.profile_count == 0
 
 
@@ -92,17 +92,29 @@ class TestFielderEngineBuild:
 
 
 class TestPitcherEngineBuild:
-    def test_build_with_empty_data(self):
-        from similarity.engines import pitcher_similarity as mod
+    @staticmethod
+    def _import_or_skip():
+        """Lazy-import the pitcher engine; skip cleanly if POT is missing
+        (Python 3.13 has no published wheel for POT as of 2026-05)."""
+        try:
+            from similarity.engines import pitcher_similarity as mod
+        except ImportError as e:
+            if "ot" in str(e):
+                pytest.skip(f"POT not installed: {e}")
+            raise
+        if not getattr(mod, "_POT_AVAILABLE", True):
+            pytest.skip("POT (ot) not installed — Python 3.13 has no wheel yet")
+        return mod
 
+    def test_build_with_empty_data(self):
+        mod = self._import_or_skip()
         with _patch_empty_duckdb("similarity.engines.pitcher_similarity"):
             engine = mod.PitcherSimilarityEngine(duckdb_path="/tmp/x.duckdb")
             engine.build()
         assert engine.profile_count == 0
 
     def test_build_seasons_filter(self):
-        from similarity.engines import pitcher_similarity as mod
-
+        mod = self._import_or_skip()
         with _patch_empty_duckdb("similarity.engines.pitcher_similarity"):
             engine = mod.PitcherSimilarityEngine(duckdb_path="/tmp/x.duckdb")
             engine.build(seasons=[2024])
@@ -198,13 +210,22 @@ class TestBaserunnerEngineBuild:
 
 
 # ---------------------------------------------------------------------------
-# Per-pitch / batted-ball engines
+# Per-pitch / batted-ball engines (FAISS — optional dep)
 # ---------------------------------------------------------------------------
+
+
+def _faiss_or_skip(mod):
+    if not getattr(mod, "_FAISS_AVAILABLE", True):
+        pytest.skip(
+            "faiss-cpu not installed -- Python 3.13 has no wheel yet"
+        )
 
 
 class TestPitchPitchEngineBuild:
     def test_build_with_empty_data(self):
         from similarity.engines import pitch_pitch_similarity as mod
+
+        _faiss_or_skip(mod)
 
         with _patch_empty_duckdb("similarity.engines.pitch_pitch_similarity"):
             try:
@@ -212,11 +233,17 @@ class TestPitchPitchEngineBuild:
                 engine.build()
             except (AttributeError, KeyError, IndexError):
                 pytest.skip("engine.build() requires a non-empty data shape")
+            except RuntimeError as e:
+                if "faiss" in str(e).lower():
+                    pytest.skip(f"faiss-cpu missing: {e}")
+                raise
 
 
 class TestBattedBallEngineBuild:
     def test_build_with_empty_data(self):
         from similarity.engines import batted_ball_similarity as mod
+
+        _faiss_or_skip(mod)
 
         with _patch_empty_duckdb("similarity.engines.batted_ball_similarity"):
             try:
@@ -224,3 +251,7 @@ class TestBattedBallEngineBuild:
                 engine.build()
             except (AttributeError, KeyError, IndexError):
                 pytest.skip("engine.build() requires a non-empty data shape")
+            except RuntimeError as e:
+                if "faiss" in str(e).lower():
+                    pytest.skip(f"faiss-cpu missing: {e}")
+                raise

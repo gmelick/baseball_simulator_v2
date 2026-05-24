@@ -52,6 +52,34 @@ try:
 except ImportError:  # pragma: no cover
     _TESTCONTAINERS_AVAILABLE = False
 
+
+def _docker_available() -> bool:
+    """Return True iff a usable Docker daemon is reachable.
+
+    Integration tests spin up ephemeral PostgreSQL + Redis containers via
+    testcontainers.  When the host has no Docker (e.g., Windows without
+    Docker Desktop running, or a sandboxed CI without DinD) the spin-up
+    raises an opaque Connection-refused error during the *first fixture
+    request*, which pytest then reports as 21 collection-time ERRORS
+    instead of clean skips.  Probing for `docker version` up-front lets
+    us emit a single, descriptive SKIP per test instead.
+    """
+    if not _TESTCONTAINERS_AVAILABLE:
+        return False
+    try:
+        result = subprocess.run(
+            ["docker", "version", "--format", "{{.Server.Version}}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+_DOCKER_AVAILABLE = _docker_available()
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -80,6 +108,11 @@ def pg_container():
     """
     if not _TESTCONTAINERS_AVAILABLE:
         pytest.skip("testcontainers not installed — skipping integration tests")
+    if not _DOCKER_AVAILABLE:
+        pytest.skip(
+            "Docker daemon not reachable — skipping integration tests. "
+            "Start Docker Desktop (Windows/macOS) or `systemctl start docker` (Linux)."
+        )
 
     with PostgresContainer(
         image=_POSTGRES_IMAGE,
@@ -156,6 +189,11 @@ def redis_container():
     """
     if not _TESTCONTAINERS_AVAILABLE:
         pytest.skip("testcontainers not installed — skipping integration tests")
+    if not _DOCKER_AVAILABLE:
+        pytest.skip(
+            "Docker daemon not reachable — skipping integration tests. "
+            "Start Docker Desktop (Windows/macOS) or `systemctl start docker` (Linux)."
+        )
 
     with RedisContainer(image=_REDIS_IMAGE) as redis:
         yield redis

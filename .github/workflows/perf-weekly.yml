@@ -1,0 +1,110 @@
+# =============================================================================
+# MLB Baseball Simulation Platform — Weekly Performance Benchmarks (SIM-118)
+#
+# Runs the pytest-benchmark performance harness against the simulator's hot
+# paths and enforces the latency/throughput budgets as a hard gate:
+#   - Bench 1  pitcher engine query()        p50 <= 5ms,  p99 <= 20ms
+#   - Bench 2  arsenal cache lookup           <= 0.1ms (warm, all-vs-one)
+#   - Bench 3  GMM fit per-season             <= 10min (CI-scale target)
+#   - Bench 4  Phase 4 sim-loop per-pitch step <= 1.23ms/pitch (SIM-119, SIM-335)
+#   - Bench 5  Phase 4 batch-runner throughput <= 1.23ms/pitch (SIM-119, SIM-332)
+#
+# PERF_STRICT=1 turns the soft (record-only) thresholds into hard failures so
+# a perf regression fails the run.  Locally the same suite is always green.
+# PERF_STRICT_SANDBOX=1 additionally arms the sub-millisecond SIM-119 loop
+# budgets (Bench 4/5) as hard failures — set ONLY on dedicated CI hardware (here),
+# never in the shared sandbox where ms-scale timing is too noisy to gate on.
+#
+# Schedule: Every Monday at 04:00 UTC (off-peak; staggered after the 03:00
+# integration suite). Also manually dispatchable via workflow_dispatch.
+# =============================================================================
+
+name: Performance Benchmarks (weekly)
+
+on:
+  schedule:
+    # Monday 04:00 UTC
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual trigger'
+        required: false
+        default: 'Manual performance benchmark run'
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  benchmark:
+    name: Performance benchmarks (pytest-benchmark)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run performance benchmarks (strict thresholds)
+        env:
+          # Turns the soft latency targets into hard CI failures.
+          PERF_STRICT: '1'
+          # Arms the sub-millisecond SIM-119 sim-loop budgets (Bench 4/5) as hard
+          # failures — safe here because this runs on dedicated CI hardware (NOT
+          # the shared sandbox, where ms-scale timing flakes).
+          PERF_STRICT_SANDBOX: '1'
+        run: |
+          # --benchmark-max-time bounds each bench's wall time so the heavier
+          # sim-loop / batch benches (Bench 4/5) do not balloon the job; the
+          # SIM-119 budget is asserted on the MEDIAN, which is stable within a
+          # short window.
+          pytest tests/performance \
+            --benchmark-only \
+            --benchmark-json=benchmark-results.json \
+            --benchmark-max-time=1.0 \
+            -v \
+            --tb=short
+
+      - name: Enforce peak-RSS RAM budget (SIM-280 ≤ 2 GB)
+        # A coarse process-level guard that the perf suite (which exercises the
+        # SIM-332 batch runner + the in-memory similarity engines) stays well
+        # under the SIM-280 ≤2 GB single-process budget.  Uses /usr/bin/time
+        # -v's "Maximum resident set size" (KB).  Soft-bounded high (1.5 GB) so
+        # it catches a gross leak/blow-up without flaking on normal variance.
+        run: |
+          /usr/bin/time -v python -m pytest tests/performance \
+            --benchmark-only --benchmark-max-time=0.5 -q \
+            2> perf-mem.txt || true
+          peak_kb=$(grep "Maximum resident set size" perf-mem.txt | awk '{print $NF}')
+          echo "Peak RSS: ${peak_kb} KB"
+          limit_kb=$((1536 * 1024))   # 1.5 GB headroom under the 2 GB SIM-280 cap
+          if [ -n "${peak_kb}" ] && [ "${peak_kb}" -gt "${limit_kb}" ]; then
+            echo "::error::Perf suite peak RSS ${peak_kb} KB exceeds ${limit_kb} KB (SIM-280 ≤2 GB)"
+            exit 1
+          fi
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-${{ github.run_id }}
+          path: benchmark-results.json
+          retention-days: 90
+
+      - name: Notify on failure (workflow summary)
+        if: failure()
+        run: |
+          echo "## ❌ Performance Benchmark Failure" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The weekly performance harness failed a threshold (PERF_STRICT=1)." >> $GITHUB_STEP_SUMMARY
+          echo "Check the uploaded benchmark-results.json for the regressed bench." >> $GITHUB_STEP_SUMMARY
+          echo "Run \`PERF_STRICT=1 pytest tests/performance --benchmark-only\` locally to reproduce." >> $GITHUB_STEP_SUMMARY

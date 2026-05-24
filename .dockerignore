@@ -3,13 +3,18 @@
 # Keep the build context small: no tests, docs, or dev artifacts in image.
 # =============================================================================
 
-# Secrets — never bake into image
+# Secrets — never bake into image.
+# NOTE: `.env.example` is a sample file (no secrets) — kept in the image
+# because tests/unit/test_backend_sim101_to_106_148_153.py asserts it ships.
 .env
-.env.*
+.env.local
+.env.production
+.env.staging
 
-# Version control
+# Version control: .git/ is excluded (large, unnecessary), but .gitignore
+# is kept because tests/unit/test_backend_sim101_to_106_148_153.py reads it
+# to verify the SIM-153 secrets-baseline excludes .env.
 .git/
-.gitignore
 
 # Python artifacts
 __pycache__/
@@ -36,16 +41,23 @@ env/
 *.swp
 *.swo
 
-# Tests (not in runtime image — run via make test in separate container)
-tests/
+# Tests are intentionally NOT excluded here.
+#
+# The runtime Dockerfile stage stays lean by listing exactly which
+# directories to COPY (api/, pipeline/, similarity/, simulator/, db/) —
+# tests/ never lands in the runtime image regardless of .dockerignore.
+#
+# The dev stage, by contrast, does ``COPY tests/ /app/tests/`` so
+# ``make test`` / ``make lint`` etc. can run inside the container.
+# Excluding tests/ here breaks that COPY with "not found" — see the
+# comment in Dockerfile lines 113-115.
 
-# Docs & planning
-*.md
+# Docs & planning — large binaries excluded but markdown kept so tests
+# can verify documentation files referenced by SIM-313 etc. exist.
 *.docx
-*.xlsx
 baseball_sim_project_plan.docx
-agent_team.md
-CHANGES.md
+backlog.xlsx
+backlog_v2.xlsx
 
 # Large data / model artifacts
 data/

@@ -3,6 +3,7 @@ pitcher_similarity.py
 =====================
 Step 2.1 — Pitcher-to-Pitcher Similarity (Command & Pitch Profile)
 MLB Baseball Simulation Platform
+(SIM-075: arsenal W2 cache lookup vectorized via NumPy matrix row-slice)
 
 Computes a composite similarity score [0, 1] between any two MLB
 pitcher-season profiles by combining:
@@ -128,9 +129,39 @@ from pathlib import Path
 
 import duckdb
 import numpy as np
-import ot
 from numpy.typing import NDArray
 from scipy.linalg import sqrtm
+
+# POT (Python Optimal Transport) provides the EMD solver used by the
+# W2 arsenal distance.  It does not yet publish cp313 wheels (as of
+# 2026-05) — a top-level `import ot` therefore makes the whole module
+# unimportable on Python 3.13, breaking the engine-build smoke tests
+# even though they mock duckdb and never touch the W2 code path.
+#
+# Gate it behind a lazy import: smoke tests don't reach the W2 path,
+# so they don't need POT installed.  Real build/query paths call
+# `_require_pot()` first and raise a clean RuntimeError if missing.
+try:  # pragma: no cover
+    import ot
+
+    _POT_AVAILABLE = True
+except ImportError as _pot_err:  # pragma: no cover
+    ot = None  # type: ignore[assignment]
+    _POT_AVAILABLE = False
+    _POT_IMPORT_ERROR = _pot_err
+
+
+def _require_pot() -> None:
+    """Raise a clean RuntimeError when POT is needed but not installed."""
+    if not _POT_AVAILABLE:  # pragma: no cover
+        raise RuntimeError(
+            "POT (Python Optimal Transport) is required for W2 arsenal "
+            "similarity but is not installed.  On Python 3.13 it currently "
+            "has no published wheel -- install from source "
+            "(`pip install POT`) or use Python 3.11 / 3.12.  "
+            f"Original ImportError: {_POT_IMPORT_ERROR!r}"
+        )
+
 
 from similarity.similarity_diagnostics import run_pitcher_diagnostics
 
@@ -186,23 +217,37 @@ RBF_SIGMA_COMMAND = 1.0453  # tighter — command is lower-dimensional
 
 # Arsenal W2 distance → similarity score transform.
 #
-# Uses a linear exponential:
+# SINGLE CANONICAL FORM (SIM-346): linear exponential ONLY.
 #   score = exp(-W₂ / ARSENAL_SCALE)
 #
 # Linear rather than squared because the simulation uses similarity as a
 # weight for ALL historical pitches in the pool, not just top-N. The
 # linear form keeps the tail (dissimilar pitchers) distinguishable rather
 # than crushing them all to ~0, which matters when even moderately
-# different pitchers contribute to the weighted sample.
+# different pitchers contribute to the weighted sample. This is the locked
+# project convention (agent_team.md: "linear exponential exp(-W₂ / 4.10)
+# used over squared exponential"). The squared-exponential ``arsenal_gamma``
+# form (exp(-γ·W₂²)) that the calibrator computes is the SAME calibration
+# anchor expressed differently and is converted into this linear scale by
+# ``arsenal_scale_from_gamma`` / ``PitcherSimilarityEngine.apply_calibration``
+# — there is no longer a second, divergent squared code path in the engine.
 #
-# ARSENAL_SCALE = -median_W₂ / ln(target)
-# For median W₂ ≈ 2.84 and target 0.50: scale = 2.84 / 0.693 = 4.10
+# Calibration: ARSENAL_SCALE = -median_W₂ / ln(target).
+# For median W₂ ≈ 2.84 and target 0.50: scale = 2.84 / 0.693 = 4.10.
+# (Previously a hand-tuned 4.25 literal, which drifted off the calibrated
+# value and was never reconciled with the calibrator output — fixed in
+# SIM-346.)
 #
-# Recalibrate from real data via:
-#   from similarity_calibration import calibrate_arsenal_scale
-#   dists = engine._arsenal_cache.finite_distances()
-#   optimal_scale = calibrate_arsenal_scale(dists, target_median_score=0.50)
-ARSENAL_SCALE = 4.25
+# Recalibrate from real data and wire the result into the engine via:
+#   from similarity.similarity_calibration import SimilarityCalibrator
+#   report = SimilarityCalibrator(db).calibrate_from_population(seasons)
+#   engine.apply_calibration(report)   # overrides ARSENAL_SCALE from the report
+ARSENAL_SCALE = 4.10
+
+# Default used whenever no CalibrationReport has been applied. apply_calibration
+# overrides the module-level ARSENAL_SCALE; this constant preserves the locked
+# fallback so a fresh engine is still on the calibrated 0.50-median scale.
+DEFAULT_ARSENAL_SCALE = 4.10
 
 # Empirical Bayes shrinkage prior strength
 # At N_PRIOR pitches, the shrinkage weight α = N / (N + N_PRIOR) = 0.5
@@ -215,6 +260,48 @@ MIN_CLUSTER_SIZE = 30
 
 # Minimum sample for similarity (matches player_profile_computor.py)
 MIN_PITCHER_PITCHES = 200
+
+
+def arsenal_scale_from_gamma(gamma: float, median_w2: float) -> float:
+    """Convert a calibrated squared-exponential ``arsenal_gamma`` into the
+    engine's canonical LINEAR ``ARSENAL_SCALE`` (SIM-346 reconciliation).
+
+    The calibrator solves its anchor in squared-exponential form::
+
+        target = exp(-gamma * median_w2 ** 2)   =>   gamma = -ln(target)/median_w2²
+
+    The engine uses the linear form::
+
+        target = exp(-median_w2 / scale)        =>   scale  = -median_w2/ln(target)
+
+    Both pin the SAME median W₂ to the SAME target score, so they share the
+    identity ``-ln(target) = gamma * median_w2² = median_w2 / scale``, giving::
+
+        scale = 1 / (gamma * median_w2)
+
+    Parameters
+    ----------
+    gamma : float
+        ``CalibrationReport.arsenal_gamma`` (squared-exp coefficient).
+    median_w2 : float
+        Median finite W₂ distance used as the calibration anchor.
+
+    Returns
+    -------
+    The equivalent linear ``ARSENAL_SCALE`` (defaults to ``DEFAULT_ARSENAL_SCALE``
+    if the inputs are non-positive / non-finite).
+    """
+    if (
+        gamma is None
+        or median_w2 is None
+        or not np.isfinite(gamma)
+        or not np.isfinite(median_w2)
+        or gamma <= 0.0
+        or median_w2 <= 0.0
+    ):
+        return DEFAULT_ARSENAL_SCALE
+    return float(1.0 / (gamma * median_w2))
+
 
 # ============================================================================
 # Data Structures
@@ -245,15 +332,57 @@ class GMMModel:
 
     @classmethod
     def from_json(cls, model_json: dict) -> GMMModel:
-        """Deserialize from the JSON stored in pitcher_season_metrics.gmm_model."""
+        """Deserialize from the JSON stored in pitcher_season_metrics.gmm_model.
+
+        SIM-322 — covariance de-standardization on load.
+
+        The nightly computor (player_profile_computor._fit_gmm_for_pitcher)
+        stores each component's ``mean`` in ORIGINAL feature units but its
+        ``covariance`` in PER-PITCHER STANDARDIZED space, i.e.
+
+            cov_std = D_feat⁻¹ · cov_orig · D_feat⁻¹,   D_feat = diag(feature_stds)
+
+        (see the storage comment "covariance stored in STANDARDIZED space").
+        Loading ``mean`` (original) alongside ``covariance`` (standardized)
+        would leave the two on inconsistent scales.  Downstream,
+        ``standardize_gmm`` standardizes BOTH from ORIGINAL units
+        (``z_mean = (μ−pop_mean)/pop_std`` and ``z_cov = D⁻¹ Σ D⁻¹``); feeding
+        it an already-standardized covariance double-standardizes the cov while
+        the mean is standardized only once, corrupting the W2 / Bures term.
+
+        Fix: restore the covariance to ORIGINAL units on load so that the
+        in-memory ``GMMComponent`` is internally consistent (mean and cov both
+        in original units), letting ``standardize_gmm`` apply ONE consistent
+        standardization to both:
+
+            cov_orig = D_feat · cov_std · D_feat
+
+        This is an engine-side fix (no nightly recompute required); the stored
+        JSON convention is unchanged.
+        """
+        feature_means = np.array(
+            model_json.get("feature_means", [0.0] * GMM_FEATURE_DIM),
+            dtype=np.float64,
+        )
+        feature_stds = np.array(
+            model_json.get("feature_stds", [1.0] * GMM_FEATURE_DIM),
+            dtype=np.float64,
+        )
+        # D_feat = diag(feature_stds) — used to de-standardize the stored cov.
+        d_feat = np.diag(feature_stds)
+
         components = []
         for c in model_json.get("components", []):
+            # Stored covariance is in per-pitcher STANDARDIZED space; convert
+            # back to ORIGINAL units so it matches the original-unit ``mean``.
+            cov_std = np.array(c["covariance"], dtype=np.float64)
+            cov_orig = d_feat @ cov_std @ d_feat
             components.append(
                 GMMComponent(
                     component_id=c["component_id"],
                     weight=c["weight"],
                     mean=np.array(c["mean"], dtype=np.float64),
-                    covariance=np.array(c["covariance"], dtype=np.float64),
+                    covariance=cov_orig,
                     n_pitches=c.get("n_pitches", 0),
                 )
             )
@@ -261,14 +390,8 @@ class GMMModel:
         return cls(
             n_components=model_json.get("n_components", 0),
             feature_names=model_json.get("feature_names", GMM_FEATURE_NAMES),
-            feature_means=np.array(
-                model_json.get("feature_means", [0.0] * GMM_FEATURE_DIM),
-                dtype=np.float64,
-            ),
-            feature_stds=np.array(
-                model_json.get("feature_stds", [1.0] * GMM_FEATURE_DIM),
-                dtype=np.float64,
-            ),
+            feature_means=feature_means,
+            feature_stds=feature_stds,
             components=components,
             bic=diag.get("bic", 0.0),
         )
@@ -462,8 +585,14 @@ class ArsenalSimilarity:
         """
         Arsenal similarity score in [0, 1].
 
-        Uses the Gaussian RBF form for consistency with all other sub-scores:
-            score = exp(-ARSENAL_GAMMA * W₂²)
+        SIM-346: canonical LINEAR-exponential transform (the single form used
+        everywhere in this engine — see ARSENAL_SCALE):
+            score = exp(-W₂ / ARSENAL_SCALE)
+
+        (The old docstring described a squared ``exp(-ARSENAL_GAMMA * W₂²)``
+        form that the code never actually used — that dead/divergent path is
+        gone; the calibrator's ``arsenal_gamma`` is converted to this linear
+        scale via ``arsenal_scale_from_gamma``.)
 
         A distance of 0 → score 1.0 (identical).
         """
@@ -782,6 +911,18 @@ class ArsenalCache:
     def __init__(self) -> None:
         self._cache: dict[tuple[tuple[int, int], tuple[int, int]], float] = {}
 
+        # SIM-075: NumPy matrix backing for vectorized all-vs-one lookups.
+        # The dict above remains the authoritative sparse store (lazy fills,
+        # save/load, finite_distances). The matrix is a dense, vectorized
+        # *view* of that store, rebuilt on demand for one key population at a
+        # time (one handedness partition). It holds raw W2 distances with:
+        #   * 0.0 on the diagonal (self-distance),
+        #   * NaN for missing/non-finite (inf) pairs — i.e. a GMM was None,
+        #   * the finite W2 distance otherwise.
+        # ``_matrix_index`` maps (pitcher_id, season) -> row/col index.
+        self._matrix: NDArray[np.float64] | None = None
+        self._matrix_index: dict[tuple[int, int], int] = {}
+
     def get(
         self,
         a: tuple[int, int],
@@ -798,6 +939,119 @@ class ArsenalCache:
     ) -> None:
         """Store a distance in the cache."""
         self._cache[_cache_key(a, b)] = distance
+        # A write invalidates any previously-built dense matrix: the value
+        # for this pair may have changed. The matrix is rebuilt lazily on
+        # the next vectorized lookup, so we just drop the stale snapshot.
+        self._matrix = None
+        self._matrix_index = {}
+
+    # ------------------------------------------------------------------
+    # SIM-075: vectorized matrix-backed lookup
+    # ------------------------------------------------------------------
+
+    def build_matrix(
+        self,
+        profiles: list[PitcherProfile],
+    ) -> None:
+        """
+        Build the dense symmetric W2 distance matrix for ``profiles``.
+
+        Ensures every pair is present in the sparse cache (lazy-computing
+        and caching misses, exactly as ``get_or_compute`` would), then
+        materializes a symmetric ``(n, n)`` float matrix and the
+        ``id -> row index`` map. Subsequent all-vs-one lookups are a single
+        NumPy row slice rather than an O(N) dict loop.
+
+        Matrix encoding (raw W2 distances):
+          * diagonal = 0.0 (self-distance),
+          * NaN where a pair's cached distance is non-finite (a GMM was
+            None → ``inf`` in the dict), i.e. "missing"/below-availability,
+          * the finite W2 distance otherwise.
+
+        The result is numerically identical to repeatedly calling
+        ``get_or_compute`` for each pair — this is a pure layout change.
+        """
+        keys = [(p.pitcher_id, p.season) for p in profiles]
+        n = len(keys)
+
+        mat = np.zeros((n, n), dtype=np.float64)
+        for i in range(n):
+            pi = profiles[i]
+            for j in range(i + 1, n):
+                pj = profiles[j]
+                # Same lazy-compute-and-cache contract as get_or_compute,
+                # so the dict store stays the single source of truth.
+                # NOTE: a cache miss here calls put(), which clears
+                # self._matrix / self._matrix_index — so we must publish
+                # both the matrix AND the index *after* this loop finishes.
+                dist = self.get_or_compute(keys[i], keys[j], pi.gmm, pj.gmm)
+                v = dist if np.isfinite(dist) else np.nan
+                mat[i, j] = v
+                mat[j, i] = v
+        # Diagonal stays 0.0 (self-distance) from np.zeros init.
+        # Publish AFTER all get_or_compute/put calls so neither is wiped.
+        self._matrix = mat
+        self._matrix_index = {k: i for i, k in enumerate(keys)}
+
+    def has_matrix(self, profiles: list[PitcherProfile]) -> bool:
+        """True if a dense matrix covering exactly ``profiles`` is current."""
+        if self._matrix is None:
+            return False
+        keys = [(p.pitcher_id, p.season) for p in profiles]
+        if len(keys) != len(self._matrix_index):
+            return False
+        return all(k in self._matrix_index for k in keys)
+
+    def row_distances(
+        self,
+        query_profile: PitcherProfile,
+        profiles: list[PitcherProfile],
+    ) -> NDArray[np.float64]:
+        """
+        Return raw W2 distances from ``query_profile`` to every profile in
+        ``profiles`` as a single 1-D array (aligned to ``profiles`` order).
+
+        This is the vectorized all-vs-one lookup: when the query belongs to
+        the matrix population it is a single matrix **row slice**; otherwise
+        the row is built once (lazy-computing/caching any misses) and reused.
+
+        Encoding matches the legacy per-pair ``get_or_compute`` path so
+        callers get numerically identical values:
+          * 0.0 for the exact self (pitcher_id, season),
+          * ``float('inf')`` for missing pairs (a GMM was None),
+          * the finite W2 distance otherwise.
+
+        (The internal matrix stores NaN for missing pairs; this method maps
+        NaN -> inf on the way out so ``np.isfinite`` masks behave exactly as
+        they did against the old dict-loop result.)
+        """
+        query_key = (query_profile.pitcher_id, query_profile.season)
+
+        # Fast path: a dense matrix covering this population already exists
+        # (e.g. after precompute_arsenal_cache or a prior build) and the
+        # query is part of it -> the all-vs-one lookup is a single row slice.
+        if self.has_matrix(profiles):
+            qi = self._matrix_index.get(query_key)
+            if qi is not None:
+                row = self._matrix[qi].copy()
+                return np.where(np.isnan(row), np.inf, row)
+
+        # Lazy path: no precomputed matrix (or query outside it). Build just
+        # this one row against the sparse cache — same O(N) compute cost and
+        # cache-fill behaviour as the old per-candidate loop, but assembled
+        # into a NumPy array so the caller transforms it vectorized.
+        keys = [(p.pitcher_id, p.season) for p in profiles]
+        row = np.empty(len(profiles), dtype=np.float64)
+        for i, (k, cand) in enumerate(zip(keys, profiles, strict=False)):
+            if k == query_key:
+                row[i] = 0.0
+                continue
+            dist = self.get_or_compute(query_key, k, query_profile.gmm, cand.gmm)
+            row[i] = dist if np.isfinite(dist) else np.nan
+
+        # Map the NaN sentinel back to inf for caller parity with the legacy
+        # get_or_compute path (which returned float('inf') for missing pairs).
+        return np.where(np.isnan(row), np.inf, row)
 
     def get_or_compute(
         self,
@@ -854,7 +1108,15 @@ class ArsenalCache:
 
         if not pairs_to_compute:
             log.info("  Arsenal cache already complete for %d profiles.", len(profiles))
+            # SIM-075: even when nothing was computed, build the dense matrix
+            # so subsequent queries take the vectorized row-slice fast path.
+            self.build_matrix(profiles)
             return
+
+        # SIM-075: a batch fill changes the underlying store; drop any stale
+        # dense matrix snapshot so the next vectorized lookup rebuilds it.
+        self._matrix = None
+        self._matrix_index = {}
 
         log.info(
             "  Precomputing %d arsenal W2 distances (%d workers) …",
@@ -927,6 +1189,10 @@ class ArsenalCache:
             len(pairs_to_compute) / max(elapsed, 0.001),
         )
 
+        # SIM-075: materialize the dense matrix from the now-complete cache so
+        # every subsequent all-vs-one query is a single row slice.
+        self.build_matrix(profiles)
+
     @property
     def size(self) -> int:
         """Number of cached distances."""
@@ -968,6 +1234,9 @@ class ArsenalCache:
         with p.open("rb") as f:
             loaded = pickle.load(f)
         self._cache.update(loaded)
+        # SIM-075: loaded entries change the store → invalidate matrix view.
+        self._matrix = None
+        self._matrix_index = {}
         log.info("Arsenal cache loaded: %d entries from %s", len(loaded), path)
 
 
@@ -1108,27 +1377,24 @@ class HandednessPartition:
 
         command_scores = command_rbf.score_batch(cmd_q, self._cmd_matrix)
 
-        # --- Arsenal W2 scores (from cache, lazy-compute on miss) ---
-        arsenal_scores = np.zeros(n, dtype=np.float64)
+        # --- Arsenal W2 scores (from cache, vectorized all-vs-one) ---
+        # SIM-075: instead of an O(N) per-candidate dict loop calling
+        # get_or_compute, fetch the entire W2-distance row in one shot
+        # (a single matrix row slice once the dense matrix is built) and
+        # transform it with NumPy. ``row_distances`` returns raw W2 with
+        # 0.0 for self and inf for missing pairs — numerically identical to
+        # the old loop — so the exp/mask below reproduces the same scores.
         query_has_gmm = query_profile.gmm is not None
 
-        for i, cand in enumerate(self.profiles):
-            cand_key = self.keys[i]
-            if cand_key == query_key:
-                # Will be filtered out below; skip expensive W2
-                continue
-
-            w2_dist = arsenal_cache.get_or_compute(
-                query_key,
-                cand_key,
-                query_profile.gmm,
-                cand.gmm,
-            )
-
-            if np.isfinite(w2_dist):
-                arsenal_scores[i] = np.exp(-w2_dist / ARSENAL_SCALE)
-            else:
-                arsenal_scores[i] = 0.0
+        w2_row = arsenal_cache.row_distances(query_profile, self.profiles)
+        finite_mask = np.isfinite(w2_row)
+        arsenal_scores = np.zeros(n, dtype=np.float64)
+        arsenal_scores[finite_mask] = np.exp(-w2_row[finite_mask] / ARSENAL_SCALE)
+        # The exact self (pitcher_id, season) is excluded from results below;
+        # match the legacy loop, which left its arsenal score at 0.0 (it
+        # never called get_or_compute for self).
+        self_mask = np.array([k == query_key for k in self.keys], dtype=bool)
+        arsenal_scores[self_mask] = 0.0
 
         # --- Composite scores ---
         has_arsenal = np.array(
@@ -1144,10 +1410,25 @@ class HandednessPartition:
             WEIGHT_ARSENAL * arsenal_scores[mask_full] + WEIGHT_COMMAND * command_scores[mask_full]
         )
 
-        # Path 2: missing GMM — redistribute arsenal weight
+        # Path 2: missing GMM — redistribute the arsenal weight onto command.
+        #
+        # SIM-346 BUG FIX: the old code computed ``(WEIGHT_COMMAND / remaining)``
+        # with ``remaining = WEIGHT_COMMAND``, i.e. an exact ×1.0 no-op. That
+        # left a GMM-less pitcher's composite at ``WEIGHT_COMMAND * command``
+        # (max 0.35) — NOT comparable to a full pitcher's composite (max 1.0),
+        # so command-only pitchers were systematically under-scored and could
+        # never out-rank a mediocre full-arsenal match.
+        #
+        # Correct redistribution: pour the freed arsenal weight into the only
+        # surviving sub-score so the weights still sum to 1.0. With one
+        # remaining sub-score that means rescaling command by
+        # ``(WEIGHT_ARSENAL + WEIGHT_COMMAND) / WEIGHT_COMMAND`` (== 1/0.35 ≈
+        # 2.857), which is exactly ``_TOTAL_WEIGHT / WEIGHT_COMMAND``. The
+        # composite is then a pure command similarity on the same [0, 1] scale
+        # as a full-arsenal composite, just with the confidence discount below.
         mask_no_arsenal = ~has_arsenal
-        remaining = WEIGHT_COMMAND
-        composite[mask_no_arsenal] = (WEIGHT_COMMAND / remaining) * command_scores[mask_no_arsenal]
+        command_redistrib = _TOTAL_WEIGHT / WEIGHT_COMMAND
+        composite[mask_no_arsenal] = command_redistrib * command_scores[mask_no_arsenal]
 
         # Confidence discount: sqrt(min(alpha_query, alpha_candidate))
         query_alpha = query_profile.eb_alpha
@@ -1224,6 +1505,90 @@ class PitcherSimilarityEngine:
 
         # Arsenal W2 distance cache (shared across both partitions)
         self._arsenal_cache = ArsenalCache()
+
+        # SIM-346: the calibrated arsenal scale actually in force. Defaults to
+        # the locked DEFAULT_ARSENAL_SCALE; apply_calibration() overrides it
+        # from a CalibrationReport so the engine reads the calibrated value
+        # instead of a hardcoded literal.
+        self._arsenal_scale: float = DEFAULT_ARSENAL_SCALE
+
+    # ------------------------------------------------------------------
+    # Calibration wiring (SIM-346)
+    # ------------------------------------------------------------------
+
+    def apply_calibration(
+        self,
+        report: "CalibrationReport",
+        median_w2: float | None = None,
+    ) -> float:
+        """Wire a ``CalibrationReport`` into the engine's arsenal transform.
+
+        Closes the SIM-346 "computed-but-never-applied" gap: the
+        ``SimilarityCalibrator`` produces ``CalibrationReport.arsenal_gamma``
+        (squared-exponential coefficient) plus the median W₂ it was anchored
+        on, but the engine previously ignored it and used a hardcoded
+        ``ARSENAL_SCALE`` literal, letting medians silently drift off 0.50.
+
+        This method converts the report's gamma into the engine's canonical
+        LINEAR ``ARSENAL_SCALE`` (via ``arsenal_scale_from_gamma``) and
+        overrides the module-level constant so EVERY scoring path
+        (``score_all``, ``ArsenalSimilarity.score``, ``_score_pair``) picks it
+        up. If the report carries no usable gamma, the locked
+        ``DEFAULT_ARSENAL_SCALE`` is kept.
+
+        Parameters
+        ----------
+        report : CalibrationReport
+            Must expose ``arsenal_gamma`` (and optionally
+            ``arsenal_median_w2`` / ``target_median_score``).
+        median_w2 : float, optional
+            Median finite W₂ used as the calibration anchor. If omitted, falls
+            back to ``report.arsenal_median_w2`` then to this engine's own
+            cache (``finite_distances()``), then to the canonical 2.84.
+
+        Returns
+        -------
+        The arsenal scale now in force.
+        """
+        global ARSENAL_SCALE
+
+        gamma = float(getattr(report, "arsenal_gamma", 0.0) or 0.0)
+
+        # Note: the report's median defaults to 0.0 (dataclass default), so a
+        # falsy/non-positive value means "not provided" and we fall back to the
+        # engine's own W2 cache, then to the locked canonical median.
+        if median_w2 is None or median_w2 <= 0.0:
+            report_median = getattr(report, "arsenal_median_w2", 0.0) or 0.0
+            median_w2 = float(report_median) if report_median > 0.0 else None
+        if median_w2 is None or median_w2 <= 0.0:
+            try:
+                dists = self._arsenal_cache.finite_distances()
+                if dists.size:
+                    median_w2 = float(np.median(dists))
+            except Exception:  # pragma: no cover - defensive
+                median_w2 = None
+        if median_w2 is None or median_w2 <= 0.0:
+            median_w2 = 2.84  # locked canonical median (agent_team.md)
+
+        scale = arsenal_scale_from_gamma(gamma, median_w2)
+        self._arsenal_scale = scale
+        # Override the module-level constant so all scoring paths read it
+        # (same override pattern the calibrator documents for the batter sigmas).
+        ARSENAL_SCALE = scale
+        log.info(
+            "SIM-346: applied CalibrationReport — arsenal_gamma=%.5f, "
+            "median_W2=%.4f → ARSENAL_SCALE=%.4f (was default %.4f).",
+            gamma,
+            median_w2,
+            scale,
+            DEFAULT_ARSENAL_SCALE,
+        )
+        return scale
+
+    @property
+    def arsenal_scale(self) -> float:
+        """The arsenal W₂→score linear scale currently in force."""
+        return self._arsenal_scale
 
     # ------------------------------------------------------------------
     # Build
@@ -1653,8 +2018,12 @@ class PitcherSimilarityEngine:
         if has_arsenal:
             composite = WEIGHT_ARSENAL * arsenal_s + WEIGHT_COMMAND * command_s
         else:
-            remaining = WEIGHT_COMMAND
-            composite = (WEIGHT_COMMAND / remaining) * command_s
+            # SIM-346: redistribute the arsenal weight onto command so a
+            # GMM-less pair lands on the same [0, 1] scale as a full pair.
+            # (Old code rescaled by WEIGHT_COMMAND / WEIGHT_COMMAND == 1.0, a
+            # no-op that capped command-only composites at WEIGHT_COMMAND.)
+            # Mirrors the vectorized path in HandednessPartition.score_all.
+            composite = (_TOTAL_WEIGHT / WEIGHT_COMMAND) * command_s
 
         confidence = min(query.eb_alpha, candidate.eb_alpha)
         composite *= np.sqrt(confidence)
@@ -1729,6 +2098,7 @@ def build_similarity_matrix(
 # ============================================================================
 # Entry Point — CLI for testing
 # ============================================================================
+# (SIM-075: arsenal W2 cache now matrix-backed; see ArsenalCache.build_matrix)
 if __name__ == "__main__":
     engine = PitcherSimilarityEngine(duckdb_path="../../db/schemas/baseball_simulator.duckdb")
     engine.build(seasons=[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017])

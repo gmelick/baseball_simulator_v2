@@ -116,8 +116,25 @@ async def lifespan(app: FastAPI):
     log.info("Opening Redis cache ...")
     app.state.redis_client, app.state.similarity_cache = await open_redis_cache(redis_url)
 
-    log.info("Building pitcher similarity engine (this may take a few seconds) ...")
-    app.state.pitcher_engine = await asyncio.to_thread(build_pitcher_engine)
+    # Dev-onboarding escape hatch: SIMILARITY_ENGINE_ENABLED=false skips the
+    # engine build entirely so the stack can boot before the DuckDB profile
+    # file exists (i.e. before the multi-hour ETL has run). When skipped,
+    # ``app.state.pitcher_engine`` is left unset and the similarity route
+    # returns 503 "engine warming" — which is exactly its documented
+    # contract for that condition.
+    engine_enabled = os.environ.get(
+        "SIMILARITY_ENGINE_ENABLED", "true"
+    ).strip().lower() not in ("0", "false", "no")
+
+    if engine_enabled:
+        log.info("Building pitcher similarity engine (this may take a few seconds) ...")
+        app.state.pitcher_engine = await asyncio.to_thread(build_pitcher_engine)
+    else:
+        log.warning(
+            "SIMILARITY_ENGINE_ENABLED is false — skipping engine build. "
+            "The /api/similarity/* routes will return 503 until this is "
+            "re-enabled and the DuckDB profile file exists."
+        )
 
     # ----------------------------------------------------------------
     # Phase 5: Uncomment to wire in the live ingestion pipeline

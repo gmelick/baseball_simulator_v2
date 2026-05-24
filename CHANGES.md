@@ -1485,3 +1485,867 @@ git commit -m "chore: update regression golden files after <describe change>"
 pytest tests/regression/ -v --timeout=60
 54 passed in <2s
 ```
+
+---
+
+# Sprint 2026-05-13 — Phase 2 Closure & Engine Build-out (CLOSED 2026-05-14)
+**Authors: ML Engineer (Agent 3), Data Engineer (Agent 4), Backend Developer (Agent 5), Performance Engineer (Agent 6)**
+
+Seven tickets shipped together as the Phase 2 closure sprint.  With SIM-041 and
+SIM-042 in, all 11 similarity engines are now built; SIM-072 v2 retires the
+v1 catcher composite; SIM-073 supplies the deterrence signal; SIM-157 closes
+the SIM-092 carry-forward; SIM-158 stands up the index acceptance harness;
+SIM-159 removes the persistent vig flake.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-073 | Gap | Data Engineer | `steal_attempt_rate_against` column on `derived.catcher_season_metrics`; DuckDB migration 0002; profile computor populates it via PA-level CTE. |
+| SIM-072 | Enhancement | ML Engineer | CatcherSimilarityEngine v2 — 5-sub-score split (Framing 45 + Blocking 20 + Execution 12 + Deterrence 8 + Offense 15). |
+| SIM-157 | Improvement | Data Engineer | `scripts/backfill_odds_hash.py` backfills legacy NULL `odds_hash` rows and de-duplicates pre-SIM-092 history; Alembic 0012 promotes partial → full unique index. |
+| SIM-158 | Validation | Performance Engineer | `scripts/run_index_acceptance.py` harness + `docs/perf/2026-05-13-index-acceptance.md` template.  Live run deferred to SIM-161. |
+| SIM-159 | Bug | Backend Developer | Moneyline vig test bounds widened to absorb American-odds integer rounding; deterministic across 100 runs × 5 game_pks. |
+| SIM-041 | Feature | ML Engineer | `PitchPitchSimilarityEngine` — FAISS IndexFlatL2 (+ HNSW path) over a 10-dim pitch fingerprint. |
+| SIM-042 | Feature | ML Engineer | `BattedBallSimilarityEngine` — FAISS over a 3-dim launch fingerprint with SIM-051 fall-forward and `outcome_distribution()` helper. |
+
+**PM acceptance verdict (2026-05-14):**
+- 12 Alembic migrations now in chain (`0001 → 0012`).
+- 2 DuckDB migrations now in chain (`0001 → 0002`).
+- 95 / 95 unit + regression tests passing (10 environmental skips for missing scipy in the local sandbox; CI installs scipy).
+- All 11 similarity engines now built — Phase 2 milestone reached.
+
+---
+
+## SIM-073 — Add `steal_attempt_rate_against` to `derived.catcher_season_metrics`
+
+**Type:** Gap | **Effort:** S | **Status:** ✅ Complete
+**Role:** Data Engineer (Agent 4)
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `db/schemas/02_duckdb_schema.sql` | Modified | Added `steal_attempt_rate_against FLOAT` to `derived.catcher_season_metrics` with the BA-approved formula in the column comment. |
+| `db/migrations/duckdb/0002_catcher_attempt_rate_against.sql` | New | Idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`; records in `migration_history`. |
+| `db/schemas/duckdb_schema_version.txt` | Modified | Bumped 1 → 2. |
+| `pipeline/batch/player_profile_computor.py::_compute_catcher_throwing` | Rewritten | Added `catcher_pa_state` (DISTINCT per game_pk + at_bat_number) and `catcher_opportunities` CTEs (1B opp = runner-on-1B-and-2B-empty, 2B opp = runner-on-2B-and-3B-empty); FULL OUTER JOIN with steal-attempt aggregation; min-sample guard returns NULL when `opp_1b_pa + opp_2b_pa < 100`. |
+| `pipeline/batch/player_profile_computor.py::_aggregate_catcher_season_metrics` | Modified | Wired the new column into the positional INSERT statement. |
+
+### Verified
+
+```bash
+# SQL round-trip exercised in an in-memory DuckDB with synthetic data —
+# bases-loaded PAs correctly drop out of opportunities, dedup-per-PA works,
+# denominator math is right.
+```
+
+---
+
+## SIM-072 — CatcherSimilarityEngine v2: Split Throwing into Execution + Deterrence
+
+**Type:** Enhancement | **Effort:** M | **Status:** ✅ Complete
+**Role:** ML Engineer (Agent 3) · Baseball Analyst (validation) · QA/DevOps (regression fixtures)
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `similarity/engines/catcher_similarity.py` | Rewritten | Composite weights now Framing 45 + Blocking 20 + Execution 12 + Deterrence 8 + Offense 15.  Added `DETERRENCE_FEATURES`, `WEIGHT_DETERRENCE`, `RBF_SIGMA_DETERRENCE`, `_deterrence_rbf`, `deterrence_vec` on `CatcherProfile`, `deterrence_score` on `SimilarityResult` (aliased as `CatcherSimilarityResult` per spec). |
+| `tests/regression/conftest.py` | Modified | Synthetic fixtures construct `deterrence_vec` via `rng.uniform(0.02, 0.18, …)`. |
+| `tests/regression/generate_fixtures.py` | Modified | Same construction; `catcher.json` regenerated. |
+| `tests/regression/fixtures/catcher.json` | Regenerated | Golden file updated for v2 weights. |
+| `tests/regression/test_engine_regression.py::TestWeightConstants` | Rewritten | New `test_catcher_v2_split_weights` locks in 12% / 8% split; `test_catcher_weights_sum_to_one` exercises the 5-sub-score sum. |
+| `tests/unit/test_ml_engines_sim072.py` | New | 5 tests including the AC-#8 synthetic Cannon-vs-Welcome-Mat test (composite < 0.40, both throwing and deterrence sub-scores < 0.5). |
+| `tests/unit/test_ml_engines_sim066_071.py::TestCatcherEngine` | Modified | `_make_engine` extended with `deterrence_vec`; sub-score check renamed to five. |
+
+### Verified
+
+```bash
+pytest tests/unit/test_ml_engines_sim072.py \
+       tests/unit/test_ml_engines_sim066_071.py::TestCatcherEngine \
+       tests/regression/test_engine_regression.py -v
+# 56 passed
+```
+
+---
+
+## SIM-157 — Backfill legacy `odds_hash` + dedup pass
+
+**Type:** Improvement | **Effort:** S | **Status:** ✅ Complete
+**Role:** Data Engineer (Agent 4)
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `scripts/backfill_odds_hash.py` | New | Async script: hashes legacy NULL rows via `LiveIngestionPipeline._odds_hash` in 10k batches, then a `ROW_NUMBER() OVER (PARTITION BY game_pk, source, odds_hash ORDER BY received_at, id)` DELETE keeps the earliest row per group.  Supports `--dry-run`. |
+| `db/migrations/versions/0012_sim157_game_odds_full_unique.py` | New | Drops the SIM-092 partial unique index, sets `odds_hash NOT NULL`, replaces with full unique. |
+| `tests/unit/test_data_engineer_sim157.py` | New | 4 tests: hash byte-equivalence with live pipeline, dict-order stability, distinct-payload distinctness, migration chain. |
+
+### Verified
+
+```bash
+pytest tests/unit/test_data_engineer_sim157.py -v
+# 4 passed
+```
+
+---
+
+## SIM-158 — EXPLAIN ANALYZE acceptance gates for SIM-085 + SIM-089
+
+**Type:** Validation | **Effort:** S | **Status:** ✅ Harness shipped (live run deferred → SIM-161)
+**Role:** Performance Engineer (Agent 6)
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `scripts/run_index_acceptance.py` | New | Async harness running EXPLAIN (ANALYZE, BUFFERS) against staging, parsing the plan for index-name + Seq Scan + execution time, emitting a Markdown acceptance report.  Exits non-zero on gate failure. |
+| `docs/perf/2026-05-13-index-acceptance.md` | New | Placeholder doc explaining how the harness populates it once 2024 data is loaded; documents AC #4 failure handling. |
+| `tests/unit/test_perf_eng_sim158.py` | New | 6 tests against fixture EXPLAIN ANALYZE output (pass/fail plan parsing, locked-in budgets, index-name + Seq Scan detection). |
+
+### Deferred
+
+The live EXPLAIN ANALYZE run is deferred to SIM-161 (sprint 2026-05-20) — the sandbox has no staging Postgres, and the SIM-158 AC explicitly allows "Once a 2024 staging DB exists, these gates must be run and the results recorded".  Harness + acceptance doc both ready.
+
+### Verified
+
+```bash
+pytest tests/unit/test_perf_eng_sim158.py -v
+# 6 passed
+```
+
+---
+
+## SIM-159 — Tighten SIM-132 vig RNG range so the moneyline test is no longer flaky
+
+**Type:** Bug | **Effort:** S | **Status:** ✅ Complete
+**Role:** Backend Developer (Agent 5)
+
+### Problem
+
+`MockOddsAPI.get_odds()` samples vig from `rng.uniform(0.06, 0.10)`, producing
+an overround `1 + vig/2 ∈ [1.030, 1.050]`.  The test asserts strict
+`> 1.03`, which fails at the lower edge for game_pk=12345 (RNG produces
+~1.0286 because integer rounding in `_prob_to_american()` drifts ±0.003).
+
+### Fix
+
+Test-side bounds widened to `[1.025, 1.055]`, with a multi-paragraph
+calibration comment explaining why the AC's nominal `1e-9` tolerance is
+wrong (American-odds integer rounding contributes ~0.003 of drift, three
+orders of magnitude larger than float-equality tolerance).  RNG range kept
+at `[0.06, 0.10]` per PM preference so the mock spans both sharp-book
+(3–5 %) and soft-book (6–8 %) overround ranges.
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `tests/unit/test_live_pipeline_bugs.py::TestSIM132MockOddsVig` | Modified | Class constants `_VIG_LOWER = 1.025`, `_VIG_UPPER = 1.055`; both bounds asserted in `test_moneyline_implied_probs_sum_exceeds_1_03` and the parametrized `test_moneyline_sum_in_realistic_vig_band`. |
+
+### Verified
+
+```bash
+# 100 runs × 5 game_pks = 500 iterations, including game_pk=12345 boundary
+# → 0 failures
+```
+
+---
+
+## SIM-041 — Pitch-to-Pitch Similarity Engine (Step 2.10, FAISS)
+
+**Type:** Feature | **Effort:** L | **Status:** ✅ Complete
+**Role:** ML Engineer (Agent 3)
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `similarity/engines/pitch_pitch_similarity.py` | New | FAISS `IndexFlatL2` over a 10-dim pitch fingerprint (velo, ivb, hb, spin_rate, spin_axis, release_x/z/ext, plate_x/z).  Z-score normalizer + sqrt-weight scaling, single + batched query path, optional `IndexHNSWFlat`, recency boost via row replication of last 2 seasons. |
+| `tests/unit/test_ml_engines_sim041.py` | New | 11 tests: K-sorted results, self-query distance ≈ 0, k-cap, finite distances, batched vs individual equivalence, empty engine, HNSW path, feature-contract lock. |
+
+### Verified
+
+```bash
+pytest tests/unit/test_ml_engines_sim041.py -v
+# 11 passed
+```
+
+---
+
+## SIM-042 — Batted-Ball Similarity Engine (Step 2.11, FAISS)
+
+**Type:** Feature | **Effort:** M | **Status:** ✅ Complete (with SIM-051 fall-forward)
+**Role:** ML Engineer (Agent 3)
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `similarity/engines/batted_ball_similarity.py` | New | FAISS over 3-dim launch fingerprint (exit_velo, launch_angle, spray_angle).  Loader introspects `information_schema.columns` and uses `pull_relative_spray_angle` automatically when SIM-051 ships, falls back to raw `spray_angle` today with an INFO note.  Includes `outcome_distribution()` helper returning a probability map over {0,1,2,3,4} hits. |
+| `tests/unit/test_ml_engines_sim042.py` | New | 10 tests including the SIM-051 readiness test (column-present vs column-missing variants of the outcome_pool DuckDB schema). |
+
+### Deferred (to SIM-051 in sprint 2026-05-20)
+
+Calibration: today the engine uses raw `spray_angle`, which is biased by
+batter handedness.  Once SIM-051 lands and adds `pull_relative_spray_angle`,
+the loader picks it up automatically — no engine code change.  Regression
+fixtures should be regenerated then to lock in the better baseline.
+
+### Verified
+
+```bash
+pytest tests/unit/test_ml_engines_sim042.py -v
+# 10 passed
+```
+
+---
+
+# Sprint 2026-05-20 — Phase 2 hardening & Phase 3 kickoff (CLOSED 2026-05-21)
+**Authors: Data Engineer (Agent 4), ML Engineer (Agent 3), Backend Developer (Agent 5), Performance Engineer (Agent 6), QA/DevOps (Agent 9)**
+
+Seven tickets: six fully shipped, one (SIM-161) deferred for operational
+reasons (staging 2024 data load).  This sprint closes Phase 2 — every
+similarity engine now has a unit test file, the FAISS engines have
+calibration sanity tests, and the SIM-051 column SIM-042's loader was
+already prepared to consume is live.  The sprint also ships the Phase 3
+play-pool architecture spec, which Phase 3 implementation tickets will
+build against.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-051 | Improvement | Data Engineer | `pull_relative_spray_angle` column on `sim.outcome_pool`; DuckDB migration 0003. SIM-042 picks it up automatically via `_select_spray_column()`. |
+| SIM-160 | Gap | Data Engineer | `scripts/check_bat_side_coverage.py` audit + acceptance doc. Gate: ≤ 1 % NULL per season. |
+| SIM-162 | Bug | Data Engineer | Restored `player_profile_computor.py` truncated tail; module parses cleanly; `LeagueAverageProfiles.compute()` chained from `__main__`. |
+| SIM-149 | Gap | QA / DevOps | `tests/unit/test_baserunner_steal_engine.py` — 9 tests covering score bounds, ordering, symmetry, sub-scores, identical-profile, EB_N_PRIOR=20. |
+| SIM-150 | Gap | QA / DevOps | `tests/unit/test_ml_engines_sim150.py` — calibration sanity tests for catcher v2 (Realmuto archetype), pitch-to-pitch (recency boost shifts neighbors), batted-ball (outcome monotonicity by exit-velo). |
+| SIM-161 | Validation | Performance Engineer | ⏳ Deferred (operational) — harness already shipped in SIM-158; live run blocks on staging 2024 data load. |
+| SIM-300 | Spec | Backend Developer + ML Engineer | `docs/architecture/2026-05-20-play-pool.md` — Phase 3 sampler architecture. |
+
+**PM acceptance verdict (2026-05-21):**
+- 3 DuckDB migrations now in chain (`0001 → 0003`).
+- 120 / 120 unit + regression tests passing (10 environmental skips for scipy in sandbox).
+- Phase 2 hardening complete; Phase 3 spec accepted.
+
+---
+
+## SIM-051 — Pre-compute `pull_relative_spray_angle` in `sim.outcome_pool`
+
+**Type:** Improvement | **Effort:** S | **Status:** ✅ Complete
+**Role:** Data Engineer (Agent 4)
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `db/schemas/02_duckdb_schema.sql` | Modified | Added `pull_relative_spray_angle FLOAT` column to `sim.outcome_pool` after `spray_angle`, with column comment documenting the sign convention. |
+| `db/migrations/duckdb/0003_pull_relative_spray_angle.sql` | New | Idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`. |
+| `db/schemas/duckdb_schema_version.txt` | Modified | Bumped 2 → 3. |
+| `pipeline/batch/player_profile_computor.py::_build_outcome_pool` | Modified | Populates the column via `CASE WHEN bat_hand='R' THEN spray_angle WHEN bat_hand='L' THEN -spray_angle ELSE NULL`. |
+| `tests/unit/test_data_engineer_sim051.py` | New | 7 tests covering RHB pull / LHB pull / oppo symmetry / 'S' fallback / NULL propagation / migration chain / schema source. |
+
+### Verified
+
+```bash
+pytest tests/unit/test_data_engineer_sim051.py -v
+# 7 passed
+```
+
+### Engine fall-forward
+
+SIM-042's `BattedBallSimilarityEngine._select_spray_column()` was already
+SIM-051-aware (shipped in sprint 2026-05-13): it introspects
+`information_schema.columns` and picks `pull_relative_spray_angle` over
+raw `spray_angle` automatically once the column exists.  No engine code
+change required — just regenerate the SIM-042 fixture once the column is
+populated in staging.
+
+---
+
+## SIM-160 — `raw.pitches.bat_side` coverage audit
+
+**Type:** Gap | **Effort:** S | **Status:** ✅ Complete
+**Role:** Data Engineer (Agent 4)
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `scripts/check_bat_side_coverage.py` | New | Async script reporting NULL stand/bat_hand % and 'S' (unresolved switch) % per season. Gate: NULL % ≤ 1 % per season. Exits non-zero on failure (CI-ready). Emits a Markdown report. |
+| `docs/data_quality/2026-05-20-bat-side-coverage.md` | New | Placeholder doc explaining how the audit gets executed once staging is loaded, with failure-handling instructions. |
+
+### Notes
+
+Schema-level `CHAR(1) NOT NULL CHECK IN ('L','R','S')` structurally
+guarantees the NULL gate — this audit verifies that holds in practice.
+The secondary `'S' %` (informational) catches switch hitters whose
+handedness wasn't resolved at ETL time.  These would propagate sign-flip
+errors into SIM-051's `pull_relative_spray_angle`.
+
+---
+
+## SIM-162 — Restore truncated `LeagueAverageProfiles.compute()` chain
+
+**Type:** Bug | **Effort:** S | **Status:** ✅ Complete
+**Role:** Data Engineer (Agent 4)
+
+### Root cause
+
+`pipeline/batch/player_profile_computor.py` was truncated at line 3971
+mid-argparse statement.  The `LeagueAverageProfiles` class definition
+itself (line 3800–3927) was intact; the actual truncation was in the
+`__main__` block that wires it up — a partial in-progress edit had
+left the module unimportable across the entire codebase even though
+the catcher / pitcher / fielder pipelines themselves were correct.
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `pipeline/batch/player_profile_computor.py::__main__` | Restored | Added the missing `parser.parse_args()` call, the DSN check, the credential-masked log line, the `PlayerProfileComputor` instantiation with `pg_dsn=` keyword (the correct parameter name), and the chained `LeagueAverageProfiles(args.duckdb_path).compute(args.seasons or [datetime.today().year])` call. |
+| `pipeline/batch/player_profile_computor.py::__main__` | Added | `--skip-league-averages` flag for incremental reruns where league averages are already current. |
+| `tests/unit/test_data_engineer_sim162.py` | New | 4 tests: file parses cleanly, `__main__` invokes both `PlayerProfileComputor` and `LeagueAverageProfiles`, correct `pg_dsn=` parameter name, class definitions still present. |
+
+### Verified
+
+```bash
+python -c 'import ast; ast.parse(open("pipeline/batch/player_profile_computor.py").read())'
+pytest tests/unit/test_data_engineer_sim162.py -v
+# 4 passed
+```
+
+---
+
+## SIM-149 — Baserunner-steal engine unit test file
+
+**Type:** Gap | **Effort:** S | **Status:** ✅ Complete
+**Role:** QA / DevOps (Agent 9)
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `tests/unit/test_baserunner_steal_engine.py` | New | 9 tests mirroring the SIM-067 catcher unit-test pattern: score bounds, descending sort, self-exclusion, symmetry, no NaN/Inf, sub-score bounds, identical-profile cap, EB_N_PRIOR=20 lock, EB-alpha monotonicity. |
+
+### Phase 2 closure
+
+Baserunner-steal was the only similarity engine without a dedicated
+unit test file.  All 11 engines now have one — Phase 2 testing
+infrastructure is complete.
+
+---
+
+## SIM-150 — Calibration test extensions for SIM-072 / SIM-041 / SIM-042
+
+**Type:** Gap | **Effort:** M | **Status:** ✅ Complete
+**Role:** QA / DevOps (Agent 9)
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `tests/unit/test_ml_engines_sim150.py` | New | 5 Baseball-Analyst-style sanity tests: (a) catcher v2 Realmuto-archetype top-10 dominated by elite-arm comps; (b) catcher v2 welcome-mat archetype top-10 dominated by weak-arm comps (symmetry); (c) pitch-to-pitch `recency_boost=True` shifts neighbor mix toward recent seasons; (d) barreled-ball HR rate > weak-grounder HR rate; (e) batted-ball out-rate monotone non-increasing in exit-velocity. |
+
+### Verified
+
+```bash
+pytest tests/unit/test_ml_engines_sim150.py -v
+# 5 passed
+```
+
+---
+
+## SIM-161 — Deferred (operational)
+
+**Type:** Validation | **Effort:** S | **Status:** ⏳ Deferred to sprint 2026-05-27
+**Role:** Performance Engineer (Agent 6)
+
+The harness (`scripts/run_index_acceptance.py`) and acceptance doc
+(`docs/perf/2026-05-13-index-acceptance.md`) both shipped in SIM-158
+(sprint 2026-05-13).  The live EXPLAIN ANALYZE run requires staging
+Postgres to have 2024 data loaded.  Staging load did not complete in
+this sprint window; the live run carries forward to sprint 2026-05-27.
+
+Acceptance doc updated to document the deferral terms and the escape
+hatch (developer-local Postgres) if staging slips a second sprint.
+
+**Live-run update (2026-05-17, out-of-sprint).**  A first live run was
+executed against a developer-local Postgres after staging slipped:
+
+* SIM-089 (`idx_pitches_pitcher_season_clean`): **PASS** — 40.43 ms / 50 ms budget, Index Scan as expected on a 3,274-pitch fetch (pitcher_id=605400, season=2024).
+* SIM-085 (`idx_pitches_situation`): **MARGINAL FAIL** — 31.03 ms / 30 ms budget (1.03 ms / 3.4 % over).  Plan analysis (see `docs/perf/2026-05-13-index-acceptance.md` §Analysis): the right index is selected (no Seq Scan); the overshoot is dominated by the heap fetch (~28 ms for 12,299 rows / 9,724 blocks), with ~1 ms of overhead from a BitmapOr caused by the test fixture's synthetic `on_2b=12345`.  Bug fixed in `scripts/run_index_acceptance.py`: `DEFAULT_SITUATION` now uses bases-empty + `IS NOT DISTINCT FROM` predicates.
+
+The SIM-085 / SIM-089 index claims in this CHANGES.md are **not**
+reverted — the plan analysis confirms both indexes function as designed.
+Follow-up filed as **SIM-163**: re-run with the corrected fixture and,
+if SIM-085 still misses, widen `idx_pitches_situation` with
+`INCLUDE (game_pk, at_bat_number, pitch_number)` for an Index Only Scan.
+
+---
+
+## SIM-300 — Phase 3 play-pool architecture spec
+
+**Type:** Spec | **Effort:** M | **Status:** ✅ Complete
+**Role:** Backend Developer (Agent 5, lead) · ML Engineer (Agent 3)
+
+### Changes
+
+| File | Action | Notes |
+|------|--------|-------|
+| `docs/architecture/2026-05-20-play-pool.md` | New | The Phase 3 play-pool architecture spec. Sections: engine consumption table, pre-filter contract, sub-index materialization strategy, recency lifecycle decision, FAISS index lifecycle (build cadence, in-memory layout, hot reload), sampler query API (`PlayPoolSampler` class with four methods), performance budget (SIM-114 carried forward), four deferred BA questions, proposed Phase 3 sprint sequencing (SIM-301/302/303), sign-off list. |
+
+### Outcome
+
+Phase 3 implementation tickets SIM-301 / SIM-302 / SIM-303 drafted in
+the spec's §10 and entered as backlog placeholders.  PM will formalize
+them at sprint 2026-05-27 kickoff.
+
+---
+
+# Audit Pass — 2026-05-21 (end-of-Phase-2 program audit)
+**Authors: every agent**
+
+Post-Phase-2 audit conducted by all 9 agents. Each agent surveyed their
+scope, surfaced findings, and filed tickets. Full record:
+
+  * `docs/audit/2026-05-21-program-audit.md` — per-agent findings.
+  * `docs/audit/2026-05-21-prioritized-tickets.md` — priority-ranked
+    backlog with tiers, sizes, and the next-3-sprints proposal.
+
+**47 new tickets filed (in addition to 6 pre-existing that the audit
+elevated to higher priority).**  Tier P0 (gating tickets that must
+land before Phase 4 simulation-loop work) covers:
+
+  * SIM-118 (Performance benchmark harness, M)
+  * SIM-202 (run-value constants centralization, S)
+  * SIM-301 (play-pool cache serializer, M) — drafted in SIM-300 §10
+  * SIM-201 (Manager decision logic spec, L)
+  * SIM-280 / SIM-281 (RAM budget + ProcessPoolExecutor decision, S × 2)
+  * SIM-220 (Backtesting framework, L)
+
+Phase 2 milestone confirmed: **all 11 similarity engines built, every
+engine has a unit test file, regression goldens in place, calibration
+sanity tests landed**.  Phase 3 implementation begins sprint 2026-05-27.
+
+---
+
+# Sprint 2026-05-27 — Phase 3 Kickoff (executed & CLOSED 2026-05-20)
+**Authors: Product Manager (Agent 1, orchestrator), Data Engineer (Agent 4), ML Engineer (Agent 3), Baseball Analyst (Agent 2), Performance Engineer (Agent 6), Backend Developer (Agent 5), QA/DevOps (Agent 9)**
+
+Phase 3 kickoff. Two parts: (a) reconcile the §7 documentation/test gaps and the
+missing SIM-300 spec that `docs/HANDOFF_PHASE3.md` requires before any Phase 3
+feature work — these were OneDrive truncation casualties (CHANGES.md/BACKLOG.md had
+already recorded them as shipped); (b) deliver the six "Current Sprint" tickets.
+Each ticket implemented by its owning agent and gated by an **independent QA/DevOps
+cross-validation** (acceptance criteria audited against the actual files, not
+self-reports). Full transparency record: `docs/SPRINT_2026-05-27_phase3_kickoff.md`.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-300 | Spec (rebuild) | PM → BE+ML | Reconstructed play-pool architecture spec (`docs/architecture/2026-05-20-play-pool.md`) — pre-filter, FAISS tiles, recency, sampler API, ≤2 GB budget |
+| SIM-051 | Migration+Test (rebuild) | Data Eng | DuckDB migration `0003` for `pull_relative_spray_angle` + 7 handedness-flip tests |
+| SIM-162 | Test (rebuild) | Data Eng | `LeagueAverageProfiles.compute()` non-empty-insert regression (5 entity types) |
+| SIM-149 | Test (rebuild) | ML Eng | Dedicated baserunner-steal engine unit file — 9 invariants |
+| SIM-150 | Test (rebuild) | ML Eng | Calibration regressions: catcher v2, FAISS pitch, FAISS batted-ball |
+| SIM-202 | Improvement | Baseball Analyst | `simulation/constants.py` RUN_VALUES (12 PA outcomes, cited) + DEFENSIVE_RUN_VALUES centralization |
+| SIM-118 | Gap | Perf Eng | pytest-benchmark harness + weekly CI job |
+| SIM-301 | Feature | Backend | Play-pool nightly cache serializer (FAISS tiles, idempotent, atomic) |
+| SIM-302 | Feature | Backend+ML | `PlayPoolSampler` four-method API (distance→weight + distribution mode) |
+| SIM-280 | Gap | Perf Eng | Per-engine RAM budget vs 2 GB (measured) |
+| SIM-281 | Gap | Perf Eng | Parallelism ADR — ProcessPoolExecutor + shared_memory |
+
+### Verification
+Independent QA/DevOps pass: **unit+regression 833 passed / 1 skipped / 0 failed
+(834 collected, exit 0)**; **performance 3 passed / 2 skipped**. +63 tests over the
+771/1 pre-sprint baseline. Writer↔reader tile format (SIM-301↔SIM-302) verified
+end-to-end via a real builder round-trip; engine score discipline intact (the only
+distance→weight conversion is in the sampler). No defects. Verdict: SHIPPABLE.
+
+### Notes / follow-ups
+- `pyproject.toml` `python_files` extended to also match `bench_*.py` (additive; needed
+  to collect the SIM-118 benches).
+- Still open (non-P0 §7 gaps): `docs/audit/2026-05-21-*.md` rebuilds.
+- `backlog.xlsx` was locked/open during the sprint; not edited. Regenerate from
+  `BACKLOG.md` to publish the closed-sprint state.
+- Cosmetic: three empty `tests/unit/test_zz_repro*.py` scratch files are OneDrive-locked
+  against deletion from the sandbox (harmless, 0 tests); remove on host.
+
+---
+
+---
+
+# Sprint 2026-06-03 — Phase 4 Readiness (executed & CLOSED 2026-05-21)
+**Authors: Performance Engineer (Agent 6), ML Engineer (Agent 3), Backend Developer (Agent 5), Data Engineer (Agent 4), Product Manager (Agent 1), QA/DevOps (Agent 9)**
+
+Phase-4-gating performance specs + the remaining unblocked perf/quality work, and
+Phase 3 completion (sampler wired into the sim-loop scaffold). Role subagents
+implemented; an independent QA/DevOps pass audited each ticket and ran the suite.
+SIM-074 and SIM-113 both edit `player_profile_computor.py` and were serialized.
+Full record: `docs/SPRINT_2026-06-03_phase4_readiness.md`.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-114 | Gap (spec) | Perf+ML | FAISS index design: benchmarked IVFFlat vs flat; per-tile flat stays, IVFFlat above a 50k-vector crossover (`nlist=512,nprobe=32`) |
+| SIM-303 | Feature | Backend | `simulation/sim_loop.py` — `PlateAppearanceSimulator` wires PlayPoolSampler into a Phase-4 scaffold (Phase 3 complete) |
+| SIM-119 | Gap (spec) | Perf+BE | Per-step time budget for the 8-step loop: ~1.23 ms/pitch, ~0.37 s/game vs 2 s SLA |
+| SIM-113 | Improvement | Perf+DE | GMM batch: dynamic workers, chunked IPC, bulk DuckDB writes (replaces ~5,600 per-pitcher writes) |
+| SIM-075 | Improvement | ML+Perf | Arsenal W2 cache vectorized (NumPy matrix row-slice); ~2.9× faster, numerically identical |
+| SIM-074 | Bug | Data Eng | barrel_rate now the full Statcast sliding scale (EV≥98 + widening LA band) for overall/vs-L/vs-R |
+| SIM-090 | Improvement | Data Eng | ETL psycopg2 ThreadedConnectionPool (getconn/putconn, closeall) replaces per-game connect/close |
+
+### Verification
+Independent QA pass (chunked due to the 45 s sandbox limit): engines+ML, regression
+(55), data-engineering (66), backend/API/live (102), computor+SIM-113 (98), new sprint
+files — all green; performance 3 passed / 2 skipped. **New baseline: 870 unit+regression
+passing** (834 + 36 new), 1 pre-existing skip, 0 failures.
+
+### Notes
+- OneDrive truncated the three large edited source files on the sandbox mount during
+  editing; authoritative files verified complete via the file tools, mount rebuilt for
+  the QA run (clean tails re-appended; null bytes stripped from two test files). Tests
+  run with the datetime.UTC shim, a redirected pyc cache, and `-p no:cacheprovider`.
+- Still open: SIM-220 (backtesting), SIM-201 (manager logic), Phase-4 loop steps that
+  flesh out the SIM-303 scaffold; perf follow-ups (share arsenal cache, columnarize
+  situation engine); `docs/audit/2026-05-21-*.md` rebuilds.
+
+---
+
+---
+
+# Sprint 2026-06-10 — Phase 3 Completion (executed & CLOSED 2026-05-21)
+**Authors: ML Engineer (Agent 3), Data Engineer (Agent 4), Backend Developer (Agent 5), Performance Engineer (Agent 6), Baseball Analyst (Agent 2), Product Manager (Agent 1), QA/DevOps (Agent 9)**
+
+Closes **Phase 3 — Play Pool Architecture**. Completes the remaining play-pool chain
+(registry → recency weighting + incremental rebuild → query contracts → index strategy →
+foul-weighting design). Role subagents did the new-file work; the orchestrator made the
+profile-computor changes surgically (OneDrive truncation makes agent edits to that 4,300-line
+file unreliable). Independent QA gate. Full record: `docs/SPRINT_2026-06-10_phase3_completion.md`.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-048 | Feature | ML Eng | `similarity/registry.py` SimilarityEngineRegistry — 11 engines, family + score_type, lazy guarded imports |
+| SIM-076 | Improvement | Data Eng + ML Eng | recency_weight on all 3 sim pools + `pool_build_metadata` + migration 0004 (schema v5) + computor population + walk-forward harness |
+| SIM-095 | Improvement | Data Eng | incremental pool rebuild (`_seasons_needing_rebuild`; `run()` uses `incremental=not full_rebuild`) |
+| SIM-111 | Gap (doc) | Backend + Data Eng | play-pool query column contracts doc (pre-filter keys, access-pattern→index map, recency_weight) |
+| SIM-115 | Improvement | Data Eng + Perf Eng | migration 0005 — drop 8 pitch + 9 outcome write-overhead indexes (schema-qualified), keep query-path set |
+| SIM-056 | Design | Baseball Analyst | count-stratified foul-ball weighting design + two-strike-foul loop rule + validation plan |
+
+### Verification
+Independent QA pass (chunked): **unit 872 + regression 55 = 927 passed / 1 skipped / 0 failed**;
+performance 3 passed / 2 skipped. +57 over the 870 baseline (4 new test files add 33).
+Engine score discipline intact; recency_weight is last column in each pool table + builder
+SELECT (SELECT * alignment); computor imports clean. No defects.
+
+### Notes
+- DuckDB schema version bumped 3 → 5 (migration 0004 recency_weight + pool_build_metadata;
+  migration 0005 index prune). `DROP INDEX` must be schema-qualified (`sim.idx_...`) — an
+  unqualified drop silently no-ops; the SIM-115 test caught this.
+- **Phase 3 (Play Pool Architecture) is COMPLETE** (SIM-300/301/302/303/048/076/095/111/115/056).
+  Remaining "Phase 3 Gate" rows are frontend (SIM-127/128/129), live-pipeline tests (SIM-107),
+  and Phase-4-blocked (SIM-120) — out of play-pool scope.
+- Next: Phase 4 sim loop (flesh out SIM-303 scaffold), SIM-220 backtesting, SIM-201 manager logic.
+- Housekeeping: cosmetic trailing comma in pitch_pool builder (DuckDB-tolerated); stray
+  `tests/unit/test_data_engineer_sim085_to_091.py.tmp` to remove.
+
+---
+
+---
+
+# Program Audit — Phase 3 Close (2026-06-10)
+**Authors: all 9 agents**
+
+End-of-Phase-3 program audit. Each of the 9 agents reviewed the whole project for gaps,
+bugs, and improvements ahead of Phase 4 (the core simulation loop). Findings recorded in
+`docs/audit/2026-06-10-phase3-close-program-audit.md`; the consolidated, deduped, tiered
+ticket list (41 tickets: SIM-220 + SIM-310–349) is in
+`docs/audit/2026-06-10-phase4-prioritized-tickets.md` and entered into `backlog.xlsx`
+(Full Backlog). Phase 4 entry plan: `docs/HANDOFF_PHASE4.md`.
+
+**Six live bugs found** (fix as touched): SIM-312 (RUN_VALUES↔Statcast events mismatch →
+silent 0.0 run values), SIM-313 (recency_weight not applied in the sampler), SIM-322 (GMM
+covariance double-standardization), SIM-336 (park-factor SQL bug + NULL L/R splits),
+SIM-337 (SIM-115 indexes contradict the SIM-111 query contract), SIM-346 (pitcher
+no-arsenal ×1.0 no-op + calibration computed-but-unused).
+
+**Critical path for Phase 4:** SIM-310 (loop spec) → SIM-311 (GameState contract) →
+SIM-316 → SIM-317 → {SIM-318, SIM-319} → SIM-320 (simulate_game) → {SIM-220 backtester,
+SIM-327 output contract, SIM-332 ProcessPool runner}. Also fills the long-missing
+`docs/audit/` files referenced since Phase 2.
+
+---
+
+# Sprint 2026-06-17 — Phase 4 P0 Gates (executed & CLOSED 2026-05-22)
+**Authors: Backend Developer (Agent 5), Baseball Analyst (Agent 2), ML Engineer (Agent 3), Data Engineer (Agent 4), Performance Engineer (Agent 6), Product Manager (Agent 1), QA/DevOps (Agent 9)**
+
+Opens **Phase 4 — the core simulation loop** by landing the Tier-P0 gates plus the
+"fix-as-touched" live bugs that must precede any loop code. Role subagents did the
+implementation (one per ticket, in dependency order — the SIM-310 spec landed before the
+SIM-311 contract); the orchestrator handled the two doc/governance items (SIM-314,
+SIM-315); an independent QA/DevOps pass cross-validated every ticket against the actual
+files (not self-reports) and ran the full suite. Scope confirmed with Greg: full P0 set
+plus the two quick bug fixes (SIM-322, SIM-337) pulled forward; SIM-315 documented and
+deferred. Full record: `docs/SPRINT_2026-06-17_phase4_p0_gates.md`.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-310 | Spec | Backend + BA | Canonical Phase 4 sim-loop spec — one authoritative 8-step loop (adopts the time-budget ordering over the README's steal-first; steal/IBB/sub moved to pre-pitch + end-of-PA hooks), fingerprint derivation (10-dim pitch / 3-dim batted-ball in engine order), terminal/half-inning/game logic (`docs/architecture/2026-06-17-phase4-sim-loop-spec.md`) |
+| SIM-311 | Spec | Backend + DE | `GameState` + `PlayResult` dataclass contract (`simulation/game_state.py`) — mutable count/outs/bases/score/inning/half/per-team lineup/manager hook; PlayResult carries SIM-312 run-resolution provenance + step 5/6/7 deltas; the SIM-303 scaffold left untouched |
+| SIM-312 ⚠ | Bug | BA + Backend | RUN_VALUES↔Statcast `events` fix — canonical 12 keys kept + `STATCAST_EVENT_ALIASES` (intent_walk/field_out/force_out/sac_fly/grounded_into_double_play/…) with an import-time assert; new `simulation/run_resolution.py` (RE24-primary + linear-weight fallback). Common outs no longer silently score 0.0 |
+| SIM-313 ⚠ | Bug | ML + Backend | `recency_weight` wired into `PlayPoolSampler` — distance-weight × per-row recency, renormalized, in both sample_pitch and sample_batted_ball/distribution path; injectable `recency_fetch`, DuckDB default, missing→1.0 (uniform recency reproduces old behavior) |
+| SIM-322 ⚠ | Bug | ML Eng | GMM covariance double-standardization fixed engine-side — `GMMModel.from_json` de-standardizes the stored (standardized) covariance to original units so mean & covariance share one scale before `standardize_gmm`; no nightly recompute needed |
+| SIM-337 ⚠ | Bug | DE + Perf | sim-pool indexes reconciled to the SIM-111 contract — migration `0006` (schema-qualified DROPs) restores pitcher/season, adds `stand` composites (`pitcher_stand_season`, `stand_season`), drops outcome/count; schema v6 |
+| SIM-314 ⚠ | Gap | PM | SIM-200/201 ID collision resolved — SIM-200/201 = catcher framing/blocking placeholders; manager-logic scope is SIM-323 (`docs/audit/2026-06-17-sim314-id-collision-resolution.md`) |
+| SIM-315 ⚠ | Infra | QA/DevOps | OneDrive truncation remediation plan documented (move-off-OneDrive + `ast.parse`/null-byte integrity guard + CI job); document-only, ticket stays Open (`docs/architecture/2026-06-17-sim315-onedrive-remediation.md`) |
+
+### Verification
+Independent QA pass (chunked; the full suite exceeds the 45s sandbox limit). All 8 tickets
+audited against the actual files — all PASS. Full suite: **unit 941 + regression 55 = 996
+passed / 1 skipped / 0 failed (+60 subtests)**; performance 3 passed / 2 skipped. +69 over
+the 927 baseline (74 new sprint tests + the async tests now collected once `pytest-asyncio`
+was installed). Existing SIM-302 sampler tests stayed green under uniform recency; existing
+pitcher-engine tests (56) stayed green with no expected-value corrections. No regressions.
+
+Plus a hygiene fix: `tests/unit/test_data_engineer_sim162.py` had a stray trailing `)`
+(line 315) — a pre-existing OneDrive-corruption casualty that broke collection; a one-char
+fix restores its 5 tests → **1001 passed / 1 skipped / 0 failed**.
+
+### Notes
+- DuckDB schema version bumped 5 → 6 (migration 0006, SIM-337). `DROP INDEX` remains
+  schema-qualified (`sim.idx_…`); an unqualified drop silently no-ops.
+- Of the six audit live bugs, 4 are now fixed (SIM-312/313/322/337). Remaining: SIM-336
+  (park-factor SQL) and SIM-346 (ML calibration) — slated for later Phase 4 tiers.
+- Sandbox env: `pytest-asyncio` is required by the baseline (`asyncio_mode=auto` in
+  `pyproject.toml`) in addition to `pytest-benchmark`; both must be installed for a true
+  full-suite run. OneDrive truncation/null-byte injection hit several files this sprint
+  (incl. `pitcher_similarity.py`) and was repaired on the mount per the documented recipe.
+- `backlog.xlsx` should be regenerated from `BACKLOG.md` to publish the closed state — no
+  automated regen script exists in `scripts/`, and the file is often locked open in Excel.
+- Next: the Phase 4 loop build — SIM-316 (state machine) → SIM-317 (fingerprints) →
+  SIM-318/319 → SIM-320 (`simulate_game()`), with the SIM-220 validation spine alongside.
+
+---
+
+# Sprint 2026-06-24 — Phase 4 Loop Build (executed & CLOSED 2026-05-23)
+**Authors: Product Manager (Agent 1), Backend Developer (Agent 5), ML Engineer (Agent 3), Baseball Analyst (Agent 2), QA/DevOps (Agent 9)**
+
+Builds the **core simulation loop** on top of the Sprint-1 P0 gates: turns the SIM-303
+single-pitch scaffold into a full-game simulator (`simulate_game()`), plus the cross-engine
+fusion module and the first two validation harnesses. The PM planned the sprint; role
+subagents implemented in dependency order with the loop file (`simulation/sim_loop.py`)
+strictly serialized (SIM-316→318→319→320, since they all mutate it) while the separable
+modules (SIM-321 fusion, SIM-317 fingerprints) and the test-only harnesses (SIM-326/324)
+ran where parallel-safe. An independent QA/DevOps pass cross-validated every ticket against
+the actual files. Full record: `docs/SPRINT_2026-06-24_phase4_loop_build.md`.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-316 | Feature | Backend | GameState count/out/inning state machine — `advance_count` (ball4→walk, K3→strikeout, SIM-056 two-strike-foul absorbing rule), half-inning roll (clear/reset/flip half + per-team lineup pointer carry), invalid-state guards; restructured `sim_loop.py` from the SIM-303 scaffold with `# TODO(SIM-318/319/320)` hooks |
+| SIM-321 | Design+Feature | ML + Backend | Cross-engine score-fusion module `simulation/score_fusion.py` (+ `docs/architecture/2026-06-24-cross-engine-fusion.md`) — weighted geometric mean of pitcher/batter/situation signals; distances→bounded affinity `exp(-d/scale)`, NEVER the sampler's `1/(d+EPS)`; engines stay pure |
+| SIM-317 | Feature | ML + Backend | Real query-fingerprint derivation `simulation/fingerprints.py` — 10-dim pitch + 3-dim batted-ball vectors in engine feature order (imported from the engines as single source of truth), pre-filter keys as args not dims, per-PA matchup cache; wired into the loop's pitch-selection step without breaking the no-DB test path |
+| SIM-318 | Feature | Backend + BA | Outcome-determination step 4 + SIM-056 count-conditional foul re-weight applied IN THE LOOP before the count advances (factors {0:1.00, 1:1.05, 2:1.55} per the foul design); sampler stays count-blind |
+| SIM-319 | Feature | Backend + ML | Fielding (step 6) + baserunning/steals (step 7) + dropped-third-strike — fielder/baserunner RBF signals; ALL run/base-out deltas routed through the single `resolve_runs` call site (`_commit_run_delta`); steal decide (pre-pitch hook) + resolve vs `sim.stolen_base_pool` |
+| SIM-320 | Feature | Backend | `simulate_game()` + game control — drives the 8-step loop to completion; regulation 9, walk-off (home lead bottom-9+ ends mid-inning), extra innings with ghost runner on 2B, deterministic per-game seed threaded through loop + sampler rng; returns `GameSimResult` (unblocks SIM-120) |
+| SIM-326 | Test | QA + Backend | Invalid-state harness `test_qa_sim326.py` — 1,000 games (default, env-overridable) + a slow 5,000-game run, checking invalid states at every committed transition; zero invalid states |
+| SIM-324 | Validation | BA + QA | Baseball sniff suite `test_baseball_analyst_sim324.py` — calibrated league-average model; observed run env ≈ 4.38 R/team/G, P/PA ≈ 3.74, BB ≈ .097 / K ≈ .269 / HR ≈ .032, platoon split emerges, RE24 monotonic |
+
+### Verification
+Independent QA pass (chunked; the full suite exceeds the 45s sandbox limit). All 8 tickets
+audited against the actual files — all PASS. The two locked boundaries verified by grep:
+every run/base-out delta routes through `simulation/run_resolution.resolve_runs` (single call
+site, no inline run arithmetic), and the fusion module never does the sampler's
+distance→weight conversion nor imports the sampler. Full suite: **1144 passed / 1 skipped /
+0 failed** unit+regression (+2 slow-marked passed); performance 3 passed / 2 skipped. Up from
+the 996 baseline (+148 sprint coverage). No mount repairs were needed at QA time; no
+regressions. DuckDB schema unchanged at v6.
+
+### Notes
+- One existing test was deliberately updated: the SIM-316 test that asserted
+  `simulate_game()` raises `NotImplementedError` (the guarded stub) now asserts the
+  implemented driver's `ValueError` on the un-driveable no-sampler path.
+- `simulation/sim_loop.py` grew 255 → ~1,805 lines across SIM-316→320. OneDrive
+  truncation/null-byte injection hit it (and several test files) on nearly every edit; each
+  was repaired on the mount per the documented recipe, with the authoritative Windows file
+  verified as the intact source of truth. This remains the SIM-315 hazard.
+- The Phase-4 critical path is now **SIM-310→311→316→317→{318,319}→320 COMPLETE**. The loop
+  produces full games; the remaining validation spine (SIM-220 backtester, SIM-325
+  chi-squared replay) and SIM-323 manager logic are Sprint 3.
+- `backlog.xlsx` should be regenerated from `BACKLOG.md` to publish the closed state (no
+  automated regen script; often locked open in Excel).
+- Next: Sprint 3 — SIM-220 + SIM-325 (validation spine), SIM-323 (manager logic), and the
+  P2 output contracts (SIM-327/328/330) + perf mechanisms (SIM-332/333).
+
+---
+
+# Sprint 2026-07-01 — Phase 4 Validation Spine + Output Contracts (executed & CLOSED 2026-05-23)
+**Authors: Product Manager (Agent 1), Backend Developer (Agent 5), ML Engineer (Agent 3), Baseball Analyst (Agent 2), Performance Engineer (Agent 6), Betting Analyst (Agent 8), UX Designer (Agent 7), QA/DevOps (Agent 9)**
+
+Builds the **output-contract layer** the UI/betting/perf consumers read, plus the
+**validation spine** that makes the loop's output verifiable. The PM planned the sprint; role
+subagents implemented. Execution serialized the two `sim_loop.py`-adjacent tickets first
+(SIM-327 then SIM-328) to fully stabilize the loop file before running the five new-module
+tickets in parallel — concurrent edits/mount-repairs on a shared large file is the one thing
+that bites in this sandbox. Full record: `docs/SPRINT_2026-07-01_phase4_validation_outputs.md`.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-327 | Spec | Backend + UX | `GameSimSummary` aggregation in a new `simulation/results.py` — per-team win% (+ties), mean/median scores, **raw per-iteration score arrays**, `simulated_at` (UTC), Wald confidence intervals (SIM-112); re-exports `GameSimResult`; did NOT touch `sim_loop.py` |
+| SIM-328 | Feature | Backend + BA | Per-player `BoxScore`/`PlayerStatLine` accumulators built into the PA loop — batters AB/H/HR/RBI, pitchers IP(thirds)/K/BB/ER (unearned via `is_error` not charged); attached additively to `GameSimResult` |
+| SIM-332 | Feature | Backend + Perf | `simulation/batch_runner.py` — `ProcessPoolExecutor(min(cpu-1,10))` N-iteration runner → `GameSimSummary`; per-game seed isolation (reproducible); pickle-safe game-spec worker; Redis TTL cache (60s sim/5-min pool) with in-memory/no-op fallback; SIM-333 shared-memory seam left inert |
+| SIM-330 | Feature | Backend + ML | `simulation/win_probability.py` — calibrated win-prob; Beta/Laplace smoothing (0/N never hard 0), tie handling (split/drop), identity calibration-map seam for a fitted reliability curve, CI; deterministic |
+| SIM-331 | Spec | Backend + UX | `simulation/snapshots.py` — `FieldSnapshot.from_game_state`, `PlayByPlay.from_play_results` (pitch-level), `StateAtPitch`, `OverrideDelta`; pure builders for the BaseballFieldGraphic / `/plays` / `/state/{ab}/{pitch}` / override UI |
+| SIM-220 | Feature | ML + Betting | `similarity/backtesting/backtester.py` — ECE + multiclass Brier + eps-clipped log-loss + reliability curve + `walk_forward_ablation` vs a league-average baseline, reusing the SIM-076 walk-forward splitter |
+| SIM-325 | Test | QA + BA | `simulation/validation/replay_chi_squared.py` — replay via `simulate_game()` + chi-squared GOF vs a reference run distribution (observed p≈0.36), Cochran low-expected-bin pooling, a negative control that IS rejected, and a real-historical-data seam |
+
+### Verification
+The independent QA subagent hit a session limit mid-run, so the orchestrator ran the
+cross-validation directly: integrity-checked all sprint files (compile + null-byte clean),
+then ran the FULL unit+regression suite in chunks (per-pattern groups + the slow-marked
+tests + performance), covering every test file with zero failures. **New baseline: 1271
+passed / 1 skipped / 0 failed** unit+regression (1272 items collected: 1267 not-slow + 5
+slow; the 1 skip is the pre-existing engine-build-smoke skip); performance 3 passed / 2
+skipped. Up from 1144 (+127 new sprint tests, reconciled exactly). No regressions; DuckDB
+schema unchanged at v6. The two locked boundaries still hold (engines distance-pure; runs via
+`resolve_runs`).
+
+### Notes
+- SIM-327 cleanly avoided editing `sim_loop.py` (the existing per-game `GameSimResult`
+  sufficed), so only SIM-328 touched the loop file this sprint — minimizing the truncation
+  surface. OneDrive truncation/null-byte injection still hit several files on write and was
+  repaired on the mount per the documented recipe; authoritative Windows files verified intact.
+- Output contracts now exist end-to-end: a batch of games → `GameSimSummary` (win%/scores/raw
+  arrays/CIs) + per-player `BoxScore` + win-prob + field/PBP snapshots — the stable target UI
+  (Phase 6) and betting/CLV consume.
+- `backlog.xlsx` should be regenerated from `BACKLOG.md` (no automated regen script; often
+  locked open in Excel).
+- Next: Sprint 4 — SIM-329 (prop PMFs) + SIM-339/340 (CLV + real odds) now that win-prob +
+  per-player + raw arrays exist; SIM-333 (shared-memory attach) on the SIM-332 seam; SIM-323
+  (manager logic); and the two remaining audit bugs SIM-336/SIM-346.
+
+---
+
+# Sprint 2026-07-08 — Phase 4 Betting Chain + Bug Cleanup (executed & CLOSED 2026-05-23)
+**Authors: Product Manager (Agent 1), Betting Analyst (Agent 8), ML Engineer (Agent 3), Data Engineer (Agent 4), Baseball Analyst (Agent 2), Performance Engineer (Agent 6), Backend Developer (Agent 5)**
+
+Stands up the **betting chain** (now unblocked by the Sprint-3 outputs) and clears the **two
+remaining ⚠ audit bugs** plus the shared-memory perf mechanism. The PM planned the sprint;
+role subagents implemented. File ownership was disjoint, so five tickets ran fully in parallel
+(Wave A) and only the betting chain was sequential (SIM-339 after SIM-329). Full record:
+`docs/SPRINT_2026-07-08_phase4_betting_bugs.md`.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-329 | Feature | Backend + ML + Betting | `simulation/prop_distributions.py` — full integer-support PMF per prop per player (K/BB/ER/outs; H/HR/RBI/TB) over the N per-game `BoxScore`s; mean/median/std + `p_over`/`p_under`/`p_push` at any line. (TB = h + 3·hr lower bound — 2B/3B not yet tracked; flagged) |
+| SIM-339 | Feature | Betting + ML | `betting/clv_engine.py` — implied prob from American odds, two-way + multi-way de-vig/no-vig, edge (sim − fair), EV vs offered price, CLV on the no-vig prob scale (positive = beat the close); consumes SIM-329 PMFs + SIM-330 win-prob + SIM-327 raw totals |
+| SIM-340 | Feature | Data + Betting | Wired the dead `_persist_prop_odds` into the live cycle; implemented `mark_closing_prop_lines`; multi-book + `is_sharp_book` + cadence + opening-line capture; dedup via `odds_hash` + Alembic `0013` (Postgres) |
+| SIM-336 ⚠ | Bug+Design | BA + Data | Park-factor fix — corrected the `factor_overall`/UNPIVOT ordering (grouped `UNPIVOT INCLUDE NULLS`), real `factor_vs_l`/`factor_vs_r` splits (not NULL), documented pool-neutralization policy |
+| SIM-345 ⚠ | Bug/Tech-debt | Data | Data-layer fixes — watermark `>=` + source row-count guard; consistent cross-pool `recency_ref_season`; `recency_weight` NOT NULL parity; enforced `stand` vs `bat_hand` pool contract. (Folded with SIM-336; DuckDB migration `0007`, schema v6→**v7**) |
+| SIM-346 ⚠ | Bug | ML | Calibration fixes — replaced the no-arsenal ×1.0 no-op with true weight redistribution (1/0.35); reconciled `arsenal_gamma`(squared) vs `ARSENAL_SCALE` into one linear `exp(-W₂/4.10)`; wired `CalibrationReport.arsenal_gamma` into the engine constant; added a drift regression test |
+| SIM-333 | Feature | Perf | `multiprocessing.shared_memory` zero-copy attach filling the SIM-332 seam — situation KDTree / RBF matrices / FAISS-tile backing arrays shared ONCE across W workers (≈290 MB flat, ≤2 GB); per-worker fallback preserved |
+
+### Verification
+The independent QA subagent again hit the shared session limit, so the orchestrator ran the
+cross-validation directly (independent of the implementers): integrity-checked all sprint
+files (compile + null-byte clean), verified the schema bump to v7 + migration 0007 + Alembic
+0013, then ran the FULL unit+regression suite in chunks (Sprint-4 files; the regression-
+sensitive computor/pitcher/live-pipeline/batch-runner/sampler areas; regression; data-eng;
+ML; engine/component; the loop incl. real-FAISS sim303/sim319; older backend; api/perf/smoke;
+the slow-marked tests; performance) — every file covered, zero failures. **New baseline: 1380
+passed / 1 skipped / 0 failed** unit+regression (1381 collected = 1375 not-slow + 6 slow; the
+lone skip is the pre-existing engine-build-smoke skip); performance 3 passed / 2 skipped. Up
+from 1271 (+109, reconciled). No regressions; **DuckDB schema now v7**.
+
+### Notes
+- Five large files were edited this sprint (computor ~4,400, pitcher ~1,950, live-pipeline
+  ~1,800, batch_runner, sampler), each by a single owning ticket — disjoint, so safe to
+  parallelize. OneDrive truncation/null-byte injection hit them repeatedly on write and was
+  repaired on the mount per the documented recipe; authoritative Windows files verified intact.
+- SIM-346 made NO expected-value corrections (no prior test had baked in the buggy no-op or
+  the old 4.25 literal). SIM-336 updated one computor fixture for the new `source_row_count`
+  metadata column.
+- The betting chain is now end-to-end: sim → prop PMFs / win-prob → de-vig + edge + EV + CLV.
+- `backlog.xlsx` should be regenerated from `BACKLOG.md` (no automated regen script; often
+  locked open in Excel).
+- Next: Sprint 5 — SIM-323 (manager decision logic) + SIM-349 (situational decisions); SIM-334
+  (columnarize situation engine) + SIM-335 (CI perf gate); SIM-347 (stress) + SIM-348
+  (live-pipeline tests); P3 hygiene SIM-341–344.
+
+---
+
+# Sprint 2026-07-15 — Phase 4 Close-Out (Manager Logic + Hardening) (executed & CLOSED 2026-05-24)
+**Authors: Product Manager (Agent 1), Baseball Analyst (Agent 2), Backend Developer (Agent 5), Performance Engineer (Agent 6), ML Engineer (Agent 3), QA/DevOps (Agent 9)**
+
+**CLOSES PHASE 4.** Lands the manager decision logic + situational decisions, the last perf
+mechanisms, the stress/live-pipeline test hardening, and the P3 hygiene. The PM planned the
+sprint; role subagents implemented; the orchestrator ran the cross-validation (the QA
+subagent kept hitting the shared session limit). Full record:
+`docs/SPRINT_2026-07-15_phase4_closeout.md`. Phase 5 entry plan: `docs/HANDOFF_PHASE5.md`.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-323 | Feature | BA + Backend | Manager decision logic — `_pre_pitch_hook` (IBB / pitch-out / steal green-light) + `_end_of_pa_hook` (starter pull / bullpen-by-leverage / pinch-hit / sac-bunt) from `manager_similarity` tendencies gated by a leverage index, via `ManagerContext`; no-DB-safe |
+| SIM-349 | Design+Feature | BA + Backend | Situational decisions — hit-and-run + sac-fly intent on the SIM-323 hooks (IBB/sac-bunt already in SIM-323), base/out + leverage conditioned; no double-fire; sniff metrics unmoved |
+| SIM-334 | Improvement | Perf + ML | Columnarized the situation engine — `_index_meta: list[NearestSituation]` → parallel read-only numpy column arrays (share-able, ≤2 GB); public query API/results unchanged |
+| SIM-335 | Validation | Perf | Implemented perf Bench 4 (loop `step_pitch`) + Bench 5 (batch runner); SIM-119 budget asserted HARD only under `PERF_STRICT`+`PERF_STRICT_SANDBOX`; wired `perf-weekly.yml` + a 1.5 GB RSS gate. Perf suite 3→**5 passed / 0 skipped** |
+| SIM-347 | Test | QA + Perf | Stress harness — 100 sims × 30 concurrent games via the batch runner; asserts no races, valid results, no `/dev/shm` leak; full 100×30 slow-marked (clean) |
+| SIM-348 | Test | QA + Data | Real `live_ingestion_pipeline` tests (51) + removed the coverage omit; SIM-152 shared conftest confirmed complete |
+| SIM-343 | CI | QA | Added `simulation/`+`betting/` to coverage scope (gate 80 unchanged); unified CI Python to 3.11 across all jobs |
+| SIM-344 | Chore | QA | Extended `.gitignore` for scratch outputs (`*_output.txt`/`*.clean`/`*.tmp`/…); stray files now untracked+ignored (mount blocks the physical delete) |
+| SIM-341 | Gap | PM | Reconciled README — engines 5-11 + registry marked shipped, fixed the stale `simulator.core` API sample → `simulation.*`, corrected the repo tree (`simulator/`→`simulation/`+`betting/`). PRODUCT_GUIDE had no stale `simulator.core` markers |
+| SIM-342 | Improvement | PM | Re-categorized the stale Phase-3-Gate rows: SIM-107 → addressed by SIM-348; SIM-120 → unblocked by SIM-320 (`simulate_game`); SIM-127/128/129 → Phase 6 frontend |
+
+### Verification
+Orchestrator-run cross-validation (the QA subagent hit the session limit). Every sprint file
+integrity-checked; the FULL unit+regression suite run in chunks (Sprint-5 files; situation
+regression+unit; regression; data-eng; ML; engine/component; loop+output+betting; api/live/
+smoke/older; perf-eng; the real-FAISS sim301/302/303/319 individually; the slow-marked tests;
+performance) — every file covered. **New baseline: 1505 passed / 1 skipped / 0 failed**
+unit+regression (1506 collected incl. 9 slow; the lone skip is the pre-existing
+engine-build-smoke skip), up from 1380 (+125); **performance 5 passed / 0 skipped** (Bench 4/5
+now real). DuckDB schema v7.
+
+### Notes
+- **QA caught a real regression:** SIM-334's columnarization broke the situation-engine
+  golden-file + batch-equals-individual regression tests (the implementing agent ran the unit
+  tests but not `tests/regression/`). Root cause: the regression tests inject `_index_meta` as
+  a plain `list[NearestSituation]`, but the new `query()` only handled the columnar `.row()`.
+  Fixed by a `_row_from_meta` helper that handles BOTH the columnar store and a list — query
+  results are identical either way. All situation tests now green.
+- Both Wave-A agents (SIM-334, SIM-348) and earlier QA agents hit the shared session limit
+  mid-run; SIM-334 left the engine half-edited (an unclosed-bracket SyntaxError) — recovered by
+  completing it. Remaining tickets were then run one-at-a-time to reduce peak load.
+- Latent finding (SIM-347): the batch runner's `GameSpec._hit_rate` knob is dead (the factory
+  reads it but `simulate_game` rejects it as a kwarg) — filed for follow-up, non-blocking.
+- `backlog.xlsx` should be regenerated from `BACKLOG.md`.
+- **PHASE 4 IS COMPLETE.** Next: Phase 5 — backend API + WebSocket + the 100-iteration runner
+  endpoint + managerial-override endpoint (see `docs/HANDOFF_PHASE5.md`). Standing non-Phase-4
+  follow-ups: SIM-315 (move repo off OneDrive — the biggest infra risk), the prop-TB 2B/3B
+  upgrade, and the dead `GameSpec._hit_rate` knob.
+
+---
+
+# Program Audit — Phase 4 Close (2026-07-15, executed 2026-05-24)
+**Authors: all 9 agents (3 role-clusters + PM consolidation)**
+
+End-of-Phase-4 program audit, looking ahead to **Phase 5 (Backend API & Simulation Runner)**.
+The 9 agent scopes reviewed the project (3 parallel read-only cluster reviews — Backend/Perf/ML,
+Data/QA-DevOps, Betting/UX/Baseball — consolidated by the PM). Findings in
+`docs/audit/2026-07-15-phase4-close-program-audit.md`; the deduped, tiered ticket list (28 tickets:
+**SIM-350→377** + the **SIM-315** carryover) in `docs/audit/2026-07-15-phase5-prioritized-tickets.md`.
+Phase 5 entry plan: `docs/HANDOFF_PHASE5.md`.
+
+**Headline:** the `api/` layer is greenfield — all six Phase-5 endpoints, the JSON-serialization
+contract, and auth are unbuilt, and `BatchRunner` has no production DB-backed factory (so
+`/simulate` can't run a real game yet / the 2s/30s SLA is unverified).
+
+**Four ⚠ defects found:** `docker-compose.yml` mounts the empty `./simulator` (not `./simulation`);
+`api/` is missing from the coverage gate (only the Makefile measures it); `GameSpec._hit_rate`
+raises `TypeError` when set (the factory reads it but `simulate_game` has no `**kwargs`); and
+`clv_engine` has no spread/run-line edge report despite run-line odds being ingested.
+
+**Two hard gates before endpoints:** the serialization contract (SIM-350) and the runtime
+lineup/substitution resolver (SIM-353, the long-open SIM-338 gap), plus a real DB-backed
+`machine_factory` (SIM-352). **Critical path:** SIM-350 → SIM-352/SIM-353 → SIM-355 (`/simulate`)
+→ SIM-356 (snapshot persistence) → SIM-357/SIM-358 (`/plays`+`/state`, override). Next free ID
+after the audit: **SIM-378**.
+
+---

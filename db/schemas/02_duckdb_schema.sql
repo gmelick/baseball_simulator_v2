@@ -618,8 +618,11 @@ CREATE TABLE IF NOT EXISTS derived.park_factors (
 CREATE INDEX IF NOT EXISTS idx_pf_season      ON derived.park_factors(season);
 CREATE INDEX IF NOT EXISTS idx_pf_venue       ON derived.park_factors(venue_id, season);
 
-COMMENT ON TABLE  derived.park_factors IS 'Park factors per venue per season. Historical seasons frozen after year-end. Current season rebuilt weekly.';
-COMMENT ON COLUMN derived.park_factors.regressed_factor IS 'Bayesian-shrunk toward 1.0 based on sample_pa. Use this value in simulation rather than factor_overall.';
+COMMENT ON TABLE  derived.park_factors IS 'Park factors per venue per season. Historical seasons frozen after year-end. Current season rebuilt weekly. SIM-336: factor_vs_l/factor_vs_r are real splits on BATTER handedness (stand); switch-hitter (stand=S) PAs count toward factor_overall only.';
+COMMENT ON COLUMN derived.park_factors.factor_overall IS 'SIM-336: venue event rate / league event rate, 1.0 = neutral. Computed via grouped UNPIVOT (overall + L/R splits melted together).';
+COMMENT ON COLUMN derived.park_factors.factor_vs_l IS 'SIM-336: venue-vs-LHB rate / league-vs-LHB rate. NULL when the venue had no vs-LHB sample for the factor type.';
+COMMENT ON COLUMN derived.park_factors.factor_vs_r IS 'SIM-336: venue-vs-RHB rate / league-vs-RHB rate. NULL when the venue had no vs-RHB sample for the factor type.';
+COMMENT ON COLUMN derived.park_factors.regressed_factor IS 'Bayesian-shrunk toward 1.0 based on sample_pa. Use this value in simulation rather than factor_overall. SIM-336 pool-neutralization policy: sim pools are drawn from real (already park-influenced) PAs, so apply park as base_rate * (target_factor / comp_origin_factor) — divide out the comp origin-venue factor before multiplying by the target venue factor, to avoid double-counting.';
 
 -- =============================================================================
 -- SIM.PITCH_POOL
@@ -688,20 +691,30 @@ CREATE TABLE IF NOT EXISTS sim.pitch_pool (
                                 -- ball, called_strike, swinging_strike, foul, in_play
     events                      VARCHAR(50),            -- Non-NULL when outcome_type = in_play
 
+    -- SIM-076: sampling recency weight. 2.0 for the most-recent two seasons,
+    -- geometric decay (×0.75/season, floor 0.25) for older data, relative to
+    -- the build's reference season. The PlayPoolSampler multiplies a row's
+    -- distance-weight by recency_weight so recent form is preferred.
+    recency_weight              FLOAT       NOT NULL DEFAULT 1.0,
+
     PRIMARY KEY (pitch_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_pp_pitcher         ON sim.pitch_pool(pitcher_id);
-CREATE INDEX IF NOT EXISTS idx_pp_batter          ON sim.pitch_pool(batter_id);
-CREATE INDEX IF NOT EXISTS idx_pp_season          ON sim.pitch_pool(season);
-CREATE INDEX IF NOT EXISTS idx_pp_game_date       ON sim.pitch_pool(game_date);
-CREATE INDEX IF NOT EXISTS idx_pp_pitcher_season  ON sim.pitch_pool(pitcher_id, season);
-CREATE INDEX IF NOT EXISTS idx_pp_batter_season   ON sim.pitch_pool(batter_id, season);
-CREATE INDEX IF NOT EXISTS idx_pp_outcome         ON sim.pitch_pool(outcome_type);
-CREATE INDEX IF NOT EXISTS idx_pp_runners         ON sim.pitch_pool(runners_state);
-CREATE INDEX IF NOT EXISTS idx_pp_count           ON sim.pitch_pool(count_balls, count_strikes, outs);
-CREATE INDEX IF NOT EXISTS idx_pp_velo            ON sim.pitch_pool(velo);
-CREATE INDEX IF NOT EXISTS idx_pp_ivb             ON sim.pitch_pool(ivb);
+-- SIM-337: index set reconciled to the SIM-111 play-pool query contract (§6.2).
+-- The pitch read path pre-filters on pitcher_id + stand (batter handedness)
+-- before any FAISS tile is materialized, and otherwise reads by primary key; the
+-- situation/feature/outcome columns are read in bulk inside that scoped scan,
+-- never via a single-column predicate. So the pitcher/season pre-filter indexes
+-- (+ advisory season/game_date) are kept, a stand-bearing composite is added so
+-- the pre-filter is fully index-served, and the outcome_type/count indexes (which
+-- SIM-115 wrongly kept) are dropped. DuckDB's columnar zone maps cover the
+-- bulk-scan columns. See db/migrations/duckdb/0006_sim337_reconcile_pool_indexes.sql
+-- and docs/architecture/2026-05-21-play-pool-query-contracts.md §6.2.
+CREATE INDEX IF NOT EXISTS idx_pp_pitcher_season       ON sim.pitch_pool(pitcher_id, season);
+CREATE INDEX IF NOT EXISTS idx_pp_pitcher              ON sim.pitch_pool(pitcher_id);
+CREATE INDEX IF NOT EXISTS idx_pp_season               ON sim.pitch_pool(season);
+CREATE INDEX IF NOT EXISTS idx_pp_game_date            ON sim.pitch_pool(game_date);
+CREATE INDEX IF NOT EXISTS idx_pp_pitcher_stand_season ON sim.pitch_pool(pitcher_id, stand, season);
 
 COMMENT ON TABLE  sim.pitch_pool IS 'Pre-filtered pitch pool for Step 2 similarity scoring. Quality-flagged pitches excluded. Rebuilt nightly from PostgreSQL.';
 COMMENT ON COLUMN sim.pitch_pool.runners_state IS 'Bitmask: bit0=1B, bit1=2B, bit2=3B. Values 0-7. Encodes baserunner configuration for situational similarity.';
@@ -751,7 +764,11 @@ CREATE TABLE IF NOT EXISTS sim.outcome_pool (
     -- -------------------------------------------------------------------------
     exit_velo                   FLOAT,      -- launch_speed
     launch_angle                FLOAT,
-    spray_angle                 FLOAT,
+    spray_angle                 FLOAT,                  -- raw spray angle (Statcast)
+    -- SIM-051: handedness-corrected spray angle.  Same sign convention for
+    -- LHB pull doubles and RHB pull doubles — flips on bat_hand at ETL time.
+    -- NULL when bat_hand is 'S' (unresolved switch hitter).
+    pull_relative_spray_angle   FLOAT,
     bb_type                     VARCHAR(20),            -- ground_ball, fly_ball, line_drive, popup
     hit_distance                FLOAT,
     hc_x                        FLOAT,
@@ -766,19 +783,22 @@ CREATE TABLE IF NOT EXISTS sim.outcome_pool (
     result_outs                 SMALLINT    NOT NULL DEFAULT 0,
     result_runs                 SMALLINT    NOT NULL DEFAULT 0,
 
+    -- SIM-076: sampling recency weight (see sim.pitch_pool.recency_weight).
+    recency_weight              FLOAT       NOT NULL DEFAULT 1.0,
+
     PRIMARY KEY (pitch_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_op_pitcher         ON sim.outcome_pool(pitcher_id);
-CREATE INDEX IF NOT EXISTS idx_op_batter          ON sim.outcome_pool(batter_id);
-CREATE INDEX IF NOT EXISTS idx_op_season          ON sim.outcome_pool(season);
-CREATE INDEX IF NOT EXISTS idx_op_bb_type         ON sim.outcome_pool(bb_type);
-CREATE INDEX IF NOT EXISTS idx_op_exit_velo       ON sim.outcome_pool(exit_velo);
-CREATE INDEX IF NOT EXISTS idx_op_launch_angle    ON sim.outcome_pool(launch_angle);
-CREATE INDEX IF NOT EXISTS idx_op_spray_angle     ON sim.outcome_pool(spray_angle);
-CREATE INDEX IF NOT EXISTS idx_op_runners         ON sim.outcome_pool(runners_state);
-CREATE INDEX IF NOT EXISTS idx_op_result_hits     ON sim.outcome_pool(result_hits);
-CREATE INDEX IF NOT EXISTS idx_op_fielded_by      ON sim.outcome_pool(fielded_by_position);
+-- SIM-337: outcome_pool is read by PK point-lookup (the sampler's payload fetch)
+-- and built pre-filtered on season + stand (batter handedness); the batted-ball
+-- detail columns are read in bulk inside that scoped scan, never via a
+-- single-column predicate (SIM-111 contract §6.2 E/F). The season index
+-- (incremental rebuild, SIM-095) is kept and a stand-bearing composite is added
+-- so the season + stand pre-filter is fully index-served. Write-overhead indexes
+-- on bulk-scan/projected columns dropped.
+-- See db/migrations/duckdb/0006_sim337_reconcile_pool_indexes.sql.
+CREATE INDEX IF NOT EXISTS idx_op_season       ON sim.outcome_pool(season);
+CREATE INDEX IF NOT EXISTS idx_op_stand_season ON sim.outcome_pool(stand, season);
 
 COMMENT ON TABLE  sim.outcome_pool IS 'In-play subset of pitch_pool with full batted ball detail. Input to Steps 3b/4/5.';
 
@@ -827,6 +847,9 @@ CREATE TABLE IF NOT EXISTS sim.stolen_base_pool (
     -- Outcome
     success                     BOOLEAN     NOT NULL,
 
+    -- SIM-076: sampling recency weight (see sim.pitch_pool.recency_weight).
+    recency_weight              FLOAT       NOT NULL DEFAULT 1.0,
+
     PRIMARY KEY (pitch_id)
 );
 
@@ -840,6 +863,32 @@ CREATE INDEX IF NOT EXISTS idx_sbp_runner_speed   ON sim.stolen_base_pool(runner
 
 COMMENT ON TABLE  sim.stolen_base_pool IS 'All pitches with SB attempts. Denormalized runner/catcher metrics enable fast similarity scoring without joins.';
 COMMENT ON COLUMN sim.stolen_base_pool.runner_sprint_speed IS 'Denormalized from derived.baserunner_season_metrics at ETL time. Avoids join during simulation.';
+
+-- =============================================================================
+-- SIM.POOL_BUILD_METADATA  (SIM-076 / SIM-095)
+-- One row per (pool, season) recording the last build. Drives the incremental
+-- pool rebuild (SIM-095): a season is skipped when its source watermark has not
+-- advanced since the last build. Also records the recency reference season used.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS sim.pool_build_metadata (
+    pool_name             VARCHAR(20) NOT NULL,   -- 'pitch_pool' | 'outcome_pool' | 'stolen_base_pool'
+    season                SMALLINT    NOT NULL,
+    row_count             BIGINT      NOT NULL DEFAULT 0,
+    source_max_game_date  DATE,                   -- max(game_date) of source rows at build time (watermark)
+    -- SIM-345: source row count at build time. Paired with source_max_game_date
+    -- so the incremental rebuild can detect a same-game_date late/doubleheader
+    -- row (which does NOT advance the watermark). A season is fresh only when the
+    -- watermark has not advanced AND this count is unchanged.
+    source_row_count      BIGINT,
+    recency_ref_season    SMALLINT,               -- reference season used for recency_weight (canonical across pools, SIM-345)
+    builder_version       VARCHAR(20),
+    built_at              TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (pool_name, season)
+);
+
+COMMENT ON TABLE sim.pool_build_metadata IS 'SIM-076/SIM-095/SIM-345: per-(pool,season) build watermark + source row count + canonical recency reference. Enables incremental pool rebuild (skip seasons whose source date AND row count are unchanged).';
 
 -- =============================================================================
 -- PER-PLAY DETAIL TABLES

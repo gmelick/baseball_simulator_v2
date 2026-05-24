@@ -122,6 +122,46 @@ RESIM_COOLDOWN_S = 10
 GAME_TYPES = ["R", "F", "D", "L", "W", "C", "P"]
 
 # ---------------------------------------------------------------------------
+# SIM-340: Prop-odds ingestion config (multi-book, sharp flag, cadence)
+# ---------------------------------------------------------------------------
+# PROP_BOOKS — the set of books polled for player props on every prop-fetch
+# cycle.  Each entry is (book_name, is_sharp_book).  Sharp books (Pinnacle,
+# Circa) provide the CLV reference line; soft books (DraftKings, FanDuel)
+# capture the line the public actually bets into.  Capturing both lets the
+# CLV engine (SIM-339) measure soft-vs-sharp divergence per prop.
+#
+# Phase 7 swap: replace MockOddsAPI.get_prop_odds() in _fetch_prop_odds() with
+# a real provider that returns one quote per (book, player, prop_stat); the
+# is_sharp_book classification stays here so it survives the provider swap.
+PROP_BOOKS: list[tuple[str, bool]] = [
+    ("pinnacle", True),  # sharp — CLV reference
+    ("circa", True),  # sharp — CLV reference
+    ("draftkings", False),  # soft — retail line
+    ("fanduel", False),  # soft — retail line
+]
+
+# The 7 Betting-Analyst-confirmed prop markets (mirror MockOddsAPI._PROP_CONFIG
+# and the raw.prop_odds CHECK constraint).  Kept as a tuple so callers cannot
+# mutate the canonical ordering.
+PROP_STATS: tuple[str, ...] = (
+    "strikeouts",
+    "hits",
+    "home_runs",
+    "earned_runs",
+    "walks",
+    "total_bases",
+    "rbis",
+)
+
+# SIM-340: prop-odds fetch cadence.  Prop lines move far more slowly than the
+# WS refresh rate (a WS message fires on every pitch).  Polling every book ×
+# player × prop on every WS signal would issue thousands of redundant writes
+# per game.  We therefore gate prop fetches to at most once per
+# PROP_FETCH_CADENCE_S seconds per game; the dedup hash (migration 0013)
+# collapses any identical snapshot that still slips through.
+PROP_FETCH_CADENCE_S = 60
+
+# ---------------------------------------------------------------------------
 # DDL helpers
 # ---------------------------------------------------------------------------
 # NOTE (SIM-083): GAME_ODDS_DDL has been removed from this file.
@@ -1102,6 +1142,11 @@ class LiveIngestionPipeline:
         # refresh; preserves last-processed at-bat index across refreshes so
         # _parse_play_history() only walks new plays.
         self._builders: dict[int, GameStateBuilder] = {}
+        # SIM-340: per-game timestamp of the last prop-odds fetch cycle.  The
+        # WS feed signals on every pitch; prop lines move far more slowly, so
+        # _persist_prop_odds_cycle() consults this map and skips the fetch
+        # unless PROP_FETCH_CADENCE_S seconds have elapsed for this game.
+        self._last_prop_fetch: dict[int, datetime] = {}
 
         self._schedule_task: asyncio.Task | None = None
         self._running = False
@@ -1296,6 +1341,12 @@ class LiveIngestionPipeline:
                     feed["gameData"]["status"]["abstractGameState"],
                 )
                 await self._persist_odds(game_pk, odds)
+                # SIM-340: persist player-prop odds on the same refresh cycle.
+                # _persist_prop_odds_cycle() self-throttles to PROP_FETCH_CADENCE_S
+                # per game so it does not fire on every WS pitch signal.  This is
+                # the live wiring that finally invokes _persist_prop_odds (which
+                # had been defined but never called before SIM-340).
+                await self._persist_prop_odds_cycle(game_pk, game_state)
 
                 # Determine whether this update marks the end of a plate
                 # appearance before broadcasting, so the frontend knows whether
@@ -1357,6 +1408,190 @@ class LiveIngestionPipeline:
                 return await resp.json()
         """
         return MockOddsAPI.get_odds(game_pk)
+
+    @staticmethod
+    def _collect_prop_player_ids(game_state: dict) -> list[int]:
+        """
+        SIM-340: Extract the player_ids eligible for prop-line capture from a
+        built game_state.
+
+        Props are offered on the two probable/active starting pitchers and on
+        the batters in both lineups.  We pull:
+          * current_pitcher_id (the pitcher on the mound right now)
+          * every player_id in home_lineup / away_lineup (the hitters)
+
+        Deduplicated, None-filtered, and order-stable so a fixed game_state
+        always yields the same id list (keeps the dedup hash and tests stable).
+        """
+        ids: list[int] = []
+        cp = game_state.get("current_pitcher_id")
+        if cp:
+            ids.append(int(cp))
+        for side in ("home_lineup", "away_lineup"):
+            for entry in game_state.get(side, []) or []:
+                pid = entry.get("player_id")
+                if pid:
+                    ids.append(int(pid))
+        # Order-stable dedup.
+        seen: set[int] = set()
+        unique: list[int] = []
+        for pid in ids:
+            if pid not in seen:
+                seen.add(pid)
+                unique.append(pid)
+        return unique
+
+    def _fetch_prop_odds(
+        self,
+        game_pk: int,
+        player_ids: list[int],
+        *,
+        line_type: str = "current",
+        books: list[tuple[str, bool]] | None = None,
+        prop_stats: tuple[str, ...] = PROP_STATS,
+    ) -> list[dict]:
+        """
+        SIM-340: Returns a flat list of prop-odds quotes for the given players.
+
+        Multi-book + sharp flag: iterates over PROP_BOOKS (each a
+        ``(book, is_sharp_book)`` pair) so every prop is captured at every book,
+        with the sharp-book flag carried through to raw.prop_odds.  Capturing
+        both sharp (Pinnacle, Circa) and soft (DraftKings, FanDuel) quotes lets
+        the CLV engine (SIM-339) measure soft-vs-sharp divergence per prop.
+
+        In Phase 7, replace the MockOddsAPI.get_prop_odds() call with a real
+        provider that returns one quote per (book, player, prop_stat).  The book
+        list and is_sharp_book classification live in PROP_BOOKS so they survive
+        the provider swap untouched.
+        """
+        books = books if books is not None else PROP_BOOKS
+        quotes: list[dict] = []
+        for player_id in player_ids:
+            for prop_stat in prop_stats:
+                for book, is_sharp in books:
+                    try:
+                        quote = MockOddsAPI.get_prop_odds(
+                            game_pk,
+                            player_id,
+                            prop_stat,
+                            line_type=line_type,
+                            book=book,
+                            is_sharp_book=is_sharp,
+                        )
+                    except ValueError:
+                        # Unknown prop_stat — skip rather than abort the cycle.
+                        log.warning(
+                            "skipping unknown prop_stat '%s' for player %s game %s",
+                            prop_stat,
+                            player_id,
+                            game_pk,
+                        )
+                        continue
+                    quotes.append(quote)
+        return quotes
+
+    async def _persist_prop_odds_cycle(self, game_pk: int, game_state: dict) -> int:
+        """
+        SIM-340: Live prop-odds persistence cycle.
+
+        Called from _refresh_game_state() on every WS signal, but self-throttled
+        to at most once per PROP_FETCH_CADENCE_S seconds per game (prop lines move
+        far more slowly than the per-pitch WS feed).  When the cadence gate opens,
+        it:
+          1. Collects prop-eligible player_ids from the game_state.
+          2. Fetches multi-book prop quotes (sharp + soft) via _fetch_prop_odds().
+          3. Persists each quote via _persist_prop_odds() (the previously-unwired
+             method this ticket activates).
+
+        Returns the number of prop rows written this cycle (0 when the cadence
+        gate is closed or no eligible players were found).
+        """
+        now = datetime.now(UTC)
+        last = self._last_prop_fetch.get(game_pk)
+        if last is not None and (now - last).total_seconds() < PROP_FETCH_CADENCE_S:
+            # Cadence gate closed — too soon since the last prop fetch.
+            return 0
+
+        player_ids = self._collect_prop_player_ids(game_state)
+        if not player_ids:
+            # Nothing to price yet (e.g. lineups not posted) — don't stamp the
+            # cadence clock so the next signal retries promptly.
+            return 0
+
+        self._last_prop_fetch[game_pk] = now
+        quotes = self._fetch_prop_odds(game_pk, player_ids, line_type="current")
+        written = 0
+        for quote in quotes:
+            try:
+                await self._persist_prop_odds(quote)
+                written += 1
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "prop persist failed game %s player %s %s @ %s: %s",
+                    game_pk,
+                    quote.get("player_id"),
+                    quote.get("prop_stat"),
+                    quote.get("book"),
+                    exc,
+                )
+        if written:
+            log.info(
+                "SIM-340: persisted %d prop quotes for game %s (%d players × %d stats × %d books)",
+                written,
+                game_pk,
+                len(player_ids),
+                len(PROP_STATS),
+                len(PROP_BOOKS),
+            )
+        return written
+
+    async def capture_opening_prop_lines(
+        self,
+        game_pk: int,
+        player_ids: list[int],
+        *,
+        books: list[tuple[str, bool]] | None = None,
+        prop_stats: tuple[str, ...] = PROP_STATS,
+    ) -> int:
+        """
+        SIM-340 / SIM-138: Opening-line capture hook for player props.
+
+        Writes one raw.prop_odds row per (player, prop_stat, book) with
+        line_type='opening'.  This is the prop analogue of the nightly opening
+        game-line capture (opening_line_job.py / SIM-138): it records the FIRST
+        line posted so opening→closing movement (and therefore CLV) is
+        recoverable for props, not just game markets.
+
+        Idempotent by virtue of the dedup hash (migration 0013): re-running with
+        an unchanged opening line is a no-op via ON CONFLICT DO NOTHING.
+
+        Returns the number of opening prop rows written.
+        """
+        quotes = self._fetch_prop_odds(
+            game_pk,
+            player_ids,
+            line_type="opening",
+            books=books,
+            prop_stats=prop_stats,
+        )
+        written = 0
+        for quote in quotes:
+            try:
+                await self._persist_prop_odds(quote)
+                written += 1
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "opening prop persist failed game %s player %s %s: %s",
+                    game_pk,
+                    quote.get("player_id"),
+                    quote.get("prop_stat"),
+                    exc,
+                )
+        if written:
+            log.info(
+                "SIM-340: captured %d opening prop lines for game %s", written, game_pk
+            )
+        return written
 
     def _should_resimulate(self, game_pk: int, feed: dict) -> tuple[bool, int]:
         """
@@ -1589,6 +1824,48 @@ class LiveIngestionPipeline:
             odds_hash,
         )
 
+    @staticmethod
+    def _prop_odds_hash(prop: dict) -> str:
+        """
+        SIM-340: Deterministic SHA-256 fingerprint of a prop-odds payload —
+        the prop analogue of _odds_hash() (SIM-092).
+
+        Identical prop snapshots produce identical hashes, so an
+        INSERT … ON CONFLICT (game_pk, player_id, source, odds_hash) DO NOTHING
+        is a no-op for any snapshot already written.  This is what makes the
+        live cadence safe: even if the cadence gate is loosened, the dedup hash
+        collapses unchanged lines instead of accumulating a row per WS signal.
+
+        prop_stat / book / line_type / is_sharp_book are part of the hash because
+        two books (or the over vs the under, or current vs opening) at the same
+        line are still distinct quotes.  source lives outside the hash, paired
+        with it in the unique index.
+        """
+        import hashlib
+
+        ordered_keys = (
+            "player_id",
+            "prop_stat",
+            "book",
+            "line_type",
+            "is_sharp_book",
+            "line",
+            "over_ml",
+            "under_ml",
+        )
+
+        def _fmt(v: object) -> str:
+            if v is None:
+                return "∅"
+            if isinstance(v, bool):
+                return "1" if v else "0"
+            if isinstance(v, float):
+                return f"{v:.6f}"
+            return str(v)
+
+        payload = "|".join(f"{k}={_fmt(prop.get(k))}" for k in ordered_keys)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
     async def _persist_prop_odds(self, prop: dict) -> None:
         """
         SIM-134: Inserts a fresh player prop odds snapshot into raw.prop_odds.
@@ -1603,21 +1880,32 @@ class LiveIngestionPipeline:
 
         Notes
         -----
-        The live pipeline writes line_type='current' during active game windows.
-        Opening lines are captured by the nightly opening_line_job (SIM-138).
-        Closing lines are designated by mark_closing_prop_lines() (Phase 5).
+        The live pipeline writes line_type='current' during active game windows
+        via _persist_prop_odds_cycle() (SIM-340 wiring).  Opening lines are
+        captured by capture_opening_prop_lines() and the nightly opening_line_job
+        (SIM-138).  Closing lines are designated by mark_closing_prop_lines().
+
+        SIM-340: also writes ``odds_hash`` (SHA-256 of the prop payload) and uses
+        ON CONFLICT (game_pk, player_id, source, odds_hash) DO NOTHING so the
+        live cadence never accumulates duplicate rows for an unchanged line.
+        Backed by the partial unique index ``idx_prop_odds_dedup`` (migration
+        0013).
 
         The DB enforces prop_stat values via CHECK constraint (migration 0004).
         Any unknown prop_stat will fail here with a clear IntegrityError before
         the invalid value reaches the application layer.
         """
+        odds_hash = self._prop_odds_hash(prop)
         await self._db.execute(
             """
             INSERT INTO raw.prop_odds
                 (game_pk, player_id, source, is_mock,
                  prop_stat, line, over_ml, under_ml,
-                 book, line_type, is_sharp_book)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                 book, line_type, is_sharp_book, odds_hash)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            ON CONFLICT (game_pk, player_id, source, odds_hash)
+              WHERE odds_hash IS NOT NULL
+              DO NOTHING
             """,
             prop["game_pk"],
             prop["player_id"],
@@ -1630,6 +1918,7 @@ class LiveIngestionPipeline:
             prop.get("book", "consensus"),
             prop.get("line_type", "current"),
             prop.get("is_sharp_book", False),
+            odds_hash,
         )
 
     async def mark_closing_lines(self, game_pk: int, first_pitch_at: datetime) -> int:
@@ -1667,6 +1956,53 @@ class LiveIngestionPipeline:
         if updated:
             log.info(
                 "Closing line designated: game %s at %s (%d row updated)",
+                game_pk,
+                first_pitch_at.isoformat(),
+                updated,
+            )
+        return updated
+
+    async def mark_closing_prop_lines(self, game_pk: int, first_pitch_at: datetime) -> int:
+        """
+        SIM-340: Closing prop-line designation job — the prop analogue of
+        mark_closing_lines() (SIM-133).
+
+        For every distinct (player_id, prop_stat, book) on this game, finds the
+        most recent raw.prop_odds snapshot with line_type='current' that was
+        fetched at or before first_pitch_at and stamps it line_type='closing'.
+        Each stamped row becomes the per-prop CLV reference line (SIM-339).
+
+        Unlike game odds — which has one closing line per market_type — props
+        fan out per player × stat × book, so this stamps one closing row per
+        such combination via a DISTINCT ON window rather than a single LIMIT 1.
+
+        Should be called once per game immediately after first pitch is detected
+        (status transitions 'Preview' -> 'Live'), the same trigger point used
+        for mark_closing_lines().
+
+        Returns the number of prop rows updated to 'closing'.
+        """
+        result = await self._db.execute(
+            """
+            WITH last_pre_pitch AS (
+                SELECT DISTINCT ON (player_id, prop_stat, book) id
+                FROM raw.prop_odds
+                WHERE game_pk = $1
+                  AND line_type = 'current'
+                  AND fetched_at <= $2
+                ORDER BY player_id, prop_stat, book, fetched_at DESC
+            )
+            UPDATE raw.prop_odds
+               SET line_type = 'closing'
+             WHERE id IN (SELECT id FROM last_pre_pitch)
+            """,
+            game_pk,
+            first_pitch_at,
+        )
+        updated = int(result.split()[-1]) if result else 0
+        if updated:
+            log.info(
+                "Closing prop lines designated: game %s at %s (%d rows updated)",
                 game_pk,
                 first_pitch_at.isoformat(),
                 updated,

@@ -32,8 +32,12 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # SIM-343: unified to 3.11 (the version the project targets — see
+  # [tool.ruff] target-version + [tool.mypy] python_version) so lint/test
+  # here run the same interpreter as the weekly + docker workflows.
   PYTHON_VERSION: '3.11'
-  # Minimum line-coverage threshold for similarity/ + pipeline/ modules.
+  # Minimum line-coverage threshold for the measured packages
+  # (similarity/ + pipeline/ + simulation/ + betting/).
   # Scope is configured in pyproject.toml's [tool.coverage.run] section —
   # CLI / diagnostic / real-time streaming files are excluded since they're
   # exercised by regression + integration tests, not unit tests.
@@ -127,6 +131,8 @@ jobs:
             --cov-config=pyproject.toml \
             --cov=similarity \
             --cov=pipeline \
+            --cov=simulation \
+            --cov=betting \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
             --cov-report=html:htmlcov \

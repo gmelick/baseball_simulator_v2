@@ -283,9 +283,34 @@ class SprintSpeedLoader:
 
 
 if __name__ == "__main__":
-    loader = SprintSpeedLoader(
-        "postgresql://localhost/baseball_simulator?user=postgres&password=baseball"
+    import argparse
+    import os
+    import sys
+
+    parser = argparse.ArgumentParser(
+        description="Load Baseball Savant sprint speed data into raw.sprint_speed."
     )
-    results = loader.refresh_seasons([2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025])
+    parser.add_argument(
+        "--seasons",
+        type=int,
+        nargs="+",
+        required=True,
+        help="One or more seasons to refresh, e.g. --seasons 2023 2024 2025",
+    )
+    parser.add_argument(
+        "--dsn",
+        default=os.environ.get("BASEBALL_DB_DSN"),
+        help="Postgres DSN. Defaults to the BASEBALL_DB_DSN environment variable.",
+    )
+    args = parser.parse_args()
+
+    if not args.dsn:
+        sys.stderr.write(
+            "ERROR: no Postgres DSN provided. Set BASEBALL_DB_DSN or pass --dsn.\n"
+        )
+        sys.exit(2)
+
+    loader = SprintSpeedLoader(args.dsn)
+    results = loader.refresh_seasons(args.seasons)
     for season, n in sorted(results.items()):
         log.info("  season %d → %d rows", season, n)

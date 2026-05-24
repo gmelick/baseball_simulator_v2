@@ -62,6 +62,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import time
 from datetime import date, datetime
 from pathlib import Path
@@ -72,6 +73,8 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
+
+from simulation.constants import DEFENSIVE_RUN_VALUES
 
 logging.basicConfig(
     level=logging.INFO,
@@ -117,12 +120,43 @@ PARK_PRIOR_PA = 2000
 LI_LOW = 0.7
 LI_HIGH = 1.5
 
-# Barrel: exit_velo >= 98 mph AND launch_angle between 26–30 deg (tight zone)
+# Barrel (Statcast sliding-scale definition).
+# A batted ball is a *barrel* when exit velocity >= 98 mph AND launch angle falls
+# inside a band that WIDENS as exit velocity increases.  At the 98 mph floor the
+# band is launch_angle 26-30 deg; for every +1 mph above 98 the lower bound drops
+# 1 deg and the upper bound rises 2 deg, expanding to roughly 8-50 deg at
+# >= 116 mph (capped there).  Below 98 mph it is never a barrel.
+#   lower_la = GREATEST(BARREL_LA_FLOOR,  BARREL_MIN_LA - (EV - BARREL_MIN_VELO) * BARREL_LOWER_SLOPE)
+#   upper_la = LEAST   (BARREL_LA_CEILING, BARREL_MAX_LA + (EV - BARREL_MIN_VELO) * BARREL_UPPER_SLOPE)
 # Hard hit: exit_velo >= 95 mph
-BARREL_MIN_VELO = 98.0
-BARREL_MIN_LA = 26.0
-BARREL_MAX_LA = 30.0
+BARREL_MIN_VELO = 98.0       # EV floor; below this never a barrel
+BARREL_MIN_LA = 26.0         # lower LA bound at the 98 mph floor
+BARREL_MAX_LA = 30.0         # upper LA bound at the 98 mph floor
+BARREL_LOWER_SLOPE = 1.0     # deg the lower bound drops per +1 mph above floor
+BARREL_UPPER_SLOPE = 2.0     # deg the upper bound rises per +1 mph above floor
+BARREL_LA_FLOOR = 8.0        # lower LA bound never goes below this (>= ~116 mph)
+BARREL_LA_CEILING = 50.0     # upper LA bound never goes above this (>= ~116 mph)
 HARD_HIT_MIN_VELO = 95.0
+
+# SIM-074: barrel uses the Statcast sliding-scale band built by _barrel_case_sql.
+
+
+def _barrel_case_sql(prefix: str = "") -> str:
+    """Return a DuckDB SQL boolean expression that is TRUE when the row is a
+    Statcast *barrel*.
+
+    The sliding-scale band widens with exit velocity (see module constants).
+    NULL launch_speed / launch_angle yield NULL (counted as not-a-barrel by the
+    enclosing SUM(CASE ...)).  ``prefix`` is prepended to the predicate so the
+    platoon variants can gate on e.g. ``p_throws='L' AND``.
+    """
+    return (
+        f"{prefix}launch_speed >= {BARREL_MIN_VELO} "
+        f"AND launch_angle >= GREATEST({BARREL_LA_FLOOR}, "
+        f"{BARREL_MIN_LA} - (launch_speed - {BARREL_MIN_VELO}) * {BARREL_LOWER_SLOPE}) "
+        f"AND launch_angle <= LEAST({BARREL_LA_CEILING}, "
+        f"{BARREL_MAX_LA} + (launch_speed - {BARREL_MIN_VELO}) * {BARREL_UPPER_SLOPE})"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -157,10 +191,12 @@ AVG_THROW_VELO = {
 
 INFIELD_EXCHANGE_TIME = 0.80
 OUTFIELD_EXCHANGE_TIME = 1.00
-RUNS_PER_OAA_INFIELD = 0.75
-RUNS_PER_OAA_OUTFIELD = 0.90
-RUNS_PER_BLOCK_SAVED = 0.25
-RUNS_PER_STRIKE_ABOVE_AVG = 0.125
+# Defensive run-value constants — sourced from simulation.constants (SIM-202).
+# Values preserved exactly: infield 0.75, outfield 0.90, block 0.25, strike 0.125.
+RUNS_PER_OAA_INFIELD = DEFENSIVE_RUN_VALUES["runs_per_oaa_infield"]
+RUNS_PER_OAA_OUTFIELD = DEFENSIVE_RUN_VALUES["runs_per_oaa_outfield"]
+RUNS_PER_BLOCK_SAVED = DEFENSIVE_RUN_VALUES["runs_per_block_saved"]
+RUNS_PER_STRIKE_ABOVE_AVG = DEFENSIVE_RUN_VALUES["runs_per_strike_above_avg"]
 FRAMING_SHADOW_INNER = 0.0
 FRAMING_SHADOW_OUTER = 0.5
 ZONE_HALF_WIDTH = 0.833
@@ -724,6 +760,112 @@ def _fit_gmm_for_pitcher(
     return model_json, component_rows
 
 
+# ---------------------------------------------------------------------------
+# SIM-113: GMM batch-fit scaling, chunked IPC, and bulk result writes
+# ---------------------------------------------------------------------------
+
+
+def _resolve_gmm_workers(n_tasks: int) -> int:
+    """Size the GMM fit pool to the host (SIM-113).
+
+    Replaces the previously hardcoded ``n_workers = 8`` (which oversubscribed
+    small CI boxes and underused large hosts). One worker per CPU core minus
+    one for the parent, never more than the number of tasks, floored at 1.
+    """
+    cpu = os.cpu_count() or 2
+    return max(1, min(cpu - 1, n_tasks or 1))
+
+
+def _chunk_tasks(tasks: list, n_chunks: int) -> list[list]:
+    """Round-robin ``tasks`` into at most ``n_chunks`` non-empty lists.
+
+    Round-robin keeps per-chunk wall-time balanced when fit cost varies by
+    pitcher (high-volume starters vs. relievers).
+    """
+    if n_chunks <= 1:
+        return [list(tasks)] if tasks else []
+    buckets: list[list] = [[] for _ in range(n_chunks)]
+    for i, t in enumerate(tasks):
+        buckets[i % n_chunks].append(t)
+    return [b for b in buckets if b]
+
+
+def _fit_gmm_batch(
+    task_chunk: list[tuple[np.ndarray, int, int]],
+) -> list[tuple[int, int, dict | None, list[dict]]]:
+    """Fit GMMs for a *chunk* of pitchers in one worker process (SIM-113).
+
+    Submitting one task per chunk instead of one per pitcher collapses the
+    per-pitcher submission/result IPC into a single round-trip per worker.
+    Each task carries a compact float32 feature array rather than a pandas
+    DataFrame, roughly halving the bytes pickled across the process boundary.
+    """
+    results: list[tuple[int, int, dict | None, list[dict]]] = []
+    for arr, pitcher_id, season in task_chunk:
+        df = pd.DataFrame(arr, columns=GMM_FEATURE_NAMES)
+        model_json, component_rows = _fit_gmm_for_pitcher(df, pitcher_id, season)
+        results.append((pitcher_id, season, model_json, component_rows))
+    return results
+
+
+def _flush_gmm_results(
+    conn,
+    fitted: list[tuple[int, int, dict, list[dict]]],
+    fallbacks: list[tuple[int, int]],
+) -> None:
+    """Write all GMM results in a few set-based statements (SIM-113).
+
+    Replaces ~one UPDATE/INSERT per pitcher (5,000+ round-trips on a full
+    9-season build) with three bulk operations driven by registered frames.
+    """
+    if fallbacks:
+        fb_df = pd.DataFrame(fallbacks, columns=["pitcher_id", "season"])
+        conn.register("gmm_fallback_df", fb_df)
+        try:
+            conn.execute(
+                """
+                UPDATE derived.pitcher_season_metrics AS m
+                SET below_minimum_sample = TRUE
+                FROM gmm_fallback_df AS f
+                WHERE m.pitcher_id = f.pitcher_id AND m.season = f.season
+                """
+            )
+        finally:
+            conn.unregister("gmm_fallback_df")
+
+    if not fitted:
+        return
+
+    model_df = pd.DataFrame(
+        [(pid, ssn, json.dumps(mj)) for pid, ssn, mj, _ in fitted],
+        columns=["pitcher_id", "season", "gmm_model_json"],
+    )
+    conn.register("gmm_model_df", model_df)
+    try:
+        conn.execute(
+            """
+            UPDATE derived.pitcher_season_metrics AS m
+            SET gmm_model = CAST(g.gmm_model_json AS JSON)
+            FROM gmm_model_df AS g
+            WHERE m.pitcher_id = g.pitcher_id AND m.season = g.season
+            """
+        )
+    finally:
+        conn.unregister("gmm_model_df")
+
+    all_components = [row for _, _, _, rows in fitted for row in rows]
+    if all_components:
+        comp_df = pd.DataFrame(all_components)
+        conn.register("comp_df", comp_df)
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO derived.pitcher_gmm_components "
+                "SELECT * FROM comp_df"
+            )
+        finally:
+            conn.unregister("comp_df")
+
+
 def _label_component(mean: list[float], fi: dict[str, int]) -> str | None:
     """
     Post-hoc human-readable label for a GMM component.
@@ -768,6 +910,152 @@ def _label_component(mean: list[float], fi: dict[str, int]) -> str | None:
         return "Offspeed"
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# SIM-076 / SIM-095: sim-pool recency weighting + incremental rebuild helpers
+# ---------------------------------------------------------------------------
+
+POOL_BUILDER_VERSION = "sim076.1"
+RECENCY_RECENT_SEASONS = 2     # seasons (incl. ref) that get the full peak weight
+RECENCY_DECAY = 0.75           # geometric decay per season beyond the recent window
+RECENCY_FLOOR = 0.25
+RECENCY_PEAK = 2.0
+
+
+def recency_weight(season: int, ref_season: int) -> float:
+    """Sampling recency weight for a row from ``season`` vs ``ref_season`` (SIM-076).
+
+    2.0 for the most-recent two seasons, then x0.75 per additional season,
+    floored at 0.25. This mirrors the SQL emitted into the pool builders so the
+    Python reference and the materialized ``recency_weight`` column never diverge.
+    """
+    age = ref_season - season
+    if age <= RECENCY_RECENT_SEASONS - 1:
+        return RECENCY_PEAK
+    return max(RECENCY_FLOOR, RECENCY_PEAK * (RECENCY_DECAY ** (age - (RECENCY_RECENT_SEASONS - 1))))
+
+
+def _recency_weight_sql(season_expr: str, ref_season: int) -> str:
+    """SQL CASE expression mirroring ``recency_weight()`` for a season column."""
+    age = f"({ref_season} - {season_expr})"
+    return (
+        f"CASE WHEN {age} <= {RECENCY_RECENT_SEASONS - 1} THEN {RECENCY_PEAK} "
+        f"ELSE GREATEST({RECENCY_FLOOR}, {RECENCY_PEAK} * "
+        f"POWER({RECENCY_DECAY}, {age} - {RECENCY_RECENT_SEASONS - 1})) END"
+    )
+
+
+def _canonical_ref_season(conn, seasons: list[int]) -> int:
+    """The single recency reference season shared by ALL three sim pools (SIM-345).
+
+    Previously each pool computed ``ref_season = max(seasons)`` from its own
+    argument, so a partial/incremental call could give pools different
+    references — and a row's ``recency_weight`` would then disagree between the
+    pitch_pool and the outcome_pool built from it. This pins one canonical
+    reference: the newest of the seasons requested in THIS run and every
+    ``recency_ref_season`` already recorded in ``sim.pool_build_metadata``. Once
+    a pool advances the reference, the others adopt the same value, so the
+    weights stay consistent across pools and across incremental runs.
+    """
+    ref = max(seasons)
+    try:
+        prev = conn.execute(
+            "SELECT MAX(recency_ref_season) FROM sim.pool_build_metadata"
+        ).fetchone()[0]
+    except Exception:
+        prev = None
+    if prev is not None:
+        ref = max(ref, int(prev))
+    return ref
+
+
+def _source_state(conn, season: int):
+    """``(MAX(game_date), COUNT(*))`` of usable source rows for ``season``.
+
+    Single scan over ``pg.raw.pitches`` (quality rows only). The count is the
+    SIM-345 row-count guard so a same-``game_date`` late/doubleheader row — which
+    does NOT advance ``MAX(game_date)`` — is still detected. Returns
+    ``(None, 0)`` when the source has no usable rows (or an empty result).
+    """
+    row = conn.execute(
+        "SELECT MAX(game_date), COUNT(*) FROM pg.raw.pitches "
+        "WHERE season = ? AND data_quality_flag = FALSE",
+        [season],
+    ).fetchone()
+    if not row or len(row) < 2:
+        return None, 0
+    return row[0], row[1]
+
+
+def _seasons_needing_rebuild(conn, pool_name: str, seasons: list[int]) -> list[int]:
+    """Subset of ``seasons`` whose source changed since the last build (SIM-095).
+
+    SIM-345 freshness contract — a season is fresh (skipped) only when BOTH:
+      * the recorded watermark ``source_max_game_date`` is ``>=`` the current
+        ``MAX(game_date)`` in ``pg.raw.pitches`` (date has not advanced), AND
+      * the recorded ``source_row_count`` equals the current source row count.
+
+    The previous strict ``>`` watermark silently skipped a season when a late or
+    doubleheader row landed on an ALREADY-SEEN ``game_date`` (the max did not
+    move). Switching the staleness test to ``src_max >= prev`` and adding the
+    row-count guard catches those same-date additions without rebuilding an
+    unchanged season every night. If the metadata table is absent or has no row
+    for a season (or a legacy row predates ``source_row_count``), the season is
+    (re)built.
+    """
+    try:
+        meta = {
+            row[0]: (row[1], row[2])
+            for row in conn.execute(
+                "SELECT season, source_max_game_date, source_row_count "
+                "FROM sim.pool_build_metadata WHERE pool_name = ?",
+                [pool_name],
+            ).fetchall()
+        }
+    except Exception:
+        return list(seasons)
+    stale: list[int] = []
+    for s in seasons:
+        src_max, src_cnt = _source_state(conn, s)
+        prev = meta.get(s)
+        if prev is None:
+            stale.append(s)
+            continue
+        prev_max, prev_cnt = prev
+        if src_max is None or prev_max is None:
+            stale.append(s)
+            continue
+        # Fresh only when the date has not advanced AND the source row count is
+        # unchanged. ``src_max >= prev_max`` is the freshness side; we rebuild
+        # when the date moved forward OR the count differs (same-date late row).
+        date_advanced = src_max > prev_max
+        count_changed = prev_cnt is None or src_cnt != prev_cnt
+        if date_advanced or count_changed:
+            stale.append(s)
+    return stale
+
+
+def _record_pool_build(conn, pool_name: str, seasons: list[int], ref_season: int) -> None:
+    """Upsert per-(pool, season) build watermark + recency reference (SIM-076/095).
+
+    Records both the source watermark (``source_max_game_date``) and the source
+    row count (``source_row_count``, SIM-345 guard) so the next incremental run
+    can detect same-date late rows. ``row_count`` remains the materialized pool
+    row count for observability.
+    """
+    for s in seasons:
+        src_max, src_cnt = _source_state(conn, s)
+        cnt = conn.execute(
+            f"SELECT COUNT(*) FROM sim.{pool_name} WHERE season = ?", [s]
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT OR REPLACE INTO sim.pool_build_metadata "
+            "(pool_name, season, row_count, source_max_game_date, "
+            " source_row_count, recency_ref_season, builder_version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [pool_name, s, cnt, src_max, src_cnt, ref_season, POOL_BUILDER_VERSION],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -903,9 +1191,11 @@ class PlayerProfileComputor:
             self._aggregate_catcher_season_metrics(seasons)
 
             # ── Simulation pools (last — denormalize from derived.*) ──────────
-            self._build_pitch_pool(seasons)
-            self._build_outcome_pool(seasons)
-            self._build_stolen_base_pool(seasons)
+            # SIM-095: incremental rebuild unless a full_rebuild was requested.
+            incremental = not full_rebuild
+            self._build_pitch_pool(seasons, incremental=incremental)
+            self._build_outcome_pool(seasons, incremental=incremental)
+            self._build_stolen_base_pool(seasons, incremental=incremental)
 
             elapsed = time.time() - t0
             log.info("=== Completed in %.1f seconds ===", elapsed)
@@ -985,9 +1275,40 @@ class PlayerProfileComputor:
         Computes park factors per venue per season per event type
         (HR, 1B, 2B, 3B, R, K, BB, GB, FB).
 
-        Method: compare rate of each event at a given park to the
+        Method: compare the rate of each event at a given park to the
         league-average rate.  Bayesian shrinkage toward 1.0 based on
         sample_pa (PARK_PRIOR_PA controls the shrinkage rate).
+
+        Handedness splits (SIM-336)
+        ---------------------------
+        ``factor_vs_l`` / ``factor_vs_r`` are split on the **batter's**
+        handedness (``stand``), the standard sabermetric convention — short
+        porches and outfield dimensions interact with the batter's pull side,
+        and ``stand`` is the same key the pitch/outcome read path pre-filters
+        on (SIM-337 indexes, SIM-345 contract). Switch hitters (``stand='S'``)
+        contribute only to ``factor_overall`` (the per-PA resolved batting side
+        is carried by ``bat_hand``, which is not retained at venue grain here),
+        so an 'S' PA is neutral w.r.t. the L/R splits but still counted overall.
+        Each L/R split is the venue's vs-hand rate over its own vs-hand league
+        average, so it is independently centered on 1.0.
+
+        Pool-neutralization policy (SIM-336)
+        ------------------------------------
+        The sim pools (``sim.pitch_pool`` / ``sim.outcome_pool``) are drawn
+        from *real* PAs that ALREADY occurred in some park, so their empirical
+        rates are park-influenced. To apply a venue's park factor at sim time
+        WITHOUT double-counting, the caller must first NEUTRALIZE each sampled
+        comp by dividing out the park factor of the venue the comp was played
+        in, then multiply by the target venue's factor:
+            adjusted = base_rate * (target_factor / comp_origin_factor)
+        Equivalently, sample from a park-neutral pool (each row pre-divided by
+        its origin venue's ``regressed_factor``) and multiply by the target
+        venue factor once. ``factor_overall == 1.0`` for a perfectly neutral
+        park, so a league-average comp pool needs no adjustment. This policy is
+        documented on ``derived.park_factors`` (schema) and enforced by the
+        park-application engine, not by this builder (which only materializes
+        the factors). Always use ``regressed_factor`` (Bayesian-shrunk), never
+        the raw ``factor_overall``, in the sim path.
         """
         log.info("Computing park factors …")
         season_list = ", ".join(str(s) for s in seasons)
@@ -1019,6 +1340,9 @@ class PlayerProfileComputor:
                     CASE WHEN p.events IN ('strikeout','strikeout_double_play')  THEN 1 ELSE 0 END AS is_k,
                     CASE WHEN p.bb_type = 'ground_ball'                          THEN 1 ELSE 0 END AS is_gb,
                     CASE WHEN p.bb_type IN ('fly_ball','popup')                  THEN 1 ELSE 0 END AS is_fb,
+                    -- Batter-handedness gates (switch hitters excluded from both splits)
+                    CASE WHEN p.stand = 'L' THEN 1 ELSE 0 END                   AS is_vs_l,
+                    CASE WHEN p.stand = 'R' THEN 1 ELSE 0 END                   AS is_vs_r,
                     p.runs_on_pitch
                 FROM pg.raw.pitches p
                 WHERE p.events IS NOT NULL
@@ -1029,21 +1353,41 @@ class PlayerProfileComputor:
                 SELECT
                     venue_id,
                     season,
-                    COUNT(*)                        AS sample_pa,
-                    -- By handedness splits
-                    CASE WHEN p_throws = 'L' THEN SUM(is_hr) ELSE NULL END  AS hr_l,
-                    CASE WHEN p_throws = 'R' THEN SUM(is_hr) ELSE NULL END  AS hr_r,
-                    SUM(is_hr)                      AS hr_total,
-                    SUM(is_1b)                      AS singles,
-                    SUM(is_2b)                      AS doubles,
-                    SUM(is_3b)                      AS triples,
-                    SUM(is_bb)                      AS walks,
-                    SUM(is_k)                       AS strikeouts,
-                    SUM(is_gb)                      AS groundballs,
-                    SUM(is_fb)                      AS flyballs,
-                    SUM(runs_on_pitch)              AS runs
+                    COUNT(*)                            AS sample_pa,
+                    SUM(is_vs_l)                        AS sample_pa_l,
+                    SUM(is_vs_r)                        AS sample_pa_r,
+                    -- Overall numerators
+                    SUM(is_hr)                          AS hr_total,
+                    SUM(is_1b)                          AS singles,
+                    SUM(is_2b)                          AS doubles,
+                    SUM(is_3b)                          AS triples,
+                    SUM(is_bb)                          AS walks,
+                    SUM(is_k)                           AS strikeouts,
+                    SUM(is_gb)                          AS groundballs,
+                    SUM(is_fb)                          AS flyballs,
+                    SUM(runs_on_pitch)                  AS runs,
+                    -- vs-LHB numerators
+                    SUM(is_hr * is_vs_l)                AS hr_l,
+                    SUM(is_1b * is_vs_l)                AS singles_l,
+                    SUM(is_2b * is_vs_l)                AS doubles_l,
+                    SUM(is_3b * is_vs_l)                AS triples_l,
+                    SUM(is_bb * is_vs_l)                AS walks_l,
+                    SUM(is_k  * is_vs_l)                AS strikeouts_l,
+                    SUM(is_gb * is_vs_l)                AS groundballs_l,
+                    SUM(is_fb * is_vs_l)                AS flyballs_l,
+                    SUM(runs_on_pitch * is_vs_l)        AS runs_l,
+                    -- vs-RHB numerators
+                    SUM(is_hr * is_vs_r)                AS hr_r,
+                    SUM(is_1b * is_vs_r)                AS singles_r,
+                    SUM(is_2b * is_vs_r)                AS doubles_r,
+                    SUM(is_3b * is_vs_r)                AS triples_r,
+                    SUM(is_bb * is_vs_r)                AS walks_r,
+                    SUM(is_k  * is_vs_r)                AS strikeouts_r,
+                    SUM(is_gb * is_vs_r)                AS groundballs_r,
+                    SUM(is_fb * is_vs_r)                AS flyballs_r,
+                    SUM(runs_on_pitch * is_vs_r)        AS runs_r
                 FROM pa
-                GROUP BY venue_id, season, p_throws
+                GROUP BY venue_id, season
             ),
             league_rates AS (
                 SELECT
@@ -1056,7 +1400,27 @@ class PlayerProfileComputor:
                     SUM(strikeouts) * 1.0 / NULLIF(SUM(sample_pa), 0)   AS lg_k_rate,
                     SUM(groundballs) * 1.0 / NULLIF(SUM(sample_pa), 0)  AS lg_gb_rate,
                     SUM(flyballs)    * 1.0 / NULLIF(SUM(sample_pa), 0)  AS lg_fb_rate,
-                    SUM(runs)        * 1.0 / NULLIF(SUM(sample_pa), 0)  AS lg_r_rate
+                    SUM(runs)        * 1.0 / NULLIF(SUM(sample_pa), 0)  AS lg_r_rate,
+                    -- vs-LHB league rates
+                    SUM(hr_l) * 1.0 / NULLIF(SUM(sample_pa_l), 0)       AS lg_hr_rate_l,
+                    SUM(singles_l) * 1.0 / NULLIF(SUM(sample_pa_l), 0)  AS lg_1b_rate_l,
+                    SUM(doubles_l) * 1.0 / NULLIF(SUM(sample_pa_l), 0)  AS lg_2b_rate_l,
+                    SUM(triples_l) * 1.0 / NULLIF(SUM(sample_pa_l), 0)  AS lg_3b_rate_l,
+                    SUM(walks_l)   * 1.0 / NULLIF(SUM(sample_pa_l), 0)  AS lg_bb_rate_l,
+                    SUM(strikeouts_l) * 1.0 / NULLIF(SUM(sample_pa_l), 0) AS lg_k_rate_l,
+                    SUM(groundballs_l) * 1.0 / NULLIF(SUM(sample_pa_l), 0) AS lg_gb_rate_l,
+                    SUM(flyballs_l)    * 1.0 / NULLIF(SUM(sample_pa_l), 0) AS lg_fb_rate_l,
+                    SUM(runs_l)        * 1.0 / NULLIF(SUM(sample_pa_l), 0) AS lg_r_rate_l,
+                    -- vs-RHB league rates
+                    SUM(hr_r) * 1.0 / NULLIF(SUM(sample_pa_r), 0)       AS lg_hr_rate_r,
+                    SUM(singles_r) * 1.0 / NULLIF(SUM(sample_pa_r), 0)  AS lg_1b_rate_r,
+                    SUM(doubles_r) * 1.0 / NULLIF(SUM(sample_pa_r), 0)  AS lg_2b_rate_r,
+                    SUM(triples_r) * 1.0 / NULLIF(SUM(sample_pa_r), 0)  AS lg_3b_rate_r,
+                    SUM(walks_r)   * 1.0 / NULLIF(SUM(sample_pa_r), 0)  AS lg_bb_rate_r,
+                    SUM(strikeouts_r) * 1.0 / NULLIF(SUM(sample_pa_r), 0) AS lg_k_rate_r,
+                    SUM(groundballs_r) * 1.0 / NULLIF(SUM(sample_pa_r), 0) AS lg_gb_rate_r,
+                    SUM(flyballs_r)    * 1.0 / NULLIF(SUM(sample_pa_r), 0) AS lg_fb_rate_r,
+                    SUM(runs_r)        * 1.0 / NULLIF(SUM(sample_pa_r), 0) AS lg_r_rate_r
                 FROM venue_rates
                 GROUP BY season
             ),
@@ -1064,57 +1428,82 @@ class PlayerProfileComputor:
                 SELECT
                     vr.venue_id,
                     vr.season,
-                    SUM(vr.sample_pa) AS sample_pa,
-                    -- Factor = venue rate / league rate
-                    (SUM(vr.hr_total) * 1.0 / NULLIF(SUM(vr.sample_pa),0))
-                        / NULLIF(lr.lg_hr_rate, 0)  AS factor_hr,
-                    (SUM(vr.singles) * 1.0 / NULLIF(SUM(vr.sample_pa),0))
-                        / NULLIF(lr.lg_1b_rate, 0)  AS factor_1b,
-                    (SUM(vr.doubles) * 1.0 / NULLIF(SUM(vr.sample_pa),0))
-                        / NULLIF(lr.lg_2b_rate, 0)  AS factor_2b,
-                    (SUM(vr.triples) * 1.0 / NULLIF(SUM(vr.sample_pa),0))
-                        / NULLIF(lr.lg_3b_rate, 0)  AS factor_3b,
-                    (SUM(vr.walks) * 1.0 / NULLIF(SUM(vr.sample_pa),0))
-                        / NULLIF(lr.lg_bb_rate, 0)  AS factor_bb,
-                    (SUM(vr.strikeouts) * 1.0 / NULLIF(SUM(vr.sample_pa),0))
-                        / NULLIF(lr.lg_k_rate, 0)   AS factor_k,
-                    (SUM(vr.groundballs) * 1.0 / NULLIF(SUM(vr.sample_pa),0))
-                        / NULLIF(lr.lg_gb_rate, 0)  AS factor_gb,
-                    (SUM(vr.flyballs) * 1.0 / NULLIF(SUM(vr.sample_pa),0))
-                        / NULLIF(lr.lg_fb_rate, 0)  AS factor_fb,
-                    (SUM(vr.runs) * 1.0 / NULLIF(SUM(vr.sample_pa),0))
-                        / NULLIF(lr.lg_r_rate, 0)   AS factor_r
+                    vr.sample_pa,
+                    -- Overall factor = venue rate / league rate
+                    (vr.hr_total * 1.0 / NULLIF(vr.sample_pa,0)) / NULLIF(lr.lg_hr_rate, 0)  AS factor_hr,
+                    (vr.singles  * 1.0 / NULLIF(vr.sample_pa,0)) / NULLIF(lr.lg_1b_rate, 0)  AS factor_1b,
+                    (vr.doubles  * 1.0 / NULLIF(vr.sample_pa,0)) / NULLIF(lr.lg_2b_rate, 0)  AS factor_2b,
+                    (vr.triples  * 1.0 / NULLIF(vr.sample_pa,0)) / NULLIF(lr.lg_3b_rate, 0)  AS factor_3b,
+                    (vr.walks    * 1.0 / NULLIF(vr.sample_pa,0)) / NULLIF(lr.lg_bb_rate, 0)  AS factor_bb,
+                    (vr.strikeouts * 1.0 / NULLIF(vr.sample_pa,0)) / NULLIF(lr.lg_k_rate, 0) AS factor_k,
+                    (vr.groundballs * 1.0 / NULLIF(vr.sample_pa,0)) / NULLIF(lr.lg_gb_rate, 0) AS factor_gb,
+                    (vr.flyballs * 1.0 / NULLIF(vr.sample_pa,0)) / NULLIF(lr.lg_fb_rate, 0)  AS factor_fb,
+                    (vr.runs     * 1.0 / NULLIF(vr.sample_pa,0)) / NULLIF(lr.lg_r_rate, 0)   AS factor_r,
+                    -- vs-LHB factor = venue vs-L rate / league vs-L rate
+                    (vr.hr_l * 1.0 / NULLIF(vr.sample_pa_l,0)) / NULLIF(lr.lg_hr_rate_l, 0)  AS factor_hr_l,
+                    (vr.singles_l * 1.0 / NULLIF(vr.sample_pa_l,0)) / NULLIF(lr.lg_1b_rate_l, 0) AS factor_1b_l,
+                    (vr.doubles_l * 1.0 / NULLIF(vr.sample_pa_l,0)) / NULLIF(lr.lg_2b_rate_l, 0) AS factor_2b_l,
+                    (vr.triples_l * 1.0 / NULLIF(vr.sample_pa_l,0)) / NULLIF(lr.lg_3b_rate_l, 0) AS factor_3b_l,
+                    (vr.walks_l   * 1.0 / NULLIF(vr.sample_pa_l,0)) / NULLIF(lr.lg_bb_rate_l, 0) AS factor_bb_l,
+                    (vr.strikeouts_l * 1.0 / NULLIF(vr.sample_pa_l,0)) / NULLIF(lr.lg_k_rate_l, 0) AS factor_k_l,
+                    (vr.groundballs_l * 1.0 / NULLIF(vr.sample_pa_l,0)) / NULLIF(lr.lg_gb_rate_l, 0) AS factor_gb_l,
+                    (vr.flyballs_l * 1.0 / NULLIF(vr.sample_pa_l,0)) / NULLIF(lr.lg_fb_rate_l, 0) AS factor_fb_l,
+                    (vr.runs_l     * 1.0 / NULLIF(vr.sample_pa_l,0)) / NULLIF(lr.lg_r_rate_l, 0)  AS factor_r_l,
+                    -- vs-RHB factor = venue vs-R rate / league vs-R rate
+                    (vr.hr_r * 1.0 / NULLIF(vr.sample_pa_r,0)) / NULLIF(lr.lg_hr_rate_r, 0)  AS factor_hr_r,
+                    (vr.singles_r * 1.0 / NULLIF(vr.sample_pa_r,0)) / NULLIF(lr.lg_1b_rate_r, 0) AS factor_1b_r,
+                    (vr.doubles_r * 1.0 / NULLIF(vr.sample_pa_r,0)) / NULLIF(lr.lg_2b_rate_r, 0) AS factor_2b_r,
+                    (vr.triples_r * 1.0 / NULLIF(vr.sample_pa_r,0)) / NULLIF(lr.lg_3b_rate_r, 0) AS factor_3b_r,
+                    (vr.walks_r   * 1.0 / NULLIF(vr.sample_pa_r,0)) / NULLIF(lr.lg_bb_rate_r, 0) AS factor_bb_r,
+                    (vr.strikeouts_r * 1.0 / NULLIF(vr.sample_pa_r,0)) / NULLIF(lr.lg_k_rate_r, 0) AS factor_k_r,
+                    (vr.groundballs_r * 1.0 / NULLIF(vr.sample_pa_r,0)) / NULLIF(lr.lg_gb_rate_r, 0) AS factor_gb_r,
+                    (vr.flyballs_r * 1.0 / NULLIF(vr.sample_pa_r,0)) / NULLIF(lr.lg_fb_rate_r, 0) AS factor_fb_r,
+                    (vr.runs_r     * 1.0 / NULLIF(vr.sample_pa_r,0)) / NULLIF(lr.lg_r_rate_r, 0)  AS factor_r_r
                 FROM venue_rates vr
                 JOIN league_rates lr ON vr.season = lr.season
-                GROUP BY vr.venue_id, vr.season, lr.lg_hr_rate, lr.lg_1b_rate,
-                         lr.lg_2b_rate, lr.lg_3b_rate, lr.lg_bb_rate, lr.lg_k_rate,
-                         lr.lg_gb_rate, lr.lg_fb_rate, lr.lg_r_rate
+            ),
+            -- Melt the overall / vs-L / vs-R factor groups together so each
+            -- factor_type yields ONE row carrying overall + both splits.
+            melted AS (
+                SELECT
+                    venue_id, season, sample_pa,
+                    factor_type, factor_overall, factor_vs_l, factor_vs_r
+                FROM factors
+                -- INCLUDE NULLS so every factor_type always yields a row even
+                -- when a venue/league rate is undefined (0 events). The outer
+                -- COALESCE then makes factor_overall the neutral 1.0, honoring
+                -- the NOT NULL constraint on derived.park_factors.factor_overall.
+                UNPIVOT INCLUDE NULLS (
+                    (factor_overall, factor_vs_l, factor_vs_r)
+                    FOR factor_type IN (
+                        (factor_hr, factor_hr_l, factor_hr_r) AS 'HR',
+                        (factor_1b, factor_1b_l, factor_1b_r) AS '1B',
+                        (factor_2b, factor_2b_l, factor_2b_r) AS '2B',
+                        (factor_3b, factor_3b_l, factor_3b_r) AS '3B',
+                        (factor_bb, factor_bb_l, factor_bb_r) AS 'BB',
+                        (factor_k,  factor_k_l,  factor_k_r)  AS 'K',
+                        (factor_gb, factor_gb_l, factor_gb_r) AS 'GB',
+                        (factor_fb, factor_fb_l, factor_fb_r) AS 'FB',
+                        (factor_r,  factor_r_l,  factor_r_r)  AS 'R'
+                    )
+                )
             )
-            -- Unnest factor types for storage as one row per factor type
+            -- One row per (venue, season, factor_type) with real L/R splits.
             SELECT
                 venue_id,
                 season,
                 factor_type,
                 COALESCE(factor_overall, 1.0) AS factor_overall,
-                NULL::FLOAT AS factor_vs_l,
-                NULL::FLOAT AS factor_vs_r,
+                factor_vs_l,
+                factor_vs_r,
                 sample_pa,
                 -- Bayesian shrinkage: posterior = (observed * N + 1.0 * prior_weight) / (N + prior_weight)
-                -- where prior_weight = PARK_PRIOR_PA / N
+                -- where prior_weight = PARK_PRIOR_PA. Applied to the overall factor;
+                -- the L/R splits are stored raw (callers shrink with their own
+                -- vs-hand sample if desired).
                 (COALESCE(factor_overall, 1.0) * sample_pa + 1.0 * {PARK_PRIOR_PA})
                     / (sample_pa + {PARK_PRIOR_PA}) AS regressed_factor
-            FROM factors
-            UNPIVOT (factor_overall FOR factor_type IN (
-                factor_hr AS 'HR',
-                factor_1b AS '1B',
-                factor_2b AS '2B',
-                factor_3b AS '3B',
-                factor_bb AS 'BB',
-                factor_k  AS 'K',
-                factor_gb AS 'GB',
-                factor_fb AS 'FB',
-                factor_r  AS 'R'
-            ))
+            FROM melted
         """)
         log.info("  Park factors done.")
 
@@ -1301,69 +1690,52 @@ class PlayerProfileComputor:
                 )
                 fit_tasks.append((pitcher_id, season, pitcher_df))
 
-        # Parallel GMM fitting — one process per CPU core (minus one for the parent)
+        # Parallel GMM fitting — chunked across CPU cores (SIM-113).
         from concurrent.futures import ProcessPoolExecutor, as_completed
 
-        # n_workers = max(1, (os.cpu_count() or 2) - 1)
-        n_workers = 8
-        log.info("  Fitting GMMs in parallel with %d workers …", n_workers)
+        # Compact float32 feature arrays (not DataFrames) keep per-task IPC small.
+        array_tasks = [
+            (df[GMM_FEATURE_NAMES].to_numpy(dtype=np.float32), pid, ssn)
+            for pid, ssn, df in fit_tasks
+        ]
+        n_workers = _resolve_gmm_workers(len(array_tasks))
+        chunks = _chunk_tasks(array_tasks, n_workers)
+        log.info(
+            "  Fitting GMMs: %d pitchers across %d workers (%d chunks) …",
+            len(array_tasks), n_workers, len(chunks),
+        )
 
-        gmm_success = 0
-        gmm_fallback = 0
+        fitted: list[tuple[int, int, dict, list[dict]]] = []
+        fallbacks: list[tuple[int, int]] = []
 
-        # _fit_gmm_for_pitcher is a module-level function so it pickles cleanly
+        # _fit_gmm_batch is a module-level function so it pickles cleanly.
         with ProcessPoolExecutor(max_workers=n_workers) as pool:
-            future_to_task = {
-                pool.submit(_fit_gmm_for_pitcher, df, pid, ssn): (pid, ssn)
-                for pid, ssn, df in fit_tasks
+            future_to_chunk = {
+                pool.submit(_fit_gmm_batch, chunk): chunk for chunk in chunks
             }
-
-            for future in as_completed(future_to_task):
-                pitcher_id, season = future_to_task[future]
+            for future in as_completed(future_to_chunk):
                 try:
-                    model_json, component_rows = future.result()
+                    chunk_results = future.result()
                 except Exception as exc:
-                    log.error(
-                        "GMM worker crashed: pitcher=%s season=%s: %s", pitcher_id, season, exc
-                    )
-                    gmm_fallback += 1
-                    self._conn.execute(
-                        f"""
-                            UPDATE derived.pitcher_season_metrics
-                            SET below_minimum_sample = TRUE
-                            WHERE pitcher_id = {pitcher_id} AND season = {season}
-                            """
+                    # Whole-chunk crash: flag every pitcher in it as fallback,
+                    # preserving the prior per-pitcher crash semantics.
+                    log.error("GMM worker chunk crashed: %s", exc)
+                    fallbacks.extend(
+                        (pid, ssn) for _arr, pid, ssn in future_to_chunk[future]
                     )
                     continue
+                for pitcher_id, season, model_json, component_rows in chunk_results:
+                    if model_json is None:
+                        fallbacks.append((pitcher_id, season))
+                    else:
+                        fitted.append((pitcher_id, season, model_json, component_rows))
 
-                if model_json is None:
-                    gmm_fallback += 1
-                    self._conn.execute(
-                        f"""
-                            UPDATE derived.pitcher_season_metrics
-                            SET below_minimum_sample = TRUE
-                            WHERE pitcher_id = {pitcher_id} AND season = {season}
-                            """
-                    )
-                    continue
+        # Batched DuckDB writes (SIM-113): a few set-based statements instead
+        # of one UPDATE/INSERT per pitcher.
+        _flush_gmm_results(self._conn, fitted, fallbacks)
 
-                model_json_str = json.dumps(model_json).replace("'", "''")
-                self._conn.execute(
-                    f"""
-                        UPDATE derived.pitcher_season_metrics
-                        SET gmm_model = '{model_json_str}'::JSON
-                        WHERE pitcher_id = {pitcher_id} AND season = {season}
-                        """
-                )
-
-                if component_rows:
-                    pd.DataFrame(component_rows)
-                    self._conn.execute(
-                        "INSERT OR REPLACE INTO derived.pitcher_gmm_components "
-                        "SELECT * FROM comp_df"
-                    )
-
-                gmm_success += 1
+        gmm_success = len(fitted)
+        gmm_fallback = len(fallbacks)
 
         log.info(
             "  GMM fitting complete: %d fitted, %d fell back to minimum-sample flag.",
@@ -1441,9 +1813,8 @@ class PlayerProfileComputor:
                     SUM(CASE WHEN launch_speed >= {HARD_HIT_MIN_VELO} THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS hard_hit_rate,
 
-                    -- Barrel rate (exit_velo >= 98 AND launch_angle 26–30)
-                    SUM(CASE WHEN launch_speed >= {BARREL_MIN_VELO} AND launch_angle BETWEEN {BARREL_MIN_LA}
-                        AND {BARREL_MAX_LA} THEN 1.0 ELSE 0 END) /
+                    -- Barrel rate (Statcast sliding-scale: EV>=98 & LA band widening with EV)
+                    SUM(CASE WHEN {_barrel_case_sql()} THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS barrel_rate,
 
                     -- HR rate per PA
@@ -1484,9 +1855,8 @@ class PlayerProfileComputor:
                     SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS oppo_rate_vs_l,
                     AVG(CASE WHEN p_throws='L' AND launch_speed IS NOT NULL THEN launch_speed END) AS avg_exit_velo_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND launch_speed >= {BARREL_MIN_VELO} AND launch_angle BETWEEN
-                        {BARREL_MIN_LA} AND {BARREL_MAX_LA} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND
-                        type='X' THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_l,
+                    SUM(CASE WHEN {_barrel_case_sql("p_throws='L' AND ")} THEN 1.0 ELSE 0 END) /
+                        NULLIF(SUM(CASE WHEN p_throws='L' AND type='X' THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_l,
 
                     -- Platoon splits — vs RHP
                     SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
@@ -1515,9 +1885,8 @@ class PlayerProfileComputor:
                     SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS oppo_rate_vs_r,
                     AVG(CASE WHEN p_throws='R' AND launch_speed IS NOT NULL THEN launch_speed END) AS avg_exit_velo_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND launch_speed >= {BARREL_MIN_VELO} AND launch_angle BETWEEN
-                        {BARREL_MIN_LA} AND {BARREL_MAX_LA} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND
-                        type='X' THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_r
+                    SUM(CASE WHEN {_barrel_case_sql("p_throws='R' AND ")} THEN 1.0 ELSE 0 END) /
+                        NULLIF(SUM(CASE WHEN p_throws='R' AND type='X' THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_r
 
                 FROM pg.raw.pitches
                 WHERE data_quality_flag = FALSE
@@ -3182,6 +3551,92 @@ class PlayerProfileComputor:
     # AGGREGATE SEASON-LEVEL METRICS
     # ------------------------------------------------------------------
 
+    def _ensure_fielder_temp_tables_exist(self) -> None:
+        """Create empty `_tmp_*` placeholders for any temp table the
+        fielder aggregator JOINs against that hasn't been created yet
+        (e.g. because the upstream compute step returned early on a
+        sample-size guard).
+
+        Columns match what the aggregator's CTEs SELECT — the goal is
+        to make the JOIN a no-op when the corresponding compute step
+        was skipped, NOT to substitute real data.
+        """
+        # Each entry: (table_name, CREATE TABLE DDL with the columns
+        # the aggregator references).  We use CREATE TABLE IF NOT EXISTS
+        # so this is idempotent: if the compute step DID create the
+        # table, this no-ops and the real data is preserved.
+        placeholders = {
+            # Outfield catch probability — _compute_outfield_catch_probability
+            "_tmp_of_plays": """
+                CREATE TABLE IF NOT EXISTS _tmp_of_plays (
+                    fielder_id INTEGER, position VARCHAR, season SMALLINT,
+                    catch_probability FLOAT, caught BOOLEAN,
+                    oaa_credit FLOAT, direction_cat VARCHAR, star_rating INTEGER
+                )
+            """,
+            # Infield OAA — _compute_infield_oaa
+            "_tmp_if_plays": """
+                CREATE TABLE IF NOT EXISTS _tmp_if_plays (
+                    fielder_id INTEGER, position VARCHAR, season SMALLINT,
+                    out_probability FLOAT, out_recorded BOOLEAN,
+                    oaa_credit FLOAT, direction_category VARCHAR
+                )
+            """,
+            # Double-play metrics — _compute_dp_metrics
+            "_tmp_dp_plays": """
+                CREATE TABLE IF NOT EXISTS _tmp_dp_plays (
+                    initiator_id INTEGER, initiator_position VARCHAR,
+                    pivot_id INTEGER, pivot_position VARCHAR,
+                    season SMALLINT,
+                    dp_probability FLOAT, dp_turned BOOLEAN,
+                    dp_run_value FLOAT
+                )
+            """,
+            # Errors — _compute_error_decomposition
+            # Schema follows the SELECT shape inside the aggregator's `err` CTE
+            # (SELECT * FROM _tmp_errors).  Keep the column set minimal but
+            # include the foreign-key columns the outer SELECT joins on.
+            "_tmp_errors": """
+                CREATE TABLE IF NOT EXISTS _tmp_errors (
+                    season SMALLINT, fielder_id INTEGER, position VARCHAR,
+                    total_plays INTEGER, fielding_errors INTEGER,
+                    throwing_errors INTEGER, error_rate FLOAT
+                )
+            """,
+            # Bunt defense — _compute_bunt_defense
+            "_tmp_bunt_defense": """
+                CREATE TABLE IF NOT EXISTS _tmp_bunt_defense (
+                    season SMALLINT, fielder_id INTEGER, position VARCHAR,
+                    bunt_opportunities INTEGER, bunt_outs INTEGER,
+                    bunt_success_rate FLOAT
+                )
+            """,
+            # 1B scooping — _compute_first_base_scooping
+            "_tmp_1b_scoop": """
+                CREATE TABLE IF NOT EXISTS _tmp_1b_scoop (
+                    season SMALLINT, fielder_id INTEGER, position VARCHAR,
+                    scoop_opportunities INTEGER, scoop_successes INTEGER,
+                    scoop_success_rate FLOAT
+                )
+            """,
+            # OF arm — _compute_outfield_arm_metrics (not joined directly by
+            # the aggregator today, but referenced by the cleanup loop, so
+            # we ensure it's safe to DROP).
+            "_tmp_of_arm": """
+                CREATE TABLE IF NOT EXISTS _tmp_of_arm (
+                    season SMALLINT, fielder_id INTEGER, position VARCHAR,
+                    arm_opportunities INTEGER, arm_runs FLOAT
+                )
+            """,
+        }
+        for table, ddl in placeholders.items():
+            try:
+                self._conn.execute(ddl)
+            except Exception as exc:  # noqa: BLE001  - defensive log + continue
+                log.warning(
+                    "  Could not ensure placeholder %s exists: %s", table, exc
+                )
+
     def _aggregate_fielder_season_metrics(self, seasons: list[int]) -> None:
         """
         Combine all per-play detail tables into the final
@@ -3189,6 +3644,18 @@ class PlayerProfileComputor:
         """
         log.info("Aggregating fielder season metrics …")
         season_list = ", ".join(str(s) for s in seasons)
+
+        # ----------------------------------------------------------------
+        # Defensive: ensure every _tmp_* table the aggregator JOINs against
+        # exists, even if the upstream _compute_* step returned early due to
+        # the sample-size guard (e.g. _compute_outfield_catch_probability
+        # bails out when len(df) < 500).  Without this step the aggregator
+        # crashes with "Catalog Error: Table with name _tmp_of_plays does
+        # not exist!" on small / partial data loads.  Creating an empty
+        # placeholder with the right columns is a no-op JOIN target and
+        # preserves the aggregator's shape.
+        # ----------------------------------------------------------------
+        self._ensure_fielder_temp_tables_exist()
 
         # Delete existing rows for these seasons (full rebuild pattern)
         self._conn.execute(f"""
@@ -3403,10 +3870,70 @@ class PlayerProfileComputor:
 
         log.info("  Fielder season metrics aggregated.")
 
+    def _ensure_catcher_temp_tables_exist(self) -> None:
+        """Defensive — same pattern as _ensure_fielder_temp_tables_exist.
+
+        The catcher aggregator FULL-OUTER-JOINs three temp tables:
+          _tmp_framing            ← created by _compute_catcher_framing
+          _tmp_blocking           ← created by _compute_catcher_blocking
+          _tmp_catcher_throwing   ← created by _compute_catcher_throwing
+
+        Each compute step may early-`return` when the per-season sample
+        size falls below its guard (typical on partial / small data
+        loads).  Empty placeholders preserve the aggregator's join
+        shape without injecting fake rows.
+        """
+        placeholders = {
+            "_tmp_framing": """
+                CREATE TABLE IF NOT EXISTS _tmp_framing (
+                    catcher_id INTEGER, season SMALLINT,
+                    called_pitches INTEGER, called_strikes INTEGER,
+                    expected_called_strikes FLOAT, strikes_above_average FLOAT,
+                    framing_runs FLOAT,
+                    framing_low FLOAT, framing_high FLOAT,
+                    framing_inside FLOAT, framing_outside FLOAT
+                )
+            """,
+            "_tmp_blocking": """
+                CREATE TABLE IF NOT EXISTS _tmp_blocking (
+                    catcher_id INTEGER, season SMALLINT,
+                    expected_pbwp FLOAT, actual_pbwp INTEGER,
+                    blocks_above_average FLOAT, blocking_runs FLOAT,
+                    blocks_aa_bounced FLOAT, blocks_aa_high FLOAT,
+                    blocks_aa_lateral FLOAT
+                )
+            """,
+            "_tmp_catcher_throwing": """
+                CREATE TABLE IF NOT EXISTS _tmp_catcher_throwing (
+                    catcher_id INTEGER, season SMALLINT,
+                    sb_attempts_faced INTEGER, cs_total INTEGER,
+                    sb_attempts_2b INTEGER, cs_rate_2b FLOAT,
+                    sb_attempts_3b INTEGER, cs_rate_3b FLOAT,
+                    cs_rate FLOAT, sb_allowed_rate FLOAT,
+                    sb_opportunities_pa INTEGER,
+                    steal_attempt_rate_against FLOAT
+                )
+            """,
+        }
+        for table, ddl in placeholders.items():
+            try:
+                self._conn.execute(ddl)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "  Could not ensure placeholder %s exists: %s", table, exc
+                )
+
     def _aggregate_catcher_season_metrics(self, seasons: list[int]) -> None:
         """Combine framing, blocking, and throwing into catcher season metrics."""
         log.info("Aggregating catcher season metrics …")
         season_list = ", ".join(str(s) for s in seasons)
+
+        # SIM-2026-05 hardening: see _ensure_fielder_temp_tables_exist for
+        # the rationale.  When a per-season sample is too thin, the upstream
+        # _compute_catcher_{framing,blocking,throwing} method returns early
+        # without creating its _tmp_* table.  Guarantee the aggregator's
+        # FULL OUTER JOIN inputs all exist (possibly empty) before running.
+        self._ensure_catcher_temp_tables_exist()
 
         self._conn.execute(f"""
             DELETE FROM derived.catcher_season_metrics
@@ -3497,18 +4024,29 @@ class PlayerProfileComputor:
 
         log.info("  Catcher season metrics aggregated.")
 
-    def _build_pitch_pool(self, seasons: list[int]) -> None:
+    def _build_pitch_pool(self, seasons: list[int], incremental: bool = False) -> None:
         """
-        Full rebuild of sim.pitch_pool from raw.pitches.
+        Rebuild sim.pitch_pool from raw.pitches.
         Excludes quality-flagged rows.  Adds:
           - runners_state bitmask
           - score_diff
           - outcome_type classification
           - prev_pitch_velo / ivb / hb / outcome (LAG window)
           - pitch_id surrogate key (row_number over natural sort)
+          - recency_weight (SIM-076)
+        When ``incremental`` (SIM-095), only seasons whose source changed rebuild.
         """
-        log.info("Building sim.pitch_pool …")
+        ref_season = _canonical_ref_season(self._conn, seasons)
+        if incremental:
+            seasons = _seasons_needing_rebuild(self._conn, "pitch_pool", seasons)
+            if not seasons:
+                log.info("Building sim.pitch_pool … all seasons fresh; skipped.")
+                return
+        log.info("Building sim.pitch_pool … (seasons=%s)", seasons)
         season_list = ", ".join(str(s) for s in seasons)
+        recency_expr = _recency_weight_sql(
+            "CAST(EXTRACT(year FROM game_date) AS SMALLINT)", ref_season
+        )
 
         # Delete existing rows for these seasons, then insert
         self._conn.execute(f"DELETE FROM sim.pitch_pool WHERE season IN ({season_list})")
@@ -3527,7 +4065,21 @@ class PlayerProfileComputor:
                     pitcher                             AS pitcher_id,
                     p_throws,
                     batter                              AS batter_id,
-                    stand,
+                    -- SIM-345 pool `stand` contract: the pool's `stand` column is
+                    -- the RESOLVED batting side for the PA, so it agrees with the
+                    -- `bat_hand`-keyed spray angle / FAISS tile key and with the
+                    -- read-path pre-filter (which scopes on the batter's actual
+                    -- side, never 'S'). For a switch hitter (`stand`='S'),
+                    -- `bat_hand` carries the side they batted from that PA; we
+                    -- adopt it. When `bat_hand` is itself unresolved ('S' or
+                    -- NULL — gate-capped ≤1 %/season by SIM-160) we fall back to
+                    -- the declared `stand`. Result is always 'L' or 'R' except
+                    -- for the residual unresolved-switch tail, keeping `stand`
+                    -- and `bat_hand` consistent for every fully-resolved row.
+                    CASE
+                        WHEN bat_hand IN ('L', 'R') THEN bat_hand
+                        ELSE stand
+                    END                                 AS stand,
                     release_speed                       AS velo,
                     break_vertical_induced              AS ivb,
                     break_horizontal                    AS hb,
@@ -3568,6 +4120,7 @@ class PlayerProfileComputor:
                         ELSE 'ball'
                     END                                 AS outcome_type,
                     events,
+                    {recency_expr} AS recency_weight,
 
                 FROM pg.raw.pitches
                 WHERE data_quality_flag = FALSE
@@ -3581,21 +4134,31 @@ class PlayerProfileComputor:
             SELECT * FROM ordered
         """)
         log.info("  sim.pitch_pool done.")
+        _record_pool_build(self._conn, "pitch_pool", seasons, ref_season)
 
     # ------------------------------------------------------------------
     # 9. sim.outcome_pool
     # ------------------------------------------------------------------
 
-    def _build_outcome_pool(self, seasons: list[int]) -> None:
+    def _build_outcome_pool(self, seasons: list[int], incremental: bool = False) -> None:
         """
         Rebuilds sim.outcome_pool as the in-play subset of sim.pitch_pool
         with full batted ball detail and fielding outcome columns added.
+        Adds recency_weight (SIM-076). When ``incremental`` (SIM-095), only
+        seasons whose source changed rebuild.
 
         Fielder position is looked up from the fielder_N columns so the
         simulation engine knows which positional number fielded the ball.
         """
-        log.info("Building sim.outcome_pool …")
+        ref_season = _canonical_ref_season(self._conn, seasons)
+        if incremental:
+            seasons = _seasons_needing_rebuild(self._conn, "outcome_pool", seasons)
+            if not seasons:
+                log.info("Building sim.outcome_pool … all seasons fresh; skipped.")
+                return
+        log.info("Building sim.outcome_pool … (seasons=%s)", seasons)
         season_list = ", ".join(str(s) for s in seasons)
+        recency_expr = _recency_weight_sql("pp.season", ref_season)
 
         self._conn.execute(f"DELETE FROM sim.outcome_pool WHERE season IN ({season_list})")
 
@@ -3619,6 +4182,16 @@ class PlayerProfileComputor:
                     rp.launch_speed                 AS exit_velo,
                     rp.launch_angle,
                     rp.spray_angle,
+                    -- SIM-051: handedness-corrected pull-relative spray angle.
+                    -- Sign convention: positive = pull side (LF for RHB, RF for LHB).
+                    -- `bat_hand` is the per-pitch resolved handedness; switch
+                    -- hitters with bat_hand='S' get NULL (gate-controlled to
+                    -- ≤ 1 % per season by SIM-160).
+                    CASE
+                        WHEN rp.bat_hand = 'R' THEN  rp.spray_angle
+                        WHEN rp.bat_hand = 'L' THEN -rp.spray_angle
+                        ELSE NULL
+                    END                              AS pull_relative_spray_angle,
                     rp.bb_type,
                     rp.hit_distance_sc              AS hit_distance,
                     rp.hc_x,
@@ -3655,7 +4228,8 @@ class PlayerProfileComputor:
                         ELSE 0
                     END::SMALLINT                   AS result_hits,
                     rp.outs_on_pitch::SMALLINT      AS result_outs,
-                    rp.runs_on_pitch::SMALLINT      AS result_runs
+                    rp.runs_on_pitch::SMALLINT      AS result_runs,
+                    {recency_expr} AS recency_weight
                 FROM sim.pitch_pool pp
                 JOIN pg.raw.pitches rp
                     ON rp.game_pk       = pp.game_pk
@@ -3667,19 +4241,29 @@ class PlayerProfileComputor:
             SELECT * FROM bip
         """)
         log.info("  sim.outcome_pool done.")
+        _record_pool_build(self._conn, "outcome_pool", seasons, ref_season)
 
     # ------------------------------------------------------------------
     # 10. sim.stolen_base_pool
     # ------------------------------------------------------------------
 
-    def _build_stolen_base_pool(self, seasons: list[int]) -> None:
+    def _build_stolen_base_pool(self, seasons: list[int], incremental: bool = False) -> None:
         """
         Builds sim.stolen_base_pool from all SB attempts in raw.pitches.
         Denormalizes runner/catcher/pitcher metrics from the derived tables
         so the simulation engine can score similarity without joins at runtime.
+        Adds recency_weight (SIM-076). When ``incremental`` (SIM-095), only
+        seasons whose source changed rebuild.
         """
-        log.info("Building sim.stolen_base_pool …")
+        ref_season = _canonical_ref_season(self._conn, seasons)
+        if incremental:
+            seasons = _seasons_needing_rebuild(self._conn, "stolen_base_pool", seasons)
+            if not seasons:
+                log.info("Building sim.stolen_base_pool … all seasons fresh; skipped.")
+                return
+        log.info("Building sim.stolen_base_pool … (seasons=%s)", seasons)
         season_list = ", ".join(str(s) for s in seasons)
+        recency_expr = _recency_weight_sql("s.season", ref_season)
 
         self._conn.execute(f"DELETE FROM sim.stolen_base_pool WHERE season IN ({season_list})")
 
@@ -3765,7 +4349,8 @@ class PlayerProfileComputor:
                 -- (pitcher's own cs_rate as opposition catcher doesn't apply here;
                 -- real pitcher-SB-allowed rate requires Phase 2 Step 2.7)
                 NULL::FLOAT                 AS pitcher_sb_allowed_rate,
-                s.success
+                s.success,
+                {recency_expr} AS recency_weight
             FROM sb_pitches s
             LEFT JOIN derived.baserunner_season_metrics brm
                 ON brm.player_id = s.runner_id AND brm.season = s.season
@@ -3777,6 +4362,7 @@ class PlayerProfileComputor:
               AND s.base_attempted IS NOT NULL
         """)
         log.info("  sim.stolen_base_pool done.")
+        _record_pool_build(self._conn, "stolen_base_pool", seasons, ref_season)
 
 
 class LeagueAverageProfiles:
@@ -3847,13 +4433,8 @@ class LeagueAverageProfiles:
                         'contact_rate',          AVG(contact_rate),
                         'walk_rate',             AVG(walk_rate),
                         'k_rate',                AVG(k_rate),
-                        'gb_rate',               AVG(gb_rate),
-                        'fb_rate',               AVG(fb_rate),
-                        'pull_rate',             AVG(pull_rate),
-                        'oppo_rate',             AVG(oppo_rate),
                         'avg_exit_velo',         AVG(avg_exit_velo),
-                        'hard_hit_rate',         AVG(hard_hit_rate),
-                        'barrel_rate',           AVG(barrel_rate)
+                        'hard_hit_rate',         AVG(hard_hit_rate)
                     ) AS profile_json,
                     CURRENT_TIMESTAMP AS updated_at
                 FROM derived.batter_season_metrics
@@ -3862,8 +4443,10 @@ class LeagueAverageProfiles:
                 GROUP BY season
             """)
 
-            # Fielder average by position
-            for position in ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"]:
+            # Fielder average — one row per position so shrinkage falls
+            # back to position-specific league averages (a 1B should not
+            # be compared to an OF league average).
+            for position in ("C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"):
                 conn.execute(f"""
                     INSERT OR REPLACE INTO derived.league_averages
                     SELECT
@@ -3876,12 +4459,113 @@ class LeagueAverageProfiles:
                         ) AS profile_json,
                         CURRENT_TIMESTAMP AS updated_at
                     FROM derived.fielder_season_metrics
-                    WHERE season IN ({season_list})
-                      AND position = '{position}'
+                    WHERE position = '{position}'
+                      AND season IN ({season_list})
                       AND below_minimum_sample = FALSE
                     GROUP BY season
                 """)
 
-            log.info("  League averages done.")
+            # Baserunner average
+            conn.execute(f"""
+                INSERT OR REPLACE INTO derived.league_averages
+                SELECT
+                    'baserunner' AS entity_type, season,
+                    JSON_OBJECT(
+                        'sprint_speed',            AVG(sprint_speed),
+                        'extra_base_attempt_rate', AVG(extra_base_attempt_rate),
+                        'extra_base_success_rate', AVG(extra_base_success_rate),
+                        'sb_success_rate',         AVG(sb_success_rate)
+                    ) AS profile_json,
+                    CURRENT_TIMESTAMP AS updated_at
+                FROM derived.baserunner_season_metrics
+                WHERE season IN ({season_list})
+                  AND below_minimum_sample = FALSE
+                GROUP BY season
+            """)
+
+            # Catcher average
+            conn.execute(f"""
+                INSERT OR REPLACE INTO derived.league_averages
+                SELECT
+                    'catcher' AS entity_type, season,
+                    JSON_OBJECT(
+                        'framing_runs',  AVG(framing_runs),
+                        'blocking_runs', AVG(blocking_runs),
+                        'cs_rate',       AVG(cs_rate)
+                    ) AS profile_json,
+                    CURRENT_TIMESTAMP AS updated_at
+                FROM derived.catcher_season_metrics
+                WHERE season IN ({season_list})
+                  AND below_minimum_sample = FALSE
+                GROUP BY season
+            """)
+
+            log.info("League averages computed for seasons: %s", seasons)
         finally:
             conn.close()
+
+
+# =============================================================================
+# Entry point
+# =============================================================================
+
+if __name__ == "__main__":
+    import argparse
+    import os
+    import sys
+    from datetime import datetime
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Compute player profile + defensive metrics from Postgres and "
+            "write them into the DuckDB analytical store that the similarity "
+            "engines read from."
+        ),
+    )
+    parser.add_argument(
+        "--seasons", type=int, nargs="+", default=None,
+        help="One or more seasons to (re)compute. Defaults to current year.",
+    )
+    parser.add_argument(
+        "--full-rebuild", action="store_true",
+        help="Delete and rewrite all derived metrics for the requested seasons.",
+    )
+    parser.add_argument(
+        "--dsn", default=os.environ.get("BASEBALL_DB_DSN"),
+        help="Postgres DSN. Defaults to BASEBALL_DB_DSN env var.",
+    )
+    parser.add_argument(
+        "--duckdb-path",
+        default=os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb"),
+        help="Path to the DuckDB output file.",
+    )
+    parser.add_argument(
+        "--skip-league-averages", action="store_true",
+        help="Skip the LeagueAverageProfiles.compute() pass.",
+    )
+    args = parser.parse_args()
+
+    if not args.dsn:
+        sys.stderr.write(
+            "ERROR: no Postgres DSN. Set BASEBALL_DB_DSN or pass --dsn.\n"
+        )
+        sys.exit(2)
+
+    log.info(
+        "Starting player profile compute - dsn=%s duckdb=%s seasons=%s full_rebuild=%s",
+        args.dsn.split("@", 1)[-1] if "@" in args.dsn else args.dsn,
+        args.duckdb_path, args.seasons, args.full_rebuild,
+    )
+
+    computor = PlayerProfileComputor(
+        pg_dsn=args.dsn, duckdb_path=args.duckdb_path,
+    )
+    computor.run(seasons=args.seasons, full_rebuild=args.full_rebuild)
+    log.info("Player profile compute complete.")
+
+    if not args.skip_league_averages:
+        log.info("Computing league averages ...")
+        LeagueAverageProfiles(args.duckdb_path).compute(
+            args.seasons or [datetime.today().year]
+        )
+        log.info("League averages complete.")

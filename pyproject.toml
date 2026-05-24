@@ -7,6 +7,11 @@ minversion = "8.0"
 testpaths  = ["tests"]
 asyncio_mode = "auto"
 
+# Collect the standard ``test_*.py`` files PLUS the performance harness's
+# ``bench_*.py`` modules (SIM-118). This is additive — normal unit/regression
+# test discovery is unchanged; it just also picks up tests/performance/bench_*.py.
+python_files = ["test_*.py", "bench_*.py"]
+
 markers = [
     "integration: marks tests as integration tests (require live DB + Redis via testcontainers)",
     "unit: marks tests as unit tests (no external services required)",
@@ -55,16 +60,20 @@ ignore_errors = true
 # ---------------------------------------------------------------------------
 # Coverage scope (pytest-cov / coverage.py)
 #
-# Coverage is measured for similarity/ and pipeline/, excluding modules that
-# are pure CLI / diagnostic / real-time orchestration scripts. Those modules
-# are exercised by regression and integration tests, not unit tests.
+# Coverage is measured for similarity/, pipeline/, simulation/ and betting/,
+# excluding modules that are pure CLI / diagnostic / real-time orchestration
+# scripts. Those modules are exercised by regression and integration tests,
+# not unit tests. simulation/ + betting/ added in SIM-343 so the Phase-4
+# Monte Carlo sim-loop, validation spine and betting (CLV) code is measured;
+# both packages are exercised by tests/unit (26+ sim test modules,
+# tests/unit/test_betting_sim339.py) and have no untestable __main__ CLI
+# entrypoints, so they are measured in full (no omit entries needed).
 # ---------------------------------------------------------------------------
 [tool.coverage.run]
-source = ["similarity", "pipeline"]
+source = ["similarity", "pipeline", "simulation", "betting"]
 omit = [
     "similarity/similarity_calibration.py",
     "similarity/similarity_diagnostics.py",
-    "pipeline/live/live_ingestion_pipeline.py",
     "pipeline/etl/venue_backfill_job.py",
     "pipeline/etl/etl_sprint_speed_loader.py",
     "pipeline/etl/opening_line_job.py",

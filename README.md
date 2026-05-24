@@ -118,15 +118,15 @@ All engines share a unified interface: `engine.query(entity_features, n=50) -> L
 | 2 | **Batter → Batter** | RBF kernel, z-score normalized | First-pitch take rate, O-swing%, whiff%, K%, BB%, batted ball profile, platoon splits | ✅ Complete |
 | 3 | **Fielder → Fielder** | RBF kernel (position-specific) | OAA components, range factor, error rate by zone, arm strength proxy | ✅ Complete |
 | 4 | **Baserunner → Baserunner** (Extra Base) | RBF kernel | Extra-base rate by situation, sprint speed, stop rate, score-from-second rate | ✅ Complete |
-| 5 | **Baserunner → Baserunner** (Stealing) | RBF kernel | SB attempt rate, SB success rate, lead distance proxy, sprint speed | 🔲 Planned (SIM-044) |
-| 6 | **Catcher → Catcher** (Throwing) | RBF kernel | Caught-stealing rate by base, arm strength proxy, pop time proxy | 🔲 Planned (SIM-043) |
-| 7 | **Pitcher → Pitcher** (Allowing SBs) | RBF kernel | Slide step mix, time to plate, SB allowed rate, pickoff attempt rate | 🔲 Planned (SIM-045) |
-| 8 | **Manager → Manager** | Cosine similarity | PH usage rate, bullpen leverage patterns, defensive replacement freq, SB green-light rate | 🔲 Planned (SIM-046) |
-| 9 | **Situation → Situation** | KD-Tree, weighted Euclidean | Count, outs, inning, score differential (capped ±5), base state, leverage index | 🔲 Planned (SIM-047) |
-| 10 | **Pitch → Pitch** | FAISS flat index | Pitch type, velocity, pfx_x, IVB, release position, spin axis, extension, plate location | 🔲 Planned (SIM-041) |
-| 11 | **Batted Ball → Batted Ball** | FAISS flat index | Exit velocity, launch angle, spray angle, batted ball type, venue | 🔲 Planned (SIM-042) |
+| 5 | **Baserunner → Baserunner** (Stealing) | RBF kernel | SB attempt rate, SB success rate, lead distance proxy, sprint speed | ✅ Complete (SIM-066) |
+| 6 | **Catcher → Catcher** (Throwing) | RBF kernel | Caught-stealing rate by base, arm strength proxy, pop time proxy | ✅ Complete (SIM-067/072) |
+| 7 | **Pitcher → Pitcher** (Allowing SBs) | RBF kernel | Slide step mix, time to plate, SB allowed rate, pickoff attempt rate | ✅ Complete (SIM-068) |
+| 8 | **Manager → Manager** | RBF kernel | PH usage rate, bullpen leverage patterns, defensive replacement freq, SB green-light rate | ✅ Complete (SIM-069) |
+| 9 | **Situation → Situation** | KD-Tree, weighted Euclidean | Count, outs, inning, score differential (capped ±5), base state, leverage index | ✅ Complete (SIM-070; columnarized SIM-334) |
+| 10 | **Pitch → Pitch** | FAISS flat index | Pitch type, velocity, pfx_x, IVB, release position, spin axis, extension, plate location | ✅ Complete (SIM-041) |
+| 11 | **Batted Ball → Batted Ball** | FAISS flat index | Exit velocity, launch angle, spray angle, batted ball type, venue | ✅ Complete (SIM-042) |
 
-**`SimilarityEngineRegistry`** (`similarity/registry.py`) — instantiates and caches all 11 engines with unified query interface. *(Phase 2 final deliverable — planned, SIM-048)*
+**`SimilarityEngineRegistry`** (`similarity/registry.py`) — instantiates and caches all 11 engines with unified query interface. *(✅ Shipped, SIM-048.)*
 
 **Key modeling decisions:**
 - GMM covariances stored in **standardized space** with saved `feature_means` / `feature_stds` — prevents dominant features (spin rate) from corrupting arsenal distances
@@ -293,19 +293,23 @@ python pipeline/batch/build_profiles.py
 
 ### Running Simulations
 
-> **Note:** The simulation runner below is a Phase 4/5 deliverable and is not yet implemented.
+> **Note:** The Phase 4 simulation loop is implemented (`simulation/`). The Phase 5 REST/WebSocket API is still planned.
 
 ```python
-from simulator.core import simulate_game
-from simulator.state import GameState
+from simulation.sim_loop import simulate_game
+from simulation.game_state import GameState
 
 # Simulate a full game from any starting state
-result = simulate_game(initial_state=GameState.from_game_pk(745528), seed=42)
+result = simulate_game(state=GameState(...), seed=42)   # returns a GameSimResult
 
-# Run 100 iterations in parallel
-from simulator.runner import run_simulations
-results = run_simulations(game_state, n=100)
-print(f"Home win probability: {results.home_win_pct:.1%}")
+# Run 100 iterations in parallel (SIM-332 ProcessPool runner)
+from simulation.batch_runner import BatchRunner
+summary = BatchRunner(spec).run(n=100, base_seed=42)    # returns a GameSimSummary
+print(f"Home win probability: {summary.home_win_pct:.1%}")
+
+# Calibrated win probability + betting edge
+from simulation.win_probability import win_probability     # SIM-330
+from betting.clv_engine import moneyline_edge_report       # SIM-339
 ```
 
 ---
@@ -319,15 +323,24 @@ baseball_simulator/
 │   ├── live/                 # MLB Stats API live ingestion
 │   └── batch/                # Nightly profile + defensive metrics computation
 ├── similarity/
-│   ├── registry.py           # SimilarityEngineRegistry [Phase 2 — planned]
-│   ├── engines/              # One module per engine (pitcher, batter, fielder, ...)
-│   └── indices/              # FAISS + KD-Tree index management [Phase 3 — planned]
-├── simulator/                # [Phase 4 — planned]
-│   ├── core.py               # simulate_game()
-│   ├── state.py              # GameState dataclass + advance_state()
-│   ├── steps/                # 8-step loop (steal, pitch, outcome, fielding, ...)
-│   ├── manager.py            # Manager decision logic
-│   └── runner.py             # run_simulations() parallel runner
+│   ├── registry.py           # SimilarityEngineRegistry [✅ SIM-048]
+│   ├── engines/              # 11 engines (pitcher, batter, fielder, situation, ...)
+│   ├── backtesting/          # recency walk-forward + backtester (ECE/Brier/log-loss) [✅ SIM-076/220]
+│   └── similarity_calibration.py  # sigma / gamma / EB calibration [✅]
+├── simulation/               # [✅ Phase 4 — the simulation loop lives HERE, not simulator/]
+│   ├── sim_loop.py           # StateMachine + simulate_game() (8-step loop + manager hooks)
+│   ├── game_state.py         # GameState / PlayResult / ManagerContext dataclasses
+│   ├── run_resolution.py     # RE24 + linear-weight run resolution
+│   ├── play_pool_sampler.py  # play-pool k-NN sampler (recency-weighted)
+│   ├── score_fusion.py       # cross-engine score fusion
+│   ├── fingerprints.py       # real query-fingerprint derivation
+│   ├── results.py            # GameSimResult / GameSimSummary / BoxScore
+│   ├── win_probability.py    # calibrated win probability
+│   ├── prop_distributions.py # per-prop PMFs
+│   ├── snapshots.py          # field / play-by-play snapshot contracts
+│   ├── batch_runner.py       # ProcessPool 100-iteration runner (+ shared-memory attach)
+│   └── validation/           # chi-squared historical-replay harness
+├── betting/                  # [✅ Phase 4] CLV engine (implied / de-vig / edge / EV / CLV)
 ├── api/                      # [Phase 5 — planned]
 │   ├── main.py               # FastAPI app
 │   ├── routes/               # REST endpoints

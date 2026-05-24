@@ -107,5 +107,44 @@ class TestAcceptanceBudgets(unittest.TestCase):
         self.assertEqual(h.PITCHER_INDEX_NAME, "idx_pitches_pitcher_season_clean")
 
 
+class TestSituationQueryBuilder(unittest.TestCase):
+    """SIM-163: `_build_situation_query` must emit literal `IS NULL` for None
+    bases and `= $N` for real values.  Parameterized `IS NOT DISTINCT FROM $N`
+    was tried and caused the planner to pick a generic plan that bypassed
+    `idx_pitches_situation`'s base columns -- a 12x slowdown observed in the
+    live run on 2026-05-17.  This test exists to prevent regression.
+    """
+
+    def test_all_bases_empty_uses_is_null(self):
+        h = _load_harness()
+        sql, params = h._build_situation_query(h.DEFAULT_SITUATION)
+        self.assertIn("on_1b IS NULL", sql)
+        self.assertIn("on_2b IS NULL", sql)
+        self.assertIn("on_3b IS NULL", sql)
+        self.assertNotIn("IS NOT DISTINCT FROM", sql)
+        # Only inning/outs/balls/strikes get parameterized when bases empty.
+        self.assertEqual(len(params), 4)
+
+    def test_runner_on_2b_uses_equality(self):
+        h = _load_harness()
+        situation = dict(h.DEFAULT_SITUATION)
+        situation["on_2b"] = 605400
+        sql, params = h._build_situation_query(situation)
+        self.assertIn("on_1b IS NULL", sql)
+        self.assertIn("on_3b IS NULL", sql)
+        # The on_2b predicate should be a parameterized equality.
+        self.assertRegex(sql, r"on_2b = \$\d+")
+        self.assertIn(605400, params)
+        # 4 count/inning + 1 runner = 5 params.
+        self.assertEqual(len(params), 5)
+
+    def test_data_quality_partial_index_predicate_present(self):
+        h = _load_harness()
+        sql, _ = h._build_situation_query(h.DEFAULT_SITUATION)
+        # idx_pitches_situation is a partial index WHERE data_quality_flag = FALSE.
+        # The query must include this predicate or the planner won't pick the index.
+        self.assertIn("data_quality_flag = FALSE", sql)
+
+
 if __name__ == "__main__":
     unittest.main()

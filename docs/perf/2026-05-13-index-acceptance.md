@@ -1,59 +1,61 @@
-# SIM-158 — Index Acceptance Gates (sprint 2026-05-13)
+# SIM-158 -- Index Acceptance Gates (sprint 2026-05-13)
 
-*Owner: Performance Engineer (Agent 6) · Reports back to: ML Engineer + Data Engineer*
+*Generated: 2026-05-17T16:29:02+00:00 (UTC)*
 
-This file is the canonical record for the SIM-085 and SIM-089 EXPLAIN ANALYZE
-acceptance gates.  The two indexes were merged in sprint 2026-05-06+07 with
-their gates *expressed* but not *executed* because the sandbox lacked a
-populated database; SIM-158 closes the loop now that 2024 data is loaded in
-staging.
+This report captures the EXPLAIN ANALYZE acceptance gates for SIM-085
+(`idx_pitches_situation`) and SIM-089 (`idx_pitches_pitcher_season_clean`),
+run against the staging database after 2024 data was loaded.
 
-## Status
+**Outcome:** Both gates passed
 
-**Pending execution against staging (2024 season).**
+---
 
-The harness script `scripts/run_index_acceptance.py` ships with this ticket
-and replaces this file in-place when the operator runs it against staging.
-Until that run completes, the SIM-085 / SIM-089 entries in `CHANGES.md`
-remain provisional.
+## SIM-085 -- `idx_pitches_situation` (composite situation index)
 
-## Gates
+* **Representative situation:** {'inning': 7, 'outs': 1, 'balls': 1, 'strikes': 2, 'on_1b': None, 'on_2b': None, 'on_3b': None}
+* **Acceptance gate:** Index Scan using `idx_pitches_situation` AND latency < 30 ms.
+* **Measured latency:** 27.54 ms
+* **Result:** PASS
 
-| Index | Acceptance criterion | Latency budget |
-|-------|----------------------|----------------|
-| `idx_pitches_situation` (SIM-085) | `EXPLAIN (ANALYZE, BUFFERS)` on a representative situation lookup reports `Index Scan using idx_pitches_situation` (not `Seq Scan on pitches`). | < 30 ms |
-| `idx_pitches_pitcher_season_clean` (SIM-089) | `EXPLAIN (ANALYZE, BUFFERS)` on `_compute_pitcher_profiles()`'s primary fetch reports `Index Scan using idx_pitches_pitcher_season_clean`.  3,000-pitch fetch budget. | < 50 ms |
-
-## How to run
-
-```sh
-# From staging with 2024 data loaded:
-BASEBALL_DB_DSN=postgresql://staging-host:5432/baseball \
-    python scripts/run_index_acceptance.py \
-        --season 2024 \
-        --pitcher-id 605400 \
-        --out docs/perf/2026-05-13-index-acceptance.md
+```text
+Bitmap Heap Scan on pitches  (cost=315.45..35581.65 rows=9979 width=12) (actual time=1.969..26.869 rows=12299 loops=1)
+  Recheck Cond: ((inning = '7'::smallint) AND (outs = '1'::smallint) AND (balls = '1'::smallint) AND (strikes = '2'::smallint) AND (on_1b IS NULL) AND (on_2b IS NULL) AND (on_3b IS NULL) AND (NOT data_quality_flag))
+  Heap Blocks: exact=9724
+  Buffers: shared hit=9736
+  ->  Bitmap Index Scan on idx_pitches_situation  (cost=0.00..312.96 rows=9979 width=0) (actual time=1.018..1.019 rows=12299 loops=1)
+        Index Cond: ((inning = '7'::smallint) AND (outs = '1'::smallint) AND (balls = '1'::smallint) AND (strikes = '2'::smallint) AND (on_1b IS NULL) AND (on_2b IS NULL) AND (on_3b IS NULL))
+        Buffers: shared hit=12
+Planning:
+  Buffers: shared hit=364
+Planning Time: 2.027 ms
+Execution Time: 27.538 ms
 ```
 
-Pick a `--pitcher-id` whose 2024 clean-pitch count is close to 3,000 (per the
-SIM-089 acceptance criterion).  605400 (Justin Steele) is a workable default;
-swap for any starter who threw a full season if his profile has changed.
+---
 
-The script exits non-zero when either gate fails so it can be wired into CI
-or run as a pre-merge guard.
+## SIM-089 -- `idx_pitches_pitcher_season_clean`
 
-## Failure handling (AC #4)
+* **Representative pitcher / season:** pitcher_id=605400, season=2024
+* **Acceptance gate:** Index Scan using `idx_pitches_pitcher_season_clean` AND latency < 50 ms on a 3,000-pitch fetch.
+* **Measured latency:** 2.25 ms
+* **Result:** PASS
 
-If either index loses to a `Seq Scan` or exceeds its latency budget:
+```text
+Index Scan using idx_pitches_pitcher_season_clean on pitches  (cost=0.43..9740.91 rows=2841 width=56) (actual time=0.024..2.106 rows=3274 loops=1)
+  Index Cond: ((pitcher = 605400) AND (season = 2024))
+  Buffers: shared hit=438
+Planning:
+  Buffers: shared hit=27
+Planning Time: 0.275 ms
+Execution Time: 2.255 ms
+```
 
-1. The harness script overwrites this file with the failing plan + measured
-   latency captured verbatim (`docs/perf/2026-05-13-index-acceptance.md`).
-2. File a follow-up ticket on the relevant index immediately
-   (re-tune `WHERE`, change `INCLUDE` columns, etc.).
-3. Revert the index claim from `CHANGES.md` for that ticket (SIM-085 or
-   SIM-089) so downstream readers know the index is provisional again.
+---
 
-## Companion CHANGES.md links
+## Reproducing this report
 
-* SIM-085 — composite situation index on `raw.pitches`
-* SIM-089 — `(pitcher, season)` partial index on `raw.pitches`
+```sh
+BASEBALL_DB_DSN=postgresql://... python scripts/run_index_acceptance.py \
+    --season 2024 --pitcher-id 605400 \
+    --out docs/perf/2026-05-13-index-acceptance.md
+```

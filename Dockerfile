@@ -68,9 +68,24 @@ COPY simulator/   ./simulator/
 COPY db/          ./db/
 COPY alembic.ini  ./alembic.ini
 
-# Non-root user for security (principle of least privilege)
-RUN useradd --system --uid 1001 --no-create-home appuser \
- && chown -R appuser:appuser /app
+# Non-root user for security (principle of least privilege).
+#
+# Two ownership / filesystem concerns handled here:
+#
+# 1. /data: created with appuser ownership so that when the duckdb_data
+#    named volume mounts onto it (see docker-compose.yml), Docker copies
+#    the appuser-owned directory into the new volume on first init.
+#    Without this, the volume inherits Docker's default root ownership
+#    and the non-root container can't write /data/baseball_sim.duckdb.
+#
+# 2. /home/appuser: DuckDB's INSTALL/LOAD of the postgres extension
+#    requires a writable home directory to cache the downloaded extension
+#    binary. Previously the user was created with --no-create-home, which
+#    crashed any DuckDB operation that touched extensions with
+#    "Can't find the home directory at '/home/appuser'".
+RUN useradd --system --uid 1001 --create-home --home-dir /home/appuser appuser \
+ && mkdir -p /data \
+ && chown -R appuser:appuser /app /data /home/appuser
 USER appuser
 
 # Health check — liveness probe via the /health endpoint
@@ -103,17 +118,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# Both requirement files must land in the same directory because
+# requirements-dev.txt starts with ``-r requirements.txt`` — pip resolves
+# that path relative to the file it's reading, not relative to cwd.
+COPY requirements.txt     /tmp/requirements.txt
 COPY requirements-dev.txt /tmp/requirements-dev.txt
 # pytest + pytest-asyncio + ruff + mypy + httpx + testcontainers + ...
 # The -r requirements.txt inside requirements-dev.txt re-resolves runtime
 # deps, but pip is a no-op when versions already match.
 RUN pip install --no-cache-dir -r /tmp/requirements-dev.txt \
- && rm /tmp/requirements-dev.txt
+ && rm /tmp/requirements.txt /tmp/requirements-dev.txt
 
 # Test files aren't part of the runtime image — copy them into the dev image
 # so the ``app`` service can run pytest without bind-mounting the host.
 COPY tests/        /app/tests/
 COPY pyproject.toml /app/pyproject.toml
+
+# Files that test_backend_sim101_to_106_148_153.py::TestSim153SecretsBaseline
+# asserts ship with the image (SIM-153 secrets-baseline acceptance gates).
+# These were previously stripped by `.dockerignore` (`.env.*`, `*.md`) or
+# never COPY'd by this stage — now restored so `make test` is self-contained.
+COPY .env.example      /app/.env.example
+COPY .gitignore        /app/.gitignore
+COPY requirements.txt  /app/requirements.txt
+COPY README.md         /app/README.md
+COPY BACKLOG.md        /app/BACKLOG.md
+
+# CI workflows — SIM-153 test asserts the secrets-check job lives here.
+COPY .github/  /app/.github/
+
+# Operator scripts (SIM-157 backfill, SIM-158 index acceptance, SIM-160
+# bat_side audit).  test_data_engineer_sim157.py + test_perf_eng_sim158.py
+# both `importlib`-load these by path and need them inside the image.
+COPY scripts/  /app/scripts/
+
+# Documentation tree — kept in the dev image so docs-existence tests
+# (e.g., SIM-313, SIM-314 follow-ups) can verify the index is current.
+COPY docs/     /app/docs/
 
 # Drop privileges back to the non-root user for tests + tooling.
 USER appuser

@@ -11,7 +11,7 @@
 # =============================================================================
 
 .PHONY: help dev down build migrate test test-unit test-integration test-regression lint \
-        type-check format shell logs clean nuke
+        type-check format shell logs clean nuke profile-computor play-pool-cache
 
 # Default target — show help.
 ##
@@ -19,7 +19,7 @@
 ## Windows cmd.exe prints the literal "" instead of a blank line for
 ## `echo ""`, so the bash form was visually broken under Windows GNU Make.
 help:
-	@python -c "print('''\nMLB Baseball Simulation Platform\n=================================\n\n  make dev               Build + start all services (foreground)\n  make down              Stop and remove containers + networks\n  make build             Force rebuild Docker images\n  make migrate           Apply all Alembic migrations (requires db healthy)\n\n  make test              Run full test suite (unit + integration)\n  make test-unit         Unit tests only (no Docker deps)\n  make test-regression   Regression gate (golden-file engine drift detection)\n  make test-integration  Integration tests (spins up testcontainers)\n\n  make lint              Ruff lint check\n  make format            Ruff auto-format\n  make type-check        Mypy static type analysis\n\n  make shell             Open a bash shell inside the app container\n  make logs              Tail logs for all services\n  make clean             Remove Python artifacts (__pycache__, .coverage, etc.)\n  make nuke              Full teardown: containers + volumes (destructive!)\n''')"
+	@py -c "print('''\nMLB Baseball Simulation Platform\n=================================\n\n  make dev               Build + start all services (foreground)\n  make down              Stop and remove containers + networks\n  make build             Force rebuild Docker images\n  make migrate           Apply all Alembic migrations (requires db healthy)\n\n  make test              Run full test suite (unit + integration)\n  make test-unit         Unit tests only (no Docker deps)\n  make test-regression   Regression gate (golden-file engine drift detection)\n  make test-integration  Integration tests (spins up testcontainers)\n\n  make lint              Ruff lint check\n  make format            Ruff auto-format\n  make type-check        Mypy static type analysis\n\n  make shell             Open a bash shell inside the app container\n  make logs              Tail logs for all services\n  make clean             Remove Python artifacts (__pycache__, .coverage, etc.)\n  make nuke              Full teardown: containers + volumes (destructive!)\n''')"
 
 # ---------------------------------------------------------------------------
 # Docker Compose shortcuts
@@ -55,6 +55,25 @@ migrate: _require_env_file
 	@echo "Applying Alembic migrations..."
 	docker compose run --rm app alembic upgrade head
 	@echo "Migrations complete."
+
+# ---------------------------------------------------------------------------
+# Nightly batch jobs
+# ---------------------------------------------------------------------------
+# These run in order each night: the profile computor rebuilds the DuckDB
+# pools (sim.pitch_pool / sim.outcome_pool), then the play-pool cache
+# serializer (SIM-301) materializes FAISS tiles from those pools.  The cache
+# build MUST run AFTER the profile computor.  See the crontab note at the
+# bottom of pipeline/batch/play_pool_cache.py.
+
+## Nightly: rebuild DuckDB player profiles + sim pools from Postgres.
+profile-computor: _require_env_file
+	docker compose run --rm app python -m pipeline.batch.player_profile_computor
+
+## Nightly (SIM-301): materialize play-pool FAISS tiles from the DuckDB pools.
+## Idempotent — only stale or missing tiles are rebuilt.  Runs AFTER
+## profile-computor.  Pass FLAGS="--no-recency-boost --seasons 2024" to tune.
+play-pool-cache:
+	docker compose run --rm app python -m pipeline.batch.play_pool_cache $(FLAGS)
 
 ## Tail logs for all services (Ctrl-C to exit)
 logs:
@@ -116,7 +135,7 @@ format:
 type-check:
 	docker compose run --rm app \
 	  mypy similarity/ pipeline/ api/ --ignore-missing-imports \
-	       --python-version 3.11
+	       --python-version 3.13
 
 # ---------------------------------------------------------------------------
 # Cleanup
@@ -129,7 +148,7 @@ type-check:
 ## tree exactly once; ignores PermissionError / FileNotFoundError so a
 ## locked .pyc or already-deleted dir doesn't fail the recipe.
 clean:
-	@python -c "import os, shutil, pathlib; \
+	@py -c "import os, shutil, pathlib; \
 	root = pathlib.Path('.'); \
 	[shutil.rmtree(p, ignore_errors=True) for p in root.rglob('__pycache__') if p.is_dir()]; \
 	[p.unlink(missing_ok=True) for p in root.rglob('*.pyc') if p.is_file()]; \
@@ -151,7 +170,7 @@ clean:
 ## useful for CI / scripted teardowns.
 nuke:
 	@echo "WARNING: This will delete all Docker volumes including the PostgreSQL database."
-	@python -c "import sys, os; ans = os.environ.get('NUKE_CONFIRM') or input('Are you sure? [y/N] '); sys.exit(0 if ans.strip().lower() in ('y','yes') else 1)" \
+	@py -c "import sys, os; ans = os.environ.get('NUKE_CONFIRM') or input('Are you sure? [y/N] '); sys.exit(0 if ans.strip().lower() in ('y','yes') else 1)" \
 	  && docker compose down -v && echo "Done." \
 	  || echo "Aborted."
 
@@ -169,4 +188,4 @@ nuke:
 ## prerequisite (see requirements.txt + Dockerfile), so introducing it
 ## here adds no new dependency.
 _require_env_file:
-	@python -c "import os, sys; os.path.isfile('.env') or print('\nERROR: .env file not found.\n  Run: cp .env.example .env\n  Then edit .env with your database credentials.\n', file=sys.stderr) or sys.exit(1)"
+	@py -c "import os, sys; os.path.isfile('.env') or print('\nERROR: .env file not found.\n  Run: cp .env.example .env\n  Then edit .env with your database credentials.\n', file=sys.stderr) or sys.exit(1)"

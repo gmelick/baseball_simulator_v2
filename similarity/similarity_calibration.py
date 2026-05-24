@@ -510,6 +510,10 @@ class CalibrationReport:
     sigma_command: float = 0.0  # pitcher
     sigma_results: float = 0.0  # pitcher
     arsenal_gamma: float = 0.0
+    # SIM-346: the median finite W₂ the arsenal_gamma anchor was solved on.
+    # Stored so the engine can convert gamma → linear ARSENAL_SCALE exactly
+    # (scale = 1 / (gamma * median)) without re-deriving the median.
+    arsenal_median_w2: float = 0.0
     eb_n_prior_batter: float = 0.0
     eb_n_prior_pitcher: float = 0.0
     reliability_weights_discipline: NDArray | None = None
@@ -790,6 +794,7 @@ class CalibrationReport:
             "sigma_command": self.sigma_command,
             "sigma_results": self.sigma_results,
             "arsenal_gamma": self.arsenal_gamma,
+            "arsenal_median_w2": self.arsenal_median_w2,
             "eb_n_prior_batter": self.eb_n_prior_batter,
             "eb_n_prior_pitcher": self.eb_n_prior_pitcher,
             "bats_penalty_lr": self.bats_penalty_lr,
@@ -881,10 +886,22 @@ class SimilarityCalibrator:
         self,
         seasons: list[int],
         target_median_score: float = 0.50,
+        arsenal_w2_distances: NDArray[np.float64] | None = None,
     ) -> CalibrationReport:
         """
         Tier 1 calibration: derive all parameters from the population
         of profiles. No outcome data needed.
+
+        Parameters
+        ----------
+        arsenal_w2_distances : 1-D array, optional
+            Pairwise pitcher arsenal W₂ distances (e.g. from
+            ``engine._arsenal_cache.finite_distances()``). When supplied,
+            ``report.arsenal_gamma`` and ``report.arsenal_median_w2`` are
+            calibrated to ``target_median_score`` so the engine can wire them
+            in via ``PitcherSimilarityEngine.apply_calibration`` (SIM-346).
+            When omitted, the arsenal fields are left at 0.0 and the engine
+            keeps its locked default scale.
         """
         import duckdb
 
@@ -898,6 +915,7 @@ class SimilarityCalibrator:
         try:
             report = self._calibrate_batter_params(conn, seasons, target_median_score, report)
             report = self._calibrate_pitcher_params(conn, seasons, target_median_score, report)
+            report = self._calibrate_arsenal_params(arsenal_w2_distances, target_median_score, report)
             report = self._calibrate_fielder_params(conn, seasons, target_median_score, report)
             report = self._calibrate_baserunner_params(conn, seasons, target_median_score, report)
         finally:
@@ -1089,6 +1107,45 @@ class SimilarityCalibrator:
             report.sigma_command,
             report.sigma_results,
             report.eb_n_prior_pitcher,
+        )
+        return report
+
+    def _calibrate_arsenal_params(
+        self,
+        arsenal_w2_distances: NDArray[np.float64] | None,
+        target: float,
+        report: CalibrationReport,
+    ) -> CalibrationReport:
+        """SIM-346: calibrate the arsenal W₂→score anchor.
+
+        Solves ``arsenal_gamma`` (squared-exponential coefficient) so the
+        median pairwise W₂ maps to ``target`` and records the median itself.
+        The pitcher engine converts these into its canonical LINEAR
+        ``ARSENAL_SCALE`` via ``apply_calibration`` — the two forms share the
+        same median/target anchor, so they pin the same 0.50-median curve.
+
+        If no distances are supplied (the W₂ cache lives on the engine, not in
+        DuckDB), the arsenal fields are left at 0.0 and the engine keeps its
+        locked default scale.
+        """
+        if arsenal_w2_distances is None:
+            return report
+
+        dists = np.asarray(arsenal_w2_distances, dtype=np.float64)
+        finite = dists[np.isfinite(dists)]
+        if finite.size == 0:
+            log.warning("No finite arsenal W2 distances; leaving arsenal_gamma at 0.0.")
+            return report
+
+        report.arsenal_gamma = calibrate_arsenal_gamma(finite, target_median_score=target)
+        report.arsenal_median_w2 = float(np.median(finite))
+        log.info(
+            "Arsenal calibration complete: %d distances, median_W2=%.4f, "
+            "arsenal_gamma=%.5f (target median=%.2f).",
+            finite.size,
+            report.arsenal_median_w2,
+            report.arsenal_gamma,
+            target,
         )
         return report
 

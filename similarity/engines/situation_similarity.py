@@ -55,6 +55,16 @@ Leverage Index
   variance in play outcomes, which should pull similar situations
   together.
 
+Columnar Metadata (SIM-334)
+---------------------------
+  The per-row situation metadata is stored as parallel NumPy column
+  arrays (``ColumnarSituationMeta``) rather than a ``list[NearestSituation]``
+  of Python objects.  The list cost ~120 MB at 1 M rows and was
+  un-shareable across processes.  The columnar store is contiguous,
+  compact, and trivially share-able read-only via mmap / shared memory,
+  while reconstructing byte-for-byte identical ``NearestSituation`` results
+  on demand so the public query API is unchanged.
+
 Dependencies
 ------------
   pip install duckdb numpy scipy
@@ -201,6 +211,147 @@ class NearestSituation:
 
 
 # ============================================================================
+# Columnar metadata store (SIM-334)
+# ============================================================================
+#
+# The engine previously stored row metadata as a `list[NearestSituation]` —
+# one ~120-byte Python slots object per indexed PA (~120 MB at 1 M rows).  That
+# list is un-shareable across processes (it is a graph of Python objects) and is
+# *larger than the raw KDTree data itself* (SIM-280 §2.1).  This columnar store
+# replaces that list with parallel NumPy arrays — one dtype-appropriate array per
+# `NearestSituation` field — which are contiguous, compact, and trivially
+# share-able read-only via `multiprocessing.shared_memory` / mmap (SIM-281 D2).
+#
+# Field → array mapping (the per-row `distance` is NOT stored: it is always 0.0
+# at index time and is filled in from the KDTree result at query time):
+#
+#   play_id            -> str   : fixed-width unicode array (np.dtype('U<W>')),
+#                                 width auto-sized to the longest id; play_ids
+#                                 are near-unique foreign keys so an int-code +
+#                                 category table buys nothing — a fixed-width
+#                                 array is the compact, share-able encoding.
+#   game_pk            -> int   : np.int64
+#   inning             -> int   : np.int16
+#   outs               -> int   : np.int8
+#   runners (bitmask)  -> int   : np.int8   (values 0..7)
+#   leverage_index     -> float : np.float64
+#   score_differential -> float : np.float64
+#
+# The store reconstructs a byte-for-byte identical `NearestSituation` on demand,
+# so the public query API and result objects are unchanged.  It is also a drop-in
+# replacement for the old `list[NearestSituation]` everywhere it was iterated or
+# indexed (it supports `len()`, integer indexing, and iteration, each yielding a
+# reconstructed `NearestSituation`).
+
+
+@dataclass(slots=True)
+class ColumnarSituationMeta:
+    """
+    Column-parallel NumPy store of per-row situation metadata.
+
+    Replaces ``list[NearestSituation]``.  One array per field; integer indexing,
+    iteration, and ``len()`` reconstruct a ``NearestSituation`` (with
+    ``distance=0.0``, matching the old index-time sentinel) so existing callers
+    that treat ``_index_meta`` as a sequence of ``NearestSituation`` keep working
+    unchanged.
+
+    The arrays are write-protected (``flags.writeable = False``) after
+    construction so the store is read-only/lazy: callers cannot mutate the index
+    in place, which keeps it safe to share read-only across processes.
+    """
+
+    play_id: NDArray  # dtype '<U...' fixed-width unicode
+    game_pk: NDArray[np.int64]
+    inning: NDArray[np.int16]
+    outs: NDArray[np.int8]
+    runners: NDArray[np.int8]
+    leverage_index: NDArray[np.float64]
+    score_differential: NDArray[np.float64]
+
+    def __post_init__(self) -> None:
+        # Make the columnar store read-only.  Shared read-only arrays must not be
+        # mutated by any consumer; freezing the write flag enforces that and is a
+        # prerequisite for zero-copy sharing across processes.
+        for arr in (
+            self.play_id,
+            self.game_pk,
+            self.inning,
+            self.outs,
+            self.runners,
+            self.leverage_index,
+            self.score_differential,
+        ):
+            try:
+                arr.flags.writeable = False
+            except (ValueError, AttributeError):
+                # A non-owning view may refuse; that is acceptable for our use.
+                pass
+
+    @classmethod
+    def empty(cls) -> ColumnarSituationMeta:
+        """An empty store (zero rows) — used for the empty/missing-catalog path."""
+        return cls(
+            play_id=np.empty(0, dtype="<U1"),
+            game_pk=np.empty(0, dtype=np.int64),
+            inning=np.empty(0, dtype=np.int16),
+            outs=np.empty(0, dtype=np.int8),
+            runners=np.empty(0, dtype=np.int8),
+            leverage_index=np.empty(0, dtype=np.float64),
+            score_differential=np.empty(0, dtype=np.float64),
+        )
+
+    @classmethod
+    def from_columns(
+        cls,
+        *,
+        play_id: list[str],
+        game_pk: list[int],
+        inning: list[int],
+        outs: list[int],
+        runners: list[int],
+        leverage_index: list[float],
+        score_differential: list[float],
+    ) -> ColumnarSituationMeta:
+        """Build the store from per-field Python lists collected during load."""
+        n = len(game_pk)
+        if n == 0:
+            return cls.empty()
+        return cls(
+            # np.array on a list[str] picks the minimal fixed-width '<U' dtype.
+            play_id=np.array(play_id, dtype=np.str_),
+            game_pk=np.asarray(game_pk, dtype=np.int64),
+            inning=np.asarray(inning, dtype=np.int16),
+            outs=np.asarray(outs, dtype=np.int8),
+            runners=np.asarray(runners, dtype=np.int8),
+            leverage_index=np.asarray(leverage_index, dtype=np.float64),
+            score_differential=np.asarray(score_differential, dtype=np.float64),
+        )
+
+    def __len__(self) -> int:
+        return int(self.game_pk.shape[0])
+
+    def row(self, idx: int, distance: float = 0.0) -> NearestSituation:
+        """Reconstruct the NearestSituation at ``idx`` (default index-time sentinel)."""
+        return NearestSituation(
+            play_id=str(self.play_id[idx]),
+            game_pk=int(self.game_pk[idx]),
+            distance=float(distance),
+            inning=int(self.inning[idx]),
+            outs=int(self.outs[idx]),
+            runners=int(self.runners[idx]),
+            leverage_index=float(self.leverage_index[idx]),
+            score_differential=float(self.score_differential[idx]),
+        )
+
+    def __getitem__(self, idx: int) -> NearestSituation:
+        return self.row(int(idx))
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self.row(i)
+
+
+# ============================================================================
 # Feature Normalization (fit on indexed situations, apply to query)
 # ============================================================================
 
@@ -247,7 +398,10 @@ class SituationSimilarityEngine:
 
     The engine stores:
       - A KDTree of normalized situation vectors (for fast lookup)
-      - A parallel array of NearestSituation metadata (for result construction)
+      - A ColumnarSituationMeta of per-row metadata (parallel NumPy column
+        arrays) for result construction.  This replaces the old
+        ``list[NearestSituation]`` (SIM-334) to cut memory ~10x and make the
+        index share-able read-only across processes.
 
     Usage:
         engine = SituationSimilarityEngine(duckdb_path="path/to/db.duckdb")
@@ -259,7 +413,8 @@ class SituationSimilarityEngine:
         self._duckdb_path = duckdb_path
         self._normalizer = SituationNormalizer()
         self._kdtree: KDTree | None = None
-        self._index_meta: list[NearestSituation] = []  # parallel to kdtree leafs
+        # Columnar metadata store, parallel to the kdtree leaves (SIM-334).
+        self._index_meta: ColumnarSituationMeta = ColumnarSituationMeta.empty()
         self._index_size = 0
 
     # ------------------------------------------------------------------
@@ -309,8 +464,8 @@ class SituationSimilarityEngine:
         self,
         conn: duckdb.DuckDBPyConnection,
         seasons: list[int] | None,
-    ) -> tuple[NDArray[np.float64], list[NearestSituation]]:
-        """Load situations from DuckDB into a NumPy matrix and metadata list."""
+    ) -> tuple[NDArray[np.float64], ColumnarSituationMeta]:
+        """Load situations from DuckDB into a NumPy matrix and columnar metadata."""
         sf = ""
         if seasons:
             sf = f"AND abs.season IN ({', '.join(str(s) for s in seasons)})"
@@ -342,13 +497,26 @@ class SituationSimilarityEngine:
             """).fetchall()
         except duckdb.CatalogException as e:
             log.warning("Could not load at_bat_situations: %s", e)
-            return np.empty((0, len(SITUATION_FEATURES)), dtype=np.float64), []
+            return (
+                np.empty((0, len(SITUATION_FEATURES)), dtype=np.float64),
+                ColumnarSituationMeta.empty(),
+            )
 
         n = len(rows)
         log.info("Loading %d historical situations from DuckDB …", n)
 
         matrix = np.empty((n, len(SITUATION_FEATURES)), dtype=np.float64)
-        meta = []
+
+        # Collect per-field columns (Python lists), then pack into NumPy arrays
+        # once at the end via ColumnarSituationMeta.from_columns().  This keeps
+        # the load loop allocation-light and avoids one Python object per row.
+        col_play_id: list[str] = []
+        col_game_pk: list[int] = []
+        col_inning: list[int] = []
+        col_outs: list[int] = []
+        col_runners: list[int] = []
+        col_leverage_index: list[float] = []
+        col_score_differential: list[float] = []
 
         for idx, row in enumerate(rows):
             (
@@ -385,18 +553,24 @@ class SituationSimilarityEngine:
                 float(pa_count or 1),
                 float(park_factor or 1.0),
             ]
-            meta.append(
-                NearestSituation(
-                    play_id=str(play_id or ""),
-                    game_pk=int(game_pk or 0),
-                    distance=0.0,  # filled at query time
-                    inning=int(inning or 1),
-                    outs=int(outs or 0),
-                    runners=runners_bitmask,
-                    leverage_index=float(li or 1.0),
-                    score_differential=score_diff_clipped,
-                )
-            )
+
+            col_play_id.append(str(play_id or ""))
+            col_game_pk.append(int(game_pk or 0))
+            col_inning.append(int(inning or 1))
+            col_outs.append(int(outs or 0))
+            col_runners.append(runners_bitmask)
+            col_leverage_index.append(float(li or 1.0))
+            col_score_differential.append(score_diff_clipped)
+
+        meta = ColumnarSituationMeta.from_columns(
+            play_id=col_play_id,
+            game_pk=col_game_pk,
+            inning=col_inning,
+            outs=col_outs,
+            runners=col_runners,
+            leverage_index=col_leverage_index,
+            score_differential=col_score_differential,
+        )
 
         return matrix, meta
 
@@ -439,21 +613,13 @@ class SituationSimilarityEngine:
             distances = np.array([distances])
             indices = np.array([indices])
 
+        meta = self._index_meta
         results = []
         for dist, idx in zip(distances, indices, strict=False):
-            base = self._index_meta[idx]
-            results.append(
-                NearestSituation(
-                    play_id=base.play_id,
-                    game_pk=base.game_pk,
-                    distance=float(dist),
-                    inning=base.inning,
-                    outs=base.outs,
-                    runners=base.runners,
-                    leverage_index=base.leverage_index,
-                    score_differential=base.score_differential,
-                )
-            )
+            # Reconstruct the NearestSituation at this index, filling in the
+            # query-time distance.  Field values are identical to the old
+            # list[NearestSituation] path.
+            results.append(self._row_from_meta(meta, idx, dist))
 
         return results
 
@@ -485,26 +651,38 @@ class SituationSimilarityEngine:
             all_distances = all_distances[:, np.newaxis]
             all_indices = all_indices[:, np.newaxis]
 
+        meta = self._index_meta
         results = []
         for distances, indices in zip(all_distances, all_indices, strict=False):
             row = []
             for dist, idx in zip(distances, indices, strict=False):
-                base = self._index_meta[idx]
-                row.append(
-                    NearestSituation(
-                        play_id=base.play_id,
-                        game_pk=base.game_pk,
-                        distance=float(dist),
-                        inning=base.inning,
-                        outs=base.outs,
-                        runners=base.runners,
-                        leverage_index=base.leverage_index,
-                        score_differential=base.score_differential,
-                    )
-                )
+                row.append(self._row_from_meta(meta, idx, dist))
             results.append(row)
 
         return results
+
+    @staticmethod
+    def _row_from_meta(meta, idx, distance) -> NearestSituation:
+        """Reconstruct a NearestSituation at ``idx`` with the query distance.
+
+        Handles BOTH the SIM-334 columnar store (``meta.row``) and a plain
+        ``list[NearestSituation]`` (the regression/test-injection path), so
+        query results are identical regardless of how ``_index_meta`` was
+        populated.
+        """
+        if hasattr(meta, "row"):
+            return meta.row(int(idx), distance=float(distance))
+        base = meta[int(idx)]
+        return NearestSituation(
+            play_id=base.play_id,
+            game_pk=base.game_pk,
+            distance=float(distance),
+            inning=base.inning,
+            outs=base.outs,
+            runners=base.runners,
+            leverage_index=base.leverage_index,
+            score_differential=base.score_differential,
+        )
 
     # ------------------------------------------------------------------
     # Utilities
@@ -521,15 +699,22 @@ class SituationSimilarityEngine:
     def situation_count_by_outs(self) -> dict[int, int]:
         """Returns {outs_value: count} for the full index."""
         counts: dict[int, int] = {0: 0, 1: 0, 2: 0}
-        for meta in self._index_meta:
-            counts[meta.outs] = counts.get(meta.outs, 0) + 1
+        # Count directly off the columnar array (no per-row object reconstruction).
+        outs_arr = self._index_meta.outs
+        if len(outs_arr) > 0:
+            vals, vcounts = np.unique(outs_arr, return_counts=True)
+            for v, c in zip(vals, vcounts, strict=False):
+                counts[int(v)] = counts.get(int(v), 0) + int(c)
         return counts
 
     def situation_count_by_inning(self) -> dict[int, int]:
         """Returns {inning: count} for the full index."""
         counts: dict[int, int] = {}
-        for meta in self._index_meta:
-            counts[meta.inning] = counts.get(meta.inning, 0) + 1
+        inning_arr = self._index_meta.inning
+        if len(inning_arr) > 0:
+            vals, vcounts = np.unique(inning_arr, return_counts=True)
+            for v, c in zip(vals, vcounts, strict=False):
+                counts[int(v)] = int(c)
         return sorted_dict(counts)
 
 
@@ -551,8 +736,12 @@ def build_coverage_report(engine: SituationSimilarityEngine) -> str:
     from collections import Counter
 
     counter: Counter = Counter()
-    for meta in engine._index_meta:
-        counter[(meta.inning, meta.outs)] += 1
+    meta = engine._index_meta
+    # Pair (inning, outs) directly off the columnar arrays.
+    inning_arr = meta.inning
+    outs_arr = meta.outs
+    for inning_val, outs_val in zip(inning_arr.tolist(), outs_arr.tolist(), strict=False):
+        counter[(int(inning_val), int(outs_val))] += 1
 
     lines = [
         "SituationSimilarityEngine Coverage Report",
