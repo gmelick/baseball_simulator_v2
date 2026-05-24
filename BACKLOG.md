@@ -1,7 +1,33 @@
 # Product Backlog
 
-*Owner: Product Manager (Agent 1) · Last updated: 2026-05-24 (Phase 4 COMPLETE; Phase 5 audit — 28 tickets filed)*
+*Owner: Product Manager (Agent 1) · Last updated: 2026-05-24 (Phase 5 Sprint 1 — P0 gates CLOSED; 9 tickets)*
 
+> # 🚀 Phase 5 — Sprint 1 (P0 Gates) — CLOSED 2026-05-24
+>
+> **First Phase-5 sprint shipped: all 5 P0 gates + 3 ⚠ hygiene bugs + the SIM-315 carryover (9 tickets).**
+> The `api/` layer is no longer greenfield — the serialization contract, auth baseline, real
+> `machine_factory`, lineup resolver, and mounted router/pipeline skeleton are in place, unblocking the
+> P1 endpoint tickets. Log: `docs/SPRINT_2026-07-22_phase5_p0_gates.md`.
+>
+> | Ticket | Type | Status |
+> |---|---|---|
+> | SIM-350 serialization contract (`api/serialization.py` + `api/schemas.py`) | Spec | ✅ Closed |
+> | SIM-351 auth + rate-limit + CORS baseline (`api/auth.py`) | Feature | ✅ Closed |
+> | SIM-352 production DB-backed `machine_factory` | Feature | ✅ Closed (live-DB acceptance → SIM-372) |
+> | SIM-353 runtime lineup/sub resolver (the SIM-338 gap) | Feature | ✅ Closed |
+> | SIM-354 mount `ws_router`/`odds_router` + gated live pipeline | Gap | ✅ Closed |
+> | SIM-375 ⚠ docker-compose `./simulation` mount + dead `simulator/` removed | Bug | ✅ Closed |
+> | SIM-376 ⚠ `api/` added to coverage gate | Bug | ✅ Closed |
+> | SIM-377 ⚠ `GameSpec._hit_rate` TypeError | Bug | ✅ Closed |
+> | SIM-315 ⚠ file-integrity guard (OneDrive truncation, Option B) | Infra | ✅ Closed |
+>
+> **Tests: 1603 unit+regression passing / 0 failed** (1506 baseline + 97 new). Schema **v7** / Alembic
+> **0013** (unchanged). **Next free ID: SIM-378.** Next up (P1, the endpoints): SIM-355 → SIM-356 →
+> SIM-357/SIM-358, + SIM-359/360/361. SIM-315 is now **Closed** (the durable guard; the physical move was
+> already done).
+>
+> ---
+>
 > # 🏁 PHASE 4 — Core Simulation Loop — CLOSED 2026-05-24
 >
 > **Phase 4 complete across 5 sprints (SIM-310→349 + SIM-220).** The simulator runs full games

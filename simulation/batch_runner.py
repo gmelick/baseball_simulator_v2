@@ -155,6 +155,14 @@ class GameSpec:
         :func:`simulate_game` (e.g. ``pitcher_id`` / ``bat_hand`` / ``season`` /
         the two lineups / ``k`` / ``max_innings``).  MUST be picklable (no live
         sampler/resolver).
+
+        **FACTORY-ONLY KEYS (SIM-377 convention).**  A key whose name starts with
+        an underscore (e.g. ``_hit_rate``) is read by the ``machine_factory`` to
+        tune the machine it builds, but is **NOT** a :func:`simulate_game`
+        parameter.  :func:`_run_one` therefore filters every ``_``-prefixed key
+        out of the splat into ``simulate_game(**...)``, so a factory may stash its
+        own knobs here without raising a ``TypeError`` against ``simulate_game``'s
+        fixed signature.  Non-underscore keys are passed through verbatim.
       * ``shared_segments`` -- SIM-333 seam: the ``{name: (shape, dtype)}`` shared
         ``multiprocessing.shared_memory`` registry the worker factory attaches to
         build a zero-copy sampler.  ``None`` until SIM-333.
@@ -391,12 +399,25 @@ def _run_one(spec: GameSpec, seed: "int | None") -> GameSimResult:
     The ``seed`` is threaded into BOTH the factory AND ``simulate_game(seed=...)``
     so the machine's loop rng and the sampler's k-NN rng are reproducible from the
     one per-game seed (spec §6.3).
+
+    SIM-377: ``sim_kwargs`` keys are split by the underscore-prefix convention
+    (see :class:`GameSpec`).  The factory sees the WHOLE ``spec`` (so it can read
+    its own ``_``-prefixed knobs like ``_hit_rate``), but only the NON-underscore
+    keys are splatted into :func:`simulate_game` -- which has a fixed signature and
+    no ``**kwargs``, so a stray factory-only key would otherwise raise
+    ``TypeError``.
     """
     machine = None
     if spec.machine_factory is not None:
         factory = _resolve_dotted(spec.machine_factory)
         machine = factory(seed, spec)
-    return simulate_game(machine, seed=seed, **spec.sim_kwargs)
+    # SIM-377: drop factory-only (``_``-prefixed) keys before the splat so they
+    # never reach ``simulate_game``'s fixed signature.  The factory already saw
+    # them via ``spec`` above.
+    passthrough = {
+        k: v for k, v in spec.sim_kwargs.items() if not k.startswith("_")
+    }
+    return simulate_game(machine, seed=seed, **passthrough)
 
 
 # ===========================================================================

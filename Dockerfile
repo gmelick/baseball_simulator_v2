@@ -64,7 +64,8 @@ WORKDIR /app
 COPY api/         ./api/
 COPY pipeline/    ./pipeline/
 COPY similarity/  ./similarity/
-COPY simulator/   ./simulator/
+COPY simulation/  ./simulation/
+COPY betting/     ./betting/
 COPY db/          ./db/
 COPY alembic.ini  ./alembic.ini
 

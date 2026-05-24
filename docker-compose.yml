@@ -105,7 +105,9 @@ services:
       - ./api:/app/api
       - ./pipeline:/app/pipeline
       - ./similarity:/app/similarity
-      - ./simulator:/app/simulator
+      # SIM-375: mount the real Phase-5 simulation package (not the dead
+      # ``simulator`` stub) so the Monte-Carlo loop/runner code hot-reloads in dev.
+      - ./simulation:/app/simulation
       - ./db:/app/db
       # Persistent /data volume so the DuckDB file produced by
       # pipeline/batch/player_profile_computor.py survives container

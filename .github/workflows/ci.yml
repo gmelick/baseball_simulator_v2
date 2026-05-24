@@ -37,7 +37,7 @@ env:
   # here run the same interpreter as the weekly + docker workflows.
   PYTHON_VERSION: '3.11'
   # Minimum line-coverage threshold for the measured packages
-  # (similarity/ + pipeline/ + simulation/ + betting/).
+  # (similarity/ + pipeline/ + simulation/ + betting/ + api/).
   # Scope is configured in pyproject.toml's [tool.coverage.run] section —
   # CLI / diagnostic / real-time streaming files are excluded since they're
   # exercised by regression + integration tests, not unit tests.
@@ -133,6 +133,7 @@ jobs:
             --cov=pipeline \
             --cov=simulation \
             --cov=betting \
+            --cov=api \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
             --cov-report=html:htmlcov \
@@ -284,6 +285,28 @@ jobs:
             exit 1
           fi
           echo "OK — .env is in .gitignore."
+
+  # ---------------------------------------------------------------------------
+  # Job 4c — File integrity (SIM-315)
+  # Flags .py files corrupted by the Cowork/OneDrive file bridge (NUL bytes or
+  # truncated/un-parseable source). Pure stdlib — no deps, runs in seconds.
+  # ---------------------------------------------------------------------------
+  file-integrity:
+    name: File integrity (SIM-315)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run file-integrity guard
+        run: python scripts/check_file_integrity.py
 
   docker-build-check:
     name: Docker build check

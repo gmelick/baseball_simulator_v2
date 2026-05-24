@@ -1,0 +1,24 @@
+# =============================================================================
+# pre-commit configuration
+#
+# Install once with:
+#   pip install pre-commit && pre-commit install
+#
+# Then every `git commit` runs the hooks below against the staged files.
+# Run manually across the whole tree with:
+#   pre-commit run --all-files
+# =============================================================================
+repos:
+  # ---------------------------------------------------------------------------
+  # SIM-315 — file-integrity guard
+  # Catches files corrupted by the Cowork/OneDrive file bridge (NUL bytes or
+  # truncated/un-parseable source) before they are committed. Pure stdlib, fast.
+  # ---------------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: check-file-integrity
+        name: Check file integrity (SIM-315)
+        entry: python scripts/check_file_integrity.py
+        language: system
+        types: [python]
+        pass_filenames: true

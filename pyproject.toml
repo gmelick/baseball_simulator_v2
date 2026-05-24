@@ -30,14 +30,14 @@ addopts = [
 [tool.ruff]
 target-version = "py311"
 line-length    = 100
-src            = ["api", "pipeline", "similarity", "simulator", "db", "tests"]
+src            = ["api", "pipeline", "similarity", "simulation", "betting", "db", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "C4", "UP", "SIM", "TID", "PTH"]
 ignore = ["E501", "B008", "B904"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["api", "pipeline", "similarity", "simulator", "db"]
+known-first-party = ["api", "pipeline", "similarity", "simulation", "betting", "db"]
 
 [tool.mypy]
 python_version         = "3.11"
@@ -60,17 +60,20 @@ ignore_errors = true
 # ---------------------------------------------------------------------------
 # Coverage scope (pytest-cov / coverage.py)
 #
-# Coverage is measured for similarity/, pipeline/, simulation/ and betting/,
-# excluding modules that are pure CLI / diagnostic / real-time orchestration
-# scripts. Those modules are exercised by regression and integration tests,
-# not unit tests. simulation/ + betting/ added in SIM-343 so the Phase-4
-# Monte Carlo sim-loop, validation spine and betting (CLV) code is measured;
-# both packages are exercised by tests/unit (26+ sim test modules,
+# Coverage is measured for similarity/, pipeline/, simulation/, betting/ and
+# api/, excluding modules that are pure CLI / diagnostic / real-time
+# orchestration scripts. Those modules are exercised by regression and
+# integration tests, not unit tests. simulation/ + betting/ added in SIM-343 so
+# the Phase-4 Monte Carlo sim-loop, validation spine and betting (CLV) code is
+# measured; both packages are exercised by tests/unit (26+ sim test modules,
 # tests/unit/test_betting_sim339.py) and have no untestable __main__ CLI
-# entrypoints, so they are measured in full (no omit entries needed).
+# entrypoints, so they are measured in full (no omit entries needed). api/ added
+# in SIM-376 so the FastAPI app is enforced by the CI gate too (the local
+# Makefile already passed --cov=api); api/ has no in-module __main__ entrypoint
+# (the server is launched via uvicorn api.main:app), so no omit entries needed.
 # ---------------------------------------------------------------------------
 [tool.coverage.run]
-source = ["similarity", "pipeline", "simulation", "betting"]
+source = ["similarity", "pipeline", "simulation", "betting", "api"]
 omit = [
     "similarity/similarity_calibration.py",
     "similarity/similarity_diagnostics.py",

@@ -2349,3 +2349,154 @@ lineup/substitution resolver (SIM-353, the long-open SIM-338 gap), plus a real D
 after the audit: **SIM-378**.
 
 ---
+
+# Sprint 2026-07-22 — Phase 5 P0 Gates (Backend API & Simulation Runner) (executed & CLOSED 2026-05-24)
+**Authors: Backend Developer (Agent 5), ML Engineer (Agent 3), Data Engineer (Agent 4), Performance Engineer (Agent 6), UX Designer (Agent 7), QA/DevOps (Agent 9), Product Manager (Agent 1, orchestrator)**
+
+First Phase-5 sprint: the five P0 gates that unblock the real endpoints + the three ⚠ hygiene bugs
++ the SIM-315 file-integrity carryover. The `api/` layer was greenfield going in. Run as two waves
+of file-disjoint role subagents, then an independent orchestrator cross-validation that ran the full
+suite from scratch. Companion: `docs/SPRINT_2026-07-22_phase5_p0_gates.md`.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-350 | Spec | Backend + UX | Array-safe JSON contract: `api/serialization.py` (`to_jsonable`) + `api/schemas.py` Pydantic v2 models + `from_dataclass` for every Phase-4 output dataclass |
+| SIM-351 | Feature | Backend + QA | Auth + rate-limit + CORS baseline (`api/auth.py`) — API-key dep, stdlib sliding-window limiter, env-driven CORS (no more `["*"]`) |
+| SIM-352 | Feature | Backend + Perf + ML | Production DB-backed `production_machine_factory` over `PlayPoolSampler` + SIM-333 shared tiles; injectable builders for no-DB testing |
+| SIM-353 | Feature | Data + Backend | Runtime lineup/sub resolver: `raw.game_lineups`/`raw.players` → `GameState` (the SIM-338 gap); pure assembly layer + async asyncpg readers |
+| SIM-354 | Gap | Backend + Data | Mount `ws_router`/`odds_router` into `api/main.py` + lifespan live-pipeline gated by `LIVE_PIPELINE_ENABLED` + `simulation_callback` hook |
+| SIM-375 | Bug | Data + QA | `docker-compose.yml` mounts `./simulation` (was empty `./simulator`); `Dockerfile` copies `simulation/`+`betting/`; dead `simulator/` deleted |
+| SIM-376 | Bug | QA | `api/` added to the coverage gate (pyproject `source` + ci `--cov=api`) |
+| SIM-377 | Bug | Backend/Perf | `_run_one` filters `_`-prefixed (factory-only) `sim_kwargs` keys out of the `simulate_game(**...)` splat — fixes the `_hit_rate` TypeError |
+| SIM-315 | Infra | QA | `scripts/check_file_integrity.py` (`ast.parse` + null-byte scan) + pre-commit hook + CI job — durable OneDrive-truncation guard |
+
+## SIM-350 — API Response-Serialization Contract
+
+**Type:** Spec | **Effort:** M | **Status:** ✅ Complete
+
+`api/serialization.py` provides `to_jsonable(obj)`, a recursive numpy-scalar / numpy-array /
+dataclass / dict / sequence / datetime / enum → JSON-native converter (no `default=` hook needed,
+no numpy survives). `api/schemas.py` provides Pydantic v2 response models with a `from_dataclass`
+classmethod for each Phase-4 output dataclass: `GameSimSummaryModel` (+ `GameSimSummaryLite`),
+`ConfidenceIntervalModel`, `BoxScoreModel`/`PlayerStatLineModel`, `WinProbabilityModel`/`CalibrationMapModel`,
+the six `snapshots` models (`PlayerRef`/`FieldSnapshot`/`PlayByPlayEntry`/`PlayByPlay`/`StateAtPitch`/`OverrideDelta`+`MetricDelta`),
+`PropDistributionModel`/`PropDistributionSetModel`, and `EdgeReportModel`/`CLVModel`. No source
+dataclass was modified. Large per-iteration score arrays are exposed in full by default; trimming is
+an explicit opt-in (`include_raw_arrays=False` / the `Lite` projection).
+
+**QA fix:** `to_jsonable` originally leaked `np.float64` — it subclasses Python `float`, so numpy
+scalars hit the native-scalar fast path and were returned unconverted. Fixed by excluding
+`np.generic` from that fast path so numpy scalars fall through to the numpy branch. (Caught by the
+ticket's own round-trip test, which the implementing agent could not run — no pydantic/numpy in its
+sandbox.) 21 tests.
+
+## SIM-351 — Auth + Rate-Limit + CORS Baseline
+
+**Type:** Feature | **Effort:** M | **Status:** ✅ Complete
+
+`api/auth.py`: `require_api_key` FastAPI dependency (validates `X-API-Key` against `API_KEYS`;
+no-op pass-through in `development` or when no keys configured; 401 otherwise; ops probes never
+forced). `RateLimitMiddleware` — pure-stdlib sliding window (`collections.deque`) keyed by API key
+then client IP; `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_ENABLED` knobs, off by default so dev + tests
+are unaffected; 429 + `Retry-After`; `/health` `/ready` `/` exempt. `resolve_cors_origins` replaces
+the unconditional `["*"]` with `CORS_ORIGINS` → `FRONTEND_URL` → dev-only `*`, so production is never
+wildcard with `allow_credentials=True`. No new third-party dependency. 9 tests.
+
+## SIM-352 — Production DB-Backed machine_factory
+
+**Type:** Feature | **Effort:** L | **Status:** ✅ Complete (live-DB acceptance deferred)
+
+`simulation/production_factory.py`: `production_machine_factory(seed, spec) -> StateMachine`,
+module-level + picklable + dotted-ref-able (`"simulation.production_factory:production_machine_factory"`),
+mirroring `rng_driven_machine_factory`. Builds a real `PlayPoolSampler`-driven `StateMachine` and, when
+`spec.shared_segments` is set, attaches the SIM-333 shared tiles zero-copy via `get_shared_view(...)`.
+Sampler + fingerprint-deriver construction sit behind injectable module-level builder hooks
+(`set_sampler_builder`/`set_deriver_builder`/`use_sampler_builder`) so the factory is unit-testable
+with no live DuckDB/FAISS; the per-game seed threads into both the loop rng and the sampler's k-NN rng.
+Factory-only knobs (`_pool_dir`/`_duckdb_path`/`_k`/`_max_resident_tiles`) ride the SIM-377 `_`-prefix
+convention. **Sandbox has no Postgres/DuckDB**, so the 2s/30s SLA and a real `/simulate` run remain to
+verify in a live environment (folds into SIM-372); verified here via the mock/`__new__`-bypass pattern.
+13 tests.
+
+## SIM-353 — Runtime Lineup/Substitution Resolver
+
+**Type:** Feature | **Effort:** L | **Status:** ✅ Complete
+
+`simulation/lineup_resolver.py` closes the long-open SIM-338 gap. Layered + independently testable:
+pure assembly `resolve_lineup_from_rows(...)` → `ResolvedLineup`; pure `build_game_state(...)` mapping
+to a `GameState` via its public fields (ordered `home/away_lineup`, slot pointers, leadoff `batter_id`,
+defending `pitcher_id`, `bat_hand`/`throw_hand`/`season`); and async asyncpg readers
+(`fetch_*`/`resolve_lineup`/`resolve_game_state`) over `raw.games` + `raw.game_lineups` + `raw.players`.
+Substitutions resolve by highest `sequence` per slot with optional `as_of_at_bat` rewind; pitching
+changes resolve independently of the batting order (AL pitcher excluded from the order). **No migration
+needed** — `raw.game_lineups` already exists from migration 0001 with every required column (the audit's
+"deferred" note was stale). `game_state.py` untouched. 24 tests (fake-asyncpg + in-memory).
+
+## SIM-354 — Mount the API Skeleton
+
+**Type:** Gap | **Effort:** S | **Status:** ✅ Complete
+
+`api/main.py` now includes `ws_router` (`/ws/games/{game_pk}`) and `odds_router` (`/api/odds/{game_pk}`,
+`/api/odds/today/all`) unconditionally in `create_app()` — route registration needs no live connection.
+The background `LiveIngestionPipeline` is gated behind `LIVE_PIPELINE_ENABLED` (default false) in the
+lifespan: when enabled it builds the pipeline with the `simulation_callback` re-sim hook, attaches it to
+`app.state.pipeline`, and `stop()`s it cleanly on shutdown — so the app boots for tests without an MLB
+WebSocket. 11 tests (FastAPI `TestClient`).
+
+## SIM-375 — docker-compose Mount Fix + Dead Package Removal
+
+**Type:** Bug | **Effort:** S | **Status:** ✅ Complete
+
+The dev hot-reload bind mount now points at the real `./simulation:/app/simulation` (was the empty
+`./simulator` stub, so Phase-5 loop/runner code never hot-reloaded). `Dockerfile` updated to
+`COPY simulation/` and `COPY betting/` (the now-mounted API imports both) so the runtime image is
+importable. The dead `simulator/` package (2 `__init__.py` files, zero importers — confirmed by grep)
+was deleted; its stale references were removed from `pyproject.toml`'s ruff `src`/`known-first-party`.
+
+## SIM-376 — api/ Added to the Coverage Gate
+
+**Type:** Bug | **Effort:** S | **Status:** ✅ Complete
+
+`"api"` added to `[tool.coverage.run] source` in `pyproject.toml` and `--cov=api` added to the CI
+unit-test job, so the FastAPI app is enforced by the 80% CI coverage gate (previously only the local
+Makefile measured it). No `api/` entrypoint files needed omitting; gate threshold unchanged.
+
+## SIM-377 — `GameSpec._hit_rate` TypeError Fix
+
+**Type:** Bug | **Effort:** S | **Status:** ✅ Complete
+
+`rng_driven_machine_factory` reads `spec.sim_kwargs["_hit_rate"]`, but `_run_one` then splatted the same
+`sim_kwargs` into `simulate_game(**...)`, which has a fixed signature (no `**kwargs`) → `TypeError`.
+Fixed by filtering `_`-prefixed keys out of the splat in `_run_one` (`passthrough = {k: v for ... if not
+k.startswith("_")}`), establishing the documented "underscore keys are factory-only" convention on
+`GameSpec`. A `GameSpec` carrying `_hit_rate` now runs end-to-end through `BatchRunner.run` with no error.
+7 tests. **QA fix:** the agent's "high `_hit_rate` out-scores low" assertion was over-strong — the no-DB
+stub's integer runs are driven by its own pitch-outcome rng, not the resolver, so per-game scores are
+byte-identical across hit rates. Rewrote the test to assert the knob's real effect (more hits from
+`resolve_fielding` at higher `_hit_rate`), which is true; the knob verifiably reaches the factory.
+
+## SIM-315 — File-Integrity Guard (OneDrive Truncation Remediation, Option B)
+
+**Type:** Infra | **Effort:** M | **Status:** ✅ Complete
+
+`scripts/check_file_integrity.py` (pure stdlib) walks tracked `.py` files, `ast.parse`s each (catching
+truncated / mid-statement files) and scans for null bytes, exiting non-zero with a per-file report;
+accepts explicit path args for pre-commit. Wired into `.pre-commit-config.yaml` (local hook) and a fast
+`File integrity (SIM-315)` CI job. **It paid off on its first run** — flagged a real bridge truncation of
+`simulation/batch_runner.py` (866 vs 913 authoritative lines). The physical OneDrive→Documents move is
+already done (Greg-only); this is the durable guard half. 12 tests. **Follow-up:** extend the guard to
+YAML/TOML — this sprint's `ci.yml` and `pyproject.toml` truncations were `.py`-only blind spots the
+line-count/job diff caught instead.
+
+## Verification (orchestrator cross-validation)
+
+Independent QA pass ran the full suite from scratch (sandbox deps installed; `datetime.UTC` shim + pyc
+dir per the standing recipe; per-pattern chunks). **Result: 1603 unit+regression passing / 0 failed**
+(1548 unit + 55 regression = 1506 baseline + 97 new). Regression golden-files green (no engine drift).
+Performance: 5 benches intact (full-timing run exceeds the 45s sandbox cap as always; runner covered by
+the batch_runner unit suites). Integrity guard: 157 `.py` files clean. Six mount truncations were
+repaired during the pass (`batch_runner.py`, `pyproject.toml`, `api/serialization.py`, `api/main.py`,
+`test_perf_eng_sim377.py`, `ci.yml`); every authoritative file was complete. DuckDB schema **v7** /
+Alembic head **0013** unchanged. **Next free ID: SIM-378.**
+
+---

@@ -27,6 +27,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from api.auth import RateLimitMiddleware, resolve_cors_origins
 from api.state import (
     build_pitcher_engine,
     make_pg_name_resolver,
@@ -137,16 +138,55 @@ async def lifespan(app: FastAPI):
         )
 
     # ----------------------------------------------------------------
-    # Phase 5: Uncomment to wire in the live ingestion pipeline
+    # Phase 5 (SIM-354): live ingestion pipeline.
+    #
+    # Gated behind LIVE_PIPELINE_ENABLED (default FALSE) so importing/booting
+    # the app — including the test suite and `create_app()` import-time wiring —
+    # never requires a live MLB WebSocket, the MLB Stats REST API, or any other
+    # external connection. The ws_router / odds_router are ALWAYS registered in
+    # create_app() (route registration needs no live connection); only the
+    # background poller + WS subscriptions are started here when enabled.
+    #
+    # The pipeline's simulation_callback is the Phase-5 re-sim seam: it fires
+    # at the end of every plate appearance via
+    # LiveIngestionPipeline._signal_resimulation(game_pk, game_state). We wire a
+    # default async hook that logs the signal and stashes the latest state on
+    # app.state.last_resim_signal; the Phase-5 simulation runner replaces this
+    # callback with the real re-sim trigger once that slice lands.
     # ----------------------------------------------------------------
-    # from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
-    # pipeline = LiveIngestionPipeline(
-    #     dsn=dsn,
-    #     redis_url=redis_url,
-    # )
-    # await pipeline.start()
-    # app.state.pipeline = pipeline
-    # ----------------------------------------------------------------
+    pipeline_enabled = os.environ.get(
+        "LIVE_PIPELINE_ENABLED", "false"
+    ).strip().lower() not in ("0", "false", "no", "")
+
+    if pipeline_enabled:
+        from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
+
+        async def _resim_signal(game_pk: int, game_state: dict) -> None:
+            # Phase-5 seam: the simulation runner will replace this hook with a
+            # real re-sim trigger. Until then, record the signal so /ready and
+            # tests can observe that the wiring fired.
+            log.info(
+                "Re-sim signal received: game %s | inning %s | score %s-%s",
+                game_pk,
+                game_state.get("inning"),
+                game_state.get("home_score"),
+                game_state.get("away_score"),
+            )
+            app.state.last_resim_signal = {"game_pk": game_pk, "game_state": game_state}
+
+        log.info("Starting live ingestion pipeline (LIVE_PIPELINE_ENABLED=true) ...")
+        pipeline = LiveIngestionPipeline(
+            dsn=dsn,
+            redis_url=redis_url,
+            simulation_callback=_resim_signal,
+        )
+        await pipeline.start()
+        app.state.pipeline = pipeline
+    else:
+        log.info(
+            "LIVE_PIPELINE_ENABLED is false — ws_router/odds_router are mounted "
+            "but the background live ingestion pipeline is NOT started."
+        )
 
     yield
 
@@ -160,11 +200,10 @@ async def lifespan(app: FastAPI):
         await app.state.pg_pool.close()
 
     # ----------------------------------------------------------------
-    # Phase 5: Uncomment to cleanly stop the pipeline
+    # Phase 5 (SIM-354): cleanly stop the pipeline if it was started.
     # ----------------------------------------------------------------
-    # if hasattr(app.state, "pipeline"):
-    #     await app.state.pipeline.stop()
-    # ----------------------------------------------------------------
+    if hasattr(app.state, "pipeline"):
+        await app.state.pipeline.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -185,12 +224,12 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
 
-    # CORS — tighten in production via ENVIRONMENT check
-    origins = (
-        ["*"]
-        if os.environ.get("ENVIRONMENT", "development") == "development"
-        else [os.environ.get("FRONTEND_URL", "http://localhost:3000")]
-    )
+    # CORS (SIM-351) — env-driven allowlist. CORS_ORIGINS (comma-separated)
+    # wins; else FRONTEND_URL; else a safe localhost default. The "*" wildcard
+    # is reachable ONLY under ENVIRONMENT=development, so production is never
+    # ["*"] while allow_credentials=True (a spec violation browsers reject).
+    # See api/auth.resolve_cors_origins for the precedence rules.
+    origins = resolve_cors_origins()
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
@@ -198,6 +237,12 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Rate limiting (SIM-351) — lightweight in-memory sliding window keyed by
+    # API key / client IP. Disabled by default (RATE_LIMIT_PER_MINUTE unset/<=0)
+    # so dev + the test suite are unaffected; opt in via RATE_LIMIT_PER_MINUTE.
+    # /health, /ready, / are exempt inside the middleware.
+    app.add_middleware(RateLimitMiddleware)
 
     # ----------------------------------------------------------------
     # Routers — registered as phases complete
@@ -209,10 +254,16 @@ def create_app() -> FastAPI:
 
     app.include_router(similarity_router)
 
-    # Phase 5:
-    # from pipeline.live.live_ingestion_pipeline import ws_router, odds_router
-    # app.include_router(ws_router)
-    # app.include_router(odds_router)
+    # Phase 5 (SIM-354): live ingestion routers.
+    #   ws_router   — WebSocket /ws/games/{game_pk} (frontend live subscriptions)
+    #   odds_router — REST /api/odds/{game_pk}, /api/odds/today/all
+    # These are registered unconditionally — route registration requires no live
+    # DB/Redis/WS connection. The background pipeline that *feeds* the WS clients
+    # is started in lifespan only when LIVE_PIPELINE_ENABLED=true.
+    from pipeline.live.live_ingestion_pipeline import odds_router, ws_router
+
+    app.include_router(ws_router)
+    app.include_router(odds_router)
     # ----------------------------------------------------------------
 
     # ---- Health / readiness -----------------------------------------
