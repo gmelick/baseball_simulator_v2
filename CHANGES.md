@@ -2592,3 +2592,56 @@ head **0014**. **Next free ID: SIM-378.** Remaining P1 → Sprint 3: SIM-360 (pe
 (calibration serving).
 
 ---
+
+# Sprint 2026-08-05 — Phase 5 P1 Lifecycle (Persistent Pool + Calibration Serving) (executed & CLOSED 2026-05-24)
+**Authors: Performance Engineer (Agent 6), ML Engineer (Agent 3), Product Manager (Agent 1, orchestrator)**
+
+Third Phase-5 sprint: the two remaining P1 lifecycle tickets — a persistent ProcessPool/shared-memory
+lifecycle for the runner, and server-side calibration + all-11-engine startup. **Phase 5 P1 (SIM-355→361)
+is now COMPLETE.** Both tickets touch the `api/main.py` lifespan, so they ran as sequential single-agent
+waves (Perf → ML). Companion: `docs/SPRINT_2026-08-05_phase5_p1_lifecycle.md`.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-360 | Perf | Performance | Persistent `ProcessPoolExecutor` reuse in `BatchRunner` (was fresh-per-`run()`) + `app.state.sim_runner` lifespan + `/simulate` reuse |
+| SIM-361 | Feature | ML | `CalibrationReport` JSON persistence + startup load → `CalibrationMap`; build all 11 engines at startup (was pitcher-only) |
+
+## SIM-360 — Persistent ProcessPool + Shared-Memory Lifecycle
+
+**Type:** Perf | **Effort:** M | **Status:** ✅ Complete
+
+`BatchRunner` forked a fresh `ProcessPoolExecutor` on every `run()` (and published/unlinked shared memory
+per call) — fine for a one-shot script, wrong for a long-lived API. Now `reuse_pool=True` (default) lazily
+creates ONE warm pool and **reuses it across `run()` calls** (SIM-333 shared-mem segments published once and
+reused); the pool is recreated only on a `max_workers` change, and `close()` does `shutdown(wait=True)` before
+unlinking segments (idempotent). The `max_workers <= 1` in-process path + all one-shot/context-manager callers
+are unchanged (determinism preserved). The lifespan builds ONE long-lived `BatchRunner` as `app.state.sim_runner`
+(`SIM_RUNNER_WORKERS`, default 1) and `close()`s it on shutdown; `/simulate` + `/with_override` reuse it
+(transient fallback when absent). 10 new tests (real multiprocessing, asserting pool-reuse identity); sim332/sim333
+green.
+
+## SIM-361 — CalibrationReport Serving + 11-Engine Startup
+
+**Type:** Feature | **Effort:** M | **Status:** ✅ Complete
+
+Added lossless JSON persistence to `CalibrationReport` (`to_json`/`from_json` + `to_dict`/`from_dict`/`equals`,
+numpy-aware, schema-versioned) and a `reliability_curve` carrier field (the SIM-220 fitted-curve seam).
+`CalibrationMap.from_report` builds a monotone piecewise-linear win-prob calibration map (identity when no
+curve). `api/state.build_all_engines` builds all 11 similarity engines via `ENGINE_REGISTRY`, with a per-engine
+try/except (one bad profile table is skipped + logged, not fatal) and injectable registry/loader for no-DB
+testing. The lifespan attaches `app.state.engines` (all 11; `app.state.pitcher_engine` kept fail-fast for the
+similarity route's contract) and `app.state.calibration_map` (loaded from `CALIBRATION_REPORT_PATH`, default
+identity), degrading gracefully without DuckDB or a report. 28 new tests; affected suites (api_state/sim330/
+sim346/wiring, 76 tests) green. Live 11-engine build needs DuckDB profiles → verified via mocks.
+
+## Verification (orchestrator cross-validation)
+
+Independent full-suite run from scratch (per-pattern chunks; FAISS builders individually; `test_api_main_wiring.py`
+run split — it now exceeds the 45s shell cap on its own). **Result: 1702 unit+regression passing / 0 failed**
+(1647 unit + 55 regression = 1661 Sprint-2 baseline + 41 new). Regression golden-files green. File integrity:
+167 `.py` files clean. File-bridge truncations repaired across the sprint (`api/main.py` now 477 lines, ends with
+`app = create_app()`); every authoritative file complete. DuckDB schema **v9** / Alembic head **0014** unchanged.
+**Phase 5 P1 (SIM-355→361) COMPLETE. Next free ID: SIM-378.** Next: P2 loop-output gaps (SIM-362–366) + betting
+surface (SIM-367–370).
+
+---

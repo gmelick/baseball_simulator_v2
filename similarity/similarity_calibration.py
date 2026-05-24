@@ -38,9 +38,10 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any
 
 import numpy as np
@@ -552,6 +553,21 @@ class CalibrationReport:
     # Tier 3
     bats_penalty_lr: float = 0.0
 
+    # ------------------------------------------------------------------
+    # SIM-361: win-probability reliability curve (the seam for the SIM-220
+    # backtester's fitted isotonic/Platt calibration).
+    #
+    # When the backtester fits a reliability curve from historical
+    # sim-vs-actual outcomes, it stores the curve here as a list of
+    # ``(predicted_p, observed_p)`` anchor points, sorted by predicted_p,
+    # each in [0, 1]. ``simulation.win_probability.CalibrationMap.from_report``
+    # turns these into a monotone piecewise-linear p->p map that the
+    # ``win_probability(...)`` transform applies in place of the identity.
+    # When None / empty, the win-prob layer keeps the identity map (the
+    # simulator is treated as well-calibrated until a curve says otherwise).
+    # ------------------------------------------------------------------
+    reliability_curve: list | None = None
+
     # Metadata
     n_profiles_used: int = 0
     seasons_used: list = field(default_factory=list)
@@ -855,6 +871,100 @@ class CalibrationReport:
         if self.pitcher_subscores is not None:
             d["pitcher_subscores"] = self.pitcher_subscores.tolist()
         return d
+
+    # ------------------------------------------------------------------
+    # SIM-361: lossless JSON persistence (to_dict/to_json ↔ from_dict/from_json)
+    #
+    # ``as_dict`` above is a *flat, human-facing export* (drops zero-valued
+    # arrays, loses the NDArray-vs-list distinction) — it is NOT round-trippable.
+    # The pair below is the persistence format the API loads at boot: it walks
+    # EVERY dataclass field so adding a field to CalibrationReport is picked up
+    # automatically, tags numpy arrays so ``from_dict`` restores them as
+    # ``np.ndarray`` (not plain lists), and converts numpy scalars to native
+    # Python so ``json.dumps`` never chokes. Round-trip is exact:
+    # ``from_json(r.to_json()) == r`` (compared via :meth:`equals`).
+    # ------------------------------------------------------------------
+
+    #: Bumped if the persisted layout changes incompatibly.
+    SCHEMA_VERSION = 1
+
+    @staticmethod
+    def _encode_value(v: Any) -> Any:
+        """Convert one field value into a JSON-safe, round-trippable form."""
+        if v is None:
+            return None
+        if isinstance(v, np.ndarray):
+            # Tag arrays so from_dict can restore the NDArray type exactly.
+            return {"__ndarray__": True, "data": v.tolist()}
+        if isinstance(v, np.generic):  # numpy scalar (e.g. np.float64)
+            return v.item()
+        if isinstance(v, (list, tuple)):
+            return [CalibrationReport._encode_value(x) for x in v]
+        # Plain Python scalars (int/float/str/bool) pass through.
+        return v
+
+    @staticmethod
+    def _decode_value(v: Any) -> Any:
+        """Inverse of :meth:`_encode_value`."""
+        if isinstance(v, dict) and v.get("__ndarray__"):
+            return np.asarray(v["data"], dtype=np.float64)
+        if isinstance(v, list):
+            return [CalibrationReport._decode_value(x) for x in v]
+        return v
+
+    def to_dict(self) -> dict:
+        """Lossless, round-trippable dict of EVERY field (see class note)."""
+        out: dict[str, Any] = {"__schema_version__": self.SCHEMA_VERSION}
+        for f in fields(self):
+            out[f.name] = self._encode_value(getattr(self, f.name))
+        return out
+
+    def to_json(self, *, indent: int | None = 2) -> str:
+        """Serialize to a JSON string (round-trips via :meth:`from_json`)."""
+        return json.dumps(self.to_dict(), indent=indent, sort_keys=True)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> CalibrationReport:
+        """Reconstruct a CalibrationReport from a :meth:`to_dict` payload.
+
+        Unknown keys (e.g. ``__schema_version__`` or fields from a newer
+        report) are ignored so an older reader never crashes on a newer file;
+        missing keys fall back to the dataclass default.
+        """
+        valid = {f.name for f in fields(cls)}
+        kwargs = {
+            k: cls._decode_value(v) for k, v in d.items() if k in valid
+        }
+        return cls(**kwargs)
+
+    @classmethod
+    def from_json(cls, s: str) -> CalibrationReport:
+        """Reconstruct a CalibrationReport from a :meth:`to_json` string."""
+        return cls.from_dict(json.loads(s))
+
+    def equals(self, other: object) -> bool:
+        """Field-by-field equality that handles the NDArray fields correctly.
+
+        ``@dataclass``'s generated ``__eq__`` raises on ndarray fields
+        (``a == b`` is elementwise + ambiguous in a bool context), so this is
+        the canonical way to assert a lossless round-trip.
+        """
+        if not isinstance(other, CalibrationReport):
+            return NotImplemented
+        for f in fields(self):
+            a = getattr(self, f.name)
+            b = getattr(other, f.name)
+            if isinstance(a, np.ndarray) or isinstance(b, np.ndarray):
+                if a is None or b is None:
+                    if a is not b:
+                        return False
+                    continue
+                if not np.array_equal(np.asarray(a), np.asarray(b)):
+                    return False
+            else:
+                if a != b:
+                    return False
+        return True
 
 
 # ============================================================================

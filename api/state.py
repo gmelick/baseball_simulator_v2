@@ -84,6 +84,174 @@ def build_pitcher_engine(duckdb_path: str | None = None):
 
 
 # ---------------------------------------------------------------------------
+# All 11 similarity engines (SIM-361)
+# ---------------------------------------------------------------------------
+
+#: Stable name -> (module path, class name) registry for all 11 similarity
+#: engines the platform serves. The KEY is the contract: ``app.state.engines``
+#: is keyed by these names, so a route can ask for ``engines["batter"]`` without
+#: knowing the import path. Every engine takes ``duckdb_path=`` as its first
+#: keyword arg and exposes ``build()`` (verified across the suite), so the
+#: builder below treats them uniformly. The FAISS-backed engines (situation /
+#: pitch_pitch / batted_ball) accept the same ``duckdb_path=`` kwarg; their extra
+#: ``index_kind`` arg has a working default, so the uniform call is correct.
+ENGINE_REGISTRY: dict[str, tuple[str, str]] = {
+    "pitcher": ("similarity.engines.pitcher_similarity", "PitcherSimilarityEngine"),
+    "batter": ("similarity.engines.batter_similarity", "BatterSimilarityEngine"),
+    "fielder": ("similarity.engines.fielder_similarity", "FielderSimilarityEngine"),
+    "baserunner": ("similarity.engines.baserunner_similarity", "BaserunnerSimilarityEngine"),
+    "baserunner_steal": (
+        "similarity.engines.baserunner_steal_similarity",
+        "BaserunnerStealSimilarityEngine",
+    ),
+    "catcher": ("similarity.engines.catcher_similarity", "CatcherSimilarityEngine"),
+    "pitcher_steal": (
+        "similarity.engines.pitcher_steal_similarity",
+        "PitcherStealSimilarityEngine",
+    ),
+    "manager": ("similarity.engines.manager_similarity", "ManagerSimilarityEngine"),
+    "situation": ("similarity.engines.situation_similarity", "SituationSimilarityEngine"),
+    "pitch_pitch": ("similarity.engines.pitch_pitch_similarity", "PitchPitchSimilarityEngine"),
+    "batted_ball": ("similarity.engines.batted_ball_similarity", "BattedBallSimilarityEngine"),
+}
+
+
+def _default_engine_loader(module_path: str, class_name: str):
+    """Import ``class_name`` from ``module_path`` (lazy, so importing this
+    module needs no numpy/faiss). Factored out so a test can monkeypatch the
+    whole load step with fakes — no DuckDB, no heavy deps."""
+    import importlib
+
+    mod = importlib.import_module(module_path)
+    return getattr(mod, class_name)
+
+
+def build_all_engines(
+    duckdb_path: str | None = None,
+    *,
+    registry: dict[str, tuple[str, str]] | None = None,
+    loader=None,
+):
+    """Build all 11 similarity engines, keyed by their stable registry name.
+
+    Mirrors :func:`build_pitcher_engine`'s pattern for each engine: resolve the
+    DuckDB path (arg -> ``BASEBALL_DUCKDB_PATH`` env -> ``DEFAULT_DUCKDB_PATH``),
+    construct with ``duckdb_path=``, call ``build()`` (which loads the engine's
+    profiles from DuckDB). Like ``build_pitcher_engine`` this is a synchronous,
+    CPU+I/O bound call meant to run under ``asyncio.to_thread(...)`` from the
+    FastAPI lifespan.
+
+    **Resilient:** each engine is built inside its own try/except. An engine
+    that fails to construct or ``build()`` (e.g. a missing/empty profile table,
+    or faiss absent for a FAISS engine) is logged at WARNING and SKIPPED — it is
+    simply absent from the returned dict — so one bad profile table never takes
+    the whole API down with it. The returned dict therefore contains only the
+    engines that built successfully (0..11 entries).
+
+    **Mockable:** the ``registry`` (name -> (module, class)) and the ``loader``
+    (``(module, class) -> engine_class``) are both injectable so a unit test can
+    feed fake engine classes and never touch DuckDB or the real heavy modules.
+
+    Parameters
+    ----------
+    duckdb_path : str, optional
+        DuckDB path; same precedence as :func:`build_pitcher_engine`.
+    registry : dict, optional
+        Override the default :data:`ENGINE_REGISTRY` (for tests).
+    loader : callable, optional
+        ``(module_path, class_name) -> engine_class``. Defaults to
+        :func:`_default_engine_loader`.
+
+    Returns
+    -------
+    dict[str, object]
+        ``{engine_name: built_engine}`` for every engine that built OK.
+    """
+    path = duckdb_path or os.environ.get("BASEBALL_DUCKDB_PATH") or DEFAULT_DUCKDB_PATH
+    reg = registry if registry is not None else ENGINE_REGISTRY
+    load = loader or _default_engine_loader
+
+    engines: dict[str, Any] = {}
+    for name, (module_path, class_name) in reg.items():
+        try:
+            engine_cls = load(module_path, class_name)
+            engine = engine_cls(duckdb_path=path)
+            engine.build()
+            engines[name] = engine
+            log.info("Similarity engine '%s' built.", name)
+        except Exception as exc:  # noqa: BLE001 — one bad engine must not kill boot
+            log.warning(
+                "Skipping similarity engine '%s' — build failed (%s: %s).",
+                name,
+                type(exc).__name__,
+                exc,
+            )
+    log.info("build_all_engines: %d/%d engines built.", len(engines), len(reg))
+    return engines
+
+
+# ---------------------------------------------------------------------------
+# Win-probability calibration loading (SIM-361)
+# ---------------------------------------------------------------------------
+
+#: Env var pointing at a persisted CalibrationReport JSON (CalibrationReport.to_json).
+CALIBRATION_REPORT_PATH_ENV = "CALIBRATION_REPORT_PATH"
+
+
+def load_calibration_report(path: str | None = None):
+    """Load a ``CalibrationReport`` from a JSON file (SIM-361).
+
+    Best-effort: returns ``None`` when no path is given (and the
+    ``CALIBRATION_REPORT_PATH`` env var is unset), the file does not exist, or
+    the file is unreadable / malformed — each logged but never raised, so a
+    missing or corrupt report degrades gracefully to the identity calibration
+    rather than crashing boot.
+    """
+    report_path = path or os.environ.get(CALIBRATION_REPORT_PATH_ENV)
+    if not report_path:
+        return None
+    if not os.path.exists(report_path):
+        log.warning(
+            "Calibration report path %s does not exist — using identity calibration.",
+            report_path,
+        )
+        return None
+    try:
+        from similarity.similarity_calibration import CalibrationReport
+
+        with open(report_path, encoding="utf-8") as fh:
+            report = CalibrationReport.from_json(fh.read())
+        log.info("Loaded calibration report from %s.", report_path)
+        return report
+    except Exception as exc:  # noqa: BLE001 — a bad report must not crash boot
+        log.warning(
+            "Failed to load calibration report from %s (%s: %s) — "
+            "using identity calibration.",
+            report_path,
+            type(exc).__name__,
+            exc,
+        )
+        return None
+
+
+def load_calibration_map(path: str | None = None):
+    """Load a persisted CalibrationReport and turn it into a ``CalibrationMap``.
+
+    Returns the module-level ``IDENTITY_CALIBRATION`` singleton when no report is
+    found / loadable (see :func:`load_calibration_report`) OR when the report
+    carries no fitted reliability curve — the win-prob layer's documented
+    "well-calibrated until a curve says otherwise" default. Otherwise returns a
+    monotone ``CalibrationMap`` built via ``CalibrationMap.from_report``.
+    """
+    from simulation.win_probability import IDENTITY_CALIBRATION, CalibrationMap
+
+    report = load_calibration_report(path)
+    if report is None:
+        return IDENTITY_CALIBRATION
+    return CalibrationMap.from_report(report)
+
+
+# ---------------------------------------------------------------------------
 # Player name resolver
 # ---------------------------------------------------------------------------
 

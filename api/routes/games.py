@@ -170,16 +170,26 @@ def _get_sim_duckdb(request: Request) -> Any:
 
 
 def _build_runner(request: Request) -> BatchRunner:
-    """A BatchRunner wired with the app's sim cache (SIM-359).
+    """The BatchRunner for this request -- the shared one if present (SIM-360).
 
-    When ``app.state.sim_cache`` is present the runner reuses it (so a repeat
-    matchup/seed/N hits the memoized summary at SIM_RESULT_TTL_S); otherwise the
-    runner falls back to its own ``make_cache()`` (Redis-if-reachable, else
-    in-memory).  ``max_workers=1`` runs the batch synchronously in THIS process
-    -- no fork, no pickling -- which is both the fast deterministic test path and
-    the right default inside an async request handler (the heavy run is offloaded
-    to a worker thread by the caller via ``asyncio.to_thread``).
+    SIM-360: when the lifespan has attached a long-lived ``app.state.sim_runner``
+    (a persistent BatchRunner that REUSES one warm ProcessPoolExecutor + the
+    SIM-333 shared-mem segments across requests), reuse it rather than building a
+    fresh runner per request -- so a long-lived API does not pay the fork +
+    publish/unlink cost on every ``/simulate``.  The runner's OWN SimCache still
+    memoizes summaries at SIM_RESULT_TTL_S, and the heavy run is offloaded to a
+    worker thread by the caller via ``asyncio.to_thread``.
+
+    FALLBACK (SIM-359): if no shared runner is attached (e.g. a unit test that
+    builds the app without entering the lifespan), build a transient one wired
+    with the app's sim cache when present (so a repeat matchup/seed/N hits the
+    memoized summary), else its own ``make_cache()``.  ``max_workers=1`` runs the
+    batch synchronously in THIS process -- no fork, no pickling -- the fast,
+    deterministic test path.
     """
+    shared = getattr(request.app.state, "sim_runner", None)
+    if shared is not None:
+        return shared
     cache = _get_sim_cache(request)
     return BatchRunner(cache=cache, max_workers=1)
 

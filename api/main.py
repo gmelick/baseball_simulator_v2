@@ -29,7 +29,9 @@ from fastapi.responses import JSONResponse
 
 from api.auth import RateLimitMiddleware, resolve_cors_origins
 from api.state import (
+    build_all_engines,
     build_pitcher_engine,
+    load_calibration_map,
     make_pg_name_resolver,
     open_pg_pool,
     open_redis_cache,
@@ -129,13 +131,48 @@ async def lifespan(app: FastAPI):
 
     if engine_enabled:
         log.info("Building pitcher similarity engine (this may take a few seconds) ...")
+        # The pitcher engine keeps its FAIL-FAST posture: a build failure here
+        # crashes boot loudly so the similarity route's contract is unchanged.
         app.state.pitcher_engine = await asyncio.to_thread(build_pitcher_engine)
+
+        # ------------------------------------------------------------
+        # SIM-361: build ALL 11 similarity engines and attach them as
+        # app.state.engines (keyed by ENGINE_REGISTRY name). build_all_engines
+        # is per-engine resilient — an engine with a missing/empty profile table
+        # is logged + skipped, so the *additional* engines degrade gracefully and
+        # never take down boot the way the pitcher engine (above) intentionally
+        # does. app.state.pitcher_engine is preserved (set above) for the
+        # existing similarity route's backward-compat; the built dict's "pitcher"
+        # entry is the same contract under the new keying.
+        # ------------------------------------------------------------
+        log.info("Building all similarity engines (SIM-361) ...")
+        app.state.engines = await asyncio.to_thread(build_all_engines)
+        log.info(
+            "Similarity engines attached: %s",
+            sorted(app.state.engines.keys()),
+        )
     else:
         log.warning(
             "SIMILARITY_ENGINE_ENABLED is false — skipping engine build. "
             "The /api/similarity/* routes will return 503 until this is "
             "re-enabled and the DuckDB profile file exists."
         )
+        # No engines built; expose an empty dict so consumers can probe safely.
+        app.state.engines = {}
+
+    # ----------------------------------------------------------------
+    # SIM-361: win-probability calibration map.
+    #
+    # Load a persisted CalibrationReport from CALIBRATION_REPORT_PATH (if set
+    # and readable) and turn its fitted reliability curve into a CalibrationMap
+    # for the win_probability(...) transform. Best-effort: a missing / corrupt
+    # report, or a report with no fitted curve, degrades to IDENTITY_CALIBRATION
+    # (the "well-calibrated until a curve says otherwise" default) — never a boot
+    # failure. Always attached so consumers can read app.state.calibration_map
+    # unconditionally.
+    # ----------------------------------------------------------------
+    app.state.calibration_map = await asyncio.to_thread(load_calibration_map)
+    log.info("Win-probability calibration map: %s", app.state.calibration_map.name)
 
     # ----------------------------------------------------------------
     # Phase 5 (SIM-354): live ingestion pipeline.
@@ -219,9 +256,47 @@ async def lifespan(app: FastAPI):
                 type(exc).__name__,
             )
 
+    # ----------------------------------------------------------------
+    # Phase 5 (SIM-360): the long-lived, persistent BatchRunner.
+    #
+    # Build ONE BatchRunner at startup and attach it as app.state.sim_runner so
+    # the /simulate handlers REUSE a single warm ProcessPoolExecutor (and the
+    # SIM-333 shared-mem segments, published once) across requests rather than
+    # forking + publishing/unlinking per call (the SIM-332 one-shot lifecycle).
+    #
+    # The runner reuses the cache create_app() already attached
+    # (app.state.sim_cache) when present, else makes its own. SIM_RUNNER_WORKERS
+    # (env) overrides the worker count; default 1 keeps the in-process,
+    # deterministic path on (no fork until a deployment opts into a pooled count),
+    # so this is always safe to create -- a BatchRunner with no pooled run yet
+    # holds no resources, and close() on shutdown is a no-op in that case. The
+    # /simulate handler still offloads the run via asyncio.to_thread.
+    # ----------------------------------------------------------------
+    from simulation.batch_runner import BatchRunner, make_cache
+
+    sim_cache = getattr(app.state, "sim_cache", None) or make_cache()
+    try:
+        sim_runner_workers = int(os.environ.get("SIM_RUNNER_WORKERS", "1"))
+    except (TypeError, ValueError):
+        sim_runner_workers = 1
+    log.info("Building persistent BatchRunner (workers=%s) ...", sim_runner_workers)
+    app.state.sim_runner = BatchRunner(
+        cache=sim_cache, max_workers=sim_runner_workers
+    )
+
     yield
 
     log.info("MLB Simulation Platform shutting down.")
+
+    # Phase 5 (SIM-360): shut the persistent BatchRunner down first (reverse
+    # order of acquisition) — close() shutdown(wait=True)s its warm pool and
+    # unlinks the SIM-333 shared-mem segments. Idempotent + a no-op if no pooled
+    # run ever happened, so this never raises even on a clean (unused) boot.
+    if getattr(app.state, "sim_runner", None) is not None:
+        try:
+            app.state.sim_runner.close()
+        except Exception:  # noqa: BLE001
+            pass
 
     # Reverse order of acquisition for shutdown — engine has no
     # explicit close, just drop the reference.

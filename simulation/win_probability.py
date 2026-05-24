@@ -140,6 +140,81 @@ class CalibrationMap:
         q = p if self.fn is None else float(self.fn(p))
         return min(1.0, max(0.0, q))
 
+    @classmethod
+    def from_report(cls, report: object) -> "CalibrationMap":
+        """Build a :class:`CalibrationMap` from a ``CalibrationReport`` (SIM-361).
+
+        The SIM-220 backtester stores a fitted reliability curve on the report
+        as ``report.reliability_curve`` -- a list of ``(predicted_p, observed_p)``
+        anchor points, each in [0, 1]. This turns those points into a monotone
+        **piecewise-linear** p -> p map:
+
+          * The anchors are sorted by ``predicted_p`` and a running max is taken
+            over the ``observed_p`` values so the curve is monotone
+            non-decreasing (the relative ordering of probabilities is preserved
+            even if the raw fit dips slightly -- the same guarantee
+            :meth:`apply` documents).
+          * ``fn`` linearly interpolates between anchors; queries below the first
+            / above the last anchor clamp to that anchor's observed value.
+            ``apply`` then clamps the result to [0, 1] defensively.
+
+        When the report has **no** fitted curve (``reliability_curve`` is missing,
+        ``None``, empty, or has fewer than two usable points), the simulator is
+        treated as well-calibrated and the module's :data:`IDENTITY_CALIBRATION`
+        singleton is returned unchanged -- so an absent curve costs nothing.
+        """
+        curve = getattr(report, "reliability_curve", None)
+        if not curve:
+            return IDENTITY_CALIBRATION
+
+        # Parse + sanitize the anchor points: keep finite (x, y) pairs only.
+        pts: list[tuple[float, float]] = []
+        for item in curve:
+            try:
+                x, y = float(item[0]), float(item[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if x != x or y != y:  # NaN guard
+                continue
+            pts.append((x, y))
+
+        if len(pts) < 2:
+            # Not enough to interpolate -> identity (well-calibrated default).
+            return IDENTITY_CALIBRATION
+
+        pts.sort(key=lambda t: t[0])
+        xs = [p[0] for p in pts]
+        # Enforce monotone non-decreasing observed values via a running max.
+        ys: list[float] = []
+        running = pts[0][1]
+        for _, y in pts:
+            running = max(running, y)
+            ys.append(running)
+
+        def _interp(p: float) -> float:
+            # Clamp outside the anchor range to the end anchors.
+            if p <= xs[0]:
+                return ys[0]
+            if p >= xs[-1]:
+                return ys[-1]
+            # Find the bracketing segment (small curves -> linear scan is fine).
+            for i in range(1, len(xs)):
+                if p <= xs[i]:
+                    x0, x1 = xs[i - 1], xs[i]
+                    y0, y1 = ys[i - 1], ys[i]
+                    span = x1 - x0
+                    if span <= 0:  # coincident xs -> step to upper anchor
+                        return y1
+                    t = (p - x0) / span
+                    return y0 + t * (y1 - y0)
+            return ys[-1]  # pragma: no cover - covered by the >= xs[-1] guard
+
+        name = "reliability-curve"
+        seasons = getattr(report, "seasons_used", None)
+        if seasons:
+            name = f"reliability-curve({','.join(str(s) for s in seasons)})"
+        return cls(fn=_interp, name=name)
+
 
 #: The default (identity) calibration map -- module-level singleton so callers can
 #: reference "the identity map" by name and so the default is allocation-free.

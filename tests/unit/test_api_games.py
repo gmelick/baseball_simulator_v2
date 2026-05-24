@@ -283,6 +283,55 @@ def test_simulate_unknown_game_is_404(monkeypatch):
 
 
 # ===========================================================================
+# SIM-360 -- /simulate REUSES the shared app.state.sim_runner (with fallback)
+# ===========================================================================
+
+
+def test_simulate_reuses_shared_sim_runner(patch_resolver):
+    """SIM-360: when the lifespan has attached a long-lived app.state.sim_runner,
+    /simulate REUSES it instead of building a fresh BatchRunner per request."""
+    from simulation.batch_runner import BatchRunner, InMemoryCache as _IMC
+
+    shared = BatchRunner(cache=_IMC(), max_workers=1)
+    app = _build_app(pool=_FakePool())
+    app.state.sim_runner = shared
+
+    # _build_runner must hand back the SHARED runner instance (not a new one).
+    import api.routes.games as gm
+    from starlette.requests import Request as _Req
+
+    scope = {"type": "http", "app": app}
+    assert gm._build_runner(_Req(scope)) is shared
+
+    # And the endpoint runs end-to-end on the shared runner.
+    client = TestClient(app)
+    resp = client.get("/api/games/745001/simulate?n_iterations=5&base_seed=42")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["summary"]["n_iterations"] == 5
+
+
+def test_simulate_falls_back_to_transient_runner_without_shared(patch_resolver):
+    """SIM-360: with NO app.state.sim_runner attached (the existing test apps),
+    _build_runner falls back to a transient BatchRunner so /simulate still works."""
+    import api.routes.games as gm
+    from simulation.batch_runner import BatchRunner
+    from starlette.requests import Request as _Req
+
+    app = _build_app(pool=_FakePool())
+    assert getattr(app.state, "sim_runner", None) is None  # none attached
+
+    scope = {"type": "http", "app": app}
+    runner = gm._build_runner(_Req(scope))
+    assert isinstance(runner, BatchRunner)
+    # The transient fallback is in-process (max_workers=1 -> never forks).
+    assert runner.resolve_max_workers(100) == 1
+
+    client = TestClient(app)
+    resp = client.get("/api/games/745001/simulate?n_iterations=4&base_seed=1")
+    assert resp.status_code == 200, resp.text
+
+
+# ===========================================================================
 # POST /api/games/{game_pk}/simulate/with_override  (SIM-358)
 # ===========================================================================
 

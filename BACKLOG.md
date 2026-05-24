@@ -1,7 +1,28 @@
 # Product Backlog
 
-*Owner: Product Manager (Agent 1) · Last updated: 2026-05-24 (Phase 5 Sprint 2 — P1 endpoints CLOSED; 5 tickets)*
+*Owner: Product Manager (Agent 1) · Last updated: 2026-05-24 (Phase 5 Sprint 3 — P1 lifecycle CLOSED; P1 tier COMPLETE)*
 
+> # 🚀 Phase 5 — Sprint 3 (P1 Lifecycle) — CLOSED 2026-05-24 · **P1 TIER COMPLETE**
+>
+> **Third Phase-5 sprint shipped: the two P1 lifecycle tickets — Phase 5 P1 (SIM-355→361) is now complete.**
+> The long-lived API has a persistent ProcessPool/shared-memory runner and server-side calibration + all-11-engine
+> startup. Log: `docs/SPRINT_2026-08-05_phase5_p1_lifecycle.md`.
+>
+> | Ticket | Type | Status |
+> |---|---|---|
+> | SIM-360 persistent `ProcessPoolExecutor` reuse + `app.state.sim_runner` + `/simulate` reuse | Perf | ✅ Closed |
+> | SIM-361 `CalibrationReport` JSON persistence + startup load → `CalibrationMap` + all-11-engine build | Feature | ✅ Closed |
+>
+> **Tests: 1702 unit+regression passing / 0 failed** (1661 Sprint-2 baseline + 41 new). DuckDB schema **v9** /
+> Alembic head **0014** (unchanged this sprint). **Next free ID: SIM-378.**
+> **Phase 5 P1 (SIM-355→361) ✅ COMPLETE** — endpoints + persistence + caching + pool lifecycle + calibration serving.
+> **Next (P2):** loop-output gaps SIM-362 (per-inning R/H/E), SIM-363 (fielders), SIM-364 (W/L/S), SIM-365 (richer
+> boxscore + prop-TB fix), SIM-366 (boxscore-avg API) — these touch `sim_loop.py` (top truncation risk); then betting
+> surface SIM-367–370 + testing/infra SIM-371–374. **Live-DB caveats:** `/simulate` SLA (→ SIM-372), 11-engine build,
+> replay endpoints, and a fitted calibration curve all verify in a real environment.
+>
+> ---
+>
 > # 🚀 Phase 5 — Sprint 2 (P1 Endpoints + Persistence) — CLOSED 2026-05-24
 >
 > **Second Phase-5 sprint shipped: the core REST surface (5 tickets).** `/api/games/{date}`, the

@@ -621,6 +621,38 @@ class BatchRunner:
 
     The SIM-333 shared-memory attach is wired behind :meth:`_pool_kwargs`
     (initializer / initargs) but inert until that ticket fills the registry.
+
+    SIM-360 -- PERSISTENT (warm) POOL for the long-lived API
+    --------------------------------------------------------
+    A one-shot script forks a fresh ``ProcessPoolExecutor`` per ``run()`` and tears
+    it down at the end -- fine for a CLI, but a long-lived API would then pay the
+    fork + worker-startup + shared-mem publish/unlink cost on EVERY request.  When
+    ``reuse_pool`` is True (the default), the runner instead creates ONE
+    ``ProcessPoolExecutor`` lazily on the first pooled ``_execute`` and **reuses**
+    it across subsequent ``run()`` calls; the SIM-333 shared-mem segments are
+    published ONCE (:meth:`_ensure_shared_published`) and stay attached for the warm
+    pool's lifetime.  The lifecycle policy:
+
+      * **create** -- lazily, on the first ``_execute`` whose ``max_workers > 1``;
+        built with ``max_workers`` + the existing :meth:`_pool_kwargs` attach seam.
+      * **reuse** -- a later pooled ``run()`` with the SAME worker count reuses the
+        SAME ``ProcessPoolExecutor`` instance (no new fork, no re-publish).
+      * **recreate-on-worker-count-change** -- a pooled ``run()`` that resolves to a
+        DIFFERENT ``max_workers`` shuts the old pool down (``wait=True``) and builds
+        a fresh one sized for the new count (the shared-mem segments are NOT
+        republished -- they outlive the pool and the new workers re-attach them via
+        the unchanged ``_pool_kwargs``).  Documented over silently honoring a stale
+        size.
+      * **close** -- :meth:`close` ``shutdown(wait=True)``s the pool, drops the
+        reference, and unlinks the shared segments (idempotent).  ``__exit__`` calls
+        it, so a context-manager / transient runner cleans up exactly as before.
+
+    Backward-compatible: ``reuse_pool=False`` restores the SIM-332 behaviour (a
+    fresh ``with ProcessPoolExecutor(...)`` per ``_execute``, torn down at the end of
+    the call).  Either way the synchronous ``max_workers <= 1`` in-process path is
+    untouched (no pool is ever created), so the always-on deterministic tests are
+    unaffected, and existing one-shot ``BatchRunner(...).run(...)`` callers behave
+    identically (a transient pool is still cleaned up on ``close()`` / ``__exit__``).
     """
 
     def __init__(
@@ -630,6 +662,7 @@ class BatchRunner:
         max_workers: "int | None" = None,
         confidence_level: float = 0.95,
         shared_arrays: "dict[str, np.ndarray] | None" = None,
+        reuse_pool: bool = True,
     ) -> None:
         self.cache = cache if cache is not None else make_cache()
         # None -> compute the SIM-281 ceiling at run time; an explicit value
@@ -645,6 +678,16 @@ class BatchRunner:
         self._shared_arrays = dict(shared_arrays) if shared_arrays else {}
         self._shared_registry: "dict[str, SharedArrayDescriptor]" = {}
         self._owned_segments: "list[shared_memory.SharedMemory]" = []
+
+        # SIM-360: the persistent (warm) pool, created lazily on the first pooled
+        # ``_execute`` and reused across ``run()`` calls.  ``_pool`` is the live
+        # executor (None until created / after close); ``_pool_workers`` is the
+        # worker count it was sized for (so a later run with a different count can
+        # detect the change and recreate).  ``reuse_pool=False`` opts back into the
+        # SIM-332 fresh-pool-per-call behaviour.
+        self._reuse_pool = bool(reuse_pool)
+        self._pool: "ProcessPoolExecutor | None" = None
+        self._pool_workers: "int | None" = None
 
     # ---- worker-count + cache-key helpers --------------------------------
 
@@ -699,7 +742,40 @@ class BatchRunner:
         registry = self._ensure_shared_published()
         return {"initializer": _worker_init, "initargs": (registry or None,)}
 
-    # ---- shared-memory lifecycle (parent owns create/unlink) --------------
+    # ---- persistent (warm) pool lifecycle (SIM-360) -----------------------
+
+    def _get_pool(self, max_workers: int) -> "ProcessPoolExecutor":
+        """Return the warm :class:`ProcessPoolExecutor` for this run (SIM-360).
+
+        Creates the pool lazily on the first pooled call (sized for ``max_workers``
+        with the SIM-333 attach seam from :meth:`_pool_kwargs`) and REUSES the SAME
+        instance on subsequent calls.  If a later run needs a DIFFERENT worker count
+        than the live pool was built for, the old pool is shut down (``wait=True``)
+        and a fresh one is created for the new count -- the documented
+        recreate-on-worker-count-change policy.  The shared-mem segments are NOT
+        republished on a recreate (they outlive the pool; the new workers re-attach
+        them via the unchanged ``_pool_kwargs``).
+
+        Only ever called from :meth:`_execute` on the ``max_workers > 1`` path with
+        ``reuse_pool`` True, so the synchronous in-process path never builds a pool.
+        """
+        if self._pool is not None and self._pool_workers != max_workers:
+            # Worker count changed between runs -> drain + drop the stale pool and
+            # rebuild at the new size.
+            self._pool.shutdown(wait=True)
+            self._pool = None
+            self._pool_workers = None
+        if self._pool is None:
+            # `_pool_kwargs()` publishes the shared segments ONCE (idempotent) and
+            # wires the worker initializer; the warm pool keeps those segments
+            # attached for its whole lifetime.
+            self._pool = ProcessPoolExecutor(
+                max_workers=max_workers, **self._pool_kwargs()
+            )
+            self._pool_workers = max_workers
+        return self._pool
+
+    # ---- shared-memory + pool lifecycle (parent owns create/unlink) -------
 
     @property
     def shared_registry(self) -> "dict[str, SharedArrayDescriptor]":
@@ -708,12 +784,19 @@ class BatchRunner:
         return self._ensure_shared_published()
 
     def close(self) -> None:
-        """Release the parent-owned shared segments: ``unlink()`` each exactly once.
+        """Shut the warm pool down + release the parent-owned shared segments.
 
-        ONLY the parent owns unlink (SIM-281 lifecycle); workers attach + close but
-        never unlink.  Idempotent -- safe to call repeatedly / when nothing was
-        published.
+        SIM-360: ``shutdown(wait=True)`` the persistent pool (if one was created)
+        and drop the reference, THEN ``unlink()`` each owned shared segment exactly
+        once.  Pool first, segments second, so no worker is mapping a segment when
+        it is unlinked.  ONLY the parent owns unlink (SIM-281 lifecycle); workers
+        attach + close but never unlink.  Idempotent -- safe to call repeatedly /
+        when no pool was created and nothing was published.
         """
+        if self._pool is not None:
+            self._pool.shutdown(wait=True)
+            self._pool = None
+            self._pool_workers = None
         if self._owned_segments:
             unlink_shared_segments(self._owned_segments)
             self._owned_segments = []
@@ -788,21 +871,48 @@ class BatchRunner:
         out across processes (SIM-281 D1) and reassembles results IN SEED ORDER so
         the summary's raw per-iteration arrays line up with the seed list
         regardless of completion order.
+
+        SIM-360: with ``reuse_pool`` True (the default) the pooled path uses the
+        PERSISTENT warm pool from :meth:`_get_pool` (created once, reused across
+        ``run()`` calls, recreated only on a worker-count change), so a long-lived
+        API does not re-fork per request.  With ``reuse_pool`` False the SIM-332
+        behaviour is preserved: a fresh ``with ProcessPoolExecutor(...)`` per call,
+        torn down at the end of the call.
         """
         if max_workers <= 1:
             return [_run_one(spec, s) for s in seeds]
 
-        results: "list[GameSimResult | None]" = [None] * len(seeds)
+        if self._reuse_pool:
+            pool = self._get_pool(max_workers)
+            return self._map_pool(pool, spec, seeds)
+
+        # reuse_pool=False -> SIM-332 transient pool (fresh per call).
         with ProcessPoolExecutor(
             max_workers=max_workers, **self._pool_kwargs()
         ) as pool:
-            futures = {
-                pool.submit(_run_one, spec, s): idx
-                for idx, s in enumerate(seeds)
-            }
-            for fut in as_completed(futures):
-                idx = futures[fut]
-                results[idx] = fut.result()
+            return self._map_pool(pool, spec, seeds)
+
+    @staticmethod
+    def _map_pool(
+        pool: "ProcessPoolExecutor",
+        spec: GameSpec,
+        seeds: "list[int | None]",
+    ) -> "list[GameSimResult]":
+        """Submit one ``_run_one`` per seed to ``pool`` and gather IN SEED ORDER.
+
+        Reassembles results by their seed index regardless of completion order so
+        the summary's raw per-iteration arrays line up with the seed list -- the
+        same ordering contract the SIM-332 fresh-pool path guaranteed, factored out
+        so both the warm-pool (SIM-360) and transient-pool paths share it.
+        """
+        results: "list[GameSimResult | None]" = [None] * len(seeds)
+        futures = {
+            pool.submit(_run_one, spec, s): idx
+            for idx, s in enumerate(seeds)
+        }
+        for fut in as_completed(futures):
+            idx = futures[fut]
+            results[idx] = fut.result()
         # Every slot is filled (one future per seed); the cast is safe.
         return [r for r in results if r is not None]
 

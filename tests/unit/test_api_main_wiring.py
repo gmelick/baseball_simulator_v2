@@ -105,6 +105,64 @@ def test_simulation_callback_seam_exists():
 
 
 # ---------------------------------------------------------------------------
+# SIM-360 — the lifespan attaches + closes the persistent BatchRunner
+# ---------------------------------------------------------------------------
+
+
+def test_lifespan_attaches_and_closes_sim_runner(monkeypatch):
+    """SIM-360: entering the lifespan builds ONE long-lived BatchRunner on
+    app.state.sim_runner; exiting it calls close() on that runner.
+
+    The lifespan opens a live asyncpg pool + Redis + builds the similarity
+    engine — all stubbed here (the engine build is also skipped via
+    SIMILARITY_ENGINE_ENABLED=false) so the wiring runs with no live infra.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    import api.main as main_mod
+
+    monkeypatch.setenv("BASEBALL_DB_DSN", "postgresql://x/y")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.setenv("SIMILARITY_ENGINE_ENABLED", "false")
+    monkeypatch.setenv("LIVE_PIPELINE_ENABLED", "false")
+    monkeypatch.setenv("REPLAY_PERSISTENCE_ENABLED", "false")
+
+    # Stub the live-infra openers the lifespan calls (return AsyncMocks with the
+    # close/aclose coroutines the shutdown path awaits).
+    fake_pool = MagicMock()
+    fake_pool.close = AsyncMock()
+    fake_redis = MagicMock()
+    fake_redis.aclose = AsyncMock()
+
+    monkeypatch.setattr(main_mod, "open_pg_pool", AsyncMock(return_value=fake_pool))
+    monkeypatch.setattr(main_mod, "make_pg_name_resolver", lambda pool: (lambda ids: {}))
+    monkeypatch.setattr(
+        main_mod, "open_redis_cache", AsyncMock(return_value=(fake_redis, MagicMock()))
+    )
+
+    app = main_mod.create_app()
+
+    async def _drive():
+        async with main_mod.lifespan(app):
+            # During the lifespan the runner is attached and is a BatchRunner.
+            from simulation.batch_runner import BatchRunner
+
+            runner = getattr(app.state, "sim_runner", None)
+            assert isinstance(runner, BatchRunner)
+            # Spy on close() so we can prove shutdown tears it down.
+            runner.close = MagicMock(wraps=runner.close)
+            app.state.sim_runner = runner
+            return runner
+
+        # control returns here AFTER the lifespan exits (shutdown ran).
+
+    runner = asyncio.run(_drive())
+    # Shutdown called close() on the persistent runner (SIM-360 teardown).
+    assert runner.close.called
+
+
+# ---------------------------------------------------------------------------
 # CORS policy (SIM-351)
 # ---------------------------------------------------------------------------
 
