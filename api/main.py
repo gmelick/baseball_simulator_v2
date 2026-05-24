@@ -188,6 +188,37 @@ async def lifespan(app: FastAPI):
             "but the background live ingestion pipeline is NOT started."
         )
 
+    # ----------------------------------------------------------------
+    # Phase 5 (SIM-357): replay-persistence DuckDB connection.
+    #
+    # Gated behind REPLAY_PERSISTENCE_ENABLED (default FALSE). When enabled,
+    # open a writable DuckDB connection (the sim.play_stream / sim.state_snapshots
+    # store, schema v9) and attach it as app.state.sim_duckdb so /simulate can
+    # persist a representative game's play-by-play + per-pitch snapshots and
+    # /plays + /state/{at_bat}/{pitch} can serve them. Best-effort: a failure to
+    # open never blocks boot — the replay endpoints simply return 503 and
+    # /simulate's persistence step skips silently. Default-off avoids DuckDB's
+    # single-writer constraint clashing with the read-only similarity engine
+    # until the deployment wires a dedicated replay DuckDB file.
+    # ----------------------------------------------------------------
+    replay_enabled = os.environ.get(
+        "REPLAY_PERSISTENCE_ENABLED", "false"
+    ).strip().lower() not in ("0", "false", "no", "")
+
+    if replay_enabled:
+        try:
+            import duckdb
+
+            duckdb_path = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb")
+            log.info("Opening replay-persistence DuckDB at %s ...", duckdb_path)
+            app.state.sim_duckdb = await asyncio.to_thread(duckdb.connect, duckdb_path)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "REPLAY_PERSISTENCE_ENABLED but DuckDB open failed (%s); "
+                "/plays + /state will return 503 and /simulate persistence is skipped.",
+                type(exc).__name__,
+            )
+
     yield
 
     log.info("MLB Simulation Platform shutting down.")
@@ -204,6 +235,13 @@ async def lifespan(app: FastAPI):
     # ----------------------------------------------------------------
     if hasattr(app.state, "pipeline"):
         await app.state.pipeline.stop()
+
+    # Phase 5 (SIM-357): close the replay-persistence DuckDB connection.
+    if getattr(app.state, "sim_duckdb", None) is not None:
+        try:
+            app.state.sim_duckdb.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +291,27 @@ def create_app() -> FastAPI:
     from api.routes.similarity import router as similarity_router
 
     app.include_router(similarity_router)
+
+    # Phase 5 (SIM-355/358/359): game simulation router.
+    #   GET  /api/games/{date}                            -- games on a date
+    #   GET  /api/games/{game_pk}/simulate                -- Monte-Carlo summary
+    #   POST /api/games/{game_pk}/simulate/with_override  -- baseline vs override
+    # Registered unconditionally -- route registration needs no live DB/Redis.
+    # The handlers read app.state.pg_pool + app.state.sim_cache (attached below /
+    # in the lifespan); a missing pool returns 503 from the route itself.
+    #
+    # SIM-359: attach a sim-result cache to app.state at factory time so the
+    # BatchRunner the games router builds memoizes summaries (keyed on
+    # spec+seed+N at SIM_RESULT_TTL_S) AND the date listing (at POOL_QUERY_TTL_S).
+    # make_cache() is no-op-safe: it returns a RedisCache only when a server
+    # answers ping(), else an in-process InMemoryCache -- so this never requires
+    # Redis and the test suite runs on the in-memory fallback with no server.
+    from simulation.batch_runner import make_cache
+
+    from api.routes.games import router as games_router
+
+    app.state.sim_cache = make_cache()
+    app.include_router(games_router)
 
     # Phase 5 (SIM-354): live ingestion routers.
     #   ws_router   — WebSocket /ws/games/{game_pk} (frontend live subscriptions)

@@ -1,7 +1,31 @@
 # Product Backlog
 
-*Owner: Product Manager (Agent 1) · Last updated: 2026-05-24 (Phase 5 Sprint 1 — P0 gates CLOSED; 9 tickets)*
+*Owner: Product Manager (Agent 1) · Last updated: 2026-05-24 (Phase 5 Sprint 2 — P1 endpoints CLOSED; 5 tickets)*
 
+> # 🚀 Phase 5 — Sprint 2 (P1 Endpoints + Persistence) — CLOSED 2026-05-24
+>
+> **Second Phase-5 sprint shipped: the core REST surface (5 tickets).** `/api/games/{date}`, the
+> 100-iteration `/simulate`, `/simulate/with_override`, `/plays`, and `/state/{at_bat}/{pitch}` are live,
+> backed by durable sim-result + pitch-snapshot persistence and Redis TTL caching. Log:
+> `docs/SPRINT_2026-07-29_phase5_p1_endpoints.md`.
+>
+> | Ticket | Type | Status |
+> |---|---|---|
+> | SIM-355 `GET /api/games/{date}` + `GET /{game_pk}/simulate` (100-iter runner) | Feature | ✅ Closed |
+> | SIM-356 sim-result + pitch-snapshot persistence (Alembic 0014 / DuckDB v8) | Feature | ✅ Closed |
+> | SIM-357 `GET /{game_pk}/plays` + `/state/{at_bat}/{pitch}` + record→persist (DuckDB v9) | Feature | ✅ Closed |
+> | SIM-358 `POST /{game_pk}/simulate/with_override` → `OverrideDelta` | Feature | ✅ Closed |
+> | SIM-359 Redis TTL caching (sim 60s / listing 300s) | Feature | ✅ Closed |
+>
+> **Tests: 1661 unit+regression passing / 0 failed** (1603 Sprint-1 baseline + 58 new). DuckDB schema
+> **v9** (migrations 0008 play_stream + 0009 state_snapshots); Postgres Alembic head **0014** (`sim.sim_runs`).
+> **Next free ID: SIM-378.** Remaining P1 (Sprint 3): SIM-360 (persistent ProcessPool + shared-memory) +
+> SIM-361 (CalibrationReport serving + 11-engine startup build). Then P2: loop-output gaps (SIM-362–365)
+> + betting surface (SIM-367–370). **Live-DB caveats:** `/simulate` SLA over the production factory (→ SIM-372)
+> and the replay endpoints (`REPLAY_PERSISTENCE_ENABLED=true` + a dedicated replay DuckDB) verify in a real env.
+>
+> ---
+>
 > # 🚀 Phase 5 — Sprint 1 (P0 Gates) — CLOSED 2026-05-24
 >
 > **First Phase-5 sprint shipped: all 5 P0 gates + 3 ⚠ hygiene bugs + the SIM-315 carryover (9 tickets).**

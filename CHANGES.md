@@ -2500,3 +2500,95 @@ repaired during the pass (`batch_runner.py`, `pyproject.toml`, `api/serializatio
 Alembic head **0013** unchanged. **Next free ID: SIM-378.**
 
 ---
+
+# Sprint 2026-07-29 — Phase 5 P1 Endpoints + Persistence (executed & CLOSED 2026-05-24)
+**Authors: Backend Developer (Agent 5), Data Engineer (Agent 4), Product Manager (Agent 1, orchestrator)**
+
+Second Phase-5 sprint: the core REST surface on top of the Sprint-1 P0 gates — the 100-iteration
+`/simulate` runner, games-by-date, managerial-override re-sim, durable sim-result + pitch-snapshot
+persistence, the pitch-level `/plays` + `/state` replay endpoints, and Redis TTL caching. Scope was the
+P1 endpoint+persistence tier (SIM-355/356/357/358/359); the P1 lifecycle tickets SIM-360 (persistent
+pool) + SIM-361 (calibration serving) were deferred to Sprint 3. Run as two waves of role subagents +
+an orchestrator cross-validation. Companion: `docs/SPRINT_2026-07-29_phase5_p1_endpoints.md`.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-355 | Feature | Backend | `api/routes/games.py`: `GET /api/games/{date}` + `GET /{game_pk}/simulate` (lineup resolver → production factory → BatchRunner(100) → GameSimSummaryModel); mounted in `api/main.py` |
+| SIM-356 | Feature | Data | `db/sim_store.py` + Alembic 0014 (`sim.sim_runs`) + DuckDB 0008 (`sim.play_stream`, schema v8) — durable sim-result + pitch-stream store |
+| SIM-357 | Feature | Backend | `GET /{game_pk}/plays` + `GET /{game_pk}/state/{at_bat}/{pitch}` from persisted snapshots + record→persist flow; DuckDB 0009 (`sim.state_snapshots`, v9); `simulation/play_recorder.py` |
+| SIM-358 | Feature | Backend | `POST /{game_pk}/simulate/with_override` (baseline + override sims at one seed → `OverrideDelta`) |
+| SIM-359 | Feature | Backend | Redis TTL caching: `app.state.sim_cache` (Redis-optional, InMemory fallback); `/simulate` 60s, listing 300s, `?use_cache=false` |
+
+## SIM-355 — GET /api/games/{date} + GET /{game_pk}/simulate
+
+**Type:** Feature | **Effort:** L | **Status:** ✅ Complete
+
+New `api/routes/games.py` (prefix `/api/games`). `GET /{date}` (YYYY-MM-DD) lists `raw.games` for that
+date via `app.state.pg_pool` → `GamesOnDateResponse`. `GET /{game_pk}/simulate?n_iterations=100&base_seed=&use_cache=`
+resolves the lineup → `GameState` (SIM-353 `resolve_game_state`), assembles a `GameSpec` over the production
+machine factory, runs the SIM-332 `BatchRunner` (offloaded via `asyncio.to_thread`), and returns a
+`SimulateResponse` whose `summary` is a `GameSimSummaryModel` (SIM-350). Errors: 503 no pool, 404 unknown
+game, 422 bad date. **Testability seam:** `PRODUCTION_FACTORY_REF` + `resolve_factory_ref(request)`
+(precedence `app.state.sim_factory_ref` → `$SIM_MACHINE_FACTORY_REF` → default) lets tests inject the no-DB
+rng factory. Mounted in `api/main.py`. 14 endpoint tests (FastAPI `TestClient`, fake pool + mocked resolver).
+
+## SIM-356 — Sim-result + Pitch-snapshot Persistence
+
+**Type:** Feature | **Effort:** M | **Status:** ✅ Complete
+
+`db/sim_store.py` — a mockable read/write API replacing the ephemeral `sim.lineup_state.simulation_results`
+blob. Postgres (asyncpg): `store_sim_run` / `load_latest_sim_run` / `load_sim_run` / `list_sim_runs` over
+`sim.sim_runs` (run_id, game_pk, n_iterations, base_seed, summary JSONB, created_at — Alembic **0014**,
+down_revision 0013). DuckDB: `store_play_stream` / `load_play_stream` over `sim.play_stream` (one row per
+pitch, columns 1:1 with `PlayByPlayEntry`, PK (run_id, sequence) — DuckDB migration **0008**, schema version
+7→8). The play-row schema is documented in the module so SIM-357 writes matching rows. 19 tests (real
+in-memory DuckDB round-trip + stubbed asyncpg + migration sanity).
+
+## SIM-357 — GET /plays + GET /state/{at_bat}/{pitch} + Record→Persist
+
+**Type:** Feature | **Effort:** M | **Status:** ✅ Complete
+
+`GET /{game_pk}/plays` rebuilds a `PlayByPlay` from `load_play_stream` → `PlayByPlayModel`. `GET
+/{game_pk}/state/{at_bat}/{pitch}` returns a `StateAtPitch` from the persisted per-pitch snapshot
+(rebuilding the `FieldSnapshot` dataclass so derived `occupied_bases`/`runners_on` match the live wire
+shape) → `StateAtPitchModel`. Both 404 when nothing persisted, 503 when no replay store. **Write path:**
+`/simulate` best-effort records ONE representative game at the run's `base_seed` (via the play recorder),
+persists its play-stream + per-pitch `StateAtPitch` snapshots (built from each `PlayResult.next_state`) +
+the sim-run summary — wrapped in try/except so a persistence failure never breaks `/simulate`. Added a
+state-snapshot store to `db/sim_store.py` + DuckDB migration **0009** (`sim.state_snapshots`, schema 8→9).
+**Play recorder** `simulation/play_recorder.py`: `RecordingMachine` (non-invasive delegating wrapper) +
+`RecordingStateMachine` (subclass) + `record_game_plays(...)` capture a game's `PlayResult` stream with no
+DB and **without touching `sim_loop.py`**. 14 endpoint + 10 recorder tests. **Orchestrator integration:**
+added a gated (`REPLAY_PERSISTENCE_ENABLED`, default off) best-effort `app.state.sim_duckdb` attach to the
+`api/main.py` lifespan so the endpoints are functional in production without risking DuckDB's single-writer
+constraint by default.
+
+## SIM-358 — POST /{game_pk}/simulate/with_override
+
+**Type:** Feature | **Effort:** M | **Status:** ✅ Complete
+
+Takes a `RosterOverride` body (`home_lineup`/`away_lineup`/`pitcher_id`/`bat_hand`/`description`), runs a
+baseline sim (resolved lineup) and an override sim (modified `GameSpec`) at the **same base_seed** for
+comparability, and returns `WithOverrideResponse{baseline, override, delta}` where `delta` is an
+`OverrideDelta` (SIM-331) via `OverrideDeltaModel`. Empty override → zero delta.
+
+## SIM-359 — Redis TTL Caching
+
+**Type:** Feature | **Effort:** S | **Status:** ✅ Complete
+
+`app.state.sim_cache = make_cache()` (RedisCache if a server answers `ping()`, else InMemoryCache —
+confirmed fallback). The games router's `BatchRunner` memoizes sim summaries at `SIM_RESULT_TTL_S` (60s),
+the date listing at `POOL_QUERY_TTL_S` (300s); `?use_cache=false` disables per request; every cache call is
+wrapped so a cache hiccup never breaks a response.
+
+## Verification (orchestrator cross-validation)
+
+Independent QA pass ran the full suite from scratch (per-pattern chunks; FAISS builders individually).
+**Result: 1661 unit+regression passing / 0 failed** (1606 unit + 55 regression = 1603 Sprint-1 baseline +
+58 new). Regression golden-files green. File integrity: 165 `.py` files clean. Six file-bridge truncations
+repaired during the sprint (`api/main.py` ×, `api/routes/games.py`, `db/sim_store.py`, `test_sim_store.py`,
+etc.); every authoritative file was complete. DuckDB schema **v9** (migrations 0008 + 0009); Postgres Alembic
+head **0014**. **Next free ID: SIM-378.** Remaining P1 → Sprint 3: SIM-360 (persistent pool) + SIM-361
+(calibration serving).
+
+---
