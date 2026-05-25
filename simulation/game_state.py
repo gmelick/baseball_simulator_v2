@@ -60,7 +60,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any, Optional
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Value types / enums
@@ -88,8 +88,8 @@ _BIT_3B = 0b100
 class Half(IntEnum):
     """Which half of the inning is being played (spec §2 'inning/half')."""
 
-    TOP = 0      # away team bats
-    BOTTOM = 1   # home team bats
+    TOP = 0  # away team bats
+    BOTTOM = 1  # home team bats
 
 
 class Team(IntEnum):
@@ -114,9 +114,9 @@ class Bases:
     ``bit0=1B, bit1=2B, bit2=3B``.
     """
 
-    first: Optional[int] = None    # runner id on 1B, or None
-    second: Optional[int] = None   # runner id on 2B, or None
-    third: Optional[int] = None    # runner id on 3B, or None
+    first: int | None = None  # runner id on 1B, or None
+    second: int | None = None  # runner id on 2B, or None
+    third: int | None = None  # runner id on 3B, or None
 
     @property
     def runners_state(self) -> int:
@@ -134,9 +134,7 @@ class Bases:
     def occupancy(self) -> tuple[bool, bool, bool]:
         """``(on_1B, on_2B, on_3B)`` bools — the scaffold ``PitchState.bases``
         shape, generalized.  Convenience for callers that only need occupancy."""
-        return (self.first is not None,
-                self.second is not None,
-                self.third is not None)
+        return (self.first is not None, self.second is not None, self.third is not None)
 
     @property
     def count_on_base(self) -> int:
@@ -217,7 +215,7 @@ class GameState:
 
     # ---- sampler pre-filter (spec §4.3 — tile keys, NOT fingerprint dims) ----
     pitcher_id: int
-    bat_hand: str            # 'L' / 'R' — batter's hand vs the current pitcher
+    bat_hand: str  # 'L' / 'R' — batter's hand vs the current pitcher
     season: int
 
     # ---- count (spec step 4 / §5.1 count machine) ----------------------------
@@ -247,20 +245,20 @@ class GameState:
     home_lineup_slot: int = 0
 
     # ---- current matchup ids (spec step 2 matchup) --------------------------
-    batter_id: Optional[int] = None      # current batter; None until lineup set
-    throw_hand: Optional[str] = None     # current pitcher's throwing hand 'L'/'R'
+    batter_id: int | None = None  # current batter; None until lineup set
+    throw_hand: str | None = None  # current pitcher's throwing hand 'L'/'R'
 
     # ---- per-game counters the spec step-1 read surfaces --------------------
-    pitcher_pitch_count: int = 0   # current pitcher's pitch count (fatigue/sub)
-    batter_pa_count: int = 0       # PAs the current batter has had (3rd-time-thru)
-    park: Optional[str] = None     # venue id for park/venue context (spec step 1/6)
+    pitcher_pitch_count: int = 0  # current pitcher's pitch count (fatigue/sub)
+    batter_pa_count: int = 0  # PAs the current batter has had (3rd-time-thru)
+    park: str | None = None  # venue id for park/venue context (spec step 1/6)
 
     # ---- manager / leverage context hook (spec §3 / §5.3; SIM-323) ----------
     manager: ManagerContext = field(default_factory=ManagerContext)
 
     # ---- determinism (spec §6.3) --------------------------------------------
     #: Per-game RNG seed threaded through sampler + loop draws (spec §6.3).
-    seed: Optional[int] = None
+    seed: int | None = None
 
     # ====================================================================
     # Derived reads (spec step 1 'situation context')
@@ -324,7 +322,7 @@ class GameState:
             raise ValueError("record_out(n) requires n >= 0.")
         self.outs += int(n)
 
-    def add_runs(self, runs: int, *, to: "Team | None" = None) -> None:
+    def add_runs(self, runs: int, *, to: Team | None = None) -> None:
         """Credit ``runs`` to a team (defaults to the current offense, spec
         step 8).  Run *value* (RE24/linear weight) is computed by SIM-312's
         ``run_resolution`` and lives on ``PlayResult.runs``; this commits the
@@ -387,8 +385,7 @@ class GameState:
         """Scores are non-negative (spec step 8 commit invariant)."""
         if self.home_score < 0 or self.away_score < 0:
             raise ValueError(
-                f"scores must be non-negative: home={self.home_score} "
-                f"away={self.away_score}"
+                f"scores must be non-negative: home={self.home_score} away={self.away_score}"
             )
 
     def assert_invariants(self, *, in_play: bool = True) -> None:
@@ -427,15 +424,15 @@ class PlayResult:
     """
 
     # ---- step 3/4: the pitch outcome + count classification -----------------
-    pitch_outcome: str                       # ball/called_strike/.../in_play
-    is_contact: bool = False                 # True == ball put in play (step 5)
+    pitch_outcome: str  # ball/called_strike/.../in_play
+    is_contact: bool = False  # True == ball put in play (step 5)
     #: True once step 4 declares the PA terminal (walk/K/in-play resolution).
     pa_terminal: bool = False
 
     # ---- the resolved PA event (step 4 terminal classification / step 5-7) --
     #: e.g. None (non-terminal pitch), "walk", "strikeout", "single",
     #: "field_out", "home_run", "ground_into_double_play" ... (spec §5.1).
-    event: Optional[str] = None
+    event: str | None = None
 
     # ---- step 8: run value + SIM-312 run-resolution provenance --------------
     #: The resolved run *value* of the play (RE24 or linear-weight). Computed by
@@ -444,23 +441,23 @@ class PlayResult:
     runs: float = 0.0
     #: How ``runs`` was resolved: "re24_delta" (primary) / "linear_weight"
     #: (fallback) — mirrors ``run_resolution.RunResolution.method``.
-    run_resolution_method: Optional[str] = None
+    run_resolution_method: str | None = None
     #: The canonical RUN_VALUES key the event resolved to (SIM-312), if any.
-    canonical_event: Optional[str] = None
+    canonical_event: str | None = None
     #: Base-out run expectancy before/after the play (SIM-312 RE24 provenance).
-    re_start: Optional[float] = None
-    re_end: Optional[float] = None
+    re_start: float | None = None
+    re_end: float | None = None
     #: Integer runs that physically scored on the play (committed to the score).
     runs_scored: int = 0
 
     # ---- step 5: batted-ball stats (placeholders, typed; SIM-319 fills) ------
-    exit_velo: Optional[float] = None
-    launch_angle: Optional[float] = None
-    spray_angle: Optional[float] = None
+    exit_velo: float | None = None
+    launch_angle: float | None = None
+    spray_angle: float | None = None
 
     # ---- step 6: fielding resolution (placeholders, typed; SIM-319) ---------
-    fielder_id: Optional[int] = None          # the fielder who handled the ball
-    is_error: bool = False                     # error flag (fielder/catcher RBF)
+    fielder_id: int | None = None  # the fielder who handled the ball
+    is_error: bool = False  # error flag (fielder/catcher RBF)
     #: Outs recorded by this play (the step-7 baserunning/fielding delta).
     outs_recorded: int = 0
 
@@ -472,13 +469,13 @@ class PlayResult:
     #: Whether a steal was attempted on this pitch (spec §3 item 4 / step 7).
     steal_attempted: bool = False
     #: Steal outcome: None / "safe" / "caught" / "pickoff" (SIM-319).
-    steal_outcome: Optional[str] = None
+    steal_outcome: str | None = None
 
     # ---- raw sampler payloads (carried verbatim from the sampler) -----------
     #: The raw ``PlayPoolSampler.sample_pitch(...)`` dict (row_id/distance/...).
-    pitch_sample: Optional[dict] = None
+    pitch_sample: dict | None = None
     #: The raw ``sample_batted_ball(...)`` dict, or None on a non-contact pitch.
-    battedball_sample: Optional[dict] = None
+    battedball_sample: dict | None = None
     #: True when any served tile fell back to the pitcher_id=0 league-average
     #: tile (mirrors the scaffold's ``fellback`` flag).
     fellback: bool = False
@@ -486,7 +483,7 @@ class PlayResult:
     # ---- step 8: next-state pointer (the committed GameState) ----------------
     #: The ``GameState`` after this play is committed (spec step 8 'next state').
     #: Optional so a PlayResult can be constructed before the commit.
-    next_state: Optional[GameState] = None
+    next_state: GameState | None = None
 
     def as_scaffold_dict(self) -> dict[str, Any]:
         """Return the legacy scaffold ``simulate_pitch`` dict shape.

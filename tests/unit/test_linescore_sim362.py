@@ -28,7 +28,6 @@ from simulation.linescore import (
     linescore_from_plays,
 )
 
-
 # ===========================================================================
 # Helpers
 # ===========================================================================
@@ -132,9 +131,9 @@ def test_hits_counted_from_hit_events_per_batting_side():
         _play(1, Half.TOP, event="double"),
         _play(1, Half.TOP, event="triple", runs_scored=1),
         _play(1, Half.TOP, event="home_run", runs_scored=1),
-        _play(1, Half.TOP, event="field_out"),     # not a hit
-        _play(1, Half.TOP, event="walk"),          # not a hit
-        _play(1, Half.TOP, event="strikeout"),     # not a hit
+        _play(1, Half.TOP, event="field_out"),  # not a hit
+        _play(1, Half.TOP, event="walk"),  # not a hit
+        _play(1, Half.TOP, event="strikeout"),  # not a hit
         # Home (bottom) hits: 1 single.
         _play(1, Half.BOTTOM, event="single"),
         _play(1, Half.BOTTOM, event="field_out"),
@@ -180,8 +179,8 @@ def test_errors_charged_to_fielding_side():
         _play(1, Half.BOTTOM, event="field_error", is_error=True),
     ]
     ls = linescore_from_plays(plays)
-    assert ls.home_errors == 1   # the top-half error
-    assert ls.away_errors == 2   # the two bottom-half errors
+    assert ls.home_errors == 1  # the top-half error
+    assert ls.away_errors == 2  # the two bottom-half errors
 
 
 # ===========================================================================
@@ -224,9 +223,9 @@ def test_bottom_of_last_inning_unplayed_is_none_not_zero():
     assert ls.n_innings == 9
     last = ls.innings[-1]
     assert last.inning == 9
-    assert last.away == 0          # top of 9 was played, scoreless
+    assert last.away == 0  # top of 9 was played, scoreless
     assert last.away_played is True
-    assert last.home is None       # bottom of 9 NOT played -> None, not 0
+    assert last.home is None  # bottom of 9 NOT played -> None, not 0
     assert last.home_played is False
     assert ls.home_by_inning[-1] is None
     # Totals only sum the played cells.
@@ -259,7 +258,7 @@ def test_plays_without_next_state_are_skipped():
 
 
 def test_hit_events_constant_is_the_four_hit_types():
-    assert HIT_EVENTS == frozenset({"single", "double", "triple", "home_run"})
+    assert frozenset({"single", "double", "triple", "home_run"}) == HIT_EVENTS
 
 
 if __name__ == "__main__":  # pragma: no cover

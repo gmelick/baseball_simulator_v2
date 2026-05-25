@@ -74,7 +74,8 @@ directly onto ``PlayByPlayEntry(**row)``.
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping, Optional
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Play-row schema (the single source of truth shared by writer + reader)
@@ -146,23 +147,17 @@ def _normalize_play_row(entry: Mapping[str, Any]) -> dict[str, Any]:
     _event = entry.get("event", _PLAY_ROW_DEFAULTS["event"])
     row["event"] = None if _event is None else str(_event)
     row["runs_scored"] = int(entry.get("runs_scored", _PLAY_ROW_DEFAULTS["runs_scored"]))
-    row["outs_recorded"] = int(
-        entry.get("outs_recorded", _PLAY_ROW_DEFAULTS["outs_recorded"])
-    )
+    row["outs_recorded"] = int(entry.get("outs_recorded", _PLAY_ROW_DEFAULTS["outs_recorded"]))
     row["exit_velo"] = _opt_float(entry.get("exit_velo", _PLAY_ROW_DEFAULTS["exit_velo"]))
-    row["launch_angle"] = _opt_float(
-        entry.get("launch_angle", _PLAY_ROW_DEFAULTS["launch_angle"])
-    )
-    row["spray_angle"] = _opt_float(
-        entry.get("spray_angle", _PLAY_ROW_DEFAULTS["spray_angle"])
-    )
+    row["launch_angle"] = _opt_float(entry.get("launch_angle", _PLAY_ROW_DEFAULTS["launch_angle"]))
+    row["spray_angle"] = _opt_float(entry.get("spray_angle", _PLAY_ROW_DEFAULTS["spray_angle"]))
     row["runs"] = float(entry.get("runs", _PLAY_ROW_DEFAULTS["runs"]))
     _canon = entry.get("canonical_event", _PLAY_ROW_DEFAULTS["canonical_event"])
     row["canonical_event"] = None if _canon is None else str(_canon)
     return row
 
 
-def _opt_float(value: Any) -> Optional[float]:
+def _opt_float(value: Any) -> float | None:
     """Cast to float, preserving None (the 'no batted-ball stat' sentinel)."""
     return None if value is None else float(value)
 
@@ -210,7 +205,7 @@ async def store_sim_run(
     game_pk: int,
     summary: Mapping[str, Any],
     n_iterations: int,
-    base_seed: Optional[int] = None,
+    base_seed: int | None = None,
 ) -> int:
     """Persist one Monte-Carlo run's summary; return its new ``run_id``.
 
@@ -231,13 +226,13 @@ async def store_sim_run(
     return int(run_id)
 
 
-async def load_latest_sim_run(conn: Any, game_pk: int) -> Optional[dict]:
+async def load_latest_sim_run(conn: Any, game_pk: int) -> dict | None:
     """Load the most-recent run for ``game_pk`` (None if the game has none)."""
     row = await conn.fetchrow(_SQL_LOAD_LATEST_SIM_RUN, int(game_pk))
     return None if row is None else _sim_run_row_to_dict(row)
 
 
-async def load_sim_run(conn: Any, run_id: int) -> Optional[dict]:
+async def load_sim_run(conn: Any, run_id: int) -> dict | None:
     """Load a specific run by ``run_id`` (None if absent)."""
     row = await conn.fetchrow(_SQL_LOAD_SIM_RUN, int(run_id))
     return None if row is None else _sim_run_row_to_dict(row)
@@ -328,7 +323,7 @@ def load_play_stream(
     con: Any,
     *,
     game_pk: int,
-    run_id: Optional[int] = None,
+    run_id: int | None = None,
 ) -> list[dict]:
     """Load a pitch stream for ``game_pk``, ordered by ``sequence`` ascending.
 
@@ -351,7 +346,7 @@ def load_play_stream(
         cur = con.execute(sql, [int(game_pk), int(run_id)])
     out: list[dict] = []
     for rec in cur.fetchall():
-        row = dict(zip(PLAY_ROW_FIELDS, rec))
+        row = dict(zip(PLAY_ROW_FIELDS, rec, strict=False))
         # Normalize duckdb's returned types back to plain python (DuckDB already
         # yields python scalars; the casts make the contract explicit + guard
         # against a fake cursor returning numpy-ish values).
@@ -459,10 +454,7 @@ def _state_row_to_dict(rec: Any) -> dict:
     import json
 
     at_bat, pitch, sequence, snapshot = rec
-    if isinstance(snapshot, (str, bytes, bytearray)):
-        parsed = json.loads(snapshot)
-    else:
-        parsed = snapshot
+    parsed = json.loads(snapshot) if isinstance(snapshot, (str, bytes, bytearray)) else snapshot
     return {
         "at_bat": int(at_bat),
         "pitch": int(pitch),
@@ -477,8 +469,8 @@ def load_state_at(
     game_pk: int,
     at_bat: int,
     pitch: int,
-    run_id: Optional[int] = None,
-) -> Optional[dict]:
+    run_id: int | None = None,
+) -> dict | None:
     """Load the state snapshot for ``(game_pk, at_bat, pitch)`` (None if absent).
 
     With ``run_id`` given, only that run's snapshot is consulted; without it the
@@ -511,7 +503,7 @@ def load_state_snapshots(
     con: Any,
     *,
     game_pk: int,
-    run_id: Optional[int] = None,
+    run_id: int | None = None,
 ) -> list[dict]:
     """Load the whole ordered state-snapshot stream for ``game_pk``.
 
@@ -625,8 +617,8 @@ def load_game_card(
     con: Any,
     *,
     game_pk: int,
-    run_id: Optional[int] = None,
-) -> Optional[dict]:
+    run_id: int | None = None,
+) -> dict | None:
     """Load the game card for ``game_pk`` (None if none has been persisted).
 
     With ``run_id`` given, only that run's card is consulted; without it the

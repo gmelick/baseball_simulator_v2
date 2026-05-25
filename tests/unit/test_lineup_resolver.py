@@ -104,9 +104,9 @@ def _starting_rows() -> list[dict]:
     """
     rows: list[dict] = []
     positions = ["8", "4", "9", "3", "7", "5", "6", "2", "1"]  # CF,2B,RF,1B,LF,3B,SS,C,P
-    for slot, (pid, pos) in enumerate(zip(HOME_BATTERS, positions), start=1):
+    for slot, (pid, pos) in enumerate(zip(HOME_BATTERS, positions, strict=False), start=1):
         rows.append(_lineup_row(HOME_TEAM, pid, slot, pos))
-    for slot, (pid, pos) in enumerate(zip(AWAY_BATTERS, positions), start=1):
+    for slot, (pid, pos) in enumerate(zip(AWAY_BATTERS, positions, strict=False), start=1):
         rows.append(_lineup_row(AWAY_TEAM, pid, slot, pos))
     return rows
 
@@ -192,9 +192,15 @@ class TestResolveLineupFromRows:
         # A pinch hitter (sequence 2) takes over the home leadoff slot at AB 30.
         rows.append(
             _lineup_row(
-                HOME_TEAM, 150, 1, "8",
-                is_starter=False, sequence=2,
-                entered_inning=7, entered_at_bat=30, pinch_role="PH",
+                HOME_TEAM,
+                150,
+                1,
+                "8",
+                is_starter=False,
+                sequence=2,
+                entered_inning=7,
+                entered_at_bat=30,
+                pinch_role="PH",
             )
         )
         resolved = resolve_lineup_from_rows(
@@ -215,9 +221,15 @@ class TestResolveLineupFromRows:
         rows = _starting_rows()
         rows.append(
             _lineup_row(
-                HOME_TEAM, 150, 1, "8",
-                is_starter=False, sequence=2,
-                entered_inning=7, entered_at_bat=30, pinch_role="PH",
+                HOME_TEAM,
+                150,
+                1,
+                "8",
+                is_starter=False,
+                sequence=2,
+                entered_inning=7,
+                entered_at_bat=30,
+                pinch_role="PH",
             )
         )
         # As of AB 10 (before the sub at AB 30) the starter is still up.
@@ -236,12 +248,28 @@ class TestResolveLineupFromRows:
         rows = _starting_rows()
         # Slot 1: starter (seq1) -> PH (seq2 @ AB30) -> a later sub (seq3 @ AB55).
         rows.append(
-            _lineup_row(HOME_TEAM, 150, 1, "8", is_starter=False, sequence=2,
-                        entered_at_bat=30, pinch_role="PH")
+            _lineup_row(
+                HOME_TEAM,
+                150,
+                1,
+                "8",
+                is_starter=False,
+                sequence=2,
+                entered_at_bat=30,
+                pinch_role="PH",
+            )
         )
         rows.append(
-            _lineup_row(HOME_TEAM, 160, 1, "8", is_starter=False, sequence=3,
-                        entered_at_bat=55, pinch_role="DEF")
+            _lineup_row(
+                HOME_TEAM,
+                160,
+                1,
+                "8",
+                is_starter=False,
+                sequence=3,
+                entered_at_bat=55,
+                pinch_role="DEF",
+            )
         )
         resolved = resolve_lineup_from_rows(
             game_pk=GAME_PK,
@@ -256,8 +284,16 @@ class TestResolveLineupFromRows:
         rows = _starting_rows()
         # A reliever (position '1', no batting_order) enters at AB 40, seq 2.
         rows.append(
-            _lineup_row(HOME_TEAM, 950, None, "1", is_starter=False, sequence=2,
-                        entered_inning=8, entered_at_bat=40)
+            _lineup_row(
+                HOME_TEAM,
+                950,
+                None,
+                "1",
+                is_starter=False,
+                sequence=2,
+                entered_inning=8,
+                entered_at_bat=40,
+            )
         )
         resolved = resolve_lineup_from_rows(
             game_pk=GAME_PK,
@@ -276,7 +312,7 @@ class TestResolveLineupFromRows:
         # batting_order (the AL pitcher never bats).
         rows: list[dict] = []
         positions = ["8", "4", "9", "3", "7", "5", "6", "2", "10"]  # 10 = DH
-        for slot, (pid, pos) in enumerate(zip(HOME_BATTERS, positions), start=1):
+        for slot, (pid, pos) in enumerate(zip(HOME_BATTERS, positions, strict=False), start=1):
             rows.append(_lineup_row(HOME_TEAM, pid, slot, pos))
         rows.append(_lineup_row(HOME_TEAM, HOME_PITCHER, None, "1"))
         # away side needs at least one batter so the resolve doesn't error.
@@ -332,13 +368,13 @@ class TestBuildGameState:
         assert state.season == SEASON
         # Top of the 1st: away bats, home pitches.
         assert state.offense == Team.AWAY
-        assert state.batter_id == AWAY_BATTERS[0]   # away leadoff
+        assert state.batter_id == AWAY_BATTERS[0]  # away leadoff
         assert state.pitcher_id == HOME_BATTERS[8]  # home slot-9 pitcher
 
     def test_bottom_of_first_flips_offense_and_pitcher(self):
         state = build_game_state(self._resolved(), half=Half.BOTTOM)
         assert state.offense == Team.HOME
-        assert state.batter_id == HOME_BATTERS[0]   # home leadoff
+        assert state.batter_id == HOME_BATTERS[0]  # home leadoff
         assert state.pitcher_id == AWAY_BATTERS[8]  # away pitcher defends
 
     def test_hand_maps_drive_sampler_prefilter(self):
@@ -364,12 +400,22 @@ class TestBuildGameState:
     def test_substitution_shows_in_built_lineup(self):
         rows = _starting_rows()
         rows.append(
-            _lineup_row(AWAY_TEAM, 250, 1, "8", is_starter=False, sequence=2,
-                        entered_at_bat=20, pinch_role="PH")
+            _lineup_row(
+                AWAY_TEAM,
+                250,
+                1,
+                "8",
+                is_starter=False,
+                sequence=2,
+                entered_at_bat=20,
+                pinch_role="PH",
+            )
         )
         resolved = resolve_lineup_from_rows(
-            game_pk=GAME_PK, season=SEASON,
-            home_team_id=HOME_TEAM, away_team_id=AWAY_TEAM,
+            game_pk=GAME_PK,
+            season=SEASON,
+            home_team_id=HOME_TEAM,
+            away_team_id=AWAY_TEAM,
             lineup_rows=rows,
         )
         state = build_game_state(resolved, half=Half.TOP)
@@ -380,11 +426,14 @@ class TestBuildGameState:
     def test_missing_pitcher_raises(self):
         # A lineup with batters but no pitcher row on the defending side.
         rows = [_lineup_row(AWAY_TEAM, AWAY_BATTERS[0], 1, "8")]  # away only, no pitcher
-        rows += [_lineup_row(HOME_TEAM, pid, slot, "8")
-                 for slot, pid in enumerate(HOME_BATTERS, start=1)]  # home, no '1' pos
+        rows += [
+            _lineup_row(HOME_TEAM, pid, slot, "8") for slot, pid in enumerate(HOME_BATTERS, start=1)
+        ]  # home, no '1' pos
         resolved = resolve_lineup_from_rows(
-            game_pk=GAME_PK, season=SEASON,
-            home_team_id=HOME_TEAM, away_team_id=AWAY_TEAM,
+            game_pk=GAME_PK,
+            season=SEASON,
+            home_team_id=HOME_TEAM,
+            away_team_id=AWAY_TEAM,
             lineup_rows=rows,
         )
         # Top of 1st -> home pitches; home has no pitcher -> error.
@@ -396,8 +445,10 @@ class TestBuildGameState:
         rows = _starting_rows_home_only()
         rows.append(_lineup_row(AWAY_TEAM, AWAY_PITCHER, None, "1"))
         resolved = resolve_lineup_from_rows(
-            game_pk=GAME_PK, season=SEASON,
-            home_team_id=HOME_TEAM, away_team_id=AWAY_TEAM,
+            game_pk=GAME_PK,
+            season=SEASON,
+            home_team_id=HOME_TEAM,
+            away_team_id=AWAY_TEAM,
             lineup_rows=rows,
         )
         # Top of 1st -> away bats; away has no batting order -> error.
@@ -414,7 +465,7 @@ def _starting_rows_home_only() -> list[dict]:
     positions = ["8", "4", "9", "3", "7", "5", "6", "2", "1"]
     return [
         _lineup_row(HOME_TEAM, pid, slot, pos)
-        for slot, (pid, pos) in enumerate(zip(HOME_BATTERS, positions), start=1)
+        for slot, (pid, pos) in enumerate(zip(HOME_BATTERS, positions, strict=False), start=1)
     ]
 
 
@@ -513,14 +564,13 @@ def test_build_from_directly_constructed_resolved_lineup():
     from simulation.lineup_resolver import LineupSlot
 
     away_slots = tuple(
-        LineupSlot(batting_order=i + 1, player_id=pid, position_code="8",
-                   is_starter=True, sequence=1)
+        LineupSlot(
+            batting_order=i + 1, player_id=pid, position_code="8", is_starter=True, sequence=1
+        )
         for i, pid in enumerate(AWAY_BATTERS)
     )
     away = TeamLineup(team_id=AWAY_TEAM, slots=away_slots, pitcher_id=AWAY_PITCHER)
-    resolved = ResolvedLineup(
-        game_pk=GAME_PK, season=SEASON, home=home, away=away
-    )
+    resolved = ResolvedLineup(game_pk=GAME_PK, season=SEASON, home=home, away=away)
     state = build_game_state(resolved, half=Half.TOP)
     assert state.away_lineup == AWAY_BATTERS
     assert state.pitcher_id == HOME_PITCHER  # home defends in the top

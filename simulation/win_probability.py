@@ -78,8 +78,8 @@ level) always yields the same :class:`WinProbability`.
 from __future__ import annotations
 
 import enum
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from simulation.results import (
     ConfidenceInterval,
@@ -90,7 +90,7 @@ from simulation.results import (
 #: Two-sided z-multipliers for the common confidence levels (mirrors the table in
 #: ``simulation/results.py`` so a win-prob CI and a SIM-327 CI agree on z).
 _Z_95 = 1.959963984540054
-_Z_BY_LEVEL: "dict[float, float]" = {
+_Z_BY_LEVEL: dict[float, float] = {
     0.80: 1.2815515594457,
     0.90: 1.6448536269514722,
     0.95: _Z_95,
@@ -132,7 +132,7 @@ class CalibrationMap:
     [0, 1] defensively regardless.
     """
 
-    fn: "Callable[[float], float] | None" = None
+    fn: Callable[[float], float] | None = None
     name: str = "identity"
 
     def apply(self, p: float) -> float:
@@ -141,7 +141,7 @@ class CalibrationMap:
         return min(1.0, max(0.0, q))
 
     @classmethod
-    def from_report(cls, report: object) -> "CalibrationMap":
+    def from_report(cls, report: object) -> CalibrationMap:
         """Build a :class:`CalibrationMap` from a ``CalibrationReport`` (SIM-361).
 
         The SIM-220 backtester stores a fitted reliability curve on the report
@@ -256,7 +256,7 @@ class WinProbability:
 
 
 def win_probability(
-    summary: "GameSimSummary | list[GameSimResult]",
+    summary: GameSimSummary | list[GameSimResult],
     *,
     alpha: float = JEFFREYS_ALPHA,
     tie_handling: TieHandling = TieHandling.SPLIT,
@@ -299,9 +299,7 @@ def win_probability(
     # Accept a raw list of results for convenience -- aggregate to the SIM-327
     # contract first so there is exactly one path through the math below.
     if not isinstance(summary, GameSimSummary):
-        summary = GameSimSummary.from_results(
-            list(summary), confidence_level=confidence_level
-        )
+        summary = GameSimSummary.from_results(list(summary), confidence_level=confidence_level)
 
     n = int(summary.n_iterations)
     if n <= 0:
@@ -338,10 +336,7 @@ def win_probability(
     #     p = (k + alpha) / (n_eff + 2*alpha).  With n_eff == 0 (all ties, DROP)
     #     and alpha == 0 this would be 0/0; guard to the prior centre 0.5.
     denom = n_eff + 2.0 * alpha
-    if denom <= 0:
-        p_home_smoothed = 0.5
-    else:
-        p_home_smoothed = (k + alpha) / denom
+    p_home_smoothed = 0.5 if denom <= 0 else (k + alpha) / denom
 
     # --- Step 3: calibration map (identity by default) -------------------------
     p_home = calibration_map.apply(p_home_smoothed)
@@ -368,9 +363,7 @@ def win_probability(
     )
 
 
-def _smoothed_proportion_ci(
-    p: float, n_eff: float, z: float, level: float
-) -> ConfidenceInterval:
+def _smoothed_proportion_ci(p: float, n_eff: float, z: float, level: float) -> ConfidenceInterval:
     """Wald (normal-approximation) CI on the smoothed home-win proportion.
 
     half-width = z * sqrt(p(1-p) / n_eff), clamped to [0, 1].  Because the

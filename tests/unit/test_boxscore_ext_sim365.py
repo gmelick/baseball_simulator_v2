@@ -30,20 +30,18 @@ Coverage (the SIM-365 acceptance criteria):
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
-from simulation.game_state import Bases, GameState, Half, PlayResult, Team
+from simulation.game_state import Bases, GameState, PlayResult
+from simulation.prop_distributions import TB_IS_LOWER_BOUND, _total_bases
 from simulation.sim_loop import (
-    BoxScore,
+    STEAL_CAUGHT,
+    STEAL_SAFE,
     FieldingSignal,
     PlayerStatLine,
     PlayResolver,
     StateMachine,
     StealResolution,
-    STEAL_SAFE,
-    STEAL_CAUGHT,
 )
-from simulation.prop_distributions import TB_IS_LOWER_BOUND, _total_bases
 
 SEASON = 2024
 PITCHER = 477132
@@ -70,22 +68,26 @@ class _FixedResolver(PlayResolver):
         return dict(self._injected_battedball)
 
 
-def _machine(resolver: "PlayResolver | None" = None) -> StateMachine:
+def _machine(resolver: PlayResolver | None = None) -> StateMachine:
     return StateMachine(resolver=resolver, rng=np.random.default_rng(0))
 
 
 def _fresh_state(**kw) -> GameState:
-    defaults = dict(
-        pitcher_id=PITCHER, bat_hand="R", season=SEASON,
-        away_lineup=list(AWAY_LINEUP), home_lineup=list(HOME_LINEUP),
-        batter_id=AWAY_LINEUP[0],
-    )
+    defaults = {
+        "pitcher_id": PITCHER,
+        "bat_hand": "R",
+        "season": SEASON,
+        "away_lineup": list(AWAY_LINEUP),
+        "home_lineup": list(HOME_LINEUP),
+        "batter_id": AWAY_LINEUP[0],
+    }
     defaults.update(kw)
     return GameState(**defaults)
 
 
-def _pa(canonical, *, runs_scored=0, outs_recorded=0, is_error=False,
-        advances=None, event=None) -> PlayResult:
+def _pa(
+    canonical, *, runs_scored=0, outs_recorded=0, is_error=False, advances=None, event=None
+) -> PlayResult:
     """A synthetic terminal PlayResult shaped the way ``_accumulate_pa`` reads it."""
     return PlayResult(
         pitch_outcome="in_play",
@@ -117,13 +119,11 @@ class TestPlayerStatLineDefaults:
 
     def test_existing_positional_keyword_constructions_still_work(self):
         # A SIM-328-style construction (no new fields) is unaffected.
-        ln = PlayerStatLine(player_id=1, ab=4, h=2, hr=1, rbi=3,
-                            outs_recorded=21, k=8, bb=2, er=3)
+        ln = PlayerStatLine(player_id=1, ab=4, h=2, hr=1, rbi=3, outs_recorded=21, k=8, bb=2, er=3)
         assert (ln.ab, ln.h, ln.hr, ln.rbi) == (4, 2, 1, 3)
         assert (ln.outs_recorded, ln.k, ln.bb, ln.er) == (21, 8, 2, 3)
         # And the new fields are still 0.
-        assert (ln.b2, ln.b3, ln.r, ln.sb, ln.h_allowed, ln.r_allowed) == \
-            (0, 0, 0, 0, 0, 0)
+        assert (ln.b2, ln.b3, ln.r, ln.sb, ln.h_allowed, ln.r_allowed) == (0, 0, 0, 0, 0, 0)
 
 
 # ===========================================================================
@@ -172,9 +172,11 @@ class TestDoublesAndTriples:
 
     def test_in_play_double_end_to_end_records_b2(self):
         # Drive a real PA through the count machine with an injected double.
-        sm = _machine(_FixedResolver(
-            FieldingSignal(event="double", result_hits=2, result_outs=0, result_runs=0)
-        ))
+        sm = _machine(
+            _FixedResolver(
+                FieldingSignal(event="double", result_hits=2, result_outs=0, result_runs=0)
+            )
+        )
         state = _fresh_state()
         batter = state.batter_id
         sm.step_pitch(state, pitch_outcome="in_play")
@@ -197,9 +199,14 @@ class TestRunsScored:
         state = _fresh_state()
         state.bases = Bases(third=505)
         batter = state.batter_id
-        sm._accumulate_pa(state, _pa(
-            "single", runs_scored=1, advances={505: 0, batter: 1},
-        ))
+        sm._accumulate_pa(
+            state,
+            _pa(
+                "single",
+                runs_scored=1,
+                advances={505: 0, batter: 1},
+            ),
+        )
 
         # The runner from 3B scored.
         assert sm.boxscore.line(505).r == 1
@@ -214,9 +221,14 @@ class TestRunsScored:
         sm = _machine()
         state = _fresh_state()
         batter = state.batter_id
-        sm._accumulate_pa(state, _pa(
-            "home_run", runs_scored=1, advances={batter: 0},
-        ))
+        sm._accumulate_pa(
+            state,
+            _pa(
+                "home_run",
+                runs_scored=1,
+                advances={batter: 0},
+            ),
+        )
 
         assert sm.boxscore.line(batter).r == 1
         assert sm.boxscore.line(batter).hr == 1
@@ -227,9 +239,14 @@ class TestRunsScored:
         state = _fresh_state()
         batter = state.batter_id
         # A double clearing two runners (both end_base == 0), batter to 2B.
-        sm._accumulate_pa(state, _pa(
-            "double", runs_scored=2, advances={601: 0, 602: 0, batter: 2},
-        ))
+        sm._accumulate_pa(
+            state,
+            _pa(
+                "double",
+                runs_scored=2,
+                advances={601: 0, 602: 0, batter: 2},
+            ),
+        )
 
         assert sm.boxscore.line(601).r == 1
         assert sm.boxscore.line(602).r == 1
@@ -261,22 +278,33 @@ class TestPitcherHitsAndRunsAllowed:
         sm = _machine()
         state = _fresh_state()
         state.bases = Bases(third=701)
-        sm._accumulate_pa(state, _pa(
-            "field_error", runs_scored=1, is_error=True, advances={701: 0},
-        ))
+        sm._accumulate_pa(
+            state,
+            _pa(
+                "field_error",
+                runs_scored=1,
+                is_error=True,
+                advances={701: 0},
+            ),
+        )
 
         pit = sm.boxscore.line(PITCHER)
-        assert pit.er == 0            # unearned -> ER excludes it (SIM-328)
-        assert pit.r_allowed == 1     # R counts it (SIM-365)
+        assert pit.er == 0  # unearned -> ER excludes it (SIM-328)
+        assert pit.r_allowed == 1  # R counts it (SIM-365)
         assert pit.r_allowed >= pit.er
 
     def test_clean_run_counts_for_both_er_and_r_allowed(self):
         sm = _machine()
         state = _fresh_state()
         state.bases = Bases(third=702)
-        sm._accumulate_pa(state, _pa(
-            "single", runs_scored=1, advances={702: 0, state.batter_id: 1},
-        ))
+        sm._accumulate_pa(
+            state,
+            _pa(
+                "single",
+                runs_scored=1,
+                advances={702: 0, state.batter_id: 1},
+            ),
+        )
         pit = sm.boxscore.line(PITCHER)
         assert pit.er == 1
         assert pit.r_allowed == 1
@@ -294,13 +322,17 @@ class TestStolenBases:
         state = _fresh_state()
         state.bases = Bases(first=801)
         sm._pending_steal = StealResolution(
-            attempted=True, runner_id=801, from_base=1, to_base=2, safe=True,
+            attempted=True,
+            runner_id=801,
+            from_base=1,
+            to_base=2,
+            safe=True,
         )
         result = PlayResult(pitch_outcome="ball", pa_terminal=False)
         sm._resolve_steal_outcome(state, result)
 
         assert sm.boxscore.line(801).sb == 1
-        assert sm.boxscore.line(801).r == 0      # only advanced to 2B
+        assert sm.boxscore.line(801).r == 0  # only advanced to 2B
         assert result.steal_outcome == STEAL_SAFE
 
     def test_steal_of_home_credits_sb_run_and_run_allowed(self):
@@ -308,7 +340,11 @@ class TestStolenBases:
         state = _fresh_state()
         state.bases = Bases(third=802)
         sm._pending_steal = StealResolution(
-            attempted=True, runner_id=802, from_base=3, to_base=4, safe=True,
+            attempted=True,
+            runner_id=802,
+            from_base=3,
+            to_base=4,
+            safe=True,
         )
         # Non-terminal pitch: the run never reaches _accumulate_pa, so
         # _resolve_steal_outcome must charge the pitcher itself.
@@ -324,7 +360,11 @@ class TestStolenBases:
         state = _fresh_state()
         state.bases = Bases(first=803)
         sm._pending_steal = StealResolution(
-            attempted=True, runner_id=803, from_base=1, to_base=2, safe=False,
+            attempted=True,
+            runner_id=803,
+            from_base=1,
+            to_base=2,
+            safe=False,
         )
         result = PlayResult(pitch_outcome="ball", pa_terminal=False)
         sm._resolve_steal_outcome(state, result)
@@ -349,7 +389,6 @@ class TestStealRunAttributionDoesNotDoubleCount:
         # an R via _accumulate_pa.
         sm = _machine()
         state = _fresh_state()
-        batter = state.batter_id
         result = _pa("strikeout", outs_recorded=1, advances={902: 0})
         result.steal_attempted = True
         sm._accumulate_pa(state, result)

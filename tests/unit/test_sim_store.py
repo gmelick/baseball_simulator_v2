@@ -32,12 +32,8 @@ from db import sim_store
 from simulation.snapshots import PlayByPlay, PlayByPlayEntry
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DUCKDB_MIGRATION = (
-    REPO_ROOT / "db" / "migrations" / "duckdb" / "0008_sim356_play_stream.sql"
-)
-ALEMBIC_0014 = (
-    REPO_ROOT / "db" / "migrations" / "versions" / "0014_sim356_sim_run_history.py"
-)
+DUCKDB_MIGRATION = REPO_ROOT / "db" / "migrations" / "duckdb" / "0008_sim356_play_stream.sql"
+ALEMBIC_0014 = REPO_ROOT / "db" / "migrations" / "versions" / "0014_sim356_sim_run_history.py"
 DUCKDB_VERSION_FILE = REPO_ROOT / "db" / "schemas" / "duckdb_schema_version.txt"
 
 
@@ -113,9 +109,7 @@ def _sample_play_entries() -> list[dict]:
 class TestPlayStreamRoundTrip:
     def test_store_then_load_roundtrip_and_ordering(self, duck_con):
         entries = _sample_play_entries()
-        sim_store.store_play_stream(
-            duck_con, game_pk=777001, run_id=42, play_entries=entries
-        )
+        sim_store.store_play_stream(duck_con, game_pk=777001, run_id=42, play_entries=entries)
         loaded = sim_store.load_play_stream(duck_con, game_pk=777001, run_id=42)
 
         assert len(loaded) == len(entries) == 4
@@ -129,9 +123,7 @@ class TestPlayStreamRoundTrip:
         """A loaded row carries every PlayByPlayEntry constructor field, so it
         maps straight onto PlayByPlayEntry(**row) -- the SIM-357 read path."""
         entries = _sample_play_entries()
-        sim_store.store_play_stream(
-            duck_con, game_pk=1, run_id=1, play_entries=entries
-        )
+        sim_store.store_play_stream(duck_con, game_pk=1, run_id=1, play_entries=entries)
         loaded = sim_store.load_play_stream(duck_con, game_pk=1, run_id=1)
 
         rebuilt = [PlayByPlayEntry(**row) for row in loaded]
@@ -141,9 +133,7 @@ class TestPlayStreamRoundTrip:
     def test_terminal_pitch_fields_persist(self, duck_con):
         """The PA event + batted-ball stats on the terminal pitch survive."""
         entries = _sample_play_entries()
-        sim_store.store_play_stream(
-            duck_con, game_pk=5, run_id=9, play_entries=entries
-        )
+        sim_store.store_play_stream(duck_con, game_pk=5, run_id=9, play_entries=entries)
         loaded = sim_store.load_play_stream(duck_con, game_pk=5, run_id=9)
 
         hr = loaded[-1]
@@ -167,12 +157,8 @@ class TestPlayStreamRoundTrip:
 
     def test_load_without_run_id_returns_all_for_game(self, duck_con):
         entries = _sample_play_entries()
-        sim_store.store_play_stream(
-            duck_con, game_pk=100, run_id=1, play_entries=entries
-        )
-        sim_store.store_play_stream(
-            duck_con, game_pk=100, run_id=2, play_entries=entries
-        )
+        sim_store.store_play_stream(duck_con, game_pk=100, run_id=1, play_entries=entries)
+        sim_store.store_play_stream(duck_con, game_pk=100, run_id=2, play_entries=entries)
         all_rows = sim_store.load_play_stream(duck_con, game_pk=100)
         assert len(all_rows) == 2 * len(entries)
         # Distinct runs stay grouped (ORDER BY run_id, sequence).
@@ -180,9 +166,7 @@ class TestPlayStreamRoundTrip:
         assert len(only_run2) == len(entries)
 
     def test_store_empty_is_noop(self, duck_con):
-        sim_store.store_play_stream(
-            duck_con, game_pk=1, run_id=1, play_entries=[]
-        )
+        sim_store.store_play_stream(duck_con, game_pk=1, run_id=1, play_entries=[])
         assert sim_store.load_play_stream(duck_con, game_pk=1, run_id=1) == []
 
     def test_missing_required_field_raises(self, duck_con):
@@ -200,9 +184,7 @@ class TestPlayStreamRoundTrip:
             duck_con,
             game_pk=2,
             run_id=3,
-            play_entries=[
-                {"sequence": 0, "at_bat": 0, "pitch": 1, "pitch_outcome": "ball"}
-            ],
+            play_entries=[{"sequence": 0, "at_bat": 0, "pitch": 1, "pitch_outcome": "ball"}],
         )
         row = sim_store.load_play_stream(duck_con, game_pk=2, run_id=3)[0]
         assert row["is_contact"] is False
@@ -389,10 +371,7 @@ class TestMigrationSanity:
 
     def test_duckdb_0009_creates_state_snapshots(self):
         # SIM-357: the DuckDB backing for GET /state/{at_bat}/{pitch}.
-        path = (
-            REPO_ROOT / "db" / "migrations" / "duckdb"
-            / "0009_sim357_state_snapshots.sql"
-        )
+        path = REPO_ROOT / "db" / "migrations" / "duckdb" / "0009_sim357_state_snapshots.sql"
         text = path.read_text()
         assert "sim.state_snapshots" in text
         assert "IF NOT EXISTS" in text

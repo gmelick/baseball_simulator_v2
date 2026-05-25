@@ -86,14 +86,14 @@ from simulation.constants import resolve_event_to_canonical, run_value_for_event
 # ---------------------------------------------------------------------------
 RE24_MATRIX: dict[tuple[int, int], float] = {
     # outs = 0
-    (0, 0): 0.51,   # empty
-    (0, 1): 0.89,   # 1B
-    (0, 2): 1.16,   # 2B
-    (0, 3): 1.49,   # 1B+2B
-    (0, 4): 1.40,   # 3B
-    (0, 5): 1.78,   # 1B+3B
-    (0, 6): 1.99,   # 2B+3B
-    (0, 7): 2.30,   # loaded
+    (0, 0): 0.51,  # empty
+    (0, 1): 0.89,  # 1B
+    (0, 2): 1.16,  # 2B
+    (0, 3): 1.49,  # 1B+2B
+    (0, 4): 1.40,  # 3B
+    (0, 5): 1.78,  # 1B+3B
+    (0, 6): 1.99,  # 2B+3B
+    (0, 7): 2.30,  # loaded
     # outs = 1
     (1, 0): 0.27,
     (1, 1): 0.53,
@@ -123,7 +123,7 @@ _BIT_2B = 0b010
 _BIT_3B = 0b100
 
 
-def re24_value(outs: int, runners_state: int, matrix: "dict | None" = None) -> float:
+def re24_value(outs: int, runners_state: int, matrix: dict | None = None) -> float:
     """RE for a base-out state.  ≥3 outs ⇒ 0.0 (inning over, no carry-over RE)."""
     if outs >= OUTS_PER_INNING:
         return 0.0
@@ -135,7 +135,7 @@ def re24_value(outs: int, runners_state: int, matrix: "dict | None" = None) -> f
     return float(m[(o, rs)])
 
 
-def re24_from_rows(rows: "list[tuple[int, int, float]]") -> "dict[tuple[int, int], float]":
+def re24_from_rows(rows: list[tuple[int, int, float]]) -> dict[tuple[int, int], float]:
     """Build an RE24 matrix dict from ``(outs, runners_state, expected_runs)`` rows.
 
     Convenience for loading ``derived.run_expectancy_matrix`` (its three keying
@@ -143,9 +143,7 @@ def re24_from_rows(rows: "list[tuple[int, int, float]]") -> "dict[tuple[int, int
     base-out states are present.
     """
     matrix = {(int(o), int(rs) & 0b111): float(er) for o, rs, er in rows}
-    missing = {
-        (o, rs) for o in range(OUTS_PER_INNING) for rs in range(8)
-    } - set(matrix.keys())
+    missing = {(o, rs) for o in range(OUTS_PER_INNING) for rs in range(8)} - set(matrix.keys())
     if missing:
         raise ValueError(f"RE24 rows are missing base-out states: {sorted(missing)}")
     return matrix
@@ -167,7 +165,7 @@ def advance_state(
     result_hits: int,
     result_outs: int,
     result_runs: int,
-) -> "tuple[int, int]":
+) -> tuple[int, int]:
     """Advance a base-out state by the sampled per-play deltas.
 
     Returns ``(new_outs, new_runners_state)``.
@@ -234,22 +232,22 @@ class RunResolution:
 
     runs: float
     method: str
-    re_start: "float | None" = None
-    re_end: "float | None" = None
-    new_outs: "int | None" = None
-    new_runners_state: "int | None" = None
-    canonical_event: "str | None" = None
+    re_start: float | None = None
+    re_end: float | None = None
+    new_outs: int | None = None
+    new_runners_state: int | None = None
+    canonical_event: str | None = None
 
 
 def resolve_runs(
     *,
-    event: "str | None" = None,
-    outs: "int | None" = None,
-    runners_state: "int | None" = None,
-    result_hits: "int | None" = None,
-    result_outs: "int | None" = None,
-    result_runs: "int | None" = None,
-    matrix: "dict | None" = None,
+    event: str | None = None,
+    outs: int | None = None,
+    runners_state: int | None = None,
+    result_hits: int | None = None,
+    result_outs: int | None = None,
+    result_runs: int | None = None,
+    matrix: dict | None = None,
     strict: bool = False,
 ) -> RunResolution:
     """Resolve the run value of one resolved play.

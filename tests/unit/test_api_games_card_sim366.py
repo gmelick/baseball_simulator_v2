@@ -55,7 +55,6 @@ from api.serialization import to_jsonable
 from db import sim_store
 from simulation.game_state import GameState, Half, PlayResult
 from simulation.linescore import linescore_from_plays
-from simulation.lineup_resolver import ResolvedLineup
 from simulation.pitcher_decisions import decisions_from_plays
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -151,7 +150,9 @@ def _scoring_stream() -> list[PlayResult]:
             event="double",
             runs_scored=2,
             is_error=False,
-            next_state=_state(inning=1, half=Half.BOTTOM, home_score=2, away_score=1, pitcher_id=800),
+            next_state=_state(
+                inning=1, half=Half.BOTTOM, home_score=2, away_score=1, pitcher_id=800
+            ),
         )
     )
     plays.append(
@@ -159,7 +160,9 @@ def _scoring_stream() -> list[PlayResult]:
             event="field_out",
             runs_scored=0,
             is_error=True,  # error in the bottom half -> charged to the AWAY defense
-            next_state=_state(inning=1, half=Half.BOTTOM, home_score=2, away_score=1, pitcher_id=800),
+            next_state=_state(
+                inning=1, half=Half.BOTTOM, home_score=2, away_score=1, pitcher_id=800
+            ),
         )
     )
     return plays
@@ -175,9 +178,7 @@ class TestGameCardStore:
         plays = _scoring_stream()
         ls = to_jsonable(linescore_from_plays(plays))
         dec = to_jsonable(decisions_from_plays(plays))
-        sim_store.store_game_card(
-            duck_con, game_pk=900, run_id=7, linescore=ls, decisions=dec
-        )
+        sim_store.store_game_card(duck_con, game_pk=900, run_id=7, linescore=ls, decisions=dec)
         got = sim_store.load_game_card(duck_con, game_pk=900)
         assert got is not None
         assert got["run_id"] == 7
@@ -188,11 +189,23 @@ class TestGameCardStore:
         assert sim_store.load_game_card(duck_con, game_pk=12345) is None
 
     def test_latest_run_wins_without_run_id(self, duck_con):
-        ls1 = {"innings": [], "away_runs": 1, "home_runs": 0, "away_hits": 0,
-               "home_hits": 0, "away_errors": 0, "home_errors": 0}
+        ls1 = {
+            "innings": [],
+            "away_runs": 1,
+            "home_runs": 0,
+            "away_hits": 0,
+            "home_hits": 0,
+            "away_errors": 0,
+            "home_errors": 0,
+        }
         ls2 = {**ls1, "away_runs": 9}
-        dec = {"winning_pitcher_id": None, "losing_pitcher_id": None,
-               "save_pitcher_id": None, "home_score": 0, "away_score": 0}
+        dec = {
+            "winning_pitcher_id": None,
+            "losing_pitcher_id": None,
+            "save_pitcher_id": None,
+            "home_score": 0,
+            "away_score": 0,
+        }
         sim_store.store_game_card(duck_con, game_pk=901, run_id=1, linescore=ls1, decisions=dec)
         sim_store.store_game_card(duck_con, game_pk=901, run_id=2, linescore=ls2, decisions=dec)
         latest = sim_store.load_game_card(duck_con, game_pk=901)
@@ -367,9 +380,18 @@ class TestCardAndBoxscoreEndpoints:
         ls = client.get("/api/games/745001/linescore")
         assert ls.status_code == 200, ls.text
         lbody = ls.json()
-        for key in ("innings", "away_runs", "home_runs", "away_hits", "home_hits",
-                    "away_errors", "home_errors", "n_innings",
-                    "away_by_inning", "home_by_inning"):
+        for key in (
+            "innings",
+            "away_runs",
+            "home_runs",
+            "away_hits",
+            "home_hits",
+            "away_errors",
+            "home_errors",
+            "n_innings",
+            "away_by_inning",
+            "home_by_inning",
+        ):
             assert key in lbody
         assert lbody["n_innings"] == len(lbody["innings"]) >= 1
         json.dumps(lbody)
@@ -378,8 +400,13 @@ class TestCardAndBoxscoreEndpoints:
         dec = client.get("/api/games/745001/decisions")
         assert dec.status_code == 200, dec.text
         dbody = dec.json()
-        for key in ("winning_pitcher_id", "losing_pitcher_id", "save_pitcher_id",
-                    "home_score", "away_score"):
+        for key in (
+            "winning_pitcher_id",
+            "losing_pitcher_id",
+            "save_pitcher_id",
+            "home_score",
+            "away_score",
+        ):
             assert key in dbody
         json.dumps(dbody)
 

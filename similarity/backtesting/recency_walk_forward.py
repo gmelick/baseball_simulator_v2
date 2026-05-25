@@ -38,7 +38,8 @@ Public API
 
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -173,7 +174,7 @@ def recency_weighted_prediction(
     eps = 1e-9
     sim_w = 1.0 / (eps + dists[nn])  # closer => larger weight
     if weighted:
-        sim_w = sim_w * rec_w[nn]    # SIM-076 recency up-weighting
+        sim_w = sim_w * rec_w[nn]  # SIM-076 recency up-weighting
 
     total = sim_w.sum()
     if total <= 0 or not np.isfinite(total):

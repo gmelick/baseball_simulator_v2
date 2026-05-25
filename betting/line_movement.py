@@ -89,8 +89,9 @@ columns (moneyline ``home_ml`` / ``away_ml``; runline ``home_spread_ml`` /
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional, Sequence, Union
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
 
 from betting.clv_engine import (
     CLV,
@@ -110,7 +111,7 @@ from betting.clv_engine import (
 # Alembic-0003 CHECK set: 'moneyline' | 'runline' | 'total'.
 
 #: (this_american_col, other_american_col, line_col_or_None) per (market, side).
-_MARKET_COLUMNS: dict[tuple[str, MarketSide], tuple[str, str, "str | None"]] = {
+_MARKET_COLUMNS: dict[tuple[str, MarketSide], tuple[str, str, str | None]] = {
     ("moneyline", MarketSide.HOME): ("home_ml", "away_ml", None),
     ("moneyline", MarketSide.AWAY): ("away_ml", "home_ml", None),
     ("runline", MarketSide.HOME): ("home_spread_ml", "away_spread_ml", "home_spread"),
@@ -128,7 +129,7 @@ _MARKET_SIDES: dict[str, tuple[MarketSide, MarketSide]] = {
 }
 
 
-def _side_columns(market_type: str, side: MarketSide) -> tuple[str, str, "str | None"]:
+def _side_columns(market_type: str, side: MarketSide) -> tuple[str, str, str | None]:
     """The (this-side, other-side, line) game_odds columns for a market + side.
 
     Raises ``ValueError`` for an unknown ``market_type`` or a ``side`` that does
@@ -140,12 +141,10 @@ def _side_columns(market_type: str, side: MarketSide) -> tuple[str, str, "str | 
         valid = _MARKET_SIDES.get(market_type)
         if valid is None:
             raise ValueError(
-                f"unknown market_type {market_type!r} "
-                f"(expected one of {sorted(_MARKET_SIDES)})"
+                f"unknown market_type {market_type!r} (expected one of {sorted(_MARKET_SIDES)})"
             )
         raise ValueError(
-            f"side {side} is not valid for market_type {market_type!r} "
-            f"(valid sides: {valid})"
+            f"side {side} is not valid for market_type {market_type!r} (valid sides: {valid})"
         )
     return cols
 
@@ -183,9 +182,9 @@ class LineQuote:
     american: float
     #: The OPPOSITE side's American odds at the SAME snapshot (for de-vig). May be
     #: None if the row stored only this side (then the CLV cannot be computed).
-    other_american: "float | None" = None
+    other_american: float | None = None
     #: The market line at this snapshot (spread / total). None for a moneyline.
-    line: "float | None" = None
+    line: float | None = None
     #: RAW single-side implied probability of ``american`` (margin included).
     implied_prob: float = 0.0
 
@@ -197,9 +196,9 @@ class LineQuote:
         book: str,
         is_sharp_book: bool,
         american: float,
-        other_american: "float | None" = None,
-        line: "float | None" = None,
-    ) -> "LineQuote":
+        other_american: float | None = None,
+        line: float | None = None,
+    ) -> LineQuote:
         """Build a :class:`LineQuote`, computing ``implied_prob`` from ``american``.
 
         The convenience constructor used everywhere internally: it fills
@@ -237,26 +236,26 @@ class LineMovement:
     game_pk: int
     market_type: str
     side: MarketSide
-    book: "str | None"
+    book: str | None
 
     #: The ordered series, oldest (opening) -> newest (closing).
     quotes: tuple[LineQuote, ...]
 
     #: Opening / closing American odds for THIS side (first / last quote).
-    opening_american: "float | None" = None
-    closing_american: "float | None" = None
+    opening_american: float | None = None
+    closing_american: float | None = None
     #: Opening / closing RAW implied probability (first / last quote).
-    opening_implied_prob: "float | None" = None
-    closing_implied_prob: "float | None" = None
+    opening_implied_prob: float | None = None
+    closing_implied_prob: float | None = None
 
     #: closing_american - opening_american (American-points move; sign per the
     #: American convention, so prefer implied_prob_delta for monotone reasoning).
-    american_delta: "float | None" = None
+    american_delta: float | None = None
     #: closing_implied_prob - opening_implied_prob.  > 0 => odds shortened, the
     #: market moved TOWARD this side ("steam toward"); < 0 => moved away.
-    implied_prob_delta: "float | None" = None
+    implied_prob_delta: float | None = None
     #: closing line - opening line (spread / total markets; None for moneyline).
-    line_delta: "float | None" = None
+    line_delta: float | None = None
 
     #: Per-step implied-prob changes between consecutive quotes.  Length ==
     #: len(quotes) - 1 (empty for a single quote -- no movement).
@@ -274,13 +273,13 @@ class LineMovement:
     #: The SIM-339 entry-vs-close CLV with entry == opening quote, close ==
     #: closing quote.  None when the series has < 2 quotes or is missing the
     #: opposite-side price needed to de-vig either endpoint.
-    clv: "CLV | None" = None
+    clv: CLV | None = None
 
     #: True iff the SHARP books in this game's wider market moved this side the
     #: SAME direction as the overall movement (sharp money agrees).  Only set by
     #: :func:`fetch_line_movement` (which sees every book); None on a pure single-
     #: book series built directly via :func:`line_movement_from_quotes`.
-    sharp_consensus: "bool | None" = None
+    sharp_consensus: bool | None = None
 
     @property
     def has_movement(self) -> bool:
@@ -302,7 +301,7 @@ _AUTO = object()
 
 
 def _coerce_quote(
-    row: "Mapping[str, Any] | LineQuote",
+    row: Mapping[str, Any] | LineQuote,
     *,
     market_type: str,
     side: MarketSide,
@@ -345,13 +344,13 @@ def _sort_key(q: LineQuote) -> tuple[int, Any]:
 
 
 def line_movement_from_quotes(
-    rows: "Sequence[Mapping[str, Any] | LineQuote]",
+    rows: Sequence[Mapping[str, Any] | LineQuote],
     *,
     market_type: str,
     side: MarketSide,
     game_pk: int = 0,
-    book: "str | None" = None,
-    sharp_consensus: "bool | None" = None,
+    book: str | None = None,
+    sharp_consensus: bool | None = None,
 ) -> LineMovement:
     """PURE: build a :class:`LineMovement` from an (unordered) quote sequence.
 
@@ -400,17 +399,14 @@ def line_movement_from_quotes(
 
     implied_series = tuple(q.implied_prob for q in quotes)
     step_ip = tuple(
-        quotes[i + 1].implied_prob - quotes[i].implied_prob
-        for i in range(len(quotes) - 1)
+        quotes[i + 1].implied_prob - quotes[i].implied_prob for i in range(len(quotes) - 1)
     )
-    step_am = tuple(
-        quotes[i + 1].american - quotes[i].american for i in range(len(quotes) - 1)
-    )
+    step_am = tuple(quotes[i + 1].american - quotes[i].american for i in range(len(quotes) - 1))
 
     opening, closing = quotes[0], quotes[-1]
     american_delta = closing.american - opening.american
     implied_prob_delta = closing.implied_prob - opening.implied_prob
-    line_delta: "float | None" = None
+    line_delta: float | None = None
     if opening.line is not None and closing.line is not None:
         line_delta = closing.line - opening.line
 
@@ -421,7 +417,7 @@ def line_movement_from_quotes(
     else:
         direction = "flat"
 
-    clv: "CLV | None" = None
+    clv: CLV | None = None
     if (
         len(quotes) >= 2
         and opening.other_american is not None
@@ -501,7 +497,7 @@ async def fetch_line_movement(
     *,
     game_pk: int,
     market_type: str,
-    book: "str | None" = None,
+    book: str | None = None,
 ) -> list[LineMovement]:
     """Read ``raw.game_odds`` and build the per-side line-movement series.
 
@@ -522,16 +518,13 @@ async def fetch_line_movement(
     sides = _MARKET_SIDES.get(market_type)
     if sides is None:
         raise ValueError(
-            f"unknown market_type {market_type!r} "
-            f"(expected one of {sorted(_MARKET_SIDES)})"
+            f"unknown market_type {market_type!r} (expected one of {sorted(_MARKET_SIDES)})"
         )
 
     if book is None:
         rows = await conn.fetch(_SQL_FETCH_GAME_ODDS, int(game_pk), market_type)
     else:
-        rows = await conn.fetch(
-            _SQL_FETCH_GAME_ODDS_BOOK, int(game_pk), market_type, str(book)
-        )
+        rows = await conn.fetch(_SQL_FETCH_GAME_ODDS_BOOK, int(game_pk), market_type, str(book))
     mappings = [_row_to_mapping(r) for r in (rows or [])]
 
     # Group rows by book so each series is one (side, book).
@@ -546,7 +539,7 @@ async def fetch_line_movement(
         sharp_dir = _net_direction(mappings, market_type, side, sharp_only=True)
         overall_dir = _net_direction(mappings, market_type, side, sharp_only=False)
         if sharp_dir == "flat" or overall_dir == "flat":
-            sharp_flag: "bool | None" = None
+            sharp_flag: bool | None = None
         else:
             sharp_flag = sharp_dir == overall_dir
 
@@ -566,7 +559,7 @@ async def fetch_line_movement(
 
 
 def _net_direction(
-    rows: "Sequence[Mapping[str, Any]]",
+    rows: Sequence[Mapping[str, Any]],
     market_type: str,
     side: MarketSide,
     *,
@@ -581,9 +574,7 @@ def _net_direction(
     pool = [r for r in rows if (r.get("is_sharp_book") if sharp_only else True)]
     if not pool:
         return "flat"
-    movement = line_movement_from_quotes(
-        pool, market_type=market_type, side=side
-    )
+    movement = line_movement_from_quotes(pool, market_type=market_type, side=side)
     return movement.direction
 
 

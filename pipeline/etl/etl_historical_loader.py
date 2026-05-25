@@ -2067,9 +2067,7 @@ class HistoricalDataLoader:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    loader = HistoricalDataLoader(
-        "postgresql://baseball_user:baseball_pass@db:5432/baseball_sim"
-    )
+    loader = HistoricalDataLoader("postgresql://baseball_user:baseball_pass@db:5432/baseball_sim")
     try:
         loader.refresh_seasons()
     finally:

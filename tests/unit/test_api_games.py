@@ -290,15 +290,17 @@ def test_simulate_unknown_game_is_404(monkeypatch):
 def test_simulate_reuses_shared_sim_runner(patch_resolver):
     """SIM-360: when the lifespan has attached a long-lived app.state.sim_runner,
     /simulate REUSES it instead of building a fresh BatchRunner per request."""
-    from simulation.batch_runner import BatchRunner, InMemoryCache as _IMC
+    from simulation.batch_runner import BatchRunner
+    from simulation.batch_runner import InMemoryCache as _IMC
 
     shared = BatchRunner(cache=_IMC(), max_workers=1)
     app = _build_app(pool=_FakePool())
     app.state.sim_runner = shared
 
     # _build_runner must hand back the SHARED runner instance (not a new one).
-    import api.routes.games as gm
     from starlette.requests import Request as _Req
+
+    import api.routes.games as gm
 
     scope = {"type": "http", "app": app}
     assert gm._build_runner(_Req(scope)) is shared
@@ -313,9 +315,10 @@ def test_simulate_reuses_shared_sim_runner(patch_resolver):
 def test_simulate_falls_back_to_transient_runner_without_shared(patch_resolver):
     """SIM-360: with NO app.state.sim_runner attached (the existing test apps),
     _build_runner falls back to a transient BatchRunner so /simulate still works."""
+    from starlette.requests import Request as _Req
+
     import api.routes.games as gm
     from simulation.batch_runner import BatchRunner
-    from starlette.requests import Request as _Req
 
     app = _build_app(pool=_FakePool())
     assert getattr(app.state, "sim_runner", None) is None  # none attached

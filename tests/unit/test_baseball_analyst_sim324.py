@@ -58,10 +58,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from simulation.game_state import GameState, Half, Team
-from simulation.run_resolution import RE24_MATRIX, OUTS_PER_INNING, re24_value
+from simulation.game_state import GameState, Half
+from simulation.run_resolution import OUTS_PER_INNING, RE24_MATRIX, re24_value
 from simulation.sim_loop import (
-    REGULATION_INNINGS,
     FieldingSignal,
     GameSimResult,
     PlayResolver,
@@ -71,8 +70,8 @@ from simulation.sim_loop import (
 
 SEASON = 2024
 PITCHER = 477132
-AWAY_LINEUP = list(range(101, 110))   # 9 batters
-HOME_LINEUP = list(range(201, 210))   # 9 batters
+AWAY_LINEUP = list(range(101, 110))  # 9 batters
+HOME_LINEUP = list(range(201, 210))  # 9 batters
 
 
 # ===========================================================================
@@ -88,7 +87,7 @@ HOME_LINEUP = list(range(201, 210))   # 9 batters
 # ~16% fouls, ~22% balls-in-play; foul share is high because two-strike fouls are
 # absorbed (they prolong the PA), which is exactly the P/PA driver the spec calls
 # out (§5.1 / foul-ball doc §3.3).
-LEAGUE_PITCH_MODEL: "dict[str, float]" = {
+LEAGUE_PITCH_MODEL: dict[str, float] = {
     "ball": 0.332,
     "called_strike": 0.138,
     "swinging_strike": 0.087,
@@ -104,7 +103,7 @@ LEAGUE_PITCH_MODEL: "dict[str, float]" = {
 # remainder outs (incl. a slice of GIDP).  These are the frequencies the play
 # pool would emit; we inject them directly so the loop's baserunning + resolve_runs
 # convert them into the run environment.
-LEAGUE_INPLAY_MODEL: "dict[str, float]" = {
+LEAGUE_INPLAY_MODEL: dict[str, float] = {
     "home_run": 0.050,
     "single": 0.262,
     "double": 0.084,
@@ -115,13 +114,25 @@ LEAGUE_INPLAY_MODEL: "dict[str, float]" = {
 
 # The hit value (result_hits) + outs recorded (result_outs) per injected event,
 # in the play-pool vocabulary resolve_runs / advance_state consume.
-_EVENT_HITS = {"single": 1, "double": 2, "triple": 3, "home_run": 4,
-               "field_out": 0, "ground_into_double_play": 0}
-_EVENT_OUTS = {"single": 0, "double": 0, "triple": 0, "home_run": 0,
-               "field_out": 1, "ground_into_double_play": 2}
+_EVENT_HITS = {
+    "single": 1,
+    "double": 2,
+    "triple": 3,
+    "home_run": 4,
+    "field_out": 0,
+    "ground_into_double_play": 0,
+}
+_EVENT_OUTS = {
+    "single": 0,
+    "double": 0,
+    "triple": 0,
+    "home_run": 0,
+    "field_out": 1,
+    "ground_into_double_play": 2,
+}
 
 
-def _normalize(model: "dict[str, float]") -> "tuple[list, np.ndarray]":
+def _normalize(model: dict[str, float]) -> tuple[list, np.ndarray]:
     keys = list(model.keys())
     probs = np.asarray([model[k] for k in keys], dtype=np.float64)
     return keys, probs / probs.sum()
@@ -153,7 +164,7 @@ class _LeagueOutcomeMachine(StateMachine):
         if self._hand_skew == 0.0:
             idx = int(self.rng.choice(len(self._base_keys), p=self._base_probs))
             return self._base_keys[idx]
-        probs = dict(zip(self._base_keys, self._base_probs))
+        probs = dict(zip(self._base_keys, self._base_probs, strict=False))
         # The advantaged hand: shift mass from whiffs (swinging_strike) into
         # balls-in-play (more / better contact).  The disadvantaged hand gets the
         # opposite tilt.  Direction only -- the test asserts the loop PROPAGATES
@@ -184,7 +195,7 @@ class _LeagueInPlayResolver(PlayResolver):
     ``runners_scored``).
     """
 
-    def __init__(self, rng: "np.random.Generator"):
+    def __init__(self, rng: np.random.Generator):
         self.rng = rng
         self._keys, self._probs = _normalize(LEAGUE_INPLAY_MODEL)
         # Present (with NO result_runs) so the no-sampler path reaches step 6/7.
@@ -209,7 +220,7 @@ class _LeagueInPlayResolver(PlayResolver):
             event=event,
             result_hits=_EVENT_HITS[event],
             result_outs=outs,
-            result_runs=0,   # runs emerge from the loop's baserunning
+            result_runs=0,  # runs emerge from the loop's baserunning
         )
 
 
@@ -247,9 +258,16 @@ class _EventTallyMachine(_LeagueOutcomeMachine):
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
         self.pa_count = 0
-        self.events = {"walk": 0, "strikeout": 0, "single": 0, "double": 0,
-                       "triple": 0, "home_run": 0, "field_out": 0,
-                       "ground_into_double_play": 0}
+        self.events = {
+            "walk": 0,
+            "strikeout": 0,
+            "single": 0,
+            "double": 0,
+            "triple": 0,
+            "home_run": 0,
+            "field_out": 0,
+            "ground_into_double_play": 0,
+        }
 
     def step_pitch(self, state, **_kw):  # type: ignore[override]
         result = super().step_pitch(state)
@@ -289,22 +307,35 @@ class _Aggregate:
 
 def _fresh_state(seed: int, away_hand: str = "R") -> GameState:
     return GameState(
-        pitcher_id=PITCHER, bat_hand=away_hand, season=SEASON,
-        away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP,
-        batter_id=AWAY_LINEUP[0], seed=seed,
+        pitcher_id=PITCHER,
+        bat_hand=away_hand,
+        season=SEASON,
+        away_lineup=AWAY_LINEUP,
+        home_lineup=HOME_LINEUP,
+        batter_id=AWAY_LINEUP[0],
+        seed=seed,
     )
 
 
-def _run_one(seed: int, *, hand_skew: float = 0.0, platoon_adv_hand: str = "L",
-             away_hand: str = "R", home_hand: str = "R") -> GameSimResult:
+def _run_one(
+    seed: int,
+    *,
+    hand_skew: float = 0.0,
+    platoon_adv_hand: str = "L",
+    away_hand: str = "R",
+    home_hand: str = "R",
+) -> GameSimResult:
     """Simulate one full game under the calibrated model with a fixed seed."""
     rng = np.random.default_rng(seed)
     resolver = _LeagueInPlayResolver(np.random.default_rng(seed + 1_000_003))
     if away_hand != home_hand or hand_skew != 0.0:
         sm = _HandedMachine(
-            resolver=resolver, rng=rng, hand_skew=hand_skew,
+            resolver=resolver,
+            rng=rng,
+            hand_skew=hand_skew,
             platoon_adv_hand=platoon_adv_hand,
-            away_hand=away_hand, home_hand=home_hand,
+            away_hand=away_hand,
+            home_hand=home_hand,
         )
     else:
         sm = _LeagueOutcomeMachine(resolver=resolver, rng=rng)
@@ -386,9 +417,7 @@ class TestPitchesPerPA:
         # -- it cannot flake, yet a broken count machine (e.g. the two-strike-foul
         # absorbing rule regressing) would move P/PA outside it immediately.
         assert n_pa > 5000, f"too few PAs ({n_pa}) for a stable P/PA estimate"
-        assert 3.7 <= ppa <= 4.0, (
-            f"pitches-per-PA {ppa:.3f} outside the realistic 3.7-4.0 band"
-        )
+        assert 3.7 <= ppa <= 4.0, f"pitches-per-PA {ppa:.3f} outside the realistic 3.7-4.0 band"
 
 
 # ===========================================================================
@@ -406,19 +435,21 @@ class TestPlatoonSplit:
         other = "R" if platoon_adv_hand == "L" else "L"
         for s in seeds:
             r = _run_one(
-                s, hand_skew=hand_skew, platoon_adv_hand=platoon_adv_hand,
-                away_hand=platoon_adv_hand, home_hand=other,
+                s,
+                hand_skew=hand_skew,
+                platoon_adv_hand=platoon_adv_hand,
+                away_hand=platoon_adv_hand,
+                home_hand=other,
             )
-            adv += r.away_score   # away bats with the advantaged hand
-            dis += r.home_score   # home bats with the disadvantaged hand
+            adv += r.away_score  # away bats with the advantaged hand
+            dis += r.home_score  # home bats with the disadvantaged hand
         return adv, dis
 
     def test_platoon_advantage_side_scores_more(self):
         # A meaningful per-pitch skew (more contact, fewer whiffs for the
         # advantaged hand) must propagate through the loop to MORE runs for that
         # side, aggregated over enough games to drown the per-game noise.
-        adv, dis = self._runs_by_side(range(180), hand_skew=0.06,
-                                      platoon_adv_hand="L")
+        adv, dis = self._runs_by_side(range(180), hand_skew=0.06, platoon_adv_hand="L")
         assert adv > dis, (
             f"platoon split did not emerge: advantaged-hand runs {adv} "
             f"<= disadvantaged-hand runs {dis}"
@@ -434,8 +465,7 @@ class TestPlatoonSplit:
         # Sanity / control: with NO skew the two sides are statistically even
         # (the harness is not biased toward one side).  Wide band -- this only
         # guards against a structural bias, not Monte-Carlo wobble.
-        adv, dis = self._runs_by_side(range(120), hand_skew=0.0,
-                                      platoon_adv_hand="L")
+        adv, dis = self._runs_by_side(range(120), hand_skew=0.0, platoon_adv_hand="L")
         ratio = adv / max(1, dis)
         assert 0.85 <= ratio <= 1.15, (
             f"zero-skew sides are systematically uneven (ratio {ratio:.3f}) -- "
@@ -476,8 +506,7 @@ class TestRE24Monotonicity:
                         continue  # already occupied
                     sup = rs | bit
                     assert RE24_MATRIX[(outs, sup)] >= RE24_MATRIX[(outs, rs)], (
-                        f"adding a runner lowered RE24 at outs={outs}: "
-                        f"{rs:03b} -> {sup:03b}"
+                        f"adding a runner lowered RE24 at outs={outs}: {rs:03b} -> {sup:03b}"
                     )
 
     def test_re24_more_total_baserunners_dominates_empty(self):
@@ -510,9 +539,16 @@ class TestModelCalibrationSanity:
     one that happens to hit a number)."""
 
     def test_walk_and_strikeout_rates_are_league_average(self):
-        events = {"walk": 0, "strikeout": 0, "single": 0, "double": 0,
-                  "triple": 0, "home_run": 0, "field_out": 0,
-                  "ground_into_double_play": 0}
+        events = {
+            "walk": 0,
+            "strikeout": 0,
+            "single": 0,
+            "double": 0,
+            "triple": 0,
+            "home_run": 0,
+            "field_out": 0,
+            "ground_into_double_play": 0,
+        }
         total = 0
         for s in range(80):
             rng = np.random.default_rng(s)

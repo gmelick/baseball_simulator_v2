@@ -155,20 +155,31 @@ def sample_feed(sample_game_pk: int) -> dict[str, Any]:
                         "pitcher": {"id": 999, "fullName": "Test Pitcher"},
                     },
                     "count": {"balls": 2, "strikes": 1},
-                    "about": {"isComplete": True, "atBatIndex": 41, "inning": 3,
-                              "halfInning": "top"},
+                    "about": {
+                        "isComplete": True,
+                        "atBatIndex": 41,
+                        "inning": 3,
+                        "halfInning": "top",
+                    },
                     "result": {"eventType": "single", "description": "Single to left", "rbi": 1},
                 },
                 "allPlays": [
                     {
-                        "about": {"atBatIndex": 41, "inning": 3, "halfInning": "top",
-                                  "isComplete": True},
+                        "about": {
+                            "atBatIndex": 41,
+                            "inning": 3,
+                            "halfInning": "top",
+                            "isComplete": True,
+                        },
                         "matchup": {
                             "batter": {"id": 101, "fullName": "Test Batter"},
                             "pitcher": {"id": 999, "fullName": "Test Pitcher"},
                         },
-                        "result": {"eventType": "single", "description": "Single to left",
-                                   "rbi": 1},
+                        "result": {
+                            "eventType": "single",
+                            "description": "Single to left",
+                            "rbi": 1,
+                        },
                         "playEvents": [
                             {
                                 "isPitch": True,

@@ -42,7 +42,6 @@ from simulation.production_factory import (
 )
 from simulation.sim_loop import StateMachine
 
-
 # ---------------------------------------------------------------------------
 # A dependency-light mock sampler (no DuckDB / FAISS) -- the __new__ bypass
 # ---------------------------------------------------------------------------
@@ -58,23 +57,39 @@ class _MockSampler:
 
     def __init__(self, rng=None):
         self.rng = rng if rng is not None else np.random.default_rng()
-        self.attached: "list[dict]" = []
+        self.attached: list[dict] = []
 
-    def attach_shared_tile(self, pool, season, bat_hand, *, vectors, rowids,
-                           pitcher_id=None, meta=None, is_fallback=False,
-                           label=None):
-        self.attached.append({
-            "pool": pool, "season": season, "bat_hand": bat_hand,
-            "pitcher_id": pitcher_id,
-            "n_rowids": None if rowids is None else int(np.asarray(rowids).size),
-            "has_vectors": vectors is not None,
-        })
+    def attach_shared_tile(
+        self,
+        pool,
+        season,
+        bat_hand,
+        *,
+        vectors,
+        rowids,
+        pitcher_id=None,
+        meta=None,
+        is_fallback=False,
+        label=None,
+    ):
+        self.attached.append(
+            {
+                "pool": pool,
+                "season": season,
+                "bat_hand": bat_hand,
+                "pitcher_id": pitcher_id,
+                "n_rowids": None if rowids is None else int(np.asarray(rowids).size),
+                "has_vectors": vectors is not None,
+            }
+        )
         return None
 
 
 def _spec(**extra) -> GameSpec:
     kw = {
-        "pitcher_id": 477132, "bat_hand": "R", "season": 2024,
+        "pitcher_id": 477132,
+        "bat_hand": "R",
+        "season": 2024,
         "away_lineup": list(range(101, 110)),
         "home_lineup": list(range(201, 210)),
     }
@@ -88,7 +103,9 @@ def _spec(**extra) -> GameSpec:
 
 def _spec_with_segments(segments, **extra) -> GameSpec:
     kw = {
-        "pitcher_id": 477132, "bat_hand": "R", "season": 2024,
+        "pitcher_id": 477132,
+        "bat_hand": "R",
+        "season": 2024,
         "away_lineup": list(range(101, 110)),
         "home_lineup": list(range(201, 210)),
     }
@@ -160,8 +177,7 @@ class TestWiring:
 class TestSeedThreading:
     def test_machine_loop_rng_seeded_from_seed(self):
         # Two machines built from the SAME seed must draw the SAME loop-rng stream.
-        with use_sampler_builder(lambda spec, seed: _MockSampler(
-                rng=np.random.default_rng(seed))):
+        with use_sampler_builder(lambda spec, seed: _MockSampler(rng=np.random.default_rng(seed))):
             m1 = production_machine_factory(99, _spec())
             m2 = production_machine_factory(99, _spec())
         a = m1.rng.random(5)
@@ -169,8 +185,7 @@ class TestSeedThreading:
         assert np.array_equal(a, b)
 
     def test_different_seed_different_stream(self):
-        with use_sampler_builder(lambda spec, seed: _MockSampler(
-                rng=np.random.default_rng(seed))):
+        with use_sampler_builder(lambda spec, seed: _MockSampler(rng=np.random.default_rng(seed))):
             m1 = production_machine_factory(1, _spec())
             m2 = production_machine_factory(2, _spec())
         assert not np.array_equal(m1.rng.random(5), m2.rng.random(5))
@@ -197,16 +212,21 @@ class TestSharedTileAttach:
         # factory reads via get_shared_view, then attach through the factory.
         vecs = np.random.default_rng(0).standard_normal((20, 10)).astype(np.float32)
         rowids = (np.arange(20) + 500).astype(np.int64)
-        registry, owned = br.publish_shared_arrays({
-            "pitch_vectors": vecs, "pitch_rowids": rowids,
-        })
+        registry, owned = br.publish_shared_arrays(
+            {
+                "pitch_vectors": vecs,
+                "pitch_rowids": rowids,
+            }
+        )
         try:
             br._worker_init(registry)  # attach the views in-process
             mock = _MockSampler()
-            spec = _spec_with_segments({
-                "pitch_vectors": (vecs.shape, "float32"),
-                "pitch_rowids": (rowids.shape, "int64"),
-            })
+            spec = _spec_with_segments(
+                {
+                    "pitch_vectors": (vecs.shape, "float32"),
+                    "pitch_rowids": (rowids.shape, "int64"),
+                }
+            )
             with use_sampler_builder(lambda s, seed: mock):
                 machine = production_machine_factory(7, spec)
             assert machine.sampler is mock
@@ -237,9 +257,12 @@ class TestSharedTileAttach:
         pytest.importorskip("faiss")
         vecs = np.random.default_rng(3).standard_normal((30, 10)).astype(np.float32)
         rowids = (np.arange(30) + 900).astype(np.int64)
-        registry, owned = br.publish_shared_arrays({
-            "pitch_vectors": vecs, "pitch_rowids": rowids,
-        })
+        registry, owned = br.publish_shared_arrays(
+            {
+                "pitch_vectors": vecs,
+                "pitch_rowids": rowids,
+            }
+        )
         try:
             br._worker_init(registry)
             shared_rowids_view = br.get_shared_view("pitch_rowids")
@@ -247,18 +270,19 @@ class TestSharedTileAttach:
             def _real_builder(spec, seed):
                 return PlayPoolSampler(
                     pool_dir="/nonexistent",
-                    outcome_fetch=lambda pool, ids: {i: "single" for i in ids},
+                    outcome_fetch=lambda pool, ids: dict.fromkeys(ids, "single"),
                     rng=np.random.default_rng(seed),
                 )
 
-            spec = _spec_with_segments({
-                "pitch_vectors": (vecs.shape, "float32"),
-                "pitch_rowids": (rowids.shape, "int64"),
-            })
+            spec = _spec_with_segments(
+                {
+                    "pitch_vectors": (vecs.shape, "float32"),
+                    "pitch_rowids": (rowids.shape, "int64"),
+                }
+            )
             with use_sampler_builder(_real_builder):
                 machine = production_machine_factory(7, spec)
-            handle = machine.sampler.load_tile(POOL_PITCH, 2024, "R",
-                                               pitcher_id=477132)
+            handle = machine.sampler.load_tile(POOL_PITCH, 2024, "R", pitcher_id=477132)
             assert handle.n_vectors == 30
             assert np.shares_memory(handle.rowids, shared_rowids_view)
             machine.sampler.close()
@@ -283,9 +307,11 @@ class TestDottedRefAndDefault:
     def test_default_builder_constructs_real_sampler_no_db(self):
         # The production default builder returns a real PlayPoolSampler and touches
         # NO DB at construction (lazy connection) -- safe to build in the sandbox.
-        spec = _spec(_pool_dir="/data/play_pool",
-                     _duckdb_path="/data/baseball_sim.duckdb",
-                     _max_resident_tiles=64)
+        spec = _spec(
+            _pool_dir="/data/play_pool",
+            _duckdb_path="/data/baseball_sim.duckdb",
+            _max_resident_tiles=64,
+        )
         sampler = pf._default_sampler_builder(spec, seed=1)
         assert isinstance(sampler, PlayPoolSampler)
         assert sampler.max_resident_tiles == 64

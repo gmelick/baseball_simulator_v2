@@ -125,9 +125,11 @@ async def lifespan(app: FastAPI):
     # ``app.state.pitcher_engine`` is left unset and the similarity route
     # returns 503 "engine warming" — which is exactly its documented
     # contract for that condition.
-    engine_enabled = os.environ.get(
-        "SIMILARITY_ENGINE_ENABLED", "true"
-    ).strip().lower() not in ("0", "false", "no")
+    engine_enabled = os.environ.get("SIMILARITY_ENGINE_ENABLED", "true").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+    )
 
     if engine_enabled:
         log.info("Building pitcher similarity engine (this may take a few seconds) ...")
@@ -191,9 +193,12 @@ async def lifespan(app: FastAPI):
     # app.state.last_resim_signal; the Phase-5 simulation runner replaces this
     # callback with the real re-sim trigger once that slice lands.
     # ----------------------------------------------------------------
-    pipeline_enabled = os.environ.get(
-        "LIVE_PIPELINE_ENABLED", "false"
-    ).strip().lower() not in ("0", "false", "no", "")
+    pipeline_enabled = os.environ.get("LIVE_PIPELINE_ENABLED", "false").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "",
+    )
 
     if pipeline_enabled:
         from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
@@ -238,9 +243,12 @@ async def lifespan(app: FastAPI):
     # single-writer constraint clashing with the read-only similarity engine
     # until the deployment wires a dedicated replay DuckDB file.
     # ----------------------------------------------------------------
-    replay_enabled = os.environ.get(
-        "REPLAY_PERSISTENCE_ENABLED", "false"
-    ).strip().lower() not in ("0", "false", "no", "")
+    replay_enabled = os.environ.get("REPLAY_PERSISTENCE_ENABLED", "false").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "",
+    )
 
     if replay_enabled:
         try:
@@ -280,9 +288,7 @@ async def lifespan(app: FastAPI):
     except (TypeError, ValueError):
         sim_runner_workers = 1
     log.info("Building persistent BatchRunner (workers=%s) ...", sim_runner_workers)
-    app.state.sim_runner = BatchRunner(
-        cache=sim_cache, max_workers=sim_runner_workers
-    )
+    app.state.sim_runner = BatchRunner(cache=sim_cache, max_workers=sim_runner_workers)
 
     yield
 
@@ -381,9 +387,8 @@ def create_app() -> FastAPI:
     # make_cache() is no-op-safe: it returns a RedisCache only when a server
     # answers ping(), else an in-process InMemoryCache -- so this never requires
     # Redis and the test suite runs on the in-memory fallback with no server.
-    from simulation.batch_runner import make_cache
-
     from api.routes.games import router as games_router
+    from simulation.batch_runner import make_cache
 
     app.state.sim_cache = make_cache()
     app.include_router(games_router)

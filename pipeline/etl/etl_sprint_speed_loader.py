@@ -305,9 +305,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if not args.dsn:
-        sys.stderr.write(
-            "ERROR: no Postgres DSN provided. Set BASEBALL_DB_DSN or pass --dsn.\n"
-        )
+        sys.stderr.write("ERROR: no Postgres DSN provided. Set BASEBALL_DB_DSN or pass --dsn.\n")
         sys.exit(2)
 
     loader = SprintSpeedLoader(args.dsn)

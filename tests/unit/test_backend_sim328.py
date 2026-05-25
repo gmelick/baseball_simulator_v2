@@ -46,8 +46,8 @@ from simulation.sim_loop import (
 
 SEASON = 2024
 PITCHER = 477132
-AWAY_LINEUP = list(range(101, 110))   # 9 away batters
-HOME_LINEUP = list(range(201, 210))   # 9 home batters
+AWAY_LINEUP = list(range(101, 110))  # 9 away batters
+HOME_LINEUP = list(range(201, 210))  # 9 home batters
 
 
 # ===========================================================================
@@ -70,16 +70,19 @@ class _FixedResolver(PlayResolver):
         return self._signal
 
 
-def _machine(resolver: "PlayResolver | None" = None) -> StateMachine:
+def _machine(resolver: PlayResolver | None = None) -> StateMachine:
     return StateMachine(resolver=resolver, rng=np.random.default_rng(0))
 
 
 def _fresh_state(**kw) -> GameState:
-    defaults = dict(
-        pitcher_id=PITCHER, bat_hand="R", season=SEASON,
-        away_lineup=list(AWAY_LINEUP), home_lineup=list(HOME_LINEUP),
-        batter_id=AWAY_LINEUP[0],
-    )
+    defaults = {
+        "pitcher_id": PITCHER,
+        "bat_hand": "R",
+        "season": SEASON,
+        "away_lineup": list(AWAY_LINEUP),
+        "home_lineup": list(HOME_LINEUP),
+        "batter_id": AWAY_LINEUP[0],
+    }
     defaults.update(kw)
     return GameState(**defaults)
 
@@ -136,9 +139,11 @@ class TestWalkIsNotAnAtBat:
 
 class TestHomeRunCreditsRbi:
     def test_solo_home_run_credits_ab_h_hr_and_one_rbi(self):
-        sm = _machine(_FixedResolver(
-            FieldingSignal(event="home_run", result_hits=4, result_outs=0, result_runs=1)
-        ))
+        sm = _machine(
+            _FixedResolver(
+                FieldingSignal(event="home_run", result_hits=4, result_outs=0, result_runs=1)
+            )
+        )
         state = _fresh_state()
         batter = state.batter_id
         _drive_in_play(sm, state)
@@ -147,7 +152,7 @@ class TestHomeRunCreditsRbi:
         assert bat.ab == 1
         assert bat.h == 1
         assert bat.hr == 1
-        assert bat.rbi == 1                # solo HR drives in the batter himself
+        assert bat.rbi == 1  # solo HR drives in the batter himself
         # The HR scored a run charged to the pitcher as an earned run; no out.
         pit = sm.boxscore.line(PITCHER)
         assert pit.er == 1
@@ -157,9 +162,11 @@ class TestHomeRunCreditsRbi:
     def test_three_run_home_run_credits_three_rbi(self):
         # Bases loaded so a HR clears them: 3 runners + the batter == 4 runs, but
         # the injected result_runs of 4 is what is committed/attributed.
-        sm = _machine(_FixedResolver(
-            FieldingSignal(event="home_run", result_hits=4, result_outs=0, result_runs=4)
-        ))
+        sm = _machine(
+            _FixedResolver(
+                FieldingSignal(event="home_run", result_hits=4, result_outs=0, result_runs=4)
+            )
+        )
         state = _fresh_state()
         state.bases = Bases(first=501, second=502, third=503)
         batter = state.batter_id
@@ -167,7 +174,7 @@ class TestHomeRunCreditsRbi:
 
         bat = sm.boxscore.line(batter)
         assert bat.hr == 1
-        assert bat.rbi == 4               # grand slam drives in 4
+        assert bat.rbi == 4  # grand slam drives in 4
         assert sm.boxscore.line(PITCHER).er == 4
 
 
@@ -201,9 +208,11 @@ class TestStrikeout:
 
 class TestSingle:
     def test_single_is_an_ab_and_a_hit_no_hr(self):
-        sm = _machine(_FixedResolver(
-            FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
-        ))
+        sm = _machine(
+            _FixedResolver(
+                FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
+            )
+        )
         state = _fresh_state()
         batter = state.batter_id
         _drive_in_play(sm, state)
@@ -215,11 +224,13 @@ class TestSingle:
         assert bat.rbi == 0
 
     def test_rbi_single_credits_the_run_it_drives_in(self):
-        sm = _machine(_FixedResolver(
-            FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=1)
-        ))
+        sm = _machine(
+            _FixedResolver(
+                FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=1)
+            )
+        )
         state = _fresh_state()
-        state.bases = Bases(third=505)        # runner on 3B to drive in
+        state.bases = Bases(third=505)  # runner on 3B to drive in
         batter = state.batter_id
         _drive_in_play(sm, state)
 
@@ -255,7 +266,7 @@ class TestInningsPitchedInThirds:
 
     def test_ip_form_for_seven_outs_is_two_point_one(self):
         line = PlayerStatLine(player_id=PITCHER, outs_recorded=7)
-        assert line.ip == pytest.approx(2.1)        # 2 innings + 1 out
+        assert line.ip == pytest.approx(2.1)  # 2 innings + 1 out
         assert line.ip_thirds == pytest.approx(7 / 3.0)
         assert line.ip_outs == 7
 
@@ -269,27 +280,34 @@ class TestUnearnedRunNotChargedAsEr:
     def test_run_on_an_error_is_not_an_earned_run_nor_an_rbi(self):
         # An error-flagged play that scores a run: the run is unearned, so the
         # pitcher is not charged ER and the batter is not credited the RBI.
-        sm = _machine(_FixedResolver(
-            FieldingSignal(
-                event="field_error", result_hits=1, result_outs=0, result_runs=1,
-                is_error=True,
+        sm = _machine(
+            _FixedResolver(
+                FieldingSignal(
+                    event="field_error",
+                    result_hits=1,
+                    result_outs=0,
+                    result_runs=1,
+                    is_error=True,
+                )
             )
-        ))
+        )
         state = _fresh_state()
         state.bases = Bases(third=507)
         batter = state.batter_id
         _drive_in_play(sm, state)
 
         pit = sm.boxscore.line(PITCHER)
-        assert pit.er == 0                 # unearned -> not charged
+        assert pit.er == 0  # unearned -> not charged
         bat = sm.boxscore.line(batter)
-        assert bat.rbi == 0                # no RBI on an error-driven run
+        assert bat.rbi == 0  # no RBI on an error-driven run
 
     def test_a_clean_run_is_charged_but_an_error_run_is_not(self):
         # Control: the SAME signal without the error flag DOES charge the ER.
-        sm = _machine(_FixedResolver(
-            FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=1)
-        ))
+        sm = _machine(
+            _FixedResolver(
+                FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=1)
+            )
+        )
         state = _fresh_state()
         state.bases = Bases(third=508)
         _drive_in_play(sm, state)
@@ -303,14 +321,16 @@ class TestUnearnedRunNotChargedAsEr:
 
 class TestAttribution:
     def test_consecutive_batters_get_their_own_lines(self):
-        sm = _machine(_FixedResolver(
-            FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
-        ))
+        sm = _machine(
+            _FixedResolver(
+                FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
+            )
+        )
         state = _fresh_state()
         first_batter = state.batter_id
         _drive_in_play(sm, state)
         second_batter = state.batter_id
-        assert second_batter != first_batter   # lineup advanced
+        assert second_batter != first_batter  # lineup advanced
         _drive_in_play(sm, state)
 
         box = sm.boxscore
@@ -387,7 +407,10 @@ class TestBoxscoreExposedOnResult:
         rng = np.random.default_rng(3)
         sm = _RngStateMachine(resolver=_CyclingResolver(rng), rng=rng)
         r = simulate_game(
-            sm, seed=3, away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP,
+            sm,
+            seed=3,
+            away_lineup=AWAY_LINEUP,
+            home_lineup=HOME_LINEUP,
         )
         assert isinstance(r, GameSimResult)
         assert r.boxscore is not None
@@ -404,9 +427,9 @@ class TestBoxscoreExposedOnResult:
         rng = np.random.default_rng(7)
         sm = _RngStateMachine(resolver=_CyclingResolver(rng), rng=rng)
         r = simulate_game(sm, seed=7, away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP)
-        for pid, line in r.boxscore.batters.items():
-            assert line.h <= line.ab          # a hit is always an at-bat here
-            assert line.hr <= line.h          # every HR is a hit
+        for _pid, line in r.boxscore.batters.items():
+            assert line.h <= line.ab  # a hit is always an at-bat here
+            assert line.hr <= line.h  # every HR is a hit
             assert line.rbi >= 0
 
 
@@ -420,7 +443,10 @@ class TestAdditiveContract:
         # A GameSimResult built without the boxscore arg leaves it None (optional).
         st = _fresh_state()
         r = GameSimResult(
-            home_score=1, away_score=0, innings_played=9, final_state=st,
+            home_score=1,
+            away_score=0,
+            innings_played=9,
+            final_state=st,
         )
         assert r.boxscore is None
         assert r.winner == Team.HOME

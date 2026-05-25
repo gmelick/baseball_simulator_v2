@@ -66,20 +66,21 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
-from simulation.constants import RUN_VALUES, run_value_for_event
+from simulation.constants import RUN_VALUES, resolve_event_to_canonical
 from simulation.game_state import (
     BALLS_FOR_WALK,
-    Bases,
-    CONTACT_PITCH_OUTCOME as _GS_CONTACT_PITCH_OUTCOME,
-    GameState,
-    Half,
     OUTS_PER_INNING,
     PITCH_OUTCOMES,
-    PlayResult,
     STRIKES_FOR_STRIKEOUT,
+    Bases,
+    GameState,
+    Half,
+    PlayResult,
     Team,
 )
-from simulation.constants import resolve_event_to_canonical
+from simulation.game_state import (
+    CONTACT_PITCH_OUTCOME as _GS_CONTACT_PITCH_OUTCOME,
+)
 from simulation.play_pool_sampler import PlayPoolSampler
 from simulation.run_resolution import resolve_runs
 
@@ -115,10 +116,10 @@ _FOUL_OUTCOME = "foul"
 #: that is the dominant, behaviourally-grounded signal (foul-ball doc §2.1
 #: "granularity decision"); a future calibration can swap in measured league
 #: rates (and refine to all 12 counts) as a *data* change with no logic change.
-STRIKES_BUCKET_FOUL_FACTOR: "dict[int, float]" = {
-    0: 1.00,   # 0 strikes: a foul can only become strike 1 (bounded) -> no tilt
-    1: 1.05,   # 1 strike : a foul can only become strike 2 (bounded) -> tiny tilt
-    2: 1.55,   # 2 strikes: absorbing, count-neutral foul-off -> the big step-up
+STRIKES_BUCKET_FOUL_FACTOR: dict[int, float] = {
+    0: 1.00,  # 0 strikes: a foul can only become strike 1 (bounded) -> no tilt
+    1: 1.05,  # 1 strike : a foul can only become strike 2 (bounded) -> tiny tilt
+    2: 1.55,  # 2 strikes: absorbing, count-neutral foul-off -> the big step-up
 }
 
 
@@ -138,8 +139,8 @@ def strikes_bucket_foul_factor(strikes: int) -> float:
 
 
 def apply_count_foul_weighting(
-    distribution: "dict[str, float]", balls: int, strikes: int
-) -> "dict[str, float]":
+    distribution: dict[str, float], balls: int, strikes: int
+) -> dict[str, float]:
     """SIM-056 Option-A re-weight: tilt a sampled outcome ``distribution`` toward
     ``foul`` by the count-conditional factor, then renormalize the closed
     pitch-outcome vocabulary to sum to 1.0 (foul-ball doc §3.2 Option A).
@@ -163,13 +164,11 @@ def apply_count_foul_weighting(
     if not distribution:
         return {}
     factor = strikes_bucket_foul_factor(strikes)
-    reweighted: "dict[str, float]" = {}
+    reweighted: dict[str, float] = {}
     for outcome, mass in distribution.items():
         m = float(mass)
         if m < 0.0:
-            raise ValueError(
-                f"outcome mass for {outcome!r} cannot be negative: {mass!r}"
-            )
+            raise ValueError(f"outcome mass for {outcome!r} cannot be negative: {mass!r}")
         reweighted[outcome] = m * factor if outcome == _FOUL_OUTCOME else m
     total = sum(reweighted.values())
     if total <= 0.0:
@@ -216,7 +215,7 @@ def apply_count_foul_weighting(
 #: Hit-value of the batter's result, in the ``result_hits`` vocabulary the play
 #: pool stores and ``run_resolution.advance_state`` consumes: 0=out, 1=1B, 2=2B,
 #: 3=3B, 4=HR (``db/schemas/02_duckdb_schema.sql`` sim.outcome_pool).
-_HIT_VALUE_BY_EVENT: "dict[str, int]" = {
+_HIT_VALUE_BY_EVENT: dict[str, int] = {
     "single": 1,
     "double": 2,
     "triple": 3,
@@ -227,18 +226,37 @@ _HIT_VALUE_BY_EVENT: "dict[str, int]" = {
 #: canonical resolver (constants.resolve_event_to_canonical) maps the long
 #: Statcast vocabulary; this set is only the loop's quick "did the batter reach"
 #: test for the result_hits delta.
-_OUT_EVENTS: "frozenset[str]" = frozenset({
-    "field_out", "force_out", "fielders_choice", "fielders_choice_out",
-    "other_out", "strikeout", "sac_fly", "sacrifice_fly", "sac_bunt",
-    "sacrifice_hit", "grounded_into_double_play", "ground_into_double_play",
-    "double_play", "triple_play", "strikeout_double_play",
-})
+_OUT_EVENTS: frozenset[str] = frozenset(
+    {
+        "field_out",
+        "force_out",
+        "fielders_choice",
+        "fielders_choice_out",
+        "other_out",
+        "strikeout",
+        "sac_fly",
+        "sacrifice_fly",
+        "sac_bunt",
+        "sacrifice_hit",
+        "grounded_into_double_play",
+        "ground_into_double_play",
+        "double_play",
+        "triple_play",
+        "strikeout_double_play",
+    }
+)
 
 #: Events that record TWO outs on the play (the batter + a runner).
-_DOUBLE_PLAY_EVENTS: "frozenset[str]" = frozenset({
-    "grounded_into_double_play", "ground_into_double_play", "double_play",
-    "strikeout_double_play", "sac_fly_double_play", "sac_bunt_double_play",
-})
+_DOUBLE_PLAY_EVENTS: frozenset[str] = frozenset(
+    {
+        "grounded_into_double_play",
+        "ground_into_double_play",
+        "double_play",
+        "strikeout_double_play",
+        "sac_fly_double_play",
+        "sac_bunt_double_play",
+    }
+)
 
 #: Steal-outcome strings recorded on ``PlayResult.steal_outcome`` (spec §3/§7).
 STEAL_SAFE = "safe"
@@ -320,15 +338,15 @@ class FieldingSignal:
     and a test can inject it verbatim.
     """
 
-    event: str                       # Statcast/canonical batted-ball event
-    result_hits: int                 # 0=out 1=1B 2=2B 3=3B 4=HR (pool vocab)
-    result_outs: int                 # outs recorded on the play (0/1/2)
-    result_runs: int                 # runs that physically scored on the play
-    fielder_id: "int | None" = None  # the fielder who handled the ball (RBF)
-    is_error: bool = False           # error flag (fielder/catcher RBF)
-    exit_velo: "float | None" = None
-    launch_angle: "float | None" = None
-    spray_angle: "float | None" = None
+    event: str  # Statcast/canonical batted-ball event
+    result_hits: int  # 0=out 1=1B 2=2B 3=3B 4=HR (pool vocab)
+    result_outs: int  # outs recorded on the play (0/1/2)
+    result_runs: int  # runs that physically scored on the play
+    fielder_id: int | None = None  # the fielder who handled the ball (RBF)
+    is_error: bool = False  # error flag (fielder/catcher RBF)
+    exit_velo: float | None = None
+    launch_angle: float | None = None
+    spray_angle: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,9 +361,9 @@ class StealResolution:
     """
 
     attempted: bool
-    runner_id: "int | None" = None
-    from_base: "int | None" = None
-    to_base: "int | None" = None
+    runner_id: int | None = None
+    from_base: int | None = None
+    to_base: int | None = None
     safe: bool = False
 
 
@@ -364,9 +382,7 @@ class PlayResolver:
     ``resolve_runs``).  Every method is overridable in isolation.
     """
 
-    def resolve_fielding(
-        self, state: GameState, battedball_sample: "dict | None"
-    ) -> FieldingSignal:
+    def resolve_fielding(self, state: GameState, battedball_sample: dict | None) -> FieldingSignal:
         """Map a sampled batted-ball event to a :class:`FieldingSignal` (step 6).
 
         The default reads the play pool's ``result_hits/result_outs/result_runs``
@@ -422,7 +438,7 @@ class _SampledStealPool:
     flip.
     """
 
-    rows: "list[tuple[bool, float]]"
+    rows: list[tuple[bool, float]]
 
     def sample(self, rng) -> bool:
         if not self.rows:
@@ -484,7 +500,7 @@ class CountAdvance:
     terminal: bool
     #: The terminal PA event, or ``EVENT_IN_PROGRESS`` while the PA is live.
     #: For ``in_play`` this is None (the event is resolved by the batted ball).
-    event: "str | None"
+    event: str | None
     #: True when this outcome put the ball in play (the batted-ball path).
     is_contact: bool
 
@@ -516,8 +532,7 @@ def advance_count(balls: int, strikes: int, pitch_outcome: str) -> CountAdvance:
     """
     if pitch_outcome not in PITCH_OUTCOMES:
         raise ValueError(
-            f"unknown pitch_outcome {pitch_outcome!r}; expected one of "
-            f"{PITCH_OUTCOMES}."
+            f"unknown pitch_outcome {pitch_outcome!r}; expected one of {PITCH_OUTCOMES}."
         )
     if balls < 0 or strikes < 0:
         raise ValueError(f"count cannot be negative: {balls}-{strikes}.")
@@ -530,30 +545,32 @@ def advance_count(balls: int, strikes: int, pitch_outcome: str) -> CountAdvance:
     if pitch_outcome == "ball":
         balls += 1
         if balls >= BALLS_FOR_WALK:
-            return CountAdvance(balls, strikes, terminal=True,
-                                event=EVENT_WALK, is_contact=False)
-        return CountAdvance(balls, strikes, terminal=False,
-                            event=EVENT_IN_PROGRESS, is_contact=False)
+            return CountAdvance(balls, strikes, terminal=True, event=EVENT_WALK, is_contact=False)
+        return CountAdvance(
+            balls, strikes, terminal=False, event=EVENT_IN_PROGRESS, is_contact=False
+        )
 
     if pitch_outcome in ("called_strike", "swinging_strike"):
         strikes += 1
         if strikes >= STRIKES_FOR_STRIKEOUT:
-            return CountAdvance(balls, strikes, terminal=True,
-                                event=EVENT_STRIKEOUT, is_contact=False)
-        return CountAdvance(balls, strikes, terminal=False,
-                            event=EVENT_IN_PROGRESS, is_contact=False)
+            return CountAdvance(
+                balls, strikes, terminal=True, event=EVENT_STRIKEOUT, is_contact=False
+            )
+        return CountAdvance(
+            balls, strikes, terminal=False, event=EVENT_IN_PROGRESS, is_contact=False
+        )
 
     if pitch_outcome == "foul":
         # SIM-056 absorbing rule: a two-strike foul keeps the PA alive and does
         # NOT advance the count past strike 2.
         if strikes < STRIKES_FOR_STRIKEOUT - 1:
             strikes += 1
-        return CountAdvance(balls, strikes, terminal=False,
-                            event=EVENT_IN_PROGRESS, is_contact=False)
+        return CountAdvance(
+            balls, strikes, terminal=False, event=EVENT_IN_PROGRESS, is_contact=False
+        )
 
     # in_play: terminal as a pitch outcome; event resolved by batted-ball steps.
-    return CountAdvance(balls, strikes, terminal=True, event=None,
-                        is_contact=True)
+    return CountAdvance(balls, strikes, terminal=True, event=None, is_contact=True)
 
 
 # ---------------------------------------------------------------------------
@@ -561,7 +578,7 @@ def advance_count(balls: int, strikes: int, pitch_outcome: str) -> CountAdvance:
 # ---------------------------------------------------------------------------
 
 
-def pitch_outcome_to_event(pitch_outcome: str) -> "str | None":
+def pitch_outcome_to_event(pitch_outcome: str) -> str | None:
     """Map a *non-contact* terminal pitch outcome to a PA-event string, or
     ``None`` when the pitch is in-play (contact) and must be resolved by the
     batted-ball pool instead.
@@ -601,7 +618,7 @@ class PlateAppearanceSimulator:
         sampler: PlayPoolSampler,
         *,
         k: int = 25,
-        rng: "np.random.Generator | None" = None,
+        rng: np.random.Generator | None = None,
         fingerprint_deriver=None,
     ) -> None:
         if sampler is None:
@@ -619,7 +636,7 @@ class PlateAppearanceSimulator:
 
     # ---- fingerprints (SIM-317 real derivation, with a stub fall-back) -----
 
-    def _pitch_fingerprint(self, state: "PitchState | GameState") -> NDArray[np.float32]:
+    def _pitch_fingerprint(self, state: PitchState | GameState) -> NDArray[np.float32]:
         """Build the 10-dim pitch query vector (spec §4.1).
 
         SIM-317: when a :class:`simulation.fingerprints.FingerprintDeriver` is
@@ -631,12 +648,13 @@ class PlateAppearanceSimulator:
         """
         if self.fingerprint_deriver is not None:
             return self.fingerprint_deriver.pitch_fingerprint(state)
-        seed = abs(hash((state.pitcher_id, state.bat_hand, state.balls,
-                         state.strikes, state.outs))) % (2**32)
+        seed = abs(
+            hash((state.pitcher_id, state.bat_hand, state.balls, state.strikes, state.outs))
+        ) % (2**32)
         local = np.random.default_rng(seed)
         return local.standard_normal(_PITCH_FINGERPRINT_DIM).astype(np.float32)
 
-    def _battedball_fingerprint(self, state: "PitchState | GameState") -> NDArray[np.float32]:
+    def _battedball_fingerprint(self, state: PitchState | GameState) -> NDArray[np.float32]:
         """Build the 3-dim batted-ball query vector (EV / LA / spray; spec §4.2).
 
         SIM-317: when a deriver is injected, derive the real contact-quality
@@ -667,8 +685,8 @@ class PlateAppearanceSimulator:
         fellback = bool(pitch_sample.get("fellback", False))
 
         is_contact = pitch_outcome == CONTACT_PITCH_OUTCOME
-        battedball_sample: "dict | None" = None
-        event: "str | None"
+        battedball_sample: dict | None = None
+        event: str | None
 
         if is_contact:
             bb_fp = self._battedball_fingerprint(state)
@@ -719,12 +737,12 @@ class StateMachine:
 
     def __init__(
         self,
-        sampler: "PlayPoolSampler | None" = None,
+        sampler: PlayPoolSampler | None = None,
         *,
         k: int = 25,
-        rng: "np.random.Generator | None" = None,
+        rng: np.random.Generator | None = None,
         fingerprint_deriver=None,
-        resolver: "PlayResolver | None" = None,
+        resolver: PlayResolver | None = None,
         sim=None,
         manager=None,
         bench=None,
@@ -768,23 +786,26 @@ class StateMachine:
         # observable side of the §3/§5.3 hooks the SIM-323 tests assert against).
         # Each entry is a small dict: {"kind": ..., "inning": ..., "leverage": ...,
         # plus decision-specific ids}.  Lightweight + additive.
-        self.manager_decisions: "list[dict]" = []
+        self.manager_decisions: list[dict] = []
         # Steal decision made in the pre-pitch hook, resolved in step 7.  Reset
         # each pitch in step_pitch.
-        self._pending_steal: "StealResolution | None" = None
+        self._pending_steal: StealResolution | None = None
         # SIM-328: per-game boxscore accumulator.  Populated INSIDE the PA loop
         # (:meth:`_accumulate_pa`, called from :meth:`_end_of_pa`) on every
         # terminal PA — the batter on offense, the pitcher on defense.  Lazily
         # created on the first terminal PA so a machine that is never driven (or a
         # caller that does not care) carries no boxscore.  The full-game driver
         # exposes it on :class:`GameSimResult.boxscore`.
-        self.boxscore: "BoxScore | None" = None
-        self._pa: "PlateAppearanceSimulator | None" = (
+        self.boxscore: BoxScore | None = None
+        self._pa: PlateAppearanceSimulator | None = (
             PlateAppearanceSimulator(
-                sampler, k=k, rng=self.rng,
+                sampler,
+                k=k,
+                rng=self.rng,
                 fingerprint_deriver=fingerprint_deriver,
             )
-            if sampler is not None else None
+            if sampler is not None
+            else None
         )
 
     # ===================================================================
@@ -795,8 +816,8 @@ class StateMachine:
         self,
         state: GameState,
         *,
-        pitch_outcome: "str | None" = None,
-        outcome_distribution: "dict[str, float] | None" = None,
+        pitch_outcome: str | None = None,
+        outcome_distribution: dict[str, float] | None = None,
     ) -> PlayResult:
         """Advance the game by exactly ONE pitch (spec §2 step 1 -> step 8).
 
@@ -856,7 +877,7 @@ class StateMachine:
             )
 
         # --- Steps 2/3: pitch selection + sampling -------------------------
-        pitch_sample: "dict | None" = None
+        pitch_sample: dict | None = None
         fellback = False
         if outcome_distribution is not None:
             # SIM-318 Option-A path: the caller supplies the sampled neighbourhood
@@ -881,12 +902,12 @@ class StateMachine:
             # draw; bias *whether* a foul is accepted by the count-conditional
             # factor (re-sample on rejection from the same count-blind sampler).
             pitch_outcome = self._accept_or_resample_foul(
-                pitch_outcome, state, pitch_fp,
+                pitch_outcome,
+                state,
+                pitch_fp,
             )
         elif pitch_outcome not in PITCH_OUTCOMES:
-            raise ValueError(
-                f"pitch_outcome {pitch_outcome!r} is not one of {PITCH_OUTCOMES}."
-            )
+            raise ValueError(f"pitch_outcome {pitch_outcome!r} is not one of {PITCH_OUTCOMES}.")
 
         # --- Step 4: outcome determination (§5.1 count machine) ------------
         # The SIM-056 count-conditional foul re-weight has already been applied
@@ -954,7 +975,7 @@ class StateMachine:
     # ===================================================================
 
     def _draw_reweighted_outcome(
-        self, distribution: "dict[str, float]", balls: int, strikes: int
+        self, distribution: dict[str, float], balls: int, strikes: int
     ) -> str:
         """SIM-318 Option-A: re-weight a sampled outcome ``distribution`` by the
         count-conditional foul factor (:func:`apply_count_foul_weighting`) and
@@ -968,8 +989,7 @@ class StateMachine:
         for outcome in distribution:
             if outcome not in PITCH_OUTCOMES:
                 raise ValueError(
-                    f"outcome_distribution key {outcome!r} is not one of "
-                    f"{PITCH_OUTCOMES}."
+                    f"outcome_distribution key {outcome!r} is not one of {PITCH_OUTCOMES}."
                 )
         reweighted = apply_count_foul_weighting(distribution, balls, strikes)
         total = sum(reweighted.values())
@@ -984,9 +1004,7 @@ class StateMachine:
         idx = int(self.rng.choice(len(outcomes), p=probs))
         return outcomes[idx]
 
-    def _accept_or_resample_foul(
-        self, pitch_outcome: str, state: GameState, pitch_fp
-    ) -> str:
+    def _accept_or_resample_foul(self, pitch_outcome: str, state: GameState, pitch_fp) -> str:
         """SIM-318 Option-B: bias a single count-blind ``sample_pitch`` draw by
         the SIM-056 count-conditional foul factor (foul-ball doc §3.2 Option B).
 
@@ -1033,7 +1051,7 @@ class StateMachine:
         state: GameState,
         result: PlayResult,
         *,
-        event: "str | None",
+        event: str | None,
         result_hits: int,
         result_outs: int,
         result_runs: int,
@@ -1100,18 +1118,20 @@ class StateMachine:
         old = state.bases
         # Collect existing runners as (from_base, runner_id), lead runner first.
         existing = [
-            (3, old.third), (2, old.second), (1, old.first),
+            (3, old.third),
+            (2, old.second),
+            (1, old.first),
         ]
         new_first = new_second = new_third = None
         runs_scored = 0
-        advances: "dict[int, int]" = {}
+        advances: dict[int, int] = {}
         for from_base, rid in existing:
             if rid is None:
                 continue
             dest = from_base + int(bases_advanced)
             if dest >= 4:
                 runs_scored += 1
-                advances[rid] = 0          # 0 == scored
+                advances[rid] = 0  # 0 == scored
                 continue
             # Place on the destination bag.  Under a uniform push runners never
             # pass each other, so the lead-most bag is always free first; if a
@@ -1182,8 +1202,10 @@ class StateMachine:
             return
         result.steal_attempted = True
         from_base = steal.from_base
-        to_base = steal.to_base if steal.to_base is not None else (
-            _NEXT_BASE.get(from_base, 4) if from_base else 4
+        to_base = (
+            steal.to_base
+            if steal.to_base is not None
+            else (_NEXT_BASE.get(from_base, 4) if from_base else 4)
         )
         rid = steal.runner_id
         if steal.safe:
@@ -1199,8 +1221,12 @@ class StateMachine:
             if to_base >= 4:
                 # Steal of home: one run scores -> route through resolve_runs.
                 self._commit_run_delta(
-                    state, result, event="stolen_base_home",
-                    result_hits=0, result_outs=0, result_runs=1,
+                    state,
+                    result,
+                    event="stolen_base_home",
+                    result_hits=0,
+                    result_outs=0,
+                    result_runs=1,
                 )
                 if rid is not None:
                     result.baserunner_advances[rid] = 0
@@ -1220,14 +1246,18 @@ class StateMachine:
             # through resolve_runs (no inline out arithmetic).
             self._clear_base(state, from_base)
             self._commit_run_delta(
-                state, result, event="caught_stealing",
-                result_hits=0, result_outs=1, result_runs=0,
+                state,
+                result,
+                event="caught_stealing",
+                result_hits=0,
+                result_outs=1,
+                result_runs=0,
             )
             if rid is not None:
                 result.baserunner_advances[rid] = 0  # out (off the bases)
 
     @staticmethod
-    def _move_runner(state: GameState, from_base: "int | None", to_base: int) -> None:
+    def _move_runner(state: GameState, from_base: int | None, to_base: int) -> None:
         """Move a runner from ``from_base`` to ``to_base`` (4 == home/off bases)."""
         b = state.bases
         rid = {1: b.first, 2: b.second, 3: b.third}.get(from_base)
@@ -1242,7 +1272,7 @@ class StateMachine:
         b.assert_consistent()
 
     @staticmethod
-    def _clear_base(state: GameState, base: "int | None") -> None:
+    def _clear_base(state: GameState, base: int | None) -> None:
         b = state.bases
         if base == 1:
             b.first = None
@@ -1271,7 +1301,7 @@ class StateMachine:
         if b.first is not None:
             if b.second is not None:
                 if b.third is not None:
-                    forced_run = 1            # bases loaded -> run forced home
+                    forced_run = 1  # bases loaded -> run forced home
                 # push 2B -> 3B
                 b.third = b.second
             # push 1B -> 2B
@@ -1283,8 +1313,12 @@ class StateMachine:
             result.baserunner_advances[state.batter_id] = 1
         # Route the (possibly forced) run through resolve_runs — no inline runs.
         self._commit_run_delta(
-            state, result, event=EVENT_WALK,
-            result_hits=0, result_outs=0, result_runs=forced_run,
+            state,
+            result,
+            event=EVENT_WALK,
+            result_hits=0,
+            result_outs=0,
+            result_runs=forced_run,
         )
 
     def _issue_intentional_walk(self, state: GameState) -> PlayResult:
@@ -1328,14 +1362,22 @@ class StateMachine:
             result.event = "strikeout"  # still a K event; batter reached on D3K
             forced_run = self._force_on_reach(state, result)
             self._commit_run_delta(
-                state, result, event="field_error",  # batter safe at 1B (no out)
-                result_hits=1, result_outs=0, result_runs=forced_run,
+                state,
+                result,
+                event="field_error",  # batter safe at 1B (no out)
+                result_hits=1,
+                result_outs=0,
+                result_runs=forced_run,
             )
             return
         # Ordinary strikeout: one out, no base/score change beyond the out.
         self._commit_run_delta(
-            state, result, event=EVENT_STRIKEOUT,
-            result_hits=0, result_outs=1, result_runs=0,
+            state,
+            result,
+            event=EVENT_STRIKEOUT,
+            result_hits=0,
+            result_outs=1,
+            result_runs=0,
         )
 
     def _dropped_third_strike(self, state: GameState, result: PlayResult) -> bool:
@@ -1380,12 +1422,19 @@ class StateMachine:
     #: plain fly/air out (NOT a hit, NOT a strikeout, NOT a grounder/DP, NOT an
     #: already-productive out).  Kept conservative so the bias only nudges the
     #: genuinely-ambiguous deep-fly-out into the productive-out it already is.
-    _SAC_FLY_ELIGIBLE_OUTS: "frozenset[str]" = frozenset({
-        "field_out", "fly_out", "flyout", "out", "air_out", "sac_fly",
-        "sacrifice_fly",
-    })
+    _SAC_FLY_ELIGIBLE_OUTS: frozenset[str] = frozenset(
+        {
+            "field_out",
+            "fly_out",
+            "flyout",
+            "out",
+            "air_out",
+            "sac_fly",
+            "sacrifice_fly",
+        }
+    )
 
-    def _apply_sac_fly_bias(self, state: GameState, sig: "FieldingSignal") -> "FieldingSignal":
+    def _apply_sac_fly_bias(self, state: GameState, sig: FieldingSignal) -> FieldingSignal:
         """Bias a sampled fly-ball OUT toward a ``sacrifice_fly`` (SIM-349).
 
         A no-op unless ALL hold: the manager flagged ``sac_fly_intent`` for this
@@ -1450,7 +1499,7 @@ class StateMachine:
         count machine can still be tested without FAISS.
         """
         result.pa_terminal = True
-        bb_sample: "dict | None" = None
+        bb_sample: dict | None = None
         if self._pa is not None:
             # --- Step 5: batted-ball sampling ------------------------------
             bb_fp = self._pa._battedball_fingerprint(state)  # SIM-317
@@ -1461,7 +1510,7 @@ class StateMachine:
             result.fellback = result.fellback or bool(bb_sample.get("fellback", False))
         elif getattr(self.resolver, "_injected_battedball", None) is not None:
             # A resolver may carry an injected batted-ball sample (no-DB tests).
-            bb_sample = self.resolver._injected_battedball
+            bb_sample = getattr(self.resolver, "_injected_battedball", None)
 
         if bb_sample is None:
             # Count-machine-only mode: terminal in-play, resolution handed off.
@@ -1492,7 +1541,10 @@ class StateMachine:
         hit = int(sig.result_hits)
         if hit >= 1:
             runners_scored = self._advance_runners(
-                state, result, batter_reached=hit, bases_advanced=hit,
+                state,
+                result,
+                batter_reached=hit,
+                bases_advanced=hit,
             )
         else:
             runners_scored = 0
@@ -1510,8 +1562,12 @@ class StateMachine:
 
         # --- Step 8 hand-off: ONE resolve_runs call for runs + base-out ----
         self._commit_run_delta(
-            state, result, event=sig.event,
-            result_hits=hit, result_outs=int(sig.result_outs), result_runs=runs,
+            state,
+            result,
+            event=sig.event,
+            result_hits=hit,
+            result_outs=int(sig.result_outs),
+            result_runs=runs,
         )
 
     # ===================================================================
@@ -1559,19 +1615,29 @@ class StateMachine:
     #: Canonical PA outcomes that are NOT at-bats (PA but not AB): walks, HBP,
     #: and the two productive outs (sac fly / sac bunt).  Everything else that is
     #: a terminal PA counts as an AB.
-    _NON_AB_CANONICAL: "frozenset[str]" = frozenset({
-        "walk", "intentional_walk", "hit_by_pitch",
-        "sacrifice_fly", "sacrifice_hit",
-    })
+    _NON_AB_CANONICAL: frozenset[str] = frozenset(
+        {
+            "walk",
+            "intentional_walk",
+            "hit_by_pitch",
+            "sacrifice_fly",
+            "sacrifice_hit",
+        }
+    )
     #: Canonical PA outcomes that are base hits.
-    _HIT_CANONICAL: "frozenset[str]" = frozenset({
-        "single", "double", "triple", "home_run",
-    })
+    _HIT_CANONICAL: frozenset[str] = frozenset(
+        {
+            "single",
+            "double",
+            "triple",
+            "home_run",
+        }
+    )
     #: Canonical PA outcomes that count as a walk against the pitcher.
-    _BB_CANONICAL: "frozenset[str]" = frozenset({"walk", "intentional_walk"})
+    _BB_CANONICAL: frozenset[str] = frozenset({"walk", "intentional_walk"})
 
     @staticmethod
-    def _current_batter_id(state: GameState) -> "int | None":
+    def _current_batter_id(state: GameState) -> int | None:
         """The id of the batter who just completed THIS PA (SIM-328 attribution).
 
         Reads the OFFENSE's lineup at its current slot pointer — the authoritative
@@ -1938,10 +2004,14 @@ class StateMachine:
             mgr.intentional_walk_signalled = True
             # An IBB pre-empts the steal/pitch-out: the loop will issue the walk.
             mgr.green_light_rate = 0.0
-            self.manager_decisions.append({
-                "kind": "intentional_walk", "inning": int(state.inning),
-                "leverage": li, "batter_id": state.batter_id,
-            })
+            self.manager_decisions.append(
+                {
+                    "kind": "intentional_walk",
+                    "inning": int(state.inning),
+                    "leverage": li,
+                    "batter_id": state.batter_id,
+                }
+            )
             return
 
         # --- (3) Steal green-light: tendency scaled by leverage ----------------
@@ -1972,9 +2042,13 @@ class StateMachine:
             # this manager (a defensive mirror of the running tendency).
             if self._manager_rng() < min(0.5 * green, 0.5):
                 mgr.pitch_out_signalled = True
-                self.manager_decisions.append({
-                    "kind": "pitch_out", "inning": int(state.inning), "leverage": li,
-                })
+                self.manager_decisions.append(
+                    {
+                        "kind": "pitch_out",
+                        "inning": int(state.inning),
+                        "leverage": li,
+                    }
+                )
 
         # --- steal initiate wiring (SIM-319) -----------------------------------
         # Only auto-stage from the resolver if a test has not already staged one,
@@ -2068,18 +2142,23 @@ class StateMachine:
         if self._manager_rng() >= fire_p:
             return
         state.manager.hit_and_run_signalled = True
-        self.manager_decisions.append({
-            "kind": "hit_and_run", "inning": int(state.inning), "leverage": li,
-            "batter_id": state.batter_id, "runner_id": b.first,
-        })
+        self.manager_decisions.append(
+            {
+                "kind": "hit_and_run",
+                "inning": int(state.inning),
+                "leverage": li,
+                "batter_id": state.batter_id,
+                "runner_id": b.first,
+            }
+        )
 
     def stage_steal(
         self,
         *,
-        runner_id: "int | None" = None,
+        runner_id: int | None = None,
         from_base: int = 1,
-        to_base: "int | None" = None,
-        safe: "bool | None" = None,
+        to_base: int | None = None,
+        safe: bool | None = None,
     ) -> None:
         """Stage a steal attempt for the NEXT pitch (the §3 decision).
 
@@ -2093,8 +2172,11 @@ class StateMachine:
         if safe is None:
             safe = self._sample_steal_success(state=None)
         self._pending_steal = StealResolution(
-            attempted=True, runner_id=runner_id,
-            from_base=from_base, to_base=to_base, safe=bool(safe),
+            attempted=True,
+            runner_id=runner_id,
+            from_base=from_base,
+            to_base=to_base,
+            safe=bool(safe),
         )
 
     def _sample_steal_success(self, state) -> bool:
@@ -2177,12 +2259,18 @@ class StateMachine:
         old = state.pitcher_id
         state.pitcher_id = int(new_arm)
         state.pitcher_pitch_count = 0  # fresh arm
-        self.manager_decisions.append({
-            "kind": "pitching_change", "inning": int(state.inning), "leverage": li,
-            "out_pitcher_id": old, "in_pitcher_id": int(new_arm), "forced": forced,
-        })
+        self.manager_decisions.append(
+            {
+                "kind": "pitching_change",
+                "inning": int(state.inning),
+                "leverage": li,
+                "out_pitcher_id": old,
+                "in_pitcher_id": int(new_arm),
+                "forced": forced,
+            }
+        )
 
-    def _pick_reliever(self, state: GameState, li: float) -> "int | None":
+    def _pick_reliever(self, state: GameState, li: float) -> int | None:
         """Choose a reliever from the defending team's bullpen BY LEVERAGE.
 
         High-LI + late -> the **closer** (the first arm in the list, by
@@ -2200,8 +2288,8 @@ class StateMachine:
             return None
         high_lev_late = li >= _HIGH_LEVERAGE and int(state.inning) >= _LATE_INNING
         if high_lev_late:
-            return int(arms.pop(0))      # closer / highest-leverage arm.
-        return int(arms.pop())           # middle reliever from the back.
+            return int(arms.pop(0))  # closer / highest-leverage arm.
+        return int(arms.pop())  # middle reliever from the back.
 
     def _maybe_pinch_hit(self, state: GameState, li: float) -> None:
         """Pinch-hit a bench player for the batter now due up (SIM-323).
@@ -2235,10 +2323,15 @@ class StateMachine:
         out_batter = lineup[slot % len(lineup)]
         lineup[slot % len(lineup)] = sub
         state.batter_id = sub
-        self.manager_decisions.append({
-            "kind": "pinch_hit", "inning": int(state.inning), "leverage": li,
-            "out_batter_id": out_batter, "in_batter_id": sub,
-        })
+        self.manager_decisions.append(
+            {
+                "kind": "pinch_hit",
+                "inning": int(state.inning),
+                "leverage": li,
+                "out_batter_id": out_batter,
+                "in_batter_id": sub,
+            }
+        )
 
     def _maybe_sac_bunt(self, state: GameState, li: float) -> None:
         """Signal a sacrifice bunt for the next PA (SIM-323 small-ball setup).
@@ -2260,10 +2353,14 @@ class StateMachine:
             return
         if self._manager_rng() >= min(1.0, tend):
             return
-        self.manager_decisions.append({
-            "kind": "sac_bunt", "inning": int(state.inning), "leverage": li,
-            "batter_id": state.batter_id,
-        })
+        self.manager_decisions.append(
+            {
+                "kind": "sac_bunt",
+                "inning": int(state.inning),
+                "leverage": li,
+                "batter_id": state.batter_id,
+            }
+        )
 
     def _maybe_sac_fly_intent(self, state: GameState, li: float) -> None:
         """Flag sac-fly intent for the NEXT PA (SIM-349 productive-out bias).
@@ -2308,10 +2405,15 @@ class StateMachine:
         if self._manager_rng() >= fire_p:
             return
         state.manager.sac_fly_intent = True
-        self.manager_decisions.append({
-            "kind": "sac_fly_intent", "inning": int(state.inning), "leverage": li,
-            "batter_id": state.batter_id, "runner_id": b.third,
-        })
+        self.manager_decisions.append(
+            {
+                "kind": "sac_fly_intent",
+                "inning": int(state.inning),
+                "leverage": li,
+                "batter_id": state.batter_id,
+                "runner_id": b.third,
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2359,10 +2461,10 @@ class PlayerStatLine:
     rbi: int = 0
     # SIM-365 additive batting extras (all default 0 so existing constructions
     # and SIM-328 tests are unaffected):
-    b2: int = 0          # doubles (a subset of ``h``)
-    b3: int = 0          # triples (a subset of ``h``)
-    r: int = 0           # runs scored by this player (offense)
-    sb: int = 0          # stolen bases
+    b2: int = 0  # doubles (a subset of ``h``)
+    b3: int = 0  # triples (a subset of ``h``)
+    r: int = 0  # runs scored by this player (offense)
+    sb: int = 0  # stolen bases
 
     # --- pitching (IP stored as outs == thirds of an inning) ---
     outs_recorded: int = 0
@@ -2370,8 +2472,8 @@ class PlayerStatLine:
     bb: int = 0
     er: int = 0
     # SIM-365 additive pitching extras (default 0):
-    h_allowed: int = 0   # hits allowed
-    r_allowed: int = 0   # runs allowed (earned + unearned; >= ``er``)
+    h_allowed: int = 0  # hits allowed
+    r_allowed: int = 0  # runs allowed (earned + unearned; >= ``er``)
 
     @property
     def ip_outs(self) -> int:
@@ -2410,7 +2512,7 @@ class BoxScore:
       * :meth:`line` returns (creating if needed) the single line for an id.
     """
 
-    lines: "dict[int, PlayerStatLine]" = field(default_factory=dict)
+    lines: dict[int, PlayerStatLine] = field(default_factory=dict)
 
     def line(self, player_id: int) -> PlayerStatLine:
         """Return the stat line for ``player_id``, creating an empty one if absent."""
@@ -2421,19 +2523,15 @@ class BoxScore:
         return line
 
     @property
-    def batters(self) -> "dict[int, PlayerStatLine]":
+    def batters(self) -> dict[int, PlayerStatLine]:
         """Lines with any batting activity (an AB or a PA that reached base)."""
-        return {
-            pid: ln for pid, ln in self.lines.items()
-            if ln.ab or ln.h or ln.rbi
-        }
+        return {pid: ln for pid, ln in self.lines.items() if ln.ab or ln.h or ln.rbi}
 
     @property
-    def pitchers(self) -> "dict[int, PlayerStatLine]":
+    def pitchers(self) -> dict[int, PlayerStatLine]:
         """Lines with any pitching activity (outs recorded / K / BB / ER)."""
         return {
-            pid: ln for pid, ln in self.lines.items()
-            if ln.outs_recorded or ln.k or ln.bb or ln.er
+            pid: ln for pid, ln in self.lines.items() if ln.outs_recorded or ln.k or ln.bb or ln.er
         }
 
 
@@ -2455,17 +2553,17 @@ class GameSimResult:
     final_state: GameState
     walk_off: bool = False
     extra_innings: bool = False
-    seed: "int | None" = None
+    seed: int | None = None
     #: Total pitches thrown across the game (a cheap sanity / perf signal).
     total_pitches: int = 0
     #: SIM-328 per-game boxscore: per-player AB/H/HR/RBI + IP/K/BB/ER, keyed by
     #: player_id.  ADDITIVE/optional so SIM-320/327 returns + tests are
     #: unaffected; ``None`` when no boxscore was accumulated (the loop attaches a
     #: populated one via :func:`simulate_game`).
-    boxscore: "BoxScore | None" = None
+    boxscore: BoxScore | None = None
 
     @property
-    def winner(self) -> "Team | None":
+    def winner(self) -> Team | None:
         """The winning :class:`~simulation.game_state.Team` (None on a tie — only
         possible at the ``_MAX_INNINGS`` guard, never in a normal finish)."""
         if self.home_score > self.away_score:
@@ -2490,7 +2588,7 @@ def _place_ghost_runner(state: GameState) -> None:
         return  # already seeded / runners present — never double-place.
     lineup = state.home_lineup if state.offense == Team.HOME else state.away_lineup
     slot = state.home_lineup_slot if state.offense == Team.HOME else state.away_lineup_slot
-    ghost_id: "int | None" = None
+    ghost_id: int | None = None
     if lineup:
         ghost_id = lineup[(slot - 1) % len(lineup)]
     # A non-None id so the bag reads as occupied even without a lineup; a
@@ -2524,9 +2622,7 @@ def _game_over_after_half(state: GameState) -> bool:
         return False
     # state.half == TOP: the bottom of (state.inning - 1) just finished.
     completed_inning = state.inning - 1
-    if completed_inning >= REGULATION_INNINGS and state.home_score != state.away_score:
-        return True
-    return False
+    return bool(completed_inning >= REGULATION_INNINGS and state.home_score != state.away_score)
 
 
 def _is_walkoff_live(state: GameState) -> bool:
@@ -2542,20 +2638,20 @@ def _is_walkoff_live(state: GameState) -> bool:
 
 
 def simulate_game(
-    state_machine: "StateMachine | None" = None,
+    state_machine: StateMachine | None = None,
     *,
-    initial_state: "GameState | None" = None,
-    sampler: "PlayPoolSampler | None" = None,
-    resolver: "PlayResolver | None" = None,
+    initial_state: GameState | None = None,
+    sampler: PlayPoolSampler | None = None,
+    resolver: PlayResolver | None = None,
     sim=None,
     fingerprint_deriver=None,
     k: int = 25,
-    seed: "int | None" = None,
+    seed: int | None = None,
     pitcher_id: int = 0,
     bat_hand: str = "R",
     season: int = 2024,
-    away_lineup: "list[int] | None" = None,
-    home_lineup: "list[int] | None" = None,
+    away_lineup: list[int] | None = None,
+    home_lineup: list[int] | None = None,
     max_innings: int = _MAX_INNINGS,
 ) -> GameSimResult:
     """Drive the SIM-316 :class:`StateMachine` to a completed game (SIM-320).
@@ -2591,7 +2687,11 @@ def simulate_game(
     if state_machine is None:
         rng = np.random.default_rng(seed)
         state_machine = StateMachine(
-            sampler, k=k, rng=rng, resolver=resolver, sim=sim,
+            sampler,
+            k=k,
+            rng=rng,
+            resolver=resolver,
+            sim=sim,
             fingerprint_deriver=fingerprint_deriver,
         )
     elif seed is not None:
@@ -2608,14 +2708,19 @@ def simulate_game(
         if smp is not None and hasattr(smp, "rng"):
             smp.rng = np.random.default_rng(seed)
         pa = getattr(state_machine, "_pa", None)
-        if pa is not None and getattr(pa, "sampler", None) is not None \
-                and hasattr(pa.sampler, "rng"):
+        if (
+            pa is not None
+            and getattr(pa, "sampler", None) is not None
+            and hasattr(pa.sampler, "rng")
+        ):
             pa.sampler.rng = np.random.default_rng(seed)
 
     # --- Build the initial GameState (fresh top of the 1st) ------------------
     if initial_state is None:
         initial_state = GameState(
-            pitcher_id=pitcher_id, bat_hand=bat_hand, season=season,
+            pitcher_id=pitcher_id,
+            bat_hand=bat_hand,
+            season=season,
             away_lineup=list(away_lineup or []),
             home_lineup=list(home_lineup or []),
             seed=seed,

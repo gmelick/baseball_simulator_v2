@@ -27,8 +27,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from simulation.results import ConfidenceInterval, GameSimSummary
-
 from betting.clv_engine import (
     MarketSide,
     OddsQuote,
@@ -40,11 +38,12 @@ from betting.clv_engine import (
     run_line_edge_report,
     spread_cover_prob,
 )
-
+from simulation.results import ConfidenceInterval, GameSimSummary
 
 # ---------------------------------------------------------------------------
 # Synthetic-data helpers
 # ---------------------------------------------------------------------------
+
 
 def _summary_from_margins(margins) -> GameSimSummary:
     """A synthetic SIM-327 GameSimSummary whose home/away scores realise ``margins``.
@@ -92,6 +91,7 @@ _MARGINS = [-2, -1, 0, 1, 1, 2, 2, 3, 3, 4]
 # ===========================================================================
 # spread_cover_prob -- cover math + push handling
 # ===========================================================================
+
 
 def test_home_cover_prob_half_integer_matches_hand_count():
     # HOME -1.5 covers iff margin > 1.5: {2,2,3,3,4} -> 5/10.
@@ -169,6 +169,7 @@ def test_cover_prob_rejects_bad_side_and_empty():
 # run_line_edge_report -- full EdgeReport assembly
 # ===========================================================================
 
+
 def test_run_line_report_home_fields_and_edge():
     summary = _summary_from_margins(_MARGINS)  # home -1.5 cover = 0.50
     # Market: home -1.5 at +110 (dog price on the spread), away +1.5 at -130.
@@ -240,8 +241,8 @@ def test_run_line_report_with_clv_end_to_end():
     summary = _summary_from_margins(_MARGINS)  # home -1.5 cover = 0.50
     market = TwoWayMarket(
         side=MarketSide.HOME,
-        entry=OddsQuote(side=+120, other=-140, line=-1.5),   # entry: home dog +120
-        close=OddsQuote(side=-120, other=+100, line=-1.5),   # close: home now favoured
+        entry=OddsQuote(side=+120, other=-140, line=-1.5),  # entry: home dog +120
+        close=OddsQuote(side=-120, other=+100, line=-1.5),  # close: home now favoured
     )
     rep = run_line_edge_report(summary, market, side=MarketSide.HOME)
     assert rep.clv is not None

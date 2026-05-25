@@ -113,10 +113,7 @@ class TestHitRateActuallyTunes:
 
         def hits_over_n(hit_rate: float, n: int = 400) -> int:
             machine = rng_driven_machine_factory(2024, _spec(_hit_rate=hit_rate))
-            return sum(
-                machine.resolver.resolve_fielding(None, None).result_hits
-                for _ in range(n)
-            )
+            return sum(machine.resolver.resolve_fielding(None, None).result_hits for _ in range(n))
 
         low_hits = hits_over_n(0.05)
         high_hits = hits_over_n(0.95)
@@ -150,11 +147,7 @@ class TestPassthroughPreserved:
         # The fix must not perturb determinism: same base seed + _hit_rate -> same
         # per-iteration scores.
         spec = _spec(_hit_rate=0.6)
-        a = _runner(cache=NullCache()).run(
-            spec, n_iterations=8, base_seed=321, use_cache=False
-        )
-        b = _runner(cache=NullCache()).run(
-            spec, n_iterations=8, base_seed=321, use_cache=False
-        )
+        a = _runner(cache=NullCache()).run(spec, n_iterations=8, base_seed=321, use_cache=False)
+        b = _runner(cache=NullCache()).run(spec, n_iterations=8, base_seed=321, use_cache=False)
         assert np.array_equal(a.summary.home_scores, b.summary.home_scores)
         assert np.array_equal(a.summary.away_scores, b.summary.away_scores)

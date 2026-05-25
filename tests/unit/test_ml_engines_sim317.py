@@ -28,9 +28,7 @@ Coverage (the SIM-317 acceptance criteria):
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
-from simulation.game_state import GameState
 from simulation.fingerprints import (
     BATTED_BALL_FEATURE_NAMES,
     BATTED_BALL_FINGERPRINT_DIM,
@@ -39,6 +37,7 @@ from simulation.fingerprints import (
     FingerprintDeriver,
     MatchupProfile,
 )
+from simulation.game_state import GameState
 
 SEASON = 2024
 PITCHER = 477132
@@ -75,7 +74,7 @@ def _counting_provider():
 
 
 def _fresh_state(**kw) -> GameState:
-    base = dict(pitcher_id=PITCHER, bat_hand="R", season=SEASON, batter_id=BATTER)
+    base = {"pitcher_id": PITCHER, "bat_hand": "R", "season": SEASON, "batter_id": BATTER}
     base.update(kw)
     return GameState(**base)
 
@@ -89,8 +88,16 @@ class TestVectorShapeAndOrder:
     def test_pitch_vector_is_ten_dim_in_pitch_features_order(self):
         assert PITCH_FINGERPRINT_DIM == 10
         assert PITCH_FEATURE_NAMES == (
-            "velo", "ivb", "hb", "spin_rate", "spin_axis",
-            "release_x", "release_z", "release_ext", "plate_x", "plate_z",
+            "velo",
+            "ivb",
+            "hb",
+            "spin_rate",
+            "spin_axis",
+            "release_x",
+            "release_z",
+            "release_ext",
+            "plate_x",
+            "plate_z",
         )
         d = FingerprintDeriver(_fixed_profile)
         vec = d.pitch_fingerprint(_fresh_state())
@@ -110,6 +117,7 @@ class TestVectorShapeAndOrder:
         # dims must track the arsenal centroid and the last 2 the location, in
         # order -- so the sqrt-weight-scaled raw is recoverable monotonically.
         from similarity.engines.pitch_pitch_similarity import FEATURE_SCALE
+
         d = FingerprintDeriver(_fixed_profile)
         vec = d.pitch_fingerprint(_fresh_state())
         expected = (np.concatenate([_ARSENAL, _LOCATION]) * FEATURE_SCALE).astype(np.float32)
@@ -169,11 +177,11 @@ class TestPerPACache:
         provider, calls = _counting_provider()
         d = FingerprintDeriver(provider)
         state = _fresh_state()
-        d.pitch_fingerprint(state)        # miss
-        d.pitch_fingerprint(state)        # hit
+        d.pitch_fingerprint(state)  # miss
+        d.pitch_fingerprint(state)  # hit
         assert calls["n"] == 1
         d.new_plate_appearance()
-        d.pitch_fingerprint(state)        # miss again after reset
+        d.pitch_fingerprint(state)  # miss again after reset
         assert calls["n"] == 2
         assert d.cache_misses == 2
         assert d.cache_hits == 1
@@ -181,8 +189,8 @@ class TestPerPACache:
     def test_different_matchup_is_a_distinct_cache_entry(self):
         provider, calls = _counting_provider()
         d = FingerprintDeriver(provider)
-        d.pitch_fingerprint(_fresh_state(batter_id=1))   # miss
-        d.pitch_fingerprint(_fresh_state(batter_id=2))   # miss (different batter)
+        d.pitch_fingerprint(_fresh_state(batter_id=1))  # miss
+        d.pitch_fingerprint(_fresh_state(batter_id=2))  # miss (different batter)
         assert calls["n"] == 2
 
 
@@ -205,9 +213,7 @@ class TestPrefilterNotInVector:
         # No extra dims for pitcher_id / bat_hand / season / count.
         d = FingerprintDeriver(_fixed_profile)
         assert d.pitch_fingerprint(_fresh_state()).shape[0] == len(PITCH_FEATURE_NAMES)
-        assert d.battedball_fingerprint(_fresh_state()).shape[0] == len(
-            BATTED_BALL_FEATURE_NAMES
-        )
+        assert d.battedball_fingerprint(_fresh_state()).shape[0] == len(BATTED_BALL_FEATURE_NAMES)
 
 
 # ===========================================================================
@@ -254,13 +260,13 @@ class TestNormalizationSpace:
     def test_fitted_normalizer_matches_the_engine_normalize(self):
         # When the engine's fitted mean/std are supplied, the deriver must apply
         # the IDENTICAL transform the SIM-041 engine applies at index/query time.
-        from simulation.fingerprints import _PitchNorm
         from similarity.engines.pitch_pitch_similarity import (
-            FEATURE_SCALE, PitchNormalizer,
+            PitchNormalizer,
         )
+        from simulation.fingerprints import _PitchNorm
 
         raw_full = np.concatenate([_ARSENAL, _LOCATION])
-        mean = raw_full - 1.0          # arbitrary but fixed fitted stats
+        mean = raw_full - 1.0  # arbitrary but fixed fitted stats
         std = np.full(raw_full.shape, 2.0)
 
         d = FingerprintDeriver(
@@ -287,7 +293,7 @@ class TestLoopWiring:
         from simulation.sim_loop import EVENT_WALK, StateMachine
 
         d = FingerprintDeriver(_fixed_profile)
-        sm = StateMachine(fingerprint_deriver=d)   # NO sampler
+        sm = StateMachine(fingerprint_deriver=d)  # NO sampler
         state = _fresh_state()
         for _ in range(3):
             r = sm.step_pitch(state, pitch_outcome="ball")

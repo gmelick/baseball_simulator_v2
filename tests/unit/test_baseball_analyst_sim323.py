@@ -89,7 +89,7 @@ _AGGRESSIVE = {
     "sac_bunt_rate_low_leverage": 0.95,
 }
 # A manager who never does anything (all rates 0.0) -- a "ride the lineup" type.
-_PASSIVE = {k: 0.0 for k in _AGGRESSIVE}
+_PASSIVE = dict.fromkeys(_AGGRESSIVE, 0.0)
 
 
 # ===========================================================================
@@ -110,9 +110,7 @@ class TestLeverageIndex:
 
     def test_li_rises_with_runners_on(self):
         empty = StateMachine.compute_leverage(_state(outs=0))
-        loaded = StateMachine.compute_leverage(
-            _state(first=1, second=2, third=3, outs=0)
-        )
+        loaded = StateMachine.compute_leverage(_state(first=1, second=2, third=3, outs=0))
         assert loaded > empty
 
     def test_li_falls_with_more_outs(self):
@@ -143,8 +141,7 @@ class TestIntentionalWalk:
     def test_ibb_does_not_fire_when_first_base_is_occupied(self):
         # 1B occupied -> the defining IBB precondition fails.
         m = _machine(_AGGRESSIVE, seed=1)
-        s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3,
-                   first=44, second=55)
+        s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3, first=44, second=55)
         m._pre_pitch_hook(s)
         assert s.manager.intentional_walk_signalled is False
 
@@ -158,8 +155,7 @@ class TestIntentionalWalk:
     def test_ibb_ends_the_pa_as_a_walk_putting_the_batter_on_first(self):
         # When the IBB signal is set, step_pitch issues the walk without a pitch.
         m = _machine(_AGGRESSIVE, seed=1)
-        s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3,
-                   second=55, batter_id=201)
+        s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3, second=55, batter_id=201)
         s.home_lineup = HOME_LINEUP
         s.home_lineup_slot = 0
         result = m.step_pitch(s)
@@ -213,16 +209,20 @@ class TestStealGreenLight:
                     attempted=True, runner_id=11, from_base=1, to_base=2, safe=True
                 )
 
-        on = StateMachine(rng=np.random.default_rng(2),
-                          manager={"steal_order_rate_per_1b_opp": 1.0},
-                          resolver=_AlwaysSteal())
+        on = StateMachine(
+            rng=np.random.default_rng(2),
+            manager={"steal_order_rate_per_1b_opp": 1.0},
+            resolver=_AlwaysSteal(),
+        )
         s_on = _state(inning=7, first=11)
         on._pre_pitch_hook(s_on)
         assert on._pending_steal is not None and on._pending_steal.attempted
 
-        off = StateMachine(rng=np.random.default_rng(2),
-                           manager={"steal_order_rate_per_1b_opp": 0.0},
-                           resolver=_AlwaysSteal())
+        off = StateMachine(
+            rng=np.random.default_rng(2),
+            manager={"steal_order_rate_per_1b_opp": 0.0},
+            resolver=_AlwaysSteal(),
+        )
         s_off = _state(inning=7, first=11)
         off._pre_pitch_hook(s_off)
         assert off._pending_steal is None
@@ -237,41 +237,37 @@ class TestStarterPull:
     def test_high_pitch_count_high_leverage_pulls_to_the_closer(self):
         # Away team is defending in the bottom of the 9th (closer territory).
         bullpen = {Team.HOME: [301, 302, 303]}  # 301 == the closer (first arm)
-        s = _state(inning=9, half=Half.TOP, home_score=2, away_score=2,
-                   second=55, pitch_count=105)
+        s = _state(inning=9, half=Half.TOP, home_score=2, away_score=2, second=55, pitch_count=105)
         s.manager.bullpen_available = bullpen
         m = _machine(_AGGRESSIVE, seed=4)
         m._end_of_pa_hook(s)
         # The defending team (HOME, fielding in the top) pulled its starter.
-        assert s.pitcher_id == 301              # the closer entered
-        assert s.pitcher_pitch_count == 0       # fresh arm
+        assert s.pitcher_id == 301  # the closer entered
+        assert s.pitcher_pitch_count == 0  # fresh arm
         assert any(d["kind"] == "pitching_change" for d in m.manager_decisions)
 
     def test_low_pitch_count_does_not_pull(self):
         bullpen = {Team.HOME: [301, 302, 303]}
-        s = _state(inning=9, half=Half.TOP, home_score=2, away_score=2,
-                   second=55, pitch_count=10)
+        s = _state(inning=9, half=Half.TOP, home_score=2, away_score=2, second=55, pitch_count=10)
         s.manager.bullpen_available = bullpen
         m = _machine(_AGGRESSIVE, seed=4)
         m._end_of_pa_hook(s)
-        assert s.pitcher_id == PITCHER          # starter stays
+        assert s.pitcher_id == PITCHER  # starter stays
 
     def test_ceiling_forces_a_pull_even_for_a_passive_manager(self):
         bullpen = {Team.HOME: [301, 302, 303]}
-        s = _state(inning=3, half=Half.TOP, home_score=0, away_score=0,
-                   pitch_count=120)
+        s = _state(inning=3, half=Half.TOP, home_score=0, away_score=0, pitch_count=120)
         s.manager.bullpen_available = bullpen
         m = _machine(_PASSIVE, seed=4)
         m._end_of_pa_hook(s)
-        assert s.pitcher_id != PITCHER          # the hard ceiling forced the hook
+        assert s.pitcher_id != PITCHER  # the hard ceiling forced the hook
 
     def test_pull_degrades_gracefully_with_an_empty_bullpen(self):
-        s = _state(inning=9, half=Half.TOP, home_score=2, away_score=2,
-                   second=55, pitch_count=130)
-        s.manager.bullpen_available = {}        # no arms available
+        s = _state(inning=9, half=Half.TOP, home_score=2, away_score=2, second=55, pitch_count=130)
+        s.manager.bullpen_available = {}  # no arms available
         m = _machine(_AGGRESSIVE, seed=4)
         m._end_of_pa_hook(s)
-        assert s.pitcher_id == PITCHER          # no illegal state -> starter stays
+        assert s.pitcher_id == PITCHER  # no illegal state -> starter stays
 
 
 # ===========================================================================
@@ -288,7 +284,7 @@ class TestPinchHit:
         m = _machine(_AGGRESSIVE, seed=6, bench=bench)
         out_batter = s.home_lineup[0]
         m._maybe_pinch_hit(s, StateMachine.compute_leverage(s))
-        assert s.home_lineup[0] == 777          # the bench bat replaced the slot
+        assert s.home_lineup[0] == 777  # the bench bat replaced the slot
         assert s.batter_id == 777
         assert out_batter not in s.home_lineup
         assert any(d["kind"] == "pinch_hit" for d in m.manager_decisions)
@@ -299,7 +295,7 @@ class TestPinchHit:
         bench = {Team.HOME: [777]}
         m = _machine(_AGGRESSIVE, seed=6, bench=bench)
         m._maybe_pinch_hit(s, StateMachine.compute_leverage(s))
-        assert s.home_lineup[0] == HOME_LINEUP[0]   # unchanged
+        assert s.home_lineup[0] == HOME_LINEUP[0]  # unchanged
 
 
 # ===========================================================================
@@ -336,6 +332,7 @@ class _CyclingResolver(PlayResolver):
 
     def resolve_fielding(self, state, battedball_sample):
         from simulation.sim_loop import FieldingSignal
+
         if float(self.rng.random()) < self.hit_rate:
             return FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
         return FieldingSignal(event="field_out", result_hits=0, result_outs=1, result_runs=0)
@@ -360,7 +357,10 @@ class TestNoManagerProfile:
         rng = np.random.default_rng(0)
         machine = _RngMachine(resolver=_CyclingResolver(rng), rng=rng)  # manager=None
         result = simulate_game(
-            machine, seed=0, away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP,
+            machine,
+            seed=0,
+            away_lineup=AWAY_LINEUP,
+            home_lineup=HOME_LINEUP,
         )
         assert result.home_score != result.away_score
         assert result.innings_played >= 9
@@ -373,12 +373,17 @@ class TestNoManagerProfile:
         rng = np.random.default_rng(1)
         bench = {Team.HOME: [777, 778], Team.AWAY: [677, 678]}
         machine = _RngMachine(
-            resolver=_CyclingResolver(rng), rng=rng,
-            manager=_AGGRESSIVE, bench=bench,
+            resolver=_CyclingResolver(rng),
+            rng=rng,
+            manager=_AGGRESSIVE,
+            bench=bench,
         )
         # Seed bullpens on the initial state via the manager context.
         result = simulate_game(
-            machine, seed=1, away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP,
+            machine,
+            seed=1,
+            away_lineup=AWAY_LINEUP,
+            home_lineup=HOME_LINEUP,
         )
         assert result.home_score != result.away_score
         assert result.innings_played >= 9

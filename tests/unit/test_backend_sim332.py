@@ -23,7 +23,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from simulation.results import GameSimSummary
 from simulation.batch_runner import (
     MAX_WORKER_CEILING,
     POOL_QUERY_TTL_S,
@@ -36,6 +35,7 @@ from simulation.batch_runner import (
     derive_seed,
     make_cache,
 )
+from simulation.results import GameSimSummary
 
 # The picklable no-DB factory + a lineup so games progress and end.
 FACTORY = "simulation.batch_runner:rng_driven_machine_factory"
@@ -80,8 +80,7 @@ class TestDeriveSeed:
 
     def test_pure_function_of_base(self):
         # Same base -> identical derivation (reproducible batch).
-        assert [derive_seed(7, i) for i in range(4)] == \
-               [derive_seed(7, i) for i in range(4)]
+        assert [derive_seed(7, i) for i in range(4)] == [derive_seed(7, i) for i in range(4)]
 
 
 # ===========================================================================
@@ -155,8 +154,9 @@ class TestDeterminism:
         a = _runner().run(_spec(), n_iterations=8, base_seed=1, use_cache=False)
         b = _runner().run(_spec(), n_iterations=8, base_seed=999, use_cache=False)
         # Overwhelmingly likely to differ in at least one game's score.
-        assert not np.array_equal(a.summary.home_scores, b.summary.home_scores) \
-            or not np.array_equal(a.summary.away_scores, b.summary.away_scores)
+        assert not np.array_equal(
+            a.summary.home_scores, b.summary.home_scores
+        ) or not np.array_equal(a.summary.away_scores, b.summary.away_scores)
 
 
 # ===========================================================================
@@ -170,7 +170,7 @@ class TestVariation:
         s = res.summary
         # With distinct per-game seeds the games are not all identical: the raw
         # score arrays must show more than one distinct (home, away) pairing.
-        pairs = set(zip(s.home_scores.tolist(), s.away_scores.tolist()))
+        pairs = set(zip(s.home_scores.tolist(), s.away_scores.tolist(), strict=False))
         assert len(pairs) > 1, "all iterations produced the identical game"
 
 
@@ -282,11 +282,7 @@ class TestSlowParallel:
         # Determinism must hold across the process boundary too: pooled (workers>1)
         # and in-process (workers=1) give the same per-iteration scores.
         spec = _spec()
-        seq = BatchRunner(max_workers=1, cache=NullCache()).run(
-            spec, n_iterations=8, base_seed=321
-        )
-        par = BatchRunner(max_workers=4, cache=NullCache()).run(
-            spec, n_iterations=8, base_seed=321
-        )
+        seq = BatchRunner(max_workers=1, cache=NullCache()).run(spec, n_iterations=8, base_seed=321)
+        par = BatchRunner(max_workers=4, cache=NullCache()).run(spec, n_iterations=8, base_seed=321)
         assert np.array_equal(seq.summary.home_scores, par.summary.home_scores)
         assert np.array_equal(seq.summary.away_scores, par.summary.away_scores)

@@ -10,6 +10,7 @@ Pitcher-id convention used by these fixtures (purely for readability):
 Recall: in ``Half.TOP`` the HOME pitcher throws (away bats); in ``Half.BOTTOM``
 the AWAY pitcher throws (home bats).
 """
+
 from __future__ import annotations
 
 import unittest
@@ -39,9 +40,7 @@ def _play(*, inning: int, half: Half, home: int, away: int, pitcher_id: int) -> 
     """A PlayResult carrying only the committed next_state we care about."""
     return PlayResult(
         pitch_outcome="in_play",
-        next_state=_state(
-            inning=inning, half=half, home=home, away=away, pitcher_id=pitcher_id
-        ),
+        next_state=_state(inning=inning, half=half, home=home, away=away, pitcher_id=pitcher_id),
     )
 
 
@@ -63,7 +62,7 @@ class TestCleanWin(unittest.TestCase):
     def test_win_and_loss(self):
         d = decisions_from_plays(self._stream())
         self.assertEqual(d.winning_pitcher_id, 100)  # home starter
-        self.assertEqual(d.losing_pitcher_id, 200)   # away starter allowed the lead
+        self.assertEqual(d.losing_pitcher_id, 200)  # away starter allowed the lead
         self.assertEqual(d.home_score, 2)
         self.assertEqual(d.away_score, 0)
 

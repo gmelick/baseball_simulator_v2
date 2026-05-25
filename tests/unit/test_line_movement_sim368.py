@@ -31,12 +31,10 @@ from betting.clv_engine import (
     implied_prob_from_american,
 )
 from betting.line_movement import (
-    LineMovement,
     LineQuote,
     fetch_line_movement,
     line_movement_from_quotes,
 )
-
 
 # ---------------------------------------------------------------------------
 # Synthetic-quote helpers
@@ -76,9 +74,7 @@ def _home_ml_series():
 class TestPureSeries:
     def test_running_implied_prob_series_matches_clv_engine(self):
         quotes = _home_ml_series()
-        mv = line_movement_from_quotes(
-            quotes, market_type="moneyline", side=MarketSide.HOME
-        )
+        mv = line_movement_from_quotes(quotes, market_type="moneyline", side=MarketSide.HOME)
         expected = [
             implied_prob_from_american(-120),
             implied_prob_from_american(-135),
@@ -112,9 +108,7 @@ class TestPureSeries:
             implied_prob_from_american(-150),
         ]
         assert len(mv.step_implied_prob_deltas) == 2
-        assert mv.step_implied_prob_deltas == pytest.approx(
-            [ips[1] - ips[0], ips[2] - ips[1]]
-        )
+        assert mv.step_implied_prob_deltas == pytest.approx([ips[1] - ips[0], ips[2] - ips[1]])
         assert mv.step_american_deltas == pytest.approx([-15.0, -15.0])
 
     def test_entry_vs_close_clv_matches_clv_from_odds(self):
@@ -142,9 +136,7 @@ class TestPureSeries:
             _ml_quote(t=1, american=-150, other=+130, line_type="opening"),
             _ml_quote(t=2, american=-120, other=+100, line_type="closing"),
         ]
-        mv = line_movement_from_quotes(
-            quotes, market_type="moneyline", side=MarketSide.HOME
-        )
+        mv = line_movement_from_quotes(quotes, market_type="moneyline", side=MarketSide.HOME)
         assert mv.implied_prob_delta < 0
         assert mv.direction == "away"
         # Opening -150 vs closing -120: you bet the WORSE price -> did NOT beat.
@@ -168,9 +160,7 @@ class TestPureSeries:
         assert mv.beat_close is False
 
     def test_empty_input(self):
-        mv = line_movement_from_quotes(
-            [], market_type="moneyline", side=MarketSide.HOME
-        )
+        mv = line_movement_from_quotes([], market_type="moneyline", side=MarketSide.HOME)
         assert mv.quotes == ()
         assert mv.implied_prob_series == ()
         assert mv.clv is None
@@ -180,9 +170,7 @@ class TestPureSeries:
         """Shuffled fetched_at times still derive opening=-120, closing=-150."""
         a, b, c = _home_ml_series()
         shuffled = [c, a, b]  # closing, opening, middle
-        mv = line_movement_from_quotes(
-            shuffled, market_type="moneyline", side=MarketSide.HOME
-        )
+        mv = line_movement_from_quotes(shuffled, market_type="moneyline", side=MarketSide.HOME)
         assert [q.fetched_at for q in mv.quotes] == [1, 2, 3]
         assert mv.opening_american == -120
         assert mv.closing_american == -150
@@ -192,17 +180,23 @@ class TestPureSeries:
         """No other-side price at an endpoint -> CLV None, series still built."""
         quotes = [
             LineQuote.from_american(
-                fetched_at=1, line_type="opening", book="b", is_sharp_book=False,
-                american=-120, other_american=None,
+                fetched_at=1,
+                line_type="opening",
+                book="b",
+                is_sharp_book=False,
+                american=-120,
+                other_american=None,
             ),
             LineQuote.from_american(
-                fetched_at=2, line_type="closing", book="b", is_sharp_book=False,
-                american=-150, other_american=None,
+                fetched_at=2,
+                line_type="closing",
+                book="b",
+                is_sharp_book=False,
+                american=-150,
+                other_american=None,
             ),
         ]
-        mv = line_movement_from_quotes(
-            quotes, market_type="moneyline", side=MarketSide.HOME
-        )
+        mv = line_movement_from_quotes(quotes, market_type="moneyline", side=MarketSide.HOME)
         assert len(mv.quotes) == 2
         assert mv.implied_prob_delta > 0
         assert mv.direction == "toward"
@@ -212,19 +206,25 @@ class TestPureSeries:
         """A total OVER series tracks the line move (8.5 -> 9.0) too."""
         quotes = [
             {
-                "fetched_at": 1, "line_type": "opening", "book": "consensus",
-                "is_sharp_book": False, "over_ml": -110, "under_ml": -110,
+                "fetched_at": 1,
+                "line_type": "opening",
+                "book": "consensus",
+                "is_sharp_book": False,
+                "over_ml": -110,
+                "under_ml": -110,
                 "total_line": 8.5,
             },
             {
-                "fetched_at": 2, "line_type": "closing", "book": "consensus",
-                "is_sharp_book": False, "over_ml": -115, "under_ml": -105,
+                "fetched_at": 2,
+                "line_type": "closing",
+                "book": "consensus",
+                "is_sharp_book": False,
+                "over_ml": -115,
+                "under_ml": -105,
                 "total_line": 9.0,
             },
         ]
-        mv = line_movement_from_quotes(
-            quotes, market_type="total", side=MarketSide.OVER
-        )
+        mv = line_movement_from_quotes(quotes, market_type="total", side=MarketSide.OVER)
         assert mv.line_delta == pytest.approx(0.5)
         assert mv.opening_american == -110
         assert mv.closing_american == -115
@@ -281,9 +281,7 @@ class TestFetchLineMovement:
 
     async def test_book_filter_adds_third_arg(self):
         conn = _StubConn(fetch=[])
-        await fetch_line_movement(
-            conn, game_pk=5, market_type="moneyline", book="pinnacle"
-        )
+        await fetch_line_movement(conn, game_pk=5, market_type="moneyline", book="pinnacle")
         sql, args = conn.calls[0]
         assert "AND book = $3" in sql
         assert args == (5, "moneyline", "pinnacle")
@@ -295,9 +293,7 @@ class TestFetchLineMovement:
             _ml_row(t=3, home_ml=-150, away_ml=+130, line_type="closing"),
         ]
         conn = _StubConn(fetch=rows)
-        movements = await fetch_line_movement(
-            conn, game_pk=1, market_type="moneyline"
-        )
+        movements = await fetch_line_movement(conn, game_pk=1, market_type="moneyline")
         # One series per side (HOME, AWAY) for the single book.
         sides = {m.side for m in movements}
         assert sides == {MarketSide.HOME, MarketSide.AWAY}
@@ -310,8 +306,10 @@ class TestFetchLineMovement:
         assert home.closing_american == -150
         assert home.direction == "toward"
         expected = clv_from_odds(
-            entry_side_american=-120, entry_other_american=+100,
-            close_side_american=-150, close_other_american=+130,
+            entry_side_american=-120,
+            entry_other_american=+100,
+            close_side_american=-150,
+            close_other_american=+130,
         )
         assert home.clv is not None
         assert home.clv.clv_prob == pytest.approx(expected.clv_prob)
@@ -326,15 +324,15 @@ class TestFetchLineMovement:
         rows = [
             _ml_row(t=1, home_ml=-120, away_ml=+100, line_type="opening", book="dk"),
             _ml_row(t=3, home_ml=-150, away_ml=+130, line_type="closing", book="dk"),
-            _ml_row(t=1, home_ml=-118, away_ml=-102, line_type="opening",
-                    book="pinnacle", sharp=True),
-            _ml_row(t=3, home_ml=-148, away_ml=+128, line_type="closing",
-                    book="pinnacle", sharp=True),
+            _ml_row(
+                t=1, home_ml=-118, away_ml=-102, line_type="opening", book="pinnacle", sharp=True
+            ),
+            _ml_row(
+                t=3, home_ml=-148, away_ml=+128, line_type="closing", book="pinnacle", sharp=True
+            ),
         ]
         conn = _StubConn(fetch=rows)
-        movements = await fetch_line_movement(
-            conn, game_pk=1, market_type="moneyline"
-        )
+        movements = await fetch_line_movement(conn, game_pk=1, market_type="moneyline")
         # 2 sides x 2 books = 4 series.
         assert len(movements) == 4
         home_books = {m.book for m in movements if m.side is MarketSide.HOME}
@@ -345,23 +343,21 @@ class TestFetchLineMovement:
         rows = [
             _ml_row(t=1, home_ml=-120, away_ml=+100, line_type="opening", book="dk"),
             _ml_row(t=3, home_ml=-150, away_ml=+130, line_type="closing", book="dk"),
-            _ml_row(t=1, home_ml=-118, away_ml=-102, line_type="opening",
-                    book="pinnacle", sharp=True),
-            _ml_row(t=3, home_ml=-150, away_ml=+130, line_type="closing",
-                    book="pinnacle", sharp=True),
+            _ml_row(
+                t=1, home_ml=-118, away_ml=-102, line_type="opening", book="pinnacle", sharp=True
+            ),
+            _ml_row(
+                t=3, home_ml=-150, away_ml=+130, line_type="closing", book="pinnacle", sharp=True
+            ),
         ]
         conn = _StubConn(fetch=rows)
-        movements = await fetch_line_movement(
-            conn, game_pk=1, market_type="moneyline"
-        )
+        movements = await fetch_line_movement(conn, game_pk=1, market_type="moneyline")
         home = [m for m in movements if m.side is MarketSide.HOME]
         assert all(m.sharp_consensus is True for m in home)
 
     async def test_empty_result_for_no_odds(self):
         conn = _StubConn(fetch=[])
-        movements = await fetch_line_movement(
-            conn, game_pk=999, market_type="moneyline"
-        )
+        movements = await fetch_line_movement(conn, game_pk=999, market_type="moneyline")
         assert movements == []
 
     async def test_unknown_market_type_raises(self):

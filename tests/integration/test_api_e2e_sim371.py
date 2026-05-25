@@ -332,9 +332,7 @@ class TestFullGameCardFlow:
         assert game_pk in (745001, 745002)
 
         # 2) Simulate that game (a REAL no-DB batch -> persists the replay).
-        sim = client.get(
-            f"/api/games/{game_pk}/simulate?n_iterations=8&base_seed=42"
-        )
+        sim = client.get(f"/api/games/{game_pk}/simulate?n_iterations=8&base_seed=42")
         assert sim.status_code == 200, sim.text
         sim_body = sim.json()
         assert sim_body["game_pk"] == game_pk
@@ -354,9 +352,7 @@ class TestFullGameCardFlow:
 
         # 4) /state for the FIRST pitch -- comes from the SAME persisted stream.
         e0 = pbp["entries"][0]
-        st = client.get(
-            f"/api/games/{game_pk}/state/{e0['at_bat']}/{e0['pitch']}"
-        )
+        st = client.get(f"/api/games/{game_pk}/state/{e0['at_bat']}/{e0['pitch']}")
         assert st.status_code == 200, st.text
         snap = st.json()
         # Cross-endpoint consistency: the /state snapshot's (at_bat, pitch) match
@@ -364,8 +360,17 @@ class TestFullGameCardFlow:
         assert snap["at_bat"] == e0["at_bat"]
         assert snap["pitch"] == e0["pitch"]
         field = snap["field"]
-        for key in ("positions", "baserunners", "balls", "strikes", "outs",
-                    "inning", "half", "occupied_bases", "runners_on"):
+        for key in (
+            "positions",
+            "baserunners",
+            "balls",
+            "strikes",
+            "outs",
+            "inning",
+            "half",
+            "occupied_bases",
+            "runners_on",
+        ):
             assert key in field
         json.dumps(snap)
 
@@ -405,9 +410,7 @@ class TestFullGameCardFlow:
 
         # 8) /boxscore -- the per-player prop-means card (a fresh seeded N-game
         #    batch). numpy-free; carries entries.
-        box = client.get(
-            f"/api/games/{game_pk}/boxscore?n_iterations=8&base_seed=42"
-        )
+        box = client.get(f"/api/games/{game_pk}/boxscore?n_iterations=8&base_seed=42")
         assert box.status_code == 200, box.text
         box_body = box.json()
         json.dumps(box_body)
@@ -519,9 +522,7 @@ class TestBettingFlow:
         client, _pool = e2e
 
         # /line-movement from the canned raw.game_odds history.
-        lm = client.get(
-            "/api/betting/games/745001/line-movement?market_type=moneyline"
-        )
+        lm = client.get("/api/betting/games/745001/line-movement?market_type=moneyline")
         assert lm.status_code == 200, lm.text
         lm_body = lm.json()
         assert lm_body["game_pk"] == 745001
@@ -553,9 +554,7 @@ class TestBettingFlow:
         pool = _FakePool(games_rows=CANNED_GAMES_ROWS, odds_rows=[])
         app = _build_e2e_app(pool=pool, duck=duck_con, cache=InMemoryCache())
         client = TestClient(app)
-        resp = client.get(
-            "/api/betting/games/745001/line-movement?market_type=moneyline"
-        )
+        resp = client.get("/api/betting/games/745001/line-movement?market_type=moneyline")
         assert resp.status_code == 200, resp.text
         assert resp.json()["count"] == 0
 
@@ -628,14 +627,8 @@ class TestHistoricalReplayE2E:
         # run persists under its own SIM-356 run_id (the fake pool issues a fresh
         # one per call), so the two streams coexist in the store -- we compare
         # them PER RUN below rather than via the accumulating by-game /plays read.
-        a = client.get(
-            f"/api/games/{game_pk}/simulate"
-            "?n_iterations=5&base_seed=7&use_cache=false"
-        )
-        b = client.get(
-            f"/api/games/{game_pk}/simulate"
-            "?n_iterations=5&base_seed=7&use_cache=false"
-        )
+        a = client.get(f"/api/games/{game_pk}/simulate?n_iterations=5&base_seed=7&use_cache=false")
+        b = client.get(f"/api/games/{game_pk}/simulate?n_iterations=5&base_seed=7&use_cache=false")
 
         assert a.status_code == b.status_code == 200
         # The aggregate summary replays bit-for-bit (per-iteration arrays match).
@@ -653,23 +646,16 @@ class TestHistoricalReplayE2E:
         stream_a = sim_store.load_play_stream(duck_con, game_pk=game_pk, run_id=run_id_a)
         stream_b = sim_store.load_play_stream(duck_con, game_pk=game_pk, run_id=run_id_b)
         assert len(stream_a) == len(stream_b) >= 1
-        assert (
-            [e["pitch_outcome"] for e in stream_a]
-            == [e["pitch_outcome"] for e in stream_b]
-        )
+        assert [e["pitch_outcome"] for e in stream_a] == [e["pitch_outcome"] for e in stream_b]
 
     def test_different_seed_diverges(self, e2e):
         """A control: a DIFFERENT seed yields a different replay -- so the
         reproducibility above is real determinism, not a constant."""
         client, _pool = e2e
         game_pk = 745001
-        a = client.get(
-            f"/api/games/{game_pk}/simulate"
-            "?n_iterations=12&base_seed=1&use_cache=false"
-        )
+        a = client.get(f"/api/games/{game_pk}/simulate?n_iterations=12&base_seed=1&use_cache=false")
         b = client.get(
-            f"/api/games/{game_pk}/simulate"
-            "?n_iterations=12&base_seed=999&use_cache=false"
+            f"/api/games/{game_pk}/simulate?n_iterations=12&base_seed=999&use_cache=false"
         )
         assert a.status_code == b.status_code == 200
         # Over 12 iterations two distinct seeds must produce a different score

@@ -79,8 +79,8 @@ RNG.  The same list of boxscores always yields the same PMFs.  Aggregation is by
 from __future__ import annotations
 
 import statistics
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable, Mapping
 
 import numpy as np
 from numpy.typing import NDArray
@@ -95,7 +95,7 @@ from simulation.results import (
 #: Two-sided z-multipliers for the common confidence levels (mirrors the table in
 #: ``simulation/results.py`` so a prop CI and a SIM-327 CI agree on z).
 _Z_95 = 1.959963984540054
-_Z_BY_LEVEL: "dict[float, float]" = {
+_Z_BY_LEVEL: dict[float, float] = {
     0.80: 1.2815515594457,
     0.90: 1.6448536269514722,
     0.95: _Z_95,
@@ -103,11 +103,11 @@ _Z_BY_LEVEL: "dict[float, float]" = {
 }
 
 #: Pitcher prop names (charged on defense).
-PITCHER_PROPS: "tuple[str, ...]" = ("K", "BB", "ER", "OUTS")
+PITCHER_PROPS: tuple[str, ...] = ("K", "BB", "ER", "OUTS")
 #: Batter prop names (credited on offense).
-BATTER_PROPS: "tuple[str, ...]" = ("H", "HR", "RBI", "TB")
+BATTER_PROPS: tuple[str, ...] = ("H", "HR", "RBI", "TB")
 #: Every prop name this aggregator can build.
-ALL_PROPS: "tuple[str, ...]" = PITCHER_PROPS + BATTER_PROPS
+ALL_PROPS: tuple[str, ...] = PITCHER_PROPS + BATTER_PROPS
 
 #: TB is now EXACT (SIM-365): the boxscore tracks ``b2``/``b3`` alongside
 #: ``h``/``hr``, so :func:`_total_bases` computes true total bases.
@@ -175,13 +175,13 @@ class PropDistribution:
     std: float
 
     # ------------------------------------------------------------------ PMF
-    def pmf(self) -> "dict[int, float]":
+    def pmf(self) -> dict[int, float]:
         """The PMF as a plain ``{value: probability}`` dict (probabilities sum to 1).
 
         Only values that actually occurred appear (a compact support); a value not
         in the dict has probability 0 -- use :meth:`prob` for a zero-safe lookup.
         """
-        return {int(v): float(p) for v, p in zip(self.support, self.probabilities)}
+        return {int(v): float(p) for v, p in zip(self.support, self.probabilities, strict=False)}
 
     def prob(self, value: int) -> float:
         """``P(X == value)`` -- 0.0 for a value that never occurred (zero-safe)."""
@@ -237,9 +237,7 @@ class PropDistribution:
         return self.p_less(line)
 
     # ----------------------------------------------------------------- CI
-    def mean_ci(
-        self, *, confidence_level: float = 0.95
-    ) -> ConfidenceInterval:
+    def mean_ci(self, *, confidence_level: float = 0.95) -> ConfidenceInterval:
         """Wald CI on the prop's sample mean (the SIM-327 :class:`ConfidenceInterval`).
 
         half-width = z * (s / sqrt(n)), s = std(ddof=1).  With n < 2 the spread is
@@ -256,7 +254,7 @@ class PropDistribution:
                 level=float(confidence_level),
                 method="normal",
             )
-        margin = z * (self.std / (self.n ** 0.5))
+        margin = z * (self.std / (self.n**0.5))
         return ConfidenceInterval(
             point=self.mean,
             low=self.mean - margin,
@@ -271,8 +269,8 @@ class PropDistribution:
         cls,
         player_id: int,
         prop: str,
-        samples: "Iterable[int]",
-    ) -> "PropDistribution":
+        samples: Iterable[int],
+    ) -> PropDistribution:
         """Build a PMF from the per-iteration integer ``samples`` for one prop.
 
         ``samples`` is one integer per simulated game (e.g. that game's K count).
@@ -282,8 +280,7 @@ class PropDistribution:
         arr = np.asarray(list(samples), dtype=np.int64)
         if arr.size == 0:
             raise ValueError(
-                f"PropDistribution.from_samples({player_id!r}, {prop!r}) "
-                "requires >= 1 sample"
+                f"PropDistribution.from_samples({player_id!r}, {prop!r}) requires >= 1 sample"
             )
         values, counts = np.unique(arr, return_counts=True)
         probs = counts.astype(np.float64) / float(arr.size)
@@ -320,12 +317,12 @@ class PropDistributionSet:
     #: any per-game line -- but every player who pitched gets ALL pitcher props
     #: (even an all-zero ER PMF), and every batter gets all batter props, so the
     #: keyspace is predictable for a consumer iterating a known prop list.
-    by_player: "dict[int, dict[str, PropDistribution]]" = field(default_factory=dict)
+    by_player: dict[int, dict[str, PropDistribution]] = field(default_factory=dict)
 
     # ------------------------------------------------------------- lookups
     def get(
-        self, player_id: int, prop: "str | None" = None
-    ) -> "PropDistribution | dict[str, PropDistribution] | None":
+        self, player_id: int, prop: str | None = None
+    ) -> PropDistribution | dict[str, PropDistribution] | None:
         """Look up a player's props (or one prop), ``None`` if absent.
 
         ``get(pid)`` -> the ``{prop: PropDistribution}`` map (or ``None``);
@@ -339,21 +336,19 @@ class PropDistributionSet:
             return player
         return player.get(str(prop))
 
-    def player_ids(self) -> "list[int]":
+    def player_ids(self) -> list[int]:
         """All player ids with at least one prop PMF, ascending."""
         return sorted(self.by_player.keys())
 
     def __contains__(self, player_id: object) -> bool:
         try:
-            return int(player_id) in self.by_player  # type: ignore[arg-type]
+            return int(player_id) in self.by_player  # type: ignore[call-overload]
         except (TypeError, ValueError):
             return False
 
     # ------------------------------------------------------------ builders
     @classmethod
-    def from_boxscores(
-        cls, boxscores: "Iterable[BoxScore]"
-    ) -> "PropDistributionSet":
+    def from_boxscores(cls, boxscores: Iterable[BoxScore]) -> PropDistributionSet:
         """Build the full prop-PMF set from the N per-game :class:`BoxScore`s.
 
         For each game we read every player's line; a player who did not appear in
@@ -374,10 +369,10 @@ class PropDistributionSet:
 
         # Pass 1: discover, per player, whether they ever pitched / batted, and
         # collect every per-game line keyed by (game_index, player_id).
-        pitched: "set[int]" = set()
-        batted: "set[int]" = set()
-        all_ids: "set[int]" = set()
-        per_game_lines: "list[dict[int, PlayerStatLine]]" = []
+        pitched: set[int] = set()
+        batted: set[int] = set()
+        all_ids: set[int] = set()
+        per_game_lines: list[dict[int, PlayerStatLine]] = []
         for box in games:
             lines = dict(box.lines)
             per_game_lines.append(lines)
@@ -390,9 +385,9 @@ class PropDistributionSet:
 
         # Pass 2: for each player, build the per-prop sample vector (length N,
         # zero-filled for games the player did not appear) and PMF it.
-        by_player: "dict[int, dict[str, PropDistribution]]" = {}
+        by_player: dict[int, dict[str, PropDistribution]] = {}
         for pid in sorted(all_ids):
-            props_for_player: "list[str]" = []
+            props_for_player: list[str] = []
             if pid in pitched:
                 props_for_player.extend(PITCHER_PROPS)
             if pid in batted:
@@ -405,21 +400,17 @@ class PropDistributionSet:
             # Gather this player's per-game line (or None for a DNP) once.
             game_lines = [g.get(pid) for g in per_game_lines]
 
-            dists: "dict[str, PropDistribution]" = {}
+            dists: dict[str, PropDistribution] = {}
             for prop in props_for_player:
                 extract = _PROP_EXTRACTORS[prop]
-                samples = [
-                    extract(ln) if ln is not None else 0 for ln in game_lines
-                ]
+                samples = [extract(ln) if ln is not None else 0 for ln in game_lines]
                 dists[prop] = PropDistribution.from_samples(pid, prop, samples)
             by_player[pid] = dists
 
         return cls(n_iterations=n, by_player=by_player)
 
     @classmethod
-    def from_results(
-        cls, results: "Iterable[GameSimResult]"
-    ) -> "PropDistributionSet":
+    def from_results(cls, results: Iterable[GameSimResult]) -> PropDistributionSet:
         """Build the prop-PMF set from N :class:`GameSimResult`s (each ``.boxscore``).
 
         Convenience wrapper over :meth:`from_boxscores`: pulls ``r.boxscore`` from
@@ -428,10 +419,7 @@ class PropDistributionSet:
         toward N (every player gets a 0 for that game) so the denominator stays the
         full iteration count.
         """
-        boxscores = [
-            r.boxscore if r.boxscore is not None else BoxScore()
-            for r in results
-        ]
+        boxscores = [r.boxscore if r.boxscore is not None else BoxScore() for r in results]
         return cls.from_boxscores(boxscores)
 
 

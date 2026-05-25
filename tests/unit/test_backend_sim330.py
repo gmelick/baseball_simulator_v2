@@ -34,7 +34,6 @@ from simulation.win_probability import (
     win_probability,
 )
 
-
 # ===========================================================================
 # Synthetic-input builders (mirror the SIM-327 test idiom)
 # ===========================================================================
@@ -54,7 +53,7 @@ def _result(home: int, away: int) -> GameSimResult:
     )
 
 
-def _summary(scores: "list[tuple[int, int]]", **kw) -> GameSimSummary:
+def _summary(scores: list[tuple[int, int]], **kw) -> GameSimSummary:
     return GameSimSummary.from_results([_result(h, a) for (h, a) in scores], **kw)
 
 
@@ -199,10 +198,7 @@ def test_tie_drop_all_ties_falls_back_to_half():
 def test_tie_handling_recorded():
     s = _summary_counts(10, 10)
     assert win_probability(s).tie_handling is TieHandling.SPLIT
-    assert (
-        win_probability(s, tie_handling=TieHandling.DROP).tie_handling
-        is TieHandling.DROP
-    )
+    assert win_probability(s, tie_handling=TieHandling.DROP).tie_handling is TieHandling.DROP
 
 
 # ===========================================================================

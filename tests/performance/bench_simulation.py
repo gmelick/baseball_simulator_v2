@@ -47,7 +47,6 @@ from similarity.engines.pitcher_similarity import (
     GMM_FEATURE_DIM,
     GMM_FEATURE_NAMES,
     ArsenalCache,
-    ArsenalSimilarity,
     EmpiricalBayesShrinkage,
     FeatureNormalizer,
     GMMComponent,
@@ -220,9 +219,7 @@ def _random_gmm(rng: np.random.Generator) -> GMMModel:
         jitter = rng.standard_normal(GMM_FEATURE_DIM) * np.array(
             [2.0, 3.0, 4.0, 150.0, 25.0, 0.2, 0.2, 0.3]
         )
-        comps.append(
-            _make_component(i, float(weights[i]), (base + jitter).tolist(), var_diag=1.5)
-        )
+        comps.append(_make_component(i, float(weights[i]), (base + jitter).tolist(), var_diag=1.5))
     return _make_gmm(comps)
 
 
@@ -476,9 +473,7 @@ class _OutFieldingResolver:
     def resolve_fielding(self, state, battedball_sample):
         from simulation.sim_loop import FieldingSignal
 
-        return FieldingSignal(
-            event="field_out", result_hits=0, result_outs=1, result_runs=0
-        )
+        return FieldingSignal(event="field_out", result_hits=0, result_outs=1, result_runs=0)
 
     def resolve_steal(self, state):
         from simulation.sim_loop import StealResolution
@@ -498,7 +493,7 @@ _BENCH4_OUTCOME_CYCLE = (
     "swinging_strike",
     "swinging_strike",  # strike 3 -> strikeout terminal (rolls the PA)
     "ball",
-    "in_play",          # contact -> resolver records a field-out (rolls outs)
+    "in_play",  # contact -> resolver records a field-out (rolls outs)
 )
 
 
@@ -624,9 +619,7 @@ def test_bench_phase4_batch_runner(benchmark):
     batch_median_s = benchmark.stats.stats.median
     per_game_s = batch_median_s / _BATCH_N
     # Soft per-game note against the SIM-119 §4.2 budgeted ~0.37 s/game.
-    _check_loop_threshold(
-        "batch per-game wall", per_game_s, SIM_GAME_BUDGET_SECONDS, "s"
-    )
+    _check_loop_threshold("batch per-game wall", per_game_s, SIM_GAME_BUDGET_SECONDS, "s")
     # Hard(-able) per-pitch throughput against the SIM-119 §3 per-pitch budget.
     if total_pitches > 0:
         per_pitch_ms = (batch_median_s / total_pitches) * 1_000.0

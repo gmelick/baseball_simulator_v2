@@ -76,7 +76,7 @@ def test_metrics_body_is_valid_exposition(client: TestClient) -> None:
     for name in EXPECTED_METRICS:
         assert name in body, f"missing metric series: {name}"
     # app_info carries the version label and is always 1.
-    assert 'baseball_sim_app_info{version=' in body
+    assert "baseball_sim_app_info{version=" in body
 
 
 def test_metrics_help_and_type_lines_well_formed(client: TestClient) -> None:
@@ -146,11 +146,7 @@ def test_prometheus_yml_parses_and_scrapes_app() -> None:
     app_jobs = [
         j
         for j in jobs
-        if any(
-            "app:8000" in t
-            for sc in j.get("static_configs", [])
-            for t in sc.get("targets", [])
-        )
+        if any("app:8000" in t for sc in j.get("static_configs", []) for t in sc.get("targets", []))
     ]
     assert app_jobs, "no scrape job targets app:8000"
     assert app_jobs[0].get("metrics_path", "/metrics") == "/metrics"
@@ -173,11 +169,7 @@ def test_grafana_dashboard_json_parses() -> None:
     dash = json.loads(path.read_text(encoding="utf-8"))
     assert "panels" in dash and len(dash["panels"]) >= 3
     # Panels should reference the SIM-374 metric series.
-    exprs = " ".join(
-        t.get("expr", "")
-        for p in dash["panels"]
-        for t in p.get("targets", [])
-    )
+    exprs = " ".join(t.get("expr", "") for p in dash["panels"] for t in p.get("targets", []))
     assert "baseball_sim_latency_seconds" in exprs
     assert "baseball_sim_api_p95_seconds" in exprs
     assert "baseball_sim_pipeline_freshness_seconds" in exprs

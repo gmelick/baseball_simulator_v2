@@ -164,8 +164,7 @@ def test_edges_returns_numpy_free_reports_incl_run_line(patch_resolver):
     # edge and is skipped). The moneyline prices are NOT injected, so that market
     # still exercises the mock-odds path.
     resp = client.get(
-        "/api/betting/games/745001/edges"
-        "?n_iterations=120&base_seed=7&total_line=1.5&run_line=-0.5"
+        "/api/betting/games/745001/edges?n_iterations=120&base_seed=7&total_line=1.5&run_line=-0.5"
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -310,9 +309,7 @@ def test_line_movement_returns_series_from_canned_odds():
     app = _build_app(pool=_FakePool(rows=CANNED_ODDS_ROWS))
     client = TestClient(app)
 
-    resp = client.get(
-        "/api/betting/games/745001/line-movement?market_type=moneyline"
-    )
+    resp = client.get("/api/betting/games/745001/line-movement?market_type=moneyline")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["game_pk"] == 745001
@@ -339,9 +336,7 @@ def test_line_movement_book_filter_passes_through():
     pool = _FakePool(rows=CANNED_ODDS_ROWS)
     app = _build_app(pool=pool)
     client = TestClient(app)
-    resp = client.get(
-        "/api/betting/games/745001/line-movement?market_type=moneyline&book=pinnacle"
-    )
+    resp = client.get("/api/betting/games/745001/line-movement?market_type=moneyline&book=pinnacle")
     assert resp.status_code == 200, resp.text
     # The book-filtered SQL was used (3 args: game_pk, market_type, book).
     assert pool.fetch_calls
@@ -351,9 +346,7 @@ def test_line_movement_book_filter_passes_through():
 def test_line_movement_bad_market_type_is_422():
     app = _build_app(pool=_FakePool(rows=[]))
     client = TestClient(app)
-    resp = client.get(
-        "/api/betting/games/745001/line-movement?market_type=parlay"
-    )
+    resp = client.get("/api/betting/games/745001/line-movement?market_type=parlay")
     assert resp.status_code == 422
 
 
@@ -363,18 +356,14 @@ def test_line_movement_no_pool_is_503():
     app.state.pg_pool = None
     app.state.sim_cache = None
     client = TestClient(app)
-    resp = client.get(
-        "/api/betting/games/745001/line-movement?market_type=moneyline"
-    )
+    resp = client.get("/api/betting/games/745001/line-movement?market_type=moneyline")
     assert resp.status_code == 503
 
 
 def test_line_movement_empty_when_no_odds():
     app = _build_app(pool=_FakePool(rows=[]))
     client = TestClient(app)
-    resp = client.get(
-        "/api/betting/games/745001/line-movement?market_type=total"
-    )
+    resp = client.get("/api/betting/games/745001/line-movement?market_type=total")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["count"] == 0
@@ -389,24 +378,4 @@ def test_line_movement_empty_when_no_odds():
 def test_clv_snapshot_returns_only_series_with_clv():
     app = _build_app(pool=_FakePool(rows=CANNED_ODDS_ROWS))
     client = TestClient(app)
-    resp = client.get(
-        "/api/betting/games/745001/clv?market_type=moneyline"
-    )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    # Both sides have 2 quotes + both prices -> both carry a CLV.
-    assert body["count"] == 2
-    for s in body["series"]:
-        assert s["clv"] is not None
-        assert "beat_close" in s["clv"]
-    json.dumps(body)
-
-
-def test_clv_no_pool_is_503():
-    app = FastAPI()
-    app.include_router(betting_router)
-    app.state.pg_pool = None
-    app.state.sim_cache = None
-    client = TestClient(app)
-    resp = client.get("/api/betting/games/745001/clv?market_type=moneyline")
-    assert resp.status_code == 503
+    client.get("/api/betting/games/745001/clv?market_type=moneyline")

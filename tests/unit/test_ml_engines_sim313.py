@@ -33,7 +33,6 @@ import pytest
 faiss = pytest.importorskip("faiss")
 
 from simulation.play_pool_sampler import (
-    EPS,
     POOL_BATTEDBALL,
     POOL_PITCH,
     PlayPoolSampler,
@@ -61,19 +60,22 @@ def _write_synthetic_tile(tile_dir, bat_hand, vectors, rowids, meta_extra):
         fh.write(buf.getvalue())
 
     meta = {
-        "schema_version": 1, "bat_hand": bat_hand, "dim": dim,
+        "schema_version": 1,
+        "bat_hand": bat_hand,
+        "dim": dim,
         "n_vectors": int(vectors.shape[0]),
         "n_source_rows": int(meta_extra.get("n_source_rows", vectors.shape[0])),
-        "recency_boost": False, "recency_boost_seasons": 2,
-        "build_timestamp": "2026-05-20T08:00:00Z", "builder_version": "sim301.1",
+        "recency_boost": False,
+        "recency_boost_seasons": 2,
+        "build_timestamp": "2026-05-20T08:00:00Z",
+        "builder_version": "sim301.1",
     }
     meta.update(meta_extra)
     with open(os.path.join(tile_dir, f"{bat_hand}.faiss.meta"), "w", encoding="utf-8") as fh:
         json.dump(meta, fh, indent=2, sort_keys=True)
 
 
-def _make_battedball_sampler(tmp_path, *, recency=None, n=200, seed=7,
-                             rng_seed=0):
+def _make_battedball_sampler(tmp_path, *, recency=None, n=200, seed=7, rng_seed=0):
     """Build a synthetic batted-ball tile + sampler.  ``recency`` is an optional
     {row_id: float} map injected via recency_fetch; when None, no recency_fetch
     is injected (recency-neutral, since an outcome_fetch is supplied)."""
@@ -84,21 +86,25 @@ def _make_battedball_sampler(tmp_path, *, recency=None, n=200, seed=7,
     outcomes = {int(rid): vocab[i % len(vocab)] for i, rid in enumerate(rowids)}
 
     tile_dir = os.path.join(str(tmp_path), str(SEASON), POOL_BATTEDBALL)
-    _write_synthetic_tile(tile_dir, "R", vectors, rowids,
-                          {"pool": POOL_BATTEDBALL, "season": SEASON})
+    _write_synthetic_tile(
+        tile_dir, "R", vectors, rowids, {"pool": POOL_BATTEDBALL, "season": SEASON}
+    )
 
     def outcome_fetch(pool, rids):
         return {int(r): outcomes[int(r)] for r in rids}
 
     recency_fetch = None
     if recency is not None:
+
         def recency_fetch(pool, rids):  # noqa: E731
             return {int(r): recency.get(int(r)) for r in rids}
 
     sampler = PlayPoolSampler(
-        pool_dir=str(tmp_path), duckdb_path=None,
+        pool_dir=str(tmp_path),
+        duckdb_path=None,
         rng=np.random.default_rng(rng_seed),
-        outcome_fetch=outcome_fetch, recency_fetch=recency_fetch,
+        outcome_fetch=outcome_fetch,
+        recency_fetch=recency_fetch,
     )
     return sampler, vectors, rowids, outcomes
 
@@ -112,10 +118,11 @@ def test_uniform_recency_matches_pure_distance_weights(tmp_path):
     """With every recency_weight = 1.0 the normalized weights returned by _knn +
     _apply_recency are identical to the pure-distance weights from _knn alone."""
     sampler_unit, vectors, rowids, _ = _make_battedball_sampler(
-        tmp_path, recency={int(r): 1.0 for r in (np.arange(200) + 700_000)})
+        tmp_path, recency={int(r): 1.0 for r in (np.arange(200) + 700_000)}
+    )
 
     handle = sampler_unit.load_tile(POOL_BATTEDBALL, SEASON, "R")
-    q = (vectors[42].astype(np.float32) + 0.1)
+    q = vectors[42].astype(np.float32) + 0.1
     positions, dist_weights, _d = sampler_unit._knn(handle, q, k=25)
     recency_weights = sampler_unit._apply_recency(handle, positions, dist_weights)
 
@@ -129,16 +136,13 @@ def test_uniform_recency_same_draws_as_no_recency_fetch(tmp_path):
     """Same tile, same seed: a sampler with uniform recency_fetch and one with NO
     recency_fetch (recency-neutral) must produce identical draw sequences."""
     sampler_a, vectors, _, _ = _make_battedball_sampler(
-        tmp_path, recency={int(r): 1.0 for r in (np.arange(200) + 700_000)},
-        rng_seed=99)
-    sampler_b, _, _, _ = _make_battedball_sampler(
-        tmp_path, recency=None, rng_seed=99)
+        tmp_path, recency={int(r): 1.0 for r in (np.arange(200) + 700_000)}, rng_seed=99
+    )
+    sampler_b, _, _, _ = _make_battedball_sampler(tmp_path, recency=None, rng_seed=99)
 
     q = vectors[10].astype(np.float32) + 0.05
-    draws_a = [sampler_a.sample_batted_ball("R", SEASON, q, k=20)["row_id"]
-               for _ in range(40)]
-    draws_b = [sampler_b.sample_batted_ball("R", SEASON, q, k=20)["row_id"]
-               for _ in range(40)]
+    draws_a = [sampler_a.sample_batted_ball("R", SEASON, q, k=20)["row_id"] for _ in range(40)]
+    draws_b = [sampler_b.sample_batted_ball("R", SEASON, q, k=20)["row_id"] for _ in range(40)]
     assert draws_a == draws_b
 
 
@@ -156,8 +160,9 @@ def test_higher_recency_increases_selection_probability(tmp_path):
     vectors = rng.uniform(-1.0, 1.0, size=(n, 3)).astype(np.float32)
     rowids = np.arange(n, dtype=np.int64) + 700_000
     tile_dir = os.path.join(str(tmp_path), str(SEASON), POOL_BATTEDBALL)
-    _write_synthetic_tile(tile_dir, "R", vectors, rowids,
-                          {"pool": POOL_BATTEDBALL, "season": SEASON})
+    _write_synthetic_tile(
+        tile_dir, "R", vectors, rowids, {"pool": POOL_BATTEDBALL, "season": SEASON}
+    )
 
     def outcome_fetch(pool, rids):
         return {int(r): "single" for r in rids}
@@ -168,8 +173,10 @@ def test_higher_recency_increases_selection_probability(tmp_path):
         recency = {int(r): 1.0 for r in rowids}
         # Find the target neighbour: the 3rd-nearest so it's not already dominant.
         sampler = PlayPoolSampler(
-            pool_dir=str(tmp_path), duckdb_path=None,
-            rng=np.random.default_rng(0), outcome_fetch=outcome_fetch,
+            pool_dir=str(tmp_path),
+            duckdb_path=None,
+            rng=np.random.default_rng(0),
+            outcome_fetch=outcome_fetch,
             recency_fetch=lambda pool, rids: {int(r): recency[int(r)] for r in rids},
         )
         handle = sampler.load_tile(POOL_BATTEDBALL, SEASON, "R")
@@ -179,7 +186,7 @@ def test_higher_recency_increases_selection_probability(tmp_path):
         recency[target_row] = boost
         weights = sampler._apply_recency(handle, positions, dist_w)
         # locate target among returned positions
-        idx = list(int(p) for p in positions).index(target_pos)
+        idx = [int(p) for p in positions].index(target_pos)
         return float(weights[idx])
 
     p1 = prob_of_target_with_boost(1.0)
@@ -192,18 +199,23 @@ def test_two_equidistant_neighbours_split_by_recency(tmp_path):
     """Two neighbours at the SAME distance: their post-recency probabilities are
     in exact proportion to their recency_weights."""
     # Place two vectors symmetric about the query so distances are identical.
-    vectors = np.array([
-        [1.0, 0.0, 0.0],
-        [-1.0, 0.0, 0.0],
-    ], dtype=np.float32)
+    vectors = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
     rowids = np.array([700_000, 700_001], dtype=np.int64)
     tile_dir = os.path.join(str(tmp_path), str(SEASON), POOL_BATTEDBALL)
-    _write_synthetic_tile(tile_dir, "R", vectors, rowids,
-                          {"pool": POOL_BATTEDBALL, "season": SEASON})
+    _write_synthetic_tile(
+        tile_dir, "R", vectors, rowids, {"pool": POOL_BATTEDBALL, "season": SEASON}
+    )
 
     recency = {700_000: 3.0, 700_001: 1.0}
     sampler = PlayPoolSampler(
-        pool_dir=str(tmp_path), duckdb_path=None,
+        pool_dir=str(tmp_path),
+        duckdb_path=None,
         rng=np.random.default_rng(0),
         outcome_fetch=lambda pool, rids: {int(r): "single" for r in rids},
         recency_fetch=lambda pool, rids: {int(r): recency[int(r)] for r in rids},
@@ -215,7 +227,9 @@ def test_two_equidistant_neighbours_split_by_recency(tmp_path):
     assert dist_w[0] == pytest.approx(dist_w[1])
     weights = sampler._apply_recency(handle, positions, dist_w)
     # Map back to row ids to compare against the 3:1 recency ratio.
-    by_row = {int(handle.rowids[int(p)]): float(w) for p, w in zip(positions, weights)}
+    by_row = {
+        int(handle.rowids[int(p)]): float(w) for p, w in zip(positions, weights, strict=False)
+    }
     assert by_row[700_000] == pytest.approx(0.75, abs=1e-9)  # 3/(3+1)
     assert by_row[700_001] == pytest.approx(0.25, abs=1e-9)  # 1/(3+1)
 
@@ -235,8 +249,9 @@ def test_distribution_reweights_by_recency(tmp_path):
     vocab = ["single", "double", "field_out"]
     outcomes = {int(rid): vocab[i % len(vocab)] for i, rid in enumerate(rowids)}
     tile_dir = os.path.join(str(tmp_path), str(SEASON), POOL_BATTEDBALL)
-    _write_synthetic_tile(tile_dir, "R", vectors, rowids,
-                          {"pool": POOL_BATTEDBALL, "season": SEASON})
+    _write_synthetic_tile(
+        tile_dir, "R", vectors, rowids, {"pool": POOL_BATTEDBALL, "season": SEASON}
+    )
 
     def outcome_fetch(pool, rids):
         return {int(r): outcomes[int(r)] for r in rids}
@@ -245,16 +260,16 @@ def test_distribution_reweights_by_recency(tmp_path):
 
     def dist_with(recency):
         sampler = PlayPoolSampler(
-            pool_dir=str(tmp_path), duckdb_path=None,
-            rng=np.random.default_rng(0), outcome_fetch=outcome_fetch,
+            pool_dir=str(tmp_path),
+            duckdb_path=None,
+            rng=np.random.default_rng(0),
+            outcome_fetch=outcome_fetch,
             recency_fetch=lambda pool, rids: {int(r): recency[int(r)] for r in rids},
         )
-        return sampler.sample_batted_ball("R", SEASON, q, k=30,
-                                          return_distribution=True)
+        return sampler.sample_batted_ball("R", SEASON, q, k=30, return_distribution=True)
 
     uniform = {int(r): 1.0 for r in rowids}
-    boost_singles = {int(r): (5.0 if outcomes[int(r)] == "single" else 1.0)
-                     for r in rowids}
+    boost_singles = {int(r): (5.0 if outcomes[int(r)] == "single" else 1.0) for r in rowids}
 
     d_uniform = dist_with(uniform)
     d_boost = dist_with(boost_singles)
@@ -273,18 +288,21 @@ def test_distribution_two_events_exact_recency_ratio(tmp_path):
     rowids = np.array([700_000, 700_001], dtype=np.int64)
     outcomes = {700_000: "single", 700_001: "field_out"}
     tile_dir = os.path.join(str(tmp_path), str(SEASON), POOL_BATTEDBALL)
-    _write_synthetic_tile(tile_dir, "R", vectors, rowids,
-                          {"pool": POOL_BATTEDBALL, "season": SEASON})
+    _write_synthetic_tile(
+        tile_dir, "R", vectors, rowids, {"pool": POOL_BATTEDBALL, "season": SEASON}
+    )
 
     recency = {700_000: 2.0, 700_001: 1.0}
     sampler = PlayPoolSampler(
-        pool_dir=str(tmp_path), duckdb_path=None,
+        pool_dir=str(tmp_path),
+        duckdb_path=None,
         rng=np.random.default_rng(0),
         outcome_fetch=lambda pool, rids: {int(r): outcomes[int(r)] for r in rids},
         recency_fetch=lambda pool, rids: {int(r): recency[int(r)] for r in rids},
     )
-    dist = sampler.sample_batted_ball("R", SEASON, np.zeros(3, dtype=np.float32),
-                                      k=2, return_distribution=True)
+    dist = sampler.sample_batted_ball(
+        "R", SEASON, np.zeros(3, dtype=np.float32), k=2, return_distribution=True
+    )
     assert dist["single"] == pytest.approx(2.0 / 3.0, abs=1e-9)
     assert dist["field_out"] == pytest.approx(1.0 / 3.0, abs=1e-9)
 
@@ -298,7 +316,8 @@ def test_none_recency_defaults_to_one(tmp_path):
     """A recency_fetch returning None for a row must default that row to 1.0 and
     therefore reproduce the pure-distance weights."""
     sampler, vectors, rowids, _ = _make_battedball_sampler(
-        tmp_path, recency={int(r): None for r in (np.arange(200) + 700_000)})
+        tmp_path, recency={int(r): None for r in (np.arange(200) + 700_000)}
+    )
     handle = sampler.load_tile(POOL_BATTEDBALL, SEASON, "R")
     q = vectors[7].astype(np.float32) + 0.1
     positions, dist_w, _d = sampler._knn(handle, q, k=20)
@@ -310,7 +329,8 @@ def test_partial_recency_map_defaults_missing_rows(tmp_path):
     """recency_fetch that omits some row ids -> those rows default to 1.0; the
     sampler must not raise and weights remain a valid probability vector."""
     sampler, vectors, rowids, _ = _make_battedball_sampler(
-        tmp_path, recency={int(rowids := 700_000): 5.0})  # only one row mapped
+        tmp_path, recency={int(rowids := 700_000): 5.0}
+    )  # only one row mapped
     handle = sampler.load_tile(POOL_BATTEDBALL, SEASON, "R")
     q = vectors[3].astype(np.float32) + 0.1
     positions, dist_w, _d = sampler._knn(handle, q, k=20)
@@ -327,19 +347,27 @@ def test_partial_recency_map_defaults_missing_rows(tmp_path):
 def test_sample_pitch_applies_recency(tmp_path):
     """sample_pitch must route through _apply_recency: two equidistant pitch
     neighbours split selection probability by their recency_weights."""
-    vectors = np.array([
-        [1.0] + [0.0] * 9,
-        [-1.0] + [0.0] * 9,
-    ], dtype=np.float32)
+    vectors = np.array(
+        [
+            [1.0] + [0.0] * 9,
+            [-1.0] + [0.0] * 9,
+        ],
+        dtype=np.float32,
+    )
     rowids = np.array([800_000, 800_001], dtype=np.int64)
     tile_dir = os.path.join(str(tmp_path), str(SEASON), str(PITCHER))
-    _write_synthetic_tile(tile_dir, "R", vectors, rowids,
-                          {"pool": POOL_PITCH, "season": SEASON,
-                           "pitcher_id": PITCHER, "n_source_rows": 200})
+    _write_synthetic_tile(
+        tile_dir,
+        "R",
+        vectors,
+        rowids,
+        {"pool": POOL_PITCH, "season": SEASON, "pitcher_id": PITCHER, "n_source_rows": 200},
+    )
 
     recency = {800_000: 9.0, 800_001: 1.0}
     sampler = PlayPoolSampler(
-        pool_dir=str(tmp_path), duckdb_path=None,
+        pool_dir=str(tmp_path),
+        duckdb_path=None,
         rng=np.random.default_rng(123),
         outcome_fetch=lambda pool, rids: {int(r): "ball" for r in rids},
         recency_fetch=lambda pool, rids: {int(r): recency[int(r)] for r in rids},

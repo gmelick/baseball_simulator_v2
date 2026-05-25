@@ -37,8 +37,8 @@ from simulation.sim_loop import (
 
 SEASON = 2024
 PITCHER = 477132
-AWAY_LINEUP = list(range(101, 110))   # 9 batters
-HOME_LINEUP = list(range(201, 210))   # 9 batters
+AWAY_LINEUP = list(range(101, 110))  # 9 batters
+HOME_LINEUP = list(range(201, 210))  # 9 batters
 
 
 # ===========================================================================
@@ -51,7 +51,7 @@ class _CyclingResolver(PlayResolver):
     time, governed by the shared rng) so games make progress, score, and END.
     No DB/FAISS — the batted-ball sample is injected."""
 
-    def __init__(self, rng: "np.random.Generator", hit_rate: float = 0.30):
+    def __init__(self, rng: np.random.Generator, hit_rate: float = 0.30):
         self.rng = rng
         self.hit_rate = float(hit_rate)
         self._injected_battedball = {"event": "field_out"}
@@ -147,8 +147,9 @@ class TestDeterminism:
 
     def test_different_seeds_vary_the_game(self):
         # Across a spread of seeds, not every game is identical (the seed matters).
-        results = {(_run(s).home_score, _run(s).away_score, _run(s).innings_played)
-                   for s in range(12)}
+        results = {
+            (_run(s).home_score, _run(s).away_score, _run(s).innings_played) for s in range(12)
+        }
         assert len(results) > 1
 
     def test_seed_threads_through_the_sampler_rng(self):
@@ -161,8 +162,9 @@ class TestDeterminism:
         class _NoSampleSM(_RngStateMachine):
             pass
 
-        sm = _NoSampleSM(resolver=_CyclingResolver(np.random.default_rng(3)),
-                         rng=np.random.default_rng(3))
+        sm = _NoSampleSM(
+            resolver=_CyclingResolver(np.random.default_rng(3)), rng=np.random.default_rng(3)
+        )
         sm.sampler = _StubSampler()
         before = sm.sampler.rng
         simulate_game(sm, seed=123, away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP)
@@ -181,10 +183,17 @@ class TestRegulationNoBottomNinth:
         # empty / 2 outs; one more out completes the top of the 9th -> game over,
         # the bottom of the 9th is NOT played (spec §6.2).
         state = GameState(
-            pitcher_id=PITCHER, bat_hand="R", season=SEASON,
-            away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP, batter_id=101,
-            inning=REGULATION_INNINGS, half=Half.TOP, outs=2,
-            home_score=5, away_score=3,
+            pitcher_id=PITCHER,
+            bat_hand="R",
+            season=SEASON,
+            away_lineup=AWAY_LINEUP,
+            home_lineup=HOME_LINEUP,
+            batter_id=101,
+            inning=REGULATION_INNINGS,
+            half=Half.TOP,
+            outs=2,
+            home_score=5,
+            away_score=3,
         )
         # An out-only resolver so the top of the 9th ends immediately.
         rng = np.random.default_rng(0)
@@ -196,8 +205,11 @@ class TestRegulationNoBottomNinth:
         class _AllOut(PlayResolver):
             def __init__(self):
                 self._injected_battedball = {"event": "field_out"}
+
             def resolve_fielding(self, st, bb):
-                return FieldingSignal(event="field_out", result_hits=0, result_outs=1, result_runs=0)
+                return FieldingSignal(
+                    event="field_out", result_hits=0, result_outs=1, result_runs=0
+                )
 
         sm = _OutSM(resolver=_AllOut(), rng=rng)
         r = simulate_game(sm, initial_state=state, seed=1)
@@ -224,10 +236,17 @@ class TestWalkOff:
         # (the resolver scores the runner via result_runs) gives the home team
         # the lead -> walk-off, the half-inning does NOT complete.
         state = GameState(
-            pitcher_id=PITCHER, bat_hand="R", season=SEASON,
-            away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP, batter_id=201,
-            inning=REGULATION_INNINGS, half=Half.BOTTOM, outs=0,
-            home_score=2, away_score=2,
+            pitcher_id=PITCHER,
+            bat_hand="R",
+            season=SEASON,
+            away_lineup=AWAY_LINEUP,
+            home_lineup=HOME_LINEUP,
+            batter_id=201,
+            inning=REGULATION_INNINGS,
+            half=Half.BOTTOM,
+            outs=0,
+            home_score=2,
+            away_score=2,
         )
         state.home_lineup_slot = 0
         state.bases = Bases(third=205)  # runner on 3B
@@ -239,6 +258,7 @@ class TestWalkOff:
         class _ScoringSingle(PlayResolver):
             def __init__(self):
                 self._injected_battedball = {"event": "single", "result_runs": 1}
+
             def resolve_fielding(self, st, bb):
                 return FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=1)
 
@@ -278,10 +298,17 @@ class TestExtraInnings:
         # Force the start of the top of the 10th (tied) and assert the driver
         # seeds the automatic runner on 2B before the first pitch is resolved.
         state = GameState(
-            pitcher_id=PITCHER, bat_hand="R", season=SEASON,
-            away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP, batter_id=101,
-            inning=REGULATION_INNINGS + 1, half=Half.TOP, outs=0,
-            home_score=4, away_score=4,
+            pitcher_id=PITCHER,
+            bat_hand="R",
+            season=SEASON,
+            away_lineup=AWAY_LINEUP,
+            home_lineup=HOME_LINEUP,
+            batter_id=101,
+            inning=REGULATION_INNINGS + 1,
+            half=Half.TOP,
+            outs=0,
+            home_score=4,
+            away_score=4,
         )
         captured = {}
 
@@ -297,8 +324,11 @@ class TestExtraInnings:
         class _AllOut(PlayResolver):
             def __init__(self):
                 self._injected_battedball = {"event": "field_out"}
+
             def resolve_fielding(self, st, bb):
-                return FieldingSignal(event="field_out", result_hits=0, result_outs=1, result_runs=0)
+                return FieldingSignal(
+                    event="field_out", result_hits=0, result_outs=1, result_runs=0
+                )
 
         sm = _CaptureSM(resolver=_AllOut(), rng=np.random.default_rng(0))
         simulate_game(sm, initial_state=state, seed=1)
@@ -309,10 +339,17 @@ class TestExtraInnings:
         # A tied-after-9 start drives into extras (ghost runner each half) and
         # eventually decides a winner — never returns tied.
         state = GameState(
-            pitcher_id=PITCHER, bat_hand="R", season=SEASON,
-            away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP, batter_id=101,
-            inning=REGULATION_INNINGS, half=Half.TOP, outs=0,
-            home_score=3, away_score=3,
+            pitcher_id=PITCHER,
+            bat_hand="R",
+            season=SEASON,
+            away_lineup=AWAY_LINEUP,
+            home_lineup=HOME_LINEUP,
+            batter_id=101,
+            inning=REGULATION_INNINGS,
+            half=Half.TOP,
+            outs=0,
+            home_score=3,
+            away_score=3,
         )
         # Start at the top of the 9th tied; the game must play the 9th then go to
         # extras and settle.
@@ -351,7 +388,10 @@ class TestGuardsHold:
 
         sm = _NeverOutSM(rng=np.random.default_rng(0))
         r = simulate_game(
-            sm, seed=1, away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP,
+            sm,
+            seed=1,
+            away_lineup=AWAY_LINEUP,
+            home_lineup=HOME_LINEUP,
             max_innings=12,
         )
         # The driver returned (did not hang) and bounded its work.
@@ -371,15 +411,20 @@ class TestDriverConstruction:
         class _AllOut(PlayResolver):
             def __init__(self):
                 self._injected_battedball = {"event": "field_out"}
+
             def resolve_fielding(self, st, bb):
-                return FieldingSignal(event="field_out", result_hits=0, result_outs=1, result_runs=0)
+                return FieldingSignal(
+                    event="field_out", result_hits=0, result_outs=1, result_runs=0
+                )
 
         # With a built-from-scratch machine the driver samples nothing (no
         # sampler) and would need explicit outcomes; instead assert it raises a
         # clear error rather than hang, proving the no-sampler guard fires.
         with pytest.raises(ValueError):
             simulate_game(
-                resolver=_AllOut(), seed=1,
-                away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP,
+                resolver=_AllOut(),
+                seed=1,
+                away_lineup=AWAY_LINEUP,
+                home_lineup=HOME_LINEUP,
                 max_innings=3,
             )

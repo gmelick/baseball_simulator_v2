@@ -84,23 +84,23 @@ def _is_barrel(con, ev, la, prefix: str = "") -> bool | None:
     "ev, la, expected",
     [
         # exactly at the 98 mph floor, band 26-30
-        (98.0, 28.0, True),    # inside band
-        (98.0, 26.0, True),    # lower edge inclusive
-        (98.0, 30.0, True),    # upper edge inclusive
-        (98.0, 25.0, False),   # just below lower edge -> not a barrel
-        (98.0, 31.0, False),   # just above upper edge -> not a barrel
+        (98.0, 28.0, True),  # inside band
+        (98.0, 26.0, True),  # lower edge inclusive
+        (98.0, 30.0, True),  # upper edge inclusive
+        (98.0, 25.0, False),  # just below lower edge -> not a barrel
+        (98.0, 31.0, False),  # just above upper edge -> not a barrel
         # just below the EV floor -> never a barrel even at an ideal angle
         (97.0, 28.0, False),
         (97.9, 28.0, False),
         # 100 mph: band widens to 24-34
-        (100.0, 24.0, True),   # new lower edge
-        (100.0, 34.0, True),   # new upper edge
+        (100.0, 24.0, True),  # new lower edge
+        (100.0, 34.0, True),  # new upper edge
         (100.0, 23.0, False),  # below widened lower edge
         (100.0, 35.0, False),  # above widened upper edge
         # 116 mph: band fully clamped to 8-50
-        (116.0, 8.0, True),    # clamped lower edge
-        (116.0, 50.0, True),   # clamped upper edge
-        (116.0, 7.0, False),   # below clamp
+        (116.0, 8.0, True),  # clamped lower edge
+        (116.0, 50.0, True),  # clamped upper edge
+        (116.0, 7.0, False),  # below clamp
         (116.0, 51.0, False),  # above clamp
         # well past 116 mph -> still clamped 8-50
         (120.0, 8.0, True),
@@ -120,9 +120,9 @@ def test_barrel_boundary_points(con, ev, la, expected):
 @pytest.mark.parametrize(
     "ev, la",
     [
-        (None, 28.0),    # NULL exit velocity
-        (105.0, None),   # NULL launch angle
-        (None, None),    # both NULL
+        (None, 28.0),  # NULL exit velocity
+        (105.0, None),  # NULL launch angle
+        (None, None),  # both NULL
     ],
 )
 def test_null_inputs_not_barrels(con, ev, la):
@@ -138,16 +138,14 @@ def test_null_not_summed_as_barrel(con):
     con.executemany(
         "INSERT INTO bbe VALUES (?, ?, ?, ?)",
         [
-            (1, None, None, "R"),     # NULL -> not a barrel
-            (2, 97.0, 28.0, "R"),     # below EV floor -> not a barrel
-            (3, 98.0, 28.0, "R"),     # barrel
-            (4, 100.0, 34.0, "R"),    # barrel
+            (1, None, None, "R"),  # NULL -> not a barrel
+            (2, 97.0, 28.0, "R"),  # below EV floor -> not a barrel
+            (3, 98.0, 28.0, "R"),  # barrel
+            (4, 100.0, 34.0, "R"),  # barrel
         ],
     )
     expr = ppc._barrel_case_sql()
-    n = con.execute(
-        f"SELECT SUM(CASE WHEN {expr} THEN 1.0 ELSE 0 END) FROM bbe"
-    ).fetchone()[0]
+    n = con.execute(f"SELECT SUM(CASE WHEN {expr} THEN 1.0 ELSE 0 END) FROM bbe").fetchone()[0]
     assert n == 2.0
 
 
@@ -192,9 +190,9 @@ def test_platoon_prefix_gates_handedness(con):
         (99.0, 25.0, 32.0),
         (100.0, 24.0, 34.0),
         (105.0, 19.0, 44.0),
-        (110.0, 14.0, 50.0),   # upper clamped
-        (116.0, 8.0, 50.0),    # lower clamped
-        (120.0, 8.0, 50.0),    # both clamped
+        (110.0, 14.0, 50.0),  # upper clamped
+        (116.0, 8.0, 50.0),  # lower clamped
+        (120.0, 8.0, 50.0),  # both clamped
     ],
 )
 def test_documented_band_edges(con, ev, lower, upper):

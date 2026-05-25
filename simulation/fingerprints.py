@@ -58,11 +58,21 @@ provider work runs once.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Callable, Mapping, Optional
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray
+
+from similarity.engines.batted_ball_similarity import (
+    BATTED_BALL_FEATURES,
+)
+from similarity.engines.batted_ball_similarity import (
+    FEATURE_SCALE as _BB_FEATURE_SCALE,
+)
+from similarity.engines.pitch_pitch_similarity import (
+    FEATURE_SCALE as _PITCH_FEATURE_SCALE,
+)
 
 # Import the engines' feature definitions as the SINGLE SOURCE OF TRUTH for the
 # fingerprint order + the sqrt feature weighting.  These modules import only
@@ -70,13 +80,7 @@ from numpy.typing import NDArray
 # NOT require faiss to be installed.
 from similarity.engines.pitch_pitch_similarity import (
     PITCH_FEATURES,
-    FEATURE_SCALE as _PITCH_FEATURE_SCALE,
 )
-from similarity.engines.batted_ball_similarity import (
-    BATTED_BALL_FEATURES,
-    FEATURE_SCALE as _BB_FEATURE_SCALE,
-)
-
 from simulation.score_fusion import ScoreFusion
 
 __all__ = [
@@ -105,7 +109,7 @@ PITCH_FEATURE_NAMES: tuple[str, ...] = tuple(f for f, _ in PITCH_FEATURES)
 #: spray_angle]``.
 BATTED_BALL_FEATURE_NAMES: tuple[str, ...] = tuple(f for f, _ in BATTED_BALL_FEATURES)
 
-PITCH_FINGERPRINT_DIM = len(PITCH_FEATURE_NAMES)          # 10
+PITCH_FINGERPRINT_DIM = len(PITCH_FEATURE_NAMES)  # 10
 BATTED_BALL_FINGERPRINT_DIM = len(BATTED_BALL_FEATURE_NAMES)  # 3
 
 #: The 8 GMM arsenal dims the pitcher engine models (the pitch fingerprint's
@@ -179,7 +183,7 @@ class MatchupProfile:
 #: A provider resolves the matchup geometry for ``(pitcher_id, bat_hand, season,
 #: batter_id)`` into a :class:`MatchupProfile`.  Pluggable so the loop can inject
 #: an engine-backed provider (production) or a fixed one (tests).
-MatchupProfileProvider = Callable[[int, str, int, "Optional[int]"], MatchupProfile]
+MatchupProfileProvider = Callable[[int, str, int, "int | None"], MatchupProfile]
 
 
 # ---------------------------------------------------------------------------
@@ -200,8 +204,8 @@ class _PitchNorm:
     own ``normalize`` "unfitted" branch (``mean is None``).
     """
 
-    mean: Optional[NDArray[np.float64]] = None
-    std: Optional[NDArray[np.float64]] = None
+    mean: NDArray[np.float64] | None = None
+    std: NDArray[np.float64] | None = None
 
 
 class FingerprintDeriver:
@@ -230,10 +234,10 @@ class FingerprintDeriver:
         self,
         profile_provider: MatchupProfileProvider,
         *,
-        pitch_fusion: "ScoreFusion | None" = None,
-        battedball_fusion: "ScoreFusion | None" = None,
-        pitch_norm: "_PitchNorm | None" = None,
-        battedball_norm: "_PitchNorm | None" = None,
+        pitch_fusion: ScoreFusion | None = None,
+        battedball_fusion: ScoreFusion | None = None,
+        pitch_norm: _PitchNorm | None = None,
+        battedball_norm: _PitchNorm | None = None,
     ) -> None:
         if profile_provider is None:
             raise ValueError(
@@ -276,7 +280,7 @@ class FingerprintDeriver:
         return self._cache_misses
 
     def _matchup(
-        self, pitcher_id: int, bat_hand: str, season: int, batter_id: "int | None"
+        self, pitcher_id: int, bat_hand: str, season: int, batter_id: int | None
     ) -> MatchupProfile:
         """Resolve the matchup geometry, hitting the per-PA cache when possible.
 
@@ -284,8 +288,12 @@ class FingerprintDeriver:
         one PA every pitch shares this key, so the expensive provider call runs
         once per PA (spec §2.1 / SIM-119 §5).
         """
-        key = (int(pitcher_id), str(bat_hand), int(season),
-               None if batter_id is None else int(batter_id))
+        key = (
+            int(pitcher_id),
+            str(bat_hand),
+            int(season),
+            None if batter_id is None else int(batter_id),
+        )
         cached = self._pa_cache.get(key)
         if cached is not None:
             self._cache_hits += 1
@@ -301,7 +309,7 @@ class FingerprintDeriver:
         self,
         state,
         *,
-        pitch_signals: "Mapping | None" = None,
+        pitch_signals: Mapping | None = None,
     ) -> NDArray[np.float32]:
         """Build the 10-dim pitch query vector from ``state`` (spec §4.1).
 
@@ -315,7 +323,9 @@ class FingerprintDeriver:
         space.  The pre-filter keys are NOT encoded here (spec §4.3).
         """
         prof = self._matchup(
-            state.pitcher_id, state.bat_hand, state.season,
+            state.pitcher_id,
+            state.bat_hand,
+            state.season,
             getattr(state, "batter_id", None),
         )
         # Assemble the raw 10-vector in PITCH_FEATURES order: arsenal then loc.
@@ -338,7 +348,7 @@ class FingerprintDeriver:
         self,
         state,
         *,
-        battedball_signals: "Mapping | None" = None,
+        battedball_signals: Mapping | None = None,
     ) -> NDArray[np.float32]:
         """Build the 3-dim batted-ball query vector from ``state`` (spec §4.2).
 
@@ -350,7 +360,9 @@ class FingerprintDeriver:
         not encoded here (spec §4.3).
         """
         prof = self._matchup(
-            state.pitcher_id, state.bat_hand, state.season,
+            state.pitcher_id,
+            state.bat_hand,
+            state.season,
             getattr(state, "batter_id", None),
         )
         raw = np.array(prof.batted_ball, dtype=np.float64, copy=True)
@@ -366,9 +378,7 @@ class FingerprintDeriver:
     # ---- internals: centroid tilt + normalization ------------------------
 
     @staticmethod
-    def _tilt_location(
-        location: NDArray[np.float64], shape: float
-    ) -> NDArray[np.float64]:
+    def _tilt_location(location: NDArray[np.float64], shape: float) -> NDArray[np.float64]:
         """Tilt ``(plate_x, plate_z)`` by the SIM-321 shaping scalar in ``[0,1]``.
 
         Deterministic and bounded: ``0.5`` is neutral (no change).  Above 0.5 the

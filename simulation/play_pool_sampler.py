@@ -60,8 +60,9 @@ from __future__ import annotations
 import json
 import os
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -158,12 +159,12 @@ class TileHandle:
     result's ``"tile"`` field.
     """
 
-    index: object                     # faiss.IndexFlatL2
+    index: Any  # faiss.IndexFlatL2
     rowids: NDArray[np.int64]
     meta: dict
     pool: str
     label: str
-    is_fallback: bool                 # True when this is a pitcher_id=0 tile
+    is_fallback: bool  # True when this is a pitcher_id=0 tile
 
     @property
     def n_vectors(self) -> int:
@@ -209,9 +210,7 @@ def _normalize_bat_hand(bat_hand: str) -> str:
         raise ValueError("bat_hand is required (expected 'L' or 'R').")
     bh = str(bat_hand).strip().upper()
     if bh not in ("L", "R"):
-        raise ValueError(
-            f"bat_hand must be 'L' or 'R' (no 'S' tile exists); got {bat_hand!r}."
-        )
+        raise ValueError(f"bat_hand must be 'L' or 'R' (no 'S' tile exists); got {bat_hand!r}.")
     return bh
 
 
@@ -230,18 +229,19 @@ class PlayPoolSampler:
 
     def __init__(
         self,
-        pool_dir: "str | os.PathLike" = None,
-        duckdb_path: "str | os.PathLike | None" = None,
+        pool_dir: str | os.PathLike = None,
+        duckdb_path: str | os.PathLike | None = None,
         *,
         max_resident_tiles: int = 256,
-        rng: "np.random.Generator | None" = None,
-        outcome_fetch: "OutcomeFetch | None" = None,
-        recency_fetch: "RecencyFetch | None" = None,
+        rng: np.random.Generator | None = None,
+        outcome_fetch: OutcomeFetch | None = None,
+        recency_fetch: RecencyFetch | None = None,
     ) -> None:
         # Resolve defaults at construction time so env vars set by tests
         # (e.g. monkeypatch.setenv) are honoured.
         self.pool_dir = os.fspath(
-            pool_dir if pool_dir is not None
+            pool_dir
+            if pool_dir is not None
             else os.environ.get("BASEBALL_PLAY_POOL_DIR", DEFAULT_POOL_DIR)
         )
         if duckdb_path is not None:
@@ -257,15 +257,15 @@ class PlayPoolSampler:
 
         # LRU of resident tiles: cache_key -> TileHandle.  OrderedDict gives us
         # O(1) move-to-end (mark recently used) + popitem(last=False) (evict LRU).
-        self._lru: "OrderedDict[tuple, TileHandle]" = OrderedDict()
+        self._lru: OrderedDict[tuple, TileHandle] = OrderedDict()
 
         # Outcome-payload fetch.  Injectable for tests; lazily-built DuckDB
         # fetch in production.
-        self._outcome_fetch: "OutcomeFetch | None" = outcome_fetch
+        self._outcome_fetch: OutcomeFetch | None = outcome_fetch
         # Per-row recency-weight fetch (SIM-076 / contract §8).  Injectable for
         # tests; lazily-built DuckDB fetch in production, sharing ``self._conn``.
-        self._recency_fetch: "RecencyFetch | None" = recency_fetch
-        self._conn = None  # lazy read-only DuckDB connection
+        self._recency_fetch: RecencyFetch | None = recency_fetch
+        self._conn: duckdb.DuckDBPyConnection | None = None  # lazy read-only DuckDB connection
 
     # ---- LRU bookkeeping --------------------------------------------------
 
@@ -274,7 +274,7 @@ class PlayPoolSampler:
         """Number of tiles currently held in the LRU (test invariant #6)."""
         return len(self._lru)
 
-    def _cache_get(self, cache_key: tuple) -> "TileHandle | None":
+    def _cache_get(self, cache_key: tuple) -> TileHandle | None:
         handle = self._lru.get(cache_key)
         if handle is not None:
             self._lru.move_to_end(cache_key)  # mark most-recently-used
@@ -294,7 +294,7 @@ class PlayPoolSampler:
         pool: str,
         season: int,
         bat_hand: str,
-        pitcher_id: "int | None" = None,
+        pitcher_id: int | None = None,
     ) -> TileHandle:
         """Resolve + load the tile for ``(pool, season, bat_hand[, pitcher_id])``
         into the LRU, returning a :class:`TileHandle`.
@@ -321,7 +321,11 @@ class PlayPoolSampler:
             tile_dir = _battedball_dir(self.pool_dir, season)
             label = f"{season}/{POOL_BATTEDBALL}/{bat_hand}"
             handle = self._load_from_disk(
-                cache_key, POOL_BATTEDBALL, tile_dir, bat_hand, label,
+                cache_key,
+                POOL_BATTEDBALL,
+                tile_dir,
+                bat_hand,
+                label,
                 is_fallback=False,
             )
             self._cache_put(cache_key, handle)
@@ -356,7 +360,11 @@ class PlayPoolSampler:
         tile_dir = _pitch_dir(self.pool_dir, season, resolved_pid)
         label = f"{season}/{resolved_pid}/{bat_hand}"
         handle = self._load_from_disk(
-            cache_key, POOL_PITCH, tile_dir, bat_hand, label,
+            cache_key,
+            POOL_PITCH,
+            tile_dir,
+            bat_hand,
+            label,
             is_fallback=use_fallback,
         )
         self._cache_put(cache_key, handle)
@@ -371,9 +379,9 @@ class PlayPoolSampler:
         faiss_path = _faiss_path(tile_dir, bat_hand)
         meta_path = _meta_path(tile_dir, bat_hand)
         rowids_path = _rowids_path(tile_dir, bat_hand)
-        if not (os.path.exists(faiss_path)
-                and os.path.exists(meta_path)
-                and os.path.exists(rowids_path)):
+        if not (
+            os.path.exists(faiss_path) and os.path.exists(meta_path) and os.path.exists(rowids_path)
+        ):
             return True  # specific tile missing -> fall forward (§3 floor)
         meta = _read_meta(meta_path)
         if meta is None:
@@ -431,10 +439,10 @@ class PlayPoolSampler:
         *,
         vectors: NDArray,
         rowids: NDArray,
-        meta: "dict | None" = None,
-        pitcher_id: "int | None" = None,
+        meta: dict | None = None,
+        pitcher_id: int | None = None,
         is_fallback: bool = False,
-        label: "str | None" = None,
+        label: str | None = None,
     ) -> TileHandle:
         """Build + cache a :class:`TileHandle` over SHARED-MEMORY buffers (zero-copy).
 
@@ -493,15 +501,12 @@ class PlayPoolSampler:
             resolved_label = label or f"{season}/{POOL_BATTEDBALL}/{bat_hand}"
         elif pool == POOL_PITCH:
             resolved_pid = (
-                FALLBACK_PITCHER_ID if (is_fallback or pitcher_id is None)
-                else int(pitcher_id)
+                FALLBACK_PITCHER_ID if (is_fallback or pitcher_id is None) else int(pitcher_id)
             )
             cache_key = (POOL_PITCH, season, bat_hand, resolved_pid)
             resolved_label = label or f"{season}/{resolved_pid}/{bat_hand}"
         else:
-            raise ValueError(
-                f"Unknown pool {pool!r} (expected 'pitch' or 'battedball')."
-            )
+            raise ValueError(f"Unknown pool {pool!r} (expected 'pitch' or 'battedball').")
 
         handle = TileHandle(
             index=index,
@@ -550,9 +555,7 @@ class PlayPoolSampler:
             weights = weights / total
         return positions, weights, distances
 
-    def _apply_recency(
-        self, handle: TileHandle, positions: NDArray, weights: NDArray
-    ) -> NDArray:
+    def _apply_recency(self, handle: TileHandle, positions: NDArray, weights: NDArray) -> NDArray:
         """Multiply the normalized distance ``weights`` by each neighbour's
         per-row ``recency_weight`` and renormalize (contract §8 / SIM-076).
 
@@ -660,16 +663,14 @@ class PlayPoolSampler:
             "fellback": bool(handle.is_fallback),
         }
 
-    def _event_distribution(
-        self, handle: TileHandle, positions: NDArray, weights: NDArray
-    ) -> dict:
+    def _event_distribution(self, handle: TileHandle, positions: NDArray, weights: NDArray) -> dict:
         """Collapse the k neighbours' weights onto their event types, normalized
         to a probability dict summing to 1.0 (spec §6.2 / test invariant #4)."""
         row_ids = [int(handle.rowids[int(p)]) for p in positions]
         outcomes = self._fetch_outcomes(POOL_BATTEDBALL, row_ids)
 
-        dist: "dict[str, float]" = {}
-        for outcome, w in zip(outcomes, weights):
+        dist: dict[str, float] = {}
+        for outcome, w in zip(outcomes, weights, strict=False):
             dist[outcome] = dist.get(outcome, 0.0) + float(w)
 
         # ``weights`` already sum to 1.0; re-normalize to absorb float drift so
@@ -708,8 +709,12 @@ class PlayPoolSampler:
                 # Evict + reload in place, preserving the fall-back flag + label.
                 self._lru.pop(cache_key, None)
                 fresh = self._load_from_disk(
-                    cache_key, handle.pool, tile_dir, bat_hand,
-                    handle.label, is_fallback=handle.is_fallback,
+                    cache_key,
+                    handle.pool,
+                    tile_dir,
+                    bat_hand,
+                    handle.label,
+                    is_fallback=handle.is_fallback,
                 )
                 self._cache_put(cache_key, fresh)
                 reloaded += 1
@@ -733,7 +738,7 @@ class PlayPoolSampler:
         """Single-row outcome lookup (delegates to the batch fetch)."""
         return self._fetch_outcomes(pool, [row_id])[0]
 
-    def _fetch_outcomes(self, pool: str, row_ids: "list[int]") -> "list[str]":
+    def _fetch_outcomes(self, pool: str, row_ids: list[int]) -> list[str]:
         """Resolve a list of row ids to their outcome strings, order-preserving.
 
         Uses the injected ``outcome_fetch`` if present; otherwise a read-only
@@ -748,7 +753,7 @@ class PlayPoolSampler:
             mapping = self._duckdb_fetch(pool, list(row_ids))
         return [str(mapping.get(int(rid), "unknown")) for rid in row_ids]
 
-    def _duckdb_fetch(self, pool: str, row_ids: "list[int]") -> "dict[int, str]":
+    def _duckdb_fetch(self, pool: str, row_ids: list[int]) -> dict[int, str]:
         if not _DUCKDB_AVAILABLE:  # pragma: no cover -- guarded
             raise RuntimeError(
                 "duckdb is not installed and no outcome_fetch was injected. "
@@ -772,7 +777,7 @@ class PlayPoolSampler:
 
     # ---- Recency-weight fetch (injectable / DuckDB) -----------------------
 
-    def _fetch_recencies(self, pool: str, row_ids: "list[int]") -> "list[float]":
+    def _fetch_recencies(self, pool: str, row_ids: list[int]) -> list[float]:
         """Resolve a list of row ids to their ``recency_weight`` values,
         order-preserving (contract §8 / SIM-076).
 
@@ -799,7 +804,7 @@ class PlayPoolSampler:
             mapping = {}
         else:
             mapping = self._duckdb_fetch_recency(pool, list(row_ids))
-        out: "list[float]" = []
+        out: list[float] = []
         for rid in row_ids:
             val = mapping.get(int(rid))
             if val is None:
@@ -808,7 +813,7 @@ class PlayPoolSampler:
                 out.append(float(val))
         return out
 
-    def _duckdb_fetch_recency(self, pool: str, row_ids: "list[int]") -> "dict[int, float]":
+    def _duckdb_fetch_recency(self, pool: str, row_ids: list[int]) -> dict[int, float]:
         if not _DUCKDB_AVAILABLE:  # pragma: no cover -- guarded
             raise RuntimeError(
                 "duckdb is not installed and no recency_fetch was injected. "
@@ -834,8 +839,7 @@ class PlayPoolSampler:
             [int(r) for r in row_ids],
         ).fetchall()
         return {
-            int(rid): (DEFAULT_RECENCY_WEIGHT if val is None else float(val))
-            for rid, val in rows
+            int(rid): (DEFAULT_RECENCY_WEIGHT if val is None else float(val)) for rid, val in rows
         }
 
     def _table_has_recency(self, qualified_table: str) -> bool:
@@ -873,7 +877,7 @@ class PlayPoolSampler:
                 self._conn = None
         self._lru.clear()
 
-    def __enter__(self) -> "PlayPoolSampler":
+    def __enter__(self) -> PlayPoolSampler:
         return self
 
     def __exit__(self, *_exc) -> None:

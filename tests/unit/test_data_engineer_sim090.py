@@ -162,16 +162,18 @@ class TestSim090GetconnPutconnPerRoundTrip:
         mock_pool = MagicMock()
         mock_pool.getconn.return_value = boom_conn
 
-        with patch(
-            "pipeline.etl.etl_historical_loader.psycopg2.pool.ThreadedConnectionPool",
-            return_value=mock_pool,
+        with (
+            patch(
+                "pipeline.etl.etl_historical_loader.psycopg2.pool.ThreadedConnectionPool",
+                return_value=mock_pool,
+            ),
+            loader._get_conn() as conn,
         ):
-            with loader._get_conn() as conn:
-                try:
-                    with conn.cursor():
-                        pass
-                except RuntimeError:
+            try:
+                with conn.cursor():
                     pass
+            except RuntimeError:
+                pass
 
         mock_pool.putconn.assert_called_once_with(boom_conn)
 

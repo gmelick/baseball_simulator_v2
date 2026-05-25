@@ -39,6 +39,12 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
+    PROP_BOOKS,
+    PROP_STATS,
+    LiveIngestionPipeline,
+    MockOddsAPI,
+)
 from pipeline.odds_provider import (  # noqa: E402
     DEFAULT_PROVIDER,
     ODDS_PROVIDER_ENV,
@@ -47,12 +53,6 @@ from pipeline.odds_provider import (  # noqa: E402
     available_providers,
     get_odds_provider,
     register_odds_provider,
-)
-from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
-    PROP_BOOKS,
-    PROP_STATS,
-    LiveIngestionPipeline,
-    MockOddsAPI,
 )
 
 # ===========================================================================
@@ -166,17 +166,39 @@ class TestMockConforms:
     def test_get_odds_return_shape(self) -> None:
         odds = MockOddsAPI().get_odds(745000)
         required = {
-            "game_pk", "source", "is_mock", "book", "line_type", "market_type",
-            "is_sharp_book", "home_ml", "away_ml", "home_spread", "home_spread_ml",
-            "away_spread", "away_spread_ml", "total_line", "over_ml", "under_ml",
+            "game_pk",
+            "source",
+            "is_mock",
+            "book",
+            "line_type",
+            "market_type",
+            "is_sharp_book",
+            "home_ml",
+            "away_ml",
+            "home_spread",
+            "home_spread_ml",
+            "away_spread",
+            "away_spread_ml",
+            "total_line",
+            "over_ml",
+            "under_ml",
         }
         assert required.issubset(odds.keys())
 
     def test_get_prop_odds_return_shape(self) -> None:
         prop = MockOddsAPI().get_prop_odds(745000, 101, "strikeouts")
         required = {
-            "game_pk", "player_id", "prop_stat", "line", "over_ml", "under_ml",
-            "book", "line_type", "is_sharp_book", "source", "is_mock",
+            "game_pk",
+            "player_id",
+            "prop_stat",
+            "line",
+            "over_ml",
+            "under_ml",
+            "book",
+            "line_type",
+            "is_sharp_book",
+            "source",
+            "is_mock",
         }
         assert required.issubset(prop.keys())
 

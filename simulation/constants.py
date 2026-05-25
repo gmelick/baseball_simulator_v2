@@ -148,10 +148,10 @@ STATCAST_EVENT_ALIASES: dict[str, str] = {
     "home_run": "home_run",
     # --- reaching base without a hit ---
     "walk": "walk",
-    "intent_walk": "intentional_walk",        # IBB (Statcast spelling)
-    "intentional_walk": "intentional_walk",   # tolerate canonical spelling too
+    "intent_walk": "intentional_walk",  # IBB (Statcast spelling)
+    "intentional_walk": "intentional_walk",  # tolerate canonical spelling too
     "hit_by_pitch": "hit_by_pitch",
-    "catcher_interf": "hit_by_pitch",          # reach-on-interference ~ HBP value
+    "catcher_interf": "hit_by_pitch",  # reach-on-interference ~ HBP value
     # --- strikeouts ---
     "strikeout": "strikeout",
     "strikeout_double_play": "ground_into_double_play",  # K + runner out
@@ -163,7 +163,7 @@ STATCAST_EVENT_ALIASES: dict[str, str] = {
     "other_out": "field_out",
     # --- double plays / lost runners ---
     "grounded_into_double_play": "ground_into_double_play",  # Statcast spelling
-    "ground_into_double_play": "ground_into_double_play",     # canonical spelling
+    "ground_into_double_play": "ground_into_double_play",  # canonical spelling
     "double_play": "ground_into_double_play",
     "triple_play": "ground_into_double_play",  # rarer; >= GIDP severity
     # --- productive / sacrifice outs ---
@@ -171,8 +171,8 @@ STATCAST_EVENT_ALIASES: dict[str, str] = {
     "sac_fly_double_play": "sacrifice_fly",
     "sac_bunt": "sacrifice_hit",
     "sac_bunt_double_play": "sacrifice_hit",
-    "sacrifice_fly": "sacrifice_fly",   # tolerate canonical spelling
-    "sacrifice_hit": "sacrifice_hit",   # tolerate canonical spelling
+    "sacrifice_fly": "sacrifice_fly",  # tolerate canonical spelling
+    "sacrifice_hit": "sacrifice_hit",  # tolerate canonical spelling
     # --- reach-on-error: treat as a single's run value (batter reaches 1B) ---
     "field_error": "single",
 }
@@ -200,7 +200,7 @@ class UnknownEventError(KeyError):
     """
 
 
-def resolve_event_to_canonical(event: "str | None") -> "str | None":
+def resolve_event_to_canonical(event: str | None) -> str | None:
     """Map any Statcast ``events`` string (or a canonical key) to its canonical
     ``RUN_VALUES`` key.
 
@@ -214,17 +214,17 @@ def resolve_event_to_canonical(event: "str | None") -> "str | None":
     key = str(event).strip()
     if not key:
         return None
-    if key in CANONICAL_OUTCOME_KEYS:   # already canonical
+    if key in CANONICAL_OUTCOME_KEYS:  # already canonical
         return key
     return STATCAST_EVENT_ALIASES.get(key)  # raw Statcast -> canonical, else None
 
 
 def run_value_for_event(
-    event: "str | None",
+    event: str | None,
     *,
-    default: "float | None" = None,
+    default: float | None = None,
     strict: bool = False,
-) -> "float | None":
+) -> float | None:
     """Linear-weight run value for a Statcast ``events`` string (or canonical key).
 
     Resolution order:

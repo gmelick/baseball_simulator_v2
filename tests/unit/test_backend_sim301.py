@@ -38,8 +38,8 @@ BIG_PITCHER_A = 477132
 BIG_PITCHER_B = 592789
 TINY_PITCHER = 999001  # < MIN_TILE_ROWS rows -> falls into pitcher_id=0 tile
 
-ROWS_PER_BIG_TILE = 80        # >= MIN_TILE_ROWS (50)
-ROWS_TINY = 12                # < MIN_TILE_ROWS
+ROWS_PER_BIG_TILE = 80  # >= MIN_TILE_ROWS (50)
+ROWS_TINY = 12  # < MIN_TILE_ROWS
 
 PITCH_POOL_DDL = """
 CREATE TABLE sim.pitch_pool (
@@ -67,22 +67,23 @@ CREATE TABLE sim.outcome_pool (
 """
 
 
-def _insert_pitch_rows(conn, pitcher_id, bat_hand, n, *, base_id, season=SEASON,
-                       game_date="2024-06-01"):
+def _insert_pitch_rows(
+    conn, pitcher_id, bat_hand, n, *, base_id, season=SEASON, game_date="2024-06-01"
+):
     rng = np.random.default_rng(abs(hash((pitcher_id, bat_hand))) % (2**32))
     for i in range(n):
         pid = base_id + i
         vec = [
-            float(rng.uniform(88, 100)),       # velo
-            float(rng.uniform(-5, 20)),        # ivb
-            float(rng.uniform(-15, 15)),       # hb
-            float(rng.uniform(1800, 2600)),    # spin_rate
-            float(rng.uniform(0, 360)),        # spin_axis
-            float(rng.uniform(-2.5, 2.5)),     # release_x
-            float(rng.uniform(5, 6.5)),        # release_z
-            float(rng.uniform(5.5, 7)),        # release_ext
-            float(rng.uniform(-1.5, 1.5)),     # plate_x
-            float(rng.uniform(1.5, 3.5)),      # plate_z
+            float(rng.uniform(88, 100)),  # velo
+            float(rng.uniform(-5, 20)),  # ivb
+            float(rng.uniform(-15, 15)),  # hb
+            float(rng.uniform(1800, 2600)),  # spin_rate
+            float(rng.uniform(0, 360)),  # spin_axis
+            float(rng.uniform(-2.5, 2.5)),  # release_x
+            float(rng.uniform(5, 6.5)),  # release_z
+            float(rng.uniform(5.5, 7)),  # release_ext
+            float(rng.uniform(-1.5, 1.5)),  # plate_x
+            float(rng.uniform(1.5, 3.5)),  # plate_z
         ]
         conn.execute(
             "INSERT INTO sim.pitch_pool VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -90,8 +91,7 @@ def _insert_pitch_rows(conn, pitcher_id, bat_hand, n, *, base_id, season=SEASON,
         )
 
 
-def _insert_outcome_rows(conn, bat_hand, n, *, base_id, season=SEASON,
-                         game_date="2024-06-01"):
+def _insert_outcome_rows(conn, bat_hand, n, *, base_id, season=SEASON, game_date="2024-06-01"):
     rng = np.random.default_rng(abs(hash(("bb", bat_hand))) % (2**32))
     for i in range(n):
         pid = base_id + i
@@ -100,9 +100,18 @@ def _insert_outcome_rows(conn, bat_hand, n, *, base_id, season=SEASON,
         sa = float(rng.uniform(-45, 45))
         conn.execute(
             "INSERT INTO sim.outcome_pool VALUES (?,?,?,?,?,?,?,?,?,?)",
-            [pid, season, 600000 + (i % 20), bat_hand, ev, la, sa,
-             "line_drive" if la > 0 else "ground_ball", int(rng.integers(0, 5)),
-             game_date],
+            [
+                pid,
+                season,
+                600000 + (i % 20),
+                bat_hand,
+                ev,
+                la,
+                sa,
+                "line_drive" if la > 0 else "ground_ball",
+                int(rng.integers(0, 5)),
+                game_date,
+            ],
         )
 
 
@@ -180,9 +189,18 @@ def test_meta_required_fields_and_counts(duckdb_path, pool_dir):
     ppc.build_play_pool_cache(duckdb_path, pool_dir, recency_boost=False)
 
     required = {
-        "schema_version", "pool", "season", "bat_hand", "dim", "n_vectors",
-        "n_source_rows", "recency_boost", "recency_boost_seasons",
-        "source_max_updated_at", "build_timestamp", "builder_version",
+        "schema_version",
+        "pool",
+        "season",
+        "bat_hand",
+        "dim",
+        "n_vectors",
+        "n_source_rows",
+        "recency_boost",
+        "recency_boost_seasons",
+        "source_max_updated_at",
+        "build_timestamp",
+        "builder_version",
         "bytes_on_disk",
     }
 
@@ -242,8 +260,7 @@ def test_new_source_data_rebuilds_only_affected_tile(duckdb_path, pool_dir):
     ppc.build_play_pool_cache(duckdb_path, pool_dir, recency_boost=False)
 
     conn = duckdb.connect(duckdb_path)
-    _insert_pitch_rows(conn, BIG_PITCHER_A, "L", 1, base_id=9_000_000,
-                       game_date="2024-09-30")
+    _insert_pitch_rows(conn, BIG_PITCHER_A, "L", 1, base_id=9_000_000, game_date="2024-09-30")
     conn.close()
 
     res = ppc.build_play_pool_cache(duckdb_path, pool_dir, recency_boost=False)
@@ -306,13 +323,16 @@ def test_battedball_spray_column_reuses_engine_helper(duckdb_path, pool_dir):
 
 
 def test_cli_main_runs(duckdb_path, pool_dir):
-    rc = ppc.main([
-        "--duckdb-path", duckdb_path,
-        "--pool-dir", pool_dir,
-        "--no-recency-boost",
-        "--seasons", str(SEASON),
-    ])
-    assert rc == 0
-    assert os.path.exists(
-        os.path.join(pool_dir, str(SEASON), str(BIG_PITCHER_A), "L.faiss")
+    rc = ppc.main(
+        [
+            "--duckdb-path",
+            duckdb_path,
+            "--pool-dir",
+            pool_dir,
+            "--no-recency-boost",
+            "--seasons",
+            str(SEASON),
+        ]
     )
+    assert rc == 0
+    assert os.path.exists(os.path.join(pool_dir, str(SEASON), str(BIG_PITCHER_A), "L.faiss"))

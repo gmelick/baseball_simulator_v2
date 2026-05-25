@@ -45,7 +45,6 @@ from similarity.backtesting.backtester import (
     walk_forward_ablation,
 )
 
-
 SEED = 20260610
 CLASSES = ["single", "double", "field_out", "strikeout"]
 N_CLASSES = len(CLASSES)
@@ -212,10 +211,7 @@ def _make_pa_dataset(seed=SEED):
     for s in SEASONS:
         for _ in range(ROWS_PER_SEASON):
             f = int(rng.integers(0, N_CLASSES))
-            if rng.random() < 0.8:
-                y = f
-            else:
-                y = int(rng.integers(0, N_CLASSES))
+            y = f if rng.random() < 0.8 else int(rng.integers(0, N_CLASSES))
             seasons.append(s)
             features.append([float(f)])
             outcomes.append(CLASSES[y])
@@ -233,7 +229,7 @@ def _signal_predict(train_subset, x):
 
     counts = np.full(n_classes, OUTCOME_PROB_EPS, dtype=float)
     matched = 0
-    for fv, lbl in zip(feats, train_labels):
+    for fv, lbl in zip(feats, train_labels, strict=False):
         if lbl < 0:
             continue
         if abs(float(np.asarray(fv).ravel()[0]) - qf) < 1e-9:

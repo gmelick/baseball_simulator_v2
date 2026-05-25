@@ -48,12 +48,11 @@ factory so a full game records with NO DuckDB / FAISS / Postgres.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from simulation.batch_runner import (
     GameSpec,
     _resolve_dotted,
-    rng_driven_machine_factory,
 )
 from simulation.game_state import PlayResult
 from simulation.sim_loop import GameSimResult, StateMachine, simulate_game
@@ -142,9 +141,9 @@ class RecordingStateMachine(StateMachine):
 def record_game_plays(
     *,
     factory_ref: str = DEFAULT_FACTORY_REF,
-    seed: Optional[int] = None,
-    sim_kwargs: Optional[dict[str, Any]] = None,
-) -> "tuple[GameSimResult, list[PlayResult]]":
+    seed: int | None = None,
+    sim_kwargs: dict[str, Any] | None = None,
+) -> tuple[GameSimResult, list[PlayResult]]:
     """Simulate ONE game and return ``(GameSimResult, ordered list[PlayResult])``.
 
     Builds the per-game :class:`~simulation.sim_loop.StateMachine` via the dotted

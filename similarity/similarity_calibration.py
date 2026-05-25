@@ -932,9 +932,7 @@ class CalibrationReport:
         missing keys fall back to the dataclass default.
         """
         valid = {f.name for f in fields(cls)}
-        kwargs = {
-            k: cls._decode_value(v) for k, v in d.items() if k in valid
-        }
+        kwargs = {k: cls._decode_value(v) for k, v in d.items() if k in valid}
         return cls(**kwargs)
 
     @classmethod
@@ -1025,7 +1023,9 @@ class SimilarityCalibrator:
         try:
             report = self._calibrate_batter_params(conn, seasons, target_median_score, report)
             report = self._calibrate_pitcher_params(conn, seasons, target_median_score, report)
-            report = self._calibrate_arsenal_params(arsenal_w2_distances, target_median_score, report)
+            report = self._calibrate_arsenal_params(
+                arsenal_w2_distances, target_median_score, report
+            )
             report = self._calibrate_fielder_params(conn, seasons, target_median_score, report)
             report = self._calibrate_baserunner_params(conn, seasons, target_median_score, report)
         finally:

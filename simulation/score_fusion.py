@@ -56,8 +56,8 @@ or queries an engine and never needs a DB to unit-test.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Mapping, Optional
 
 __all__ = [
     "ScoreType",
@@ -134,7 +134,7 @@ _VALID_RULES = ("geometric", "linear")
 # ---------------------------------------------------------------------------
 
 
-def _registry_score_type(engine_name: str) -> Optional[ScoreType]:
+def _registry_score_type(engine_name: str) -> ScoreType | None:
     """Resolve ``engine_name``'s ``score_type`` via the registry, if available.
 
     The registry import is lazy + guarded so this module unit-tests without
@@ -222,9 +222,7 @@ def _to_affinity(raw: object, score_type: ScoreType, scale: float) -> float:
         return min(1.0, max(0.0, score))
     if score_type == _DISTANCE:
         return distance_to_affinity(score, scale)
-    raise ValueError(
-        f"unknown score_type {score_type!r} (expected 'similarity' | 'distance')"
-    )
+    raise ValueError(f"unknown score_type {score_type!r} (expected 'similarity' | 'distance')")
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +242,7 @@ class EngineSignal:
 
     name: str
     raw: object
-    score_type: Optional[ScoreType] = None
+    score_type: ScoreType | None = None
     scale: float = DEFAULT_DISTANCE_SCALE
 
     def resolved_score_type(self) -> ScoreType:
@@ -277,7 +275,7 @@ class FusionResult:
     affinities: dict[str, float] = field(default_factory=dict)
     weights: dict[str, float] = field(default_factory=dict)
     rule: str = "geometric"
-    profile: Optional[str] = None
+    profile: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -359,10 +357,10 @@ class ScoreFusion:
 
     def __init__(
         self,
-        profile: Optional[str] = "pitch_draw",
+        profile: str | None = "pitch_draw",
         *,
-        weights: Optional[Mapping[str, float]] = None,
-        rule: Optional[str] = None,
+        weights: Mapping[str, float] | None = None,
+        rule: str | None = None,
         distance_scale: float = DEFAULT_DISTANCE_SCALE,
     ) -> None:
         if weights is not None:
@@ -371,9 +369,7 @@ class ScoreFusion:
             self.profile = profile
         elif profile is not None:
             if profile not in PROFILES:
-                raise KeyError(
-                    f"unknown profile {profile!r}; known: {sorted(PROFILES)}"
-                )
+                raise KeyError(f"unknown profile {profile!r}; known: {sorted(PROFILES)}")
             spec = PROFILES[profile]
             self.weights = dict(spec["weights"])
             self.rule = rule or spec["rule"]
@@ -411,8 +407,7 @@ class ScoreFusion:
             for s in signals:
                 if not isinstance(s, EngineSignal):
                     raise TypeError(
-                        "iterable signals must be EngineSignal instances; "
-                        f"got {type(s).__name__}"
+                        f"iterable signals must be EngineSignal instances; got {type(s).__name__}"
                     )
                 out.append(s)
         return out
@@ -444,9 +439,9 @@ class ScoreFusion:
 def fuse_scores(
     signals,
     *,
-    profile: Optional[str] = "pitch_draw",
-    weights: Optional[Mapping[str, float]] = None,
-    rule: Optional[str] = None,
+    profile: str | None = "pitch_draw",
+    weights: Mapping[str, float] | None = None,
+    rule: str | None = None,
     distance_scale: float = DEFAULT_DISTANCE_SCALE,
 ) -> FusionResult:
     """One-shot cross-engine fusion (design doc 4 / 5).

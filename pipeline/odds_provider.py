@@ -56,7 +56,8 @@ Owned by Data Engineer (Agent 4) with Betting Analyst (Agent 8) input.
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, Protocol, runtime_checkable
+from collections.abc import Callable
+from typing import Any, Protocol, runtime_checkable
 
 # ---------------------------------------------------------------------------
 # Provider interface

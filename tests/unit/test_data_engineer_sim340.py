@@ -208,9 +208,7 @@ class TestSIM340MarkClosingPropLines:
     async def test_closing_returns_zero_when_no_rows(self) -> None:
         pipeline = _make_pipeline()
         pipeline._db.execute.return_value = "UPDATE 0"
-        updated = await pipeline.mark_closing_prop_lines(
-            745000, datetime(2024, 8, 15, tzinfo=UTC)
-        )
+        updated = await pipeline.mark_closing_prop_lines(745000, datetime(2024, 8, 15, tzinfo=UTC))
         assert updated == 0
 
     @pytest.mark.asyncio
@@ -306,20 +304,20 @@ class TestSIM340DedupHash:
     def test_identical_quotes_same_hash(self) -> None:
         q1 = MockOddsAPI.get_prop_odds(745000, 999, "strikeouts", book="pinnacle")
         q2 = MockOddsAPI.get_prop_odds(745000, 999, "strikeouts", book="pinnacle")
-        assert LiveIngestionPipeline._prop_odds_hash(
-            q1
-        ) == LiveIngestionPipeline._prop_odds_hash(q2)
+        assert LiveIngestionPipeline._prop_odds_hash(q1) == LiveIngestionPipeline._prop_odds_hash(
+            q2
+        )
 
     def test_different_book_different_hash(self) -> None:
         q1 = MockOddsAPI.get_prop_odds(745000, 999, "strikeouts", book="pinnacle")
         q2 = MockOddsAPI.get_prop_odds(745000, 999, "strikeouts", book="draftkings")
-        assert LiveIngestionPipeline._prop_odds_hash(
-            q1
-        ) != LiveIngestionPipeline._prop_odds_hash(q2)
+        assert LiveIngestionPipeline._prop_odds_hash(q1) != LiveIngestionPipeline._prop_odds_hash(
+            q2
+        )
 
     def test_different_line_type_different_hash(self) -> None:
         q1 = MockOddsAPI.get_prop_odds(745000, 999, "strikeouts", line_type="opening")
         q2 = MockOddsAPI.get_prop_odds(745000, 999, "strikeouts", line_type="closing")
-        assert LiveIngestionPipeline._prop_odds_hash(
-            q1
-        ) != LiveIngestionPipeline._prop_odds_hash(q2)
+        assert LiveIngestionPipeline._prop_odds_hash(q1) != LiveIngestionPipeline._prop_odds_hash(
+            q2
+        )

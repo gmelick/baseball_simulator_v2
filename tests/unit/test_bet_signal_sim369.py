@@ -22,14 +22,6 @@ from __future__ import annotations
 
 import pytest
 
-from betting.clv_engine import (
-    EdgeReport,
-    MarketSide,
-    american_to_decimal,
-    edge as edge_fn,
-    expected_value,
-    prob_to_american,
-)
 from betting.bet_signal import (
     DEFAULT_KELLY_FRACTION,
     DEFAULT_MAX_STAKE_FRACTION,
@@ -39,11 +31,21 @@ from betting.bet_signal import (
     kelly_fraction_full,
     stake_fraction,
 )
-
+from betting.clv_engine import (
+    EdgeReport,
+    MarketSide,
+    american_to_decimal,
+    expected_value,
+    prob_to_american,
+)
+from betting.clv_engine import (
+    edge as edge_fn,
+)
 
 # ===========================================================================
 # Synthetic EdgeReport factory (real constructor, hand-set probabilities)
 # ===========================================================================
+
 
 def _edge_report(
     *,
@@ -52,7 +54,7 @@ def _edge_report(
     sim_prob: float,
     market_fair_prob: float,
     offered_american: float,
-    line: "float | None" = None,
+    line: float | None = None,
 ) -> EdgeReport:
     """Build a real EdgeReport with consistent edge/EV derived from the inputs.
 
@@ -78,6 +80,7 @@ def _edge_report(
 # stake_fraction / Kelly hand-checks
 # ===========================================================================
 
+
 def test_full_kelly_hand_calc_even_money():
     # +100 -> decimal 2.0 -> b = 1.0.  p = 0.60, q = 0.40.
     # full Kelly = (b*p - q)/b = (0.6 - 0.4)/1 = 0.20.
@@ -93,8 +96,11 @@ def test_stake_fraction_quarter_kelly_hand_calc_below_cap():
     # +100, p=0.60 -> full Kelly 0.20.  Quarter Kelly = 0.25*0.20 = 0.05.
     # With a GENEROUS cap (0.10) the quarter-Kelly 0.05 is returned uncapped.
     rep = _edge_report(
-        label="moneyline", side=MarketSide.HOME,
-        sim_prob=0.60, market_fair_prob=0.50, offered_american=+100,
+        label="moneyline",
+        side=MarketSide.HOME,
+        sim_prob=0.60,
+        market_fair_prob=0.50,
+        offered_american=+100,
     )
     s = stake_fraction(rep, kelly_fraction=0.25, cap=0.10)
     assert s == pytest.approx(0.05, abs=1e-12)
@@ -103,8 +109,11 @@ def test_stake_fraction_quarter_kelly_hand_calc_below_cap():
 def test_stake_fraction_respects_cap():
     # Half Kelly at p=0.60/+100: 0.5*0.20 = 0.10, but cap 0.05 -> clamped to 0.05.
     rep = _edge_report(
-        label="moneyline", side=MarketSide.HOME,
-        sim_prob=0.60, market_fair_prob=0.50, offered_american=+100,
+        label="moneyline",
+        side=MarketSide.HOME,
+        sim_prob=0.60,
+        market_fair_prob=0.50,
+        offered_american=+100,
     )
     s = stake_fraction(rep, kelly_fraction=0.50, cap=0.05)
     assert s == pytest.approx(0.05, abs=1e-12)
@@ -114,8 +123,11 @@ def test_stake_fraction_zero_for_non_positive_kelly():
     # p below break-even at the price -> negative full Kelly -> floored to 0.
     # +100 break-even p = 0.50; p = 0.45 is -EV.
     rep = _edge_report(
-        label="moneyline", side=MarketSide.AWAY,
-        sim_prob=0.45, market_fair_prob=0.50, offered_american=+100,
+        label="moneyline",
+        side=MarketSide.AWAY,
+        sim_prob=0.45,
+        market_fair_prob=0.50,
+        offered_american=+100,
     )
     assert kelly_fraction_full(0.45, +100) < 0.0
     assert stake_fraction(rep) == 0.0
@@ -126,21 +138,26 @@ def test_stake_fraction_matches_closed_form():
     p = 0.58
     american = -120
     rep = _edge_report(
-        label="total", side=MarketSide.OVER, line=8.5,
-        sim_prob=p, market_fair_prob=0.50, offered_american=american,
+        label="total",
+        side=MarketSide.OVER,
+        line=8.5,
+        sim_prob=p,
+        market_fair_prob=0.50,
+        offered_american=american,
     )
     b = american_to_decimal(american) - 1.0
     q = 1.0 - p
     expected = max(0.0, min(0.05, 0.25 * max(0.0, (b * p - q) / b)))
-    assert stake_fraction(rep, kelly_fraction=0.25, cap=0.05) == pytest.approx(
-        expected, abs=1e-12
-    )
+    assert stake_fraction(rep, kelly_fraction=0.25, cap=0.05) == pytest.approx(expected, abs=1e-12)
 
 
 def test_stake_fraction_rejects_negative_knobs():
     rep = _edge_report(
-        label="moneyline", side=MarketSide.HOME,
-        sim_prob=0.60, market_fair_prob=0.50, offered_american=+100,
+        label="moneyline",
+        side=MarketSide.HOME,
+        sim_prob=0.60,
+        market_fair_prob=0.50,
+        offered_american=+100,
     )
     with pytest.raises(ValueError):
         stake_fraction(rep, kelly_fraction=-0.1)
@@ -152,11 +169,15 @@ def test_stake_fraction_rejects_negative_knobs():
 # bet_signals_from_edges -- gating
 # ===========================================================================
 
+
 def test_positive_ev_report_yields_signal_with_capped_kelly_stake():
     # Clearly +EV: sim 0.60 vs fair 0.50 at +100.  edge = 0.10 > 0, ev > 0.
     rep = _edge_report(
-        label="moneyline", side=MarketSide.HOME,
-        sim_prob=0.60, market_fair_prob=0.50, offered_american=+100,
+        label="moneyline",
+        side=MarketSide.HOME,
+        sim_prob=0.60,
+        market_fair_prob=0.50,
+        offered_american=+100,
     )
     assert rep.edge == pytest.approx(0.10, abs=1e-12)
     assert rep.ev > 0.0
@@ -181,8 +202,11 @@ def test_positive_ev_report_yields_signal_with_capped_kelly_stake():
 def test_negative_ev_report_yields_no_signal():
     # -EV: sim 0.45 (< break-even 0.50) at +100; edge also negative vs fair 0.50.
     rep = _edge_report(
-        label="moneyline", side=MarketSide.AWAY,
-        sim_prob=0.45, market_fair_prob=0.50, offered_american=+100,
+        label="moneyline",
+        side=MarketSide.AWAY,
+        sim_prob=0.45,
+        market_fair_prob=0.50,
+        offered_american=+100,
     )
     assert rep.positive_edge is False
     assert rep.ev < 0.0
@@ -193,8 +217,11 @@ def test_sub_threshold_edge_yields_no_signal():
     # Tiny POSITIVE edge (0.5%) below the 2% min_edge floor -> gated out even though
     # it may be marginally +EV.
     rep = _edge_report(
-        label="moneyline", side=MarketSide.HOME,
-        sim_prob=0.505, market_fair_prob=0.50, offered_american=+100,
+        label="moneyline",
+        side=MarketSide.HOME,
+        sim_prob=0.505,
+        market_fair_prob=0.50,
+        offered_american=+100,
     )
     assert rep.positive_edge is True
     assert rep.edge < BetSignalConfig().min_edge
@@ -206,19 +233,26 @@ def test_zero_ev_at_threshold_is_excluded():
     # +100 with p = 0.50 -> ev == 0 exactly; pair with a fair prob low enough that
     # edge clears min_edge so EV is the binding gate.
     rep = _edge_report(
-        label="moneyline", side=MarketSide.HOME,
-        sim_prob=0.50, market_fair_prob=0.40, offered_american=+100,
+        label="moneyline",
+        side=MarketSide.HOME,
+        sim_prob=0.50,
+        market_fair_prob=0.40,
+        offered_american=+100,
     )
     assert rep.edge == pytest.approx(0.10, abs=1e-12)  # clears min_edge
-    assert rep.ev == pytest.approx(0.0, abs=1e-12)      # at the EV floor
+    assert rep.ev == pytest.approx(0.0, abs=1e-12)  # at the EV floor
     assert bet_signals_from_edges([rep]) == []
 
 
 def test_custom_config_thresholds():
     # A 3% edge report passes the default 2% floor but fails a stricter 5% floor.
     rep = _edge_report(
-        label="total", side=MarketSide.OVER, line=8.5,
-        sim_prob=0.53, market_fair_prob=0.50, offered_american=+100,
+        label="total",
+        side=MarketSide.OVER,
+        line=8.5,
+        sim_prob=0.53,
+        market_fair_prob=0.50,
+        offered_american=+100,
     )
     assert len(bet_signals_from_edges([rep])) == 1  # default min_edge 0.02
     strict = BetSignalConfig(min_edge=0.05)
@@ -229,20 +263,30 @@ def test_custom_config_thresholds():
 # bet_signals_from_edges -- ranking
 # ===========================================================================
 
+
 def test_signals_sorted_by_ev_descending():
     # Three +EV reports with DIFFERENT EVs (drive EV via the offered price + prob).
     # Bigger underdog price at a high sim prob -> larger EV.
     low = _edge_report(
-        label="ml_low", side=MarketSide.HOME,
-        sim_prob=0.55, market_fair_prob=0.50, offered_american=+100,
+        label="ml_low",
+        side=MarketSide.HOME,
+        sim_prob=0.55,
+        market_fair_prob=0.50,
+        offered_american=+100,
     )
     mid = _edge_report(
-        label="ml_mid", side=MarketSide.HOME,
-        sim_prob=0.60, market_fair_prob=0.50, offered_american=+120,
+        label="ml_mid",
+        side=MarketSide.HOME,
+        sim_prob=0.60,
+        market_fair_prob=0.50,
+        offered_american=+120,
     )
     high = _edge_report(
-        label="ml_high", side=MarketSide.HOME,
-        sim_prob=0.65, market_fair_prob=0.50, offered_american=+150,
+        label="ml_high",
+        side=MarketSide.HOME,
+        sim_prob=0.65,
+        market_fair_prob=0.50,
+        offered_american=+150,
     )
     # sanity: EVs strictly increasing low < mid < high
     assert low.ev < mid.ev < high.ev
@@ -256,20 +300,32 @@ def test_signals_sorted_by_ev_descending():
 
 def test_mixed_input_filters_then_ranks():
     pos_big = _edge_report(
-        label="ml_big", side=MarketSide.HOME,
-        sim_prob=0.65, market_fair_prob=0.50, offered_american=+150,
+        label="ml_big",
+        side=MarketSide.HOME,
+        sim_prob=0.65,
+        market_fair_prob=0.50,
+        offered_american=+150,
     )
     neg = _edge_report(
-        label="ml_neg", side=MarketSide.AWAY,
-        sim_prob=0.40, market_fair_prob=0.50, offered_american=+100,
+        label="ml_neg",
+        side=MarketSide.AWAY,
+        sim_prob=0.40,
+        market_fair_prob=0.50,
+        offered_american=+100,
     )
     pos_small = _edge_report(
-        label="ml_small", side=MarketSide.HOME,
-        sim_prob=0.55, market_fair_prob=0.50, offered_american=+100,
+        label="ml_small",
+        side=MarketSide.HOME,
+        sim_prob=0.55,
+        market_fair_prob=0.50,
+        offered_american=+100,
     )
     tiny_edge = _edge_report(  # +EV-ish but edge below the 2% floor
-        label="ml_tiny", side=MarketSide.HOME,
-        sim_prob=0.505, market_fair_prob=0.50, offered_american=+100,
+        label="ml_tiny",
+        side=MarketSide.HOME,
+        sim_prob=0.505,
+        market_fair_prob=0.50,
+        offered_american=+100,
     )
     signals = bet_signals_from_edges([pos_small, neg, pos_big, tiny_edge])
     # Only the two clearing both gates survive, ranked by EV desc.
@@ -283,8 +339,11 @@ def test_empty_input_returns_empty_list():
 def test_all_negative_input_returns_empty_list():
     reports = [
         _edge_report(
-            label=f"neg{i}", side=MarketSide.AWAY,
-            sim_prob=0.40, market_fair_prob=0.55, offered_american=-110,
+            label=f"neg{i}",
+            side=MarketSide.AWAY,
+            sim_prob=0.40,
+            market_fair_prob=0.55,
+            offered_american=-110,
         )
         for i in range(4)
     ]
@@ -295,6 +354,7 @@ def test_all_negative_input_returns_empty_list():
 # ===========================================================================
 # BetSignalConfig validation
 # ===========================================================================
+
 
 def test_config_rejects_negative_knobs():
     with pytest.raises(ValueError):

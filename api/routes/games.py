@@ -63,9 +63,10 @@ import asyncio
 import dataclasses
 import logging
 import os
+from collections.abc import Mapping
 from datetime import date as _date
 from datetime import datetime
-from typing import Any, Mapping, Optional
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
@@ -91,8 +92,8 @@ from simulation.linescore import linescore_from_plays
 from simulation.lineup_resolver import (
     LineupResolutionError,
     build_defense_map_for_state,
-    resolve_lineup,
     resolve_game_state,
+    resolve_lineup,
 )
 from simulation.pitcher_decisions import decisions_from_plays
 from simulation.play_recorder import record_game_plays
@@ -214,10 +215,10 @@ class GameCard(BaseModel):
     game_pk: int
     season: int
     game_date: str
-    status: Optional[str] = None
-    home_team_id: Optional[int] = None
-    away_team_id: Optional[int] = None
-    venue_id: Optional[int] = None
+    status: str | None = None
+    home_team_id: int | None = None
+    away_team_id: int | None = None
+    venue_id: int | None = None
 
 
 class GamesOnDateResponse(BaseModel):
@@ -233,7 +234,7 @@ class SimulateResponse(BaseModel):
 
     game_pk: int
     n_iterations: int
-    base_seed: Optional[int] = None
+    base_seed: int | None = None
     from_cache: bool = False
     summary: GameSimSummaryModel
 
@@ -254,11 +255,11 @@ class RosterOverride(BaseModel):
       * ``description`` -- free text recorded on the returned OverrideDelta.
     """
 
-    home_lineup: Optional[list[int]] = None
-    away_lineup: Optional[list[int]] = None
-    pitcher_id: Optional[int] = None
-    bat_hand: Optional[str] = Field(default=None, max_length=1)
-    description: Optional[str] = None
+    home_lineup: list[int] | None = None
+    away_lineup: list[int] | None = None
+    pitcher_id: int | None = None
+    bat_hand: str | None = Field(default=None, max_length=1)
+    description: str | None = None
 
 
 class WithOverrideResponse(BaseModel):
@@ -270,7 +271,7 @@ class WithOverrideResponse(BaseModel):
 
     game_pk: int
     n_iterations: int
-    base_seed: Optional[int] = None
+    base_seed: int | None = None
     baseline: GameSimSummaryModel
     override: GameSimSummaryModel
     delta: OverrideDeltaModel
@@ -345,7 +346,7 @@ def _run_batch(
     spec: GameSpec,
     *,
     n_iterations: int,
-    base_seed: Optional[int],
+    base_seed: int | None,
     use_cache: bool,
 ):
     """Run the Monte-Carlo batch (a sync call -- offloaded to a worker thread).
@@ -366,7 +367,7 @@ def _run_batch(
 # ---------------------------------------------------------------------------
 
 
-def _player_ref_from_jsonable(ref: Any) -> Optional[PlayerRef]:
+def _player_ref_from_jsonable(ref: Any) -> PlayerRef | None:
     """Rebuild an Optional[PlayerRef] from its jsonable dict (None == empty)."""
     if ref is None:
         return None
@@ -412,9 +413,7 @@ def _state_at_pitch_model_from_snapshot(snapshot: Mapping[str, Any]) -> StateAtP
         at_bat=int(snapshot["at_bat"]),
         pitch=int(snapshot["pitch"]),
         field=field_snap,
-        sequence=(
-            None if snapshot.get("sequence") is None else int(snapshot["sequence"])
-        ),
+        sequence=(None if snapshot.get("sequence") is None else int(snapshot["sequence"])),
     )
     return StateAtPitchModel.from_dataclass(sap)
 
@@ -427,10 +426,10 @@ def _state_at_pitch_model_from_snapshot(snapshot: Mapping[str, Any]) -> StateAtP
 def _record_and_build(
     *,
     factory_ref: str,
-    base_seed: Optional[int],
+    base_seed: int | None,
     sim_kwargs: dict[str, Any],
     resolved: Any = None,
-) -> "tuple[PlayByPlay, list[dict], dict, dict]":
+) -> tuple[PlayByPlay, list[dict], dict, dict]:
     """Record ONE representative game and build the replay artifacts (sync).
 
     Replays a single game at the run's ``base_seed`` via
@@ -478,9 +477,9 @@ def _record_and_build(
     # SIM-363: cache the fielding-side defense map per (half, fielding-side) so we
     # build it at most twice per inning rather than per pitch (it changes only on a
     # substitution, which the resolver's "latest occupant" map already reflects).
-    defense_cache: dict[Any, Optional[dict[str, int]]] = {}
+    defense_cache: dict[Any, dict[str, int] | None] = {}
 
-    def _defense_for(next_state: Any) -> Optional[dict[str, int]]:
+    def _defense_for(next_state: Any) -> dict[str, int] | None:
         if resolved is None:
             return None
         key = getattr(next_state, "half", None)
@@ -494,7 +493,7 @@ def _record_and_build(
     # plays and pbp.entries are 1:1 in order, so zip pairs each PlayResult with
     # its entry's (at_bat, pitch, sequence) indices.
     snapshots: list[dict] = []
-    for play, entry in zip(plays, pbp.entries):
+    for play, entry in zip(plays, pbp.entries, strict=False):
         next_state = getattr(play, "next_state", None)
         if next_state is None:
             continue
@@ -514,7 +513,7 @@ async def _persist_replay_artifacts(
     *,
     game_pk: int,
     factory_ref: str,
-    base_seed: Optional[int],
+    base_seed: int | None,
     sim_kwargs: dict[str, Any],
     batch: Any,
 ) -> None:
@@ -591,12 +590,8 @@ async def _persist_replay_artifacts(
 
         # 3) Persist the DuckDB play-stream + state snapshots (sync calls).
         play_rows = [dataclasses.asdict(e) for e in pbp.entries]
-        sim_store.store_play_stream(
-            con, game_pk=game_pk, run_id=run_id, play_entries=play_rows
-        )
-        sim_store.store_state_snapshots(
-            con, game_pk=game_pk, run_id=run_id, snapshots=snapshots
-        )
+        sim_store.store_play_stream(con, game_pk=game_pk, run_id=run_id, play_entries=play_rows)
+        sim_store.store_state_snapshots(con, game_pk=game_pk, run_id=run_id, snapshots=snapshots)
 
         # 4) Persist the SIM-362/364 game card (linescore + decisions).  These were
         #    derived at record time (they need PlayResult.next_state) and are stored
@@ -692,9 +687,7 @@ def _game_card(row: Any) -> GameCard:
         away_team_id=(
             None if _row_get(row, "away_team_id") is None else int(_row_get(row, "away_team_id"))
         ),
-        venue_id=(
-            None if _row_get(row, "venue_id") is None else int(_row_get(row, "venue_id"))
-        ),
+        venue_id=(None if _row_get(row, "venue_id") is None else int(_row_get(row, "venue_id"))),
     )
 
 
@@ -767,7 +760,7 @@ async def simulate_game_endpoint(
     game_pk: int,
     request: Request,
     n_iterations: int = Query(100, ge=1, le=10000, description="Monte-Carlo iterations"),
-    base_seed: Optional[int] = Query(None, description="Reproducibility seed for the whole batch"),
+    base_seed: int | None = Query(None, description="Reproducibility seed for the whole batch"),
     use_cache: bool = Query(True, description="Consult/populate the sim-result cache"),
 ) -> SimulateResponse:
     pool = _get_pool(request)
@@ -832,7 +825,7 @@ async def simulate_with_override_endpoint(
     override: RosterOverride,
     request: Request,
     n_iterations: int = Query(100, ge=1, le=10000, description="Monte-Carlo iterations"),
-    base_seed: Optional[int] = Query(0, description="Shared seed for baseline + override"),
+    base_seed: int | None = Query(0, description="Shared seed for baseline + override"),
     use_cache: bool = Query(True, description="Consult/populate the sim-result cache"),
 ) -> WithOverrideResponse:
     pool = _get_pool(request)
@@ -850,12 +843,20 @@ async def simulate_with_override_endpoint(
     # Both batches at the SAME base seed -> the only difference between the two
     # summaries is the roster change (apples-to-apples comparison).
     baseline_batch = await asyncio.to_thread(
-        _run_batch, runner, baseline_spec,
-        n_iterations=n_iterations, base_seed=base_seed, use_cache=use_cache,
+        _run_batch,
+        runner,
+        baseline_spec,
+        n_iterations=n_iterations,
+        base_seed=base_seed,
+        use_cache=use_cache,
     )
     override_batch = await asyncio.to_thread(
-        _run_batch, runner, override_spec,
-        n_iterations=n_iterations, base_seed=base_seed, use_cache=use_cache,
+        _run_batch,
+        runner,
+        override_spec,
+        n_iterations=n_iterations,
+        base_seed=base_seed,
+        use_cache=use_cache,
     )
 
     delta = OverrideDelta.from_summaries(
@@ -903,9 +904,7 @@ async def get_game_plays(
             detail="replay store unavailable",
         )
 
-    rows = await asyncio.to_thread(
-        sim_store.load_play_stream, con, game_pk=int(game_pk)
-    )
+    rows = await asyncio.to_thread(sim_store.load_play_stream, con, game_pk=int(game_pk))
     if not rows:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -956,10 +955,7 @@ async def get_game_state_at_pitch(
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                f"no persisted state for game_pk={game_pk} "
-                f"at_bat={at_bat} pitch={pitch}"
-            ),
+            detail=(f"no persisted state for game_pk={game_pk} at_bat={at_bat} pitch={pitch}"),
         )
 
     # ``row["snapshot"]`` is the stored, numpy-free jsonable StateAtPitch dict
@@ -1002,9 +998,7 @@ async def _load_game_card_or_error(request: Request, game_pk: int) -> dict:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="replay store unavailable",
         )
-    card = await asyncio.to_thread(
-        sim_store.load_game_card, con, game_pk=int(game_pk)
-    )
+    card = await asyncio.to_thread(sim_store.load_game_card, con, game_pk=int(game_pk))
     if card is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1085,7 +1079,7 @@ async def get_game_card(
 def _build_prop_set(
     *,
     factory_ref: str,
-    base_seed: Optional[int],
+    base_seed: int | None,
     sim_kwargs: dict[str, Any],
     n_iterations: int,
 ) -> PropDistributionSet:
@@ -1140,7 +1134,7 @@ async def get_game_boxscore(
     game_pk: int,
     request: Request,
     n_iterations: int = Query(100, ge=1, le=2000, description="Monte-Carlo iterations"),
-    base_seed: Optional[int] = Query(None, description="Reproducibility seed for the batch"),
+    base_seed: int | None = Query(None, description="Reproducibility seed for the batch"),
 ) -> BoxscoreCardModel:
     pool = _get_pool(request)
     state = await _resolve_state_or_error(pool, game_pk)

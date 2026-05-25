@@ -80,7 +80,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from simulation.game_state import GameState, Half, Team
 
@@ -154,7 +154,7 @@ class LineupSlot:
     position_code: str
     is_starter: bool
     sequence: int
-    pinch_role: Optional[str] = None
+    pinch_role: str | None = None
 
     @property
     def is_substitution(self) -> bool:
@@ -172,7 +172,7 @@ class TeamLineup:
 
     team_id: int
     slots: tuple[LineupSlot, ...]
-    pitcher_id: Optional[int]
+    pitcher_id: int | None
 
     @property
     def batting_order_ids(self) -> list[int]:
@@ -217,7 +217,7 @@ def _row_get(row: Any, key: str, default: Any = None) -> Any:
     return default if val is None else val
 
 
-def _occupant_takes_effect(row: Any, as_of_at_bat: Optional[int]) -> bool:
+def _occupant_takes_effect(row: Any, as_of_at_bat: int | None) -> bool:
     """Whether a lineup row's occupant has taken effect by ``as_of_at_bat``.
 
     ``as_of_at_bat=None`` -> always (use the latest occupant of every slot).
@@ -236,8 +236,8 @@ def _occupant_takes_effect(row: Any, as_of_at_bat: Optional[int]) -> bool:
 def _pick_team_slots(
     rows: Iterable[Mapping[str, Any]],
     *,
-    as_of_at_bat: Optional[int],
-) -> tuple[list[LineupSlot], Optional[int]]:
+    as_of_at_bat: int | None,
+) -> tuple[list[LineupSlot], int | None]:
     """Reduce one team's raw rows to (ordered batting slots, current pitcher id).
 
     For each ``batting_order`` slot, the occupant is the row with the highest
@@ -249,7 +249,7 @@ def _pick_team_slots(
     # batting_order -> the winning row so far (highest applicable sequence).
     best_by_slot: dict[int, Any] = {}
     # the winning pitcher row so far (highest applicable sequence).
-    best_pitcher: Optional[Any] = None
+    best_pitcher: Any | None = None
 
     for row in rows:
         if not _occupant_takes_effect(row, as_of_at_bat):
@@ -284,9 +284,7 @@ def _pick_team_slots(
         for bo in sorted(best_by_slot)
     ]
 
-    pitcher_id = (
-        int(_row_get(best_pitcher, "player_id")) if best_pitcher is not None else None
-    )
+    pitcher_id = int(_row_get(best_pitcher, "player_id")) if best_pitcher is not None else None
     return slots, pitcher_id
 
 
@@ -297,9 +295,9 @@ def resolve_lineup_from_rows(
     home_team_id: int,
     away_team_id: int,
     lineup_rows: Iterable[Mapping[str, Any]],
-    bat_hands: Optional[Mapping[int, str]] = None,
-    throw_hands: Optional[Mapping[int, str]] = None,
-    as_of_at_bat: Optional[int] = None,
+    bat_hands: Mapping[int, str] | None = None,
+    throw_hands: Mapping[int, str] | None = None,
+    as_of_at_bat: int | None = None,
 ) -> ResolvedLineup:
     """Assemble a :class:`ResolvedLineup` from raw ``raw.game_lineups`` rows.
 
@@ -363,7 +361,7 @@ def build_game_state(
     resolved: ResolvedLineup,
     *,
     half: Half = Half.TOP,
-    seed: Optional[int] = None,
+    seed: int | None = None,
 ) -> GameState:
     """Build a fresh, top-of-the-1st :class:`GameState` from a resolved lineup.
 
@@ -391,7 +389,6 @@ def build_game_state(
         the defense has no resolvable pitcher — the loop cannot start a PA.
     """
     offense_team = Team.AWAY if half == Half.TOP else Team.HOME
-    offense = resolved.away if offense_team == Team.AWAY else resolved.home
     defense = resolved.home if offense_team == Team.AWAY else resolved.away
 
     away_ids = resolved.away.batting_order_ids
@@ -487,9 +484,7 @@ def build_team_defense_map(team: TeamLineup) -> dict[str, int]:
     return out
 
 
-def build_defense_map(
-    resolved: ResolvedLineup, *, fielding_side: str
-) -> dict[str, int]:
+def build_defense_map(resolved: ResolvedLineup, *, fielding_side: str) -> dict[str, int]:
     """Map the FIELDING team's lineup to ``{defensive-slot name: player_id}``.
 
     ``fielding_side`` selects which team is in the field: ``"home"`` or ``"away"``
@@ -520,9 +515,7 @@ def fielding_side_for_half(half: Half) -> Team:
     return Team.HOME if half == Half.TOP else Team.AWAY
 
 
-def build_defense_map_for_state(
-    resolved: ResolvedLineup, state: GameState
-) -> dict[str, int]:
+def build_defense_map_for_state(resolved: ResolvedLineup, state: GameState) -> dict[str, int]:
     """Convenience: pick the fielding side from ``state.half`` and build its map.
 
     Wires :func:`fielding_side_for_half` (the home/away <-> fielding convention)
@@ -551,8 +544,7 @@ def _normalize_side(side: Any) -> Team:
         except ValueError:
             pass
     raise LineupResolutionError(
-        f"fielding_side={side!r} is not a recognizable side; expected "
-        "'home'/'away' or a Team."
+        f"fielding_side={side!r} is not a recognizable side; expected 'home'/'away' or a Team."
     )
 
 
@@ -585,7 +577,7 @@ _PLAYER_HANDS_SQL = """
 """
 
 
-async def fetch_game_sides(conn: Any, game_pk: int) -> Optional[Mapping[str, Any]]:
+async def fetch_game_sides(conn: Any, game_pk: int) -> Mapping[str, Any] | None:
     """Read the ``raw.games`` row that maps team ids to the home/away sides.
 
     Returns the row (``game_pk, season, home_team_id, away_team_id``) or None
@@ -637,7 +629,7 @@ async def resolve_lineup(
     conn: Any,
     game_pk: int,
     *,
-    as_of_at_bat: Optional[int] = None,
+    as_of_at_bat: int | None = None,
 ) -> ResolvedLineup:
     """Read Postgres and return the resolved (substitution-applied) lineup.
 
@@ -663,11 +655,12 @@ async def resolve_lineup(
     lineup_rows = await fetch_lineup_rows(conn, game_pk)
     if not lineup_rows:
         raise LineupResolutionError(
-            f"no raw.game_lineups rows for game_pk={game_pk}; the lineup has not "
-            "been ingested yet."
+            f"no raw.game_lineups rows for game_pk={game_pk}; the lineup has not been ingested yet."
         )
 
-    player_ids = {int(_row_get(r, "player_id")) for r in lineup_rows if _row_get(r, "player_id") is not None}
+    player_ids = {
+        int(_row_get(r, "player_id")) for r in lineup_rows if _row_get(r, "player_id") is not None
+    }
     bat_hands, throw_hands = await fetch_player_hands(conn, player_ids)
 
     return resolve_lineup_from_rows(
@@ -687,8 +680,8 @@ async def resolve_game_state(
     game_pk: int,
     *,
     half: Half = Half.TOP,
-    as_of_at_bat: Optional[int] = None,
-    seed: Optional[int] = None,
+    as_of_at_bat: int | None = None,
+    seed: int | None = None,
 ) -> GameState:
     """One-call convenience: Postgres ``game_pk`` -> a fresh :class:`GameState`.
 

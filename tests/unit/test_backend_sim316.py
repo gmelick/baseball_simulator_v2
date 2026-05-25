@@ -39,7 +39,7 @@ PITCHER = 477132
 
 def _fresh_state(**kw) -> GameState:
     """A 'top of the 1st, nobody on, 0-0, 0 outs' GameState."""
-    base = dict(pitcher_id=PITCHER, bat_hand="R", season=SEASON)
+    base = {"pitcher_id": PITCHER, "bat_hand": "R", "season": SEASON}
     base.update(kw)
     return GameState(**base)
 
@@ -52,8 +52,7 @@ def _fresh_state(**kw) -> GameState:
 class TestAdvanceCount:
     def test_ball_increments_then_walks_on_four(self):
         adv = advance_count(0, 0, "ball")
-        assert adv == CountAdvance(1, 0, terminal=False, event="in_progress",
-                                   is_contact=False)
+        assert adv == CountAdvance(1, 0, terminal=False, event="in_progress", is_contact=False)
         # Ball four is terminal -> walk.
         adv4 = advance_count(3, 2, "ball")
         assert adv4.balls == 4
@@ -63,8 +62,7 @@ class TestAdvanceCount:
 
     def test_strike_increments_then_strikes_out_on_three(self):
         adv = advance_count(0, 0, "called_strike")
-        assert adv == CountAdvance(0, 1, terminal=False, event="in_progress",
-                                   is_contact=False)
+        assert adv == CountAdvance(0, 1, terminal=False, event="in_progress", is_contact=False)
         adv3 = advance_count(1, 2, "swinging_strike")
         assert adv3.strikes == 3
         assert adv3.terminal is True
@@ -78,16 +76,16 @@ class TestAdvanceCount:
         # SIM-056 absorbing rule: with two strikes a foul does NOT advance the
         # count and does NOT terminate the PA.
         adv = advance_count(1, 2, "foul")
-        assert adv.strikes == 2          # unchanged
-        assert adv.balls == 1            # unchanged
-        assert adv.terminal is False     # PA stays alive
+        assert adv.strikes == 2  # unchanged
+        assert adv.balls == 1  # unchanged
+        assert adv.terminal is False  # PA stays alive
         assert adv.is_contact is False
 
     def test_in_play_is_terminal_contact_with_no_event(self):
         adv = advance_count(2, 2, "in_play")
         assert adv.terminal is True
         assert adv.is_contact is True
-        assert adv.event is None         # event resolved by the batted ball
+        assert adv.event is None  # event resolved by the batted ball
 
     def test_unknown_outcome_rejected(self):
         with pytest.raises(ValueError):
@@ -95,7 +93,7 @@ class TestAdvanceCount:
 
     def test_classifying_an_already_terminal_count_rejected(self):
         with pytest.raises(ValueError):
-            advance_count(4, 0, "ball")   # already a walk
+            advance_count(4, 0, "ball")  # already a walk
         with pytest.raises(ValueError):
             advance_count(0, 3, "called_strike")  # already a strikeout
 
@@ -118,7 +116,7 @@ class TestStateMachineCount:
         r = sm.step_pitch(state, pitch_outcome="ball")
         assert r.pa_terminal is True
         assert r.event == EVENT_WALK
-        assert r.outs_recorded == 0          # a walk records no out
+        assert r.outs_recorded == 0  # a walk records no out
         assert state.outs == 0
         assert (state.balls, state.strikes) == (0, 0)  # count reset for next PA
 
@@ -145,7 +143,7 @@ class TestStateMachineCount:
         for _ in range(10):
             r = sm.step_pitch(state, pitch_outcome="foul")
             assert r.pa_terminal is False
-            assert state.strikes == 2     # absorbed, never advances to 3
+            assert state.strikes == 2  # absorbed, never advances to 3
             assert state.outs == 0
         # The PA is still live: a real strike now ends it.
         r = sm.step_pitch(state, pitch_outcome="swinging_strike")
@@ -174,7 +172,7 @@ class TestHalfInning:
 
         # Half-inning rolled: bottom of the 1st, clean slate.
         assert state.half == Half.BOTTOM
-        assert state.inning == 1            # inning does NOT advance on TOP->BOTTOM
+        assert state.inning == 1  # inning does NOT advance on TOP->BOTTOM
         assert state.outs == 0
         assert (state.balls, state.strikes) == (0, 0)
         assert state.bases.occupancy == (False, False, False)
@@ -186,15 +184,17 @@ class TestHalfInning:
             for _ in range(3):
                 sm.step_pitch(state, pitch_outcome="called_strike")
         assert state.half == Half.TOP
-        assert state.inning == 2            # BOTTOM->TOP advances the inning
+        assert state.inning == 2  # BOTTOM->TOP advances the inning
 
     def test_lineup_pointer_carries_across_half_innings(self):
         sm = StateMachine()
         away = [10, 11, 12, 13, 14, 15, 16, 17, 18]
         home = [20, 21, 22, 23, 24, 25, 26, 27, 28]
         state = _fresh_state(
-            away_lineup=away, home_lineup=home,
-            away_lineup_slot=0, home_lineup_slot=0,
+            away_lineup=away,
+            home_lineup=home,
+            away_lineup_slot=0,
+            home_lineup_slot=0,
             batter_id=away[0],
         )
         # Top of the 1st: AWAY bats. Two batters reach (walk), one strikes out
@@ -204,7 +204,7 @@ class TestHalfInning:
             for _ in range(3):
                 sm.step_pitch(state, pitch_outcome="called_strike")
         assert state.away_lineup_slot == 3
-        assert state.batter_id == away[3]   # away resumes at slot 3 next time
+        assert state.batter_id == away[3]  # away resumes at slot 3 next time
         assert state.home_lineup_slot == 0  # home untouched
         assert state.half == Half.BOTTOM
 

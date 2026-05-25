@@ -67,8 +67,8 @@ from simulation.sim_loop import (
 
 SEASON = 2024
 PITCHER = 477132
-AWAY_LINEUP = list(range(101, 110))   # 9 batters
-HOME_LINEUP = list(range(201, 210))   # 9 batters
+AWAY_LINEUP = list(range(101, 110))  # 9 batters
+HOME_LINEUP = list(range(201, 210))  # 9 batters
 
 #: The acceptance-criterion game count. Overridable via env (so a future ticket
 #: can crank it without editing the file) -- the always-on test uses this default.
@@ -108,6 +108,7 @@ def assert_state_valid(
     Raises :class:`InvalidStateError` with the seed + pitch index + the violated
     rule on the first violation.
     """
+
     def _fail(msg: str) -> None:
         raise InvalidStateError(
             f"[seed={seed} pitch={pitch_index}] invalid state: {msg} "
@@ -138,17 +139,20 @@ def assert_state_valid(
     ball_ceiling = 3 if in_play else 4
     strike_ceiling = 2 if in_play else 3
     if state.balls > ball_ceiling:
-        _fail(f"balls={state.balls} exceeds {ball_ceiling} "
-              f"({'mid-PA' if in_play else 'terminal'})")
+        _fail(f"balls={state.balls} exceeds {ball_ceiling} ({'mid-PA' if in_play else 'terminal'})")
     if state.strikes > strike_ceiling:
-        _fail(f"strikes={state.strikes} exceeds {strike_ceiling} "
-              f"({'mid-PA' if in_play else 'terminal'})")
+        _fail(
+            f"strikes={state.strikes} exceeds {strike_ceiling} "
+            f"({'mid-PA' if in_play else 'terminal'})"
+        )
 
     # --- base occupancy: no two runners on one bag, no bad ids, <= 3 -----
     b = state.bases
-    occupants = [(name, rid) for name, rid in
-                 (("1B", b.first), ("2B", b.second), ("3B", b.third))
-                 if rid is not None]
+    occupants = [
+        (name, rid)
+        for name, rid in (("1B", b.first), ("2B", b.second), ("3B", b.third))
+        if rid is not None
+    ]
     ids = [rid for _, rid in occupants]
     for name, rid in occupants:
         if int(rid) < 0:
@@ -161,18 +165,19 @@ def assert_state_valid(
         _fail(f"more than 3 runners on base ({b.count_on_base})")
     # runners_state bitmask must round-trip the occupancy (encoding consistency).
     if bin(b.runners_state).count("1") != b.count_on_base:
-        _fail(f"runners_state bitmask {b.runners_state:#05b} disagrees with "
-              f"occupancy {b.occupancy}")
+        _fail(
+            f"runners_state bitmask {b.runners_state:#05b} disagrees with occupancy {b.occupancy}"
+        )
 
     # --- lineup pointers stay in range -----------------------------------
-    if state.away_lineup:
-        if not (0 <= state.away_lineup_slot < len(state.away_lineup)):
-            _fail(f"away_lineup_slot={state.away_lineup_slot} out of range "
-                  f"[0,{len(state.away_lineup)})")
-    if state.home_lineup:
-        if not (0 <= state.home_lineup_slot < len(state.home_lineup)):
-            _fail(f"home_lineup_slot={state.home_lineup_slot} out of range "
-                  f"[0,{len(state.home_lineup)})")
+    if state.away_lineup and not (0 <= state.away_lineup_slot < len(state.away_lineup)):
+        _fail(
+            f"away_lineup_slot={state.away_lineup_slot} out of range [0,{len(state.away_lineup)})"
+        )
+    if state.home_lineup and not (0 <= state.home_lineup_slot < len(state.home_lineup)):
+        _fail(
+            f"home_lineup_slot={state.home_lineup_slot} out of range [0,{len(state.home_lineup)})"
+        )
 
     # --- inning sane ------------------------------------------------------
     if state.inning < 1:
@@ -190,17 +195,15 @@ class _CyclingResolver(PlayResolver):
     governed by a shared rng so games make progress, score, and END. No DB/FAISS
     -- the batted-ball sample is injected (mirrors the SIM-320 test double)."""
 
-    def __init__(self, rng: "np.random.Generator", hit_rate: float = 0.30):
+    def __init__(self, rng: np.random.Generator, hit_rate: float = 0.30):
         self.rng = rng
         self.hit_rate = float(hit_rate)
         self._injected_battedball = {"event": "field_out"}
 
     def resolve_fielding(self, state, battedball_sample) -> FieldingSignal:
         if float(self.rng.random()) < self.hit_rate:
-            return FieldingSignal(event="single", result_hits=1, result_outs=0,
-                                  result_runs=0)
-        return FieldingSignal(event="field_out", result_hits=0, result_outs=1,
-                              result_runs=0)
+            return FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
+        return FieldingSignal(event="field_out", result_hits=0, result_outs=1, result_runs=0)
 
 
 class _CheckingRngStateMachine(StateMachine):
@@ -236,7 +239,10 @@ class _CheckingRngStateMachine(StateMachine):
         # Validate the committed state at this transition (tolerant of the
         # transient terminal boundary the loop may hand back post-roll).
         assert_state_valid(
-            state, seed=self._seed, pitch_index=self._pitch_index, in_play=False,
+            state,
+            seed=self._seed,
+            pitch_index=self._pitch_index,
+            in_play=False,
         )
         return result
 
@@ -244,7 +250,9 @@ class _CheckingRngStateMachine(StateMachine):
 def _make_machine(seed: int, hit_rate: float = 0.30) -> _CheckingRngStateMachine:
     rng = np.random.default_rng(seed)
     return _CheckingRngStateMachine(
-        resolver=_CyclingResolver(rng, hit_rate=hit_rate), rng=rng, seed=seed,
+        resolver=_CyclingResolver(rng, hit_rate=hit_rate),
+        rng=rng,
+        seed=seed,
     )
 
 
@@ -290,7 +298,7 @@ def run_invalid_state_harness(
     extra_games = 0
     home_wins = 0
     away_wins = 0
-    distinct_scores: "set[tuple[int, int]]" = set()
+    distinct_scores: set[tuple[int, int]] = set()
 
     for i in range(n):
         seed = start_seed + i
@@ -371,8 +379,12 @@ class TestPerStateChecker:
 
     def _good(self) -> GameState:
         return GameState(
-            pitcher_id=PITCHER, bat_hand="R", season=SEASON,
-            away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP, batter_id=101,
+            pitcher_id=PITCHER,
+            bat_hand="R",
+            season=SEASON,
+            away_lineup=AWAY_LINEUP,
+            home_lineup=HOME_LINEUP,
+            batter_id=101,
         )
 
     def test_a_clean_state_passes(self):

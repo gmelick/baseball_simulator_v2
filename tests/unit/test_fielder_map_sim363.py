@@ -56,6 +56,7 @@ from simulation.lineup_resolver import (  # noqa: E402
     fielding_side_for_half,
     resolve_lineup_from_rows,
 )
+
 # Read-only: assert the map round-trips through the real contract.
 from simulation.snapshots import (  # noqa: E402
     DEFENSE_POSITIONS,
@@ -84,12 +85,10 @@ POSITIONS = ["8", "4", "9", "3", "7", "5", "6", "2", "1"]
 # The expected {slot name: player_id} for the HOME side given the layout above.
 # Pitcher ('P') is HOME_BATTERS[8] (the slot-9 occupant, code '1').
 EXPECTED_HOME_MAP = {
-    POSITION_CODE_TO_NAME[code]: pid
-    for pid, code in zip(HOME_BATTERS, POSITIONS)
+    POSITION_CODE_TO_NAME[code]: pid for pid, code in zip(HOME_BATTERS, POSITIONS, strict=False)
 }
 EXPECTED_AWAY_MAP = {
-    POSITION_CODE_TO_NAME[code]: pid
-    for pid, code in zip(AWAY_BATTERS, POSITIONS)
+    POSITION_CODE_TO_NAME[code]: pid for pid, code in zip(AWAY_BATTERS, POSITIONS, strict=False)
 }
 
 
@@ -122,9 +121,9 @@ def _lineup_row(
 def _starting_rows() -> list[dict]:
     """A complete two-team NL-style starting lineup (9 in the field per side)."""
     rows: list[dict] = []
-    for slot, (pid, pos) in enumerate(zip(HOME_BATTERS, POSITIONS), start=1):
+    for slot, (pid, pos) in enumerate(zip(HOME_BATTERS, POSITIONS, strict=False), start=1):
         rows.append(_lineup_row(HOME_TEAM, pid, slot, pos))
-    for slot, (pid, pos) in enumerate(zip(AWAY_BATTERS, POSITIONS), start=1):
+    for slot, (pid, pos) in enumerate(zip(AWAY_BATTERS, POSITIONS, strict=False), start=1):
         rows.append(_lineup_row(AWAY_TEAM, pid, slot, pos))
     return rows
 
@@ -148,8 +147,15 @@ def _resolved(rows: list[dict] | None = None, *, as_of_at_bat=None):
 class TestPositionCodeMapping:
     def test_code_map_is_canonical_1_through_9(self):
         assert POSITION_CODE_TO_NAME == {
-            "1": "P", "2": "C", "3": "1B", "4": "2B", "5": "3B",
-            "6": "SS", "7": "LF", "8": "CF", "9": "RF",
+            "1": "P",
+            "2": "C",
+            "3": "1B",
+            "4": "2B",
+            "5": "3B",
+            "6": "SS",
+            "7": "LF",
+            "8": "CF",
+            "9": "RF",
         }
 
     def test_slot_names_match_snapshots_defense_positions(self):
@@ -204,8 +210,7 @@ class TestFieldSnapshotRoundTrip:
     def _state_top_of_first(self) -> GameState:
         # A minimal live state: top of the 1st, home fielding.  The defense map
         # is supplied separately (the loop does not track fielders).
-        return GameState(pitcher_id=HOME_BATTERS[8], bat_hand="R", season=SEASON,
-                         half=Half.TOP)
+        return GameState(pitcher_id=HOME_BATTERS[8], bat_hand="R", season=SEASON, half=Half.TOP)
 
     def test_map_populates_all_nine_field_snapshot_slots(self):
         resolved = _resolved()
@@ -244,8 +249,17 @@ class TestSubstitutions:
         rows = _starting_rows()
         # A defensive sub takes over the home CF slot (slot 1, code '8') at AB 40.
         rows.append(
-            _lineup_row(HOME_TEAM, 150, 1, "8", is_starter=False, sequence=2,
-                        entered_inning=7, entered_at_bat=40, pinch_role="DEF")
+            _lineup_row(
+                HOME_TEAM,
+                150,
+                1,
+                "8",
+                is_starter=False,
+                sequence=2,
+                entered_inning=7,
+                entered_at_bat=40,
+                pinch_role="DEF",
+            )
         )
         resolved = _resolved(rows)
         dmap = build_team_defense_map(resolved.home)
@@ -260,8 +274,16 @@ class TestSubstitutions:
         # Slot 8 starter is the catcher (code '2'); a sub enters at slot 8 but is
         # now playing LF (code '7'), seq 2.  (Contrived double-switch shape.)
         rows.append(
-            _lineup_row(HOME_TEAM, 170, 8, "7", is_starter=False, sequence=2,
-                        entered_at_bat=50, pinch_role="DEF")
+            _lineup_row(
+                HOME_TEAM,
+                170,
+                8,
+                "7",
+                is_starter=False,
+                sequence=2,
+                entered_at_bat=50,
+                pinch_role="DEF",
+            )
         )
         resolved = _resolved(rows)
         dmap = build_team_defense_map(resolved.home)
@@ -275,8 +297,16 @@ class TestSubstitutions:
         rows = _starting_rows()
         # A reliever (code '1', no batting_order) enters seq 2 -> wins pitcher.
         rows.append(
-            _lineup_row(HOME_TEAM, 950, None, "1", is_starter=False, sequence=2,
-                        entered_inning=8, entered_at_bat=60)
+            _lineup_row(
+                HOME_TEAM,
+                950,
+                None,
+                "1",
+                is_starter=False,
+                sequence=2,
+                entered_inning=8,
+                entered_at_bat=60,
+            )
         )
         resolved = _resolved(rows)
         dmap = build_team_defense_map(resolved.home)
@@ -295,7 +325,7 @@ class TestNonFieldingSkipped:
         # '1', no batting_order) holds the glove.
         rows: list[dict] = []
         positions = ["8", "4", "9", "3", "7", "5", "6", "2", "10"]  # 10 = DH
-        for slot, (pid, pos) in enumerate(zip(HOME_BATTERS, positions), start=1):
+        for slot, (pid, pos) in enumerate(zip(HOME_BATTERS, positions, strict=False), start=1):
             rows.append(_lineup_row(HOME_TEAM, pid, slot, pos))
         rows.append(_lineup_row(HOME_TEAM, 901, None, "1"))  # AL pitcher
         # Away side needs a batter + pitcher so the resolve doesn't error.
@@ -319,8 +349,16 @@ class TestNonFieldingSkipped:
         rows = _starting_rows()
         # Replace slot 1 occupant with a PH carrying position_code 'PH'.
         rows.append(
-            _lineup_row(HOME_TEAM, 180, 1, "PH", is_starter=False, sequence=2,
-                        entered_at_bat=70, pinch_role="PH")
+            _lineup_row(
+                HOME_TEAM,
+                180,
+                1,
+                "PH",
+                is_starter=False,
+                sequence=2,
+                entered_at_bat=70,
+                pinch_role="PH",
+            )
         )
         resolved = _resolved(rows)
         dmap = build_team_defense_map(resolved.home)
@@ -343,8 +381,7 @@ class TestFieldingSideSelection:
 
     def test_top_of_inning_uses_home_defense(self):
         resolved = _resolved()
-        state = GameState(pitcher_id=HOME_BATTERS[8], bat_hand="R", season=SEASON,
-                          half=Half.TOP)
+        state = GameState(pitcher_id=HOME_BATTERS[8], bat_hand="R", season=SEASON, half=Half.TOP)
         dmap = build_defense_map_for_state(resolved, state)
         assert dmap == EXPECTED_HOME_MAP
         # Sanity: this is the team GameState.defense names too.
@@ -352,19 +389,18 @@ class TestFieldingSideSelection:
 
     def test_bottom_of_inning_uses_away_defense(self):
         resolved = _resolved()
-        state = GameState(pitcher_id=AWAY_BATTERS[8], bat_hand="R", season=SEASON,
-                          half=Half.BOTTOM)
+        state = GameState(pitcher_id=AWAY_BATTERS[8], bat_hand="R", season=SEASON, half=Half.BOTTOM)
         dmap = build_defense_map_for_state(resolved, state)
         assert dmap == EXPECTED_AWAY_MAP
         assert state.defense == Team.AWAY
 
     def test_for_state_matches_explicit_side_choice(self):
         resolved = _resolved()
-        top = GameState(pitcher_id=HOME_BATTERS[8], bat_hand="R", season=SEASON,
-                        half=Half.TOP)
-        bot = GameState(pitcher_id=AWAY_BATTERS[8], bat_hand="R", season=SEASON,
-                        half=Half.BOTTOM)
+        top = GameState(pitcher_id=HOME_BATTERS[8], bat_hand="R", season=SEASON, half=Half.TOP)
+        bot = GameState(pitcher_id=AWAY_BATTERS[8], bat_hand="R", season=SEASON, half=Half.BOTTOM)
         assert build_defense_map_for_state(resolved, top) == build_defense_map(
-            resolved, fielding_side="home")
+            resolved, fielding_side="home"
+        )
         assert build_defense_map_for_state(resolved, bot) == build_defense_map(
-            resolved, fielding_side="away")
+            resolved, fielding_side="away"
+        )

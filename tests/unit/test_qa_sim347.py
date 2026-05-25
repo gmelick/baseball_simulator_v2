@@ -58,7 +58,7 @@ from simulation.batch_runner import (
     derive_seed,
 )
 from simulation.results import GameSimSummary
-from simulation.sim_loop import GameSimResult, REGULATION_INNINGS
+from simulation.sim_loop import REGULATION_INNINGS, GameSimResult
 
 # The picklable no-DB factory (rng-driven StateMachine, no sampler) + short
 # lineups so every game progresses and ENDS without a live DB/FAISS.
@@ -105,7 +105,7 @@ def _shm_count() -> int:
         return 0
 
 
-def _peak_rss_bytes() -> "int | None":
+def _peak_rss_bytes() -> int | None:
     """Peak RSS of this process in bytes, or ``None`` if unmeasurable cheaply.
 
     Uses ``resource.getrusage`` (``ru_maxrss`` is KiB on Linux); returns None on
@@ -168,7 +168,7 @@ def _assert_valid_game(r: GameSimResult, *, max_innings: int = MAX_INNINGS) -> N
 
 def _drive_concurrent(
     n_games: int, *, base_seed: int, max_workers: int, shared: bool = False
-) -> "tuple[list[GameSimResult], BatchRunner]":
+) -> tuple[list[GameSimResult], BatchRunner]:
     """Drive ``n_games`` through the runner's REAL pooled executor and return the
     per-game results + the runner (caller closes it).
 
@@ -180,12 +180,8 @@ def _drive_concurrent(
     leak assertion has a real ``/dev/shm`` segment to track (the no-DB factory
     ignores it; only the create/unlink lifecycle is exercised).
     """
-    shared_arrays = (
-        {"sim347_payload": np.arange(256, dtype=np.float64)} if shared else None
-    )
-    runner = BatchRunner(
-        max_workers=max_workers, cache=NullCache(), shared_arrays=shared_arrays
-    )
+    shared_arrays = {"sim347_payload": np.arange(256, dtype=np.float64)} if shared else None
+    runner = BatchRunner(max_workers=max_workers, cache=NullCache(), shared_arrays=shared_arrays)
     seeds = [derive_seed(base_seed, i) for i in range(n_games)]
     resolved = runner.resolve_max_workers(n_games)
     results = runner._execute(_spec(), seeds, resolved)
@@ -229,9 +225,7 @@ class TestConcurrentSmoke:
         # the pre-run baseline (no leak), even though work ran across processes.
         gc.collect()
         before = _shm_count()
-        results, runner = _drive_concurrent(
-            6, base_seed=7, max_workers=3, shared=True
-        )
+        results, runner = _drive_concurrent(6, base_seed=7, max_workers=3, shared=True)
         try:
             assert len(results) == 6
             for r in results:
@@ -240,9 +234,7 @@ class TestConcurrentSmoke:
             runner.close()  # parent unlinks its owned segment(s)
         gc.collect()
         after = _shm_count()
-        assert after <= before, (
-            f"/dev/shm leaked: {before} segments before, {after} after close()"
-        )
+        assert after <= before, f"/dev/shm leaked: {before} segments before, {after} after close()"
 
     def test_run_returns_valid_summary_concurrently(self):
         # The PUBLIC run() path under concurrency returns a valid SIM-327 summary
@@ -273,7 +265,7 @@ class TestConcurrencyStress:
         gc.collect()
         shm_before = _shm_count()
         total_games = 0
-        runners: "list[BatchRunner]" = []
+        runners: list[BatchRunner] = []
         try:
             for b in range(N_BATCHES):
                 # A distinct base seed per batch so each 30-game wave differs, yet
@@ -312,12 +304,8 @@ class TestConcurrencyStress:
     def test_30_concurrent_batch_is_reproducible(self):
         """Reproducibility under full concurrency: a fixed base seed reproduces a
         30-game wave's per-game scores across the worker-process race."""
-        a, ra = _drive_concurrent(
-            CONCURRENT_GAMES, base_seed=555, max_workers=CONCURRENT_GAMES
-        )
-        b, rb = _drive_concurrent(
-            CONCURRENT_GAMES, base_seed=555, max_workers=CONCURRENT_GAMES
-        )
+        a, ra = _drive_concurrent(CONCURRENT_GAMES, base_seed=555, max_workers=CONCURRENT_GAMES)
+        b, rb = _drive_concurrent(CONCURRENT_GAMES, base_seed=555, max_workers=CONCURRENT_GAMES)
         try:
             assert [r.home_score for r in a] == [r.home_score for r in b]
             assert [r.away_score for r in a] == [r.away_score for r in b]

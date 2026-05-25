@@ -103,12 +103,15 @@ class TestWarmPoolReuse:
                 assert isinstance(res.summary, GameSimSummary)
                 assert res.summary.n_iterations == 4
                 assert res.max_workers == 2
-                assert abs(
-                    res.summary.home_win_pct
-                    + res.summary.away_win_pct
-                    + res.summary.tie_pct
-                    - 1.0
-                ) < 1e-9
+                assert (
+                    abs(
+                        res.summary.home_win_pct
+                        + res.summary.away_win_pct
+                        + res.summary.tie_pct
+                        - 1.0
+                    )
+                    < 1e-9
+                )
                 assert res.summary.home_scores.shape == (4,)
         finally:
             runner.close()

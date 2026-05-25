@@ -129,13 +129,13 @@ LI_HIGH = 1.5
 #   lower_la = GREATEST(BARREL_LA_FLOOR,  BARREL_MIN_LA - (EV - BARREL_MIN_VELO) * BARREL_LOWER_SLOPE)
 #   upper_la = LEAST   (BARREL_LA_CEILING, BARREL_MAX_LA + (EV - BARREL_MIN_VELO) * BARREL_UPPER_SLOPE)
 # Hard hit: exit_velo >= 95 mph
-BARREL_MIN_VELO = 98.0       # EV floor; below this never a barrel
-BARREL_MIN_LA = 26.0         # lower LA bound at the 98 mph floor
-BARREL_MAX_LA = 30.0         # upper LA bound at the 98 mph floor
-BARREL_LOWER_SLOPE = 1.0     # deg the lower bound drops per +1 mph above floor
-BARREL_UPPER_SLOPE = 2.0     # deg the upper bound rises per +1 mph above floor
-BARREL_LA_FLOOR = 8.0        # lower LA bound never goes below this (>= ~116 mph)
-BARREL_LA_CEILING = 50.0     # upper LA bound never goes above this (>= ~116 mph)
+BARREL_MIN_VELO = 98.0  # EV floor; below this never a barrel
+BARREL_MIN_LA = 26.0  # lower LA bound at the 98 mph floor
+BARREL_MAX_LA = 30.0  # upper LA bound at the 98 mph floor
+BARREL_LOWER_SLOPE = 1.0  # deg the lower bound drops per +1 mph above floor
+BARREL_UPPER_SLOPE = 2.0  # deg the upper bound rises per +1 mph above floor
+BARREL_LA_FLOOR = 8.0  # lower LA bound never goes below this (>= ~116 mph)
+BARREL_LA_CEILING = 50.0  # upper LA bound never goes above this (>= ~116 mph)
 HARD_HIT_MIN_VELO = 95.0
 
 # SIM-074: barrel uses the Statcast sliding-scale band built by _barrel_case_sql.
@@ -859,8 +859,7 @@ def _flush_gmm_results(
         conn.register("comp_df", comp_df)
         try:
             conn.execute(
-                "INSERT OR REPLACE INTO derived.pitcher_gmm_components "
-                "SELECT * FROM comp_df"
+                "INSERT OR REPLACE INTO derived.pitcher_gmm_components SELECT * FROM comp_df"
             )
         finally:
             conn.unregister("comp_df")
@@ -917,8 +916,8 @@ def _label_component(mean: list[float], fi: dict[str, int]) -> str | None:
 # ---------------------------------------------------------------------------
 
 POOL_BUILDER_VERSION = "sim076.1"
-RECENCY_RECENT_SEASONS = 2     # seasons (incl. ref) that get the full peak weight
-RECENCY_DECAY = 0.75           # geometric decay per season beyond the recent window
+RECENCY_RECENT_SEASONS = 2  # seasons (incl. ref) that get the full peak weight
+RECENCY_DECAY = 0.75  # geometric decay per season beyond the recent window
 RECENCY_FLOOR = 0.25
 RECENCY_PEAK = 2.0
 
@@ -933,7 +932,9 @@ def recency_weight(season: int, ref_season: int) -> float:
     age = ref_season - season
     if age <= RECENCY_RECENT_SEASONS - 1:
         return RECENCY_PEAK
-    return max(RECENCY_FLOOR, RECENCY_PEAK * (RECENCY_DECAY ** (age - (RECENCY_RECENT_SEASONS - 1))))
+    return max(
+        RECENCY_FLOOR, RECENCY_PEAK * (RECENCY_DECAY ** (age - (RECENCY_RECENT_SEASONS - 1)))
+    )
 
 
 def _recency_weight_sql(season_expr: str, ref_season: int) -> str:
@@ -1702,7 +1703,9 @@ class PlayerProfileComputor:
         chunks = _chunk_tasks(array_tasks, n_workers)
         log.info(
             "  Fitting GMMs: %d pitchers across %d workers (%d chunks) …",
-            len(array_tasks), n_workers, len(chunks),
+            len(array_tasks),
+            n_workers,
+            len(chunks),
         )
 
         fitted: list[tuple[int, int, dict, list[dict]]] = []
@@ -1710,9 +1713,7 @@ class PlayerProfileComputor:
 
         # _fit_gmm_batch is a module-level function so it pickles cleanly.
         with ProcessPoolExecutor(max_workers=n_workers) as pool:
-            future_to_chunk = {
-                pool.submit(_fit_gmm_batch, chunk): chunk for chunk in chunks
-            }
+            future_to_chunk = {pool.submit(_fit_gmm_batch, chunk): chunk for chunk in chunks}
             for future in as_completed(future_to_chunk):
                 try:
                     chunk_results = future.result()
@@ -1720,9 +1721,7 @@ class PlayerProfileComputor:
                     # Whole-chunk crash: flag every pitcher in it as fallback,
                     # preserving the prior per-pitcher crash semantics.
                     log.error("GMM worker chunk crashed: %s", exc)
-                    fallbacks.extend(
-                        (pid, ssn) for _arr, pid, ssn in future_to_chunk[future]
-                    )
+                    fallbacks.extend((pid, ssn) for _arr, pid, ssn in future_to_chunk[future])
                     continue
                 for pitcher_id, season, model_json, component_rows in chunk_results:
                     if model_json is None:
@@ -3633,9 +3632,7 @@ class PlayerProfileComputor:
             try:
                 self._conn.execute(ddl)
             except Exception as exc:  # noqa: BLE001  - defensive log + continue
-                log.warning(
-                    "  Could not ensure placeholder %s exists: %s", table, exc
-                )
+                log.warning("  Could not ensure placeholder %s exists: %s", table, exc)
 
     def _aggregate_fielder_season_metrics(self, seasons: list[int]) -> None:
         """
@@ -3919,9 +3916,7 @@ class PlayerProfileComputor:
             try:
                 self._conn.execute(ddl)
             except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "  Could not ensure placeholder %s exists: %s", table, exc
-                )
+                log.warning("  Could not ensure placeholder %s exists: %s", table, exc)
 
     def _aggregate_catcher_season_metrics(self, seasons: list[int]) -> None:
         """Combine framing, blocking, and throwing into catcher season metrics."""
@@ -4523,15 +4518,20 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
-        "--seasons", type=int, nargs="+", default=None,
+        "--seasons",
+        type=int,
+        nargs="+",
+        default=None,
         help="One or more seasons to (re)compute. Defaults to current year.",
     )
     parser.add_argument(
-        "--full-rebuild", action="store_true",
+        "--full-rebuild",
+        action="store_true",
         help="Delete and rewrite all derived metrics for the requested seasons.",
     )
     parser.add_argument(
-        "--dsn", default=os.environ.get("BASEBALL_DB_DSN"),
+        "--dsn",
+        default=os.environ.get("BASEBALL_DB_DSN"),
         help="Postgres DSN. Defaults to BASEBALL_DB_DSN env var.",
     )
     parser.add_argument(
@@ -4540,32 +4540,32 @@ if __name__ == "__main__":
         help="Path to the DuckDB output file.",
     )
     parser.add_argument(
-        "--skip-league-averages", action="store_true",
+        "--skip-league-averages",
+        action="store_true",
         help="Skip the LeagueAverageProfiles.compute() pass.",
     )
     args = parser.parse_args()
 
     if not args.dsn:
-        sys.stderr.write(
-            "ERROR: no Postgres DSN. Set BASEBALL_DB_DSN or pass --dsn.\n"
-        )
+        sys.stderr.write("ERROR: no Postgres DSN. Set BASEBALL_DB_DSN or pass --dsn.\n")
         sys.exit(2)
 
     log.info(
         "Starting player profile compute - dsn=%s duckdb=%s seasons=%s full_rebuild=%s",
         args.dsn.split("@", 1)[-1] if "@" in args.dsn else args.dsn,
-        args.duckdb_path, args.seasons, args.full_rebuild,
+        args.duckdb_path,
+        args.seasons,
+        args.full_rebuild,
     )
 
     computor = PlayerProfileComputor(
-        pg_dsn=args.dsn, duckdb_path=args.duckdb_path,
+        pg_dsn=args.dsn,
+        duckdb_path=args.duckdb_path,
     )
     computor.run(seasons=args.seasons, full_rebuild=args.full_rebuild)
     log.info("Player profile compute complete.")
 
     if not args.skip_league_averages:
         log.info("Computing league averages ...")
-        LeagueAverageProfiles(args.duckdb_path).compute(
-            args.seasons or [datetime.today().year]
-        )
+        LeagueAverageProfiles(args.duckdb_path).compute(args.seasons or [datetime.today().year])
         log.info("League averages complete.")

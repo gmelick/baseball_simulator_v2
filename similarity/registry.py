@@ -119,8 +119,7 @@ _SPECS: tuple[EngineSpec, ...] = (
         class_name="FielderSimilarityEngine",
         family="rbf",
         score_type="similarity",
-        description="Position-partitioned fielder-to-fielder weighted RBF "
-        "similarity.",
+        description="Position-partitioned fielder-to-fielder weighted RBF similarity.",
     ),
     EngineSpec(
         name="baserunner",
@@ -144,8 +143,7 @@ _SPECS: tuple[EngineSpec, ...] = (
         class_name="CatcherSimilarityEngine",
         family="rbf",
         score_type="similarity",
-        description="Catcher defense (framing/blocking/throwing) weighted RBF "
-        "similarity.",
+        description="Catcher defense (framing/blocking/throwing) weighted RBF similarity.",
     ),
     EngineSpec(
         name="pitcher_steal",
@@ -153,8 +151,7 @@ _SPECS: tuple[EngineSpec, ...] = (
         class_name="PitcherStealSimilarityEngine",
         family="rbf",
         score_type="similarity",
-        description="Pitcher stolen-base control (hold/pickoff) weighted RBF "
-        "similarity.",
+        description="Pitcher stolen-base control (hold/pickoff) weighted RBF similarity.",
     ),
     EngineSpec(
         name="manager",
@@ -179,8 +176,7 @@ _SPECS: tuple[EngineSpec, ...] = (
         class_name="PitchPitchSimilarityEngine",
         family="faiss",
         score_type="distance",
-        description="Pitch-to-pitch nearest-neighbour search via FAISS "
-        "(geometric L2 distance).",
+        description="Pitch-to-pitch nearest-neighbour search via FAISS (geometric L2 distance).",
     ),
     EngineSpec(
         name="batted_ball",
@@ -188,8 +184,7 @@ _SPECS: tuple[EngineSpec, ...] = (
         class_name="BattedBallSimilarityEngine",
         family="faiss",
         score_type="distance",
-        description="Batted-ball nearest-neighbour search via FAISS "
-        "(geometric L2 distance).",
+        description="Batted-ball nearest-neighbour search via FAISS (geometric L2 distance).",
     ),
 )
 
@@ -233,8 +228,7 @@ class SimilarityEngineRegistry:
             return _SPEC_BY_NAME[name]
         except KeyError:
             raise KeyError(
-                f"unknown similarity engine: {name!r}. "
-                f"Valid names: {sorted(_SPEC_BY_NAME)}"
+                f"unknown similarity engine: {name!r}. Valid names: {sorted(_SPEC_BY_NAME)}"
             ) from None
 
     @classmethod

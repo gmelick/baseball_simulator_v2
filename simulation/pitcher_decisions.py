@@ -82,8 +82,8 @@ TIES / UNFINISHED GAMES / WALK-OFFS
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional, Sequence
 
 from simulation.game_state import GameState, Half, PlayResult, Team
 
@@ -107,9 +107,9 @@ class PitcherDecisions:
     committed scores for context.
     """
 
-    winning_pitcher_id: Optional[int] = None
-    losing_pitcher_id: Optional[int] = None
-    save_pitcher_id: Optional[int] = None
+    winning_pitcher_id: int | None = None
+    losing_pitcher_id: int | None = None
+    save_pitcher_id: int | None = None
     home_score: int = 0
     away_score: int = 0
 
@@ -145,8 +145,8 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
     # Per-play snapshots we need: running score + each side's pitcher of record.
     # The pitcher of record for a side is the defending pitcher_id from that
     # side's most recent fielding play.  Seed from whoever fields first.
-    home_poR: Optional[int] = None  # pitcher of record (home)
-    away_poR: Optional[int] = None  # pitcher of record (away)
+    home_poR: int | None = None  # pitcher of record (home)
+    away_poR: int | None = None  # pitcher of record (away)
 
     # Build a per-state view: (winner_score, loser_score, winner_poR, loser_poR).
     # winner_poR/loser_poR are the pitchers of record *as of* that play, given
@@ -154,7 +154,7 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
     def _score_for(team: Team, st: GameState) -> int:
         return st.home_score if team == Team.HOME else st.away_score
 
-    snapshots: list[tuple[int, int, Optional[int], Optional[int]]] = []
+    snapshots: list[tuple[int, int, int | None, int | None]] = []
     for st in states:
         defending = _defending_team(st)
         if defending == Team.HOME:
@@ -163,16 +163,18 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
             away_poR = st.pitcher_id
         winner_poR = home_poR if winner == Team.HOME else away_poR
         loser_poR = home_poR if loser == Team.HOME else away_poR
-        snapshots.append((
-            _score_for(winner, st),
-            _score_for(loser, st),
-            winner_poR,
-            loser_poR,
-        ))
+        snapshots.append(
+            (
+                _score_for(winner, st),
+                _score_for(loser, st),
+                winner_poR,
+                loser_poR,
+            )
+        )
 
     # Find the decisive lead-taking play: the earliest index after which the
     # winner leads and never again falls to a tie-or-behind through the end.
-    decisive_idx: Optional[int] = None
+    decisive_idx: int | None = None
     n = len(snapshots)
     for i in range(n):
         w_i, l_i, _, _ = snapshots[i]
@@ -195,7 +197,7 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
     # ---- Save -----------------------------------------------------------------
     # The winning side's pitcher of record on the final play (the finisher).
     finisher_id = snapshots[-1][2]
-    save_pitcher_id: Optional[int] = None
+    save_pitcher_id: int | None = None
 
     if (
         finisher_id is not None

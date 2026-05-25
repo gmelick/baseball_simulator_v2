@@ -23,18 +23,10 @@ live provider, no DB, no RNG), then assert the CLV framework's contract:
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 import pytest
 
-from simulation.prop_distributions import PropDistribution
-from simulation.results import ConfidenceInterval, GameSimSummary
-from simulation.win_probability import TieHandling, WinProbability
-
 from betting.clv_engine import (
-    CLV,
-    EdgeReport,
     MarketSide,
     OddsQuote,
     TwoWayMarket,
@@ -54,11 +46,14 @@ from betting.clv_engine import (
     prop_edge_report,
     total_over_under_edge_report,
 )
-
+from simulation.prop_distributions import PropDistribution
+from simulation.results import ConfidenceInterval, GameSimSummary
+from simulation.win_probability import TieHandling, WinProbability
 
 # ===========================================================================
 # Implied probability / fair-odds conversions
 # ===========================================================================
+
 
 def test_implied_prob_known_american_odds():
     # -110 -> 0.5238...  (favourite juice)
@@ -112,6 +107,7 @@ def test_american_decimal_roundtrip():
 # De-vig
 # ===========================================================================
 
+
 def test_two_way_devig_sums_to_one_and_reduces_both_sides():
     # A vigged -110 / -110 total: raw implied 0.5238 each, sum 1.0476 overround.
     q_over = implied_prob_from_american(-110)
@@ -146,7 +142,7 @@ def test_multiway_devig_normalises_n_outcomes():
     fair = devig_multiway(raw)
     assert sum(fair) == pytest.approx(1.0, abs=1e-12)
     # Each reduced proportionally; ordering preserved.
-    for f, r in zip(fair, raw):
+    for f, r in zip(fair, raw, strict=False):
         assert f < r
     assert fair[0] > fair[1] > fair[2]
     # Two-way multiway reduces to devig_two_way.
@@ -168,6 +164,7 @@ def test_devig_rejects_bad_input():
 # ===========================================================================
 # Edge & EV signs
 # ===========================================================================
+
 
 def test_edge_sign_against_fair_prob():
     # Fair market prob 0.50; sim more bullish -> positive edge.
@@ -198,7 +195,7 @@ def test_edge_and_ev_agree_in_sign_vs_fair():
     # that edge (vs fair) and EV (vs offered) are distinct and intentionally so.
     p_over, _ = devig_two_way(-110, -110)  # fair 0.50
     sim = 0.52
-    assert edge(sim, p_over) > 0.0          # beats the no-vig market
+    assert edge(sim, p_over) > 0.0  # beats the no-vig market
     # at -110 the break-even is 0.5238; sim 0.52 < that -> EV negative despite +edge
     assert expected_value(sim, -110) < 0.0
 
@@ -206,6 +203,7 @@ def test_edge_and_ev_agree_in_sign_vs_fair():
 # ===========================================================================
 # CLV
 # ===========================================================================
+
 
 def test_clv_positive_when_entry_beats_close():
     # Bet a side whose fair prob RISES from entry (0.50) to close (0.55):
@@ -265,6 +263,7 @@ def test_clv_from_prob_rejects_degenerate():
 # ===========================================================================
 # Report builders (consume SIM-329 / SIM-330 / SIM-327)
 # ===========================================================================
+
 
 def _win_prob(p_home: float) -> WinProbability:
     """A synthetic SIM-330 WinProbability with an injected home win prob."""
@@ -368,8 +367,8 @@ def test_moneyline_with_clv():
     wp = _win_prob(0.55)
     market = TwoWayMarket(
         side=MarketSide.HOME,
-        entry=OddsQuote(side=+110, other=-130),   # entry: home dog +110
-        close=OddsQuote(side=-120, other=+100),   # close: home now favourite
+        entry=OddsQuote(side=+110, other=-130),  # entry: home dog +110
+        close=OddsQuote(side=-120, other=+100),  # close: home now favourite
     )
     rep = moneyline_edge_report(wp, market, side=MarketSide.HOME)
     assert rep.clv is not None
@@ -468,8 +467,8 @@ def test_total_with_clv_end_to_end():
     summary = _summary_from_totals([9] * 6 + [7] * 4)  # P(over 8.5) = 0.60
     market = TwoWayMarket(
         side=MarketSide.OVER,
-        entry=OddsQuote(side=+105, other=-125, line=8.5),   # entry over +105
-        close=OddsQuote(side=-115, other=-105, line=8.5),   # close over -115
+        entry=OddsQuote(side=+105, other=-125, line=8.5),  # entry over +105
+        close=OddsQuote(side=-115, other=-105, line=8.5),  # close over -115
     )
     rep = total_over_under_edge_report(summary, market, side=MarketSide.OVER)
     assert rep.sim_prob == pytest.approx(0.60, abs=1e-12)

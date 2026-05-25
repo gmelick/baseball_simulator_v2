@@ -14,6 +14,7 @@ Covered:
 Run:
     pytest tests/unit/test_data_engineer_sim076_sim095.py -v
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -25,8 +26,13 @@ import duckdb
 import pipeline.batch.player_profile_computor as ppc
 
 MIGRATION_0004 = os.path.join(
-    os.path.dirname(__file__), "..", "..",
-    "db", "migrations", "duckdb", "0004_sim076_recency_weight.sql",
+    os.path.dirname(__file__),
+    "..",
+    "..",
+    "db",
+    "migrations",
+    "duckdb",
+    "0004_sim076_recency_weight.sql",
 )
 
 
@@ -36,13 +42,11 @@ def _conn_with_pg():
     c.execute("ATTACH ':memory:' AS pg")
     c.execute("CREATE SCHEMA pg.raw")
     c.execute(
-        "CREATE TABLE pg.raw.pitches (season SMALLINT, game_date DATE, "
-        "data_quality_flag BOOLEAN)"
+        "CREATE TABLE pg.raw.pitches (season SMALLINT, game_date DATE, data_quality_flag BOOLEAN)"
     )
     c.execute("CREATE SCHEMA sim")
     c.execute(
-        "CREATE TABLE sim.pitch_pool (pitch_id BIGINT, season SMALLINT, "
-        "recency_weight FLOAT)"
+        "CREATE TABLE sim.pitch_pool (pitch_id BIGINT, season SMALLINT, recency_weight FLOAT)"
     )
     c.execute(
         "CREATE TABLE sim.pool_build_metadata ("
@@ -61,8 +65,8 @@ class TestRecencyWeightFormula(unittest.TestCase):
         self.assertEqual(ppc.recency_weight(2024, 2025), 2.0)
 
     def test_geometric_decay(self):
-        self.assertAlmostEqual(ppc.recency_weight(2023, 2025), 1.5, places=6)      # 2*0.75^1
-        self.assertAlmostEqual(ppc.recency_weight(2022, 2025), 1.125, places=6)    # 2*0.75^2
+        self.assertAlmostEqual(ppc.recency_weight(2023, 2025), 1.5, places=6)  # 2*0.75^1
+        self.assertAlmostEqual(ppc.recency_weight(2022, 2025), 1.125, places=6)  # 2*0.75^2
 
     def test_floor(self):
         self.assertEqual(ppc.recency_weight(2005, 2025), ppc.RECENCY_FLOOR)
@@ -104,15 +108,13 @@ class TestSeasonsNeedingRebuild(unittest.TestCase):
             "('pitch_pool', 2024, 10, DATE '2024-08-01', 1, 2024, 'x')"
         )
         stale = ppc._seasons_needing_rebuild(c, "pitch_pool", [2023, 2024, 2025])
-        self.assertNotIn(2023, stale)   # fresh
-        self.assertIn(2024, stale)      # source advanced
-        self.assertIn(2025, stale)      # never built
+        self.assertNotIn(2023, stale)  # fresh
+        self.assertIn(2024, stale)  # source advanced
+        self.assertIn(2025, stale)  # never built
 
     def test_missing_metadata_table_rebuilds_all(self):
         c = duckdb.connect(":memory:")  # no sim.pool_build_metadata
-        self.assertEqual(
-            ppc._seasons_needing_rebuild(c, "pitch_pool", [2024, 2025]), [2024, 2025]
-        )
+        self.assertEqual(ppc._seasons_needing_rebuild(c, "pitch_pool", [2024, 2025]), [2024, 2025])
 
 
 class TestRecordPoolBuild(unittest.TestCase):
@@ -122,17 +124,15 @@ class TestRecordPoolBuild(unittest.TestCase):
             "INSERT INTO pg.raw.pitches VALUES (?, ?, FALSE)",
             [[2024, dt.date(2024, 9, 1)], [2024, dt.date(2024, 9, 30)]],
         )
-        c.executemany(
-            "INSERT INTO sim.pitch_pool VALUES (?, 2024, 2.0)", [[1], [2], [3]]
-        )
+        c.executemany("INSERT INTO sim.pitch_pool VALUES (?, 2024, 2.0)", [[1], [2], [3]])
         ppc._record_pool_build(c, "pitch_pool", [2024], ref_season=2024)
         row = c.execute(
             "SELECT row_count, source_max_game_date, recency_ref_season, builder_version "
             "FROM sim.pool_build_metadata WHERE pool_name='pitch_pool' AND season=2024"
         ).fetchone()
-        self.assertEqual(row[0], 3)                       # row_count
-        self.assertEqual(row[1], dt.date(2024, 9, 30))    # watermark = max source game_date
-        self.assertEqual(row[2], 2024)                    # recency ref
+        self.assertEqual(row[0], 3)  # row_count
+        self.assertEqual(row[1], dt.date(2024, 9, 30))  # watermark = max source game_date
+        self.assertEqual(row[2], 2024)  # recency ref
         self.assertEqual(row[3], ppc.POOL_BUILDER_VERSION)
 
     def test_idempotent_reupsert(self):

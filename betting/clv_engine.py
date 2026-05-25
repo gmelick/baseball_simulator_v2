@@ -79,9 +79,9 @@ always yield the same reports.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable, Sequence
 
 import numpy as np
 
@@ -92,10 +92,10 @@ from simulation.prop_distributions import PropDistribution
 from simulation.results import GameSimSummary
 from simulation.win_probability import WinProbability
 
-
 # ===========================================================================
 # American <-> decimal <-> implied-probability conversions
 # ===========================================================================
+
 
 def american_to_decimal(american: float) -> float:
     """Convert American odds to decimal (European) odds (total return per 1 staked).
@@ -170,9 +170,10 @@ fair_american_from_prob = prob_to_american
 # De-vig / no-vig fair odds
 # ===========================================================================
 
+
 def devig_multiway(
-    implied_probs: "Sequence[float] | np.ndarray",
-) -> "list[float]":
+    implied_probs: Sequence[float] | np.ndarray,
+) -> list[float]:
     """Remove the bookmaker margin from an N-way market (N >= 2) by normalisation.
 
     Given the raw implied probabilities ``q_i`` of every outcome (each from
@@ -198,7 +199,7 @@ def devig_multiway(
 def devig_two_way(
     over_american: float,
     under_american: float,
-) -> "tuple[float, float]":
+) -> tuple[float, float]:
     """De-vig a TWO-way market (the proportional / multiplicative method).
 
     Takes the two sides' American odds (e.g. an over price and an under price, or a
@@ -220,6 +221,7 @@ def devig_two_way(
 # ===========================================================================
 # Edge and expected value
 # ===========================================================================
+
 
 def edge(p_sim: float, p_fair: float) -> float:
     """Edge = simulation probability - market FAIR (no-vig) probability.
@@ -248,6 +250,7 @@ def expected_value(p_sim: float, offered_american: float) -> float:
 # ===========================================================================
 # Closing Line Value
 # ===========================================================================
+
 
 @dataclass(frozen=True, slots=True)
 class CLV:
@@ -329,6 +332,7 @@ def clv_from_odds(
 # Per-market / per-prop edge reports (consume SIM-329 / SIM-330 / SIM-327)
 # ===========================================================================
 
+
 class MarketSide(Enum):
     """Which side of a two-way market a report is about."""
 
@@ -351,7 +355,7 @@ class OddsQuote:
 
     side: float
     other: float
-    line: "float | None" = None
+    line: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,7 +369,7 @@ class TwoWayMarket:
 
     side: MarketSide
     entry: OddsQuote
-    close: "OddsQuote | None" = None
+    close: OddsQuote | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,7 +383,7 @@ class EdgeReport:
 
     label: str
     side: MarketSide
-    line: "float | None"
+    line: float | None
 
     #: Our simulation probability of the bet side (SIM-329 / SIM-330 / SIM-327).
     sim_prob: float
@@ -397,7 +401,7 @@ class EdgeReport:
     sim_fair_american: float
 
     #: CLV of the entry vs the close, if a closing quote was supplied (else None).
-    clv: "CLV | None" = None
+    clv: CLV | None = None
 
     @property
     def positive_edge(self) -> bool:
@@ -409,7 +413,7 @@ def _build_edge_report(
     *,
     label: str,
     side: MarketSide,
-    line: "float | None",
+    line: float | None,
     sim_prob: float,
     market: TwoWayMarket,
 ) -> EdgeReport:
@@ -420,7 +424,7 @@ def _build_edge_report(
     # De-vig the ENTRY market to a fair probability for the bet side.
     entry_fair, _ = devig_two_way(market.entry.side, market.entry.other)
     ev = expected_value(p, market.entry.side)
-    clv: "CLV | None" = None
+    clv: CLV | None = None
     if market.close is not None:
         clv = clv_from_odds(
             entry_side_american=market.entry.side,
@@ -549,7 +553,10 @@ def total_over_under_edge_report(
 # Run line / spread (SIM-367) -- cover probability from raw score margins
 # ---------------------------------------------------------------------------
 
-def _as_margin_array(summary_or_margin: "GameSimSummary | Sequence[float] | np.ndarray") -> np.ndarray:
+
+def _as_margin_array(
+    summary_or_margin: GameSimSummary | Sequence[float] | np.ndarray,
+) -> np.ndarray:
     """Coerce the input to a 1-D float64 SCORE-MARGIN array (``home - away``).
 
     Accepts either a SIM-327 :class:`GameSimSummary` -- in which case the margin is
@@ -565,7 +572,7 @@ def _as_margin_array(summary_or_margin: "GameSimSummary | Sequence[float] | np.n
 
 
 def spread_cover_prob(
-    summary_or_margin: "GameSimSummary | Sequence[float] | np.ndarray",
+    summary_or_margin: GameSimSummary | Sequence[float] | np.ndarray,
     line: float,
     side: MarketSide = MarketSide.HOME,
 ) -> float:
@@ -623,7 +630,7 @@ def spread_cover_prob(
 
 
 def run_line_edge_report(
-    summary_or_margin: "GameSimSummary | Sequence[float] | np.ndarray",
+    summary_or_margin: GameSimSummary | Sequence[float] | np.ndarray,
     market: TwoWayMarket,
     *,
     side: MarketSide = MarketSide.HOME,

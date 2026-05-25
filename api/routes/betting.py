@@ -75,9 +75,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from api.routes.games import (
@@ -134,9 +134,7 @@ def _mock_odds(game_pk: int, market_type: str) -> dict[str, Any]:
     return MockOddsAPI.get_odds(int(game_pk), market_type=market_type)
 
 
-def _resolve_price(
-    injected: Optional[float], mock: dict[str, Any], key: str
-) -> tuple[float, bool]:
+def _resolve_price(injected: float | None, mock: dict[str, Any], key: str) -> tuple[float, bool]:
     """Pick a price: the injected value if given, else the mock's ``key``.
 
     Returns ``(price, was_injected)`` so the caller can flag the odds source.
@@ -170,14 +168,14 @@ def _build_edge_reports(
     *,
     game_pk: int,
     markets: tuple[str, ...],
-    home_ml: Optional[float],
-    away_ml: Optional[float],
-    over_ml: Optional[float],
-    under_ml: Optional[float],
-    total_line: Optional[float],
-    home_rl_ml: Optional[float],
-    away_rl_ml: Optional[float],
-    run_line: Optional[float],
+    home_ml: float | None,
+    away_ml: float | None,
+    over_ml: float | None,
+    under_ml: float | None,
+    total_line: float | None,
+    home_rl_ml: float | None,
+    away_rl_ml: float | None,
+    run_line: float | None,
 ) -> tuple[list[EdgeReport], dict[str, str]]:
     """Build the EdgeReports for the requested markets off the sim + odds.
 
@@ -233,9 +231,7 @@ def _build_edge_reports(
             reports,
             lambda: total_over_under_edge_report(
                 summary,
-                TwoWayMarket(
-                    side=MarketSide.OVER, entry=OddsQuote(side=o, other=u, line=line)
-                ),
+                TwoWayMarket(side=MarketSide.OVER, entry=OddsQuote(side=o, other=u, line=line)),
                 side=MarketSide.OVER,
             ),
         )
@@ -243,9 +239,7 @@ def _build_edge_reports(
             reports,
             lambda: total_over_under_edge_report(
                 summary,
-                TwoWayMarket(
-                    side=MarketSide.UNDER, entry=OddsQuote(side=u, other=o, line=line)
-                ),
+                TwoWayMarket(side=MarketSide.UNDER, entry=OddsQuote(side=u, other=o, line=line)),
                 side=MarketSide.UNDER,
             ),
         )
@@ -261,9 +255,7 @@ def _build_edge_reports(
             reports,
             lambda: run_line_edge_report(
                 summary,
-                TwoWayMarket(
-                    side=MarketSide.HOME, entry=OddsQuote(side=h, other=a, line=eff_line)
-                ),
+                TwoWayMarket(side=MarketSide.HOME, entry=OddsQuote(side=h, other=a, line=eff_line)),
                 side=MarketSide.HOME,
                 line=eff_line,
             ),
@@ -272,9 +264,7 @@ def _build_edge_reports(
             reports,
             lambda: run_line_edge_report(
                 summary,
-                TwoWayMarket(
-                    side=MarketSide.AWAY, entry=OddsQuote(side=a, other=h, line=eff_line)
-                ),
+                TwoWayMarket(side=MarketSide.AWAY, entry=OddsQuote(side=a, other=h, line=eff_line)),
                 side=MarketSide.AWAY,
                 line=eff_line,
             ),
@@ -283,7 +273,7 @@ def _build_edge_reports(
     return reports, odds_source
 
 
-def _parse_markets(markets: Optional[str]) -> tuple[str, ...]:
+def _parse_markets(markets: str | None) -> tuple[str, ...]:
     """Parse the ``markets`` query param (comma-separated) -> a validated tuple.
 
     Defaults to all three (moneyline,total,runline) when unset. A token not in the
@@ -297,10 +287,7 @@ def _parse_markets(markets: Optional[str]) -> tuple[str, ...]:
     if bad:
         raise HTTPException(
             status_code=422,
-            detail=(
-                f"unknown market(s) {bad}; expected a subset of "
-                f"{list(_VALID_MARKET_TYPES)}"
-            ),
+            detail=(f"unknown market(s) {bad}; expected a subset of {list(_VALID_MARKET_TYPES)}"),
         )
     return requested or _VALID_MARKET_TYPES
 
@@ -310,7 +297,7 @@ async def _summary_and_winprob(
     *,
     game_pk: int,
     n_iterations: int,
-    base_seed: Optional[int],
+    base_seed: int | None,
     use_cache: bool,
 ) -> tuple[Any, WinProbability]:
     """Resolve the lineup, run (or reuse) a sim, and return (summary, win_prob).
@@ -358,7 +345,7 @@ class EdgesResponse(BaseModel):
 
     game_pk: int
     n_iterations: int
-    base_seed: Optional[int] = None
+    base_seed: int | None = None
     markets: list[str] = Field(default_factory=list)
     odds_source: dict[str, str] = Field(default_factory=dict)
     edges: list[EdgeReportModel] = Field(default_factory=list)
@@ -374,7 +361,7 @@ class SignalsResponse(BaseModel):
 
     game_pk: int
     n_iterations: int
-    base_seed: Optional[int] = None
+    base_seed: int | None = None
     config: dict[str, float] = Field(default_factory=dict)
     odds_source: dict[str, str] = Field(default_factory=dict)
     signals: list[BetSignalModel] = Field(default_factory=list)
@@ -389,7 +376,7 @@ class LineMovementResponse(BaseModel):
 
     game_pk: int
     market_type: str
-    book: Optional[str] = None
+    book: str | None = None
     count: int = 0
     series: list[LineMovementModel] = Field(default_factory=list)
 
@@ -406,7 +393,7 @@ class ClvSnapshotResponse(BaseModel):
 
     game_pk: int
     market_type: str
-    book: Optional[str] = None
+    book: str | None = None
     count: int = 0
     series: list[LineMovementModel] = Field(default_factory=list)
 
@@ -434,19 +421,19 @@ async def get_game_edges(
     game_pk: int,
     request: Request,
     n_iterations: int = Query(200, ge=1, le=10000, description="Monte-Carlo iterations"),
-    base_seed: Optional[int] = Query(None, description="Reproducibility seed for the batch"),
+    base_seed: int | None = Query(None, description="Reproducibility seed for the batch"),
     use_cache: bool = Query(True, description="Consult/populate the sim-result cache"),
-    markets: Optional[str] = Query(
+    markets: str | None = Query(
         None, description="Comma-separated subset of moneyline,total,runline (default all)"
     ),
-    home_ml: Optional[float] = Query(None, description="Injected home moneyline (American)"),
-    away_ml: Optional[float] = Query(None, description="Injected away moneyline (American)"),
-    over_ml: Optional[float] = Query(None, description="Injected total over price (American)"),
-    under_ml: Optional[float] = Query(None, description="Injected total under price (American)"),
-    total_line: Optional[float] = Query(None, description="Injected total line"),
-    home_rl_ml: Optional[float] = Query(None, description="Injected home run-line price (American)"),
-    away_rl_ml: Optional[float] = Query(None, description="Injected away run-line price (American)"),
-    run_line: Optional[float] = Query(None, description="Injected HOME run line (e.g. -1.5)"),
+    home_ml: float | None = Query(None, description="Injected home moneyline (American)"),
+    away_ml: float | None = Query(None, description="Injected away moneyline (American)"),
+    over_ml: float | None = Query(None, description="Injected total over price (American)"),
+    under_ml: float | None = Query(None, description="Injected total under price (American)"),
+    total_line: float | None = Query(None, description="Injected total line"),
+    home_rl_ml: float | None = Query(None, description="Injected home run-line price (American)"),
+    away_rl_ml: float | None = Query(None, description="Injected away run-line price (American)"),
+    run_line: float | None = Query(None, description="Injected HOME run line (e.g. -1.5)"),
 ) -> EdgesResponse:
     requested = _parse_markets(markets)
     summary, win_prob = await _summary_and_winprob(
@@ -504,9 +491,9 @@ async def get_game_signals(
     game_pk: int,
     request: Request,
     n_iterations: int = Query(200, ge=1, le=10000, description="Monte-Carlo iterations"),
-    base_seed: Optional[int] = Query(None, description="Reproducibility seed for the batch"),
+    base_seed: int | None = Query(None, description="Reproducibility seed for the batch"),
     use_cache: bool = Query(True, description="Consult/populate the sim-result cache"),
-    markets: Optional[str] = Query(
+    markets: str | None = Query(
         None, description="Comma-separated subset of moneyline,total,runline (default all)"
     ),
     min_edge: float = Query(0.02, ge=0.0, le=1.0, description="Edge noise floor (gate)"),
@@ -515,14 +502,14 @@ async def get_game_signals(
     max_stake_fraction: float = Query(
         0.05, ge=0.0, le=1.0, description="Hard cap on the stake fraction"
     ),
-    home_ml: Optional[float] = Query(None, description="Injected home moneyline (American)"),
-    away_ml: Optional[float] = Query(None, description="Injected away moneyline (American)"),
-    over_ml: Optional[float] = Query(None, description="Injected total over price (American)"),
-    under_ml: Optional[float] = Query(None, description="Injected total under price (American)"),
-    total_line: Optional[float] = Query(None, description="Injected total line"),
-    home_rl_ml: Optional[float] = Query(None, description="Injected home run-line price (American)"),
-    away_rl_ml: Optional[float] = Query(None, description="Injected away run-line price (American)"),
-    run_line: Optional[float] = Query(None, description="Injected HOME run line (e.g. -1.5)"),
+    home_ml: float | None = Query(None, description="Injected home moneyline (American)"),
+    away_ml: float | None = Query(None, description="Injected away moneyline (American)"),
+    over_ml: float | None = Query(None, description="Injected total over price (American)"),
+    under_ml: float | None = Query(None, description="Injected total under price (American)"),
+    total_line: float | None = Query(None, description="Injected total line"),
+    home_rl_ml: float | None = Query(None, description="Injected home run-line price (American)"),
+    away_rl_ml: float | None = Query(None, description="Injected away run-line price (American)"),
+    run_line: float | None = Query(None, description="Injected HOME run line (e.g. -1.5)"),
 ) -> SignalsResponse:
     requested = _parse_markets(markets)
     summary, win_prob = await _summary_and_winprob(
@@ -582,15 +569,14 @@ def _validate_market_type(market_type: str) -> str:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"unknown market_type {market_type!r}; expected one of "
-                f"{list(_VALID_MARKET_TYPES)}"
+                f"unknown market_type {market_type!r}; expected one of {list(_VALID_MARKET_TYPES)}"
             ),
         )
     return market_type
 
 
 async def _fetch_movements(
-    request: Request, *, game_pk: int, market_type: str, book: Optional[str]
+    request: Request, *, game_pk: int, market_type: str, book: str | None
 ) -> list[Any]:
     """Acquire a conn from the pool and run fetch_line_movement (503 if no pool).
 
@@ -605,9 +591,7 @@ async def _fetch_movements(
             return await fetch_line_movement(
                 conn, game_pk=int(game_pk), market_type=market_type, book=book
             )
-    return await fetch_line_movement(
-        pool, game_pk=int(game_pk), market_type=market_type, book=book
-    )
+    return await fetch_line_movement(pool, game_pk=int(game_pk), market_type=market_type, book=book)
 
 
 @router.get(
@@ -627,12 +611,10 @@ async def get_game_line_movement(
     game_pk: int,
     request: Request,
     market_type: str = Query("moneyline", description="moneyline | runline | total"),
-    book: Optional[str] = Query(None, description="Restrict to one book (else all books)"),
+    book: str | None = Query(None, description="Restrict to one book (else all books)"),
 ) -> LineMovementResponse:
     mt = _validate_market_type(market_type)
-    movements = await _fetch_movements(
-        request, game_pk=int(game_pk), market_type=mt, book=book
-    )
+    movements = await _fetch_movements(request, game_pk=int(game_pk), market_type=mt, book=book)
     return LineMovementResponse(
         game_pk=int(game_pk),
         market_type=mt,
@@ -663,12 +645,10 @@ async def get_game_clv(
     game_pk: int,
     request: Request,
     market_type: str = Query("moneyline", description="moneyline | runline | total"),
-    book: Optional[str] = Query(None, description="Restrict to one book (else all books)"),
+    book: str | None = Query(None, description="Restrict to one book (else all books)"),
 ) -> ClvSnapshotResponse:
     mt = _validate_market_type(market_type)
-    movements = await _fetch_movements(
-        request, game_pk=int(game_pk), market_type=mt, book=book
-    )
+    movements = await _fetch_movements(request, game_pk=int(game_pk), market_type=mt, book=book)
     # Only the series that actually have a computed CLV (the snapshot's point).
     with_clv = [m for m in movements if m.clv is not None]
     return ClvSnapshotResponse(

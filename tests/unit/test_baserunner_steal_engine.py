@@ -31,7 +31,6 @@ import unittest
 
 import numpy as np
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -89,9 +88,9 @@ def _make_engine(
                     season=season,
                     sample_steal_attempts=n_atts,
                     sample_first_base_opps=n_atts * 10,
-                    tendency_vec=(
-                        base_tend + rng.normal(0, 0.02, len(TENDENCY_FEATURES))
-                    ).astype(np.float64),
+                    tendency_vec=(base_tend + rng.normal(0, 0.02, len(TENDENCY_FEATURES))).astype(
+                        np.float64
+                    ),
                     jump_vec=(base_jump + rng.normal(0, 0.02, len(JUMP_FEATURES))).astype(
                         np.float64
                     ),
@@ -137,9 +136,6 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
         confidence) must reach the documented maximum composite of 1.0."""
         from similarity.engines.baserunner_steal_similarity import (
             BaserunnerStealProfile,
-            JUMP_FEATURES,
-            SUCCESS_FEATURES,
-            TENDENCY_FEATURES,
         )
 
         engine = _make_engine(eb_alpha_full=True)
@@ -364,11 +360,11 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
         """A feature column with zero variance across the population must
         not produce NaN scores (std==0 is replaced by 1.0 in fit)."""
         from similarity.engines.baserunner_steal_similarity import (
-            BaserunnerStealProfile,
-            FeatureNormalizer,
             JUMP_FEATURES,
             SUCCESS_FEATURES,
             TENDENCY_FEATURES,
+            BaserunnerStealProfile,
+            FeatureNormalizer,
         )
 
         rng = np.random.default_rng(11)

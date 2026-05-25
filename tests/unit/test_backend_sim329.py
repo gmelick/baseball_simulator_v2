@@ -30,16 +30,15 @@ import numpy as np
 import pytest
 
 from simulation.game_state import GameState
-from simulation.results import BoxScore, GameSimResult, PlayerStatLine
 from simulation.prop_distributions import (
-    ALL_PROPS,
     BATTER_PROPS,
     PITCHER_PROPS,
+    TB_IS_LOWER_BOUND,
     PropDistribution,
     PropDistributionSet,
-    TB_IS_LOWER_BOUND,
     _total_bases,
 )
+from simulation.results import BoxScore, GameSimResult, PlayerStatLine
 
 PITCHER = 477132
 BATTER = 545361
@@ -54,7 +53,7 @@ def _state() -> GameState:
     return GameState(pitcher_id=0, bat_hand="R", season=2024)
 
 
-def _box(lines: "list[PlayerStatLine]") -> BoxScore:
+def _box(lines: list[PlayerStatLine]) -> BoxScore:
     """A per-game BoxScore from explicit PlayerStatLines."""
     box = BoxScore()
     for ln in lines:
@@ -70,9 +69,12 @@ def _batter_line(pid: int, *, ab=0, h=0, hr=0, rbi=0) -> PlayerStatLine:
     return PlayerStatLine(player_id=pid, ab=ab, h=h, hr=hr, rbi=rbi)
 
 
-def _result(box: "BoxScore | None") -> GameSimResult:
+def _result(box: BoxScore | None) -> GameSimResult:
     return GameSimResult(
-        home_score=1, away_score=0, innings_played=9, final_state=_state(),
+        home_score=1,
+        away_score=0,
+        innings_played=9,
+        final_state=_state(),
         boxscore=box,
     )
 
@@ -127,11 +129,11 @@ def test_empty_samples_raises():
 def test_p_at_least_and_at_most_integer_line():
     # K samples: 4,5,6,6,8 -> support {4,5,6,8} probs {.2,.2,.4,.2}
     d = PropDistribution.from_samples(PITCHER, "K", [4, 5, 6, 6, 8])
-    assert math.isclose(d.p_at_least(6), 0.4 + 0.2)   # P(X>=6) = 6,6,8 = 3/5
+    assert math.isclose(d.p_at_least(6), 0.4 + 0.2)  # P(X>=6) = 6,6,8 = 3/5
     assert math.isclose(d.p_at_most(6), 0.2 + 0.2 + 0.4)  # P(X<=6) = 4,5,6,6 = 4/5
-    assert math.isclose(d.p_greater(6), 0.2)          # P(X>6) = 8 = 1/5
-    assert math.isclose(d.p_less(6), 0.2 + 0.2)       # P(X<6) = 4,5 = 2/5
-    assert math.isclose(d.p_push(6), 0.4)             # P(X==6) = 2/5
+    assert math.isclose(d.p_greater(6), 0.2)  # P(X>6) = 8 = 1/5
+    assert math.isclose(d.p_less(6), 0.2 + 0.2)  # P(X<6) = 4,5 = 2/5
+    assert math.isclose(d.p_push(6), 0.4)  # P(X==6) = 2/5
     # at_least + (less) cover everything; greater + at_most cover everything
     assert math.isclose(d.p_at_least(6) + d.p_less(6), 1.0)
     assert math.isclose(d.p_greater(6) + d.p_at_most(6), 1.0)
@@ -142,8 +144,8 @@ def test_half_integer_line_splits_cleanly_no_push():
     d = PropDistribution.from_samples(PITCHER, "K", [4, 5, 6, 6, 8])
     over = d.p_over(5.5)
     under = d.p_under(5.5)
-    assert math.isclose(over, 3 / 5)    # 6,6,8
-    assert math.isclose(under, 2 / 5)   # 4,5
+    assert math.isclose(over, 3 / 5)  # 6,6,8
+    assert math.isclose(under, 2 / 5)  # 4,5
     assert math.isclose(over + under, 1.0)
     assert d.p_push(5.5) == 0.0
     # over at 5.5 equals the inclusive P(X>=6)
@@ -153,9 +155,9 @@ def test_half_integer_line_splits_cleanly_no_push():
 
 def test_integer_line_over_under_push_sum_to_one():
     d = PropDistribution.from_samples(PITCHER, "K", [4, 5, 6, 6, 8])
-    over = d.p_over(6)     # strict P(X>6)
-    under = d.p_under(6)   # strict P(X<6)
-    push = d.p_push(6)     # P(X==6)
+    over = d.p_over(6)  # strict P(X>6)
+    under = d.p_under(6)  # strict P(X<6)
+    push = d.p_push(6)  # P(X==6)
     assert math.isclose(over, 1 / 5)
     assert math.isclose(under, 2 / 5)
     assert math.isclose(push, 2 / 5)
@@ -309,10 +311,14 @@ def test_from_results_none_boxscore_counts_as_zero_game():
 def test_two_player_run():
     boxes = []
     for kk, hh in [(6, 2), (7, 1), (5, 3), (9, 0)]:
-        boxes.append(_box([
-            _pitcher_line(PITCHER, k=kk, bb=2, er=1, outs=18),
-            _batter_line(BATTER, ab=4, h=hh, hr=(1 if hh else 0), rbi=hh),
-        ]))
+        boxes.append(
+            _box(
+                [
+                    _pitcher_line(PITCHER, k=kk, bb=2, er=1, outs=18),
+                    _batter_line(BATTER, ab=4, h=hh, hr=(1 if hh else 0), rbi=hh),
+                ]
+            )
+        )
     s = PropDistributionSet.from_boxscores(boxes)
     assert set(s.player_ids()) == {PITCHER, BATTER}
     # pitcher K PMF over 4 games

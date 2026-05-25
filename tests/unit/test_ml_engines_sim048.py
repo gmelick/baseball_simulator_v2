@@ -76,9 +76,7 @@ def test_metadata_score_type_contract():
 def test_metadata_family_values():
     for name, family in EXPECTED_FAMILY.items():
         spec = SimilarityEngineRegistry.get_spec(name)
-        assert spec.family == family, (
-            f"{name}: expected family {family!r}, got {spec.family!r}"
-        )
+        assert spec.family == family, f"{name}: expected family {family!r}, got {spec.family!r}"
 
 
 def test_family_and_score_type_are_consistent():

@@ -12,6 +12,7 @@ Covers the three helpers extracted from PlayerProfileComputor's GMM pass:
 Run:
     pytest tests/unit/test_perf_eng_sim113.py -v
 """
+
 from __future__ import annotations
 
 import os
@@ -19,7 +20,6 @@ import unittest
 
 import duckdb
 import numpy as np
-import pandas as pd
 
 import pipeline.batch.player_profile_computor as ppc
 
@@ -107,10 +107,15 @@ class TestFlushGmmResults(unittest.TestCase):
     def test_bulk_update_and_insert(self):
         conn = self._conn()
         fitted = [
-            (1, 2024, {"n_components": 2}, [
-                {"pitcher_id": 1, "season": 2024, "component_id": 0, "weight": 0.6},
-                {"pitcher_id": 1, "season": 2024, "component_id": 1, "weight": 0.4},
-            ]),
+            (
+                1,
+                2024,
+                {"n_components": 2},
+                [
+                    {"pitcher_id": 1, "season": 2024, "component_id": 0, "weight": 0.6},
+                    {"pitcher_id": 1, "season": 2024, "component_id": 1, "weight": 0.4},
+                ],
+            ),
         ]
         fallbacks = [(2, 2024)]
         ppc._flush_gmm_results(conn, fitted, fallbacks)

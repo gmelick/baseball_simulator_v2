@@ -31,33 +31,10 @@ import json
 import numpy as np
 import pytest
 
-from simulation.game_state import Bases, GameState, Half, PlayResult
-from simulation.results import ConfidenceInterval, GameSimResult, GameSimSummary
-from simulation.snapshots import (
-    FieldSnapshot,
-    OverrideDelta,
-    PlayByPlay,
-    PlayerRef,
-    StateAtPitch,
-)
-from simulation.prop_distributions import PropDistribution, PropDistributionSet
-from simulation.win_probability import TieHandling, win_probability
-from simulation.sim_loop import BoxScore, PlayerStatLine
-
-from betting.clv_engine import (
-    MarketSide,
-    OddsQuote,
-    TwoWayMarket,
-    clv_from_odds,
-    moneyline_edge_report,
-    prop_edge_report,
-)
-
-from api.serialization import to_jsonable
 from api.schemas import (
     BoxScoreModel,
-    CLVModel,
     CalibrationMapModel,
+    CLVModel,
     ConfidenceIntervalModel,
     EdgeReportModel,
     FieldSnapshotModel,
@@ -74,8 +51,27 @@ from api.schemas import (
     StateAtPitchModel,
     WinProbabilityModel,
 )
-from simulation.win_probability import IDENTITY_CALIBRATION
-
+from api.serialization import to_jsonable
+from betting.clv_engine import (
+    MarketSide,
+    OddsQuote,
+    TwoWayMarket,
+    clv_from_odds,
+    moneyline_edge_report,
+    prop_edge_report,
+)
+from simulation.game_state import Bases, GameState, Half, PlayResult
+from simulation.prop_distributions import PropDistribution, PropDistributionSet
+from simulation.results import ConfidenceInterval, GameSimResult, GameSimSummary
+from simulation.sim_loop import BoxScore, PlayerStatLine
+from simulation.snapshots import (
+    FieldSnapshot,
+    OverrideDelta,
+    PlayByPlay,
+    PlayerRef,
+    StateAtPitch,
+)
+from simulation.win_probability import IDENTITY_CALIBRATION, TieHandling, win_probability
 
 # ===========================================================================
 # Helpers
@@ -119,7 +115,7 @@ def _state() -> GameState:
     return GameState(pitcher_id=0, bat_hand="R", season=2024)
 
 
-def _result(home: int, away: int, boxscore: "BoxScore | None" = None) -> GameSimResult:
+def _result(home: int, away: int, boxscore: BoxScore | None = None) -> GameSimResult:
     return GameSimResult(
         home_score=home,
         away_score=away,
@@ -135,13 +131,13 @@ def _summary() -> GameSimSummary:
     return GameSimSummary.from_results(results, confidence_level=0.95)
 
 
-def _result_list() -> "list[GameSimResult]":
+def _result_list() -> list[GameSimResult]:
     return [_result(h, a) for (h, a) in [(5, 1), (4, 2), (3, 3), (1, 4), (6, 2), (2, 7)]]
 
 
-def _boxscores() -> "list[BoxScore]":
+def _boxscores() -> list[BoxScore]:
     """N per-game boxscores so PropDistributionSet builds real numpy PMFs."""
-    boxes: "list[BoxScore]" = []
+    boxes: list[BoxScore] = []
     # Pitcher id 900 (K/BB/ER/OUTS), batter id 101 (AB/H/HR/RBI).
     for k, h, hr in [(6, 2, 1), (8, 1, 0), (5, 3, 1), (7, 0, 0)]:
         box = BoxScore()
@@ -308,9 +304,7 @@ def test_player_ref_model_roundtrips():
 
 
 def test_field_snapshot_model_roundtrips():
-    snap = FieldSnapshot.from_game_state(
-        _live_state(), labels={101: "Batter A", 201: "Runner 1B"}
-    )
+    snap = FieldSnapshot.from_game_state(_live_state(), labels={101: "Batter A", 201: "Runner 1B"})
     model = FieldSnapshotModel.from_dataclass(snap)
     loaded = _roundtrip(model)
     assert loaded["balls"] == 2 and loaded["strikes"] == 1 and loaded["outs"] == 1
@@ -406,7 +400,7 @@ def test_prop_distribution_model_roundtrips():
     assert loaded["probabilities"] == pytest.approx(dist.probabilities.tolist())
     assert sum(loaded["probabilities"]) == pytest.approx(1.0)
     # pmf keys are stringified ints.
-    assert all(isinstance(k, str) for k in loaded["pmf"].keys())
+    assert all(isinstance(k, str) for k in loaded["pmf"])
     assert loaded["pmf"]["6"] == pytest.approx(dist.prob(6))
     assert loaded["mean"] == pytest.approx(dist.mean)
 

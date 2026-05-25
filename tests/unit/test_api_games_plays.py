@@ -170,13 +170,9 @@ def _sample_snapshots() -> list[dict]:
 class TestStateSnapshotStore:
     def test_store_then_load_at_roundtrip(self, duck_con):
         snaps = _sample_snapshots()
-        sim_store.store_state_snapshots(
-            duck_con, game_pk=900, run_id=7, snapshots=snaps
-        )
+        sim_store.store_state_snapshots(duck_con, game_pk=900, run_id=7, snapshots=snaps)
         # The right snapshot comes back for a given (at_bat, pitch).
-        hit = sim_store.load_state_at(
-            duck_con, game_pk=900, at_bat=0, pitch=2, run_id=7
-        )
+        hit = sim_store.load_state_at(duck_con, game_pk=900, at_bat=0, pitch=2, run_id=7)
         assert hit is not None
         assert hit["at_bat"] == 0
         assert hit["pitch"] == 2
@@ -190,10 +186,7 @@ class TestStateSnapshotStore:
         sim_store.store_state_snapshots(
             duck_con, game_pk=900, run_id=7, snapshots=_sample_snapshots()
         )
-        assert (
-            sim_store.load_state_at(duck_con, game_pk=900, at_bat=9, pitch=9, run_id=7)
-            is None
-        )
+        assert sim_store.load_state_at(duck_con, game_pk=900, at_bat=9, pitch=9, run_id=7) is None
 
     def test_load_at_without_run_id_uses_latest_run(self, duck_con):
         # Two runs for the same game; the no-run_id lookup returns the latest.
@@ -209,17 +202,13 @@ class TestStateSnapshotStore:
 
     def test_load_snapshots_whole_stream_ordered(self, duck_con):
         snaps = _sample_snapshots()
-        sim_store.store_state_snapshots(
-            duck_con, game_pk=902, run_id=3, snapshots=snaps
-        )
+        sim_store.store_state_snapshots(duck_con, game_pk=902, run_id=3, snapshots=snaps)
         loaded = sim_store.load_state_snapshots(duck_con, game_pk=902, run_id=3)
         assert len(loaded) == len(snaps) == 4
         assert [r["sequence"] for r in loaded] == [0, 1, 2, 3]
 
     def test_store_empty_is_noop(self, duck_con):
-        sim_store.store_state_snapshots(
-            duck_con, game_pk=1, run_id=1, snapshots=[]
-        )
+        sim_store.store_state_snapshots(duck_con, game_pk=1, run_id=1, snapshots=[])
         assert sim_store.load_state_snapshots(duck_con, game_pk=1, run_id=1) == []
 
     def test_missing_required_field_raises(self, duck_con):
@@ -243,9 +232,7 @@ class TestPlaysAndStateEndpoints:
         client = TestClient(app)
 
         # Drive /simulate at a fixed seed -> persists play-stream + snapshots.
-        sim = client.get(
-            "/api/games/745001/simulate?n_iterations=3&base_seed=42"
-        )
+        sim = client.get("/api/games/745001/simulate?n_iterations=3&base_seed=42")
         assert sim.status_code == 200, sim.text
 
         # /plays returns a numpy-free PlayByPlay.
@@ -264,9 +251,7 @@ class TestPlaysAndStateEndpoints:
 
         # /state for the first pitch returns its snapshot.
         e0 = body["entries"][0]
-        st = client.get(
-            f"/api/games/745001/state/{e0['at_bat']}/{e0['pitch']}"
-        )
+        st = client.get(f"/api/games/745001/state/{e0['at_bat']}/{e0['pitch']}")
         assert st.status_code == 200, st.text
         snap = st.json()
         assert snap["at_bat"] == e0["at_bat"]
@@ -274,8 +259,17 @@ class TestPlaysAndStateEndpoints:
         # The field snapshot carries the BaseballFieldGraphic shape incl. the
         # derived occupied_bases / runners_on the response model requires.
         field = snap["field"]
-        for key in ("positions", "baserunners", "balls", "strikes", "outs",
-                    "inning", "half", "occupied_bases", "runners_on"):
+        for key in (
+            "positions",
+            "baserunners",
+            "balls",
+            "strikes",
+            "outs",
+            "inning",
+            "half",
+            "occupied_bases",
+            "runners_on",
+        ):
             assert key in field
         assert isinstance(field["occupied_bases"], list)
         json.dumps(snap)  # numpy-free

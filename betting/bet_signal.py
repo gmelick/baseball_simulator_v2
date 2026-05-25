@@ -68,21 +68,22 @@ ranked signal list.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
 
 from betting.clv_engine import EdgeReport, MarketSide, american_to_decimal
 
 # Defaults (module-level so the API agent / callers can reference the same numbers).
-DEFAULT_MIN_EDGE: float = 0.02            # 2% edge noise floor.
-DEFAULT_MIN_EV: float = 0.0               # strictly +EV at the offered price.
-DEFAULT_KELLY_FRACTION: float = 0.25      # quarter Kelly.
+DEFAULT_MIN_EDGE: float = 0.02  # 2% edge noise floor.
+DEFAULT_MIN_EV: float = 0.0  # strictly +EV at the offered price.
+DEFAULT_KELLY_FRACTION: float = 0.25  # quarter Kelly.
 DEFAULT_MAX_STAKE_FRACTION: float = 0.05  # cap at 5% of bankroll.
 
 
 # ===========================================================================
 # Fractional-Kelly stake sizing
 # ===========================================================================
+
 
 def kelly_fraction_full(p_sim: float, offered_american: float) -> float:
     """FULL-Kelly fraction f* = (b*p - q) / b for win prob ``p_sim`` at ``offered_american``.
@@ -129,6 +130,7 @@ def stake_fraction(
 # ===========================================================================
 # Bet-signal config + record
 # ===========================================================================
+
 
 @dataclass(frozen=True, slots=True)
 class BetSignalConfig:
@@ -178,7 +180,7 @@ class BetSignal:
     #: Which side of the two-way market this signal backs.
     side: MarketSide
     #: The market line (None for a moneyline; a float for total / prop / run line).
-    line: "float | None"
+    line: float | None
     #: American price of the side we would transact at (the report's offered price).
     offered_american: float
 
@@ -205,6 +207,7 @@ class BetSignal:
 # The gate + rank: EdgeReports -> BetSignals
 # ===========================================================================
 
+
 def _passes_gate(report: EdgeReport, config: BetSignalConfig) -> bool:
     """True iff ``report`` clears BOTH action gates (positive edge AND +EV).
 
@@ -216,16 +219,14 @@ def _passes_gate(report: EdgeReport, config: BetSignalConfig) -> bool:
         return False
     if report.edge < config.min_edge:
         return False
-    if report.ev <= config.min_ev:
-        return False
-    return True
+    return not report.ev <= config.min_ev
 
 
 def bet_signals_from_edges(
-    reports: "Sequence[EdgeReport]",
+    reports: Sequence[EdgeReport],
     *,
     config: BetSignalConfig = DEFAULT_CONFIG,
-) -> "list[BetSignal]":
+) -> list[BetSignal]:
     """Filter, size, and RANK ``reports`` into a list of fireable +EV :class:`BetSignal`s.
 
     Pipeline (SIM-369):
@@ -244,17 +245,20 @@ def bet_signals_from_edges(
     """
     survivors = [r for r in reports if _passes_gate(r, config)]
     # Rank by EV desc, then edge desc, then stake desc for a fully deterministic order.
-    sized: "list[tuple[EdgeReport, float]]" = [
-        (r, stake_fraction(
+    sized: list[tuple[EdgeReport, float]] = [
+        (
             r,
-            kelly_fraction=config.kelly_fraction,
-            cap=config.max_stake_fraction,
-        ))
+            stake_fraction(
+                r,
+                kelly_fraction=config.kelly_fraction,
+                cap=config.max_stake_fraction,
+            ),
+        )
         for r in survivors
     ]
     sized.sort(key=lambda rs: (rs[0].ev, rs[0].edge, rs[1]), reverse=True)
 
-    signals: "list[BetSignal]" = []
+    signals: list[BetSignal] = []
     for rank, (report, stake) in enumerate(sized):
         signals.append(
             BetSignal(

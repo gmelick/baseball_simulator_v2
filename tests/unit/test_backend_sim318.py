@@ -35,7 +35,7 @@ import os
 import numpy as np
 import pytest
 
-from simulation.game_state import GameState, PITCH_OUTCOMES
+from simulation.game_state import GameState
 from simulation.sim_loop import (
     EVENT_STRIKEOUT,
     EVENT_WALK,
@@ -51,12 +51,14 @@ PITCHER = 477132
 # Repo-root-relative path to the SIM-056 illustrative table.
 _CSV_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "docs", "data", "foul_rate_by_count.csv",
+    "docs",
+    "data",
+    "foul_rate_by_count.csv",
 )
 
 
 def _fresh_state(**kw) -> GameState:
-    base = dict(pitcher_id=PITCHER, bat_hand="R", season=SEASON)
+    base = {"pitcher_id": PITCHER, "bat_hand": "R", "season": SEASON}
     base.update(kw)
     return GameState(**base)
 
@@ -104,11 +106,7 @@ class TestFoulFactorMatchesDesign:
         # Every (balls, strikes) row's strikes_bucket_factor must equal the
         # loop's factor for that strike bucket -- the data and code agree.
         with open(_CSV_PATH, newline="", encoding="utf-8") as fh:
-            rows = [
-                r for r in csv.DictReader(
-                    (line for line in fh if not line.startswith("#"))
-                )
-            ]
+            rows = list(csv.DictReader(line for line in fh if not line.startswith("#")))
         assert len(rows) == 12, "CSV must enumerate all 12 counts"
         seen = set()
         for r in rows:
@@ -164,9 +162,7 @@ class TestApplyCountFoulWeighting:
         f = strikes_bucket_foul_factor(2)
         out = apply_count_foul_weighting(d, balls=0, strikes=2)
         # foul mass = f*p_foul / (1 + (f-1)*p_foul) under the closed renorm.
-        denom = sum(
-            (v * f if k == "foul" else v) for k, v in d.items()
-        )
+        denom = sum((v * f if k == "foul" else v) for k, v in d.items())
         assert out["foul"] == pytest.approx(d["foul"] * f / denom)
         # Non-foul buckets keep their relative proportions.
         assert out["ball"] == pytest.approx(d["ball"] / denom)
@@ -188,8 +184,8 @@ class TestLoopReweightDrawPath:
     def test_step_pitch_draws_from_the_reweighted_distribution(self):
         # A fixed rng makes the draw deterministic; assert the committed outcome
         # is one of the vocabulary and the count advanced consistently.
-        sm = StateMachine(rng=np.random.default_rng(0))
-        state = _fresh_state(strikes=2, balls=1)
+        StateMachine(rng=np.random.default_rng(0))
+        _fresh_state(strikes=2, balls=1)
         dist = {"foul": 0.5, "swinging_strike": 0.5}
         # Run many draws from a fresh state each time and confirm the foul share
         # exceeds the un-reweighted 0.5 (the two-strike tilt is applied).
@@ -220,7 +216,8 @@ class TestLoopReweightDrawPath:
         state = _fresh_state()
         with pytest.raises(ValueError):
             sm.step_pitch(
-                state, pitch_outcome="ball",
+                state,
+                pitch_outcome="ball",
                 outcome_distribution={"ball": 1.0},
             )
 
@@ -287,7 +284,7 @@ class TestCountBlindSampler:
         two_rate = two_strike_fouls / n
         zero_rate = zero_strike_fouls / n
         assert zero_rate == pytest.approx(0.5, abs=0.03)  # no tilt at 0 strikes
-        assert two_rate > zero_rate + 0.05                 # clear upward tilt
+        assert two_rate > zero_rate + 0.05  # clear upward tilt
 
 
 # ===========================================================================
@@ -304,8 +301,8 @@ class TestTwoStrikeFoulAbsorbingEndToEnd:
         for _ in range(8):
             r = sm.step_pitch(state, outcome_distribution={"foul": 1.0})
             assert r.pa_terminal is False
-            assert state.strikes == 2     # absorbed -- never advances to 3
-            assert state.balls == 1       # unchanged
+            assert state.strikes == 2  # absorbed -- never advances to 3
+            assert state.balls == 1  # unchanged
         # A real strike now ends it.
         r = sm.step_pitch(state, outcome_distribution={"swinging_strike": 1.0})
         assert r.pa_terminal is True

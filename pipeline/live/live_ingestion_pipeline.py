@@ -1610,9 +1610,7 @@ class LiveIngestionPipeline:
                     exc,
                 )
         if written:
-            log.info(
-                "SIM-340: captured %d opening prop lines for game %s", written, game_pk
-            )
+            log.info("SIM-340: captured %d opening prop lines for game %s", written, game_pk)
         return written
 
     def _should_resimulate(self, game_pk: int, feed: dict) -> tuple[bool, int]:

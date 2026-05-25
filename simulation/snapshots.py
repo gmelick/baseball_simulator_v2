@@ -38,10 +38,11 @@ DESIGN
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import Any
 
-from simulation.game_state import Bases, GameState, Half, PlayResult, Team
+from simulation.game_state import GameState, Half, PlayResult
 
 # ---------------------------------------------------------------------------
 # Vocabulary
@@ -50,7 +51,15 @@ from simulation.game_state import Bases, GameState, Half, PlayResult, Team
 #: The 9 defensive positions in canonical scorebook order (1=P ... 9=RF) -- the
 #: order the BaseballFieldGraphic SVG renders.
 DEFENSE_POSITIONS: tuple[str, ...] = (
-    "P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF",
+    "P",
+    "C",
+    "1B",
+    "2B",
+    "3B",
+    "SS",
+    "LF",
+    "CF",
+    "RF",
 )
 #: Scorebook number for each position (1-indexed).
 POSITION_NUMBER: dict[str, int] = {p: i + 1 for i, p in enumerate(DEFENSE_POSITIONS)}
@@ -70,7 +79,7 @@ OVERRIDE_METRIC_FIELDS: tuple[str, ...] = (
 )
 
 
-def _label_for(player_id: Optional[int], labels: Optional[Mapping[int, str]]) -> Optional[str]:
+def _label_for(player_id: int | None, labels: Mapping[int, str] | None) -> str | None:
     """Resolve a display label for a player id (None for an empty slot)."""
     if player_id is None:
         return None
@@ -89,12 +98,10 @@ class PlayerRef:
     """A player reference: the loop's integer id + an optional display label."""
 
     player_id: int
-    label: Optional[str] = None
+    label: str | None = None
 
     @classmethod
-    def of(
-        cls, player_id: Optional[int], labels: Optional[Mapping[int, str]] = None
-    ) -> "Optional[PlayerRef]":
+    def of(cls, player_id: int | None, labels: Mapping[int, str] | None = None) -> PlayerRef | None:
         """Build a PlayerRef for player_id (or None if the slot is empty)."""
         if player_id is None:
             return None
@@ -111,17 +118,17 @@ class FieldSnapshot:
     """The BaseballFieldGraphic state: defense + batter + baserunners + chrome."""
 
     #: Keyed by DEFENSE_POSITIONS ("P", "C", "1B", ... "RF"); None == unassigned.
-    positions: dict[str, Optional[PlayerRef]]
+    positions: dict[str, PlayerRef | None]
 
-    batter: Optional[PlayerRef]
+    batter: PlayerRef | None
     #: Baserunners keyed by base label ("1B"/"2B"/"3B"); None == empty bag.
-    baserunners: dict[str, Optional[PlayerRef]]
+    baserunners: dict[str, PlayerRef | None]
 
     balls: int
     strikes: int
     outs: int
     inning: int
-    half: str            # "top" / "bottom"
+    half: str  # "top" / "bottom"
     home_score: int
     away_score: int
     #: Base-occupancy bitmask (RE24 / run_resolution encoding).
@@ -142,23 +149,23 @@ class FieldSnapshot:
         cls,
         state: GameState,
         *,
-        labels: Optional[Mapping[int, str]] = None,
-        defense_positions: Optional[Mapping[str, int]] = None,
-    ) -> "FieldSnapshot":
+        labels: Mapping[int, str] | None = None,
+        defense_positions: Mapping[str, int] | None = None,
+    ) -> FieldSnapshot:
         """Build a FieldSnapshot from a live GameState.
 
         labels resolves ids to display names.  defense_positions is an optional
         {position: player_id} map for the fielding side; when omitted the 9 slots
         are present but empty (the loop does not yet track per-position fielders).
         """
-        positions: dict[str, Optional[PlayerRef]] = {}
+        positions: dict[str, PlayerRef | None] = {}
         for pos in DEFENSE_POSITIONS:
             pid = None
             if defense_positions is not None:
                 pid = defense_positions.get(pos)
             positions[pos] = PlayerRef.of(pid, labels)
 
-        baserunners: dict[str, Optional[PlayerRef]] = {
+        baserunners: dict[str, PlayerRef | None] = {
             "1B": PlayerRef.of(state.bases.first, labels),
             "2B": PlayerRef.of(state.bases.second, labels),
             "3B": PlayerRef.of(state.bases.third, labels),
@@ -193,25 +200,25 @@ class PlayByPlayEntry:
     resolved event is carried on the terminal pitch (is_pa_end).
     """
 
-    sequence: int            # global 0-based pitch index
-    at_bat: int              # 0-based plate-appearance index
-    pitch: int               # 1-based pitch number WITHIN the PA
+    sequence: int  # global 0-based pitch index
+    at_bat: int  # 0-based plate-appearance index
+    pitch: int  # 1-based pitch number WITHIN the PA
 
-    pitch_outcome: str       # ball / called_strike / swinging_strike / foul / in_play
+    pitch_outcome: str  # ball / called_strike / swinging_strike / foul / in_play
     is_contact: bool
     is_pa_end: bool
 
-    event: Optional[str] = None          # "single" / "strikeout" / "home_run" / ...
+    event: str | None = None  # "single" / "strikeout" / "home_run" / ...
 
     runs_scored: int = 0
     outs_recorded: int = 0
 
-    exit_velo: Optional[float] = None
-    launch_angle: Optional[float] = None
-    spray_angle: Optional[float] = None
+    exit_velo: float | None = None
+    launch_angle: float | None = None
+    spray_angle: float | None = None
 
     runs: float = 0.0
-    canonical_event: Optional[str] = None
+    canonical_event: str | None = None
 
     @classmethod
     def from_play_result(
@@ -221,7 +228,7 @@ class PlayByPlayEntry:
         sequence: int,
         at_bat: int,
         pitch: int,
-    ) -> "PlayByPlayEntry":
+    ) -> PlayByPlayEntry:
         """Build one entry from a PlayResult + its position indices."""
         return cls(
             sequence=int(sequence),
@@ -273,7 +280,7 @@ class PlayByPlay:
     def from_play_results(
         cls,
         results: Sequence[PlayResult],
-    ) -> "PlayByPlay":
+    ) -> PlayByPlay:
         """Build a PlayByPlay from a flat, ordered sequence of pitches.
 
         PAs are inferred from the pa_terminal flag: a new PA begins after each
@@ -308,10 +315,10 @@ class StateAtPitch:
     tagged with those indices and the global pitch sequence (if known).
     """
 
-    at_bat: int                  # 0-based plate-appearance index this is as-of
-    pitch: int                   # 1-based pitch number within the PA (0 == pre-PA)
-    field: FieldSnapshot         # the BaseballFieldGraphic state at that point
-    sequence: Optional[int] = None   # global pitch index, if known
+    at_bat: int  # 0-based plate-appearance index this is as-of
+    pitch: int  # 1-based pitch number within the PA (0 == pre-PA)
+    field: FieldSnapshot  # the BaseballFieldGraphic state at that point
+    sequence: int | None = None  # global pitch index, if known
 
     @classmethod
     def from_game_state(
@@ -320,10 +327,10 @@ class StateAtPitch:
         *,
         at_bat: int,
         pitch: int,
-        sequence: Optional[int] = None,
-        labels: Optional[Mapping[int, str]] = None,
-        defense_positions: Optional[Mapping[str, int]] = None,
-    ) -> "StateAtPitch":
+        sequence: int | None = None,
+        labels: Mapping[int, str] | None = None,
+        defense_positions: Mapping[str, int] | None = None,
+    ) -> StateAtPitch:
         """Build a StateAtPitch from the GameState as of (at_bat, pitch)."""
         snap = FieldSnapshot.from_game_state(
             state, labels=labels, defense_positions=defense_positions
@@ -365,7 +372,7 @@ class OverrideDelta:
     """
 
     metrics: dict[str, MetricDelta]
-    description: Optional[str] = None
+    description: str | None = None
 
     def delta(self, metric: str) -> float:
         """The override - baseline delta for metric (KeyError if absent)."""
@@ -382,9 +389,9 @@ class OverrideDelta:
         baseline: Any,
         override: Any,
         *,
-        description: Optional[str] = None,
-        metrics: Optional[Iterable[str]] = None,
-    ) -> "OverrideDelta":
+        description: str | None = None,
+        metrics: Iterable[str] | None = None,
+    ) -> OverrideDelta:
         """Build an OverrideDelta from two summaries.
 
         baseline / override are any objects exposing the metric attributes (e.g.

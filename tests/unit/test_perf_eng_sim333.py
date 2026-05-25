@@ -42,7 +42,6 @@ from simulation.batch_runner import (
     unlink_shared_segments,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -50,7 +49,7 @@ from simulation.batch_runner import (
 
 def _payload():
     """A small read-only payload standing in for the KDTree data + rowids."""
-    kd = (np.arange(60, dtype=np.float64).reshape(5, 12) * 1.5)
+    kd = np.arange(60, dtype=np.float64).reshape(5, 12) * 1.5
     rowids = np.array([10, 20, 30, 40, 50], dtype=np.int64)
     rbf = np.linspace(-1.0, 1.0, 24, dtype=np.float32).reshape(4, 6)
     return {"kd": kd, "rowids": rowids, "rbf": rbf}
@@ -144,10 +143,8 @@ class TestInProcessAttach:
             desc = registry["a"]
             attached = shared_memory.SharedMemory(name=desc.shm_name)
             try:
-                view = np.ndarray(desc.shape, dtype=np.dtype(desc.dtype),
-                                  buffer=attached.buf)
-                owner_view = np.ndarray(desc.shape, dtype=np.dtype(desc.dtype),
-                                        buffer=owned[0].buf)
+                view = np.ndarray(desc.shape, dtype=np.dtype(desc.dtype), buffer=attached.buf)
+                owner_view = np.ndarray(desc.shape, dtype=np.dtype(desc.dtype), buffer=owned[0].buf)
                 owner_view[0] = 999.0
                 assert view[0] == 999.0  # saw the parent's write -> shared buffer
             finally:
@@ -208,8 +205,7 @@ class TestLifecycle:
         runner.close()
 
     def test_context_manager_unlinks_on_exit(self):
-        with BatchRunner(max_workers=2,
-                         shared_arrays={"kd": _payload()["kd"]}) as runner:
+        with BatchRunner(max_workers=2, shared_arrays={"kd": _payload()["kd"]}) as runner:
             name = runner.shared_registry["kd"].shm_name
         with pytest.raises(FileNotFoundError):
             shared_memory.SharedMemory(name=name)
@@ -275,8 +271,8 @@ class TestSingleSpawnedWorker:
 
 class TestSamplerSharedTileAttach:
     def test_attach_shared_tile_rowids_zero_copy_and_samples(self):
-        faiss = pytest.importorskip("faiss")  # guarded like the sampler itself
-        from simulation.play_pool_sampler import PlayPoolSampler, POOL_PITCH
+        pytest.importorskip("faiss")  # guarded like the sampler itself
+        from simulation.play_pool_sampler import POOL_PITCH, PlayPoolSampler
 
         rng = np.random.default_rng(7)
         vecs = rng.standard_normal((40, 10)).astype(np.float32)
@@ -285,17 +281,20 @@ class TestSamplerSharedTileAttach:
         shm_v = shared_memory.SharedMemory(name=registry["pv"].shm_name)
         shm_r = shared_memory.SharedMemory(name=registry["pr"].shm_name)
         try:
-            vview = np.ndarray(registry["pv"].shape, dtype=np.float32,
-                               buffer=shm_v.buf)
-            rview = np.ndarray(registry["pr"].shape, dtype=np.int64,
-                               buffer=shm_r.buf)
+            vview = np.ndarray(registry["pv"].shape, dtype=np.float32, buffer=shm_v.buf)
+            rview = np.ndarray(registry["pr"].shape, dtype=np.int64, buffer=shm_r.buf)
             samp = PlayPoolSampler(
                 pool_dir="/nonexistent",
-                outcome_fetch=lambda pool, ids: {i: "single" for i in ids},
+                outcome_fetch=lambda pool, ids: dict.fromkeys(ids, "single"),
             )
             handle = samp.attach_shared_tile(
-                POOL_PITCH, 2024, "R", vectors=vview, rowids=rview,
-                pitcher_id=12345, meta={"season": 2024},
+                POOL_PITCH,
+                2024,
+                "R",
+                vectors=vview,
+                rowids=rview,
+                pitcher_id=12345,
+                meta={"season": 2024},
             )
             # rowids on the handle is the SAME shared buffer (zero-copy).
             assert np.shares_memory(handle.rowids, rview)
@@ -332,8 +331,7 @@ class TestSlowMultiWorker:
                 results = list(pool.map(_probe_views, range(16)))
             kd_sum = float(arrays["kd"].sum())
             assert all(r["kd_sum"] == kd_sum for r in results)
-            assert all(r["rowids"] == tuple(arrays["rowids"].tolist())
-                       for r in results)
+            assert all(r["rowids"] == tuple(arrays["rowids"].tolist()) for r in results)
             assert all(r["kd_writeable"] is False for r in results)
         finally:
             unlink_shared_segments(owned)

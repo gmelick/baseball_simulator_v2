@@ -31,7 +31,6 @@ from simulation.game_state import (
 )
 from simulation.run_resolution import re24_value
 
-
 # ===========================================================================
 # Construction
 # ===========================================================================
@@ -39,7 +38,7 @@ from simulation.run_resolution import re24_value
 
 def _fresh_state(**overrides) -> GameState:
     """A 'top of the 1st, 0-0, nobody on, 0 outs' state."""
-    base = dict(pitcher_id=477132, bat_hand="L", season=2024)
+    base = {"pitcher_id": 477132, "bat_hand": "L", "season": 2024}
     base.update(overrides)
     return GameState(**base)
 
@@ -72,9 +71,9 @@ def test_count_mutation_and_mid_count_invariant():
     gs = _fresh_state()
     gs.add_ball()
     gs.add_ball()
-    gs.add_ball()          # 3-0
+    gs.add_ball()  # 3-0
     gs.add_strike()
-    gs.add_strike()        # 3-2
+    gs.add_strike()  # 3-2
     assert (gs.balls, gs.strikes) == (3, 2)
     # 3-2 is the max live mid-count; invariant holds.
     gs.assert_count_valid(mid_count=True)
@@ -92,9 +91,9 @@ def test_count_mutation_and_mid_count_invariant():
 def test_strike_terminal_invariant():
     gs = _fresh_state()
     gs.add_strike()
-    gs.add_strike()        # 0-2 (live)
+    gs.add_strike()  # 0-2 (live)
     gs.assert_count_valid(mid_count=True)
-    gs.add_strike()        # 0-3 (terminal strikeout)
+    gs.add_strike()  # 0-3 (terminal strikeout)
     assert gs.strikes == STRIKES_FOR_STRIKEOUT
     with pytest.raises(ValueError):
         gs.assert_count_valid(mid_count=True)
@@ -103,11 +102,11 @@ def test_strike_terminal_invariant():
 def test_outs_invariant_during_play_and_at_three():
     gs = _fresh_state()
     gs.record_out()
-    gs.record_out()        # 2 outs
+    gs.record_out()  # 2 outs
     assert gs.outs == 2
     gs.assert_outs_valid(in_play=True)
     assert gs.is_half_inning_over() is False
-    gs.record_out()        # 3rd out
+    gs.record_out()  # 3rd out
     assert gs.outs == OUTS_PER_INNING
     assert gs.is_half_inning_over() is True
     # The third out is terminal -> in-play invariant rejects it.
@@ -120,11 +119,11 @@ def test_outs_invariant_during_play_and_at_three():
 
 
 def test_score_non_negative_and_offense_credit():
-    gs = _fresh_state()              # top of 1st -> offense is AWAY
+    gs = _fresh_state()  # top of 1st -> offense is AWAY
     assert gs.offense == Team.AWAY
-    gs.add_runs(2)                   # credits the offense (away)
+    gs.add_runs(2)  # credits the offense (away)
     assert gs.away_score == 2 and gs.home_score == 0
-    assert gs.score_diff == 2       # offense leads by 2
+    assert gs.score_diff == 2  # offense leads by 2
     gs.assert_score_valid()
     # Negative runs are rejected.
     with pytest.raises(ValueError):
@@ -149,7 +148,7 @@ def test_score_diff_flips_with_half():
 
 
 def test_base_occupancy_and_runners_state_encoding():
-    bases = Bases(first=101, third=303)   # runners on 1B and 3B
+    bases = Bases(first=101, third=303)  # runners on 1B and 3B
     assert bases.occupancy == (True, False, True)
     assert bases.count_on_base == 2
     # bit0=1B, bit2=3B -> 0b101 == 5 (matches run_resolution encoding).
@@ -171,8 +170,8 @@ def test_gamestate_runners_state_feeds_re24():
     """A GameState's (outs, runners_state) plug straight into the SIM-312 RE24
     matrix -- the encodings are byte-compatible."""
     gs = _fresh_state()
-    gs.bases = Bases(first=10, second=20)   # 1B+2B -> 0b011 == 3
-    gs.record_out()                          # 1 out
+    gs.bases = Bases(first=10, second=20)  # 1B+2B -> 0b011 == 3
+    gs.record_out()  # 1 out
     assert gs.runners_state == 3
     # No KeyError == the GameState state is a valid RE24 lookup key.
     re = re24_value(gs.outs, gs.runners_state)
@@ -196,11 +195,22 @@ def test_assert_invariants_aggregate():
 
 def test_playresult_roundtrip_to_scaffold_dict():
     """PlayResult generalizes the scaffold dict; as_scaffold_dict() restores it."""
-    pitch_sample = {"row_id": 42, "pitch_outcome": "in_play",
-                    "distance": 0.1, "weight": 0.2, "tile": "2024/477132/L",
-                    "fellback": False}
-    bb_sample = {"row_id": 99, "event": "double", "distance": 0.3,
-                 "weight": 0.4, "tile": "2024/battedball/L", "fellback": False}
+    pitch_sample = {
+        "row_id": 42,
+        "pitch_outcome": "in_play",
+        "distance": 0.1,
+        "weight": 0.2,
+        "tile": "2024/477132/L",
+        "fellback": False,
+    }
+    bb_sample = {
+        "row_id": 99,
+        "event": "double",
+        "distance": 0.3,
+        "weight": 0.4,
+        "tile": "2024/battedball/L",
+        "fellback": False,
+    }
     pr = PlayResult(
         pitch_outcome=CONTACT_PITCH_OUTCOME,
         is_contact=True,
@@ -225,8 +235,15 @@ def test_playresult_roundtrip_to_scaffold_dict():
 
     d = pr.as_scaffold_dict()
     # Exactly the scaffold dict keys, restored faithfully.
-    assert set(d) == {"pitch_outcome", "is_contact", "event", "runs",
-                      "fellback", "pitch_sample", "battedball_sample"}
+    assert set(d) == {
+        "pitch_outcome",
+        "is_contact",
+        "event",
+        "runs",
+        "fellback",
+        "pitch_sample",
+        "battedball_sample",
+    }
     assert d["pitch_outcome"] == CONTACT_PITCH_OUTCOME
     assert d["is_contact"] is True
     assert d["event"] == "double"
@@ -262,8 +279,14 @@ def test_playresult_carries_run_resolution_provenance():
         re_start=0.51,
         re_end=0.27,
     )
-    for fld in ("runs", "run_resolution_method", "canonical_event",
-                "re_start", "re_end", "runs_scored"):
+    for fld in (
+        "runs",
+        "run_resolution_method",
+        "canonical_event",
+        "re_start",
+        "re_end",
+        "runs_scored",
+    ):
         assert hasattr(pr, fld)
     assert pr.run_resolution_method == "re24_delta"
 
@@ -277,17 +300,30 @@ def test_gamestate_exposes_spec_step1_situation_context_fields():
     """Spec step 1 reads: count, outs, inning/half, base state, score diff,
     leverage, pitcher pitch-count, batter PA-count, park."""
     gs = _fresh_state()
-    for fld in ("balls", "strikes",           # count (step 4 / §5.1)
-                "outs",                         # §6.1
-                "inning", "half",               # inning/half
-                "bases",                        # base state (step 7)
-                "home_score", "away_score",     # score (step 8)
-                "pitcher_id", "bat_hand", "season",  # pre-filter (§4.3)
-                "batter_id", "throw_hand",      # matchup (step 2)
-                "pitcher_pitch_count", "batter_pa_count", "park",  # step-1 reads
-                "away_lineup", "home_lineup",   # batting order (§6.1)
-                "away_lineup_slot", "home_lineup_slot",  # lineup pointers (§6.1)
-                "manager", "seed"):             # manager hook (§3) / RNG (§6.3)
+    for fld in (
+        "balls",
+        "strikes",  # count (step 4 / §5.1)
+        "outs",  # §6.1
+        "inning",
+        "half",  # inning/half
+        "bases",  # base state (step 7)
+        "home_score",
+        "away_score",  # score (step 8)
+        "pitcher_id",
+        "bat_hand",
+        "season",  # pre-filter (§4.3)
+        "batter_id",
+        "throw_hand",  # matchup (step 2)
+        "pitcher_pitch_count",
+        "batter_pa_count",
+        "park",  # step-1 reads
+        "away_lineup",
+        "home_lineup",  # batting order (§6.1)
+        "away_lineup_slot",
+        "home_lineup_slot",  # lineup pointers (§6.1)
+        "manager",
+        "seed",
+    ):  # manager hook (§3) / RNG (§6.3)
         assert hasattr(gs, fld), f"GameState missing spec field: {fld}"
     # Derived situation reads.
     for prop in ("offense", "defense", "score_diff", "runners_state"):
@@ -297,19 +333,38 @@ def test_gamestate_exposes_spec_step1_situation_context_fields():
 def test_manager_context_fields_present():
     """Spec §3 pre-pitch hook context (steal/IBB/pitch-out/bullpen) — SIM-323."""
     mc = ManagerContext()
-    for fld in ("leverage", "green_light_rate", "bullpen_available",
-                "intentional_walk_signalled", "pitch_out_signalled"):
+    for fld in (
+        "leverage",
+        "green_light_rate",
+        "bullpen_available",
+        "intentional_walk_signalled",
+        "pitch_out_signalled",
+    ):
         assert hasattr(mc, fld)
 
 
 def test_playresult_exposes_spec_step_deltas():
     """Spec steps 5/6/7 deltas + step-8 next-state pointer all have typed homes."""
     pr = PlayResult(pitch_outcome="in_play")
-    for fld in ("pitch_outcome", "is_contact", "pa_terminal", "event",  # step 3/4
-                "exit_velo", "launch_angle", "spray_angle",             # step 5
-                "fielder_id", "is_error", "outs_recorded",              # step 6
-                "baserunner_advances", "steal_attempted", "steal_outcome",  # step 7
-                "runs", "runs_scored",                                  # step 8 runs
-                "pitch_sample", "battedball_sample", "fellback",        # raw payloads
-                "next_state"):                                          # step 8 state
+    for fld in (
+        "pitch_outcome",
+        "is_contact",
+        "pa_terminal",
+        "event",  # step 3/4
+        "exit_velo",
+        "launch_angle",
+        "spray_angle",  # step 5
+        "fielder_id",
+        "is_error",
+        "outs_recorded",  # step 6
+        "baserunner_advances",
+        "steal_attempted",
+        "steal_outcome",  # step 7
+        "runs",
+        "runs_scored",  # step 8 runs
+        "pitch_sample",
+        "battedball_sample",
+        "fellback",  # raw payloads
+        "next_state",
+    ):  # step 8 state
         assert hasattr(pr, fld), f"PlayResult missing spec field: {fld}"

@@ -29,13 +29,12 @@ import unittest
 
 import numpy as np
 
+from pipeline.batch.player_profile_computor import recency_weight
 from similarity.backtesting.recency_walk_forward import (
     recency_weighted_prediction,
     walk_forward_folds,
     walk_forward_recency_eval,
 )
-from pipeline.batch.player_profile_computor import recency_weight
-
 
 SEASONS = [2018, 2019, 2020, 2021, 2022]
 REF_SEASON = SEASONS[-1]

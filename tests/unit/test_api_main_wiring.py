@@ -19,13 +19,11 @@ Owned by Backend Developer (SIM-354 / SIM-351).
 
 from __future__ import annotations
 
-import pytest
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 
 from api.auth import RateLimitMiddleware
-
 
 # ---------------------------------------------------------------------------
 # create_app() — import-time wiring (no live DB/Redis required)
@@ -136,7 +134,7 @@ def test_lifespan_attaches_and_closes_sim_runner(monkeypatch):
     fake_redis.aclose = AsyncMock()
 
     monkeypatch.setattr(main_mod, "open_pg_pool", AsyncMock(return_value=fake_pool))
-    monkeypatch.setattr(main_mod, "make_pg_name_resolver", lambda pool: (lambda ids: {}))
+    monkeypatch.setattr(main_mod, "make_pg_name_resolver", lambda pool: lambda ids: {})
     monkeypatch.setattr(
         main_mod, "open_redis_cache", AsyncMock(return_value=(fake_redis, MagicMock()))
     )

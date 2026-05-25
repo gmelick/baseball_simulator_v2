@@ -97,9 +97,7 @@ def _make_profile(
         p_throws=p_throws,
         sample_pitches=500,
         gmm=gmm,
-        command_vec=np.array(
-            command or [0.08, 0.22, 0.30, 0.45, 0.28], dtype=np.float64
-        ),
+        command_vec=np.array(command or [0.08, 0.22, 0.30, 0.45, 0.28], dtype=np.float64),
     )
 
 
@@ -243,15 +241,9 @@ class TestVectorizedArsenalLookup(unittest.TestCase):
             ckey = (cand.pitcher_id, cand.season)
             if ckey == (query.pitcher_id, query.season):
                 continue
-            w2 = fresh.get_or_compute(
-                (query.pitcher_id, query.season), ckey, query.gmm, cand.gmm
-            )
-            expected_arsenal = (
-                float(np.exp(-w2 / ARSENAL_SCALE)) if np.isfinite(w2) else 0.0
-            )
-            self.assertAlmostEqual(
-                res_by_key[ckey].arsenal_score, expected_arsenal, places=10
-            )
+            w2 = fresh.get_or_compute((query.pitcher_id, query.season), ckey, query.gmm, cand.gmm)
+            expected_arsenal = float(np.exp(-w2 / ARSENAL_SCALE)) if np.isfinite(w2) else 0.0
+            self.assertAlmostEqual(res_by_key[ckey].arsenal_score, expected_arsenal, places=10)
 
     # --- (b) self-distance is 0 -----------------------------------------
 
@@ -331,12 +323,8 @@ class TestVectorizedArsenalLookup(unittest.TestCase):
         base = _build_rhp_profiles(include_missing_gmm=False)
         for i in range(60):
             comps = [
-                _make_component(
-                    0, 0.6, (rng.normal(0, 1, GMM_FEATURE_DIM)).tolist(), 1.2
-                ),
-                _make_component(
-                    1, 0.4, (rng.normal(0, 1, GMM_FEATURE_DIM)).tolist(), 1.0
-                ),
+                _make_component(0, 0.6, (rng.normal(0, 1, GMM_FEATURE_DIM)).tolist(), 1.2),
+                _make_component(1, 0.4, (rng.normal(0, 1, GMM_FEATURE_DIM)).tolist(), 1.0),
             ]
             big.append(_make_profile(10_000 + i, 2024, "R", _make_gmm(comps)))
         profiles = base + big

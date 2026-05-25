@@ -50,12 +50,12 @@ This module does NOT modify ``simulation/sim_loop.py``; it only drives it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 from scipy.stats import chisquare
 
-from simulation.game_state import GameState, Half
+from simulation.game_state import GameState
 from simulation.sim_loop import (
     FieldingSignal,
     GameSimResult,
@@ -75,7 +75,7 @@ from simulation.sim_loop import (
 # importable library: production callers can build a reference distribution from
 # the SAME calibrated model the SIM-324 sniff suite is anchored to.
 
-LEAGUE_PITCH_MODEL: "dict[str, float]" = {
+LEAGUE_PITCH_MODEL: dict[str, float] = {
     "ball": 0.332,
     "called_strike": 0.138,
     "swinging_strike": 0.087,
@@ -83,7 +83,7 @@ LEAGUE_PITCH_MODEL: "dict[str, float]" = {
     "in_play": 0.170,
 }
 
-LEAGUE_INPLAY_MODEL: "dict[str, float]" = {
+LEAGUE_INPLAY_MODEL: dict[str, float] = {
     "home_run": 0.050,
     "single": 0.262,
     "double": 0.084,
@@ -92,10 +92,22 @@ LEAGUE_INPLAY_MODEL: "dict[str, float]" = {
     "ground_into_double_play": 0.050,
 }
 
-_EVENT_HITS = {"single": 1, "double": 2, "triple": 3, "home_run": 4,
-               "field_out": 0, "ground_into_double_play": 0}
-_EVENT_OUTS = {"single": 0, "double": 0, "triple": 0, "home_run": 0,
-               "field_out": 1, "ground_into_double_play": 2}
+_EVENT_HITS = {
+    "single": 1,
+    "double": 2,
+    "triple": 3,
+    "home_run": 4,
+    "field_out": 0,
+    "ground_into_double_play": 0,
+}
+_EVENT_OUTS = {
+    "single": 0,
+    "double": 0,
+    "triple": 0,
+    "home_run": 0,
+    "field_out": 1,
+    "ground_into_double_play": 2,
+}
 
 #: Default matchup keys for the no-DB reference replay (mirror SIM-324).
 _DEFAULT_SEASON = 2024
@@ -107,7 +119,7 @@ _DEFAULT_HOME_LINEUP = list(range(201, 210))
 _OUTS_PER_INNING = 3
 
 
-def _normalize(model: "dict[str, float]") -> "tuple[list, np.ndarray]":
+def _normalize(model: dict[str, float]) -> tuple[list, np.ndarray]:
     keys = list(model.keys())
     probs = np.asarray([model[k] for k in keys], dtype=np.float64)
     return keys, probs / probs.sum()
@@ -142,9 +154,9 @@ class HistoricalGame:
     pitcher_id: int = _DEFAULT_PITCHER
     season: int = _DEFAULT_SEASON
     bat_hand: str = "R"
-    away_lineup: "tuple[int, ...]" = tuple(_DEFAULT_AWAY_LINEUP)
-    home_lineup: "tuple[int, ...]" = tuple(_DEFAULT_HOME_LINEUP)
-    seed: "int | None" = None
+    away_lineup: tuple[int, ...] = tuple(_DEFAULT_AWAY_LINEUP)
+    home_lineup: tuple[int, ...] = tuple(_DEFAULT_HOME_LINEUP)
+    seed: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -167,9 +179,9 @@ class ChiSquaredResult:
     statistic: float
     dof: int
     p_value: float
-    bins: "list[str]"
-    observed: "list[float]"
-    expected: "list[float]"
+    bins: list[str]
+    observed: list[float]
+    expected: list[float]
     alpha: float = 0.05
 
     @property
@@ -201,7 +213,7 @@ class _LeagueInPlayResolver(PlayResolver):
     """Resolve an ``in_play`` pitch to a sampled league-average batted-ball event
     (the SIM-324 idiom): runs EMERGE from the loop's baserunning, not injected."""
 
-    def __init__(self, rng: "np.random.Generator"):
+    def __init__(self, rng: np.random.Generator):
         self.rng = rng
         self._keys, self._probs = _normalize(LEAGUE_INPLAY_MODEL)
         self._injected_battedball = {"event": "field_out"}
@@ -246,9 +258,9 @@ def simulate_run_distribution(
     pitcher_id: int = _DEFAULT_PITCHER,
     season: int = _DEFAULT_SEASON,
     bat_hand: str = "R",
-    away_lineup: "list[int] | None" = None,
-    home_lineup: "list[int] | None" = None,
-) -> "list[int]":
+    away_lineup: list[int] | None = None,
+    home_lineup: list[int] | None = None,
+) -> list[int]:
     """Replay ``n_games`` games through ``simulate_game()`` and return the SIMULATED
     per-TEAM-game run totals (a flat list of ``2 * n_games`` integers -- home +
     away of each game).
@@ -268,14 +280,18 @@ def simulate_run_distribution(
     factory = state_machine_factory or _default_state_machine
     away = list(away_lineup) if away_lineup is not None else list(_DEFAULT_AWAY_LINEUP)
     home = list(home_lineup) if home_lineup is not None else list(_DEFAULT_HOME_LINEUP)
-    totals: "list[int]" = []
+    totals: list[int] = []
     for i in range(n_games):
         seed = base_seed + i
         sm = factory(seed)
         state = GameState(
-            pitcher_id=pitcher_id, bat_hand=bat_hand, season=season,
-            away_lineup=away, home_lineup=home,
-            batter_id=away[0], seed=seed,
+            pitcher_id=pitcher_id,
+            bat_hand=bat_hand,
+            season=season,
+            away_lineup=away,
+            home_lineup=home,
+            batter_id=away[0],
+            seed=seed,
         )
         result: GameSimResult = simulate_game(sm, initial_state=state, seed=seed)
         totals.append(int(result.home_score))
@@ -284,11 +300,11 @@ def simulate_run_distribution(
 
 
 def replay_historical_games(
-    historical_games: "list[HistoricalGame]",
+    historical_games: list[HistoricalGame],
     *,
     base_seed: int = 0,
     state_machine_factory=None,
-) -> "list[int]":
+) -> list[int]:
     """Replay each :class:`HistoricalGame`'s matchup through ``simulate_game()`` and
     return the SIMULATED per-team-game run totals (the real-data replay path).
 
@@ -300,14 +316,18 @@ def replay_historical_games(
     historical replay -- otherwise the calibrated no-DB model drives it.
     """
     factory = state_machine_factory or _default_state_machine
-    totals: "list[int]" = []
+    totals: list[int] = []
     for i, hg in enumerate(historical_games):
         seed = hg.seed if hg.seed is not None else base_seed + i
         sm = factory(seed)
         state = GameState(
-            pitcher_id=hg.pitcher_id, bat_hand=hg.bat_hand, season=hg.season,
-            away_lineup=list(hg.away_lineup), home_lineup=list(hg.home_lineup),
-            batter_id=hg.away_lineup[0], seed=seed,
+            pitcher_id=hg.pitcher_id,
+            bat_hand=hg.bat_hand,
+            season=hg.season,
+            away_lineup=list(hg.away_lineup),
+            home_lineup=list(hg.home_lineup),
+            batter_id=hg.away_lineup[0],
+            seed=seed,
         )
         result: GameSimResult = simulate_game(sm, initial_state=state, seed=seed)
         # One team-game per historical row: take the home half (arbitrary but
@@ -321,7 +341,7 @@ def replay_historical_games(
 # ---------------------------------------------------------------------------
 
 
-def bin_run_totals(run_totals, max_bin: int = 10) -> "np.ndarray":
+def bin_run_totals(run_totals, max_bin: int = 10) -> np.ndarray:
     """Histogram a sequence of integer per-team-game run totals into bins
     ``0, 1, 2, ..., (max_bin)+`` -- the last bin is a ``max_bin+`` tail that
     absorbs every total >= ``max_bin``.
@@ -343,11 +363,11 @@ def bin_run_totals(run_totals, max_bin: int = 10) -> "np.ndarray":
 
 
 def pool_low_expected_bins(
-    observed: "np.ndarray",
-    expected: "np.ndarray",
+    observed: np.ndarray,
+    expected: np.ndarray,
     *,
     min_expected: float = 5.0,
-) -> "tuple[np.ndarray, np.ndarray, list[str]]":
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """Pool adjacent TAIL bins until every EXPECTED count is >= ``min_expected``,
     so the chi-squared approximation is valid (the classic Cochran rule:
     expected counts should not be tiny).
@@ -370,7 +390,7 @@ def pool_low_expected_bins(
     if len(obs) == 0:
         raise ValueError("cannot pool empty count vectors.")
     # Track which original bin indices each pooled bin spans, so we can label.
-    spans: "list[list[int]]" = [[i] for i in range(len(obs))]
+    spans: list[list[int]] = [[i] for i in range(len(obs))]
 
     # Pool the high tail inward: while the LAST bin's expected < min_expected and
     # there is more than one bin, merge it down into the previous bin.
@@ -391,7 +411,7 @@ def pool_low_expected_bins(
         del obs[0]
         del spans[0]
 
-    labels: "list[str]" = []
+    labels: list[str] = []
     n_orig = len(observed)
     for span in spans:
         lo = span[0]
@@ -411,7 +431,7 @@ def pool_low_expected_bins(
 # ---------------------------------------------------------------------------
 
 
-def run_total_distribution(run_totals, max_bin: int = 10) -> "np.ndarray":
+def run_total_distribution(run_totals, max_bin: int = 10) -> np.ndarray:
     """The per-team-game run-total histogram (a thin alias for
     :func:`bin_run_totals` named for the spec's "run distribution" vocabulary)."""
     return bin_run_totals(run_totals, max_bin=max_bin)
@@ -446,9 +466,7 @@ def chi_squared_gof(
     the post-pooling observed/expected vectors).  ``passed`` is ``p > alpha``.
     """
     if (reference_totals is None) == (reference_distribution is None):
-        raise ValueError(
-            "supply exactly one of reference_totals / reference_distribution."
-        )
+        raise ValueError("supply exactly one of reference_totals / reference_distribution.")
     observed = bin_run_totals(simulated_totals, max_bin=max_bin)
     obs_total = float(observed.sum())
     if obs_total <= 0.0:
@@ -506,7 +524,7 @@ def chi_squared_gof(
 
 
 def replay_and_test(
-    historical_games: "list[HistoricalGame]",
+    historical_games: list[HistoricalGame],
     *,
     base_seed: int = 0,
     state_machine_factory=None,
@@ -526,10 +544,14 @@ def replay_and_test(
     """
     actual = [int(hg.runs) for hg in historical_games]
     simulated = replay_historical_games(
-        historical_games, base_seed=base_seed,
+        historical_games,
+        base_seed=base_seed,
         state_machine_factory=state_machine_factory,
     )
     return chi_squared_gof(
-        simulated, reference_totals=actual,
-        max_bin=max_bin, min_expected=min_expected, alpha=alpha,
+        simulated,
+        reference_totals=actual,
+        max_bin=max_bin,
+        min_expected=min_expected,
+        alpha=alpha,
     )

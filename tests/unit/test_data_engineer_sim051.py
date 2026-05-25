@@ -100,18 +100,14 @@ class TestPullRelativeSprayAnglePython(unittest.TestCase):
         # positive.
         lhb_pull_raw = -28.0
         self.assertGreater(pull_relative_spray_angle(lhb_pull_raw, "L"), 0.0)
-        self.assertAlmostEqual(
-            pull_relative_spray_angle(lhb_pull_raw, "L"), 28.0
-        )
+        self.assertAlmostEqual(pull_relative_spray_angle(lhb_pull_raw, "L"), 28.0)
 
     def test_rhb_pull_is_positive(self):
         # For a RHB, pulling means hitting to LF, which is already positive in
         # the raw convention -> passes through unchanged.
         rhb_pull_raw = 28.0
         self.assertGreater(pull_relative_spray_angle(rhb_pull_raw, "R"), 0.0)
-        self.assertAlmostEqual(
-            pull_relative_spray_angle(rhb_pull_raw, "R"), 28.0
-        )
+        self.assertAlmostEqual(pull_relative_spray_angle(rhb_pull_raw, "R"), 28.0)
 
     def test_both_handedness_pull_share_same_sign(self):
         # The whole point of SIM-051: a LHB pull and a RHB pull must end up
@@ -168,9 +164,7 @@ class TestPullRelativeSprayAngleDuckDB(unittest.TestCase):
         self.conn.close()
 
     def _insert(self, rows):
-        self.conn.executemany(
-            "INSERT INTO raw_bip VALUES (?, ?, ?, ?)", rows
-        )
+        self.conn.executemany("INSERT INTO raw_bip VALUES (?, ?, ?, ?)", rows)
 
     def _flip(self):
         return [r[0] for r in self.conn.execute(_FLIP_SQL).fetchall()]
@@ -180,11 +174,11 @@ class TestPullRelativeSprayAngleDuckDB(unittest.TestCase):
         self._insert(
             [
                 (0, "L", "L", -28.0),  # LHB pull -> +28
-                (1, "R", "R", 28.0),   # RHB pull -> +28
+                (1, "R", "R", 28.0),  # RHB pull -> +28
                 (2, "L", "S", -22.0),  # switch batting L this PA -> +22
-                (3, "R", "S", 19.0),   # switch batting R this PA -> +19
-                (4, "S", "S", 15.0),   # unresolved switch -> NULL
-                (5, "R", "R", None),   # NULL spray -> NULL
+                (3, "R", "S", 19.0),  # switch batting R this PA -> +19
+                (4, "S", "S", 15.0),  # unresolved switch -> NULL
+                (5, "R", "R", None),  # NULL spray -> NULL
             ]
         )
         out = self._flip()
@@ -224,7 +218,7 @@ class TestPullRelativeSprayAngleDuckDB(unittest.TestCase):
             rows.append((i, hand, roster, sa))
         self._insert(rows)
         sql_out = self._flip()
-        for (hand, _roster, sa), got in zip(cases, sql_out):
+        for (hand, _roster, sa), got in zip(cases, sql_out, strict=False):
             expected = pull_relative_spray_angle(sa, hand)
             if expected is None:
                 self.assertIsNone(got)

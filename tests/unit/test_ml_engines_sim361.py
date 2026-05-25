@@ -41,7 +41,6 @@ from api.state import (
 from similarity.similarity_calibration import CalibrationReport
 from simulation.win_probability import IDENTITY_CALIBRATION, CalibrationMap
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -266,7 +265,6 @@ class TestCalibrationMapFromReport:
 
 class TestBuildAllEngines:
     def test_builds_all_eleven_with_fake_loader(self):
-        built = {}
 
         def fake_loader(module_path, class_name):
             return _FakeEngine
@@ -276,7 +274,7 @@ class TestBuildAllEngines:
         assert set(engines.keys()) == set(ENGINE_REGISTRY.keys())
         assert len(engines) == 11
         # Every one got the duckdb_path and was build()-ed.
-        for name, eng in engines.items():
+        for _name, eng in engines.items():
             assert eng.duckdb_path == "/fake/db.duckdb"
             assert eng.built is True
 

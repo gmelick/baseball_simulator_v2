@@ -18,12 +18,10 @@ Owned by Backend Developer (SIM-351).
 
 from __future__ import annotations
 
-import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from api.auth import API_KEY_HEADER, require_api_key, resolve_cors_origins
-
 
 # ---------------------------------------------------------------------------
 # require_api_key — via a protected route

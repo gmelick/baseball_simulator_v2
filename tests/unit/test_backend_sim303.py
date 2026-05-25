@@ -75,27 +75,39 @@ _PITCH_OUTCOMES = ["ball", "called_strike", "swinging_strike", "foul", "in_play"
 _BB_EVENTS = ["single", "double", "triple", "home_run", "field_out"]
 
 
-def _insert_pitch_rows(conn, pitcher_id, bat_hand, n, *, base_id, season=SEASON,
-                       game_date="2024-06-01"):
+def _insert_pitch_rows(
+    conn, pitcher_id, bat_hand, n, *, base_id, season=SEASON, game_date="2024-06-01"
+):
     rng = np.random.default_rng(abs(hash((pitcher_id, bat_hand))) % (2**32))
     for i in range(n):
         pid = base_id + i
         vec = [
-            float(rng.uniform(88, 100)), float(rng.uniform(-5, 20)),
-            float(rng.uniform(-15, 15)), float(rng.uniform(1800, 2600)),
-            float(rng.uniform(0, 360)), float(rng.uniform(-2.5, 2.5)),
-            float(rng.uniform(5, 6.5)), float(rng.uniform(5.5, 7)),
-            float(rng.uniform(-1.5, 1.5)), float(rng.uniform(1.5, 3.5)),
+            float(rng.uniform(88, 100)),
+            float(rng.uniform(-5, 20)),
+            float(rng.uniform(-15, 15)),
+            float(rng.uniform(1800, 2600)),
+            float(rng.uniform(0, 360)),
+            float(rng.uniform(-2.5, 2.5)),
+            float(rng.uniform(5, 6.5)),
+            float(rng.uniform(5.5, 7)),
+            float(rng.uniform(-1.5, 1.5)),
+            float(rng.uniform(1.5, 3.5)),
         ]
         conn.execute(
             "INSERT INTO sim.pitch_pool VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            [pid, season, pitcher_id, bat_hand, *vec,
-             _PITCH_OUTCOMES[i % len(_PITCH_OUTCOMES)], game_date],
+            [
+                pid,
+                season,
+                pitcher_id,
+                bat_hand,
+                *vec,
+                _PITCH_OUTCOMES[i % len(_PITCH_OUTCOMES)],
+                game_date,
+            ],
         )
 
 
-def _insert_outcome_rows(conn, bat_hand, n, *, base_id, season=SEASON,
-                         game_date="2024-06-01"):
+def _insert_outcome_rows(conn, bat_hand, n, *, base_id, season=SEASON, game_date="2024-06-01"):
     rng = np.random.default_rng(abs(hash(("bb", bat_hand))) % (2**32))
     for i in range(n):
         pid = base_id + i
@@ -104,9 +116,18 @@ def _insert_outcome_rows(conn, bat_hand, n, *, base_id, season=SEASON,
         sa = float(rng.uniform(-45, 45))
         conn.execute(
             "INSERT INTO sim.outcome_pool VALUES (?,?,?,?,?,?,?,?,?,?)",
-            [pid, season, 600000 + (i % 20), bat_hand, ev, la, sa,
-             _BB_EVENTS[i % len(_BB_EVENTS)],
-             "line_drive" if la > 0 else "ground_ball", game_date],
+            [
+                pid,
+                season,
+                600000 + (i % 20),
+                bat_hand,
+                ev,
+                la,
+                sa,
+                _BB_EVENTS[i % len(_BB_EVENTS)],
+                "line_drive" if la > 0 else "ground_ball",
+                game_date,
+            ],
         )
 
 
@@ -147,8 +168,10 @@ def _make_sampler(pool_dir, *, pitch_outcome, seed=0):
         return {int(r): _BB_EVENTS[int(r) % len(_BB_EVENTS)] for r in rids}
 
     return PlayPoolSampler(
-        pool_dir=pool_dir, duckdb_path=None,
-        rng=np.random.default_rng(seed), outcome_fetch=fetch,
+        pool_dir=pool_dir,
+        duckdb_path=None,
+        rng=np.random.default_rng(seed),
+        outcome_fetch=fetch,
     )
 
 
@@ -166,8 +189,15 @@ def test_simulate_pitch_returns_well_formed_play_result(round_trip_pool):
     result = sim.simulate_pitch(state)
 
     # Shape / key contract.
-    for key in ("pitch_outcome", "is_contact", "event", "runs", "fellback",
-                "pitch_sample", "battedball_sample"):
+    for key in (
+        "pitch_outcome",
+        "is_contact",
+        "event",
+        "runs",
+        "fellback",
+        "pitch_sample",
+        "battedball_sample",
+    ):
         assert key in result
     assert isinstance(result["pitch_outcome"], str)
     assert isinstance(result["is_contact"], bool)
@@ -176,7 +206,7 @@ def test_simulate_pitch_returns_well_formed_play_result(round_trip_pool):
     # The pitch_sample is the genuine sampler payload (proves the sampler was
     # invoked): it must carry a row_id that is in the loaded pitch tile.
     handle = sampler.load_tile(POOL_PITCH, SEASON, "L", pitcher_id=BIG_PITCHER)
-    valid_ids = set(int(r) for r in handle.rowids)
+    valid_ids = {int(r) for r in handle.rowids}
     assert result["pitch_sample"]["row_id"] in valid_ids
     assert result["pitch_sample"]["tile"] == f"{SEASON}/{BIG_PITCHER}/L"
     sampler.close()
@@ -191,8 +221,7 @@ def test_non_contact_path(round_trip_pool):
     pool_dir, _ = round_trip_pool
     sampler = _make_sampler(pool_dir, pitch_outcome="called_strike")
     sim = PlateAppearanceSimulator(sampler, rng=np.random.default_rng(1))
-    state = PitchState(pitcher_id=BIG_PITCHER, bat_hand="R", season=SEASON,
-                       strikes=1)
+    state = PitchState(pitcher_id=BIG_PITCHER, bat_hand="R", season=SEASON, strikes=1)
 
     result = sim.simulate_pitch(state)
 
@@ -238,7 +267,7 @@ def test_contact_path_triggers_batted_ball(round_trip_pool):
     assert result["event"] in _BB_EVENTS
     # The batted-ball sample row must be in the loaded battedball tile.
     bb_handle = sampler.load_tile(POOL_BATTEDBALL, SEASON, "L")
-    assert result["battedball_sample"]["row_id"] in set(int(r) for r in bb_handle.rowids)
+    assert result["battedball_sample"]["row_id"] in {int(r) for r in bb_handle.rowids}
     sampler.close()
 
 
@@ -256,7 +285,6 @@ def test_deterministic_with_fixed_rng(round_trip_pool):
         state = PitchState(pitcher_id=BIG_PITCHER, bat_hand="R", season=SEASON)
         out = [sim.simulate_pitch(state) for _ in range(10)]
         sampler.close()
-        return [(o["pitch_sample"]["row_id"], o["battedball_sample"]["row_id"])
-                for o in out]
+        return [(o["pitch_sample"]["row_id"], o["battedball_sample"]["row_id"]) for o in out]
 
     assert run() == run()

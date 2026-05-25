@@ -139,7 +139,8 @@ class TestNoArsenalRedistribution(unittest.TestCase):
         # Query has NO gmm → every pair takes the no-arsenal path.
         query = _make_profile(1, gmm=None, command=[0.08, 0.22, 0.30, 0.45, 0.28])
         cand = _make_profile(
-            2, gmm=_single_component_gmm([90.0] * GMM_FEATURE_DIM),
+            2,
+            gmm=_single_component_gmm([90.0] * GMM_FEATURE_DIM),
             command=[0.09, 0.20, 0.31, 0.44, 0.27],
         )
 
@@ -269,9 +270,7 @@ class TestCalibrationWiring(unittest.TestCase):
     def test_apply_calibration_overrides_module_constant(self):
         eng = _new_engine()
         median = 3.20
-        gamma = calibrate_arsenal_gamma(
-            np.array([median]), target_median_score=0.50
-        )
+        gamma = calibrate_arsenal_gamma(np.array([median]), target_median_score=0.50)
         report = CalibrationReport(arsenal_gamma=gamma, arsenal_median_w2=median)
 
         expected_scale = arsenal_scale_from_gamma(gamma, median)
@@ -323,9 +322,7 @@ class TestCalibrationWiring(unittest.TestCase):
         report = CalibrationReport(arsenal_gamma=0.15)  # no median provided
         scale = eng.apply_calibration(report)
         cache_median = float(np.median(eng._arsenal_cache.finite_distances()))
-        self.assertAlmostEqual(
-            scale, arsenal_scale_from_gamma(0.15, cache_median), places=9
-        )
+        self.assertAlmostEqual(scale, arsenal_scale_from_gamma(0.15, cache_median), places=9)
 
 
 # ============================================================================

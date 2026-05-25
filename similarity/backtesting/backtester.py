@@ -66,7 +66,8 @@ Public API
 
 from __future__ import annotations
 
-from typing import Any, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -164,9 +165,7 @@ def _validate(probs: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.nda
     if p.ndim != 2:
         raise ValueError(f"probs must be 2-D (n, c); got shape {p.shape}")
     if p.shape[0] != y.shape[0]:
-        raise ValueError(
-            f"probs has {p.shape[0]} rows but {y.shape[0]} labels were given"
-        )
+        raise ValueError(f"probs has {p.shape[0]} rows but {y.shape[0]} labels were given")
     if p.shape[0] == 0:
         return p, y
     if y.min() < 0 or y.max() >= p.shape[1]:
@@ -180,9 +179,7 @@ def _validate(probs: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.nda
 # ---------------------------------------------------------------------------
 # 2. Probabilistic metrics (pure NumPy)
 # ---------------------------------------------------------------------------
-def _confidence_and_correct(
-    probs: np.ndarray, labels: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
+def _confidence_and_correct(probs: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Per-row predicted-class confidence (max prob) and correctness (0/1)."""
     pred = np.argmax(probs, axis=1)
     confidence = probs[np.arange(probs.shape[0]), pred]
@@ -452,9 +449,7 @@ def walk_forward_ablation(
     features = _column(df, feature_col)
     raw_labels = _column(df, label_col)
     # Map string outcome labels to class indices once.
-    labels = np.array(
-        [cls_idx.get(str(lbl), -1) for lbl in raw_labels], dtype=int
-    )
+    labels = np.array([cls_idx.get(str(lbl), -1) for lbl in raw_labels], dtype=int)
 
     folds_spec = walk_forward_folds(seasons)
 

@@ -114,10 +114,7 @@ def to_jsonable(obj: Any) -> Any:
 
     # --- dataclass instances (not classes) ------------------------------------
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-        return {
-            f.name: to_jsonable(getattr(obj, f.name))
-            for f in dataclasses.fields(obj)
-        }
+        return {f.name: to_jsonable(getattr(obj, f.name)) for f in dataclasses.fields(obj)}
 
     # --- mappings -------------------------------------------------------------
     if isinstance(obj, dict):

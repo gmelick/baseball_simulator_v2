@@ -66,7 +66,8 @@ read here only to size the shared-tile attach.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
@@ -106,7 +107,7 @@ def _kwarg(spec: GameSpec, name: str, default: Any) -> Any:
     return default if val is None else val
 
 
-def _default_sampler_builder(spec: GameSpec, seed: "int | None") -> PlayPoolSampler:
+def _default_sampler_builder(spec: GameSpec, seed: int | None) -> PlayPoolSampler:
     """Build the REAL production :class:`PlayPoolSampler` for this matchup.
 
     Reads the factory-only ``_pool_dir`` / ``_duckdb_path`` / ``_max_resident_tiles``
@@ -146,7 +147,7 @@ _SAMPLER_BUILDER: SamplerBuilder = _default_sampler_builder
 _DERIVER_BUILDER: DeriverBuilder = _default_deriver_builder
 
 
-def set_sampler_builder(builder: "SamplerBuilder | None") -> SamplerBuilder:
+def set_sampler_builder(builder: SamplerBuilder | None) -> SamplerBuilder:
     """Install ``builder`` as the active sampler builder; return the previous one.
 
     ``None`` restores the production default (:func:`_default_sampler_builder`).
@@ -159,7 +160,7 @@ def set_sampler_builder(builder: "SamplerBuilder | None") -> SamplerBuilder:
     return prev
 
 
-def set_deriver_builder(builder: "DeriverBuilder | None") -> DeriverBuilder:
+def set_deriver_builder(builder: DeriverBuilder | None) -> DeriverBuilder:
     """Install ``builder`` as the active fingerprint-deriver builder; return the
     previous one.  ``None`` restores the default (:func:`_default_deriver_builder`,
     i.e. no deriver -> stub fingerprints)."""
@@ -179,9 +180,9 @@ class use_sampler_builder:
             machine = production_machine_factory(7, spec)
     """
 
-    def __init__(self, builder: "SamplerBuilder | None") -> None:
+    def __init__(self, builder: SamplerBuilder | None) -> None:
         self._builder = builder
-        self._prev: "SamplerBuilder | None" = None
+        self._prev: SamplerBuilder | None = None
 
     def __enter__(self) -> SamplerBuilder:
         self._prev = set_sampler_builder(self._builder)
@@ -257,7 +258,7 @@ def _attach_shared_tiles(sampler: PlayPoolSampler, spec: GameSpec) -> int:
 # ---------------------------------------------------------------------------
 
 
-def production_machine_factory(seed: "int | None", spec: GameSpec) -> StateMachine:
+def production_machine_factory(seed: int | None, spec: GameSpec) -> StateMachine:
     """Build a REAL, DuckDB/FAISS-backed :class:`StateMachine` for the worker.
 
     The production counterpart of

@@ -62,8 +62,17 @@ from simulation.validation.replay_chi_squared import (
 # (compare against ACTUAL historical run totals) is exercised by the
 # HistoricalGame test below.
 REFERENCE_RUN_DISTRIBUTION = [
-    0.0773, 0.1067, 0.1260, 0.1290, 0.1230, 0.1147,
-    0.0997, 0.0667, 0.0520, 0.0353, 0.0697,
+    0.0773,
+    0.1067,
+    0.1260,
+    0.1290,
+    0.1230,
+    0.1147,
+    0.0997,
+    0.0667,
+    0.0520,
+    0.0353,
+    0.0697,
 ]
 MAX_BIN = 10
 
@@ -105,9 +114,7 @@ class TestBinningAndPooling:
         # until every expected bin is >= min_expected (Cochran's rule).
         observed = np.array([20.0, 30.0, 25.0, 4.0, 1.0, 0.0], dtype=float)
         expected = np.array([22.0, 28.0, 24.0, 4.0, 1.5, 0.5], dtype=float)
-        obs, exp, labels = pool_low_expected_bins(
-            observed, expected, min_expected=5.0
-        )
+        obs, exp, labels = pool_low_expected_bins(observed, expected, min_expected=5.0)
         # Every pooled expected bin now clears the threshold...
         assert all(e >= 5.0 for e in exp)
         # ...and pooling conserves the total counts (no games lost).
@@ -120,9 +127,7 @@ class TestBinningAndPooling:
     def test_pool_keeps_well_populated_bins_separate(self):
         observed = np.array([20.0, 30.0, 25.0, 18.0], dtype=float)
         expected = np.array([22.0, 28.0, 24.0, 19.0], dtype=float)
-        obs, exp, labels = pool_low_expected_bins(
-            observed, expected, min_expected=5.0
-        )
+        obs, exp, labels = pool_low_expected_bins(observed, expected, min_expected=5.0)
         # Nothing was sparse -> no pooling -> all four bins survive.
         assert len(obs) == 4
         assert labels == ["0", "1", "2", "3+"]
@@ -131,9 +136,7 @@ class TestBinningAndPooling:
         # A sparse FIRST bin must merge upward so no bin is left under-populated.
         observed = np.array([1.0, 40.0, 40.0], dtype=float)
         expected = np.array([2.0, 39.0, 41.0], dtype=float)
-        obs, exp, labels = pool_low_expected_bins(
-            observed, expected, min_expected=5.0
-        )
+        obs, exp, labels = pool_low_expected_bins(observed, expected, min_expected=5.0)
         assert all(e >= 5.0 for e in exp)
         assert obs.sum() == observed.sum()
 
@@ -151,8 +154,10 @@ class TestChiSquaredReplayPasses:
         sim = simulate_run_distribution(ALWAYS_ON_GAMES, base_seed=0)
         assert len(sim) == 2 * ALWAYS_ON_GAMES  # home + away per game
         res = chi_squared_gof(
-            sim, reference_distribution=REFERENCE_RUN_DISTRIBUTION,
-            max_bin=MAX_BIN, min_expected=5.0,
+            sim,
+            reference_distribution=REFERENCE_RUN_DISTRIBUTION,
+            max_bin=MAX_BIN,
+            min_expected=5.0,
         )
         assert isinstance(res, ChiSquaredResult)
         # Report shape: a sensible dof and a real p-value.
@@ -179,7 +184,10 @@ class TestChiSquaredReplayPasses:
         sim = simulate_run_distribution(ALWAYS_ON_GAMES, base_seed=0)
         ref_totals = simulate_run_distribution(400, base_seed=500_000)
         res = chi_squared_gof(
-            sim, reference_totals=ref_totals, max_bin=MAX_BIN, min_expected=5.0,
+            sim,
+            reference_totals=ref_totals,
+            max_bin=MAX_BIN,
+            min_expected=5.0,
         )
         assert res.passed, (
             f"self-consistency vs simulated reference rejected: "
@@ -199,12 +207,15 @@ class TestNegativeControl:
         # it -- p < 0.05 -- proving the chi-squared has power to reject.
         sim = simulate_run_distribution(ALWAYS_ON_GAMES, base_seed=0)
         wrong = np.array(
-            [math.exp(-2.2) * 2.2 ** k / math.factorial(k) for k in range(MAX_BIN + 1)],
+            [math.exp(-2.2) * 2.2**k / math.factorial(k) for k in range(MAX_BIN + 1)],
             dtype=float,
         )
         wrong[-1] += max(0.0, 1.0 - wrong.sum())  # close the tail mass
         res = chi_squared_gof(
-            sim, reference_distribution=wrong, max_bin=MAX_BIN, min_expected=5.0,
+            sim,
+            reference_distribution=wrong,
+            max_bin=MAX_BIN,
+            min_expected=5.0,
         )
         assert not res.passed, (
             f"negative control NOT rejected (test lacks power): "
@@ -219,7 +230,10 @@ class TestNegativeControl:
         ref_totals = simulate_run_distribution(300, base_seed=8000)
         wrong_totals = [r + 3 for r in ref_totals]
         res = chi_squared_gof(
-            sim, reference_totals=wrong_totals, max_bin=MAX_BIN, min_expected=5.0,
+            sim,
+            reference_totals=wrong_totals,
+            max_bin=MAX_BIN,
+            min_expected=5.0,
         )
         assert res.p_value < 0.05
         assert not res.passed
@@ -236,9 +250,7 @@ class TestChiSquaredGuards:
         with pytest.raises(ValueError):
             chi_squared_gof(sim)  # neither reference given
         with pytest.raises(ValueError):
-            chi_squared_gof(
-                sim, reference_totals=[1, 2], reference_distribution=[1.0] * 11
-            )
+            chi_squared_gof(sim, reference_totals=[1, 2], reference_distribution=[1.0] * 11)
 
     def test_reference_distribution_wrong_length_raises(self):
         sim = [1, 2, 3]
@@ -298,8 +310,10 @@ class TestLargeSampleReplay:
         # league shape even at a large sample where chi-squared is more sensitive).
         sim = simulate_run_distribution(400, base_seed=0)
         res = chi_squared_gof(
-            sim, reference_distribution=REFERENCE_RUN_DISTRIBUTION,
-            max_bin=MAX_BIN, min_expected=5.0,
+            sim,
+            reference_distribution=REFERENCE_RUN_DISTRIBUTION,
+            max_bin=MAX_BIN,
+            min_expected=5.0,
         )
         assert res.passed, (
             f"large-sample replay rejected: chi2={res.statistic:.3f} "

@@ -10,6 +10,7 @@ while the query-path indexes (and primary keys) remain.
 Run:
     pytest tests/unit/test_data_engineer_sim115.py -v
 """
+
 from __future__ import annotations
 
 import os
@@ -18,19 +19,36 @@ import unittest
 import duckdb
 
 MIGRATION_0005 = os.path.join(
-    os.path.dirname(__file__), "..", "..",
-    "db", "migrations", "duckdb", "0005_sim115_prune_pool_indexes.sql",
+    os.path.dirname(__file__),
+    "..",
+    "..",
+    "db",
+    "migrations",
+    "duckdb",
+    "0005_sim115_prune_pool_indexes.sql",
 )
 
 PITCH_DROP = [
-    "idx_pp_pitcher", "idx_pp_batter", "idx_pp_season", "idx_pp_game_date",
-    "idx_pp_batter_season", "idx_pp_runners", "idx_pp_velo", "idx_pp_ivb",
+    "idx_pp_pitcher",
+    "idx_pp_batter",
+    "idx_pp_season",
+    "idx_pp_game_date",
+    "idx_pp_batter_season",
+    "idx_pp_runners",
+    "idx_pp_velo",
+    "idx_pp_ivb",
 ]
 PITCH_KEEP = ["idx_pp_pitcher_season", "idx_pp_outcome", "idx_pp_count"]
 OUTCOME_DROP = [
-    "idx_op_pitcher", "idx_op_batter", "idx_op_bb_type", "idx_op_exit_velo",
-    "idx_op_launch_angle", "idx_op_spray_angle", "idx_op_runners",
-    "idx_op_result_hits", "idx_op_fielded_by",
+    "idx_op_pitcher",
+    "idx_op_batter",
+    "idx_op_bb_type",
+    "idx_op_exit_velo",
+    "idx_op_launch_angle",
+    "idx_op_spray_angle",
+    "idx_op_runners",
+    "idx_op_result_hits",
+    "idx_op_fielded_by",
 ]
 OUTCOME_KEEP = ["idx_op_season"]
 
@@ -50,24 +68,35 @@ def _seed_full_index_set():
         "launch_angle FLOAT, spray_angle FLOAT, runners_state SMALLINT, "
         "result_hits SMALLINT, fielded_by_position SMALLINT)"
     )
-    c.execute("CREATE TABLE migration_history (migration_id VARCHAR PRIMARY KEY, description VARCHAR)")
+    c.execute(
+        "CREATE TABLE migration_history (migration_id VARCHAR PRIMARY KEY, description VARCHAR)"
+    )
     # full pre-prune index set
     for name, col in [
-        ("idx_pp_pitcher", "pitcher_id"), ("idx_pp_batter", "batter_id"),
-        ("idx_pp_season", "season"), ("idx_pp_game_date", "game_date"),
+        ("idx_pp_pitcher", "pitcher_id"),
+        ("idx_pp_batter", "batter_id"),
+        ("idx_pp_season", "season"),
+        ("idx_pp_game_date", "game_date"),
         ("idx_pp_pitcher_season", "pitcher_id, season"),
         ("idx_pp_batter_season", "batter_id, season"),
-        ("idx_pp_outcome", "outcome_type"), ("idx_pp_runners", "runners_state"),
+        ("idx_pp_outcome", "outcome_type"),
+        ("idx_pp_runners", "runners_state"),
         ("idx_pp_count", "count_balls, count_strikes, outs"),
-        ("idx_pp_velo", "velo"), ("idx_pp_ivb", "ivb"),
+        ("idx_pp_velo", "velo"),
+        ("idx_pp_ivb", "ivb"),
     ]:
         c.execute(f"CREATE INDEX {name} ON sim.pitch_pool({col})")
     for name, col in [
-        ("idx_op_pitcher", "pitcher_id"), ("idx_op_batter", "batter_id"),
-        ("idx_op_season", "season"), ("idx_op_bb_type", "bb_type"),
-        ("idx_op_exit_velo", "exit_velo"), ("idx_op_launch_angle", "launch_angle"),
-        ("idx_op_spray_angle", "spray_angle"), ("idx_op_runners", "runners_state"),
-        ("idx_op_result_hits", "result_hits"), ("idx_op_fielded_by", "fielded_by_position"),
+        ("idx_op_pitcher", "pitcher_id"),
+        ("idx_op_batter", "batter_id"),
+        ("idx_op_season", "season"),
+        ("idx_op_bb_type", "bb_type"),
+        ("idx_op_exit_velo", "exit_velo"),
+        ("idx_op_launch_angle", "launch_angle"),
+        ("idx_op_spray_angle", "spray_angle"),
+        ("idx_op_runners", "runners_state"),
+        ("idx_op_result_hits", "result_hits"),
+        ("idx_op_fielded_by", "fielded_by_position"),
     ]:
         c.execute(f"CREATE INDEX {name} ON sim.outcome_pool({col})")
     return c

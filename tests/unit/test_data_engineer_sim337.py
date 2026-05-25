@@ -27,6 +27,7 @@ schema) - which is exactly how the original contradiction could go unnoticed.
 Run:
     pytest tests/unit/test_data_engineer_sim337.py -v
 """
+
 from __future__ import annotations
 
 import os
@@ -36,7 +37,12 @@ import unittest
 import duckdb
 
 MIGRATION_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "..", "db", "migrations", "duckdb",
+    os.path.dirname(__file__),
+    "..",
+    "..",
+    "db",
+    "migrations",
+    "duckdb",
 )
 MIGRATION_0006 = os.path.join(MIGRATION_DIR, "0006_sim337_reconcile_pool_indexes.sql")
 
@@ -78,7 +84,9 @@ def _seed_post_0005_state():
     )
     c.execute("CREATE INDEX idx_pp_pitcher_season ON sim.pitch_pool(pitcher_id, season)")
     c.execute("CREATE INDEX idx_pp_outcome        ON sim.pitch_pool(outcome_type)")
-    c.execute("CREATE INDEX idx_pp_count          ON sim.pitch_pool(count_balls, count_strikes, outs)")
+    c.execute(
+        "CREATE INDEX idx_pp_count          ON sim.pitch_pool(count_balls, count_strikes, outs)"
+    )
     c.execute("CREATE INDEX idx_op_season         ON sim.outcome_pool(season)")
     c.execute("INSERT INTO migration_history VALUES ('0005', 'prune sim-pool indexes SIM-115')")
     return c
@@ -99,14 +107,15 @@ class TestSim337Reconcile(unittest.TestCase):
         _apply(self.c, MIGRATION_0006)
 
     def _index_names(self):
-        return {r[0] for r in self.c.execute(
-            "SELECT index_name FROM duckdb_indexes()"
-        ).fetchall()}
+        return {r[0] for r in self.c.execute("SELECT index_name FROM duckdb_indexes()").fetchall()}
 
     def _indexes_on(self, table):
-        return {r[0] for r in self.c.execute(
-            "SELECT index_name FROM duckdb_indexes() WHERE table_name = ?", [table]
-        ).fetchall()}
+        return {
+            r[0]
+            for r in self.c.execute(
+                "SELECT index_name FROM duckdb_indexes() WHERE table_name = ?", [table]
+            ).fetchall()
+        }
 
     def test_pitch_pool_kept_and_added_present(self):
         names = self._indexes_on("pitch_pool")
@@ -125,31 +134,54 @@ class TestSim337Reconcile(unittest.TestCase):
 
     def test_stand_composites_added(self):
         names = self._index_names()
-        self.assertIn("idx_pp_pitcher_stand_season", names,
-                      "pitch pre-filter (C) must be served by a stand-bearing composite")
-        self.assertIn("idx_op_stand_season", names,
-                      "batted-ball pre-filter (E) must be served by a stand-bearing composite")
+        self.assertIn(
+            "idx_pp_pitcher_stand_season",
+            names,
+            "pitch pre-filter (C) must be served by a stand-bearing composite",
+        )
+        self.assertIn(
+            "idx_op_stand_season",
+            names,
+            "batted-ball pre-filter (E) must be served by a stand-bearing composite",
+        )
 
     def test_pitch_pool_exact_index_set(self):
         managed = {
-            "idx_pp_pitcher_season", "idx_pp_pitcher", "idx_pp_season",
-            "idx_pp_game_date", "idx_pp_pitcher_stand_season",
-            "idx_pp_outcome", "idx_pp_count",
+            "idx_pp_pitcher_season",
+            "idx_pp_pitcher",
+            "idx_pp_season",
+            "idx_pp_game_date",
+            "idx_pp_pitcher_stand_season",
+            "idx_pp_outcome",
+            "idx_pp_count",
         }
         present = self._indexes_on("pitch_pool") & managed
-        self.assertEqual(present, set(PITCH_KEEP),
-                         "pitch_pool managed index set must equal the contract KEEP set")
+        self.assertEqual(
+            present,
+            set(PITCH_KEEP),
+            "pitch_pool managed index set must equal the contract KEEP set",
+        )
 
     def test_outcome_pool_exact_index_set(self):
         managed = {
-            "idx_op_season", "idx_op_stand_season",
-            "idx_op_pitcher", "idx_op_batter", "idx_op_bb_type",
-            "idx_op_exit_velo", "idx_op_launch_angle", "idx_op_spray_angle",
-            "idx_op_runners", "idx_op_result_hits", "idx_op_fielded_by",
+            "idx_op_season",
+            "idx_op_stand_season",
+            "idx_op_pitcher",
+            "idx_op_batter",
+            "idx_op_bb_type",
+            "idx_op_exit_velo",
+            "idx_op_launch_angle",
+            "idx_op_spray_angle",
+            "idx_op_runners",
+            "idx_op_result_hits",
+            "idx_op_fielded_by",
         }
         present = self._indexes_on("outcome_pool") & managed
-        self.assertEqual(present, set(OUTCOME_KEEP),
-                         "outcome_pool managed index set must equal the contract KEEP set")
+        self.assertEqual(
+            present,
+            set(OUTCOME_KEEP),
+            "outcome_pool managed index set must equal the contract KEEP set",
+        )
 
     def test_migration_recorded(self):
         self.assertEqual(

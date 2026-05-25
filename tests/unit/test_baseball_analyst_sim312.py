@@ -1,28 +1,59 @@
 """SIM-312 tests: RUN_VALUES<->Statcast events vocab fix + run resolution."""
+
 from __future__ import annotations
+
 import unittest
+
 from simulation.constants import (
-    CANONICAL_OUTCOME_KEYS, RUN_VALUES, STATCAST_EVENT_ALIASES,
-    UnknownEventError, resolve_event_to_canonical, run_value_for_event,
+    CANONICAL_OUTCOME_KEYS,
+    RUN_VALUES,
+    STATCAST_EVENT_ALIASES,
+    UnknownEventError,
+    resolve_event_to_canonical,
+    run_value_for_event,
 )
 from simulation.run_resolution import (
-    OUTS_PER_INNING, RE24_MATRIX, advance_state, re24_from_rows,
-    re24_value, resolve_runs,
+    OUTS_PER_INNING,
+    RE24_MATRIX,
+    advance_state,
+    re24_from_rows,
+    re24_value,
+    resolve_runs,
 )
 
 STATCAST_TERMINAL_EVENTS = [
-    "single", "double", "triple", "home_run",
-    "walk", "intent_walk", "hit_by_pitch", "catcher_interf",
-    "strikeout", "strikeout_double_play",
-    "field_out", "force_out", "fielders_choice", "fielders_choice_out", "other_out",
-    "grounded_into_double_play", "double_play", "triple_play",
-    "sac_fly", "sac_fly_double_play", "sac_bunt", "sac_bunt_double_play",
+    "single",
+    "double",
+    "triple",
+    "home_run",
+    "walk",
+    "intent_walk",
+    "hit_by_pitch",
+    "catcher_interf",
+    "strikeout",
+    "strikeout_double_play",
+    "field_out",
+    "force_out",
+    "fielders_choice",
+    "fielders_choice_out",
+    "other_out",
+    "grounded_into_double_play",
+    "double_play",
+    "triple_play",
+    "sac_fly",
+    "sac_fly_double_play",
+    "sac_bunt",
+    "sac_bunt_double_play",
     "field_error",
 ]
 # Outs that COST runs (sac_fly excluded; it is productive/positive).
 COMMON_STATCAST_OUTS = [
-    "field_out", "force_out", "fielders_choice",
-    "grounded_into_double_play", "double_play", "strikeout",
+    "field_out",
+    "force_out",
+    "fielders_choice",
+    "grounded_into_double_play",
+    "double_play",
+    "strikeout",
 ]
 
 
@@ -65,16 +96,17 @@ class TestVocab(unittest.TestCase):
         self.assertTrue(set(STATCAST_EVENT_ALIASES.values()) <= CANONICAL_OUTCOME_KEYS)
 
     def test_spellings_agree(self):
-        for raw, canon in [("intent_walk", "intentional_walk"),
-                           ("sac_fly", "sacrifice_fly"),
-                           ("sac_bunt", "sacrifice_hit"),
-                           ("grounded_into_double_play", "ground_into_double_play")]:
+        for raw, canon in [
+            ("intent_walk", "intentional_walk"),
+            ("sac_fly", "sacrifice_fly"),
+            ("sac_bunt", "sacrifice_hit"),
+            ("grounded_into_double_play", "ground_into_double_play"),
+        ]:
             with self.subTest(pair=(raw, canon)):
                 self.assertEqual(run_value_for_event(raw), RUN_VALUES[canon])
 
     def test_dp_at_least_as_bad_as_field_out(self):
-        self.assertLessEqual(run_value_for_event("double_play"),
-                             run_value_for_event("field_out"))
+        self.assertLessEqual(run_value_for_event("double_play"), run_value_for_event("field_out"))
 
 
 class TestUnknownDetectable(unittest.TestCase):
@@ -120,38 +152,42 @@ class TestRE24Matrix(unittest.TestCase):
 
 class TestRE24Resolution(unittest.TestCase):
     def test_solo_hr(self):
-        r = resolve_runs(event="home_run", outs=0, runners_state=0,
-                         result_hits=4, result_outs=0, result_runs=1)
+        r = resolve_runs(
+            event="home_run", outs=0, runners_state=0, result_hits=4, result_outs=0, result_runs=1
+        )
         self.assertEqual(r.method, "re24_delta")
         self.assertAlmostEqual(r.runs, 1.0, places=6)
 
     def test_grand_slam(self):
-        r = resolve_runs(event="home_run", outs=0, runners_state=7,
-                         result_hits=4, result_outs=0, result_runs=4)
+        r = resolve_runs(
+            event="home_run", outs=0, runners_state=7, result_hits=4, result_outs=0, result_runs=4
+        )
         self.assertEqual(r.method, "re24_delta")
         self.assertGreater(r.runs, 1.5)
         self.assertLess(r.runs, 4.0)
 
     def test_k_two_outs_negative(self):
-        r = resolve_runs(event="strikeout", outs=2, runners_state=3,
-                         result_hits=0, result_outs=1, result_runs=0)
+        r = resolve_runs(
+            event="strikeout", outs=2, runners_state=3, result_hits=0, result_outs=1, result_runs=0
+        )
         self.assertEqual(r.method, "re24_delta")
         self.assertLess(r.runs, 0.0)
         self.assertEqual(r.new_outs, OUTS_PER_INNING)
         self.assertEqual(r.new_runners_state, 0)
 
     def test_gidp_worse_than_out(self):
-        base = dict(outs=0, runners_state=1)
-        gidp = resolve_runs(event="grounded_into_double_play",
-                            result_hits=0, result_outs=2, result_runs=0, **base)
-        out1 = resolve_runs(event="field_out",
-                            result_hits=0, result_outs=1, result_runs=0, **base)
+        base = {"outs": 0, "runners_state": 1}
+        gidp = resolve_runs(
+            event="grounded_into_double_play", result_hits=0, result_outs=2, result_runs=0, **base
+        )
+        out1 = resolve_runs(event="field_out", result_hits=0, result_outs=1, result_runs=0, **base)
         self.assertEqual(gidp.method, "re24_delta")
         self.assertLess(gidp.runs, out1.runs)
 
     def test_single_scoring_positive(self):
-        r = resolve_runs(event="single", outs=0, runners_state=2,
-                         result_hits=1, result_outs=0, result_runs=1)
+        r = resolve_runs(
+            event="single", outs=0, runners_state=2, result_hits=1, result_outs=0, result_runs=1
+        )
         self.assertEqual(r.method, "re24_delta")
         self.assertGreater(r.runs, 0.0)
 

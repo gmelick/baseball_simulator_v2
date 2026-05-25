@@ -37,7 +37,7 @@ from __future__ import annotations
 import json
 import pathlib
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -59,7 +59,6 @@ from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
     MockOddsAPI,
     create_app,
 )
-
 
 # ===========================================================================
 # Helpers
@@ -206,19 +205,29 @@ class TestGameStateBuilderRoster:
                 "home": {
                     "players": {
                         "ID1": _make_player(
-                            1, "Lead Off", batting_order="100", position="CF",
+                            1,
+                            "Lead Off",
+                            batting_order="100",
+                            position="CF",
                             stats={"batting": {"summary": "1-2"}},
                         ),
                         "ID2": _make_player(
-                            2, "Cleanup", batting_order="400", position="1B",
+                            2,
+                            "Cleanup",
+                            batting_order="400",
+                            position="1B",
                             stats={"batting": {"summary": "0-1"}},
                         ),
                         "ID3": _make_player(
-                            3, "Reliever", position="P",
+                            3,
+                            "Reliever",
+                            position="P",
                             stats={"pitching": {"pitchesThrown": 0, "inningsPitched": "0.0"}},
                         ),
                         "ID4": _make_player(
-                            4, "Bench Bat", position="SS",
+                            4,
+                            "Bench Bat",
+                            position="SS",
                             stats={"batting": {"summary": ""}},
                         ),
                     },
@@ -243,7 +252,9 @@ class TestGameStateBuilderRoster:
                 "home": {
                     "players": {
                         "ID3": _make_player(
-                            3, "Fresh Arm", position="P",
+                            3,
+                            "Fresh Arm",
+                            position="P",
                             stats={"pitching": {"pitchesThrown": 0, "inningsPitched": "0.0"}},
                         ),
                     },
@@ -282,9 +293,7 @@ class TestPlayHistoryIncrementalCache:
         assert builder._last_at_bat_index == 1
 
         # Same two plays + one new play → only the new one is appended.
-        second = builder._parse_play_history(
-            [self._play(0), self._play(1), self._play(2)]
-        )
+        second = builder._parse_play_history([self._play(0), self._play(1), self._play(2)])
         assert len(second) == 3
         assert builder._last_at_bat_index == 2
 
@@ -316,9 +325,7 @@ class TestInferRole:
     def test_opener_is_opener(self) -> None:
         # IP < 4.0 but BF >= 9 → deliberate first-inning opener.
         assert (
-            GameStateBuilder._infer_role(
-                {"inningsPitched": "2.0", "battersFaced": 9}, {}
-            )
+            GameStateBuilder._infer_role({"inningsPitched": "2.0", "battersFaced": 9}, {})
             == "Opener"
         )
 
@@ -571,10 +578,7 @@ class TestPersistOdds:
     def test_prop_odds_hash_differs_per_prop_stat(self) -> None:
         a = MockOddsAPI.get_prop_odds(745000, 100001, "strikeouts")
         b = MockOddsAPI.get_prop_odds(745000, 100001, "hits")
-        assert (
-            LiveIngestionPipeline._prop_odds_hash(a)
-            != LiveIngestionPipeline._prop_odds_hash(b)
-        )
+        assert LiveIngestionPipeline._prop_odds_hash(a) != LiveIngestionPipeline._prop_odds_hash(b)
 
 
 # ===========================================================================

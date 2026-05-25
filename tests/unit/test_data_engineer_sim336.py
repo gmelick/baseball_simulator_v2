@@ -14,20 +14,24 @@ an in-memory connection seeded with synthetic rows; no Postgres.
 Run:
     pytest tests/unit/test_data_engineer_sim336.py -v
 """
+
 from __future__ import annotations
 
 import datetime as dt
 import os
 import unittest
-from unittest.mock import MagicMock
 
 import duckdb
 
 import pipeline.batch.player_profile_computor as ppc
 
 MIGRATION_0007 = os.path.join(
-    os.path.dirname(__file__), "..", "..",
-    "db", "migrations", "duckdb",
+    os.path.dirname(__file__),
+    "..",
+    "..",
+    "db",
+    "migrations",
+    "duckdb",
     "0007_sim336_sim345_park_factors_data_layer.sql",
 )
 
@@ -35,6 +39,7 @@ MIGRATION_0007 = os.path.join(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _pf_conn():
     """In-memory DuckDB with a synthetic pg.raw.pitches + derived.park_factors."""
@@ -98,9 +103,7 @@ def _seed_park_pas(c):
     for _ in range(4):
         add(1, "S", "home_run")
 
-    c.executemany(
-        "INSERT INTO pg.raw.pitches VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows
-    )
+    c.executemany("INSERT INTO pg.raw.pitches VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
 
 
 def _run_park_factors(c, seasons):
@@ -113,6 +116,7 @@ def _run_park_factors(c, seasons):
 # ---------------------------------------------------------------------------
 # SIM-336 — park factors
 # ---------------------------------------------------------------------------
+
 
 class TestParkFactorsCompute(unittest.TestCase):
     def setUp(self):
@@ -127,9 +131,7 @@ class TestParkFactorsCompute(unittest.TestCase):
                 "SELECT DISTINCT factor_type FROM derived.park_factors"
             ).fetchall()
         }
-        self.assertEqual(
-            types, {"HR", "1B", "2B", "3B", "BB", "K", "GB", "FB", "R"}
-        )
+        self.assertEqual(types, {"HR", "1B", "2B", "3B", "BB", "K", "GB", "FB", "R"})
 
     def test_factor_overall_non_null_and_correct(self):
         # Venue 1 HR rate = 44/204; venue 2 = 10/200. League = 54/404.
@@ -205,8 +207,7 @@ class TestParkFactorsIdempotent(unittest.TestCase):
         _run_park_factors(c, [2024])
         _run_park_factors(c, [2024])
         n = c.execute(
-            "SELECT COUNT(*) FROM derived.park_factors "
-            "WHERE venue_id=1 AND factor_type='HR'"
+            "SELECT COUNT(*) FROM derived.park_factors WHERE venue_id=1 AND factor_type='HR'"
         ).fetchone()[0]
         self.assertEqual(n, 1)
 
@@ -215,18 +216,17 @@ class TestParkFactorsIdempotent(unittest.TestCase):
 # SIM-345 — watermark >= + row-count guard
 # ---------------------------------------------------------------------------
 
+
 def _wm_conn():
     c = duckdb.connect(":memory:")
     c.execute("ATTACH ':memory:' AS pg")
     c.execute("CREATE SCHEMA pg.raw")
     c.execute(
-        "CREATE TABLE pg.raw.pitches (season SMALLINT, game_date DATE, "
-        "data_quality_flag BOOLEAN)"
+        "CREATE TABLE pg.raw.pitches (season SMALLINT, game_date DATE, data_quality_flag BOOLEAN)"
     )
     c.execute("CREATE SCHEMA sim")
     c.execute(
-        "CREATE TABLE sim.pitch_pool (pitch_id BIGINT, season SMALLINT, "
-        "recency_weight FLOAT)"
+        "CREATE TABLE sim.pitch_pool (pitch_id BIGINT, season SMALLINT, recency_weight FLOAT)"
     )
     c.execute(
         "CREATE TABLE sim.pool_build_metadata ("
@@ -251,17 +251,13 @@ class TestWatermarkRowCountGuard(unittest.TestCase):
         ppc._record_pool_build(c, "pitch_pool", [2024], ref_season=2024)
 
         # Nothing changed → fresh, skipped.
-        self.assertEqual(
-            ppc._seasons_needing_rebuild(c, "pitch_pool", [2024]), []
-        )
+        self.assertEqual(ppc._seasons_needing_rebuild(c, "pitch_pool", [2024]), [])
 
         # A LATE doubleheader row lands on the SAME game_date (watermark does
         # NOT advance). The strict `>` watermark would have skipped this; the
         # row-count guard must catch it.
         c.execute("INSERT INTO pg.raw.pitches VALUES (2024, DATE '2024-09-15', FALSE)")
-        self.assertEqual(
-            ppc._seasons_needing_rebuild(c, "pitch_pool", [2024]), [2024]
-        )
+        self.assertEqual(ppc._seasons_needing_rebuild(c, "pitch_pool", [2024]), [2024])
 
     def test_unchanged_season_stays_fresh(self):
         c = _wm_conn()
@@ -283,8 +279,11 @@ class TestWatermarkRowCountGuard(unittest.TestCase):
         c = _wm_conn()
         c.executemany(
             "INSERT INTO pg.raw.pitches VALUES (?, ?, FALSE)",
-            [[2024, dt.date(2024, 9, 1)], [2024, dt.date(2024, 9, 30)],
-             [2024, dt.date(2024, 9, 30)]],
+            [
+                [2024, dt.date(2024, 9, 1)],
+                [2024, dt.date(2024, 9, 30)],
+                [2024, dt.date(2024, 9, 30)],
+            ],
         )
         c.execute("INSERT INTO sim.pitch_pool VALUES (1, 2024, 2.0)")
         ppc._record_pool_build(c, "pitch_pool", [2024], 2024)
@@ -300,12 +299,11 @@ class TestWatermarkRowCountGuard(unittest.TestCase):
 # SIM-345 — canonical cross-pool recency_ref_season
 # ---------------------------------------------------------------------------
 
+
 class TestCanonicalRefSeason(unittest.TestCase):
     def test_max_of_requested_when_no_metadata(self):
         c = _wm_conn()
-        self.assertEqual(
-            ppc._canonical_ref_season(c, [2022, 2023, 2024]), 2024
-        )
+        self.assertEqual(ppc._canonical_ref_season(c, [2022, 2023, 2024]), 2024)
 
     def test_adopts_newest_recorded_ref_across_pools(self):
         c = _wm_conn()
@@ -328,23 +326,22 @@ class TestCanonicalRefSeason(unittest.TestCase):
 # SIM-345 — stand vs bat_hand pool contract
 # ---------------------------------------------------------------------------
 
+
 class TestStandBatHandContract(unittest.TestCase):
     def test_pool_stand_resolves_to_bat_hand(self):
         """The pool `stand` is the RESOLVED batting side: bat_hand when L/R,
         else the declared stand. We exercise the CASE expression directly in
         DuckDB to lock the contract."""
         c = duckdb.connect(":memory:")
-        c.execute(
-            "CREATE TABLE t (stand VARCHAR, bat_hand VARCHAR)"
-        )
+        c.execute("CREATE TABLE t (stand VARCHAR, bat_hand VARCHAR)")
         c.executemany(
             "INSERT INTO t VALUES (?, ?)",
             [
-                ["R", "R"],   # RHB → R
-                ["L", "L"],   # LHB → L
-                ["S", "R"],   # switch hitter batting R this PA → R (not S)
-                ["S", "L"],   # switch hitter batting L this PA → L (not S)
-                ["S", "S"],   # unresolved switch → fall back to declared stand
+                ["R", "R"],  # RHB → R
+                ["L", "L"],  # LHB → L
+                ["S", "R"],  # switch hitter batting R this PA → R (not S)
+                ["S", "L"],  # switch hitter batting L this PA → L (not S)
+                ["S", "S"],  # unresolved switch → fall back to declared stand
                 ["L", None],  # bat_hand missing → fall back to declared stand
             ],
         )
@@ -358,6 +355,7 @@ class TestStandBatHandContract(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # SIM-345 — recency_weight NOT NULL parity + migration 0007
 # ---------------------------------------------------------------------------
+
 
 class TestMigration0007(unittest.TestCase):
     def _base_db(self):
@@ -385,8 +383,7 @@ class TestMigration0007(unittest.TestCase):
             "PRIMARY KEY (pool_name, season))"
         )
         c.execute(
-            "CREATE TABLE migration_history "
-            "(migration_id VARCHAR PRIMARY KEY, description VARCHAR)"
+            "CREATE TABLE migration_history (migration_id VARCHAR PRIMARY KEY, description VARCHAR)"
         )
         return c
 
@@ -397,9 +394,7 @@ class TestMigration0007(unittest.TestCase):
 
         # source_row_count added to metadata.
         meta_cols = [
-            r[1] for r in c.execute(
-                "PRAGMA table_info('sim.pool_build_metadata')"
-            ).fetchall()
+            r[1] for r in c.execute("PRAGMA table_info('sim.pool_build_metadata')").fetchall()
         ]
         self.assertIn("source_row_count", meta_cols)
 
@@ -408,7 +403,8 @@ class TestMigration0007(unittest.TestCase):
             val = c.execute(f"SELECT recency_weight FROM sim.{tbl}").fetchone()[0]
             self.assertEqual(val, 1.0)
             notnull = [
-                r[3] for r in c.execute(f"PRAGMA table_info('sim.{tbl}')").fetchall()
+                r[3]
+                for r in c.execute(f"PRAGMA table_info('sim.{tbl}')").fetchall()
                 if r[1] == "recency_weight"
             ][0]
             self.assertTrue(notnull, f"{tbl}.recency_weight must be NOT NULL")

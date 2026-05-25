@@ -56,10 +56,10 @@ construction.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
 
-from simulation.game_state import Half, PlayResult, Team
+from simulation.game_state import Half, PlayResult
 
 # ---------------------------------------------------------------------------
 # Vocabulary
@@ -69,9 +69,7 @@ from simulation.game_state import Half, PlayResult, Team
 #: canonical ``RUN_VALUES`` spellings (``simulation.run_resolution``) and the raw
 #: ``PlayResult.event`` spellings -- which happen to coincide for the four hit
 #: types -- so the derivation is tolerant of either field being populated.
-HIT_EVENTS: frozenset[str] = frozenset(
-    {"single", "double", "triple", "home_run"}
-)
+HIT_EVENTS: frozenset[str] = frozenset({"single", "double", "triple", "home_run"})
 
 
 def _is_hit(result: PlayResult) -> bool:
@@ -107,8 +105,8 @@ class InningLine:
     """
 
     inning: int
-    away: Optional[int] = None
-    home: Optional[int] = None
+    away: int | None = None
+    home: int | None = None
 
     @property
     def away_played(self) -> bool:
@@ -150,12 +148,12 @@ class Linescore:
         return len(self.innings)
 
     @property
-    def away_by_inning(self) -> list[Optional[int]]:
+    def away_by_inning(self) -> list[int | None]:
         """The away (top) run cell per inning, in order (None == not played)."""
         return [ln.away for ln in self.innings]
 
     @property
-    def home_by_inning(self) -> list[Optional[int]]:
+    def home_by_inning(self) -> list[int | None]:
         """The home (bottom) run cell per inning, in order (None == not played)."""
         return [ln.home for ln in self.innings]
 

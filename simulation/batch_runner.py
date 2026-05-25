@@ -75,10 +75,11 @@ from __future__ import annotations
 import importlib
 import os
 import time
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from multiprocessing import shared_memory
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 
@@ -103,7 +104,7 @@ POOL_QUERY_TTL_S = 300
 MAX_WORKER_CEILING = 10
 
 
-def default_max_workers(cpu_count: "int | None" = None) -> int:
+def default_max_workers(cpu_count: int | None = None) -> int:
     """The SIM-281 D1 worker count: ``min(os.cpu_count() - 1, 10)``, floored at 1.
 
     ``cpu_count`` is injectable for deterministic tests; defaults to
@@ -115,7 +116,7 @@ def default_max_workers(cpu_count: "int | None" = None) -> int:
     return max(1, min(int(cpu) - 1, MAX_WORKER_CEILING))
 
 
-def derive_seed(base_seed: "int | None", i: int) -> "int | None":
+def derive_seed(base_seed: int | None, i: int) -> int | None:
     """Derive iteration ``i``'s per-game seed from a ``base_seed`` (spec §6.3).
 
     Returns ``base_seed + i`` (a distinct, deterministic seed per iteration) when
@@ -168,9 +169,9 @@ class GameSpec:
         build a zero-copy sampler.  ``None`` until SIM-333.
     """
 
-    machine_factory: "str | None" = None
-    sim_kwargs: "dict[str, Any]" = field(default_factory=dict)
-    shared_segments: "dict[str, Any] | None" = None
+    machine_factory: str | None = None
+    sim_kwargs: dict[str, Any] = field(default_factory=dict)
+    shared_segments: dict[str, Any] | None = None
 
     def cache_key_fields(self) -> tuple:
         """The picklable, hashable identity of this spec for the cache key.
@@ -178,9 +179,7 @@ class GameSpec:
         Excludes ``shared_segments`` (an attach detail, NOT a determinant of the
         result) and sorts ``sim_kwargs`` so the key is stable across dict order.
         """
-        kw = tuple(sorted(
-            (k, _hashable(v)) for k, v in self.sim_kwargs.items()
-        ))
+        kw = tuple(sorted((k, _hashable(v)) for k, v in self.sim_kwargs.items()))
         return (self.machine_factory, kw)
 
 
@@ -201,9 +200,7 @@ def _resolve_dotted(ref: str) -> Callable:
     method or closure would not).
     """
     if ":" not in ref:
-        raise ValueError(
-            f"machine_factory ref {ref!r} must be 'module.path:callable'."
-        )
+        raise ValueError(f"machine_factory ref {ref!r} must be 'module.path:callable'.")
     mod_path, _, attr = ref.partition(":")
     module = importlib.import_module(mod_path)
     factory = getattr(module, attr)
@@ -271,13 +268,13 @@ class SharedArrayDescriptor:
     """
 
     shm_name: str
-    shape: "tuple[int, ...]"
+    shape: tuple[int, ...]
     dtype: str
 
 
 def publish_shared_arrays(
-    arrays: "dict[str, np.ndarray]",
-) -> "tuple[dict[str, SharedArrayDescriptor], list[shared_memory.SharedMemory]]":
+    arrays: dict[str, np.ndarray],
+) -> tuple[dict[str, SharedArrayDescriptor], list[shared_memory.SharedMemory]]:
     """Parent-side: copy each read-only array ONCE into a named ``SharedMemory``
     segment and return ``(registry, owned_segments)``.
 
@@ -288,13 +285,13 @@ def publish_shared_arrays(
     :func:`unlink_shared_segments`).  The one-time copy here is the ONLY copy of the
     bytes -- workers attach the same physical segment zero-copy.
     """
-    registry: "dict[str, SharedArrayDescriptor]" = {}
-    owned: "list[shared_memory.SharedMemory]" = []
+    registry: dict[str, SharedArrayDescriptor] = {}
+    owned: list[shared_memory.SharedMemory] = []
     for name, arr in arrays.items():
         a = np.ascontiguousarray(arr)
         nbytes = max(int(a.nbytes), 1)  # SharedMemory requires size >= 1
         shm = shared_memory.SharedMemory(create=True, size=nbytes)
-        view = np.ndarray(a.shape, dtype=a.dtype, buffer=shm.buf)
+        view: np.ndarray = np.ndarray(a.shape, dtype=a.dtype, buffer=shm.buf)
         view[...] = a  # the single copy into shared memory
         owned.append(shm)
         registry[name] = SharedArrayDescriptor(
@@ -304,7 +301,7 @@ def publish_shared_arrays(
 
 
 def unlink_shared_segments(
-    segments: "list[shared_memory.SharedMemory]",
+    segments: list[shared_memory.SharedMemory],
 ) -> None:
     """Parent-side teardown: ``close()`` then ``unlink()`` every owned segment
     exactly once (idempotent / never raises).
@@ -335,10 +332,10 @@ def unlink_shared_segments(
 #: shared buffer; ``"_handles"`` holds the live ``SharedMemory`` handles the worker
 #: keeps open (and ``close()``s at exit -- but NEVER ``unlink()``s).  Empty when no
 #: registry is supplied (the SIM-332 per-process fallback).
-_WORKER_SHARED: "dict[str, Any]" = {"views": {}, "_handles": []}
+_WORKER_SHARED: dict[str, Any] = {"views": {}, "_handles": []}
 
 
-def _worker_init(shared_registry: "dict[str, SharedArrayDescriptor] | None" = None) -> None:
+def _worker_init(shared_registry: dict[str, SharedArrayDescriptor] | None = None) -> None:
     """Pool ``initializer`` (runs ONCE per worker at startup) -- the SIM-333 attach.
 
     SIM-281 D2 / §"Worker startup sequence": each worker ATTACHES the parent's named
@@ -359,15 +356,13 @@ def _worker_init(shared_registry: "dict[str, SharedArrayDescriptor] | None" = No
         return
     for name, desc in shared_registry.items():
         shm = shared_memory.SharedMemory(name=desc.shm_name)  # ATTACH (no create)
-        view = np.ndarray(
-            tuple(desc.shape), dtype=np.dtype(desc.dtype), buffer=shm.buf
-        )
+        view: np.ndarray = np.ndarray(tuple(desc.shape), dtype=np.dtype(desc.dtype), buffer=shm.buf)
         view.setflags(write=False)  # read-only contract (no CoW re-duplication)
         _WORKER_SHARED["views"][name] = view
         _WORKER_SHARED["_handles"].append(shm)
 
 
-def get_shared_view(name: str) -> "np.ndarray | None":
+def get_shared_view(name: str) -> np.ndarray | None:
     """Worker-side accessor: the zero-copy view attached by :func:`_worker_init`
     for ``name``, or ``None`` if no such shared segment was published.
 
@@ -383,7 +378,7 @@ def get_shared_view(name: str) -> "np.ndarray | None":
 # ---------------------------------------------------------------------------
 
 
-def _run_one(spec: GameSpec, seed: "int | None") -> GameSimResult:
+def _run_one(spec: GameSpec, seed: int | None) -> GameSimResult:
     """Run ONE :func:`simulate_game` for ``spec`` at the derived per-game ``seed``.
 
     This is the function the pool maps across the N seeds.  It is module-level
@@ -414,9 +409,7 @@ def _run_one(spec: GameSpec, seed: "int | None") -> GameSimResult:
     # SIM-377: drop factory-only (``_``-prefixed) keys before the splat so they
     # never reach ``simulate_game``'s fixed signature.  The factory already saw
     # them via ``spec`` above.
-    passthrough = {
-        k: v for k, v in spec.sim_kwargs.items() if not k.startswith("_")
-    }
+    passthrough = {k: v for k, v in spec.sim_kwargs.items() if not k.startswith("_")}
     return simulate_game(machine, seed=seed, **passthrough)
 
 
@@ -434,7 +427,7 @@ class SimCache:
     chooses a backend (Redis if reachable, else in-memory, else no-op).
     """
 
-    def get(self, key: str) -> "Any | None":
+    def get(self, key: str) -> Any | None:
         raise NotImplementedError
 
     def set(self, key: str, value: Any, ttl_s: int) -> None:
@@ -452,7 +445,7 @@ class NullCache(SimCache):
     batch.
     """
 
-    def get(self, key: str) -> "Any | None":
+    def get(self, key: str) -> Any | None:
         return None
 
     def set(self, key: str, value: Any, ttl_s: int) -> None:
@@ -472,12 +465,12 @@ class InMemoryCache(SimCache):
     ``redis`` client but NO server).
     """
 
-    def __init__(self, maxsize: int = 256, *, clock: "Callable[[], float] | None" = None):
-        self._store: "dict[str, tuple[Any, float]]" = {}
+    def __init__(self, maxsize: int = 256, *, clock: Callable[[], float] | None = None):
+        self._store: dict[str, tuple[Any, float]] = {}
         self._maxsize = int(maxsize)
         self._clock = clock or time.monotonic
 
-    def get(self, key: str) -> "Any | None":
+    def get(self, key: str) -> Any | None:
         entry = self._store.get(key)
         if entry is None:
             return None
@@ -523,7 +516,7 @@ class RedisCache(SimCache):
     def _k(self, key: str) -> str:
         return f"{self._prefix}{key}"
 
-    def get(self, key: str) -> "Any | None":
+    def get(self, key: str) -> Any | None:
         try:
             raw = self._client.get(self._k(key))
         except Exception:
@@ -553,7 +546,7 @@ class RedisCache(SimCache):
 def make_cache(
     *,
     prefer_redis: bool = True,
-    redis_url: "str | None" = None,
+    redis_url: str | None = None,
     client: Any = None,
 ) -> SimCache:
     """Choose a cache backend: Redis if reachable, else in-memory (never raises).
@@ -602,7 +595,7 @@ class BatchResult:
     n_iterations: int
     max_workers: int
     from_cache: bool
-    base_seed: "int | None"
+    base_seed: int | None
 
 
 class BatchRunner:
@@ -658,10 +651,10 @@ class BatchRunner:
     def __init__(
         self,
         *,
-        cache: "SimCache | None" = None,
-        max_workers: "int | None" = None,
+        cache: SimCache | None = None,
+        max_workers: int | None = None,
         confidence_level: float = 0.95,
-        shared_arrays: "dict[str, np.ndarray] | None" = None,
+        shared_arrays: dict[str, np.ndarray] | None = None,
         reuse_pool: bool = True,
     ) -> None:
         self.cache = cache if cache is not None else make_cache()
@@ -676,8 +669,8 @@ class BatchRunner:
         # registry + owned segments are populated lazily on the first pooled run and
         # torn down by :meth:`close`.
         self._shared_arrays = dict(shared_arrays) if shared_arrays else {}
-        self._shared_registry: "dict[str, SharedArrayDescriptor]" = {}
-        self._owned_segments: "list[shared_memory.SharedMemory]" = []
+        self._shared_registry: dict[str, SharedArrayDescriptor] = {}
+        self._owned_segments: list[shared_memory.SharedMemory] = []
 
         # SIM-360: the persistent (warm) pool, created lazily on the first pooled
         # ``_execute`` and reused across ``run()`` calls.  ``_pool`` is the live
@@ -686,8 +679,8 @@ class BatchRunner:
         # detect the change and recreate).  ``reuse_pool=False`` opts back into the
         # SIM-332 fresh-pool-per-call behaviour.
         self._reuse_pool = bool(reuse_pool)
-        self._pool: "ProcessPoolExecutor | None" = None
-        self._pool_workers: "int | None" = None
+        self._pool: ProcessPoolExecutor | None = None
+        self._pool_workers: int | None = None
 
     # ---- worker-count + cache-key helpers --------------------------------
 
@@ -704,7 +697,7 @@ class BatchRunner:
         )
         return max(1, min(int(base), int(n_iterations)))
 
-    def _cache_key(self, spec: GameSpec, base_seed: "int | None", n: int) -> str:
+    def _cache_key(self, spec: GameSpec, base_seed: int | None, n: int) -> str:
         """Key the sim cache on (game spec + base seed + N) -- SIM-332 AC #4.
 
         A pure function of exactly the inputs that determine the summary, so a
@@ -712,7 +705,7 @@ class BatchRunner:
         """
         return repr(("sim", spec.cache_key_fields(), base_seed, int(n)))
 
-    def _ensure_shared_published(self) -> "dict[str, SharedArrayDescriptor]":
+    def _ensure_shared_published(self) -> dict[str, SharedArrayDescriptor]:
         """Publish the read-only arrays into shared memory ONCE (idempotent).
 
         On the first pooled run with ``shared_arrays`` set, copy each array into a
@@ -724,12 +717,10 @@ class BatchRunner:
         if not self._shared_arrays:
             return {}
         if not self._shared_registry:
-            self._shared_registry, self._owned_segments = publish_shared_arrays(
-                self._shared_arrays
-            )
+            self._shared_registry, self._owned_segments = publish_shared_arrays(self._shared_arrays)
         return self._shared_registry
 
-    def _pool_kwargs(self) -> "dict[str, Any]":
+    def _pool_kwargs(self) -> dict[str, Any]:
         """Kwargs for the ``ProcessPoolExecutor`` -- the SIM-333 attach seam (FILLED).
 
         Returns ``initializer=_worker_init`` with ``initargs=(registry,)`` where
@@ -744,7 +735,7 @@ class BatchRunner:
 
     # ---- persistent (warm) pool lifecycle (SIM-360) -----------------------
 
-    def _get_pool(self, max_workers: int) -> "ProcessPoolExecutor":
+    def _get_pool(self, max_workers: int) -> ProcessPoolExecutor:
         """Return the warm :class:`ProcessPoolExecutor` for this run (SIM-360).
 
         Creates the pool lazily on the first pooled call (sized for ``max_workers``
@@ -769,16 +760,14 @@ class BatchRunner:
             # `_pool_kwargs()` publishes the shared segments ONCE (idempotent) and
             # wires the worker initializer; the warm pool keeps those segments
             # attached for its whole lifetime.
-            self._pool = ProcessPoolExecutor(
-                max_workers=max_workers, **self._pool_kwargs()
-            )
+            self._pool = ProcessPoolExecutor(max_workers=max_workers, **self._pool_kwargs())
             self._pool_workers = max_workers
         return self._pool
 
     # ---- shared-memory + pool lifecycle (parent owns create/unlink) -------
 
     @property
-    def shared_registry(self) -> "dict[str, SharedArrayDescriptor]":
+    def shared_registry(self) -> dict[str, SharedArrayDescriptor]:
         """The published ``{name: SharedArrayDescriptor}`` registry (publishing it
         if not yet done).  Exposed so a caller / test can round-trip + attach."""
         return self._ensure_shared_published()
@@ -802,7 +791,7 @@ class BatchRunner:
             self._owned_segments = []
         self._shared_registry = {}
 
-    def __enter__(self) -> "BatchRunner":
+    def __enter__(self) -> BatchRunner:
         return self
 
     def __exit__(self, *_exc) -> None:
@@ -815,7 +804,7 @@ class BatchRunner:
         spec: GameSpec,
         *,
         n_iterations: int = 100,
-        base_seed: "int | None" = None,
+        base_seed: int | None = None,
         use_cache: bool = True,
     ) -> BatchResult:
         """Run the batch and return a :class:`BatchResult` (summary + provenance).
@@ -847,9 +836,7 @@ class BatchRunner:
         seeds = [derive_seed(base_seed, i) for i in range(n_iterations)]
         results = self._execute(spec, seeds, max_workers)
 
-        summary = GameSimSummary.from_results(
-            results, confidence_level=self.confidence_level
-        )
+        summary = GameSimSummary.from_results(results, confidence_level=self.confidence_level)
         if use_cache:
             self.cache.set(key, summary, SIM_RESULT_TTL_S)
         return BatchResult(
@@ -861,8 +848,8 @@ class BatchRunner:
         )
 
     def _execute(
-        self, spec: GameSpec, seeds: "list[int | None]", max_workers: int
-    ) -> "list[GameSimResult]":
+        self, spec: GameSpec, seeds: list[int | None], max_workers: int
+    ) -> list[GameSimResult]:
         """Run the N games -- in-process when ``max_workers == 1``, else pooled.
 
         The synchronous (workers=1) path runs every game in THIS process in seed
@@ -887,17 +874,15 @@ class BatchRunner:
             return self._map_pool(pool, spec, seeds)
 
         # reuse_pool=False -> SIM-332 transient pool (fresh per call).
-        with ProcessPoolExecutor(
-            max_workers=max_workers, **self._pool_kwargs()
-        ) as pool:
+        with ProcessPoolExecutor(max_workers=max_workers, **self._pool_kwargs()) as pool:
             return self._map_pool(pool, spec, seeds)
 
     @staticmethod
     def _map_pool(
-        pool: "ProcessPoolExecutor",
+        pool: ProcessPoolExecutor,
         spec: GameSpec,
-        seeds: "list[int | None]",
-    ) -> "list[GameSimResult]":
+        seeds: list[int | None],
+    ) -> list[GameSimResult]:
         """Submit one ``_run_one`` per seed to ``pool`` and gather IN SEED ORDER.
 
         Reassembles results by their seed index regardless of completion order so
@@ -905,11 +890,8 @@ class BatchRunner:
         same ordering contract the SIM-332 fresh-pool path guaranteed, factored out
         so both the warm-pool (SIM-360) and transient-pool paths share it.
         """
-        results: "list[GameSimResult | None]" = [None] * len(seeds)
-        futures = {
-            pool.submit(_run_one, spec, s): idx
-            for idx, s in enumerate(seeds)
-        }
+        results: list[GameSimResult | None] = [None] * len(seeds)
+        futures = {pool.submit(_run_one, spec, s): idx for idx, s in enumerate(seeds)}
         for fut in as_completed(futures):
             idx = futures[fut]
             results[idx] = fut.result()
@@ -928,7 +910,7 @@ class BatchRunner:
 # PlayPoolSampler over the attached shared tiles.
 
 
-def rng_driven_machine_factory(seed: "int | None", spec: GameSpec):
+def rng_driven_machine_factory(seed: int | None, spec: GameSpec):
     """Build a no-sampler, rng-driven :class:`StateMachine` for the worker.
 
     The returned machine draws each pitch outcome from its own loop rng (seeded
@@ -939,11 +921,10 @@ def rng_driven_machine_factory(seed: "int | None", spec: GameSpec):
     :class:`GameSpec`.
     """
     rng = np.random.default_rng(seed)
-    hit_rate = float(spec.sim_kwargs.get("_hit_rate", 0.30)) \
-        if isinstance(spec.sim_kwargs, dict) else 0.30
-    return _RngOutcomeStateMachine(
-        resolver=_CyclingResolver(rng, hit_rate=hit_rate), rng=rng
+    hit_rate = (
+        float(spec.sim_kwargs.get("_hit_rate", 0.30)) if isinstance(spec.sim_kwargs, dict) else 0.30
     )
+    return _RngOutcomeStateMachine(resolver=_CyclingResolver(rng, hit_rate=hit_rate), rng=rng)
 
 
 # Imported lazily-at-module-load (they live in sim_loop) so the factory above can
@@ -959,18 +940,14 @@ class _CyclingResolver(PlayResolver):
     process boundary (the whole point of the GameSpec/factory seam).
     """
 
-    def __init__(self, rng: "np.random.Generator", hit_rate: float = 0.30):
+    def __init__(self, rng: np.random.Generator, hit_rate: float = 0.30):
         self.rng = rng
         self.hit_rate = float(hit_rate)
 
-    def resolve_fielding(self, state, battedball_sample) -> "FieldingSignal":
+    def resolve_fielding(self, state, battedball_sample) -> FieldingSignal:
         if float(self.rng.random()) < self.hit_rate:
-            return FieldingSignal(
-                event="single", result_hits=1, result_outs=0, result_runs=0
-            )
-        return FieldingSignal(
-            event="field_out", result_hits=0, result_outs=1, result_runs=0
-        )
+            return FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
+        return FieldingSignal(event="field_out", result_hits=0, result_outs=1, result_runs=0)
 
 
 class _RngOutcomeStateMachine(StateMachine):

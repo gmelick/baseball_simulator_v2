@@ -29,9 +29,8 @@ pattern -- no DuckDB / FAISS is touched.
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
-from simulation.game_state import Bases, GameState, Half, Team
+from simulation.game_state import Bases, GameState, Half
 from simulation.sim_loop import (
     FieldingSignal,
     PlayResolver,
@@ -92,7 +91,7 @@ _AGGRESSIVE = {
     "squeeze_play_rate_per_3b_opp": 0.95,
 }
 # A manager who never moves (all rates 0.0).
-_PASSIVE = {k: 0.0 for k in _AGGRESSIVE}
+_PASSIVE = dict.fromkeys(_AGGRESSIVE, 0.0)
 
 
 class _SacFlyResolver(PlayResolver):
@@ -179,8 +178,7 @@ class TestHitAndRunConsolidation:
 
         m = StateMachine(
             rng=np.random.default_rng(3),
-            manager={"hit_and_run_rate_per_opportunity": 1.0,
-                     "steal_order_rate_per_1b_opp": 1.0},
+            manager={"hit_and_run_rate_per_opportunity": 1.0, "steal_order_rate_per_1b_opp": 1.0},
             resolver=_AlwaysSteal(),
         )
         s = _state(inning=7, first=11, outs=1, balls=1)
@@ -232,8 +230,7 @@ class TestSacFlyIntent:
     def test_no_intent_when_comfortably_ahead(self):
         # Offense leads -> not a run-needed spot; no sac-fly give-up.
         m = _machine({"squeeze_play_rate_per_3b_opp": 0.95}, seed=5)
-        s = _state(inning=8, half=Half.BOTTOM, third=33, outs=1,
-                   home_score=8, away_score=2)
+        s = _state(inning=8, half=Half.BOTTOM, third=33, outs=1, home_score=8, away_score=2)
         m._maybe_sac_fly_intent(s, StateMachine.compute_leverage(s))
         assert s.manager.sac_fly_intent is False
 
@@ -247,19 +244,19 @@ class TestSacFlyIntent:
         # With intent set + a runner on 3rd + <2 outs, a sampled fly OUT is
         # converted to a sacrifice_fly that scores the runner from 3rd.
         m = StateMachine(rng=np.random.default_rng(0), resolver=_SacFlyResolver())
-        s = _state(inning=8, third=33, outs=0, home_score=2, away_score=2,
-                   batter_id=101)
+        s = _state(inning=8, third=33, outs=0, home_score=2, away_score=2, batter_id=101)
         s.manager.sac_fly_intent = True
         from simulation.game_state import PlayResult
+
         result = PlayResult(pitch_outcome="in_play", is_contact=True, pa_terminal=True)
         # Drive the in-play resolution directly with the injected fly-out sample.
         m.resolver._injected_battedball = {"event": "field_out"}
-        before = s.home_score + s.away_score
+        s.home_score + s.away_score
         m._resolve_in_play(s, result)
         assert result.canonical_event == "sacrifice_fly"
-        assert result.runs_scored == 1            # the runner from 3rd scored
-        assert s.bases.third is None              # 3B cleared (runner came home)
-        assert result.outs_recorded == 1          # still one out on the play
+        assert result.runs_scored == 1  # the runner from 3rd scored
+        assert s.bases.third is None  # 3B cleared (runner came home)
+        assert result.outs_recorded == 1  # still one out on the play
         assert s.manager.sac_fly_intent is False  # the intent was consumed
 
     def test_no_intent_leaves_a_fly_out_as_a_plain_out(self):
@@ -267,24 +264,25 @@ class TestSacFlyIntent:
         m = StateMachine(rng=np.random.default_rng(0), resolver=_SacFlyResolver())
         s = _state(inning=8, third=33, outs=0, home_score=2, away_score=2)
         from simulation.game_state import PlayResult
+
         result = PlayResult(pitch_outcome="in_play", is_contact=True, pa_terminal=True)
         m.resolver._injected_battedball = {"event": "field_out"}
         m._resolve_in_play(s, result)
         assert result.canonical_event != "sacrifice_fly"
         assert result.runs_scored == 0
-        assert s.bases.third == 33                 # runner held
+        assert s.bases.third == 33  # runner held
 
     def test_intent_does_not_convert_a_base_hit(self):
         # A single with intent set is NOT turned into a sac fly (bias is out-only).
         class _SingleResolver(PlayResolver):
             def resolve_fielding(self, state, battedball_sample):
-                return FieldingSignal(event="single", result_hits=1,
-                                      result_outs=0, result_runs=0)
+                return FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
 
         m = StateMachine(rng=np.random.default_rng(0), resolver=_SingleResolver())
         s = _state(inning=8, third=33, outs=0, home_score=2, away_score=2)
         s.manager.sac_fly_intent = True
         from simulation.game_state import PlayResult
+
         result = PlayResult(pitch_outcome="in_play", is_contact=True, pa_terminal=True)
         m.resolver._injected_battedball = {"event": "single"}
         m._resolve_in_play(s, result)
@@ -302,8 +300,7 @@ class TestSituationalSetConsolidation:
         # hook flags sac-fly intent; the sac-bunt is for advancing a non-scoring
         # runner, so both small-ball calls are present but distinct kinds.
         m = _machine(_AGGRESSIVE, seed=2)
-        s = _state(inning=8, third=33, outs=1, home_score=2, away_score=2,
-                   batter_id=101)
+        s = _state(inning=8, third=33, outs=1, home_score=2, away_score=2, batter_id=101)
         m._end_of_pa_hook(s)
         kinds = [d["kind"] for d in m.manager_decisions]
         # sac_fly_intent is recorded; it and sac_bunt are distinct decision kinds
@@ -383,7 +380,10 @@ class TestNoProfileFullGame:
         rng = np.random.default_rng(0)
         machine = _RngMachine(resolver=_CyclingResolver(rng), rng=rng)  # manager=None
         result = simulate_game(
-            machine, seed=0, away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP,
+            machine,
+            seed=0,
+            away_lineup=AWAY_LINEUP,
+            home_lineup=HOME_LINEUP,
         )
         assert result.home_score != result.away_score
         assert result.innings_played >= 9
@@ -394,10 +394,15 @@ class TestNoProfileFullGame:
     def test_aggressive_situational_manager_game_completes_validly(self):
         rng = np.random.default_rng(1)
         machine = _RngMachine(
-            resolver=_CyclingResolver(rng), rng=rng, manager=_AGGRESSIVE,
+            resolver=_CyclingResolver(rng),
+            rng=rng,
+            manager=_AGGRESSIVE,
         )
         result = simulate_game(
-            machine, seed=1, away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP,
+            machine,
+            seed=1,
+            away_lineup=AWAY_LINEUP,
+            home_lineup=HOME_LINEUP,
         )
         assert result.innings_played >= 9
         result.final_state.assert_invariants(in_play=True)

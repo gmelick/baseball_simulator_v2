@@ -29,12 +29,12 @@ Run with:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
 import unittest
 
 import duckdb
-
 
 SEASONS = [2023, 2024]
 
@@ -130,29 +130,47 @@ def _build_source_tables(path: str) -> None:
         for season in SEASONS:
             # pitchers: two qualifying + one disqualified
             conn.executemany(
-                "INSERT INTO derived.pitcher_season_metrics VALUES "
-                "(?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO derived.pitcher_season_metrics VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 [
-                    (1, season, 0.08, 0.24, 0.30, 0.50, 0.28, 3.80, 3.90,
-                     0.44, 0.36, False),
-                    (2, season, 0.10, 0.20, 0.28, 0.48, 0.26, 4.20, 4.10,
-                     0.40, 0.40, False),
-                    (3, season, 0.99, 0.01, 0.01, 0.01, 0.01, 9.99, 9.99,
-                     0.01, 0.01, True),   # disqualified — must be excluded
+                    (1, season, 0.08, 0.24, 0.30, 0.50, 0.28, 3.80, 3.90, 0.44, 0.36, False),
+                    (2, season, 0.10, 0.20, 0.28, 0.48, 0.26, 4.20, 4.10, 0.40, 0.40, False),
+                    (
+                        3,
+                        season,
+                        0.99,
+                        0.01,
+                        0.01,
+                        0.01,
+                        0.01,
+                        9.99,
+                        9.99,
+                        0.01,
+                        0.01,
+                        True,
+                    ),  # disqualified — must be excluded
                 ],
             )
 
             # batters
             conn.executemany(
-                "INSERT INTO derived.batter_season_metrics VALUES "
-                "(?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO derived.batter_season_metrics VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 [
-                    (10, season, 0.45, 0.30, 0.65, 0.24, 0.78, 0.09, 0.22,
-                     89.0, 0.38, False),
-                    (11, season, 0.50, 0.28, 0.68, 0.22, 0.80, 0.11, 0.20,
-                     90.5, 0.42, False),
-                    (12, season, 0.01, 0.99, 0.01, 0.99, 0.01, 0.00, 0.99,
-                     50.0, 0.01, True),   # disqualified
+                    (10, season, 0.45, 0.30, 0.65, 0.24, 0.78, 0.09, 0.22, 89.0, 0.38, False),
+                    (11, season, 0.50, 0.28, 0.68, 0.22, 0.80, 0.11, 0.20, 90.5, 0.42, False),
+                    (
+                        12,
+                        season,
+                        0.01,
+                        0.99,
+                        0.01,
+                        0.99,
+                        0.01,
+                        0.00,
+                        0.99,
+                        50.0,
+                        0.01,
+                        True,
+                    ),  # disqualified
                 ],
             )
 
@@ -161,22 +179,16 @@ def _build_source_tables(path: str) -> None:
             positions = ("C", "1B", "2B", "3B", "SS", "LF", "CF", "RF")
             fielder_rows = []
             for i, pos in enumerate(positions):
-                fielder_rows.append(
-                    (100 + i, pos, season, 2.5, 0.012, 0.30, 1.1, False)
-                )
-                fielder_rows.append(
-                    (200 + i, pos, season, -1.0, 0.020, 0.25, -0.5, False)
-                )
+                fielder_rows.append((100 + i, pos, season, 2.5, 0.012, 0.30, 1.1, False))
+                fielder_rows.append((200 + i, pos, season, -1.0, 0.020, 0.25, -0.5, False))
             conn.executemany(
-                "INSERT INTO derived.fielder_season_metrics VALUES "
-                "(?,?,?,?,?,?,?,?)",
+                "INSERT INTO derived.fielder_season_metrics VALUES (?,?,?,?,?,?,?,?)",
                 fielder_rows,
             )
 
             # baserunners
             conn.executemany(
-                "INSERT INTO derived.baserunner_season_metrics VALUES "
-                "(?,?,?,?,?,?,?)",
+                "INSERT INTO derived.baserunner_season_metrics VALUES (?,?,?,?,?,?,?)",
                 [
                     (30, season, 27.5, 0.35, 0.55, 0.78, False),
                     (31, season, 28.8, 0.42, 0.60, 0.82, False),
@@ -186,8 +198,7 @@ def _build_source_tables(path: str) -> None:
 
             # catchers
             conn.executemany(
-                "INSERT INTO derived.catcher_season_metrics VALUES "
-                "(?,?,?,?,?,?)",
+                "INSERT INTO derived.catcher_season_metrics VALUES (?,?,?,?,?,?)",
                 [
                     (40, season, 5.0, 2.0, 0.30, False),
                     (41, season, -3.0, 1.0, 0.22, False),
@@ -211,10 +222,8 @@ class TestLeagueAverageProfilesCompute(unittest.TestCase):
     def tearDown(self):
         for p in (self._db_path, self._db_path + ".wal"):
             if os.path.exists(p):
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(p)
-                except OSError:
-                    pass
 
     def _run_compute(self):
         from pipeline.batch.player_profile_computor import LeagueAverageProfiles
@@ -247,7 +256,8 @@ class TestLeagueAverageProfilesCompute(unittest.TestCase):
         required_simple = {"pitcher", "batter", "baserunner", "catcher"}
         for et in required_simple:
             self.assertIn(
-                et, entity_types,
+                et,
+                entity_types,
                 f"entity type {et!r} produced NO league-average insert "
                 f"(SIM-162 regression). Got: {sorted(entity_types)}",
             )
@@ -271,7 +281,8 @@ class TestLeagueAverageProfilesCompute(unittest.TestCase):
         for entity_type, seasons in seen.items():
             for s in SEASONS:
                 self.assertIn(
-                    s, seasons,
+                    s,
+                    seasons,
                     f"{entity_type} missing season {s}: a season was silently "
                     f"dropped (SIM-162 regression).",
                 )
@@ -288,9 +299,9 @@ class TestLeagueAverageProfilesCompute(unittest.TestCase):
             # JSON_OBJECT(...) renders to a non-trivial string with at least
             # one key/value pair.
             self.assertIn(
-                ":", str(profile_json),
-                f"{entity_type}/{season} profile_json looks empty: "
-                f"{profile_json!r}",
+                ":",
+                str(profile_json),
+                f"{entity_type}/{season} profile_json looks empty: {profile_json!r}",
             )
 
     def test_all_eight_fielder_positions_present(self):
@@ -300,12 +311,10 @@ class TestLeagueAverageProfilesCompute(unittest.TestCase):
         self._run_compute()
         rows = self._fetch_league_averages()
         fielder_entities = {r[0] for r in rows if r[0].startswith("fielder_")}
-        expected = {
-            f"fielder_{p}"
-            for p in ("C", "1B", "2B", "3B", "SS", "LF", "CF", "RF")
-        }
+        expected = {f"fielder_{p}" for p in ("C", "1B", "2B", "3B", "SS", "LF", "CF", "RF")}
         self.assertEqual(
-            expected, fielder_entities,
+            expected,
+            fielder_entities,
             f"missing fielder positions: {expected - fielder_entities}",
         )
 

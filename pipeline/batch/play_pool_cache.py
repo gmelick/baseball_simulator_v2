@@ -71,7 +71,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import duckdb
 import numpy as np
@@ -143,8 +143,16 @@ POOL_BATTEDBALL = "battedball"
 #: Pitch fingerprint = 10-dim pitch-to-pitch vector (SIM-041).  Order MUST
 #: match the SIM-302 sampler's query-vector contract.
 PITCH_FEATURES = [
-    "velo", "ivb", "hb", "spin_rate", "spin_axis",
-    "release_x", "release_z", "release_ext", "plate_x", "plate_z",
+    "velo",
+    "ivb",
+    "hb",
+    "spin_rate",
+    "spin_axis",
+    "release_x",
+    "release_z",
+    "release_ext",
+    "plate_x",
+    "plate_z",
 ]
 PITCH_DIM = len(PITCH_FEATURES)
 
@@ -171,10 +179,10 @@ _ISO_FMT = "%Y-%m-%dT%H:%M:%SZ"
 class TileKey:
     """Identifies one tile on disk."""
 
-    pool: str           # "pitch" | "battedball"
+    pool: str  # "pitch" | "battedball"
     season: int
-    bat_hand: str       # "L" | "R"
-    pitcher_id: int | None = None   # None for battedball; int (incl. 0) for pitch
+    bat_hand: str  # "L" | "R"
+    pitcher_id: int | None = None  # None for battedball; int (incl. 0) for pitch
 
     def dir_path(self, pool_dir: str) -> str:
         if self.pool == POOL_PITCH:
@@ -200,11 +208,11 @@ class TileKey:
 class TilePayload:
     """The materialized contents of a tile, ready to serialize."""
 
-    vectors: NDArray[np.float32]      # (n_vectors, dim) — includes recency dups
-    rowids: NDArray[np.int64]         # (n_vectors,) FAISS row -> source row id
-    n_source_rows: int                # distinct source rows before recency dup
-    source_max_updated_at: str        # ISO watermark for this tile's rows
-    spray_column: str | None          # battedball only
+    vectors: NDArray[np.float32]  # (n_vectors, dim) — includes recency dups
+    rowids: NDArray[np.int64]  # (n_vectors,) FAISS row -> source row id
+    n_source_rows: int  # distinct source rows before recency dup
+    source_max_updated_at: str  # ISO watermark for this tile's rows
+    spray_column: str | None  # battedball only
 
 
 @dataclass(slots=True)
@@ -260,7 +268,7 @@ def _select_watermark_expr(cols: set[str]) -> str:
             # strftime gives a stable, comparable ISO string in both branches.
             return f"strftime(MAX({cand}), '{_ISO_FMT}')"
     # Last resort: a constant epoch so the tile is at least buildable.
-    return f"'{datetime(1970, 1, 1, tzinfo=timezone.utc).strftime(_ISO_FMT)}'"
+    return f"'{datetime(1970, 1, 1, tzinfo=UTC).strftime(_ISO_FMT)}'"
 
 
 # ============================================================================
@@ -425,9 +433,7 @@ def _build_pitch_payload(
     )
     n_source_rows = int(vectors.shape[0])
     if recency_boost:
-        vectors, rowids = _apply_recency_boost(
-            vectors, rowids, seasons_per_row, build_seasons
-        )
+        vectors, rowids = _apply_recency_boost(vectors, rowids, seasons_per_row, build_seasons)
     return TilePayload(
         vectors=vectors,
         rowids=rowids,
@@ -474,9 +480,7 @@ def _build_battedball_payload(
 
     n_source_rows = int(vectors.shape[0])
     if recency_boost:
-        vectors, rowids = _apply_recency_boost(
-            vectors, rowids, seasons_per_row, build_seasons
-        )
+        vectors, rowids = _apply_recency_boost(vectors, rowids, seasons_per_row, build_seasons)
 
     wm = conn.execute(f"""
         SELECT {wm_expr} FROM sim.outcome_pool
@@ -529,8 +533,9 @@ def is_tile_stale(
     rowids_path = key.rowids_path(pool_dir)
 
     # Rule 1 — any artifact missing.
-    if not (os.path.exists(faiss_path) and os.path.exists(meta_path)
-            and os.path.exists(rowids_path)):
+    if not (
+        os.path.exists(faiss_path) and os.path.exists(meta_path) and os.path.exists(rowids_path)
+    ):
         return True
 
     meta = _read_meta(meta_path)
@@ -550,10 +555,7 @@ def is_tile_stale(
     # Rule 2 — new source data landed (string ISO compares lexicographically
     # because both watermarks are zero-padded UTC ISO-8601).
     prior = str(meta.get("source_max_updated_at", ""))
-    if prior < str(source_watermark):
-        return True
-
-    return False
+    return prior < str(source_watermark)
 
 
 # ============================================================================
@@ -645,9 +647,7 @@ def write_tile(
         # battedball: spray_column present, pitcher_id absent (§4.3).
         meta["spray_column"] = payload.spray_column
 
-    _atomic_write_bytes(
-        meta_path, json.dumps(meta, indent=2, sort_keys=True).encode("utf-8")
-    )
+    _atomic_write_bytes(meta_path, json.dumps(meta, indent=2, sort_keys=True).encode("utf-8"))
     return meta
 
 
@@ -697,13 +697,11 @@ def _build_pitch_pool(
         else:
             fallback_members.setdefault((season, bat_hand), []).append(pitcher_id)
 
-    build_seasons = sorted({s for (s, _p, _h) in standalone}
-                           | {s for (s, _h) in fallback_members})
+    build_seasons = sorted({s for (s, _p, _h) in standalone} | {s for (s, _h) in fallback_members})
 
     # --- Standalone tiles -------------------------------------------------
     for season, pitcher_id, bat_hand in standalone:
-        key = TileKey(pool=POOL_PITCH, season=season,
-                      bat_hand=bat_hand, pitcher_id=pitcher_id)
+        key = TileKey(pool=POOL_PITCH, season=season, bat_hand=bat_hand, pitcher_id=pitcher_id)
         wm = plan.get((season, pitcher_id, bat_hand), _epoch_iso())
         if not is_tile_stale(key, pool_dir, wm, recency_boost):
             result.skipped += 1
@@ -715,15 +713,20 @@ def _build_pitch_pool(
         write_tile(key, pool_dir, payload, recency_boost, PITCH_DIM)
         result.rebuilt += 1
         result.rebuilt_tiles.append(key.label())
-        log.info("Built pitch tile %s (n_source=%d n_vectors=%d)",
-                 key.label(), payload.n_source_rows, payload.vectors.shape[0])
+        log.info(
+            "Built pitch tile %s (n_source=%d n_vectors=%d)",
+            key.label(),
+            payload.n_source_rows,
+            payload.vectors.shape[0],
+        )
 
     # --- Fall-back (pitcher_id = 0) tiles ---------------------------------
     cols = _table_columns(conn, "pitch_pool")
     wm_expr = _select_watermark_expr(cols)
     for (season, bat_hand), members in fallback_members.items():
-        key = TileKey(pool=POOL_PITCH, season=season,
-                      bat_hand=bat_hand, pitcher_id=FALLBACK_PITCHER_ID)
+        key = TileKey(
+            pool=POOL_PITCH, season=season, bat_hand=bat_hand, pitcher_id=FALLBACK_PITCHER_ID
+        )
         # Watermark for the fall-back tile = max over its member rows.
         wm_row = conn.execute(f"""
             SELECT {wm_expr} FROM sim.pitch_pool
@@ -737,16 +740,18 @@ def _build_pitch_pool(
             result.skipped += 1
             result.skipped_tiles.append(key.label())
             continue
-        payload = _build_pitch_payload(
-            conn, hand_col, key, members, recency_boost, build_seasons
-        )
+        payload = _build_pitch_payload(conn, hand_col, key, members, recency_boost, build_seasons)
         write_tile(key, pool_dir, payload, recency_boost, PITCH_DIM)
         result.rebuilt += 1
         result.rebuilt_tiles.append(key.label())
-        log.info("Built pitch FALL-BACK tile %s from %d sub-threshold pitchers "
-                 "(n_source=%d n_vectors=%d)",
-                 key.label(), len(members),
-                 payload.n_source_rows, payload.vectors.shape[0])
+        log.info(
+            "Built pitch FALL-BACK tile %s from %d sub-threshold pitchers "
+            "(n_source=%d n_vectors=%d)",
+            key.label(),
+            len(members),
+            payload.n_source_rows,
+            payload.vectors.shape[0],
+        )
 
 
 def _build_battedball_pool(
@@ -782,14 +787,22 @@ def _build_battedball_pool(
         # pitcher fan-out to fold into, so the season/bat_hand tile IS the
         # league-average pool.  We log a warning when it is thin.
         if payload.n_source_rows < MIN_TILE_ROWS:
-            log.warning("Batted-ball tile %s has only %d rows (< MIN_TILE_ROWS=%d).",
-                        key.label(), payload.n_source_rows, MIN_TILE_ROWS)
+            log.warning(
+                "Batted-ball tile %s has only %d rows (< MIN_TILE_ROWS=%d).",
+                key.label(),
+                payload.n_source_rows,
+                MIN_TILE_ROWS,
+            )
         write_tile(key, pool_dir, payload, recency_boost, BATTEDBALL_DIM)
         result.rebuilt += 1
         result.rebuilt_tiles.append(key.label())
-        log.info("Built batted-ball tile %s (spray=%s n_source=%d n_vectors=%d)",
-                 key.label(), spray_col,
-                 payload.n_source_rows, payload.vectors.shape[0])
+        log.info(
+            "Built batted-ball tile %s (spray=%s n_source=%d n_vectors=%d)",
+            key.label(),
+            spray_col,
+            payload.n_source_rows,
+            payload.vectors.shape[0],
+        )
 
 
 def build_play_pool_cache(
@@ -825,7 +838,11 @@ def build_play_pool_cache(
     log.info(
         "Play-pool cache build complete: rebuilt=%d skipped=%d in %.2fs "
         "(pool_dir=%s recency_boost=%s).",
-        result.rebuilt, result.skipped, time.time() - t0, pool_dir, recency_boost,
+        result.rebuilt,
+        result.skipped,
+        time.time() - t0,
+        pool_dir,
+        recency_boost,
     )
     return result
 
@@ -843,11 +860,11 @@ def _f(value) -> float:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime(_ISO_FMT)
+    return datetime.now(UTC).strftime(_ISO_FMT)
 
 
 def _epoch_iso() -> str:
-    return datetime(1970, 1, 1, tzinfo=timezone.utc).strftime(_ISO_FMT)
+    return datetime(1970, 1, 1, tzinfo=UTC).strftime(_ISO_FMT)
 
 
 # ============================================================================
@@ -868,26 +885,32 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--duckdb-path",
         default=DEFAULT_DUCKDB_PATH,
         help="Path to the DuckDB file (default: BASEBALL_DUCKDB_PATH or "
-             "/data/baseball_sim.duckdb).",
+        "/data/baseball_sim.duckdb).",
     )
     parser.add_argument(
         "--pool-dir",
         default=DEFAULT_POOL_DIR,
-        help="Play-pool output root (default: BASEBALL_PLAY_POOL_DIR or "
-             "/data/play_pool).",
+        help="Play-pool output root (default: BASEBALL_PLAY_POOL_DIR or /data/play_pool).",
     )
     parser.add_argument(
-        "--seasons", type=int, nargs="+", default=None,
+        "--seasons",
+        type=int,
+        nargs="+",
+        default=None,
         help="One or more seasons to (re)build. Default: all seasons in the pool.",
     )
     parser.add_argument(
-        "--pool", choices=["pitch", "battedball", "all"], default="all",
+        "--pool",
+        choices=["pitch", "battedball", "all"],
+        default="all",
         help="Which pool(s) to build (default: all).",
     )
     parser.add_argument(
-        "--no-recency-boost", dest="recency_boost", action="store_false",
+        "--no-recency-boost",
+        dest="recency_boost",
+        action="store_false",
         help="Disable the last-2-seasons recency duplication (deterministic builds). "
-             "Recency boost is ON by default for production.",
+        "Recency boost is ON by default for production.",
     )
     parser.set_defaults(recency_boost=True)
     return parser.parse_args(argv)
@@ -903,15 +926,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 3
 
-    if args.pool == "all":
-        pools = (POOL_PITCH, POOL_BATTEDBALL)
-    else:
-        pools = (args.pool,)
+    pools = (POOL_PITCH, POOL_BATTEDBALL) if args.pool == "all" else (args.pool,)
 
     log.info(
         "Starting play-pool cache build - duckdb=%s pool_dir=%s seasons=%s "
         "pools=%s recency_boost=%s",
-        args.duckdb_path, args.pool_dir, args.seasons, pools, args.recency_boost,
+        args.duckdb_path,
+        args.pool_dir,
+        args.seasons,
+        pools,
+        args.recency_boost,
     )
     result = build_play_pool_cache(
         duckdb_path=args.duckdb_path,

@@ -42,13 +42,12 @@ from pathlib import Path
 
 import asyncpg
 
-
 # ---------------------------------------------------------------------------
 # Acceptance thresholds (locked in by SIM-085 / SIM-089 acceptance criteria)
 # ---------------------------------------------------------------------------
 
-SITUATION_LATENCY_MS_BUDGET = 30.0   # SIM-085
-PITCHER_LATENCY_MS_BUDGET = 50.0     # SIM-089
+SITUATION_LATENCY_MS_BUDGET = 30.0  # SIM-085
+PITCHER_LATENCY_MS_BUDGET = 50.0  # SIM-089
 SITUATION_INDEX_NAME = "idx_pitches_situation"
 PITCHER_INDEX_NAME = "idx_pitches_pitcher_season_clean"
 
@@ -56,15 +55,21 @@ PITCHER_INDEX_NAME = "idx_pitches_pitcher_season_clean"
 # Bases empty is the single most common base state and exercises the index
 # along (inning, outs, balls, strikes, on_1b, on_2b, on_3b) without the
 # BitmapOr that a synthetic runner ID would produce.
-DEFAULT_SITUATION = dict(
-    inning=7, outs=1, balls=1, strikes=2,
-    on_1b=None, on_2b=None, on_3b=None,
-)
+DEFAULT_SITUATION = {
+    "inning": 7,
+    "outs": 1,
+    "balls": 1,
+    "strikes": 2,
+    "on_1b": None,
+    "on_2b": None,
+    "on_3b": None,
+}
 
 
 # ---------------------------------------------------------------------------
 # Query templates
 # ---------------------------------------------------------------------------
+
 
 def _build_situation_query(situation: dict) -> tuple[str, tuple]:
     """Build the EXPLAIN ANALYZE situation lookup with index-friendly
@@ -81,8 +86,10 @@ def _build_situation_query(situation: dict) -> tuple[str, tuple]:
         "strikes = $4",
     ]
     params: list = [
-        situation["inning"], situation["outs"],
-        situation["balls"], situation["strikes"],
+        situation["inning"],
+        situation["outs"],
+        situation["balls"],
+        situation["strikes"],
     ]
     for col in ("on_1b", "on_2b", "on_3b"):
         val = situation[col]
@@ -99,6 +106,7 @@ def _build_situation_query(situation: dict) -> tuple[str, tuple]:
         " WHERE " + "\n   AND ".join(where) + "\n"
     )
     return sql, tuple(params)
+
 
 PITCHER_SEASON_QUERY = """
 EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
@@ -150,6 +158,7 @@ def _plan_is_seq_scan(plan_text: str) -> bool:
 # Gate runner
 # ---------------------------------------------------------------------------
 
+
 async def _run_gate(
     conn: asyncpg.Connection,
     label: str,
@@ -184,6 +193,7 @@ async def _run_gate(
 # Markdown emission
 # ---------------------------------------------------------------------------
 
+
 def _make_markdown(
     *,
     season: int,
@@ -196,7 +206,7 @@ def _make_markdown(
     sim089_plan: str,
     sim089_ms: float,
 ) -> str:
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    now = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
     overall = (
         "Both gates passed"
         if (sim085_pass and sim089_pass)
@@ -254,6 +264,7 @@ BASEBALL_DB_DSN=postgresql://... python scripts/run_index_acceptance.py \\
 # Main
 # ---------------------------------------------------------------------------
 
+
 async def main_async(
     dsn: str,
     season: int,
@@ -310,9 +321,15 @@ async def main_async(
         )
 
         report = _make_markdown(
-            season=season, pitcher_id=pitcher_id, situation=situation,
-            sim085_pass=sim085_pass, sim085_plan=sim085_plan, sim085_ms=sim085_ms,
-            sim089_pass=sim089_pass, sim089_plan=sim089_plan, sim089_ms=sim089_ms,
+            season=season,
+            pitcher_id=pitcher_id,
+            situation=situation,
+            sim085_pass=sim085_pass,
+            sim085_plan=sim085_plan,
+            sim085_ms=sim085_ms,
+            sim089_pass=sim089_pass,
+            sim089_plan=sim089_plan,
+            sim089_ms=sim089_ms,
         )
         if out_path is not None:
             out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -331,9 +348,12 @@ def main() -> None:
     p.add_argument("--dsn", default=os.environ.get("BASEBALL_DB_DSN"))
     p.add_argument("--season", type=int, default=2024)
     p.add_argument(
-        "--pitcher-id", type=int, required=False, default=605400,
+        "--pitcher-id",
+        type=int,
+        required=False,
+        default=605400,
         help="MLBAM player_id of a pitcher with ~3,000 clean pitches in "
-             "the given season (per SIM-089 AC).",
+        "the given season (per SIM-089 AC).",
     )
     p.add_argument("--out", type=Path, default=None)
     args = p.parse_args()
@@ -344,10 +364,15 @@ def main() -> None:
             "    set BASEBALL_DB_DSN=postgresql://user:pass@localhost:5432/baseball_sim"
         )
 
-    rc = asyncio.run(main_async(
-        dsn=args.dsn, season=args.season, pitcher_id=args.pitcher_id,
-        situation=DEFAULT_SITUATION, out_path=args.out,
-    ))
+    rc = asyncio.run(
+        main_async(
+            dsn=args.dsn,
+            season=args.season,
+            pitcher_id=args.pitcher_id,
+            situation=DEFAULT_SITUATION,
+            out_path=args.out,
+        )
+    )
     sys.exit(rc)
 
 

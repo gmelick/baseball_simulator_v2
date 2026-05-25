@@ -20,7 +20,6 @@ from pathlib import Path
 
 import asyncpg
 
-
 NULL_RATE_BUDGET_PCT = 1.0
 
 
@@ -80,9 +79,13 @@ async def _scan_coverage(conn):
 
 
 def _make_markdown(coverage):
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    now = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
     any_fail = any(not c.gate_passes for c in coverage)
-    verdict = "All seasons clear the 1% NULL gate" if not any_fail else "At least one season fails the gate"
+    verdict = (
+        "All seasons clear the 1% NULL gate"
+        if not any_fail
+        else "At least one season fails the gate"
+    )
     rows = []
     for c in coverage:
         marker = "PASS" if c.gate_passes else "FAIL"
@@ -115,9 +118,17 @@ async def main_async(dsn, out_path):
             "\nERROR: password authentication failed against " + repr(masked) + ".\n\n"
             "The DSN reached the database, but the password is wrong.\n\n"
             "Reset the password in-band (cmd.exe):\n"
-            '  docker compose exec db psql -U baseball_user -d baseball_sim -c "ALTER USER baseball_user WITH PASSWORD ' + chr(39) + 'baseball_pass' + chr(39) + ';"\n\n'
+            '  docker compose exec db psql -U baseball_user -d baseball_sim -c "ALTER USER baseball_user WITH PASSWORD '
+            + chr(39)
+            + "baseball_pass"
+            + chr(39)
+            + ';"\n\n'
             "If THAT fails too, try with the OS-trusted postgres user:\n"
-            '  docker compose exec -u postgres db psql -c "ALTER USER baseball_user WITH PASSWORD ' + chr(39) + 'baseball_pass' + chr(39) + ';"\n\n'
+            '  docker compose exec -u postgres db psql -c "ALTER USER baseball_user WITH PASSWORD '
+            + chr(39)
+            + "baseball_pass"
+            + chr(39)
+            + ';"\n\n'
             "Then verify the host-side DSN matches:\n"
             "  echo %BASEBALL_DB_DSN%\n"
             "  (expected: postgresql://baseball_user:baseball_pass@localhost:5432/baseball_sim)\n\n"
@@ -151,8 +162,7 @@ async def main_async(dsn, out_path):
         if not c.gate_passes:
             any_fail = True
         line = (
-            f"{c.season:<8} {c.total_rows:>12,} "
-            f"{c.null_pct:>9.3f}% {c.switch_pct:>9.3f}%  {marker}"
+            f"{c.season:<8} {c.total_rows:>12,} {c.null_pct:>9.3f}% {c.switch_pct:>9.3f}%  {marker}"
         )
         print(line)
 

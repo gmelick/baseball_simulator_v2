@@ -20,7 +20,7 @@ DB/FAISS) and assert the aggregation contract:
 from __future__ import annotations
 
 import statistics
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 import pytest
@@ -48,7 +48,7 @@ def _result(home: int, away: int) -> GameSimResult:
     )
 
 
-def _results(scores: "list[tuple[int, int]]") -> "list[GameSimResult]":
+def _results(scores: list[tuple[int, int]]) -> list[GameSimResult]:
     return [_result(h, a) for (h, a) in scores]
 
 
@@ -163,11 +163,11 @@ def test_simulated_at_is_utc_aware():
     s = GameSimSummary.from_results(_results([(1, 0)]))
     assert isinstance(s.simulated_at, datetime)
     assert s.simulated_at.tzinfo is not None
-    assert s.simulated_at.utcoffset() == timezone.utc.utcoffset(None)
+    assert s.simulated_at.utcoffset() == UTC.utcoffset(None)
 
 
 def test_simulated_at_injectable():
-    fixed = datetime(2026, 6, 24, 12, 0, 0, tzinfo=timezone.utc)
+    fixed = datetime(2026, 6, 24, 12, 0, 0, tzinfo=UTC)
     s = GameSimSummary.from_results(_results([(1, 0)]), simulated_at=fixed)
     assert s.simulated_at == fixed
 

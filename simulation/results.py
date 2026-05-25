@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import statistics
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 from numpy.typing import NDArray
@@ -58,7 +58,7 @@ from simulation.sim_loop import BoxScore, GameSimResult, PlayerStatLine
 _Z_95 = 1.959963984540054
 #: Map a handful of common confidence levels to their two-sided z-multiplier so
 #: callers can pass a level (0.95) instead of a raw z.
-_Z_BY_LEVEL: "dict[float, float]" = {
+_Z_BY_LEVEL: dict[float, float] = {
     0.80: 1.2815515594457,
     0.90: 1.6448536269514722,
     0.95: _Z_95,
@@ -130,7 +130,7 @@ class GameSimSummary:
     total_score_ci: ConfidenceInterval
 
     #: UTC, timezone-aware; stamped when the summary is constructed.
-    simulated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    simulated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     #: The nominal confidence level used for every CI on this summary.
     confidence_level: float = 0.95
@@ -140,11 +140,11 @@ class GameSimSummary:
     @classmethod
     def from_results(
         cls,
-        results: "list[GameSimResult]",
+        results: list[GameSimResult],
         *,
         confidence_level: float = 0.95,
-        simulated_at: "datetime | None" = None,
-    ) -> "GameSimSummary":
+        simulated_at: datetime | None = None,
+    ) -> GameSimSummary:
         """Aggregate a list of per-game results into one :class:`GameSimSummary`.
 
         Pure Python + numpy; no DB, no FAISS, no rng.  ``results`` must be
@@ -199,15 +199,13 @@ class GameSimSummary:
             home_score_ci=home_score_ci,
             away_score_ci=away_score_ci,
             total_score_ci=total_score_ci,
-            simulated_at=simulated_at or datetime.now(timezone.utc),
+            simulated_at=simulated_at or datetime.now(UTC),
             confidence_level=float(confidence_level),
             ci_method="normal",
         )
 
 
-def _proportion_ci(
-    p: float, n: int, z: float, level: float
-) -> ConfidenceInterval:
+def _proportion_ci(p: float, n: int, z: float, level: float) -> ConfidenceInterval:
     """Wald (normal-approximation) CI on a proportion, clamped to [0, 1].
 
     half-width = z * sqrt(p(1-p)/n).  Degenerate at p in {0, 1} (zero variance)
@@ -237,7 +235,7 @@ def _mean_ci(values: NDArray, z: float, level: float) -> ConfidenceInterval:
             point=mean, low=mean, high=mean, level=float(level), method="normal"
         )
     std = float(values.std(ddof=1))
-    margin = z * (std / (n ** 0.5))
+    margin = z * (std / (n**0.5))
     return ConfidenceInterval(
         point=mean,
         low=mean - margin,
@@ -248,9 +246,9 @@ def _mean_ci(values: NDArray, z: float, level: float) -> ConfidenceInterval:
 
 
 __all__ = [
-    "GameSimResult",      # re-exported from sim_loop -> one import home
-    "PlayerStatLine",     # SIM-328 per-game boxscore line (re-exported)
-    "BoxScore",           # SIM-328 per-game boxscore accumulator (re-exported)
+    "GameSimResult",  # re-exported from sim_loop -> one import home
+    "PlayerStatLine",  # SIM-328 per-game boxscore line (re-exported)
+    "BoxScore",  # SIM-328 per-game boxscore accumulator (re-exported)
     "GameSimSummary",
     "ConfidenceInterval",
 ]

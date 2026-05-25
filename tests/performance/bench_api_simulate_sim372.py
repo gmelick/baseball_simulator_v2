@@ -261,7 +261,7 @@ def _benched_request(client: TestClient, n_iterations: int):
     return resp
 
 
-def _served_median_s(benchmark) -> "float | None":
+def _served_median_s(benchmark) -> float | None:
     """The benched median in seconds, or None under --benchmark-disable.
 
     Under ``--benchmark-disable`` the ``benchmark`` fixture runs the function
@@ -280,9 +280,7 @@ def _served_median_s(benchmark) -> "float | None":
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.benchmark(
-    group="api-simulate", min_rounds=1, max_time=2.0, warmup=False
-)
+@pytest.mark.benchmark(group="api-simulate", min_rounds=1, max_time=2.0, warmup=False)
 def test_bench_api_simulate_single_game(benchmark, simulate_client):
     """Bench A: time a SINGLE-game GET /{game_pk}/simulate request end-to-end.
 

@@ -126,11 +126,17 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import duckdb
 import numpy as np
 from numpy.typing import NDArray
 from scipy.linalg import sqrtm
+
+if TYPE_CHECKING:
+    # SIM-346/361: annotation-only import — avoids a runtime circular import with
+    # similarity_calibration (which imports engine helpers).
+    from similarity.similarity_calibration import CalibrationReport
 
 # POT (Python Optimal Transport) provides the EMD solver used by the
 # W2 arsenal distance.  It does not yet publish cp313 wheels (as of
@@ -162,8 +168,6 @@ def _require_pot() -> None:
             f"Original ImportError: {_POT_IMPORT_ERROR!r}"
         )
 
-
-from similarity.similarity_diagnostics import run_pitcher_diagnostics
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -1518,7 +1522,7 @@ class PitcherSimilarityEngine:
 
     def apply_calibration(
         self,
-        report: "CalibrationReport",
+        report: CalibrationReport,
         median_w2: float | None = None,
     ) -> float:
         """Wire a ``CalibrationReport`` into the engine's arsenal transform.
@@ -2103,9 +2107,4 @@ if __name__ == "__main__":
     engine = PitcherSimilarityEngine(duckdb_path="../../db/schemas/baseball_simulator.duckdb")
     engine.build(seasons=[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017])
     # engine.precompute_arsenal_cache(n_workers=8)
-    # w2_scores = engine._arsenal_cache.finite_distances()
-    # gamma = calibrate_arsenal_norm_scale(w2_scores, .5)
-    report = run_pitcher_diagnostics(engine, n_query_samples=50)
-    print(report)
-    results = engine.query(pitcher_id=694973, season=2025)
-    print(results)
+    # w2_scor

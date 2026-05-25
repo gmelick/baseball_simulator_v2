@@ -44,7 +44,7 @@ PITCHER = 477132
 
 
 def _fresh_state(**kw) -> GameState:
-    base = dict(pitcher_id=PITCHER, bat_hand="R", season=SEASON, batter_id=900)
+    base = {"pitcher_id": PITCHER, "bat_hand": "R", "season": SEASON, "batter_id": 900}
     base.update(kw)
     return GameState(**base)
 
@@ -70,9 +70,7 @@ class _InjectedResolver(PlayResolver):
 
 
 def _sig(event, hits, outs, runs, **kw) -> FieldingSignal:
-    return FieldingSignal(
-        event=event, result_hits=hits, result_outs=outs, result_runs=runs, **kw
-    )
+    return FieldingSignal(event=event, result_hits=hits, result_outs=outs, result_runs=runs, **kw)
 
 
 # ===========================================================================
@@ -153,7 +151,7 @@ class TestBaserunnerAdvancement:
         assert r.event == "double"
         assert r.runs_scored == 1
         # The run physically scored (committed to the offense's score).
-        assert state.away_score == 1          # top of 1st -> AWAY bats
+        assert state.away_score == 1  # top of 1st -> AWAY bats
         # The run VALUE went through resolve_runs (RE24 delta), not inline.
         assert r.run_resolution_method == "re24_delta"
         assert r.runs == pytest.approx(r.re_end - r.re_start + 1.0)
@@ -187,7 +185,7 @@ class TestWalkForcing:
         r = sm.step_pitch(state, pitch_outcome="ball")
         assert r.event == EVENT_WALK
         assert r.outs_recorded == 0
-        assert r.runs_scored == 1                 # runner from 3B forced home
+        assert r.runs_scored == 1  # runner from 3B forced home
         assert state.away_score == 1
         assert r.run_resolution_method == "re24_delta"
 
@@ -198,8 +196,8 @@ class TestWalkForcing:
         r = sm.step_pitch(state, pitch_outcome="ball")
         assert r.event == EVENT_WALK
         assert r.runs_scored == 0
-        assert state.bases.first == 900           # batter to 1B
-        assert state.bases.second == 102          # 2B runner not forced
+        assert state.bases.first == 900  # batter to 1B
+        assert state.bases.second == 102  # 2B runner not forced
 
 
 # ===========================================================================
@@ -218,9 +216,9 @@ class TestSteals:
         assert r.steal_attempted is True
         assert r.steal_outcome == STEAL_SAFE
         assert state.bases.first is None
-        assert state.bases.second == 101          # runner advanced 1B->2B
+        assert state.bases.second == 101  # runner advanced 1B->2B
         assert state.outs == 0
-        assert r.pa_terminal is False             # ball is non-terminal
+        assert r.pa_terminal is False  # ball is non-terminal
 
     def test_caught_stealing_records_an_out_via_resolve_runs(self):
         sm = StateMachine(rng=np.random.default_rng(0))
@@ -230,8 +228,8 @@ class TestSteals:
         r = sm.step_pitch(state, pitch_outcome="ball")
         assert r.steal_attempted is True
         assert r.steal_outcome == STEAL_CAUGHT
-        assert state.bases.first is None          # runner removed (out)
-        assert state.outs == 1                    # one out recorded
+        assert state.bases.first is None  # runner removed (out)
+        assert state.outs == 1  # one out recorded
         assert r.outs_recorded == 1
         assert r.run_resolution_method == "re24_delta"
 
@@ -247,7 +245,7 @@ class TestSteals:
         sm.stage_steal(runner_id=101, from_base=1, to_base=2)  # safe drawn from pool
         r = sm.step_pitch(state, pitch_outcome="called_strike")
         assert r.steal_attempted is True
-        assert r.steal_outcome == STEAL_SAFE      # pool was all-success
+        assert r.steal_outcome == STEAL_SAFE  # pool was all-success
         assert state.bases.second == 101
 
     def test_caught_stealing_can_be_the_third_out(self):
@@ -276,9 +274,9 @@ class TestDroppedThirdStrike:
         state = _fresh_state(balls=0, strikes=2, batter_id=900)  # 1B open
         r = sm.step_pitch(state, pitch_outcome="swinging_strike")
         assert r.pa_terminal is True
-        assert r.outs_recorded == 0               # batter reached (no out)
+        assert r.outs_recorded == 0  # batter reached (no out)
         assert state.outs == 0
-        assert state.bases.first == 900           # batter safe at 1B
+        assert state.bases.first == 900  # batter safe at 1B
 
     def test_ordinary_k3_records_an_out_when_edge_does_not_fire(self):
         # No dropped-K signal -> an ordinary strikeout (one out).
@@ -289,7 +287,7 @@ class TestDroppedThirdStrike:
         assert r.event == EVENT_STRIKEOUT
         assert r.outs_recorded == 1
         assert state.outs == 1
-        assert state.bases.first is None          # batter did NOT reach
+        assert state.bases.first is None  # batter did NOT reach
 
     def test_dropped_k3_not_eligible_with_first_occupied_and_under_two_outs(self):
         # 1B occupied AND fewer than two outs -> the edge is NOT eligible even if
@@ -297,7 +295,7 @@ class TestDroppedThirdStrike:
         resolver = _InjectedResolver(_sig("field_out", 0, 1, 0), dropped_k=True)
         sm = StateMachine(resolver=resolver, rng=np.random.default_rng(0))
         state = _fresh_state(balls=0, strikes=2, outs=0, batter_id=900)
-        state.bases = Bases(first=101)            # 1B occupied, 0 outs
+        state.bases = Bases(first=101)  # 1B occupied, 0 outs
         r = sm.step_pitch(state, pitch_outcome="swinging_strike")
         assert r.event == EVENT_STRIKEOUT
         assert r.outs_recorded == 1

@@ -64,12 +64,12 @@ Owner: Backend Developer (Agent 5).
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from collections.abc import Mapping
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.serialization import to_jsonable
-
 
 # ---------------------------------------------------------------------------
 # Base
@@ -109,7 +109,7 @@ class ConfidenceIntervalModel(_ApiModel):
     half_width: float
 
     @classmethod
-    def from_dataclass(cls, ci: Any) -> "ConfidenceIntervalModel":
+    def from_dataclass(cls, ci: Any) -> ConfidenceIntervalModel:
         """Build from a :class:`simulation.results.ConfidenceInterval`."""
         return cls(
             point=float(ci.point),
@@ -148,9 +148,9 @@ class GameSimSummaryModel(_ApiModel):
 
     # RAW per-iteration signal (length N) -- numpy arrays on the source, exposed
     # as JSON-native int lists; optional so an endpoint can trim them.
-    home_scores: Optional[list[int]] = None
-    away_scores: Optional[list[int]] = None
-    total_scores: Optional[list[int]] = None
+    home_scores: list[int] | None = None
+    away_scores: list[int] | None = None
+    total_scores: list[int] | None = None
 
     home_win_ci: ConfidenceIntervalModel
     away_win_ci: ConfidenceIntervalModel
@@ -169,7 +169,7 @@ class GameSimSummaryModel(_ApiModel):
         summary: Any,
         *,
         include_raw_arrays: bool = True,
-    ) -> "GameSimSummaryModel":
+    ) -> GameSimSummaryModel:
         """Build from a :class:`simulation.results.GameSimSummary`.
 
         ``include_raw_arrays`` (default ``True``): when ``False`` the three RAW
@@ -190,19 +190,13 @@ class GameSimSummaryModel(_ApiModel):
             away_score_median=float(summary.away_score_median),
             total_score_median=float(summary.total_score_median),
             home_scores=(
-                [int(x) for x in summary.home_scores.tolist()]
-                if include_raw_arrays
-                else None
+                [int(x) for x in summary.home_scores.tolist()] if include_raw_arrays else None
             ),
             away_scores=(
-                [int(x) for x in summary.away_scores.tolist()]
-                if include_raw_arrays
-                else None
+                [int(x) for x in summary.away_scores.tolist()] if include_raw_arrays else None
             ),
             total_scores=(
-                [int(x) for x in summary.total_scores.tolist()]
-                if include_raw_arrays
-                else None
+                [int(x) for x in summary.total_scores.tolist()] if include_raw_arrays else None
             ),
             home_win_ci=ConfidenceIntervalModel.from_dataclass(summary.home_win_ci),
             away_win_ci=ConfidenceIntervalModel.from_dataclass(summary.away_win_ci),
@@ -248,7 +242,7 @@ class GameSimSummaryLite(_ApiModel):
     ci_method: str = "normal"
 
     @classmethod
-    def from_dataclass(cls, summary: Any) -> "GameSimSummaryLite":
+    def from_dataclass(cls, summary: Any) -> GameSimSummaryLite:
         """Build the array-free projection from a :class:`GameSimSummary`."""
         full = GameSimSummaryModel.from_dataclass(summary, include_raw_arrays=False)
         data = full.model_dump()
@@ -290,7 +284,7 @@ class PlayerStatLineModel(_ApiModel):
     ip_thirds: float
 
     @classmethod
-    def from_dataclass(cls, line: Any) -> "PlayerStatLineModel":
+    def from_dataclass(cls, line: Any) -> PlayerStatLineModel:
         """Build from a :class:`simulation.sim_loop.PlayerStatLine`."""
         return cls(
             player_id=int(line.player_id),
@@ -324,20 +318,17 @@ class BoxScoreModel(_ApiModel):
     pitchers: dict[str, PlayerStatLineModel] = Field(default_factory=dict)
 
     @classmethod
-    def from_dataclass(cls, box: Any) -> "BoxScoreModel":
+    def from_dataclass(cls, box: Any) -> BoxScoreModel:
         """Build from a :class:`simulation.sim_loop.BoxScore`."""
         return cls(
             lines={
-                str(pid): PlayerStatLineModel.from_dataclass(ln)
-                for pid, ln in box.lines.items()
+                str(pid): PlayerStatLineModel.from_dataclass(ln) for pid, ln in box.lines.items()
             },
             batters={
-                str(pid): PlayerStatLineModel.from_dataclass(ln)
-                for pid, ln in box.batters.items()
+                str(pid): PlayerStatLineModel.from_dataclass(ln) for pid, ln in box.batters.items()
             },
             pitchers={
-                str(pid): PlayerStatLineModel.from_dataclass(ln)
-                for pid, ln in box.pitchers.items()
+                str(pid): PlayerStatLineModel.from_dataclass(ln) for pid, ln in box.pitchers.items()
             },
         )
 
@@ -359,7 +350,7 @@ class CalibrationMapModel(_ApiModel):
     name: str = "identity"
 
     @classmethod
-    def from_dataclass(cls, cmap: Any) -> "CalibrationMapModel":
+    def from_dataclass(cls, cmap: Any) -> CalibrationMapModel:
         """Build from a :class:`simulation.win_probability.CalibrationMap`."""
         return cls(name=str(cmap.name))
 
@@ -389,7 +380,7 @@ class WinProbabilityModel(_ApiModel):
     method: str = "beta-smoothed+wald"
 
     @classmethod
-    def from_dataclass(cls, wp: Any) -> "WinProbabilityModel":
+    def from_dataclass(cls, wp: Any) -> WinProbabilityModel:
         """Build from a :class:`simulation.win_probability.WinProbability`."""
         # tie_handling is a TieHandling enum; take its .value if present.
         th = wp.tie_handling
@@ -423,10 +414,10 @@ class PlayerRefModel(_ApiModel):
     """
 
     player_id: int
-    label: Optional[str] = None
+    label: str | None = None
 
     @classmethod
-    def from_dataclass(cls, ref: Any) -> "PlayerRefModel":
+    def from_dataclass(cls, ref: Any) -> PlayerRefModel:
         """Build from a :class:`simulation.snapshots.PlayerRef`."""
         return cls(
             player_id=int(ref.player_id),
@@ -434,7 +425,7 @@ class PlayerRefModel(_ApiModel):
         )
 
 
-def _optional_player_ref(ref: Any) -> Optional[PlayerRefModel]:
+def _optional_player_ref(ref: Any) -> PlayerRefModel | None:
     """Convert an ``Optional[PlayerRef]`` (None == empty slot) to its model."""
     return None if ref is None else PlayerRefModel.from_dataclass(ref)
 
@@ -449,9 +440,9 @@ class FieldSnapshotModel(_ApiModel):
     properties for consumer convenience.
     """
 
-    positions: dict[str, Optional[PlayerRefModel]]
-    batter: Optional[PlayerRefModel] = None
-    baserunners: dict[str, Optional[PlayerRefModel]]
+    positions: dict[str, PlayerRefModel | None]
+    batter: PlayerRefModel | None = None
+    baserunners: dict[str, PlayerRefModel | None]
 
     balls: int
     strikes: int
@@ -467,17 +458,13 @@ class FieldSnapshotModel(_ApiModel):
     runners_on: int
 
     @classmethod
-    def from_dataclass(cls, snap: Any) -> "FieldSnapshotModel":
+    def from_dataclass(cls, snap: Any) -> FieldSnapshotModel:
         """Build from a :class:`simulation.snapshots.FieldSnapshot`."""
         return cls(
-            positions={
-                str(pos): _optional_player_ref(ref)
-                for pos, ref in snap.positions.items()
-            },
+            positions={str(pos): _optional_player_ref(ref) for pos, ref in snap.positions.items()},
             batter=_optional_player_ref(snap.batter),
             baserunners={
-                str(base): _optional_player_ref(ref)
-                for base, ref in snap.baserunners.items()
+                str(base): _optional_player_ref(ref) for base, ref in snap.baserunners.items()
             },
             balls=int(snap.balls),
             strikes=int(snap.strikes),
@@ -508,20 +495,20 @@ class PlayByPlayEntryModel(_ApiModel):
     is_contact: bool
     is_pa_end: bool
 
-    event: Optional[str] = None
+    event: str | None = None
 
     runs_scored: int = 0
     outs_recorded: int = 0
 
-    exit_velo: Optional[float] = None
-    launch_angle: Optional[float] = None
-    spray_angle: Optional[float] = None
+    exit_velo: float | None = None
+    launch_angle: float | None = None
+    spray_angle: float | None = None
 
     runs: float = 0.0
-    canonical_event: Optional[str] = None
+    canonical_event: str | None = None
 
     @classmethod
-    def from_dataclass(cls, entry: Any) -> "PlayByPlayEntryModel":
+    def from_dataclass(cls, entry: Any) -> PlayByPlayEntryModel:
         """Build from a :class:`simulation.snapshots.PlayByPlayEntry`."""
         return cls(
             sequence=int(entry.sequence),
@@ -534,16 +521,10 @@ class PlayByPlayEntryModel(_ApiModel):
             runs_scored=int(entry.runs_scored),
             outs_recorded=int(entry.outs_recorded),
             exit_velo=None if entry.exit_velo is None else float(entry.exit_velo),
-            launch_angle=(
-                None if entry.launch_angle is None else float(entry.launch_angle)
-            ),
-            spray_angle=(
-                None if entry.spray_angle is None else float(entry.spray_angle)
-            ),
+            launch_angle=(None if entry.launch_angle is None else float(entry.launch_angle)),
+            spray_angle=(None if entry.spray_angle is None else float(entry.spray_angle)),
             runs=float(entry.runs),
-            canonical_event=(
-                None if entry.canonical_event is None else str(entry.canonical_event)
-            ),
+            canonical_event=(None if entry.canonical_event is None else str(entry.canonical_event)),
         )
 
 
@@ -560,12 +541,10 @@ class PlayByPlayModel(_ApiModel):
     n_plate_appearances: int = 0
 
     @classmethod
-    def from_dataclass(cls, pbp: Any) -> "PlayByPlayModel":
+    def from_dataclass(cls, pbp: Any) -> PlayByPlayModel:
         """Build from a :class:`simulation.snapshots.PlayByPlay`."""
         return cls(
-            entries=[
-                PlayByPlayEntryModel.from_dataclass(e) for e in pbp.entries
-            ],
+            entries=[PlayByPlayEntryModel.from_dataclass(e) for e in pbp.entries],
             n_pitches=int(pbp.n_pitches),
             n_plate_appearances=int(pbp.n_plate_appearances),
         )
@@ -581,10 +560,10 @@ class StateAtPitchModel(_ApiModel):
     at_bat: int
     pitch: int
     field: FieldSnapshotModel
-    sequence: Optional[int] = None
+    sequence: int | None = None
 
     @classmethod
-    def from_dataclass(cls, sap: Any) -> "StateAtPitchModel":
+    def from_dataclass(cls, sap: Any) -> StateAtPitchModel:
         """Build from a :class:`simulation.snapshots.StateAtPitch`."""
         return cls(
             at_bat=int(sap.at_bat),
@@ -607,7 +586,7 @@ class MetricDeltaModel(_ApiModel):
     delta: float
 
     @classmethod
-    def from_dataclass(cls, md: Any) -> "MetricDeltaModel":
+    def from_dataclass(cls, md: Any) -> MetricDeltaModel:
         """Build from a :class:`simulation.snapshots.MetricDelta`."""
         return cls(
             metric=str(md.metric),
@@ -625,15 +604,14 @@ class OverrideDeltaModel(_ApiModel):
     """
 
     metrics: dict[str, MetricDeltaModel] = Field(default_factory=dict)
-    description: Optional[str] = None
+    description: str | None = None
 
     @classmethod
-    def from_dataclass(cls, od: Any) -> "OverrideDeltaModel":
+    def from_dataclass(cls, od: Any) -> OverrideDeltaModel:
         """Build from a :class:`simulation.snapshots.OverrideDelta`."""
         return cls(
             metrics={
-                str(name): MetricDeltaModel.from_dataclass(md)
-                for name, md in od.metrics.items()
+                str(name): MetricDeltaModel.from_dataclass(md) for name, md in od.metrics.items()
             },
             description=None if od.description is None else str(od.description),
         )
@@ -669,7 +647,7 @@ class PropDistributionModel(_ApiModel):
     pmf: dict[str, float] = Field(default_factory=dict)
 
     @classmethod
-    def from_dataclass(cls, dist: Any) -> "PropDistributionModel":
+    def from_dataclass(cls, dist: Any) -> PropDistributionModel:
         """Build from a :class:`simulation.prop_distributions.PropDistribution`."""
         return cls(
             player_id=int(dist.player_id),
@@ -693,19 +671,16 @@ class PropDistributionSetModel(_ApiModel):
     """
 
     n_iterations: int
-    by_player: dict[str, dict[str, PropDistributionModel]] = Field(
-        default_factory=dict
-    )
+    by_player: dict[str, dict[str, PropDistributionModel]] = Field(default_factory=dict)
 
     @classmethod
-    def from_dataclass(cls, dist_set: Any) -> "PropDistributionSetModel":
+    def from_dataclass(cls, dist_set: Any) -> PropDistributionSetModel:
         """Build from a :class:`simulation.prop_distributions.PropDistributionSet`."""
         return cls(
             n_iterations=int(dist_set.n_iterations),
             by_player={
                 str(pid): {
-                    str(prop): PropDistributionModel.from_dataclass(d)
-                    for prop, d in props.items()
+                    str(prop): PropDistributionModel.from_dataclass(d) for prop, d in props.items()
                 }
                 for pid, props in dist_set.by_player.items()
             },
@@ -728,8 +703,8 @@ class InningLineModel(_ApiModel):
     """
 
     inning: int
-    away: Optional[int] = None
-    home: Optional[int] = None
+    away: int | None = None
+    home: int | None = None
 
     #: Derived from the source dataclass's properties (a half is "played" iff its
     #: cell is not None).
@@ -737,7 +712,7 @@ class InningLineModel(_ApiModel):
     home_played: bool
 
     @classmethod
-    def from_dataclass(cls, ln: Any) -> "InningLineModel":
+    def from_dataclass(cls, ln: Any) -> InningLineModel:
         """Build from a :class:`simulation.linescore.InningLine`."""
         return cls(
             inning=int(ln.inning),
@@ -769,11 +744,11 @@ class LinescoreModel(_ApiModel):
 
     #: Derived from the source dataclass's properties.
     n_innings: int = 0
-    away_by_inning: list[Optional[int]] = Field(default_factory=list)
-    home_by_inning: list[Optional[int]] = Field(default_factory=list)
+    away_by_inning: list[int | None] = Field(default_factory=list)
+    home_by_inning: list[int | None] = Field(default_factory=list)
 
     @classmethod
-    def from_dataclass(cls, ls: Any) -> "LinescoreModel":
+    def from_dataclass(cls, ls: Any) -> LinescoreModel:
         """Build from a :class:`simulation.linescore.Linescore`."""
         return cls(
             innings=[InningLineModel.from_dataclass(ln) for ln in ls.innings],
@@ -789,7 +764,7 @@ class LinescoreModel(_ApiModel):
         )
 
     @classmethod
-    def from_jsonable(cls, data: Mapping[str, Any]) -> "LinescoreModel":
+    def from_jsonable(cls, data: Mapping[str, Any]) -> LinescoreModel:
         """Build directly from a persisted ``to_jsonable(Linescore)`` dict.
 
         The DuckDB game-card store (SIM-362) persists the linescore as the
@@ -802,8 +777,8 @@ class LinescoreModel(_ApiModel):
         """
         innings = list(data.get("innings") or [])
         inning_models: list[InningLineModel] = []
-        away_by_inning: list[Optional[int]] = []
-        home_by_inning: list[Optional[int]] = []
+        away_by_inning: list[int | None] = []
+        home_by_inning: list[int | None] = []
         for entry in innings:
             away = entry.get("away")
             home = entry.get("home")
@@ -848,14 +823,14 @@ class PitcherDecisionsModel(_ApiModel):
     are the final committed scores for context.
     """
 
-    winning_pitcher_id: Optional[int] = None
-    losing_pitcher_id: Optional[int] = None
-    save_pitcher_id: Optional[int] = None
+    winning_pitcher_id: int | None = None
+    losing_pitcher_id: int | None = None
+    save_pitcher_id: int | None = None
     home_score: int = 0
     away_score: int = 0
 
     @classmethod
-    def from_dataclass(cls, dec: Any) -> "PitcherDecisionsModel":
+    def from_dataclass(cls, dec: Any) -> PitcherDecisionsModel:
         """Build from a :class:`simulation.pitcher_decisions.PitcherDecisions`."""
         return cls(
             winning_pitcher_id=(
@@ -864,21 +839,20 @@ class PitcherDecisionsModel(_ApiModel):
             losing_pitcher_id=(
                 None if dec.losing_pitcher_id is None else int(dec.losing_pitcher_id)
             ),
-            save_pitcher_id=(
-                None if dec.save_pitcher_id is None else int(dec.save_pitcher_id)
-            ),
+            save_pitcher_id=(None if dec.save_pitcher_id is None else int(dec.save_pitcher_id)),
             home_score=int(dec.home_score),
             away_score=int(dec.away_score),
         )
 
     @classmethod
-    def from_jsonable(cls, data: Mapping[str, Any]) -> "PitcherDecisionsModel":
+    def from_jsonable(cls, data: Mapping[str, Any]) -> PitcherDecisionsModel:
         """Build directly from a persisted ``to_jsonable(PitcherDecisions)`` dict.
 
         ``PitcherDecisions`` has only plain fields (no derived properties), so the
         persisted dict round-trips 1:1; this just re-coerces types defensively.
         """
-        def _oi(v: Any) -> Optional[int]:
+
+        def _oi(v: Any) -> int | None:
             return None if v is None else int(v)
 
         return cls(
@@ -913,9 +887,7 @@ class BoxscoreCardRowModel(_ApiModel):
     means: dict[str, float] = Field(default_factory=dict)
 
     @classmethod
-    def from_prop_map(
-        cls, player_id: int, props: Mapping[str, Any]
-    ) -> "BoxscoreCardRowModel":
+    def from_prop_map(cls, player_id: int, props: Mapping[str, Any]) -> BoxscoreCardRowModel:
         """Build one row from a ``{prop_name -> PropDistribution}`` map."""
         return cls(
             player_id=int(player_id),
@@ -941,7 +913,7 @@ class BoxscoreCardModel(_ApiModel):
     players: dict[str, BoxscoreCardRowModel] = Field(default_factory=dict)
 
     @classmethod
-    def from_prop_set(cls, pset: Any) -> "BoxscoreCardModel":
+    def from_prop_set(cls, pset: Any) -> BoxscoreCardModel:
         """Build from a :class:`simulation.prop_distributions.PropDistributionSet`."""
         return cls(
             n_iterations=int(pset.n_iterations),
@@ -973,7 +945,7 @@ class CLVModel(_ApiModel):
     beat_close: bool
 
     @classmethod
-    def from_dataclass(cls, clv: Any) -> "CLVModel":
+    def from_dataclass(cls, clv: Any) -> CLVModel:
         """Build from a :class:`betting.clv_engine.CLV`."""
         return cls(
             entry_fair_prob=float(clv.entry_fair_prob),
@@ -998,7 +970,7 @@ class EdgeReportModel(_ApiModel):
     label: str
     #: The MarketSide enum value as a string ("home"/"away"/"over"/"under").
     side: str
-    line: Optional[float] = None
+    line: float | None = None
 
     sim_prob: float
     market_fair_prob: float
@@ -1009,11 +981,11 @@ class EdgeReportModel(_ApiModel):
     offered_american: float
     sim_fair_american: float
 
-    clv: Optional[CLVModel] = None
+    clv: CLVModel | None = None
     positive_edge: bool
 
     @classmethod
-    def from_dataclass(cls, report: Any) -> "EdgeReportModel":
+    def from_dataclass(cls, report: Any) -> EdgeReportModel:
         """Build from a :class:`betting.clv_engine.EdgeReport`."""
         side = report.side
         side_value = side.value if hasattr(side, "value") else str(side)
@@ -1052,7 +1024,7 @@ class BetSignalModel(_ApiModel):
     label: str
     #: The MarketSide enum value as a string ("home"/"away"/"over"/"under").
     side: str
-    line: Optional[float] = None
+    line: float | None = None
     offered_american: float
 
     edge: float
@@ -1065,7 +1037,7 @@ class BetSignalModel(_ApiModel):
     report: EdgeReportModel
 
     @classmethod
-    def from_dataclass(cls, signal: Any) -> "BetSignalModel":
+    def from_dataclass(cls, signal: Any) -> BetSignalModel:
         """Build from a :class:`betting.bet_signal.BetSignal`."""
         side = signal.side
         side_value = side.value if hasattr(side, "value") else str(side)
@@ -1098,17 +1070,17 @@ class LineQuoteModel(_ApiModel):
     implied probability. numpy-free.
     """
 
-    fetched_at: Optional[str] = None
+    fetched_at: str | None = None
     line_type: str
     book: str
     is_sharp_book: bool
     american: float
-    other_american: Optional[float] = None
-    line: Optional[float] = None
+    other_american: float | None = None
+    line: float | None = None
     implied_prob: float
 
     @classmethod
-    def from_dataclass(cls, quote: Any) -> "LineQuoteModel":
+    def from_dataclass(cls, quote: Any) -> LineQuoteModel:
         """Build from a :class:`betting.line_movement.LineQuote`."""
         fa = quote.fetched_at
         fetched_at = None if fa is None else str(to_jsonable(fa))
@@ -1118,9 +1090,7 @@ class LineQuoteModel(_ApiModel):
             book=str(quote.book),
             is_sharp_book=bool(quote.is_sharp_book),
             american=float(quote.american),
-            other_american=(
-                None if quote.other_american is None else float(quote.other_american)
-            ),
+            other_american=(None if quote.other_american is None else float(quote.other_american)),
             line=None if quote.line is None else float(quote.line),
             implied_prob=float(quote.implied_prob),
         )
@@ -1142,18 +1112,18 @@ class LineMovementModel(_ApiModel):
     market_type: str
     #: The MarketSide enum value as a string ("home"/"away"/"over"/"under").
     side: str
-    book: Optional[str] = None
+    book: str | None = None
 
     quotes: list[LineQuoteModel] = Field(default_factory=list)
 
-    opening_american: Optional[float] = None
-    closing_american: Optional[float] = None
-    opening_implied_prob: Optional[float] = None
-    closing_implied_prob: Optional[float] = None
+    opening_american: float | None = None
+    closing_american: float | None = None
+    opening_implied_prob: float | None = None
+    closing_implied_prob: float | None = None
 
-    american_delta: Optional[float] = None
-    implied_prob_delta: Optional[float] = None
-    line_delta: Optional[float] = None
+    american_delta: float | None = None
+    implied_prob_delta: float | None = None
+    line_delta: float | None = None
 
     step_implied_prob_deltas: list[float] = Field(default_factory=list)
     step_american_deltas: list[float] = Field(default_factory=list)
@@ -1161,20 +1131,20 @@ class LineMovementModel(_ApiModel):
 
     direction: str = "flat"
 
-    clv: Optional[CLVModel] = None
-    sharp_consensus: Optional[bool] = None
+    clv: CLVModel | None = None
+    sharp_consensus: bool | None = None
 
     #: Derived from the source dataclass's properties.
     has_movement: bool = False
     beat_close: bool = False
 
     @classmethod
-    def from_dataclass(cls, mv: Any) -> "LineMovementModel":
+    def from_dataclass(cls, mv: Any) -> LineMovementModel:
         """Build from a :class:`betting.line_movement.LineMovement`."""
         side = mv.side
         side_value = side.value if hasattr(side, "value") else str(side)
 
-        def _of(v: Any) -> Optional[float]:
+        def _of(v: Any) -> float | None:
             return None if v is None else float(v)
 
         return cls(
@@ -1195,9 +1165,7 @@ class LineMovementModel(_ApiModel):
             implied_prob_series=[float(x) for x in mv.implied_prob_series],
             direction=str(mv.direction),
             clv=None if mv.clv is None else CLVModel.from_dataclass(mv.clv),
-            sharp_consensus=(
-                None if mv.sharp_consensus is None else bool(mv.sharp_consensus)
-            ),
+            sharp_consensus=(None if mv.sharp_consensus is None else bool(mv.sharp_consensus)),
             has_movement=bool(mv.has_movement),
             beat_close=bool(mv.beat_close),
         )

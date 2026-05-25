@@ -216,9 +216,7 @@ class TestBaserunnerEngineBuild:
 
 def _faiss_or_skip(mod):
     if not getattr(mod, "_FAISS_AVAILABLE", True):
-        pytest.skip(
-            "faiss-cpu not installed -- Python 3.13 has no wheel yet"
-        )
+        pytest.skip("faiss-cpu not installed -- Python 3.13 has no wheel yet")
 
 
 class TestPitchPitchEngineBuild:

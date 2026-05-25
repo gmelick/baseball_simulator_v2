@@ -225,8 +225,7 @@ def load_calibration_report(path: str | None = None):
         return report
     except Exception as exc:  # noqa: BLE001 — a bad report must not crash boot
         log.warning(
-            "Failed to load calibration report from %s (%s: %s) — "
-            "using identity calibration.",
+            "Failed to load calibration report from %s (%s: %s) — using identity calibration.",
             report_path,
             type(exc).__name__,
             exc,
@@ -356,7 +355,7 @@ async def open_redis_cache(redis_url: str) -> tuple[aioredis.Redis, RedisSimilar
     client = aioredis.from_url(redis_url, decode_responses=True)
     # Probe the connection so a misconfigured Redis fails fast at boot
     # (matches the validate_environment philosophy in api.main).
-    await client.ping()
+    await client.ping()  # type: ignore[misc]  # redis-py async ping stub typing
     return client, RedisSimilarityCache(client)
 
 

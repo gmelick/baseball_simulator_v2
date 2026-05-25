@@ -207,9 +207,7 @@ def _collect(app_state: Any) -> dict[str, float]:
     """Snapshot the current scalar readings used by both render paths."""
     return {
         "requests_total": float(getattr(app_state, "request_count", 0) or 0),
-        "sim_latency_last": float(
-            getattr(app_state, "sim_latency_last_seconds", 0.0) or 0.0
-        ),
+        "sim_latency_last": float(getattr(app_state, "sim_latency_last_seconds", 0.0) or 0.0),
         "api_p95": float(getattr(app_state, "api_p95_seconds", 0.0) or 0.0),
         "pipeline_freshness": _pipeline_freshness_seconds(app_state),
     }
@@ -223,9 +221,8 @@ def _collect(app_state: Any) -> dict[str, float]:
 
 
 def _metric_block(name: str, help_text: str, mtype: str, lines: list[str]) -> str:
-    return (
-        f"# HELP {name} {help_text}\n"
-        f"# TYPE {name} {mtype}\n" + "".join(f"{ln}\n" for ln in lines)
+    return f"# HELP {name} {help_text}\n# TYPE {name} {mtype}\n" + "".join(
+        f"{ln}\n" for ln in lines
     )
 
 

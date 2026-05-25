@@ -64,7 +64,7 @@ class TestComparabilityTransform(unittest.TestCase):
         # Smaller distance -> strictly higher affinity (ordering preserved).
         ds = [0.0, 0.25, 0.5, 1.0, 2.0, 4.0]
         affs = [distance_to_affinity(d) for d in ds]
-        for earlier, later in zip(affs, affs[1:]):
+        for earlier, later in zip(affs, affs[1:], strict=False):
             self.assertGreater(earlier, later)
 
     def test_zero_distance_is_max_affinity(self):
@@ -86,8 +86,7 @@ class TestComparabilityTransform(unittest.TestCase):
 
     def test_larger_scale_softens_decay(self):
         # A bigger scale -> the same distance maps to a higher affinity.
-        self.assertLess(distance_to_affinity(2.0, scale=1.0),
-                        distance_to_affinity(2.0, scale=5.0))
+        self.assertLess(distance_to_affinity(2.0, scale=1.0), distance_to_affinity(2.0, scale=5.0))
 
 
 class TestScoreTypeRespected(unittest.TestCase):
@@ -113,15 +112,19 @@ class TestScoreTypeRespected(unittest.TestCase):
         # holding the similarity engines fixed -- distance is honoured as
         # "lower = more similar".
         near = fuse_scores(
-            {"pitcher": (0.7, "similarity"),
-             "batter": (0.6, "similarity"),
-             "situation": (0.2, "distance")},
+            {
+                "pitcher": (0.7, "similarity"),
+                "batter": (0.6, "similarity"),
+                "situation": (0.2, "distance"),
+            },
             profile="pitch_draw",
         )
         far = fuse_scores(
-            {"pitcher": (0.7, "similarity"),
-             "batter": (0.6, "similarity"),
-             "situation": (5.0, "distance")},
+            {
+                "pitcher": (0.7, "similarity"),
+                "batter": (0.6, "similarity"),
+                "situation": (5.0, "distance"),
+            },
             profile="pitch_draw",
         )
         self.assertGreater(near.fused, far.fused)
@@ -129,8 +132,10 @@ class TestScoreTypeRespected(unittest.TestCase):
     def test_result_object_coercion(self):
         # Accept engine-style result objects (.score / .distance).
         res = fuse_scores(
-            {"pitcher": (_SimResult(0.8), "similarity"),
-             "situation": (_DistResult(0.5), "distance")},
+            {
+                "pitcher": (_SimResult(0.8), "similarity"),
+                "situation": (_DistResult(0.5), "distance"),
+            },
             weights={"pitcher": 0.6, "situation": 0.4},
         )
         self.assertTrue(0.0 <= res.fused <= 1.0)
@@ -145,15 +150,19 @@ class TestOrderInvariance(unittest.TestCase):
 
     def test_mapping_order_does_not_matter(self):
         a = fuse_scores(
-            {"pitcher": (0.8, "similarity"),
-             "batter": (0.5, "similarity"),
-             "situation": (1.0, "distance")},
+            {
+                "pitcher": (0.8, "similarity"),
+                "batter": (0.5, "similarity"),
+                "situation": (1.0, "distance"),
+            },
             profile="pitch_draw",
         )
         b = fuse_scores(
-            {"situation": (1.0, "distance"),
-             "batter": (0.5, "similarity"),
-             "pitcher": (0.8, "similarity")},
+            {
+                "situation": (1.0, "distance"),
+                "batter": (0.5, "similarity"),
+                "pitcher": (0.8, "similarity"),
+            },
             profile="pitch_draw",
         )
         self.assertAlmostEqual(a.fused, b.fused, places=12)
@@ -171,14 +180,22 @@ class TestOrderInvariance(unittest.TestCase):
     def test_order_invariance_linear_rule_too(self):
         w = {"pitcher": 0.5, "batter": 0.3, "situation": 0.2}
         a = fuse_scores(
-            {"pitcher": (0.8, "similarity"), "batter": (0.4, "similarity"),
-             "situation": (0.7, "distance")},
-            weights=w, rule="linear",
+            {
+                "pitcher": (0.8, "similarity"),
+                "batter": (0.4, "similarity"),
+                "situation": (0.7, "distance"),
+            },
+            weights=w,
+            rule="linear",
         )
         b = fuse_scores(
-            {"batter": (0.4, "similarity"), "situation": (0.7, "distance"),
-             "pitcher": (0.8, "similarity")},
-            weights=w, rule="linear",
+            {
+                "batter": (0.4, "similarity"),
+                "situation": (0.7, "distance"),
+                "pitcher": (0.8, "similarity"),
+            },
+            weights=w,
+            rule="linear",
         )
         self.assertAlmostEqual(a.fused, b.fused, places=12)
 
@@ -188,13 +205,19 @@ class TestMonotonicWeights(unittest.TestCase):
 
     def test_raising_one_affinity_raises_fused(self):
         base = fuse_scores(
-            {"pitcher": (0.5, "similarity"), "batter": (0.5, "similarity"),
-             "situation": (1.0, "distance")},
+            {
+                "pitcher": (0.5, "similarity"),
+                "batter": (0.5, "similarity"),
+                "situation": (1.0, "distance"),
+            },
             profile="pitch_draw",
         )
         higher = fuse_scores(
-            {"pitcher": (0.9, "similarity"), "batter": (0.5, "similarity"),
-             "situation": (1.0, "distance")},
+            {
+                "pitcher": (0.9, "similarity"),
+                "batter": (0.5, "similarity"),
+                "situation": (1.0, "distance"),
+            },
             profile="pitch_draw",
         )
         self.assertGreater(higher.fused, base.fused)
@@ -211,8 +234,11 @@ class TestMonotonicWeights(unittest.TestCase):
     def test_all_equal_affinities_give_that_value(self):
         # Geometric mean of identical values is that value, weights notwithstanding.
         res = fuse_scores(
-            {"pitcher": (0.6, "similarity"), "batter": (0.6, "similarity"),
-             "situation": (0.6, "similarity")},
+            {
+                "pitcher": (0.6, "similarity"),
+                "batter": (0.6, "similarity"),
+                "situation": (0.6, "similarity"),
+            },
             profile="pitch_draw",
         )
         self.assertAlmostEqual(res.fused, 0.6, places=9)
@@ -234,8 +260,11 @@ class TestDegenerateInputs(unittest.TestCase):
         # 'situation' has no configured weight here -> ignored; the present two
         # engines renormalize to sum to 1.
         res = fuse_scores(
-            {"pitcher": (0.8, "similarity"), "batter": (0.4, "similarity"),
-             "situation": (1.0, "distance")},
+            {
+                "pitcher": (0.8, "similarity"),
+                "batter": (0.4, "similarity"),
+                "situation": (1.0, "distance"),
+            },
             weights={"pitcher": 0.5, "batter": 0.5},
         )
         self.assertNotIn("situation", res.weights)
@@ -244,8 +273,11 @@ class TestDegenerateInputs(unittest.TestCase):
     def test_none_signal_dropped_and_weight_redistributed(self):
         # A None pitcher signal is missing -> dropped, batter+situation carry it.
         res = fuse_scores(
-            {"pitcher": (None, "similarity"), "batter": (0.6, "similarity"),
-             "situation": (0.5, "distance")},
+            {
+                "pitcher": (None, "similarity"),
+                "batter": (0.6, "similarity"),
+                "situation": (0.5, "distance"),
+            },
             profile="pitch_draw",
         )
         self.assertNotIn("pitcher", res.weights)
@@ -294,18 +326,19 @@ class TestDistanceWeightBoundaryNotCrossed(unittest.TestCase):
         # The fused per-candidate value need NOT sum to 1 across candidates.
         # Two candidates with identical high affinities both score high; their
         # fused values do not normalize to a p-vector summing to 1.
-        cand_a = fuse_scores({"pitcher": (0.9, "similarity")},
-                             weights={"pitcher": 1.0}).fused
-        cand_b = fuse_scores({"pitcher": (0.9, "similarity")},
-                             weights={"pitcher": 1.0}).fused
+        cand_a = fuse_scores({"pitcher": (0.9, "similarity")}, weights={"pitcher": 1.0}).fused
+        cand_b = fuse_scores({"pitcher": (0.9, "similarity")}, weights={"pitcher": 1.0}).fused
         self.assertAlmostEqual(cand_a, 0.9, places=9)
         self.assertAlmostEqual(cand_b, 0.9, places=9)
         self.assertGreater(cand_a + cand_b, 1.0)  # not a normalized distribution
 
     def test_affinities_are_diagnostic_and_unnormalized(self):
         res = fuse_scores(
-            {"pitcher": (0.8, "similarity"), "batter": (0.7, "similarity"),
-             "situation": (0.5, "distance")},
+            {
+                "pitcher": (0.8, "similarity"),
+                "batter": (0.7, "similarity"),
+                "situation": (0.5, "distance"),
+            },
             profile="pitch_draw",
         )
         # Per-engine affinities are independent [0,1] values; they do not sum to 1.
@@ -353,8 +386,11 @@ class TestResultContract(unittest.TestCase):
 
     def test_result_fields_present(self):
         res = fuse_scores(
-            {"pitcher": (0.8, "similarity"), "batter": (0.5, "similarity"),
-             "situation": (1.0, "distance")},
+            {
+                "pitcher": (0.8, "similarity"),
+                "batter": (0.5, "similarity"),
+                "situation": (1.0, "distance"),
+            },
             profile="pitch_draw",
         )
         self.assertIsInstance(res, FusionResult)

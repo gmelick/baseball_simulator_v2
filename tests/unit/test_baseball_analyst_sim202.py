@@ -74,9 +74,7 @@ class TestRunValues(unittest.TestCase):
 
     def test_double_play_is_worst_out(self) -> None:
         """GIDP (out + lost runner) is worse than a plain out."""
-        self.assertLess(
-            RUN_VALUES["ground_into_double_play"], RUN_VALUES["field_out"]
-        )
+        self.assertLess(RUN_VALUES["ground_into_double_play"], RUN_VALUES["field_out"])
 
     def test_hbp_at_least_walk(self) -> None:
         """HBP is worth at least an unintentional walk (can't be intentional)."""
@@ -114,9 +112,7 @@ class TestDefensiveRunValues(unittest.TestCase):
         self.assertEqual(DEFENSIVE_RUN_VALUES["runs_per_oaa_infield"], 0.75)
         self.assertEqual(DEFENSIVE_RUN_VALUES["runs_per_oaa_outfield"], 0.90)
         self.assertEqual(DEFENSIVE_RUN_VALUES["runs_per_block_saved"], 0.25)
-        self.assertEqual(
-            DEFENSIVE_RUN_VALUES["runs_per_strike_above_avg"], 0.125
-        )
+        self.assertEqual(DEFENSIVE_RUN_VALUES["runs_per_strike_above_avg"], 0.125)
 
     def test_outfield_oaa_worth_more_than_infield(self) -> None:
         self.assertGreater(

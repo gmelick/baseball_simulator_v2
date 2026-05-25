@@ -25,14 +25,11 @@ from simulation.snapshots import (
     DEFENSE_POSITIONS,
     OVERRIDE_METRIC_FIELDS,
     FieldSnapshot,
-    MetricDelta,
     OverrideDelta,
     PlayByPlay,
-    PlayByPlayEntry,
     PlayerRef,
     StateAtPitch,
 )
-
 
 # ===========================================================================
 # Helpers
@@ -54,8 +51,9 @@ def _state_with_runners() -> GameState:
     return st
 
 
-def _pitch(outcome, *, terminal=False, event=None, contact=False,
-           runs_scored=0, outs=0, ev=None) -> PlayResult:
+def _pitch(
+    outcome, *, terminal=False, event=None, contact=False, runs_scored=0, outs=0, ev=None
+) -> PlayResult:
     return PlayResult(
         pitch_outcome=outcome,
         is_contact=contact,
@@ -74,10 +72,11 @@ def _pitch(outcome, *, terminal=False, event=None, contact=False,
 
 def test_field_snapshot_captures_positions_and_chrome():
     st = _state_with_runners()
-    labels = {101: "Batter Joe", 201: "Runner One", 203: "Runner Three",
-              555: "SS Sam"}
+    labels = {101: "Batter Joe", 201: "Runner One", 203: "Runner Three", 555: "SS Sam"}
     snap = FieldSnapshot.from_game_state(
-        st, labels=labels, defense_positions={"SS": 555},
+        st,
+        labels=labels,
+        defense_positions={"SS": 555},
     )
 
     # All 9 canonical defensive positions present as slots.
@@ -128,8 +127,7 @@ def _sample_pa_stream():
         _pitch("ball"),
         _pitch("called_strike"),
         _pitch("swinging_strike", terminal=True, event="strikeout", outs=1),
-        _pitch("in_play", terminal=True, event="home_run", contact=True,
-               runs_scored=1, ev=104.2),
+        _pitch("in_play", terminal=True, event="home_run", contact=True, runs_scored=1, ev=104.2),
     ]
 
 
@@ -196,7 +194,10 @@ def test_empty_play_stream_yields_empty_pbp():
 def test_state_at_pitch_reflects_point_in_time():
     st = _state_with_runners()
     sap = StateAtPitch.from_game_state(
-        st, at_bat=14, pitch=3, sequence=57,
+        st,
+        at_bat=14,
+        pitch=3,
+        sequence=57,
         labels={101: "Batter Joe"},
     )
     # Indices tag the point in time.
@@ -227,6 +228,7 @@ def test_state_at_pitch_sequence_optional():
 @dataclass
 class _FakeSummary:
     """Minimal stand-in exposing the metric attributes OverrideDelta reads."""
+
     home_win_pct: float
     away_win_pct: float
     home_score_mean: float
@@ -236,16 +238,24 @@ class _FakeSummary:
 
 def test_override_delta_captures_diff():
     baseline = _FakeSummary(
-        home_win_pct=0.52, away_win_pct=0.48,
-        home_score_mean=4.5, away_score_mean=4.2, total_score_mean=8.7,
+        home_win_pct=0.52,
+        away_win_pct=0.48,
+        home_score_mean=4.5,
+        away_score_mean=4.2,
+        total_score_mean=8.7,
     )
     override = _FakeSummary(
-        home_win_pct=0.61, away_win_pct=0.39,
-        home_score_mean=5.1, away_score_mean=3.9, total_score_mean=9.0,
+        home_win_pct=0.61,
+        away_win_pct=0.39,
+        home_score_mean=5.1,
+        away_score_mean=3.9,
+        total_score_mean=9.0,
     )
 
     od = OverrideDelta.from_summaries(
-        baseline, override, description="sub in closer for 8th",
+        baseline,
+        override,
+        description="sub in closer for 8th",
     )
 
     # Each tracked metric carries baseline / override / delta.
@@ -268,7 +278,9 @@ def test_override_delta_custom_metric_subset():
     baseline = _FakeSummary(0.5, 0.5, 4.0, 4.0, 8.0)
     override = _FakeSummary(0.5, 0.5, 4.0, 4.0, 8.0)
     od = OverrideDelta.from_summaries(
-        baseline, override, metrics=["home_win_pct"],
+        baseline,
+        override,
+        metrics=["home_win_pct"],
     )
     assert set(od.metrics) == {"home_win_pct"}
     assert od.delta("home_win_pct") == 0.0
@@ -281,15 +293,17 @@ def test_override_delta_works_with_real_gamesimsummary():
     def _summary(scores):
         results = [
             GameSimResult(
-                home_score=h, away_score=a, innings_played=9,
+                home_score=h,
+                away_score=a,
+                innings_played=9,
                 final_state=GameState(pitcher_id=0, bat_hand="R", season=2024),
             )
             for (h, a) in scores
         ]
         return GameSimSummary.from_results(results)
 
-    baseline = _summary([(3, 5), (2, 4), (1, 6)])   # home loses all 3
-    override = _summary([(7, 2), (8, 1), (6, 3)])   # home wins all 3
+    baseline = _summary([(3, 5), (2, 4), (1, 6)])  # home loses all 3
+    override = _summary([(7, 2), (8, 1), (6, 3)])  # home wins all 3
     od = OverrideDelta.from_summaries(baseline, override)
 
     # Override flipped the home win rate from 0.0 to 1.0.
