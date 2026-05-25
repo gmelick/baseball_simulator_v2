@@ -1,0 +1,21 @@
+# ILLUSTRATIVE foul-rate-by-count table for SIM-056 (docs/architecture/2026-05-21-foul-ball-weighting.md).
+# These numbers are ANALYST-PLAUSIBLE PLACEHOLDERS, not live-pulled Statcast data.
+# They encode the well-established directional fact that the foul share of
+# pitches rises sharply with two strikes (protect-the-plate / foul-off behavior).
+# foul_per_pitch   = fouls / all pitches thrown in that count
+# foul_per_swing   = fouls / swings in that count (the conditional the sim re-weights on)
+# Replace foul_per_pitch / foul_per_swing with measured league values at calibration
+# time (SIM-056 validation plan §5); recompute strikes_bucket_factor from them.
+balls,strikes,count,foul_per_pitch,foul_per_swing,two_strike,strikes_bucket_factor
+0,0,0-0,0.150,0.330,0,1.00
+1,0,1-0,0.150,0.330,0,1.00
+2,0,2-0,0.150,0.330,0,1.00
+3,0,3-0,0.150,0.330,0,1.00
+0,1,0-1,0.165,0.345,0,1.05
+1,1,1-1,0.165,0.345,0,1.05
+2,1,2-1,0.165,0.345,0,1.05
+3,1,3-1,0.165,0.345,0,1.05
+0,2,0-2,0.235,0.470,1,1.55
+1,2,1-2,0.235,0.470,1,1.55
+2,2,2-2,0.235,0.470,1,1.55
+3,2,3-2,0.235,0.470,1,1.55

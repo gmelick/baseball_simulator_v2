@@ -465,6 +465,8 @@ class TestExhaustiveHarness:
     """A slow-marked exhaustive run so QA can stress far past 1,000 on demand
     (``pytest -m slow``) without slowing the default suite."""
 
+    @pytest.mark.timeout(120)  # 5000-game exhaustive run; exceeds the 30s CI cap
+    # under coverage instrumentation (~35s observed), so give it explicit headroom.
     def test_slow_exhaustive_run_zero_invalid_states(self):
         stats = run_invalid_state_harness(SLOW_GAMES)
         assert stats["games"] == SLOW_GAMES

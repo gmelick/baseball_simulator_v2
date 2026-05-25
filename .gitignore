@@ -99,7 +99,9 @@ dmypy.json
 # ---------------------------------------------------------------------------
 # Data & model artifacts (large files belong in DVC / S3, not git)
 # ---------------------------------------------------------------------------
-data/
+# Anchored to repo root: ignore the top-level large-artifact data/ dir, but KEEP
+# small committed reference fixtures under docs/data/ (e.g. foul_rate_by_count.csv).
+/data/
 models/
 *.faiss
 *.pkl
