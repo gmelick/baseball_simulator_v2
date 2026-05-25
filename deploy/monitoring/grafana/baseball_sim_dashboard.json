@@ -1,0 +1,135 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "title": "MLB Baseball Simulation Platform (SIM-374)",
+  "uid": "baseball-sim-374",
+  "tags": ["baseball-sim", "sim-374"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Simulation latency (last run, seconds)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 10 }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "baseball_sim_latency_seconds",
+          "legendFormat": "sim latency"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "API p95 response time (seconds)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 10 }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "baseball_sim_api_p95_seconds",
+          "legendFormat": "api p95"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Pipeline freshness (seconds since last re-sim signal)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 10 }
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "baseball_sim_pipeline_freshness_seconds",
+          "legendFormat": "pipeline freshness"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "HTTP requests served (total)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "baseball_sim_requests_total",
+          "legendFormat": "requests"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Build info",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "name"
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "baseball_sim_app_info",
+          "legendFormat": "{{version}}"
+        }
+      ]
+    }
+  ]
+}

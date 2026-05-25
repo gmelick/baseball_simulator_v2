@@ -219,6 +219,48 @@ jobs:
           retention-days: 30
 
   # ---------------------------------------------------------------------------
+  # Job 4d — API E2E + WebSocket suite (SIM-371)
+  # FastAPI TestClient end-to-end flows (games/simulate/plays/state/betting +
+  # WebSocket + historical-replay reproducibility). No live DB / testcontainers
+  # required (uses the no-DB factory + mock seams), so it runs on every push.
+  # ---------------------------------------------------------------------------
+  e2e:
+    name: API E2E + WebSocket suite (SIM-371)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: unit-tests
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run API E2E suite (TestClient; no live DB)
+        run: |
+          pytest tests/integration/test_api_e2e_sim371.py \
+            -v \
+            --tb=short \
+            --timeout=120 \
+            --strict-markers \
+            --junit-xml=test-results-e2e.xml
+
+      - name: Upload E2E results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: test-results-e2e.xml
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
   # Job 5 — Docker build check
   # Verifies the multi-stage Dockerfile builds to the runtime target without error.
   # Does NOT push. Push is handled by docker-release.yml on main.

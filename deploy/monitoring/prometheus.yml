@@ -1,0 +1,56 @@
+# =============================================================================
+# Prometheus scrape configuration — MLB Baseball Simulation Platform (SIM-374)
+#
+# Mounted into the `prometheus` service (docker-compose.yml) at
+#   /etc/prometheus/prometheus.yml
+# Prometheus scrapes the FastAPI app's /metrics endpoint (api/routes/metrics.py),
+# which exposes metrics in the text exposition format (text/plain; version=0.0.4).
+#
+# Grafana (deploy/monitoring/grafana/) reads from this Prometheus instance via
+# the provisioned datasource and renders the SIM-374 dashboard.
+#
+# ALERTING (not yet wired — left as documented intent for a follow-up):
+#   The three SLO-relevant series the audit calls for are exposed by /metrics
+#   and should back alert rules once an Alertmanager is added:
+#     * baseball_sim_latency_seconds            — alert when the sim wall-clock
+#                                                  latency exceeds the SLA target.
+#     * baseball_sim_api_p95_seconds            — alert when API p95 latency
+#                                                  breaches the response-time SLO.
+#     * baseball_sim_pipeline_freshness_seconds — alert when the live re-sim
+#                                                  pipeline goes stale (freshness
+#                                                  grows too large, or stays -1).
+#   To enable: add a `rule_files:` block + `alerting:` (Alertmanager target)
+#   here and ship the rule definitions under deploy/monitoring/rules/.
+# =============================================================================
+
+global:
+  # How often Prometheus scrapes its targets and evaluates rules.
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: baseball-sim
+
+scrape_configs:
+  # ---------------------------------------------------------------------------
+  # The FastAPI app's /metrics endpoint.
+  #
+  # The app serves on `app:8000` inside the compose `baseball_net` network, so
+  # Prometheus scrapes it directly. (It could also be scraped through nginx at
+  # `nginx:80/metrics`; the direct target is simpler and avoids the proxy hop.)
+  # ---------------------------------------------------------------------------
+  - job_name: baseball-sim-app
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - app:8000
+        labels:
+          service: api
+
+  # ---------------------------------------------------------------------------
+  # Prometheus self-monitoring (handy for confirming the stack is healthy).
+  # ---------------------------------------------------------------------------
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090

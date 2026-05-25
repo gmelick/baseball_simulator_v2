@@ -1,0 +1,24 @@
+# =============================================================================
+# Grafana dashboard provider — MLB Baseball Simulation Platform (SIM-374)
+#
+# Mounted into the `grafana` service at
+#   /etc/grafana/provisioning/dashboards/dashboards.yml
+# It tells Grafana to load every dashboard JSON it finds under
+#   /var/lib/grafana/dashboards
+# (the compose `grafana` service mounts this monitoring dir there), so the
+# SIM-374 dashboard (baseball_sim_dashboard.json) appears automatically.
+# =============================================================================
+
+apiVersion: 1
+
+providers:
+  - name: baseball-sim
+    orgId: 1
+    folder: Baseball Sim
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

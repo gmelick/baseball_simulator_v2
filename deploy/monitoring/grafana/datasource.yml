@@ -1,0 +1,22 @@
+# =============================================================================
+# Grafana datasource provisioning — MLB Baseball Simulation Platform (SIM-374)
+#
+# Mounted into the `grafana` service at
+#   /etc/grafana/provisioning/datasources/datasource.yml
+# so Grafana auto-creates the Prometheus datasource on first boot (no manual
+# clicking). Points at the compose `prometheus` service on its in-network port.
+# =============================================================================
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # In-network address of the `prometheus` compose service (port 9090).
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      # Match the Prometheus global scrape_interval (prometheus.yml).
+      timeInterval: 15s

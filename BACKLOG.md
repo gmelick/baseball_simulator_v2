@@ -1,7 +1,39 @@
 # Product Backlog
 
-*Owner: Product Manager (Agent 1) · Last updated: 2026-05-24 (Phase 5 Sprint 5 — Betting surface CLOSED; 4 tickets + API)*
+*Owner: Product Manager (Agent 1) · Last updated: 2026-05-24 (🏁 PHASE 5 COMPLETE — Sprint 6 testing/infra CLOSED)*
 
+> # 🏁 PHASE 5 — Backend API & Simulation Runner — COMPLETE 2026-05-24
+>
+> **All 28 Phase-5 tickets (SIM-350→377) + the SIM-315 carryover closed across 6 sprints.** The greenfield
+> `api/` layer now serves the full surface — games/simulate/with_override/plays/state/linescore/decisions/
+> boxscore/card, `/api/betting` (edges/signals/line-movement/clv), `/ws/games/{game_pk}`, `/api/odds/*`,
+> `/api/similarity/*`, `/metrics`, `/health`, `/ready` — behind auth/rate-limit/CORS, a persistent ProcessPool
+> runner, Redis caching, durable sim/snapshot/game-card persistence, server-side calibration + 11 engines, an
+> nginx reverse proxy, and Prometheus/Grafana monitoring.
+>
+> | Sprint | Tier | Tickets |
+> |---|---|---|
+> | 1 | P0 gates | SIM-350/351/352/353/354 + 375/376/377 + 315 |
+> | 2 | P1 endpoints + persistence | SIM-355/356/357/358/359 |
+> | 3 | P1 lifecycle | SIM-360/361 |
+> | 4 | P2 loop outputs | SIM-362/363/364/365/366 |
+> | 5 | Betting surface | SIM-367/368/369/370 + `/api/betting` |
+> | 6 | Testing / infra | SIM-371/372/373/374 |
+>
+> **Tests: 1870 unit+regression / 0 failed** (1506 at Phase-5 entry → 1870) + a 12-test E2E suite + the
+> `/simulate` perf bench. DuckDB schema **v10** / Alembic head **0014**. CI: 8 jobs (incl. e2e + file-integrity);
+> perf-weekly hard-gates the SLA. **Next free ID: SIM-378.**
+>
+> **Next: Phase 6 — Frontend Build.** Recommended entry: a 9-agent program audit → `docs/HANDOFF_PHASE6.md`
+> (UX wireframes/design-system + the React-vs-vanilla decision, building on the now-complete API contract).
+> **Live-environment verification debt (code-complete, mock/unit-verified — confirm on a staging bring-up):** the
+> `/simulate` 2s/30s SLA over the real DB-backed factory (SIM-372), the 11-engine build (needs DuckDB profiles),
+> the replay/card endpoints (`REPLAY_PERSISTENCE_ENABLED=true` + a writable replay DuckDB), a fitted
+> `CalibrationReport` (SIM-220), a real odds provider behind the SIM-370 seam, and a full `docker compose up` of
+> the nginx + app + monitoring stack.
+>
+> ---
+>
 > # 🚀 Phase 5 — Sprint 5 (Betting Surface) — CLOSED 2026-05-24
 >
 > **Fifth Phase-5 sprint shipped: the betting surface (4 tickets + the betting API).** Run-line/spread edge,

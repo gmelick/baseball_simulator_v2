@@ -2812,3 +2812,78 @@ Remaining Phase 5 = testing/infra: SIM-371 (E2E/WS suite), SIM-372 (`/simulate` 
 SIM-374 (Prometheus/Grafana).
 
 ---
+
+# Sprint 2026-08-26 — Phase 5 Testing & Infra (E2E · SLA Gate · nginx · Monitoring) — PHASE 5 COMPLETE (executed & CLOSED 2026-05-24)
+**Authors: QA/DevOps (Agent 9), Baseball Analyst (Agent 2), Performance Engineer (Agent 6), Product Manager (Agent 1, orchestrator)**
+
+Sixth and final Phase-5 sprint: the testing/deploy/infra tier. **All of SIM-350→377 + SIM-315 are now closed —
+PHASE 5 (Backend API & Simulation Runner) IS COMPLETE.** Two waves (3 parallel → monitoring) + orchestrator CI
+wiring + QA. Companion: `docs/SPRINT_2026-08-26_phase5_testing_infra.md`.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-371 | Test | QA+BA | `tests/integration/test_api_e2e_sim371.py` — TestClient E2E (game-card, override, betting, WebSocket, replay) |
+| SIM-372 | Perf+Test | Perf | `tests/performance/bench_api_simulate_sim372.py` — `/simulate` request-path latency vs 2s/30s SLA (soft in-sandbox, hard under PERF_STRICT) |
+| SIM-373 | Infra | QA | `deploy/nginx/nginx.conf` (REST + `/ws/` upgrade) + docker-compose nginx service + dev/staging/prod env tiers |
+| SIM-374 | Infra | QA | `GET /metrics` (`api/routes/metrics.py`) + Prometheus/Grafana configs + docker-compose monitoring services |
+
+## SIM-371 — API + WebSocket + Historical-Replay E2E Suite
+
+**Type:** Test | **Effort:** L | **Status:** ✅ Complete
+
+`tests/integration/test_api_e2e_sim371.py` — a sandbox-runnable, FastAPI-`TestClient` E2E suite (no
+testcontainers) mounting the real games + betting + ws routers over the established mock seams (fake pg pool,
+in-memory DuckDB w/ migrations 0008–0010, no-DB rng factory, shared cache). Five flows with cross-endpoint
+consistency assertions: full game-card walk (date→simulate→plays/state/linescore/decisions/boxscore/card),
+managerial override, betting (edges→signals→line-movement→clv), a real WebSocket connect/ping-pong/disconnect
+against `ws_router`, and a deterministic historical-replay reproducibility gate. 12 tests. Wired into CI as a
+new `e2e` job (runs on every push). Found (and worked around) a documented behavior: `load_play_stream(game_pk)`
+with no `run_id` returns the union across runs.
+
+## SIM-372 — End-to-end /simulate Latency Perf Gate
+
+**Type:** Perf+Test | **Effort:** M | **Status:** ✅ Complete
+
+`tests/performance/bench_api_simulate_sim372.py` — pytest-benchmark times the FULL `GET /{game_pk}/simulate`
+request path (HTTP → lineup resolve → BatchRunner → serialize → JSON) for a single-game and a 100-iteration
+batch via TestClient on the no-DB factory seam. `SINGLE_GAME_SLA_S=2.0` / `BATCH_SLA_S=30.0` emitted as a soft
+note in-sandbox (mirroring `bench_simulation.py`), hard-failing under `PERF_STRICT=1`. Auto-included in
+`perf-weekly.yml` (which runs `pytest tests/performance` with `PERF_STRICT=1` on dedicated hardware), so the SLA
+is hard-gated off the noisy sandbox. The no-DB path is a documented lower bound (rng games loop to max-innings);
+the authoritative gate runs the real DB-backed factory.
+
+## SIM-373 — nginx Reverse Proxy + Env Tiers
+
+**Type:** Infra | **Effort:** M | **Status:** ✅ Complete
+
+`deploy/nginx/nginx.conf` reverse-proxies REST/ops/docs to `app:8000` and `/ws/games/{game_pk}` with the HTTP/1.1
+`Upgrade`/`Connection: upgrade` handshake (+ gzip, 10m body cap, 120s REST / 3600s WS read timeouts, forwarded
+headers, `:443` TLS stub). Added an `nginx:1.27-alpine` service to docker-compose (80:80, ro conf mount,
+depends_on app, healthcheck) + `.env.staging.example` / `.env.production.example` (ENVIRONMENT, auth + rate-limit
+enabled, CORS locked to a real origin, real WORKERS/ODDS_PROVIDER, TLS) + `deploy/README.md`.
+
+## SIM-374 — Prometheus + Grafana Monitoring + /metrics
+
+**Type:** Infra | **Effort:** M | **Status:** ✅ Complete
+
+`GET /metrics` (`api/routes/metrics.py`, mounted in `create_app()`) serves Prometheus text exposition
+(`text/plain; version=0.0.4`) with app-info, request, sim-latency, API-p95 and pipeline-freshness series;
+`prometheus_client` is an optional import with a hand-rolled fallback so it runs with or without the dep. Public
+`record_sim_latency`/`record_request` helpers let other routers feed it. `deploy/monitoring/prometheus.yml`
+(scrape `app:8000/metrics`) + Grafana datasource + a 5-panel dashboard; `prometheus` (v2.53.0) + `grafana`
+(11.1.0) services + volumes added to docker-compose. 9 tests.
+
+## Verification (orchestrator cross-validation) — PHASE 5 COMPLETE
+
+Full-suite run from scratch (per-pattern chunks; FAISS individually; wiring + betting suites run split). **Result:
+1870 unit+regression passing / 0 failed** (1815 unit + 55 regression = 1861 Sprint-5 baseline + 9 new) PLUS the
+12-test E2E integration suite + the `/simulate` perf bench. File integrity: 187 `.py` files clean; all infra
+configs parse (ci.yml 8 jobs, perf-weekly, docker-compose 7 services + 5 volumes, prometheus.yml, grafana
+datasource + dashboard). **QA fixes:** restored `docker-compose.yml` (a SIM-373 truncation had silently dropped
+the `migrate` service + `volumes:`/`networks:` — still-valid YAML, caught by a structure diff) and `ci.yml` (the
+`e2e`-job insertion truncated off the `file-integrity` + `docker-build-check` jobs). DuckDB schema **v10** /
+Alembic head **0014**. **🏁 PHASE 5 (Backend API & Simulation Runner) COMPLETE — all SIM-350→377 + SIM-315
+closed across 6 sprints; suite 1506 → 1870. Next free ID: SIM-378. Next: Phase 6 — Frontend Build** (recommend a
+9-agent program audit → `docs/HANDOFF_PHASE6.md`).
+
+---

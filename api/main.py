@@ -412,6 +412,18 @@ def create_app() -> FastAPI:
 
     app.include_router(ws_router)
     app.include_router(odds_router)
+
+    # Phase 5 (SIM-374): Prometheus metrics endpoint.
+    #   GET /metrics — application metrics in Prometheus text exposition format
+    #                  (text/plain; version=0.0.4) for the deploy/monitoring/
+    #                  Prometheus scrape + Grafana dashboards.
+    # Registered unconditionally — import-safe and connection-free: the handler
+    # reads only app.state scalars (no DB/Redis), and prometheus_client is an
+    # OPTIONAL dependency (the route falls back to a hand-rolled exposition when
+    # it is not installed), so this never affects boot or the test suite.
+    from api.routes.metrics import router as metrics_router
+
+    app.include_router(metrics_router)
     # ----------------------------------------------------------------
 
     # ---- Health / readiness -----------------------------------------

@@ -135,6 +135,38 @@ services:
       - baseball_net
 
   # ---------------------------------------------------------------------------
+  # nginx reverse proxy (SIM-373)
+  # Fronts the ``app`` service: proxies REST/ops/docs to app:8000 and the
+  # live-game WebSocket (/ws/games/{game_pk}) with the HTTP/1.1 Upgrade
+  # handshake. Publishes :80 on the host (443 stub left commented).
+  # Config: deploy/nginx/nginx.conf (mounted read-only).
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      # Host port overridable via NGINX_HTTP_PORT (default 80).
+      - "${NGINX_HTTP_PORT:-80}:80"
+      # TLS — uncomment together with the :443 server block + cert mount in
+      # deploy/nginx/nginx.conf for staging/prod.
+      # - "${NGINX_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Mount TLS certs here when enabling the :443 server block:
+      # - ./deploy/nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:80/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - baseball_net
+
+  # ---------------------------------------------------------------------------
   # Migration runner (one-shot service)
   # Run via: docker compose run --rm migrate
   # Or:      make migrate
@@ -159,6 +191,72 @@ services:
     profiles:
       - tools     # only runs when explicitly invoked: make migrate
 
+  # ---------------------------------------------------------------------------
+  # Prometheus (SIM-374)
+  # Scrapes the app's /metrics endpoint (api/routes/metrics.py) per
+  # deploy/monitoring/prometheus.yml and stores the series in prometheus_data.
+  # Grafana (below) reads from it. Publishes :9090 on the host (overridable).
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    restart: unless-stopped
+    ports:
+      # Host port overridable via PROMETHEUS_HOST_PORT (default 9090).
+      - "${PROMETHEUS_HOST_PORT:-9090}:9090"
+    volumes:
+      - ./deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9090/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - baseball_net
+
+  # ---------------------------------------------------------------------------
+  # Grafana (SIM-374)
+  # Auto-provisions the Prometheus datasource + the SIM-374 dashboard from
+  # deploy/monitoring/grafana/ and persists its state in grafana_data.
+  # Publishes :3000 on the host (overridable). depends_on prometheus.
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.1.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER:     ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Disabled sign-up; default org dashboards come from provisioning.
+      GF_USERS_ALLOW_SIGN_UP:     "false"
+    ports:
+      # Host port overridable via GRAFANA_HOST_PORT (default 3000).
+      - "${GRAFANA_HOST_PORT:-3000}:3000"
+    volumes:
+      # Provisioning: datasource + dashboard provider configs.
+      - ./deploy/monitoring/grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+      - ./deploy/monitoring/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      # The dashboard JSON the provider above loads.
+      - ./deploy/monitoring/grafana:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - baseball_net
+
 # ---------------------------------------------------------------------------
 # Volumes — persist data across container restarts
 # ---------------------------------------------------------------------------
@@ -168,6 +266,10 @@ volumes:
   redis_data:
     driver: local
   duckdb_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
     driver: local
 
 # ---------------------------------------------------------------------------
