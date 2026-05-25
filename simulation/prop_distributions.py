@@ -36,20 +36,20 @@ Derived directly from the SIM-328 :class:`PlayerStatLine` fields:
       - ``RBI``  -- runs batted in (``line.rbi``)
       - ``TB``   -- total bases (see the limitation below).
 
-TOTAL BASES (TB) -- A DOCUMENTED LIMITATION
--------------------------------------------
-True total bases is ``1B + 2*2B + 3*3B + 4*HR``.  The SIM-328 boxscore tracks
-only ``h`` (all hits) and ``hr`` (home runs) -- it does NOT separately track
-doubles or triples.  With only ``(h, hr)`` available, the only defensible
-derivation treats every non-HR hit as a **single**:
+TOTAL BASES (TB) -- NOW EXACT (SIM-365)
+---------------------------------------
+True total bases is ``1B + 2*2B + 3*3B + 4*HR``.  SIM-365 extended the boxscore
+:class:`PlayerStatLine` to track doubles (``b2``) and triples (``b3``) as
+subsets of ``h``, alongside ``hr``.  Singles are therefore the remainder
+(``h - b2 - b3 - hr``), so :func:`_total_bases` now computes TB EXACTLY::
 
-    TB ~= (h - hr) * 1  +  hr * 4  =  h + 3 * hr
+    TB = (h - b2 - b3 - hr)*1 + b2*2 + b3*3 + hr*4 = h + b2 + 2*b3 + 3*hr
 
-This is a **lower bound** on true TB (any actual double/triple would add 1-2
-more bases that the boxscore did not record).  It is exposed as the ``TB`` prop
-with this caveat recorded on :data:`TB_IS_LOWER_BOUND`; when SIM-328 grows
-``b2``/``b3`` fields, :func:`_total_bases` is the single place to upgrade and the
-PMF/API above it are unchanged.
+This is no longer a lower bound: :data:`TB_IS_LOWER_BOUND` is now ``False``.
+:func:`_total_bases` remains the single place that maps hit-types to bases; the
+PMF/API above it are unchanged.  (Prior to SIM-365 the boxscore tracked only
+``(h, hr)`` and TB was a documented lower bound, treating every non-HR hit as a
+single: ``h + 3*hr``.)
 
 THE OVER/UNDER API (the core betting query)
 -------------------------------------------
@@ -109,22 +109,29 @@ BATTER_PROPS: "tuple[str, ...]" = ("H", "HR", "RBI", "TB")
 #: Every prop name this aggregator can build.
 ALL_PROPS: "tuple[str, ...]" = PITCHER_PROPS + BATTER_PROPS
 
-#: TB is a LOWER BOUND: the SIM-328 boxscore tracks only (h, hr), so every
-#: non-HR hit is treated as a single (see module docstring / :func:`_total_bases`).
-TB_IS_LOWER_BOUND = True
+#: TB is now EXACT (SIM-365): the boxscore tracks ``b2``/``b3`` alongside
+#: ``h``/``hr``, so :func:`_total_bases` computes true total bases.
+TB_IS_LOWER_BOUND = False
 
 
 def _total_bases(line: PlayerStatLine) -> int:
-    """Total bases derived from the available (h, hr) fields -- a LOWER BOUND.
+    """True total bases from the (h, b2, b3, hr) fields (EXACT, SIM-365).
 
-    True TB = 1B + 2*2B + 3*3B + 4*HR.  SIM-328 does not track doubles/triples,
-    so non-HR hits are all assumed singles: ``TB = (h - hr) + 4*hr = h + 3*hr``.
-    This is the single place to upgrade if/when ``b2``/``b3`` are added to
-    :class:`PlayerStatLine`; nothing above this function changes.
+    True TB = 1B + 2*2B + 3*3B + 4*HR.  With doubles (``b2``) and triples
+    (``b3``) now tracked as subsets of ``h`` (SIM-365), singles are the
+    remainder (``h - b2 - b3 - hr``), so::
+
+        TB = (h - b2 - b3 - hr)*1 + b2*2 + b3*3 + hr*4
+           = h + b2 + 2*b3 + 3*hr
+
+    This is the single place that reads the bases-per-hit; nothing above this
+    function changes.
     """
     h = int(line.h)
+    b2 = int(line.b2)
+    b3 = int(line.b3)
     hr = int(line.hr)
-    return h + 3 * hr
+    return h + b2 + 2 * b3 + 3 * hr
 
 
 #: How to read each prop's integer value off a single-game :class:`PlayerStatLine`.

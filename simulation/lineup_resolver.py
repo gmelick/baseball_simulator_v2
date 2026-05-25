@@ -93,6 +93,31 @@ from simulation.game_state import GameState, Half, Team
 #: abbreviation styles the live ingestion path may write.
 PITCHER_POSITION_CODES = frozenset({"1", "P", "SP", "RP"})
 
+#: MLB scoring position code (raw.game_lineups.position_code) -> the canonical
+#: defensive-slot name FieldSnapshot keys on (snapshots.DEFENSE_POSITIONS).  The
+#: nine fielding positions are numbered 1..9 in scorebook order; codes outside
+#: this set (e.g. '10'/'DH' for a designated hitter, or the pinch roles
+#: 'PH'/'PR'/'DEF') are NOT fielding positions and are skipped by the builder.
+#: Mirrors snapshots.POSITION_NUMBER (name -> number); this is its inverse keyed
+#: by the *string* code raw.game_lineups stores.  Kept here (not imported from
+#: snapshots) so the resolver has no dependency on the API/contract layer.
+POSITION_CODE_TO_NAME: dict[str, str] = {
+    "1": "P",
+    "2": "C",
+    "3": "1B",
+    "4": "2B",
+    "5": "3B",
+    "6": "SS",
+    "7": "LF",
+    "8": "CF",
+    "9": "RF",
+}
+
+#: The canonical defensive-slot names, in scorebook order (1=P .. 9=RF).  Equal
+#: to snapshots.DEFENSE_POSITIONS; duplicated here to keep this module free of an
+#: import from the contract layer.
+DEFENSE_POSITION_NAMES: tuple[str, ...] = tuple(POSITION_CODE_TO_NAME.values())
+
 #: The number of batting-order slots in a standard lineup.
 LINEUP_SLOTS = 9
 
@@ -408,6 +433,130 @@ def build_game_state(
 
 
 # ---------------------------------------------------------------------------
+# Per-position fielder map — ResolvedLineup -> {position name: player_id} (SIM-363)
+# ---------------------------------------------------------------------------
+
+
+def build_team_defense_map(team: TeamLineup) -> dict[str, int]:
+    """Map ONE team's resolved lineup to ``{defensive-slot name: player_id}``.
+
+    Produces the ``defense_positions`` map ``FieldSnapshot.from_game_state`` takes
+    (snapshots.DEFENSE_POSITIONS -> player id) for the fielding side, keyed by the
+    canonical slot name ('P','C','1B'..'RF') derived from each occupant's MLB
+    position code (``POSITION_CODE_TO_NAME``).
+
+    Rules
+    -----
+      * Each batting-order slot's *current occupant* (the resolver already applied
+        the highest-sequence-wins substitution rule) contributes one fielding
+        slot, by its ``position_code``.
+      * The pitcher is added from ``team.pitcher_id`` (an AL pitcher has no batting
+        slot, so the pitcher would otherwise be missing); an explicit pitcher
+        ALWAYS wins the 'P' slot over any batting-slot row that also maps to 'P'.
+      * Non-fielding occupants are skipped: a DH (code '10'/'DH'), or a pinch
+        role ('PH'/'PR'/'DEF') that is not yet in the field (a non-numeric /
+        unmapped ``position_code``).  Their batting slot stays in the order but
+        they hold no glove, so they get no FieldSnapshot slot.
+      * If two batting slots map to the same fielding position (a defensive sub
+        that the source recorded without retiring the prior occupant), the one
+        with the higher ``sequence`` wins — consistent with the resolver's
+        "current occupant = highest applicable sequence" substitution logic.
+
+    The result has at most 9 entries (one per DEFENSE_POSITIONS name); a partial
+    lineup yields a partial map (the FieldSnapshot leaves the rest unassigned).
+    """
+    # position name -> (winning sequence so far, player_id), so a same-position
+    # collision resolves to the higher-sequence (current) occupant.
+    best: dict[str, tuple[int, int]] = {}
+    for slot in team.slots:
+        name = POSITION_CODE_TO_NAME.get(str(slot.position_code))
+        if name is None:
+            # DH / pinch role / anything not a 1..9 fielding code: no glove slot.
+            continue
+        cur = best.get(name)
+        if cur is None or slot.sequence > cur[0]:
+            best[name] = (slot.sequence, slot.player_id)
+
+    out: dict[str, int] = {name: pid for name, (_seq, pid) in best.items()}
+
+    # The current pitcher always owns 'P' (a mid-game pitching change is resolved
+    # on TeamLineup.pitcher_id independently of the batting order, so prefer it).
+    if team.pitcher_id is not None:
+        out["P"] = int(team.pitcher_id)
+
+    return out
+
+
+def build_defense_map(
+    resolved: ResolvedLineup, *, fielding_side: str
+) -> dict[str, int]:
+    """Map the FIELDING team's lineup to ``{defensive-slot name: player_id}``.
+
+    ``fielding_side`` selects which team is in the field: ``"home"`` or ``"away"``
+    (case-insensitive; ``Team.HOME`` / ``Team.AWAY`` are also accepted).  Returns
+    the ``defense_positions`` map ``FieldSnapshot.from_game_state`` consumes.
+
+    See :func:`build_team_defense_map` for the position-code -> slot-name mapping
+    and the substitution / DH / pinch-role rules.
+
+    Raises
+    ------
+    LineupResolutionError
+        If ``fielding_side`` is not a recognizable home/away selector.
+    """
+    side = _normalize_side(fielding_side)
+    team = resolved.home if side == Team.HOME else resolved.away
+    return build_team_defense_map(team)
+
+
+def fielding_side_for_half(half: Half) -> Team:
+    """Which team is in the FIELD for ``half`` (the defense).
+
+    TOP   -> the AWAY team is batting, so the **HOME** team fields.
+    BOTTOM-> the HOME team is batting, so the **AWAY** team fields.
+
+    (Mirrors ``GameState.defense``: HOME defends in the top, AWAY in the bottom.)
+    """
+    return Team.HOME if half == Half.TOP else Team.AWAY
+
+
+def build_defense_map_for_state(
+    resolved: ResolvedLineup, state: GameState
+) -> dict[str, int]:
+    """Convenience: pick the fielding side from ``state.half`` and build its map.
+
+    Wires :func:`fielding_side_for_half` (the home/away <-> fielding convention)
+    into :func:`build_defense_map`, so callers holding a live :class:`GameState`
+    (e.g. the /state endpoint building a ``FieldSnapshot``) get the correct
+    defensive map for the current half without restating the convention.
+    """
+    side = fielding_side_for_half(state.half)
+    team = resolved.home if side == Team.HOME else resolved.away
+    return build_team_defense_map(team)
+
+
+def _normalize_side(side: Any) -> Team:
+    """Coerce a side selector (``Team``, ``"home"``/``"away"``, 0/1) to a ``Team``."""
+    if isinstance(side, Team):
+        return side
+    if isinstance(side, str):
+        s = side.strip().lower()
+        if s in ("home", "h"):
+            return Team.HOME
+        if s in ("away", "a"):
+            return Team.AWAY
+    if isinstance(side, int) and not isinstance(side, bool):
+        try:
+            return Team(side)
+        except ValueError:
+            pass
+    raise LineupResolutionError(
+        f"fielding_side={side!r} is not a recognizable side; expected "
+        "'home'/'away' or a Team."
+    )
+
+
+# ---------------------------------------------------------------------------
 # DB access (asyncpg) — separated from the pure layers above
 # ---------------------------------------------------------------------------
 
@@ -558,6 +707,11 @@ __all__ = [
     # pure assembly + building
     "resolve_lineup_from_rows",
     "build_game_state",
+    # per-position fielder map (SIM-363)
+    "build_team_defense_map",
+    "build_defense_map",
+    "build_defense_map_for_state",
+    "fielding_side_for_half",
     # DB access
     "fetch_game_sides",
     "fetch_lineup_rows",
@@ -567,6 +721,8 @@ __all__ = [
     "resolve_game_state",
     # constants
     "PITCHER_POSITION_CODES",
+    "POSITION_CODE_TO_NAME",
+    "DEFENSE_POSITION_NAMES",
     "LINEUP_SLOTS",
     "DEFAULT_BAT_HAND",
 ]

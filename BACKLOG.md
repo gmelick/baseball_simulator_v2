@@ -1,7 +1,56 @@
 # Product Backlog
 
-*Owner: Product Manager (Agent 1) · Last updated: 2026-05-24 (Phase 5 Sprint 3 — P1 lifecycle CLOSED; P1 tier COMPLETE)*
+*Owner: Product Manager (Agent 1) · Last updated: 2026-05-24 (Phase 5 Sprint 5 — Betting surface CLOSED; 4 tickets + API)*
 
+> # 🚀 Phase 5 — Sprint 5 (Betting Surface) — CLOSED 2026-05-24
+>
+> **Fifth Phase-5 sprint shipped: the betting surface (4 tickets + the betting API).** Run-line/spread edge,
+> CLV/line-movement time-series, +EV bet signals, the real-odds-provider swap seam, and a new `/api/betting`
+> router. Log: `docs/SPRINT_2026-08-19_phase5_betting_surface.md`.
+>
+> | Ticket | Type | Status |
+> |---|---|---|
+> | SIM-367 run-line/spread EdgeReport from score-margin arrays (`clv_engine`) | Gap | ✅ Closed |
+> | SIM-368 CLV/line-movement time-series (`betting/line_movement.py`, from `raw.game_odds`) | Gap | ✅ Closed |
+> | SIM-369 bet-signal/+EV recommendations (`betting/bet_signal.py`, fractional Kelly) | Feature | ✅ Closed |
+> | SIM-370 real odds/prop provider swap behind MockOddsAPI (`pipeline/odds_provider.py`) | Feature | ✅ Closed |
+> | Betting API: `api/routes/betting.py` — `/edges`, `/signals`, `/line-movement`, `/clv` | Feature | ✅ Closed |
+>
+> **Tests: 1861 unit+regression passing / 0 failed** (1780 Sprint-4 baseline + 81 new). DuckDB schema **v10** /
+> Alembic head **0014** (unchanged). **Next free ID: SIM-378.**
+> **Remaining Phase 5 (the last tier — testing/infra):** SIM-371 (API/WebSocket/historical-replay E2E suite),
+> SIM-372 (`/simulate` 2s/30s SLA perf gate), SIM-373 (nginx reverse proxy + dev/staging/prod env configs),
+> SIM-374 (Prometheus + Grafana monitoring). After these, **Phase 5 is complete** → Phase 6 (Frontend Build).
+> **Live caveats:** `/simulate` SLA, 11-engine build, replay/card endpoints, fitted calibration curve, real odds
+> provider all verify in a live environment.
+>
+> ---
+>
+> # 🚀 Phase 5 — Sprint 4 (P2 Loop Outputs) — CLOSED 2026-05-24
+>
+> **Fourth Phase-5 sprint shipped: the loop-output gaps the frontend game cards need (5 tickets).**
+> Per-inning linescore + R/H/E, the 9 fielders in the field graphic, winning/losing/save pitchers, richer
+> boxscore (2B/3B/R/SB + pitcher H/R) with exact total bases, and the per-player 100-iteration boxscore-average
+> API. Most outputs DERIVE from the recorded PlayResult stream (only SIM-365 touched `sim_loop.py`). Log:
+> `docs/SPRINT_2026-08-12_phase5_p2_loop_outputs.md`.
+>
+> | Ticket | Type | Status |
+> |---|---|---|
+> | SIM-362 per-inning linescore + team R/H/E (`simulation/linescore.py`) | Gap | ✅ Closed |
+> | SIM-363 per-position fielders → FieldSnapshot 9 slots (`build_defense_map`) | Gap | ✅ Closed |
+> | SIM-364 winning/losing/save pitcher attribution (`simulation/pitcher_decisions.py`) | Gap | ✅ Closed |
+> | SIM-365 extend PlayerStatLine (2B/3B/R/SB + pitcher H/R) + exact prop-TB | Improvement | ✅ Closed |
+> | SIM-366 boxscore-card API (PropDistributionSet means) + `/linescore`/`/decisions`/`/boxscore` | Feature | ✅ Closed |
+>
+> **Tests: 1780 unit+regression passing / 0 failed** (1702 Sprint-3 baseline + 78 new). DuckDB schema **v10**
+> (migration 0010 `sim.game_cards`) / Alembic head **0014**. **Next free ID: SIM-378.**
+> **Remaining Phase 5:** betting surface — SIM-367 (run-line/spread EdgeReport), SIM-368 (CLV/line-movement),
+> SIM-369 (bet-signal/+EV endpoint), SIM-370 (real odds provider); then testing/infra — SIM-371 (E2E/WS suite),
+> SIM-372 (`/simulate` SLA gate), SIM-373 (nginx), SIM-374 (Prometheus/Grafana). **Live-DB caveats:** `/simulate`
+> SLA, 11-engine build, replay/card endpoints over real data verify in a live environment.
+>
+> ---
+>
 > # 🚀 Phase 5 — Sprint 3 (P1 Lifecycle) — CLOSED 2026-05-24 · **P1 TIER COMPLETE**
 >
 > **Third Phase-5 sprint shipped: the two P1 lifecycle tickets — Phase 5 P1 (SIM-355→361) is now complete.**

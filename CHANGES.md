@@ -2645,3 +2645,170 @@ run split — it now exceeds the 45s shell cap on its own). **Result: 1702 unit+
 surface (SIM-367–370).
 
 ---
+
+# Sprint 2026-08-12 — Phase 5 P2 Loop Outputs (R/H/E · Fielders · W/L/S · Boxscore) (executed & CLOSED 2026-05-24)
+**Authors: Backend Developer (Agent 5), Baseball Analyst (Agent 2), ML Engineer (Agent 3), UX Designer (Agent 7), Product Manager (Agent 1, orchestrator)**
+
+Fourth Phase-5 sprint: the loop-output gaps the frontend game cards need (R/H/E, fielders, W/L/S, richer
+boxscore + exact prop-TB, boxscore-average API). **Design choice:** most outputs are DERIVED from the
+already-recorded `PlayResult` stream (SIM-355/357 recorder) rather than threaded through the 2680-line
+`sim_loop.py` — so only SIM-365 touched the loop; SIM-362/363/364/366 are new modules / API wiring.
+Companion: `docs/SPRINT_2026-08-12_phase5_p2_loop_outputs.md`.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-362 | Gap | Backend+BA | `simulation/linescore.py`: derive per-inning linescore + team R/H/E from a PlayResult stream |
+| SIM-363 | Gap | Backend+ML | `simulation/lineup_resolver.py`: `build_defense_map_for_state` → populate FieldSnapshot's 9 slots |
+| SIM-364 | Gap | BA+Backend | `simulation/pitcher_decisions.py`: derive winning/losing/save pitcher from a PlayResult stream |
+| SIM-365 | Improvement | BA+Backend | Extend `PlayerStatLine` (2B/3B/R/SB + pitcher H/R) in `sim_loop.py`; exact prop-TB (`TB_IS_LOWER_BOUND=False`) |
+| SIM-366 | Feature | Backend+UX | Boxscore-card API (PropDistributionSet means) + expose linescore/decisions/fielders via `/api/games` |
+
+## SIM-362 — Per-inning Linescore + Team R/H/E
+
+**Type:** Gap | **Effort:** L | **Status:** ✅ Complete
+
+New `simulation/linescore.py`: `linescore_from_plays(results) -> Linescore` (frozen `Linescore`/`InningLine`).
+Groups each play's `runs_scored` by `(inning, half)` from its `next_state` (TOP→away column, BOTTOM→home);
+counts team hits from the hit-event set (reach-on-error excluded); charges errors to the FIELDING side.
+Handles extra innings + an unplayed/walk-off bottom half (rendered `None`, scoreboard "x", not 0). Pure,
+no `sim_loop.py` edits. 11 tests.
+
+## SIM-363 — Per-position Fielder Map → FieldSnapshot
+
+**Type:** Gap | **Effort:** M | **Status:** ✅ Complete
+
+`FieldSnapshot.from_game_state` already accepts `defense_positions`; SIM-363 builds it. Extended
+`simulation/lineup_resolver.py` with `build_defense_map(resolved, *, fielding_side)` /
+`build_defense_map_for_state(resolved, state)` / `fielding_side_for_half` + `POSITION_CODE_TO_NAME` (1-9 →
+P/C/1B…RF). Pitcher from `TeamLineup.pitcher_id`; DH/pinch roles skipped; subs resolve to the current
+occupant; HOME fields the top, AWAY the bottom. 19 tests.
+
+## SIM-364 — Winning / Losing / Save Pitcher Attribution
+
+**Type:** Gap | **Effort:** M | **Status:** ✅ Complete
+
+New `simulation/pitcher_decisions.py`: `decisions_from_plays(results) -> PitcherDecisions` (winning/losing/
+save ids + final scores). Tracks the lead over time + each side's pitcher of record (GameState exposes only
+the fielding side's `pitcher_id` keyed by `half`); W/L follow the permanent lead, save uses the standard
+Rule-9.19 ≤3-run-lead heuristic for the finisher. Ties/walk-offs → no decision. Pure, no `sim_loop.py` edits.
+14 tests.
+
+## SIM-365 — Extended PlayerStatLine + Exact Prop-TB
+
+**Type:** Improvement | **Effort:** M | **Status:** ✅ Complete
+
+`PlayerStatLine` (sim_loop.py) gains batting `b2/b3/r/sb` + pitching `h_allowed/r_allowed` (all default 0,
+additive). Accumulated in `_accumulate_pa` (doubles→b2, triples→b3, scoring runners→r, hits/runs→pitcher
+h_allowed/r_allowed; runs-allowed include unearned so R≥ER) and `_resolve_steal_outcome` (sb + steal-of-home).
+`prop_distributions._total_bases` upgraded to exact `h + b2 + 2·b3 + 3·hr`; `TB_IS_LOWER_BOUND` flipped to
+`False` (caveat retired). 22 tests; sim328 + sim329 regression green (the one sim329 assertion hard-coding
+the old lower-bound contract was updated).
+
+## SIM-366 — Boxscore-Card API + Loop-Output Exposure
+
+**Type:** Feature | **Effort:** S | **Status:** ✅ Complete
+
+`api/schemas.py`: `BoxscoreCardModel.from_prop_set` (per-player prop means — batter H/HR/RBI/TB, pitcher
+K/BB/ER/OUTS), plus `LinescoreModel` / `PitcherDecisionsModel`. `api/routes/games.py`: `GET /{game_pk}/boxscore`,
+`/linescore`, `/decisions`, `/card`. The record→persist flow now derives linescore + decisions from the
+recorded `PlayResult` list and persists them to a new DuckDB `sim.game_cards` store (`db/sim_store.py` +
+migration **0010**, schema **v9→v10**); and builds the fielding-side defense map into the persisted
+`StateAtPitch` snapshots so `GET /state/{at_bat}/{pitch}` returns the 9 fielders populated. Best-effort
+throughout. 12 tests.
+
+## Verification (orchestrator cross-validation)
+
+Full-suite run from scratch (per-pattern chunks; FAISS builders individually; `test_api_main_wiring.py` run
+split). **Result: 1780 unit+regression passing / 0 failed** (1725 unit + 55 regression = 1702 Sprint-3
+baseline + 78 new). Regression golden-files green. File integrity: 174 `.py` files clean. **QA fixes:** the
+Wave-2 agent added DuckDB migration 0010 but left `duckdb_schema_version.txt` at 9 — the orchestrator bumped
+it to **10** and updated the `test_sim_store` version-sanity test (restoring the migrations↔version invariant).
+DuckDB schema **v10** / Alembic head **0014**. **Next free ID: SIM-378.** Remaining Phase 5: betting surface
+(SIM-367–370) + testing/infra (SIM-371–374).
+
+---
+
+# Sprint 2026-08-19 — Phase 5 Betting Surface (Spread Edge · CLV/Line-Movement · Bet Signals · Odds Provider) (executed & CLOSED 2026-05-24)
+**Authors: Betting/Markets Analyst (Agent 8), Data Engineer (Agent 4), ML Engineer (Agent 3), Backend Developer (Agent 5), Product Manager (Agent 1, orchestrator)**
+
+Fifth Phase-5 sprint: the betting surface — simulation outputs → actionable, market-validated edge. Run-line/
+spread edge, CLV/line-movement time-series, +EV bet signals, the real-odds-provider swap seam, and a new
+`/api/betting` router. Lives in `betting/` + `pipeline/` + `api/` (low `sim_loop.py` risk). Three waves
+(3 parallel → 1 → API integration). Companion: `docs/SPRINT_2026-08-19_phase5_betting_surface.md`.
+
+| Ticket | Type | Owner | One-liner |
+|--------|------|-------|-----------|
+| SIM-367 | Gap | Betting+ML | `clv_engine.run_line_edge_report` — run-line/spread cover prob from the score-margin array → EdgeReport |
+| SIM-368 | Gap | Betting+Data | `betting/line_movement.py` — opening→closing line-movement + CLV time-series from `raw.game_odds` |
+| SIM-369 | Feature | Betting | `betting/bet_signal.py` — gate EdgeReports on edge/EV, fractional-Kelly stake, ranked +EV signals |
+| SIM-370 | Feature | Data+Betting | `pipeline/odds_provider.py` — `OddsProvider` Protocol + env factory + real-provider stub; MockOddsAPI conforms |
+| Betting API | Feature | Backend+Betting | `api/routes/betting.py` (`/api/betting`): `/edges`, `/signals`, `/line-movement`, `/clv` |
+
+## SIM-367 — Run-line / Spread EdgeReport
+
+**Type:** Gap | **Effort:** S | **Status:** ✅ Complete
+
+Added `spread_cover_prob(summary_or_margin, line, side)` + `run_line_edge_report(...)` to `betting/clv_engine.py`.
+Cover probability from the per-iteration score margin (`home_scores - away_scores`): HOME covers iff
+`margin > -L`, AWAY iff `margin < -L` (away line = negated home line). Strict inequalities split integer-line
+pushes (±1.5 can't push; ±1.0 / pick'em do). Builds an `EdgeReport` (`label="run_line"`) via the shared
+`_build_edge_report` (same de-vig/edge/EV/CLV path as moneyline/total/prop). Accepts a `GameSimSummary` or a
+raw margin array; `market.entry.line` overrides the default -1.5. 15 tests; sim339 green.
+
+## SIM-368 — CLV / Line-Movement Time-Series
+
+**Type:** Gap | **Effort:** M | **Status:** ✅ Complete
+
+New `betting/line_movement.py` lifts the single entry-vs-close `CLV` to the full opening→closing history.
+`LineQuote` (timestamped single-side quote + raw implied prob) / `LineMovement` (ordered quotes, opening/closing,
+per-step + net deltas, `implied_prob_series`, steam `direction`, reused two-way `CLV`, `sharp_consensus`,
+`has_movement`/`beat_close`). Pure `line_movement_from_quotes(rows, *, market_type, side)` + async
+`fetch_line_movement(conn, *, game_pk, market_type, book=None)` (reads `raw.game_odds` ordered by `fetched_at`,
+groups per (side, book); duck-typed conn). 17 tests (pure + fake-asyncpg).
+
+## SIM-369 — Bet-Signal / +EV Recommendations
+
+**Type:** Feature | **Effort:** M | **Status:** ✅ Complete
+
+New `betting/bet_signal.py`: `bet_signals_from_edges(reports, *, config)` gates a list of `EdgeReport`s on
+`positive_edge` AND `edge >= min_edge` AND `ev > min_ev`, sizes each by fractional Kelly
+(`stake_fraction = clamp(kelly_fraction · max(0, (b·p − q)/b), 0, cap)`; quarter-Kelly default, 5% cap), and
+returns them ranked by EV descending. `BetSignal` / `BetSignalConfig` (min_edge 0.02 / min_ev 0.0 /
+kelly_fraction 0.25 / max_stake 0.05). Pure (imports only from clv_engine); signals are advisory with documented
+market-timing guidance. 17 tests (incl. Kelly hand-check).
+
+## SIM-370 — Odds/Prop Provider Swap Seam
+
+**Type:** Feature | **Effort:** M | **Status:** ✅ Complete
+
+New `pipeline/odds_provider.py`: an `OddsProvider` `@runtime_checkable Protocol` (`get_odds`/`get_prop_odds`
+matching `MockOddsAPI` exactly), `get_odds_provider(name=None)` env factory (`ODDS_PROVIDER=mock` default →
+`MockOddsAPI`; case-insensitive; clear error on unknown) backed by a `register_odds_provider` registry, and a
+`RealOddsAPIProvider` stub that conforms but raises a documented not-configured error (the plug-in point).
+`MockOddsAPI` conforms structurally; `LiveIngestionPipeline` gained an optional `odds_provider` param defaulting
+to `get_odds_provider()` (mock behavior unchanged). No live API in this env — the seam, not an integration.
+20 tests; sim340/sim348 green.
+
+## Betting API surface
+
+**Type:** Feature | **Status:** ✅ Complete
+
+New `api/routes/betting.py` (prefix `/api/betting`): `GET /games/{game_pk}/edges` (moneyline/total/run-line
+EdgeReports), `/signals` (ranked +EV `BetSignal`s, config via query params), `/line-movement` (per-(side,book)
+series from `raw.game_odds`), `/clv` (entry-vs-close snapshot). Handlers are thin over the betting modules;
+edges/signals reuse the SIM-355 sim seam (cache-memoized BatchRunner) + `win_probability`; odds from injected
+query params else `MockOddsAPI` (flagged per market). A `_safe_report` guard skips an un-priceable 0/1 side
+(small-N/extreme-line robustness). New `BetSignalModel`/`LineQuoteModel`/`LineMovementModel` in `api/schemas.py`
+(reuse `EdgeReportModel`); router mounted in `create_app()`. 14 tests.
+
+## Verification (orchestrator cross-validation)
+
+Full-suite run from scratch (per-pattern chunks; FAISS builders individually; `test_api_main_wiring.py` +
+`test_api_betting_sim36x.py` run split — the betting edge/signal tests run real batches). **Result: 1861
+unit+regression passing / 0 failed** (1806 unit + 55 regression = 1780 Sprint-4 baseline + 81 new). Regression
+golden-files green. File integrity: 183 `.py` files clean. `api/main.py` now 490 lines, ends with
+`app = create_app()`. DuckDB schema **v10** / Alembic head **0014** unchanged. **Next free ID: SIM-378.**
+Remaining Phase 5 = testing/infra: SIM-371 (E2E/WS suite), SIM-372 (`/simulate` SLA gate), SIM-373 (nginx),
+SIM-374 (Prometheus/Grafana).
+
+---

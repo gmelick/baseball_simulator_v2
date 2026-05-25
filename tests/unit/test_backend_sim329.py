@@ -171,19 +171,21 @@ def test_line_outside_support():
 
 
 # ===========================================================================
-# Total bases — the documented (h, hr)-only lower bound
+# Total bases — EXACT since SIM-365 (b2/b3 tracked); the (h, hr)-only cases
+# below still hold under the exact formula h + b2 + 2*b3 + 3*hr.
 # ===========================================================================
 
 
 def test_total_bases_formula():
     # 3 hits, 1 of them a HR -> 2 singles (2 TB) + 1 HR (4 TB) = 6
     ln = _batter_line(BATTER, ab=4, h=3, hr=1, rbi=2)
-    assert _total_bases(ln) == 3 + 3 * 1  # h + 3*hr = 6
+    assert _total_bases(ln) == 6  # h + b2 + 2*b3 + 3*hr = 3 + 0 + 0 + 3 = 6
     # all singles
     assert _total_bases(_batter_line(BATTER, ab=4, h=2, hr=0)) == 2
     # two HR among 2 hits -> 8
     assert _total_bases(_batter_line(BATTER, ab=4, h=2, hr=2)) == 8
-    assert TB_IS_LOWER_BOUND is True
+    # SIM-365 retired the lower-bound caveat: TB is now EXACT.
+    assert TB_IS_LOWER_BOUND is False
 
 
 def test_tb_pmf_per_game():

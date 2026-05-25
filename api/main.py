@@ -388,6 +388,20 @@ def create_app() -> FastAPI:
     app.state.sim_cache = make_cache()
     app.include_router(games_router)
 
+    # Phase 5 (SIM-367/368/369): betting API surface.
+    #   GET /api/betting/games/{game_pk}/edges          -- per-market edge reports
+    #   GET /api/betting/games/{game_pk}/signals        -- ranked +EV bet signals
+    #   GET /api/betting/games/{game_pk}/line-movement  -- opening->closing series
+    #   GET /api/betting/games/{game_pk}/clv            -- entry-vs-close snapshot
+    # Registered unconditionally -- route registration needs no live DB/Redis. The
+    # edge/signal handlers reuse the games router's sim seam (factory ref + the
+    # BatchRunner + sim cache attached above); line-movement/clv read raw.game_odds
+    # off app.state.pg_pool (503 without a pool). Odds for edges/signals are
+    # injected via query params or fall back to the deterministic mock provider.
+    from api.routes.betting import router as betting_router
+
+    app.include_router(betting_router)
+
     # Phase 5 (SIM-354): live ingestion routers.
     #   ws_router   — WebSocket /ws/games/{game_pk} (frontend live subscriptions)
     #   odds_router — REST /api/odds/{game_pk}, /api/odds/today/all
@@ -446,7 +460,6 @@ def create_app() -> FastAPI:
         else:
             try:
                 await redis_client.ping()
-                checks["redis"] = "ok"
             except Exception as exc:  # noqa: BLE001
                 checks["redis"] = f"error: {type(exc).__name__}"
                 all_ok = False

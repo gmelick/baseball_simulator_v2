@@ -76,6 +76,12 @@ import websockets.exceptions
 from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
 from fastapi.routing import APIRouter
 
+# SIM-370: odds/prop provider seam.  The pipeline obtains its odds source via
+# get_odds_provider() (env-selected, defaults to MockOddsAPI) instead of
+# hard-instantiating MockOddsAPI, so a real provider can drop in behind the
+# OddsProvider interface without touching ingestion/CLV/persistence code.
+from pipeline.odds_provider import OddsProvider, get_odds_provider
+
 # SIM-106: Type alias for the simulation callback. It MUST be an async
 # function — passing a sync function would either raise TypeError when the
 # pipeline awaits it, or silently no-op if the coroutine isn't awaited.
@@ -1074,6 +1080,7 @@ class LiveIngestionPipeline:
         dsn: str | None = None,
         redis_url: str | None = None,
         simulation_callback: SimulationCallback | None = None,
+        odds_provider: OddsProvider | None = None,
     ) -> None:
         """
         Parameters
@@ -1118,6 +1125,10 @@ class LiveIngestionPipeline:
                 "var is not set.  Pass redis_url=… or copy .env.example to .env."
             )
         self._sim_cb: SimulationCallback | None = simulation_callback
+
+        # SIM-370: odds source.  Defaults to the env-selected provider
+        # (MockOddsAPI unless ODDS_PROVIDER is set); tests inject a fake here.
+        self._odds: OddsProvider = odds_provider or get_odds_provider()
 
         self._db: asyncpg.Pool | None = None
         self._redis: aioredis.Redis | None = None
@@ -1396,18 +1407,28 @@ class LiveIngestionPipeline:
         log.error("No state available for game %s", game_pk)
         return None
 
+    def _odds_provider(self) -> OddsProvider:
+        """
+        SIM-370: Resolve the active odds provider.
+
+        Normally set in __init__ (env-selected, defaults to MockOddsAPI), but
+        pipelines built via __new__ (some tests) skip __init__, so fall back to
+        the default provider lazily.  A real provider drops in behind the
+        OddsProvider interface with no further changes here.
+        """
+        provider = getattr(self, "_odds", None)
+        if provider is None:
+            provider = get_odds_provider()
+            self._odds = provider
+        return provider
+
     async def _fetch_odds(self, game_pk: int) -> dict:
         """
-        Returns mock odds.  In Phase 7, replace this method body with an
-        aiohttp call to your real odds provider (e.g. The Odds API):
-
-            async with self._http.get(
-                "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds",
-                params={"apiKey": ODDS_API_KEY, "eventIds": game_pk, ...}
-            ) as resp:
-                return await resp.json()
+        Returns odds from the configured provider (SIM-370).  Defaults to the
+        deterministic MockOddsAPI; set ODDS_PROVIDER (and implement
+        RealOddsAPIProvider) to swap in a real feed without touching this code.
         """
-        return MockOddsAPI.get_odds(game_pk)
+        return self._odds_provider().get_odds(game_pk)
 
     @staticmethod
     def _collect_prop_player_ids(game_state: dict) -> list[int]:
@@ -1465,12 +1486,13 @@ class LiveIngestionPipeline:
         the provider swap untouched.
         """
         books = books if books is not None else PROP_BOOKS
+        provider = self._odds_provider()  # SIM-370: env-selected, mock by default
         quotes: list[dict] = []
         for player_id in player_ids:
             for prop_stat in prop_stats:
                 for book, is_sharp in books:
                     try:
-                        quote = MockOddsAPI.get_prop_odds(
+                        quote = provider.get_prop_odds(
                             game_pk,
                             player_id,
                             prop_stat,

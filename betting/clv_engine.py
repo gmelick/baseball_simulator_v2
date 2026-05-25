@@ -545,6 +545,129 @@ def total_over_under_edge_report(
     )
 
 
+# ---------------------------------------------------------------------------
+# Run line / spread (SIM-367) -- cover probability from raw score margins
+# ---------------------------------------------------------------------------
+
+def _as_margin_array(summary_or_margin: "GameSimSummary | Sequence[float] | np.ndarray") -> np.ndarray:
+    """Coerce the input to a 1-D float64 SCORE-MARGIN array (``home - away``).
+
+    Accepts either a SIM-327 :class:`GameSimSummary` -- in which case the margin is
+    computed as ``home_scores - away_scores`` per iteration -- or a raw margin array
+    (any sequence / ndarray of ``home - away`` values).  The returned array is the
+    per-iteration home-minus-away run differential the spread is priced against.
+    """
+    if isinstance(summary_or_margin, GameSimSummary):
+        home = np.asarray(summary_or_margin.home_scores, dtype=np.float64)
+        away = np.asarray(summary_or_margin.away_scores, dtype=np.float64)
+        return home - away
+    return np.asarray(list(summary_or_margin), dtype=np.float64)
+
+
+def spread_cover_prob(
+    summary_or_margin: "GameSimSummary | Sequence[float] | np.ndarray",
+    line: float,
+    side: MarketSide = MarketSide.HOME,
+) -> float:
+    """Sim cover probability of a SPREAD (run line) side at ``line`` from raw margins.
+
+    The score margin is ``margin = home - away`` per iteration (from a SIM-327
+    :class:`GameSimSummary` or a raw margin array).  ``line`` is the spread of the
+    **HOME** side under the standard convention: a home favourite is laying runs at a
+    NEGATIVE line (e.g. ``-1.5``), a home underdog is getting runs at a POSITIVE line.
+    The away line is the NEGATION of the home line (home ``-1.5`` <=> away ``+1.5``).
+
+    Cover definitions (``L`` == the home line):
+
+      * **HOME** covers iff the margin plus the line is positive::
+
+            (home - away) + L > 0   <=>   margin > -L
+
+        e.g. at ``L = -1.5`` the home favourite covers iff ``margin > 1.5`` (win by
+        2+).  At ``L = +1.5`` the home underdog covers iff ``margin > -1.5`` (lose by
+        at most 1, or win).
+
+      * **AWAY** covers iff the away margin plus the away line is positive.  With the
+        away line ``= -L``::
+
+            (away - home) + (-L) > 0   <=>   -margin - L > 0   <=>   margin < -L
+
+        i.e. AWAY covers iff ``margin < -L`` -- the exact complement of HOME's strict
+        ``margin > -L``, with the boundary ``margin == -L`` belonging to NEITHER (the
+        push, see below).
+
+    Push handling.  The cover boundary is ``margin == -L``.  Baseball margins are
+    integers, so:
+
+      * a HALF-integer line (e.g. ``-1.5`` / ``+1.5``) can NEVER push -- ``-L`` is not
+        an integer, no margin lands on it, and ``P(home covers) + P(away covers) == 1``;
+      * an INTEGER line (e.g. ``-1`` / ``+1``, or ``0`` a "draw no bet" pick'em) CAN
+        push -- iterations with ``margin == -L`` are pushes that count toward NEITHER
+        side, so ``P(home covers) + P(away covers) + P(push) == 1`` and the push mass
+        is excluded from both probabilities (mirrors the SIM-329 / total push rule).
+
+    Both HOME and AWAY use STRICT inequalities, which is exactly what splits the push
+    out at an integer line and is harmless at a half-integer line (nothing sits on the
+    boundary).  Returns a probability in ``[0, 1]``.
+    """
+    margin = _as_margin_array(summary_or_margin)
+    n = margin.size
+    if n == 0:
+        raise ValueError("no score margins to price a run line / spread")
+    threshold = -float(line)  # the cover boundary: margin vs -L
+    if side is MarketSide.HOME:
+        return float(np.count_nonzero(margin > threshold)) / n
+    if side is MarketSide.AWAY:
+        return float(np.count_nonzero(margin < threshold)) / n
+    raise ValueError("run line / spread side must be HOME or AWAY")
+
+
+def run_line_edge_report(
+    summary_or_margin: "GameSimSummary | Sequence[float] | np.ndarray",
+    market: TwoWayMarket,
+    *,
+    side: MarketSide = MarketSide.HOME,
+    line: float = -1.5,
+) -> EdgeReport:
+    """Edge / EV / CLV for a RUN LINE / spread side, consuming SIM-327 raw margins.
+
+    The sim probability is the spread COVER probability (:func:`spread_cover_prob`)
+    computed from the per-iteration score margin ``home - away`` -- taken from a
+    SIM-327 :class:`GameSimSummary` (``home_scores - away_scores``) or a raw margin
+    array.  Baseball's standard run line is ``+/-1.5``; this is the default (home
+    favourite ``-1.5`` / home underdog or away ``+1.5``).
+
+    Line / side conventions (see :func:`spread_cover_prob` for the cover math):
+
+      * ``line`` is the HOME line under the home convention (negative == home laying
+        runs, positive == home getting runs).  The away line is its NEGATION.  When
+        ``market.entry.line`` is set it OVERRIDES the ``line`` argument (the injected
+        market line is authoritative, mirroring :func:`total_over_under_edge_report`);
+        otherwise the ``line`` keyword (default ``-1.5``) is used.  The SAME home line
+        is used for both sides -- AWAY is priced as the complement at ``-line`` -- so
+        callers pass the home line regardless of which side they are reporting.
+      * ``side`` selects HOME or AWAY; ``market.entry.side`` must be that side's
+        American price and ``market.entry.other`` the opposite side's (needed to
+        de-vig), exactly as for the moneyline / total reports.
+      * Pushes (only possible at an integer line) are excluded from both sides; at the
+        ``+/-1.5`` default no push is possible and HOME / AWAY cover probabilities are
+        complementary.
+
+    Returns an :class:`EdgeReport` labelled ``"run_line"`` carrying the cover
+    ``sim_prob``, the de-vigged ``market_fair_prob``, ``edge``, ``ev`` (vs the offered
+    entry price), and the :class:`CLV` when a closing quote is supplied.
+    """
+    eff_line = market.entry.line if market.entry.line is not None else float(line)
+    sim_p = spread_cover_prob(summary_or_margin, eff_line, side)
+    return _build_edge_report(
+        label="run_line",
+        side=side,
+        line=float(eff_line),
+        sim_prob=sim_p,
+        market=market,
+    )
+
+
 __all__ = [
     # conversions
     "american_to_decimal",
@@ -571,4 +694,6 @@ __all__ = [
     "moneyline_edge_report",
     "prop_edge_report",
     "total_over_under_edge_report",
+    "spread_cover_prob",
+    "run_line_edge_report",
 ]

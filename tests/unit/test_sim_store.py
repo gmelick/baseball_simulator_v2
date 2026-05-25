@@ -377,9 +377,9 @@ class TestMigrationSanity:
         assert "def downgrade()" in text
         assert "sim.sim_runs" in text
 
-    def test_duckdb_schema_version_is_9(self):
+    def test_duckdb_schema_version_is_10(self):
         # SIM-357 bumped 8 -> 9 (sim.state_snapshots migration 0009).
-        assert DUCKDB_VERSION_FILE.read_text().strip() == "9"
+        assert DUCKDB_VERSION_FILE.read_text().strip() == "10"
 
     def test_duckdb_0008_creates_play_stream(self):
         text = DUCKDB_MIGRATION.read_text()

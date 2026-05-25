@@ -535,6 +535,123 @@ def load_state_snapshots(
     return [_state_row_to_dict(rec) for rec in cur.fetchall()]
 
 
+# ===========================================================================
+# DuckDB -- sim.game_cards (sync duckdb)  [SIM-362/364]
+# ===========================================================================
+#
+# The /linescore + /decisions endpoints need the game-level DERIVED loop outputs
+# -- the per-inning linescore (R/H/E grid) and the W/L/Save pitcher decisions --
+# which the play_stream / state_snapshots rows do NOT carry. Those derivations
+# (simulation.linescore.linescore_from_plays +
+# simulation.pitcher_decisions.decisions_from_plays) read PlayResult.next_state,
+# which the persisted PlayByPlayEntry rows drop, so they MUST be computed at
+# RECORD time (from the recorded PlayResult list) and persisted here -- NOT
+# re-derived at read time. This store persists one "game card" per run: two
+# numpy-free JSON blobs (the to_jsonable Linescore + PitcherDecisions), keyed by
+# run_id and looked up by (game_pk[, run_id]).
+#
+# A card handed to ``store_game_card`` carries:
+#     linescore   dict   REQUIRED  to_jsonable(Linescore): {innings:[{inning,away,
+#                                   home}], away_runs, home_runs, away_hits,
+#                                   home_hits, away_errors, home_errors, ...}
+#     decisions   dict   REQUIRED  to_jsonable(PitcherDecisions): {winning_pitcher_id,
+#                                   losing_pitcher_id, save_pitcher_id, home_score,
+#                                   away_score}
+# Both whole dicts are stored verbatim as JSON text; ``load_game_card`` returns
+# them parsed back so the endpoint rebuilds the response models directly.
+
+#: INSERT one game-card row. Column order: the two lookup keys (run_id, game_pk),
+#: then the two JSON blobs (linescore, decisions).
+_DUCK_INSERT_GAME_CARD = """
+    INSERT INTO sim.game_cards (run_id, game_pk, linescore, decisions)
+    VALUES (?, ?, ?, ?)
+"""
+
+
+def store_game_card(
+    con: Any,
+    *,
+    game_pk: int,
+    run_id: int,
+    linescore: Mapping[str, Any],
+    decisions: Mapping[str, Any],
+) -> None:
+    """Persist one game's derived loop card (linescore + decisions) for a run.
+
+    ``linescore`` / ``decisions`` are the already-jsonable dicts
+    (``api.serialization.to_jsonable(linescore)`` /
+    ``to_jsonable(pitcher_decisions)``); each whole dict is stored verbatim as
+    JSON text. Keyed by ``run_id`` (the PK); ``game_pk`` is denormalized for the
+    by-game lookup. Idempotency / replacement is the caller's concern (a fresh
+    ``run_id`` per run avoids collisions); a duplicate ``run_id`` raises the
+    engine's PK-violation error.
+    """
+    import json
+
+    con.execute(
+        _DUCK_INSERT_GAME_CARD,
+        [
+            int(run_id),
+            int(game_pk),
+            json.dumps(linescore),
+            json.dumps(decisions),
+        ],
+    )
+
+
+def _game_card_row_to_dict(rec: Any) -> dict:
+    """Map a ``sim.game_cards`` SELECT row to the parsed card dict.
+
+    The SELECT yields (run_id, game_pk, linescore, decisions); the two JSON text
+    blobs are parsed back to dicts so callers always get the real jsonable
+    structures the /linescore + /decisions endpoints rebuild their models from.
+    """
+    import json
+
+    run_id, game_pk, linescore, decisions = rec
+    if isinstance(linescore, (str, bytes, bytearray)):
+        linescore = json.loads(linescore)
+    if isinstance(decisions, (str, bytes, bytearray)):
+        decisions = json.loads(decisions)
+    return {
+        "run_id": int(run_id),
+        "game_pk": int(game_pk),
+        "linescore": linescore,
+        "decisions": decisions,
+    }
+
+
+def load_game_card(
+    con: Any,
+    *,
+    game_pk: int,
+    run_id: Optional[int] = None,
+) -> Optional[dict]:
+    """Load the game card for ``game_pk`` (None if none has been persisted).
+
+    With ``run_id`` given, only that run's card is consulted; without it the
+    most-recent run's card is returned (ORDER BY run_id DESC so the latest run
+    wins). The returned dict is ``{run_id, game_pk, linescore, decisions}`` where
+    ``linescore`` / ``decisions`` are the parsed, numpy-free jsonable structures
+    the /linescore + /decisions (+ /card) endpoints rebuild their models from.
+    ``None`` means no card was persisted -> the endpoint returns 404.
+    """
+    if run_id is None:
+        sql = (
+            "SELECT run_id, game_pk, linescore, decisions FROM sim.game_cards "
+            "WHERE game_pk = ? ORDER BY run_id DESC LIMIT 1"
+        )
+        cur = con.execute(sql, [int(game_pk)])
+    else:
+        sql = (
+            "SELECT run_id, game_pk, linescore, decisions FROM sim.game_cards "
+            "WHERE game_pk = ? AND run_id = ? LIMIT 1"
+        )
+        cur = con.execute(sql, [int(game_pk), int(run_id)])
+    rec = cur.fetchone()
+    return None if rec is None else _game_card_row_to_dict(rec)
+
+
 __all__ = [
     "PLAY_ROW_FIELDS",
     # Postgres
@@ -549,4 +666,7 @@ __all__ = [
     "store_state_snapshots",
     "load_state_at",
     "load_state_snapshots",
+    # DuckDB -- game cards (SIM-362/364)
+    "store_game_card",
+    "load_game_card",
 ]

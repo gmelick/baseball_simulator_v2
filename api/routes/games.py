@@ -71,8 +71,11 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from api.schemas import (
+    BoxscoreCardModel,
     GameSimSummaryModel,
+    LinescoreModel,
     OverrideDeltaModel,
+    PitcherDecisionsModel,
     PlayByPlayModel,
     StateAtPitchModel,
 )
@@ -82,12 +85,18 @@ from simulation.batch_runner import (
     POOL_QUERY_TTL_S,
     BatchRunner,
     GameSpec,
+    derive_seed,
 )
+from simulation.linescore import linescore_from_plays
 from simulation.lineup_resolver import (
     LineupResolutionError,
+    build_defense_map_for_state,
+    resolve_lineup,
     resolve_game_state,
 )
+from simulation.pitcher_decisions import decisions_from_plays
 from simulation.play_recorder import record_game_plays
+from simulation.prop_distributions import PropDistributionSet
 from simulation.snapshots import (
     FieldSnapshot,
     OverrideDelta,
@@ -420,23 +429,38 @@ def _record_and_build(
     factory_ref: str,
     base_seed: Optional[int],
     sim_kwargs: dict[str, Any],
-) -> "tuple[PlayByPlay, list[dict]]":
+    resolved: Any = None,
+) -> "tuple[PlayByPlay, list[dict], dict, dict]":
     """Record ONE representative game and build the replay artifacts (sync).
 
     Replays a single game at the run's ``base_seed`` via
     :func:`simulation.play_recorder.record_game_plays` (the no-DB rng path under
     the test/factory seam), then derives:
 
-      * a :class:`~simulation.snapshots.PlayByPlay` (the /plays scroll), and
+      * a :class:`~simulation.snapshots.PlayByPlay` (the /plays scroll),
       * one jsonable :class:`~simulation.snapshots.StateAtPitch` per pitch (the
         /state lookup rows), tagged with each pitch's at_bat / pitch / sequence
         from the matching PlayByPlay entry and built from that ``PlayResult``'s
-        committed ``next_state`` (the GameState after the pitch).
+        committed ``next_state`` (the GameState after the pitch),
+      * the jsonable :class:`~simulation.linescore.Linescore` (SIM-362) and
+        :class:`~simulation.pitcher_decisions.PitcherDecisions` (SIM-364) DERIVED
+        from the recorded ``PlayResult`` list -- computed HERE, at record time,
+        because both read ``PlayResult.next_state`` which the persisted
+        ``PlayByPlayEntry`` rows drop (so they cannot be re-derived at read time).
 
-    Returns ``(play_by_play, state_snapshot_dicts)``.  A pitch whose
-    ``next_state`` is missing is skipped for the state stream (its /plays entry
-    still persists) -- the snapshot is best-effort and a missing one just 404s.
-    Pure + sync so the caller can run it in the same worker thread as the batch.
+    SIM-363 -- POPULATING THE 9 FIELDERS: when a ``resolved``
+    :class:`~simulation.lineup_resolver.ResolvedLineup` is supplied, each per-pitch
+    StateAtPitch is built with the fielding side's ``defense_positions`` map
+    (``build_defense_map_for_state``), so the persisted snapshots carry the 9
+    fielders and ``GET /state`` returns them populated.  The map depends only on
+    the half (which side is fielding) + substitutions, so it is cached per
+    ``(half, fielding-side)`` key across the game.  With no ``resolved`` lineup the
+    9 slots stay present-but-empty (the prior behaviour).
+
+    Returns ``(play_by_play, state_snapshot_dicts, linescore_json, decisions_json)``.
+    A pitch whose ``next_state`` is missing is skipped for the state stream (its
+    /plays entry still persists).  Pure + sync so the caller can run it in the
+    same worker thread as the batch.
     """
     _result, plays = record_game_plays(
         factory_ref=factory_ref,
@@ -444,6 +468,29 @@ def _record_and_build(
         sim_kwargs=sim_kwargs,
     )
     pbp = PlayByPlay.from_play_results(plays)
+
+    # SIM-362 / SIM-364: derive the game card from the recorded PlayResult list
+    # (these read PlayResult.next_state, dropped by the persisted entries, so they
+    # MUST be computed here at record time).
+    linescore = linescore_from_plays(plays)
+    decisions = decisions_from_plays(plays)
+
+    # SIM-363: cache the fielding-side defense map per (half, fielding-side) so we
+    # build it at most twice per inning rather than per pitch (it changes only on a
+    # substitution, which the resolver's "latest occupant" map already reflects).
+    defense_cache: dict[Any, Optional[dict[str, int]]] = {}
+
+    def _defense_for(next_state: Any) -> Optional[dict[str, int]]:
+        if resolved is None:
+            return None
+        key = getattr(next_state, "half", None)
+        if key not in defense_cache:
+            try:
+                defense_cache[key] = build_defense_map_for_state(resolved, next_state)
+            except Exception:  # noqa: BLE001 -- a bad lineup must not break replay
+                defense_cache[key] = None
+        return defense_cache[key]
+
     # plays and pbp.entries are 1:1 in order, so zip pairs each PlayResult with
     # its entry's (at_bat, pitch, sequence) indices.
     snapshots: list[dict] = []
@@ -456,9 +503,10 @@ def _record_and_build(
             at_bat=entry.at_bat,
             pitch=entry.pitch,
             sequence=entry.sequence,
+            defense_positions=_defense_for(next_state),
         )
         snapshots.append(to_jsonable(sap))
-    return pbp, snapshots
+    return pbp, snapshots, to_jsonable(linescore), to_jsonable(decisions)
 
 
 async def _persist_replay_artifacts(
@@ -493,12 +541,21 @@ async def _persist_replay_artifacts(
         return
 
     try:
+        # SIM-363: resolve the lineup ONCE (best-effort) so the recorded snapshots
+        # can carry the 9 fielders for whichever side is fielding.  A resolution
+        # failure (e.g. a mock pool with no game_lineups) just leaves the fielder
+        # slots empty -- the replay still persists, /state still 200s with empty
+        # positions, so this is strictly additive.
+        resolved = await _resolve_lineup_best_effort(pool, game_pk)
+
         # 1) Record the representative game + build artifacts (CPU-bound: thread).
-        pbp, snapshots = await asyncio.to_thread(
+        #    Also derives the SIM-362 linescore + SIM-364 decisions game card.
+        pbp, snapshots, linescore_json, decisions_json = await asyncio.to_thread(
             _record_and_build,
             factory_ref=factory_ref,
             base_seed=base_seed,
             sim_kwargs=sim_kwargs,
+            resolved=resolved,
         )
 
         # 2) Persist the run summary to Postgres (SIM-356) to get a durable
@@ -540,8 +597,41 @@ async def _persist_replay_artifacts(
         sim_store.store_state_snapshots(
             con, game_pk=game_pk, run_id=run_id, snapshots=snapshots
         )
+
+        # 4) Persist the SIM-362/364 game card (linescore + decisions).  These were
+        #    derived at record time (they need PlayResult.next_state) and are stored
+        #    keyed on the same run_id so /linescore + /decisions can read them back.
+        sim_store.store_game_card(
+            con,
+            game_pk=game_pk,
+            run_id=run_id,
+            linescore=linescore_json,
+            decisions=decisions_json,
+        )
     except Exception as exc:  # noqa: BLE001 -- persistence must never break /simulate
         log.warning("replay-artifact persist failed for game %s: %s", game_pk, exc)
+
+
+async def _resolve_lineup_best_effort(pool: Any, game_pk: int) -> Any:
+    """Resolve a game's :class:`ResolvedLineup` (SIM-363), or None on any failure.
+
+    Used by :func:`_persist_replay_artifacts` to populate the 9 FieldSnapshot
+    fielders.  Strictly best-effort: a missing pool, an unknown game, or no
+    lineup rows simply yields ``None`` (the snapshots are then built with empty
+    fielder slots, the prior behaviour) -- a fielder-map failure NEVER breaks the
+    replay persist or the /simulate response.
+    """
+    if pool is None:
+        return None
+    try:
+        acquire = getattr(pool, "acquire", None)
+        if acquire is not None:
+            async with pool.acquire() as conn:
+                return await resolve_lineup(conn, int(game_pk))
+        return await resolve_lineup(pool, int(game_pk))
+    except Exception as exc:  # noqa: BLE001 -- fielder map is best-effort
+        log.warning("defense-map lineup resolve failed for game %s: %s", game_pk, exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -880,6 +970,194 @@ async def get_game_state_at_pitch(
     return _state_at_pitch_model_from_snapshot(row["snapshot"])
 
 
+# ===========================================================================
+# SIM-362/364 -- GET /linescore + /decisions + /card (the persisted game card)
+# ===========================================================================
+
+
+class GameCardResponse(BaseModel):
+    """The combined ``GET /api/games/{game_pk}/card`` envelope (SIM-362/364).
+
+    Carries both derived loop outputs for the game's most-recent persisted run:
+    the per-inning :class:`~api.schemas.LinescoreModel` (R/H/E grid) and the
+    :class:`~api.schemas.PitcherDecisionsModel` (W/L/Save).
+    """
+
+    game_pk: int
+    linescore: LinescoreModel
+    decisions: PitcherDecisionsModel
+
+
+async def _load_game_card_or_error(request: Request, game_pk: int) -> dict:
+    """Load the persisted game card, mapping no-store/no-card to 503/404.
+
+    Shared by /linescore, /decisions, and /card: 503 when no DuckDB replay store
+    is wired, 404 when nothing has been persisted for the game (no /simulate run,
+    or the card persist was skipped).  Returns the parsed
+    ``{run_id, game_pk, linescore, decisions}`` dict on success.
+    """
+    con = _get_sim_duckdb(request)
+    if con is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="replay store unavailable",
+        )
+    card = await asyncio.to_thread(
+        sim_store.load_game_card, con, game_pk=int(game_pk)
+    )
+    if card is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no persisted game card for game_pk={game_pk}",
+        )
+    return card
+
+
+@router.get(
+    "/{game_pk}/linescore",
+    response_model=LinescoreModel,
+    summary="Per-inning linescore (R/H/E grid) for a simulated game",
+    description=(
+        "Return the persisted per-inning linescore (the away/home run grid plus "
+        "each team's Runs/Hits/Errors totals, SIM-362) for the game's most-recent "
+        "persisted run -- derived at record time from the recorded PlayResult "
+        "stream by /simulate and served from the DuckDB game-card store. "
+        "numpy-free JSON (SIM-350). 404 if no card has been persisted, 503 if no "
+        "replay store is wired."
+    ),
+)
+async def get_game_linescore(
+    game_pk: int,
+    request: Request,
+) -> LinescoreModel:
+    card = await _load_game_card_or_error(request, game_pk)
+    return LinescoreModel.from_jsonable(card["linescore"])
+
+
+@router.get(
+    "/{game_pk}/decisions",
+    response_model=PitcherDecisionsModel,
+    summary="Winning/losing/save pitcher decisions for a simulated game",
+    description=(
+        "Return the persisted W/L/Save pitcher decisions (SIM-364) for the game's "
+        "most-recent persisted run -- derived at record time from the recorded "
+        "PlayResult stream by /simulate and served from the DuckDB game-card "
+        "store. All three pitcher ids are null on a tie / no-decision. numpy-free "
+        "JSON. 404 if no card has been persisted, 503 if no replay store is wired."
+    ),
+)
+async def get_game_decisions(
+    game_pk: int,
+    request: Request,
+) -> PitcherDecisionsModel:
+    card = await _load_game_card_or_error(request, game_pk)
+    return PitcherDecisionsModel.from_jsonable(card["decisions"])
+
+
+@router.get(
+    "/{game_pk}/card",
+    response_model=GameCardResponse,
+    summary="Combined linescore + pitcher decisions for a simulated game",
+    description=(
+        "Return BOTH the per-inning linescore (SIM-362) and the W/L/Save pitcher "
+        "decisions (SIM-364) for the game's most-recent persisted run in one "
+        "payload, from the DuckDB game-card store. 404 if no card has been "
+        "persisted, 503 if no replay store is wired."
+    ),
+)
+async def get_game_card(
+    game_pk: int,
+    request: Request,
+) -> GameCardResponse:
+    card = await _load_game_card_or_error(request, game_pk)
+    return GameCardResponse(
+        game_pk=int(game_pk),
+        linescore=LinescoreModel.from_jsonable(card["linescore"]),
+        decisions=PitcherDecisionsModel.from_jsonable(card["decisions"]),
+    )
+
+
+# ===========================================================================
+# SIM-366 -- GET /api/games/{game_pk}/boxscore (per-player prop MEANS card)
+# ===========================================================================
+
+
+def _build_prop_set(
+    *,
+    factory_ref: str,
+    base_seed: Optional[int],
+    sim_kwargs: dict[str, Any],
+    n_iterations: int,
+) -> PropDistributionSet:
+    """Build a :class:`PropDistributionSet` from a fresh N-game boxscore batch.
+
+    The SIM-366 boxscore card needs the per-game :class:`BoxScore` for every
+    iteration, but the :class:`~simulation.batch_runner.BatchResult` retains only
+    the aggregate :class:`GameSimSummary` (the per-game results are not kept) -- so
+    this records N representative games via
+    :func:`simulation.play_recorder.record_game_plays` (which DOES return a
+    populated ``GameSimResult.boxscore`` per game), derived at the SAME per-game
+    seeds the batch uses (``derive_seed(base_seed, i)``) for reproducibility, and
+    aggregates their boxscores into the prop-PMF set.  Sync + CPU-bound so the
+    caller offloads it to a worker thread.
+
+    THE SEAM (documented): this re-runs the game under the no-DB factory rather
+    than reusing the /simulate batch's per-game results, because the batch summary
+    does not carry them.  For a small ``n_iterations`` (the 100-iteration boxscore
+    average) this is cheap; a future change that has the runner retain per-game
+    boxscores could feed them straight in here instead.
+    """
+    from simulation.results import BoxScore  # local import: keep module light
+
+    boxscores = []
+    for i in range(int(n_iterations)):
+        seed = derive_seed(base_seed, i)
+        result, _plays = record_game_plays(
+            factory_ref=factory_ref,
+            seed=seed,
+            sim_kwargs=sim_kwargs,
+        )
+        # A game that did not accumulate a boxscore contributes an empty one (it
+        # still counts toward N so the means denominator stays the full count).
+        boxscores.append(result.boxscore if result.boxscore is not None else BoxScore())
+    return PropDistributionSet.from_boxscores(boxscores)
+
+
+@router.get(
+    "/{game_pk}/boxscore",
+    response_model=BoxscoreCardModel,
+    summary="Per-player boxscore-average card (prop means over N iterations)",
+    description=(
+        "Resolve the game's lineup, run an N-iteration boxscore batch, and return "
+        "each player's prop MEANS as a boxscore card (SIM-366): for a batter the "
+        "H/HR/RBI/TB means, for a pitcher the K/BB/ER/OUTS means -- the means-only "
+        "projection of the run's PropDistributionSet (SIM-329). numpy-free JSON "
+        "(SIM-350). 503 if no DB pool is attached; 404 if the lineup cannot be "
+        "resolved."
+    ),
+)
+async def get_game_boxscore(
+    game_pk: int,
+    request: Request,
+    n_iterations: int = Query(100, ge=1, le=2000, description="Monte-Carlo iterations"),
+    base_seed: Optional[int] = Query(None, description="Reproducibility seed for the batch"),
+) -> BoxscoreCardModel:
+    pool = _get_pool(request)
+    state = await _resolve_state_or_error(pool, game_pk)
+
+    factory_ref = resolve_factory_ref(request)
+    sim_kwargs = _sim_kwargs_from_state(state)
+
+    pset = await asyncio.to_thread(
+        _build_prop_set,
+        factory_ref=factory_ref,
+        base_seed=base_seed,
+        sim_kwargs=sim_kwargs,
+        n_iterations=n_iterations,
+    )
+    return BoxscoreCardModel.from_prop_set(pset)
+
+
 __all__ = [
     "router",
     "PRODUCTION_FACTORY_REF",
@@ -889,4 +1167,5 @@ __all__ = [
     "SimulateResponse",
     "RosterOverride",
     "WithOverrideResponse",
+    "GameCardResponse",
 ]

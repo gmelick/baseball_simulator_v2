@@ -1190,6 +1190,12 @@ class StateMachine:
             result.steal_outcome = STEAL_SAFE
             # Move the runner off the from-base onto the to-base (or home).
             self._move_runner(state, from_base, to_base)
+            # SIM-365: credit the stolen base to the runner.  Steals are
+            # accumulated HERE (the single steal-commit site) rather than in
+            # :meth:`_accumulate_pa` so a steal on a NON-terminal pitch — which
+            # never reaches end-of-PA — is still counted.
+            if rid is not None:
+                self._box_line(int(rid)).sb += 1
             if to_base >= 4:
                 # Steal of home: one run scores -> route through resolve_runs.
                 self._commit_run_delta(
@@ -1198,6 +1204,14 @@ class StateMachine:
                 )
                 if rid is not None:
                     result.baserunner_advances[rid] = 0
+                    # SIM-365: the runner scored on the steal of home.
+                    self._box_line(int(rid)).r += 1
+                # SIM-365: charge the pitcher the run.  Only on a NON-terminal
+                # pitch — on a terminal pitch ``_accumulate_pa`` will add this
+                # play's ``runs_scored`` (which includes this run) to r_allowed,
+                # so crediting here too would double-count.
+                if not result.pa_terminal and state.pitcher_id is not None:
+                    self._box_line(int(state.pitcher_id)).r_allowed += 1
             elif rid is not None:
                 result.baserunner_advances[rid] = to_base
         else:
@@ -1578,6 +1592,18 @@ class StateMachine:
             return lineup[slot % len(lineup)]
         return state.batter_id
 
+    def _box_line(self, player_id: int) -> PlayerStatLine:
+        """Lazily create the boxscore and return a player's line (SIM-365).
+
+        Mirrors the ``if self.boxscore is None`` guard inside
+        :meth:`_accumulate_pa`, so steal accumulation (which happens in
+        :meth:`_resolve_steal_outcome`, possibly on a non-terminal pitch that
+        never reaches end-of-PA) shares the same per-game store.
+        """
+        if self.boxscore is None:
+            self.boxscore = BoxScore()
+        return self.boxscore.line(int(player_id))
+
     def _accumulate_pa(self, state: GameState, result: PlayResult) -> None:
         """Attribute one completed terminal PA to the batter + pitcher (SIM-328).
 
@@ -1649,9 +1675,31 @@ class StateMachine:
                 bat.h += 1
                 if canonical == "home_run":
                     bat.hr += 1
+                # SIM-365: doubles / triples are a subset of ``h`` (so TB can be
+                # computed exactly downstream); singles need no field (h - b2 - b3
+                # - hr).  ADDITIVE on top of the existing ``h`` credit above.
+                elif canonical == "double":
+                    bat.b2 += 1
+                elif canonical == "triple":
+                    bat.b3 += 1
             # RBI: runs the batter drove in (not credited on an error-driven run).
             if runs and not is_error:
                 bat.rbi += runs
+
+        # ---- runs scored (SIM-365): credit each runner who crossed home on this
+        # play.  ``baserunner_advances`` records ``end_base == 0`` for a runner who
+        # SCORED (set in :meth:`_advance_runners` when dest >= 4, and for the HR
+        # batter).  Steals are credited entirely in :meth:`_resolve_steal_outcome`
+        # (so a steal on a NON-terminal pitch — which never reaches this method —
+        # is still counted, and a caught-stealing ``0`` is never mistaken for a
+        # scored run); we therefore skip run attribution on a steal PA here to
+        # avoid double-counting a steal-of-home.  Forced runs on a walk are not
+        # recorded per-runner in ``baserunner_advances`` (only ``runs_scored``),
+        # so a walk-forced run is a documented under-count for the per-runner R.
+        if not result.steal_attempted:
+            for rid, end_base in result.baserunner_advances.items():
+                if int(end_base) == 0:
+                    box.line(int(rid)).r += 1
 
         # ---- pitcher (defense) ----
         if state.pitcher_id is not None:
@@ -1661,9 +1709,19 @@ class StateMachine:
                 pit.k += 1
             if canonical in self._BB_CANONICAL:
                 pit.bb += 1
+            # SIM-365: a base hit charged to the pitcher.
+            if canonical in self._HIT_CANONICAL:
+                pit.h_allowed += 1
             # ER: scored runs charged to the pitcher unless flagged as error.
             if runs and not is_error:
                 pit.er += runs
+            # SIM-365: runs allowed (R) include UNEARNED runs too, so unlike ER
+            # there is no ``is_error`` exclusion — R >= ER by construction.  A
+            # steal-of-home on a NON-terminal pitch is charged in
+            # :meth:`_resolve_steal_outcome` (it never reaches this method);
+            # a terminal-pitch steal-of-home's run is already in ``runs`` here.
+            if runs:
+                pit.r_allowed += runs
 
     def advance_half_inning(self, state: GameState) -> None:
         """Roll the half-inning at 3 outs (spec §6.1).
@@ -2299,12 +2357,21 @@ class PlayerStatLine:
     h: int = 0
     hr: int = 0
     rbi: int = 0
+    # SIM-365 additive batting extras (all default 0 so existing constructions
+    # and SIM-328 tests are unaffected):
+    b2: int = 0          # doubles (a subset of ``h``)
+    b3: int = 0          # triples (a subset of ``h``)
+    r: int = 0           # runs scored by this player (offense)
+    sb: int = 0          # stolen bases
 
     # --- pitching (IP stored as outs == thirds of an inning) ---
     outs_recorded: int = 0
     k: int = 0
     bb: int = 0
     er: int = 0
+    # SIM-365 additive pitching extras (default 0):
+    h_allowed: int = 0   # hits allowed
+    r_allowed: int = 0   # runs allowed (earned + unearned; >= ``er``)
 
     @property
     def ip_outs(self) -> int:

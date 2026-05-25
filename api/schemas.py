@@ -64,7 +64,7 @@ Owner: Backend Developer (Agent 5).
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -713,6 +713,246 @@ class PropDistributionSetModel(_ApiModel):
 
 
 # ===========================================================================
+# simulation/linescore.py  ->  InningLine, Linescore  (SIM-362 API exposure)
+# ===========================================================================
+
+
+class InningLineModel(_ApiModel):
+    """Response model for :class:`simulation.linescore.InningLine` (SIM-362).
+
+    One inning's away (top) / home (bottom) run cells.  ``away`` / ``home`` are
+    ``Optional[int]``: ``None`` is the classic scoreboard "x" (a half that was
+    never played -- e.g. the bottom of the final inning when the home team already
+    leads, or a walk-off), distinguished from ``0`` (played and scoreless).
+    ``away_played`` / ``home_played`` mirror the source's derived properties.
+    """
+
+    inning: int
+    away: Optional[int] = None
+    home: Optional[int] = None
+
+    #: Derived from the source dataclass's properties (a half is "played" iff its
+    #: cell is not None).
+    away_played: bool
+    home_played: bool
+
+    @classmethod
+    def from_dataclass(cls, ln: Any) -> "InningLineModel":
+        """Build from a :class:`simulation.linescore.InningLine`."""
+        return cls(
+            inning=int(ln.inning),
+            away=None if ln.away is None else int(ln.away),
+            home=None if ln.home is None else int(ln.home),
+            away_played=bool(ln.away_played),
+            home_played=bool(ln.home_played),
+        )
+
+
+class LinescoreModel(_ApiModel):
+    """Response model for :class:`simulation.linescore.Linescore` (SIM-362).
+
+    The classic baseball linescore: the per-inning run grid plus each team's
+    Runs / Hits / Errors totals.  ``innings`` is ordered 1..N (N >= 9 for extra
+    innings).  ``away_by_inning`` / ``home_by_inning`` mirror the source's derived
+    per-inning cell lists (``None`` == not played); ``n_innings`` mirrors the
+    derived length.  numpy-free (plain ints / Optional[int]).
+    """
+
+    innings: list[InningLineModel] = Field(default_factory=list)
+
+    away_runs: int = 0
+    home_runs: int = 0
+    away_hits: int = 0
+    home_hits: int = 0
+    away_errors: int = 0
+    home_errors: int = 0
+
+    #: Derived from the source dataclass's properties.
+    n_innings: int = 0
+    away_by_inning: list[Optional[int]] = Field(default_factory=list)
+    home_by_inning: list[Optional[int]] = Field(default_factory=list)
+
+    @classmethod
+    def from_dataclass(cls, ls: Any) -> "LinescoreModel":
+        """Build from a :class:`simulation.linescore.Linescore`."""
+        return cls(
+            innings=[InningLineModel.from_dataclass(ln) for ln in ls.innings],
+            away_runs=int(ls.away_runs),
+            home_runs=int(ls.home_runs),
+            away_hits=int(ls.away_hits),
+            home_hits=int(ls.home_hits),
+            away_errors=int(ls.away_errors),
+            home_errors=int(ls.home_errors),
+            n_innings=int(ls.n_innings),
+            away_by_inning=[None if c is None else int(c) for c in ls.away_by_inning],
+            home_by_inning=[None if c is None else int(c) for c in ls.home_by_inning],
+        )
+
+    @classmethod
+    def from_jsonable(cls, data: Mapping[str, Any]) -> "LinescoreModel":
+        """Build directly from a persisted ``to_jsonable(Linescore)`` dict.
+
+        The DuckDB game-card store (SIM-362) persists the linescore as the
+        ``to_jsonable`` dict -- which carries the dataclass FIELDS (``innings`` +
+        the six R/H/E totals) but NOT the derived ``n_innings`` / ``away_by_inning``
+        / ``home_by_inning`` properties (``to_jsonable`` serializes fields only).
+        This recomputes those derived views from the stored ``innings`` so the wire
+        shape is identical whether served fresh (``from_dataclass``) or from the
+        store -- no need to reconstruct the frozen dataclasses.
+        """
+        innings = list(data.get("innings") or [])
+        inning_models: list[InningLineModel] = []
+        away_by_inning: list[Optional[int]] = []
+        home_by_inning: list[Optional[int]] = []
+        for entry in innings:
+            away = entry.get("away")
+            home = entry.get("home")
+            away = None if away is None else int(away)
+            home = None if home is None else int(home)
+            inning_models.append(
+                InningLineModel(
+                    inning=int(entry["inning"]),
+                    away=away,
+                    home=home,
+                    away_played=away is not None,
+                    home_played=home is not None,
+                )
+            )
+            away_by_inning.append(away)
+            home_by_inning.append(home)
+        return cls(
+            innings=inning_models,
+            away_runs=int(data.get("away_runs", 0)),
+            home_runs=int(data.get("home_runs", 0)),
+            away_hits=int(data.get("away_hits", 0)),
+            home_hits=int(data.get("home_hits", 0)),
+            away_errors=int(data.get("away_errors", 0)),
+            home_errors=int(data.get("home_errors", 0)),
+            n_innings=len(inning_models),
+            away_by_inning=away_by_inning,
+            home_by_inning=home_by_inning,
+        )
+
+
+# ===========================================================================
+# simulation/pitcher_decisions.py  ->  PitcherDecisions  (SIM-364 API exposure)
+# ===========================================================================
+
+
+class PitcherDecisionsModel(_ApiModel):
+    """Response model for :class:`simulation.pitcher_decisions.PitcherDecisions` (SIM-364).
+
+    The derived W/L/Save decision for one game.  All three pitcher ids are
+    ``Optional[int]`` (``None`` when no decision can be made -- a tie, an
+    empty/unfinished stream, or no save situation).  ``home_score`` / ``away_score``
+    are the final committed scores for context.
+    """
+
+    winning_pitcher_id: Optional[int] = None
+    losing_pitcher_id: Optional[int] = None
+    save_pitcher_id: Optional[int] = None
+    home_score: int = 0
+    away_score: int = 0
+
+    @classmethod
+    def from_dataclass(cls, dec: Any) -> "PitcherDecisionsModel":
+        """Build from a :class:`simulation.pitcher_decisions.PitcherDecisions`."""
+        return cls(
+            winning_pitcher_id=(
+                None if dec.winning_pitcher_id is None else int(dec.winning_pitcher_id)
+            ),
+            losing_pitcher_id=(
+                None if dec.losing_pitcher_id is None else int(dec.losing_pitcher_id)
+            ),
+            save_pitcher_id=(
+                None if dec.save_pitcher_id is None else int(dec.save_pitcher_id)
+            ),
+            home_score=int(dec.home_score),
+            away_score=int(dec.away_score),
+        )
+
+    @classmethod
+    def from_jsonable(cls, data: Mapping[str, Any]) -> "PitcherDecisionsModel":
+        """Build directly from a persisted ``to_jsonable(PitcherDecisions)`` dict.
+
+        ``PitcherDecisions`` has only plain fields (no derived properties), so the
+        persisted dict round-trips 1:1; this just re-coerces types defensively.
+        """
+        def _oi(v: Any) -> Optional[int]:
+            return None if v is None else int(v)
+
+        return cls(
+            winning_pitcher_id=_oi(data.get("winning_pitcher_id")),
+            losing_pitcher_id=_oi(data.get("losing_pitcher_id")),
+            save_pitcher_id=_oi(data.get("save_pitcher_id")),
+            home_score=int(data.get("home_score", 0)),
+            away_score=int(data.get("away_score", 0)),
+        )
+
+
+# ===========================================================================
+# SIM-366 -- per-player boxscore-card (prop MEANS over a run's PropDistributionSet)
+# ===========================================================================
+
+
+class BoxscoreCardRowModel(_ApiModel):
+    """One player's row in the SIM-366 boxscore card.
+
+    A compact per-player payload exposing that player's prop **means** over a
+    Monte-Carlo run -- for a batter the H/HR/RBI/TB means, for a pitcher the
+    K/BB/ER/OUTS means -- as a ``{prop_name -> mean}`` map.  Built from a
+    :class:`simulation.prop_distributions.PropDistribution` map (one player's
+    ``by_player`` entry), reading each :attr:`PropDistribution.mean`.  numpy-free
+    (plain floats).
+    """
+
+    player_id: int
+    #: ``prop_name -> mean`` (e.g. ``{"H": 1.2, "HR": 0.3, "RBI": 0.9, "TB": 2.1}``
+    #: for a batter, or ``{"K": 6.4, "BB": 2.1, "ER": 2.8, "OUTS": 17.0}`` for a
+    #: pitcher).  Whichever props the player owns in the prop set.
+    means: dict[str, float] = Field(default_factory=dict)
+
+    @classmethod
+    def from_prop_map(
+        cls, player_id: int, props: Mapping[str, Any]
+    ) -> "BoxscoreCardRowModel":
+        """Build one row from a ``{prop_name -> PropDistribution}`` map."""
+        return cls(
+            player_id=int(player_id),
+            means={str(prop): float(dist.mean) for prop, dist in props.items()},
+        )
+
+
+class BoxscoreCardModel(_ApiModel):
+    """Response model for the SIM-366 per-player boxscore-average card.
+
+    The boxscore-card payload for one Monte-Carlo run: every player's prop
+    **means** (the 100-iteration boxscore average) keyed
+    ``str(player_id) -> BoxscoreCardRowModel`` (JSON object keys must be strings).
+    Built from a :class:`simulation.prop_distributions.PropDistributionSet` via
+    :meth:`from_prop_set`, iterating ``by_player`` and reading each
+    :attr:`PropDistribution.mean` -- so the card is the means-only projection of
+    the full PMF set (a consumer that needs the full PMF reads the heavier
+    :class:`PropDistributionSetModel` instead).  numpy-free.
+    """
+
+    n_iterations: int
+    #: ``str(player_id) -> BoxscoreCardRowModel`` of prop means.
+    players: dict[str, BoxscoreCardRowModel] = Field(default_factory=dict)
+
+    @classmethod
+    def from_prop_set(cls, pset: Any) -> "BoxscoreCardModel":
+        """Build from a :class:`simulation.prop_distributions.PropDistributionSet`."""
+        return cls(
+            n_iterations=int(pset.n_iterations),
+            players={
+                str(pid): BoxscoreCardRowModel.from_prop_map(pid, props)
+                for pid, props in pset.by_player.items()
+            },
+        )
+
+
+# ===========================================================================
 # betting/clv_engine.py  ->  CLV, EdgeReport (+ MarketSide, OddsQuote helpers)
 # ===========================================================================
 
@@ -792,6 +1032,177 @@ class EdgeReportModel(_ApiModel):
         )
 
 
+# ===========================================================================
+# betting/bet_signal.py  ->  BetSignal  (SIM-369 API exposure)
+# ===========================================================================
+
+
+class BetSignalModel(_ApiModel):
+    """Response model for :class:`betting.bet_signal.BetSignal` (SIM-369).
+
+    A fireable +EV bet recommendation derived from one :class:`EdgeReport`.
+    ``side`` is the MarketSide enum's ``.value`` (a JSON-native string, e.g.
+    "home" / "over"); ``report`` is the full source :class:`EdgeReportModel` (so a
+    consumer gets the sim/market probabilities + CLV behind the signal). The list
+    a signals endpoint returns is already ranked by EV descending (``rank`` 0 ==
+    strongest). numpy-free (plain floats / ints).
+    """
+
+    #: Source report's market label ("moneyline" / "total" / "run_line" / "prop:K").
+    label: str
+    #: The MarketSide enum value as a string ("home"/"away"/"over"/"under").
+    side: str
+    line: Optional[float] = None
+    offered_american: float
+
+    edge: float
+    ev: float
+    stake_fraction: float
+    confidence: float
+    rank: int
+
+    #: The full source EdgeReport (sim_prob, market fair prob, sim_fair_american, CLV).
+    report: EdgeReportModel
+
+    @classmethod
+    def from_dataclass(cls, signal: Any) -> "BetSignalModel":
+        """Build from a :class:`betting.bet_signal.BetSignal`."""
+        side = signal.side
+        side_value = side.value if hasattr(side, "value") else str(side)
+        return cls(
+            label=str(signal.label),
+            side=str(side_value),
+            line=None if signal.line is None else float(signal.line),
+            offered_american=float(signal.offered_american),
+            edge=float(signal.edge),
+            ev=float(signal.ev),
+            stake_fraction=float(signal.stake_fraction),
+            confidence=float(signal.confidence),
+            rank=int(signal.rank),
+            report=EdgeReportModel.from_dataclass(signal.report),
+        )
+
+
+# ===========================================================================
+# betting/line_movement.py  ->  LineQuote, LineMovement  (SIM-368 API exposure)
+# ===========================================================================
+
+
+class LineQuoteModel(_ApiModel):
+    """Response model for :class:`betting.line_movement.LineQuote` (SIM-368).
+
+    One timestamped quote for a single side of one market at one book -- a point
+    on the line-movement time-series. ``fetched_at`` is rendered as a string (a
+    datetime is ISO-8601'd via :func:`api.serialization.to_jsonable`, an already-
+    string timestamp passes through). ``implied_prob`` is the RAW single-side
+    implied probability. numpy-free.
+    """
+
+    fetched_at: Optional[str] = None
+    line_type: str
+    book: str
+    is_sharp_book: bool
+    american: float
+    other_american: Optional[float] = None
+    line: Optional[float] = None
+    implied_prob: float
+
+    @classmethod
+    def from_dataclass(cls, quote: Any) -> "LineQuoteModel":
+        """Build from a :class:`betting.line_movement.LineQuote`."""
+        fa = quote.fetched_at
+        fetched_at = None if fa is None else str(to_jsonable(fa))
+        return cls(
+            fetched_at=fetched_at,
+            line_type=str(quote.line_type),
+            book=str(quote.book),
+            is_sharp_book=bool(quote.is_sharp_book),
+            american=float(quote.american),
+            other_american=(
+                None if quote.other_american is None else float(quote.other_american)
+            ),
+            line=None if quote.line is None else float(quote.line),
+            implied_prob=float(quote.implied_prob),
+        )
+
+
+class LineMovementModel(_ApiModel):
+    """Response model for :class:`betting.line_movement.LineMovement` (SIM-368).
+
+    The line-movement time-series for one (game_pk, market, side, book): the
+    ordered :class:`LineQuoteModel` series plus the derived opening->closing
+    summary (the American / implied-prob / line deltas, the per-step delta series,
+    the running ``implied_prob_series`` plottable surface, the steam ``direction``)
+    and the entry-vs-close :class:`CLVModel`. ``side`` is the MarketSide enum's
+    ``.value``; ``has_movement`` / ``beat_close`` mirror the source's derived
+    properties. numpy-free (plain floats).
+    """
+
+    game_pk: int
+    market_type: str
+    #: The MarketSide enum value as a string ("home"/"away"/"over"/"under").
+    side: str
+    book: Optional[str] = None
+
+    quotes: list[LineQuoteModel] = Field(default_factory=list)
+
+    opening_american: Optional[float] = None
+    closing_american: Optional[float] = None
+    opening_implied_prob: Optional[float] = None
+    closing_implied_prob: Optional[float] = None
+
+    american_delta: Optional[float] = None
+    implied_prob_delta: Optional[float] = None
+    line_delta: Optional[float] = None
+
+    step_implied_prob_deltas: list[float] = Field(default_factory=list)
+    step_american_deltas: list[float] = Field(default_factory=list)
+    implied_prob_series: list[float] = Field(default_factory=list)
+
+    direction: str = "flat"
+
+    clv: Optional[CLVModel] = None
+    sharp_consensus: Optional[bool] = None
+
+    #: Derived from the source dataclass's properties.
+    has_movement: bool = False
+    beat_close: bool = False
+
+    @classmethod
+    def from_dataclass(cls, mv: Any) -> "LineMovementModel":
+        """Build from a :class:`betting.line_movement.LineMovement`."""
+        side = mv.side
+        side_value = side.value if hasattr(side, "value") else str(side)
+
+        def _of(v: Any) -> Optional[float]:
+            return None if v is None else float(v)
+
+        return cls(
+            game_pk=int(mv.game_pk),
+            market_type=str(mv.market_type),
+            side=str(side_value),
+            book=None if mv.book is None else str(mv.book),
+            quotes=[LineQuoteModel.from_dataclass(q) for q in mv.quotes],
+            opening_american=_of(mv.opening_american),
+            closing_american=_of(mv.closing_american),
+            opening_implied_prob=_of(mv.opening_implied_prob),
+            closing_implied_prob=_of(mv.closing_implied_prob),
+            american_delta=_of(mv.american_delta),
+            implied_prob_delta=_of(mv.implied_prob_delta),
+            line_delta=_of(mv.line_delta),
+            step_implied_prob_deltas=[float(x) for x in mv.step_implied_prob_deltas],
+            step_american_deltas=[float(x) for x in mv.step_american_deltas],
+            implied_prob_series=[float(x) for x in mv.implied_prob_series],
+            direction=str(mv.direction),
+            clv=None if mv.clv is None else CLVModel.from_dataclass(mv.clv),
+            sharp_consensus=(
+                None if mv.sharp_consensus is None else bool(mv.sharp_consensus)
+            ),
+            has_movement=bool(mv.has_movement),
+            beat_close=bool(mv.beat_close),
+        )
+
+
 __all__ = [
     # results.py
     "ConfidenceIntervalModel",
@@ -814,7 +1225,20 @@ __all__ = [
     # prop_distributions.py
     "PropDistributionModel",
     "PropDistributionSetModel",
+    # linescore.py (SIM-362)
+    "InningLineModel",
+    "LinescoreModel",
+    # pitcher_decisions.py (SIM-364)
+    "PitcherDecisionsModel",
+    # SIM-366 boxscore card
+    "BoxscoreCardRowModel",
+    "BoxscoreCardModel",
     # clv_engine.py
     "CLVModel",
     "EdgeReportModel",
+    # bet_signal.py (SIM-369)
+    "BetSignalModel",
+    # line_movement.py (SIM-368)
+    "LineQuoteModel",
+    "LineMovementModel",
 ]
