@@ -233,3 +233,30 @@ def sample_game_state(sample_game_pk: int) -> dict[str, Any]:
         "inning_scores": {},
         "last_updated_at": "2024-08-15T19:05:00+00:00",
     }
+
+
+# ---------------------------------------------------------------------------
+# SIM-378 — event-loop guard (Python 3.11+ / pytest-asyncio interaction)
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _ensure_current_event_loop():
+    """Guarantee a usable current event loop for EVERY test.
+
+    pytest-asyncio (auto mode) sets the main thread's event loop to ``None`` after
+    each async test. On Python 3.11+, ``asyncio.get_event_loop()`` then RAISES
+    ``RuntimeError: There is no current event loop`` instead of lazily creating one
+    (the 3.10 behaviour). Any *sync* test that touches the loop -- directly or via a
+    library -- therefore fails *order-dependently* (only when an async test ran
+    earlier in the same process, e.g. the full CI suite, but not when the file runs
+    alone). Restoring a valid loop before every test removes that whole failure
+    class regardless of collection order.
+    """
+    import asyncio
+
+    try:
+        loop = asyncio.get_event_loop_policy().get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+    yield

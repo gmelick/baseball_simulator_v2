@@ -125,7 +125,7 @@ jobs:
         run: |
           pytest tests/unit/ \
             -v \
-            --tb=short \
+            --tb=native \
             --timeout=30 \
             --strict-markers \
             --cov-config=pyproject.toml \
@@ -205,7 +205,7 @@ jobs:
         run: |
           pytest tests/regression/ \
             -v \
-            --tb=short \
+            --tb=native \
             --timeout=60 \
             --strict-markers \
             --junit-xml=test-results-regression.xml
@@ -247,7 +247,7 @@ jobs:
         run: |
           pytest tests/integration/test_api_e2e_sim371.py \
             -v \
-            --tb=short \
+            --tb=native \
             --timeout=120 \
             --strict-markers \
             --junit-xml=test-results-e2e.xml

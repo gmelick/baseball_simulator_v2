@@ -262,7 +262,7 @@ class TestPipelineLookup:
     def test_injected_fake_routes_game_odds(self) -> None:
         pipeline = _make_pipeline_via_new()
         pipeline._odds = _FakeProvider()
-        odds = asyncio.get_event_loop().run_until_complete(pipeline._fetch_odds(745000))
+        odds = asyncio.run(pipeline._fetch_odds(745000))
         assert odds["source"] == "fake"
 
     def test_new_pipeline_falls_back_to_mock(self, clean_env) -> None:
