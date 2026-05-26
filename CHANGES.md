@@ -1,3 +1,21 @@
+# Phase 6 — ETL fix: skip future/non-Final games in the backfill — 2026-05-26
+**Author: Data Engineer (Agent 4)**
+
+`refresh_seasons` had no completed-game guard, so backfilling the CURRENT season
+(2026) pulled every scheduled game — including ~1,600 future/unplayed games that
+have no Statcast data (one wasted fetch + an empty `raw.games` stub each).
+
+- `pipeline/etl/etl_historical_loader.py`: new `_schedule_game_is_final(game)`
+  helper; the `refresh_seasons` loop now skips any game whose
+  `status.abstractGameState != 'Final'`. This also makes the method a correct
+  nightly incremental updater (it loads games as they become Final).
+- `tests/unit/test_etl_schedule_filter_sim405fix.py`: 4 tests (Final loadable;
+  Preview/Live/missing-status skipped).
+
+Note: the 10-season backfill (2017–2025 complete + 2026-to-date) was stopped once
+it reached the future-game churn; all played-game pitch data is loaded. The 1,609
+empty future-2026 stubs (0 pitches/lineups) remain pending a cleanup decision.
+
 # Phase 6 — SIM-405 BettingPros odds provider — 2026-05-26
 **Authors: Data Engineer (Agent 4), Betting/Markets Analyst (Agent 8)**
 

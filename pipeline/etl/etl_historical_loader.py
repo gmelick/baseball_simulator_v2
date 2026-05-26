@@ -1034,6 +1034,24 @@ def _map_game_status(gd: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Schedule filtering
+# ---------------------------------------------------------------------------
+
+
+def _schedule_game_is_final(game: dict) -> bool:
+    """True iff a schedule game entry is a completed ('Final') game.
+
+    The historical loader pulls pitch-by-pitch Statcast data, which only exists
+    for games that have actually been played.  A season schedule for the CURRENT
+    year includes future / in-progress games (``abstractGameState`` 'Preview' /
+    'Live'); loading those wastes one fetch each (0 pitches) and inserts an empty
+    ``raw.games`` stub.  Gating on Final also makes ``refresh_seasons`` a correct
+    nightly incremental updater (it picks up games as they finish).
+    """
+    return game.get("status", {}).get("abstractGameState") == "Final"
+
+
+# ---------------------------------------------------------------------------
 # Main ETL class
 # ---------------------------------------------------------------------------
 
@@ -1266,6 +1284,14 @@ class HistoricalDataLoader:
                 log.info("  %s", date_entry["date"])
                 for game in date_entry["games"]:
                     if "rescheduleGameDate" in game or "resumeGameDate" in game:
+                        continue
+                    # Only completed games have full pitch-by-pitch Statcast data.
+                    # Skip future / in-progress / postponed games — otherwise the
+                    # current season pulls thousands of unplayed games (0 pitches,
+                    # one wasted fetch + an empty raw.games stub each). This also
+                    # makes refresh_seasons a correct nightly incremental updater:
+                    # each run picks up games that have newly become Final.
+                    if not _schedule_game_is_final(game):
                         continue
                     if not self._game_already_loaded(game["gamePk"]):
                         self.load_game(game["gamePk"], season, batter_hand_cache)
