@@ -12,7 +12,8 @@
     "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "type-check": "tsc --noEmit",
     "e2e": "playwright test",
-    "e2e:install": "playwright install --with-deps"
+    "e2e:install": "playwright install --with-deps",
+    "gen:api": "openapi-typescript ./openapi.json -o ./src/api/schema.d.ts"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -29,6 +30,7 @@
     "eslint": "^8.57.1",
     "eslint-plugin-react-hooks": "^4.6.2",
     "eslint-plugin-react-refresh": "^0.4.12",
+    "openapi-typescript": "^7.4.1",
     "typescript": "^5.5.4",
     "vite": "^5.4.2"
   }

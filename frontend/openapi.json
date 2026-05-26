@@ -1,0 +1,4700 @@
+{
+  "components": {
+    "schemas": {
+      "AuthStatusResponse": {
+        "description": "Response for GET /auth/me \u2014 always 200, never 401.",
+        "properties": {
+          "authenticated": {
+            "title": "Authenticated",
+            "type": "boolean"
+          },
+          "expires_in": {
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authenticated",
+          "mode",
+          "expires_in"
+        ],
+        "title": "AuthStatusResponse",
+        "type": "object"
+      },
+      "BetSignalModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`betting.bet_signal.BetSignal` (SIM-369).\n\nA fireable +EV bet recommendation derived from one :class:`EdgeReport`.\n``side`` is the MarketSide enum's ``.value`` (a JSON-native string, e.g.\n\"home\" / \"over\"); ``report`` is the full source :class:`EdgeReportModel` (so a\nconsumer gets the sim/market probabilities + CLV behind the signal). The list\na signals endpoint returns is already ranked by EV descending (``rank`` 0 ==\nstrongest). numpy-free (plain floats / ints).",
+        "properties": {
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "edge": {
+            "title": "Edge",
+            "type": "number"
+          },
+          "ev": {
+            "title": "Ev",
+            "type": "number"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          },
+          "offered_american": {
+            "title": "Offered American",
+            "type": "number"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "report": {
+            "$ref": "#/components/schemas/EdgeReportModel"
+          },
+          "side": {
+            "title": "Side",
+            "type": "string"
+          },
+          "stake_fraction": {
+            "title": "Stake Fraction",
+            "type": "number"
+          }
+        },
+        "required": [
+          "label",
+          "side",
+          "offered_american",
+          "edge",
+          "ev",
+          "stake_fraction",
+          "confidence",
+          "rank",
+          "report"
+        ],
+        "title": "BetSignalModel",
+        "type": "object"
+      },
+      "BoxscoreCardModel": {
+        "additionalProperties": false,
+        "description": "Response model for the SIM-366 per-player boxscore-average card.\n\nThe boxscore-card payload for one Monte-Carlo run: every player's prop\n**means** (the 100-iteration boxscore average) keyed\n``str(player_id) -> BoxscoreCardRowModel`` (JSON object keys must be strings).\nBuilt from a :class:`simulation.prop_distributions.PropDistributionSet` via\n:meth:`from_prop_set`, iterating ``by_player`` and reading each\n:attr:`PropDistribution.mean` -- so the card is the means-only projection of\nthe full PMF set (a consumer that needs the full PMF reads the heavier\n:class:`PropDistributionSetModel` instead).  numpy-free.",
+        "properties": {
+          "n_iterations": {
+            "title": "N Iterations",
+            "type": "integer"
+          },
+          "players": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BoxscoreCardRowModel"
+            },
+            "title": "Players",
+            "type": "object"
+          }
+        },
+        "required": [
+          "n_iterations"
+        ],
+        "title": "BoxscoreCardModel",
+        "type": "object"
+      },
+      "BoxscoreCardRowModel": {
+        "additionalProperties": false,
+        "description": "One player's row in the SIM-366 boxscore card.\n\nA compact per-player payload exposing that player's prop **means** over a\nMonte-Carlo run -- for a batter the H/HR/RBI/TB means, for a pitcher the\nK/BB/ER/OUTS means -- as a ``{prop_name -> mean}`` map.  Built from a\n:class:`simulation.prop_distributions.PropDistribution` map (one player's\n``by_player`` entry), reading each :attr:`PropDistribution.mean`.  numpy-free\n(plain floats).",
+        "properties": {
+          "means": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Means",
+            "type": "object"
+          },
+          "player_id": {
+            "title": "Player Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "player_id"
+        ],
+        "title": "BoxscoreCardRowModel",
+        "type": "object"
+      },
+      "CLVModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`betting.clv_engine.CLV` (SIM-339).\n\nClosing Line Value for one side of one market/prop.  ``beat_close`` mirrors\nthe source dataclass's derived property (clv_prob > 0).",
+        "properties": {
+          "beat_close": {
+            "title": "Beat Close",
+            "type": "boolean"
+          },
+          "close_fair_decimal": {
+            "title": "Close Fair Decimal",
+            "type": "number"
+          },
+          "close_fair_prob": {
+            "title": "Close Fair Prob",
+            "type": "number"
+          },
+          "clv_decimal": {
+            "title": "Clv Decimal",
+            "type": "number"
+          },
+          "clv_prob": {
+            "title": "Clv Prob",
+            "type": "number"
+          },
+          "entry_fair_decimal": {
+            "title": "Entry Fair Decimal",
+            "type": "number"
+          },
+          "entry_fair_prob": {
+            "title": "Entry Fair Prob",
+            "type": "number"
+          }
+        },
+        "required": [
+          "entry_fair_prob",
+          "close_fair_prob",
+          "clv_prob",
+          "entry_fair_decimal",
+          "close_fair_decimal",
+          "clv_decimal",
+          "beat_close"
+        ],
+        "title": "CLVModel",
+        "type": "object"
+      },
+      "ClvSnapshotResponse": {
+        "description": "The ``GET /api/betting/games/{game_pk}/clv`` envelope.\n\nA thin snapshot projection of /line-movement: the entry-vs-close CLV of every\nline-movement series that HAS one (a series with < 2 quotes or a missing\nopposite-side price is omitted). Each row carries the side / book identity plus\nthe CLV's ``clv_prob`` / ``beat_close`` for a compact \"did I beat the close\"\nview without the full quote series.",
+        "properties": {
+          "book": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Book"
+          },
+          "count": {
+            "default": 0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "market_type": {
+            "title": "Market Type",
+            "type": "string"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/LineMovementModel"
+            },
+            "title": "Series",
+            "type": "array"
+          }
+        },
+        "required": [
+          "game_pk",
+          "market_type"
+        ],
+        "title": "ClvSnapshotResponse",
+        "type": "object"
+      },
+      "ConfidenceIntervalModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`simulation.results.ConfidenceInterval`.\n\nA two-sided interval around ``point`` (``low <= point <= high``).  ``level``\nis the nominal confidence (e.g. 0.95); ``method`` names how it was computed.\n``half_width`` mirrors the dataclass's derived property for consumer\nconvenience (it is not a stored field on the source).",
+        "properties": {
+          "half_width": {
+            "title": "Half Width",
+            "type": "number"
+          },
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "level": {
+            "default": 0.95,
+            "title": "Level",
+            "type": "number"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "method": {
+            "default": "normal",
+            "title": "Method",
+            "type": "string"
+          },
+          "point": {
+            "title": "Point",
+            "type": "number"
+          }
+        },
+        "required": [
+          "point",
+          "low",
+          "high",
+          "half_width"
+        ],
+        "title": "ConfidenceIntervalModel",
+        "type": "object"
+      },
+      "DataFreshnessResponse": {
+        "description": "Aggregate ingest freshness + coverage for the UI.",
+        "properties": {
+          "has_data": {
+            "default": false,
+            "title": "Has Data",
+            "type": "boolean"
+          },
+          "last_ingest_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Ingest At"
+          },
+          "latest_game_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Game Date"
+          },
+          "seasons": {
+            "items": {
+              "$ref": "#/components/schemas/SeasonCoverage"
+            },
+            "title": "Seasons",
+            "type": "array"
+          },
+          "total_games": {
+            "default": 0,
+            "title": "Total Games",
+            "type": "integer"
+          },
+          "total_pitches": {
+            "default": 0,
+            "title": "Total Pitches",
+            "type": "integer"
+          },
+          "tracked_entities": {
+            "default": 0,
+            "title": "Tracked Entities",
+            "type": "integer"
+          }
+        },
+        "title": "DataFreshnessResponse",
+        "type": "object"
+      },
+      "EdgeReportModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`betting.clv_engine.EdgeReport` (SIM-339).\n\nThe full edge / EV / CLV report for one side of one market or prop.  ``side``\nis the MarketSide enum's ``.value`` (a JSON-native string, e.g. \"home\" /\n\"over\"); ``clv`` is present only when a closing quote was supplied.\n``positive_edge`` mirrors the source's derived property (edge > 0).",
+        "properties": {
+          "clv": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CLVModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "edge": {
+            "title": "Edge",
+            "type": "number"
+          },
+          "ev": {
+            "title": "Ev",
+            "type": "number"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          },
+          "market_fair_prob": {
+            "title": "Market Fair Prob",
+            "type": "number"
+          },
+          "offered_american": {
+            "title": "Offered American",
+            "type": "number"
+          },
+          "positive_edge": {
+            "title": "Positive Edge",
+            "type": "boolean"
+          },
+          "side": {
+            "title": "Side",
+            "type": "string"
+          },
+          "sim_fair_american": {
+            "title": "Sim Fair American",
+            "type": "number"
+          },
+          "sim_prob": {
+            "title": "Sim Prob",
+            "type": "number"
+          }
+        },
+        "required": [
+          "label",
+          "side",
+          "sim_prob",
+          "market_fair_prob",
+          "edge",
+          "ev",
+          "offered_american",
+          "sim_fair_american",
+          "positive_edge"
+        ],
+        "title": "EdgeReportModel",
+        "type": "object"
+      },
+      "EdgesResponse": {
+        "description": "The ``GET /api/betting/games/{game_pk}/edges`` envelope.\n\nCarries the per-market :class:`EdgeReportModel` list plus the run metadata\n(n_iterations / base_seed) and the per-market ``odds_source`` flags\n(\"injected\" / \"mock\") so a consumer knows where each market's prices came from.",
+        "properties": {
+          "base_seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Seed"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/EdgeReportModel"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "markets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Markets",
+            "type": "array"
+          },
+          "n_iterations": {
+            "title": "N Iterations",
+            "type": "integer"
+          },
+          "odds_source": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Odds Source",
+            "type": "object"
+          }
+        },
+        "required": [
+          "game_pk",
+          "n_iterations"
+        ],
+        "title": "EdgesResponse",
+        "type": "object"
+      },
+      "FieldSnapshotModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`simulation.snapshots.FieldSnapshot` (SIM-331).\n\nThe BaseballFieldGraphic state: 9 defensive positions + batter + baserunners\n+ count/outs/inning/half/score chrome.  ``positions`` and ``baserunners`` map\na label to an OPTIONAL :class:`PlayerRefModel` (``None`` == unassigned slot /\nempty bag).  ``occupied_bases`` / ``runners_on`` mirror the source's derived\nproperties for consumer convenience.",
+        "properties": {
+          "away_score": {
+            "title": "Away Score",
+            "type": "integer"
+          },
+          "balls": {
+            "title": "Balls",
+            "type": "integer"
+          },
+          "baserunners": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PlayerRefModel"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Baserunners",
+            "type": "object"
+          },
+          "batter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlayerRefModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "half": {
+            "title": "Half",
+            "type": "string"
+          },
+          "home_score": {
+            "title": "Home Score",
+            "type": "integer"
+          },
+          "inning": {
+            "title": "Inning",
+            "type": "integer"
+          },
+          "occupied_bases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Occupied Bases",
+            "type": "array"
+          },
+          "outs": {
+            "title": "Outs",
+            "type": "integer"
+          },
+          "positions": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PlayerRefModel"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Positions",
+            "type": "object"
+          },
+          "runners_on": {
+            "title": "Runners On",
+            "type": "integer"
+          },
+          "runners_state": {
+            "default": 0,
+            "title": "Runners State",
+            "type": "integer"
+          },
+          "strikes": {
+            "title": "Strikes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "positions",
+          "baserunners",
+          "balls",
+          "strikes",
+          "outs",
+          "inning",
+          "half",
+          "home_score",
+          "away_score",
+          "occupied_bases",
+          "runners_on"
+        ],
+        "title": "FieldSnapshotModel",
+        "type": "object"
+      },
+      "GameCard": {
+        "description": "One row of ``GET /api/games/{date}`` -- a scheduled game's identity.\n\nSIM-383 enrichment adds team names, abbreviations, venue name + city, and\nseason-to-date win/loss records (computed through the day before ``game_date``\nfrom ``raw.games`` final results).  All enrichment fields are ``Optional``\nso existing cached payloads and unit-test stubs that only supply the raw\nID columns continue to deserialise without error.",
+        "properties": {
+          "away_losses": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Losses"
+          },
+          "away_team_abbrev": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Team Abbrev"
+          },
+          "away_team_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Team Id"
+          },
+          "away_team_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Team Name"
+          },
+          "away_wins": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Wins"
+          },
+          "game_date": {
+            "title": "Game Date",
+            "type": "string"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "home_losses": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Losses"
+          },
+          "home_team_abbrev": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Team Abbrev"
+          },
+          "home_team_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Team Id"
+          },
+          "home_team_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Team Name"
+          },
+          "home_wins": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Wins"
+          },
+          "season": {
+            "title": "Season",
+            "type": "integer"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "venue_city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Venue City"
+          },
+          "venue_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Venue Id"
+          },
+          "venue_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Venue Name"
+          }
+        },
+        "required": [
+          "game_pk",
+          "season",
+          "game_date"
+        ],
+        "title": "GameCard",
+        "type": "object"
+      },
+      "GameCardAggregateResponse": {
+        "description": "Response for ``GET /api/games/{game_pk}/card`` (SIM-384).\n\nAggregates the identity, status, SIM-383 enrichment, and the most recent\npersisted Monte-Carlo summary into a single payload for the Day Summary\n3-state game cards.  ``sim_summary`` is ``None`` when no sim has been run\nyet (or when Postgres is unavailable).  ``odds`` is reserved for Phase 6\nSprint 4+ (odds provider integration \u2014 SIM-405).",
+        "properties": {
+          "away_losses": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Losses"
+          },
+          "away_score_final": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Score Final"
+          },
+          "away_team_abbrev": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Team Abbrev"
+          },
+          "away_team_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Team Id"
+          },
+          "away_team_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Team Name"
+          },
+          "away_wins": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Wins"
+          },
+          "game_date": {
+            "title": "Game Date",
+            "type": "string"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "game_status": {
+            "title": "Game Status",
+            "type": "string"
+          },
+          "home_losses": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Losses"
+          },
+          "home_score_final": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Score Final"
+          },
+          "home_team_abbrev": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Team Abbrev"
+          },
+          "home_team_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Team Id"
+          },
+          "home_team_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Team Name"
+          },
+          "home_wins": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Wins"
+          },
+          "odds": {
+            "title": "Odds",
+            "type": "null"
+          },
+          "season": {
+            "title": "Season",
+            "type": "integer"
+          },
+          "sim_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GameSimSummaryLite"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "venue_city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Venue City"
+          },
+          "venue_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Venue Id"
+          },
+          "venue_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Venue Name"
+          }
+        },
+        "required": [
+          "game_pk",
+          "game_status",
+          "game_date",
+          "season"
+        ],
+        "title": "GameCardAggregateResponse",
+        "type": "object"
+      },
+      "GameCardResponse": {
+        "description": "The combined ``GET /api/games/{game_pk}/card`` envelope (SIM-362/364).\n\nCarries both derived loop outputs for the game's most-recent persisted run:\nthe per-inning :class:`~api.schemas.LinescoreModel` (R/H/E grid) and the\n:class:`~api.schemas.PitcherDecisionsModel` (W/L/Save).",
+        "properties": {
+          "decisions": {
+            "$ref": "#/components/schemas/PitcherDecisionsModel"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "linescore": {
+            "$ref": "#/components/schemas/LinescoreModel"
+          }
+        },
+        "required": [
+          "game_pk",
+          "linescore",
+          "decisions"
+        ],
+        "title": "GameCardResponse",
+        "type": "object"
+      },
+      "GameSimSummaryLite": {
+        "additionalProperties": false,
+        "description": "A raw-array-FREE projection of :class:`simulation.results.GameSimSummary`.\n\nIdentical to :class:`GameSimSummaryModel` minus the three large\nper-iteration score arrays -- the right shape for a list / index endpoint\nthat wants the aggregates (win %, means, CIs) but not the full distribution.\nBuild via :meth:`from_dataclass`.",
+        "properties": {
+          "away_score_ci": {
+            "$ref": "#/components/schemas/ConfidenceIntervalModel"
+          },
+          "away_score_mean": {
+            "title": "Away Score Mean",
+            "type": "number"
+          },
+          "away_score_median": {
+            "title": "Away Score Median",
+            "type": "number"
+          },
+          "away_win_ci": {
+            "$ref": "#/components/schemas/ConfidenceIntervalModel"
+          },
+          "away_win_pct": {
+            "title": "Away Win Pct",
+            "type": "number"
+          },
+          "ci_method": {
+            "default": "normal",
+            "title": "Ci Method",
+            "type": "string"
+          },
+          "confidence_level": {
+            "default": 0.95,
+            "title": "Confidence Level",
+            "type": "number"
+          },
+          "home_score_ci": {
+            "$ref": "#/components/schemas/ConfidenceIntervalModel"
+          },
+          "home_score_mean": {
+            "title": "Home Score Mean",
+            "type": "number"
+          },
+          "home_score_median": {
+            "title": "Home Score Median",
+            "type": "number"
+          },
+          "home_win_ci": {
+            "$ref": "#/components/schemas/ConfidenceIntervalModel"
+          },
+          "home_win_pct": {
+            "title": "Home Win Pct",
+            "type": "number"
+          },
+          "n_iterations": {
+            "title": "N Iterations",
+            "type": "integer"
+          },
+          "simulated_at": {
+            "title": "Simulated At",
+            "type": "string"
+          },
+          "tie_pct": {
+            "title": "Tie Pct",
+            "type": "number"
+          },
+          "total_score_ci": {
+            "$ref": "#/components/schemas/ConfidenceIntervalModel"
+          },
+          "total_score_mean": {
+            "title": "Total Score Mean",
+            "type": "number"
+          },
+          "total_score_median": {
+            "title": "Total Score Median",
+            "type": "number"
+          }
+        },
+        "required": [
+          "n_iterations",
+          "home_win_pct",
+          "away_win_pct",
+          "tie_pct",
+          "home_score_mean",
+          "away_score_mean",
+          "total_score_mean",
+          "home_score_median",
+          "away_score_median",
+          "total_score_median",
+          "home_win_ci",
+          "away_win_ci",
+          "home_score_ci",
+          "away_score_ci",
+          "total_score_ci",
+          "simulated_at"
+        ],
+        "title": "GameSimSummaryLite",
+        "type": "object"
+      },
+      "GameSimSummaryModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`simulation.results.GameSimSummary` (SIM-327).\n\nThe RAW per-iteration arrays (``home_scores`` / ``away_scores`` /\n``total_scores``) are exposed as ``list[int]`` and are OPTIONAL on the wire:\nthey are present by default but an endpoint may build the model with\n``include_raw_arrays=False`` (or use :class:`GameSimSummaryLite`) to omit\nthem for a list/index view -- see the module docstring's \"large per-iteration\narrays\" note.  When omitted they serialise as ``None`` (never a partial /\ndown-sampled array).",
+        "properties": {
+          "away_score_ci": {
+            "$ref": "#/components/schemas/ConfidenceIntervalModel"
+          },
+          "away_score_mean": {
+            "title": "Away Score Mean",
+            "type": "number"
+          },
+          "away_score_median": {
+            "title": "Away Score Median",
+            "type": "number"
+          },
+          "away_scores": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Scores"
+          },
+          "away_win_ci": {
+            "$ref": "#/components/schemas/ConfidenceIntervalModel"
+          },
+          "away_win_pct": {
+            "title": "Away Win Pct",
+            "type": "number"
+          },
+          "ci_method": {
+            "default": "normal",
+            "title": "Ci Method",
+            "type": "string"
+          },
+          "confidence_level": {
+            "default": 0.95,
+            "title": "Confidence Level",
+            "type": "number"
+          },
+          "home_score_ci": {
+            "$ref": "#/components/schemas/ConfidenceIntervalModel"
+          },
+          "home_score_mean": {
+            "title": "Home Score Mean",
+            "type": "number"
+          },
+          "home_score_median": {
+            "title": "Home Score Median",
+            "type": "number"
+          },
+          "home_scores": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Scores"
+          },
+          "home_win_ci": {
+            "$ref": "#/components/schemas/ConfidenceIntervalModel"
+          },
+          "home_win_pct": {
+            "title": "Home Win Pct",
+            "type": "number"
+          },
+          "n_iterations": {
+            "title": "N Iterations",
+            "type": "integer"
+          },
+          "simulated_at": {
+            "title": "Simulated At",
+            "type": "string"
+          },
+          "tie_pct": {
+            "title": "Tie Pct",
+            "type": "number"
+          },
+          "total_score_ci": {
+            "$ref": "#/components/schemas/ConfidenceIntervalModel"
+          },
+          "total_score_mean": {
+            "title": "Total Score Mean",
+            "type": "number"
+          },
+          "total_score_median": {
+            "title": "Total Score Median",
+            "type": "number"
+          },
+          "total_scores": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Scores"
+          }
+        },
+        "required": [
+          "n_iterations",
+          "home_win_pct",
+          "away_win_pct",
+          "tie_pct",
+          "home_score_mean",
+          "away_score_mean",
+          "total_score_mean",
+          "home_score_median",
+          "away_score_median",
+          "total_score_median",
+          "home_win_ci",
+          "away_win_ci",
+          "home_score_ci",
+          "away_score_ci",
+          "total_score_ci",
+          "simulated_at"
+        ],
+        "title": "GameSimSummaryModel",
+        "type": "object"
+      },
+      "GamesOnDateResponse": {
+        "description": "The ``GET /api/games/{date}`` envelope: the date echo + its game cards.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "games": {
+            "items": {
+              "$ref": "#/components/schemas/GameCard"
+            },
+            "title": "Games",
+            "type": "array"
+          }
+        },
+        "required": [
+          "date",
+          "count"
+        ],
+        "title": "GamesOnDateResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "InningLineModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`simulation.linescore.InningLine` (SIM-362).\n\nOne inning's away (top) / home (bottom) run cells.  ``away`` / ``home`` are\n``Optional[int]``: ``None`` is the classic scoreboard \"x\" (a half that was\nnever played -- e.g. the bottom of the final inning when the home team already\nleads, or a walk-off), distinguished from ``0`` (played and scoreless).\n``away_played`` / ``home_played`` mirror the source's derived properties.",
+        "properties": {
+          "away": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away"
+          },
+          "away_played": {
+            "title": "Away Played",
+            "type": "boolean"
+          },
+          "home": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home"
+          },
+          "home_played": {
+            "title": "Home Played",
+            "type": "boolean"
+          },
+          "inning": {
+            "title": "Inning",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "inning",
+          "away_played",
+          "home_played"
+        ],
+        "title": "InningLineModel",
+        "type": "object"
+      },
+      "LineMovementModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`betting.line_movement.LineMovement` (SIM-368).\n\nThe line-movement time-series for one (game_pk, market, side, book): the\nordered :class:`LineQuoteModel` series plus the derived opening->closing\nsummary (the American / implied-prob / line deltas, the per-step delta series,\nthe running ``implied_prob_series`` plottable surface, the steam ``direction``)\nand the entry-vs-close :class:`CLVModel`. ``side`` is the MarketSide enum's\n``.value``; ``has_movement`` / ``beat_close`` mirror the source's derived\nproperties. numpy-free (plain floats).",
+        "properties": {
+          "american_delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "American Delta"
+          },
+          "beat_close": {
+            "default": false,
+            "title": "Beat Close",
+            "type": "boolean"
+          },
+          "book": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Book"
+          },
+          "closing_american": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closing American"
+          },
+          "closing_implied_prob": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closing Implied Prob"
+          },
+          "clv": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CLVModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "direction": {
+            "default": "flat",
+            "title": "Direction",
+            "type": "string"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "has_movement": {
+            "default": false,
+            "title": "Has Movement",
+            "type": "boolean"
+          },
+          "implied_prob_delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Implied Prob Delta"
+          },
+          "implied_prob_series": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Implied Prob Series",
+            "type": "array"
+          },
+          "line_delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line Delta"
+          },
+          "market_type": {
+            "title": "Market Type",
+            "type": "string"
+          },
+          "opening_american": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opening American"
+          },
+          "opening_implied_prob": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opening Implied Prob"
+          },
+          "quotes": {
+            "items": {
+              "$ref": "#/components/schemas/LineQuoteModel"
+            },
+            "title": "Quotes",
+            "type": "array"
+          },
+          "sharp_consensus": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharp Consensus"
+          },
+          "side": {
+            "title": "Side",
+            "type": "string"
+          },
+          "step_american_deltas": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Step American Deltas",
+            "type": "array"
+          },
+          "step_implied_prob_deltas": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Step Implied Prob Deltas",
+            "type": "array"
+          }
+        },
+        "required": [
+          "game_pk",
+          "market_type",
+          "side"
+        ],
+        "title": "LineMovementModel",
+        "type": "object"
+      },
+      "LineMovementResponse": {
+        "description": "The ``GET /api/betting/games/{game_pk}/line-movement`` envelope.\n\nCarries one :class:`LineMovementModel` per (side, book) present in the stored\n``raw.game_odds`` history for the (game_pk, market_type[, book]).",
+        "properties": {
+          "book": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Book"
+          },
+          "count": {
+            "default": 0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "market_type": {
+            "title": "Market Type",
+            "type": "string"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/LineMovementModel"
+            },
+            "title": "Series",
+            "type": "array"
+          }
+        },
+        "required": [
+          "game_pk",
+          "market_type"
+        ],
+        "title": "LineMovementResponse",
+        "type": "object"
+      },
+      "LineQuoteModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`betting.line_movement.LineQuote` (SIM-368).\n\nOne timestamped quote for a single side of one market at one book -- a point\non the line-movement time-series. ``fetched_at`` is rendered as a string (a\ndatetime is ISO-8601'd via :func:`api.serialization.to_jsonable`, an already-\nstring timestamp passes through). ``implied_prob`` is the RAW single-side\nimplied probability. numpy-free.",
+        "properties": {
+          "american": {
+            "title": "American",
+            "type": "number"
+          },
+          "book": {
+            "title": "Book",
+            "type": "string"
+          },
+          "fetched_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fetched At"
+          },
+          "implied_prob": {
+            "title": "Implied Prob",
+            "type": "number"
+          },
+          "is_sharp_book": {
+            "title": "Is Sharp Book",
+            "type": "boolean"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          },
+          "line_type": {
+            "title": "Line Type",
+            "type": "string"
+          },
+          "other_american": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Other American"
+          }
+        },
+        "required": [
+          "line_type",
+          "book",
+          "is_sharp_book",
+          "american",
+          "implied_prob"
+        ],
+        "title": "LineQuoteModel",
+        "type": "object"
+      },
+      "LinescoreModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`simulation.linescore.Linescore` (SIM-362).\n\nThe classic baseball linescore: the per-inning run grid plus each team's\nRuns / Hits / Errors totals.  ``innings`` is ordered 1..N (N >= 9 for extra\ninnings).  ``away_by_inning`` / ``home_by_inning`` mirror the source's derived\nper-inning cell lists (``None`` == not played); ``n_innings`` mirrors the\nderived length.  numpy-free (plain ints / Optional[int]).",
+        "properties": {
+          "away_by_inning": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Away By Inning",
+            "type": "array"
+          },
+          "away_errors": {
+            "default": 0,
+            "title": "Away Errors",
+            "type": "integer"
+          },
+          "away_hits": {
+            "default": 0,
+            "title": "Away Hits",
+            "type": "integer"
+          },
+          "away_runs": {
+            "default": 0,
+            "title": "Away Runs",
+            "type": "integer"
+          },
+          "home_by_inning": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Home By Inning",
+            "type": "array"
+          },
+          "home_errors": {
+            "default": 0,
+            "title": "Home Errors",
+            "type": "integer"
+          },
+          "home_hits": {
+            "default": 0,
+            "title": "Home Hits",
+            "type": "integer"
+          },
+          "home_runs": {
+            "default": 0,
+            "title": "Home Runs",
+            "type": "integer"
+          },
+          "innings": {
+            "items": {
+              "$ref": "#/components/schemas/InningLineModel"
+            },
+            "title": "Innings",
+            "type": "array"
+          },
+          "n_innings": {
+            "default": 0,
+            "title": "N Innings",
+            "type": "integer"
+          }
+        },
+        "title": "LinescoreModel",
+        "type": "object"
+      },
+      "LiveGameStateResponse": {
+        "additionalProperties": false,
+        "description": "SIM-386 response: live in-progress game state from ``sim.lineup_state``.\n\nFields are extracted from the ``game_state`` JSONB blob written by the live\ningestion pipeline (:class:`~pipeline.live.live_ingestion_pipeline.GameStateBuilder`).\nAll fields default to neutral / empty values so a partially-built game_state\n(e.g. a game that just went Live with no pitches yet) never breaks\ndeserialization -- the frontend handles sparse state gracefully.\n\n``updated_at`` (ISO-8601 string) is the pipeline's last-write timestamp; the\nfrontend can use it to detect staleness (> ~30s without an update may mean\nthe pipeline lost the WS signal and is polling-fallback).",
+        "properties": {
+          "away_bench": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Away Bench",
+            "type": "array"
+          },
+          "away_bullpen": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Away Bullpen",
+            "type": "array"
+          },
+          "away_lineup": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Away Lineup",
+            "type": "array"
+          },
+          "away_score": {
+            "default": 0,
+            "title": "Away Score",
+            "type": "integer"
+          },
+          "balls": {
+            "default": 0,
+            "title": "Balls",
+            "type": "integer"
+          },
+          "batting_team_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batting Team Id"
+          },
+          "current_batter_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Batter Id"
+          },
+          "current_pitcher_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Pitcher Id"
+          },
+          "fielding_team_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fielding Team Id"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "half": {
+            "default": "Top",
+            "title": "Half",
+            "type": "string"
+          },
+          "home_bench": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Home Bench",
+            "type": "array"
+          },
+          "home_bullpen": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Home Bullpen",
+            "type": "array"
+          },
+          "home_lineup": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Home Lineup",
+            "type": "array"
+          },
+          "home_score": {
+            "default": 0,
+            "title": "Home Score",
+            "type": "integer"
+          },
+          "inning": {
+            "default": 1,
+            "title": "Inning",
+            "type": "integer"
+          },
+          "on_1b": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On 1B"
+          },
+          "on_2b": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On 2B"
+          },
+          "on_3b": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On 3B"
+          },
+          "outs": {
+            "default": 0,
+            "title": "Outs",
+            "type": "integer"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "strikes": {
+            "default": 0,
+            "title": "Strikes",
+            "type": "integer"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "game_pk",
+          "session_id"
+        ],
+        "title": "LiveGameStateResponse",
+        "type": "object"
+      },
+      "LoginRequest": {
+        "properties": {
+          "password": {
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "title": "LoginRequest",
+        "type": "object"
+      },
+      "MetricDeltaModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`simulation.snapshots.MetricDelta` (SIM-331).\n\nA single baseline-vs-override metric.  ``delta`` (override - baseline) mirrors\nthe source dataclass's derived property.",
+        "properties": {
+          "baseline": {
+            "title": "Baseline",
+            "type": "number"
+          },
+          "delta": {
+            "title": "Delta",
+            "type": "number"
+          },
+          "metric": {
+            "title": "Metric",
+            "type": "string"
+          },
+          "override": {
+            "title": "Override",
+            "type": "number"
+          }
+        },
+        "required": [
+          "metric",
+          "baseline",
+          "override",
+          "delta"
+        ],
+        "title": "MetricDeltaModel",
+        "type": "object"
+      },
+      "OverrideDeltaModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`simulation.snapshots.OverrideDelta` (SIM-331).\n\nThe baseline-vs-override comparison: a ``{metric_name -> MetricDeltaModel}``\nmap plus an optional free-text ``description`` of the roster change.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "metrics": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MetricDeltaModel"
+            },
+            "title": "Metrics",
+            "type": "object"
+          }
+        },
+        "title": "OverrideDeltaModel",
+        "type": "object"
+      },
+      "PitcherDecisionsModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`simulation.pitcher_decisions.PitcherDecisions` (SIM-364).\n\nThe derived W/L/Save decision for one game.  All three pitcher ids are\n``Optional[int]`` (``None`` when no decision can be made -- a tie, an\nempty/unfinished stream, or no save situation).  ``home_score`` / ``away_score``\nare the final committed scores for context.",
+        "properties": {
+          "away_score": {
+            "default": 0,
+            "title": "Away Score",
+            "type": "integer"
+          },
+          "home_score": {
+            "default": 0,
+            "title": "Home Score",
+            "type": "integer"
+          },
+          "losing_pitcher_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Losing Pitcher Id"
+          },
+          "save_pitcher_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Save Pitcher Id"
+          },
+          "winning_pitcher_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Winning Pitcher Id"
+          }
+        },
+        "title": "PitcherDecisionsModel",
+        "type": "object"
+      },
+      "PlayByPlayEntryModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`simulation.snapshots.PlayByPlayEntry` (SIM-331).\n\nOne pitch in the /plays scroll.  ``at_bat`` groups pitches into a PA, ``pitch``\nis the 1-based pitch within the PA, ``sequence`` is the global pitch index;\nthe PA's resolved event is carried on the terminal pitch (``is_pa_end``).",
+        "properties": {
+          "at_bat": {
+            "title": "At Bat",
+            "type": "integer"
+          },
+          "canonical_event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canonical Event"
+          },
+          "event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event"
+          },
+          "exit_velo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Velo"
+          },
+          "is_contact": {
+            "title": "Is Contact",
+            "type": "boolean"
+          },
+          "is_pa_end": {
+            "title": "Is Pa End",
+            "type": "boolean"
+          },
+          "launch_angle": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Launch Angle"
+          },
+          "outs_recorded": {
+            "default": 0,
+            "title": "Outs Recorded",
+            "type": "integer"
+          },
+          "pitch": {
+            "title": "Pitch",
+            "type": "integer"
+          },
+          "pitch_outcome": {
+            "title": "Pitch Outcome",
+            "type": "string"
+          },
+          "runs": {
+            "default": 0.0,
+            "title": "Runs",
+            "type": "number"
+          },
+          "runs_scored": {
+            "default": 0,
+            "title": "Runs Scored",
+            "type": "integer"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "spray_angle": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spray Angle"
+          }
+        },
+        "required": [
+          "sequence",
+          "at_bat",
+          "pitch",
+          "pitch_outcome",
+          "is_contact",
+          "is_pa_end"
+        ],
+        "title": "PlayByPlayEntryModel",
+        "type": "object"
+      },
+      "PlayByPlayModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`simulation.snapshots.PlayByPlay` (SIM-331).\n\nThe GET /api/games/{game_pk}/plays collection -- pitch-level entries plus the\nsource's derived counts (``n_pitches`` / ``n_plate_appearances``).",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/PlayByPlayEntryModel"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "n_pitches": {
+            "default": 0,
+            "title": "N Pitches",
+            "type": "integer"
+          },
+          "n_plate_appearances": {
+            "default": 0,
+            "title": "N Plate Appearances",
+            "type": "integer"
+          },
+          "page_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Limit"
+          },
+          "page_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Offset"
+          },
+          "returned_entries": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Returned Entries"
+          },
+          "total_entries": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Entries"
+          }
+        },
+        "title": "PlayByPlayModel",
+        "type": "object"
+      },
+      "PlayerRefModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`simulation.snapshots.PlayerRef`.\n\nA player reference: integer id + optional display label.",
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "player_id": {
+            "title": "Player Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "player_id"
+        ],
+        "title": "PlayerRefModel",
+        "type": "object"
+      },
+      "PropEdgeResponse": {
+        "additionalProperties": false,
+        "description": "SIM-390 response for GET /{game_pk}/props/{player_id}/{prop}.\n\nThe full integer-support PMF for one player's one prop over a Monte-Carlo\nrun, enriched with optional over/under probabilities and an edge report.\n\nWhen a ``line`` query param is supplied the ``p_over``, ``p_under``, and\n``p_push`` fields are populated using the sportsbook convention\n(half-integer line: over + under == 1; integer line: a push mass is\nexcluded from both).  When ``over_ml`` and ``under_ml`` are also supplied\nthe ``edge_report`` is populated via\n:func:`betting.clv_engine.prop_edge_report`; the side evaluated is\ndetermined by the ``bet_side`` query param (``\"over\"`` or ``\"under\"``).\n\n``pmf`` is the ``{str(value) -> probability}`` map for direct consumer use\n(JSON object keys must be strings, so integer outcomes are stringified).",
+        "properties": {
+          "edge_report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EdgeReportModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          },
+          "mean": {
+            "title": "Mean",
+            "type": "number"
+          },
+          "median": {
+            "title": "Median",
+            "type": "number"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "p_over": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P Over"
+          },
+          "p_push": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P Push"
+          },
+          "p_under": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P Under"
+          },
+          "player_id": {
+            "title": "Player Id",
+            "type": "integer"
+          },
+          "pmf": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Pmf",
+            "type": "object"
+          },
+          "probabilities": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Probabilities",
+            "type": "array"
+          },
+          "prop": {
+            "title": "Prop",
+            "type": "string"
+          },
+          "std": {
+            "title": "Std",
+            "type": "number"
+          },
+          "support": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Support",
+            "type": "array"
+          }
+        },
+        "required": [
+          "player_id",
+          "prop",
+          "n",
+          "support",
+          "probabilities",
+          "mean",
+          "median",
+          "std"
+        ],
+        "title": "PropEdgeResponse",
+        "type": "object"
+      },
+      "RosterOverride": {
+        "description": "The ``POST .../simulate/with_override`` request body (SIM-358 + SIM-388).\n\nEvery field is OPTIONAL; an unset field keeps the resolved (baseline) value.\nAt least one field SHOULD be set for the override to differ from baseline,\nbut an all-empty body is accepted (it yields an all-zero delta -- a valid,\nif uninteresting, comparison).\n\n  * ``home_lineup`` / ``away_lineup`` -- full 1..9 batting orders (player\n    ids) to swap in for that side.  When set, REPLACES the entire lineup\n    before any ``substitutions`` are applied.\n  * ``substitutions`` -- SIM-388: a list of :class:`SubstitutionSlot`\n    targeted single-player changes applied AFTER any full-lineup replacements.\n    Use this to stage individual subs without knowing the full batting order.\n    Left-to-right application; same-slot conflicts \u2192 last entry wins.\n  * ``pitcher_id`` -- the pitcher to face the batters for the simulated half.\n  * ``bat_hand`` -- the leadoff batter's hand override ('L'/'R'/'S'); the\n    sampler pre-filter key.\n  * ``description`` -- free text recorded on the returned OverrideDelta.",
+        "properties": {
+          "away_lineup": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Lineup"
+          },
+          "bat_hand": {
+            "anyOf": [
+              {
+                "maxLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bat Hand"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "home_lineup": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Lineup"
+          },
+          "pitcher_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pitcher Id"
+          },
+          "substitutions": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SubstitutionSlot"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Substitutions"
+          }
+        },
+        "title": "RosterOverride",
+        "type": "object"
+      },
+      "SeasonCoverage": {
+        "description": "Per-season ingest coverage.",
+        "properties": {
+          "games": {
+            "title": "Games",
+            "type": "integer"
+          },
+          "pitches": {
+            "title": "Pitches",
+            "type": "integer"
+          },
+          "season": {
+            "title": "Season",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "season",
+          "games",
+          "pitches"
+        ],
+        "title": "SeasonCoverage",
+        "type": "object"
+      },
+      "SignalsResponse": {
+        "description": "The ``GET /api/betting/games/{game_pk}/signals`` envelope.\n\nCarries the ranked (+EV, EV descending) :class:`BetSignalModel` list plus the\nrun metadata, the gate config that produced them (min_edge / min_ev /\nkelly_fraction / max_stake_fraction), and the per-market ``odds_source`` flags.",
+        "properties": {
+          "base_seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Seed"
+          },
+          "config": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Config",
+            "type": "object"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "n_iterations": {
+            "title": "N Iterations",
+            "type": "integer"
+          },
+          "odds_source": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Odds Source",
+            "type": "object"
+          },
+          "signals": {
+            "items": {
+              "$ref": "#/components/schemas/BetSignalModel"
+            },
+            "title": "Signals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "game_pk",
+          "n_iterations"
+        ],
+        "title": "SignalsResponse",
+        "type": "object"
+      },
+      "SimilarityDistributionResponse": {
+        "description": "Top-level response for the histogram endpoint.",
+        "properties": {
+          "bins": {
+            "items": {
+              "$ref": "#/components/schemas/_Bin"
+            },
+            "title": "Bins",
+            "type": "array"
+          },
+          "diagnostic": {
+            "$ref": "#/components/schemas/_Diagnostic"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "engine_version": {
+            "title": "Engine Version",
+            "type": "string"
+          },
+          "population_size": {
+            "title": "Population Size",
+            "type": "integer"
+          },
+          "query": {
+            "$ref": "#/components/schemas/_Query"
+          },
+          "score_summary": {
+            "$ref": "#/components/schemas/_ScoreSummary"
+          },
+          "top_n": {
+            "items": {
+              "$ref": "#/components/schemas/_Member"
+            },
+            "title": "Top N",
+            "type": "array"
+          }
+        },
+        "required": [
+          "query",
+          "engine",
+          "engine_version",
+          "population_size",
+          "score_summary",
+          "bins",
+          "top_n",
+          "diagnostic"
+        ],
+        "title": "SimilarityDistributionResponse",
+        "type": "object"
+      },
+      "SimulateResponse": {
+        "description": "The ``GET /api/games/{game_pk}/simulate`` envelope.",
+        "properties": {
+          "base_seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Seed"
+          },
+          "from_cache": {
+            "default": false,
+            "title": "From Cache",
+            "type": "boolean"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "n_iterations": {
+            "title": "N Iterations",
+            "type": "integer"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/GameSimSummaryModel"
+          }
+        },
+        "required": [
+          "game_pk",
+          "n_iterations",
+          "summary"
+        ],
+        "title": "SimulateResponse",
+        "type": "object"
+      },
+      "StateAtPitchModel": {
+        "additionalProperties": false,
+        "description": "Response model for :class:`simulation.snapshots.StateAtPitch` (SIM-331).\n\nA point-in-time :class:`FieldSnapshotModel` tagged with the at-bat / pitch\nindices (and global sequence, if known).",
+        "properties": {
+          "at_bat": {
+            "title": "At Bat",
+            "type": "integer"
+          },
+          "field": {
+            "$ref": "#/components/schemas/FieldSnapshotModel"
+          },
+          "pitch": {
+            "title": "Pitch",
+            "type": "integer"
+          },
+          "sequence": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sequence"
+          }
+        },
+        "required": [
+          "at_bat",
+          "pitch",
+          "field"
+        ],
+        "title": "StateAtPitchModel",
+        "type": "object"
+      },
+      "SubstitutionSlot": {
+        "description": "A single targeted player substitution (SIM-388).\n\nReplaces the player at a specific batting-order slot on one side of the\nlineup, without having to know or pass the other 8 slots.  One or more of\nthese can appear in :attr:`RosterOverride.substitutions` to stage a\nmulti-sub override queue.\n\n  * ``batting_order`` -- 1-indexed slot (1 = leadoff \u2026 9 = ninth).\n  * ``player_id``     -- the replacement player's MLB player ID.\n  * ``side``          -- ``\"home\"`` or ``\"away\"``.\n\nMultiple ``SubstitutionSlot`` items for the SAME (side, batting_order) in\na single request are applied left-to-right, so the last one wins.",
+        "properties": {
+          "batting_order": {
+            "description": "1-indexed lineup slot (1\u20139)",
+            "maximum": 9.0,
+            "minimum": 1.0,
+            "title": "Batting Order",
+            "type": "integer"
+          },
+          "player_id": {
+            "description": "MLB player_id of the substitute",
+            "exclusiveMinimum": 0.0,
+            "title": "Player Id",
+            "type": "integer"
+          },
+          "side": {
+            "description": "Which side's lineup to modify",
+            "enum": [
+              "home",
+              "away"
+            ],
+            "title": "Side",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batting_order",
+          "player_id",
+          "side"
+        ],
+        "title": "SubstitutionSlot",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "WithOverrideResponse": {
+        "description": "The ``POST .../simulate/with_override`` envelope (SIM-358).\n\nCarries the BASELINE summary, the OVERRIDE summary (both run at the SAME\nbase seed for an apples-to-apples comparison), and the OverrideDelta diff.",
+        "properties": {
+          "base_seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Seed"
+          },
+          "baseline": {
+            "$ref": "#/components/schemas/GameSimSummaryModel"
+          },
+          "delta": {
+            "$ref": "#/components/schemas/OverrideDeltaModel"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "n_iterations": {
+            "title": "N Iterations",
+            "type": "integer"
+          },
+          "override": {
+            "$ref": "#/components/schemas/GameSimSummaryModel"
+          }
+        },
+        "required": [
+          "game_pk",
+          "n_iterations",
+          "baseline",
+          "override",
+          "delta"
+        ],
+        "title": "WithOverrideResponse",
+        "type": "object"
+      },
+      "_Bin": {
+        "properties": {
+          "bin_index": {
+            "title": "Bin Index",
+            "type": "integer"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "hi": {
+            "title": "Hi",
+            "type": "number"
+          },
+          "lo": {
+            "title": "Lo",
+            "type": "number"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/_Member"
+            },
+            "title": "Members",
+            "type": "array"
+          },
+          "preview": {
+            "items": {
+              "$ref": "#/components/schemas/_Member"
+            },
+            "title": "Preview",
+            "type": "array"
+          }
+        },
+        "required": [
+          "bin_index",
+          "lo",
+          "hi",
+          "count",
+          "preview",
+          "members"
+        ],
+        "title": "_Bin",
+        "type": "object"
+      },
+      "_Diagnostic": {
+        "properties": {
+          "median_observed": {
+            "title": "Median Observed",
+            "type": "number"
+          },
+          "median_target": {
+            "title": "Median Target",
+            "type": "number"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "median_target",
+          "median_observed"
+        ],
+        "title": "_Diagnostic",
+        "type": "object"
+      },
+      "_Member": {
+        "description": "One pitcher's appearance in a bin / preview / top-N list.",
+        "properties": {
+          "arsenal_score": {
+            "title": "Arsenal Score",
+            "type": "number"
+          },
+          "command_score": {
+            "title": "Command Score",
+            "type": "number"
+          },
+          "full_name": {
+            "title": "Full Name",
+            "type": "string"
+          },
+          "p_throws": {
+            "title": "P Throws",
+            "type": "string"
+          },
+          "pitcher_id": {
+            "title": "Pitcher Id",
+            "type": "integer"
+          },
+          "sample_pitches": {
+            "title": "Sample Pitches",
+            "type": "integer"
+          },
+          "score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Score",
+            "type": "number"
+          },
+          "season": {
+            "title": "Season",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pitcher_id",
+          "season",
+          "full_name",
+          "p_throws",
+          "score",
+          "arsenal_score",
+          "command_score",
+          "sample_pitches"
+        ],
+        "title": "_Member",
+        "type": "object"
+      },
+      "_Query": {
+        "properties": {
+          "full_name": {
+            "title": "Full Name",
+            "type": "string"
+          },
+          "p_throws": {
+            "title": "P Throws",
+            "type": "string"
+          },
+          "pitcher_id": {
+            "title": "Pitcher Id",
+            "type": "integer"
+          },
+          "season": {
+            "title": "Season",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pitcher_id",
+          "season",
+          "p_throws",
+          "full_name"
+        ],
+        "title": "_Query",
+        "type": "object"
+      },
+      "_ScoreSummary": {
+        "properties": {
+          "max": {
+            "title": "Max",
+            "type": "number"
+          },
+          "mean": {
+            "title": "Mean",
+            "type": "number"
+          },
+          "median": {
+            "title": "Median",
+            "type": "number"
+          },
+          "min": {
+            "title": "Min",
+            "type": "number"
+          },
+          "p25": {
+            "title": "P25",
+            "type": "number"
+          },
+          "p75": {
+            "title": "P75",
+            "type": "number"
+          },
+          "std": {
+            "title": "Std",
+            "type": "number"
+          }
+        },
+        "required": [
+          "min",
+          "p25",
+          "median",
+          "p75",
+          "max",
+          "mean",
+          "std"
+        ],
+        "title": "_ScoreSummary",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Pitch-by-pitch MLB game simulator powered by Statcast data and multi-dimensional similarity engines. Full API available in Phase 5.",
+    "title": "MLB Baseball Simulation Platform",
+    "version": "0.1.0-phase2"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/betting/games/{game_pk}/clv": {
+      "get": {
+        "description": "A thin projection of /line-movement: the line-movement series that carry an entry-vs-close CLV (>= 2 quotes with both opposite-side prices). Each model's clv.clv_prob / clv.beat_close answers 'did the opening price beat the close' for that side/book. numpy-free. 503 if no DB pool, 422 on a bad market_type.",
+        "operationId": "get_game_clv_api_betting_games__game_pk__clv_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "moneyline | runline | total",
+            "in": "query",
+            "name": "market_type",
+            "required": false,
+            "schema": {
+              "default": "moneyline",
+              "description": "moneyline | runline | total",
+              "title": "Market Type",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Restrict to one book (else all books)",
+            "in": "query",
+            "name": "book",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Restrict to one book (else all books)",
+              "title": "Book"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClvSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Entry-vs-close CLV snapshot per side/book",
+        "tags": [
+          "betting"
+        ]
+      }
+    },
+    "/api/betting/games/{game_pk}/edges": {
+      "get": {
+        "description": "Run (or reuse, via the SIM-359 cache) a Monte-Carlo sim for the game and build the EdgeReports for the requested markets (moneyline / total / runline, both sides each) off the GameSimSummary + market odds. Odds come from the injected query params when supplied, else the deterministic mock provider (flagged per market in odds_source). numpy-free EdgeReportModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market.",
+        "operationId": "get_game_edges_api_betting_games__game_pk__edges_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Monte-Carlo iterations",
+            "in": "query",
+            "name": "n_iterations",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "description": "Monte-Carlo iterations",
+              "maximum": 10000,
+              "minimum": 1,
+              "title": "N Iterations",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Reproducibility seed for the batch",
+            "in": "query",
+            "name": "base_seed",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reproducibility seed for the batch",
+              "title": "Base Seed"
+            }
+          },
+          {
+            "description": "Consult/populate the sim-result cache",
+            "in": "query",
+            "name": "use_cache",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "Consult/populate the sim-result cache",
+              "title": "Use Cache",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Comma-separated subset of moneyline,total,runline (default all)",
+            "in": "query",
+            "name": "markets",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated subset of moneyline,total,runline (default all)",
+              "title": "Markets"
+            }
+          },
+          {
+            "description": "Injected home moneyline (American)",
+            "in": "query",
+            "name": "home_ml",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected home moneyline (American)",
+              "title": "Home Ml"
+            }
+          },
+          {
+            "description": "Injected away moneyline (American)",
+            "in": "query",
+            "name": "away_ml",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected away moneyline (American)",
+              "title": "Away Ml"
+            }
+          },
+          {
+            "description": "Injected total over price (American)",
+            "in": "query",
+            "name": "over_ml",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected total over price (American)",
+              "title": "Over Ml"
+            }
+          },
+          {
+            "description": "Injected total under price (American)",
+            "in": "query",
+            "name": "under_ml",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected total under price (American)",
+              "title": "Under Ml"
+            }
+          },
+          {
+            "description": "Injected total line",
+            "in": "query",
+            "name": "total_line",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected total line",
+              "title": "Total Line"
+            }
+          },
+          {
+            "description": "Injected home run-line price (American)",
+            "in": "query",
+            "name": "home_rl_ml",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected home run-line price (American)",
+              "title": "Home Rl Ml"
+            }
+          },
+          {
+            "description": "Injected away run-line price (American)",
+            "in": "query",
+            "name": "away_rl_ml",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected away run-line price (American)",
+              "title": "Away Rl Ml"
+            }
+          },
+          {
+            "description": "Injected HOME run line (e.g. -1.5)",
+            "in": "query",
+            "name": "run_line",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected HOME run line (e.g. -1.5)",
+              "title": "Run Line"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Per-market edge reports (moneyline / total / run-line)",
+        "tags": [
+          "betting"
+        ]
+      }
+    },
+    "/api/betting/games/{game_pk}/line-movement": {
+      "get": {
+        "description": "Read the persisted raw.game_odds history for the (game_pk, market_type[, book]) and build the SIM-368 line-movement time-series: one series per (side, book) with the ordered quotes, the per-step + opening->closing deltas, the running implied-prob surface, the steam direction, the sharp-consensus flag, and the entry-vs-close CLV. numpy-free LineMovementModel list. 503 if no DB pool, 422 on a bad market_type.",
+        "operationId": "get_game_line_movement_api_betting_games__game_pk__line_movement_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "moneyline | runline | total",
+            "in": "query",
+            "name": "market_type",
+            "required": false,
+            "schema": {
+              "default": "moneyline",
+              "description": "moneyline | runline | total",
+              "title": "Market Type",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Restrict to one book (else all books)",
+            "in": "query",
+            "name": "book",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Restrict to one book (else all books)",
+              "title": "Book"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LineMovementResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Opening->closing line-movement time-series per side/book",
+        "tags": [
+          "betting"
+        ]
+      }
+    },
+    "/api/betting/games/{game_pk}/signals": {
+      "get": {
+        "description": "Build the per-market EdgeReports (as /edges), gate them to the +EV set (strictly positive edge >= min_edge AND ev > min_ev), size each via fractional Kelly (kelly_fraction, capped at max_stake_fraction), and return them RANKED by EV descending. min_edge / kelly_fraction are tunable via query params. numpy-free BetSignalModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market.",
+        "operationId": "get_game_signals_api_betting_games__game_pk__signals_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Monte-Carlo iterations",
+            "in": "query",
+            "name": "n_iterations",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "description": "Monte-Carlo iterations",
+              "maximum": 10000,
+              "minimum": 1,
+              "title": "N Iterations",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Reproducibility seed for the batch",
+            "in": "query",
+            "name": "base_seed",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reproducibility seed for the batch",
+              "title": "Base Seed"
+            }
+          },
+          {
+            "description": "Consult/populate the sim-result cache",
+            "in": "query",
+            "name": "use_cache",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "Consult/populate the sim-result cache",
+              "title": "Use Cache",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Comma-separated subset of moneyline,total,runline (default all)",
+            "in": "query",
+            "name": "markets",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated subset of moneyline,total,runline (default all)",
+              "title": "Markets"
+            }
+          },
+          {
+            "description": "Edge noise floor (gate)",
+            "in": "query",
+            "name": "min_edge",
+            "required": false,
+            "schema": {
+              "default": 0.02,
+              "description": "Edge noise floor (gate)",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Min Edge",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Minimum EV per unit (strict >)",
+            "in": "query",
+            "name": "min_ev",
+            "required": false,
+            "schema": {
+              "default": 0.0,
+              "description": "Minimum EV per unit (strict >)",
+              "maximum": 10.0,
+              "minimum": -1.0,
+              "title": "Min Ev",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Fractional-Kelly multiplier",
+            "in": "query",
+            "name": "kelly_fraction",
+            "required": false,
+            "schema": {
+              "default": 0.25,
+              "description": "Fractional-Kelly multiplier",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Kelly Fraction",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Hard cap on the stake fraction",
+            "in": "query",
+            "name": "max_stake_fraction",
+            "required": false,
+            "schema": {
+              "default": 0.05,
+              "description": "Hard cap on the stake fraction",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Max Stake Fraction",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Injected home moneyline (American)",
+            "in": "query",
+            "name": "home_ml",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected home moneyline (American)",
+              "title": "Home Ml"
+            }
+          },
+          {
+            "description": "Injected away moneyline (American)",
+            "in": "query",
+            "name": "away_ml",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected away moneyline (American)",
+              "title": "Away Ml"
+            }
+          },
+          {
+            "description": "Injected total over price (American)",
+            "in": "query",
+            "name": "over_ml",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected total over price (American)",
+              "title": "Over Ml"
+            }
+          },
+          {
+            "description": "Injected total under price (American)",
+            "in": "query",
+            "name": "under_ml",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected total under price (American)",
+              "title": "Under Ml"
+            }
+          },
+          {
+            "description": "Injected total line",
+            "in": "query",
+            "name": "total_line",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected total line",
+              "title": "Total Line"
+            }
+          },
+          {
+            "description": "Injected home run-line price (American)",
+            "in": "query",
+            "name": "home_rl_ml",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected home run-line price (American)",
+              "title": "Home Rl Ml"
+            }
+          },
+          {
+            "description": "Injected away run-line price (American)",
+            "in": "query",
+            "name": "away_rl_ml",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected away run-line price (American)",
+              "title": "Away Rl Ml"
+            }
+          },
+          {
+            "description": "Injected HOME run line (e.g. -1.5)",
+            "in": "query",
+            "name": "run_line",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected HOME run line (e.g. -1.5)",
+              "title": "Run Line"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ranked +EV bet-signal recommendations",
+        "tags": [
+          "betting"
+        ]
+      }
+    },
+    "/api/data/freshness": {
+      "get": {
+        "description": "Aggregate view of the ingested data: the last-ingest watermark (raw.etl_data_freshness), the most-recent game date with data, total games/pitches, and per-season coverage. The frontend uses this for a 'data as of \u2026' badge and an empty/stale-store warning. 503 when no DB pool is attached; an empty store returns zeros (not an error).",
+        "operationId": "get_data_freshness_api_data_freshness_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataFreshnessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ingest freshness + per-season coverage for the UI",
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/api/games/{date}": {
+      "get": {
+        "description": "List the games on a date (YYYY-MM-DD) from raw.games. The result is memoized at POOL_QUERY_TTL_S (300s) when a sim cache is attached (SIM-359). Returns 503 if no DB pool is attached, 422 on a bad date.",
+        "operationId": "get_games_on_date_api_games__date__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "date",
+            "required": true,
+            "schema": {
+              "title": "Date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Consult/populate the listing cache",
+            "in": "query",
+            "name": "use_cache",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "Consult/populate the listing cache",
+              "title": "Use Cache",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GamesOnDateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Games scheduled on a date",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/boxscore": {
+      "get": {
+        "description": "Resolve the game's lineup, run an N-iteration boxscore batch, and return each player's prop MEANS as a boxscore card (SIM-366): for a batter the H/HR/RBI/TB means, for a pitcher the K/BB/ER/OUTS means -- the means-only projection of the run's PropDistributionSet (SIM-329). numpy-free JSON (SIM-350). 503 if no DB pool is attached; 404 if the lineup cannot be resolved.",
+        "operationId": "get_game_boxscore_api_games__game_pk__boxscore_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Monte-Carlo iterations",
+            "in": "query",
+            "name": "n_iterations",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Monte-Carlo iterations",
+              "maximum": 2000,
+              "minimum": 1,
+              "title": "N Iterations",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Reproducibility seed for the batch",
+            "in": "query",
+            "name": "base_seed",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reproducibility seed for the batch",
+              "title": "Base Seed"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoxscoreCardModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Per-player boxscore-average card (prop means over N iterations)",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/card": {
+      "get": {
+        "description": "Return BOTH the per-inning linescore (SIM-362) and the W/L/Save pitcher decisions (SIM-364) for the game's most-recent persisted run in one payload, from the DuckDB game-card store. 404 if no card has been persisted, 503 if no replay store is wired.",
+        "operationId": "get_game_card_api_games__game_pk__card_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameCardResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Combined linescore + pitcher decisions for a simulated game",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/decisions": {
+      "get": {
+        "description": "Return the persisted W/L/Save pitcher decisions (SIM-364) for the game's most-recent persisted run -- derived at record time from the recorded PlayResult stream by /simulate and served from the DuckDB game-card store. All three pitcher ids are null on a tie / no-decision. numpy-free JSON. 404 if no card has been persisted, 503 if no replay store is wired.",
+        "operationId": "get_game_decisions_api_games__game_pk__decisions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PitcherDecisionsModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Winning/losing/save pitcher decisions for a simulated game",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/linescore": {
+      "get": {
+        "description": "Return the persisted per-inning linescore (the away/home run grid plus each team's Runs/Hits/Errors totals, SIM-362) for the game's most-recent persisted run -- derived at record time from the recorded PlayResult stream by /simulate and served from the DuckDB game-card store. numpy-free JSON (SIM-350). 404 if no card has been persisted, 503 if no replay store is wired.",
+        "operationId": "get_game_linescore_api_games__game_pk__linescore_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinescoreModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Per-inning linescore (R/H/E grid) for a simulated game",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/live": {
+      "get": {
+        "description": "Read the live game state from ``sim.lineup_state`` for an in-progress game.  The live ingestion pipeline (port :8001) writes the game state JSONB on every MLB WebSocket signal; this endpoint surfaces it on the main API so the frontend does not need to reach the pipeline app directly.  Fields mirror the ``game_state`` JSONB blob: inning/half/outs/score/baserunners/lineup/roster.  ``updated_at`` (ISO-8601) marks when the pipeline last wrote; the frontend may treat a gap > 30s as a potential pipeline staleness signal.  Returns 404 when no live row exists for ``game_pk`` (game not yet live, already finished, or pipeline has not ingested it yet). Returns 503 when no DB pool is attached.",
+        "operationId": "get_live_game_state_api_games__game_pk__live_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveGameStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Live in-progress game state (SIM-386)",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/plays": {
+      "get": {
+        "description": "Return the persisted pitch-level play-by-play (one entry per pitch, the resolved PA event on the terminal pitch) for the game's most-recent persisted run -- the durable backing populated by /simulate (SIM-357). Served straight from the DuckDB play-stream store (SIM-356); numpy-free JSON (SIM-350). SIM-415: optional ``limit``/``offset`` page the entries (a full game is ~300 pitches); ``n_pitches``/``n_plate_appearances`` stay full-game totals and ``total_entries``/``page_*`` describe the slice. Omitting ``limit`` returns the whole stream (unchanged shape). 404 if nothing has been persisted for the game, 503 if no replay store is wired.",
+        "operationId": "get_game_plays_api_games__game_pk__plays_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Page size; omit to return all entries",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size; omit to return all entries",
+              "title": "Limit"
+            }
+          },
+          {
+            "description": "0-based offset of the entry slice",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "0-based offset of the entry slice",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayByPlayModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Play-by-play scroll for a simulated game",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/props/{player_id}/{prop}": {
+      "get": {
+        "description": "Run an N-iteration Monte-Carlo batch for the game, look up one player's prop PMF (e.g. K, BB, H, HR), and return the full integer-support PMF.  Supply ``line`` to also get ``p_over``/``p_under``/``p_push``; supply ``line``, ``over_ml``, and ``under_ml`` to also get a full ``edge_report`` via the CLV engine (SIM-339).  ``bet_side`` controls which side's edge is computed (``'over'`` or ``'under'``, default ``'over'``).  Valid props: K, BB, ER, OUTS (pitcher), H, HR, RBI, TB (batter).  503 if no DB pool is attached; 404 if the lineup or player cannot be resolved.",
+        "operationId": "get_player_prop_edge_api_games__game_pk__props__player_id___prop__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "player_id",
+            "required": true,
+            "schema": {
+              "title": "Player Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "prop",
+            "required": true,
+            "schema": {
+              "title": "Prop",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Monte-Carlo iterations",
+            "in": "query",
+            "name": "n_iterations",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Monte-Carlo iterations",
+              "maximum": 2000,
+              "minimum": 1,
+              "title": "N Iterations",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Reproducibility seed for the batch",
+            "in": "query",
+            "name": "base_seed",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reproducibility seed for the batch",
+              "title": "Base Seed"
+            }
+          },
+          {
+            "description": "Prop line for over/under calculation",
+            "in": "query",
+            "name": "line",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Prop line for over/under calculation",
+              "title": "Line"
+            }
+          },
+          {
+            "description": "American odds for the OVER side",
+            "in": "query",
+            "name": "over_ml",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "American odds for the OVER side",
+              "title": "Over Ml"
+            }
+          },
+          {
+            "description": "American odds for the UNDER side",
+            "in": "query",
+            "name": "under_ml",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "American odds for the UNDER side",
+              "title": "Under Ml"
+            }
+          },
+          {
+            "description": "Side to compute edge for ('over' or 'under')",
+            "in": "query",
+            "name": "bet_side",
+            "required": false,
+            "schema": {
+              "default": "over",
+              "description": "Side to compute edge for ('over' or 'under')",
+              "title": "Bet Side",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropEdgeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Player prop PMF + optional edge report (SIM-390)",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/simulate": {
+      "get": {
+        "description": "Resolve the game's lineup into a GameState (SIM-353), run an N-iteration Monte-Carlo batch (SIM-332), and return the GameSimSummary (numpy-free JSON, SIM-350). The machine factory is the testability seam (see resolve_factory_ref). Summary results are cached at SIM_RESULT_TTL_S (60s) keyed on (spec + seed + N) -- SIM-359.",
+        "operationId": "simulate_game_endpoint_api_games__game_pk__simulate_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Monte-Carlo iterations",
+            "in": "query",
+            "name": "n_iterations",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Monte-Carlo iterations",
+              "maximum": 10000,
+              "minimum": 1,
+              "title": "N Iterations",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Reproducibility seed for the whole batch",
+            "in": "query",
+            "name": "base_seed",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reproducibility seed for the whole batch",
+              "title": "Base Seed"
+            }
+          },
+          {
+            "description": "Consult/populate the sim-result cache",
+            "in": "query",
+            "name": "use_cache",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "Consult/populate the sim-result cache",
+              "title": "Use Cache",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimulateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Simulate a game (Monte-Carlo)",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/simulate/with_override": {
+      "post": {
+        "description": "Run a BASELINE sim (resolved lineup) and an OVERRIDE sim (the modified roster) at the SAME base seed, then return both summaries plus the baseline-vs-override OverrideDelta (SIM-331). The factory + caching seams are shared with /simulate (SIM-355/SIM-359).",
+        "operationId": "simulate_with_override_endpoint_api_games__game_pk__simulate_with_override_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Monte-Carlo iterations",
+            "in": "query",
+            "name": "n_iterations",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Monte-Carlo iterations",
+              "maximum": 10000,
+              "minimum": 1,
+              "title": "N Iterations",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Shared seed for baseline + override",
+            "in": "query",
+            "name": "base_seed",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": 0,
+              "description": "Shared seed for baseline + override",
+              "title": "Base Seed"
+            }
+          },
+          {
+            "description": "Consult/populate the sim-result cache",
+            "in": "query",
+            "name": "use_cache",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "Consult/populate the sim-result cache",
+              "title": "Use Cache",
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RosterOverride"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WithOverrideResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Simulate a game with a roster override (baseline vs override)",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/state/{at_bat}/{pitch}": {
+      "get": {
+        "description": "Return the point-in-time field/baserunner/count snapshot as of the given (at_bat, pitch) for the game's most-recent persisted run -- the StateAtPitch persisted by /simulate (SIM-357), served from the DuckDB state-snapshot store. numpy-free JSON (SIM-350). 404 if no snapshot was persisted for that pitch, 503 if no replay store is wired.",
+        "operationId": "get_game_state_at_pitch_api_games__game_pk__state__at_bat___pitch__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "at_bat",
+            "required": true,
+            "schema": {
+              "title": "At Bat",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pitch",
+            "required": true,
+            "schema": {
+              "title": "Pitch",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StateAtPitchModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Field/state snapshot as of a given at-bat/pitch",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/status": {
+      "get": {
+        "description": "Return a single game's enriched identity (SIM-383 team names + records + venue), 3-state status enum (scheduled/live/final/postponed), final scores when available, and the most recently persisted Monte-Carlo sim summary as a lite projection (no raw score arrays). Intended for the Day Summary 3-state game cards (SIM-391). ``sim_summary`` is None when no sim has been run yet or when Postgres is unavailable. ``odds`` is reserved for the Phase-6 odds-provider integration (SIM-405). Returns 404 when game_pk is not in raw.games, 503 when no DB pool is attached.",
+        "operationId": "get_game_status_card_api_games__game_pk__status_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameCardAggregateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Game-status aggregate (identity + 3-state status + sim summary)",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/odds/today/all": {
+      "get": {
+        "description": "Returns mock odds for every game scheduled today.",
+        "operationId": "get_todays_odds_api_odds_today_all_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Get Todays Odds Api Odds Today All Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Todays Odds",
+        "tags": [
+          "odds"
+        ]
+      }
+    },
+    "/api/odds/{game_pk}": {
+      "get": {
+        "description": "Returns mock betting lines for a game.  In Phase 7, replace this handler\nwith a call to a real odds provider and flip is_mock=False.",
+        "operationId": "get_game_odds_api_odds__game_pk__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Game Odds Api Odds  Game Pk  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Game Odds",
+        "tags": [
+          "odds"
+        ]
+      }
+    },
+    "/api/similarity/pitcher/{pitcher_id}/{season}": {
+      "get": {
+        "description": "Returns the full similarity-score distribution between the query pitcher-season and every same-handedness pitcher-season in the engine, binned for the histogram view. See ``docs/similarity_visualization_spec.md`` for the full design.",
+        "operationId": "get_pitcher_similarity_distribution_api_similarity_pitcher__pitcher_id___season__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pitcher_id",
+            "required": true,
+            "schema": {
+              "title": "Pitcher Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "season",
+            "required": true,
+            "schema": {
+              "title": "Season",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Histogram bin count",
+            "in": "query",
+            "name": "bins",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Histogram bin count",
+              "maximum": 100,
+              "minimum": 4,
+              "title": "Bins",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Top-N highlight band",
+            "in": "query",
+            "name": "top_n",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Top-N highlight band",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Top N",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimilarityDistributionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pitcher similarity score distribution",
+        "tags": [
+          "similarity"
+        ]
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "description": "Validate the shared AUTH_PASSWORD and issue an httpOnly session cookie (sim_session). The cookie is Secure + SameSite=strict in non-development environments. Session lifetime is SESSION_TTL_HOURS (default 8 hours). Returns 401 on an incorrect password.",
+        "operationId": "login_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Login Auth Login Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Exchange password for session cookie",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "description": "Expire the sim_session cookie.  Always returns 200 (idempotent).",
+        "operationId": "logout_auth_logout_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Logout Auth Logout Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Clear the session cookie",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "description": "Probe whether the caller has a valid session.  Always returns 200 (never 401) so the frontend can call this on boot to decide whether to show the login page without triggering an error flow.",
+        "operationId": "me_auth_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Check current session state",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Health Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Liveness probe",
+        "tags": [
+          "ops"
+        ]
+      }
+    },
+    "/ready": {
+      "get": {
+        "description": "Returns 200 when the application is ready to serve traffic.\nConfirms the Postgres pool, the Redis cache, and the pitcher\nsimilarity engine are all attached and (for DB/Redis) live.\n\nReturns 503 with a per-component status if any check fails. A\nmissing pitcher_engine is reported but does NOT cause /ready to\nfail \u2014 the similarity route surfaces that via its own 503.",
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Readiness probe",
+        "tags": [
+          "ops"
+        ]
+      }
+    }
+  }
+}
