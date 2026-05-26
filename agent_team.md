@@ -341,24 +341,31 @@ This document defines the 9-agent team for the MLB Baseball Simulation Platform.
 
 **Repository:** github.com/gmelick/baseball_simulator
 
-**Current phase:** Phase 2 — Similarity Engine Suite (~82% complete — 9 of 11 engines built)
+**Current phase:** Phase 6 — Frontend Build (OPEN as of 2026-09-02 / executed 2026-05-25)
 
-**Similarity engines status:**
-- Complete (9/11): pitcher (GMM W₂), batter (RBF), fielder (position-partitioned RBF), baserunner extra-base (RBF), baserunner steal (RBF, SIM-066), catcher (RBF, SIM-067), pitcher-steal (RBF, SIM-068), manager (RBF, SIM-069), situation (KDTree, SIM-070)
-- Remaining (2/11): pitch-to-pitch (2.10), batted ball-to-batted ball (2.11)
+**Similarity engines status:** All 11 / 11 COMPLETE (Phases 1–5 done and CI-green):
+- pitcher (GMM W₂), batter (RBF), fielder (position-partitioned RBF), baserunner extra-base (RBF),
+  baserunner steal (RBF), catcher (RBF v2), pitcher-steal (RBF), manager (RBF),
+  situation (KDTree), pitch-to-pitch (FAISS), batted-ball (FAISS)
 
-**Tech stack:** Python 3.11+, FastAPI, PostgreSQL + async SQLAlchemy + Alembic, DuckDB (postgres extension), Redis, scikit-learn (GMMs), FAISS, NumPy, pybaseball, Docker/docker-compose, JavaScript + WebSocket (React migration optional at Phase 6), Prometheus + Grafana
+**Test suite:** 1814 pass / 1 skip / 0 fail @ 89% coverage on Python 3.11.15; 8 CI jobs green.
+
+**Tech stack:** Python 3.11+, FastAPI, PostgreSQL + async SQLAlchemy + Alembic, DuckDB v10 (in-process),
+Redis, scikit-learn (GMMs), FAISS, NumPy/pandas, scipy, POT (Wasserstein), pybaseball,
+Docker/docker-compose, nginx, Prometheus + Grafana. Frontend framework: **TBD via SIM-378 ADR** (React vs vanilla JS + WebSocket).
 
 **Primary use case:** Player prop prediction and betting edge validation anchored to Closing Line Value as the gold-standard metric.
 
 **Phase roadmap:**
 
-| Phase | Name | Duration | Status |
-|-------|------|----------|--------|
-| 1 | Data Infrastructure & Pipeline | 2 weeks | Complete |
-| 2 | Similarity Engine Suite | 5 weeks | In progress |
-| 3 | Play Pool Architecture | 1 week | Not started |
-| 4 | Core Simulation Loop | 4 weeks | Not started |
-| 5 | Simulation Runner & Backend API | 3 weeks | Not started |
-| 6 | Frontend Build | 6 weeks | Not started |
-| 7 | Integration, Testing & De
+| Phase | Name | Status |
+|-------|------|--------|
+| 1 | Data Infrastructure & Pipeline | ✅ Complete |
+| 2 | Similarity Engine Suite (11 engines) | ✅ Complete |
+| 3 | Play Pool Architecture | ✅ Complete |
+| 4 | Core Simulation Loop | ✅ Complete |
+| 5 | Simulation Runner & Backend API | ✅ Complete (CI-green 3.11.15) |
+| 6 | Frontend Build | 🚀 OPEN — 43 tickets SIM-378→420 |
+| 7 | Integration, Testing & Deployment | Not started |
+
+**Next free ticket ID: SIM-421.**

@@ -14,11 +14,13 @@ exited zero.
 > `curl`; bash users can substitute `export VAR=…` for `set VAR=…` and
 > forward slashes for paths.
 
-> **Phase note.** As of 2026-05-21 the platform is at the end of
-> Phase 2 (all 11 similarity engines built; Phase 3 implementation
-> begins sprint 2026-05-27).  Phase 4 (simulator), Phase 5 (full
-> game-state API), and Phase 6 (frontend) are not yet implemented.
-> Steps marked **[Phase 4+]** below are stubs.
+> **Phase note.** As of 2026-09-02 (executed 2026-05-25) the platform is at **Phase 6 —
+> Frontend Build**.  Phases 1–5 are fully COMPLETE and CI-green (Python 3.11.15;
+> 1814 pass / 0 fail / 89% coverage; DuckDB v10 / Alembic 0014).  The full API
+> surface (games, simulate, betting, WebSocket, odds, similarity, metrics) is
+> live.  Steps marked **[Phase 4+]** below are now implemented; this document
+> will be refreshed in Sprint 2 (SIM-421) to reflect the full Phase-5 endpoint
+> inventory and Phase-6 serving path.
 
 ---
 
