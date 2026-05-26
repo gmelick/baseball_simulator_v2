@@ -988,7 +988,9 @@ class TestLoaderOrchestration:
                     "date": "2024-08-15",
                     "games": [
                         {"gamePk": 745001, "rescheduleGameDate": "tbd"},
-                        {"gamePk": 745002},
+                        # SIM-405fix: only Final games are loaded, so the game that
+                        # should load must carry a completed status.
+                        {"gamePk": 745002, "status": {"abstractGameState": "Final"}},
                     ],
                 }
             ]

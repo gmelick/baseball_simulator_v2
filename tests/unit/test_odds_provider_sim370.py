@@ -39,6 +39,7 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from pipeline.bettingpros_odds_provider import BettingProsOddsProvider  # noqa: E402
 from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
     PROP_BOOKS,
     PROP_STATS,
@@ -240,8 +241,10 @@ class TestRealStub:
         assert "not yet implemented" in str(exc.value)
 
     def test_selectable_via_factory(self, clean_env) -> None:
+        # SIM-405: the "real" provider name now resolves to the live BettingPros
+        # integration (was the unimplemented RealOddsAPIProvider stub).
         clean_env.setenv(ODDS_PROVIDER_ENV, "real")
-        assert isinstance(get_odds_provider(), RealOddsAPIProvider)
+        assert isinstance(get_odds_provider(), BettingProsOddsProvider)
 
 
 # ===========================================================================
