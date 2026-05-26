@@ -79,6 +79,7 @@ from api.schemas import (
     GameSimSummaryLite,
     GameSimSummaryModel,
     LinescoreModel,
+    LiveGameStateResponse,
     OverrideDeltaModel,
     PitcherDecisionsModel,
     PlayByPlayModel,
@@ -1116,6 +1117,93 @@ async def get_game_status_card(
         away_score_final=_opt_int("away_score_final"),
         sim_summary=sim_summary,
         odds=None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# SIM-386 — Live in-progress game-state read path
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{game_pk}/live",
+    response_model=LiveGameStateResponse,
+    summary="Live in-progress game state (SIM-386)",
+    description=(
+        "Read the live game state from ``sim.lineup_state`` for an in-progress game.  "
+        "The live ingestion pipeline (port :8001) writes the game state JSONB on every "
+        "MLB WebSocket signal; this endpoint surfaces it on the main API so the frontend "
+        "does not need to reach the pipeline app directly.  Fields mirror the "
+        "``game_state`` JSONB blob: inning/half/outs/score/baserunners/lineup/roster.  "
+        "``updated_at`` (ISO-8601) marks when the pipeline last wrote; the frontend "
+        "may treat a gap > 30s as a potential pipeline staleness signal.  "
+        "Returns 404 when no live row exists for ``game_pk`` (game not yet live, "
+        "already finished, or pipeline has not ingested it yet). "
+        "Returns 503 when no DB pool is attached."
+    ),
+)
+async def get_live_game_state(
+    game_pk: int,
+    request: Request,
+) -> LiveGameStateResponse:
+    pool = _get_pool(request)
+    acquire = getattr(pool, "acquire", None)
+    if acquire is not None:
+        async with pool.acquire() as conn:
+            live = await sim_store.load_live_game_state(conn, int(game_pk))
+    else:
+        live = await sim_store.load_live_game_state(pool, int(game_pk))
+
+    if live is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"No live game state found for game_pk {game_pk}. "
+                "The game may not be in-progress or the pipeline has not "
+                "ingested it yet."
+            ),
+        )
+
+    gs: dict[str, Any] = live.get("game_state") or {}
+
+    def _i(key: str, default: int = 0) -> int:
+        v = gs.get(key, default)
+        return default if v is None else int(v)
+
+    def _opt_i(key: str) -> int | None:
+        v = gs.get(key)
+        return None if v is None else int(v)
+
+    def _ids(key: str) -> list[int]:
+        v = gs.get(key)
+        if not v:
+            return []
+        return [int(x) for x in v if x is not None]
+
+    return LiveGameStateResponse(
+        game_pk=int(live["game_pk"]),
+        session_id=str(live["session_id"]),
+        inning=_i("inning", 1),
+        half=str(gs.get("half", "Top")),
+        outs=_i("outs"),
+        balls=_i("balls"),
+        strikes=_i("strikes"),
+        home_score=_i("home_score"),
+        away_score=_i("away_score"),
+        batting_team_id=_opt_i("batting_team_id"),
+        fielding_team_id=_opt_i("fielding_team_id"),
+        on_1b=_opt_i("on_1b"),
+        on_2b=_opt_i("on_2b"),
+        on_3b=_opt_i("on_3b"),
+        current_batter_id=_opt_i("current_batter_id"),
+        current_pitcher_id=_opt_i("current_pitcher_id"),
+        home_lineup=_ids("home_lineup"),
+        away_lineup=_ids("away_lineup"),
+        home_bullpen=_ids("home_bullpen"),
+        away_bullpen=_ids("away_bullpen"),
+        home_bench=_ids("home_bench"),
+        away_bench=_ids("away_bench"),
+        updated_at=live.get("updated_at"),
     )
 
 

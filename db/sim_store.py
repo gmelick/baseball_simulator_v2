@@ -244,6 +244,57 @@ async def list_sim_runs(conn: Any, game_pk: int, *, limit: int = 10) -> list[dic
     return [_sim_run_row_to_dict(r) for r in rows]
 
 
+# ---------------------------------------------------------------------------
+# SIM-386: live in-progress game state (sim.lineup_state)
+# ---------------------------------------------------------------------------
+
+#: Read the most-recently-updated live row for a game_pk (the partial index
+#: idx_lineup_state_live on (is_live_game, updated_at) makes this fast).
+_SQL_LOAD_LIVE_GAME_STATE = """
+    SELECT session_id, game_pk, game_state, updated_at
+      FROM sim.lineup_state
+     WHERE game_pk = $1
+       AND is_live_game = TRUE
+     ORDER BY updated_at DESC
+     LIMIT 1
+"""
+
+
+async def load_live_game_state(conn: Any, game_pk: int) -> dict | None:
+    """Load the live game state for ``game_pk`` (``None`` if not live or absent).
+
+    Returns ``{session_id, game_pk, game_state (parsed dict), updated_at (ISO str)}``.
+    The ``game_state`` dict is decoded from the JSONB blob written by
+    :class:`~pipeline.live.live_ingestion_pipeline.GameStateBuilder`; its keys
+    mirror the required fields documented in that class's docstring (inning, half,
+    outs, balls, strikes, home_score, away_score, home_lineup, away_lineup, etc.).
+    """
+    row = await conn.fetchrow(_SQL_LOAD_LIVE_GAME_STATE, int(game_pk))
+    return None if row is None else _live_state_row_to_dict(row)
+
+
+def _live_state_row_to_dict(row: Mapping[str, Any]) -> dict:
+    """Map a ``sim.lineup_state`` row to the public dict, parsing the JSONB blob."""
+    import json
+
+    game_state = row["game_state"]
+    if isinstance(game_state, (str, bytes, bytearray)):
+        game_state = json.loads(game_state)
+    updated_at = row["updated_at"]
+    return {
+        "session_id": str(row["session_id"]),
+        "game_pk": int(row["game_pk"]),
+        "game_state": game_state,
+        "updated_at": (
+            updated_at.isoformat()
+            if hasattr(updated_at, "isoformat")
+            else str(updated_at)
+            if updated_at is not None
+            else None
+        ),
+    }
+
+
 def _sim_run_row_to_dict(row: Mapping[str, Any]) -> dict:
     """Map a ``sim.sim_runs`` row to the public dict, parsing the JSONB summary.
 
@@ -651,6 +702,7 @@ __all__ = [
     "load_latest_sim_run",
     "load_sim_run",
     "list_sim_runs",
+    "load_live_game_state",
     # DuckDB -- play stream
     "store_play_stream",
     "load_play_stream",

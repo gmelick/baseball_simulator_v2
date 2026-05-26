@@ -1,12 +1,13 @@
 # Phase 6 Sprint 1 — Kickoff Gates — 2026-05-25
 **Authors: UX Designer (Agent 7), Backend Developer (Agent 5), QA/DevOps (Agent 9), Product Manager (Agent 1)**
 
-Sprint 1 P0 delivery: ADR decision (React + Vite), full frontend scaffold, design system primitives,
-SPA serving path wired end-to-end through both FastAPI and nginx, typed WebSocket schema, full browser
-session auth layer (httpOnly cookies + require_auth enforcement + CORS wildcard removed), phantom-ticket
-backfill (SIM-382), enriched games-listing API (SIM-383), single-game aggregate card + status enum
-(SIM-384), multi-substitution override (SIM-388), player-prop edge/signal endpoint (SIM-390), and the
-carry-in bug fixes (SIM-387 calibration wiring, SIM-410 p95 middleware) plus stale-doc corrections.
+Sprint 1 P0 delivery: **ALL 13 P0 tickets closed**. ADR decision (React + Vite), full frontend scaffold,
+design system primitives, SPA serving path wired end-to-end through both FastAPI and nginx, typed
+WebSocket schema, full browser session auth layer (httpOnly cookies + require_auth enforcement + CORS
+wildcard removed), phantom-ticket backfill (SIM-382), enriched games-listing API (SIM-383), single-game
+aggregate card + status enum (SIM-384), live in-progress game-state read path (SIM-386),
+multi-substitution override (SIM-388), player-prop edge/signal endpoint (SIM-390), and the carry-in bug
+fixes (SIM-387 calibration wiring, SIM-410 p95 middleware) plus stale-doc corrections.
 
 | Ticket | Type | Owner | Status |
 |--------|------|-------|--------|
@@ -21,6 +22,7 @@ carry-in bug fixes (SIM-387 calibration wiring, SIM-410 p95 middleware) plus sta
 | SIM-388 | Feature | Backend Developer | ✅ Closed — SubstitutionSlot model + substitutions[] array field + updated _apply_override |
 | SIM-387 | Bug | Backend Developer | ✅ Closed — calibration map threaded to win_probability at /api/betting edges/signals |
 | SIM-389 | Security | Backend Developer + QA/DevOps | ✅ Closed — httpOnly cookie session + require_auth on expensive routes + CORS wildcard fix |
+| SIM-386 | Feature | Data Engineer + Backend Developer | ✅ Closed — `GET /{game_pk}/live` reads `sim.lineup_state`; LiveGameStateResponse; `load_live_game_state` in sim_store |
 | SIM-390 | Feature | Backend Developer + Betting Analyst | ✅ Closed — `GET /{game_pk}/props/{player_id}/{prop}` endpoint; full PMF + optional p_over/p_under/edge_report |
 | SIM-410 | Improvement | Backend Developer + QA/DevOps | ✅ Closed — LatencyMiddleware wires rolling p95 into app.state.api_p95_seconds → /metrics |
 | — | Housekeeping | Product Manager | ✅ Done — stale "Phase 2" references corrected in api/main.py, agent_team.md, WORKFLOW.md |
@@ -355,6 +357,62 @@ The Day Summary UI (SIM-391) cannot render game cards from bare IDs.
   - `test_enriched_rows_count_and_pks_unchanged` — count and game_pk set unaffected
 
 **Verification:** `pytest tests/unit/test_api_games.py -v` → **23/23 passed** (16 pre-existing + 7 new).
+
+### SIM-386 — Live in-progress game-state read path on the main API
+
+**Problem:** The live ingestion pipeline (port :8001) writes the real-time game state to
+`sim.lineup_state` on every MLB WebSocket signal, but the main API (`api/`) had no endpoint
+to read it. The frontend (SIM-392 LinescoreGraphic + BaseballFieldGraphic) could not get the
+current inning/score/baserunner state without reaching the pipeline app directly — breaking
+the single-origin contract.
+
+**Fix:**
+
+**`db/sim_store.py`:**
+- Added `_SQL_LOAD_LIVE_GAME_STATE` — parameterized SELECT on `sim.lineup_state WHERE game_pk = $1
+  AND is_live_game = TRUE ORDER BY updated_at DESC LIMIT 1` (served by the existing
+  `idx_lineup_state_live` partial index).
+- Added `load_live_game_state(conn, game_pk)` — async, returns `{session_id, game_pk, game_state
+  (parsed dict from JSONB), updated_at (ISO string)}` or `None` if not live.
+- Added `_live_state_row_to_dict(row)` — parses `game_state` JSONB (str/bytes → dict via json.loads;
+  asyncpg dict passthrough) and isoformats `updated_at`.
+- Added `"load_live_game_state"` to `__all__`.
+
+**`api/schemas.py`:**
+- Added `LiveGameStateResponse(_ApiModel)` — SIM-386 response model with all fields from the
+  `game_state` JSONB blob written by `GameStateBuilder`:
+  - Inning state: `inning`, `half` ("Top"/"Bottom"), `outs`, `balls`, `strikes`
+  - Score: `home_score`, `away_score`
+  - Team context: `batting_team_id`, `fielding_team_id`
+  - Baserunners: `on_1b`, `on_2b`, `on_3b` (player_id or None)
+  - Current participants: `current_batter_id`, `current_pitcher_id`
+  - Lineups/rosters: `home_lineup`, `away_lineup`, `home_bullpen`, `away_bullpen`,
+    `home_bench`, `away_bench` (all `list[int]`, default empty)
+  - Staleness: `updated_at: str | None` (ISO-8601 last pipeline write timestamp)
+  - All fields have neutral defaults so a partially-built game_state never breaks deserialization.
+- Added `"LiveGameStateResponse"` to `__all__`.
+
+**`api/routes/games.py`:**
+- Added `LiveGameStateResponse` to the `api.schemas` import block.
+- Added `GET /{game_pk}/live` endpoint (`get_live_game_state`):
+  1. `pool.acquire()` / direct `pool.fetchrow()` → `sim_store.load_live_game_state(conn, game_pk)`
+  2. 404 if `None` (game not live or pipeline not yet ingested)
+  3. Extracts `gs = live["game_state"]` dict; uses local `_i(key, default)`, `_opt_i(key)`,
+     `_ids(key)` helpers to safely coerce JSONB values
+  4. Returns `LiveGameStateResponse` with all fields populated
+
+**`tests/unit/test_api_games.py`:**
+- Added `_LIVE_GAME_STATE` module-level canned game_state dict (inning=5, Top, outs=1, score 3-2,
+  runner on first, full lineups/bullpens/benches).
+- Added `_FakePoolWithLive(_FakePool)` — overrides `fetchrow` to return a canned live row.
+- Added `class TestLiveGameState` — 5 new tests:
+  - `test_live_state_returns_200_with_all_fields` — all 20+ fields present and correct
+  - `test_live_state_no_live_row_returns_404` — load returns None → 404
+  - `test_live_state_no_pool_returns_503` — no pg_pool → 503
+  - `test_live_state_response_is_json_serializable` — json.dumps round-trip
+  - `test_live_state_empty_game_state_uses_defaults` — empty game_state dict → all fields default
+
+**Verification:** `pytest tests/unit/test_api_games.py -v` → **61/61 passed** (56 pre-existing + 5 new).
 
 ### SIM-390 — Player-prop edge/signal API endpoints
 

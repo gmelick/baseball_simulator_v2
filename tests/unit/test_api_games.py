@@ -1150,3 +1150,175 @@ class TestPlayerPropEdge:
             "/api/games/745001/props/600001/K?line=6.0&over_ml=-110&under_ml=-110"
         ).json()
         json.dumps(body)  # must not raise (no numpy types)
+
+
+# ===========================================================================
+# SIM-386 -- GET /api/games/{game_pk}/live
+# ===========================================================================
+
+#: Canned game_state JSONB that the fake pool returns for live-state tests.
+_LIVE_GAME_STATE = {
+    "inning": 5,
+    "half": "Top",
+    "outs": 1,
+    "balls": 2,
+    "strikes": 1,
+    "home_score": 3,
+    "away_score": 2,
+    "batting_team_id": 111,
+    "fielding_team_id": 147,
+    "on_1b": 123456,
+    "on_2b": None,
+    "on_3b": None,
+    "current_batcher_id": 654321,
+    "current_pitcher_id": 600001,
+    "home_lineup": [201, 202, 203, 204, 205, 206, 207, 208, 209],
+    "away_lineup": [101, 102, 103, 104, 105, 106, 107, 108, 109],
+    "home_bullpen": [301, 302],
+    "away_bullpen": [401, 402],
+    "home_bench": [501],
+    "away_bench": [601],
+}
+
+
+class _FakePoolWithLive(_FakePool):
+    """A FakePool that returns a canned live-state row from fetchrow."""
+
+    def __init__(self, *, live_row: dict | None = None, game_rows=None):
+        super().__init__(rows=game_rows or [])
+        self._live_row = live_row
+
+    async def fetchrow(self, sql, *args):
+        return self._live_row
+
+
+class TestLiveGameState:
+    """SIM-386: GET /{game_pk}/live endpoint.
+
+    Tests cover: happy-path shape, all field types, 404 when not live,
+    503 without pool, and JSON-serializable response.
+    """
+
+    @staticmethod
+    def _canned_live_row():
+        """A minimal sim.lineup_state row dict for use in tests."""
+        return {
+            "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "game_pk": 745001,
+            "game_state": _LIVE_GAME_STATE,
+            "updated_at": "2024-08-15T19:42:00",
+        }
+
+    def _patched_app(self, monkeypatch, *, live_row=None):
+        """App with a monkeypatched load_live_game_state."""
+        row = live_row if live_row is not None else self._canned_live_row()
+
+        async def _fake_load(conn, game_pk):
+            return {
+                "session_id": row["session_id"],
+                "game_pk": int(row["game_pk"]),
+                "game_state": row["game_state"],
+                "updated_at": row["updated_at"],
+            }
+
+        monkeypatch.setattr(
+            games_mod,
+            "sim_store",
+            type("_FakeSS", (), {"load_live_game_state": staticmethod(_fake_load)})(),
+        )
+        return _build_app(pool=_FakePool())
+
+    def test_live_state_returns_200_with_all_fields(self, monkeypatch):
+        """Happy path: returns 200 with all inning/score/baserunner/lineup fields."""
+        app = self._patched_app(monkeypatch)
+        client = TestClient(app)
+        resp = client.get("/api/games/745001/live")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["game_pk"] == 745001
+        assert body["session_id"] == "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        assert body["inning"] == 5
+        assert body["half"] == "Top"
+        assert body["outs"] == 1
+        assert body["balls"] == 2
+        assert body["strikes"] == 1
+        assert body["home_score"] == 3
+        assert body["away_score"] == 2
+        assert body["batting_team_id"] == 111
+        assert body["fielding_team_id"] == 147
+        assert body["on_1b"] == 123456
+        assert body["on_2b"] is None
+        assert body["on_3b"] is None
+        assert body["current_pitcher_id"] == 600001
+        assert len(body["home_lineup"]) == 9
+        assert len(body["away_lineup"]) == 9
+        assert body["home_bullpen"] == [301, 302]
+        assert body["away_bullpen"] == [401, 402]
+        assert body["home_bench"] == [501]
+        assert body["away_bench"] == [601]
+        assert body["updated_at"] == "2024-08-15T19:42:00"
+
+    def test_live_state_no_live_row_returns_404(self, monkeypatch):
+        """When load_live_game_state returns None, the endpoint returns 404."""
+
+        async def _fake_load(conn, game_pk):
+            return None
+
+        monkeypatch.setattr(
+            games_mod,
+            "sim_store",
+            type("_FakeSS", (), {"load_live_game_state": staticmethod(_fake_load)})(),
+        )
+        app = _build_app(pool=_FakePool())
+        client = TestClient(app)
+        resp = client.get("/api/games/999999/live")
+        assert resp.status_code == 404
+
+    def test_live_state_no_pool_returns_503(self, monkeypatch):
+        """Without a DB pool, the endpoint returns 503."""
+
+        async def _fake_load(conn, game_pk):
+            return self._canned_live_row()
+
+        monkeypatch.setattr(
+            games_mod,
+            "sim_store",
+            type("_FakeSS", (), {"load_live_game_state": staticmethod(_fake_load)})(),
+        )
+        app = FastAPI()
+        app.include_router(games_router)
+        app.state.pg_pool = None
+        app.state.sim_cache = None
+        client = TestClient(app)
+        resp = client.get("/api/games/745001/live")
+        assert resp.status_code == 503
+
+    def test_live_state_response_is_json_serializable(self, monkeypatch):
+        """Response round-trips through json.dumps (numpy-free contract)."""
+        app = self._patched_app(monkeypatch)
+        client = TestClient(app)
+        body = client.get("/api/games/745001/live").json()
+        json.dumps(body)  # must not raise
+
+    def test_live_state_empty_game_state_uses_defaults(self, monkeypatch):
+        """A minimal game_state dict (missing most fields) falls back to defaults."""
+        row = {
+            "session_id": "bbbbbbbb-0000-0000-0000-000000000001",
+            "game_pk": 745002,
+            "game_state": {},  # completely empty
+            "updated_at": None,
+        }
+        app = self._patched_app(monkeypatch, live_row=row)
+        client = TestClient(app)
+        resp = client.get("/api/games/745002/live")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        # All missing fields should fall back to their defaults.
+        assert body["inning"] == 1
+        assert body["half"] == "Top"
+        assert body["outs"] == 0
+        assert body["home_score"] == 0
+        assert body["away_score"] == 0
+        assert body["on_1b"] is None
+        assert body["home_lineup"] == []
+        assert body["updated_at"] is None

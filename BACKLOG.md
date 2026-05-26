@@ -1,6 +1,6 @@
 # Product Backlog
 
-*Owner: Product Manager (Agent 1) · Last updated: 2026-05-26 (🚀 PHASE 6 Sprint 1 in-progress — SIM-378 ✅, SIM-379 ✅, SIM-380 ✅, SIM-381 ✅, SIM-382 ✅, SIM-383 ✅, SIM-384 ✅, SIM-385 ✅, SIM-387 ✅, SIM-388 ✅, SIM-389 ✅, SIM-390 ✅, SIM-410 ✅, stale-docs ✅)*
+*Owner: Product Manager (Agent 1) · Last updated: 2026-05-26 (🚀 PHASE 6 Sprint 1 COMPLETE — SIM-378 ✅, SIM-379 ✅, SIM-380 ✅, SIM-381 ✅, SIM-382 ✅, SIM-383 ✅, SIM-384 ✅, SIM-385 ✅, SIM-386 ✅, SIM-387 ✅, SIM-388 ✅, SIM-389 ✅, SIM-390 ✅, SIM-410 ✅, stale-docs ✅)*
 
 > # 🚀 PHASE 6 — Frontend Build — OPEN 2026-09-02 (audit executed 2026-05-25)
 >
@@ -26,7 +26,7 @@
 > | SIM-383 | Enrich GET /api/games/{date} with team/venue names + records | Feature | P0 | M | Backend Developer + Data Engineer | - | ✅ **Closed 2026-05-25** |
 > | SIM-384 | Single game-card aggregate endpoint + status enum (scheduled/live/final) | Feature | P0 | M | Backend Developer | SIM-383 | ✅ **Closed 2026-05-26** |
 > | SIM-385 | Typed + documented WebSocket event schema | Feature | P0 | M | Backend Developer | - | ✅ **Closed 2026-05-25** |
-> | SIM-386 | Live in-progress game-state read path on the main API | Feature | P0 | L | Data Engineer + Backend Developer | SIM-384 |
+> | SIM-386 | Live in-progress game-state read path on the main API | Feature | P0 | L | Data Engineer + Backend Developer | SIM-384 | ✅ **Closed 2026-05-26** |
 > | SIM-387 | Fix dead calibration wiring at the betting edge/CLV call site | Bug | P0 | S | Backend Developer + ML Engineer | - | ✅ **Closed 2026-05-25** |
 > | SIM-388 | Multi-substitution override (array body) - unblocks SIM-128 | Feature | P0 | M | Backend Developer | - | ✅ **Closed 2026-05-26** |
 > | SIM-389 | Enforce auth on data/expensive routes + browser session model + fix dev CORS | Security | P0 | M | Backend Developer + QA/DevOps | - | ✅ **Closed 2026-05-25** |
