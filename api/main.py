@@ -30,6 +30,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.auth import LatencyMiddleware, RateLimitMiddleware, resolve_cors_origins
+from api.errors import install_exception_handlers
 from api.state import (
     build_all_engines,
     build_pitcher_engine,
@@ -562,6 +563,9 @@ def create_app() -> FastAPI:
             "docs": "/docs",
             "health": "/health",
         }
+
+    # App-level exception handling (SIM-416) — structured 500 envelope.
+    install_exception_handlers(app)
 
     return app
 
