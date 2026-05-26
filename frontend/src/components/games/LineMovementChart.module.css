@@ -1,0 +1,84 @@
+/**
+ * LineMovementChart.module.css — SIM-396
+ */
+
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-2);
+  padding: var(--sim-space-3);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-md);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sim-space-2);
+}
+
+.title {
+  font-size: var(--sim-text-sm);
+  font-weight: var(--sim-font-semibold);
+  color: var(--sim-color-text);
+  text-transform: capitalize;
+}
+
+.badges {
+  display: flex;
+  gap: var(--sim-space-1p5);
+}
+
+.chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.empty {
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text-muted);
+}
+
+.line {
+  stroke: var(--sim-color-interactive);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.closeMarker {
+  stroke: var(--sim-color-text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+}
+
+.closeDot {
+  fill: var(--sim-color-interactive);
+}
+
+.axisLabel {
+  font-family: var(--sim-font-sans);
+  font-size: 9px;
+  fill: var(--sim-color-text-muted);
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sim-space-3);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.clvPos {
+  color: var(--sim-color-win);
+  font-weight: var(--sim-font-semibold);
+}
+
+.clvNeg {
+  color: var(--sim-color-loss);
+  font-weight: var(--sim-font-semibold);
+}

@@ -13,6 +13,7 @@ alias) plus one lint failure all blocked the `frontend` job; all fixed here so t
 | SIM-393 | Feature | UX + Backend | ✅ Closed — Game page: header + linescore + field + play-by-play scroll + live WS (SIM-385) |
 | SIM-394 | Feature | UX + Betting | ✅ Closed — per-player boxscore means + on-demand prop distribution chart w/ prop-line marker |
 | SIM-395 | Feature | UX + Betting | ✅ Closed — betting card: ML/total/run-line edges + favored-side highlight + +EV signal badges + mock/live odds_source |
+| SIM-396 | Feature | UX + Betting | ✅ Closed — CLV / line-movement chart: implied-prob series + close marker + sharp/steam/beat-close badges + market tabs |
 | — | Infra/Bug | UX + QA | ✅ Done — frontend CI hardening (package-lock.json, `vite-env.d.ts`, Vite `@/` alias, AuthContext lint fix) |
 
 ### Frontend CI hardening (no ticket — completes the SIM-379 scaffold)
@@ -31,6 +32,23 @@ The SIM-379 scaffold committed `frontend/package.json` but the `frontend` CI job
 - **Lint failure under `--max-warnings 0`** — `AuthContext.tsx` tripped
   `react-refresh/only-export-components` (a context file co-locating its provider + hook). Added a
   scoped `eslint-disable-next-line` with rationale.
+
+### SIM-396 — CLV / line-movement time-series chart
+
+Mounts in a Game page "Line movement / CLV" panel.
+
+- `frontend/src/components/games/LineMovementChart.tsx` (+css) — SVG line chart
+  of one side's `implied_prob_series` (open→close), auto-scaled Y, a dashed
+  close marker + close dot, and sharp / steam (with direction arrow) / beat-close
+  badges; footer shows open%, close%, and the CLV probability (green/red).
+- `frontend/src/components/games/LineMovementPanel.tsx` (+css) — market tabs
+  (moneyline / total / run-line), fetches `/line-movement` (a cheap DB read, so
+  it loads on mount), renders one chart per (side, book) series; empty history
+  renders a friendly message.
+- `frontend/src/pages/GamePage.tsx` — mounted `LineMovementPanel`.
+
+**Verification:** `tsc` + `eslint` + `vite build` pass. Not browser-tested
+(needs stored odds history).
 
 ### SIM-395 — Betting card surface
 

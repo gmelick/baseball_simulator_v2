@@ -1,0 +1,48 @@
+/**
+ * LineMovementPanel.module.css — SIM-396
+ */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-3);
+}
+
+.tabs {
+  display: flex;
+  gap: var(--sim-space-1);
+}
+
+.tab {
+  padding: var(--sim-space-1) var(--sim-space-3);
+  font-family: var(--sim-font-sans);
+  font-size: var(--sim-text-xs);
+  font-weight: var(--sim-font-medium);
+  color: var(--sim-color-text-muted);
+  background: var(--sim-color-surface-alt);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-full);
+  cursor: pointer;
+}
+
+.tabActive {
+  color: var(--sim-color-text-inverse);
+  background: var(--sim-color-interactive);
+  border-color: var(--sim-color-interactive);
+}
+
+.charts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-3);
+}
+
+.muted {
+  color: var(--sim-color-text-muted);
+  font-size: var(--sim-text-sm);
+}
+
+.error {
+  color: var(--sim-danger-700);
+  font-size: var(--sim-text-sm);
+}
