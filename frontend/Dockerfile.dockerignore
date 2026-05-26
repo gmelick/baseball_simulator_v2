@@ -1,0 +1,23 @@
+# Dockerfile-adjacent ignore (BuildKit) for the frontend image — SIM-401.
+# Build context is the repo root, so this OVERRIDES the root .dockerignore
+# (which excludes frontend/ for the backend image). Patterns are relative to
+# the context root; keep frontend/ source + deploy/nginx/ in the context.
+.git
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+frontend/dist
+frontend/.vite
+frontend/.eslintcache
+frontend/test-results
+frontend/playwright-report
+frontend/blob-report
+frontend/.playwright
+data/
+*.duckdb
+*.duckdb.wal
+*.faiss
+*.pkl
+*.joblib
+*.log

@@ -18,6 +18,7 @@ alias) plus one lint failure all blocked the `frontend` job; all fixed here so t
 | SIM-398 | Feature | UX + Backend | ✅ Closed — managerial override v2 (staged queue + undo + multi-change via substitutions[]; supersedes v1 on the Game page) |
 | SIM-399 | Gap | UX + QA | ✅ Closed — a11y + responsive pass: skip link, global :focus-visible, prefers-reduced-motion, responsive header, dead-CSS cleanup |
 | SIM-400 | Test | QA | ✅ Closed — Playwright cross-browser E2E harness + 4 mocked smoke specs (chromium-verified green) + CI job |
+| SIM-401 | Infra | QA + Backend | ✅ Closed — frontend Docker image (Vite build → nginx SPA + proxy) + CD to ghcr + compose wiring (image build-verified) |
 | — | Infra/Bug | UX + QA | ✅ Done — frontend CI hardening (package-lock.json, `vite-env.d.ts`, Vite `@/` alias, AuthContext lint fix) |
 
 ### Frontend CI hardening (no ticket — completes the SIM-379 scaffold)
@@ -36,6 +37,29 @@ The SIM-379 scaffold committed `frontend/package.json` but the `frontend` CI job
 - **Lint failure under `--max-warnings 0`** — `AuthContext.tsx` tripped
   `react-refresh/only-export-components` (a context file co-locating its provider + hook). Added a
   scoped `eslint-disable-next-line` with rationale.
+
+### SIM-401 — Frontend deploy (static artifacts + nginx + CD to ghcr)
+
+- `frontend/Dockerfile` — multi-stage: stage 1 builds the Vite bundle
+  (`node:20-alpine`, `npm ci` + `npm run build`); stage 2 (`nginx:1.27-alpine`)
+  copies `dist/` to `/var/www/baseball-sim` (the web root the SIM-381 config
+  serves) + the shared `deploy/nginx/nginx.conf` (SPA fallback + /api,/ws,/auth,
+  /docs proxy). Container HEALTHCHECK hits `/index.html` (static liveness).
+- `frontend/Dockerfile.dockerignore` — BuildKit Dockerfile-adjacent ignore that
+  overrides the root `.dockerignore` (which excludes `frontend/` for the backend
+  image); keeps `frontend/` source + `deploy/nginx/` in the context, drops
+  node_modules / dist / playwright artifacts / data blobs.
+- `.github/workflows/frontend-release.yml` — CD mirroring docker-release.yml:
+  on main push / published release, builds + pushes `ghcr.io/<repo>-frontend`
+  tagged `:<sha>` + `:latest` (+ semver on releases).
+- `docker-compose.yml` — the `nginx` service now `build`s `frontend/Dockerfile`
+  (serves the SPA + proxies) instead of mounting the bare config; healthcheck
+  switched to `/index.html`.
+
+**Verification:** built the image locally (`docker build -f frontend/Dockerfile .`)
+— **build succeeds**, and the baked image contains `/var/www/baseball-sim/index.html`
++ `assets/` with the matching nginx root. (Full serving runs in compose alongside
+the backend, where the `baseball_app` upstream resolves.)
 
 ### SIM-400 — Cross-browser E2E harness (Playwright)
 

@@ -142,7 +142,12 @@ services:
   # Config: deploy/nginx/nginx.conf (mounted read-only).
   # ---------------------------------------------------------------------------
   nginx:
-    image: nginx:1.27-alpine
+    # SIM-401: build the frontend image (Vite build → nginx serving the SPA +
+    # the SIM-381 reverse-proxy/SPA-fallback config, both baked in).
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      target: runtime
     restart: unless-stopped
     ports:
       # Host port overridable via NGINX_HTTP_PORT (default 80).
@@ -150,15 +155,16 @@ services:
       # TLS — uncomment together with the :443 server block + cert mount in
       # deploy/nginx/nginx.conf for staging/prod.
       # - "${NGINX_HTTPS_PORT:-443}:443"
-    volumes:
-      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      # Mount TLS certs here when enabling the :443 server block:
-      # - ./deploy/nginx/certs:/etc/nginx/certs:ro
+    # nginx.conf + the built SPA are baked into the image (SIM-401); mount TLS
+    # certs here when enabling the :443 server block:
+    # volumes:
+    #   - ./deploy/nginx/certs:/etc/nginx/certs:ro
     depends_on:
       app:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:80/health || exit 1"]
+      # Static-root liveness (doesn't couple nginx readiness to the backend).
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:80/index.html || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

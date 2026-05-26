@@ -1,6 +1,6 @@
 # Product Backlog
 
-*Owner: Product Manager (Agent 1) · Last updated: 2026-05-26 (🚀 PHASE 6 Sprint 1 COMPLETE — all 13 P0s + SIM-410. Sprint 2 (P1 frontend) in-progress — SIM-391 ✅ Day Summary page + frontend CI hardening)*
+*Owner: Product Manager (Agent 1) · Last updated: 2026-05-26 (🚀 PHASE 6 Sprint 1 COMPLETE — all 13 P0s + SIM-410. Sprint 2 (P1 frontend build) COMPLETE — SIM-391→401 (11 tickets) + frontend CI hardening. Remaining P1: data/ML/perf prereqs SIM-402→409)*
 
 > # 🚀 PHASE 6 — Frontend Build — OPEN 2026-09-02 (audit executed 2026-05-25)
 >
@@ -45,7 +45,7 @@
 > | SIM-398 | Managerial override UI - v2 staged queue + undo + multi-change (SIM-128 build) | Feature | P1 | L | UX Designer + Backend Developer | SIM-397, SIM-388 | ✅ **Closed 2026-05-26** |
 > | SIM-399 | Frontend a11y + responsive/mobile + cross-browser gate | Gap | P1 | M | UX Designer + QA/DevOps | SIM-391 | ✅ **Closed 2026-05-26** |
 > | SIM-400 | Cross-browser E2E harness (Playwright) | Test | P1 | L | QA/DevOps | SIM-379 | ✅ **Closed 2026-05-26** |
-> | SIM-401 | Frontend deploy (static artifacts + nginx serving + CD to ghcr) | Infra | P1 | M | QA/DevOps + Backend Developer | SIM-381 |
+> | SIM-401 | Frontend deploy (static artifacts + nginx serving + CD to ghcr) | Infra | P1 | M | QA/DevOps + Backend Developer | SIM-381 | ✅ **Closed 2026-05-26** |
 >
 > ### Tier P1 — prerequisites + live-env verification
 > | ID | Title | Type | Pri | Size | Owner | Depends-on |
