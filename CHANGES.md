@@ -16,6 +16,7 @@ alias) plus one lint failure all blocked the `frontend` job; all fixed here so t
 | SIM-396 | Feature | UX + Betting | ✅ Closed — CLV / line-movement chart: implied-prob series + close marker + sharp/steam/beat-close badges + market tabs |
 | SIM-397 | Feature | UX + Backend | ✅ Closed — managerial override v1 (single-sub form → /simulate/with_override → baseline-vs-override delta) |
 | SIM-398 | Feature | UX + Backend | ✅ Closed — managerial override v2 (staged queue + undo + multi-change via substitutions[]; supersedes v1 on the Game page) |
+| SIM-399 | Gap | UX + QA | ✅ Closed — a11y + responsive pass: skip link, global :focus-visible, prefers-reduced-motion, responsive header, dead-CSS cleanup |
 | — | Infra/Bug | UX + QA | ✅ Done — frontend CI hardening (package-lock.json, `vite-env.d.ts`, Vite `@/` alias, AuthContext lint fix) |
 
 ### Frontend CI hardening (no ticket — completes the SIM-379 scaffold)
@@ -34,6 +35,25 @@ The SIM-379 scaffold committed `frontend/package.json` but the `frontend` CI job
 - **Lint failure under `--max-warnings 0`** — `AuthContext.tsx` tripped
   `react-refresh/only-export-components` (a context file co-locating its provider + hook). Added a
   scoped `eslint-disable-next-line` with rationale.
+
+### SIM-399 — a11y + responsive pass
+
+- `frontend/src/styles/global.css` — added a global `:focus-visible` ring
+  (keyboard-only), a `prefers-reduced-motion` block (disables transitions + the
+  LIVE pulse), a `.skip-link` (visually hidden until focused), and a responsive
+  header (`max-width: 640px` reduces padding + title size). Removed the dead
+  Sprint-1 `.placeholder-card` styles and the double width/padding constraint on
+  `.app-main` (routed pages own their `.page` max-width + padding).
+- `frontend/src/App.tsx` — added a "Skip to content" link targeting
+  `#main-content`.
+- Existing a11y already in place from earlier tickets: SVG graphics carry
+  `role="img"` + `aria-label`; the date nav / play-by-play / override controls
+  are real `<button>`s with labels; forms use `<label>`s; loading states use
+  `aria-busy`; the responsive grids (Day Summary `auto-fill`, Game page
+  stack-at-768px, betting/field sides) reflow on mobile.
+
+**Cross-browser** verification is deferred to the SIM-400 Playwright harness run
+against a live env. **Verification here:** `tsc` + `eslint` + `vite build` pass.
 
 ### SIM-398 — Managerial override UI v2 (staged queue + undo + multi-change)
 

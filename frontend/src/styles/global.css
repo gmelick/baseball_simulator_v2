@@ -64,6 +64,48 @@ button {
 }
 
 /* ============================================================================
+ * Accessibility: visible keyboard focus + reduced motion
+ * ========================================================================== */
+
+/* A consistent keyboard-only focus ring across interactive elements (mouse
+ * clicks don't trigger :focus-visible, so this doesn't add visual noise). */
+:focus-visible {
+  outline: 2px solid var(--sim-color-interactive);
+  outline-offset: 2px;
+  border-radius: var(--sim-radius-sm);
+}
+
+/* Honor the OS "reduce motion" setting — disable transitions + the LIVE pulse. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Skip-to-content link: visually hidden until focused. */
+.skip-link {
+  position: absolute;
+  left: var(--sim-space-2);
+  top: -40px;
+  z-index: var(--sim-z-toast);
+  padding: var(--sim-space-2) var(--sim-space-3);
+  background: var(--sim-color-surface);
+  color: var(--sim-color-interactive);
+  border: 1px solid var(--sim-color-interactive);
+  border-radius: var(--sim-radius-md);
+  transition: top var(--sim-transition-fast);
+}
+
+.skip-link:focus {
+  top: var(--sim-space-2);
+}
+
+/* ============================================================================
  * App shell layout
  * ========================================================================== */
 
@@ -110,46 +152,22 @@ button {
   gap: var(--sim-space-4);
 }
 
+/* The routed pages (.page) own their own max-width + padding, so the shell
+ * wrapper just grows to fill — avoids double-constraining width / padding. */
 .app-main {
   flex: 1;
-  padding: var(--sim-space-6);
-  max-width: var(--sim-max-width);
-  margin: 0 auto;
   width: 100%;
 }
 
-/* ============================================================================
- * Sprint-1 placeholder card (remove when SIM-391 lands)
- * ========================================================================== */
+/* Tighter header on small screens; let the title truncate rather than overflow. */
+@media (max-width: 640px) {
+  .app-header {
+    padding: 0 var(--sim-space-4);
+  }
 
-.placeholder-card {
-  background: var(--sim-color-surface);
-  border: 1px solid var(--sim-color-border);
-  border-radius: var(--sim-radius-lg);
-  padding: var(--sim-space-8);
-  max-width: 520px;
-  box-shadow: var(--sim-shadow-sm);
-}
-
-.placeholder-card h2 {
-  font-size: var(--sim-text-xl);
-  margin-bottom: var(--sim-space-3);
-  color: var(--sim-primary-900);
-}
-
-.placeholder-card__body {
-  color: var(--sim-color-text-muted);
-  margin-bottom: var(--sim-space-5);
-  line-height: var(--sim-leading-relaxed);
-}
-
-.placeholder-card__checklist {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sim-space-2);
-  font-size: var(--sim-text-sm);
-  color: var(--sim-color-text-muted);
+  .app-header__title {
+    font-size: var(--sim-text-base);
+  }
 }
 
 /* ============================================================================

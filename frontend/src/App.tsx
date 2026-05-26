@@ -44,6 +44,9 @@ function AppShell(): React.ReactElement {
   return (
     <BrowserRouter>
       <div className="app">
+        <a href="#main-content" className="skip-link">
+          Skip to content
+        </a>
         <header className="app-header">
           <Link
             to="/"
