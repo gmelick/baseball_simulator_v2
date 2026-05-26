@@ -1359,13 +1359,20 @@ async def simulate_with_override_endpoint(
         "resolved PA event on the terminal pitch) for the game's most-recent "
         "persisted run -- the durable backing populated by /simulate (SIM-357). "
         "Served straight from the DuckDB play-stream store (SIM-356); numpy-free "
-        "JSON (SIM-350). 404 if nothing has been persisted for the game, 503 if "
-        "no replay store is wired."
+        "JSON (SIM-350). SIM-415: optional ``limit``/``offset`` page the entries "
+        "(a full game is ~300 pitches); ``n_pitches``/``n_plate_appearances`` stay "
+        "full-game totals and ``total_entries``/``page_*`` describe the slice. "
+        "Omitting ``limit`` returns the whole stream (unchanged shape). 404 if "
+        "nothing has been persisted for the game, 503 if no replay store is wired."
     ),
 )
 async def get_game_plays(
     game_pk: int,
     request: Request,
+    limit: int | None = Query(
+        None, ge=1, le=2000, description="Page size; omit to return all entries"
+    ),
+    offset: int = Query(0, ge=0, description="0-based offset of the entry slice"),
 ) -> PlayByPlayModel:
     con = _get_sim_duckdb(request)
     if con is None:
@@ -1381,8 +1388,21 @@ async def get_game_plays(
             detail=f"no persisted plays for game_pk={game_pk}",
         )
 
+    # Build the FULL collection first so n_pitches / n_plate_appearances reflect
+    # the whole game regardless of paging (SIM-415).
     pbp = PlayByPlay(entries=[PlayByPlayEntry(**row) for row in rows])
-    return PlayByPlayModel.from_dataclass(pbp)
+    model = PlayByPlayModel.from_dataclass(pbp)
+
+    if limit is None:
+        return model  # unchanged full-collection response
+
+    total = len(model.entries)
+    model.entries = model.entries[offset : offset + limit]
+    model.total_entries = total
+    model.page_offset = offset
+    model.page_limit = limit
+    model.returned_entries = len(model.entries)
+    return model
 
 
 # ===========================================================================

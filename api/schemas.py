@@ -536,9 +536,21 @@ class PlayByPlayModel(_ApiModel):
     """
 
     entries: list[PlayByPlayEntryModel] = Field(default_factory=list)
-    #: Derived from the source dataclass's properties.
+    #: Derived from the source dataclass's properties (FULL-game totals, never
+    #: trimmed by pagination — so a paged response still reports the true counts).
     n_pitches: int = 0
     n_plate_appearances: int = 0
+    # SIM-415 pagination — populated only when the /plays response is paged
+    # (``limit`` supplied); ``None`` on the default full-collection response so
+    # the shape is backward-compatible.
+    #: Total entries in the full game (== len of the un-paged stream).
+    total_entries: int | None = None
+    #: 0-based offset of the returned slice.
+    page_offset: int | None = None
+    #: The requested page size (``limit``).
+    page_limit: int | None = None
+    #: Number of entries actually returned in this page (len(entries)).
+    returned_entries: int | None = None
 
     @classmethod
     def from_dataclass(cls, pbp: Any) -> PlayByPlayModel:
