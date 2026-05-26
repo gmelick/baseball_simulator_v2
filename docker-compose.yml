@@ -90,10 +90,12 @@ services:
     env_file:
       - .env
     environment:
-      # BASEBALL_DB_DSN comes from .env (env_file above). Keep it set to
-      # ``postgresql://baseball_user:baseball_pass@db:5432/baseball_sim`` so
-      # the in-network host name ``db`` resolves to the compose Postgres
-      # service.  alembic auto-coerces to the +psycopg2 driver in env.py.
+      # In-container DSN is deterministic (the `db` service is always at
+      # db:5432), so set it here rather than relying on .env — .env's
+      # BASEBALL_DB_DSN is the HOST-side value (localhost:<DB_HOST_PORT>) for
+      # host tools and won't resolve inside the network. This override wins over
+      # env_file. alembic auto-coerces to the +psycopg2 driver in env.py.
+      BASEBALL_DB_DSN: postgresql://baseball_user:baseball_pass@db:5432/baseball_sim
       REDIS_URL:       redis://redis:6379/0
       ENVIRONMENT:     ${ENVIRONMENT:-development}
     ports:
