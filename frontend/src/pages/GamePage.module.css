@@ -1,0 +1,131 @@
+/**
+ * GamePage.module.css — SIM-393
+ */
+
+.page {
+  max-width: var(--sim-max-width);
+  margin: 0 auto;
+  padding: var(--sim-space-6) var(--sim-space-4);
+}
+
+.back {
+  color: var(--sim-color-interactive);
+  font-size: var(--sim-text-sm);
+  text-decoration: none;
+}
+
+.back:hover {
+  text-decoration: underline;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sim-space-3);
+  margin: var(--sim-space-4) 0;
+}
+
+.matchup {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-3);
+}
+
+.team {
+  font-size: var(--sim-text-xl);
+  font-weight: var(--sim-font-bold);
+  color: var(--sim-color-text);
+}
+
+.score {
+  font-size: var(--sim-text-2xl);
+  font-weight: var(--sim-font-bold);
+  color: var(--sim-color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.at {
+  color: var(--sim-color-text-muted);
+  font-size: var(--sim-text-sm);
+}
+
+.statusLine {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-3);
+}
+
+.inning {
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.liveBanner {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-2);
+  padding: var(--sim-space-2) var(--sim-space-3);
+  background: var(--sim-info-100);
+  border-radius: var(--sim-radius-md);
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text);
+  margin-bottom: var(--sim-space-4);
+}
+
+.wsDot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--sim-radius-full);
+  background: var(--sim-color-text-muted);
+}
+
+.wsDot[data-status='open'] {
+  background: var(--sim-color-win);
+}
+
+.wsDot[data-status='connecting'] {
+  background: var(--sim-color-override);
+}
+
+.wsDot[data-status='closed'] {
+  background: var(--sim-color-loss);
+}
+
+.error {
+  padding: var(--sim-space-4);
+  background: var(--sim-danger-100);
+  border: 1px solid var(--sim-danger-500);
+  border-radius: var(--sim-radius-lg);
+  color: var(--sim-danger-700);
+  margin-bottom: var(--sim-space-4);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--sim-space-4);
+  align-items: start;
+}
+
+.leftCol,
+.rightCol {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-4);
+  min-width: 0;
+}
+
+.muted {
+  color: var(--sim-color-text-muted);
+  font-size: var(--sim-text-sm);
+}
+
+/* Stack to one column on narrow viewports. */
+@media (max-width: 768px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

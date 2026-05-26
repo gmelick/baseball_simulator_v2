@@ -1,0 +1,113 @@
+/**
+ * PlayByPlayList.module.css — SIM-393
+ */
+
+.scroll {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 520px;
+  overflow-y: auto;
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-lg);
+}
+
+.empty {
+  color: var(--sim-color-text-muted);
+  font-size: var(--sim-text-sm);
+  padding: var(--sim-space-4);
+}
+
+.pa {
+  border-bottom: 1px solid var(--sim-color-border);
+}
+
+.pa:last-child {
+  border-bottom: none;
+}
+
+.paHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-3);
+  width: 100%;
+  padding: var(--sim-space-2p5) var(--sim-space-3);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--sim-font-sans);
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text);
+}
+
+.paHeader:hover {
+  background: var(--sim-color-surface-alt);
+}
+
+.paNum {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--sim-font-semibold);
+  color: var(--sim-color-text-muted);
+  min-width: 48px;
+}
+
+.paEvent {
+  flex: 1;
+  text-transform: capitalize;
+}
+
+.paMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-2);
+  flex-shrink: 0;
+}
+
+.runs {
+  color: var(--sim-color-win);
+  font-weight: var(--sim-font-semibold);
+  font-size: var(--sim-text-xs);
+}
+
+.outs {
+  color: var(--sim-color-text-muted);
+  font-size: var(--sim-text-xs);
+}
+
+.caret {
+  color: var(--sim-color-text-muted);
+  width: 12px;
+}
+
+.pitches {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--sim-space-3) var(--sim-space-2) var(--sim-space-6);
+  background: var(--sim-color-surface-alt);
+}
+
+.pitch {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sim-space-3);
+  padding: var(--sim-space-1) 0;
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+}
+
+.pitchNum {
+  font-variant-numeric: tabular-nums;
+  min-width: 24px;
+}
+
+.pitchOutcome {
+  text-transform: capitalize;
+  color: var(--sim-color-text);
+}
+
+.bip {
+  color: var(--sim-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}

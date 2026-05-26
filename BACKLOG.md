@@ -37,7 +37,7 @@
 > |---|---|---|---|---|---|---|
 > | SIM-391 | Build Day Summary page (date nav + game-count badge + 3-state cards) | Feature | P1 | L | UX Designer + Backend Developer | SIM-380, SIM-383, SIM-384 | ✅ **Closed 2026-05-26** |
 > | SIM-392 | Build LinescoreGraphic + BaseballFieldGraphic SVG | Feature | P1 | M | UX Designer + Backend Developer | SIM-380, SIM-386 | ✅ **Closed 2026-05-26** |
-> | SIM-393 | Build Game page (play-by-play + pitch drill-down + per-player sim panels) | Feature | P1 | L | UX Designer + Backend Developer | SIM-391, SIM-385 |
+> | SIM-393 | Build Game page (play-by-play + pitch drill-down + per-player sim panels) | Feature | P1 | L | UX Designer + Backend Developer | SIM-391, SIM-385 | ✅ **Closed 2026-05-26** |
 > | SIM-394 | Build per-player boxscore (100-iter averages + distribution views) | Feature | P1 | M | UX Designer + Betting Analyst | SIM-380, SIM-390 |
 > | SIM-395 | Build betting card surface (ML/spread/total + winning-side + +EV signal) | Feature | P1 | L | UX Designer + Betting Analyst | SIM-380, SIM-390 |
 > | SIM-396 | Build CLV / line-movement time-series chart | Feature | P1 | M | UX Designer + Betting Analyst | SIM-395 |

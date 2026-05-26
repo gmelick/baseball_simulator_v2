@@ -21,10 +21,11 @@ import styles from './BaseballFieldGraphic.module.css'
 export type FieldPosition = 'P' | 'C' | '1B' | '2B' | 'SS' | '3B' | 'LF' | 'CF' | 'RF'
 
 export interface BaseballFieldGraphicProps {
-  /** Runner on first — a name (rendered as a label) or any truthy = occupied. */
-  onFirst?: string | null
-  onSecond?: string | null
-  onThird?: string | null
+  /** Runner on first: a name string (rendered as a label), `true` (occupied,
+   *  no label), or null/false/'' (empty). */
+  onFirst?: string | boolean | null
+  onSecond?: string | boolean | null
+  onThird?: string | boolean | null
   /** Current batter name (label under home plate). */
   batter?: string | null
   /** Optional fielder names keyed by position. */
@@ -97,7 +98,7 @@ export function BaseballFieldGraphic({
   const label = ariaLabel ?? `Field: runners on ${baseSummary}`
 
   // Runner labels are only drawn when a name string (not just `true`) is given.
-  const runnerName = (v: string | null | undefined): string | null =>
+  const runnerName = (v: string | boolean | null | undefined): string | null =>
     typeof v === 'string' && v !== '' ? v : null
 
   return (

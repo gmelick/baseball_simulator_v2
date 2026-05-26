@@ -10,6 +10,7 @@ alias) plus one lint failure all blocked the `frontend` job; all fixed here so t
 |--------|------|-------|--------|
 | SIM-391 | Feature | UX + Backend | ✅ Closed — Day Summary page: date nav + game-count badge + 3-state GameCards + React Router |
 | SIM-392 | Feature | UX + Backend | ✅ Closed — LinescoreGraphic (R/H/E grid + "x" cells) + BaseballFieldGraphic SVG (9 positions + runners + batter) |
+| SIM-393 | Feature | UX + Backend | ✅ Closed — Game page: header + linescore + field + play-by-play scroll + live WS (SIM-385) |
 | — | Infra/Bug | UX + QA | ✅ Done — frontend CI hardening (package-lock.json, `vite-env.d.ts`, Vite `@/` alias, AuthContext lint fix) |
 
 ### Frontend CI hardening (no ticket — completes the SIM-379 scaffold)
@@ -28,6 +29,35 @@ The SIM-379 scaffold committed `frontend/package.json` but the `frontend` CI job
 - **Lint failure under `--max-warnings 0`** — `AuthContext.tsx` tripped
   `react-refresh/only-export-components` (a context file co-locating its provider + hook). Added a
   scoped `eslint-disable-next-line` with rationale.
+
+### SIM-393 — Game page (play-by-play + linescore + field + live WS)
+
+The game detail view at `/game/:gamePk`, replacing the SIM-391 stub.
+
+- `frontend/src/pages/GamePage.tsx` (+css) — orchestrates the page: header
+  (matchup + 3-state status badge + score), a live banner (WS connection dot +
+  "re-simulating…" indicator), a two-column grid (linescore + field graphic on
+  the left, play-by-play on the right), and marked slots for projections
+  (SIM-394) and betting (SIM-395). Score/baserunner precedence: WS > REST /live
+  > final scores. A local `useOptionalResource` hook treats a 404 as "no data
+  yet" (no persisted sim / not live) rather than an error.
+- `frontend/src/hooks/useGameSocket.ts` — subscribes to `/ws/games/{gamePk}`
+  (Vite-proxied), consuming the SIM-385 event schema: `game_state_update`
+  (updates live state + `resimPending`), `resim_pending`, `ping` (auto-pong),
+  `pong`. Tracks connection status, normalizes the WS `runner_on_first/second/
+  third` → `on_1b/on_2b/on_3b`, and reconnects with a 3s backoff.
+- `frontend/src/components/games/PlayByPlayList.tsx` (+css) — the scroll,
+  grouped into plate appearances (resolved event + runs/outs), each PA
+  expandable to its pitch sequence (drill-down with exit-velo/launch-angle for
+  balls in play).
+- `frontend/src/api/games.ts` — added `fetchLinescore`, `fetchPlays`,
+  `fetchLiveState` + the `Linescore`/`PlayByPlay`/`LiveState` types.
+- `frontend/src/components/graphics/BaseballFieldGraphic.tsx` — widened base
+  props to `string | boolean | null` so the page can mark occupancy without a
+  player name.
+
+**Verification:** `tsc --noEmit` + `eslint` + `vite build` (60 modules) all pass.
+UI not browser-tested (needs a live backend + persisted sim data).
 
 ### SIM-392 — LinescoreGraphic + BaseballFieldGraphic SVG
 
