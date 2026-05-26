@@ -15,6 +15,7 @@ alias) plus one lint failure all blocked the `frontend` job; all fixed here so t
 | SIM-395 | Feature | UX + Betting | ✅ Closed — betting card: ML/total/run-line edges + favored-side highlight + +EV signal badges + mock/live odds_source |
 | SIM-396 | Feature | UX + Betting | ✅ Closed — CLV / line-movement chart: implied-prob series + close marker + sharp/steam/beat-close badges + market tabs |
 | SIM-397 | Feature | UX + Backend | ✅ Closed — managerial override v1 (single-sub form → /simulate/with_override → baseline-vs-override delta) |
+| SIM-398 | Feature | UX + Backend | ✅ Closed — managerial override v2 (staged queue + undo + multi-change via substitutions[]; supersedes v1 on the Game page) |
 | — | Infra/Bug | UX + QA | ✅ Done — frontend CI hardening (package-lock.json, `vite-env.d.ts`, Vite `@/` alias, AuthContext lint fix) |
 
 ### Frontend CI hardening (no ticket — completes the SIM-379 scaffold)
@@ -33,6 +34,19 @@ The SIM-379 scaffold committed `frontend/package.json` but the `frontend` CI job
 - **Lint failure under `--max-warnings 0`** — `AuthContext.tsx` tripped
   `react-refresh/only-export-components` (a context file co-locating its provider + hook). Added a
   scoped `eslint-disable-next-line` with rationale.
+
+### SIM-398 — Managerial override UI v2 (staged queue + undo + multi-change)
+
+- `frontend/src/components/games/OverridePanelV2.tsx` — a staged-queue override:
+  add several substitutions to a queue, undo any of them (× per row), clear all,
+  then run them together via the SIM-388 `substitutions[]` array body. An amber
+  "Override active · N staged" badge shows while the queue is non-empty; the
+  result renders the side-by-side baseline/override comparison (OverrideDeltaView).
+- `frontend/src/pages/GamePage.tsx` — the "Managerial override" panel now mounts
+  `OverridePanelV2` (supersedes the SIM-397 v1 form, which remains in the
+  codebase as a standalone component).
+
+**Verification:** `tsc` + `eslint` + `vite build` pass. Not browser-tested.
 
 ### SIM-397 — Managerial override UI v1 (single-sub)
 

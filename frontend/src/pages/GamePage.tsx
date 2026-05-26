@@ -31,7 +31,7 @@ import { BaseballFieldGraphic, LinescoreGraphic } from '@/components/graphics'
 import { BettingCard } from '@/components/games/BettingCard'
 import { BoxscorePanel } from '@/components/games/BoxscorePanel'
 import { LineMovementPanel } from '@/components/games/LineMovementPanel'
-import { OverridePanelV1 } from '@/components/games/OverridePanelV1'
+import { OverridePanelV2 } from '@/components/games/OverridePanelV2'
 import { PlayByPlayList } from '@/components/games/PlayByPlayList'
 import { Badge, Card, Panel } from '@/components/ui'
 import { useGameSocket } from '@/hooks/useGameSocket'
@@ -230,7 +230,7 @@ export function GamePage(): React.ReactElement {
           </Panel>
 
           <Panel label="Managerial override">
-            <OverridePanelV1 gamePk={gamePk} />
+            <OverridePanelV2 gamePk={gamePk} />
           </Panel>
         </div>
 
