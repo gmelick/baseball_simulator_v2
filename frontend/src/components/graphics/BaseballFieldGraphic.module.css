@@ -1,0 +1,74 @@
+/**
+ * BaseballFieldGraphic.module.css — SIM-392
+ */
+
+.field {
+  width: 100%;
+  max-width: 320px;
+  height: auto;
+  display: block;
+}
+
+.outfield {
+  fill: var(--sim-success-100);
+  stroke: var(--sim-color-border);
+  stroke-width: 1;
+}
+
+.infield {
+  fill: var(--sim-warning-100);
+  stroke: var(--sim-color-border-strong);
+  stroke-width: 1.5;
+}
+
+.baseEmpty {
+  fill: var(--sim-color-surface);
+  stroke: var(--sim-color-border-strong);
+  stroke-width: 1.5;
+}
+
+.baseOccupied {
+  fill: var(--sim-color-live);
+  stroke: var(--sim-info-700);
+  stroke-width: 1.5;
+}
+
+.homePlate {
+  fill: var(--sim-color-text);
+}
+
+.fielder {
+  fill: var(--sim-color-surface);
+  stroke: var(--sim-color-text-muted);
+  stroke-width: 1.5;
+}
+
+.posLabel {
+  font-family: var(--sim-font-sans);
+  font-size: 10px;
+  font-weight: var(--sim-font-semibold);
+  fill: var(--sim-color-text-muted);
+  text-anchor: middle;
+}
+
+.nameLabel {
+  font-family: var(--sim-font-sans);
+  font-size: 8px;
+  fill: var(--sim-color-text-muted);
+  text-anchor: middle;
+}
+
+.runnerLabel {
+  font-family: var(--sim-font-sans);
+  font-size: 9px;
+  font-weight: var(--sim-font-semibold);
+  fill: var(--sim-info-700);
+  dominant-baseline: middle;
+}
+
+.batterLabel {
+  font-family: var(--sim-font-sans);
+  font-size: 9px;
+  font-weight: var(--sim-font-semibold);
+  fill: var(--sim-color-text);
+}

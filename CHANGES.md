@@ -9,6 +9,7 @@ alias) plus one lint failure all blocked the `frontend` job; all fixed here so t
 | Ticket | Type | Owner | Status |
 |--------|------|-------|--------|
 | SIM-391 | Feature | UX + Backend | ✅ Closed — Day Summary page: date nav + game-count badge + 3-state GameCards + React Router |
+| SIM-392 | Feature | UX + Backend | ✅ Closed — LinescoreGraphic (R/H/E grid + "x" cells) + BaseballFieldGraphic SVG (9 positions + runners + batter) |
 | — | Infra/Bug | UX + QA | ✅ Done — frontend CI hardening (package-lock.json, `vite-env.d.ts`, Vite `@/` alias, AuthContext lint fix) |
 
 ### Frontend CI hardening (no ticket — completes the SIM-379 scaffold)
@@ -27,6 +28,27 @@ The SIM-379 scaffold committed `frontend/package.json` but the `frontend` CI job
 - **Lint failure under `--max-warnings 0`** — `AuthContext.tsx` tripped
   `react-refresh/only-export-components` (a context file co-locating its provider + hook). Added a
   scoped `eslint-disable-next-line` with rationale.
+
+### SIM-392 — LinescoreGraphic + BaseballFieldGraphic SVG
+
+Two prop-driven presentational graphics the Game page (SIM-393) composes; both
+decoupled from the API (the page adapts payloads into their props).
+
+- `frontend/src/components/graphics/LinescoreGraphic.tsx` (+css) — classic
+  scoreboard table: away-on-top/home-on-bottom, per-inning run grid + R/H/E
+  totals. `null` inning cells render the scoreboard "x" (half not played);
+  extra innings (N>9) widen the grid; mirrors LinescoreModel (SIM-362).
+- `frontend/src/components/graphics/BaseballFieldGraphic.tsx` (+css) — SVG
+  field: outfield arc + infield diamond, 9 standard fielder dots with P/C/1B…
+  labels, base markers that fill when occupied, runner name labels, and a
+  batter label. Label-collision rules: OF labels above their dot / IF labels
+  below; runner labels anchored outside the diamond (right of 1B, above 2B,
+  left of 3B); batter label below home plate. Driven by the SIM-386 live
+  baserunner state (on_1b/on_2b/on_3b) + optional player names.
+- `frontend/src/components/graphics/index.ts` — barrel export.
+
+**Verification:** `tsc --noEmit` + `eslint` pass. (Visual rendering exercised
+once SIM-393 mounts them; build-verified there.)
 
 ### SIM-391 — Day Summary page (date nav + game-count badge + 3-state cards)
 

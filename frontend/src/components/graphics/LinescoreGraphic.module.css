@@ -1,0 +1,69 @@
+/**
+ * LinescoreGraphic.module.css — SIM-392
+ */
+
+.wrap {
+  overflow-x: auto;
+}
+
+.table {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text);
+}
+
+.caption {
+  text-align: left;
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+  margin-bottom: var(--sim-space-2);
+}
+
+.table th,
+.table td {
+  padding: var(--sim-space-1p5) var(--sim-space-2);
+  text-align: center;
+  border-bottom: 1px solid var(--sim-color-border);
+}
+
+.teamCol {
+  text-align: left;
+  font-weight: var(--sim-font-semibold);
+  min-width: 64px;
+  white-space: nowrap;
+}
+
+.inningCol,
+.totalCol {
+  font-weight: var(--sim-font-medium);
+  color: var(--sim-color-text-muted);
+  font-size: var(--sim-text-xs);
+  min-width: 22px;
+}
+
+.inningCell {
+  color: var(--sim-color-text);
+  min-width: 22px;
+}
+
+.totalCol,
+.totalCell {
+  border-left: 1px solid var(--sim-color-border);
+}
+
+.totalCell {
+  font-weight: var(--sim-font-semibold);
+}
+
+/* The R column reads as the headline number. */
+.runs {
+  color: var(--sim-color-text);
+  font-weight: var(--sim-font-bold);
+}
+
+/* Separate the inning grid from the R/H/E block with a stronger rule. */
+.inningCol:last-of-type,
+.inningCell:last-of-type {
+  border-right: 2px solid var(--sim-color-border-strong);
+}
