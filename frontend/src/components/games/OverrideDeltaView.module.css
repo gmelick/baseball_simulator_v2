@@ -1,0 +1,61 @@
+/**
+ * OverrideDeltaView.module.css — SIM-397
+ */
+
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-2);
+}
+
+.desc {
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text-muted);
+  font-style: italic;
+}
+
+.table {
+  border-collapse: collapse;
+  font-size: var(--sim-text-sm);
+  font-variant-numeric: tabular-nums;
+  width: 100%;
+}
+
+.table th,
+.table td {
+  padding: var(--sim-space-1p5) var(--sim-space-2);
+  text-align: right;
+  border-bottom: 1px solid var(--sim-color-border);
+}
+
+.table thead th {
+  font-size: var(--sim-text-xs);
+  font-weight: var(--sim-font-medium);
+  color: var(--sim-color-text-muted);
+}
+
+.metricCol {
+  text-align: left !important;
+  text-transform: capitalize;
+  font-weight: var(--sim-font-medium);
+  color: var(--sim-color-text);
+}
+
+.deltaPos {
+  color: var(--sim-color-win);
+  font-weight: var(--sim-font-semibold);
+}
+
+.deltaNeg {
+  color: var(--sim-color-loss);
+  font-weight: var(--sim-font-semibold);
+}
+
+.deltaFlat {
+  color: var(--sim-color-text-muted);
+}
+
+.empty {
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text-muted);
+}

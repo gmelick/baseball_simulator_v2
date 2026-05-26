@@ -1,0 +1,136 @@
+/**
+ * OverridePanel.module.css — SIM-397 / SIM-398 (shared)
+ */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-3);
+}
+
+.form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sim-space-3);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-1);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+}
+
+.noteField {
+  flex: 1;
+  min-width: 140px;
+}
+
+.select,
+.input {
+  padding: var(--sim-space-1p5) var(--sim-space-2);
+  font-family: var(--sim-font-sans);
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text);
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-md);
+}
+
+.submit {
+  padding: var(--sim-space-2) var(--sim-space-4);
+  font-family: var(--sim-font-sans);
+  font-size: var(--sim-text-sm);
+  font-weight: var(--sim-font-medium);
+  color: var(--sim-color-text-inverse);
+  background: var(--sim-color-interactive);
+  border: none;
+  border-radius: var(--sim-radius-md);
+  cursor: pointer;
+}
+
+.submit:hover:not(:disabled) {
+  background: var(--sim-color-interactive-hover);
+}
+
+.submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.error {
+  color: var(--sim-danger-700);
+  font-size: var(--sim-text-sm);
+}
+
+.result {
+  padding-top: var(--sim-space-2);
+  border-top: 1px solid var(--sim-color-border);
+}
+
+/* --- staged queue (SIM-398) --- */
+
+.queueHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sim-space-2);
+}
+
+.queue {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-1p5);
+}
+
+.queueItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sim-space-2);
+  padding: var(--sim-space-1p5) var(--sim-space-2p5);
+  background: var(--sim-warning-100);
+  border: 1px solid var(--sim-warning-500);
+  border-radius: var(--sim-radius-md);
+  font-size: var(--sim-text-sm);
+}
+
+.queueText {
+  color: var(--sim-warning-700);
+}
+
+.removeButton {
+  background: none;
+  border: none;
+  color: var(--sim-warning-700);
+  cursor: pointer;
+  font-size: var(--sim-text-base);
+  line-height: 1;
+  padding: 0 var(--sim-space-1);
+}
+
+.queueActions {
+  display: flex;
+  gap: var(--sim-space-2);
+}
+
+.secondary {
+  padding: var(--sim-space-2) var(--sim-space-3);
+  font-family: var(--sim-font-sans);
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text);
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-md);
+  cursor: pointer;
+}
+
+.secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

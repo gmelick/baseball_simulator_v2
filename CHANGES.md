@@ -14,6 +14,7 @@ alias) plus one lint failure all blocked the `frontend` job; all fixed here so t
 | SIM-394 | Feature | UX + Betting | ✅ Closed — per-player boxscore means + on-demand prop distribution chart w/ prop-line marker |
 | SIM-395 | Feature | UX + Betting | ✅ Closed — betting card: ML/total/run-line edges + favored-side highlight + +EV signal badges + mock/live odds_source |
 | SIM-396 | Feature | UX + Betting | ✅ Closed — CLV / line-movement chart: implied-prob series + close marker + sharp/steam/beat-close badges + market tabs |
+| SIM-397 | Feature | UX + Backend | ✅ Closed — managerial override v1 (single-sub form → /simulate/with_override → baseline-vs-override delta) |
 | — | Infra/Bug | UX + QA | ✅ Done — frontend CI hardening (package-lock.json, `vite-env.d.ts`, Vite `@/` alias, AuthContext lint fix) |
 
 ### Frontend CI hardening (no ticket — completes the SIM-379 scaffold)
@@ -32,6 +33,24 @@ The SIM-379 scaffold committed `frontend/package.json` but the `frontend` CI job
 - **Lint failure under `--max-warnings 0`** — `AuthContext.tsx` tripped
   `react-refresh/only-export-components` (a context file co-locating its provider + hook). Added a
   scoped `eslint-disable-next-line` with rationale.
+
+### SIM-397 — Managerial override UI v1 (single-sub)
+
+Mounts in the Game page "Managerial override" panel.
+
+- `frontend/src/components/games/OverridePanelV1.tsx` (+`OverridePanel.module.css`)
+  — a single-substitution form (side, lineup slot 1–9, substitute player_id,
+  optional note) that POSTs `{ substitutions: [one] }` to
+  `/simulate/with_override` (100 iterations) and renders the delta.
+- `frontend/src/components/games/OverrideDeltaView.tsx` (+css) — shared
+  baseline/override/Δ table (win% as %, scores as 2-dp; signed, colored delta).
+  Reused by SIM-398.
+- `frontend/src/api/games.ts` — added `postWithOverride` + a `postJson` helper
+  + the `RosterOverride` / `SubstitutionSlot` / `OverrideDelta` / `MetricDelta`
+  / `WithOverrideResponse` types.
+- `frontend/src/pages/GamePage.tsx` — mounted `OverridePanelV1`.
+
+**Verification:** `tsc` + `eslint` + `vite build` pass. Not browser-tested.
 
 ### SIM-396 — CLV / line-movement time-series chart
 

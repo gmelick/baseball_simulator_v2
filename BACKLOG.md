@@ -41,7 +41,7 @@
 > | SIM-394 | Build per-player boxscore (100-iter averages + distribution views) | Feature | P1 | M | UX Designer + Betting Analyst | SIM-380, SIM-390 | ✅ **Closed 2026-05-26** |
 > | SIM-395 | Build betting card surface (ML/spread/total + winning-side + +EV signal) | Feature | P1 | L | UX Designer + Betting Analyst | SIM-380, SIM-390 | ✅ **Closed 2026-05-26** |
 > | SIM-396 | Build CLV / line-movement time-series chart | Feature | P1 | M | UX Designer + Betting Analyst | SIM-395 | ✅ **Closed 2026-05-26** |
-> | SIM-397 | Managerial override UI - v1 single-sub (ships early) | Feature | P1 | M | UX Designer + Backend Developer | SIM-393 |
+> | SIM-397 | Managerial override UI - v1 single-sub (ships early) | Feature | P1 | M | UX Designer + Backend Developer | SIM-393 | ✅ **Closed 2026-05-26** |
 > | SIM-398 | Managerial override UI - v2 staged queue + undo + multi-change (SIM-128 build) | Feature | P1 | L | UX Designer + Backend Developer | SIM-397, SIM-388 |
 > | SIM-399 | Frontend a11y + responsive/mobile + cross-browser gate | Gap | P1 | M | UX Designer + QA/DevOps | SIM-391 |
 > | SIM-400 | Cross-browser E2E harness (Playwright) | Test | P1 | L | QA/DevOps | SIM-379 |

@@ -236,6 +236,49 @@ export interface PropEdgeQuery {
   baseSeed?: number
 }
 
+// ---------------------------------------------------------------------------
+// Roster override (POST /{game_pk}/simulate/with_override — SIM-358/388)
+// ---------------------------------------------------------------------------
+
+export interface SubstitutionSlot {
+  /** 1-indexed lineup slot (1–9). */
+  batting_order: number
+  player_id: number
+  side: 'home' | 'away'
+}
+
+export interface RosterOverride {
+  home_lineup?: number[] | null
+  away_lineup?: number[] | null
+  /** Targeted single-player substitutions (SIM-388). */
+  substitutions?: SubstitutionSlot[] | null
+  pitcher_id?: number | null
+  bat_hand?: string | null
+  description?: string | null
+}
+
+export interface MetricDelta {
+  metric: string
+  baseline: number
+  override: number
+  /** override − baseline. */
+  delta: number
+}
+
+export interface OverrideDelta {
+  metrics: Record<string, MetricDelta>
+  description: string | null
+}
+
+export interface WithOverrideResponse {
+  game_pk: number
+  n_iterations: number
+  base_seed: number | null
+  baseline: Record<string, unknown>
+  override: Record<string, unknown>
+  delta: OverrideDelta
+}
+
 /** Raised for any non-2xx games-API response, carrying the HTTP status. */
 export class GamesApiError extends Error {
   readonly status: number
@@ -248,6 +291,20 @@ export class GamesApiError extends Error {
 
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { credentials: 'include' })
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { detail?: string }
+    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
+  }
+  return res.json() as Promise<T>
+}
+
+async function postJson<T>(url: string, payload: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { detail?: string }
     throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
@@ -278,6 +335,22 @@ export function fetchPlays(gamePk: number): Promise<PlayByPlay> {
 /** GET /api/games/{game_pk}/live — live in-progress state (404 when not live). */
 export function fetchLiveState(gamePk: number): Promise<LiveState> {
   return getJson<LiveState>(`/api/games/${gamePk}/live`)
+}
+
+/** POST /api/games/{game_pk}/simulate/with_override — baseline-vs-override diff (SIM-358/388). */
+export function postWithOverride(
+  gamePk: number,
+  override: RosterOverride,
+  opts: { nIterations?: number; baseSeed?: number } = {},
+): Promise<WithOverrideResponse> {
+  const params = new URLSearchParams()
+  if (opts.nIterations != null) params.set('n_iterations', String(opts.nIterations))
+  if (opts.baseSeed != null) params.set('base_seed', String(opts.baseSeed))
+  const qs = params.toString()
+  return postJson<WithOverrideResponse>(
+    `/api/games/${gamePk}/simulate/with_override${qs ? `?${qs}` : ''}`,
+    override,
+  )
 }
 
 /** GET /api/games/{game_pk}/boxscore — per-player prop means over N iterations. */
