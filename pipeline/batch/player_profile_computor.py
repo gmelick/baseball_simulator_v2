@@ -1060,6 +1060,29 @@ def _record_pool_build(conn, pool_name: str, seasons: list[int], ref_season: int
 
 
 # ---------------------------------------------------------------------------
+# Index-recreate hardening (SIM-419)
+# ---------------------------------------------------------------------------
+
+
+def _ensure_index_if_not_exists(create_index_sql: str) -> str:
+    """Inject ``IF NOT EXISTS`` into a ``CREATE [UNIQUE] INDEX`` statement.
+
+    Makes an index recreate idempotent so re-running a profile rebuild (or a
+    partially-applied prior run) can't fail on an already-present index. Returns
+    the statement unchanged if it already has the clause or isn't a recognised
+    CREATE INDEX form (the caller still DROPs IF EXISTS first as a safety net).
+    """
+    stmt = create_index_sql.strip()
+    low = stmt.lower()
+    if "if not exists" in low:
+        return stmt
+    for prefix in ("create unique index ", "create index "):
+        if low.startswith(prefix):
+            return stmt[: len(prefix)] + "IF NOT EXISTS " + stmt[len(prefix) :]
+    return stmt
+
+
+# ---------------------------------------------------------------------------
 # Main computor class
 # ---------------------------------------------------------------------------
 
@@ -1237,6 +1260,16 @@ class PlayerProfileComputor:
             "derived.infield_play_detail",
             "derived.dp_play_detail",
         ]
+        # SIM-419: drop secondary indexes before the bulk DELETE (a large DELETE
+        # against indexed tables is slow), then recreate them afterwards.
+        # Hardened so the tables are NEVER left de-indexed:
+        #   * the DELETE + recreate run in try/finally — a DELETE error still
+        #     triggers the recreate (previously an error skipped it entirely);
+        #   * recreate is idempotent (DROP IF EXISTS + injected IF NOT EXISTS in
+        #     _recreate_indexes), so a partially-applied prior run can't fail it;
+        #   * recreate failures are collected + verified against duckdb_indexes()
+        #     and escalated to ERROR (previously a silent WARNING), so a
+        #     now-missing index is surfaced rather than swallowed.
         saved_indexes: list[tuple[str, str]] = []
         for tbl in tables:
             schema_name, table_name = tbl.split(".")
@@ -1257,19 +1290,58 @@ class PlayerProfileComputor:
         if saved_indexes:
             log.info("  Dropped %d secondary indexes before DELETE.", len(saved_indexes))
 
-        for tbl in tables:
-            self._conn.execute(f"DELETE FROM {tbl} WHERE season IN ({season_list})")
-
-        for idx_qualified_name, idx_sql in saved_indexes:
-            try:
-                self._conn.execute(idx_sql)
-            except Exception as exc:
-                log.warning("  Could not recreate index %s: %s", idx_qualified_name, exc)
-
-        if saved_indexes:
-            log.info("  Recreated %d secondary indexes after DELETE.", len(saved_indexes))
+        try:
+            for tbl in tables:
+                self._conn.execute(f"DELETE FROM {tbl} WHERE season IN ({season_list})")
+        finally:
+            failed = self._recreate_indexes(saved_indexes)
+            if saved_indexes:
+                log.info(
+                    "  Recreated %d/%d secondary indexes after DELETE.",
+                    len(saved_indexes) - len(failed),
+                    len(saved_indexes),
+                )
+            if failed:
+                log.error(
+                    "  %d secondary index(es) FAILED to recreate and are now MISSING: %s. "
+                    "Queries still work but lose this index's speedup — investigate and "
+                    "rebuild before relying on profile-read latency.",
+                    len(failed),
+                    ", ".join(failed),
+                )
 
         log.info("Cleared existing rows for seasons %s.", seasons)
+
+    def _recreate_indexes(self, saved_indexes: list[tuple[str, str]]) -> list[str]:
+        """Idempotently recreate dropped secondary indexes; return names that FAILED.
+
+        SIM-419: each recreate is ``DROP INDEX IF EXISTS`` + a ``CREATE INDEX IF
+        NOT EXISTS`` (injected via :func:`_ensure_index_if_not_exists`) so it is
+        safe even if a prior run left the index half-applied, then verified
+        against ``duckdb_indexes()`` so a silently-missing index is reported.
+        """
+        failed: list[str] = []
+        for idx_qualified_name, idx_sql in saved_indexes:
+            schema_name, _, idx_name = idx_qualified_name.partition(".")
+            stmt = _ensure_index_if_not_exists(idx_sql)
+            try:
+                self._conn.execute(f"DROP INDEX IF EXISTS {idx_qualified_name}")
+                self._conn.execute(stmt)
+            except Exception as exc:  # noqa: BLE001 — recorded + escalated by caller
+                log.warning("  Could not recreate index %s: %s", idx_qualified_name, exc)
+                failed.append(idx_qualified_name)
+                continue
+            # Verify the index is actually present now (don't trust a silent no-op).
+            try:
+                present = self._conn.execute(
+                    "SELECT 1 FROM duckdb_indexes() WHERE schema_name = ? AND index_name = ?",
+                    [schema_name, idx_name],
+                ).fetchone()
+            except Exception:  # noqa: BLE001 — can't verify → don't false-alarm
+                present = (True,)
+            if not present:
+                failed.append(idx_qualified_name)
+        return failed
 
     def _compute_park_factors(self, seasons: list[int]) -> None:
         """
