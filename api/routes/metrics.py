@@ -68,8 +68,10 @@ import os
 import time
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
+
+from api.auth import require_auth
 
 # ---------------------------------------------------------------------------
 # Optional prometheus_client — used when importable, else a hand-rolled writer.
@@ -280,7 +282,12 @@ _FALLBACK_SCRAPE_COUNT = 0
 # ---------------------------------------------------------------------------
 
 
-@router.get("/metrics", include_in_schema=False, summary="Prometheus metrics")
+@router.get(
+    "/metrics",
+    include_in_schema=False,
+    summary="Prometheus metrics",
+    dependencies=[Depends(require_auth)],
+)
 async def metrics(request: Request) -> Response:
     """Expose application metrics in Prometheus text exposition format.
 

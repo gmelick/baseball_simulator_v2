@@ -97,6 +97,17 @@ dmypy.json
 *.orig
 
 # ---------------------------------------------------------------------------
+# JavaScript / Node (Phase 6 frontend — SIM-379)
+# ---------------------------------------------------------------------------
+node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.eslintcache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ---------------------------------------------------------------------------
 # Data & model artifacts (large files belong in DVC / S3, not git)
 # ---------------------------------------------------------------------------
 # Anchored to repo root: ignore the top-level large-artifact data/ dir, but KEEP

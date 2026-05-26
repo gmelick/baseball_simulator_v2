@@ -77,9 +77,10 @@ import asyncio
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from api.auth import require_auth
 from api.routes.games import (
     _build_runner,
     _get_pool,
@@ -105,7 +106,7 @@ from betting.clv_engine import (
 )
 from betting.line_movement import fetch_line_movement
 from simulation.batch_runner import GameSpec
-from simulation.win_probability import WinProbability, win_probability
+from simulation.win_probability import IDENTITY_CALIBRATION, WinProbability, win_probability
 
 log = logging.getLogger("api.routes.betting")
 
@@ -324,9 +325,12 @@ async def _summary_and_winprob(
         use_cache=use_cache,
     )
     summary = batch.summary
-    # SIM-330: a calibrated (here identity / best-effort) home/away win probability
-    # derived from the summary's win-rate buckets -- the moneyline report's input.
-    win_prob = win_probability(summary)
+    # SIM-330 / SIM-387: thread the loaded CalibrationMap from app.state so CLV and
+    # edge reports are computed off a *calibrated* win probability, not the identity
+    # fallback.  Falls back to IDENTITY_CALIBRATION when the app was started without
+    # a fitted CalibrationReport (e.g. in tests / early staging).
+    cal_map = getattr(request.app.state, "calibration_map", IDENTITY_CALIBRATION)
+    win_prob = win_probability(summary, calibration_map=cal_map)
     return summary, win_prob
 
 
@@ -407,6 +411,7 @@ class ClvSnapshotResponse(BaseModel):
     "/games/{game_pk}/edges",
     response_model=EdgesResponse,
     summary="Per-market edge reports (moneyline / total / run-line)",
+    dependencies=[Depends(require_auth)],
     description=(
         "Run (or reuse, via the SIM-359 cache) a Monte-Carlo sim for the game and "
         "build the EdgeReports for the requested markets (moneyline / total / "
@@ -478,6 +483,7 @@ async def get_game_edges(
     "/games/{game_pk}/signals",
     response_model=SignalsResponse,
     summary="Ranked +EV bet-signal recommendations",
+    dependencies=[Depends(require_auth)],
     description=(
         "Build the per-market EdgeReports (as /edges), gate them to the +EV set "
         "(strictly positive edge >= min_edge AND ev > min_ev), size each via "

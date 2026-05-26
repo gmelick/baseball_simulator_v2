@@ -379,3 +379,56 @@ def test_clv_snapshot_returns_only_series_with_clv():
     app = _build_app(pool=_FakePool(rows=CANNED_ODDS_ROWS))
     client = TestClient(app)
     client.get("/api/betting/games/745001/clv?market_type=moneyline")
+
+
+# ===========================================================================
+# SIM-387 — calibration wiring in /edges
+# ===========================================================================
+
+
+def test_edges_uses_calibration_map_from_app_state(patch_resolver):
+    """SIM-387: calibration_map on app.state must be threaded to win_probability.
+
+    Strategy: attach a calibration map that always returns 0.1 (strongly
+    away-biased) and verify the moneyline HOME sim_prob is ~0.1 — far from the
+    ~0.5 the identity map would give.  Uses a fixed base_seed for
+    determinism and requests moneyline-only so the home sim_prob is unambiguous.
+    """
+    from simulation.win_probability import CalibrationMap
+
+    # A map that clamps all sim probabilities to 0.1 regardless of the raw value.
+    biased_map = CalibrationMap(fn=lambda _p: 0.1, name="away-bias-test")
+
+    app = _build_app(pool=_FakePool())
+    app.state.calibration_map = biased_map
+    client = TestClient(app)
+
+    resp = client.get(
+        "/api/betting/games/745001/edges?n_iterations=120&base_seed=42&markets=moneyline"
+    )
+    assert resp.status_code == 200, resp.text
+    edges = resp.json()["edges"]
+
+    # Home side: calibrated sim_prob should be ~0.1 (the biased map output).
+    home_edges = [e for e in edges if e["side"] == "home" and e["label"] == "moneyline"]
+    assert home_edges, "expected a moneyline home edge in the response"
+    assert home_edges[0]["sim_prob"] == pytest.approx(0.1, abs=0.01), (
+        f"calibration map was not applied: got {home_edges[0]['sim_prob']!r}, expected ~0.1"
+    )
+
+
+def test_edges_falls_back_to_identity_when_no_calibration_map(patch_resolver):
+    """SIM-387: when app.state has no calibration_map the endpoint still works
+    (falls back to IDENTITY_CALIBRATION -- no AttributeError / crash)."""
+    app = _build_app(pool=_FakePool())
+    # Deliberately do NOT set app.state.calibration_map.
+    client = TestClient(app)
+
+    resp = client.get(
+        "/api/betting/games/745001/edges?n_iterations=40&base_seed=7&markets=moneyline"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["game_pk"] == 745001
+    # Some edges should be present; no crash.
+    assert isinstance(body["edges"], list)

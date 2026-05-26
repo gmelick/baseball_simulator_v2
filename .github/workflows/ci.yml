@@ -350,6 +350,52 @@ jobs:
       - name: Run file-integrity guard
         run: python scripts/check_file_integrity.py
 
+  # ---------------------------------------------------------------------------
+  # Job JS — Frontend type-check, lint, and build (SIM-379)
+  # Runs whenever frontend/ files change.  Uses Node 20 LTS + npm ci.
+  # Gates: tsc --noEmit (no type errors), eslint (no lint errors), vite build
+  # (production bundle compiles cleanly — catches import/resolution errors that
+  # tsc alone misses because Vite resolves paths differently).
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: Frontend (Node 20 — type-check + lint + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript type-check
+        run: npm run type-check
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Vite production build
+        run: npm run build
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          retention-days: 7
+
   docker-build-check:
     name: Docker build check
     runs-on: ubuntu-latest

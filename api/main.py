@@ -22,12 +22,14 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
-from api.auth import RateLimitMiddleware, resolve_cors_origins
+from api.auth import LatencyMiddleware, RateLimitMiddleware, resolve_cors_origins
 from api.state import (
     build_all_engines,
     build_pitcher_engine,
@@ -48,6 +50,14 @@ _REQUIRED_ENV_VARS = [
     "REDIS_URL",
 ]
 
+# SIM-389: auth vars are only required outside development so `make test-unit`
+# and local dev boot without ceremony.  In any other ENVIRONMENT value they must
+# be set — validate_environment() enforces this.
+_REQUIRED_AUTH_ENV_VARS = [
+    "SECRET_KEY",  # HMAC signing key for session tokens
+    "AUTH_PASSWORD",  # shared browser login password
+]
+
 
 def validate_environment() -> None:
     """
@@ -55,6 +65,10 @@ def validate_environment() -> None:
     Raises RuntimeError with a clear message listing what is missing.
     Called inside the lifespan so a misconfigured container fails fast
     rather than silently running with broken connections.
+
+    Auth variables (SECRET_KEY, AUTH_PASSWORD) are only required outside
+    the ``development`` environment — local dev + the test suite boot without
+    them, falling back to insecure dev sentinels that are logged as warnings.
     """
     missing = [v for v in _REQUIRED_ENV_VARS if not os.environ.get(v)]
     if missing:
@@ -62,6 +76,16 @@ def validate_environment() -> None:
             f"Missing required environment variable(s): {', '.join(missing)}. "
             f"Copy .env.example to .env and fill in the required values."
         )
+
+    env = os.environ.get("ENVIRONMENT", "development").strip().lower()
+    if env != "development":
+        missing_auth = [v for v in _REQUIRED_AUTH_ENV_VARS if not os.environ.get(v)]
+        if missing_auth:
+            raise RuntimeError(
+                f"Missing required auth variable(s) for ENVIRONMENT={env!r}: "
+                f"{', '.join(missing_auth)}. "
+                f"Set these before deploying outside development."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -363,9 +387,21 @@ def create_app() -> FastAPI:
     # /health, /ready, / are exempt inside the middleware.
     app.add_middleware(RateLimitMiddleware)
 
+    # p95 latency tracking (SIM-410) — rolling 200-request window; stores the
+    # computed p95 on app.state.api_p95_seconds so /metrics can expose it to
+    # Prometheus/Grafana. /health, /ready, /, /metrics are exempt.
+    app.add_middleware(LatencyMiddleware)
+
     # ----------------------------------------------------------------
     # Routers — registered as phases complete
     # ----------------------------------------------------------------
+    # SIM-389: Browser session auth (login / me / logout).
+    # Registered FIRST so the /auth/* routes are always resolvable
+    # regardless of other router registration order.
+    from api.routes.auth import router as auth_router
+
+    app.include_router(auth_router)
+
     # Similarity Score Explorer (v1: pitcher engine).
     # Spec: docs/similarity_visualization_spec.md. The lifespan above
     # attaches the engine, name resolver, and Redis cache to app.state.
@@ -431,13 +467,39 @@ def create_app() -> FastAPI:
     app.include_router(metrics_router)
     # ----------------------------------------------------------------
 
+    # ---- SIM-381: Serve the Vite-built SPA -----------------------------------
+    # In production, nginx serves frontend/dist/ directly (see deploy/nginx/nginx.conf).
+    # This mount is a dev/staging convenience: when running uvicorn directly,
+    # the built assets are served from FastAPI so the app is fully self-contained.
+    #
+    # The mount is CONDITIONAL on the dist directory existing so the app boots
+    # cleanly before the first `npm run build` (CI / fresh clone).
+    #
+    # Mount order matters: API routes above are registered first, so the
+    # `/{full_path:path}` SPA catch-all only fires when nothing else matches.
+    _spa_dist = Path(__file__).parent.parent / "frontend" / "dist"
+    if _spa_dist.is_dir():
+        _spa_assets = _spa_dist / "assets"
+        if _spa_assets.is_dir():
+            # Hashed filenames from Vite → safe for immutable caching in prod.
+            app.mount(
+                "/assets",
+                StaticFiles(directory=str(_spa_assets)),
+                name="spa-assets",
+            )
+
+        @app.get("/{full_path:path}", include_in_schema=False, tags=["frontend"])
+        async def _serve_spa(full_path: str) -> FileResponse:  # noqa: RUF029
+            """SPA catch-all — returns index.html for all non-API client routes."""
+            return FileResponse(str(_spa_dist / "index.html"))
+
     # ---- Health / readiness -----------------------------------------
 
     @app.get("/health", tags=["ops"], summary="Liveness probe")
     async def health() -> dict:
         return {
             "status": "ok",
-            "phase": "2",
+            "phase": "6",
             "environment": os.environ.get("ENVIRONMENT", "development"),
         }
 
@@ -496,7 +558,7 @@ def create_app() -> FastAPI:
     async def root() -> dict:
         return {
             "service": "MLB Baseball Simulation Platform",
-            "phase": "2 — Similarity Engine Suite (in progress)",
+            "phase": "6 — Frontend Build (in progress)",
             "docs": "/docs",
             "health": "/health",
         }
