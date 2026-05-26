@@ -970,6 +970,11 @@ def main(argv: list[str] | None = None) -> int:
 #                  >> /var/log/baseball/nightly.log 2>&1
 #
 # Make target: `make play-pool-cache` (see Makefile).
+#
+# AUTOMATED (preferred): the docker-compose `scheduler` service (Ofelia) runs the
+# full nightly chain — refresh current-season games -> profile computor ->
+# play-pool cache — via scripts/nightly_ingest.sh at 07:00 UTC. Enable with
+# `docker compose --profile scheduler up -d scheduler`. See deploy/ofelia/config.ini.
 # ============================================================================
 
 

@@ -1,3 +1,29 @@
+# Phase 6 — Nightly ingestion scheduler (Ofelia) — 2026-05-26
+**Authors: Data Engineer (Agent 4), QA/DevOps (Agent 9)**
+
+Wired the previously-unautomated nightly data ingestion. There were batch jobs +
+Makefile targets + a documented crontab, but no scheduler actually ran them
+(and the documented crontab omitted the game refresh).
+
+- `scripts/nightly_ingest.sh` — the ordered chain for the current season:
+  `refresh_seasons(YEAR)` (loads newly-Final games; future/in-progress skipped
+  by the SIM-405fix guard) → `player_profile_computor --seasons YEAR` (DuckDB
+  profiles + sim pools) → `play_pool_cache --seasons YEAR` (FAISS tiles). Sets
+  the in-container DSN default so it works regardless of the host-side `.env`.
+- `deploy/ofelia/config.ini` — Ofelia `job-run` at 07:00 UTC launching the chain
+  as a fresh app-image container (heavy batch never competes with the live API).
+- `docker-compose.yml` — new `scheduler` service (mcuadros/ofelia), **opt-in via
+  the `scheduler` profile** so `make dev` is unchanged. Enable with:
+  `docker compose --profile scheduler up -d scheduler`.
+- `Dockerfile` — `COPY scripts/ ./scripts/` so the nightly script (and
+  `export_openapi.py`) ship in the app image.
+
+**Verification:** `sh -n` clean; `docker compose --profile scheduler config`
+valid + `scheduler` correctly absent from the default service set; app image
+rebuilt with the script present. (The components — refresh_seasons guard,
+profile-computor, play-pool-cache — were each verified against partial 2017
+data earlier.)
+
 # Phase 6 — ETL fix: skip future/non-Final games in the backfill — 2026-05-26
 **Author: Data Engineer (Agent 4)**
 

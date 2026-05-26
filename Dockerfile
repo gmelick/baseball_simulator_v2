@@ -67,6 +67,7 @@ COPY similarity/  ./similarity/
 COPY simulation/  ./simulation/
 COPY betting/     ./betting/
 COPY db/          ./db/
+COPY scripts/     ./scripts/
 COPY alembic.ini  ./alembic.ini
 
 # Non-root user for security (principle of least privilege).

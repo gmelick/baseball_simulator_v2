@@ -263,6 +263,28 @@ services:
     networks:
       - baseball_net
 
+  # Nightly data-ingestion scheduler (Ofelia, docker-native cron). Opt-in via
+  # the `scheduler` profile so it never starts on a plain `make dev`:
+  #   docker compose --profile scheduler up -d scheduler
+  # Runs scripts/nightly_ingest.sh (refresh current-season games → profiles →
+  # FAISS tiles) as a fresh app-image container at 07:00 UTC; see
+  # deploy/ofelia/config.ini. Requires the app image to be built first
+  # (docker compose build app) so the script is present.
+  scheduler:
+    image: mcuadros/ofelia:latest
+    profiles: ["scheduler"]
+    restart: unless-stopped
+    command: daemon --config=/etc/ofelia/config.ini
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      # Read-only docker socket so Ofelia can launch the nightly job container.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./deploy/ofelia/config.ini:/etc/ofelia/config.ini:ro
+    networks:
+      - baseball_net
+
 # ---------------------------------------------------------------------------
 # Volumes — persist data across container restarts
 # ---------------------------------------------------------------------------
