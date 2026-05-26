@@ -17,6 +17,7 @@ alias) plus one lint failure all blocked the `frontend` job; all fixed here so t
 | SIM-397 | Feature | UX + Backend | ✅ Closed — managerial override v1 (single-sub form → /simulate/with_override → baseline-vs-override delta) |
 | SIM-398 | Feature | UX + Backend | ✅ Closed — managerial override v2 (staged queue + undo + multi-change via substitutions[]; supersedes v1 on the Game page) |
 | SIM-399 | Gap | UX + QA | ✅ Closed — a11y + responsive pass: skip link, global :focus-visible, prefers-reduced-motion, responsive header, dead-CSS cleanup |
+| SIM-400 | Test | QA | ✅ Closed — Playwright cross-browser E2E harness + 4 mocked smoke specs (chromium-verified green) + CI job |
 | — | Infra/Bug | UX + QA | ✅ Done — frontend CI hardening (package-lock.json, `vite-env.d.ts`, Vite `@/` alias, AuthContext lint fix) |
 
 ### Frontend CI hardening (no ticket — completes the SIM-379 scaffold)
@@ -35,6 +36,26 @@ The SIM-379 scaffold committed `frontend/package.json` but the `frontend` CI job
 - **Lint failure under `--max-warnings 0`** — `AuthContext.tsx` tripped
   `react-refresh/only-export-components` (a context file co-locating its provider + hook). Added a
   scoped `eslint-disable-next-line` with rationale.
+
+### SIM-400 — Cross-browser E2E harness (Playwright)
+
+- `frontend/playwright.config.ts` — chromium / firefox / webkit projects, a
+  `webServer` that builds + serves the app on :4173, CI-aware retries/reporter.
+- `frontend/e2e/smoke.spec.ts` — 4 smoke specs that mock the backend via
+  `page.route` (no live API/DB): (1) unauthenticated → login page; (2) Day
+  Summary renders the slate + game count; (3) clicking a card → Game page;
+  (4) date nav advances the day + shows the empty state.
+- `frontend/package.json` — added `@playwright/test` + `e2e` / `e2e:install`
+  scripts (lock regenerated).
+- `.github/workflows/ci.yml` — new `frontend-e2e` job (needs `frontend`):
+  `npm ci` → install browsers → run the suite across all 3 engines → upload the
+  report.
+- `.gitignore` — Playwright artifacts (test-results/, playwright-report/, …).
+
+**Verification:** harness lists 12 tests (4 × 3 browsers); **ran the chromium
+project locally — 4/4 passed**. This is the first genuine browser verification
+of the frontend (login gating, slate render, game navigation, date nav) rather
+than build-only. Firefox/WebKit run in CI.
 
 ### SIM-399 — a11y + responsive pass
 
