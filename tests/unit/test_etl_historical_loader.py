@@ -1407,27 +1407,52 @@ class TestEnsureManagers:
 
 
 class TestEnsureGame:
-    def test_existence_short_circuit(self):
-        """If raw.games already contains the game, _ensure_game returns early."""
-        loader = _make_loader_with_seq_conns(fetchone_seq=[(745001,)])
-        gd = {
-            "datetime": {"officialDate": "2024-08-15"},
-            "status": {"abstractGameState": "Final", "codedGameState": "F"},
-            "venue": {"id": 17},
-            "teams": {
-                "home": {"id": 112, "abbreviation": "CHC"},
-                "away": {"id": 158, "abbreviation": "MIL"},
+    def test_ensure_game_writes_final_score_from_livedata(self):
+        """SIM-409: final scores are read from liveData.linescore (not gameData).
+
+        The pre-fix code read ``gd.get('linescore')`` where gd was gameData, so
+        the score was always NULL. _ensure_game now takes the full game_dict and
+        upserts the score pulled from liveData.linescore.
+        """
+        loader = HistoricalDataLoader(dsn="postgresql://test/db")
+        captured: list = []
+        cur = MagicMock()
+        cur.__enter__.return_value = cur
+        cur.__exit__.return_value = False
+        cur.execute.side_effect = lambda sql, params=None: captured.append((sql, params))
+        conn = MagicMock()
+        conn.cursor.return_value = cur
+        conn.__enter__.return_value = conn
+        conn.__exit__.return_value = False
+        ctx = MagicMock()
+        ctx.__enter__.return_value = conn
+        ctx.__exit__.return_value = False
+        loader._get_conn = MagicMock(return_value=ctx)
+
+        game_dict = {
+            "gameData": {
+                "datetime": {"officialDate": "2024-08-15"},
+                "status": {"abstractGameState": "Final", "codedGameState": "F"},
+                "venue": {"id": 17},
+                "teams": {"home": {"id": 112}, "away": {"id": 158}},
+                "game": {"type": "R"},
+                "weather": {},
+            },
+            "liveData": {
+                "linescore": {
+                    "teams": {"home": {"runs": 7}, "away": {"runs": 2}},
+                    "currentInning": 9,
+                },
+                "decisions": {"winner": {"id": 600}, "loser": {"id": 601}},
             },
         }
-        managers = {
-            "home_manager_id": 9999,
-            "home_manager_name": "M Counsell",
-            "away_manager_id": 9998,
-            "away_manager_name": "P Murphy",
-        }
-        loader._ensure_game(745001, season=2024, gd=gd, managers=managers)
-        # Only the existence check should have happened
-        assert loader._get_conn.call_count == 1
+        managers = {"home_manager_id": 9999, "away_manager_id": 9998}
+        loader._ensure_game(745001, season=2024, game_dict=game_dict, managers=managers)
+
+        insert = next((p for sql, p in captured if "INSERT INTO raw.games" in sql), None)
+        assert insert is not None, "expected an INSERT INTO raw.games"
+        # The home (7) / away (2) runs from liveData.linescore made it into the row.
+        assert 7 in insert and 2 in insert
 
 
 # ===========================================================================
