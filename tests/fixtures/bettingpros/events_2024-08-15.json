@@ -1,0 +1,49 @@
+{
+  "events": [
+    {
+      "id": 92857,
+      "home": "DET",
+      "visitor": "SEA",
+      "scheduled": "2024-08-15 17:10:00",
+      "double_header": false,
+      "participants": [
+        {
+          "id": "DET",
+          "name": "Tigers",
+          "link": "/mlb/teams/detroit-tigers/",
+          "team": {
+            "city": "Detroit",
+            "abbreviation": "DET",
+            "conference": "AL",
+            "division": "Central",
+            "record": {
+              "W": 86,
+              "L": 76,
+              "T": 0
+            },
+            "slug": "detroit-tigers",
+            "stadium_deg_offset": "150"
+          }
+        },
+        {
+          "id": "SEA",
+          "name": "Mariners",
+          "link": "/mlb/teams/seattle-mariners/",
+          "team": {
+            "city": "Seattle",
+            "abbreviation": "SEA",
+            "conference": "AL",
+            "division": "West",
+            "record": {
+              "W": 85,
+              "L": 77,
+              "T": 0
+            },
+            "slug": "seattle-mariners",
+            "stadium_deg_offset": "45"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -53,7 +53,7 @@
 > | SIM-402 | Real-DB /simulate 2s/30s SLA verification on dedicated hardware | Perf | P1 | M | Performance Engineer + QA/DevOps | - |
 > | SIM-403 | Enable real parallelism + wire shared-memory tiles into the live runner | Perf | P1 | M | Backend Developer + Performance Engineer | SIM-402 |
 > | SIM-404 | Stress / concurrency / leak suite (100 sims x 30 concurrent games) | Test | P1 | L | QA/DevOps + Performance Engineer | SIM-403 |
-> | SIM-405 | Real odds-provider implementation behind the SIM-370 seam | Feature | P1 | L | Data Engineer + Betting Analyst | - |
+> | SIM-405 | Real odds-provider implementation behind the SIM-370 seam | Feature | P1 | L | Data Engineer + Betting Analyst | - | ✅ **Closed 2026-05-26** |
 > | SIM-406 | Fit + persist a CalibrationReport over real data + apply to all engines | Feature | P1 | L | ML Engineer | SIM-408 |
 > | SIM-407 | Validate prop PMFs + run ablation/walk-forward over real outcomes | Validation | P1 | M | ML Engineer + Betting Analyst | SIM-406 |
 > | SIM-408 | DuckDB profile/pool build + provisioning for the 11-engine startup | Infra | P1 | M | Data Engineer | - |

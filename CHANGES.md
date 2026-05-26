@@ -1,3 +1,33 @@
+# Phase 6 — SIM-405 BettingPros odds provider — 2026-05-26
+**Authors: Data Engineer (Agent 4), Betting/Markets Analyst (Agent 8)**
+
+Replaced the SIM-370 `RealOddsAPIProvider` stub with a working BettingPros v3
+integration behind the same `OddsProvider` seam.
+
+- `pipeline/bettingpros_odds_provider.py` (NEW) — `BettingProsOddsProvider`
+  implementing `get_odds` (moneyline/total/run-line) + `get_prop_odds` (the 7
+  prop_stats) onto the `MockOddsAPI` dict shapes (`source='bettingpros'`,
+  `is_mock=False`). Endpoints: `/v3/events` + `/v3/offers` (markets discovered
+  from `/v3/markets`: ML 122, total 175, run-line 176; props K 285, H 287,
+  HR 299, ER 290, BB 408, TB 293, RBI 289). Identifier bridges (the seam passes
+  only `game_pk` / MLB `player_id`): `game_pk`→event via MLB schedule date +
+  nickname-suffix team match (double-headers by scheduled time); MLB
+  `player_id`→prop offer via the MLB people endpoint + normalized name match.
+  `line_type='opening'` reads `opening_line` (→ CLV); else the best/main book
+  line (`prefer_book_id` override). stdlib `urllib` (sync); two `_bp_get` /
+  `_mlb_get` network seams.
+- `pipeline/odds_provider.py` — registered `"bettingpros"` and repointed
+  `"real"` at it (was the unimplemented stub). Activate with
+  `ODDS_PROVIDER=bettingpros` + `ODDS_API_KEY`.
+- `tests/unit/test_bettingpros_odds_provider_sim405.py` (11 tests) against
+  captured fixtures (`tests/fixtures/bettingpros/`): ML/total/run-line mapping,
+  opening line_type, book/echo fields, unresolvable game, prop name-match,
+  no-match nulls, unknown-stat ValueError, registry.
+
+**Verification:** 11 unit tests green (fixtures, no network); **live API smoke
+confirmed** end-to-end — game_pk 746437 resolved to BettingPros event 92857 and
+returned real moneyline 125/-135 + total 8.5/100/-108 (`is_mock=False`).
+
 # Phase 6 — P1/P2 Hardening Batch — 2026-05-26
 **Authors: Backend Developer (Agent 5), QA/DevOps (Agent 9)**
 

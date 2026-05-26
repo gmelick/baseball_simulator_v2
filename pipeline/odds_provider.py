@@ -205,9 +205,19 @@ def register_odds_provider(name: str, factory: Callable[[], OddsProvider]) -> No
     _PROVIDER_FACTORIES[name.strip().lower()] = factory
 
 
+def _make_bettingpros_provider() -> OddsProvider:
+    """Lazy factory for the SIM-405 BettingPros provider (stdlib-only import)."""
+    from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
+
+    return BettingProsOddsProvider()
+
+
 # Built-in providers.
 register_odds_provider("mock", _make_mock_provider)
-register_odds_provider("real", lambda: RealOddsAPIProvider())
+# SIM-405: "bettingpros" is the live BettingPros v3 integration; "real" now
+# points to it (was the unimplemented SIM-370 stub) so ODDS_PROVIDER=real works.
+register_odds_provider("bettingpros", _make_bettingpros_provider)
+register_odds_provider("real", _make_bettingpros_provider)
 
 
 def available_providers() -> list[str]:
