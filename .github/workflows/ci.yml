@@ -121,10 +121,15 @@ jobs:
       - name: Install dev dependencies
         run: pip install -r requirements-dev.txt
 
-      - name: Run unit tests with coverage
+      - name: Run unit tests with coverage (fast lane — excludes @slow, SIM-418)
+        # SIM-418: the ~15 @pytest.mark.slow volume/exhaustive tests run in the
+        # dedicated `slow-tests` job below; this lane stays fast for quick PR
+        # feedback. The slow tests are volume variants of modules already
+        # covered here, so the coverage gate is unaffected.
         run: |
           pytest tests/unit/ \
             -v \
+            -m "not slow" \
             --tb=native \
             --timeout=30 \
             --strict-markers \
@@ -177,6 +182,50 @@ jobs:
           name: coverage-html
           path: htmlcov/
           retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Job 3b — Slow tests (SIM-418)
+  # The ~15 @pytest.mark.slow volume/exhaustive tests, split out of the fast
+  # unit lane so PR feedback stays quick. Runs in parallel (no `needs:`); a
+  # higher --timeout accommodates the exhaustive runs (per-test
+  # @pytest.mark.timeout overrides still apply, e.g. the 5000-game sim326).
+  # No coverage gate — these are volume variants of already-covered modules.
+  # ---------------------------------------------------------------------------
+  slow-tests:
+    name: Slow tests (@slow)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run slow tests
+        run: |
+          pytest tests/unit/ \
+            -v \
+            -m "slow" \
+            --tb=native \
+            --timeout=120 \
+            --strict-markers \
+            --junit-xml=test-results-slow.xml
+
+      - name: Upload slow test results (JUnit)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slow-test-results
+          path: test-results-slow.xml
+          retention-days: 14
 
   # ---------------------------------------------------------------------------
   # Job 4 — Similarity engine regression gate (SIM-147)
