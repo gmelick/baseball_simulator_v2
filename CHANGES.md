@@ -1,3 +1,438 @@
+# Phase 6 Sprint 1 — Kickoff Gates — 2026-05-25
+**Authors: UX Designer (Agent 7), Backend Developer (Agent 5), QA/DevOps (Agent 9), Product Manager (Agent 1)**
+
+Sprint 1 P0 delivery: ADR decision (React + Vite), full frontend scaffold, design system primitives,
+SPA serving path wired end-to-end through both FastAPI and nginx, typed WebSocket schema, full browser
+session auth layer (httpOnly cookies + require_auth enforcement + CORS wildcard removed), phantom-ticket
+backfill (SIM-382), enriched games-listing API (SIM-383), single-game aggregate card + status enum
+(SIM-384), multi-substitution override (SIM-388), player-prop edge/signal endpoint (SIM-390), and the
+carry-in bug fixes (SIM-387 calibration wiring, SIM-410 p95 middleware) plus stale-doc corrections.
+
+| Ticket | Type | Owner | Status |
+|--------|------|-------|--------|
+| SIM-378 | Spec/ADR | UX Designer + Backend Developer + QA/DevOps | ✅ Closed — React 18 + Vite chosen |
+| SIM-379 | Infra | UX Designer + QA/DevOps | ✅ Closed — scaffold + build tooling + JS CI lane |
+| SIM-380 | Feature | UX Designer | ✅ Closed — design system (tokens, global, Card, Panel, Badge) |
+| SIM-381 | Gap | Backend Developer + UX Designer | ✅ Closed — StaticFiles mount + nginx SPA fallback |
+| SIM-382 | Gap | Product Manager | ✅ Closed — backfilled 8 phantom parent tickets (SIM-108/109/112/122–126); re-mapped SIM-127–131 deps |
+| SIM-383 | Feature | Backend Developer + Data Engineer | ✅ Closed — enriched GET /api/games/{date} with team names, abbreviations, venue, and season records |
+| SIM-384 | Feature | Backend Developer | ✅ Closed — GET /api/games/{game_pk}/status aggregate card + GameStatus 3-state enum + GameCardAggregateResponse |
+| SIM-385 | Feature | Backend Developer | ✅ Closed — typed WS event schema (Pydantic v2) |
+| SIM-388 | Feature | Backend Developer | ✅ Closed — SubstitutionSlot model + substitutions[] array field + updated _apply_override |
+| SIM-387 | Bug | Backend Developer | ✅ Closed — calibration map threaded to win_probability at /api/betting edges/signals |
+| SIM-389 | Security | Backend Developer + QA/DevOps | ✅ Closed — httpOnly cookie session + require_auth on expensive routes + CORS wildcard fix |
+| SIM-390 | Feature | Backend Developer + Betting Analyst | ✅ Closed — `GET /{game_pk}/props/{player_id}/{prop}` endpoint; full PMF + optional p_over/p_under/edge_report |
+| SIM-410 | Improvement | Backend Developer + QA/DevOps | ✅ Closed — LatencyMiddleware wires rolling p95 into app.state.api_p95_seconds → /metrics |
+| — | Housekeeping | Product Manager | ✅ Done — stale "Phase 2" references corrected in api/main.py, agent_team.md, WORKFLOW.md |
+
+### SIM-378 — React-vs-vanilla-JS architecture decision (ADR)
+
+**Decision recorded:** React 18 + Vite. The decisive factor was the override-v2 UI (SIM-398: staged
+queue + undo + amber indicators + side-by-side comparison); vanilla JS would require hand-rolling all
+event coordination and state management, while React's component model makes it straightforward.
+
+**Files created:**
+- `docs/architecture/2026-09-02-adr-frontend-framework.md` — full ADR with comparison table
+  (Vanilla JS vs React + Vite vs Preact + Vite), consequences, rationale. Status: Accepted.
+
+### SIM-379 — Frontend scaffold + build tooling + frontend CI job
+
+**Frontend scaffold (React 18 + Vite + TypeScript strict):**
+- `frontend/package.json` — React 18.3, react-dom 18.3, Vite 5.4, TypeScript 5.5,
+  @vitejs/plugin-react, eslint with typescript/react-hooks/react-refresh plugins.
+- `frontend/vite.config.ts` — dev proxy: `/api` and `/ws` → `localhost:8000` (ws:true);
+  build outDir `dist`, sourcemap true.
+- `frontend/tsconfig.json` — strict mode, bundler moduleResolution, `@/*` → `src/*` path alias.
+- `frontend/tsconfig.node.json` — vite.config.ts typechecking.
+- `frontend/.eslintrc.cjs` — @typescript-eslint + react-hooks + react-refresh plugins.
+- `frontend/index.html` — HTML5 entry with `<div id="root">` and `<script type="module" src="/src/main.tsx">`.
+- `frontend/src/main.tsx` — ReactDOM.createRoot with StrictMode.
+- `frontend/src/App.tsx` — root component with header shell and Sprint-1 placeholder card.
+- `.gitignore` updated — added `node_modules/`, `frontend/dist/`, `frontend/.vite/`,
+  `frontend/.eslintcache`, npm debug/error log patterns.
+
+**CI lane added:**
+- `.github/workflows/ci.yml` — new `frontend` job (Node 20 LTS, `npm ci`, `npm run type-check`,
+  `npm run lint`, `npm run build`). Uploads `frontend/dist/` as a CI artifact (retention 7 days).
+  Runs in parallel with the Python lint/type-check/unit-test jobs.
+
+### SIM-380 — Design-system foundation (tokens, typography, spacing, Card/Panel/Badge)
+
+**CSS custom properties design system:**
+- `frontend/src/styles/tokens.css` — full `--sim-{category}-{scale}` token set:
+  color scales (gray/primary/success/danger/warning/info 50–950), semantic color aliases
+  (surface, border, text, win/loss/override/live), typography (font families + text-xs→4xl scale
+  + font weights + line heights), spacing (4px base grid, --sim-space-0 through --sim-space-24),
+  border radius (sm/md/lg/xl/full), shadows (sm/md/lg), z-index scale, layout constants
+  (--sim-header-height: 56px, --sim-max-width: 1280px). Dark-mode block via
+  `@media (prefers-color-scheme: dark)`.
+- `frontend/src/styles/global.css` — box-model reset, body/app shell styles, utility classes
+  (.sr-only, .truncate).
+
+**Design system primitives (CSS Modules + TypeScript):**
+- `frontend/src/components/ui/Badge.tsx` + `Badge.module.css` — compact status indicator:
+  variants (default/primary/success/danger/warning/info/live/final/scheduled), optional pulsing
+  dot animation (`@keyframes pulse`) for LIVE badges, aria-label support.
+- `frontend/src/components/ui/Card.tsx` + `Card.module.css` — content container with optional
+  title, count badge, headerActions, padding variants (sm/md/lg), borderless mode.
+- `frontend/src/components/ui/Panel.tsx` + `Panel.module.css` — section grouping with label
+  (visible/hidden), left accent bar (none/primary/success/danger/warning/info), aria-label.
+- `frontend/src/components/ui/index.ts` — barrel export for all three primitives + their types.
+
+### SIM-381 — API→frontend serving path (StaticFiles / nginx SPA fallback)
+
+**FastAPI (dev/staging convenience — serves SPA when running uvicorn directly):**
+- `api/main.py`: added conditional `StaticFiles` mount at `/assets` and a `/{full_path:path}`
+  SPA catch-all route that returns `index.html`. Both are gated on `frontend/dist/` existing so
+  the app boots cleanly on a fresh clone before the first `npm run build`. The catch-all is
+  registered LAST (after all API routes) so FastAPI's ordered routing ensures it only fires
+  when nothing else matches.
+
+**nginx (production/staging — serves static assets directly):**
+- `deploy/nginx/nginx.conf`: restructured to add dedicated `location /api/` proxy block,
+  explicit proxy blocks for ops endpoints (`/health`, `/ready`, `/metrics`, `/docs`, `/redoc`,
+  `/openapi.json`), a `location /assets/` block with `expires 1y; Cache-Control: public, immutable`
+  for Vite-hashed assets, and a `location /` SPA catch-all using `try_files $uri /index.html`.
+  `index.html` itself gets `Cache-Control: no-cache, no-store, must-revalidate` so deploys
+  take effect immediately while the hashed `/assets/*` benefit from 1-year browser caching.
+  Root set to `/var/www/baseball-sim` (mounted from `frontend/dist/` in docker-compose).
+
+### SIM-385 — Typed + documented WebSocket event schema
+
+**New file: `api/websocket/schemas.py`**
+- `WsEventType` enum — discriminant for all four event types:
+  `game_state_update`, `resim_pending`, `ping`, `pong`.
+- `LiveGameState` — structured Pydantic v2 model for the game-state dict built by
+  `GameStateBuilder.build()`. All fields optional; `extra="allow"` forwards future fields.
+  Known fields: inning, half, outs, balls, strikes, home/away score + team IDs, batter/pitcher IDs,
+  runners, game_status, play_history, home/away lineups.
+- `LiveOdds` — optional odds snapshot (home/away ML, run-line + prices, total + over/under prices).
+  `extra="allow"` for future book-specific fields.
+- `GameStateUpdateEvent` — main broadcast event; mirrors `broadcast_payload` at
+  `live_ingestion_pipeline.py:1370`. `resim_triggered=True` signals the frontend to show a
+  loading indicator while a new Monte-Carlo sim is queued.
+- `ResimPendingEvent` — re-sim notification; mirrors the `resim_pending` broadcast at
+  `live_ingestion_pipeline.py:2161`.
+- `PingEvent` / `PongEvent` — keep-alive pair.
+- `WsEvent` union type alias for use in `isinstance()` / `Annotated[..., Discriminator("type")]`.
+
+**New test file: `tests/unit/test_api_ws_schemas_sim385.py`** — 22 tests:
+  `TestWsEventType` (2), `TestGameStateUpdateEvent` (6), `TestResimPendingEvent` (4),
+  `TestKeepAliveEvents` (4), `TestLiveGameState` (3), `TestLiveOdds` (3). All 22 pass.
+
+### SIM-387 — Fix dead calibration wiring at the betting edge/CLV call site
+
+**Problem:** `api/routes/betting.py:329` called `win_probability(summary)` without threading
+`app.state.calibration_map`, so every edge and CLV number was computed off the identity map
+even though a `CalibrationReport` is loaded at boot (SIM-361). The "gold-standard" CLV metric
+was systematically wrong.
+
+**Fix:**
+- `api/routes/betting.py`: imported `IDENTITY_CALIBRATION`; changed the `win_probability` call to
+  `win_probability(summary, calibration_map=getattr(request.app.state, "calibration_map", IDENTITY_CALIBRATION))`
+  so the boot-loaded map is always used, with a safe fallback for test/staging environments that
+  start without a fitted CalibrationReport.
+- Added 2 new tests to `tests/unit/test_api_betting_sim36x.py`:
+  `test_edges_uses_calibration_map_from_app_state` (verifies a non-identity map shifts sim_prob to ~0.1)
+  and `test_edges_falls_back_to_identity_when_no_calibration_map` (no crash when unset).
+
+### SIM-389 — Enforce auth on expensive routes + browser session model + fix dev CORS
+
+**Design:** httpOnly cookie session for browser clients; X-API-Key header for programmatic
+clients (scripts, Prometheus, CI). A single `require_auth` dependency accepts either form.
+Session tokens are stateless HMAC-SHA256 signed payloads (pure stdlib — no new deps).
+Default lifetime: 8 hours (`SESSION_TTL_HOURS`).
+
+**Protected routes** (`dependencies=[Depends(require_auth)]` applied to):
+- `GET  /api/games/{game_pk}/simulate`, `POST /api/games/{game_pk}/simulate/with_override`
+- `GET  /api/betting/games/{game_pk}/edges`, `GET  /api/betting/games/{game_pk}/signals`
+- `GET  /metrics` (Prometheus endpoint — sensitive internal perf data)
+
+**New backend files:**
+- `api/routes/auth.py` — `POST /auth/login` (password → httpOnly sim_session cookie),
+  `GET /auth/me` (always 200 — safe session probe for frontend boot), `POST /auth/logout`.
+- `api/auth.py` additions — `_mint_session_token`, `_verify_session_token`, `cookie_kwargs`,
+  `SESSION_COOKIE_NAME`, `require_auth` dependency (cookie → API key → 401 with dev + unconfigured
+  pass-through). CORS dev wildcard replaced with specific Vite origins.
+- `api/main.py` — registered `auth_router`; added conditional non-dev env validation for
+  `SECRET_KEY` + `AUTH_PASSWORD` (boot fails fast on misconfigured production containers).
+
+**New frontend files:**
+- `frontend/src/api/auth.ts` — `login` / `checkAuth` / `logout` fetch wrappers (all `credentials: 'include'`).
+- `frontend/src/contexts/AuthContext.tsx` — React context + `useAuth()` hook; probes `/auth/me`
+  on mount to restore sessions across page reloads without requiring a re-login.
+- `frontend/src/components/auth/LoginPage.tsx` + `LoginPage.module.css` — full-page centred login
+  form on the app's navy backdrop. Fully accessible (aria-invalid, aria-busy, focus management).
+
+**Modified files:**
+- `api/routes/games.py`, `betting.py`, `metrics.py` — `Depends(require_auth)` on protected routes.
+- `frontend/vite.config.ts` — `/auth` proxy entry added so cookies are issued by localhost:5173.
+- `deploy/nginx/nginx.conf` — `location /auth/` proxy block added before `/api/`.
+- `frontend/src/App.tsx` — wrapped in `<AuthProvider>`; renders `<LoginPage>` when not authenticated.
+- `tests/unit/test_api_auth.py` — updated CORS wildcard test to match SIM-389 behaviour.
+
+**New test file: `tests/unit/test_api_auth_session_sim389.py`** — 29 tests:
+  token primitives (6), login (7), /auth/me (4), logout (2), require_auth enforcement (6), CORS (4).
+
+**New env vars:** `SECRET_KEY` (HMAC key, required non-dev), `AUTH_PASSWORD` (login password,
+required non-dev; dev default "dev"), `SESSION_TTL_HOURS` (default 8 hours).
+
+### SIM-387 — Fix dead calibration wiring at the betting edge/CLV call site
+
+**Problem:** `api/routes/betting.py:329` called `win_probability(summary)` without threading
+`app.state.calibration_map`, so every edge and CLV number was computed off the identity map
+even though a `CalibrationReport` is loaded at boot (SIM-361). The "gold-standard" CLV metric
+was systematically wrong.
+
+**Fix:**
+- `api/routes/betting.py`: imported `IDENTITY_CALIBRATION`; changed the `win_probability` call to
+  `win_probability(summary, calibration_map=getattr(request.app.state, "calibration_map", IDENTITY_CALIBRATION))`
+  so the boot-loaded map is always used, with a safe fallback for test/staging environments that
+  start without a fitted CalibrationReport.
+- Added 2 new tests to `tests/unit/test_api_betting_sim36x.py`:
+  `test_edges_uses_calibration_map_from_app_state` (verifies a non-identity map shifts sim_prob to ~0.1)
+  and `test_edges_falls_back_to_identity_when_no_calibration_map` (no crash when unset).
+
+### SIM-410 — Wire the API p95 timing middleware
+
+**Problem:** `api/routes/metrics.py`'s `baseball_sim_api_p95_seconds` gauge read
+`app.state.api_p95_seconds` which was never populated — the Grafana p95 panel always read 0.
+
+**Fix:**
+- `api/auth.py`: added `LatencyMiddleware(BaseHTTPMiddleware)` — a rolling 200-request ring buffer
+  that computes `p95 = sorted_window[floor(0.95*(N-1))]` and stores it on `app.state.api_p95_seconds`
+  after every non-exempt request. Exempt paths: `/health`, `/ready`, `/`, `/metrics`.
+- `api/main.py`: imported `LatencyMiddleware`; registered it with `app.add_middleware(LatencyMiddleware)`
+  alongside the existing `RateLimitMiddleware`.
+- Added 3 new tests to `tests/unit/test_api_auth.py`:
+  `test_latency_middleware_populates_p95_after_two_requests`,
+  `test_latency_middleware_p95_grows_with_more_requests`,
+  `test_latency_middleware_exempt_paths_do_not_populate_p95`.
+
+### SIM-382 — Backfill 8 phantom Phase-6 parent tickets + re-map SIM-127–131 deps
+
+**Problem:** the Phase-5-close program audit found that SIM-127–131 (pre-existing Phase-6 frontend
+tickets) cite parent tickets SIM-108/109/112/122–126 that never existed in the backlog — the dependency
+chain was completely phantom, making the child tickets un-actionable.
+
+**Fix (documentation only):**
+
+Added a `📋 SIM-382 — Phantom Ticket Backfill` section to `BACKLOG.md` immediately before the Phase-4
+Sprint-2026-07-08 section, containing:
+- **8 phantom-parent stubs** (SIM-108/109/112/122–126): the intended title for each and the real
+  Phase-4/5/6 ticket that supersedes it.
+- **5 child-ticket re-maps** (SIM-127–131): old phantom dep → new real dep.
+
+Full mapping:
+
+| Phantom ID | Intended title | Superseded by |
+|---|---|---|
+| SIM-108 | Frontend-facing game-simulation API contract spec | SIM-355 + SIM-358 ✅ Phase 5 |
+| SIM-109 | Team/venue metadata API | **SIM-383** ✅ |
+| SIM-112 | Live in-progress game-state read path | **SIM-386** (Phase 6 Sprint 2) |
+| SIM-122 | WebSocket event schema | **SIM-385** ✅ |
+| SIM-123 | Player prop distributions + boxscore API | SIM-366 ✅ + **SIM-390** |
+| SIM-124 | Frontend scaffold + build-tooling spec | **SIM-378/379** ✅ |
+| SIM-125 | Managerial override API (multi-sub) | **SIM-388** (Phase 6 Sprint 2) |
+| SIM-126 | Design-system + component library spec | **SIM-380** ✅ |
+
+### SIM-388 — Multi-substitution override (array body)
+
+**Problem:** `RosterOverride` only accepted full lineup arrays or a single pitcher swap — no way
+to stage targeted individual-player substitutions without knowing the full batting order. This
+blocked SIM-128 (staged override queue + undo UI) and SIM-398 (override v2).
+
+**Fix:**
+
+**`api/routes/games.py`:**
+- Added `SubstitutionSlot(BaseModel)` — validated model with three fields:
+  - `batting_order: int = Field(ge=1, le=9)` — 1-indexed batting order position
+  - `player_id: int = Field(gt=0)` — MLB player_id of the substitute
+  - `side: Literal["home", "away"]` — which side's lineup to modify
+- Extended `RosterOverride` with `substitutions: list[SubstitutionSlot] | None = None`.
+- Updated `_apply_override()` to implement a 3-step processing order:
+  1. Full lineup replacements (`home_lineup` / `away_lineup`) applied first
+  2. Targeted `substitutions` applied left-to-right to the current lineup (after step 1);
+     `batting_order` → 0-indexed slot; out-of-range slots silently skipped
+  3. `pitcher_id` + `bat_hand` applied last
+  - Multiple subs targeting the same slot: last one wins (left-to-right).
+- Added `from typing import Literal` import.
+
+**`tests/unit/test_api_games.py`:**
+- Added `class TestMultiSubstitutionOverride` — 9 new tests:
+  - Single home + single away targeted sub (HTTP end-to-end via the override endpoint)
+  - Multiple subs across different slots + sides
+  - Empty `substitutions: []` is a no-op (delta == 0)
+  - Sub + pitcher override combined
+  - Full lineup replacement + targeted sub combined (sub applies after full replacement)
+  - `batting_order=0` rejected with 422 by Pydantic
+  - `side="visitor"` rejected with 422 by Pydantic
+  - Direct unit-test of `_apply_override` helper: verifies correct slot mapping
+
+**Verification:** `pytest tests/unit/test_api_games.py -v` → **44/44 passed** (35 pre-existing + 9 new).
+
+### SIM-384 — Single game-card aggregate endpoint + status enum
+
+**Problem:** the Day Summary 3-state game cards (SIM-391) need identity + status + sim + odds in
+a single call. No such endpoint existed. `raw.games.status` has 8 raw values; the UI only cares
+about 4 states.
+
+**Fix:**
+
+**`api/routes/games.py`:**
+- Added `GameStatus(StrEnum)` — 4-value enum: `SCHEDULED / LIVE / FINAL / POSTPONED`.
+- Added `_RAW_STATUS_TO_GAME_STATUS` mapping from the 8 raw `raw.games.status` values:
+  - Preview / Warmup / Pre-Game → `scheduled`
+  - Live → `live`
+  - Final → `final`
+  - Postponed / Suspended / Cancelled → `postponed`
+- Added `GameCardAggregateResponse(BaseModel)` — carries `game_status` (str), SIM-383 enriched
+  identity (team names/abbrevs/records/venue), `home_score_final` / `away_score_final`, 
+  `sim_summary: GameSimSummaryLite | None`, and `odds: None` (reserved for SIM-405).
+- Added `_GAME_CARD_SQL` — the same CTE-based enriched query as `_GAMES_ON_DATE_SQL` but for a
+  single `game_pk` ($1), using a `game_date_lookup` CTE to feed the `team_records` date bound.
+  Selects `home_score_final` and `away_score_final` too.
+- Added `_sim_summary_lite_from_stored(summary_dict)` — strips raw score arrays, then
+  calls `GameSimSummaryLite.model_validate()` (best-effort, returns None on any failure).
+- Added `GET /{game_pk}/status` endpoint (`get_game_status_card`):
+  1. `pool.fetchrow(_GAME_CARD_SQL, game_pk)` — enriched identity (404 if not found)
+  2. Maps raw status → `GameStatus` enum value
+  3. Best-effort `sim_store.load_latest_sim_run(conn, game_pk)` to populate `sim_summary`
+     (exception-safe; always returns None rather than breaking the response)
+  4. Returns `GameCardAggregateResponse`
+- Added `from enum import StrEnum` import.
+- Added `GameSimSummaryLite` to the `api.schemas` import.
+
+Note: route is `/{game_pk}/status` (not `/card`) because `/{game_pk}/card` is already the
+SIM-366 linescore+decisions endpoint. No rename to keep SIM-366 stable.
+
+**`tests/unit/test_api_games.py`:**
+- Added `_CARD_ROW` — enriched canned row including `home_score_final` / `away_score_final`.
+- Added `class TestGameCardAggregate` — 12 new tests:
+  - Status mapping: Final/Live/Preview/Warmup/Pre-Game/Postponed/Suspended/Cancelled
+  - Enriched team data + final scores present in response
+  - `sim_summary` is None when fake pool yields no sim run (exception caught)
+  - `odds` is None placeholder
+  - 503 when no pool; 404 when game not in DB
+  - Monkeypatch test: `load_latest_sim_run` returning canned summary → `sim_summary` populated
+
+**Verification:** `pytest tests/unit/test_api_games.py -v` → **35/35 passed** (23 pre-existing + 12 new).
+
+### SIM-383 — Enrich GET /api/games/{date} with team/venue names + records
+
+**Problem:** `GET /api/games/{date}` returned only bare integer IDs (`home_team_id`, `away_team_id`,
+`venue_id`). `raw.teams` and `raw.venues` exist but were unjoined; no win/loss record was derived.
+The Day Summary UI (SIM-391) cannot render game cards from bare IDs.
+
+**Fix:**
+
+**`api/routes/games.py`:**
+- Rewrote `_GAMES_ON_DATE_SQL` as a CTE-based JOIN query:
+  - `team_records` CTE aggregates season win/loss records from `raw.games` WHERE `status = 'Final'`
+    AND `game_date < $1` (i.e., entering-game records, not same-day) via a UNION ALL of the home
+    and away perspectives, aggregated by `(team_id, season)`.
+  - Main query LEFT JOINs `raw.teams` twice (home + away, aliased `ht`/`at_`) and `raw.venues`
+    once; also LEFT JOINs the CTE twice (`hr`/`ar`). All JOINs are keyed on
+    `(team_id, season)` / `(venue_id, season)` to match the composite primary keys.
+    `COALESCE(hr.wins, 0)` handles teams with no prior Final games.
+  - All 15 columns selected (original 7 + 8 new enrichment fields).
+- Extended `GameCard` model with 8 new optional fields (`Optional[str/int] = None`):
+  `home_team_name`, `home_team_abbrev`, `away_team_name`, `away_team_abbrev`,
+  `venue_name`, `venue_city`, `home_wins`, `home_losses`, `away_wins`, `away_losses`.
+- Rewrote `_game_card()` with `_opt_str(key)` / `_opt_int(key)` helpers; all new fields
+  default to `None` when the row key is absent — backward compatible with old cached payloads
+  and pre-SIM-383 unit-test stubs.
+
+**`tests/unit/test_api_games.py`:**
+- Added `_ENRICHED_CANNED_ROWS` — 2 enriched rows with all new JOIN columns populated.
+- Added `class TestGameCardEnrichment` — 7 new tests:
+  - `test_enriched_rows_populate_team_names` — names and abbreviations present
+  - `test_enriched_rows_populate_venue_fields` — venue_name + venue_city present
+  - `test_enriched_rows_populate_records` — home_wins/losses, away_wins/losses
+  - `test_enriched_second_game_has_its_own_team_data` — per-card isolation
+  - `test_bare_rows_without_enrichment_default_to_none` — old stubs default None
+  - `test_enriched_rows_cached_payload_preserves_enrichment` — cache round-trip keeps enrichment
+  - `test_enriched_rows_count_and_pks_unchanged` — count and game_pk set unaffected
+
+**Verification:** `pytest tests/unit/test_api_games.py -v` → **23/23 passed** (16 pre-existing + 7 new).
+
+### SIM-390 — Player-prop edge/signal API endpoints
+
+**Problem:** `prop_edge_report` and `PropDistribution.p_over()` were fully implemented and tested
+(SIM-329/SIM-339) but NO route exposed them. Player props only surfaced as boxscore means via
+`GET /{game_pk}/boxscore` (SIM-366). The SIM-394 per-player distribution view (with prop-line
+marker) and SIM-395 betting card require a PMF + edge endpoint.
+
+**Fix:**
+
+**`api/schemas.py`:**
+- Added `PropEdgeResponse(_ApiModel)` — SIM-390 response model combining the full PMF fields from
+  `PropDistributionModel` (player_id, prop, n, support, probabilities, mean, median, std, pmf dict)
+  with four optional enrichment fields:
+  - `line: float | None` — populated when a `line` query param is supplied
+  - `p_over: float | None` / `p_under: float | None` / `p_push: float | None` — sportsbook
+    over/under/push probabilities at `line` (betting convention: half-integer line → no push,
+    integer line → push mass excluded from both over and under)
+  - `edge_report: EdgeReportModel | None` — full edge/EV/CLV report when market odds are also
+    supplied (via `over_ml` + `under_ml`)
+- Added `"PropEdgeResponse"` to `__all__`.
+
+**`api/routes/games.py`:**
+- Added imports: `EdgeReportModel`, `PropEdgeResponse` from `api.schemas`; `MarketSide`, `OddsQuote`,
+  `TwoWayMarket` from `betting`; `prop_edge_report as _prop_edge_report` from `betting`;
+  `ALL_PROPS` from `simulation.prop_distributions`.
+- Added `_VALID_PROP_NAMES: frozenset[str]` — the 8 valid prop names from `ALL_PROPS`
+  (K, BB, ER, OUTS, H, HR, RBI, TB). A request for any other name is a 422.
+- Added `GET /{game_pk}/props/{player_id}/{prop}` endpoint (`get_player_prop_edge`):
+  - **Validation** (all 422): prop name not in `ALL_PROPS`; `bet_side` not "over"/"under";
+    `over_ml`/`under_ml` supplied without a `line`.
+  - **PMF build**: resolves lineup → `_resolve_state_or_error` → runs `_build_prop_set`
+    (same `asyncio.to_thread` path as `/boxscore`) → `pset.get(player_id, prop)` → 404 if absent.
+  - **Line enrichment**: if `line` is supplied, populates `p_over(line)`, `p_under(line)`,
+    `p_push(line)` directly from `PropDistribution`.
+  - **Edge report**: if `line` + `over_ml` + `under_ml` are all supplied, constructs a
+    `TwoWayMarket(entry=OddsQuote(side, other, line))` keyed on the requested `bet_side`
+    ("over" → `MarketSide.OVER`, "under" → `MarketSide.UNDER`), calls `_prop_edge_report`,
+    and wraps in `EdgeReportModel.from_dataclass()`. Wrapped in try/except — degenerate odds
+    (e.g. line=0, or implied probs summing badly) log a warning but never break the response.
+  - Returns `PropEdgeResponse` with all fields populated appropriately.
+
+**`tests/unit/test_api_games.py`:**
+- Added `_make_fake_pset()` module-level helper — builds a `PropDistributionSet` with player 600001
+  having a "K" PMF with support [4,5,6,7,8] and probabilities [0.10,0.20,0.40,0.20,0.10] (mean=6.0).
+  Used to verify PMF math without running the full sim pipeline.
+- Added `class TestPlayerPropEdge` — 12 new tests:
+  - `test_prop_pmf_returns_200_with_pmf_fields` — shape check: all PMF fields present, None for
+    line-less fields
+  - `test_prop_lowercase_prop_name_is_normalised` — "k" treated as "K"
+  - `test_prop_with_half_integer_line_populates_over_under` — p_over=0.70, p_under=0.30, p_push=0.0
+    at line=5.5 (verifies betting half-integer convention)
+  - `test_prop_with_integer_line_has_push_mass` — p_over=0.30, p_under=0.30, p_push=0.40 at line=6
+    (verifies over+under+push=1.0)
+  - `test_prop_with_odds_populates_edge_report_over` — edge_report filled, label="prop:K",
+    side="over", sim_prob=0.70, positive_edge=True (0.70 > 0.50 fair for symmetric -110/-110)
+  - `test_prop_bet_side_under_computes_under_edge` — side="under", sim_prob=0.30, positive_edge=False
+  - `test_prop_invalid_name_returns_422` — "XYZ" → 422
+  - `test_prop_invalid_bet_side_returns_422` — "home" → 422
+  - `test_prop_odds_without_line_returns_422` — over_ml without line → 422
+  - `test_prop_player_not_in_set_returns_404` — player_id 999999 absent → 404
+  - `test_prop_no_pool_returns_503` — no pg_pool → 503
+  - `test_prop_response_is_numpy_free` — full response (with edge_report) json.dumps round-trips
+
+**Verification:** `pytest tests/unit/test_api_games.py -v` → **56/56 passed** (44 pre-existing + 12 new).
+Full suite (excluding FAISS/DuckDB): **1826 passed, 8 skipped, 0 failed**.
+
+### Stale-doc corrections (no ticket)
+
+- `api/main.py`: health endpoint `"phase": "2"` → `"6"`; root endpoint description updated to
+  "Phase 6 — Frontend Build (in progress)".
+- `agent_team.md`: replaced the entire "Project Context" section (was Phase 2, all 11 engines
+  listed as 9/11, roadmap showing phases 3–6 as Not Started) with the true Phase 6 state.
+- `WORKFLOW.md`: replaced the stale Phase-2 phase note with a Phase-6-accurate note referencing
+  the full Phase-5 API surface and flagging that the document needs a full refresh in Sprint 2.
+
+---
+
 # Data Engineer Changelog
 **Sprint: 2026-05-05 | Author: Data Engineer (Agent 4)**
 
@@ -2350,540 +2785,55 @@ after the audit: **SIM-378**.
 
 ---
 
-# Sprint 2026-07-22 — Phase 5 P0 Gates (Backend API & Simulation Runner) (executed & CLOSED 2026-05-24)
-**Authors: Backend Developer (Agent 5), ML Engineer (Agent 3), Data Engineer (Agent 4), Performance Engineer (Agent 6), UX Designer (Agent 7), QA/DevOps (Agent 9), Product Manager (Agent 1, orchestrator)**
-
-First Phase-5 sprint: the five P0 gates that unblock the real endpoints + the three ⚠ hygiene bugs
-+ the SIM-315 file-integrity carryover. The `api/` layer was greenfield going in. Run as two waves
-of file-disjoint role subagents, then an independent orchestrator cross-validation that ran the full
-suite from scratch. Companion: `docs/SPRINT_2026-07-22_phase5_p0_gates.md`.
-
-| Ticket | Type | Owner | One-liner |
-|--------|------|-------|-----------|
-| SIM-350 | Spec | Backend + UX | Array-safe JSON contract: `api/serialization.py` (`to_jsonable`) + `api/schemas.py` Pydantic v2 models + `from_dataclass` for every Phase-4 output dataclass |
-| SIM-351 | Feature | Backend + QA | Auth + rate-limit + CORS baseline (`api/auth.py`) — API-key dep, stdlib sliding-window limiter, env-driven CORS (no more `["*"]`) |
-| SIM-352 | Feature | Backend + Perf + ML | Production DB-backed `production_machine_factory` over `PlayPoolSampler` + SIM-333 shared tiles; injectable builders for no-DB testing |
-| SIM-353 | Feature | Data + Backend | Runtime lineup/sub resolver: `raw.game_lineups`/`raw.players` → `GameState` (the SIM-338 gap); pure assembly layer + async asyncpg readers |
-| SIM-354 | Gap | Backend + Data | Mount `ws_router`/`odds_router` into `api/main.py` + lifespan live-pipeline gated by `LIVE_PIPELINE_ENABLED` + `simulation_callback` hook |
-| SIM-375 | Bug | Data + QA | `docker-compose.yml` mounts `./simulation` (was empty `./simulator`); `Dockerfile` copies `simulation/`+`betting/`; dead `simulator/` deleted |
-| SIM-376 | Bug | QA | `api/` added to the coverage gate (pyproject `source` + ci `--cov=api`) |
-| SIM-377 | Bug | Backend/Perf | `_run_one` filters `_`-prefixed (factory-only) `sim_kwargs` keys out of the `simulate_game(**...)` splat — fixes the `_hit_rate` TypeError |
-| SIM-315 | Infra | QA | `scripts/check_file_integrity.py` (`ast.parse` + null-byte scan) + pre-commit hook + CI job — durable OneDrive-truncation guard |
-
-## SIM-350 — API Response-Serialization Contract
-
-**Type:** Spec | **Effort:** M | **Status:** ✅ Complete
-
-`api/serialization.py` provides `to_jsonable(obj)`, a recursive numpy-scalar / numpy-array /
-dataclass / dict / sequence / datetime / enum → JSON-native converter (no `default=` hook needed,
-no numpy survives). `api/schemas.py` provides Pydantic v2 response models with a `from_dataclass`
-classmethod for each Phase-4 output dataclass: `GameSimSummaryModel` (+ `GameSimSummaryLite`),
-`ConfidenceIntervalModel`, `BoxScoreModel`/`PlayerStatLineModel`, `WinProbabilityModel`/`CalibrationMapModel`,
-the six `snapshots` models (`PlayerRef`/`FieldSnapshot`/`PlayByPlayEntry`/`PlayByPlay`/`StateAtPitch`/`OverrideDelta`+`MetricDelta`),
-`PropDistributionModel`/`PropDistributionSetModel`, and `EdgeReportModel`/`CLVModel`. No source
-dataclass was modified. Large per-iteration score arrays are exposed in full by default; trimming is
-an explicit opt-in (`include_raw_arrays=False` / the `Lite` projection).
-
-**QA fix:** `to_jsonable` originally leaked `np.float64` — it subclasses Python `float`, so numpy
-scalars hit the native-scalar fast path and were returned unconverted. Fixed by excluding
-`np.generic` from that fast path so numpy scalars fall through to the numpy branch. (Caught by the
-ticket's own round-trip test, which the implementing agent could not run — no pydantic/numpy in its
-sandbox.) 21 tests.
-
-## SIM-351 — Auth + Rate-Limit + CORS Baseline
-
-**Type:** Feature | **Effort:** M | **Status:** ✅ Complete
-
-`api/auth.py`: `require_api_key` FastAPI dependency (validates `X-API-Key` against `API_KEYS`;
-no-op pass-through in `development` or when no keys configured; 401 otherwise; ops probes never
-forced). `RateLimitMiddleware` — pure-stdlib sliding window (`collections.deque`) keyed by API key
-then client IP; `RATE_LIMIT_PER_MINUTE` / `RATE_LIMIT_ENABLED` knobs, off by default so dev + tests
-are unaffected; 429 + `Retry-After`; `/health` `/ready` `/` exempt. `resolve_cors_origins` replaces
-the unconditional `["*"]` with `CORS_ORIGINS` → `FRONTEND_URL` → dev-only `*`, so production is never
-wildcard with `allow_credentials=True`. No new third-party dependency. 9 tests.
-
-## SIM-352 — Production DB-Backed machine_factory
-
-**Type:** Feature | **Effort:** L | **Status:** ✅ Complete (live-DB acceptance deferred)
-
-`simulation/production_factory.py`: `production_machine_factory(seed, spec) -> StateMachine`,
-module-level + picklable + dotted-ref-able (`"simulation.production_factory:production_machine_factory"`),
-mirroring `rng_driven_machine_factory`. Builds a real `PlayPoolSampler`-driven `StateMachine` and, when
-`spec.shared_segments` is set, attaches the SIM-333 shared tiles zero-copy via `get_shared_view(...)`.
-Sampler + fingerprint-deriver construction sit behind injectable module-level builder hooks
-(`set_sampler_builder`/`set_deriver_builder`/`use_sampler_builder`) so the factory is unit-testable
-with no live DuckDB/FAISS; the per-game seed threads into both the loop rng and the sampler's k-NN rng.
-Factory-only knobs (`_pool_dir`/`_duckdb_path`/`_k`/`_max_resident_tiles`) ride the SIM-377 `_`-prefix
-convention. **Sandbox has no Postgres/DuckDB**, so the 2s/30s SLA and a real `/simulate` run remain to
-verify in a live environment (folds into SIM-372); verified here via the mock/`__new__`-bypass pattern.
-13 tests.
-
-## SIM-353 — Runtime Lineup/Substitution Resolver
-
-**Type:** Feature | **Effort:** L | **Status:** ✅ Complete
-
-`simulation/lineup_resolver.py` closes the long-open SIM-338 gap. Layered + independently testable:
-pure assembly `resolve_lineup_from_rows(...)` → `ResolvedLineup`; pure `build_game_state(...)` mapping
-to a `GameState` via its public fields (ordered `home/away_lineup`, slot pointers, leadoff `batter_id`,
-defending `pitcher_id`, `bat_hand`/`throw_hand`/`season`); and async asyncpg readers
-(`fetch_*`/`resolve_lineup`/`resolve_game_state`) over `raw.games` + `raw.game_lineups` + `raw.players`.
-Substitutions resolve by highest `sequence` per slot with optional `as_of_at_bat` rewind; pitching
-changes resolve independently of the batting order (AL pitcher excluded from the order). **No migration
-needed** — `raw.game_lineups` already exists from migration 0001 with every required column (the audit's
-"deferred" note was stale). `game_state.py` untouched. 24 tests (fake-asyncpg + in-memory).
-
-## SIM-354 — Mount the API Skeleton
-
-**Type:** Gap | **Effort:** S | **Status:** ✅ Complete
-
-`api/main.py` now includes `ws_router` (`/ws/games/{game_pk}`) and `odds_router` (`/api/odds/{game_pk}`,
-`/api/odds/today/all`) unconditionally in `create_app()` — route registration needs no live connection.
-The background `LiveIngestionPipeline` is gated behind `LIVE_PIPELINE_ENABLED` (default false) in the
-lifespan: when enabled it builds the pipeline with the `simulation_callback` re-sim hook, attaches it to
-`app.state.pipeline`, and `stop()`s it cleanly on shutdown — so the app boots for tests without an MLB
-WebSocket. 11 tests (FastAPI `TestClient`).
-
-## SIM-375 — docker-compose Mount Fix + Dead Package Removal
-
-**Type:** Bug | **Effort:** S | **Status:** ✅ Complete
-
-The dev hot-reload bind mount now points at the real `./simulation:/app/simulation` (was the empty
-`./simulator` stub, so Phase-5 loop/runner code never hot-reloaded). `Dockerfile` updated to
-`COPY simulation/` and `COPY betting/` (the now-mounted API imports both) so the runtime image is
-importable. The dead `simulator/` package (2 `__init__.py` files, zero importers — confirmed by grep)
-was deleted; its stale references were removed from `pyproject.toml`'s ruff `src`/`known-first-party`.
-
-## SIM-376 — api/ Added to the Coverage Gate
-
-**Type:** Bug | **Effort:** S | **Status:** ✅ Complete
-
-`"api"` added to `[tool.coverage.run] source` in `pyproject.toml` and `--cov=api` added to the CI
-unit-test job, so the FastAPI app is enforced by the 80% CI coverage gate (previously only the local
-Makefile measured it). No `api/` entrypoint files needed omitting; gate threshold unchanged.
-
-## SIM-377 — `GameSpec._hit_rate` TypeError Fix
-
-**Type:** Bug | **Effort:** S | **Status:** ✅ Complete
-
-`rng_driven_machine_factory` reads `spec.sim_kwargs["_hit_rate"]`, but `_run_one` then splatted the same
-`sim_kwargs` into `simulate_game(**...)`, which has a fixed signature (no `**kwargs`) → `TypeError`.
-Fixed by filtering `_`-prefixed keys out of the splat in `_run_one` (`passthrough = {k: v for ... if not
-k.startswith("_")}`), establishing the documented "underscore keys are factory-only" convention on
-`GameSpec`. A `GameSpec` carrying `_hit_rate` now runs end-to-end through `BatchRunner.run` with no error.
-7 tests. **QA fix:** the agent's "high `_hit_rate` out-scores low" assertion was over-strong — the no-DB
-stub's integer runs are driven by its own pitch-outcome rng, not the resolver, so per-game scores are
-byte-identical across hit rates. Rewrote the test to assert the knob's real effect (more hits from
-`resolve_fielding` at higher `_hit_rate`), which is true; the knob verifiably reaches the factory.
-
-## SIM-315 — File-Integrity Guard (OneDrive Truncation Remediation, Option B)
-
-**Type:** Infra | **Effort:** M | **Status:** ✅ Complete
-
-`scripts/check_file_integrity.py` (pure stdlib) walks tracked `.py` files, `ast.parse`s each (catching
-truncated / mid-statement files) and scans for null bytes, exiting non-zero with a per-file report;
-accepts explicit path args for pre-commit. Wired into `.pre-commit-config.yaml` (local hook) and a fast
-`File integrity (SIM-315)` CI job. **It paid off on its first run** — flagged a real bridge truncation of
-`simulation/batch_runner.py` (866 vs 913 authoritative lines). The physical OneDrive→Documents move is
-already done (Greg-only); this is the durable guard half. 12 tests. **Follow-up:** extend the guard to
-YAML/TOML — this sprint's `ci.yml` and `pyproject.toml` truncations were `.py`-only blind spots the
-line-count/job diff caught instead.
-
-## Verification (orchestrator cross-validation)
-
-Independent QA pass ran the full suite from scratch (sandbox deps installed; `datetime.UTC` shim + pyc
-dir per the standing recipe; per-pattern chunks). **Result: 1603 unit+regression passing / 0 failed**
-(1548 unit + 55 regression = 1506 baseline + 97 new). Regression golden-files green (no engine drift).
-Performance: 5 benches intact (full-timing run exceeds the 45s sandbox cap as always; runner covered by
-the batch_runner unit suites). Integrity guard: 157 `.py` files clean. Six mount truncations were
-repaired during the pass (`batch_runner.py`, `pyproject.toml`, `api/serialization.py`, `api/main.py`,
-`test_perf_eng_sim377.py`, `ci.yml`); every authoritative file was complete. DuckDB schema **v7** /
-Alembic head **0013** unchanged. **Next free ID: SIM-378.**
-
----
-
-# Sprint 2026-07-29 — Phase 5 P1 Endpoints + Persistence (executed & CLOSED 2026-05-24)
-**Authors: Backend Developer (Agent 5), Data Engineer (Agent 4), Product Manager (Agent 1, orchestrator)**
-
-Second Phase-5 sprint: the core REST surface on top of the Sprint-1 P0 gates — the 100-iteration
-`/simulate` runner, games-by-date, managerial-override re-sim, durable sim-result + pitch-snapshot
-persistence, the pitch-level `/plays` + `/state` replay endpoints, and Redis TTL caching. Scope was the
-P1 endpoint+persistence tier (SIM-355/356/357/358/359); the P1 lifecycle tickets SIM-360 (persistent
-pool) + SIM-361 (calibration serving) were deferred to Sprint 3. Run as two waves of role subagents +
-an orchestrator cross-validation. Companion: `docs/SPRINT_2026-07-29_phase5_p1_endpoints.md`.
-
-| Ticket | Type | Owner | One-liner |
-|--------|------|-------|-----------|
-| SIM-355 | Feature | Backend | `api/routes/games.py`: `GET /api/games/{date}` + `GET /{game_pk}/simulate` (lineup resolver → production factory → BatchRunner(100) → GameSimSummaryModel); mounted in `api/main.py` |
-| SIM-356 | Feature | Data | `db/sim_store.py` + Alembic 0014 (`sim.sim_runs`) + DuckDB 0008 (`sim.play_stream`, schema v8) — durable sim-result + pitch-stream store |
-| SIM-357 | Feature | Backend | `GET /{game_pk}/plays` + `GET /{game_pk}/state/{at_bat}/{pitch}` from persisted snapshots + record→persist flow; DuckDB 0009 (`sim.state_snapshots`, v9); `simulation/play_recorder.py` |
-| SIM-358 | Feature | Backend | `POST /{game_pk}/simulate/with_override` (baseline + override sims at one seed → `OverrideDelta`) |
-| SIM-359 | Feature | Backend | Redis TTL caching: `app.state.sim_cache` (Redis-optional, InMemory fallback); `/simulate` 60s, listing 300s, `?use_cache=false` |
-
-## SIM-355 — GET /api/games/{date} + GET /{game_pk}/simulate
-
-**Type:** Feature | **Effort:** L | **Status:** ✅ Complete
-
-New `api/routes/games.py` (prefix `/api/games`). `GET /{date}` (YYYY-MM-DD) lists `raw.games` for that
-date via `app.state.pg_pool` → `GamesOnDateResponse`. `GET /{game_pk}/simulate?n_iterations=100&base_seed=&use_cache=`
-resolves the lineup → `GameState` (SIM-353 `resolve_game_state`), assembles a `GameSpec` over the production
-machine factory, runs the SIM-332 `BatchRunner` (offloaded via `asyncio.to_thread`), and returns a
-`SimulateResponse` whose `summary` is a `GameSimSummaryModel` (SIM-350). Errors: 503 no pool, 404 unknown
-game, 422 bad date. **Testability seam:** `PRODUCTION_FACTORY_REF` + `resolve_factory_ref(request)`
-(precedence `app.state.sim_factory_ref` → `$SIM_MACHINE_FACTORY_REF` → default) lets tests inject the no-DB
-rng factory. Mounted in `api/main.py`. 14 endpoint tests (FastAPI `TestClient`, fake pool + mocked resolver).
-
-## SIM-356 — Sim-result + Pitch-snapshot Persistence
-
-**Type:** Feature | **Effort:** M | **Status:** ✅ Complete
-
-`db/sim_store.py` — a mockable read/write API replacing the ephemeral `sim.lineup_state.simulation_results`
-blob. Postgres (asyncpg): `store_sim_run` / `load_latest_sim_run` / `load_sim_run` / `list_sim_runs` over
-`sim.sim_runs` (run_id, game_pk, n_iterations, base_seed, summary JSONB, created_at — Alembic **0014**,
-down_revision 0013). DuckDB: `store_play_stream` / `load_play_stream` over `sim.play_stream` (one row per
-pitch, columns 1:1 with `PlayByPlayEntry`, PK (run_id, sequence) — DuckDB migration **0008**, schema version
-7→8). The play-row schema is documented in the module so SIM-357 writes matching rows. 19 tests (real
-in-memory DuckDB round-trip + stubbed asyncpg + migration sanity).
-
-## SIM-357 — GET /plays + GET /state/{at_bat}/{pitch} + Record→Persist
-
-**Type:** Feature | **Effort:** M | **Status:** ✅ Complete
-
-`GET /{game_pk}/plays` rebuilds a `PlayByPlay` from `load_play_stream` → `PlayByPlayModel`. `GET
-/{game_pk}/state/{at_bat}/{pitch}` returns a `StateAtPitch` from the persisted per-pitch snapshot
-(rebuilding the `FieldSnapshot` dataclass so derived `occupied_bases`/`runners_on` match the live wire
-shape) → `StateAtPitchModel`. Both 404 when nothing persisted, 503 when no replay store. **Write path:**
-`/simulate` best-effort records ONE representative game at the run's `base_seed` (via the play recorder),
-persists its play-stream + per-pitch `StateAtPitch` snapshots (built from each `PlayResult.next_state`) +
-the sim-run summary — wrapped in try/except so a persistence failure never breaks `/simulate`. Added a
-state-snapshot store to `db/sim_store.py` + DuckDB migration **0009** (`sim.state_snapshots`, schema 8→9).
-**Play recorder** `simulation/play_recorder.py`: `RecordingMachine` (non-invasive delegating wrapper) +
-`RecordingStateMachine` (subclass) + `record_game_plays(...)` capture a game's `PlayResult` stream with no
-DB and **without touching `sim_loop.py`**. 14 endpoint + 10 recorder tests. **Orchestrator integration:**
-added a gated (`REPLAY_PERSISTENCE_ENABLED`, default off) best-effort `app.state.sim_duckdb` attach to the
-`api/main.py` lifespan so the endpoints are functional in production without risking DuckDB's single-writer
-constraint by default.
-
-## SIM-358 — POST /{game_pk}/simulate/with_override
-
-**Type:** Feature | **Effort:** M | **Status:** ✅ Complete
-
-Takes a `RosterOverride` body (`home_lineup`/`away_lineup`/`pitcher_id`/`bat_hand`/`description`), runs a
-baseline sim (resolved lineup) and an override sim (modified `GameSpec`) at the **same base_seed** for
-comparability, and returns `WithOverrideResponse{baseline, override, delta}` where `delta` is an
-`OverrideDelta` (SIM-331) via `OverrideDeltaModel`. Empty override → zero delta.
-
-## SIM-359 — Redis TTL Caching
-
-**Type:** Feature | **Effort:** S | **Status:** ✅ Complete
-
-`app.state.sim_cache = make_cache()` (RedisCache if a server answers `ping()`, else InMemoryCache —
-confirmed fallback). The games router's `BatchRunner` memoizes sim summaries at `SIM_RESULT_TTL_S` (60s),
-the date listing at `POOL_QUERY_TTL_S` (300s); `?use_cache=false` disables per request; every cache call is
-wrapped so a cache hiccup never breaks a response.
-
-## Verification (orchestrator cross-validation)
-
-Independent QA pass ran the full suite from scratch (per-pattern chunks; FAISS builders individually).
-**Result: 1661 unit+regression passing / 0 failed** (1606 unit + 55 regression = 1603 Sprint-1 baseline +
-58 new). Regression golden-files green. File integrity: 165 `.py` files clean. Six file-bridge truncations
-repaired during the sprint (`api/main.py` ×, `api/routes/games.py`, `db/sim_store.py`, `test_sim_store.py`,
-etc.); every authoritative file was complete. DuckDB schema **v9** (migrations 0008 + 0009); Postgres Alembic
-head **0014**. **Next free ID: SIM-378.** Remaining P1 → Sprint 3: SIM-360 (persistent pool) + SIM-361
-(calibration serving).
-
----
-
-# Sprint 2026-08-05 — Phase 5 P1 Lifecycle (Persistent Pool + Calibration Serving) (executed & CLOSED 2026-05-24)
-**Authors: Performance Engineer (Agent 6), ML Engineer (Agent 3), Product Manager (Agent 1, orchestrator)**
-
-Third Phase-5 sprint: the two remaining P1 lifecycle tickets — a persistent ProcessPool/shared-memory
-lifecycle for the runner, and server-side calibration + all-11-engine startup. **Phase 5 P1 (SIM-355→361)
-is now COMPLETE.** Both tickets touch the `api/main.py` lifespan, so they ran as sequential single-agent
-waves (Perf → ML). Companion: `docs/SPRINT_2026-08-05_phase5_p1_lifecycle.md`.
-
-| Ticket | Type | Owner | One-liner |
-|--------|------|-------|-----------|
-| SIM-360 | Perf | Performance | Persistent `ProcessPoolExecutor` reuse in `BatchRunner` (was fresh-per-`run()`) + `app.state.sim_runner` lifespan + `/simulate` reuse |
-| SIM-361 | Feature | ML | `CalibrationReport` JSON persistence + startup load → `CalibrationMap`; build all 11 engines at startup (was pitcher-only) |
-
-## SIM-360 — Persistent ProcessPool + Shared-Memory Lifecycle
-
-**Type:** Perf | **Effort:** M | **Status:** ✅ Complete
-
-`BatchRunner` forked a fresh `ProcessPoolExecutor` on every `run()` (and published/unlinked shared memory
-per call) — fine for a one-shot script, wrong for a long-lived API. Now `reuse_pool=True` (default) lazily
-creates ONE warm pool and **reuses it across `run()` calls** (SIM-333 shared-mem segments published once and
-reused); the pool is recreated only on a `max_workers` change, and `close()` does `shutdown(wait=True)` before
-unlinking segments (idempotent). The `max_workers <= 1` in-process path + all one-shot/context-manager callers
-are unchanged (determinism preserved). The lifespan builds ONE long-lived `BatchRunner` as `app.state.sim_runner`
-(`SIM_RUNNER_WORKERS`, default 1) and `close()`s it on shutdown; `/simulate` + `/with_override` reuse it
-(transient fallback when absent). 10 new tests (real multiprocessing, asserting pool-reuse identity); sim332/sim333
-green.
-
-## SIM-361 — CalibrationReport Serving + 11-Engine Startup
-
-**Type:** Feature | **Effort:** M | **Status:** ✅ Complete
-
-Added lossless JSON persistence to `CalibrationReport` (`to_json`/`from_json` + `to_dict`/`from_dict`/`equals`,
-numpy-aware, schema-versioned) and a `reliability_curve` carrier field (the SIM-220 fitted-curve seam).
-`CalibrationMap.from_report` builds a monotone piecewise-linear win-prob calibration map (identity when no
-curve). `api/state.build_all_engines` builds all 11 similarity engines via `ENGINE_REGISTRY`, with a per-engine
-try/except (one bad profile table is skipped + logged, not fatal) and injectable registry/loader for no-DB
-testing. The lifespan attaches `app.state.engines` (all 11; `app.state.pitcher_engine` kept fail-fast for the
-similarity route's contract) and `app.state.calibration_map` (loaded from `CALIBRATION_REPORT_PATH`, default
-identity), degrading gracefully without DuckDB or a report. 28 new tests; affected suites (api_state/sim330/
-sim346/wiring, 76 tests) green. Live 11-engine build needs DuckDB profiles → verified via mocks.
-
-## Verification (orchestrator cross-validation)
-
-Independent full-suite run from scratch (per-pattern chunks; FAISS builders individually; `test_api_main_wiring.py`
-run split — it now exceeds the 45s shell cap on its own). **Result: 1702 unit+regression passing / 0 failed**
-(1647 unit + 55 regression = 1661 Sprint-2 baseline + 41 new). Regression golden-files green. File integrity:
-167 `.py` files clean. File-bridge truncations repaired across the sprint (`api/main.py` now 477 lines, ends with
-`app = create_app()`); every authoritative file complete. DuckDB schema **v9** / Alembic head **0014** unchanged.
-**Phase 5 P1 (SIM-355→361) COMPLETE. Next free ID: SIM-378.** Next: P2 loop-output gaps (SIM-362–366) + betting
-surface (SIM-367–370).
-
----
-
-# Sprint 2026-08-12 — Phase 5 P2 Loop Outputs (R/H/E · Fielders · W/L/S · Boxscore) (executed & CLOSED 2026-05-24)
-**Authors: Backend Developer (Agent 5), Baseball Analyst (Agent 2), ML Engineer (Agent 3), UX Designer (Agent 7), Product Manager (Agent 1, orchestrator)**
-
-Fourth Phase-5 sprint: the loop-output gaps the frontend game cards need (R/H/E, fielders, W/L/S, richer
-boxscore + exact prop-TB, boxscore-average API). **Design choice:** most outputs are DERIVED from the
-already-recorded `PlayResult` stream (SIM-355/357 recorder) rather than threaded through the 2680-line
-`sim_loop.py` — so only SIM-365 touched the loop; SIM-362/363/364/366 are new modules / API wiring.
-Companion: `docs/SPRINT_2026-08-12_phase5_p2_loop_outputs.md`.
-
-| Ticket | Type | Owner | One-liner |
-|--------|------|-------|-----------|
-| SIM-362 | Gap | Backend+BA | `simulation/linescore.py`: derive per-inning linescore + team R/H/E from a PlayResult stream |
-| SIM-363 | Gap | Backend+ML | `simulation/lineup_resolver.py`: `build_defense_map_for_state` → populate FieldSnapshot's 9 slots |
-| SIM-364 | Gap | BA+Backend | `simulation/pitcher_decisions.py`: derive winning/losing/save pitcher from a PlayResult stream |
-| SIM-365 | Improvement | BA+Backend | Extend `PlayerStatLine` (2B/3B/R/SB + pitcher H/R) in `sim_loop.py`; exact prop-TB (`TB_IS_LOWER_BOUND=False`) |
-| SIM-366 | Feature | Backend+UX | Boxscore-card API (PropDistributionSet means) + expose linescore/decisions/fielders via `/api/games` |
-
-## SIM-362 — Per-inning Linescore + Team R/H/E
-
-**Type:** Gap | **Effort:** L | **Status:** ✅ Complete
-
-New `simulation/linescore.py`: `linescore_from_plays(results) -> Linescore` (frozen `Linescore`/`InningLine`).
-Groups each play's `runs_scored` by `(inning, half)` from its `next_state` (TOP→away column, BOTTOM→home);
-counts team hits from the hit-event set (reach-on-error excluded); charges errors to the FIELDING side.
-Handles extra innings + an unplayed/walk-off bottom half (rendered `None`, scoreboard "x", not 0). Pure,
-no `sim_loop.py` edits. 11 tests.
-
-## SIM-363 — Per-position Fielder Map → FieldSnapshot
-
-**Type:** Gap | **Effort:** M | **Status:** ✅ Complete
-
-`FieldSnapshot.from_game_state` already accepts `defense_positions`; SIM-363 builds it. Extended
-`simulation/lineup_resolver.py` with `build_defense_map(resolved, *, fielding_side)` /
-`build_defense_map_for_state(resolved, state)` / `fielding_side_for_half` + `POSITION_CODE_TO_NAME` (1-9 →
-P/C/1B…RF). Pitcher from `TeamLineup.pitcher_id`; DH/pinch roles skipped; subs resolve to the current
-occupant; HOME fields the top, AWAY the bottom. 19 tests.
-
-## SIM-364 — Winning / Losing / Save Pitcher Attribution
-
-**Type:** Gap | **Effort:** M | **Status:** ✅ Complete
-
-New `simulation/pitcher_decisions.py`: `decisions_from_plays(results) -> PitcherDecisions` (winning/losing/
-save ids + final scores). Tracks the lead over time + each side's pitcher of record (GameState exposes only
-the fielding side's `pitcher_id` keyed by `half`); W/L follow the permanent lead, save uses the standard
-Rule-9.19 ≤3-run-lead heuristic for the finisher. Ties/walk-offs → no decision. Pure, no `sim_loop.py` edits.
-14 tests.
-
-## SIM-365 — Extended PlayerStatLine + Exact Prop-TB
-
-**Type:** Improvement | **Effort:** M | **Status:** ✅ Complete
-
-`PlayerStatLine` (sim_loop.py) gains batting `b2/b3/r/sb` + pitching `h_allowed/r_allowed` (all default 0,
-additive). Accumulated in `_accumulate_pa` (doubles→b2, triples→b3, scoring runners→r, hits/runs→pitcher
-h_allowed/r_allowed; runs-allowed include unearned so R≥ER) and `_resolve_steal_outcome` (sb + steal-of-home).
-`prop_distributions._total_bases` upgraded to exact `h + b2 + 2·b3 + 3·hr`; `TB_IS_LOWER_BOUND` flipped to
-`False` (caveat retired). 22 tests; sim328 + sim329 regression green (the one sim329 assertion hard-coding
-the old lower-bound contract was updated).
-
-## SIM-366 — Boxscore-Card API + Loop-Output Exposure
-
-**Type:** Feature | **Effort:** S | **Status:** ✅ Complete
-
-`api/schemas.py`: `BoxscoreCardModel.from_prop_set` (per-player prop means — batter H/HR/RBI/TB, pitcher
-K/BB/ER/OUTS), plus `LinescoreModel` / `PitcherDecisionsModel`. `api/routes/games.py`: `GET /{game_pk}/boxscore`,
-`/linescore`, `/decisions`, `/card`. The record→persist flow now derives linescore + decisions from the
-recorded `PlayResult` list and persists them to a new DuckDB `sim.game_cards` store (`db/sim_store.py` +
-migration **0010**, schema **v9→v10**); and builds the fielding-side defense map into the persisted
-`StateAtPitch` snapshots so `GET /state/{at_bat}/{pitch}` returns the 9 fielders populated. Best-effort
-throughout. 12 tests.
-
-## Verification (orchestrator cross-validation)
-
-Full-suite run from scratch (per-pattern chunks; FAISS builders individually; `test_api_main_wiring.py` run
-split). **Result: 1780 unit+regression passing / 0 failed** (1725 unit + 55 regression = 1702 Sprint-3
-baseline + 78 new). Regression golden-files green. File integrity: 174 `.py` files clean. **QA fixes:** the
-Wave-2 agent added DuckDB migration 0010 but left `duckdb_schema_version.txt` at 9 — the orchestrator bumped
-it to **10** and updated the `test_sim_store` version-sanity test (restoring the migrations↔version invariant).
-DuckDB schema **v10** / Alembic head **0014**. **Next free ID: SIM-378.** Remaining Phase 5: betting surface
-(SIM-367–370) + testing/infra (SIM-371–374).
-
----
-
-# Sprint 2026-08-19 — Phase 5 Betting Surface (Spread Edge · CLV/Line-Movement · Bet Signals · Odds Provider) (executed & CLOSED 2026-05-24)
-**Authors: Betting/Markets Analyst (Agent 8), Data Engineer (Agent 4), ML Engineer (Agent 3), Backend Developer (Agent 5), Product Manager (Agent 1, orchestrator)**
-
-Fifth Phase-5 sprint: the betting surface — simulation outputs → actionable, market-validated edge. Run-line/
-spread edge, CLV/line-movement time-series, +EV bet signals, the real-odds-provider swap seam, and a new
-`/api/betting` router. Lives in `betting/` + `pipeline/` + `api/` (low `sim_loop.py` risk). Three waves
-(3 parallel → 1 → API integration). Companion: `docs/SPRINT_2026-08-19_phase5_betting_surface.md`.
-
-| Ticket | Type | Owner | One-liner |
-|--------|------|-------|-----------|
-| SIM-367 | Gap | Betting+ML | `clv_engine.run_line_edge_report` — run-line/spread cover prob from the score-margin array → EdgeReport |
-| SIM-368 | Gap | Betting+Data | `betting/line_movement.py` — opening→closing line-movement + CLV time-series from `raw.game_odds` |
-| SIM-369 | Feature | Betting | `betting/bet_signal.py` — gate EdgeReports on edge/EV, fractional-Kelly stake, ranked +EV signals |
-| SIM-370 | Feature | Data+Betting | `pipeline/odds_provider.py` — `OddsProvider` Protocol + env factory + real-provider stub; MockOddsAPI conforms |
-| Betting API | Feature | Backend+Betting | `api/routes/betting.py` (`/api/betting`): `/edges`, `/signals`, `/line-movement`, `/clv` |
-
-## SIM-367 — Run-line / Spread EdgeReport
-
-**Type:** Gap | **Effort:** S | **Status:** ✅ Complete
-
-Added `spread_cover_prob(summary_or_margin, line, side)` + `run_line_edge_report(...)` to `betting/clv_engine.py`.
-Cover probability from the per-iteration score margin (`home_scores - away_scores`): HOME covers iff
-`margin > -L`, AWAY iff `margin < -L` (away line = negated home line). Strict inequalities split integer-line
-pushes (±1.5 can't push; ±1.0 / pick'em do). Builds an `EdgeReport` (`label="run_line"`) via the shared
-`_build_edge_report` (same de-vig/edge/EV/CLV path as moneyline/total/prop). Accepts a `GameSimSummary` or a
-raw margin array; `market.entry.line` overrides the default -1.5. 15 tests; sim339 green.
-
-## SIM-368 — CLV / Line-Movement Time-Series
-
-**Type:** Gap | **Effort:** M | **Status:** ✅ Complete
-
-New `betting/line_movement.py` lifts the single entry-vs-close `CLV` to the full opening→closing history.
-`LineQuote` (timestamped single-side quote + raw implied prob) / `LineMovement` (ordered quotes, opening/closing,
-per-step + net deltas, `implied_prob_series`, steam `direction`, reused two-way `CLV`, `sharp_consensus`,
-`has_movement`/`beat_close`). Pure `line_movement_from_quotes(rows, *, market_type, side)` + async
-`fetch_line_movement(conn, *, game_pk, market_type, book=None)` (reads `raw.game_odds` ordered by `fetched_at`,
-groups per (side, book); duck-typed conn). 17 tests (pure + fake-asyncpg).
-
-## SIM-369 — Bet-Signal / +EV Recommendations
-
-**Type:** Feature | **Effort:** M | **Status:** ✅ Complete
-
-New `betting/bet_signal.py`: `bet_signals_from_edges(reports, *, config)` gates a list of `EdgeReport`s on
-`positive_edge` AND `edge >= min_edge` AND `ev > min_ev`, sizes each by fractional Kelly
-(`stake_fraction = clamp(kelly_fraction · max(0, (b·p − q)/b), 0, cap)`; quarter-Kelly default, 5% cap), and
-returns them ranked by EV descending. `BetSignal` / `BetSignalConfig` (min_edge 0.02 / min_ev 0.0 /
-kelly_fraction 0.25 / max_stake 0.05). Pure (imports only from clv_engine); signals are advisory with documented
-market-timing guidance. 17 tests (incl. Kelly hand-check).
-
-## SIM-370 — Odds/Prop Provider Swap Seam
-
-**Type:** Feature | **Effort:** M | **Status:** ✅ Complete
-
-New `pipeline/odds_provider.py`: an `OddsProvider` `@runtime_checkable Protocol` (`get_odds`/`get_prop_odds`
-matching `MockOddsAPI` exactly), `get_odds_provider(name=None)` env factory (`ODDS_PROVIDER=mock` default →
-`MockOddsAPI`; case-insensitive; clear error on unknown) backed by a `register_odds_provider` registry, and a
-`RealOddsAPIProvider` stub that conforms but raises a documented not-configured error (the plug-in point).
-`MockOddsAPI` conforms structurally; `LiveIngestionPipeline` gained an optional `odds_provider` param defaulting
-to `get_odds_provider()` (mock behavior unchanged). No live API in this env — the seam, not an integration.
-20 tests; sim340/sim348 green.
-
-## Betting API surface
-
-**Type:** Feature | **Status:** ✅ Complete
-
-New `api/routes/betting.py` (prefix `/api/betting`): `GET /games/{game_pk}/edges` (moneyline/total/run-line
-EdgeReports), `/signals` (ranked +EV `BetSignal`s, config via query params), `/line-movement` (per-(side,book)
-series from `raw.game_odds`), `/clv` (entry-vs-close snapshot). Handlers are thin over the betting modules;
-edges/signals reuse the SIM-355 sim seam (cache-memoized BatchRunner) + `win_probability`; odds from injected
-query params else `MockOddsAPI` (flagged per market). A `_safe_report` guard skips an un-priceable 0/1 side
-(small-N/extreme-line robustness). New `BetSignalModel`/`LineQuoteModel`/`LineMovementModel` in `api/schemas.py`
-(reuse `EdgeReportModel`); router mounted in `create_app()`. 14 tests.
-
-## Verification (orchestrator cross-validation)
-
-Full-suite run from scratch (per-pattern chunks; FAISS builders individually; `test_api_main_wiring.py` +
-`test_api_betting_sim36x.py` run split — the betting edge/signal tests run real batches). **Result: 1861
-unit+regression passing / 0 failed** (1806 unit + 55 regression = 1780 Sprint-4 baseline + 81 new). Regression
-golden-files green. File integrity: 183 `.py` files clean. `api/main.py` now 490 lines, ends with
-`app = create_app()`. DuckDB schema **v10** / Alembic head **0014** unchanged. **Next free ID: SIM-378.**
-Remaining Phase 5 = testing/infra: SIM-371 (E2E/WS suite), SIM-372 (`/simulate` SLA gate), SIM-373 (nginx),
-SIM-374 (Prometheus/Grafana).
-
----
-
-# Sprint 2026-08-26 — Phase 5 Testing & Infra (E2E · SLA Gate · nginx · Monitoring) — PHASE 5 COMPLETE (executed & CLOSED 2026-05-24)
-**Authors: QA/DevOps (Agent 9), Baseball Analyst (Agent 2), Performance Engineer (Agent 6), Product Manager (Agent 1, orchestrator)**
-
-Sixth and final Phase-5 sprint: the testing/deploy/infra tier. **All of SIM-350→377 + SIM-315 are now closed —
-PHASE 5 (Backend API & Simulation Runner) IS COMPLETE.** Two waves (3 parallel → monitoring) + orchestrator CI
-wiring + QA. Companion: `docs/SPRINT_2026-08-26_phase5_testing_infra.md`.
-
-| Ticket | Type | Owner | One-liner |
-|--------|------|-------|-----------|
-| SIM-371 | Test | QA+BA | `tests/integration/test_api_e2e_sim371.py` — TestClient E2E (game-card, override, betting, WebSocket, replay) |
-| SIM-372 | Perf+Test | Perf | `tests/performance/bench_api_simulate_sim372.py` — `/simulate` request-path latency vs 2s/30s SLA (soft in-sandbox, hard under PERF_STRICT) |
-| SIM-373 | Infra | QA | `deploy/nginx/nginx.conf` (REST + `/ws/` upgrade) + docker-compose nginx service + dev/staging/prod env tiers |
-| SIM-374 | Infra | QA | `GET /metrics` (`api/routes/metrics.py`) + Prometheus/Grafana configs + docker-compose monitoring services |
-
-## SIM-371 — API + WebSocket + Historical-Replay E2E Suite
-
-**Type:** Test | **Effort:** L | **Status:** ✅ Complete
-
-`tests/integration/test_api_e2e_sim371.py` — a sandbox-runnable, FastAPI-`TestClient` E2E suite (no
-testcontainers) mounting the real games + betting + ws routers over the established mock seams (fake pg pool,
-in-memory DuckDB w/ migrations 0008–0010, no-DB rng factory, shared cache). Five flows with cross-endpoint
-consistency assertions: full game-card walk (date→simulate→plays/state/linescore/decisions/boxscore/card),
-managerial override, betting (edges→signals→line-movement→clv), a real WebSocket connect/ping-pong/disconnect
-against `ws_router`, and a deterministic historical-replay reproducibility gate. 12 tests. Wired into CI as a
-new `e2e` job (runs on every push). Found (and worked around) a documented behavior: `load_play_stream(game_pk)`
-with no `run_id` returns the union across runs.
-
-## SIM-372 — End-to-end /simulate Latency Perf Gate
-
-**Type:** Perf+Test | **Effort:** M | **Status:** ✅ Complete
-
-`tests/performance/bench_api_simulate_sim372.py` — pytest-benchmark times the FULL `GET /{game_pk}/simulate`
-request path (HTTP → lineup resolve → BatchRunner → serialize → JSON) for a single-game and a 100-iteration
-batch via TestClient on the no-DB factory seam. `SINGLE_GAME_SLA_S=2.0` / `BATCH_SLA_S=30.0` emitted as a soft
-note in-sandbox (mirroring `bench_simulation.py`), hard-failing under `PERF_STRICT=1`. Auto-included in
-`perf-weekly.yml` (which runs `pytest tests/performance` with `PERF_STRICT=1` on dedicated hardware), so the SLA
-is hard-gated off the noisy sandbox. The no-DB path is a documented lower bound (rng games loop to max-innings);
-the authoritative gate runs the real DB-backed factory.
-
-## SIM-373 — nginx Reverse Proxy + Env Tiers
-
-**Type:** Infra | **Effort:** M | **Status:** ✅ Complete
-
-`deploy/nginx/nginx.conf` reverse-proxies REST/ops/docs to `app:8000` and `/ws/games/{game_pk}` with the HTTP/1.1
-`Upgrade`/`Connection: upgrade` handshake (+ gzip, 10m body cap, 120s REST / 3600s WS read timeouts, forwarded
-headers, `:443` TLS stub). Added an `nginx:1.27-alpine` service to docker-compose (80:80, ro conf mount,
-depends_on app, healthcheck) + `.env.staging.example` / `.env.production.example` (ENVIRONMENT, auth + rate-limit
-enabled, CORS locked to a real origin, real WORKERS/ODDS_PROVIDER, TLS) + `deploy/README.md`.
-
-## SIM-374 — Prometheus + Grafana Monitoring + /metrics
-
-**Type:** Infra | **Effort:** M | **Status:** ✅ Complete
-
-`GET /metrics` (`api/routes/metrics.py`, mounted in `create_app()`) serves Prometheus text exposition
-(`text/plain; version=0.0.4`) with app-info, request, sim-latency, API-p95 and pipeline-freshness series;
-`prometheus_client` is an optional import with a hand-rolled fallback so it runs with or without the dep. Public
-`record_sim_latency`/`record_request` helpers let other routers feed it. `deploy/monitoring/prometheus.yml`
-(scrape `app:8000/metrics`) + Grafana datasource + a 5-panel dashboard; `prometheus` (v2.53.0) + `grafana`
-(11.1.0) services + volumes added to docker-compose. 9 tests.
-
-## Verification (orchestrator cross-validation) — PHASE 5 COMPLETE
-
-Full-suite run from scratch (per-pattern chunks; FAISS individually; wiring + betting suites run split). **Result:
-1870 unit+regression passing / 0 failed** (1815 unit + 55 regression = 1861 Sprint-5 baseline + 9 new) PLUS the
-12-test E2E integration suite + the `/simulate` perf bench. File integrity: 187 `.py` files clean; all infra
-configs parse (ci.yml 8 jobs, perf-weekly, docker-compose 7 services + 5 volumes, prometheus.yml, grafana
-datasource + dashboard). **QA fixes:** restored `docker-compose.yml` (a SIM-373 truncation had silently dropped
-the `migrate` service + `volumes:`/`networks:` — still-valid YAML, caught by a structure diff) and `ci.yml` (the
-`e2e`-job insertion truncated off the `file-integrity` + `docker-build-check` jobs). DuckDB schema **v10** /
-Alembic head **0014**. **🏁 PHASE 5 (Backend API & Simulation Runner) COMPLETE — all SIM-350→377 + SIM-315
-closed across 6 sprints; suite 1506 → 1870. Next free ID: SIM-378. Next: Phase 6 — Frontend Build** (recommend a
-9-agent program audit → `docs/HANDOFF_PHASE6.md`).
+# Phase 5 Close-out + CI Stabilization + Phase 6 Kickoff — 2026-09-02 (executed 2026-05-25)
+**Authors: all 9 agents (full parallel audit + independent QA cross-validation) + PM consolidation; CI fixes by Backend/QA**
+
+**🏁 PHASE 5 (Backend API & Simulation Runner) is now fully CLOSED and CI-GREEN on Python 3.11.15.**
+
+### Post-close CI stabilization (what it took to turn the suite green in CI)
+The Phase-5 sprints landed all 28 tickets, but the first full CI run on the project's target interpreter
+(**Python 3.11.15** — the sandbox dev base is 3.10) surfaced toolchain + version issues. Fixed:
+
+| Area | Problem | Fix |
+|---|---|---|
+| Lint | CI floats the latest `ruff` (0.15.14) → ~840 errors from newer rules | `[tool.ruff.lint]` relaxed (dropped `PTH`; ignore opinionated `SIM` nits; per-file `E402` for tests/scripts) + `ruff format` (187 files); one real `F821` fixed with a `TYPE_CHECKING` import |
+| Types | 8 `mypy` errors (`mypy similarity/ pipeline/ api/`, pinned `<2.0`) | annotations (`view: np.ndarray`, `index: Any`, `_conn` union), `getattr` for an optional attr, corrected `type: ignore` codes, `TYPE_CHECKING` import |
+| Coverage | "borderline" reading was a `--cov-append` merge artifact | measure via `coverage --parallel-mode` + `combine`; real unit coverage **89%** (gate 80 MET); principled omits kept |
+| Unit #1 | `test_odds_provider_sim370` used `asyncio.get_event_loop()` — on 3.11 it RAISES after pytest-asyncio nulls the loop (order-dependent; passes alone) | `asyncio.run(...)` + a suite-wide autouse `_ensure_current_event_loop` guard in `tests/conftest.py` |
+| Unit #2 | `test_qa_sim326::...slow_exhaustive` (5000-game) timed out >30s **only under coverage** | `@pytest.mark.timeout(120)` (a marker overrides the CLI `--timeout`) |
+| Fixture | `test_backend_sim318` `FileNotFoundError: docs/data/foul_rate_by_count.csv` — the 1KB reference table was **gitignored** (unanchored `data/` matched `docs/data/`), so it passed locally but never reached CI | anchored `.gitignore` `data/`→`/data/` + committed the CSV |
+| Reporting | a pytest `tb_lineno - 1: NoneType` **INTERNALERROR** (renderer bug on `--tb=short`) masked the real failures + exited 3 | CI `--tb=short`→`--tb=native` (×3 jobs) so any failure is NAMED, not crashed |
+
+**Result:** full unit+regression suite **1814 pass / 1 skip / 0 fail @ 89% coverage** on Python 3.11.15;
+all 8 CI jobs green (lint, type-check, unit+coverage, regression, e2e, secrets, file-integrity, docker-build).
+
+### Phase-5-close 9-agent program audit → Phase 6
+A full parallel 9-agent audit (PM, Baseball Analyst, ML, Data, Backend, Performance, UX, Betting, QA/DevOps)
+plus an independent QA cross-validation filed **43 Phase-6 tickets (SIM-378→SIM-420)**. Findings in
+`docs/audit/2026-09-02-phase5-close-program-audit.md`; the deduped, tiered ticket list in
+`docs/audit/2026-09-02-phase6-prioritized-tickets.md`; Phase-6 entry plan in `docs/HANDOFF_PHASE6.md`.
+
+**Headline (QA-confirmed):** **Phase 6 = the Frontend Build** is effectively greenfield — `frontend/`
+component dirs are empty, there is no build tooling/design-system/API→UI serving path, and the pre-existing
+Phase-6 tickets (SIM-127–131) cite parent tickets (SIM-108/109/112/122–126) that don't exist (SIM-382
+backfills them). The backend is strong but the UI needs new contracts it can't start without: an enriched
+games list (bare integer IDs today, no standings table), a single aggregate card endpoint + status enum,
+a typed WebSocket schema, a live in-progress read path (today stranded on the :8001 pipeline app), a
+multi-substitution override body, and prop edge/signal endpoints.
+
+**Defects/dead-wiring found today:** ⚠ the betting edge/CLV call site computes the "gold-standard" CLV off
+an **uncalibrated** win probability (the loaded `calibration_map` is never threaded into `win_probability()`
+— SIM-387); ⚠ `require_api_key` is defined but applied to **zero** routes (SIM-389); ⚠ `SIM_RUNNER_WORKERS=1`
+serializes `/simulate` and the lifespan runner is built without `shared_arrays=` (SIM-403); ⚠ `GameState.park`
+is a **dead field** never read by the run environment (SIM-411); ⚠ the `metrics.py` p95 gauge is an unwired
+placeholder (SIM-410).
+
+**Live-environment verification debt** (carried, code-complete, mock/unit-verified): the `/simulate` 2s/30s
+SLA over the real DB factory (SIM-402), the real odds provider (SIM-405), a fitted `CalibrationReport`
+(SIM-406), the DuckDB-profile 11-engine build (SIM-408), and a full `docker compose up` of nginx+app+monitoring.
+
+**Next free ID after the audit: SIM-421.** Phase 6 critical path: SIM-378 (React-vs-vanilla ADR) →
+foundation (379/380/381) + contracts (382/383/384/385/387/389) → live read (386) → cards/linescore (391/392)
+→ game page/boxscore (393/394) → betting + override (395/396/397/398).
 
 ---

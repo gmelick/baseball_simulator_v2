@@ -1005,6 +1005,50 @@ class EdgeReportModel(_ApiModel):
 
 
 # ===========================================================================
+# SIM-390 -- player-prop edge response (PMF + optional over/under + edge report)
+# ===========================================================================
+
+
+class PropEdgeResponse(_ApiModel):
+    """SIM-390 response for GET /{game_pk}/props/{player_id}/{prop}.
+
+    The full integer-support PMF for one player's one prop over a Monte-Carlo
+    run, enriched with optional over/under probabilities and an edge report.
+
+    When a ``line`` query param is supplied the ``p_over``, ``p_under``, and
+    ``p_push`` fields are populated using the sportsbook convention
+    (half-integer line: over + under == 1; integer line: a push mass is
+    excluded from both).  When ``over_ml`` and ``under_ml`` are also supplied
+    the ``edge_report`` is populated via
+    :func:`betting.clv_engine.prop_edge_report`; the side evaluated is
+    determined by the ``bet_side`` query param (``"over"`` or ``"under"``).
+
+    ``pmf`` is the ``{str(value) -> probability}`` map for direct consumer use
+    (JSON object keys must be strings, so integer outcomes are stringified).
+    """
+
+    player_id: int
+    prop: str
+    n: int
+    #: The compact PMF support (sorted distinct integer outcomes).
+    support: list[int]
+    #: Aligned probabilities (sums to 1.0).
+    probabilities: list[float]
+    mean: float
+    median: float
+    std: float
+    #: ``str(value) -> probability`` view of the PMF (object keys must be str).
+    pmf: dict[str, float] = Field(default_factory=dict)
+    # Optional: populated when a ``line`` query param is supplied.
+    line: float | None = None
+    p_over: float | None = None
+    p_under: float | None = None
+    p_push: float | None = None
+    # Optional: populated when ``over_ml`` and ``under_ml`` are also supplied.
+    edge_report: EdgeReportModel | None = None
+
+
+# ===========================================================================
 # betting/bet_signal.py  ->  BetSignal  (SIM-369 API exposure)
 # ===========================================================================
 
@@ -1204,6 +1248,8 @@ __all__ = [
     # clv_engine.py
     "CLVModel",
     "EdgeReportModel",
+    # SIM-390 prop edge
+    "PropEdgeResponse",
     # bet_signal.py (SIM-369)
     "BetSignalModel",
     # line_movement.py (SIM-368)

@@ -1,7 +1,85 @@
 # Product Backlog
 
-*Owner: Product Manager (Agent 1) · Last updated: 2026-05-24 (🏁 PHASE 5 COMPLETE — Sprint 6 testing/infra CLOSED)*
+*Owner: Product Manager (Agent 1) · Last updated: 2026-05-26 (🚀 PHASE 6 Sprint 1 in-progress — SIM-378 ✅, SIM-379 ✅, SIM-380 ✅, SIM-381 ✅, SIM-382 ✅, SIM-383 ✅, SIM-384 ✅, SIM-385 ✅, SIM-387 ✅, SIM-388 ✅, SIM-389 ✅, SIM-390 ✅, SIM-410 ✅, stale-docs ✅)*
 
+> # 🚀 PHASE 6 — Frontend Build — OPEN 2026-09-02 (audit executed 2026-05-25)
+>
+> **Phase 5 is fully CLOSED and CI-green on Python 3.11.15** (unit+regression **1814 pass / 1 skip / 0 fail @ 89% coverage**; 8 CI jobs; the post-close CI-stabilization — ruff 0.15.14 config, mypy, coverage measurement, and 2 py3.11 failures [a gitignored fixture + a slow-test timeout] — is done). A full **9-agent program audit + independent QA cross-validation** filed **43 Phase-6 tickets (SIM-378→SIM-420)**. **Phase 6 = the Frontend Build** — a greenfield UI on the complete backend, PLUS the API contracts the UI can't start without and the live-env / realism / hardening debt. See `docs/HANDOFF_PHASE6.md`, `docs/audit/2026-09-02-phase5-close-program-audit.md`, `docs/audit/2026-09-02-phase6-prioritized-tickets.md`.
+>
+> **⚠ Reality check (QA-confirmed):** the pre-existing Phase-6 tickets SIM-127–131 cite parent tickets SIM-108/109/112/122–126 that **don't exist**; `frontend/{components,graphics,pages}/` are **empty dirs**; there is no build tooling or API→UI serving path. SIM-382 backfills the chain. **Next free ID: SIM-421.**
+>
+> | Tier | Tickets |
+> |---|---|
+> | P0 — kickoff gates (frontend foundation + API contracts) | SIM-378…SIM-390 (13) |
+> | P1 — frontend build | SIM-391…SIM-401 (11) |
+> | P1 — backend/perf/data prerequisites + live-env verification | SIM-402…SIM-410 (9) |
+> | P2 — realism + hardening | SIM-411…SIM-420 (10) |
+>
+> ### Tier P0 — kickoff gates
+> | ID | Title | Type | Pri | Size | Owner | Depends-on |
+> |---|---|---|---|---|---|---|
+> | SIM-378 | React-vs-vanilla-JS architecture decision (ADR) | Spec | P0 | S | UX Designer + Backend Developer + QA/DevOps | - | ✅ **Closed 2026-05-25** |
+> | SIM-379 | Frontend scaffold + build tooling + frontend CI job | Infra | P0 | M | UX Designer + QA/DevOps | SIM-378 | ✅ **Closed 2026-05-25** |
+> | SIM-380 | Design-system foundation (tokens, typography, spacing, Card/Panel/Badge) | Feature | P0 | M | UX Designer | SIM-379 | ✅ **Closed 2026-05-25** |
+> | SIM-381 | API->frontend serving path (StaticFiles / nginx SPA fallback) | Gap | P0 | S | Backend Developer + UX Designer | SIM-378 | ✅ **Closed 2026-05-25** |
+> | SIM-382 | Backfill 8 phantom Phase-6 parent tickets + re-map SIM-127-131 deps | Gap | P0 | M | Product Manager + UX Designer + Backend Developer | - | ✅ **Closed 2026-05-25** |
+> | SIM-383 | Enrich GET /api/games/{date} with team/venue names + records | Feature | P0 | M | Backend Developer + Data Engineer | - | ✅ **Closed 2026-05-25** |
+> | SIM-384 | Single game-card aggregate endpoint + status enum (scheduled/live/final) | Feature | P0 | M | Backend Developer | SIM-383 | ✅ **Closed 2026-05-26** |
+> | SIM-385 | Typed + documented WebSocket event schema | Feature | P0 | M | Backend Developer | - | ✅ **Closed 2026-05-25** |
+> | SIM-386 | Live in-progress game-state read path on the main API | Feature | P0 | L | Data Engineer + Backend Developer | SIM-384 |
+> | SIM-387 | Fix dead calibration wiring at the betting edge/CLV call site | Bug | P0 | S | Backend Developer + ML Engineer | - | ✅ **Closed 2026-05-25** |
+> | SIM-388 | Multi-substitution override (array body) - unblocks SIM-128 | Feature | P0 | M | Backend Developer | - | ✅ **Closed 2026-05-26** |
+> | SIM-389 | Enforce auth on data/expensive routes + browser session model + fix dev CORS | Security | P0 | M | Backend Developer + QA/DevOps | - | ✅ **Closed 2026-05-25** |
+> | SIM-390 | Player-prop edge/signal API endpoints | Feature | P0 | L | Backend Developer + Betting Analyst | SIM-387 | ✅ **Closed 2026-05-26** |
+>
+> ### Tier P1 — frontend build
+> | ID | Title | Type | Pri | Size | Owner | Depends-on |
+> |---|---|---|---|---|---|---|
+> | SIM-391 | Build Day Summary page (date nav + game-count badge + 3-state cards) | Feature | P1 | L | UX Designer + Backend Developer | SIM-380, SIM-383, SIM-384 |
+> | SIM-392 | Build LinescoreGraphic + BaseballFieldGraphic SVG | Feature | P1 | M | UX Designer + Backend Developer | SIM-380, SIM-386 |
+> | SIM-393 | Build Game page (play-by-play + pitch drill-down + per-player sim panels) | Feature | P1 | L | UX Designer + Backend Developer | SIM-391, SIM-385 |
+> | SIM-394 | Build per-player boxscore (100-iter averages + distribution views) | Feature | P1 | M | UX Designer + Betting Analyst | SIM-380, SIM-390 |
+> | SIM-395 | Build betting card surface (ML/spread/total + winning-side + +EV signal) | Feature | P1 | L | UX Designer + Betting Analyst | SIM-380, SIM-390 |
+> | SIM-396 | Build CLV / line-movement time-series chart | Feature | P1 | M | UX Designer + Betting Analyst | SIM-395 |
+> | SIM-397 | Managerial override UI - v1 single-sub (ships early) | Feature | P1 | M | UX Designer + Backend Developer | SIM-393 |
+> | SIM-398 | Managerial override UI - v2 staged queue + undo + multi-change (SIM-128 build) | Feature | P1 | L | UX Designer + Backend Developer | SIM-397, SIM-388 |
+> | SIM-399 | Frontend a11y + responsive/mobile + cross-browser gate | Gap | P1 | M | UX Designer + QA/DevOps | SIM-391 |
+> | SIM-400 | Cross-browser E2E harness (Playwright) | Test | P1 | L | QA/DevOps | SIM-379 |
+> | SIM-401 | Frontend deploy (static artifacts + nginx serving + CD to ghcr) | Infra | P1 | M | QA/DevOps + Backend Developer | SIM-381 |
+>
+> ### Tier P1 — prerequisites + live-env verification
+> | ID | Title | Type | Pri | Size | Owner | Depends-on |
+> |---|---|---|---|---|---|---|
+> | SIM-402 | Real-DB /simulate 2s/30s SLA verification on dedicated hardware | Perf | P1 | M | Performance Engineer + QA/DevOps | - |
+> | SIM-403 | Enable real parallelism + wire shared-memory tiles into the live runner | Perf | P1 | M | Backend Developer + Performance Engineer | SIM-402 |
+> | SIM-404 | Stress / concurrency / leak suite (100 sims x 30 concurrent games) | Test | P1 | L | QA/DevOps + Performance Engineer | SIM-403 |
+> | SIM-405 | Real odds-provider implementation behind the SIM-370 seam | Feature | P1 | L | Data Engineer + Betting Analyst | - |
+> | SIM-406 | Fit + persist a CalibrationReport over real data + apply to all engines | Feature | P1 | L | ML Engineer | SIM-408 |
+> | SIM-407 | Validate prop PMFs + run ablation/walk-forward over real outcomes | Validation | P1 | M | ML Engineer + Betting Analyst | SIM-406 |
+> | SIM-408 | DuckDB profile/pool build + provisioning for the 11-engine startup | Infra | P1 | M | Data Engineer | - |
+> | SIM-409 | Lineup ingestion guarantee for scheduled games (SIM-338 lineage) | Bug | P1 | M | Data Engineer + Backend Developer | SIM-386 |
+> | SIM-410 | Wire the API p95 timing middleware | Improvement | P1 | S | Backend Developer + QA/DevOps | - | ✅ **Closed 2026-05-25** |
+>
+> ### Tier P2 — realism + hardening
+> | ID | Title | Type | Pri | Size | Owner | Depends-on |
+> |---|---|---|---|---|---|---|
+> | SIM-411 | Park factor into the run environment | Improvement | P2 | L | Baseball Analyst + ML Engineer + Data Engineer | - |
+> | SIM-412 | Home-field run advantage in the score distribution | Improvement | P2 | M | Baseball Analyst | SIM-411 |
+> | SIM-413 | Pitcher throwing-hand -> batter platoon split in the batted-ball matchup | Improvement | P2 | M | Baseball Analyst + ML Engineer | - |
+> | SIM-414 | W/L/S + ER + per-runner R cross-surface reconciliation | Bug | P2 | M | Baseball Analyst + Backend Developer | SIM-384 |
+> | SIM-415 | Pagination / payload-trim for heavy endpoints | Improvement | P2 | M | Backend Developer | - |
+> | SIM-416 | App-level exception handler + structured error envelope | Improvement | P2 | S | Backend Developer | - |
+> | SIM-417 | Data-freshness/health API surface for the UI | Feature | P2 | S | Data Engineer | - |
+> | SIM-418 | Split slow tests into a dedicated CI lane | Chore | P2 | S | QA/DevOps | - |
+> | SIM-419 | Harden DuckDB profile-rebuild index recreate | Reliability | P2 | S | Data Engineer | - |
+> | SIM-420 | OpenAPI typed-client generation for the frontend | Improvement | P2 | S | Backend Developer + QA/DevOps | SIM-383, SIM-385 |
+>
+> **Sprint plan (6 wks):** **S1** kickoff gates SIM-378–390 · **S2** live read + cards + linescore/field (386, 391, 392) + backend 388/390 · **S3** game page + boxscore (393, 394, 420) · **S4** betting surface + override v1 (395, 396, 397) + data/ML track 405/406/407 · **S5** override v2 + perf/verification (398, 402, 403, 404, 408, 409) · **S6** a11y/Playwright/deploy + hardening (399, 400, 401, 410–419) + staging bring-up.
+>
+> **Critical path:** SIM-378 → 379/380/381 + 382/383/384/385/387/389 → 386 → 391/392 → 393/394 → 395/396/397 → 398. The data/ML/perf prerequisite track (402–409) runs alongside and must be **live-env verified** before the numbers it backs reach users.
+>
+> ---
+>
 > # 🏁 PHASE 5 — Backend API & Simulation Runner — COMPLETE 2026-05-24
 >
 > **All 28 Phase-5 tickets (SIM-350→377) + the SIM-315 carryover closed across 6 sprints.** The greenfield
@@ -260,6 +338,47 @@
 > **P2/P3 status (Sprint 2026-07-08 — CLOSED 2026-05-23):** SIM-329/339/340 (betting chain) + SIM-333 (shared-memory) ✅ Closed · audit bugs SIM-336⚠/345⚠/346⚠ ✅ Fixed — **all six ⚠ live bugs now closed**. Schema v6→v7. Suite 1271 → 1380. Remaining P1: SIM-323 manager logic.
 >
 > **P3/close status (Sprint 2026-07-15 — CLOSED 2026-05-24):** SIM-323 manager + SIM-349 situational ✅ · SIM-334 columnarize + SIM-335 perf-benches + SIM-347 stress + SIM-348 live-tests ✅ · SIM-341/342/343/344 hygiene ✅. **PHASE 4 COMPLETE.** Suite 1380 → 1505; perf 3/2 → 5/0. (SIM-342 re-categorization: SIM-107 → done via SIM-348; SIM-120 → unblocked by SIM-320; SIM-127/128/129 → Phase 6 frontend.)
+>
+> ---
+>
+> # 📋 SIM-382 — Phantom Ticket Backfill (2026-05-25)
+>
+> *Owner: Product Manager (Agent 1). Executed as part of Phase-6 Sprint 1.*
+>
+> The Phase-5-close program audit (QA-confirmed) found that the pre-existing Phase-6 frontend
+> tickets **SIM-127–131** all cite parent tickets **SIM-108, SIM-109, SIM-112, SIM-122–126** that
+> never appeared anywhere in the backlog.  SIM-382 backfills them as retrospective stubs, records
+> the intent each would have captured, and re-maps each child ticket's dependency to the real
+> Phase-6 ticket that supersedes it.
+>
+> ### Phantom parent stubs (SIM-108/109/112/122–126)
+>
+> These were intended as backend-contract / spec tickets filed during Phase 3 planning.  They were
+> referenced but never formally created; the IDs sat in the 099–130 "Backend / live pipeline" band.
+> All intent is now covered by completed Phase-4/5 tickets or open Phase-6 tickets.
+>
+> | ID (phantom) | Intended title | Superseded by |
+> |---|---|---|
+> | SIM-108 | Frontend-facing game-simulation API contract spec | SIM-355 (GET /simulate) + SIM-358 (with_override) ✅ Phase 5 |
+> | SIM-109 | Team/venue metadata API (names, abbreviations, venue) | **SIM-383** (games enrichment — Phase 6 Sprint 1) |
+> | SIM-112 | Live in-progress game-state read path | **SIM-386** (live state read path — Phase 6 Sprint 2) |
+> | SIM-122 | WebSocket event schema | **SIM-385** ✅ Phase 6 Sprint 1 |
+> | SIM-123 | Player prop distributions + boxscore API | SIM-366 (boxscore card) ✅ Phase 5 + **SIM-390** (prop edges) |
+> | SIM-124 | Frontend scaffold + build-tooling specification | **SIM-378/379** ✅ Phase 6 Sprint 1 |
+> | SIM-125 | Managerial override API (multi-substitution) | **SIM-388** (multi-sub override — Phase 6 Sprint 2) |
+> | SIM-126 | Design-system + component library specification | **SIM-380** ✅ Phase 6 Sprint 1 |
+>
+> ### Dependent child tickets (SIM-127–131) — re-mapped dependencies
+>
+> | ID | Title | Original phantom dep | Re-mapped to |
+> |---|---|---|---|
+> | SIM-127 | Game card — staleness/CI indicator | SIM-108/122 | **SIM-384** (aggregate card) + **SIM-385** ✅ |
+> | SIM-128 | Managerial override — staged queue + undo UI | SIM-125 | **SIM-398** (override v2; depends on **SIM-388**) |
+> | SIM-129 | Per-player prop/boxscore UI | SIM-123 | **SIM-394** (per-player boxscore; depends on **SIM-390**) |
+> | SIM-130 | CLV/betting surface UI | SIM-109/123 | **SIM-395/396** (betting card + CLV chart) |
+> | SIM-131 | Frontend CI/CD pipeline | SIM-124 | **SIM-379/401** ✅ CI done; CD = SIM-401 |
+>
+> SIM-382 **CLOSED 2026-05-25** — no code change; backlog and audit docs updated.
 >
 > ---
 >
@@ -729,177 +848,4 @@ season (2022, 2023, 2024) and add a backfill or an ETL fix if not.
 
 ### SIM-161 — Live EXPLAIN ANALYZE run for SIM-085 + SIM-089
 
-**Type:** Validation | **Effort:** S | **Phase:** 2 | **Status:** ⏳ Deferred (operational) — carry to sprint 2026-05-27. Harness ready; live run blocks on staging 2024 data load.
-**Owners:** Performance Engineer (lead) · Data Engineer (staging data prep)
-**Depends on:** SIM-158 harness (shipped 2026-05-14)
-
-#### Problem
-
-SIM-158 shipped `scripts/run_index_acceptance.py` and the placeholder
-acceptance doc at `docs/perf/2026-05-13-index-acceptance.md`, but the
-live EXPLAIN ANALYZE round-trip was deferred because staging didn't yet
-hold 2024 data.  Once staging is loaded, run the harness and capture
-the plans.
-
-#### Acceptance criteria
-
-1. `BASEBALL_DB_DSN=… python scripts/run_index_acceptance.py --season 2024 --pitcher-id <real> --out docs/perf/2026-05-13-index-acceptance.md` exits 0.
-2. Both gates pass per the SIM-085 / SIM-089 acceptance criteria text.
-3. The Markdown report is committed to the repo.
-4. If either gate fails, file a follow-up and revert the index claim from CHANGES.md per SIM-158 AC #4.
-
-### SIM-163 — Re-run SIM-085 acceptance with corrected fixture; consider INCLUDE columns
-
-**Type:** Validation + Improvement | **Effort:** S | **Phase:** 2 | **Status:** 📝 Open — filed 2026-05-17 from SIM-158 live run analysis
-**Owners:** Performance Engineer
-**Depends on:** SIM-158 harness (shipped); SIM-161 live run (in progress)
-
-#### Problem
-
-First live SIM-158 run against the 2024 staging DB (2026-05-17) returned:
-
-* SIM-089 (`idx_pitches_pitcher_season_clean`): **PASS** — 40.43 ms vs 50 ms budget, Index Scan as expected.
-* SIM-085 (`idx_pitches_situation`): **MARGINAL FAIL** — 31.03 ms vs 30 ms budget (1.03 ms / 3.4 % over).
-
-The plan confirms the right index is selected — no Seq Scan. The overshoot is dominated by the heap fetch (~28 ms for 12,299 rows / 9,724 heap blocks), with ~1 ms of overhead from a BitmapOr caused by the test fixture's synthetic `on_2b=12345` runner ID (a player ID that doesn't exist).
-
-`scripts/run_index_acceptance.py` was patched 2026-05-17 to use bases empty (`on_2b=None`) and `IS NOT DISTINCT FROM` predicates, eliminating the BitmapOr. A clean re-run should land under 30 ms; if it doesn't, the structural fix is to widen `idx_pitches_situation` with `INCLUDE (game_pk, at_bat_number, pitch_number)` to enable an Index Only Scan and skip the heap fetch entirely.
-
-#### Acceptance criteria
-
-1. Re-run `scripts/run_index_acceptance.py` against the 2024 staging DB with the corrected fixture; commit the updated report to `docs/perf/2026-05-13-index-acceptance.md`.
-2. If SIM-085 measured latency < 30 ms: close as no-action; the original SIM-158 close was correct, plan just needed a clean fixture.
-3. If SIM-085 still ≥ 30 ms: open a follow-up Alembic migration adding `INCLUDE (game_pk, at_bat_number, pitch_number)` to `idx_pitches_situation`, re-run, and confirm Index Only Scan path < 30 ms.
-4. Do **not** revert the SIM-085 / SIM-089 claims from `CHANGES.md` — the plan analysis (see report §Analysis) demonstrates both indexes function as designed.
-
-### SIM-162 — Restore truncated `LeagueAverageProfiles.compute()` in `player_profile_computor.py`
-
-**Type:** Bug | **Effort:** S | **Phase:** 2 | **Status:** ✅ Shipped 2026-05-21 (sprint 2026-05-20) — root cause was truncated `__main__` argparse block, not the `LeagueAverageProfiles` class itself. Restored entry point chains `LeagueAverageProfiles.compute()` after the main computor run.
-**Owners:** Data Engineer
-
-#### Problem
-
-Raised during SIM-073 verification (2026-05-14): `pipeline/batch/player_profile_computor.py`
-is truncated at line 3755 inside an unfinished `LeagueAverageProfiles.compute()`
-f-string.  `git show HEAD:pipeline/batch/player_profile_computor.py | wc -l`
-returns 3745 lines with a clean ending; the working-tree file has a partial
-in-progress edit that corrupts the parse.  Nothing in the catcher pipeline
-depends on this method (so SIM-073 shipped fine), but the module won't
-import as-is and any test that touches it transitively fails.
-
-#### Acceptance criteria
-
-1. The file parses cleanly: `python -c 'import ast; ast.parse(open("pipeline/batch/player_profile_computor.py").read())'` exits 0.
-2. Either: (a) finish the in-progress edits to `LeagueAverageProfiles.compute()` so it ships the league-average insert paths for pitcher, batter, fielder-by-position, baserunner, and catcher entity types; OR (b) revert the file's tail to upstream HEAD if the in-progress edit is no longer wanted.
-3. A unit test invokes `LeagueAverageProfiles('...').compute([2024])` against an in-memory DuckDB and confirms every entity_type produces a non-empty row.
-
----
-
-## Cross-cutting observations carried over from Sprint 2026-05-06
-
-**Documentation drift to fix.** The README's Phase 4 simulation step descriptions reference catcher only in the steal context (Step 1, Step 3a). Once SIM-200 and SIM-201 are merged into the Phase 4 Step 3b spec, the README's Step 3b section needs updating to mention framing and blocking explicitly:
-
-- [ ] Update README §"Step 3b — Pitch Outcome Determination" to mention catcher framing bias on shadow-zone takes (post SIM-200 ship)
-- [ ] Update README §"Step 3b" to mention catcher blocking coefficient on dirt-pitch outcomes (post SIM-201 ship)
-- [ ] Update `PRODUCT_GUIDE.md` §6 catcher-engine description to reflect the 5-sub-score composition (post SIM-072 ship)
-
----
-
-## Audit 2026-05-21 follow-ups (47 new tickets)
-
-Full per-agent findings: `docs/audit/2026-05-21-program-audit.md`
-Prioritized list with tiers + dependency graph: `docs/audit/2026-05-21-prioritized-tickets.md`
-
-### Tier P0 — must land before Phase 4 simulation-loop work begins
-
-| Ticket | Owner | Size | Why P0 |
-|---|---|---|---|
-| SIM-118 | Performance Engineer | M | Performance benchmark harness — no measurable SLA without it. |
-| SIM-202 | Baseball Analyst | S | Centralize run-value constants in `simulation/constants.py`. |
-| SIM-301 | Backend Developer | M | Play-pool nightly cache serializer (drafted in SIM-300 §10). |
-| SIM-323 | Baseball Analyst | L | Manager decision logic spec — required for Step 7 of the sim loop. |
-| SIM-280 | Performance Engineer | S | Per-engine RAM budget within the 2 GB SIM-114 envelope. |
-| SIM-281 | Performance Engineer | S | ProcessPoolExecutor + shared-memory architecture decision. |
-| SIM-220 | ML Engineer | L | Backtesting framework — required before simulator outputs can be validated. |
-
-### Tier P1 — Phase 3 implementation + Phase 4 readiness
-
-| Ticket | Owner | Size | Notes |
-|---|---|---|---|
-| SIM-302 | Backend + ML Engineer | M | PlayPoolSampler API surface. |
-| SIM-303 | Backend Developer | M | Wire sampler into Phase 4 loop scaffolding. |
-| SIM-161 | Performance Engineer | S | Live EXPLAIN ANALYZE — first run executed 2026-05-17; SIM-089 PASS, SIM-085 marginal fail handed to SIM-163. |
-| SIM-163 | Performance Engineer | S | Re-run SIM-085 with corrected fixture; if still > 30 ms, add INCLUDE columns for Index Only Scan. |
-| SIM-224 | ML Engineer | S | FAISS hot-path latency benchmark. |
-| SIM-225 | ML Engineer | M | Live golden-file regression fixtures from real 2024 data. |
-| SIM-221 | ML Engineer | M | Ablation harness — every engine vs league-average. |
-| SIM-222 | ML Engineer | M | Walk-forward validation pipeline. |
-| SIM-205 | Baseball Analyst | M | Platoon-split sanity tests for known L/R-heavy hitters. |
-| SIM-310 | Product Manager | S | Phase 3 acceptance gate definition. |
-
-### Tier P2 — DE hygiene + observability
-
-SIM-241 (S), SIM-244 (S), SIM-245 (S), SIM-243 (S), SIM-094 (S, pre-existing), SIM-242 (M), SIM-240 (L — `player_profile_computor.py` refactor).
-
-### Tier P3 — Backend / API readiness
-
-SIM-260 (S), SIM-263 (S), SIM-261 (M), SIM-262 (S).
-
-### Tier P4 — ML / BA validation depth
-
-SIM-223 (S), SIM-203 (S), SIM-204 (M).
-
-### Tier P5 — QA / DevOps
-
-SIM-444 (S), SIM-440 (M), SIM-441 (M), SIM-442 (M), SIM-443 (S).
-
-### Tier P6 — Betting / Markets
-
-SIM-135 (S, pre-existing), SIM-136 (M, pre-existing), SIM-410 (M), SIM-411 (M), SIM-412 (S), SIM-143 (M, pre-existing).
-
-### Tier P7 — UX (held until Phase 5 kickoff)
-
-SIM-510 (M), SIM-515 (S), SIM-511 (M), SIM-512 (M), SIM-513 (L), SIM-514 (S).
-
-### Tier P8 — long-horizon
-
-SIM-700 (M), SIM-282 (S).
-
-### Housekeeping
-
-SIM-311 (S), SIM-312 (S), SIM-313 (S), SIM-314 (S).
-
-### Recommended next 3 sprints (PM proposal — full rationale in prioritized-tickets doc)
-
-* **2026-05-27** — Phase 3 kickoff + P0 gating (6 tickets · ~7 dev-days):
-  SIM-301, SIM-118, SIM-161, SIM-202, SIM-280, SIM-281.
-* **2026-06-03** — Phase 3 implementation + ML harness (6 tickets · ~8 dev-days):
-  SIM-302, SIM-220 (start), SIM-224, SIM-241, SIM-244, SIM-310.
-* **2026-06-10** — Phase 3 closure + Phase 4 prep (5 tickets · ~9 dev-days):
-  SIM-303, SIM-220 (finish), SIM-323 (start), SIM-225, SIM-260.
-
----
-
-## Phase 4 / Phase 4+ placeholder tickets (held)
-
-### SIM-200 — [Phase 4 placeholder] Step 3b: Catcher Framing Bias on Shadow-Zone Takes
-
-**Type:** Phase 4 design constraint | **Effort:** S (when Phase 4 lands) | **Phase:** 4 | **Status:** 🔲 Held
-**Owners:** Backend Developer · ML Engineer · Baseball Analyst
-**PM note:** Forward-looking placeholder. Folds into Phase 4 Step 3b spec when drafted; do NOT ship standalone.
-
-### SIM-201 — [Phase 4 placeholder] Step 3b: Catcher Blocking Coefficient on Dirt-Pitch Outcomes
-
-**Type:** Phase 4 design constraint | **Effort:** S (when Phase 4 lands) | **Phase:** 4 | **Status:** 🔲 Held
-**Owners:** Backend Developer · ML Engineer · Baseball Analyst
-**PM note:** Same disposition as SIM-200 — folds into Phase 4 Step 3b spec when drafted.
-
----
-
-## Risk register
-
-| Risk | Source ticket | Mitigation |
-|---|---|---|
-| Phase 4 simulation harness may not isolate single features cleanly → SIM-200's validation gate becomes infeasible | SIM-200 | Fall back to ablation testing on full backtests. ML Engineer review at Phase 4 kickoff. |
-| FAISS engine sprint is over-committed (SIM-041 L + SIM-042 M for one ML Engineer) | Sprint 2026-05-13 | Day-3 standup decision point; defer SIM-042 calibration to 2026-05-20 if velocity slips. |
-| `backlog.xlsx` is corrupted on disk | Sprint 2026-05-07 housekeeping | User to re-export from OneDrive or regenerate from `BACKLOG.md`. Until then `BACKLOG.md` is authoritative. |
+**Type:** Validation | **Effort:** S | **Phase:** 2 | **Status:** ⏳ Deferred (operational) — carry to sprint 2026-05-27. Harness re
