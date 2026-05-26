@@ -1,3 +1,69 @@
+# Phase 6 Sprint 2 — Frontend Build (P1) — 2026-05-26
+**Authors: UX Designer (Agent 7), Backend Developer (Agent 5)**
+
+Sprint 2 begins the frontend build on the now-buildable Sprint-1 contracts. First ticket: the Day
+Summary page (SIM-391). Also hardened the SIM-379 scaffold, which had never actually passed its own
+CI job — three gaps (missing lock file, missing CSS-module type declarations, missing Vite path
+alias) plus one lint failure all blocked the `frontend` job; all fixed here so the job is green.
+
+| Ticket | Type | Owner | Status |
+|--------|------|-------|--------|
+| SIM-391 | Feature | UX + Backend | ✅ Closed — Day Summary page: date nav + game-count badge + 3-state GameCards + React Router |
+| — | Infra/Bug | UX + QA | ✅ Done — frontend CI hardening (package-lock.json, `vite-env.d.ts`, Vite `@/` alias, AuthContext lint fix) |
+
+### Frontend CI hardening (no ticket — completes the SIM-379 scaffold)
+
+The SIM-379 scaffold committed `frontend/package.json` but the `frontend` CI job (Node 20:
+`npm ci` → type-check → lint → build) could never have passed. Four blocking gaps, all fixed:
+
+- **No `package-lock.json`** — `npm ci` hard-requires a committed lock file. Ran `npm install`
+  (also adds `react-router-dom@^6.26.2` for routing) to generate + commit `frontend/package-lock.json`.
+- **No CSS-module type declarations** — every `import styles from './X.module.css'` failed
+  `tsc --noEmit` with TS2307. Added `frontend/src/vite-env.d.ts` (`/// <reference types="vite/client" />`),
+  which provides the ambient CSS-module + asset + `import.meta.env` declarations.
+- **No Vite `@/` alias** — the `@/*` path alias was in `tsconfig.json` (so the type-checker resolved
+  it) but not in `vite.config.ts`, so the rollup build failed to resolve `@/components/...`. Added a
+  matching `resolve.alias` to `vite.config.ts`.
+- **Lint failure under `--max-warnings 0`** — `AuthContext.tsx` tripped
+  `react-refresh/only-export-components` (a context file co-locating its provider + hook). Added a
+  scoped `eslint-disable-next-line` with rationale.
+
+### SIM-391 — Day Summary page (date nav + game-count badge + 3-state cards)
+
+**Goal:** the slate view — the entry point of the app. A date navigator, a game-count badge, and a
+responsive grid of status-aware game cards, built on the enriched games API (SIM-383) with the
+3-state status enum mapping (SIM-384). Routing (React Router) is introduced here as the dependency
+note anticipated.
+
+**New files:**
+- `frontend/src/api/games.ts` — typed games client (`credentials:'include'`, mirrors `auth.ts`):
+  - `fetchGamesOnDate(date)` → `GET /api/games/{date}` (`GamesOnDateResponse` + `GameCard`)
+  - `fetchGameCard(gamePk)` → `GET /api/games/{game_pk}/status` (`GameCardAggregate`, SIM-384)
+  - `rawStatusToGameStatus(raw)` — mirrors the server `_RAW_STATUS_TO_GAME_STATUS` 8→3-state map
+  - `GamesApiError` carrying the HTTP status (so the page can special-case 401)
+- `frontend/src/components/games/GameCard.tsx` + `.module.css` — status-aware card: away/home
+  matchup with team names + season W/L records, a status `Badge` (LIVE pulses, FINAL/SCHEDULED/PPD),
+  left-border status accent, optional score display (forward-compatible with the aggregate payload),
+  final-game winner highlight. The whole card is a `<Link to="/game/{pk}">`.
+- `frontend/src/pages/DaySummaryPage.tsx` + `.module.css` — reads the date from `/date/:date`
+  (falls back to today), date nav (prev/next/today + native date picker), game-count `Badge`, and a
+  responsive `auto-fill minmax(280px, 1fr)` grid of `GameCard`s. Loading / empty / error states
+  handled inline; local YYYY-MM-DD date helpers avoid UTC drift.
+- `frontend/src/pages/GamePage.tsx` — stub route target for `/game/:gamePk` (full build: SIM-393).
+
+**Modified:**
+- `frontend/src/App.tsx` — wired `BrowserRouter` into the authenticated shell: `/` and `/date/:date`
+  → `DaySummaryPage`; `/game/:gamePk` → `GamePage`; `*` → redirect to `/`. Header brand is now a
+  `<Link to="/">`. Replaced the Sprint-1 placeholder card.
+- `frontend/package.json` — added `react-router-dom`.
+
+**Verification:** `npm run type-check`, `npm run lint` (`--max-warnings 0`), and `npm run build`
+(`tsc --noEmit && vite build`) all pass. **UI not exercised in a browser** — the backend requires a
+populated Postgres/DuckDB to serve real data (live-env verification debt), so this is build-verified
+only, not user-tested. Visual/interaction testing is deferred to a live-env bring-up.
+
+---
+
 # Phase 6 Sprint 1 — Kickoff Gates — 2026-05-25
 **Authors: UX Designer (Agent 7), Backend Developer (Agent 5), QA/DevOps (Agent 9), Product Manager (Agent 1)**
 

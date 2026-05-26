@@ -1,6 +1,6 @@
 # Product Backlog
 
-*Owner: Product Manager (Agent 1) · Last updated: 2026-05-26 (🚀 PHASE 6 Sprint 1 COMPLETE — SIM-378 ✅, SIM-379 ✅, SIM-380 ✅, SIM-381 ✅, SIM-382 ✅, SIM-383 ✅, SIM-384 ✅, SIM-385 ✅, SIM-386 ✅, SIM-387 ✅, SIM-388 ✅, SIM-389 ✅, SIM-390 ✅, SIM-410 ✅, stale-docs ✅)*
+*Owner: Product Manager (Agent 1) · Last updated: 2026-05-26 (🚀 PHASE 6 Sprint 1 COMPLETE — all 13 P0s + SIM-410. Sprint 2 (P1 frontend) in-progress — SIM-391 ✅ Day Summary page + frontend CI hardening)*
 
 > # 🚀 PHASE 6 — Frontend Build — OPEN 2026-09-02 (audit executed 2026-05-25)
 >
@@ -35,7 +35,7 @@
 > ### Tier P1 — frontend build
 > | ID | Title | Type | Pri | Size | Owner | Depends-on |
 > |---|---|---|---|---|---|---|
-> | SIM-391 | Build Day Summary page (date nav + game-count badge + 3-state cards) | Feature | P1 | L | UX Designer + Backend Developer | SIM-380, SIM-383, SIM-384 |
+> | SIM-391 | Build Day Summary page (date nav + game-count badge + 3-state cards) | Feature | P1 | L | UX Designer + Backend Developer | SIM-380, SIM-383, SIM-384 | ✅ **Closed 2026-05-26** |
 > | SIM-392 | Build LinescoreGraphic + BaseballFieldGraphic SVG | Feature | P1 | M | UX Designer + Backend Developer | SIM-380, SIM-386 |
 > | SIM-393 | Build Game page (play-by-play + pitch drill-down + per-player sim panels) | Feature | P1 | L | UX Designer + Backend Developer | SIM-391, SIM-385 |
 > | SIM-394 | Build per-player boxscore (100-iter averages + distribution views) | Feature | P1 | M | UX Designer + Betting Analyst | SIM-380, SIM-390 |

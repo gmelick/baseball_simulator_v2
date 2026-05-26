@@ -1,0 +1,175 @@
+/**
+ * global.css — SIM-380
+ * Base resets and layout primitives. All specific component styles live in
+ * their component CSS modules or alongside the component files.
+ */
+
+@import './tokens.css';
+
+/* ============================================================================
+ * Box model + reset
+ * ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ============================================================================
+ * Root / body
+ * ========================================================================== */
+
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+  tab-size: 4;
+}
+
+body {
+  font-family: var(--sim-font-sans);
+  font-size: var(--sim-text-base);
+  line-height: var(--sim-leading-normal);
+  color: var(--sim-color-text);
+  background-color: var(--sim-color-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ============================================================================
+ * Typography resets
+ * ========================================================================== */
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: var(--sim-font-semibold);
+  line-height: var(--sim-leading-tight);
+}
+
+a {
+  color: var(--sim-color-interactive);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--sim-color-interactive-hover);
+  text-decoration: underline;
+}
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+}
+
+/* ============================================================================
+ * App shell layout
+ * ========================================================================== */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: var(--sim-z-sticky);
+  height: var(--sim-header-height);
+  background-color: var(--sim-primary-900);
+  color: var(--sim-color-text-inverse);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--sim-space-6);
+  box-shadow: var(--sim-shadow-md);
+}
+
+.app-header__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-2);
+}
+
+.app-header__logo {
+  font-size: var(--sim-text-xl);
+  line-height: 1;
+}
+
+.app-header__title {
+  font-size: var(--sim-text-lg);
+  font-weight: var(--sim-font-semibold);
+  letter-spacing: -0.01em;
+}
+
+.app-header__nav {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-4);
+}
+
+.app-main {
+  flex: 1;
+  padding: var(--sim-space-6);
+  max-width: var(--sim-max-width);
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* ============================================================================
+ * Sprint-1 placeholder card (remove when SIM-391 lands)
+ * ========================================================================== */
+
+.placeholder-card {
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-lg);
+  padding: var(--sim-space-8);
+  max-width: 520px;
+  box-shadow: var(--sim-shadow-sm);
+}
+
+.placeholder-card h2 {
+  font-size: var(--sim-text-xl);
+  margin-bottom: var(--sim-space-3);
+  color: var(--sim-primary-900);
+}
+
+.placeholder-card__body {
+  color: var(--sim-color-text-muted);
+  margin-bottom: var(--sim-space-5);
+  line-height: var(--sim-leading-relaxed);
+}
+
+.placeholder-card__checklist {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-2);
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text-muted);
+}
+
+/* ============================================================================
+ * Utility classes (minimal — prefer component-scoped CSS)
+ * ========================================================================== */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

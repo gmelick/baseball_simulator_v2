@@ -1,0 +1,66 @@
+/**
+ * Card.module.css — SIM-380
+ */
+
+.card {
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-lg);
+  box-shadow: var(--sim-shadow-sm);
+  display: flex;
+  flex-direction: column;
+}
+
+.card--borderless {
+  border: none;
+  box-shadow: none;
+}
+
+/* Padding variants */
+.padding-sm { padding: var(--sim-space-3); }
+.padding-md { padding: var(--sim-space-5); }
+.padding-lg { padding: var(--sim-space-8); }
+
+.header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--sim-space-4);
+  gap: var(--sim-space-3);
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-2);
+  font-size: var(--sim-text-base);
+  font-weight: var(--sim-font-semibold);
+  color: var(--sim-color-text);
+  line-height: var(--sim-leading-tight);
+}
+
+.count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 var(--sim-space-1p5);
+  background: var(--sim-primary-100);
+  color: var(--sim-primary-700);
+  border-radius: var(--sim-radius-full);
+  font-size: var(--sim-text-xs);
+  font-weight: var(--sim-font-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-2);
+  flex-shrink: 0;
+}
+
+.body {
+  flex: 1;
+}

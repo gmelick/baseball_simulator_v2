@@ -1,0 +1,132 @@
+/**
+ * LoginPage.module.css — SIM-389
+ */
+
+/* Full-viewport navy backdrop — matches the app header colour */
+.backdrop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--sim-primary-900);
+  padding: var(--sim-space-4);
+}
+
+/* Login card */
+.card {
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-xl);
+  box-shadow: var(--sim-shadow-lg);
+  padding: var(--sim-space-10) var(--sim-space-8);
+  width: 100%;
+  max-width: 360px;
+  text-align: center;
+}
+
+/* Logo */
+.logo {
+  font-size: 3rem;
+  line-height: 1;
+  margin-bottom: var(--sim-space-4);
+}
+
+/* Heading */
+.title {
+  font-size: var(--sim-text-xl);
+  font-weight: var(--sim-font-bold);
+  color: var(--sim-color-text);
+  margin: 0 0 var(--sim-space-1);
+}
+
+.subtitle {
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text-muted);
+  margin: 0 0 var(--sim-space-6);
+}
+
+/* Form */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-3);
+  text-align: left;
+}
+
+.label {
+  font-size: var(--sim-text-sm);
+  font-weight: var(--sim-font-medium);
+  color: var(--sim-color-text);
+}
+
+.input {
+  width: 100%;
+  padding: var(--sim-space-2p5) var(--sim-space-3);
+  font-size: var(--sim-text-base);
+  font-family: var(--sim-font-sans);
+  color: var(--sim-color-text);
+  background: var(--sim-color-bg);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-md);
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.input:focus {
+  border-color: var(--sim-primary-500);
+  box-shadow: 0 0 0 3px var(--sim-primary-100);
+}
+
+.input[aria-invalid='true'] {
+  border-color: var(--sim-danger-500);
+}
+
+.input[aria-invalid='true']:focus {
+  box-shadow: 0 0 0 3px var(--sim-danger-100);
+}
+
+.input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Error message */
+.error {
+  font-size: var(--sim-text-sm);
+  color: var(--sim-danger-700);
+  background: var(--sim-danger-50);
+  border: 1px solid var(--sim-danger-200);
+  border-radius: var(--sim-radius-sm);
+  padding: var(--sim-space-2) var(--sim-space-3);
+  margin: 0;
+}
+
+/* Submit button */
+.button {
+  width: 100%;
+  padding: var(--sim-space-2p5) var(--sim-space-4);
+  font-size: var(--sim-text-base);
+  font-weight: var(--sim-font-semibold);
+  font-family: var(--sim-font-sans);
+  color: #fff;
+  background: var(--sim-primary-600);
+  border: none;
+  border-radius: var(--sim-radius-md);
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--sim-primary-700);
+}
+
+.button:focus-visible {
+  outline: 3px solid var(--sim-primary-300);
+  outline-offset: 2px;
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

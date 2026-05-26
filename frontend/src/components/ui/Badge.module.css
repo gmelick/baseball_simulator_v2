@@ -1,0 +1,84 @@
+/**
+ * Badge.module.css — SIM-380
+ */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sim-space-1);
+  padding: var(--sim-space-0p5) var(--sim-space-2);
+  border-radius: var(--sim-radius-full);
+  font-size: var(--sim-text-xs);
+  font-weight: var(--sim-font-medium);
+  line-height: 1.5;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+/* ---------- Variants ---------- */
+
+.variant-default {
+  background: var(--sim-gray-100);
+  color: var(--sim-gray-700);
+}
+
+.variant-primary {
+  background: var(--sim-primary-100);
+  color: var(--sim-primary-700);
+}
+
+.variant-success {
+  background: var(--sim-success-100);
+  color: var(--sim-success-700);
+}
+
+.variant-danger {
+  background: var(--sim-danger-100);
+  color: var(--sim-danger-700);
+}
+
+.variant-warning {
+  background: var(--sim-warning-100);
+  color: var(--sim-warning-700);
+}
+
+.variant-info {
+  background: var(--sim-info-100);
+  color: var(--sim-info-700);
+}
+
+/* LIVE — electric blue bg, white text */
+.variant-live {
+  background: var(--sim-color-live);
+  color: #fff;
+}
+
+/* FINAL — muted gray */
+.variant-final {
+  background: var(--sim-gray-200);
+  color: var(--sim-gray-600);
+}
+
+/* SCHEDULED — outlined */
+.variant-scheduled {
+  background: transparent;
+  color: var(--sim-gray-500);
+  border: 1px solid var(--sim-gray-300);
+}
+
+/* ---------- Pulse dot ---------- */
+
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--sim-radius-full);
+  background: currentColor;
+  flex-shrink: 0;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.8); }
+}

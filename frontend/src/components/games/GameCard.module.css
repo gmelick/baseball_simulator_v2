@@ -1,0 +1,97 @@
+/**
+ * GameCard.module.css — SIM-391
+ */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-3);
+  padding: var(--sim-space-4);
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border);
+  border-left: 3px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-lg);
+  box-shadow: var(--sim-shadow-sm);
+  text-decoration: none;
+  color: inherit;
+  transition:
+    box-shadow var(--sim-transition-fast),
+    border-color var(--sim-transition-fast),
+    transform var(--sim-transition-fast);
+}
+
+.card:hover {
+  box-shadow: var(--sim-shadow-md);
+  transform: translateY(-1px);
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--sim-color-interactive);
+  outline-offset: 2px;
+}
+
+/* Status accent — the left border bar carries the 3-state color. */
+.status-live { border-left-color: var(--sim-color-live); }
+.status-final { border-left-color: var(--sim-color-final); }
+.status-scheduled { border-left-color: var(--sim-color-scheduled); }
+.status-postponed { border-left-color: var(--sim-color-border-strong); }
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sim-space-2);
+  min-height: 20px;
+}
+
+.venue {
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.matchup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-1p5);
+}
+
+.teamRow {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: baseline;
+  gap: var(--sim-space-2);
+}
+
+.teamName {
+  font-size: var(--sim-text-base);
+  font-weight: var(--sim-font-medium);
+  color: var(--sim-color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.record {
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.score {
+  min-width: 1.5em;
+  text-align: right;
+  font-size: var(--sim-text-lg);
+  font-weight: var(--sim-font-semibold);
+  color: var(--sim-color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Final-game winner: bolder name + score. */
+.winner .teamName,
+.winner .score {
+  font-weight: var(--sim-font-bold);
+  color: var(--sim-color-text);
+}

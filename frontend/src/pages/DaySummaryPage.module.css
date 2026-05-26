@@ -1,0 +1,119 @@
+/**
+ * DaySummaryPage.module.css — SIM-391
+ */
+
+.page {
+  max-width: var(--sim-max-width);
+  margin: 0 auto;
+  padding: var(--sim-space-6) var(--sim-space-4);
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-4);
+  margin-bottom: var(--sim-space-6);
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-3);
+}
+
+.title {
+  font-size: var(--sim-text-2xl);
+  font-weight: var(--sim-font-bold);
+  color: var(--sim-color-text);
+  margin: 0;
+}
+
+.dateNav {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-2);
+  flex-wrap: wrap;
+}
+
+.navButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  font-size: var(--sim-text-xl);
+  line-height: 1;
+  background: var(--sim-color-surface);
+  color: var(--sim-color-text);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-md);
+  cursor: pointer;
+  transition: background var(--sim-transition-fast), border-color var(--sim-transition-fast);
+}
+
+.navButton:hover {
+  background: var(--sim-color-surface-alt);
+  border-color: var(--sim-color-border-strong);
+}
+
+.datePicker {
+  height: 32px;
+  padding: 0 var(--sim-space-2);
+  font-family: var(--sim-font-sans);
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text);
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-md);
+}
+
+.todayButton {
+  height: 32px;
+  padding: 0 var(--sim-space-3);
+  font-family: var(--sim-font-sans);
+  font-size: var(--sim-text-sm);
+  font-weight: var(--sim-font-medium);
+  color: var(--sim-color-interactive);
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-md);
+  cursor: pointer;
+  transition: background var(--sim-transition-fast);
+}
+
+.todayButton:hover {
+  background: var(--sim-color-surface-alt);
+}
+
+.prettyDate {
+  margin-left: auto;
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text-muted);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--sim-space-4);
+}
+
+.message {
+  color: var(--sim-color-text-muted);
+  font-size: var(--sim-text-base);
+  padding: var(--sim-space-8) 0;
+  text-align: center;
+}
+
+.error {
+  padding: var(--sim-space-5);
+  background: var(--sim-danger-100);
+  border: 1px solid var(--sim-danger-500);
+  border-radius: var(--sim-radius-lg);
+  color: var(--sim-danger-700);
+}
+
+.errorHint {
+  margin-top: var(--sim-space-2);
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text-muted);
+}

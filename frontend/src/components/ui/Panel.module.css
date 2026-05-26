@@ -1,0 +1,30 @@
+/**
+ * Panel.module.css — SIM-380
+ */
+
+.panel {
+  background: var(--sim-color-surface-alt);
+  border-radius: var(--sim-radius-md);
+  padding: var(--sim-space-4);
+  position: relative;
+}
+
+/* Left accent bar for visual grouping */
+.accent-primary  { border-left: 3px solid var(--sim-primary-600); }
+.accent-success  { border-left: 3px solid var(--sim-color-win); }
+.accent-danger   { border-left: 3px solid var(--sim-color-loss); }
+.accent-warning  { border-left: 3px solid var(--sim-color-override); }
+.accent-info     { border-left: 3px solid var(--sim-color-live); }
+
+.label {
+  font-size: var(--sim-text-xs);
+  font-weight: var(--sim-font-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--sim-color-text-muted);
+  margin-bottom: var(--sim-space-3);
+}
+
+.content {
+  /* Children manage their own layout */
+}

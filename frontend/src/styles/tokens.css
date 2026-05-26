@@ -1,0 +1,205 @@
+/**
+ * Design system tokens — SIM-380
+ *
+ * All values are CSS custom properties so components never hard-code colors,
+ * spacing, or type ramp values. Dark-mode overrides go in a
+ * `@media (prefers-color-scheme: dark)` block at the bottom.
+ *
+ * Naming convention: --sim-{category}-{scale/modifier}
+ */
+
+:root {
+  /* =========================================================================
+   * Color palette — Semantic tokens built on a base scale
+   * ========================================================================= */
+
+  /* Neutrals (gray scale: 50 → 950) */
+  --sim-gray-50:  #f8fafc;
+  --sim-gray-100: #f1f5f9;
+  --sim-gray-200: #e2e8f0;
+  --sim-gray-300: #cbd5e1;
+  --sim-gray-400: #94a3b8;
+  --sim-gray-500: #64748b;
+  --sim-gray-600: #475569;
+  --sim-gray-700: #334155;
+  --sim-gray-800: #1e293b;
+  --sim-gray-900: #0f172a;
+  --sim-gray-950: #020617;
+
+  /* Brand / primary: deep navy — official baseball feel */
+  --sim-primary-50:  #eff6ff;
+  --sim-primary-100: #dbeafe;
+  --sim-primary-200: #bfdbfe;
+  --sim-primary-300: #93c5fd;
+  --sim-primary-400: #60a5fa;
+  --sim-primary-500: #3b82f6;
+  --sim-primary-600: #1a6bff;   /* main interactive / CTA */
+  --sim-primary-700: #1d4ed8;
+  --sim-primary-800: #1e3a5f;   /* navy headers */
+  --sim-primary-900: #0f2a4a;   /* deepest navy */
+
+  /* Success / win — green */
+  --sim-success-100: #dcfce7;
+  --sim-success-500: #22c55e;
+  --sim-success-700: #15803d;
+
+  /* Danger / loss — red */
+  --sim-danger-100:  #fee2e2;
+  --sim-danger-500:  #ef4444;
+  --sim-danger-700:  #b91c1c;
+
+  /* Warning / override amber */
+  --sim-warning-100: #fef3c7;
+  --sim-warning-500: #f59e0b;
+  --sim-warning-700: #b45309;
+
+  /* Info / live-game pulse — electric blue */
+  --sim-info-100: #dbeafe;
+  --sim-info-500: #3b82f6;
+  --sim-info-700: #1d4ed8;
+
+  /* =========================================================================
+   * Semantic color tokens — map palette → intent
+   * ========================================================================= */
+
+  /* Surface hierarchy */
+  --sim-color-bg:           var(--sim-gray-50);
+  --sim-color-surface:      #ffffff;
+  --sim-color-surface-alt:  var(--sim-gray-100);
+  --sim-color-border:       var(--sim-gray-200);
+  --sim-color-border-strong: var(--sim-gray-300);
+
+  /* Text */
+  --sim-color-text:         var(--sim-gray-900);
+  --sim-color-text-muted:   var(--sim-gray-500);
+  --sim-color-text-inverse: #ffffff;
+
+  /* Interactive */
+  --sim-color-interactive:  var(--sim-primary-600);
+  --sim-color-interactive-hover: var(--sim-primary-700);
+
+  /* Status */
+  --sim-color-win:       var(--sim-success-500);
+  --sim-color-loss:      var(--sim-danger-500);
+  --sim-color-override:  var(--sim-warning-500);
+  --sim-color-live:      var(--sim-info-500);
+  --sim-color-final:     var(--sim-gray-500);
+  --sim-color-scheduled: var(--sim-gray-400);
+
+  /* =========================================================================
+   * Typography
+   * ========================================================================= */
+
+  --sim-font-sans:  -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                    'Helvetica Neue', Arial, 'Noto Sans', sans-serif,
+                    'Apple Color Emoji', 'Segoe UI Emoji';
+  --sim-font-mono:  ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                    'Liberation Mono', 'Courier New', monospace;
+
+  /* Font sizes (typographic scale: 12–48) */
+  --sim-text-xs:   0.75rem;   /* 12px */
+  --sim-text-sm:   0.875rem;  /* 14px */
+  --sim-text-base: 1rem;      /* 16px */
+  --sim-text-lg:   1.125rem;  /* 18px */
+  --sim-text-xl:   1.25rem;   /* 20px */
+  --sim-text-2xl:  1.5rem;    /* 24px */
+  --sim-text-3xl:  1.875rem;  /* 30px */
+  --sim-text-4xl:  2.25rem;   /* 36px */
+
+  /* Font weights */
+  --sim-font-normal:    400;
+  --sim-font-medium:    500;
+  --sim-font-semibold:  600;
+  --sim-font-bold:      700;
+
+  /* Line heights */
+  --sim-leading-tight:  1.25;
+  --sim-leading-snug:   1.375;
+  --sim-leading-normal: 1.5;
+  --sim-leading-relaxed: 1.625;
+
+  /* =========================================================================
+   * Spacing scale (4px base grid)
+   * ========================================================================= */
+
+  --sim-space-0:   0;
+  --sim-space-px:  1px;
+  --sim-space-0p5: 0.125rem;  /* 2px */
+  --sim-space-1:   0.25rem;   /* 4px */
+  --sim-space-1p5: 0.375rem;  /* 6px */
+  --sim-space-2:   0.5rem;    /* 8px */
+  --sim-space-2p5: 0.625rem;  /* 10px */
+  --sim-space-3:   0.75rem;   /* 12px */
+  --sim-space-4:   1rem;      /* 16px */
+  --sim-space-5:   1.25rem;   /* 20px */
+  --sim-space-6:   1.5rem;    /* 24px */
+  --sim-space-8:   2rem;      /* 32px */
+  --sim-space-10:  2.5rem;    /* 40px */
+  --sim-space-12:  3rem;      /* 48px */
+  --sim-space-16:  4rem;      /* 64px */
+  --sim-space-20:  5rem;      /* 80px */
+  --sim-space-24:  6rem;      /* 96px */
+
+  /* =========================================================================
+   * Border radius
+   * ========================================================================= */
+
+  --sim-radius-sm:   0.25rem;  /* 4px — tight elements (badges) */
+  --sim-radius-md:   0.375rem; /* 6px — inputs, small cards */
+  --sim-radius-lg:   0.5rem;   /* 8px — standard cards */
+  --sim-radius-xl:   0.75rem;  /* 12px — panels */
+  --sim-radius-2xl:  1rem;     /* 16px — large containers */
+  --sim-radius-full: 9999px;   /* pills */
+
+  /* =========================================================================
+   * Shadows
+   * ========================================================================= */
+
+  --sim-shadow-sm:  0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --sim-shadow-md:  0 4px 6px -1px rgb(0 0 0 / 0.10),
+                    0 2px 4px -2px rgb(0 0 0 / 0.10);
+  --sim-shadow-lg:  0 10px 15px -3px rgb(0 0 0 / 0.10),
+                    0 4px 6px -4px rgb(0 0 0 / 0.10);
+
+  /* =========================================================================
+   * Transitions
+   * ========================================================================= */
+
+  --sim-transition-fast:   150ms ease-in-out;
+  --sim-transition-normal: 200ms ease-in-out;
+  --sim-transition-slow:   300ms ease-in-out;
+
+  /* =========================================================================
+   * Z-index scale
+   * ========================================================================= */
+
+  --sim-z-base:    0;
+  --sim-z-raised:  10;
+  --sim-z-dropdown: 100;
+  --sim-z-sticky:  200;
+  --sim-z-modal:   300;
+  --sim-z-toast:   400;
+
+  /* =========================================================================
+   * Layout
+   * ========================================================================= */
+
+  --sim-header-height: 56px;
+  --sim-max-width: 1280px;
+  --sim-sidebar-width: 280px;
+}
+
+/* ============================================================================
+ * Dark mode overrides
+ * ========================================================================== */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --sim-color-bg:           var(--sim-gray-950);
+    --sim-color-surface:      var(--sim-gray-900);
+    --sim-color-surface-alt:  var(--sim-gray-800);
+    --sim-color-border:       var(--sim-gray-700);
+    --sim-color-border-strong: var(--sim-gray-600);
+    --sim-color-text:         var(--sim-gray-50);
+    --sim-color-text-muted:   var(--sim-gray-400);
+  }
+}
