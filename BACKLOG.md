@@ -1,6 +1,6 @@
 # Product Backlog
 
-*Owner: Product Manager (Agent 1) · Last updated: 2026-05-26 (🚀 PHASE 6 Sprint 1 COMPLETE — all 13 P0s + SIM-410. Sprint 2 (P1 frontend build) COMPLETE — SIM-391→401 (11 tickets) + frontend CI hardening. Remaining P1: data/ML/perf prereqs SIM-402→409)*
+*Owner: Product Manager (Agent 1) · Last updated: 2026-05-26 (🚀 PHASE 6 Sprint 1 COMPLETE — all 13 P0s + SIM-410. Sprint 2 (P1 frontend build) COMPLETE — SIM-391→401. Hardening batch COMPLETE — SIM-415/416/417/418/419/420. Remaining: P1 data/ML/perf SIM-402→409 (live-env), P2 sim-realism SIM-411→414)*
 
 > # 🚀 PHASE 6 — Frontend Build — OPEN 2026-09-02 (audit executed 2026-05-25)
 >
@@ -67,12 +67,12 @@
 > | SIM-412 | Home-field run advantage in the score distribution | Improvement | P2 | M | Baseball Analyst | SIM-411 |
 > | SIM-413 | Pitcher throwing-hand -> batter platoon split in the batted-ball matchup | Improvement | P2 | M | Baseball Analyst + ML Engineer | - |
 > | SIM-414 | W/L/S + ER + per-runner R cross-surface reconciliation | Bug | P2 | M | Baseball Analyst + Backend Developer | SIM-384 |
-> | SIM-415 | Pagination / payload-trim for heavy endpoints | Improvement | P2 | M | Backend Developer | - |
-> | SIM-416 | App-level exception handler + structured error envelope | Improvement | P2 | S | Backend Developer | - |
-> | SIM-417 | Data-freshness/health API surface for the UI | Feature | P2 | S | Data Engineer | - |
-> | SIM-418 | Split slow tests into a dedicated CI lane | Chore | P2 | S | QA/DevOps | - |
-> | SIM-419 | Harden DuckDB profile-rebuild index recreate | Reliability | P2 | S | Data Engineer | - |
-> | SIM-420 | OpenAPI typed-client generation for the frontend | Improvement | P2 | S | Backend Developer + QA/DevOps | SIM-383, SIM-385 |
+> | SIM-415 | Pagination / payload-trim for heavy endpoints | Improvement | P2 | M | Backend Developer | - | ✅ **Closed 2026-05-26** |
+> | SIM-416 | App-level exception handler + structured error envelope | Improvement | P2 | S | Backend Developer | - | ✅ **Closed 2026-05-26** |
+> | SIM-417 | Data-freshness/health API surface for the UI | Feature | P2 | S | Data Engineer | - | ✅ **Closed 2026-05-26** |
+> | SIM-418 | Split slow tests into a dedicated CI lane | Chore | P2 | S | QA/DevOps | - | ✅ **Closed 2026-05-26** |
+> | SIM-419 | Harden DuckDB profile-rebuild index recreate | Reliability | P2 | S | Data Engineer | - | ✅ **Closed 2026-05-26** |
+> | SIM-420 | OpenAPI typed-client generation for the frontend | Improvement | P2 | S | Backend Developer + QA/DevOps | SIM-383, SIM-385 | ✅ **Closed 2026-05-26** |
 >
 > **Sprint plan (6 wks):** **S1** kickoff gates SIM-378–390 · **S2** live read + cards + linescore/field (386, 391, 392) + backend 388/390 · **S3** game page + boxscore (393, 394, 420) · **S4** betting surface + override v1 (395, 396, 397) + data/ML track 405/406/407 · **S5** override v2 + perf/verification (398, 402, 403, 404, 408, 409) · **S6** a11y/Playwright/deploy + hardening (399, 400, 401, 410–419) + staging bring-up.
 >

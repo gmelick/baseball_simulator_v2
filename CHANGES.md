@@ -1,3 +1,59 @@
+# Phase 6 — P1/P2 Hardening Batch — 2026-05-26
+**Authors: Backend Developer (Agent 5), QA/DevOps (Agent 9)**
+
+Six independent hardening/infra tickets done while the 2017–2026 historical
+backfill runs in the background (they need no ingested data). All unit-tested;
+113 tests green across the new + touched suites, ruff/mypy/format clean,
+frontend tsc+lint+build green.
+
+| Ticket | Type | Deliverable |
+|--------|------|-------------|
+| SIM-416 | Improvement | `api/errors.py` — catch-all exception handler → structured `{detail, error_type, request_id}` 500 envelope (no internal-message leak); HTTPException/validation shapes unchanged |
+| SIM-417 | Feature | `api/routes/data_health.py` — `GET /api/data/freshness` (ingest watermark + per-season coverage for the UI) |
+| SIM-415 | Improvement | `/{game_pk}/plays` optional `limit`/`offset` pagination (full-game totals preserved; omit limit → unchanged shape) |
+| SIM-419 | Reliability | DuckDB profile-rebuild index recreate hardened — try/finally recreate, idempotent (`IF NOT EXISTS`), verified + escalated failures |
+| SIM-418 | Chore | Slow tests (`@slow`, 17 cases) split into a dedicated `slow-tests` CI lane; fast lane keeps the coverage gate |
+| SIM-420 | Improvement | OpenAPI typed-client generation (`scripts/export_openapi.py` + `openapi-typescript` → `schema.d.ts` + `typed.ts`) |
+
+### SIM-416 — app-level exception handler + structured error envelope
+`api/errors.py::install_exception_handlers` registers a catch-all `Exception`
+handler returning `{detail, error_type:"internal_error", request_id:<12-hex>}`
+at 500; the full traceback is logged server-side with the request_id and the
+raw message is never sent to the client. `HTTPException` + `RequestValidationError`
+keep their FastAPI `{detail}` shapes (the frontend reads `detail`). Wired into
+`create_app`. 4 unit tests.
+
+### SIM-417 — data-freshness / health API
+`GET /api/data/freshness` → last-ingest watermark (`raw.etl_data_freshness`),
+most-recent game date, total games/pitches, `has_data`, per-season coverage.
+Aggregate-only/no-auth ops surface; 503 without a pool; empty store → zeros.
+4 unit tests.
+
+### SIM-415 — pagination for the heavy /plays endpoint
+Optional `limit`/`offset` slice the play entries; `n_pitches`/`n_plate_appearances`
+stay full-game totals and `total_entries`/`page_*` describe the slice. Omitting
+`limit` returns the whole stream (backward-compatible — the frontend is
+unaffected). 4 unit tests.
+
+### SIM-419 — harden DuckDB profile-rebuild index recreate
+The pre-DELETE drop + post-DELETE recreate now run in try/finally (a DELETE
+error no longer leaves tables permanently de-indexed); `_recreate_indexes` is
+idempotent (`DROP IF EXISTS` + injected `IF NOT EXISTS`) and verifies each index
+via `duckdb_indexes()`, escalating any still-missing index from a silent WARNING
+to an ERROR. 7 unit tests (real in-memory DuckDB).
+
+### SIM-418 — split slow tests into a dedicated CI lane
+`unit-tests` fast lane gains `-m "not slow"` (keeps the coverage gate); new
+`slow-tests` job runs `-m "slow" --timeout=120` in parallel. The 17 slow cases
+are volume variants of already-covered modules, so the gate is unaffected.
+
+### SIM-420 — OpenAPI typed client for the frontend
+`scripts/export_openapi.py` writes `frontend/openapi.json` from
+`app.openapi()`; `npm run gen:api` (openapi-typescript) generates
+`src/api/schema.d.ts`; `src/api/typed.ts` exposes response-type aliases from
+`components['schemas']` as the generated source of truth. Generated file
+eslint-ignored; bundle byte-identical (type-only).
+
 # Phase 6 Sprint 2 — Frontend Build (P1) — 2026-05-26
 **Authors: UX Designer (Agent 7), Backend Developer (Agent 5)**
 
