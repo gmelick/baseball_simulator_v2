@@ -444,6 +444,13 @@ def create_app() -> FastAPI:
 
     app.include_router(betting_router)
 
+    # SIM-417: data-freshness / health surface for the UI.
+    #   GET /api/data/freshness — ingest watermark + per-season coverage.
+    # Reads app.state.pg_pool (503 without a pool); aggregate counts only.
+    from api.routes.data_health import router as data_health_router
+
+    app.include_router(data_health_router)
+
     # Phase 5 (SIM-354): live ingestion routers.
     #   ws_router   — WebSocket /ws/games/{game_pk} (frontend live subscriptions)
     #   odds_router — REST /api/odds/{game_pk}, /api/odds/today/all
