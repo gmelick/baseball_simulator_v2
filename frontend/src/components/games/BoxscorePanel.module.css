@@ -1,0 +1,155 @@
+/**
+ * BoxscorePanel.module.css — SIM-394
+ */
+
+.gate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-2);
+}
+
+.loadButton {
+  align-self: flex-start;
+  padding: var(--sim-space-2) var(--sim-space-4);
+  font-family: var(--sim-font-sans);
+  font-size: var(--sim-text-sm);
+  font-weight: var(--sim-font-medium);
+  color: var(--sim-color-text-inverse);
+  background: var(--sim-color-interactive);
+  border: none;
+  border-radius: var(--sim-radius-md);
+  cursor: pointer;
+}
+
+.loadButton:hover:not(:disabled) {
+  background: var(--sim-color-interactive-hover);
+}
+
+.loadButton:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.caption {
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+  margin-bottom: var(--sim-space-3);
+}
+
+.playerList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-2);
+}
+
+.playerRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-3);
+  flex-wrap: wrap;
+}
+
+.playerId {
+  font-size: var(--sim-text-sm);
+  font-weight: var(--sim-font-medium);
+  color: var(--sim-color-text);
+  min-width: 92px;
+}
+
+.chips {
+  display: flex;
+  gap: var(--sim-space-1p5);
+  flex-wrap: wrap;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sim-space-1);
+  padding: var(--sim-space-0p5) var(--sim-space-2);
+  background: var(--sim-color-surface-alt);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-full);
+  cursor: pointer;
+  font-family: var(--sim-font-sans);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text);
+}
+
+.chip:hover {
+  border-color: var(--sim-color-border-strong);
+}
+
+.chipActive {
+  background: var(--sim-primary-100);
+  border-color: var(--sim-primary-600);
+  color: var(--sim-primary-700);
+}
+
+.chipProp {
+  font-weight: var(--sim-font-semibold);
+}
+
+.chipMean {
+  font-variant-numeric: tabular-nums;
+  color: var(--sim-color-text-muted);
+}
+
+.chipActive .chipMean {
+  color: var(--sim-primary-700);
+}
+
+.detail {
+  margin-top: var(--sim-space-4);
+  padding-top: var(--sim-space-3);
+  border-top: 1px solid var(--sim-color-border);
+}
+
+.detailHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sim-space-3);
+  margin-bottom: var(--sim-space-3);
+  font-size: var(--sim-text-sm);
+}
+
+.lineLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sim-space-2);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+}
+
+.lineInput {
+  width: 72px;
+  padding: var(--sim-space-1) var(--sim-space-2);
+  font-family: var(--sim-font-sans);
+  font-size: var(--sim-text-sm);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-md);
+}
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sim-space-3);
+  margin-top: var(--sim-space-2);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  color: var(--sim-color-text-muted);
+  font-size: var(--sim-text-sm);
+}
+
+.error {
+  color: var(--sim-danger-700);
+  font-size: var(--sim-text-sm);
+}

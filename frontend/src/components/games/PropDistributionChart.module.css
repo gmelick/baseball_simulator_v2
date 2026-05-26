@@ -1,0 +1,47 @@
+/**
+ * PropDistributionChart.module.css — SIM-394
+ */
+
+.chart {
+  width: 100%;
+  max-width: 360px;
+  height: auto;
+  display: block;
+}
+
+.empty {
+  color: var(--sim-color-text-muted);
+  font-size: var(--sim-text-sm);
+}
+
+.axis {
+  stroke: var(--sim-color-border-strong);
+  stroke-width: 1;
+}
+
+.bar {
+  fill: var(--sim-primary-300);
+}
+
+.barOver {
+  fill: var(--sim-primary-600);
+}
+
+.tick {
+  font-family: var(--sim-font-sans);
+  font-size: 9px;
+  fill: var(--sim-color-text-muted);
+  text-anchor: middle;
+}
+
+.meanMarker {
+  stroke: var(--sim-color-text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
+
+.lineMarker {
+  stroke: var(--sim-color-override);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 2;
+}

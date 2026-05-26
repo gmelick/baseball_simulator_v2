@@ -28,6 +28,7 @@ import {
   type PlayByPlay,
 } from '@/api/games'
 import { BaseballFieldGraphic, LinescoreGraphic } from '@/components/graphics'
+import { BoxscorePanel } from '@/components/games/BoxscorePanel'
 import { PlayByPlayList } from '@/components/games/PlayByPlayList'
 import { Badge, Card, Panel } from '@/components/ui'
 import { useGameSocket } from '@/hooks/useGameSocket'
@@ -213,8 +214,8 @@ export function GamePage(): React.ReactElement {
             </Card>
           )}
 
-          <Panel label="Projections (SIM-394)">
-            <p className={styles.muted}>Per-player projections + distributions mount here (SIM-394).</p>
+          <Panel label="Projections">
+            <BoxscorePanel gamePk={gamePk} />
           </Panel>
 
           <Panel label="Betting (SIM-395)">

@@ -176,6 +176,66 @@ export interface LiveState {
   updated_at: string | null
 }
 
+// ---------------------------------------------------------------------------
+// Boxscore card (GET /{game_pk}/boxscore — BoxscoreCardModel, SIM-366)
+// ---------------------------------------------------------------------------
+
+export interface BoxscoreRow {
+  player_id: number
+  /** prop_name → mean over the run (e.g. {"K": 6.4} pitcher, {"H": 1.2} batter). */
+  means: Record<string, number>
+}
+
+export interface BoxscoreCard {
+  n_iterations: number
+  /** str(player_id) → row. */
+  players: Record<string, BoxscoreRow>
+}
+
+// ---------------------------------------------------------------------------
+// Prop edge (GET /{game_pk}/props/{player_id}/{prop} — PropEdgeResponse, SIM-390)
+// ---------------------------------------------------------------------------
+
+export interface EdgeReport {
+  label: string
+  side: string
+  line: number | null
+  sim_prob: number
+  market_fair_prob: number
+  edge: number
+  ev: number
+  offered_american: number
+  sim_fair_american: number
+  clv: Record<string, unknown> | null
+  positive_edge: boolean
+}
+
+export interface PropEdge {
+  player_id: number
+  prop: string
+  n: number
+  support: number[]
+  probabilities: number[]
+  mean: number
+  median: number
+  std: number
+  pmf: Record<string, number>
+  line: number | null
+  p_over: number | null
+  p_under: number | null
+  p_push: number | null
+  edge_report: EdgeReport | null
+}
+
+export interface PropEdgeQuery {
+  line?: number
+  overMl?: number
+  underMl?: number
+  betSide?: 'over' | 'under'
+  nIterations?: number
+  baseSeed?: number
+}
+
 /** Raised for any non-2xx games-API response, carrying the HTTP status. */
 export class GamesApiError extends Error {
   readonly status: number
@@ -218,4 +278,31 @@ export function fetchPlays(gamePk: number): Promise<PlayByPlay> {
 /** GET /api/games/{game_pk}/live — live in-progress state (404 when not live). */
 export function fetchLiveState(gamePk: number): Promise<LiveState> {
   return getJson<LiveState>(`/api/games/${gamePk}/live`)
+}
+
+/** GET /api/games/{game_pk}/boxscore — per-player prop means over N iterations. */
+export function fetchBoxscore(gamePk: number, nIterations?: number): Promise<BoxscoreCard> {
+  const q = nIterations != null ? `?n_iterations=${nIterations}` : ''
+  return getJson<BoxscoreCard>(`/api/games/${gamePk}/boxscore${q}`)
+}
+
+/** GET /api/games/{game_pk}/props/{player_id}/{prop} — full PMF (+ optional
+ *  over/under + edge report when a line and odds are supplied). */
+export function fetchPropEdge(
+  gamePk: number,
+  playerId: number,
+  prop: string,
+  q: PropEdgeQuery = {},
+): Promise<PropEdge> {
+  const params = new URLSearchParams()
+  if (q.line != null) params.set('line', String(q.line))
+  if (q.overMl != null) params.set('over_ml', String(q.overMl))
+  if (q.underMl != null) params.set('under_ml', String(q.underMl))
+  if (q.betSide != null) params.set('bet_side', q.betSide)
+  if (q.nIterations != null) params.set('n_iterations', String(q.nIterations))
+  if (q.baseSeed != null) params.set('base_seed', String(q.baseSeed))
+  const qs = params.toString()
+  return getJson<PropEdge>(
+    `/api/games/${gamePk}/props/${playerId}/${encodeURIComponent(prop)}${qs ? `?${qs}` : ''}`,
+  )
 }

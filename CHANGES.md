@@ -11,6 +11,7 @@ alias) plus one lint failure all blocked the `frontend` job; all fixed here so t
 | SIM-391 | Feature | UX + Backend | ✅ Closed — Day Summary page: date nav + game-count badge + 3-state GameCards + React Router |
 | SIM-392 | Feature | UX + Backend | ✅ Closed — LinescoreGraphic (R/H/E grid + "x" cells) + BaseballFieldGraphic SVG (9 positions + runners + batter) |
 | SIM-393 | Feature | UX + Backend | ✅ Closed — Game page: header + linescore + field + play-by-play scroll + live WS (SIM-385) |
+| SIM-394 | Feature | UX + Betting | ✅ Closed — per-player boxscore means + on-demand prop distribution chart w/ prop-line marker |
 | — | Infra/Bug | UX + QA | ✅ Done — frontend CI hardening (package-lock.json, `vite-env.d.ts`, Vite `@/` alias, AuthContext lint fix) |
 
 ### Frontend CI hardening (no ticket — completes the SIM-379 scaffold)
@@ -29,6 +30,28 @@ The SIM-379 scaffold committed `frontend/package.json` but the `frontend` CI job
 - **Lint failure under `--max-warnings 0`** — `AuthContext.tsx` tripped
   `react-refresh/only-export-components` (a context file co-locating its provider + hook). Added a
   scoped `eslint-disable-next-line` with rationale.
+
+### SIM-394 — Per-player boxscore + distribution views (prop-line marker)
+
+Mounts in the Game page "Projections" slot.
+
+- `frontend/src/components/games/BoxscorePanel.tsx` (+css) — gated behind a
+  "Load projections" button (the /boxscore endpoint runs a 100-iteration sim,
+  so it doesn't auto-fire). Once loaded, shows each player's prop means as
+  clickable chips; selecting one fetches that prop's full PMF (SIM-390) and
+  renders the distribution, with a line input that redraws the over/under
+  marker + reports P(over)/P(under)/P(push).
+- `frontend/src/components/games/PropDistributionChart.tsx` (+css) — SVG bar
+  chart of a PMF (one bar per support value), dashed prop-line marker, mean
+  marker, and over-bar tinting so the over/under split reads at a glance.
+- `frontend/src/api/games.ts` — added `fetchBoxscore` + `fetchPropEdge`
+  (with line/odds/bet-side query params) + `BoxscoreCard` / `PropEdge` /
+  `EdgeReport` types.
+- `frontend/src/pages/GamePage.tsx` — mounted `BoxscorePanel` in the
+  Projections panel.
+
+**Verification:** `tsc` + `eslint` + `vite build` pass. Not browser-tested
+(boxscore/prop endpoints need a backend with data).
 
 ### SIM-393 — Game page (play-by-play + linescore + field + live WS)
 
