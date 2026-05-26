@@ -28,6 +28,7 @@ import {
   type PlayByPlay,
 } from '@/api/games'
 import { BaseballFieldGraphic, LinescoreGraphic } from '@/components/graphics'
+import { BettingCard } from '@/components/games/BettingCard'
 import { BoxscorePanel } from '@/components/games/BoxscorePanel'
 import { PlayByPlayList } from '@/components/games/PlayByPlayList'
 import { Badge, Card, Panel } from '@/components/ui'
@@ -218,8 +219,8 @@ export function GamePage(): React.ReactElement {
             <BoxscorePanel gamePk={gamePk} />
           </Panel>
 
-          <Panel label="Betting (SIM-395)">
-            <p className={styles.muted}>The betting card surface mounts here (SIM-395).</p>
+          <Panel label="Betting">
+            <BettingCard gamePk={gamePk} />
           </Panel>
         </div>
 

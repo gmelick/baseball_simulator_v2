@@ -1,0 +1,139 @@
+/**
+ * BettingCard.module.css — SIM-395
+ */
+
+.gate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-2);
+}
+
+.loadButton {
+  align-self: flex-start;
+  padding: var(--sim-space-2) var(--sim-space-4);
+  font-family: var(--sim-font-sans);
+  font-size: var(--sim-text-sm);
+  font-weight: var(--sim-font-medium);
+  color: var(--sim-color-text-inverse);
+  background: var(--sim-color-interactive);
+  border: none;
+  border-radius: var(--sim-radius-md);
+  cursor: pointer;
+}
+
+.loadButton:hover:not(:disabled) {
+  background: var(--sim-color-interactive-hover);
+}
+
+.loadButton:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-4);
+}
+
+.market {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-2);
+}
+
+.marketHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-2);
+}
+
+.marketTitle {
+  margin: 0;
+  font-size: var(--sim-text-sm);
+  font-weight: var(--sim-font-semibold);
+  color: var(--sim-color-text);
+}
+
+.sides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sim-space-2);
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-1p5);
+  padding: var(--sim-space-2p5);
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-md);
+}
+
+/* The side the sim favors (positive edge). */
+.favored {
+  border-color: var(--sim-color-win);
+  background: var(--sim-success-100);
+}
+
+.sideTop {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sim-space-2);
+}
+
+.sideName {
+  font-size: var(--sim-text-sm);
+  font-weight: var(--sim-font-medium);
+  color: var(--sim-color-text);
+}
+
+.price {
+  font-size: var(--sim-text-sm);
+  font-weight: var(--sim-font-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--sim-color-text);
+}
+
+.metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sim-space-2);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.edgePos {
+  color: var(--sim-color-win);
+  font-weight: var(--sim-font-semibold);
+}
+
+.edgeNeg {
+  color: var(--sim-color-loss);
+}
+
+.signal {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-2);
+}
+
+.stake {
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.error {
+  color: var(--sim-danger-700);
+  font-size: var(--sim-text-sm);
+}
+
+@media (max-width: 480px) {
+  .sides {
+    grid-template-columns: 1fr;
+  }
+}

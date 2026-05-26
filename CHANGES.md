@@ -12,6 +12,7 @@ alias) plus one lint failure all blocked the `frontend` job; all fixed here so t
 | SIM-392 | Feature | UX + Backend | ✅ Closed — LinescoreGraphic (R/H/E grid + "x" cells) + BaseballFieldGraphic SVG (9 positions + runners + batter) |
 | SIM-393 | Feature | UX + Backend | ✅ Closed — Game page: header + linescore + field + play-by-play scroll + live WS (SIM-385) |
 | SIM-394 | Feature | UX + Betting | ✅ Closed — per-player boxscore means + on-demand prop distribution chart w/ prop-line marker |
+| SIM-395 | Feature | UX + Betting | ✅ Closed — betting card: ML/total/run-line edges + favored-side highlight + +EV signal badges + mock/live odds_source |
 | — | Infra/Bug | UX + QA | ✅ Done — frontend CI hardening (package-lock.json, `vite-env.d.ts`, Vite `@/` alias, AuthContext lint fix) |
 
 ### Frontend CI hardening (no ticket — completes the SIM-379 scaffold)
@@ -30,6 +31,24 @@ The SIM-379 scaffold committed `frontend/package.json` but the `frontend` CI job
 - **Lint failure under `--max-warnings 0`** — `AuthContext.tsx` tripped
   `react-refresh/only-export-components` (a context file co-locating its provider + hook). Added a
   scoped `eslint-disable-next-line` with rationale.
+
+### SIM-395 — Betting card surface
+
+Mounts in the Game page "Betting" slot.
+
+- `frontend/src/api/betting.ts` — client for the /api/betting surface:
+  `fetchEdges` (EdgesResponse), `fetchSignals` (SignalsResponse), and
+  `fetchLineMovement` (used by SIM-396) + the `BetSignal` / `EdgesResponse` /
+  `SignalsResponse` / `LineMovement` types (reuses the shared `EdgeReport`).
+- `frontend/src/components/games/BettingCard.tsx` (+css) — gated behind a
+  "Load betting" button. Groups edges by market (moneyline / total / run-line),
+  renders both sides with offered American price + sim/fair probabilities +
+  signed edge, highlights the favored side (`positive_edge`), shows a +EV
+  signal badge with stake% for sides that produced a SIM-369 signal (matched by
+  label+side), and flags each market's `odds_source` (mock vs live).
+- `frontend/src/pages/GamePage.tsx` — mounted `BettingCard` in the Betting panel.
+
+**Verification:** `tsc` + `eslint` + `vite build` pass. Not browser-tested.
 
 ### SIM-394 — Per-player boxscore + distribution views (prop-line marker)
 
