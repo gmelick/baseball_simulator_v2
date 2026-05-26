@@ -6,7 +6,7 @@
 >
 > **Phase 5 is fully CLOSED and CI-green on Python 3.11.15** (unit+regression **1814 pass / 1 skip / 0 fail @ 89% coverage**; 8 CI jobs; the post-close CI-stabilization — ruff 0.15.14 config, mypy, coverage measurement, and 2 py3.11 failures [a gitignored fixture + a slow-test timeout] — is done). A full **9-agent program audit + independent QA cross-validation** filed **43 Phase-6 tickets (SIM-378→SIM-420)**. **Phase 6 = the Frontend Build** — a greenfield UI on the complete backend, PLUS the API contracts the UI can't start without and the live-env / realism / hardening debt. See `docs/HANDOFF_PHASE6.md`, `docs/audit/2026-09-02-phase5-close-program-audit.md`, `docs/audit/2026-09-02-phase6-prioritized-tickets.md`.
 >
-> **⚠ Reality check (QA-confirmed):** the pre-existing Phase-6 tickets SIM-127–131 cite parent tickets SIM-108/109/112/122–126 that **don't exist**; `frontend/{components,graphics,pages}/` are **empty dirs**; there is no build tooling or API→UI serving path. SIM-382 backfills the chain. **Next free ID: SIM-421.**
+> **⚠ Reality check (QA-confirmed):** the pre-existing Phase-6 tickets SIM-127–131 cite parent tickets SIM-108/109/112/122–126 that **don't exist**; `frontend/{components,graphics,pages}/` are **empty dirs**; there is no build tooling or API→UI serving path. SIM-382 backfills the chain. **Next free ID: SIM-422** (SIM-421 = the P3 full-market-projection enhancement).
 >
 > | Tier | Tickets |
 > |---|---|
@@ -73,6 +73,11 @@
 > | SIM-418 | Split slow tests into a dedicated CI lane | Chore | P2 | S | QA/DevOps | - | ✅ **Closed 2026-05-26** |
 > | SIM-419 | Harden DuckDB profile-rebuild index recreate | Reliability | P2 | S | Data Engineer | - | ✅ **Closed 2026-05-26** |
 > | SIM-420 | OpenAPI typed-client generation for the frontend | Improvement | P2 | S | Backend Developer + QA/DevOps | SIM-383, SIM-385 | ✅ **Closed 2026-05-26** |
+>
+> ### Tier P3 — future enhancements (post-stabilization, non-essential)
+> | ID | Title | Type | Pri | Size | Owner | Depends-on |
+> |---|---|---|---|---|---|---|
+> | SIM-421 | Extend prop/market projection to the full book-offered market set (individual hit types — 1B/2B/3B; SB; hits-allowed/walks-allowed; H+R+RBI combos; team totals; first-five-innings ML/RL/total; NRFI/YRFI) | Feature | P3 | L | ML Engineer + Baseball Analyst + Betting Analyst | SIM-402, SIM-406, SIM-407 | 🔵 **Open** |
 >
 > **Sprint plan (6 wks):** **S1** kickoff gates SIM-378–390 · **S2** live read + cards + linescore/field (386, 391, 392) + backend 388/390 · **S3** game page + boxscore (393, 394, 420) · **S4** betting surface + override v1 (395, 396, 397) + data/ML track 405/406/407 · **S5** override v2 + perf/verification (398, 402, 403, 404, 408, 409) · **S6** a11y/Playwright/deploy + hardening (399, 400, 401, 410–419) + staging bring-up.
 >

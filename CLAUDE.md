@@ -24,7 +24,7 @@
 - **Phases 1–5 are COMPLETE and CI-green on Python 3.11.15.** Unit+regression suite: **1814 pass / 1
   skip / 0 fail @ 89% coverage**; 8 CI jobs + weekly perf/integration all green.
 - **Phase 6 (Frontend Build) is OPEN.** A full 9-agent program audit filed **43 tickets, SIM-378 →
-  SIM-420**. **Next free ticket ID: SIM-421.**
+  SIM-420** (+ SIM-421, a P3 future enhancement). **Next free ticket ID: SIM-422.**
 - The `api/` layer serves the full backend surface; the **frontend is greenfield** (`frontend/`
   component dirs are empty). Start Phase 6 at the React-vs-vanilla ADR (SIM-378) — do NOT build
   components before the P0 kickoff gates land.
