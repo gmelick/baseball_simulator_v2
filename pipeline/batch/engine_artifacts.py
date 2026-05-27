@@ -209,6 +209,7 @@ class HandPool:
     sit: np.ndarray  # (N, 6)  float32 — situation (balls,strikes,outs,runners,inning,score_diff)
     pitcher_id: np.ndarray  # (N,) int64
     batter_id: np.ndarray  # (N,) int64
+    season: np.ndarray  # (N,) int64 — for the (pitcher_id:season) pitcher-sim key
     outcome_type: np.ndarray  # (N,) object — ball/called_strike/swinging_strike/foul/in_play
     recency: np.ndarray  # (N,) float32
 
@@ -246,7 +247,7 @@ class EngineArtifacts:
                 sit = np.load(os.path.join(pool_dir, f"{hand}.sit.npy"))
                 meta_path = os.path.join(pool_dir, f"{hand}.meta.parquet")
                 m = con.execute(
-                    "SELECT pitcher_id, batter_id, outcome_type, recency_weight "
+                    "SELECT pitcher_id, batter_id, season, outcome_type, recency_weight "
                     f"FROM read_parquet('{meta_path}')"
                 ).fetchnumpy()
                 pools[hand] = HandPool(
@@ -254,6 +255,7 @@ class EngineArtifacts:
                     sit=sit,
                     pitcher_id=np.asarray(np.ma.filled(m["pitcher_id"], 0), dtype=np.int64),
                     batter_id=np.asarray(np.ma.filled(m["batter_id"], 0), dtype=np.int64),
+                    season=np.asarray(np.ma.filled(m["season"], 0), dtype=np.int64),
                     outcome_type=np.asarray(m["outcome_type"], dtype=object),
                     recency=np.nan_to_num(
                         np.ma.filled(m["recency_weight"], 1.0).astype(np.float32), nan=1.0
