@@ -50,8 +50,7 @@ class FullPoolSampler:
         # State across the matchup.
         self._hand: str | None = None
         self._base: np.ndarray | None = None  # f_pitcher * recency  (half-inning)
-        self._cdf: np.ndarray | None = None  # per-PA cumulative weights
-        self._outcome_codes: dict[str, np.ndarray] = {}
+        self._bucket_cdf: list | None = None  # per-PA, per-count-bucket CDFs (SIM-429)
         # SIM-425 batted-ball state
         self._bb_hand: str | None = None
         self._bb_cdf: np.ndarray | None = None
@@ -79,8 +78,16 @@ class FullPoolSampler:
             )
         else:
             pool_bat = np.full(n, -1, dtype=np.int64)
+        # SIM-429: count bucket per row (balls*3 + strikes, 12 buckets) + the row
+        # indices per bucket, so the pitch draw conditions on the LIVE count
+        # (ball-rate swings 37%@0-0 -> 23%@3-2; a count-blind draw 2.8x-inflates).
+        balls = np.clip(pool.sit[:, 0].astype(np.int64), 0, 3)
+        strikes = np.clip(pool.sit[:, 1].astype(np.int64), 0, 2)
+        cbucket = balls * 3 + strikes
+        bucket_rows = [np.nonzero(cbucket == b)[0] for b in range(12)]
         meta = {"pool": pool, "pool_prof": pool_prof, "pool_bat": pool_bat,
-                "outcome": np.asarray(pool.outcome_type, dtype=object)}
+                "outcome": np.asarray(pool.outcome_type, dtype=object),
+                "bucket_rows": bucket_rows}
         self._pool_cache[hand] = meta
         return meta
 
@@ -121,6 +128,14 @@ class FullPoolSampler:
         d2 = np.einsum("ij,ij->i", diff, diff)
         return np.exp(-d2 / (2.0 * self.sit_sigma**2 * pool.sit.shape[1])).astype(np.float32)
 
+    def _f_situation_baseout(self, hand: str, base_out: np.ndarray) -> np.ndarray:
+        """RBF over the base-out dims only (outs, runners, inning, score_diff) —
+        count is handled by the per-pitch bucket, not this factor (SIM-429)."""
+        s = self.a.pools[hand].sit[:, 2:6]
+        diff = s - np.asarray(base_out, dtype=np.float32)
+        d2 = np.einsum("ij,ij->i", diff, diff)
+        return np.exp(-d2 / (2.0 * self.sit_sigma**2 * s.shape[1])).astype(np.float32)
+
     # ---- matchup lifecycle ------------------------------------------------
     def new_half_inning(self, hand: str, pitcher_key: str) -> None:
         """Cache the half-inning-constant base (f_pitcher * recency)."""
@@ -128,22 +143,30 @@ class FullPoolSampler:
         pool = self.a.pools[hand]
         self._base = (self._f_pitcher(hand, pitcher_key) * pool.recency).astype(np.float32)
 
-    def new_plate_appearance(self, batter_key: str, state: np.ndarray) -> None:
-        """Assemble the per-PA weight vector + its CDF (the alias-draw stand-in)."""
+    def new_plate_appearance(self, batter_key: str, base_out: np.ndarray) -> None:
+        """Assemble the per-PA matchup weight (base · f_batter · f_situation_baseout)
+        and split it into 12 count-bucket CDFs for the per-pitch, count-conditioned
+        draw (SIM-429)."""
         assert self._hand is not None and self._base is not None, "call new_half_inning first"
-        w = self._base * self._f_batter(self._hand, batter_key) * self._f_situation(self._hand, state)
-        self._cdf = np.cumsum(w, dtype=np.float64)
+        w = self._base * self._f_batter(self._hand, batter_key) * self._f_situation_baseout(
+            self._hand, base_out
+        )
+        rows = self._pool_meta(self._hand)["bucket_rows"]
+        self._bucket_cdf = [
+            (np.cumsum(w[r], dtype=np.float64) if r.size else None) for r in rows
+        ]
 
-    def draw(self) -> str:
-        """O(1) draw of one pitch outcome from the current PA's weighted pool."""
-        assert self._cdf is not None, "call new_plate_appearance first"
-        total = self._cdf[-1]
-        if total <= 0:
-            return "ball"
-        r = self.rng.random() * total
-        i = int(np.searchsorted(self._cdf, r))
+    def draw(self, balls: int = 0, strikes: int = 0) -> str:
+        """Count-conditioned draw of one pitch outcome (SIM-429): restrict to the
+        live count's bucket, weighted by the per-PA matchup weights."""
+        assert self._bucket_cdf is not None, "call new_plate_appearance first"
         meta = self._pool_cache[self._hand]
-        return str(meta["outcome"][min(i, len(meta["outcome"]) - 1)])
+        b = min(max(int(balls), 0), 3) * 3 + min(max(int(strikes), 0), 2)
+        cdf, rows = self._bucket_cdf[b], meta["bucket_rows"][b]
+        if cdf is None or cdf[-1] <= 0:
+            return "ball"
+        i = int(np.searchsorted(cdf, self.rng.random() * cdf[-1]))
+        return str(meta["outcome"][rows[min(i, rows.size - 1)]])
 
     # ---- SIM-425: batted-ball draw (step 5) -------------------------------
     def _batter_aff(self, batter_key: str) -> np.ndarray | None:

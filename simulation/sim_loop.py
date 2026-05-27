@@ -1106,13 +1106,12 @@ class StateMachine:
             bat = state.home_score if state.offense == Team.HOME else state.away_score
             fld = state.away_score if state.offense == Team.HOME else state.home_score
             score_diff = max(-5, min(5, int(bat) - int(fld)))
-            sit = np.array(
-                [state.balls, state.strikes, state.outs, state.runners_state,
-                 state.inning, score_diff],
-                dtype=np.float32,
+            # base-out only; the count is conditioned per pitch via the draw bucket.
+            base_out = np.array(
+                [state.outs, state.runners_state, state.inning, score_diff], dtype=np.float32
             )
-            fp.new_plate_appearance(f"{state.batter_id}:{season}", sit)
-        return fp.draw()
+            fp.new_plate_appearance(f"{state.batter_id}:{season}", base_out)
+        return fp.draw(state.balls, state.strikes)
 
     def _full_pool_fielding(self, state: GameState) -> FieldingSignal | None:
         """SIM-425: draw a batted ball from the full bat_hand batted-ball pool
@@ -1131,8 +1130,12 @@ class StateMachine:
             dtype=np.float32,
         )
         fp.battedball_new_pa(hand, f"{state.batter_id}:{season}", sit)
-        ev, rh, ro = fp.battedball_draw()
-        return FieldingSignal(event=ev, result_hits=int(rh), result_outs=int(ro), result_runs=0)
+        ev, rh, _ro = fp.battedball_draw()
+        # SIM-425/429: outs_on_pitch is unreliable in the pool (~0 for most field
+        # outs), so infer outs from the event (as the default resolver does) —
+        # otherwise only strikeouts end the half-inning and games bloat.
+        outs = 2 if ev in _DOUBLE_PLAY_EVENTS else (0 if int(rh) > 0 else 1)
+        return FieldingSignal(event=ev, result_hits=int(rh), result_outs=int(outs), result_runs=0)
 
     # ===================================================================
     # SIM-319 — run/base-out delta via resolve_runs (the ONE place, §8)
