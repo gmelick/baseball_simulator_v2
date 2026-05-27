@@ -524,8 +524,11 @@ class BaserunnerSimilarityEngine:
             SELECT
                 brm.player_id, brm.season,
                 brm.sample_advancement_opps,
-                -- Speed
-                ss.sprint_speed,
+                -- Speed (SIM-408: read the column already on the derived table
+                -- instead of a pg.raw.sprint_speed join — the profile computor
+                -- already materializes sprint_speed here, and the app's
+                -- read-only DuckDB connection has no postgres `pg` catalog).
+                brm.sprint_speed,
                 -- Aggression
                 brm.extra_base_attempt_rate,
                 brm.first_to_third_attempt_rate,
@@ -546,9 +549,6 @@ class BaserunnerSimilarityEngine:
                 brm.sample_tag_up_opps,
                 brm.below_minimum_sample
             FROM derived.baserunner_season_metrics brm
-            LEFT JOIN pg.raw.sprint_speed ss
-                ON ss.player_id = brm.player_id
-                AND ss.season = brm.season
             WHERE NOT brm.below_minimum_sample
               {season_filter}
         """).fetchall()

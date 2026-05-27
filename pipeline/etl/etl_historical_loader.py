@@ -1051,6 +1051,52 @@ def _schedule_game_is_final(game: dict) -> bool:
     return game.get("status", {}).get("abstractGameState") == "Final"
 
 
+def _build_starting_lineup_rows(game_pk: int, season: int, game_dict: dict) -> list[tuple]:
+    """Build raw.game_lineups rows for the STARTING lineups from a feed/live boxscore (SIM-409).
+
+    Reads ``liveData.boxscore.teams.{home,away}``: a player whose ``battingOrder``
+    ends in ``00`` (``int(bo) % 100 == 0``) is the original starter in slot
+    ``int(bo) // 100`` (1–9); the starting pitcher (``pitchers[0]``) is added with
+    ``position_code='P'`` and a NULL ``batting_order`` when not in the batting
+    order (AL / DH games). Substitutions (sequence > 1, pinch roles) are out of
+    scope — this ingests the opening lineup the sim resolves from.
+
+    Returns tuples in the raw.game_lineups insert column order:
+    ``(game_pk, season, team_id, player_id, batting_order, position_code,
+    is_starter, sequence)``.
+    """
+    gd = game_dict.get("gameData", {})
+    box = game_dict.get("liveData", {}).get("boxscore", {}).get("teams", {})
+    rows: list[tuple] = []
+    for side in ("home", "away"):
+        team_id = gd.get("teams", {}).get(side, {}).get("id")
+        team_box = box.get(side, {})
+        if team_id is None or not team_box:
+            continue
+        seen: set[int] = set()
+        for pdata in team_box.get("players", {}).values():
+            bo = pdata.get("battingOrder")
+            if not bo:
+                continue
+            try:
+                bo_int = int(bo)
+            except (TypeError, ValueError):
+                continue
+            if bo_int % 100 != 0:
+                continue  # a later-entering occupant of the slot, not the starter
+            pid = pdata.get("person", {}).get("id")
+            if pid is None:
+                continue
+            pos = (pdata.get("position") or {}).get("abbreviation") or "UT"
+            rows.append((game_pk, season, int(team_id), int(pid), bo_int // 100, pos[:5], True, 1))
+            seen.add(int(pid))
+        # Starting pitcher — not in the batting order for AL/DH games.
+        pitchers = team_box.get("pitchers") or []
+        if pitchers and int(pitchers[0]) not in seen:
+            rows.append((game_pk, season, int(team_id), int(pitchers[0]), None, "P", True, 1))
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Main ETL class
 # ---------------------------------------------------------------------------
@@ -1296,6 +1342,40 @@ class HistoricalDataLoader:
                     if not self._game_already_loaded(game["gamePk"]):
                         self.load_game(game["gamePk"], season, batter_hand_cache)
 
+    def backfill_lineups_and_scores(
+        self, start_year: int = 2017, end_year: int | None = None
+    ) -> None:
+        """SIM-409: populate raw.game_lineups + final scores for ALREADY-loaded games.
+
+        The original pitch backfill (refresh_seasons) never persisted lineups or
+        final scores (a bug: the linescore was read from the wrong feed level).
+        This re-fetches each Final game's feed and re-runs the prerequisite
+        upserts, which are idempotent: existing pitch/player/team rows are
+        untouched, raw.games gets its final score filled in (INSERT ... ON
+        CONFLICT DO UPDATE), and the starting lineups are inserted. Network-bound
+        (one feed fetch per game). Unlike refresh_seasons it does NOT gate on
+        ``_game_already_loaded`` — the whole point is to enrich loaded games.
+        """
+        if end_year is None:
+            end_year = datetime.today().year
+        for season in range(start_year, end_year + 1):
+            log.info("=== Backfill lineups+scores: season %d ===", season)
+            params = {"sportId": 1, "gameTypes": GAME_TYPES, "season": season}
+            schedule = _connect("https://statsapi.mlb.com/api/v1/schedule", params)["dates"]
+            cache: dict[int, str] = {}
+            for date_entry in schedule:
+                for game in date_entry["games"]:
+                    if "rescheduleGameDate" in game or "resumeGameDate" in game:
+                        continue
+                    if not _schedule_game_is_final(game):
+                        continue
+                    gpk = game["gamePk"]
+                    try:
+                        _raw, game_dict = _fetch_game_pitches(gpk, cache)
+                        self._ensure_prerequisites(gpk, game_dict)
+                    except Exception as exc:  # noqa: BLE001 — one bad game shouldn't halt the backfill
+                        log.warning("  Backfill failed for game %s: %s", gpk, exc)
+
     # ------------------------------------------------------------------
     # FK prerequisite checks — run before every raw.pitches insert
     # ------------------------------------------------------------------
@@ -1328,7 +1408,10 @@ class HistoricalDataLoader:
         self._ensure_teams(home_team_id, away_team_id, season, gd)
         self._ensure_players(game_dict)
         self._ensure_managers(managers, home_team_id, away_team_id, season, game_date)
-        self._ensure_game(game_pk, season, gd, managers)
+        # SIM-409: pass the FULL game_dict so _ensure_game can read the linescore
+        # + decisions (under liveData, not gameData), then ingest the lineups.
+        self._ensure_game(game_pk, season, game_dict, managers)
+        self._ensure_game_lineups(game_pk, season, game_dict)
 
     # --- 1. Venues ----------------------------------------------------------
 
@@ -1743,26 +1826,20 @@ class HistoricalDataLoader:
 
         # --- 5. Game record -----------------------------------------------------
 
-    def _ensure_game(self, game_pk: int, season: int, gd: dict, managers: dict) -> None:
+    def _ensure_game(self, game_pk: int, season: int, game_dict: dict, managers: dict) -> None:
         """
         Upserts raw.games.  Called after venues/teams/managers are guaranteed
         to exist so all FKs resolve cleanly.
 
-        For completed games, also populates final score and pitcher W/L/S
-        fields if available in the game_dict.
+        For completed games, also populates final score, inning scores, and
+        pitcher W/L/S. SIM-409: reads the linescore + decisions from
+        ``liveData`` (previously read from ``gameData``, where they don't exist,
+        so final scores were always NULL). The INSERT ... ON CONFLICT DO UPDATE
+        always runs (no score-blind early return) so a re-fetch of an
+        already-loaded game backfills its final score.
         """
-        with self._get_conn() as conn, conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM raw.games WHERE game_pk = %s", (game_pk,))
-            if cur.fetchone() is not None:
-                # Game already exists — only update status in case it changed
-                # (Preview → Live → Final progression)
-                status = _map_game_status(gd)
-                cur.execute(
-                    "UPDATE raw.games SET status = %s, updated_at = NOW() WHERE game_pk = %s",
-                    (status, game_pk),
-                )
-                conn.commit()
-                return
+        gd = game_dict["gameData"]
+        live = game_dict.get("liveData", {})
 
         game_date = gd["datetime"]["officialDate"]
         venue_id = gd["venue"]["id"]
@@ -1771,8 +1848,8 @@ class HistoricalDataLoader:
         game_type = gd.get("game", {}).get("type", "R")
         status = _map_game_status(gd)
 
-        # Final score — present for completed games
-        linescore = gd.get("linescore", {})
+        # Final score — present for completed games (under liveData.linescore).
+        linescore = live.get("linescore", {})
         home_score = linescore.get("teams", {}).get("home", {}).get("runs")
         away_score = linescore.get("teams", {}).get("away", {}).get("runs")
         home_hits = linescore.get("teams", {}).get("home", {}).get("hits")
@@ -1792,17 +1869,17 @@ class HistoricalDataLoader:
             else None
         )
 
-        # Winning / losing / save pitcher
-        decisions = gd.get("decisions", {})
+        # Winning / losing / save pitcher (under liveData.decisions, SIM-409).
+        decisions = live.get("decisions", {})
         winning_pid = decisions.get("winner", {}).get("id")
         losing_pid = decisions.get("loser", {}).get("id")
         save_pid = decisions.get("save", {}).get("id")
 
-        # Weather
+        # Weather (this one IS under gameData).
         weather = gd.get("weather", {})
         wind = gd.get("weather", {})
 
-        log.info("  Inserting missing game record %s", game_pk)
+        log.info("  Upserting game record %s", game_pk)
         with self._get_conn() as conn:
             with conn.cursor() as cur:
                 import json as _json
@@ -1863,6 +1940,31 @@ class HistoricalDataLoader:
                     ),
                 )
             conn.commit()
+
+    def _ensure_game_lineups(self, game_pk: int, season: int, game_dict: dict) -> None:
+        """Insert the starting-lineup rows into raw.game_lineups (SIM-409).
+
+        Idempotent (``ON CONFLICT DO NOTHING`` on the natural key) so a re-fetch
+        of an already-loaded game does not duplicate rows. The starting lineups
+        are what :mod:`simulation.lineup_resolver` reads to build the opening
+        ``GameState`` for ``/simulate``.
+        """
+        rows = _build_starting_lineup_rows(game_pk, season, game_dict)
+        if not rows:
+            return
+        with self._get_conn() as conn, conn.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO raw.game_lineups
+                    (game_pk, season, team_id, player_id, batting_order,
+                     position_code, is_starter, sequence)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (game_pk, team_id, player_id, sequence) DO NOTHING
+                """,
+                rows,
+            )
+            conn.commit()
+        log.info("  Inserted %d starting-lineup rows for game %s", len(rows), game_pk)
 
     # ------------------------------------------------------------------
     # Internal helpers

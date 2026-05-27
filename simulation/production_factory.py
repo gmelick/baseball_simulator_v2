@@ -66,6 +66,7 @@ read here only to size the shared-tile attach.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from typing import Any
 
@@ -130,15 +131,44 @@ def _default_sampler_builder(spec: GameSpec, seed: int | None) -> PlayPoolSample
 
 
 def _default_deriver_builder(spec: GameSpec) -> Any:
-    """Default fingerprint-deriver builder: ``None`` (use the stub fingerprints).
+    """Build the SIM-421 :class:`~simulation.fingerprints.FingerprintDeriver` from
+    the on-disk play-pool artifacts, or ``None`` when they are absent.
 
-    The real SIM-317 :class:`~simulation.fingerprints.FingerprintDeriver` needs the
-    engine registry + a live MatchupProfileProvider; returning ``None`` lets the
-    :class:`StateMachine` fall back to its built-in deterministic-hash fingerprints
-    so the factory runs without the full engine stack.  A production deployment that
-    wants the real geometry installs its own builder via :func:`set_deriver_builder`.
+    The deriver normalizes the loop's query into the SAME space the tiles were
+    indexed in (z-score + sqrt-weight, using the mean/std ``play_pool_cache``
+    persisted) and assembles it from per-matchup RAW centroids via a
+    :class:`~simulation.matchup_provider.PrecomputedMatchupProvider`.  Without it
+    the query is a scale-mismatched hash stub and the k-NN collapses to the
+    lowest-norm tile vectors (the "no balls in play" defect).
+
+    Built per-worker from disk so NO live object crosses the ProcessPool boundary
+    -- fork- AND spawn-safe.  Returns ``None`` (-> the StateMachine's stub
+    fingerprints) when the artifacts are missing (tiles built before SIM-421, or
+    an artifact-less test env), so the factory still runs without them.
     """
-    return None
+    pool_dir = _kwarg(spec, "_pool_dir", None) or os.environ.get(
+        "BASEBALL_PLAY_POOL_DIR", "/data/play_pool"
+    )
+    try:
+        from simulation.fingerprints import FingerprintDeriver
+        from simulation.matchup_provider import (
+            load_battedball_norm,
+            load_pitch_norm,
+            load_provider,
+        )
+
+        provider = load_provider(pool_dir)
+        pitch_norm = load_pitch_norm(pool_dir)
+        if provider is None or pitch_norm is None:
+            return None
+        return FingerprintDeriver(
+            provider,
+            pitch_norm=pitch_norm,
+            battedball_norm=load_battedball_norm(pool_dir),
+        )
+    except Exception:
+        # The deriver is an enhancement; never let a build hiccup break the sim.
+        return None
 
 
 #: The active sampler builder (swap via :func:`set_sampler_builder`).

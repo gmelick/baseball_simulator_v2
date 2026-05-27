@@ -94,7 +94,27 @@ except ImportError as e:  # pragma: no cover
 # engine's own optional-FAISS guard, so it succeeds even when faiss is absent
 # (the helper is a @staticmethod that only touches the DuckDB connection).
 from similarity.engines.batted_ball_similarity import (
+    FEATURE_SCALE as _BB_FEATURE_SCALE,
+)
+from similarity.engines.batted_ball_similarity import (
     BattedBallSimilarityEngine,
+)
+from similarity.engines.pitch_pitch_similarity import (
+    FEATURE_SCALE as _PITCH_FEATURE_SCALE,
+)
+
+# SIM-421: the tile vectors are normalized into the engines' z-score + sqrt-weight
+# space at build time, and the fitted mean/std + per-matchup raw centroids are
+# persisted so the sim loop's FingerprintDeriver lands its query in the SAME space.
+from simulation.matchup_provider import (
+    BATTEDBALL_CENTROIDS_FILE,
+    BATTEDBALL_NORM_FILE,
+    PITCH_CENTROIDS_FILE,
+    PITCH_NORM_FILE,
+    battedball_key,
+    pitch_key,
+    write_centroids,
+    write_norm,
 )
 
 # ---------------------------------------------------------------------------
@@ -115,7 +135,7 @@ log = logging.getLogger("play_pool_cache")
 
 #: Bump this when the build logic changes in a way that invalidates tiles on
 #: disk.  A mismatch with ``meta.builder_version`` forces a rebuild (§4.4#3).
-BUILDER_VERSION = "sim301.1"
+BUILDER_VERSION = "sim421.norm1"
 
 #: ``.meta`` schema version (§4.3).
 SCHEMA_VERSION = 1
@@ -597,14 +617,115 @@ def _build_faiss_index(vectors: NDArray[np.float32], dim: int):
     return index
 
 
+# ============================================================================
+# SIM-421 — tile-space normalization (z-score + sqrt-weight) + matchup centroids
+# ============================================================================
+#
+# The tiles are indexed in the engines' normalized space so the L2 k-NN reflects
+# feature priority (not raw spin_rate magnitude), and the FingerprintDeriver's
+# query lands in the SAME space.  ``mean``/``std`` are fit ONCE over the whole
+# pool; ``sqrt(weight)`` is the engine's FEATURE_SCALE (shared by import).
+
+
+def _cf(value) -> float:
+    """Coerce a DuckDB scalar to a JSON-safe finite float (None/NaN/inf -> 0.0)."""
+    if value is None:
+        return 0.0
+    f = float(value)
+    return f if np.isfinite(f) else 0.0
+
+
+def _fit_pool_norm(
+    conn: duckdb.DuckDBPyConnection, table: str, feature_cols: list[str]
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Fit ``(mean, std)`` over the whole pool for the given feature columns.
+
+    Uses DuckDB ``AVG``/``STDDEV_POP`` (NULL-skipping) in a single pass; a zero or
+    non-finite std becomes 1.0 so normalization is a no-op on a constant dim.
+    """
+    aggs = ", ".join(f"AVG({c}), STDDEV_POP({c})" for c in feature_cols)
+    row = conn.execute(f"SELECT {aggs} FROM sim.{table}").fetchone()
+    mean = np.array([_cf(row[2 * i]) for i in range(len(feature_cols))], dtype=np.float64)
+    std = np.array([_cf(row[2 * i + 1]) for i in range(len(feature_cols))], dtype=np.float64)
+    std = np.where((std == 0.0) | ~np.isfinite(std), 1.0, std)
+    return mean, std
+
+
+def _normalize_for_index(
+    vectors: NDArray[np.float32],
+    mean: NDArray[np.float64],
+    std: NDArray[np.float64],
+    scale: NDArray[np.float64],
+) -> NDArray[np.float32]:
+    """Apply ``z = (raw - mean) / std * sqrt(weight)`` to the tile vectors.
+
+    Byte-for-byte mirrors the engine's ``Normalizer.normalize_batch`` and the
+    ``FingerprintDeriver._normalize`` fitted branch, so the indexed tile and the
+    query land in one space.
+    """
+    normed = (vectors.astype(np.float64) - mean) / std
+    return (np.nan_to_num(normed, nan=0.0) * scale).astype(np.float32)
+
+
+def _compute_pitch_centroids(
+    conn: duckdb.DuckDBPyConnection, hand_col: str, seasons: list[int] | None
+) -> dict[str, list[float]]:
+    """Per-(season, pitcher, hand) RAW pitch centroids + the (season, hand)
+    fall-back centroid stored under pitcher_id=0 (mirrors the sampler's tile
+    fall-forward).  These are the points the deriver normalizes into the query."""
+    where = ""
+    if seasons:
+        where = f"WHERE season IN ({', '.join(str(int(s)) for s in seasons)})"
+    feat = ", ".join(f"AVG({c})" for c in PITCH_FEATURES)
+    out: dict[str, list[float]] = {}
+    for season, pid, hand, *means in conn.execute(
+        f"SELECT season, pitcher_id, {hand_col} AS h, {feat} "
+        f"FROM sim.pitch_pool {where} GROUP BY 1, 2, 3"
+    ).fetchall():
+        if hand not in ("L", "R"):
+            continue
+        out[pitch_key(int(season), int(pid), str(hand))] = [_cf(m) for m in means]
+    for season, hand, *means in conn.execute(
+        f"SELECT season, {hand_col} AS h, {feat} FROM sim.pitch_pool {where} GROUP BY 1, 2"
+    ).fetchall():
+        if hand not in ("L", "R"):
+            continue
+        out[pitch_key(int(season), 0, str(hand))] = [_cf(m) for m in means]
+    return out
+
+
+def _compute_battedball_centroids(
+    conn: duckdb.DuckDBPyConnection, hand_col: str, spray_col: str, seasons: list[int] | None
+) -> dict[str, list[float]]:
+    """Per-(season, hand) RAW batted-ball centroids (exit_velo, launch_angle, spray)."""
+    where = f"AND season IN ({', '.join(str(int(s)) for s in seasons)})" if seasons else ""
+    out: dict[str, list[float]] = {}
+    for season, hand, ev, la, sp in conn.execute(
+        f"SELECT season, {hand_col} AS h, AVG(exit_velo), AVG(launch_angle), AVG({spray_col}) "
+        f"FROM sim.outcome_pool "
+        f"WHERE exit_velo IS NOT NULL AND launch_angle IS NOT NULL AND {spray_col} IS NOT NULL "
+        f"{where} GROUP BY 1, 2"
+    ).fetchall():
+        if hand not in ("L", "R"):
+            continue
+        out[battedball_key(int(season), str(hand))] = [_cf(ev), _cf(la), _cf(sp)]
+    return out
+
+
 def write_tile(
     key: TileKey,
     pool_dir: str,
     payload: TilePayload,
     recency_boost: bool,
     dim: int,
+    norm: tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]] | None = None,
 ) -> dict:
     """Build the FAISS index + rowids + meta and write all three atomically.
+
+    When ``norm`` (``(mean, std, sqrt_weight_scale)``) is supplied the tile
+    vectors are normalized into the engines' space BEFORE indexing (SIM-421) so
+    the k-NN L2 distance reflects feature priority and matches the deriver's
+    query.  rowids still map FAISS position -> source row id unchanged.
 
     Returns the meta dict that was written.
     """
@@ -617,7 +738,10 @@ def write_tile(
     meta_path = key.meta_path(pool_dir)
     rowids_path = key.rowids_path(pool_dir)
 
-    index = _build_faiss_index(payload.vectors, dim)
+    index_vectors = (
+        payload.vectors if norm is None else _normalize_for_index(payload.vectors, *norm)
+    )
+    index = _build_faiss_index(index_vectors, dim)
     bytes_on_disk = _write_faiss_index(index, faiss_path)
 
     # rowids: int64 array, FAISS vector i -> source outcome/pitch row id.
@@ -640,6 +764,7 @@ def write_tile(
         "build_timestamp": _now_iso(),
         "builder_version": BUILDER_VERSION,
         "bytes_on_disk": int(bytes_on_disk),
+        "normalized": norm is not None,
     }
     if key.pool == POOL_PITCH:
         meta["pitcher_id"] = int(key.pitcher_id)
@@ -662,6 +787,7 @@ def _build_pitch_pool(
     seasons: list[int] | None,
     recency_boost: bool,
     result: BuildResult,
+    norm: tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]] | None = None,
 ) -> None:
     """Build every pitch tile: standalone tiles for pitchers >= MIN_TILE_ROWS,
     plus the pitcher_id=0 fall-back tile collecting all sub-threshold rows
@@ -710,7 +836,7 @@ def _build_pitch_pool(
         payload = _build_pitch_payload(
             conn, hand_col, key, [pitcher_id], recency_boost, build_seasons
         )
-        write_tile(key, pool_dir, payload, recency_boost, PITCH_DIM)
+        write_tile(key, pool_dir, payload, recency_boost, PITCH_DIM, norm=norm)
         result.rebuilt += 1
         result.rebuilt_tiles.append(key.label())
         log.info(
@@ -741,7 +867,7 @@ def _build_pitch_pool(
             result.skipped_tiles.append(key.label())
             continue
         payload = _build_pitch_payload(conn, hand_col, key, members, recency_boost, build_seasons)
-        write_tile(key, pool_dir, payload, recency_boost, PITCH_DIM)
+        write_tile(key, pool_dir, payload, recency_boost, PITCH_DIM, norm=norm)
         result.rebuilt += 1
         result.rebuilt_tiles.append(key.label())
         log.info(
@@ -760,6 +886,7 @@ def _build_battedball_pool(
     seasons: list[int] | None,
     recency_boost: bool,
     result: BuildResult,
+    norm: tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]] | None = None,
 ) -> None:
     """Build batted-ball tiles, one per (season, bat_hand)."""
     plan, hand_col = _plan_battedball_tiles(conn, seasons)
@@ -793,7 +920,7 @@ def _build_battedball_pool(
                 payload.n_source_rows,
                 MIN_TILE_ROWS,
             )
-        write_tile(key, pool_dir, payload, recency_boost, BATTEDBALL_DIM)
+        write_tile(key, pool_dir, payload, recency_boost, BATTEDBALL_DIM, norm=norm)
         result.rebuilt += 1
         result.rebuilt_tiles.append(key.label())
         log.info(
@@ -826,12 +953,34 @@ def build_play_pool_cache(
 
     t0 = time.time()
     result = BuildResult()
+    os.makedirs(pool_dir, exist_ok=True)
     conn = duckdb.connect(duckdb_path, read_only=True)
     try:
         if POOL_PITCH in pools:
-            _build_pitch_pool(conn, pool_dir, seasons, recency_boost, result)
+            # SIM-421: fit the global pitch normalizer + persist mean/std and the
+            # per-matchup raw centroids, then index tiles in the normalized space.
+            pmean, pstd = _fit_pool_norm(conn, "pitch_pool", PITCH_FEATURES)
+            pitch_norm = (pmean, pstd, _PITCH_FEATURE_SCALE)
+            write_norm(pool_dir, PITCH_NORM_FILE, pmean, pstd)
+            phand = _select_bat_hand_column(_table_columns(conn, "pitch_pool"))
+            write_centroids(
+                pool_dir, PITCH_CENTROIDS_FILE, _compute_pitch_centroids(conn, phand, seasons)
+            )
+            _build_pitch_pool(conn, pool_dir, seasons, recency_boost, result, norm=pitch_norm)
         if POOL_BATTEDBALL in pools:
-            _build_battedball_pool(conn, pool_dir, seasons, recency_boost, result)
+            bhand = _select_bat_hand_column(_table_columns(conn, "outcome_pool"))
+            spray_col = BattedBallSimilarityEngine._select_spray_column(conn)
+            bbmean, bbstd = _fit_pool_norm(
+                conn, "outcome_pool", ["exit_velo", "launch_angle", spray_col]
+            )
+            bb_norm = (bbmean, bbstd, _BB_FEATURE_SCALE)
+            write_norm(pool_dir, BATTEDBALL_NORM_FILE, bbmean, bbstd)
+            write_centroids(
+                pool_dir,
+                BATTEDBALL_CENTROIDS_FILE,
+                _compute_battedball_centroids(conn, bhand, spray_col, seasons),
+            )
+            _build_battedball_pool(conn, pool_dir, seasons, recency_boost, result, norm=bb_norm)
     finally:
         conn.close()
 

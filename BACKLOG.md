@@ -6,7 +6,7 @@
 >
 > **Phase 5 is fully CLOSED and CI-green on Python 3.11.15** (unit+regression **1814 pass / 1 skip / 0 fail @ 89% coverage**; 8 CI jobs; the post-close CI-stabilization — ruff 0.15.14 config, mypy, coverage measurement, and 2 py3.11 failures [a gitignored fixture + a slow-test timeout] — is done). A full **9-agent program audit + independent QA cross-validation** filed **43 Phase-6 tickets (SIM-378→SIM-420)**. **Phase 6 = the Frontend Build** — a greenfield UI on the complete backend, PLUS the API contracts the UI can't start without and the live-env / realism / hardening debt. See `docs/HANDOFF_PHASE6.md`, `docs/audit/2026-09-02-phase5-close-program-audit.md`, `docs/audit/2026-09-02-phase6-prioritized-tickets.md`.
 >
-> **⚠ Reality check (QA-confirmed):** the pre-existing Phase-6 tickets SIM-127–131 cite parent tickets SIM-108/109/112/122–126 that **don't exist**; `frontend/{components,graphics,pages}/` are **empty dirs**; there is no build tooling or API→UI serving path. SIM-382 backfills the chain. **Next free ID: SIM-422** (SIM-421 = the P3 full-market-projection enhancement).
+> **⚠ Reality check (QA-confirmed):** the pre-existing Phase-6 tickets SIM-127–131 cite parent tickets SIM-108/109/112/122–126 that **don't exist**; `frontend/{components,graphics,pages}/` are **empty dirs**; there is no build tooling or API→UI serving path. SIM-382 backfills the chain. **Next free ID: SIM-430** (SIM-422→429 = the similarity-engine-wiring epic; SIM-421 = the P3 full-market-projection enhancement).
 >
 > | Tier | Tickets |
 > |---|---|
@@ -78,6 +78,20 @@
 > | ID | Title | Type | Pri | Size | Owner | Depends-on |
 > |---|---|---|---|---|---|---|
 > | SIM-421 | Extend prop/market projection to the full book-offered market set (individual hit types — 1B/2B/3B; SB; hits-allowed/walks-allowed; H+R+RBI combos; team totals; first-five-innings ML/RL/total; NRFI/YRFI) | Feature | P3 | L | ML Engineer + Baseball Analyst + Betting Analyst | SIM-402, SIM-406, SIM-407 | 🔵 **Open** |
+>
+> ### EPIC — Similarity-engine wiring + full-pool scoring (SIM-422→429)
+> *Design: `docs/architecture/2026-09-03-engine-wiring-and-full-pool-scoring.md`. **Audit finding:** the live sim actively uses only **2 of 11** engines (Pitch + Batted Ball, both hard-filtered); production builds the StateMachine with `manager=None`/`sim=None`/default resolver, so step 1 (manager) + step 4 (steal) are inert and steps 3/5/6 use proxies/Retrosheet constants. This epic wires **all 11 engines** into the loop via **full-pool similarity-weighted draws** — the only hard filter is the batter's hand; pitcher hand self-zeroes via the pitcher engine; NO top-K. Fork-safe via nightly disk artifacts (generalizes the SIM-421 deriver-from-disk pattern). Supersedes the SIM-300 per-pitcher play-pool tiling + the interim realism work (jitter/advancement constants) that was provisionally tagged SIM-421 in code (⚠ collides with the P3 prop-markets ticket — reconcile that tag when committing the realism work).*
+>
+> | ID | Title | Type | Pri | Size | Owner | Depends-on |
+> |---|---|---|---|---|---|---|
+> | SIM-422 | Fork-safe engine-artifact bundle + per-worker loader (full pools, pitcher×pitcher sim, batter/catcher/fielder/baserunner embeddings, situation KDTree, manager profiles) | Infra | P1 | L | Data Engineer + ML Engineer | - |
+> | SIM-423 | Full-pool resident sampler + factorized-weight alias draw + **perf gate vs 2s/30s SLA** | Infra | P1 | L | Performance Engineer + Backend Developer | SIM-422 |
+> | SIM-424 | Pitch full-pool scoring — steps 2/3 (Situation, Pitcher, Batter, Pitch, Catcher-recv); delete the SIM-421 jitter | Feature | P1 | L | ML Engineer + Backend Developer | SIM-423 |
+> | SIM-425 | Engine-backed PlayResolver — steps 5/6 (Batted Ball + Fielder RBF + Baserunner extra-base + Situation); replace the Retrosheet advancement constants | Feature | P1 | L | ML Engineer + Backend Developer | SIM-422, SIM-423 |
+> | SIM-426 | Steal path — steps 1b/4 (Baserunner-steal + Catcher-steal + Pitcher-steal + Situation + Manager) | Feature | P1 | M | Backend Developer + Baseball Analyst | SIM-422 |
+> | SIM-427 | Engine-backed manager decisions — step 1 (Manager + Situation + Pitcher + Batter) | Feature | P1 | M | Backend Developer + Baseball Analyst | SIM-422 |
+> | SIM-428 | Catcher framing in the ball/called-strike resolution — step 3 | Improvement | P2 | M | ML Engineer + Baseball Analyst | SIM-424 |
+> | SIM-429 | Re-calibration + CLV backtest over the rewired loop | Validation | P1 | L | ML Engineer + Betting Analyst | SIM-424, SIM-425, SIM-426, SIM-427 |
 >
 > **Sprint plan (6 wks):** **S1** kickoff gates SIM-378–390 · **S2** live read + cards + linescore/field (386, 391, 392) + backend 388/390 · **S3** game page + boxscore (393, 394, 420) · **S4** betting surface + override v1 (395, 396, 397) + data/ML track 405/406/407 · **S5** override v2 + perf/verification (398, 402, 403, 404, 408, 409) · **S6** a11y/Playwright/deploy + hardening (399, 400, 401, 410–419) + staging bring-up.
 >

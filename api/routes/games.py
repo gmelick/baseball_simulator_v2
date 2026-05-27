@@ -498,6 +498,13 @@ def _sim_kwargs_from_state(state: Any) -> dict[str, Any]:
         "season": int(getattr(state, "season", 2024)),
         "pitcher_id": int(getattr(state, "pitcher_id", 0) or 0),
         "bat_hand": str(getattr(state, "bat_hand", "R") or "R"),
+        # SIM-421: carry the per-batter hand map + both starters so the matchup
+        # pre-filter follows the lineup across PAs/half-innings (picklable, so
+        # they survive the ProcessPool sim_kwargs path).
+        "bat_hands": dict(getattr(state, "bat_hands", {}) or {}),
+        "throw_hands": dict(getattr(state, "throw_hands", {}) or {}),
+        "home_pitcher_id": getattr(state, "home_pitcher_id", None),
+        "away_pitcher_id": getattr(state, "away_pitcher_id", None),
         "k": int(getattr(state, "k", 25) or 25) if hasattr(state, "k") else 25,
         "max_innings": 12,
     }

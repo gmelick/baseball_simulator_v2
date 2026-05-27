@@ -316,7 +316,46 @@ class TestDottedRefAndDefault:
         assert isinstance(sampler, PlayPoolSampler)
         assert sampler.max_resident_tiles == 64
 
-    def test_default_deriver_builder_returns_none(self):
-        # Default deriver is None -> the StateMachine's stub fingerprints (no engine
-        # stack needed for the factory to build).
-        assert pf._default_deriver_builder(_spec()) is None
+    def test_default_deriver_builder_returns_none_without_artifacts(self, tmp_path):
+        # SIM-421: the deriver is built from on-disk play-pool artifacts; with none
+        # present it returns None -> the StateMachine falls back to its stub
+        # fingerprints (so the factory runs without the artifacts).
+        assert pf._default_deriver_builder(_spec(_pool_dir=str(tmp_path))) is None
+
+    def test_default_deriver_builder_builds_from_artifacts(self, tmp_path):
+        # SIM-421: with the persisted norm + centroid artifacts present, the
+        # builder wires the real FingerprintDeriver (so the query lands in the
+        # tiles' normalized space) — built from disk, fork/spawn-safe.
+        import numpy as np
+
+        from simulation import matchup_provider as mp
+        from simulation.fingerprints import (
+            BATTED_BALL_FINGERPRINT_DIM,
+            PITCH_FINGERPRINT_DIM,
+            FingerprintDeriver,
+        )
+
+        mp.write_norm(
+            str(tmp_path),
+            mp.PITCH_NORM_FILE,
+            np.zeros(PITCH_FINGERPRINT_DIM),
+            np.ones(PITCH_FINGERPRINT_DIM),
+        )
+        mp.write_norm(
+            str(tmp_path),
+            mp.BATTEDBALL_NORM_FILE,
+            np.zeros(BATTED_BALL_FINGERPRINT_DIM),
+            np.ones(BATTED_BALL_FINGERPRINT_DIM),
+        )
+        mp.write_centroids(
+            str(tmp_path),
+            mp.PITCH_CENTROIDS_FILE,
+            {mp.pitch_key(2024, 477132, "R"): [0.0] * PITCH_FINGERPRINT_DIM},
+        )
+        mp.write_centroids(
+            str(tmp_path),
+            mp.BATTEDBALL_CENTROIDS_FILE,
+            {mp.battedball_key(2024, "R"): [89.0, 12.0, -3.0]},
+        )
+        deriver = pf._default_deriver_builder(_spec(_pool_dir=str(tmp_path)))
+        assert isinstance(deriver, FingerprintDeriver)

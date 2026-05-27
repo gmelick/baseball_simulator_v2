@@ -763,6 +763,22 @@ class BatterSimilarityEngine:
             sl = ", ".join(str(s) for s in seasons)
             season_filter = f"AND bsm.season IN ({sl})"
 
+        # SIM-408: graceful-optional feature columns. xba/xslg are expected-stats
+        # the profile computor does not yet produce; rather than hard-fail the
+        # whole engine build on a missing column, select NULL for any absent
+        # optional column (the _v() helper coerces NULL -> 0.0, so the feature is
+        # effectively dropped). Re-enabled automatically once the computor adds it.
+        _present = {
+            r[0]
+            for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'derived' AND table_name = 'batter_season_metrics'"
+            ).fetchall()
+        }
+
+        def _opt(name: str) -> str:
+            return f"bsm.{name}" if name in _present else f"NULL AS {name}"
+
         rows = conn.execute(f"""
             SELECT
                 bsm.batter_id, bsm.season, bsm.bats,
@@ -776,7 +792,7 @@ class BatterSimilarityEngine:
                 bsm.avg_exit_velo, bsm.avg_launch_angle,
                 bsm.hard_hit_rate, bsm.barrel_rate,
                 -- Power
-                bsm.hr_rate, bsm.xba, bsm.xslg, bsm.max_exit_velo,
+                bsm.hr_rate, {_opt("xba")}, {_opt("xslg")}, bsm.max_exit_velo,
                 -- Platoon vs L
                 bsm.o_swing_rate_vs_l, bsm.z_swing_rate_vs_l,
                 bsm.whiff_rate_vs_l, bsm.walk_rate_vs_l, bsm.k_rate_vs_l,

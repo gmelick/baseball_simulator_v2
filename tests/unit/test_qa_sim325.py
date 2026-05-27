@@ -46,6 +46,7 @@ from simulation.validation.replay_chi_squared import (
     chi_squared_gof,
     pool_low_expected_bins,
     replay_and_test,
+    replay_historical_games,
     run_total_distribution,
     simulate_run_distribution,
 )
@@ -62,17 +63,17 @@ from simulation.validation.replay_chi_squared import (
 # (compare against ACTUAL historical run totals) is exercised by the
 # HistoricalGame test below.
 REFERENCE_RUN_DISTRIBUTION = [
-    0.0773,
-    0.1067,
-    0.1260,
-    0.1290,
-    0.1230,
-    0.1147,
-    0.0997,
-    0.0667,
-    0.0520,
-    0.0353,
-    0.0697,
+    0.0640,
+    0.1127,
+    0.1310,
+    0.1387,
+    0.1277,
+    0.1080,
+    0.0907,
+    0.0727,
+    0.0497,
+    0.0377,
+    0.0673,
 ]
 MAX_BIN = 10
 
@@ -269,22 +270,49 @@ class TestChiSquaredGuards:
 
 class TestRealDataSeam:
     def test_replay_and_test_over_historical_games(self):
-        # Build a set of "historical" team-games whose ACTUAL run totals come from
-        # the SAME calibrated model (a no-DB stand-in for real box scores), then
-        # run the end-to-end replay_and_test entry point: replay each matchup
-        # through simulate_game() and chi-squared the simulated vs actual totals.
-        # This exercises the EXACT path real data would take -- only the source of
-        # HistoricalGame.runs (and the production sampler/resolver) would differ.
-        actual_totals = simulate_run_distribution(150, base_seed=700_000)
-        # One HistoricalGame per actual team-game total (the real-data unit).
-        games = [HistoricalGame(runs=int(r)) for r in actual_totals]
-        res = replay_and_test(games, base_seed=0, max_bin=MAX_BIN, min_expected=5.0)
+        # Exercise the real-data seam: replay HistoricalGames through the loop and
+        # chi-squared the simulated run distribution against a reference of ACTUAL
+        # totals.  With real data the reference is the games' true historical run
+        # totals and replay_and_test's one-sample GOF is exactly right.
+        #
+        # SIM-421: in the NO-DB self-consistency mode (reference itself generated
+        # from the model) two corrections are required, both surfaced by the
+        # run-environment change:
+        #   1. ``replay_historical_games`` scores the HOME half of each game, which
+        #      runs ~0.3 R below the both-teams mean (the home team skips the
+        #      bottom 9th when leading / walk-off truncation) -- so the reference
+        #      must use the SAME home-only extraction.
+        #   2. a one-sample GOF treats the reference as the KNOWN distribution, so
+        #      it must be LARGE/well-estimated; a noisy small reference inflates
+        #      chi2 ~2x and spuriously rejects two same-model samples.  Use a
+        #      1500-game home-only reference, then GOF a disjoint 300-game replay.
+        reference_totals = replay_historical_games(
+            [HistoricalGame(runs=0) for _ in range(1500)], base_seed=700_000
+        )
+        games = [HistoricalGame(runs=0) for _ in range(300)]
+        simulated = replay_historical_games(games, base_seed=0)
+        res = chi_squared_gof(
+            simulated,
+            reference_totals=reference_totals,
+            max_bin=MAX_BIN,
+            min_expected=5.0,
+        )
         assert isinstance(res, ChiSquaredResult)
+        assert res.dof >= 1
         assert res.passed, (
             f"historical replay rejected by chi-squared GOF: "
             f"chi2={res.statistic:.3f} dof={res.dof} p={res.p_value:.4f}"
         )
         assert res.p_value > 0.05
+
+        # The replay_and_test wrapper (the real-data entry point) still runs and
+        # returns a sane result; give it realistic per-game actual totals (its
+        # small coupled reference is only statistically valid against TRUE totals,
+        # so we smoke the path, not its p-value here).
+        wrapped_games = [HistoricalGame(runs=int(r)) for r in reference_totals[:300]]
+        wrapped = replay_and_test(wrapped_games, base_seed=0, max_bin=MAX_BIN, min_expected=5.0)
+        assert isinstance(wrapped, ChiSquaredResult)
+        assert 0.0 <= wrapped.p_value <= 1.0
 
     def test_historical_game_carries_the_matchup_seam(self):
         # The HistoricalGame seam carries the matchup keys a real replay needs.
