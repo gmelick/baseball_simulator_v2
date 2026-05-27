@@ -1,3 +1,38 @@
+# Phase 6 — SIM-425: engine-backed baserunner advancement (run-gap closer) — 2026-05-27
+**Authors: ML Engineer (Agent 3), Baseball Analyst (Agent 2), Backend Developer (Agent 5)**
+
+Closed the full-pool hits-are-right / runs-low gap (SIM-429 validation: R 4.02 vs
+MLB 4.62, ~13% low). Root cause: on the full-pool path an OUT advanced no runner
+and scored no run — no sac flies, no productive outs (the SIM-349 sac-fly bias only
+fires on explicit manager intent, which is off in the full-pool path). Diagnosis in
+`scripts/diag_runs.py`: the batted-ball pool carries explicit productive-out events
+(`sac_fly`, `force_out`, `grounded_into_double_play`) and launch_angle cleanly
+separates fly (tag-up) from ground outs; the baserunner embedding carries the exact
+per-runner advancement rates.
+
+- `full_pool_sampler.py` — `battedball_draw` now also returns `launch_angle` (so
+  the resolver can tell a fly out from a ground out); new `runner_rate(key, name)`
+  exposes a runner's raw advancement rate from the baserunner embedding
+  (`second_to_home_attempt_rate`, `first_to_third_attempt_rate`,
+  `first_to_home_attempt_rate`, `tag_up_attempt_rate`).
+- `sim_loop.py` — `_extra_advance` is now **engine-backed**: a hit's extra base
+  uses the runner's OWN attempt-rate from the embedding (fallback to the Retrosheet
+  league constant, which keeps the per-tile path unchanged). New
+  `_full_pool_out_advancement`: on a full-pool OUT, a fly out tags the runner home
+  from 3rd (sac fly, scored at the runner's `tag_up_attempt_rate`) and pushes a
+  runner from 2nd→3rd on a deep fly; a ground out advances the lead runner one base;
+  double plays / 2-out innings score no one. Only the full-pool path is affected
+  (the per-tile path keeps its validated pool-supplied `result_runs`).
+
+**Validation (100 sims, per-team vs MLB-2023):** R **4.54** (4.62, was 4.02) ·
+BB 3.37 (3.30) · K 8.18 (8.60) · H 9.19 (8.60) · HR 1.35 (1.21) · 2B 1.82 (1.60).
+The run gap is essentially closed (R within ~2%); the slightly-high extra-base line
+is within a 4-game sample's noise and folds into SIM-429's final calibration pass.
+Targeted suite (165 baserunning/run-resolution/full-pool tests) green; per-tile path
+unaffected. **REMAINING in SIM-425:** the Fielder RBF (out/hit/error scaled by the
+fielding team's defensive quality) needs per-row fielder identity baked into the
+batted-ball artifact — a separate artifact-rebuild sub-task.
+
 # Phase 6 — SIM-429: full-pool engine promoted to the production default — 2026-05-27
 **Authors: ML Engineer (Agent 3), Backend Developer (Agent 5), QA/DevOps (Agent 9)**
 

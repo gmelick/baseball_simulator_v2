@@ -55,6 +55,7 @@ class FullPoolSampler:
         self._bb_hand: str | None = None
         self._bb_cdf: np.ndarray | None = None
         self._bb_pool_bat: dict[str, np.ndarray] = {}
+        self._br_idx: dict[str, int] | None = None  # baserunner feature-name -> col
 
     # ---- per-pool one-time precompute ------------------------------------
     def _pool_meta(self, hand: str) -> dict:
@@ -210,13 +211,38 @@ class FullPoolSampler:
         f_sit = np.exp(-d2 / (2.0 * self.sit_sigma**2 * pool.sit.shape[1])).astype(np.float32)
         self._bb_cdf = np.cumsum(f_bat * f_sit * pool.recency, dtype=np.float64)
 
-    def battedball_draw(self) -> tuple[str, int, int]:
-        """Draw one batted ball -> (event, result_hits, result_outs)."""
+    def battedball_draw(self) -> tuple[str, int, int, float]:
+        """Draw one batted ball -> (event, result_hits, result_outs, launch_angle).
+
+        SIM-425: launch_angle (geom col 1) is returned so the resolver can tell a
+        fly out (tag-up eligible) from a ground out for productive-out advancement.
+        """
         if self._bb_hand is None or self._bb_cdf is None or self._bb_cdf[-1] <= 0:
-            return ("field_out", 0, 1)
+            return ("field_out", 0, 1, 0.0)
         pool = self.a.bb_pools[self._bb_hand]
         i = min(int(np.searchsorted(self._bb_cdf, self.rng.random() * self._bb_cdf[-1])), pool.n - 1)
-        return (str(pool.event[i]), int(pool.result_hits[i]), int(pool.result_outs[i]))
+        return (str(pool.event[i]), int(pool.result_hits[i]), int(pool.result_outs[i]),
+                float(pool.geom[i, 1]))
 
     def has_battedball(self) -> bool:
         return bool(self.a.bb_pools)
+
+    # ---- SIM-425: engine-backed baserunner advancement rates --------------
+    def runner_rate(self, runner_key: str, name: str) -> float | None:
+        """Return a baserunner's raw advancement rate (e.g. ``second_to_home_attempt_rate``,
+        ``tag_up_attempt_rate``) from the baserunner embedding, or None when the
+        runner / feature is absent so the caller can fall back to a league constant."""
+        bemb = self.a.actor_emb.get("baserunner")
+        if bemb is None:
+            return None
+        feats = bemb.get("features")
+        idx = bemb["key_index"].get(runner_key)
+        if feats is None or idx is None or name not in self._br_feat_idx(feats):
+            return None
+        v = float(bemb["vecs"][idx][self._br_feat_idx(feats)[name]])
+        return v if np.isfinite(v) else None
+
+    def _br_feat_idx(self, feats: list) -> dict[str, int]:
+        if self._br_idx is None:
+            self._br_idx = {f: i for i, f in enumerate(feats)}
+        return self._br_idx

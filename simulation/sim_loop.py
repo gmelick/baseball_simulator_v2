@@ -1130,12 +1130,79 @@ class StateMachine:
             dtype=np.float32,
         )
         fp.battedball_new_pa(hand, f"{state.batter_id}:{season}", sit)
-        ev, rh, _ro = fp.battedball_draw()
+        ev, rh, _ro, la = fp.battedball_draw()
         # SIM-425/429: outs_on_pitch is unreliable in the pool (~0 for most field
         # outs), so infer outs from the event (as the default resolver does) —
         # otherwise only strikeouts end the half-inning and games bloat.
         outs = 2 if ev in _DOUBLE_PLAY_EVENTS else (0 if int(rh) > 0 else 1)
-        return FieldingSignal(event=ev, result_hits=int(rh), result_outs=int(outs), result_runs=0)
+        return FieldingSignal(
+            event=ev, result_hits=int(rh), result_outs=int(outs), result_runs=0,
+            launch_angle=float(la),
+        )
+
+    def _tag_rate(self, runner_id: int | None, season: int, event: str) -> float:
+        """SIM-425: probability the runner on 3rd tags & scores on a fly out.  An
+        explicit ``sac_fly`` draw means the ball was deep enough, so score near-
+        certainly; a generic deep fly uses the runner's own ``tag_up_attempt_rate``
+        from the baserunner embedding (league ~0.45 fallback)."""
+        if event in ("sac_fly", "sac_fly_double_play"):
+            return 0.92
+        fp = self.full_pool_sampler
+        if fp is not None and runner_id is not None:
+            r = fp.runner_rate(f"{int(runner_id)}:{int(season)}", "tag_up_attempt_rate")
+            if r is not None:
+                return float(min(max(r, 0.0), 0.95))
+        return 0.45
+
+    def _full_pool_out_advancement(
+        self, state: GameState, result: PlayResult, sig: FieldingSignal
+    ) -> int:
+        """SIM-425: advance runners on a full-pool OUT and return the runs scored.
+
+        Fly outs tag the runner home from 3rd (sac fly) and push a runner from 2nd
+        to an open 3rd on a deep fly; ground outs push the lead runner one base on a
+        productive grounder.  Double plays erase the trail runner (no productive
+        run), and with 2 outs the inning-ending out scores no one.  Mutates
+        ``state.bases`` consistently — the run VALUE is still committed by the
+        caller via :meth:`_commit_run_delta` -> ``resolve_runs``."""
+        event = sig.event or ""
+        if event in _DOUBLE_PLAY_EVENTS or state.outs >= 2:
+            return 0
+        la = float(sig.launch_angle) if sig.launch_angle is not None else 0.0
+        season = int(getattr(state, "season", 2024) or 2024)
+        old = state.bases
+        new_first, new_second, new_third = old.first, old.second, old.third
+        runs = 0
+        advances: dict[int, int] = {}
+        is_fly = (la >= 24.0) or event in ("sac_fly", "sac_fly_double_play")
+        if is_fly:
+            if old.third is not None and float(self.rng.random()) < self._tag_rate(
+                old.third, season, event
+            ):
+                runs += 1
+                new_third = None
+                advances[old.third] = 0
+            if old.second is not None and new_third is None and la >= 28.0 and (
+                float(self.rng.random()) < 0.30
+            ):
+                new_third, new_second = old.second, None
+                advances[old.second] = 3
+        else:
+            # Ground out: lead runner advances one base on a productive grounder.
+            if old.third is not None and float(self.rng.random()) < 0.28:
+                runs += 1
+                new_third = None
+                advances[old.third] = 0
+            elif old.second is not None and old.third is None and (
+                float(self.rng.random()) < 0.35
+            ):
+                new_third, new_second = old.second, None
+                advances[old.second] = 3
+        state.bases = Bases(first=new_first, second=new_second, third=new_third)
+        state.bases.assert_consistent()
+        if advances:
+            result.baserunner_advances.update({k: v for k, v in advances.items() if k != -1})
+        return runs
 
     # ===================================================================
     # SIM-319 — run/base-out delta via resolve_runs (the ONE place, §8)
@@ -1209,11 +1276,36 @@ class StateMachine:
         (2, 1): 0.45,  # double, runner on 1st -> scores
     }
 
-    def _extra_advance(self, from_base: int, bases_advanced: int) -> int:
+    #: SIM-425: which baserunner-embedding rate governs each extra-base advance.
+    _ADVANCE_RATE_FEATURE: dict[tuple[int, int], str] = {
+        (1, 2): "second_to_home_attempt_rate",  # single, runner 2nd -> scores
+        (1, 1): "first_to_third_attempt_rate",  # single, runner 1st -> 3rd
+        (2, 1): "first_to_home_attempt_rate",   # double, runner 1st -> scores
+    }
+
+    def _advance_rate(
+        self, from_base: int, bases_advanced: int, runner_id: int | None, season: int
+    ) -> float:
+        """The probability a runner takes one extra base.  SIM-425: when the
+        full-pool sampler + this runner's baserunner embedding are present, use the
+        runner's OWN attempt-rate (engine-backed); otherwise the Retrosheet league
+        constant.  Keeps the per-tile path (no full_pool_sampler) on the constant."""
+        constant = self._EXTRA_ADVANCE_P.get((int(bases_advanced), int(from_base)), 0.0)
+        fp = self.full_pool_sampler
+        feat = self._ADVANCE_RATE_FEATURE.get((int(bases_advanced), int(from_base)))
+        if fp is not None and feat is not None and runner_id is not None:
+            rate = fp.runner_rate(f"{int(runner_id)}:{int(season)}", feat)
+            if rate is not None:
+                return float(min(max(rate, 0.0), 0.97))
+        return constant
+
+    def _extra_advance(
+        self, from_base: int, bases_advanced: int, runner_id: int | None = None, season: int = 2024
+    ) -> int:
         """Return 1 if the runner takes an extra base beyond the hit value, else 0
-        (SIM-421).  Only hits (bases_advanced 1/2) grant extra bases; the draw
+        (SIM-421/425).  Only hits (bases_advanced 1/2) grant extra bases; the draw
         comes from the loop rng so a fixed seed reproduces the advance."""
-        p = self._EXTRA_ADVANCE_P.get((int(bases_advanced), int(from_base)), 0.0)
+        p = self._advance_rate(from_base, bases_advanced, runner_id, season)
         return 1 if p and float(self.rng.random()) < p else 0
 
     def _advance_runners(
@@ -1252,7 +1344,10 @@ class StateMachine:
             # old rigid ``from_base + bases_advanced`` stranded the runner from 2nd
             # on every single (he only reached 3rd), suppressing run-scoring ~26%.
             # Probabilities track the Retrosheet extra-base-advance rates.
-            dest = from_base + int(bases_advanced) + self._extra_advance(from_base, bases_advanced)
+            dest = from_base + int(bases_advanced) + self._extra_advance(
+                from_base, bases_advanced, runner_id=rid,
+                season=int(getattr(state, "season", 2024) or 2024),
+            )
             if dest >= 4:
                 runs_scored += 1
                 advances[rid] = 0  # 0 == scored
@@ -1627,6 +1722,10 @@ class StateMachine:
         # bat_hand batted-ball pool) when wired; else the per-tile sampler path.
         bb_sample: dict | None = None
         sig = self._full_pool_fielding(state)
+        # SIM-425: did the batted ball come from the full-pool sampler?  Only then
+        # do we model productive-out advancement here (the per-tile path keeps its
+        # validated pool-supplied ``result_runs``).
+        full_pool_sig = sig is not None
         if sig is None:
             if self._pa is not None:
                 # --- Step 5: batted-ball sampling --------------------------
@@ -1675,6 +1774,13 @@ class StateMachine:
                 batter_reached=hit,
                 bases_advanced=hit,
             )
+        elif full_pool_sig:
+            # SIM-425: productive-out advancement on the full-pool path — a fly out
+            # tags the runner home from 3rd (sac fly), a ground out advances forced
+            # runners.  This is the bulk of the hits-are-right / runs-low gap: outs
+            # previously moved no one.  Scored per the runner's own tag-up/advance
+            # rate from the baserunner embedding.
+            runners_scored = self._full_pool_out_advancement(state, result, sig)
         else:
             runners_scored = 0
             # An out may still record outs (incl. the batter) without moving the
