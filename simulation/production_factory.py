@@ -288,6 +288,25 @@ def _attach_shared_tiles(sampler: PlayPoolSampler, spec: GameSpec) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
+    """SIM-424: build the full-pool sampler from the on-disk engine-artifact bundle
+    when opted in (``SIM_FULL_POOL`` env or the ``_full_pool`` sim-kwarg).  Returns
+    None otherwise (the validated per-tile path).  Built from disk -> fork-safe."""
+    if not (os.environ.get("SIM_FULL_POOL") or _kwarg(spec, "_full_pool", None)):
+        return None
+    pool_dir = _kwarg(spec, "_pool_dir", None) or os.environ.get(
+        "BASEBALL_PLAY_POOL_DIR", "/data/play_pool"
+    )
+    try:
+        from pipeline.batch.engine_artifacts import EngineArtifacts
+        from simulation.full_pool_sampler import FullPoolSampler
+
+        art = EngineArtifacts.load(os.path.join(pool_dir, "engine_artifacts"))
+        return FullPoolSampler(art, np.random.default_rng(seed))
+    except Exception:
+        return None
+
+
 def production_machine_factory(seed: int | None, spec: GameSpec) -> StateMachine:
     """Build a REAL, DuckDB/FAISS-backed :class:`StateMachine` for the worker.
 
@@ -326,6 +345,7 @@ def production_machine_factory(seed: int | None, spec: GameSpec) -> StateMachine
         k=k,
         rng=np.random.default_rng(seed),
         fingerprint_deriver=deriver,
+        full_pool_sampler=_build_full_pool_sampler(spec, seed),
     )
 
 

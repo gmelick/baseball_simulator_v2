@@ -763,9 +763,16 @@ class StateMachine:
         sim=None,
         manager=None,
         bench=None,
+        full_pool_sampler=None,
     ) -> None:
         self.rng = rng if rng is not None else np.random.default_rng()
         self.k = int(k)
+        # SIM-424: opt-in full-pool similarity-weighted pitch sampler. When wired
+        # (the engine-artifacts bundle is present + the flag is set) step_pitch
+        # draws the pitch outcome from it instead of the per-tile sample_pitch;
+        # None keeps the validated default path untouched.
+        self.full_pool_sampler = full_pool_sampler
+        self._fp_matchup: tuple | None = None
         # The single-pitch helper owns the (SIM-317 real / stub) fingerprint +
         # sampler call.  When no sampler is supplied the machine is "count-machine
         # only": the caller passes a pitch_outcome directly into step_pitch (the
@@ -909,21 +916,27 @@ class StateMachine:
                     "step_pitch needs either an injected sampler or an explicit "
                     "pitch_outcome (count-machine-only mode)."
                 )
-            pitch_fp = self._pa._pitch_fingerprint(state)  # TODO(SIM-317)
-            pitch_fp = self._jitter_query(pitch_fp, _PITCH_FEATURE_SCALE)
-            pitch_sample = self._pa.sampler.sample_pitch(
-                state.pitcher_id, state.bat_hand, state.season, pitch_fp, k=self.k
-            )
-            pitch_outcome = pitch_sample["pitch_outcome"]
-            fellback = bool(pitch_sample.get("fellback", False))
-            # SIM-318 Option-B path: the count-blind sampler returned a single
-            # draw; bias *whether* a foul is accepted by the count-conditional
-            # factor (re-sample on rejection from the same count-blind sampler).
-            pitch_outcome = self._accept_or_resample_foul(
-                pitch_outcome,
-                state,
-                pitch_fp,
-            )
+            if self.full_pool_sampler is not None:
+                # SIM-424: full-pool similarity-weighted draw (Situation+Pitcher+
+                # Batter); count still enters via the §5.1 machine downstream.
+                pitch_outcome = self._full_pool_outcome(state)
+                fellback = False
+            else:
+                pitch_fp = self._pa._pitch_fingerprint(state)  # TODO(SIM-317)
+                pitch_fp = self._jitter_query(pitch_fp, _PITCH_FEATURE_SCALE)
+                pitch_sample = self._pa.sampler.sample_pitch(
+                    state.pitcher_id, state.bat_hand, state.season, pitch_fp, k=self.k
+                )
+                pitch_outcome = pitch_sample["pitch_outcome"]
+                fellback = bool(pitch_sample.get("fellback", False))
+                # SIM-318 Option-B path: the count-blind sampler returned a single
+                # draw; bias *whether* a foul is accepted by the count-conditional
+                # factor (re-sample on rejection from the same count-blind sampler).
+                pitch_outcome = self._accept_or_resample_foul(
+                    pitch_outcome,
+                    state,
+                    pitch_fp,
+                )
         elif pitch_outcome not in PITCH_OUTCOMES:
             raise ValueError(f"pitch_outcome {pitch_outcome!r} is not one of {PITCH_OUTCOMES}.")
 
@@ -1075,6 +1088,31 @@ class StateMachine:
         return (np.asarray(fp, dtype=np.float32) + noise * (scale * _QUERY_JITTER_SIGMA)).astype(
             np.float32
         )
+
+    def _full_pool_outcome(self, state: GameState) -> str:
+        """SIM-424: draw a pitch outcome from the full-pool sampler.
+
+        Refreshes the matchup when (pitcher, hand, batter) changes — the pitcher
+        factor is half-inning-constant, the batter + situation factors are
+        PA-constant — and conditions the situation at the PA start; the count then
+        enters downstream via the §5.1 count machine (as the legacy path did)."""
+        fp = self.full_pool_sampler
+        hand = state.bat_hand if state.bat_hand in fp.a.pools else "R"
+        key = (state.pitcher_id, hand, state.batter_id)
+        if key != self._fp_matchup:
+            self._fp_matchup = key
+            season = int(getattr(state, "season", 2024) or 2024)
+            fp.new_half_inning(hand, f"{state.pitcher_id}:{season}")
+            bat = state.home_score if state.offense == Team.HOME else state.away_score
+            fld = state.away_score if state.offense == Team.HOME else state.home_score
+            score_diff = max(-5, min(5, int(bat) - int(fld)))
+            sit = np.array(
+                [state.balls, state.strikes, state.outs, state.runners_state,
+                 state.inning, score_diff],
+                dtype=np.float32,
+            )
+            fp.new_plate_appearance(f"{state.batter_id}:{season}", sit)
+        return fp.draw()
 
     # ===================================================================
     # SIM-319 — run/base-out delta via resolve_runs (the ONE place, §8)
