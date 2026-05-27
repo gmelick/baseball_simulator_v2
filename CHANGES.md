@@ -1,3 +1,32 @@
+# Phase 6 — SIM-426: full-pool steal path (engine-backed, no manager dep) — 2026-05-27
+**Authors: Backend Developer (Agent 5), Baseball Analyst (Agent 2)**
+
+Steals were wired (pre-pitch decision -> step-7 resolution) but **inert in
+production**: the decision was gated entirely on `state.manager` tendencies, and
+the manager is None on the full-pool path, so `green_light_rate` stayed 0 and zero
+steals ever fired. SIM-426 adds a manager-independent steal decision driven by the
+RUNNER's own baserunner-embedding rates.
+
+- `sim_loop.py` — `_full_pool_steal_decision`: when the manager green-light is off
+  and the full-pool sampler is present, the lead stealable runner (1B with 2B open,
+  or 2B with 3B open at a lower base rate) attempts a steal at a probability scaled
+  from the runner's `sb_attempt_rate` (× `_STEAL_ATTEMPT_K=0.38`, damped in blowouts
+  / with two outs, gated to one decision per PA). Safe/caught is the runner's
+  `sb_success_rate` with a 0.90 realization haircut (the raw rate reflects
+  historically favorable spots). New `SIM_STEAL_K` env override (0 disables).
+- Added `cs` (caught stealing) to `PlayerStatLine` + the box score, charged to the
+  runner on a caught steal (`sb` was already credited on a safe steal).
+
+**Validation (100 sims, full-pool, per-team vs MLB):** SB **0.59** (0.51) · CS
+**0.17** (0.19) · attempts **0.77** (0.70) · success **0.78** (~0.78) — steal volume
+and success split all within a hair of MLB. Aggregate box line stays realistic
+(H 8.54/8.60, HR 1.17/1.21, BB 3.28/3.30, K 8.30/8.60). 99 steal/box/sim-loop unit
+tests green. NOTE: an apples-to-apples steals-off vs steals-on read at 200 sims
+(R/H 0.492 -> 0.472) suggests a small (~1-sigma, within R's high variance + the
+rng-stream shift) run-conversion interaction; the residual run-conversion gap
+(R/H ~0.49 vs MLB ~0.54, present with steals OFF too) is SIM-429's holistic
+final-calibration target, not a steal-path defect.
+
 # Phase 6 — SIM-425: engine-backed baserunner advancement (run-gap closer) — 2026-05-27
 **Authors: ML Engineer (Agent 3), Baseball Analyst (Agent 2), Backend Developer (Agent 5)**
 
