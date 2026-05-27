@@ -113,6 +113,49 @@ def build_pitch_pool_artifact(
     return counts
 
 
+_BB_GEOM_COLS = ["exit_velo", "launch_angle", "pull_relative_spray_angle"]
+
+
+def build_battedball_pool_artifact(
+    con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]
+) -> dict[str, int]:
+    """Write the full per-hand batted-ball pool (recency-floored) for SIM-425:
+    geom (EV/LA/spray) + situation + metadata (batter, event, result deltas)."""
+    pool_dir = os.path.join(out_dir, "battedball_pool")
+    os.makedirs(pool_dir, exist_ok=True)
+    season_list = ", ".join(str(int(s)) for s in seasons)
+    where = (
+        f"stand='%s' AND season IN ({season_list}) AND exit_velo IS NOT NULL "
+        "AND launch_angle IS NOT NULL AND pull_relative_spray_angle IS NOT NULL"
+    )
+    counts: dict[str, int] = {}
+    for hand in ("L", "R"):
+        w = where % hand
+        d = con.execute(
+            f"SELECT {', '.join(_BB_GEOM_COLS + _SIT_COLS)} FROM sim.outcome_pool WHERE {w}"
+        ).fetchnumpy()
+        n = len(d[_BB_GEOM_COLS[0]])
+        geom = np.nan_to_num(
+            np.stack([np.ma.filled(d[c], np.nan).astype(np.float32) for c in _BB_GEOM_COLS], axis=1)
+        ).astype(np.float32)
+        sit = np.nan_to_num(
+            np.stack([np.ma.filled(d[c], np.nan).astype(np.float32) for c in _SIT_COLS], axis=1)
+        ).astype(np.float32)
+        np.save(os.path.join(pool_dir, f"{hand}.geom.npy"), geom)
+        np.save(os.path.join(pool_dir, f"{hand}.sit.npy"), sit)
+        con.execute(
+            "COPY (SELECT batter_id, season, events, result_hits, result_outs, result_runs, "
+            f"recency_weight FROM sim.outcome_pool WHERE {w}) "
+            f"TO '{os.path.join(pool_dir, f'{hand}.meta.parquet')}' (FORMAT parquet)"
+        )
+        counts[hand] = int(n)
+        log.info("battedball_pool[%s]: %d rows (seasons %s)", hand, n, seasons)
+    with open(os.path.join(pool_dir, "manifest.json"), "w", encoding="utf-8") as fh:
+        json.dump({"seasons": seasons, "counts": counts, "geom_cols": _BB_GEOM_COLS,
+                   "sit_cols": _SIT_COLS}, fh, indent=2)
+    return counts
+
+
 def build_pitcher_sim_matrix(
     duckdb_path: str, out_dir: str, seasons: list[int], limit: int | None = None
 ) -> int:
@@ -218,6 +261,24 @@ class HandPool:
         return int(self.geom.shape[0])
 
 
+@dataclass
+class BattedBallPool:
+    """One batter-hand's resident batted-ball pool for SIM-425 (step 5/6)."""
+
+    geom: np.ndarray  # (N, 3) float32 — exit_velo, launch_angle, spray
+    sit: np.ndarray  # (N, 6)  float32
+    batter_id: np.ndarray  # (N,) int64
+    season: np.ndarray  # (N,) int64
+    event: np.ndarray  # (N,) object
+    result_hits: np.ndarray  # (N,) int8 (0=out,1=1B,2=2B,3=3B,4=HR)
+    result_outs: np.ndarray  # (N,) int8
+    recency: np.ndarray  # (N,) float32
+
+    @property
+    def n(self) -> int:
+        return int(self.sit.shape[0])
+
+
 class EngineArtifacts:
     """Per-worker loader for the SIM-422 bundle (resident, built entirely from disk
     so nothing live crosses the ProcessPool fork).  Holds both batter-hand pools +
@@ -225,9 +286,11 @@ class EngineArtifacts:
     these to assemble the factorized full-pool weights."""
 
     def __init__(
-        self, pools, pitcher_sim_index=None, pitcher_sim=None, seasons=None, actor_emb=None
+        self, pools, pitcher_sim_index=None, pitcher_sim=None, seasons=None, actor_emb=None,
+        bb_pools=None,
     ):
         self.pools: dict[str, HandPool] = pools
+        self.bb_pools: dict[str, BattedBallPool] = bb_pools or {}
         self.pitcher_sim_index: dict[str, int] = pitcher_sim_index or {}
         self.pitcher_sim: dict[str, dict[str, float]] = pitcher_sim or {}
         self.seasons: list[int] = seasons or []
@@ -261,6 +324,26 @@ class EngineArtifacts:
                         np.ma.filled(m["recency_weight"], 1.0).astype(np.float32), nan=1.0
                     ),
                 )
+            bb_pools: dict[str, BattedBallPool] = {}
+            bb_dir = os.path.join(art_dir, "battedball_pool")
+            if os.path.exists(os.path.join(bb_dir, "manifest.json")):
+                for hand in ("L", "R"):
+                    m = con.execute(
+                        "SELECT batter_id, season, events, result_hits, result_outs, "
+                        f"recency_weight FROM read_parquet('{os.path.join(bb_dir, f'{hand}.meta.parquet')}')"
+                    ).fetchnumpy()
+                    bb_pools[hand] = BattedBallPool(
+                        geom=np.load(os.path.join(bb_dir, f"{hand}.geom.npy")),
+                        sit=np.load(os.path.join(bb_dir, f"{hand}.sit.npy")),
+                        batter_id=np.asarray(np.ma.filled(m["batter_id"], 0), dtype=np.int64),
+                        season=np.asarray(np.ma.filled(m["season"], 0), dtype=np.int64),
+                        event=np.asarray(m["events"], dtype=object),
+                        result_hits=np.asarray(np.ma.filled(m["result_hits"], 0), dtype=np.int8),
+                        result_outs=np.asarray(np.ma.filled(m["result_outs"], 0), dtype=np.int8),
+                        recency=np.nan_to_num(
+                            np.ma.filled(m["recency_weight"], 1.0).astype(np.float32), nan=1.0
+                        ),
+                    )
         finally:
             con.close()
         ps_index, ps_sims = {}, {}
@@ -282,7 +365,7 @@ class EngineArtifacts:
                     "std": z["std"],
                     "features": json.loads(str(z["features"])),
                 }
-        return cls(pools, ps_index, ps_sims, manifest.get("seasons"), actor_emb)
+        return cls(pools, ps_index, ps_sims, manifest.get("seasons"), actor_emb, bb_pools)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -313,6 +396,7 @@ def main(argv: list[str] | None = None) -> int:
         seasons = args.seasons or last_n_seasons(con)
         if args.what in ("pool", "all"):
             build_pitch_pool_artifact(con, args.out_dir, seasons)
+            build_battedball_pool_artifact(con, args.out_dir, seasons)
         if args.what in ("actors", "all"):
             build_actor_embeddings(con, args.out_dir)
         if args.what in ("pitcher_sim", "all"):

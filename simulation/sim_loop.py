@@ -1114,6 +1114,26 @@ class StateMachine:
             fp.new_plate_appearance(f"{state.batter_id}:{season}", sit)
         return fp.draw()
 
+    def _full_pool_fielding(self, state: GameState) -> FieldingSignal | None:
+        """SIM-425: draw a batted ball from the full bat_hand batted-ball pool
+        (Batter + Situation weighting) -> a FieldingSignal.  None when no full-pool
+        sampler / batted-ball pool is wired (the per-tile path then runs)."""
+        fp = self.full_pool_sampler
+        if fp is None or not fp.has_battedball():
+            return None
+        hand = state.bat_hand if state.bat_hand in fp.a.bb_pools else "R"
+        season = int(getattr(state, "season", 2024) or 2024)
+        bat = state.home_score if state.offense == Team.HOME else state.away_score
+        fld = state.away_score if state.offense == Team.HOME else state.home_score
+        sd = max(-5, min(5, int(bat) - int(fld)))
+        sit = np.array(
+            [state.balls, state.strikes, state.outs, state.runners_state, state.inning, sd],
+            dtype=np.float32,
+        )
+        fp.battedball_new_pa(hand, f"{state.batter_id}:{season}", sit)
+        ev, rh, ro = fp.battedball_draw()
+        return FieldingSignal(event=ev, result_hits=int(rh), result_outs=int(ro), result_runs=0)
+
     # ===================================================================
     # SIM-319 — run/base-out delta via resolve_runs (the ONE place, §8)
     # ===================================================================
@@ -1600,27 +1620,31 @@ class StateMachine:
         count machine can still be tested without FAISS.
         """
         result.pa_terminal = True
+        # SIM-425: full-pool batted-ball draw (Batter+Situation over the whole
+        # bat_hand batted-ball pool) when wired; else the per-tile sampler path.
         bb_sample: dict | None = None
-        if self._pa is not None:
-            # --- Step 5: batted-ball sampling ------------------------------
-            bb_fp = self._pa._battedball_fingerprint(state)  # SIM-317
-            bb_fp = self._jitter_query(bb_fp, _BB_FEATURE_SCALE)
-            bb_sample = self._pa.sampler.sample_batted_ball(
-                state.bat_hand, state.season, bb_fp, k=self.k
-            )
-            result.battedball_sample = bb_sample
-            result.fellback = result.fellback or bool(bb_sample.get("fellback", False))
-        elif getattr(self.resolver, "_injected_battedball", None) is not None:
-            # A resolver may carry an injected batted-ball sample (no-DB tests).
-            bb_sample = getattr(self.resolver, "_injected_battedball", None)
+        sig = self._full_pool_fielding(state)
+        if sig is None:
+            if self._pa is not None:
+                # --- Step 5: batted-ball sampling --------------------------
+                bb_fp = self._pa._battedball_fingerprint(state)  # SIM-317
+                bb_fp = self._jitter_query(bb_fp, _BB_FEATURE_SCALE)
+                bb_sample = self._pa.sampler.sample_batted_ball(
+                    state.bat_hand, state.season, bb_fp, k=self.k
+                )
+                result.battedball_sample = bb_sample
+                result.fellback = result.fellback or bool(bb_sample.get("fellback", False))
+            elif getattr(self.resolver, "_injected_battedball", None) is not None:
+                # A resolver may carry an injected batted-ball sample (no-DB tests).
+                bb_sample = getattr(self.resolver, "_injected_battedball", None)
 
-        if bb_sample is None:
-            # Count-machine-only mode: terminal in-play, resolution handed off.
-            result.event = None
-            return
+            if bb_sample is None:
+                # Count-machine-only mode: terminal in-play, resolution handed off.
+                result.event = None
+                return
 
-        # --- Step 6: fielding resolution (fielder/catcher RBF signal) ------
-        sig = self.resolver.resolve_fielding(state, bb_sample)
+            # --- Step 6: fielding resolution (fielder/catcher RBF signal) --
+            sig = self.resolver.resolve_fielding(state, bb_sample)
         # --- SIM-349 sac-fly intent bias (productive-out nudge) ------------
         # When the manager flagged sac-fly intent for this PA and the sampled
         # batted ball is a fly-ball OUT with the runner still on 3rd and <2 outs,
@@ -1658,7 +1682,7 @@ class StateMachine:
         # sac-fly bias sets ``sig.result_runs`` on the converted productive out
         # (the runner from 3rd scores) when the sample itself carried none, so the
         # credited run is honoured without overriding a richer pool sample.
-        sampled_runs = bb_sample.get("result_runs")
+        sampled_runs = bb_sample.get("result_runs") if bb_sample is not None else None
         runs = int(sampled_runs) if sampled_runs is not None else int(runners_scored)
         runs = max(runs, int(sig.result_runs))
 

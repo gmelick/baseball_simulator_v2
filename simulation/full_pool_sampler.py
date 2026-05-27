@@ -52,6 +52,10 @@ class FullPoolSampler:
         self._base: np.ndarray | None = None  # f_pitcher * recency  (half-inning)
         self._cdf: np.ndarray | None = None  # per-PA cumulative weights
         self._outcome_codes: dict[str, np.ndarray] = {}
+        # SIM-425 batted-ball state
+        self._bb_hand: str | None = None
+        self._bb_cdf: np.ndarray | None = None
+        self._bb_pool_bat: dict[str, np.ndarray] = {}
 
     # ---- per-pool one-time precompute ------------------------------------
     def _pool_meta(self, hand: str) -> dict:
@@ -140,3 +144,56 @@ class FullPoolSampler:
         i = int(np.searchsorted(self._cdf, r))
         meta = self._pool_cache[self._hand]
         return str(meta["outcome"][min(i, len(meta["outcome"]) - 1)])
+
+    # ---- SIM-425: batted-ball draw (step 5) -------------------------------
+    def _batter_aff(self, batter_key: str) -> np.ndarray | None:
+        """Per-batter-embedding RBF affinity to the current batter (None if absent)."""
+        bemb = self.a.actor_emb.get("batter")
+        if bemb is None or batter_key not in bemb["key_index"]:
+            return None
+        vecs_z = (bemb["vecs"] - bemb["mean"]) / bemb["std"]
+        q = vecs_z[bemb["key_index"][batter_key]]
+        d2 = np.einsum("ij,ij->i", vecs_z - q, vecs_z - q)
+        return np.exp(-d2 / (2.0 * self.batter_sigma**2 * vecs_z.shape[1])).astype(np.float32)
+
+    def _bb_pool_bat_idx(self, hand: str) -> np.ndarray:
+        if hand in self._bb_pool_bat:
+            return self._bb_pool_bat[hand]
+        pool = self.a.bb_pools[hand]
+        bemb = self.a.actor_emb.get("batter")
+        if bemb is None:
+            pb = np.full(pool.n, -1, dtype=np.int64)
+        else:
+            ki = bemb["key_index"]
+            pb = np.fromiter(
+                (ki.get(f"{int(b)}:{int(s)}", -1) for b, s in zip(pool.batter_id, pool.season, strict=False)),
+                dtype=np.int64, count=pool.n,
+            )
+        self._bb_pool_bat[hand] = pb
+        return pb
+
+    def battedball_new_pa(self, hand: str, batter_key: str, state: np.ndarray) -> None:
+        """Assemble the batted-ball weight CDF for the PA (f_batter · f_situation · recency)."""
+        self._bb_hand = hand
+        pool = self.a.bb_pools[hand]
+        aff = self._batter_aff(batter_key)
+        if aff is not None:
+            pb = self._bb_pool_bat_idx(hand)
+            f_bat = np.where(pb >= 0, aff[np.clip(pb, 0, len(aff) - 1)], np.float32(1.0)).astype(np.float32)
+        else:
+            f_bat = np.ones(pool.n, dtype=np.float32)
+        diff = pool.sit - np.asarray(state, dtype=np.float32)
+        d2 = np.einsum("ij,ij->i", diff, diff)
+        f_sit = np.exp(-d2 / (2.0 * self.sit_sigma**2 * pool.sit.shape[1])).astype(np.float32)
+        self._bb_cdf = np.cumsum(f_bat * f_sit * pool.recency, dtype=np.float64)
+
+    def battedball_draw(self) -> tuple[str, int, int]:
+        """Draw one batted ball -> (event, result_hits, result_outs)."""
+        if self._bb_hand is None or self._bb_cdf is None or self._bb_cdf[-1] <= 0:
+            return ("field_out", 0, 1)
+        pool = self.a.bb_pools[self._bb_hand]
+        i = min(int(np.searchsorted(self._bb_cdf, self.rng.random() * self._bb_cdf[-1])), pool.n - 1)
+        return (str(pool.event[i]), int(pool.result_hits[i]), int(pool.result_outs[i]))
+
+    def has_battedball(self) -> bool:
+        return bool(self.a.bb_pools)
