@@ -1,3 +1,27 @@
+# Phase 6 — SIM-428: catcher framing in the ball/called-strike draw — 2026-05-27
+**Authors: ML Engineer (Agent 3), Baseball Analyst (Agent 2)**
+
+Threads the fielding catcher into the full-pool loop and nudges the taken-pitch
+(ball<->called_strike) outcome by that catcher's framing. The pitch pool already
+bakes in league-average framing, so the nudge is the catcher's **centred** delta
+(`strikes_above_average / pitches_received_total`) vs the league — aggregate-
+neutral, with the value in per-pitcher/per-catcher differentiation (a good framing
+catcher lifts his pitchers' called-strike rate -> more Ks / fewer walks).
+
+- `game_state.py` — `home_catcher_id` / `away_catcher_id`; `lineup_resolver`
+  populates them from the SIM-363 defense map (`build_team_defense_map(...)['C']`).
+- `sim_loop.py` — `simulate_game` gains the two catcher kwargs; `_apply_framing`
+  applies the fielding catcher's centred CS delta to a drawn ball/called_strike
+  (swings are never frameable). `api/routes/games.py` + `scripts/sim_stats.py`
+  thread the ids through the production + validation kwargs.
+- `full_pool_sampler.py` — `catcher_framing(catcher_key)` returns the centred
+  per-taken-pitch CS delta from the catcher embedding (0.0 when absent -> no-op).
+
+**Validation:** framing delta is ~centred across 850 catchers (median -0.0003,
+range ±0.04). Differential (best vs worst framer, 40 sims, both teams): K 16.77 vs
+16.32 — correct direction. Aggregate-neutral: league K 8.08 / BB 3.36 unchanged vs
+framing-off at the same seeds. 122 plumbing unit tests green.
+
 # Phase 6 — SIM-426: full-pool steal path (engine-backed, no manager dep) — 2026-05-27
 **Authors: Backend Developer (Agent 5), Baseball Analyst (Agent 2)**
 

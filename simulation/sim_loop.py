@@ -1111,7 +1111,32 @@ class StateMachine:
                 [state.outs, state.runners_state, state.inning, score_diff], dtype=np.float32
             )
             fp.new_plate_appearance(f"{state.batter_id}:{season}", base_out)
-        return fp.draw(state.balls, state.strikes)
+        return self._apply_framing(state, fp.draw(state.balls, state.strikes))
+
+    def _apply_framing(self, state: GameState, outcome: str) -> str:
+        """SIM-428: nudge a TAKEN pitch (ball<->called_strike) by the fielding
+        catcher's centred framing delta — a good framer steals a strike, a poor one
+        loses one.  Swings (foul / swinging_strike / in_play) are never frameable.
+        Aggregate-neutral across the league (the delta is ~centred); the effect is
+        per-catcher differentiation.  No-op when no catcher / framing signal."""
+        if outcome not in ("ball", "called_strike"):
+            return outcome
+        fp = self.full_pool_sampler
+        if fp is None:
+            return outcome
+        catcher = state.away_catcher_id if state.offense == Team.HOME else state.home_catcher_id
+        if catcher is None:
+            return outcome
+        season = int(getattr(state, "season", 2024) or 2024)
+        d = fp.catcher_framing(f"{int(catcher)}:{season}")
+        if d == 0.0:
+            return outcome
+        r = float(self.rng.random())
+        if outcome == "ball" and d > 0.0 and r < d:
+            return "called_strike"
+        if outcome == "called_strike" and d < 0.0 and r < -d:
+            return "ball"
+        return outcome
 
     def _full_pool_fielding(self, state: GameState) -> FieldingSignal | None:
         """SIM-425: draw a batted ball from the full bat_hand batted-ball pool
@@ -2988,6 +3013,8 @@ def simulate_game(
     throw_hands: dict[int, str] | None = None,
     home_pitcher_id: int | None = None,
     away_pitcher_id: int | None = None,
+    home_catcher_id: int | None = None,
+    away_catcher_id: int | None = None,
     max_innings: int = _MAX_INNINGS,
 ) -> GameSimResult:
     """Drive the SIM-316 :class:`StateMachine` to a completed game (SIM-320).
@@ -3073,6 +3100,8 @@ def simulate_game(
             initial_state.throw_hands = dict(throw_hands)
         initial_state.home_pitcher_id = home_pitcher_id
         initial_state.away_pitcher_id = away_pitcher_id
+        initial_state.home_catcher_id = home_catcher_id
+        initial_state.away_catcher_id = away_catcher_id
         initial_state.bat_hand = initial_state.bat_hand_for(initial_state.batter_id)
     state = initial_state
     if seed is not None and state.seed is None:

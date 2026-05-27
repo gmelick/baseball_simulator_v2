@@ -56,6 +56,7 @@ class FullPoolSampler:
         self._bb_cdf: np.ndarray | None = None
         self._bb_pool_bat: dict[str, np.ndarray] = {}
         self._br_idx: dict[str, int] | None = None  # baserunner feature-name -> col
+        self._cat_idx: dict[str, int] | None = None  # catcher feature-name -> col
 
     # ---- per-pool one-time precompute ------------------------------------
     def _pool_meta(self, hand: str) -> dict:
@@ -246,3 +247,33 @@ class FullPoolSampler:
         if self._br_idx is None:
             self._br_idx = {f: i for i, f in enumerate(feats)}
         return self._br_idx
+
+    # ---- SIM-428: catcher framing -----------------------------------------
+    def catcher_framing(self, catcher_key: str) -> float:
+        """Return the catcher's per-taken-pitch called-strike delta vs expected
+        (``strikes_above_average / pitches_received_total``), ~centred across the
+        league.  The pitch pool already bakes in average framing, so this centred
+        delta nudges the ball/called-strike draw toward THIS catcher.  0.0 when the
+        catcher / features are absent."""
+        cemb = self.a.actor_emb.get("catcher")
+        if cemb is None:
+            return 0.0
+        feats = cemb.get("features")
+        idx = cemb["key_index"].get(catcher_key)
+        if feats is None or idx is None:
+            return 0.0
+        fi = self._cat_feat_idx(feats)
+        saa_i, tot_i = fi.get("strikes_above_average"), fi.get("pitches_received_total")
+        if saa_i is None or tot_i is None:
+            return 0.0
+        vec = cemb["vecs"][idx]
+        tot = float(vec[tot_i])
+        if tot <= 0.0:
+            return 0.0
+        d = float(vec[saa_i]) / tot
+        return d if np.isfinite(d) else 0.0
+
+    def _cat_feat_idx(self, feats: list) -> dict[str, int]:
+        if self._cat_idx is None:
+            self._cat_idx = {f: i for i, f in enumerate(feats)}
+        return self._cat_idx

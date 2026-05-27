@@ -57,6 +57,8 @@ def _sim_kwargs(state) -> dict:
         "throw_hands": dict(getattr(state, "throw_hands", {}) or {}),
         "home_pitcher_id": getattr(state, "home_pitcher_id", None),
         "away_pitcher_id": getattr(state, "away_pitcher_id", None),
+        "home_catcher_id": getattr(state, "home_catcher_id", None),
+        "away_catcher_id": getattr(state, "away_catcher_id", None),
         "k": 25,
         "max_innings": 12,
     }

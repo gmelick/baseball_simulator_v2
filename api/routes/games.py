@@ -505,6 +505,9 @@ def _sim_kwargs_from_state(state: Any) -> dict[str, Any]:
         "throw_hands": dict(getattr(state, "throw_hands", {}) or {}),
         "home_pitcher_id": getattr(state, "home_pitcher_id", None),
         "away_pitcher_id": getattr(state, "away_pitcher_id", None),
+        # SIM-428: catchers for the framing nudge.
+        "home_catcher_id": getattr(state, "home_catcher_id", None),
+        "away_catcher_id": getattr(state, "away_catcher_id", None),
         "k": int(getattr(state, "k", 25) or 25) if hasattr(state, "k") else 25,
         "max_innings": 12,
     }

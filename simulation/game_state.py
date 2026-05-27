@@ -253,6 +253,10 @@ class GameState:
     throw_hands: dict[int, str] = field(default_factory=dict)
     home_pitcher_id: int | None = None
     away_pitcher_id: int | None = None
+    # SIM-428: each team's catcher (defense slot 'C') so the half-inning matchup
+    # can apply the fielding catcher's framing to the ball/called-strike draw.
+    home_catcher_id: int | None = None
+    away_catcher_id: int | None = None
 
     # ---- current matchup ids (spec step 2 matchup) --------------------------
     batter_id: int | None = None  # current batter; None until lineup set

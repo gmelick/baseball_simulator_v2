@@ -432,6 +432,9 @@ def build_game_state(
     state.throw_hands = dict(resolved.throw_hands)
     state.home_pitcher_id = resolved.home.pitcher_id
     state.away_pitcher_id = resolved.away.pitcher_id
+    # SIM-428: each team's catcher (defense slot 'C') for the framing nudge.
+    state.home_catcher_id = build_team_defense_map(resolved.home).get("C")
+    state.away_catcher_id = build_team_defense_map(resolved.away).get("C")
     return state
 
 
