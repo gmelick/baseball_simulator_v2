@@ -1176,8 +1176,8 @@ class StateMachine:
         if fp is not None and runner_id is not None:
             r = fp.runner_rate(f"{int(runner_id)}:{int(season)}", "tag_up_attempt_rate")
             if r is not None:
-                return float(min(max(r, 0.0), 0.95))
-        return 0.45
+                return float(min(max(r * self._run_calib(), 0.0), 0.95))
+        return float(min(0.45 * self._run_calib(), 0.95))
 
     def _full_pool_out_advancement(
         self, state: GameState, result: PlayResult, sig: FieldingSignal
@@ -1214,12 +1214,13 @@ class StateMachine:
                 advances[old.second] = 3
         else:
             # Ground out: lead runner advances one base on a productive grounder.
-            if old.third is not None and float(self.rng.random()) < 0.28:
+            calib = self._run_calib()
+            if old.third is not None and float(self.rng.random()) < 0.28 * calib:
                 runs += 1
                 new_third = None
                 advances[old.third] = 0
             elif old.second is not None and old.third is None and (
-                float(self.rng.random()) < 0.35
+                float(self.rng.random()) < 0.35 * calib
             ):
                 new_third, new_second = old.second, None
                 advances[old.second] = 3
@@ -1301,6 +1302,32 @@ class StateMachine:
         (2, 1): 0.45,  # double, runner on 1st -> scores
     }
 
+    #: SIM-429: optional global multiplier on the full-pool advancement rates
+    #: (extra-base + sac-fly tag-up + productive ground-out).  Env override
+    #: ``SIM_RUN_CALIB``; only the full-pool path is affected.
+    #:
+    #: Default is **neutral (1.0)** on purpose.  Investigation (4-game harness,
+    #: 200-sim sweeps): with the engine attempt-rates at face value the rate stats
+    #: (H/HR/BB/K) land within ~4% of MLB AND baserunning is realistic
+    #: (``second_to_home_attempt_rate`` ~0.59, MLB ~0.60-0.65), yet runs sit ~12%
+    #: low.  Raising this multiplier DOES lift runs (calib 1.45 -> R 4.24 vs 4.05)
+    #: but ONLY by pushing advancement into unrealistic territory (second-to-home
+    #: ~0.86 at 1.45) — so a global multiplier is the WRONG lever: the residual
+    #: run-conversion gap lives in hit sequencing / batted-ball-with-RISP, not in
+    #: baserunning aggression.  Left neutral to preserve baserunning realism; the
+    #: knob stays for a future granular (per-channel) calibration once the
+    #: batted-ball/sequencing cause is addressed with a larger game+sim harness.
+    _RUN_CONV_CALIB: float = 1.0
+
+    def _run_calib(self) -> float:
+        env = os.environ.get("SIM_RUN_CALIB")
+        if env is not None:
+            try:
+                return float(env)
+            except ValueError:
+                pass
+        return self._RUN_CONV_CALIB
+
     #: SIM-425: which baserunner-embedding rate governs each extra-base advance.
     _ADVANCE_RATE_FEATURE: dict[tuple[int, int], str] = {
         (1, 2): "second_to_home_attempt_rate",  # single, runner 2nd -> scores
@@ -1321,7 +1348,7 @@ class StateMachine:
         if fp is not None and feat is not None and runner_id is not None:
             rate = fp.runner_rate(f"{int(runner_id)}:{int(season)}", feat)
             if rate is not None:
-                return float(min(max(rate, 0.0), 0.97))
+                return float(min(max(rate * self._run_calib(), 0.0), 0.97))
         return constant
 
     def _extra_advance(

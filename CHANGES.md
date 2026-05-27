@@ -1,3 +1,26 @@
+# Phase 6 — SIM-429: run-conversion calibration investigation — 2026-05-27
+**Authors: ML Engineer (Agent 3), Betting Analyst (Agent 8), Baseball Analyst (Agent 2)**
+
+Investigated the residual run-conversion gap on the full-pool path: at 400 sims the
+rate stats land within ~4% of MLB (H 8.63/8.60, HR 1.17/1.21, BB 3.43/3.30,
+K 8.29/8.60) but **runs sit ~12% low (R 4.05 vs 4.62)** — a hits-are-right /
+runs-low signature.
+
+- `sim_loop.py` — added a global advancement-calibration knob `_RUN_CONV_CALIB`
+  (env override `SIM_RUN_CALIB`) on the full-pool extra-base / sac-fly-tag /
+  productive-ground-out rates. **Left NEUTRAL (1.0)** by design.
+
+**Finding (the important part):** a global multiplier is the WRONG lever. Sweeps
+(200 sims each): calib 1.45 -> R 4.24 (vs 1.0 -> 4.05), i.e. it DOES lift runs —
+but only by pushing advancement into unrealistic territory
+(`second_to_home_attempt_rate` ~0.59 at calib 1.0, already MLB-realistic ~0.60-0.65,
+becomes ~0.86 at 1.45). Since the rate stats AND baserunning are already realistic,
+the residual gap lives in **hit sequencing / batted-ball-with-RISP**, not
+baserunning aggression. The knob is retained for a future granular (per-channel)
+calibration once that cause is investigated with a larger game+sim harness (the
+4-game / 200-sim harness's R-variance ~±0.2 also can't resolve the ~0.2-0.3 signal
+cleanly). **CLV backtest** remains blocked on the live-odds path (separate track).
+
 # Phase 6 — SIM-428: catcher framing in the ball/called-strike draw — 2026-05-27
 **Authors: ML Engineer (Agent 3), Baseball Analyst (Agent 2)**
 
