@@ -113,6 +113,49 @@ def build_pitch_pool_artifact(
     return counts
 
 
+_BB_GEOM_COLS = ["exit_velo", "launch_angle", "pull_relative_spray_angle"]
+
+
+def build_battedball_pool_artifact(
+    con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]
+) -> dict[str, int]:
+    """Write the full per-hand batted-ball pool (recency-floored) for SIM-425:
+    geom (EV/LA/spray) + situation + metadata (batter, event, result deltas)."""
+    pool_dir = os.path.join(out_dir, "battedball_pool")
+    os.makedirs(pool_dir, exist_ok=True)
+    season_list = ", ".join(str(int(s)) for s in seasons)
+    where = (
+        f"stand='%s' AND season IN ({season_list}) AND exit_velo IS NOT NULL "
+        "AND launch_angle IS NOT NULL AND pull_relative_spray_angle IS NOT NULL"
+    )
+    counts: dict[str, int] = {}
+    for hand in ("L", "R"):
+        w = where % hand
+        d = con.execute(
+            f"SELECT {', '.join(_BB_GEOM_COLS + _SIT_COLS)} FROM sim.outcome_pool WHERE {w}"
+        ).fetchnumpy()
+        n = len(d[_BB_GEOM_COLS[0]])
+        geom = np.nan_to_num(
+            np.stack([np.ma.filled(d[c], np.nan).astype(np.float32) for c in _BB_GEOM_COLS], axis=1)
+        ).astype(np.float32)
+        sit = np.nan_to_num(
+            np.stack([np.ma.filled(d[c], np.nan).astype(np.float32) for c in _SIT_COLS], axis=1)
+        ).astype(np.float32)
+        np.save(os.path.join(pool_dir, f"{hand}.geom.npy"), geom)
+        np.save(os.path.join(pool_dir, f"{hand}.sit.npy"), sit)
+        con.execute(
+            "COPY (SELECT batter_id, season, events, result_hits, result_outs, result_runs, "
+            f"recency_weight FROM sim.outcome_pool WHERE {w}) "
+            f"TO '{os.path.join(pool_dir, f'{hand}.meta.parquet')}' (FORMAT parquet)"
+        )
+        counts[hand] = int(n)
+        log.info("battedball_pool[%s]: %d rows (seasons %s)", hand, n, seasons)
+    with open(os.path.join(pool_dir, "manifest.json"), "w", encoding="utf-8") as fh:
+        json.dump({"seasons": seasons, "counts": counts, "geom_cols": _BB_GEOM_COLS,
+                   "sit_cols": _SIT_COLS}, fh, indent=2)
+    return counts
+
+
 def build_pitcher_sim_matrix(
     duckdb_path: str, out_dir: str, seasons: list[int], limit: int | None = None
 ) -> int:
@@ -140,6 +183,62 @@ def build_pitcher_sim_matrix(
     return len(rows)
 
 
+#: Actor engines whose per-(id, season) season-metrics vector is exported as a v1
+#: embedding (the worker z-scores + RBFs it for the f_batter / f_catcher / ... factor).
+#: SIM-424/425/426/427 refine these to each engine's exact feature selection/weights.
+_ACTOR_TABLES = {
+    "batter": "batter_season_metrics",
+    "catcher": "catcher_season_metrics",
+    "fielder": "fielder_season_metrics",
+    "baserunner": "baserunner_season_metrics",
+    "manager": "manager_season_metrics",
+}
+_NUMERIC_TYPES = {"DOUBLE", "FLOAT", "REAL", "INTEGER", "BIGINT", "SMALLINT", "DECIMAL"}
+
+
+def build_actor_embeddings(con: duckdb.DuckDBPyConnection, out_dir: str) -> dict[str, int]:
+    """Export per-(actor_id, season) embeddings + global mean/std for each actor
+    engine, so the worker can z-score + RBF-score the actor factor on the fly."""
+    os.makedirs(out_dir, exist_ok=True)
+    counts: dict[str, int] = {}
+    for actor, table in _ACTOR_TABLES.items():
+        schema = con.execute(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            f"WHERE table_schema='derived' AND table_name='{table}' ORDER BY ordinal_position"
+        ).fetchall()
+        id_col = next(c for c, _ in schema if c.endswith("_id") or c == "player_id")
+        feats = [
+            c for c, dt in schema
+            if dt.upper() in _NUMERIC_TYPES
+            and c not in (id_col, "season")
+            and not c.startswith("sample_")
+        ]
+        d = con.execute(
+            f"SELECT {id_col}, season, {', '.join(feats)} FROM derived.{table}"
+        ).fetchnumpy()
+        ids = np.ma.filled(d[id_col], 0).astype(np.int64)
+        seasons = np.ma.filled(d["season"], 0).astype(np.int64)
+        keys = [f"{int(i)}:{int(s)}" for i, s in zip(ids, seasons, strict=False)]
+        mat = np.stack(
+            [np.ma.filled(np.ma.asarray(d[f]).astype(np.float32), np.nan) for f in feats],
+            axis=1,
+        )
+        mean = np.nan_to_num(np.nanmean(mat, axis=0)).astype(np.float32)
+        std = np.nan_to_num(np.nanstd(mat, axis=0), nan=1.0).astype(np.float32)
+        std[std == 0.0] = 1.0
+        np.savez_compressed(
+            os.path.join(out_dir, f"{actor}_emb.npz"),
+            keys=json.dumps(keys),
+            vecs=np.nan_to_num(mat).astype(np.float32),
+            mean=mean,
+            std=std,
+            features=json.dumps(feats),
+        )
+        counts[actor] = len(keys)
+        log.info("%s_emb: %d (id,season) rows × %d features", actor, len(keys), len(feats))
+    return counts
+
+
 # ============================================================================
 # Per-worker LOADER (the read side; fork-safe — everything comes off disk)
 # ============================================================================
@@ -153,6 +252,7 @@ class HandPool:
     sit: np.ndarray  # (N, 6)  float32 — situation (balls,strikes,outs,runners,inning,score_diff)
     pitcher_id: np.ndarray  # (N,) int64
     batter_id: np.ndarray  # (N,) int64
+    season: np.ndarray  # (N,) int64 — for the (pitcher_id:season) pitcher-sim key
     outcome_type: np.ndarray  # (N,) object — ball/called_strike/swinging_strike/foul/in_play
     recency: np.ndarray  # (N,) float32
 
@@ -161,17 +261,41 @@ class HandPool:
         return int(self.geom.shape[0])
 
 
+@dataclass
+class BattedBallPool:
+    """One batter-hand's resident batted-ball pool for SIM-425 (step 5/6)."""
+
+    geom: np.ndarray  # (N, 3) float32 — exit_velo, launch_angle, spray
+    sit: np.ndarray  # (N, 6)  float32
+    batter_id: np.ndarray  # (N,) int64
+    season: np.ndarray  # (N,) int64
+    event: np.ndarray  # (N,) object
+    result_hits: np.ndarray  # (N,) int8 (0=out,1=1B,2=2B,3=3B,4=HR)
+    result_outs: np.ndarray  # (N,) int8
+    recency: np.ndarray  # (N,) float32
+
+    @property
+    def n(self) -> int:
+        return int(self.sit.shape[0])
+
+
 class EngineArtifacts:
     """Per-worker loader for the SIM-422 bundle (resident, built entirely from disk
     so nothing live crosses the ProcessPool fork).  Holds both batter-hand pools +
     (when present) the pitcher×pitcher similarity lookup; the SIM-423 sampler reads
     these to assemble the factorized full-pool weights."""
 
-    def __init__(self, pools, pitcher_sim_index=None, pitcher_sim=None, seasons=None):
+    def __init__(
+        self, pools, pitcher_sim_index=None, pitcher_sim=None, seasons=None, actor_emb=None,
+        bb_pools=None,
+    ):
         self.pools: dict[str, HandPool] = pools
+        self.bb_pools: dict[str, BattedBallPool] = bb_pools or {}
         self.pitcher_sim_index: dict[str, int] = pitcher_sim_index or {}
         self.pitcher_sim: dict[str, dict[str, float]] = pitcher_sim or {}
         self.seasons: list[int] = seasons or []
+        #: actor -> {"key_index": {id:season -> row}, "vecs", "mean", "std", "features"}
+        self.actor_emb: dict[str, dict] = actor_emb or {}
 
     @classmethod
     def load(cls, art_dir: str) -> EngineArtifacts:
@@ -186,7 +310,7 @@ class EngineArtifacts:
                 sit = np.load(os.path.join(pool_dir, f"{hand}.sit.npy"))
                 meta_path = os.path.join(pool_dir, f"{hand}.meta.parquet")
                 m = con.execute(
-                    "SELECT pitcher_id, batter_id, outcome_type, recency_weight "
+                    "SELECT pitcher_id, batter_id, season, outcome_type, recency_weight "
                     f"FROM read_parquet('{meta_path}')"
                 ).fetchnumpy()
                 pools[hand] = HandPool(
@@ -194,11 +318,32 @@ class EngineArtifacts:
                     sit=sit,
                     pitcher_id=np.asarray(np.ma.filled(m["pitcher_id"], 0), dtype=np.int64),
                     batter_id=np.asarray(np.ma.filled(m["batter_id"], 0), dtype=np.int64),
+                    season=np.asarray(np.ma.filled(m["season"], 0), dtype=np.int64),
                     outcome_type=np.asarray(m["outcome_type"], dtype=object),
                     recency=np.nan_to_num(
                         np.ma.filled(m["recency_weight"], 1.0).astype(np.float32), nan=1.0
                     ),
                 )
+            bb_pools: dict[str, BattedBallPool] = {}
+            bb_dir = os.path.join(art_dir, "battedball_pool")
+            if os.path.exists(os.path.join(bb_dir, "manifest.json")):
+                for hand in ("L", "R"):
+                    m = con.execute(
+                        "SELECT batter_id, season, events, result_hits, result_outs, "
+                        f"recency_weight FROM read_parquet('{os.path.join(bb_dir, f'{hand}.meta.parquet')}')"
+                    ).fetchnumpy()
+                    bb_pools[hand] = BattedBallPool(
+                        geom=np.load(os.path.join(bb_dir, f"{hand}.geom.npy")),
+                        sit=np.load(os.path.join(bb_dir, f"{hand}.sit.npy")),
+                        batter_id=np.asarray(np.ma.filled(m["batter_id"], 0), dtype=np.int64),
+                        season=np.asarray(np.ma.filled(m["season"], 0), dtype=np.int64),
+                        event=np.asarray(m["events"], dtype=object),
+                        result_hits=np.asarray(np.ma.filled(m["result_hits"], 0), dtype=np.int8),
+                        result_outs=np.asarray(np.ma.filled(m["result_outs"], 0), dtype=np.int8),
+                        recency=np.nan_to_num(
+                            np.ma.filled(m["recency_weight"], 1.0).astype(np.float32), nan=1.0
+                        ),
+                    )
         finally:
             con.close()
         ps_index, ps_sims = {}, {}
@@ -207,7 +352,20 @@ class EngineArtifacts:
             z = np.load(ps_path, allow_pickle=True)
             ps_index = json.loads(str(z["index"]))
             ps_sims = json.loads(str(z["sims"]))
-        return cls(pools, ps_index, ps_sims, manifest.get("seasons"))
+        actor_emb: dict[str, dict] = {}
+        for actor in _ACTOR_TABLES:
+            p = os.path.join(art_dir, f"{actor}_emb.npz")
+            if os.path.exists(p):
+                z = np.load(p, allow_pickle=True)
+                keys = json.loads(str(z["keys"]))
+                actor_emb[actor] = {
+                    "key_index": {k: i for i, k in enumerate(keys)},
+                    "vecs": z["vecs"],
+                    "mean": z["mean"],
+                    "std": z["std"],
+                    "features": json.loads(str(z["features"])),
+                }
+        return cls(pools, ps_index, ps_sims, manifest.get("seasons"), actor_emb, bb_pools)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -222,7 +380,9 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Override the recency-floor seasons (default: last 3).",
     )
-    ap.add_argument("--what", choices=["pool", "pitcher_sim", "all"], default="pool")
+    ap.add_argument(
+        "--what", choices=["pool", "pitcher_sim", "actors", "all"], default="pool"
+    )
     ap.add_argument(
         "--pitcher-sim-limit",
         type=int,
@@ -236,6 +396,9 @@ def main(argv: list[str] | None = None) -> int:
         seasons = args.seasons or last_n_seasons(con)
         if args.what in ("pool", "all"):
             build_pitch_pool_artifact(con, args.out_dir, seasons)
+            build_battedball_pool_artifact(con, args.out_dir, seasons)
+        if args.what in ("actors", "all"):
+            build_actor_embeddings(con, args.out_dir)
         if args.what in ("pitcher_sim", "all"):
             build_pitcher_sim_matrix(
                 args.duckdb_path, args.out_dir, seasons, limit=args.pitcher_sim_limit

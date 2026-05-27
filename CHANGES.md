@@ -1,3 +1,94 @@
+# Phase 6 — SIM-426: full-pool steal path (engine-backed, no manager dep) — 2026-05-27
+**Authors: Backend Developer (Agent 5), Baseball Analyst (Agent 2)**
+
+Steals were wired (pre-pitch decision -> step-7 resolution) but **inert in
+production**: the decision was gated entirely on `state.manager` tendencies, and
+the manager is None on the full-pool path, so `green_light_rate` stayed 0 and zero
+steals ever fired. SIM-426 adds a manager-independent steal decision driven by the
+RUNNER's own baserunner-embedding rates.
+
+- `sim_loop.py` — `_full_pool_steal_decision`: when the manager green-light is off
+  and the full-pool sampler is present, the lead stealable runner (1B with 2B open,
+  or 2B with 3B open at a lower base rate) attempts a steal at a probability scaled
+  from the runner's `sb_attempt_rate` (× `_STEAL_ATTEMPT_K=0.38`, damped in blowouts
+  / with two outs, gated to one decision per PA). Safe/caught is the runner's
+  `sb_success_rate` with a 0.90 realization haircut (the raw rate reflects
+  historically favorable spots). New `SIM_STEAL_K` env override (0 disables).
+- Added `cs` (caught stealing) to `PlayerStatLine` + the box score, charged to the
+  runner on a caught steal (`sb` was already credited on a safe steal).
+
+**Validation (100 sims, full-pool, per-team vs MLB):** SB **0.59** (0.51) · CS
+**0.17** (0.19) · attempts **0.77** (0.70) · success **0.78** (~0.78) — steal volume
+and success split all within a hair of MLB. Aggregate box line stays realistic
+(H 8.54/8.60, HR 1.17/1.21, BB 3.28/3.30, K 8.30/8.60). 99 steal/box/sim-loop unit
+tests green. NOTE: an apples-to-apples steals-off vs steals-on read at 200 sims
+(R/H 0.492 -> 0.472) suggests a small (~1-sigma, within R's high variance + the
+rng-stream shift) run-conversion interaction; the residual run-conversion gap
+(R/H ~0.49 vs MLB ~0.54, present with steals OFF too) is SIM-429's holistic
+final-calibration target, not a steal-path defect.
+
+# Phase 6 — SIM-425: engine-backed baserunner advancement (run-gap closer) — 2026-05-27
+**Authors: ML Engineer (Agent 3), Baseball Analyst (Agent 2), Backend Developer (Agent 5)**
+
+Closed the full-pool hits-are-right / runs-low gap (SIM-429 validation: R 4.02 vs
+MLB 4.62, ~13% low). Root cause: on the full-pool path an OUT advanced no runner
+and scored no run — no sac flies, no productive outs (the SIM-349 sac-fly bias only
+fires on explicit manager intent, which is off in the full-pool path). Diagnosis in
+`scripts/diag_runs.py`: the batted-ball pool carries explicit productive-out events
+(`sac_fly`, `force_out`, `grounded_into_double_play`) and launch_angle cleanly
+separates fly (tag-up) from ground outs; the baserunner embedding carries the exact
+per-runner advancement rates.
+
+- `full_pool_sampler.py` — `battedball_draw` now also returns `launch_angle` (so
+  the resolver can tell a fly out from a ground out); new `runner_rate(key, name)`
+  exposes a runner's raw advancement rate from the baserunner embedding
+  (`second_to_home_attempt_rate`, `first_to_third_attempt_rate`,
+  `first_to_home_attempt_rate`, `tag_up_attempt_rate`).
+- `sim_loop.py` — `_extra_advance` is now **engine-backed**: a hit's extra base
+  uses the runner's OWN attempt-rate from the embedding (fallback to the Retrosheet
+  league constant, which keeps the per-tile path unchanged). New
+  `_full_pool_out_advancement`: on a full-pool OUT, a fly out tags the runner home
+  from 3rd (sac fly, scored at the runner's `tag_up_attempt_rate`) and pushes a
+  runner from 2nd→3rd on a deep fly; a ground out advances the lead runner one base;
+  double plays / 2-out innings score no one. Only the full-pool path is affected
+  (the per-tile path keeps its validated pool-supplied `result_runs`).
+
+**Validation (100 sims, per-team vs MLB-2023):** R **4.54** (4.62, was 4.02) ·
+BB 3.37 (3.30) · K 8.18 (8.60) · H 9.19 (8.60) · HR 1.35 (1.21) · 2B 1.82 (1.60).
+The run gap is essentially closed (R within ~2%); the slightly-high extra-base line
+is within a 4-game sample's noise and folds into SIM-429's final calibration pass.
+Targeted suite (165 baserunning/run-resolution/full-pool tests) green; per-tile path
+unaffected. **REMAINING in SIM-425:** the Fielder RBF (out/hit/error scaled by the
+fielding team's defensive quality) needs per-row fielder identity baked into the
+batted-ball artifact — a separate artifact-rebuild sub-task.
+
+# Phase 6 — SIM-429: full-pool engine promoted to the production default — 2026-05-27
+**Authors: ML Engineer (Agent 3), Backend Developer (Agent 5), QA/DevOps (Agent 9)**
+
+The full-pool similarity sampler (SIM-422→424: score the entire same-hand play
+pool by the applicable engines, no top-K, only the batter-hand hard filter) is now
+the **production default**, flipped on after a broad-sample realism validation.
+
+- `docker-compose.yml` — the `app` service sets `SIM_FULL_POOL=1`, so the running
+  API/runner uses the full-pool path. The factory loads the engine-artifact bundle
+  when present and **falls back to the per-tile path** if it's absent (safe before
+  the nightly artifact build has run). Set `SIM_FULL_POOL=0` to force per-tile.
+- `simulation/production_factory.py` — `SIM_FULL_POOL` is now parsed as a real
+  boolean (`0`/`false`/`no`/`off`/empty → off), so `=0` actually disables it
+  (the bare-truthy check previously treated the string `"0"` as on).
+- `tests/conftest.py` — pins the unit suite to the per-tile path
+  (`SIM_FULL_POOL=0`) regardless of the inherited compose env; full-pool tests opt
+  in via the `_full_pool` sim-kwarg, so the flip introduces **no suite changes**.
+
+**Validation (100 sims, 4 games × 25 iters, full f_pitcher live, per-team vs MLB-2023):**
+R 4.02 (4.62) · H 8.91 (8.60) · HR 1.20 (1.21) · 2B 1.70 (1.60) · BB 3.55 (3.30) ·
+K 8.23 (8.60). Rate stats (H/HR/BB/K) land within ~7%; **runs are ~13% low** — the
+hits→runs *conversion* gap, since baserunner advancement is still the static
+Retrosheet `_EXTRA_ADVANCE_P` table. Closing that gap (the engine-backed baserunner
+advancement, SIM-425) + a final run-conversion recalibration + the CLV backtest
+remain open under SIM-429/425; the rate realism is sufficient to make full-pool the
+default now (the per-tile path stays as the graceful fallback).
+
 # Phase 6 — Nightly ingestion scheduler (Ofelia) — 2026-05-26
 **Authors: Data Engineer (Agent 4), QA/DevOps (Agent 9)**
 
