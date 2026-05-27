@@ -140,6 +140,62 @@ def build_pitcher_sim_matrix(
     return len(rows)
 
 
+#: Actor engines whose per-(id, season) season-metrics vector is exported as a v1
+#: embedding (the worker z-scores + RBFs it for the f_batter / f_catcher / ... factor).
+#: SIM-424/425/426/427 refine these to each engine's exact feature selection/weights.
+_ACTOR_TABLES = {
+    "batter": "batter_season_metrics",
+    "catcher": "catcher_season_metrics",
+    "fielder": "fielder_season_metrics",
+    "baserunner": "baserunner_season_metrics",
+    "manager": "manager_season_metrics",
+}
+_NUMERIC_TYPES = {"DOUBLE", "FLOAT", "REAL", "INTEGER", "BIGINT", "SMALLINT", "DECIMAL"}
+
+
+def build_actor_embeddings(con: duckdb.DuckDBPyConnection, out_dir: str) -> dict[str, int]:
+    """Export per-(actor_id, season) embeddings + global mean/std for each actor
+    engine, so the worker can z-score + RBF-score the actor factor on the fly."""
+    os.makedirs(out_dir, exist_ok=True)
+    counts: dict[str, int] = {}
+    for actor, table in _ACTOR_TABLES.items():
+        schema = con.execute(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            f"WHERE table_schema='derived' AND table_name='{table}' ORDER BY ordinal_position"
+        ).fetchall()
+        id_col = next(c for c, _ in schema if c.endswith("_id") or c == "player_id")
+        feats = [
+            c for c, dt in schema
+            if dt.upper() in _NUMERIC_TYPES
+            and c not in (id_col, "season")
+            and not c.startswith("sample_")
+        ]
+        d = con.execute(
+            f"SELECT {id_col}, season, {', '.join(feats)} FROM derived.{table}"
+        ).fetchnumpy()
+        ids = np.ma.filled(d[id_col], 0).astype(np.int64)
+        seasons = np.ma.filled(d["season"], 0).astype(np.int64)
+        keys = [f"{int(i)}:{int(s)}" for i, s in zip(ids, seasons, strict=False)]
+        mat = np.stack(
+            [np.ma.filled(np.ma.asarray(d[f]).astype(np.float32), np.nan) for f in feats],
+            axis=1,
+        )
+        mean = np.nan_to_num(np.nanmean(mat, axis=0)).astype(np.float32)
+        std = np.nan_to_num(np.nanstd(mat, axis=0), nan=1.0).astype(np.float32)
+        std[std == 0.0] = 1.0
+        np.savez_compressed(
+            os.path.join(out_dir, f"{actor}_emb.npz"),
+            keys=json.dumps(keys),
+            vecs=np.nan_to_num(mat).astype(np.float32),
+            mean=mean,
+            std=std,
+            features=json.dumps(feats),
+        )
+        counts[actor] = len(keys)
+        log.info("%s_emb: %d (id,season) rows × %d features", actor, len(keys), len(feats))
+    return counts
+
+
 # ============================================================================
 # Per-worker LOADER (the read side; fork-safe — everything comes off disk)
 # ============================================================================
@@ -167,11 +223,15 @@ class EngineArtifacts:
     (when present) the pitcher×pitcher similarity lookup; the SIM-423 sampler reads
     these to assemble the factorized full-pool weights."""
 
-    def __init__(self, pools, pitcher_sim_index=None, pitcher_sim=None, seasons=None):
+    def __init__(
+        self, pools, pitcher_sim_index=None, pitcher_sim=None, seasons=None, actor_emb=None
+    ):
         self.pools: dict[str, HandPool] = pools
         self.pitcher_sim_index: dict[str, int] = pitcher_sim_index or {}
         self.pitcher_sim: dict[str, dict[str, float]] = pitcher_sim or {}
         self.seasons: list[int] = seasons or []
+        #: actor -> {"key_index": {id:season -> row}, "vecs", "mean", "std", "features"}
+        self.actor_emb: dict[str, dict] = actor_emb or {}
 
     @classmethod
     def load(cls, art_dir: str) -> EngineArtifacts:
@@ -207,7 +267,20 @@ class EngineArtifacts:
             z = np.load(ps_path, allow_pickle=True)
             ps_index = json.loads(str(z["index"]))
             ps_sims = json.loads(str(z["sims"]))
-        return cls(pools, ps_index, ps_sims, manifest.get("seasons"))
+        actor_emb: dict[str, dict] = {}
+        for actor in _ACTOR_TABLES:
+            p = os.path.join(art_dir, f"{actor}_emb.npz")
+            if os.path.exists(p):
+                z = np.load(p, allow_pickle=True)
+                keys = json.loads(str(z["keys"]))
+                actor_emb[actor] = {
+                    "key_index": {k: i for i, k in enumerate(keys)},
+                    "vecs": z["vecs"],
+                    "mean": z["mean"],
+                    "std": z["std"],
+                    "features": json.loads(str(z["features"])),
+                }
+        return cls(pools, ps_index, ps_sims, manifest.get("seasons"), actor_emb)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -222,7 +295,9 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Override the recency-floor seasons (default: last 3).",
     )
-    ap.add_argument("--what", choices=["pool", "pitcher_sim", "all"], default="pool")
+    ap.add_argument(
+        "--what", choices=["pool", "pitcher_sim", "actors", "all"], default="pool"
+    )
     ap.add_argument(
         "--pitcher-sim-limit",
         type=int,
@@ -236,6 +311,8 @@ def main(argv: list[str] | None = None) -> int:
         seasons = args.seasons or last_n_seasons(con)
         if args.what in ("pool", "all"):
             build_pitch_pool_artifact(con, args.out_dir, seasons)
+        if args.what in ("actors", "all"):
+            build_actor_embeddings(con, args.out_dir)
         if args.what in ("pitcher_sim", "all"):
             build_pitcher_sim_matrix(
                 args.duckdb_path, args.out_dir, seasons, limit=args.pitcher_sim_limit
