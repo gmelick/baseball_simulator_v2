@@ -33,6 +33,7 @@ import argparse
 import json
 import logging
 import os
+from dataclasses import dataclass
 
 import duckdb
 import numpy as np
@@ -137,6 +138,76 @@ def build_pitcher_sim_matrix(
     )
     log.info("pitcher_sim: %d query profiles scored (of %d total)", len(rows), len(profiles))
     return len(rows)
+
+
+# ============================================================================
+# Per-worker LOADER (the read side; fork-safe — everything comes off disk)
+# ============================================================================
+
+
+@dataclass
+class HandPool:
+    """One batter-hand's resident candidate pool for full-pool scoring (SIM-423)."""
+
+    geom: np.ndarray  # (N, 10) float32 — raw geometry (kernel applied at sample time)
+    sit: np.ndarray  # (N, 6)  float32 — situation (balls,strikes,outs,runners,inning,score_diff)
+    pitcher_id: np.ndarray  # (N,) int64
+    batter_id: np.ndarray  # (N,) int64
+    outcome_type: np.ndarray  # (N,) object — ball/called_strike/swinging_strike/foul/in_play
+    recency: np.ndarray  # (N,) float32
+
+    @property
+    def n(self) -> int:
+        return int(self.geom.shape[0])
+
+
+class EngineArtifacts:
+    """Per-worker loader for the SIM-422 bundle (resident, built entirely from disk
+    so nothing live crosses the ProcessPool fork).  Holds both batter-hand pools +
+    (when present) the pitcher×pitcher similarity lookup; the SIM-423 sampler reads
+    these to assemble the factorized full-pool weights."""
+
+    def __init__(self, pools, pitcher_sim_index=None, pitcher_sim=None, seasons=None):
+        self.pools: dict[str, HandPool] = pools
+        self.pitcher_sim_index: dict[str, int] = pitcher_sim_index or {}
+        self.pitcher_sim: dict[str, dict[str, float]] = pitcher_sim or {}
+        self.seasons: list[int] = seasons or []
+
+    @classmethod
+    def load(cls, art_dir: str) -> EngineArtifacts:
+        pool_dir = os.path.join(art_dir, "pitch_pool")
+        with open(os.path.join(pool_dir, "manifest.json"), encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        con = duckdb.connect(":memory:")
+        pools: dict[str, HandPool] = {}
+        try:
+            for hand in ("L", "R"):
+                geom = np.load(os.path.join(pool_dir, f"{hand}.geom.npy"))
+                sit = np.load(os.path.join(pool_dir, f"{hand}.sit.npy"))
+                meta_path = os.path.join(pool_dir, f"{hand}.meta.parquet")
+                m = con.execute(
+                    "SELECT pitcher_id, batter_id, outcome_type, recency_weight "
+                    f"FROM read_parquet('{meta_path}')"
+                ).fetchnumpy()
+                pools[hand] = HandPool(
+                    geom=geom,
+                    sit=sit,
+                    pitcher_id=np.asarray(np.ma.filled(m["pitcher_id"], 0), dtype=np.int64),
+                    batter_id=np.asarray(np.ma.filled(m["batter_id"], 0), dtype=np.int64),
+                    outcome_type=np.asarray(m["outcome_type"], dtype=object),
+                    recency=np.nan_to_num(
+                        np.ma.filled(m["recency_weight"], 1.0).astype(np.float32), nan=1.0
+                    ),
+                )
+        finally:
+            con.close()
+        ps_index, ps_sims = {}, {}
+        ps_path = os.path.join(art_dir, "pitcher_sim.npz")
+        if os.path.exists(ps_path):
+            z = np.load(ps_path, allow_pickle=True)
+            ps_index = json.loads(str(z["index"]))
+            ps_sims = json.loads(str(z["sims"]))
+        return cls(pools, ps_index, ps_sims, manifest.get("seasons"))
 
 
 def main(argv: list[str] | None = None) -> int:
