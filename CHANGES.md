@@ -1,3 +1,30 @@
+# Phase 6 — SIM-429: full-pool engine promoted to the production default — 2026-05-27
+**Authors: ML Engineer (Agent 3), Backend Developer (Agent 5), QA/DevOps (Agent 9)**
+
+The full-pool similarity sampler (SIM-422→424: score the entire same-hand play
+pool by the applicable engines, no top-K, only the batter-hand hard filter) is now
+the **production default**, flipped on after a broad-sample realism validation.
+
+- `docker-compose.yml` — the `app` service sets `SIM_FULL_POOL=1`, so the running
+  API/runner uses the full-pool path. The factory loads the engine-artifact bundle
+  when present and **falls back to the per-tile path** if it's absent (safe before
+  the nightly artifact build has run). Set `SIM_FULL_POOL=0` to force per-tile.
+- `simulation/production_factory.py` — `SIM_FULL_POOL` is now parsed as a real
+  boolean (`0`/`false`/`no`/`off`/empty → off), so `=0` actually disables it
+  (the bare-truthy check previously treated the string `"0"` as on).
+- `tests/conftest.py` — pins the unit suite to the per-tile path
+  (`SIM_FULL_POOL=0`) regardless of the inherited compose env; full-pool tests opt
+  in via the `_full_pool` sim-kwarg, so the flip introduces **no suite changes**.
+
+**Validation (100 sims, 4 games × 25 iters, full f_pitcher live, per-team vs MLB-2023):**
+R 4.02 (4.62) · H 8.91 (8.60) · HR 1.20 (1.21) · 2B 1.70 (1.60) · BB 3.55 (3.30) ·
+K 8.23 (8.60). Rate stats (H/HR/BB/K) land within ~7%; **runs are ~13% low** — the
+hits→runs *conversion* gap, since baserunner advancement is still the static
+Retrosheet `_EXTRA_ADVANCE_P` table. Closing that gap (the engine-backed baserunner
+advancement, SIM-425) + a final run-conversion recalibration + the CLV backtest
+remain open under SIM-429/425; the rate realism is sufficient to make full-pool the
+default now (the per-tile path stays as the graceful fallback).
+
 # Phase 6 — Nightly ingestion scheduler (Ofelia) — 2026-05-26
 **Authors: Data Engineer (Agent 4), QA/DevOps (Agent 9)**
 

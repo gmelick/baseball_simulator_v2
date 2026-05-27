@@ -291,8 +291,13 @@ def _attach_shared_tiles(sampler: PlayPoolSampler, spec: GameSpec) -> int:
 def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     """SIM-424: build the full-pool sampler from the on-disk engine-artifact bundle
     when opted in (``SIM_FULL_POOL`` env or the ``_full_pool`` sim-kwarg).  Returns
-    None otherwise (the validated per-tile path).  Built from disk -> fork-safe."""
-    if not (os.environ.get("SIM_FULL_POOL") or _kwarg(spec, "_full_pool", None)):
+    None otherwise (the validated per-tile path).  Built from disk -> fork-safe.
+
+    SIM-429: ``SIM_FULL_POOL`` is parsed as a real boolean so ``=0``/``=false``
+    disables it (production sets ``=1``; the unit-test conftest sets ``=0``)."""
+    env = os.environ.get("SIM_FULL_POOL", "").strip().lower()
+    env_on = env not in ("", "0", "false", "no", "off")
+    if not (env_on or _kwarg(spec, "_full_pool", None)):
         return None
     pool_dir = _kwarg(spec, "_pool_dir", None) or os.environ.get(
         "BASEBALL_PLAY_POOL_DIR", "/data/play_pool"

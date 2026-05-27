@@ -19,10 +19,18 @@ gets one by naming it in its signature).
 
 from __future__ import annotations
 
+import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+# SIM-429: production enables the full-pool sampler via SIM_FULL_POOL=1 (set in
+# the docker-compose `app` env, which `docker compose run app pytest` inherits).
+# The unit suite is pinned to the validated per-tile path — tests that exercise
+# the full-pool path opt in explicitly via the `_full_pool` sim-kwarg, not the
+# env — so force the env off here for deterministic, env-independent runs.
+os.environ["SIM_FULL_POOL"] = "0"
 
 # ---------------------------------------------------------------------------
 # Shared lightweight fixtures
