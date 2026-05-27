@@ -1159,7 +1159,21 @@ class StateMachine:
         # SIM-425/429: outs_on_pitch is unreliable in the pool (~0 for most field
         # outs), so infer outs from the event (as the default resolver does) —
         # otherwise only strikeouts end the half-inning and games bloat.
-        outs = 2 if ev in _DOUBLE_PLAY_EVENTS else (0 if int(rh) > 0 else 1)
+        # SIM-429: a double play needs a runner to double off, but the draw
+        # conditions only softly on base-out, so ~55% of drawn DPs land with NO
+        # forceable runner (audit).  Recording a phantom 2nd out there ends innings
+        # early and suppresses runs, so a DP with no runner to retire is just the
+        # batter out (relabelled to a plain field_out so RE24/the box don't show a
+        # phantom GIDP).
+        if ev in _DOUBLE_PLAY_EVENTS:
+            grounded = ev in ("grounded_into_double_play", "ground_into_double_play")
+            can_dp = (state.bases.first is not None) if grounded else (int(state.runners_state) > 0)
+            if can_dp and int(state.outs) < 2:
+                outs = 2
+            else:
+                outs, ev = 1, ("field_out" if int(rh) == 0 else ev)
+        else:
+            outs = 0 if int(rh) > 0 else 1
         return FieldingSignal(
             event=ev, result_hits=int(rh), result_outs=int(outs), result_runs=0,
             launch_angle=float(la),

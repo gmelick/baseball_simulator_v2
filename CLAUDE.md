@@ -21,14 +21,30 @@
 
 ## 2. Current status (read this)
 
-- **Phases 1–5 are COMPLETE and CI-green on Python 3.11.15.** Unit+regression suite: **1814 pass / 1
-  skip / 0 fail @ 89% coverage**; 8 CI jobs + weekly perf/integration all green.
-- **Phase 6 (Frontend Build) is OPEN.** A full 9-agent program audit filed **43 tickets, SIM-378 →
-  SIM-420** (+ SIM-421, a P3 future enhancement). **Next free ticket ID: SIM-422.**
-- The `api/` layer serves the full backend surface; the **frontend is greenfield** (`frontend/`
-  component dirs are empty). Start Phase 6 at the React-vs-vanilla ADR (SIM-378) — do NOT build
-  components before the P0 kickoff gates land.
-- Canonical git repo: this directory. Primary shell: **Windows Command Prompt (cmd.exe)**.
+- **Phases 1–5 are COMPLETE and CI-green on Python 3.11.15.** Unit suite green (the unit lane runs the
+  per-tile path; see below).
+- **Similarity-engine-wiring / full-pool realism epic (SIM-422→429) — LANDED on `master`.** This was
+  the major work since the Phase-5 close: the simulator now scores the **entire same-hand play pool**
+  by the applicable similarity engines (no top-K; the batter's hand is the only hard filter — the
+  pitcher hand self-zeroes via the pitcher engine) and is the **production default** (`SIM_FULL_POOL=1`
+  in the docker-compose `app` env; per-tile path is the graceful fallback and the unit-test default,
+  pinned off in `tests/conftest.py`). Full-pool box output is **MLB-realistic**: H/HR/2B/BB/K within
+  ~4% of MLB-2023, steals at MLB volume (SB/CS/attempts). **Runs run ~12% low** — a hits→runs
+  *conversion* residual (root cause: batted-ball-with-RISP / sequencing, NOT advancement or rate
+  stats; see §11). What landed: SIM-422 (fork-safe engine-artifact bundle), 423 (full-pool sampler +
+  perf gate), 424 (count-bucketed pitch draw), 425 (engine-backed baserunner advancement + productive
+  outs), 426 (engine-backed steal path), 428 (catcher framing), 429 (the flip + a run-conversion
+  investigation; the `SIM_RUN_CALIB` knob is neutral by design). **Next free ticket ID: SIM-430.**
+- **Phase 6 (Frontend Build) is OPEN** and the **frontend is greenfield** (`frontend/` component dirs
+  empty). The original Phase-6 audit filed SIM-378→420 (+421). Start the frontend at the
+  React-vs-vanilla ADR (SIM-378); the `api/` layer serves the full backend surface.
+- **Open follow-ons (tracked, blocked on data/infra, not shipped hollow):** SIM-427 engine-backed
+  manager (needs a per-(team,season) bullpen roster built from raw Statcast — no role/team source in
+  `derived.*`); SIM-425b Fielder RBF (needs per-row fielder identity baked into the batted-ball
+  artifact → a play-pool rebuild); SIM-429 granular run-conversion calibration + the CLV backtest
+  (needs a larger game+sim harness and the live-odds path).
+- Canonical git repo: this directory. Primary shell: **Windows Command Prompt (cmd.exe)**;
+  development + tests run through Docker (`docker compose run --rm app ...`).
 
 ## 3. Tech stack
 
@@ -46,6 +62,10 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   → 11 similarity engines (similarity/engines/) : GMM-W2 pitcher, RBF batter/fielder/baserunner/
     catcher/pitcher-steal/manager, KDTree situation, FAISS pitch-to-pitch + batted-ball
   → Play pool (sim.pitch_pool / sim.outcome_pool + FAISS tiles)  [Phase 3]
+  → Full-pool similarity sampler (simulation/full_pool_sampler.py over the SIM-422 engine-artifact
+    bundle) : scores the WHOLE same-hand pool by the applicable engines (factorized weights:
+    f_pitcher·f_batter·f_situation·recency; count-bucketed pitch draw) — the PRODUCTION path
+    (SIM_FULL_POOL=1). The per-tile FAISS k-NN sampler is the fallback / unit-test path.  [SIM-422→429]
   → Core sim loop (simulation/sim_loop.py) : 8-step pitch-by-pitch state machine + manager/situational
     decisions → GameSimResult                                     [Phase 4]
   → Runner + API (simulation/batch_runner.py, api/) : 100-iteration ProcessPool runner, REST + WebSocket,
@@ -58,15 +78,23 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
 
 - `api/` — FastAPI app. `main.py` (create_app + lifespan), `routes/` (games, betting, metrics, similarity),
   `schemas.py` (Pydantic), `serialization.py` (numpy-safe `to_jsonable`), `auth.py`, `state.py` (engine build).
-- `simulation/` — `sim_loop.py` (the simulator, ~2.7k lines, biggest file), `game_state.py`, `results.py`,
-  `batch_runner.py` (ProcessPool runner), `production_factory.py`, `lineup_resolver.py`, `linescore.py`,
-  `pitcher_decisions.py`, `play_recorder.py`, `prop_distributions.py`, `win_probability.py`, `snapshots.py`,
-  `score_fusion.py`, `fingerprints.py`, `validation/replay_chi_squared.py`.
+- `simulation/` — `sim_loop.py` (the simulator, biggest file; full-pool draw + engine-backed
+  advancement/steal/framing live here), `full_pool_sampler.py` (SIM-423 full-pool similarity sampler:
+  count-bucket CDFs, batted-ball draw, `runner_rate`/`catcher_framing`), `matchup_provider.py` (SIM-421
+  fork-safe deriver/centroid provider), `game_state.py` (carries bat/throw hands + per-team
+  pitcher/catcher ids), `results.py`, `batch_runner.py` (ProcessPool runner), `production_factory.py`
+  (builds the full-pool sampler from disk per worker when `SIM_FULL_POOL` is set), `lineup_resolver.py`
+  (also resolves the per-team catcher via the SIM-363 defense map), `linescore.py`, `pitcher_decisions.py`,
+  `play_recorder.py`, `prop_distributions.py`, `win_probability.py`, `snapshots.py`, `score_fusion.py`,
+  `fingerprints.py`, `validation/replay_chi_squared.py`.
 - `similarity/` — `engines/` (the 11 engines), `similarity_calibration.py`, `backtesting/` (backtester +
   walk-forward), `registry.py`.
 - `betting/` — `clv_engine.py`, `bet_signal.py`, `line_movement.py`.
 - `pipeline/` — `etl/` (historical loader), `live/live_ingestion_pipeline.py` (MLB WS + REST + odds),
-  `batch/player_profile_computor.py` + `play_pool_cache.py`, `odds_provider.py`.
+  `batch/player_profile_computor.py` + `play_pool_cache.py` (normalized tiles + persisted norms/centroids)
+  + `engine_artifacts.py` (SIM-422 builder + per-worker loader for the full-pool bundle: hand pools,
+  pitcher×pitcher sim, batter/catcher/fielder/baserunner/manager embeddings, batted-ball pools),
+  `odds_provider.py`.
 - `db/` — `migrations/` (Alembic, head 0014) + `migrations/duckdb/` (numbered SQL, schema v10) +
   `schemas/duckdb_schema_version.txt`.
 - `tests/` — `unit/`, `regression/` (golden-file engine-drift gate), `integration/` (E2E TestClient),
@@ -98,9 +126,11 @@ consolidates; QA cross-validates and never self-certifies its own work.
   rows under a sprint banner, add `docs/SPRINT_<date>_<name>.md`, and regenerate `backlog.xlsx`.
 - **TDD:** tests first, then implementation (Backend Developer convention). Unit tests use the `__new__`
   constructor-bypass + in-memory mock pattern (no live DB) — see `tests/conftest.py`.
-- **Ticketing:** every change maps to a `SIM-NNN` ticket. Next free ID is tracked in `BACKLOG.md` /
-  `backlog.xlsx` (currently **SIM-421**). The `backlog.xlsx` sheets: `Full Backlog` (authoritative, ends
-  SIM-420), per-phase `* Gate`/`* Build` sheets.
+- **Ticketing:** every change maps to a `SIM-NNN` ticket. Next free ID is tracked in `BACKLOG.md`
+  (currently **SIM-430**; the SIM-422→429 full-pool epic is filed there under its own banner). NOTE: a
+  realism-work batch was tagged `SIM-421` *in code comments* before the epic was filed — `SIM-421` the
+  ticket is the P3 book-offered-market projection, so treat in-code `SIM-421` tags as the realism work
+  and reconcile if you touch them.
 - **Migrations (mandatory):** every Postgres schema change ships an Alembic migration in
   `db/migrations/versions/`; every DuckDB schema change ships a numbered SQL file in
   `db/migrations/duckdb/` AND increments `db/schemas/duckdb_schema_version.txt`. *Gotcha:* a past sprint
@@ -185,6 +215,17 @@ bring-up): real-DB `/simulate` 2s/30s SLA (SIM-402), real odds provider (SIM-405
 `CalibrationReport` (SIM-406), the DuckDB-profile 11-engine build (SIM-408), and a full `docker compose
 up` of nginx+app+monitoring.
 
+**Full-pool realism residual (SIM-422→429, the production path):** box rate stats (H/HR/2B/BB/K) are
+within ~4% of MLB and steals match MLB volume, but **runs sit ~12% low** — a hits→runs *conversion*
+gap, not a rate-stat or baserunning-aggression problem (advancement rates are already MLB-realistic; a
+global advancement multiplier `SIM_RUN_CALIB` was investigated and rejected as the wrong lever). The
+gap lives in batted-ball-with-RISP / sequencing. One concrete contributor identified + fixed: the
+batted-ball draw conditions only softly on base-out, so ~55% of drawn double-play events landed with no
+runner to double off — `_full_pool_fielding` now records a 2nd out only when a forceable runner exists
+(else a 1-out field_out). Remaining conversion gap → granular per-channel calibration on a larger
+game+sim harness (SIM-429 follow-on). *Validation caveat:* the ad-hoc `scripts/sim_stats.py` harness is
+4 games; R-variance is ~±0.2 at 200 sims, so use ≥400 sims and several games for run-level reads.
+
 ## 12. Phase roadmap
 
 | Phase | Name | Status |
@@ -194,8 +235,12 @@ up` of nginx+app+monitoring.
 | 3 | Play Pool Architecture | ✅ Complete |
 | 4 | Core Simulation Loop | ✅ Complete |
 | 5 | Simulation Runner & Backend API | ✅ Complete (CI-green on 3.11.15) |
-| 6 | **Frontend Build** | 🚀 **OPEN** — 43 tickets SIM-378→420 |
+| 6 | **Frontend Build** | 🚀 **OPEN** — frontend greenfield (SIM-378→420) |
 | 7 | Integration, Testing & Deployment | Not started |
+
+**Realism sub-track (interleaved, landed on `master`):** the SIM-422→429 full-pool similarity-wiring
+epic replaced the per-tile k-NN draw with whole-pool engine-weighted sampling and made it the
+production default — see §2/§11. This is independent of the frontend critical path below.
 
 **Phase 6 critical path:** SIM-378 (React-vs-vanilla ADR) → 379/380/381 (scaffold + design system +
 API→UI serving) + 382/383/384/385/387/389 (backfill deps; enriched games list+records; aggregate card +
@@ -210,7 +255,7 @@ status enum; typed WebSocket schema; calibration-wiring fix; auth enforcement) �
 - `docs/audit/2026-09-02-phase6-prioritized-tickets.md` — the full tiered 43-ticket list + sprint plan.
 - `docs/audit/2026-09-02-phase5-close-program-audit.md` — the audit narrative + findings.
 - `BACKLOG.md` / `backlog.xlsx` — authoritative ticket status (verify before acting on any ticket).
-- `CHANGES.md` — the running changelog (chronological; append new entries at the end).
+- `CHANGES.md` — the running changelog (**newest entries prepended at the top**; per-agent detail).
 - `agent_team.md` — full agent scopes + the cross-agent collaboration map.
 - `WORKFLOW.md` — the operator's manual (clean-checkout bring-up, health checks).
 

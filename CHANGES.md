@@ -10,16 +10,23 @@ runs-low signature.
   (env override `SIM_RUN_CALIB`) on the full-pool extra-base / sac-fly-tag /
   productive-ground-out rates. **Left NEUTRAL (1.0)** by design.
 
-**Finding (the important part):** a global multiplier is the WRONG lever. Sweeps
-(200 sims each): calib 1.45 -> R 4.24 (vs 1.0 -> 4.05), i.e. it DOES lift runs —
-but only by pushing advancement into unrealistic territory
-(`second_to_home_attempt_rate` ~0.59 at calib 1.0, already MLB-realistic ~0.60-0.65,
-becomes ~0.86 at 1.45). Since the rate stats AND baserunning are already realistic,
-the residual gap lives in **hit sequencing / batted-ball-with-RISP**, not
-baserunning aggression. The knob is retained for a future granular (per-channel)
-calibration once that cause is investigated with a larger game+sim harness (the
-4-game / 200-sim harness's R-variance ~±0.2 also can't resolve the ~0.2-0.3 signal
-cleanly). **CLV backtest** remains blocked on the live-odds path (separate track).
+**Finding:** a global advancement multiplier is the WRONG lever. Sweeps (200 sims):
+calib 1.45 -> R 4.24 (vs 1.0 -> 4.05) — it lifts runs only by pushing advancement
+unrealistic (`second_to_home_attempt_rate` ~0.59 at calib 1.0 is already MLB-real
+~0.60-0.65; ~0.86 at 1.45). So the residual gap lives in **batted-ball-with-RISP /
+sequencing**, not baserunning aggression; the knob is kept neutral for future
+granular calibration.
+
+**Concrete contributor found + fixed — phantom double plays.** The batted-ball draw
+conditions only softly on base-out, so an audit (`scripts/diag_dp.py`, 80 sims)
+found **~55% of drawn double-play events had NO runner to double off** (59% no
+runner on 1B). `_full_pool_fielding` was recording a phantom 2nd out there, ending
+innings early and suppressing runs. Fixed: a DP records 2 outs only when a forceable
+runner exists (runner on 1B for grounded DPs, any runner otherwise) and outs<2; else
+it's a 1-out `field_out`. R lifts ~4.05 -> 4.17 (now ~10% low) with rate stats
+intact (H 8.79, HR 1.27, BB 3.47, K 8.12). The remaining ~10% is the deeper
+sequencing/RISP modelling (SIM-429 follow-on). **CLV backtest** remains blocked on
+the live-odds path.
 
 # Phase 6 — SIM-428: catcher framing in the ball/called-strike draw — 2026-05-27
 **Authors: ML Engineer (Agent 3), Baseball Analyst (Agent 2)**
