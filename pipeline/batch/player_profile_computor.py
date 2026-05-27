@@ -4177,13 +4177,18 @@ class PlayerProfileComputor:
                     LAG(break_horizontal,       1) OVER w AS prev_pitch_hb,
                     LAG(type,                   1) OVER w AS prev_pitch_outcome,
 
-                    -- Outcome type classification from pitch code
+                    -- Outcome type classification from the MLB Gameday pitch
+                    -- `type` code (SIM-421 fix).  The in-play code splits THREE
+                    -- ways -- X=out, D=hit (no out), E=hit with run(s) -- so the
+                    -- old `type='X'`-only mapping silently dropped ~all hits +
+                    -- home runs into 'ball' (the no-balls-in-play defect).  TRIM
+                    -- guards the space-padded Gameday codes.
                     CASE
-                        WHEN type = 'B' THEN 'ball'
-                        WHEN type = 'C' THEN 'called_strike'
-                        WHEN type = 'S' THEN 'swinging_strike'
-                        WHEN type = 'F' THEN 'foul'
-                        WHEN type = 'X' THEN 'in_play'
+                        WHEN TRIM(type) IN ('B', '*B') THEN 'ball'
+                        WHEN TRIM(type) = 'C' THEN 'called_strike'
+                        WHEN TRIM(type) IN ('S', 'W', 'M') THEN 'swinging_strike'
+                        WHEN TRIM(type) IN ('F', 'T', 'L') THEN 'foul'
+                        WHEN TRIM(type) IN ('X', 'D', 'E') THEN 'in_play'
                         ELSE 'ball'
                     END                                 AS outcome_type,
                     events,

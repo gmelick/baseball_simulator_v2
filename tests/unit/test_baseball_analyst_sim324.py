@@ -103,13 +103,17 @@ LEAGUE_PITCH_MODEL: dict[str, float] = {
 # remainder outs (incl. a slice of GIDP).  These are the frequencies the play
 # pool would emit; we inject them directly so the loop's baserunning + resolve_runs
 # convert them into the run environment.
+# SIM-421: re-tuned to the production outcome-pool proportions (hit-on-contact
+# ~33%, was an inflated ~40% that compensated for the old conservative baserunner
+# advancement).  With the corrected realistic advancement this restores the
+# ~4.4 R/team/G run environment.
 LEAGUE_INPLAY_MODEL: dict[str, float] = {
-    "home_run": 0.050,
-    "single": 0.262,
-    "double": 0.084,
-    "triple": 0.008,
-    "field_out": 0.546,
-    "ground_into_double_play": 0.050,
+    "home_run": 0.049,
+    "single": 0.239,
+    "double": 0.071,
+    "triple": 0.006,
+    "field_out": 0.609,
+    "ground_into_double_play": 0.026,
 }
 
 # The hit value (result_hits) + outs recorded (result_outs) per injected event,

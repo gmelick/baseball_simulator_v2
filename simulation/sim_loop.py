@@ -61,6 +61,7 @@ verbatim so the SIM-303 tests keep passing; the new machine is additive.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -89,6 +90,22 @@ from simulation.run_resolution import resolve_runs
 # see docs/architecture/2026-05-20-play-pool.md §2).
 _PITCH_FINGERPRINT_DIM = 10
 _BATTEDBALL_FINGERPRINT_DIM = 3
+
+# SIM-421 (L2): when the real FingerprintDeriver is wired the query is the
+# matchup CENTROID; sampling its k-NN alone over-draws the dense centre
+# (well-located called strikes) and under-draws off-centre pitches (balls), so a
+# game collapses to ~all strikeouts.  Per pitch we add zero-mean Gaussian jitter
+# in the normalized tile space (scaled per-dim by the engine FEATURE_SCALE) so
+# the draw SCATTERS like a real pitch sequence and reproduces the pitcher's
+# marginal outcome mix.  The stub-fingerprint path is already stochastic and is
+# left untouched.  Sigma ~ the within-tile normalized spread.
+try:  # numpy-only engine constants (faiss is guarded inside the engine modules)
+    from similarity.engines.batted_ball_similarity import FEATURE_SCALE as _BB_FEATURE_SCALE
+    from similarity.engines.pitch_pitch_similarity import FEATURE_SCALE as _PITCH_FEATURE_SCALE
+except Exception:  # pragma: no cover - defensive; jitter simply disables
+    _PITCH_FEATURE_SCALE = None
+    _BB_FEATURE_SCALE = None
+_QUERY_JITTER_SIGMA = float(os.environ.get("SIM_QUERY_JITTER_SIGMA", "1.25"))
 
 #: The single pitch outcome that means the ball was put in play -> resolve a
 #: batted ball.  Mirrors the ``outcome_type`` vocabulary the SIM-301 builder
@@ -893,6 +910,7 @@ class StateMachine:
                     "pitch_outcome (count-machine-only mode)."
                 )
             pitch_fp = self._pa._pitch_fingerprint(state)  # TODO(SIM-317)
+            pitch_fp = self._jitter_query(pitch_fp, _PITCH_FEATURE_SCALE)
             pitch_sample = self._pa.sampler.sample_pitch(
                 state.pitcher_id, state.bat_hand, state.season, pitch_fp, k=self.k
             )
@@ -1042,6 +1060,22 @@ class StateMachine:
                 return _FOUL_OUTCOME
         return pitch_outcome
 
+    def _jitter_query(self, fp, scale):
+        """Scatter a deriver CENTROID query per pitch (SIM-421 L2).
+
+        Adds zero-mean Gaussian noise (per-dim ``scale * sigma``, drawn from the
+        loop rng so it stays reproducible from the per-game seed) so the k-NN
+        samples the pre-filtered tile representatively instead of collapsing onto
+        the dense centre.  A no-op on the stub-fingerprint path (already
+        stochastic) and when the engine scale is unavailable.
+        """
+        if self.fingerprint_deriver is None or scale is None or fp is None:
+            return fp
+        noise = self.rng.standard_normal(np.shape(fp)).astype(np.float32)
+        return (np.asarray(fp, dtype=np.float32) + noise * (scale * _QUERY_JITTER_SIGMA)).astype(
+            np.float32
+        )
+
     # ===================================================================
     # SIM-319 — run/base-out delta via resolve_runs (the ONE place, §8)
     # ===================================================================
@@ -1090,12 +1124,36 @@ class StateMachine:
             state.add_runs(int(result_runs))
             state.assert_score_valid()
         if result_outs:
-            result.outs_recorded += int(result_outs)
-            self._record_outs(state, int(result_outs))
+            # SIM-421: a sampled multi-out event (e.g. a GIDP carrying 2 outs)
+            # comes from a DIFFERENT base-out context; clamp it to the outs that
+            # actually remain in the half-inning so a double play with 2 already
+            # out ends the inning at 3 rather than overflowing to 4 (the ceiling
+            # assertion in _record_outs).
+            outs_to_record = min(int(result_outs), max(0, OUTS_PER_INNING - state.outs))
+            if outs_to_record:
+                result.outs_recorded += outs_to_record
+                self._record_outs(state, outs_to_record)
 
     # ===================================================================
     # SIM-319 — Step 7 baserunning (per-runner advancement on the bases)
     # ===================================================================
+
+    #: Probability a runner takes ONE extra base beyond the batter's hit value,
+    #: keyed by (bases_advanced, from_base) — the Retrosheet-style extra-advance
+    #: rates (e.g. 2nd->home on a single ~55%, 1st->3rd ~28%, 1st->home on a
+    #: double ~45%).  Absent keys = no extra base (SIM-421).
+    _EXTRA_ADVANCE_P: dict[tuple[int, int], float] = {
+        (1, 2): 0.55,  # single, runner on 2nd -> scores
+        (1, 1): 0.28,  # single, runner on 1st -> 3rd
+        (2, 1): 0.45,  # double, runner on 1st -> scores
+    }
+
+    def _extra_advance(self, from_base: int, bases_advanced: int) -> int:
+        """Return 1 if the runner takes an extra base beyond the hit value, else 0
+        (SIM-421).  Only hits (bases_advanced 1/2) grant extra bases; the draw
+        comes from the loop rng so a fixed seed reproduces the advance."""
+        p = self._EXTRA_ADVANCE_P.get((int(bases_advanced), int(from_base)), 0.0)
+        return 1 if p and float(self.rng.random()) < p else 0
 
     def _advance_runners(
         self, state: GameState, result: PlayResult, *, batter_reached: int, bases_advanced: int
@@ -1128,7 +1186,12 @@ class StateMachine:
         for from_base, rid in existing:
             if rid is None:
                 continue
-            dest = from_base + int(bases_advanced)
+            # SIM-421: a baserunner advances the batter's hit value PLUS a
+            # probabilistic extra base (the loop rng keeps it deterministic).  The
+            # old rigid ``from_base + bases_advanced`` stranded the runner from 2nd
+            # on every single (he only reached 3rd), suppressing run-scoring ~26%.
+            # Probabilities track the Retrosheet extra-base-advance rates.
+            dest = from_base + int(bases_advanced) + self._extra_advance(from_base, bases_advanced)
             if dest >= 4:
                 runs_scored += 1
                 advances[rid] = 0  # 0 == scored
@@ -1503,6 +1566,7 @@ class StateMachine:
         if self._pa is not None:
             # --- Step 5: batted-ball sampling ------------------------------
             bb_fp = self._pa._battedball_fingerprint(state)  # SIM-317
+            bb_fp = self._jitter_query(bb_fp, _BB_FEATURE_SCALE)
             bb_sample = self._pa.sampler.sample_batted_ball(
                 state.bat_hand, state.season, bb_fp, k=self.k
             )
@@ -1823,6 +1887,10 @@ class StateMachine:
 
         # The per-team batting-order pointers already persist on the GameState,
         # so the side coming to bat resumes where it left off automatically.
+        # SIM-421: re-point the matchup at the new half's offense/defense (the
+        # due-up batter + the fielding team's pitcher) so the sampler pre-filter
+        # follows the game instead of freezing at the opening matchup.
+        self._set_half_matchup(state)
 
         # Half-inning-boundary manager hook (§5.3) — SIM-323.
         self._end_of_pa_hook(state)
@@ -1865,6 +1933,32 @@ class StateMachine:
             if lineup:
                 state.away_lineup_slot = (state.away_lineup_slot + 1) % len(lineup)
                 state.batter_id = lineup[state.away_lineup_slot]
+        # SIM-421: the matchup pre-filter must follow the new batter's hand (was
+        # frozen at the leadoff hand for the whole game -> always one tile half).
+        state.bat_hand = state.bat_hand_for(state.batter_id)
+
+    def _set_half_matchup(self, state: GameState) -> None:
+        """Re-point the matchup at the new half's offense + defense (SIM-421).
+
+        Called from :meth:`advance_half_inning` AFTER the half flips: the side now
+        batting resumes at its persisted slot pointer (its due-up batter), and the
+        pitcher swaps to the fielding team's starter (away pitches when home bats,
+        and vice versa), refreshing the ``throw_hand`` + ``bat_hand`` pre-filters.
+        Each step is guarded so the count-machine test path (no lineups / no
+        pitcher map) is a no-op and keeps its fixed matchup.
+        """
+        if state.offense == Team.HOME:
+            lineup, slot = state.home_lineup, state.home_lineup_slot
+            pitcher = state.away_pitcher_id  # away team pitches when home bats
+        else:
+            lineup, slot = state.away_lineup, state.away_lineup_slot
+            pitcher = state.home_pitcher_id
+        if lineup:
+            state.batter_id = lineup[slot % len(lineup)]
+        if pitcher is not None:
+            state.pitcher_id = pitcher
+            state.throw_hand = state.throw_hands.get(pitcher, state.throw_hand)
+        state.bat_hand = state.bat_hand_for(state.batter_id)
 
     # ===================================================================
     # Manager hooks (§3 / §5.3) — SIM-323 owns the logic
@@ -2652,6 +2746,10 @@ def simulate_game(
     season: int = 2024,
     away_lineup: list[int] | None = None,
     home_lineup: list[int] | None = None,
+    bat_hands: dict[int, str] | None = None,
+    throw_hands: dict[int, str] | None = None,
+    home_pitcher_id: int | None = None,
+    away_pitcher_id: int | None = None,
     max_innings: int = _MAX_INNINGS,
 ) -> GameSimResult:
     """Drive the SIM-316 :class:`StateMachine` to a completed game (SIM-320).
@@ -2728,6 +2826,16 @@ def simulate_game(
         # Point the batter at the leadoff slot when a lineup is wired.
         if initial_state.away_lineup:
             initial_state.batter_id = initial_state.away_lineup[0]
+        # SIM-421: carry the per-batter hand map + both starters (picklable, so
+        # they survive the BatchRunner's sim_kwargs path) so the matchup
+        # pre-filter follows the lineup instead of freezing at the leadoff hand.
+        if bat_hands:
+            initial_state.bat_hands = dict(bat_hands)
+        if throw_hands:
+            initial_state.throw_hands = dict(throw_hands)
+        initial_state.home_pitcher_id = home_pitcher_id
+        initial_state.away_pitcher_id = away_pitcher_id
+        initial_state.bat_hand = initial_state.bat_hand_for(initial_state.batter_id)
     state = initial_state
     if seed is not None and state.seed is None:
         state.seed = seed

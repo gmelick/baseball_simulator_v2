@@ -203,8 +203,11 @@ class TestHalfInning:
         for _ in range(3):
             for _ in range(3):
                 sm.step_pitch(state, pitch_outcome="called_strike")
-        assert state.away_lineup_slot == 3
-        assert state.batter_id == away[3]  # away resumes at slot 3 next time
+        assert state.away_lineup_slot == 3  # away resumes at slot 3 next time
+        # SIM-421: the half-inning roll now re-points batter_id at the NEW
+        # offense's due-up hitter (home's leadoff) rather than leaving it on the
+        # away team's next batter, so the matchup pre-filter follows the game.
+        assert state.batter_id == home[0]
         assert state.home_lineup_slot == 0  # home untouched
         assert state.half == Half.BOTTOM
 

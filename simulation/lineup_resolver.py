@@ -426,6 +426,12 @@ def build_game_state(
     state.away_lineup_slot = 0
     state.batter_id = leadoff_batter
     state.throw_hand = throw_hand
+    # SIM-421: retain the per-batter hand map + both starters so the matchup
+    # pre-filter follows the lineup (batter hand per PA, pitcher per half).
+    state.bat_hands = dict(resolved.bat_hands)
+    state.throw_hands = dict(resolved.throw_hands)
+    state.home_pitcher_id = resolved.home.pitcher_id
+    state.away_pitcher_id = resolved.away.pitcher_id
     return state
 
 

@@ -244,6 +244,16 @@ class GameState:
     away_lineup_slot: int = 0
     home_lineup_slot: int = 0
 
+    # SIM-421: per-batter handedness + per-team starters so the matchup
+    # pre-filter follows the lineup.  ``bat_hands`` maps batter_id -> 'L'/'R'/'S'
+    # ('S' resolves vs the pitcher's throwing hand); the two pitcher ids let the
+    # half-inning roll swap the pitcher to the fielding team's starter.  Empty by
+    # default -> the count-machine test path keeps its fixed ``bat_hand`` (no-op).
+    bat_hands: dict[int, str] = field(default_factory=dict)
+    throw_hands: dict[int, str] = field(default_factory=dict)
+    home_pitcher_id: int | None = None
+    away_pitcher_id: int | None = None
+
     # ---- current matchup ids (spec step 2 matchup) --------------------------
     batter_id: int | None = None  # current batter; None until lineup set
     throw_hand: str | None = None  # current pitcher's throwing hand 'L'/'R'
@@ -293,6 +303,20 @@ class GameState:
         """The ``(pitcher_id, bat_hand, season)`` tuple the sampler pre-filters
         on (spec §4.3 / step 3).  These are tile keys, NOT fingerprint dims."""
         return (self.pitcher_id, self.bat_hand, self.season)
+
+    def bat_hand_for(self, batter_id: int | None) -> str:
+        """The batter's hand for the sampler pre-filter (SIM-421).
+
+        Resolves a switch hitter ('S') against the current pitcher's throwing
+        hand (the platoon side: a switch hitter bats opposite the pitcher).  When
+        the batter's hand is unknown (the count-machine test path, which sets no
+        ``bat_hands`` map) the current ``bat_hand`` is kept unchanged."""
+        hand = self.bat_hands.get(batter_id) if batter_id is not None else None
+        if hand is None:
+            return self.bat_hand
+        if hand == "S":
+            return "L" if (self.throw_hand or "R") == "R" else "R"
+        return hand
 
     # ====================================================================
     # Ergonomic mutators for the SIM-316 state machine.

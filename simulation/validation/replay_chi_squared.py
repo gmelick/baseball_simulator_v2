@@ -83,13 +83,17 @@ LEAGUE_PITCH_MODEL: dict[str, float] = {
     "in_play": 0.170,
 }
 
+# SIM-421: re-tuned to the production outcome-pool proportions (hit-on-contact
+# ~33%, was an inflated ~40% that had compensated for the old conservative
+# baserunner advancement).  With the corrected realistic advancement this lands
+# the harness run environment back at the ~4.4 R/team/G calibration target.
 LEAGUE_INPLAY_MODEL: dict[str, float] = {
-    "home_run": 0.050,
-    "single": 0.262,
-    "double": 0.084,
-    "triple": 0.008,
-    "field_out": 0.546,
-    "ground_into_double_play": 0.050,
+    "home_run": 0.049,
+    "single": 0.239,
+    "double": 0.071,
+    "triple": 0.006,
+    "field_out": 0.609,
+    "ground_into_double_play": 0.026,
 }
 
 _EVENT_HITS = {
