@@ -1,3 +1,32 @@
+# Phase 6 — SIM-404: stress / concurrency / leak suite — 2026-05-28
+**Authors: QA/DevOps (Agent 9), Performance Engineer (Agent 6)**
+
+Validates the SIM-403 parallelism work end-to-end with the invariants a
+long-lived production API needs. Five slow-marked integration tests in
+`tests/integration/test_stress_concurrency_sim404.py`, all sandbox-runnable
+(in-process FastAPI TestClient + ThreadPoolExecutor + the no-DB rng factory):
+
+- **Warm-pool stability** — 30 sequential /simulate requests share the SAME
+  ProcessPoolExecutor (SIM-360 AC) and the child-subprocess count never
+  drifts upward.
+- **No FD / subprocess leak** — after warming with 1 request, 29 more
+  requests do not grow the FD count beyond a 16-fd tolerance, and the
+  worker count stays exactly at `POOL_WORKERS`.
+- **30 concurrent /simulate** — every response carries the requested
+  game_pk + iteration count, and the (home_win + away_win + tie)% triple
+  sums to 1.0 on every one (no torn / interleaved data under contention).
+- **Direct BatchRunner concurrency** — 30 threads calling `runner.run(...)`
+  on the warm pool all succeed; isolates the runner seam from FastAPI
+  overhead.
+- **Cache-key race safety** — 30 concurrent same-key (matchup, seed, N)
+  requests all return identical canonical summaries (cache is coherent or
+  same-input races produce equal results — never a corrupted one).
+
+Pool sizes are intentionally MODEST (2 workers × 30 requests, 4
+n_iterations per request) so the suite is sandbox-bounded — the
+authoritative load gate is SIM-372 on target hardware under PERF_STRICT.
+All 5 tests pass in ~20s.
+
 # Phase 6 — SIM-414: W/L/S + ER + per-runner R reconciliation — 2026-05-28
 **Authors: Baseball Analyst (Agent 2), Backend Developer (Agent 5)**
 
