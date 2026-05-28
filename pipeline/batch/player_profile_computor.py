@@ -1590,6 +1590,12 @@ class PlayerProfileComputor:
         log.info("Computing pitcher profiles …")
         season_list = ", ".join(str(s) for s in seasons)
 
+        # Delete child rows first so INSERT OR REPLACE on pitcher_season_metrics
+        # can implicitly remove the old parent row without a FK violation.
+        self._conn.execute(
+            f"DELETE FROM derived.pitcher_gmm_components WHERE season IN ({season_list})"
+        )
+
         # --- Pass 1: command + result metrics ----------------------------
         self._conn.execute(f"""
                 INSERT OR REPLACE INTO derived.pitcher_season_metrics (
