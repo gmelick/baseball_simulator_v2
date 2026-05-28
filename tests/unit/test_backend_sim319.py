@@ -199,6 +199,54 @@ class TestWalkForcing:
         assert state.bases.first == 900  # batter to 1B
         assert state.bases.second == 102  # 2B runner not forced
 
+    def test_bases_loaded_walk_records_forced_advances(self):
+        """SIM-414: a bases-loaded walk records every forced advance in
+        ``baserunner_advances`` — including the runner on 3B who scored
+        (``end_base == 0``). Previously only the batter's advance was recorded
+        and the per-runner R credit silently dropped the forced run."""
+        sm = StateMachine(rng=np.random.default_rng(0))
+        state = _fresh_state(balls=3, batter_id=900)
+        state.bases = Bases(first=101, second=102, third=103)
+        r = sm.step_pitch(state, pitch_outcome="ball")
+        assert r.event == EVENT_WALK
+        assert r.runs_scored == 1
+        # Every forced runner is recorded.
+        assert r.baserunner_advances[103] == 0  # 3B runner scored
+        assert r.baserunner_advances[102] == 3  # 2B -> 3B
+        assert r.baserunner_advances[101] == 2  # 1B -> 2B
+        assert r.baserunner_advances[900] == 1  # batter to 1B
+
+    def test_bases_loaded_walk_credits_per_runner_R(self):
+        """SIM-414: the per-runner R credit in :meth:`_accumulate_pa` fires
+        for the runner on 3B forced home by a bases-loaded walk, so the
+        boxscore Σ r equals the linescore run total."""
+        sm = StateMachine(rng=np.random.default_rng(0))
+        state = _fresh_state(balls=3, batter_id=900)
+        state.bases = Bases(first=101, second=102, third=103)
+        sm.step_pitch(state, pitch_outcome="ball")
+        # Runner 103 crossed home -> credited 1 R; the other forced runners did
+        # not score, so their r stays 0.
+        assert sm.boxscore.line(103).r == 1
+        assert sm.boxscore.line(102).r == 0
+        assert sm.boxscore.line(101).r == 0
+        assert sm.boxscore.line(900).r == 0
+
+    def test_two_runners_walk_no_run_but_advances_recorded(self):
+        """SIM-414: a walk with runners on 1B+2B records both forced advances
+        (no run scores) — the dict is now semantically complete."""
+        sm = StateMachine(rng=np.random.default_rng(0))
+        state = _fresh_state(balls=3, batter_id=900)
+        state.bases = Bases(first=101, second=102)
+        r = sm.step_pitch(state, pitch_outcome="ball")
+        assert r.event == EVENT_WALK
+        assert r.runs_scored == 0
+        assert r.baserunner_advances[102] == 3  # 2B -> 3B
+        assert r.baserunner_advances[101] == 2  # 1B -> 2B
+        assert r.baserunner_advances[900] == 1
+        # No 0-base advance -> no R credited to anyone.
+        assert sm.boxscore.line(102).r == 0
+        assert sm.boxscore.line(101).r == 0
+
 
 # ===========================================================================
 # Steals — decision (pre-pitch) + outcome (step 7) against the steal pool

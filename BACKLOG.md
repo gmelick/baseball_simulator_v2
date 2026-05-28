@@ -1,6 +1,6 @@
 # Product Backlog
 
-*Owner: Product Manager (Agent 1) · Last updated: 2026-05-28 (SIM-403 ✅ + SIM-409 ✅ closed — real parallelism unblocked + lineup ingestion guard. 🚀 PHASE 6 Sprint 1 COMPLETE — all 13 P0s + SIM-410. Sprint 2 (P1 frontend build) COMPLETE — SIM-391→401. Hardening batch COMPLETE — SIM-415/416/417/418/419/420. Remaining: P1 data/ML/perf SIM-402/404/406/407/408 (live-env), P2 sim-realism SIM-411→414)*
+*Owner: Product Manager (Agent 1) · Last updated: 2026-05-28 (SIM-414 ✅ closed — W/L/S + ER + per-runner R cross-surface reconciliation. SIM-403 ✅ + SIM-409 ✅ closed earlier this day. 🚀 PHASE 6 Sprint 1 COMPLETE — all 13 P0s + SIM-410. Sprint 2 (P1 frontend build) COMPLETE — SIM-391→401. Hardening batch COMPLETE — SIM-415/416/417/418/419/420. Remaining: P1 data/ML/perf SIM-402/404/406/407/408 (live-env), P2 sim-realism SIM-411/412/413)*
 
 > # 🚀 PHASE 6 — Frontend Build — OPEN 2026-09-02 (audit executed 2026-05-25)
 >
@@ -66,7 +66,7 @@
 > | SIM-411 | Park factor into the run environment | Improvement | P2 | L | Baseball Analyst + ML Engineer + Data Engineer | - |
 > | SIM-412 | Home-field run advantage in the score distribution | Improvement | P2 | M | Baseball Analyst | SIM-411 |
 > | SIM-413 | Pitcher throwing-hand -> batter platoon split in the batted-ball matchup | Improvement | P2 | M | Baseball Analyst + ML Engineer | - |
-> | SIM-414 | W/L/S + ER + per-runner R cross-surface reconciliation | Bug | P2 | M | Baseball Analyst + Backend Developer | SIM-384 |
+> | SIM-414 | W/L/S + ER + per-runner R cross-surface reconciliation | Bug | P2 | M | Baseball Analyst + Backend Developer | SIM-384 | ✅ **Closed 2026-05-28** (sub-5-IP starter rule + inning-reconstruction unearned runs + walk-forced per-runner R)
 > | SIM-415 | Pagination / payload-trim for heavy endpoints | Improvement | P2 | M | Backend Developer | - | ✅ **Closed 2026-05-26** |
 > | SIM-416 | App-level exception handler + structured error envelope | Improvement | P2 | S | Backend Developer | - | ✅ **Closed 2026-05-26** |
 > | SIM-417 | Data-freshness/health API surface for the UI | Feature | P2 | S | Data Engineer | - | ✅ **Closed 2026-05-26** |

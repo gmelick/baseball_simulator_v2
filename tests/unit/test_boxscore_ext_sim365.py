@@ -311,6 +311,125 @@ class TestPitcherHitsAndRunsAllowed:
 
 
 # ===========================================================================
+# SIM-414 — Inning-reconstruction unearned runs (Rule 9.16(b))
+# A run that scores AFTER the inning "should have ended" (an earlier
+# reach-on-error prevented an out) is UNEARNED even when its play is clean.
+# ===========================================================================
+
+
+class TestSim414InningReconstruction:
+    def test_reach_on_error_increments_half_inning_error_outs_lost(self):
+        """The canonical reach-on-error (is_error + outs_recorded==0) adds 1
+        to the per-half-inning missed-out counter."""
+        sm = _machine()
+        state = _fresh_state()
+        assert sm._half_inning_error_outs_lost == 0
+        sm._accumulate_pa(
+            state,
+            _pa("field_error", outs_recorded=0, is_error=True),
+        )
+        assert sm._half_inning_error_outs_lost == 1
+
+    def test_error_play_with_recorded_out_does_not_increment(self):
+        """An error that still records an out (e.g. throwing error after a
+        force out) does NOT add to the missed-out counter."""
+        sm = _machine()
+        state = _fresh_state()
+        sm._accumulate_pa(
+            state,
+            _pa("field_out", outs_recorded=1, is_error=True),
+        )
+        assert sm._half_inning_error_outs_lost == 0
+
+    def test_clean_run_after_inning_should_have_ended_is_unearned(self):
+        """2 actual outs + 1 error-out-lost = effective 3 outs.  A clean single
+        that drives in a run scored AFTER this point is UNEARNED (charged to R
+        but not to ER)."""
+        sm = _machine()
+        state = _fresh_state()
+        state.outs = 2  # 2 outs already recorded
+        sm._half_inning_error_outs_lost = 1  # earlier reach-on-error
+        state.bases = Bases(third=701)
+        sm._accumulate_pa(
+            state,
+            _pa(
+                "single",
+                runs_scored=1,
+                outs_recorded=0,
+                advances={701: 0, state.batter_id: 1},
+            ),
+        )
+        pit = sm.boxscore.line(PITCHER)
+        assert pit.r_allowed == 1
+        assert pit.er == 0  # unearned: inning should have ended
+        # RBI is still credited (Rule 9.04: clean RBI in an extended inning counts).
+        bat = sm.boxscore.line(state.batter_id)
+        assert bat.rbi == 1
+
+    def test_run_before_inning_would_have_ended_is_earned(self):
+        """1 actual out + 1 error-out-lost = effective 2 outs.  A clean run on
+        this play scores BEFORE the inning would have ended -> EARNED."""
+        sm = _machine()
+        state = _fresh_state()
+        state.outs = 1
+        sm._half_inning_error_outs_lost = 1
+        state.bases = Bases(third=701)
+        sm._accumulate_pa(
+            state,
+            _pa(
+                "single",
+                runs_scored=1,
+                outs_recorded=0,
+                advances={701: 0, state.batter_id: 1},
+            ),
+        )
+        pit = sm.boxscore.line(PITCHER)
+        assert pit.r_allowed == 1
+        assert pit.er == 1  # earned: inning had not yet "should have ended"
+
+    def test_two_reach_on_errors_then_clean_run_is_unearned(self):
+        """Two reach-on-errors in the same half-inning + 1 actual out =
+        effective 3 outs.  A subsequent clean run is unearned."""
+        sm = _machine()
+        state = _fresh_state()
+        # First reach-on-error.
+        sm._accumulate_pa(state, _pa("field_error", outs_recorded=0, is_error=True))
+        # Second reach-on-error.
+        sm._accumulate_pa(state, _pa("field_error", outs_recorded=0, is_error=True))
+        # Actual out.
+        state.outs = 1
+        sm._accumulate_pa(state, _pa("strikeout", outs_recorded=1))
+        # Clean RBI single.
+        state.outs = 1  # still 1 actual out
+        state.bases = Bases(third=701)
+        sm._accumulate_pa(
+            state,
+            _pa(
+                "single",
+                runs_scored=1,
+                outs_recorded=0,
+                advances={701: 0, state.batter_id: 1},
+            ),
+        )
+        pit = sm.boxscore.line(PITCHER)
+        # effective_outs_before_clean_single = 1 + 2 = 3 -> unearned.
+        assert pit.er == 0
+        assert pit.r_allowed == 1
+
+    def test_half_inning_roll_resets_error_counter(self):
+        """Errors don't carry across half-innings.  ``advance_half_inning``
+        resets the counter so a clean run in the next half is earned."""
+        sm = _machine()
+        state = _fresh_state()
+        sm._half_inning_error_outs_lost = 2
+        # Half-inning advances when state.outs has reached 3.  Force it via the
+        # state setter (we just need the precondition the method asserts).
+        state.outs = 3
+        sm.advance_half_inning(state)
+        assert sm._half_inning_error_outs_lost == 0
+
+
+# ===========================================================================
 # Stolen bases (accumulated in _resolve_steal_outcome -- catches non-terminal
 # pitches too) + a caught stealing is neither an SB nor a run
 # ===========================================================================

@@ -47,10 +47,16 @@ empty stream).
   the moment the decisive lead-taking run scored*.  Because the lead-taking run
   is scored by the offense against the losing team, the winning team's pitcher
   of record at that instant is the one carried from its most recent fielding
-  play (its half-inning).  (Simplified-standard attribution: official scoring
-  has discretion for a starter who didn't go 5 IP, but we apply the common
-  "pitcher of record when the winning team took the permanent lead" rule and do
-  not model the 5-IP starter exception.)
+  play (its half-inning).
+
+  **SIM-414 — MLB Rule 9.17(b) starter exception.**  If the candidate winner is
+  the winning team's **starter** and that starter did NOT record at least 15
+  outs (5.0 IP), the win is reassigned to the most-effective reliever.  We
+  approximate "most effective" by outs recorded (the simulator does not carry a
+  leverage / WPA signal); ties break by first-appearance order; if no reliever
+  has any outs we leave the starter (defensive fallback for under-instrumented
+  streams).  The reassigned winner correctly invalidates a save for the same
+  pitcher (the finisher-vs-winner check downstream sees the new id).
 
 * **Losing pitcher.**  The losing team's pitcher who was on the mound when the
   decisive lead-taking run scored — i.e. the pitcher who *allowed* the run that
@@ -91,10 +97,18 @@ from simulation.game_state import GameState, Half, PlayResult, Team
 #: three runs or fewer with the finisher pitching at least one inning.
 SAVE_LEAD_CEILING = 3
 
+#: SIM-414: MLB Rule 9.17(b) — a starting pitcher must pitch at least 5 INNINGS
+#: (15 outs) to be credited with the win.  When the starter does not reach 5
+#: IP, the official scorer awards the win to the most-effective reliever; we
+#: approximate "most effective" by outs recorded (with first-appearance order
+#: breaking ties), since the simulator doesn't carry a leverage / WPA signal.
+STARTER_WIN_MIN_OUTS = 15
+
 __all__ = [
     "PitcherDecisions",
     "decisions_from_plays",
     "SAVE_LEAD_CEILING",
+    "STARTER_WIN_MIN_OUTS",
 ]
 
 
@@ -127,12 +141,15 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
     are skipped (they cannot move the score / pitcher of record).  Returns a
     :class:`PitcherDecisions`; see the module docstring for the exact rules.
     """
-    # Collect committed states in order.
-    states: list[GameState] = [r.next_state for r in results if r.next_state is not None]
-    if not states:
+    # Iterate results+states together: states gives the committed score / poR,
+    # results carries ``outs_recorded`` we need for SIM-414 (the starter-5-IP rule).
+    paired: list[tuple[PlayResult, GameState]] = [
+        (r, r.next_state) for r in results if r.next_state is not None
+    ]
+    if not paired:
         return PitcherDecisions()
 
-    final = states[-1]
+    final = paired[-1][1]
     home_final, away_final = final.home_score, final.away_score
 
     # No decision on a tie (or a still-tied / unfinished stream).
@@ -148,6 +165,13 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
     home_poR: int | None = None  # pitcher of record (home)
     away_poR: int | None = None  # pitcher of record (away)
 
+    # SIM-414: per-pitcher outs recorded for the WINNING team's pitchers, plus
+    # the order in which they first appeared (for tie-breaking the most-effective
+    # reliever choice when the starter doesn't reach 5 IP).
+    winner_pitcher_outs: dict[int, int] = {}
+    winner_pitcher_order: list[int] = []
+    winner_starter_id: int | None = None
+
     # Build a per-state view: (winner_score, loser_score, winner_poR, loser_poR).
     # winner_poR/loser_poR are the pitchers of record *as of* that play, given
     # the substitutions seen so far.
@@ -155,7 +179,7 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
         return st.home_score if team == Team.HOME else st.away_score
 
     snapshots: list[tuple[int, int, int | None, int | None]] = []
-    for st in states:
+    for r, st in paired:
         defending = _defending_team(st)
         if defending == Team.HOME:
             home_poR = st.pitcher_id
@@ -163,6 +187,16 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
             away_poR = st.pitcher_id
         winner_poR = home_poR if winner == Team.HOME else away_poR
         loser_poR = home_poR if loser == Team.HOME else away_poR
+        # SIM-414: tally outs for whichever winning-team pitcher is on the mound.
+        if defending == winner and st.pitcher_id is not None:
+            pid = int(st.pitcher_id)
+            if pid not in winner_pitcher_outs:
+                winner_pitcher_outs[pid] = 0
+                winner_pitcher_order.append(pid)
+                if winner_starter_id is None:
+                    winner_starter_id = pid
+            outs_on_play = int(getattr(r, "outs_recorded", 0) or 0)
+            winner_pitcher_outs[pid] += outs_on_play
         snapshots.append(
             (
                 _score_for(winner, st),
@@ -193,6 +227,29 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
     _, _, win_poR_at_lead, lose_poR_at_lead = snapshots[decisive_idx]
     winning_pitcher_id = win_poR_at_lead
     losing_pitcher_id = lose_poR_at_lead
+
+    # SIM-414: MLB Rule 9.17(b) — if the winning team's STARTER is the pitcher
+    # of record at the decisive play but did not pitch 5 innings (15 outs), the
+    # official scorer awards the win to the most-effective reliever instead.
+    # We approximate "most effective" by outs recorded; the starter is excluded,
+    # ties break by first-appearance order.  If no reliever has any outs the
+    # starter keeps the decision (defensive fallback — shouldn't happen in a
+    # finished game with a sub-5-IP starter, but guard against an empty list).
+    if (
+        winning_pitcher_id is not None
+        and winner_starter_id is not None
+        and winning_pitcher_id == winner_starter_id
+        and winner_pitcher_outs.get(winner_starter_id, 0) < STARTER_WIN_MIN_OUTS
+    ):
+        reliever_candidates = [pid for pid in winner_pitcher_order if pid != winner_starter_id]
+        if reliever_candidates:
+            # Pick the reliever with the most outs; tie -> earliest appearance.
+            best = max(
+                reliever_candidates,
+                key=lambda pid: (winner_pitcher_outs.get(pid, 0), -winner_pitcher_order.index(pid)),
+            )
+            if winner_pitcher_outs.get(best, 0) > 0:
+                winning_pitcher_id = best
 
     # ---- Save -----------------------------------------------------------------
     # The winning side's pitcher of record on the final play (the finisher).

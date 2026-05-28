@@ -1,3 +1,68 @@
+# Phase 6 — SIM-414: W/L/S + ER + per-runner R reconciliation — 2026-05-28
+**Authors: Baseball Analyst (Agent 2), Backend Developer (Agent 5)**
+
+Three pre-existing boxscore/linescore disagreements closed.  Once the frontend
+renders boxscore and linescore together, the per-pitcher ER, the team total R,
+and the per-runner R now sum cleanly and reflect the standard MLB rules.
+
+**SIM-414a — Sub-5-IP starter winner rule (MLB Rule 9.17(b)).**
+`simulation/pitcher_decisions.py` previously awarded the win to the winning
+team's pitcher of record at the decisive lead-taking play, ignoring the
+official-scorer rule that a starter who didn't pitch 5 IP cannot earn the win.
+
+- New `STARTER_WIN_MIN_OUTS = 15` constant + reassignment block in
+  `decisions_from_plays`.  When the candidate winner is the winning team's
+  starter and their outs recorded < 15, the win is reassigned to the reliever
+  with the most outs (ties → first-appearance order; defensive fallback to
+  keep the starter if no reliever has any outs — protects synthetic-stream
+  tests that don't track outs).
+- The play-pair loop now zips `(result, next_state)` so per-pitcher outs are
+  tallied for the winning team only.  Snapshot construction unchanged.
+- The save chain runs against the *reassigned* `winning_pitcher_id`, so a
+  reliever-now-winner correctly invalidates a save for the same pitcher.
+- 5 new tests in `test_pitcher_decisions_sim364.py::TestSim414StarterMinIP`
+  (4.2 IP starter loses win; 5.0 IP exactly keeps win; no-eligible-reliever
+  fallback; reassigned win invalidates save; constant pinned to 15).  All
+  14 pre-existing SIM-364 tests still pass.
+
+**SIM-414b — Inning-reconstruction unearned runs (MLB Rule 9.16(b)).**
+`_accumulate_pa` previously only excluded runs scored on the *current* play
+when `is_error=True`, missing the larger "errors earlier in the inning let
+later runs score unearned" class.
+
+- New `StateMachine._half_inning_error_outs_lost` counter, incremented when a
+  play is `is_error=True` with `outs_recorded == 0` (canonical reach-on-error
+  = 1 missed out).  Reset in `advance_half_inning`.
+- `_accumulate_pa` computes `effective_outs_before_play = state.outs - outs +
+  error_outs_lost` and flags the play as unearned when that reaches 3 — even
+  when the play itself is clean.  ER excludes the flagged run; R_allowed still
+  counts it (R ≥ ER invariant preserved).  RBI tracks the per-play `is_error`
+  flag only (Rule 9.04 — a clean RBI in an extended inning still counts).
+- 6 new tests in `test_boxscore_ext_sim365.py::TestSim414InningReconstruction`
+  (counter increments only on outs==0; clean run after effective-3 outs is
+  unearned; same run before effective-3 is earned; two-reach-on-errors
+  scenario; half-inning roll resets).
+
+**SIM-414c — Walk-forced runs in per-runner R.**
+`_resolve_walk` previously didn't record forced advances in
+`baserunner_advances`, so a bases-loaded walk forced a run home (and the run
+showed in the linescore) but the per-runner R credit in `_accumulate_pa`
+silently dropped it (the code carried an explicit "documented under-count"
+comment).
+
+- Capture pre-walk runner ids before the base-state mutation and record each
+  forced advance (3B→0 / 2B→3 / 1B→2) alongside the batter's →1 entry.
+- The per-runner R credit now fires for the runner forced home; the
+  semantically complete advances dict also unblocks downstream consumers.
+- 3 new tests in `test_backend_sim319.py::TestWalkForcing` cover the
+  advances dict, the per-runner R credit on a bases-loaded walk, and the
+  no-run-but-advances-recorded case for runners on 1B+2B.
+
+**Tests:** 67 pass across `test_pitcher_decisions_sim364.py` (19),
+`test_boxscore_ext_sim365.py` (48 incl. 6 new), and
+`test_backend_sim319.py::TestWalkForcing` (5).  No regressions in the
+sim_loop / boxscore / decisions surfaces.
+
 # Phase 6 — SIM-409 + SIM-403: lineup ingestion guard + real parallelism — 2026-05-28
 **Authors: Backend Developer (Agent 5), Data Engineer (Agent 4), QA/DevOps (Agent 9)**
 

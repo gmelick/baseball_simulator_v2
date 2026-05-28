@@ -821,6 +821,13 @@ class StateMachine:
         # caller that does not care) carries no boxscore.  The full-game driver
         # exposes it on :class:`GameSimResult.boxscore`.
         self.boxscore: BoxScore | None = None
+        # SIM-414: per-half-inning counter of outs that errors prevented (a
+        # reach-on-error that would have been an out adds 1).  Used by
+        # :meth:`_accumulate_pa` to flag runs that scored AFTER the inning
+        # "should have ended" as UNEARNED per MLB Rule 9.16(b) — the prior
+        # implementation only excluded the per-play ``is_error`` case and
+        # under-counted unearned runs.  Reset to 0 in :meth:`advance_half_inning`.
+        self._half_inning_error_outs_lost: int = 0
         self._pa: PlateAppearanceSimulator | None = (
             PlateAppearanceSimulator(
                 sampler,
@@ -1594,20 +1601,35 @@ class StateMachine:
         A walk forces the batter to 1B and pushes each runner ahead only when the
         bag behind him is occupied (a true force).  The number of forced runs is
         computed from the base state, then handed to :meth:`_commit_run_delta`.
+
+        SIM-414: each forced advance is also recorded in
+        ``result.baserunner_advances`` so the per-runner R credit in
+        :meth:`_accumulate_pa` fires for a walk-forced run (previously a
+        documented under-count that made the boxscore disagree with the
+        linescore once shown together).
         """
         result.event = EVENT_WALK
         result.pa_terminal = True
         b = state.bases
+        # Capture pre-walk runner identities before the base mutation overwrites
+        # them — the advances dict is keyed on the runner who moved, not the bag.
+        rid_1 = b.first
+        rid_2 = b.second
+        rid_3 = b.third
         # A walk forces runners only on consecutive occupancy from 1B.
         forced_run = 0
-        if b.first is not None:
-            if b.second is not None:
-                if b.third is not None:
+        if rid_1 is not None:
+            if rid_2 is not None:
+                if rid_3 is not None:
                     forced_run = 1  # bases loaded -> run forced home
+                    # Runner on 3B scored (end_base == 0 triggers the R credit).
+                    result.baserunner_advances[int(rid_3)] = 0
                 # push 2B -> 3B
-                b.third = b.second
+                b.third = rid_2
+                result.baserunner_advances[int(rid_2)] = 3
             # push 1B -> 2B
-            b.second = b.first
+            b.second = rid_1
+            result.baserunner_advances[int(rid_1)] = 2
         # batter to 1B
         b.first = state.batter_id if state.batter_id is not None else b.first
         b.assert_consistent()
@@ -2026,15 +2048,19 @@ class StateMachine:
             when the play carried an error (``result.is_error``), in which case
             we treat the run(s) as UNEARNED and do not charge the pitcher.
 
-        EARNED/UNEARNED SIMPLIFICATION (documented per the AC): full ER scoring
-        requires reconstructing the inning "as if" errors never happened (which
-        runners would have scored absent the error / extra outs).  We deliberately
-        do NOT do that here.  Instead we use the per-play ``is_error`` flag as the
-        split: a run that scores on a play flagged as an error is unearned; every
-        other scored run is earned and charged to the current pitcher.  This is a
-        conservative, deterministic, per-play approximation — it under-counts the
-        rare "error earlier in the inning lets a later run score unearned" case,
-        which a future ticket can refine with the inning-reconstruction rule.
+        EARNED/UNEARNED — INNING-RECONSTRUCTION (SIM-414): full ER scoring per
+        MLB Rule 9.16(b) treats as UNEARNED any run that would not have scored
+        had the defense played errorlessly — including runs that score AFTER the
+        inning "should have ended".  We approximate this by tracking
+        ``_half_inning_error_outs_lost`` (incremented when an error play
+        recorded no outs — the canonical reach-on-error) and flagging the run as
+        unearned if ``outs_before_this_play + error_outs_lost >= 3``.  Combined
+        with the per-play ``is_error`` flag, this captures the two dominant
+        unearned-run patterns: (1) runs that score on an error play, (2) runs
+        that score in an extended inning.  The rarer "runner reached on an
+        error and later scored" case requires per-runner provenance and is
+        deferred (a future ticket can add it).  RBI tracks ``is_error`` only
+        (per Rule 9.04: a clean RBI in an extended inning still counts).
         """
         if self.boxscore is None:
             self.boxscore = BoxScore()
@@ -2047,6 +2073,17 @@ class StateMachine:
         runs = int(result.runs_scored or 0)
         outs = int(result.outs_recorded or 0)
         is_error = bool(result.is_error)
+
+        # SIM-414: inning-reconstruction unearned-run flag.  ``state.outs`` has
+        # already been incremented by this play, so the count BEFORE the play
+        # is ``state.outs - outs``.  If errors earlier in the half-inning
+        # prevented an out, the effective out total may already be >= 3 at the
+        # start of this play — any run that scores here is unearned even when
+        # this play itself is clean.
+        outs_before_play = max(0, int(state.outs) - outs)
+        effective_outs_before_play = outs_before_play + self._half_inning_error_outs_lost
+        inning_should_have_ended = effective_outs_before_play >= 3
+        run_is_unearned = is_error or inning_should_have_ended
 
         batter_id = self._current_batter_id(state)
 
@@ -2072,14 +2109,13 @@ class StateMachine:
 
         # ---- runs scored (SIM-365): credit each runner who crossed home on this
         # play.  ``baserunner_advances`` records ``end_base == 0`` for a runner who
-        # SCORED (set in :meth:`_advance_runners` when dest >= 4, and for the HR
-        # batter).  Steals are credited entirely in :meth:`_resolve_steal_outcome`
+        # SCORED (set in :meth:`_advance_runners` when dest >= 4, for the HR
+        # batter, and SIM-414 for the runner on 3B forced home by a bases-loaded
+        # walk).  Steals are credited entirely in :meth:`_resolve_steal_outcome`
         # (so a steal on a NON-terminal pitch — which never reaches this method —
         # is still counted, and a caught-stealing ``0`` is never mistaken for a
         # scored run); we therefore skip run attribution on a steal PA here to
-        # avoid double-counting a steal-of-home.  Forced runs on a walk are not
-        # recorded per-runner in ``baserunner_advances`` (only ``runs_scored``),
-        # so a walk-forced run is a documented under-count for the per-runner R.
+        # avoid double-counting a steal-of-home.
         if not result.steal_attempted:
             for rid, end_base in result.baserunner_advances.items():
                 if int(end_base) == 0:
@@ -2096,8 +2132,10 @@ class StateMachine:
             # SIM-365: a base hit charged to the pitcher.
             if canonical in self._HIT_CANONICAL:
                 pit.h_allowed += 1
-            # ER: scored runs charged to the pitcher unless flagged as error.
-            if runs and not is_error:
+            # ER: scored runs charged to the pitcher unless the run is unearned —
+            # SIM-414: now also excludes runs that score after the inning "should
+            # have ended" (an earlier error prevented an out).
+            if runs and not run_is_unearned:
                 pit.er += runs
             # SIM-365: runs allowed (R) include UNEARNED runs too, so unlike ER
             # there is no ``is_error`` exclusion — R >= ER by construction.  A
@@ -2106,6 +2144,12 @@ class StateMachine:
             # a terminal-pitch steal-of-home's run is already in ``runs`` here.
             if runs:
                 pit.r_allowed += runs
+
+        # SIM-414: a reach-on-error (the canonical error play — outs_recorded == 0
+        # with is_error == True) counts as one missed out; subsequent runs in the
+        # same half-inning will be unearned once effective_outs reaches 3.
+        if is_error and outs == 0:
+            self._half_inning_error_outs_lost += 1
 
     def advance_half_inning(self, state: GameState) -> None:
         """Roll the half-inning at 3 outs (spec §6.1).
@@ -2132,6 +2176,8 @@ class StateMachine:
         state.bases.clear()
         state.reset_outs()
         state.reset_count()
+        # SIM-414: errors don't carry across half-innings.
+        self._half_inning_error_outs_lost = 0
 
         if state.half == Half.TOP:
             state.half = Half.BOTTOM
