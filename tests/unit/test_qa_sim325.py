@@ -269,6 +269,7 @@ class TestChiSquaredGuards:
 
 
 class TestRealDataSeam:
+    @pytest.mark.slow
     def test_replay_and_test_over_historical_games(self):
         # Exercise the real-data seam: replay HistoricalGames through the loop and
         # chi-squared the simulated run distribution against a reference of ACTUAL
