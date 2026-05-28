@@ -3379,8 +3379,9 @@ class PlayerProfileComputor:
             if not toward_2b and initiator_pos in ("3B", "1B"):
                 time_margin -= 0.15
 
-            # Outcome
-            dp_turned = r["outs_on_pitch"] >= 2
+            # Outcome — Statcast never sets outs_on_pitch=2 for DPs; the relay
+            # out is recorded via the events field only.
+            dp_turned = r["events"] in ("grounded_into_double_play", "double_play")
 
             # Identify pivot man
             pivot_id = None
