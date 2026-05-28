@@ -288,11 +288,49 @@ class BattedBallPool:
         return int(self.sit.shape[0])
 
 
+#: SIM-403b — the shareable subset of numpy arrays inside an EngineArtifacts
+#: bundle, by flat name. Used for zero-copy publication into
+#: ``multiprocessing.shared_memory`` so worker subprocesses don't each copy the
+#: ~hundreds-of-MB pool/embedding arrays from disk. The key convention is
+#: ``"<bucket>.<sub>.<attr>"`` so the worker can unambiguously route each view
+#: back to its slot. Object-dtype arrays (``HandPool.outcome_type`` /
+#: ``BattedBallPool.event``) and the pitcher-sim dict-of-dicts are kept
+#: per-worker (loaded from disk) — they are not shareable through
+#: ``shared_memory`` and live as small picklable Python objects anyway.
+_HAND_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
+    "geom",
+    "sit",
+    "pitcher_id",
+    "batter_id",
+    "season",
+    "recency",
+)
+_BB_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
+    "geom",
+    "sit",
+    "batter_id",
+    "season",
+    "result_hits",
+    "result_outs",
+    "recency",
+)
+_ACTOR_EMB_SHAREABLE_ATTRS: tuple[str, ...] = ("vecs", "mean", "std")
+
+
 class EngineArtifacts:
     """Per-worker loader for the SIM-422 bundle (resident, built entirely from disk
     so nothing live crosses the ProcessPool fork).  Holds both batter-hand pools +
     (when present) the pitcher×pitcher similarity lookup; the SIM-423 sampler reads
-    these to assemble the factorized full-pool weights."""
+    these to assemble the factorized full-pool weights.
+
+    SIM-403b: the big read-only numpy arrays (pitch pool + batted-ball pool +
+    actor embeddings) can be PUBLISHED INTO SHARED MEMORY by the parent (via
+    :meth:`extract_shared_arrays`) and ATTACHED zero-copy by each worker (via
+    :meth:`attach_shared_views`), so a 10-worker pool resident-set drops from
+    ``10 × ~300 MB`` to ``~300 MB`` total + per-worker scratch. The shared-mem
+    plumbing itself lives in :mod:`simulation.batch_runner` (``shared_arrays=``
+    + :func:`_worker_init`); this module just defines the (flat-name -> array)
+    contract."""
 
     def __init__(
         self,
@@ -310,6 +348,89 @@ class EngineArtifacts:
         self.seasons: list[int] = seasons or []
         #: actor -> {"key_index": {id:season -> row}, "vecs", "mean", "std", "features"}
         self.actor_emb: dict[str, dict] = actor_emb or {}
+
+    # ------------------------------------------------------------------
+    # SIM-403b — shared-memory publish/attach helpers
+    # ------------------------------------------------------------------
+
+    def extract_shared_arrays(self) -> dict[str, np.ndarray]:
+        """Return the shareable numpy arrays in this bundle keyed by flat name.
+
+        Parent-side: call once after :meth:`load`, hand the result to
+        ``BatchRunner(shared_arrays=...)`` so the runner publishes them into
+        ``multiprocessing.shared_memory`` ONCE for the warm pool. Each value is
+        the same buffer the loaded instance carries (no copy here); the runner
+        does the single copy into shared memory.
+
+        Keys:
+          * ``"pool.<hand>.<attr>"``      — HandPool attrs in
+            :data:`_HAND_POOL_SHAREABLE_ATTRS`.
+          * ``"bb_pool.<hand>.<attr>"``   — BattedBallPool attrs in
+            :data:`_BB_POOL_SHAREABLE_ATTRS`.
+          * ``"actor_emb.<actor>.<attr>"`` — for ``attr`` in
+            :data:`_ACTOR_EMB_SHAREABLE_ATTRS` and any actor present in
+            :attr:`actor_emb`.
+
+        Object-dtype arrays (``outcome_type`` / ``event``) and the
+        ``pitcher_sim`` dict-of-dicts are NOT included — they are not shareable
+        through ``shared_memory`` and stay per-worker (each worker loads them
+        from disk as today; they're a small fraction of the bundle by size).
+        """
+        out: dict[str, np.ndarray] = {}
+        for hand, pool in self.pools.items():
+            for attr in _HAND_POOL_SHAREABLE_ATTRS:
+                arr = getattr(pool, attr, None)
+                if isinstance(arr, np.ndarray):
+                    out[f"pool.{hand}.{attr}"] = arr
+        for hand, pool in self.bb_pools.items():
+            for attr in _BB_POOL_SHAREABLE_ATTRS:
+                arr = getattr(pool, attr, None)
+                if isinstance(arr, np.ndarray):
+                    out[f"bb_pool.{hand}.{attr}"] = arr
+        for actor, emb in self.actor_emb.items():
+            for attr in _ACTOR_EMB_SHAREABLE_ATTRS:
+                v = emb.get(attr)
+                if isinstance(v, np.ndarray):
+                    out[f"actor_emb.{actor}.{attr}"] = v
+        return out
+
+    def attach_shared_views(self, views: dict[str, np.ndarray]) -> None:
+        """In-place replace this bundle's shareable arrays with ``views``.
+
+        Worker-side: after :meth:`load` returns a freshly-disk-loaded bundle,
+        call this with the attached shared-memory views (from
+        :data:`simulation.batch_runner._WORKER_SHARED` ``["views"]``) so each
+        large array is REPLACED by a zero-copy view over the parent's segment.
+        The disk-loaded buffers then become unreferenced and the worker's
+        resident-set drops to the shared one.
+
+        ``views`` is the same flat-name -> ndarray map :meth:`extract_shared_arrays`
+        emits (the runner pickles the segment registry across the fork; the worker
+        initializer rebuilds the ndarray views over the attached segments). Keys
+        that don't match this bundle's structure are silently ignored — a
+        defensive contract so a stale registry from a previous artifact build
+        doesn't crash the worker.
+        """
+        if not views:
+            return
+        for hand, pool in self.pools.items():
+            for attr in _HAND_POOL_SHAREABLE_ATTRS:
+                key = f"pool.{hand}.{attr}"
+                v = views.get(key)
+                if isinstance(v, np.ndarray):
+                    setattr(pool, attr, v)
+        for hand, pool in self.bb_pools.items():
+            for attr in _BB_POOL_SHAREABLE_ATTRS:
+                key = f"bb_pool.{hand}.{attr}"
+                v = views.get(key)
+                if isinstance(v, np.ndarray):
+                    setattr(pool, attr, v)
+        for actor, emb in self.actor_emb.items():
+            for attr in _ACTOR_EMB_SHAREABLE_ATTRS:
+                key = f"actor_emb.{actor}.{attr}"
+                v = views.get(key)
+                if isinstance(v, np.ndarray):
+                    emb[attr] = v
 
     @classmethod
     def load(cls, art_dir: str) -> EngineArtifacts:

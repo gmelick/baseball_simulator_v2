@@ -294,7 +294,19 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     None otherwise (the validated per-tile path).  Built from disk -> fork-safe.
 
     SIM-429: ``SIM_FULL_POOL`` is parsed as a real boolean so ``=0``/``=false``
-    disables it (production sets ``=1``; the unit-test conftest sets ``=0``)."""
+    disables it (production sets ``=1``; the unit-test conftest sets ``=0``).
+
+    SIM-403b: when the parent has published the artifact arrays into shared memory
+    via ``BatchRunner(shared_arrays=...)``, the worker's :func:`_worker_init` has
+    already attached them and put zero-copy views in
+    :data:`simulation.batch_runner._WORKER_SHARED` ``["views"]``. We disk-load the
+    bundle (small picklable members like the pitcher-sim dict + the object-dtype
+    outcome_type / event arrays only — the loader does the same I/O either way)
+    and then SPLICE the shared views over the big numerical arrays. Net effect:
+    per-worker resident-set drops by the size of the shared subset (~hundreds of
+    MB at production scale). When no views are present (no-DB tests, sandboxes
+    without the published bundle), this is a no-op — the disk path is unchanged.
+    """
     env = os.environ.get("SIM_FULL_POOL", "").strip().lower()
     env_on = env not in ("", "0", "false", "no", "off")
     if not (env_on or _kwarg(spec, "_full_pool", None)):
@@ -304,9 +316,17 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     )
     try:
         from pipeline.batch.engine_artifacts import EngineArtifacts
+        from simulation.batch_runner import _WORKER_SHARED
         from simulation.full_pool_sampler import FullPoolSampler
 
         art = EngineArtifacts.load(os.path.join(pool_dir, "engine_artifacts"))
+        # SIM-403b: splice in any shared-memory views the parent published. The
+        # worker initializer (simulation.batch_runner._worker_init) populates
+        # _WORKER_SHARED["views"] with {flat_name -> ndarray-over-shm}; the
+        # attach is a defensive no-op when the dict is empty.
+        views = _WORKER_SHARED.get("views") or {}
+        if views:
+            art.attach_shared_views(views)
         return FullPoolSampler(art, np.random.default_rng(seed))
     except Exception:
         return None

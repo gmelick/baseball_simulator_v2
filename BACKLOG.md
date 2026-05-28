@@ -1,6 +1,6 @@
 # Product Backlog
 
-*Owner: Product Manager (Agent 1) · Last updated: 2026-05-28 (SIM-404 ✅ + SIM-414 ✅ + SIM-403 ✅ + SIM-409 ✅ all closed today. 🚀 PHASE 6 Sprint 1 COMPLETE — all 13 P0s + SIM-410. Sprint 2 (P1 frontend build) COMPLETE — SIM-391→401. Hardening batch COMPLETE — SIM-415/416/417/418/419/420. Remaining: P1 data/ML/perf SIM-402/406/407/408 (live-env) + SIM-403b shared_arrays follow-on, P2 sim-realism SIM-411/412/413)*
+*Owner: Product Manager (Agent 1) · Last updated: 2026-05-28 (SIM-404 ✅ + SIM-403b ✅ + SIM-414 ✅ + SIM-403 ✅ + SIM-409 ✅ all closed today. 🚀 PHASE 6 Sprint 1 COMPLETE — all 13 P0s + SIM-410. Sprint 2 (P1 frontend build) COMPLETE — SIM-391→401. Hardening batch COMPLETE — SIM-415/416/417/418/419/420. Remaining: P1 data/ML/perf SIM-402/406/407/408 (live-env), P2 sim-realism SIM-411/412/413)*
 
 > # 🚀 PHASE 6 — Frontend Build — OPEN 2026-09-02 (audit executed 2026-05-25)
 >
@@ -51,7 +51,8 @@
 > | ID | Title | Type | Pri | Size | Owner | Depends-on |
 > |---|---|---|---|---|---|---|
 > | SIM-402 | Real-DB /simulate 2s/30s SLA verification on dedicated hardware | Perf | P1 | M | Performance Engineer + QA/DevOps | - |
-> | SIM-403 | Enable real parallelism + wire shared-memory tiles into the live runner | Perf | P1 | M | Backend Developer + Performance Engineer | SIM-402 | ✅ **Closed 2026-05-28** (worker-count fix; shared_arrays= for full-pool path is a follow-on tracked under SIM-403b)
+> | SIM-403 | Enable real parallelism + wire shared-memory tiles into the live runner | Perf | P1 | M | Backend Developer + Performance Engineer | SIM-402 | ✅ **Closed 2026-05-28** (worker-count fix; SIM-403b shared_arrays= for full-pool path landed same day)
+> | SIM-403b | Wire EngineArtifacts arrays through shared_memory (zero-copy across workers) | Perf | P1 | M | Backend Developer + Performance Engineer | SIM-403 | ✅ **Closed 2026-05-28** (extract_shared_arrays + attach_shared_views on EngineArtifacts; lifespan publishes; production_factory worker splices)
 > | SIM-404 | Stress / concurrency / leak suite (100 sims x 30 concurrent games) | Test | P1 | L | QA/DevOps + Performance Engineer | SIM-403 | ✅ **Closed 2026-05-28** (5 slow-marked integration tests in `test_stress_concurrency_sim404.py`: warm-pool stability, no FD/subprocess leak, 30 concurrent /simulate, direct BatchRunner concurrency, cache-key race safety)
 > | SIM-405 | Real odds-provider implementation behind the SIM-370 seam | Feature | P1 | L | Data Engineer + Betting Analyst | - | ✅ **Closed 2026-05-26** |
 > | SIM-406 | Fit + persist a CalibrationReport over real data + apply to all engines | Feature | P1 | L | ML Engineer | SIM-408 |

@@ -1,3 +1,56 @@
+# Phase 6 — SIM-403b: EngineArtifacts shared-memory publish for full-pool path — 2026-05-28
+**Authors: Backend Developer (Agent 5), Performance Engineer (Agent 6)**
+
+Closes the deeper half of SIM-403: the big read-only numpy arrays inside the
+SIM-422 ``EngineArtifacts`` bundle now publish through the SIM-333
+``multiprocessing.shared_memory`` plumbing already in
+``simulation/batch_runner.py``, so a 10-worker production pool resident-set
+drops from ``10 × ~300 MB`` to ``~300 MB`` total + per-worker scratch.
+
+**The contract** (``pipeline/batch/engine_artifacts.py``):
+
+- ``EngineArtifacts.extract_shared_arrays()`` — returns the shareable numpy
+  arrays under flat names ``pool.<hand>.<attr>`` / ``bb_pool.<hand>.<attr>``
+  / ``actor_emb.<actor>.<attr>``. Object-dtype arrays (``outcome_type`` /
+  ``event``) and the ``pitcher_sim`` dict-of-dicts are NOT included — they
+  can't live in ``shared_memory`` and remain per-worker (small).
+- ``EngineArtifacts.attach_shared_views(views)`` — in-place splice that
+  REPLACES each pool / embedding array with a zero-copy view over the
+  shared segment. Unknown keys silently ignored (defensive against a stale
+  registry from a previous artifact build).
+
+**The lifespan plumbing** (``api/main.py``):
+
+- When ``SIM_FULL_POOL`` is on AND the engine-artifact dir exists, the
+  lifespan loads the bundle ONCE via ``EngineArtifacts.load(...)``, extracts
+  the shareable arrays, and passes them to
+  ``BatchRunner(shared_arrays=...)`` — which publishes them into named
+  ``SharedMemory`` segments and crosses the registry to each worker.
+- A missing / corrupt bundle logs a warning and starts with no shared
+  arrays (per-worker disk load fallback is unchanged).
+
+**The worker splice** (``simulation/production_factory.py::_build_full_pool_sampler``):
+
+- After disk-loading the artifacts (the small picklable members + the
+  per-worker object-dtype arrays are still loaded from disk), the factory
+  reads ``simulation.batch_runner._WORKER_SHARED["views"]`` and calls
+  ``art.attach_shared_views(views)``. The disk-loaded buffers for the big
+  arrays become unreferenced and the worker's resident-set drops to the
+  shared segment. When no views are present (no-DB test path), this is a
+  no-op — the disk path is unchanged.
+
+**Tests** (``tests/unit/test_engine_artifacts_shared_sim403b.py``, 15
+cases): the extract -> attach round-trip on synthetic artifacts; the
+publish -> ``_worker_init`` -> splice end-to-end chain (in-process — the
+full fork lifecycle is already covered by SIM-360 / SIM-333); the
+defensive contract (unknown keys ignored, empty / None views is a no-op,
+empty bundle round-trips). All 15 pass.
+
+**Regression check:** the existing SIM-360 / SIM-333 / SIM-352 perf-engine
+suites (36 tests) still pass — the new helpers are purely additive on
+``EngineArtifacts`` and the worker-side splice is opt-in (no views ->
+unchanged behavior).
+
 # Phase 6 — SIM-404: stress / concurrency / leak suite — 2026-05-28
 **Authors: QA/DevOps (Agent 9), Performance Engineer (Agent 6)**
 
