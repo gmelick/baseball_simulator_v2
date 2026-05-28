@@ -4,6 +4,29 @@
 
 ---
 
+## ⚡ Update banner (2026-05-28)
+
+This handoff was written for the Phase-6 kickoff and captures the audit-era starting
+state.  Phase 6 has since **closed code-complete**:
+
+- Frontend P0 + P1 build (SIM-378→401) and hardening batch (SIM-415→420) — all closed by 2026-05-26.
+- Same-day backend P1 closures: SIM-387 (CLV calibration), SIM-389 (auth), SIM-390 (props),
+  SIM-410 (p95), SIM-405 (odds), SIM-403 + SIM-403b (real parallelism + shared-memory artifacts),
+  SIM-404 (stress suite), SIM-409 (lineup guard), SIM-414 (W/L/S + ER + R reconciliation),
+  SIM-412 (home-field run advantage).
+- Realism epic SIM-422→429 (full-pool similarity sampler) landed on master; the new
+  `scripts/sim_stats.py` v2 is the calibration harness for the residual ~10-12% run-conversion gap.
+
+**What's still open** is the LIVE-ENVIRONMENT VERIFICATION track (SIM-402 real-DB SLA,
+SIM-406 CalibrationReport, SIM-407 prop-PMF validation, SIM-408 11-engine DuckDB build) and
+the play-pool-rebuild-blocked realism tickets (SIM-411 park factor, SIM-413 pitcher-hand
+platoon).  See `CLAUDE.md` §11 for the live status; this handoff doc is preserved for
+historical context.
+
+**Next free ticket ID: SIM-430.**
+
+---
+
 ## TL;DR
 
 **Phase 5 (Backend API & Simulation Runner) is COMPLETE and CI-green on Python 3.11.15** — unit+regression

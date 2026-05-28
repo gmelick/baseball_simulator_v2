@@ -1,3 +1,63 @@
+# Phase 6 — SIM-412 + SIM-429 harness v2 + doc refresh — 2026-05-28
+**Authors: Baseball Analyst (Agent 2), ML Engineer (Agent 3), Product Manager (Agent 1)**
+
+Three closing items at the end of today's run.
+
+**SIM-412 — Home-field run advantage in the score distribution.**
+The audit found `home_win_pct` stuck at the structural-only ~.510-.515 (the
+walk-off + skipped-bottom-9th rules) without ever reaching MLB's empirical
+~.535-.540.  `simulation/sim_loop.py` now models the aggregate edge:
+
+- New class fields `_HOME_FIELD_BIAS_DEFAULT = 0.025` +
+  `_HOME_FIELD_ELIGIBLE_OUTS` + env override `SIM_HOME_FIELD_BIAS`
+  (clamped to `[0.0, 0.1]`).
+- New `StateMachine._apply_home_field_bias(state, sig)` flips a HOME-team
+  batted-ball OUT (`result_hits == 0`, `result_outs == 1`, event in the
+  eligible set, no error flag) to a SINGLE with the configured probability.
+  Strikeouts / DPs / sac flies / hits / errors are never touched, so per-team
+  K9 / BB9 / HR rate stay unaffected.  Away half-innings are untouched
+  entirely.
+- Wired into `_resolve_in_play` right after `_apply_sac_fly_bias` so the
+  bias runs once per PA, with the rest of the play resolution downstream.
+- `tests/conftest.py` pins `SIM_HOME_FIELD_BIAS=0` for the unit suite (the
+  SIM-412 tests opt back in via monkeypatch).
+- 16 new tests in `tests/unit/test_home_field_bias_sim412.py` cover the env
+  knob + clamp, the asymmetric Half.BOTTOM-only firing, the event filter
+  (K / DP / sac fly / errors / existing hits all excluded), the no-op when
+  disabled, and a 5000-trial empirical-rate Monte-Carlo check that confirms
+  the flip rate matches the configured probability.
+
+**SIM-429 follow-on — scaled sim harness.**
+The original `scripts/sim_stats.py` ran 4 games × 25 iters and produced
+~±0.2 R variance on per-team R — too noisy to read per-channel calibration
+moves cleanly.  Replaced with v2 that:
+
+- Defaults to 200 iters/game (configurable up to thousands).
+- Reports per-team R/H/HR/2B/3B/BB/K/SB/CS vs the MLB-2023 baseline AND
+  per-half home/away splits (R, H, HR) so SIM-412 can be A/B'd against the
+  env knob directly.
+- Computes `home_win_pct` + home-R delta against the empirical target.
+- Reports `R` standard error + a precision verdict (TIGHT / moderate /
+  NOISY) so a calibration sweep knows whether the sample size is enough.
+- Optional `--json-out` for downstream analysis.
+- Read-only against the DuckDB sampler so it can run alongside the
+  nightly profile computor (which holds the write lock).
+
+**Doc refresh.**
+- `CLAUDE.md` §2 status: marked Phase 6 code-complete, listed today's 6
+  closures, retired the "open follow-ons" entries that closed.
+- `CLAUDE.md` §11 known-defects: marked the 6 closed tickets with ✓,
+  trimmed the live-env debt list (SIM-405/410/403 dropped — all closed),
+  pointed the realism-residual paragraph at the new harness.
+- `CLAUDE.md` §12 phase roadmap: Phase 6 code-complete; Phase 7 = live-env
+  bring-up that closes SIM-402/406/407/408 in one pass.
+- `docs/HANDOFF_PHASE6.md` got a status banner at the top — the historical
+  audit-era content is preserved below it.
+
+**Tests:** 16 pass on SIM-412 + the existing 63 sim_loop / boxscore /
+qa-sim325 tests still pass (no regressions).  The new harness import-tests
+cleanly and parses cleanly in the docker container.
+
 # Phase 6 — SIM-403b: EngineArtifacts shared-memory publish for full-pool path — 2026-05-28
 **Authors: Backend Developer (Agent 5), Performance Engineer (Agent 6)**
 

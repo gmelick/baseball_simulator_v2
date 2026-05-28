@@ -35,14 +35,33 @@
   perf gate), 424 (count-bucketed pitch draw), 425 (engine-backed baserunner advancement + productive
   outs), 426 (engine-backed steal path), 428 (catcher framing), 429 (the flip + a run-conversion
   investigation; the `SIM_RUN_CALIB` knob is neutral by design). **Next free ticket ID: SIM-430.**
-- **Phase 6 (Frontend Build) is OPEN** and the **frontend is greenfield** (`frontend/` component dirs
-  empty). The original Phase-6 audit filed SIM-378→420 (+421). Start the frontend at the
-  React-vs-vanilla ADR (SIM-378); the `api/` layer serves the full backend surface.
+- **Phase 6 (Frontend Build) is COMPLETE** (SIM-378→401 + the hardening batch SIM-415→420 all
+  closed in the 2026-05-25/26 sprints). The frontend is React 18 + Vite + TypeScript strict with
+  the Day Summary page, 3-state game cards, Game page (play-by-play + WebSocket), per-player
+  boxscore + prop distributions, betting card + CLV chart, and managerial override v1/v2.
+  Caveat: data-bound views are unverified against a live backend; all E2E runs against mocked
+  responses (see live-env verification debt below).
+- **2026-05-28 closure batch (5 P1/P2 tickets):** SIM-403 (real parallelism — worker-count fix) +
+  **SIM-403b** (zero-copy `EngineArtifacts` numpy arrays across workers via shared memory) +
+  SIM-404 (stress / concurrency / leak suite, 5 slow-marked integration tests) +
+  SIM-409 (lineup-ingestion guard: `LineupNotIngestedError` → 503 + `Retry-After: 900`;
+  `lineup_ready: bool | None` on `GameCard`) +
+  SIM-414 (W/L/S + ER + per-runner R cross-surface reconciliation — sub-5-IP starter winner rule,
+  inning-reconstruction unearned runs, walk-forced R credit) +
+  **SIM-412** (home-field run advantage — `_apply_home_field_bias` flips HOME batted-ball outs to
+  singles at the default 0.025 rate, calibrated to MLB ~.535-.540 `home_win_pct`; env override
+  `SIM_HOME_FIELD_BIAS`). **Next free ticket ID: SIM-430.**
 - **Open follow-ons (tracked, blocked on data/infra, not shipped hollow):** SIM-427 engine-backed
   manager (needs a per-(team,season) bullpen roster built from raw Statcast — no role/team source in
   `derived.*`); SIM-425b Fielder RBF (needs per-row fielder identity baked into the batted-ball
-  artifact → a play-pool rebuild); SIM-429 granular run-conversion calibration + the CLV backtest
-  (needs a larger game+sim harness and the live-odds path).
+  artifact → a play-pool rebuild); SIM-411 park factor + SIM-413 pitcher-hand platoon (both also
+  blocked on a play-pool rebuild — engine artifact has no `venue_id` / `p_throws` per row);
+  SIM-429 granular run-conversion calibration + the CLV backtest (the larger sim harness landed
+  2026-05-28 as `scripts/sim_stats.py` v2 — defaults to 200 sims/game, reports per-channel + home/
+  away splits + R standard error; calibration sweeps + CLV backtest pending the live-odds path).
+- **Live-env verification debt** (open, mostly waiting on the play-pool rebuild that runs after the
+  nightly profile computor finishes): SIM-402 (real-DB SLA), SIM-406 (fitted CalibrationReport
+  over real data), SIM-407 (prop-PMF validation + ablation), SIM-408 (DuckDB 11-engine provisioning).
 - Canonical git repo: this directory. Primary shell: **Windows Command Prompt (cmd.exe)**;
   development + tests run through Docker (`docker compose run --rm app ...`).
 
@@ -198,33 +217,51 @@ mypy similarity/ pipeline/ api/        # CI scope; config in pyproject.toml; pin
 
 ## 11. Known defects / dead-wiring + verification debt (from the Phase-5-close audit)
 
-⚠ Fix these early in Phase 6 (tickets in parens):
-- The "gold-standard" CLV is computed off an **uncalibrated** win prob — `betting.py` calls
-  `win_probability()` without threading `app.state.calibration_map` (**SIM-387**).
-- `require_api_key` is defined but applied to **zero** routes; dev CORS is `*`+credentials (**SIM-389**).
-- `SIM_RUNNER_WORKERS=1` serializes `/simulate`; the lifespan runner is built without `shared_arrays=`
-  (**SIM-403**).
-- `GameState.park` is a **dead field** (run environment is park-blind); no home-field edge; pitcher
-  throwing-hand unused in the batted-ball matchup (**SIM-411/412/413**).
-- The `/metrics` p95 gauge is an unwired placeholder (**SIM-410**).
-- Pre-existing Phase-6 tickets SIM-127–131 cite **phantom parent tickets** SIM-108/109/112/122–126 that
-  don't exist (**SIM-382** backfills them).
+The audit-era list of issues (kept here for historical context; tickets marked ✓ have closed):
+- ✓ The "gold-standard" CLV is computed off an **uncalibrated** win prob — `betting.py` calls
+  `win_probability()` without threading `app.state.calibration_map` (**SIM-387** — closed).
+- ✓ `require_api_key` is defined but applied to **zero** routes; dev CORS is `*`+credentials
+  (**SIM-389** — closed).
+- ✓ `SIM_RUNNER_WORKERS=1` serializes `/simulate`; the lifespan runner is built without
+  `shared_arrays=` (**SIM-403** worker-count fix + **SIM-403b** `EngineArtifacts.{extract,attach}_shared_views`
+  zero-copy across workers — both closed 2026-05-28).
+- `GameState.park` is a **dead field** (run environment is park-blind) (**SIM-411** — open, blocked
+  on play-pool rebuild for venue_id per-row); pitcher throwing-hand unused in the batted-ball matchup
+  (**SIM-413** — open, same blocker).
+- ✓ Home-field run advantage missing — `home_win_pct` stuck at the structural-only ~.510-.515
+  (**SIM-412** — closed 2026-05-28; `_apply_home_field_bias` flips a small fraction of HOME
+  batted-ball outs to singles, default 0.025 calibrated to MLB ~.535-.540; env override
+  `SIM_HOME_FIELD_BIAS`).
+- ✓ The `/metrics` p95 gauge is an unwired placeholder (**SIM-410** — closed).
+- ✓ Pre-existing Phase-6 tickets SIM-127–131 cite **phantom parent tickets** SIM-108/109/112/122–126
+  (**SIM-382** backfill — closed).
+- ✓ Walk-forced runs missed in per-runner R, ER under-counting, sub-5-IP starter winners
+  (**SIM-414a/b/c** — closed 2026-05-28; `_resolve_walk` records forced advances,
+  `_half_inning_error_outs_lost` inning-reconstruction for ER, `STARTER_WIN_MIN_OUTS=15` reassignment
+  in `pitcher_decisions.py`).
+- ✓ Lineup ingestion silent 500s on scheduled games whose lineup hasn't been published
+  (**SIM-409** — closed 2026-05-28; `LineupNotIngestedError` → 503 + `Retry-After: 900`;
+  `lineup_ready: bool | None` field on `GameCard`).
 
 **Live-environment verification debt** (code-complete, only mock/unit-verified — confirm on a staging
-bring-up): real-DB `/simulate` 2s/30s SLA (SIM-402), real odds provider (SIM-405), a fitted
-`CalibrationReport` (SIM-406), the DuckDB-profile 11-engine build (SIM-408), and a full `docker compose
-up` of nginx+app+monitoring.
+bring-up): real-DB `/simulate` 2s/30s SLA (SIM-402), a fitted `CalibrationReport` (SIM-406),
+prop-PMF validation + ablation (SIM-407), the DuckDB-profile 11-engine build (SIM-408), and a full
+`docker compose up` of nginx+app+monitoring. (SIM-405 real odds provider, SIM-410 p95 timing, and
+the SIM-403 worker-count fix all closed.)
 
 **Full-pool realism residual (SIM-422→429, the production path):** box rate stats (H/HR/2B/BB/K) are
-within ~4% of MLB and steals match MLB volume, but **runs sit ~12% low** — a hits→runs *conversion*
+within ~4% of MLB and steals match MLB volume, but **runs sit ~10-12% low** — a hits→runs *conversion*
 gap, not a rate-stat or baserunning-aggression problem (advancement rates are already MLB-realistic; a
 global advancement multiplier `SIM_RUN_CALIB` was investigated and rejected as the wrong lever). The
 gap lives in batted-ball-with-RISP / sequencing. One concrete contributor identified + fixed: the
 batted-ball draw conditions only softly on base-out, so ~55% of drawn double-play events landed with no
 runner to double off — `_full_pool_fielding` now records a 2nd out only when a forceable runner exists
-(else a 1-out field_out). Remaining conversion gap → granular per-channel calibration on a larger
-game+sim harness (SIM-429 follow-on). *Validation caveat:* the ad-hoc `scripts/sim_stats.py` harness is
-4 games; R-variance is ~±0.2 at 200 sims, so use ≥400 sims and several games for run-level reads.
+(else a 1-out field_out). The harness for the next calibration pass landed 2026-05-28 as
+`scripts/sim_stats.py` v2 (defaults to 200 iters/game, reports per-channel + per-half home/away
+splits + R standard error so a calibration sweep can target the right channel). Remaining
+conversion gap → granular per-channel calibration on this larger harness (SIM-429 follow-on).
+*Validation caveat:* run a multi-game × ≥400-sim batch before reading R-level moves; the per-channel
+breakouts (RISP, advancement, DP rate) are the right lens, not the global R mean.
 
 ## 12. Phase roadmap
 
@@ -235,8 +272,8 @@ game+sim harness (SIM-429 follow-on). *Validation caveat:* the ad-hoc `scripts/s
 | 3 | Play Pool Architecture | ✅ Complete |
 | 4 | Core Simulation Loop | ✅ Complete |
 | 5 | Simulation Runner & Backend API | ✅ Complete (CI-green on 3.11.15) |
-| 6 | **Frontend Build** | 🚀 **OPEN** — frontend greenfield (SIM-378→420) |
-| 7 | Integration, Testing & Deployment | Not started |
+| 6 | **Frontend Build + P1 backend prerequisites** | ✅ **Code-complete** — SIM-378→401 + 415→420 + 414 closed; SIM-402/406/407/408 are live-env verification only |
+| 7 | Integration, Testing & Deployment | Pending live-env bring-up (closes SIM-402/406/407/408 in one pass) |
 
 **Realism sub-track (interleaved, landed on `master`):** the SIM-422→429 full-pool similarity-wiring
 epic replaced the per-tile k-NN draw with whole-pool engine-weighted sampling and made it the

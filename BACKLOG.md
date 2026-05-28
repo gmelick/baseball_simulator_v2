@@ -1,6 +1,6 @@
 # Product Backlog
 
-*Owner: Product Manager (Agent 1) · Last updated: 2026-05-28 (SIM-404 ✅ + SIM-403b ✅ + SIM-414 ✅ + SIM-403 ✅ + SIM-409 ✅ all closed today. 🚀 PHASE 6 Sprint 1 COMPLETE — all 13 P0s + SIM-410. Sprint 2 (P1 frontend build) COMPLETE — SIM-391→401. Hardening batch COMPLETE — SIM-415/416/417/418/419/420. Remaining: P1 data/ML/perf SIM-402/406/407/408 (live-env), P2 sim-realism SIM-411/412/413)*
+*Owner: Product Manager (Agent 1) · Last updated: 2026-05-28 (six closures today: SIM-403 + SIM-403b + SIM-404 + SIM-409 + SIM-412 + SIM-414. 🚀 PHASE 6 Sprint 1 COMPLETE — all 13 P0s + SIM-410. Sprint 2 (P1 frontend build) COMPLETE — SIM-391→401. Hardening batch COMPLETE — SIM-415/416/417/418/419/420. Remaining: P1 data/ML/perf SIM-402/406/407/408 (live-env), P2 sim-realism SIM-411 + SIM-413 (both play-pool-rebuild-blocked))*
 
 > # 🚀 PHASE 6 — Frontend Build — OPEN 2026-09-02 (audit executed 2026-05-25)
 >
@@ -65,7 +65,7 @@
 > | ID | Title | Type | Pri | Size | Owner | Depends-on |
 > |---|---|---|---|---|---|---|
 > | SIM-411 | Park factor into the run environment | Improvement | P2 | L | Baseball Analyst + ML Engineer + Data Engineer | - |
-> | SIM-412 | Home-field run advantage in the score distribution | Improvement | P2 | M | Baseball Analyst | SIM-411 |
+> | SIM-412 | Home-field run advantage in the score distribution | Improvement | P2 | M | Baseball Analyst | SIM-411 | ✅ **Closed 2026-05-28** (`_apply_home_field_bias` flips HOME batted-ball outs to singles at default 0.025 rate, calibrated to MLB ~.535-.540 home_win_pct; env override `SIM_HOME_FIELD_BIAS`)
 > | SIM-413 | Pitcher throwing-hand -> batter platoon split in the batted-ball matchup | Improvement | P2 | M | Baseball Analyst + ML Engineer | - |
 > | SIM-414 | W/L/S + ER + per-runner R cross-surface reconciliation | Bug | P2 | M | Baseball Analyst + Backend Developer | SIM-384 | ✅ **Closed 2026-05-28** (sub-5-IP starter rule + inning-reconstruction unearned runs + walk-forced per-runner R)
 > | SIM-415 | Pagination / payload-trim for heavy endpoints | Improvement | P2 | M | Backend Developer | - | ✅ **Closed 2026-05-26** |
