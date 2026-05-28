@@ -1,3 +1,44 @@
+# Phase 6 — SIM-409 + SIM-403: lineup ingestion guard + real parallelism — 2026-05-28
+**Authors: Backend Developer (Agent 5), Data Engineer (Agent 4), QA/DevOps (Agent 9)**
+
+Two of the P1 live-env prerequisites closed; the third (SIM-402 SLA verification) is
+now unblocked by the parallelism fix.
+
+**SIM-409 — lineup ingestion guard.** `resolve_lineup` previously raised the same
+`LineupResolutionError` whether the game was unknown (permanent) or the lineup just
+hadn't been published yet (transient). Both surfaced as a 500 in production. Now:
+
+- `simulation/lineup_resolver.py` — new `LineupNotIngestedError(LineupResolutionError)`
+  subclass raised when `raw.games` has the row but `raw.game_lineups` is empty.
+- `api/routes/games.py` — `_resolve_state_or_error` catches the subclass first and
+  returns **503 Service Unavailable with `Retry-After: 900`** (15 min); the parent
+  `LineupResolutionError` still maps to 404 for truly unknown games.
+- `GameCard` gains a `lineup_ready: bool | None` field populated by an
+  `EXISTS(SELECT 1 FROM raw.game_lineups …)` subquery in both `_GAMES_ON_DATE_SQL`
+  and `_GAME_CARD_SQL`. UI can now disable the simulate button on scheduled games
+  whose lineups haven't been published yet.
+
+**SIM-403 — real parallelism.** `api/main.py` hardcoded `SIM_RUNNER_WORKERS=1`,
+serialising every `/simulate` request through a single subprocess. Fix: unset →
+`None` → `BatchRunner.resolve_max_workers()` uses `default_max_workers()` =
+`min(cpu_count - 1, 10)` at run time. Explicit env override still wins. The
+`shared_arrays=` wiring for the EngineArtifacts full-pool path is the deeper
+follow-on (tracked separately; the per-tile FAISS shared-memory path is already
+implemented in `batch_runner.py` but the production full-pool path doesn't use it).
+
+**CI fixes shipped alongside:**
+- `tests/unit/test_qa_sim325.py::test_replay_and_test_over_historical_games` — a
+  1800-game replay that timed out at the unit-lane 30s limit — moved to
+  `@pytest.mark.slow` (120s timeout).
+- The previous push (61bfa42) bumped the unit-tests CI timeout to 30 min,
+  removed `--cov-report=term-missing` (saves ~2-3 min), and added `.gitattributes`
+  with `eol=lf` so the ruff 0.15.14 / Windows-CRLF format drift is normalised
+  at the git boundary.
+
+**Tests:** 85 pass across `test_lineup_resolver.py` + `test_api_games.py` (including
+4 new SIM-409 cases — 503-with-Retry-After, `lineup_ready` true/false/None).
+Full unit suite green on the next CI run.
+
 # Phase 6 — SIM-429: run-conversion calibration investigation — 2026-05-27
 **Authors: ML Engineer (Agent 3), Betting Analyst (Agent 8), Baseball Analyst (Agent 2)**
 
