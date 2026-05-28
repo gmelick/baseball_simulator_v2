@@ -43,6 +43,7 @@ if str(_ROOT) not in sys.path:
 
 from simulation.game_state import GameState, Half, Team  # noqa: E402
 from simulation.lineup_resolver import (  # noqa: E402
+    LineupNotIngestedError,
     LineupResolutionError,
     ResolvedLineup,
     TeamLineup,
@@ -517,9 +518,19 @@ class TestAsyncOrchestrator:
             await resolve_lineup(conn, GAME_PK)
 
     @pytest.mark.asyncio
-    async def test_no_lineup_rows_raises(self):
+    async def test_no_lineup_rows_raises_not_ingested(self):
+        # SIM-409: empty lineup_rows → LineupNotIngestedError (subclass of
+        # LineupResolutionError), not the plain base error.
         conn = _StubConn(game_row=_game_row(), lineup_rows=[])
-        with pytest.raises(LineupResolutionError, match="no raw.game_lineups rows"):
+        with pytest.raises(LineupNotIngestedError, match="not yet published"):
+            await resolve_lineup(conn, GAME_PK)
+
+    @pytest.mark.asyncio
+    async def test_lineup_not_ingested_is_resolution_error(self):
+        # LineupNotIngestedError must remain catchable as LineupResolutionError
+        # so existing broad except clauses are not broken.
+        conn = _StubConn(game_row=_game_row(), lineup_rows=[])
+        with pytest.raises(LineupResolutionError):
             await resolve_lineup(conn, GAME_PK)
 
     @pytest.mark.asyncio

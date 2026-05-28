@@ -98,6 +98,7 @@ from simulation.batch_runner import (
 )
 from simulation.linescore import linescore_from_plays
 from simulation.lineup_resolver import (
+    LineupNotIngestedError,
     LineupResolutionError,
     build_defense_map_for_state,
     resolve_game_state,
@@ -247,6 +248,10 @@ class GameCard(BaseModel):
     home_losses: int | None = None
     away_wins: int | None = None
     away_losses: int | None = None
+    # SIM-409: True when raw.game_lineups has at least one row for this game;
+    # False for scheduled games whose lineups haven't been published yet.
+    # None when the caller did not include the lineup check (older code paths).
+    lineup_ready: bool | None = None
 
 
 class GamesOnDateResponse(BaseModel):
@@ -446,7 +451,10 @@ _GAME_CARD_SQL = """
            COALESCE(hr.wins,   0) AS home_wins,
            COALESCE(hr.losses, 0) AS home_losses,
            COALESCE(ar.wins,   0) AS away_wins,
-           COALESCE(ar.losses, 0) AS away_losses
+           COALESCE(ar.losses, 0) AS away_losses,
+           EXISTS(
+               SELECT 1 FROM raw.game_lineups gl WHERE gl.game_pk = g.game_pk
+           ) AS lineup_ready
       FROM raw.games g
       LEFT JOIN raw.teams    ht  ON ht.team_id  = g.home_team_id AND ht.season  = g.season
       LEFT JOIN raw.teams    at_ ON at_.team_id = g.away_team_id AND at_.season = g.season
@@ -564,8 +572,12 @@ async def _resolve_state_or_error(pool: Any, game_pk: int) -> Any:
 
     A connection is acquired from the pool (asyncpg-style ``async with
     pool.acquire()``); a pool that IS a connection (the mock-pool test idiom)
-    is used directly.  A ``LineupResolutionError`` (unknown game / no lineup) is
-    surfaced as 404, not 500.
+    is used directly.
+
+    Error mapping (SIM-409):
+    * ``LineupNotIngestedError`` (game exists, lineups not yet published by MLB)
+      → 503 Service Unavailable with a Retry-After: 900 hint.
+    * ``LineupResolutionError`` (game not found in raw.games) → 404 Not Found.
     """
     acquire = getattr(pool, "acquire", None)
     try:
@@ -574,6 +586,13 @@ async def _resolve_state_or_error(pool: Any, game_pk: int) -> Any:
                 return await resolve_game_state(conn, game_pk)
         # The pool itself exposes fetch/fetchrow (mock-pool / direct-conn path).
         return await resolve_game_state(pool, game_pk)
+    except LineupNotIngestedError as exc:
+        # Transient: lineup not published yet. Suggest retry in 15 min.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+            headers={"Retry-After": "900"},
+        ) from exc
     except LineupResolutionError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -905,7 +924,10 @@ _GAMES_ON_DATE_SQL = """
            COALESCE(hr.wins,   0) AS home_wins,
            COALESCE(hr.losses, 0) AS home_losses,
            COALESCE(ar.wins,   0) AS away_wins,
-           COALESCE(ar.losses, 0) AS away_losses
+           COALESCE(ar.losses, 0) AS away_losses,
+           EXISTS(
+               SELECT 1 FROM raw.game_lineups gl WHERE gl.game_pk = g.game_pk
+           ) AS lineup_ready
       FROM raw.games g
       LEFT JOIN raw.teams    ht  ON ht.team_id  = g.home_team_id AND ht.season  = g.season
       LEFT JOIN raw.teams    at_ ON at_.team_id = g.away_team_id AND at_.season = g.season
@@ -986,6 +1008,10 @@ def _game_card(row: Any) -> GameCard:
         home_losses=_opt_int("home_losses"),
         away_wins=_opt_int("away_wins"),
         away_losses=_opt_int("away_losses"),
+        # SIM-409: bool from the EXISTS(...) subquery; None when absent.
+        lineup_ready=bool(_row_get(row, "lineup_ready"))
+        if _row_get(row, "lineup_ready") is not None
+        else None,
     )
 
 

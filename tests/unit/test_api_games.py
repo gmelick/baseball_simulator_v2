@@ -1,7 +1,7 @@
 """
 test_api_games.py
 =================
-Unit tests for api/routes/games.py â€” the Phase-5 game-simulation endpoints
+Unit tests for api/routes/games.py â€" the Phase-5 game-simulation endpoints
 (SIM-355 GET /{date} + GET /{game_pk}/simulate, SIM-358 POST .../with_override,
 SIM-359 caching).
 
@@ -10,17 +10,17 @@ ISOLATION STRATEGY
 These tests build a TINY FastAPI app that includes ONLY the games router (NOT
 ``api.main.create_app()``), so the heavy similarity-engine lifespan and the live
 ingestion pipeline import are never touched. The router reads two things off
-``app.state`` â€” ``pg_pool`` and (optionally) ``sim_cache`` â€” both of which we
+``app.state`` â€" ``pg_pool`` and (optionally) ``sim_cache`` â€" both of which we
 attach directly:
 
-  * ``pg_pool``  â€” a fake asyncpg pool/connection that returns canned raw.games
+  * ``pg_pool``  â€" a fake asyncpg pool/connection that returns canned raw.games
     rows for ``fetch`` and is also handed to a MONKEYPATCHED ``resolve_game_state``
     so /simulate runs without a live Postgres/DuckDB.
-  * ``sim_factory_ref`` â€” set to the no-DB rng factory so the BatchRunner runs a
+  * ``sim_factory_ref`` â€" set to the no-DB rng factory so the BatchRunner runs a
     real (fast, in-process) batch with NO live sampler.
 
 The ``/simulate`` and ``/with_override`` paths therefore exercise the REAL
-BatchRunner + simulate_game loop + GameSimSummaryModel serialization â€” only the
+BatchRunner + simulate_game loop + GameSimSummaryModel serialization â€" only the
 DB (lineup resolution) and the production sampler are stubbed.
 
 Owned by Backend Developer (SIM-355 / SIM-358 / SIM-359).
@@ -39,7 +39,7 @@ from api.routes.games import router as games_router
 from simulation.batch_runner import InMemoryCache
 from simulation.game_state import GameState
 
-# The no-DB, picklable rng factory â€” what the production factory ref is swapped
+# The no-DB, picklable rng factory â€" what the production factory ref is swapped
 # to so /simulate runs a real batch with no live sampler/DuckDB.
 NO_DB_FACTORY_REF = "simulation.batch_runner:rng_driven_machine_factory"
 
@@ -67,7 +67,7 @@ class _FakePool:
         self.fetch_calls.append((sql, args))
         return self._rows
 
-    async def fetchrow(self, sql, *args):  # pragma: no cover â€” not used directly here
+    async def fetchrow(self, sql, *args):  # pragma: no cover â€" not used directly here
         return self._rows[0] if self._rows else None
 
 
@@ -96,7 +96,7 @@ CANNED_GAMES_ROWS = [
 def _small_game_state() -> GameState:
     """A minimal but valid GameState the monkeypatched resolver returns.
 
-    Full 1..9 lineups + a pitcher + season â€” enough for simulate_game to run a
+    Full 1..9 lineups + a pitcher + season â€" enough for simulate_game to run a
     real (no-DB) game via the rng factory.
     """
     state = GameState(pitcher_id=600001, bat_hand="R", season=2024)
@@ -127,7 +127,7 @@ def _build_app(*, pool, cache=None, factory_ref=NO_DB_FACTORY_REF) -> FastAPI:
 @pytest.fixture
 def patch_resolver(monkeypatch):
     """Monkeypatch resolve_game_state (as imported into the games module) to
-    return a fixed small GameState â€” no live Postgres/DuckDB."""
+    return a fixed small GameState â€" no live Postgres/DuckDB."""
 
     async def _fake_resolve_game_state(conn, game_pk, **kwargs):
         return _small_game_state()
@@ -282,6 +282,27 @@ def test_simulate_unknown_game_is_404(monkeypatch):
     assert resp.status_code == 404
 
 
+def test_simulate_lineup_not_ingested_is_503(monkeypatch):
+    """SIM-409: LineupNotIngestedError (game exists but lineup not yet published)
+    -> 503 Service Unavailable with Retry-After header, not 404 or 500."""
+    from simulation.lineup_resolver import LineupNotIngestedError
+
+    async def _raise(conn, game_pk, **kwargs):
+        raise LineupNotIngestedError(
+            f"no raw.game_lineups rows for game_pk={game_pk}; "
+            "lineup not yet published — try again closer to game time."
+        )
+
+    monkeypatch.setattr(games_mod, "resolve_game_state", _raise)
+    app = _build_app(pool=_FakePool())
+    client = TestClient(app)
+    resp = client.get("/api/games/745001/simulate?n_iterations=3")
+    assert resp.status_code == 503
+    assert "Retry-After" in resp.headers
+    assert resp.headers["Retry-After"] == "900"
+    assert "not yet published" in resp.json()["detail"]
+
+
 # ===========================================================================
 # SIM-360 -- /simulate REUSES the shared app.state.sim_runner (with fallback)
 # ===========================================================================
@@ -371,7 +392,7 @@ def test_with_override_returns_baseline_override_delta(patch_resolver):
 
 
 def test_with_override_empty_body_is_valid(patch_resolver):
-    """An all-empty override is accepted (yields a zero delta â€” baseline==override
+    """An all-empty override is accepted (yields a zero delta â€" baseline==override
     at the same seed)."""
     app = _build_app(pool=_FakePool())
     client = TestClient(app)
@@ -669,7 +690,7 @@ class TestGameCardEnrichment:
 
     def test_bare_rows_without_enrichment_default_to_none(self):
         """Existing rows that don't include enrichment columns (old cache, stubs)
-        deserialise without error â€” new fields default to ``None``."""
+        deserialise without error â€" new fields default to ``None``."""
         app = _build_app(pool=_FakePool(rows=CANNED_GAMES_ROWS))
         client = TestClient(app)
         resp = client.get("/api/games/2024-08-15")
@@ -682,6 +703,37 @@ class TestGameCardEnrichment:
             assert g["home_losses"] is None
             assert g["away_wins"] is None
             assert g["away_losses"] is None
+
+    def test_lineup_ready_true_when_lineups_exist(self):
+        """SIM-409: lineup_ready=True when the row includes a truthy lineup_ready
+        column (game has been ingested into raw.game_lineups)."""
+        rows = [{**_ENRICHED_CANNED_ROWS[0], "lineup_ready": True}]
+        app = _build_app(pool=_FakePool(rows=rows))
+        client = TestClient(app)
+        resp = client.get("/api/games/2024-08-15")
+        assert resp.status_code == 200
+        g = resp.json()["games"][0]
+        assert g["lineup_ready"] is True
+
+    def test_lineup_ready_false_when_lineups_missing(self):
+        """SIM-409: lineup_ready=False for a scheduled game with no lineup rows."""
+        rows = [{**_ENRICHED_CANNED_ROWS[0], "lineup_ready": False}]
+        app = _build_app(pool=_FakePool(rows=rows))
+        client = TestClient(app)
+        resp = client.get("/api/games/2024-08-15")
+        assert resp.status_code == 200
+        g = resp.json()["games"][0]
+        assert g["lineup_ready"] is False
+
+    def test_lineup_ready_none_when_column_absent(self):
+        """SIM-409: lineup_ready=None when the query row does not include
+        the column (backward compat with old cached responses / stubs)."""
+        app = _build_app(pool=_FakePool(rows=CANNED_GAMES_ROWS))
+        client = TestClient(app)
+        resp = client.get("/api/games/2024-08-15")
+        assert resp.status_code == 200
+        for g in resp.json()["games"]:
+            assert g["lineup_ready"] is None
 
     def test_enriched_rows_cached_payload_preserves_enrichment(self):
         """SIM-359 + SIM-383: the cache round-trip (model_dump â†’ **cached)

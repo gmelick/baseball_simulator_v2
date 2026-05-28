@@ -134,6 +134,16 @@ class LineupResolutionError(ValueError):
     """
 
 
+class LineupNotIngestedError(LineupResolutionError):
+    """Raised when the game exists but ``raw.game_lineups`` has no rows yet.
+
+    Distinct from the parent :class:`LineupResolutionError` (which covers
+    "game not found in raw.games") so callers can distinguish a permanent
+    failure (game unknown → 404) from a transient one (lineup not yet
+    published by MLB → 503 Retry-After, typically 15 min before first pitch).
+    """
+
+
 # ---------------------------------------------------------------------------
 # Pure value types (no I/O)
 # ---------------------------------------------------------------------------
@@ -663,8 +673,9 @@ async def resolve_lineup(
 
     lineup_rows = await fetch_lineup_rows(conn, game_pk)
     if not lineup_rows:
-        raise LineupResolutionError(
-            f"no raw.game_lineups rows for game_pk={game_pk}; the lineup has not been ingested yet."
+        raise LineupNotIngestedError(
+            f"no raw.game_lineups rows for game_pk={game_pk}; "
+            "lineup not yet published — try again closer to game time."
         )
 
     player_ids = {
@@ -706,6 +717,7 @@ __all__ = [
     "TeamLineup",
     "ResolvedLineup",
     "LineupResolutionError",
+    "LineupNotIngestedError",
     # pure assembly + building
     "resolve_lineup_from_rows",
     "build_game_state",

@@ -305,14 +305,26 @@ async def lifespan(app: FastAPI):
     # holds no resources, and close() on shutdown is a no-op in that case. The
     # /simulate handler still offloads the run via asyncio.to_thread.
     # ----------------------------------------------------------------
-    from simulation.batch_runner import BatchRunner, make_cache
+    from simulation.batch_runner import BatchRunner, default_max_workers, make_cache
 
     sim_cache = getattr(app.state, "sim_cache", None) or make_cache()
+    # SIM-403: SIM_RUNNER_WORKERS unset → None → BatchRunner.resolve_max_workers()
+    # uses default_max_workers() = min(cpu_count - 1, 10) at run time, enabling
+    # real parallelism.  Explicit "1" keeps the serialised in-process path for
+    # environments that can't fork (e.g. some CI runners).
+    _workers_env = os.environ.get("SIM_RUNNER_WORKERS")
     try:
-        sim_runner_workers = int(os.environ.get("SIM_RUNNER_WORKERS", "1"))
+        sim_runner_workers: int | None = int(_workers_env) if _workers_env else None
     except (TypeError, ValueError):
-        sim_runner_workers = 1
-    log.info("Building persistent BatchRunner (workers=%s) ...", sim_runner_workers)
+        sim_runner_workers = None
+    resolved_workers = (
+        sim_runner_workers if sim_runner_workers is not None else default_max_workers()
+    )
+    log.info(
+        "Building persistent BatchRunner (workers=%s, SIM_RUNNER_WORKERS=%r) ...",
+        resolved_workers,
+        _workers_env,
+    )
     app.state.sim_runner = BatchRunner(cache=sim_cache, max_workers=sim_runner_workers)
 
     yield
