@@ -59,9 +59,9 @@ class TestSim092OddsDedup:
         )
         assert match, "raw.game_odds CREATE TABLE block missing"
         body = match.group(1)
-        assert re.search(
-            r"\bodds_hash\s+VARCHAR\(64\)", body, re.IGNORECASE
-        ), "SIM-092: odds_hash VARCHAR(64) column missing from raw.game_odds"
+        assert re.search(r"\bodds_hash\s+VARCHAR\(64\)", body, re.IGNORECASE), (
+            "SIM-092: odds_hash VARCHAR(64) column missing from raw.game_odds"
+        )
 
     def test_canonical_schema_has_partial_unique_index(self) -> None:
         sql = _read(_PG_SCHEMA_PATH)
@@ -219,18 +219,18 @@ class TestSim092OddsDedup:
         assert pipeline._db.execute.call_count == 1
         call = pipeline._db.execute.call_args
         sql_text = call.args[0]
-        assert (
-            "ON CONFLICT" in sql_text and "DO NOTHING" in sql_text
-        ), "SIM-092: _persist_odds must use ON CONFLICT … DO NOTHING"
+        assert "ON CONFLICT" in sql_text and "DO NOTHING" in sql_text, (
+            "SIM-092: _persist_odds must use ON CONFLICT … DO NOTHING"
+        )
         assert "odds_hash" in sql_text, "SIM-092: INSERT must include odds_hash column"
         # Last positional arg is the hash; must be a 64-char hex string.
         actual_hash = call.args[-1]
         assert isinstance(actual_hash, str) and len(actual_hash) == 64
         # Must equal the hash function output for the same payload.
         expected = LiveIngestionPipeline._odds_hash(odds_payload)
-        assert (
-            actual_hash == expected
-        ), "SIM-092: _persist_odds must use _odds_hash() to compute the value"
+        assert actual_hash == expected, (
+            "SIM-092: _persist_odds must use _odds_hash() to compute the value"
+        )
 
     def test_persist_odds_identical_call_produces_same_hash(self) -> None:
         """Two identical _persist_odds() calls produce two identical hashes
@@ -277,9 +277,9 @@ class TestSim093EtlErrorsTable:
             r"error_messages\s+TEXT\[\]",
             r"created_at\s+TIMESTAMPTZ",
         ):
-            assert re.search(
-                needed, body, re.IGNORECASE
-            ), f"SIM-093: column matching /{needed}/ missing from raw.etl_errors"
+            assert re.search(needed, body, re.IGNORECASE), (
+                f"SIM-093: column matching /{needed}/ missing from raw.etl_errors"
+            )
         assert re.search(
             r"CHECK\s*\(\s*error_type\s+IN\s*\(\s*'HARD'\s*,\s*'WARN'\s*\)\s*\)",
             body,
@@ -311,16 +311,16 @@ class TestSim093EtlErrorsTable:
     def test_loader_has_log_etl_errors_method(self) -> None:
         from pipeline.etl.etl_historical_loader import HistoricalDataLoader
 
-        assert callable(
-            getattr(HistoricalDataLoader, "_log_etl_errors", None)
-        ), "SIM-093: HistoricalDataLoader._log_etl_errors() missing"
+        assert callable(getattr(HistoricalDataLoader, "_log_etl_errors", None)), (
+            "SIM-093: HistoricalDataLoader._log_etl_errors() missing"
+        )
 
     def test_loader_has_reprocess_errored_games_method(self) -> None:
         from pipeline.etl.etl_historical_loader import HistoricalDataLoader
 
-        assert callable(
-            getattr(HistoricalDataLoader, "reprocess_errored_games", None)
-        ), "SIM-093: HistoricalDataLoader.reprocess_errored_games() missing"
+        assert callable(getattr(HistoricalDataLoader, "reprocess_errored_games", None)), (
+            "SIM-093: HistoricalDataLoader.reprocess_errored_games() missing"
+        )
 
     def test_log_etl_errors_inserts_per_skipped_pitch(self) -> None:
         """
@@ -379,9 +379,9 @@ class TestSim093EtlErrorsTable:
         loader._log_etl_errors(745001, errors)
 
         # One mogrify call per skipped pitch
-        assert (
-            len(conn.cur.mogrify_calls) == 3
-        ), f"expected 3 mogrify calls; got {len(conn.cur.mogrify_calls)}"
+        assert len(conn.cur.mogrify_calls) == 3, (
+            f"expected 3 mogrify calls; got {len(conn.cur.mogrify_calls)}"
+        )
         # Each mogrify call's first param is our INSERT template
         for sql_arg, params in conn.cur.mogrify_calls:
             assert "INSERT INTO raw.etl_errors" in sql_arg
@@ -460,6 +460,6 @@ class TestMigrationChain:
             if expected_parent is None:
                 assert "down_revision = None" in mig, f"{filename}: expected down_revision = None"
             else:
-                assert (
-                    f'down_revision = "{expected_parent}"' in mig
-                ), f'{filename}: expected down_revision = "{expected_parent}"'
+                assert f'down_revision = "{expected_parent}"' in mig, (
+                    f'{filename}: expected down_revision = "{expected_parent}"'
+                )

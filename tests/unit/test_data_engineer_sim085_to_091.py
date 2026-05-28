@@ -109,9 +109,9 @@ class TestSim086VenueIdFallback:
             None,
         )
         assert venue_line is not None, "venue_id column missing from raw.games"
-        assert (
-            "NOT NULL" not in venue_line.upper()
-        ), f"SIM-086: raw.games.venue_id must be nullable. Current line: {venue_line!r}"
+        assert "NOT NULL" not in venue_line.upper(), (
+            f"SIM-086: raw.games.venue_id must be nullable. Current line: {venue_line!r}"
+        )
 
     def test_migration_0006_drops_not_null(self) -> None:
         mig = _read(_MIG_DIR / "0006_sim086_games_venue_id_nullable.py")
@@ -262,9 +262,9 @@ class TestSim087ReleaseSpeedThreshold:
         result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": 60.0})
         assert not result.hard_errors
         rs_warnings = [w for w in result.warnings if "release_speed" in w]
-        assert (
-            rs_warnings == []
-        ), f"SIM-087: 60 mph boundary should be inclusive. Warnings: {rs_warnings}"
+        assert rs_warnings == [], (
+            f"SIM-087: 60 mph boundary should be inclusive. Warnings: {rs_warnings}"
+        )
 
     def test_validate_row_still_flags_impossible_low(self) -> None:
         """A 35 mph pitch is implausible and must still warn."""
@@ -290,9 +290,9 @@ class TestSim087ReleaseSpeedThreshold:
 
         result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": 35.0})
         rs_warnings = [w for w in result.warnings if "release_speed" in w]
-        assert any(
-            "60" in w for w in rs_warnings
-        ), f"SIM-087: warning text should reference the new 60 mph bound, got: {rs_warnings}"
+        assert any("60" in w for w in rs_warnings), (
+            f"SIM-087: warning text should reference the new 60 mph bound, got: {rs_warnings}"
+        )
 
     def test_canonical_schema_trigger_threshold(self) -> None:
         """raw.flag_pitch_quality() must use < 50, not < 60, as the trigger floor."""
@@ -305,12 +305,12 @@ class TestSim087ReleaseSpeedThreshold:
         )
         assert m, "flag_pitch_quality function not found in canonical schema"
         body = m.group(1)
-        assert (
-            "release_speed < 50" in body
-        ), "SIM-087: raw.flag_pitch_quality() must use < 50 mph as the impossible floor."
-        assert (
-            "release_speed < 60" not in body
-        ), "SIM-087: stale 60 mph check still present in flag_pitch_quality()."
+        assert "release_speed < 50" in body, (
+            "SIM-087: raw.flag_pitch_quality() must use < 50 mph as the impossible floor."
+        )
+        assert "release_speed < 60" not in body, (
+            "SIM-087: stale 60 mph check still present in flag_pitch_quality()."
+        )
 
     def test_migration_0007_updates_trigger(self) -> None:
         mig = _read(_MIG_DIR / "0007_sim087_release_speed_threshold.py")
@@ -383,9 +383,9 @@ class TestSim089PitcherSeasonCleanIndex:
 
     def test_index_present_in_canonical_schema(self) -> None:
         sql = _read(_PG_SCHEMA_PATH)
-        assert (
-            "idx_pitches_pitcher_season_clean" in sql
-        ), "SIM-089: idx_pitches_pitcher_season_clean missing from canonical schema."
+        assert "idx_pitches_pitcher_season_clean" in sql, (
+            "SIM-089: idx_pitches_pitcher_season_clean missing from canonical schema."
+        )
         assert re.search(
             r"idx_pitches_pitcher_season_clean"
             r".*?\(\s*pitcher\s*,\s*season\s*\)"

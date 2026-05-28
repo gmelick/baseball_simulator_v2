@@ -26,8 +26,8 @@ for e, c in by_ev.most_common(15):
     m = is_out & (ev == e)
     print(f"  {str(e):28s} n={c:6d}  LA mean={la[m].mean():6.1f}  outs mean={outs[m].mean():.2f}")
 print(
-    f"  TOTAL out rows={is_out.sum()}  (fly LA>=20: {(is_out & (la>=20)).sum()}, "
-    f"ground LA<10: {(is_out & (la<10)).sum()})"
+    f"  TOTAL out rows={is_out.sum()}  (fly LA>=20: {(is_out & (la >= 20)).sum()}, "
+    f"ground LA<10: {(is_out & (la < 10)).sum()})"
 )
 
 print("\n=== baserunner embedding features ===")

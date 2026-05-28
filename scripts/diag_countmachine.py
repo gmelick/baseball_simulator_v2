@@ -55,6 +55,6 @@ for mode in ("count-BLIND (current)", "count-CONDITIONED (fix)"):
     c = collections.Counter(play_pa(cond) for _ in range(100_000))
     n = sum(c.values())
     print(
-        f"{mode:28s}: walk {100*c['walk']/n:4.1f}%  K {100*c['strikeout']/n:4.1f}%  "
-        f"in_play {100*c['in_play']/n:4.1f}%   (MLB ~ walk 8.5  K 23  in_play 68)"
+        f"{mode:28s}: walk {100 * c['walk'] / n:4.1f}%  K {100 * c['strikeout'] / n:4.1f}%  "
+        f"in_play {100 * c['in_play'] / n:4.1f}%   (MLB ~ walk 8.5  K 23  in_play 68)"
     )

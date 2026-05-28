@@ -88,9 +88,9 @@ class TestSchemaMigrations:
         # Verify the version string is non-empty and looks like a revision ID
         version_num: str = row[0]
         assert version_num, "version_num is blank"
-        assert (
-            len(version_num) >= 4
-        ), f"version_num '{version_num}' looks too short to be a valid Alembic revision"
+        assert len(version_num) >= 4, (
+            f"version_num '{version_num}' looks too short to be a valid Alembic revision"
+        )
 
     def test_sim082_unique_partial_index_exists(self, pg_connection: sa.Connection) -> None:
         """SIM-082: The unique partial index on sim.lineup_state must exist.

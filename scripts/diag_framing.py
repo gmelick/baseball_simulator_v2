@@ -47,8 +47,8 @@ def _framing_extremes():
     arr = np.array([d for d, _ in deltas])
     print(f"=== framing delta (per-taken-pitch CS shift), n={len(deltas)} catchers ===")
     print(
-        f"  min={arr.min():+.4f}  p10={np.percentile(arr,10):+.4f}  med={np.median(arr):+.4f}"
-        f"  p90={np.percentile(arr,90):+.4f}  max={arr.max():+.4f}"
+        f"  min={arr.min():+.4f}  p10={np.percentile(arr, 10):+.4f}  med={np.median(arr):+.4f}"
+        f"  p90={np.percentile(arr, 90):+.4f}  max={arr.max():+.4f}"
     )
     return deltas[-1][1], deltas[0][1]  # best, worst keys ("id:season")
 

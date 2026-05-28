@@ -79,10 +79,10 @@ def main() -> None:
     cs = statistics.mean(cs_per_game)
     print(f"=== steal volume (n={n} sims, both teams) ===")
     print(f"  SB/game={sb:.2f}  CS/game={cs:.2f}  attempts/game={sb + cs:.2f}")
-    print(f"  per-team: SB={sb/2:.2f}  CS={cs/2:.2f}  attempts={(sb+cs)/2:.2f}")
+    print(f"  per-team: SB={sb / 2:.2f}  CS={cs / 2:.2f}  attempts={(sb + cs) / 2:.2f}")
     print("  MLB per-team target: SB~0.51  CS~0.19  attempts~0.70")
     if sb + cs > 0:
-        print(f"  success rate={sb/(sb+cs):.2f}  (MLB ~0.75-0.80)")
+        print(f"  success rate={sb / (sb + cs):.2f}  (MLB ~0.75-0.80)")
 
 
 if __name__ == "__main__":

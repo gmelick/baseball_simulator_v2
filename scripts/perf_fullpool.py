@@ -71,7 +71,7 @@ batter_sim_const = np.float32(
     0.5
 )  # placeholder (batter factor is a per-PA gather, ~= pitcher cost)
 print(
-    f"[load] hand={HAND} N={N:,} geom={geom.nbytes/1e6:.0f}MB sit={sit.nbytes/1e6:.0f}MB  in {time.time()-t0:.2f}s"
+    f"[load] hand={HAND} N={N:,} geom={geom.nbytes / 1e6:.0f}MB sit={sit.nbytes / 1e6:.0f}MB  in {time.time() - t0:.2f}s"
 )
 
 rng = np.random.default_rng(1)
@@ -139,7 +139,7 @@ pa_ms = timeit(pa_setup)
 base_ms = timeit(half_inning_base)
 # ~80 PA/game, ~18 half-innings/game, ~290 pitches/game
 game_ms = 80 * pa_ms + 18 * base_ms + 290 * timeit(lambda: per_pitch_draw(cdf))
-print(f"\n=== EXTRAPOLATED per game: {game_ms/1000:.2f} s  (SLA = 2.0 s/game) ===")
+print(f"\n=== EXTRAPOLATED per game: {game_ms / 1000:.2f} s  (SLA = 2.0 s/game) ===")
 print(
-    f"=== per 100-game batch (1 worker): {100*game_ms/1000:.0f} s  (SLA = 30 s, but batch parallelizes across workers) ==="
+    f"=== per 100-game batch (1 worker): {100 * game_ms / 1000:.0f} s  (SLA = 30 s, but batch parallelizes across workers) ==="
 )

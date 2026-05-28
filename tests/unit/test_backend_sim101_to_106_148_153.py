@@ -357,9 +357,9 @@ class TestSim148PitcherSimilarityCleanup:
         )
         # 3-tuple guard: source must contain a 3-element return tuple
         # immediately after the SIM-148 comment in _score_pair.
-        assert (
-            "(composite, arsenal, command)" in src
-        ), "SIM-148: _score_pair docstring must advertise a 3-tuple return."
+        assert "(composite, arsenal, command)" in src, (
+            "SIM-148: _score_pair docstring must advertise a 3-tuple return."
+        )
 
     def test_no_release_score_in_source(self) -> None:
         """Source-level guard: release_score must not appear as a dataclass
@@ -422,9 +422,9 @@ class TestSim153SecretsBaseline:
     def test_gitignore_excludes_dotenv(self) -> None:
         path = _ROOT / ".gitignore"
         assert path.exists()
-        assert re.search(
-            r"^\.env\b", _read(path), re.MULTILINE
-        ), "SIM-153: .gitignore must explicitly list `.env`"
+        assert re.search(r"^\.env\b", _read(path), re.MULTILINE), (
+            "SIM-153: .gitignore must explicitly list `.env`"
+        )
 
     def test_python_dotenv_in_requirements(self) -> None:
         text = _read(_ROOT / "requirements.txt")
@@ -446,9 +446,9 @@ class TestSim153SecretsBaseline:
     def test_ci_workflow_has_secrets_check_job(self) -> None:
         ci = _read(_ROOT / ".github" / "workflows" / "ci.yml")
         assert "secrets-check" in ci, "SIM-153: CI workflow must define a `secrets-check` job"
-        assert (
-            "Reject committed .env" in ci or "committed .env" in ci
-        ), "SIM-153: secrets-check job must reject committed .env files"
+        assert "Reject committed .env" in ci or "committed .env" in ci, (
+            "SIM-153: secrets-check job must reject committed .env files"
+        )
 
     def test_loader_falls_back_to_env_dsn(self) -> None:
         """SIM-153 AC #4: HistoricalDataLoader reads BASEBALL_DB_DSN from env

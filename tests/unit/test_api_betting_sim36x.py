@@ -412,9 +412,9 @@ def test_edges_uses_calibration_map_from_app_state(patch_resolver):
     # Home side: calibrated sim_prob should be ~0.1 (the biased map output).
     home_edges = [e for e in edges if e["side"] == "home" and e["label"] == "moneyline"]
     assert home_edges, "expected a moneyline home edge in the response"
-    assert home_edges[0]["sim_prob"] == pytest.approx(
-        0.1, abs=0.01
-    ), f"calibration map was not applied: got {home_edges[0]['sim_prob']!r}, expected ~0.1"
+    assert home_edges[0]["sim_prob"] == pytest.approx(0.1, abs=0.01), (
+        f"calibration map was not applied: got {home_edges[0]['sim_prob']!r}, expected ~0.1"
+    )
 
 
 def test_edges_falls_back_to_identity_when_no_calibration_map(patch_resolver):

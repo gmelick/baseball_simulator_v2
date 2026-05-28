@@ -226,6 +226,6 @@ class TestLivePipelineUpsert:
         )
         # Confirm it really is a partial index (WHERE clause)
         indexdef: str = row[0]
-        assert (
-            "is_live_game" in indexdef.lower()
-        ), f"Index definition does not reference is_live_game: {indexdef}"
+        assert "is_live_game" in indexdef.lower(), (
+            f"Index definition does not reference is_live_game: {indexdef}"
+        )

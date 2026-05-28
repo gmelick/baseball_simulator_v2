@@ -85,13 +85,13 @@ def main():
     print("=== phantom double-play audit (80 sims) ===")
     print(f"  in-play outs drawn      : {counts['out_total']}")
     print(
-        f"  DP events drawn         : {counts['dp_total']}  ({100*counts['dp_total']/o:.1f}% of outs)"
+        f"  DP events drawn         : {counts['dp_total']}  ({100 * counts['dp_total'] / o:.1f}% of outs)"
     )
     print(
-        f"  DP with NO runner on 1B : {counts['dp_no_first']}  ({100*counts['dp_no_first']/d:.1f}% of DPs) <- phantom 2nd out"
+        f"  DP with NO runner on 1B : {counts['dp_no_first']}  ({100 * counts['dp_no_first'] / d:.1f}% of DPs) <- phantom 2nd out"
     )
     print(
-        f"  DP with NO runner at all: {counts['dp_no_runner']}  ({100*counts['dp_no_runner']/d:.1f}% of DPs)"
+        f"  DP with NO runner at all: {counts['dp_no_runner']}  ({100 * counts['dp_no_runner'] / d:.1f}% of DPs)"
     )
 
 

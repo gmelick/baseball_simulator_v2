@@ -1,0 +1,24 @@
+# Normalize all text files to LF in the git object store.
+# Windows checkouts still get CRLF (core.autocrlf handles that),
+# but CI (Linux) and Docker always see LF — preventing ruff
+# format --check drift between local and CI.
+* text=auto eol=lf
+
+# Binaries — no newline normalization
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.pdf binary
+*.xlsx binary
+*.db binary
+*.duckdb binary
+*.faiss binary
+*.npy binary
+*.pkl binary
+*.pickle binary

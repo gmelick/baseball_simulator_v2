@@ -291,15 +291,15 @@ class TestConcurrencyStress:
         shm_after = _shm_count()
 
         assert total_games >= 100, f"only ran {total_games} games (< 100)"
-        assert (
-            shm_after <= shm_before
-        ), f"/dev/shm leaked across the stress run: {shm_before} -> {shm_after}"
+        assert shm_after <= shm_before, (
+            f"/dev/shm leaked across the stress run: {shm_before} -> {shm_after}"
+        )
         # Optional cheap RAM assertion (SIM-280 <= 2 GB cap).
         peak = _peak_rss_bytes()
         if peak is not None:
-            assert (
-                peak < RAM_CAP_BYTES
-            ), f"peak RSS {peak / 1e9:.2f} GB exceeds the 2 GB SIM-280 cap"
+            assert peak < RAM_CAP_BYTES, (
+                f"peak RSS {peak / 1e9:.2f} GB exceeds the 2 GB SIM-280 cap"
+            )
 
     def test_30_concurrent_batch_is_reproducible(self):
         """Reproducibility under full concurrency: a fixed base seed reproduces a

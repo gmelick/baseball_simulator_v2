@@ -106,7 +106,7 @@ jobs:
   unit-tests:
     name: Unit tests + coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -139,7 +139,6 @@ jobs:
             --cov=simulation \
             --cov=betting \
             --cov=api \
-            --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
             --junit-xml=test-results-unit.xml
 
