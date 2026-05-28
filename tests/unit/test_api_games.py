@@ -222,7 +222,7 @@ def test_simulate_returns_numpy_free_summary(patch_resolver):
     # The GameSimSummaryModel shape (SIM-350).
     assert summary["n_iterations"] == 5
     for key in ("home_win_pct", "away_win_pct", "home_score_mean", "total_score_mean"):
-        assert isinstance(summary[key], (int, float))
+        assert isinstance(summary[key], int | float)
     # The raw per-iteration arrays are present and JSON-native (no numpy).
     assert isinstance(summary["home_scores"], list)
     assert len(summary["home_scores"]) == 5

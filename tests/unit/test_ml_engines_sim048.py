@@ -68,9 +68,9 @@ def test_metadata_score_type_contract():
         spec = SimilarityEngineRegistry.get_spec(name)
         assert isinstance(spec, EngineSpec)
         expected = "distance" if name in DISTANCE_ENGINES else "similarity"
-        assert spec.score_type == expected, (
-            f"{name}: expected score_type {expected!r}, got {spec.score_type!r}"
-        )
+        assert (
+            spec.score_type == expected
+        ), f"{name}: expected score_type {expected!r}, got {spec.score_type!r}"
 
 
 def test_metadata_family_values():

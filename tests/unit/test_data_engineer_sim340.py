@@ -93,9 +93,9 @@ class TestSIM340PersistPropOddsWired:
 
         written = await pipeline._persist_prop_odds_cycle(745000, _make_game_state())
 
-        assert pipeline._persist_prop_odds.await_count > 0, (
-            "_persist_prop_odds was never called — the SIM-340 live wiring is broken."
-        )
+        assert (
+            pipeline._persist_prop_odds.await_count > 0
+        ), "_persist_prop_odds was never called — the SIM-340 live wiring is broken."
         # players(4) × stats(7) × books(4) = 112 quotes for the default fixture.
         expected = 4 * len(PROP_STATS) * len(PROP_BOOKS)
         assert pipeline._persist_prop_odds.await_count == expected
@@ -163,9 +163,9 @@ class TestSIM340MultiBookSharpFlag:
         quotes = pipeline._fetch_prop_odds(745000, [101], line_type="current")
         classification = dict(PROP_BOOKS)
         for q in quotes:
-            assert q["is_sharp_book"] == classification[q["book"]], (
-                f"book {q['book']} sharp flag mismatch"
-            )
+            assert (
+                q["is_sharp_book"] == classification[q["book"]]
+            ), f"book {q['book']} sharp flag mismatch"
 
     @pytest.mark.asyncio
     async def test_sharp_flag_persisted_to_db(self) -> None:
@@ -243,9 +243,9 @@ class TestSIM340OpeningLineCapture:
 
         assert written == len(PROP_STATS) * len(PROP_BOOKS)
         assert captured_quotes, "no opening quotes captured"
-        assert all(q["line_type"] == "opening" for q in captured_quotes), (
-            "opening capture wrote a non-opening line_type"
-        )
+        assert all(
+            q["line_type"] == "opening" for q in captured_quotes
+        ), "opening capture wrote a non-opening line_type"
 
     @pytest.mark.asyncio
     async def test_capture_opening_multi_book(self) -> None:

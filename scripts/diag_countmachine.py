@@ -11,7 +11,9 @@ import os
 import duckdb
 import numpy as np
 
-con = duckdb.connect(os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb"), read_only=True)
+con = duckdb.connect(
+    os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb"), read_only=True
+)
 OUT = ["ball", "called_strike", "swinging_strike", "foul", "in_play"]
 dist = {}
 for b, s, *cnts in con.execute(f"""
@@ -49,7 +51,10 @@ def play_pa(conditioned: bool):
 for mode in ("count-BLIND (current)", "count-CONDITIONED (fix)"):
     cond = mode.startswith("count-COND")
     import collections
+
     c = collections.Counter(play_pa(cond) for _ in range(100_000))
     n = sum(c.values())
-    print(f"{mode:28s}: walk {100*c['walk']/n:4.1f}%  K {100*c['strikeout']/n:4.1f}%  "
-          f"in_play {100*c['in_play']/n:4.1f}%   (MLB ~ walk 8.5  K 23  in_play 68)")
+    print(
+        f"{mode:28s}: walk {100*c['walk']/n:4.1f}%  K {100*c['strikeout']/n:4.1f}%  "
+        f"in_play {100*c['in_play']/n:4.1f}%   (MLB ~ walk 8.5  K 23  in_play 68)"
+    )

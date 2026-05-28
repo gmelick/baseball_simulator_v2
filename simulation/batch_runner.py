@@ -185,7 +185,7 @@ class GameSpec:
 
 def _hashable(value: Any) -> Any:
     """Coerce a sim-kwarg value into a hashable form for the cache key."""
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return tuple(_hashable(v) for v in value)
     if isinstance(value, dict):
         return tuple(sorted((k, _hashable(v)) for k, v in value.items()))

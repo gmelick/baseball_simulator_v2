@@ -151,8 +151,16 @@ def build_battedball_pool_artifact(
         counts[hand] = int(n)
         log.info("battedball_pool[%s]: %d rows (seasons %s)", hand, n, seasons)
     with open(os.path.join(pool_dir, "manifest.json"), "w", encoding="utf-8") as fh:
-        json.dump({"seasons": seasons, "counts": counts, "geom_cols": _BB_GEOM_COLS,
-                   "sit_cols": _SIT_COLS}, fh, indent=2)
+        json.dump(
+            {
+                "seasons": seasons,
+                "counts": counts,
+                "geom_cols": _BB_GEOM_COLS,
+                "sit_cols": _SIT_COLS,
+            },
+            fh,
+            indent=2,
+        )
     return counts
 
 
@@ -208,7 +216,8 @@ def build_actor_embeddings(con: duckdb.DuckDBPyConnection, out_dir: str) -> dict
         ).fetchall()
         id_col = next(c for c, _ in schema if c.endswith("_id") or c == "player_id")
         feats = [
-            c for c, dt in schema
+            c
+            for c, dt in schema
             if dt.upper() in _NUMERIC_TYPES
             and c not in (id_col, "season")
             and not c.startswith("sample_")
@@ -286,7 +295,12 @@ class EngineArtifacts:
     these to assemble the factorized full-pool weights."""
 
     def __init__(
-        self, pools, pitcher_sim_index=None, pitcher_sim=None, seasons=None, actor_emb=None,
+        self,
+        pools,
+        pitcher_sim_index=None,
+        pitcher_sim=None,
+        seasons=None,
+        actor_emb=None,
         bb_pools=None,
     ):
         self.pools: dict[str, HandPool] = pools
@@ -380,9 +394,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Override the recency-floor seasons (default: last 3).",
     )
-    ap.add_argument(
-        "--what", choices=["pool", "pitcher_sim", "actors", "all"], default="pool"
-    )
+    ap.add_argument("--what", choices=["pool", "pitcher_sim", "actors", "all"], default="pool")
     ap.add_argument(
         "--pitcher-sim-limit",
         type=int,

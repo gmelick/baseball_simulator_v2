@@ -81,7 +81,7 @@ def to_jsonable(obj: Any) -> Any:
     # unconverted and leak into the wire format.  They fall through to the numpy
     # branch below.
     if obj is None or (
-        isinstance(obj, (bool, int, float, str)) and not isinstance(obj, np.generic)
+        isinstance(obj, bool | int | float | str) and not isinstance(obj, np.generic)
     ):
         # bool is a subclass of int; handled here so True/False stay JSON bools.
         return obj
@@ -105,7 +105,7 @@ def to_jsonable(obj: Any) -> Any:
         return [to_jsonable(x) for x in obj.tolist()]
 
     # --- datetimes ------------------------------------------------------------
-    if isinstance(obj, (_dt.datetime, _dt.date, _dt.time)):
+    if isinstance(obj, _dt.datetime | _dt.date | _dt.time):
         return obj.isoformat()
 
     # --- enums ----------------------------------------------------------------
@@ -121,7 +121,7 @@ def to_jsonable(obj: Any) -> Any:
         return {str(_jsonable_key(k)): to_jsonable(v) for k, v in obj.items()}
 
     # --- other iterables (list / tuple / set / frozenset) ---------------------
-    if isinstance(obj, (list, tuple, set, frozenset)):
+    if isinstance(obj, list | tuple | set | frozenset):
         return [to_jsonable(x) for x in obj]
 
     # --- last resort ----------------------------------------------------------
@@ -135,9 +135,9 @@ def _jsonable_key(key: Any) -> Any:
     Python scalar first so e.g. an ``np.int64`` player-id key becomes ``"7"``
     rather than ``"np.int64(7)"``.
     """
-    if isinstance(key, (np.integer,)):
+    if isinstance(key, np.integer):
         return int(key)
-    if isinstance(key, (np.floating,)):
+    if isinstance(key, np.floating):
         return float(key)
     if isinstance(key, np.generic):
         return key.item()

@@ -1175,7 +1175,10 @@ class StateMachine:
         else:
             outs = 0 if int(rh) > 0 else 1
         return FieldingSignal(
-            event=ev, result_hits=int(rh), result_outs=int(outs), result_runs=0,
+            event=ev,
+            result_hits=int(rh),
+            result_outs=int(outs),
+            result_runs=0,
             launch_angle=float(la),
         )
 
@@ -1221,8 +1224,11 @@ class StateMachine:
                 runs += 1
                 new_third = None
                 advances[old.third] = 0
-            if old.second is not None and new_third is None and la >= 28.0 and (
-                float(self.rng.random()) < 0.30
+            if (
+                old.second is not None
+                and new_third is None
+                and la >= 28.0
+                and (float(self.rng.random()) < 0.30)
             ):
                 new_third, new_second = old.second, None
                 advances[old.second] = 3
@@ -1233,8 +1239,10 @@ class StateMachine:
                 runs += 1
                 new_third = None
                 advances[old.third] = 0
-            elif old.second is not None and old.third is None and (
-                float(self.rng.random()) < 0.35 * calib
+            elif (
+                old.second is not None
+                and old.third is None
+                and (float(self.rng.random()) < 0.35 * calib)
             ):
                 new_third, new_second = old.second, None
                 advances[old.second] = 3
@@ -1346,7 +1354,7 @@ class StateMachine:
     _ADVANCE_RATE_FEATURE: dict[tuple[int, int], str] = {
         (1, 2): "second_to_home_attempt_rate",  # single, runner 2nd -> scores
         (1, 1): "first_to_third_attempt_rate",  # single, runner 1st -> 3rd
-        (2, 1): "first_to_home_attempt_rate",   # double, runner 1st -> scores
+        (2, 1): "first_to_home_attempt_rate",  # double, runner 1st -> scores
     }
 
     def _advance_rate(
@@ -1410,9 +1418,15 @@ class StateMachine:
             # old rigid ``from_base + bases_advanced`` stranded the runner from 2nd
             # on every single (he only reached 3rd), suppressing run-scoring ~26%.
             # Probabilities track the Retrosheet extra-base-advance rates.
-            dest = from_base + int(bases_advanced) + self._extra_advance(
-                from_base, bases_advanced, runner_id=rid,
-                season=int(getattr(state, "season", 2024) or 2024),
+            dest = (
+                from_base
+                + int(bases_advanced)
+                + self._extra_advance(
+                    from_base,
+                    bases_advanced,
+                    runner_id=rid,
+                    season=int(getattr(state, "season", 2024) or 2024),
+                )
             )
             if dest >= 4:
                 runs_scored += 1

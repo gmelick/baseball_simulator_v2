@@ -278,7 +278,7 @@ def _live_state_row_to_dict(row: Mapping[str, Any]) -> dict:
     import json
 
     game_state = row["game_state"]
-    if isinstance(game_state, (str, bytes, bytearray)):
+    if isinstance(game_state, str | bytes | bytearray):
         game_state = json.loads(game_state)
     updated_at = row["updated_at"]
     return {
@@ -304,7 +304,7 @@ def _sim_run_row_to_dict(row: Mapping[str, Any]) -> dict:
     ``datetime`` from asyncpg, a str/None from a stub).
     """
     summary = row["summary"]
-    if isinstance(summary, (str, bytes, bytearray)):
+    if isinstance(summary, str | bytes | bytearray):
         import json
 
         summary = json.loads(summary)
@@ -505,7 +505,7 @@ def _state_row_to_dict(rec: Any) -> dict:
     import json
 
     at_bat, pitch, sequence, snapshot = rec
-    parsed = json.loads(snapshot) if isinstance(snapshot, (str, bytes, bytearray)) else snapshot
+    parsed = json.loads(snapshot) if isinstance(snapshot, str | bytes | bytearray) else snapshot
     return {
         "at_bat": int(at_bat),
         "pitch": int(pitch),
@@ -652,9 +652,9 @@ def _game_card_row_to_dict(rec: Any) -> dict:
     import json
 
     run_id, game_pk, linescore, decisions = rec
-    if isinstance(linescore, (str, bytes, bytearray)):
+    if isinstance(linescore, str | bytes | bytearray):
         linescore = json.loads(linescore)
-    if isinstance(decisions, (str, bytes, bytearray)):
+    if isinstance(decisions, str | bytes | bytearray):
         decisions = json.loads(decisions)
     return {
         "run_id": int(run_id),

@@ -5,7 +5,6 @@ each factor in isolation, against the true pool marginal (recency only). A facto
 that shifts the mix away from the marginal is a distortion source.
 """
 
-import collections
 import os
 
 import numpy as np
@@ -34,7 +33,7 @@ def f_sit(state, dims=None, sigma=2.0):
     return np.exp(-d2 / (2.0 * sigma**2 * s.shape[1]))
 
 
-print("=== pitch-outcome marginal under each factor (R pool, N=%d) ===" % pool.n)
+print(f"=== pitch-outcome marginal under each factor (R pool, N={pool.n}) ===")
 print("MLB-ish target ~  ball 36  cs 17  ss 10  foul 17  in_play 17 (rough)")
 print("recency only (true pool marginal):", marg(rec))
 
@@ -52,10 +51,11 @@ aff = np.exp(-np.einsum("ij,ij->i", vz - q, vz - q) / (2.0 * 3.0**2 * vz.shape[1
 ki = bemb["key_index"]
 pool_bat = np.fromiter(
     (ki.get(f"{int(b)}:{int(s)}", -1) for b, s in zip(pool.batter_id, pool.season, strict=False)),
-    dtype=np.int64, count=pool.n,
+    dtype=np.int64,
+    count=pool.n,
 )
 f_bat = np.where(pool_bat >= 0, aff[np.clip(pool_bat, 0, len(aff) - 1)], 1.0)
-print("× f_batter [%s]:" % bk, marg(rec * f_bat))
+print(f"× f_batter [{bk}]:", marg(rec * f_bat))
 
 # f_pitcher — a representative pitcher
 pk = next(iter(a.pitcher_sim))
@@ -67,11 +67,15 @@ for k, v in sims.items():
     if j is not None:
         ps[j] = v
 pool_prof = np.fromiter(
-    (a.pitcher_sim_index.get(f"{int(p)}:{int(s)}", -1) for p, s in zip(pool.pitcher_id, pool.season, strict=False)),
-    dtype=np.int64, count=pool.n,
+    (
+        a.pitcher_sim_index.get(f"{int(p)}:{int(s)}", -1)
+        for p, s in zip(pool.pitcher_id, pool.season, strict=False)
+    ),
+    dtype=np.int64,
+    count=pool.n,
 )
 f_pit = np.where(pool_prof >= 0, ps[np.clip(pool_prof, 0, n_prof - 1)], 1.0)
-print("× f_pitcher [%s] (frac matched %.2f):" % (pk, (pool_prof >= 0).mean()), marg(rec * f_pit))
+print(f"× f_pitcher [{pk}] (frac matched {(pool_prof >= 0).mean():.2f}):", marg(rec * f_pit))
 
 # ALL multiplied (count-inclusive situation, the current sampler)
 allw = rec * f_sit([0, 0, 1, 0, 5, 0]) * f_bat * f_pit

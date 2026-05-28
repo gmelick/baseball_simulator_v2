@@ -265,7 +265,6 @@ class TestCalibrationMapFromReport:
 
 class TestBuildAllEngines:
     def test_builds_all_eleven_with_fake_loader(self):
-
         def fake_loader(module_path, class_name):
             return _FakeEngine
 

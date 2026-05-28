@@ -67,16 +67,24 @@ class FullPoolSampler:
         # candidate (pitcher_id:season) -> dense profile index in the pitcher-sim list
         pidx = self.a.pitcher_sim_index
         pool_prof = np.fromiter(
-            (pidx.get(f"{int(p)}:{int(s)}", -1) for p, s in zip(pool.pitcher_id, pool.season, strict=False)),
-            dtype=np.int64, count=n,
+            (
+                pidx.get(f"{int(p)}:{int(s)}", -1)
+                for p, s in zip(pool.pitcher_id, pool.season, strict=False)
+            ),
+            dtype=np.int64,
+            count=n,
         )
         # candidate (batter_id:season) -> dense batter-embedding row
         bemb = self.a.actor_emb.get("batter")
         if bemb is not None:
             bkidx = bemb["key_index"]
             pool_bat = np.fromiter(
-                (bkidx.get(f"{int(b)}:{int(s)}", -1) for b, s in zip(pool.batter_id, pool.season, strict=False)),
-                dtype=np.int64, count=n,
+                (
+                    bkidx.get(f"{int(b)}:{int(s)}", -1)
+                    for b, s in zip(pool.batter_id, pool.season, strict=False)
+                ),
+                dtype=np.int64,
+                count=n,
             )
         else:
             pool_bat = np.full(n, -1, dtype=np.int64)
@@ -87,9 +95,13 @@ class FullPoolSampler:
         strikes = np.clip(pool.sit[:, 1].astype(np.int64), 0, 2)
         cbucket = balls * 3 + strikes
         bucket_rows = [np.nonzero(cbucket == b)[0] for b in range(12)]
-        meta = {"pool": pool, "pool_prof": pool_prof, "pool_bat": pool_bat,
-                "outcome": np.asarray(pool.outcome_type, dtype=object),
-                "bucket_rows": bucket_rows}
+        meta = {
+            "pool": pool,
+            "pool_prof": pool_prof,
+            "pool_bat": pool_bat,
+            "outcome": np.asarray(pool.outcome_type, dtype=object),
+            "bucket_rows": bucket_rows,
+        }
         self._pool_cache[hand] = meta
         return meta
 
@@ -122,7 +134,9 @@ class FullPoolSampler:
         d2 = np.einsum("ij,ij->i", vecs_z - q, vecs_z - q)
         aff = np.exp(-d2 / (2.0 * self.batter_sigma**2 * vecs_z.shape[1])).astype(np.float32)
         pb = meta["pool_bat"]
-        return np.where(pb >= 0, aff[np.clip(pb, 0, len(aff) - 1)], np.float32(1.0)).astype(np.float32)
+        return np.where(pb >= 0, aff[np.clip(pb, 0, len(aff) - 1)], np.float32(1.0)).astype(
+            np.float32
+        )
 
     def _f_situation(self, hand: str, state: np.ndarray) -> np.ndarray:
         pool = self.a.pools[hand]
@@ -150,13 +164,13 @@ class FullPoolSampler:
         and split it into 12 count-bucket CDFs for the per-pitch, count-conditioned
         draw (SIM-429)."""
         assert self._hand is not None and self._base is not None, "call new_half_inning first"
-        w = self._base * self._f_batter(self._hand, batter_key) * self._f_situation_baseout(
-            self._hand, base_out
+        w = (
+            self._base
+            * self._f_batter(self._hand, batter_key)
+            * self._f_situation_baseout(self._hand, base_out)
         )
         rows = self._pool_meta(self._hand)["bucket_rows"]
-        self._bucket_cdf = [
-            (np.cumsum(w[r], dtype=np.float64) if r.size else None) for r in rows
-        ]
+        self._bucket_cdf = [(np.cumsum(w[r], dtype=np.float64) if r.size else None) for r in rows]
 
     def draw(self, balls: int = 0, strikes: int = 0) -> str:
         """Count-conditioned draw of one pitch outcome (SIM-429): restrict to the
@@ -191,8 +205,12 @@ class FullPoolSampler:
         else:
             ki = bemb["key_index"]
             pb = np.fromiter(
-                (ki.get(f"{int(b)}:{int(s)}", -1) for b, s in zip(pool.batter_id, pool.season, strict=False)),
-                dtype=np.int64, count=pool.n,
+                (
+                    ki.get(f"{int(b)}:{int(s)}", -1)
+                    for b, s in zip(pool.batter_id, pool.season, strict=False)
+                ),
+                dtype=np.int64,
+                count=pool.n,
             )
         self._bb_pool_bat[hand] = pb
         return pb
@@ -204,7 +222,9 @@ class FullPoolSampler:
         aff = self._batter_aff(batter_key)
         if aff is not None:
             pb = self._bb_pool_bat_idx(hand)
-            f_bat = np.where(pb >= 0, aff[np.clip(pb, 0, len(aff) - 1)], np.float32(1.0)).astype(np.float32)
+            f_bat = np.where(pb >= 0, aff[np.clip(pb, 0, len(aff) - 1)], np.float32(1.0)).astype(
+                np.float32
+            )
         else:
             f_bat = np.ones(pool.n, dtype=np.float32)
         diff = pool.sit - np.asarray(state, dtype=np.float32)
@@ -221,9 +241,15 @@ class FullPoolSampler:
         if self._bb_hand is None or self._bb_cdf is None or self._bb_cdf[-1] <= 0:
             return ("field_out", 0, 1, 0.0)
         pool = self.a.bb_pools[self._bb_hand]
-        i = min(int(np.searchsorted(self._bb_cdf, self.rng.random() * self._bb_cdf[-1])), pool.n - 1)
-        return (str(pool.event[i]), int(pool.result_hits[i]), int(pool.result_outs[i]),
-                float(pool.geom[i, 1]))
+        i = min(
+            int(np.searchsorted(self._bb_cdf, self.rng.random() * self._bb_cdf[-1])), pool.n - 1
+        )
+        return (
+            str(pool.event[i]),
+            int(pool.result_hits[i]),
+            int(pool.result_outs[i]),
+            float(pool.geom[i, 1]),
+        )
 
     def has_battedball(self) -> bool:
         return bool(self.a.bb_pools)

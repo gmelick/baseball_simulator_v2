@@ -898,7 +898,7 @@ class CalibrationReport:
             return {"__ndarray__": True, "data": v.tolist()}
         if isinstance(v, np.generic):  # numpy scalar (e.g. np.float64)
             return v.item()
-        if isinstance(v, (list, tuple)):
+        if isinstance(v, list | tuple):
             return [CalibrationReport._encode_value(x) for x in v]
         # Plain Python scalars (int/float/str/bool) pass through.
         return v

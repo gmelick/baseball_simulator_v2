@@ -387,9 +387,9 @@ class TestCorsDevOrigins:
         monkeypatch.delenv("CORS_ORIGINS", raising=False)
         monkeypatch.delenv("FRONTEND_URL", raising=False)
         origins = resolve_cors_origins()
-        assert any("5173" in o for o in origins), (
-            "Dev CORS must include localhost:5173 (Vite dev server)"
-        )
+        assert any(
+            "5173" in o for o in origins
+        ), "Dev CORS must include localhost:5173 (Vite dev server)"
 
     def test_cors_origins_env_var_takes_precedence(self, monkeypatch):
         monkeypatch.setenv("CORS_ORIGINS", "https://sim.example.com")

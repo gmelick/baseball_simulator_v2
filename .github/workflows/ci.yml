@@ -106,7 +106,7 @@ jobs:
   unit-tests:
     name: Unit tests + coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -141,7 +141,6 @@ jobs:
             --cov=api \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
-            --cov-report=html:htmlcov \
             --junit-xml=test-results-unit.xml
 
       - name: Enforce coverage gate (${{ env.COVERAGE_GATE }}%)
@@ -174,14 +173,6 @@ jobs:
           name: unit-test-results
           path: test-results-unit.xml
           retention-days: 14
-
-      - name: Upload HTML coverage report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-html
-          path: htmlcov/
-          retention-days: 7
 
   # ---------------------------------------------------------------------------
   # Job 3b — Slow tests (SIM-418)

@@ -104,10 +104,7 @@ def main() -> None:
                 per[k].append(t[k])
                 all_games[k].append(t[k])
         means = {k: statistics.mean(per[k]) for k in keys}
-        print(
-            f"game {gp} (n={args.iters}): "
-            + "  ".join(f"{k}={means[k]:.1f}" for k in keys)
-        )
+        print(f"game {gp} (n={args.iters}): " + "  ".join(f"{k}={means[k]:.1f}" for k in keys))
 
     n = len(all_games["R"])
     print(f"\n=== OVERALL per-game, both teams (n={n} sims) ===")

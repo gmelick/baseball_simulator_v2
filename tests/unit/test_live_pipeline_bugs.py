@@ -130,9 +130,9 @@ class TestSIM099RedisKeyMismatch:
         await pipeline._cache_to_redis(745000, feed, game_state, status="Live")
 
         written_keys = {c.args[0] for c in mock_redis.setex.call_args_list}
-        assert "game_feed:745000" in written_keys, (
-            "game_feed:745000 was not written — _fetch_feed() fallback will never work"
-        )
+        assert (
+            "game_feed:745000" in written_keys
+        ), "game_feed:745000 was not written — _fetch_feed() fallback will never work"
 
     @pytest.mark.asyncio
     async def test_cache_to_redis_still_writes_game_state_key(self) -> None:
@@ -147,9 +147,9 @@ class TestSIM099RedisKeyMismatch:
         await pipeline._cache_to_redis(745000, {}, {"inning": 1}, status="Live")
 
         written_keys = {c.args[0] for c in mock_redis.setex.call_args_list}
-        assert "game_state:745000" in written_keys, (
-            "game_state:745000 was not written — resimulate endpoint will break"
-        )
+        assert (
+            "game_state:745000" in written_keys
+        ), "game_state:745000 was not written — resimulate endpoint will break"
 
     @pytest.mark.asyncio
     async def test_redis_key_written_matches_key_read(self) -> None:
@@ -206,9 +206,9 @@ class TestSIM099RedisKeyMismatch:
 
         result = await pipeline._fetch_feed(745002)
 
-        assert result is not None, (
-            "_fetch_feed() returned None on 429 — Redis fallback is not working"
-        )
+        assert (
+            result is not None
+        ), "_fetch_feed() returned None on 429 — Redis fallback is not working"
         assert result["gamePk"] == 745002
         mock_redis.get.assert_awaited_once_with("game_feed:745002")
 
@@ -370,9 +370,9 @@ class TestSIM100RosterParsing:
         30-pitch threshold for 'light usage'.
         """
         entry = self._make_roster_bullpen_entry(pitch_count_today=35, days_rest=2)
-        assert entry["available"] is False, (
-            "Pitcher with 35 pitches today should not be available even with rest."
-        )
+        assert (
+            entry["available"] is False
+        ), "Pitcher with 35 pitches today should not be available even with rest."
 
     def test_availability_no_rest_any_pitches_is_unavailable(self) -> None:
         """days_rest=0 → unavailable even for light usage."""

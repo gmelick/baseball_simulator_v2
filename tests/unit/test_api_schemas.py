@@ -86,8 +86,8 @@ def _assert_no_numpy(obj) -> None:
     yields dict/list/str/int/float/bool/None, so a positive find here would mean
     the JSON text smuggled a numpy repr -- but we walk defensively anyway.
     """
-    if obj is None or isinstance(obj, (bool, int, float, str)):
-        assert not isinstance(obj, (np.generic, np.ndarray)), f"numpy leaked: {obj!r}"
+    if obj is None or isinstance(obj, bool | int | float | str):
+        assert not isinstance(obj, np.generic | np.ndarray), f"numpy leaked: {obj!r}"
         return
     if isinstance(obj, dict):
         for k, v in obj.items():

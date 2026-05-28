@@ -125,9 +125,9 @@ class TestStealEngineProperties:
         ab = steal_engine.query_pair(a, b)
         ba = steal_engine.query_pair(b, a)
         assert ab is not None and ba is not None
-        assert abs(ab.score - ba.score) <= SYMMETRY_TOLERANCE, (
-            f"Asymmetry {abs(ab.score - ba.score):.2e} > {SYMMETRY_TOLERANCE:.2e}"
-        )
+        assert (
+            abs(ab.score - ba.score) <= SYMMETRY_TOLERANCE
+        ), f"Asymmetry {abs(ab.score - ba.score):.2e} > {SYMMETRY_TOLERANCE:.2e}"
 
     def test_no_nan_inf(self, steal_engine):
         ids = steal_engine.profile_ids()
@@ -175,9 +175,9 @@ class TestStealEngineProperties:
         result = steal_engine.query_pair(orig_key, dup_key)
         assert result is not None
         # With eb_alpha=1.0 and identical features, RBF(x, x) = 1.0
-        assert abs(result.score - 1.0) < 1e-9, (
-            f"Identical profiles scored {result.score:.9f}, expected ≈ 1.0"
-        )
+        assert (
+            abs(result.score - 1.0) < 1e-9
+        ), f"Identical profiles scored {result.score:.9f}, expected ≈ 1.0"
 
         # Clean up — remove dup so other tests aren't affected
         del steal_engine._profiles[dup_key]
@@ -548,9 +548,9 @@ class TestPitcherStealEngineGoldenFile:
             for _i, (actual, expected) in enumerate(
                 zip(results[:TOP_K_STABLE], q["top5_scores"], strict=False)
             ):
-                assert abs(actual.score - expected) <= SCORE_ABS_TOLERANCE, (
-                    f"Score drift delta={abs(actual.score - expected):.2e}"
-                )
+                assert (
+                    abs(actual.score - expected) <= SCORE_ABS_TOLERANCE
+                ), f"Score drift delta={abs(actual.score - expected):.2e}"
 
 
 class TestManagerEngineGoldenFile:
@@ -571,9 +571,9 @@ class TestManagerEngineGoldenFile:
             for _i, (actual, expected) in enumerate(
                 zip(results[:TOP_K_STABLE], q["top5_scores"], strict=False)
             ):
-                assert abs(actual.score - expected) <= SCORE_ABS_TOLERANCE, (
-                    f"Score drift delta={abs(actual.score - expected):.2e}"
-                )
+                assert (
+                    abs(actual.score - expected) <= SCORE_ABS_TOLERANCE
+                ), f"Score drift delta={abs(actual.score - expected):.2e}"
 
 
 class TestSituationEngineGoldenFile:
@@ -696,12 +696,12 @@ class TestWeightConstants:
             WEIGHT_PICKOFF,
         )
 
-        assert WEIGHT_DELIVERY > WEIGHT_PICKOFF, (
-            f"Delivery ({WEIGHT_DELIVERY}) should outweigh Pickoff ({WEIGHT_PICKOFF})"
-        )
-        assert WEIGHT_DELIVERY > WEIGHT_OUTCOME, (
-            f"Delivery ({WEIGHT_DELIVERY}) should outweigh Outcome ({WEIGHT_OUTCOME})"
-        )
+        assert (
+            WEIGHT_DELIVERY > WEIGHT_PICKOFF
+        ), f"Delivery ({WEIGHT_DELIVERY}) should outweigh Pickoff ({WEIGHT_PICKOFF})"
+        assert (
+            WEIGHT_DELIVERY > WEIGHT_OUTCOME
+        ), f"Delivery ({WEIGHT_DELIVERY}) should outweigh Outcome ({WEIGHT_OUTCOME})"
 
     def test_catcher_framing_dominates(self):
         """Framing is the highest-weight sub-score (45%) per spec."""

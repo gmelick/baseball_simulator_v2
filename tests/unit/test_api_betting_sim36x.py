@@ -179,7 +179,7 @@ def test_edges_returns_numpy_free_reports_incl_run_line(patch_resolver):
     # Each report is the EdgeReportModel shape (numpy-free).
     for e in body["edges"]:
         for key in ("sim_prob", "market_fair_prob", "edge", "ev", "offered_american"):
-            assert isinstance(e[key], (int, float))
+            assert isinstance(e[key], int | float)
         assert isinstance(e["positive_edge"], bool)
         assert e["side"] in ("home", "away", "over", "under")
 
@@ -328,7 +328,7 @@ def test_line_movement_returns_series_from_canned_odds():
     assert home["implied_prob_series"][1] > home["implied_prob_series"][0]
     # Both endpoints carry the opposite price -> an entry-vs-close CLV is computed.
     assert home["clv"] is not None
-    assert isinstance(home["clv"]["clv_prob"], (int, float))
+    assert isinstance(home["clv"]["clv_prob"], int | float)
     json.dumps(body)  # numpy-free
 
 
@@ -412,9 +412,9 @@ def test_edges_uses_calibration_map_from_app_state(patch_resolver):
     # Home side: calibrated sim_prob should be ~0.1 (the biased map output).
     home_edges = [e for e in edges if e["side"] == "home" and e["label"] == "moneyline"]
     assert home_edges, "expected a moneyline home edge in the response"
-    assert home_edges[0]["sim_prob"] == pytest.approx(0.1, abs=0.01), (
-        f"calibration map was not applied: got {home_edges[0]['sim_prob']!r}, expected ~0.1"
-    )
+    assert home_edges[0]["sim_prob"] == pytest.approx(
+        0.1, abs=0.01
+    ), f"calibration map was not applied: got {home_edges[0]['sim_prob']!r}, expected ~0.1"
 
 
 def test_edges_falls_back_to_identity_when_no_calibration_map(patch_resolver):

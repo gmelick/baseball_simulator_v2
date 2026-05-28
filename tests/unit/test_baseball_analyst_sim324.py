@@ -371,9 +371,9 @@ class TestRunEnvironment:
         # the modest calibration slack of an injected (not measured) model while
         # still failing loudly if the loop mis-aggregates runs (e.g. the SIM-312
         # silent-zero-out regression would push this far above 5.0).
-        assert 3.8 <= rpg <= 5.0, (
-            f"run environment {rpg:.2f} R/team/G outside the realistic 3.8-5.0 band"
-        )
+        assert (
+            3.8 <= rpg <= 5.0
+        ), f"run environment {rpg:.2f} R/team/G outside the realistic 3.8-5.0 band"
 
     def test_run_environment_is_deterministic_for_a_fixed_seed_set(self):
         # The whole aggregate is reproducible from the seed set (noise-robust by
@@ -389,9 +389,9 @@ class TestRunEnvironment:
         # with a tighter band (slow-marked so the always-on suite stays fast).
         agg = _aggregate(range(600))
         rpg = agg.runs_per_team_game
-        assert 4.0 <= rpg <= 4.9, (
-            f"large-sample run environment {rpg:.2f} outside the tight 4.0-4.9 band"
-        )
+        assert (
+            4.0 <= rpg <= 4.9
+        ), f"large-sample run environment {rpg:.2f} outside the tight 4.0-4.9 band"
 
 
 # ===========================================================================
@@ -509,9 +509,9 @@ class TestRE24Monotonicity:
                     if rs & bit:
                         continue  # already occupied
                     sup = rs | bit
-                    assert RE24_MATRIX[(outs, sup)] >= RE24_MATRIX[(outs, rs)], (
-                        f"adding a runner lowered RE24 at outs={outs}: {rs:03b} -> {sup:03b}"
-                    )
+                    assert (
+                        RE24_MATRIX[(outs, sup)] >= RE24_MATRIX[(outs, rs)]
+                    ), f"adding a runner lowered RE24 at outs={outs}: {rs:03b} -> {sup:03b}"
 
     def test_re24_more_total_baserunners_dominates_empty(self):
         # The loaded bases always beat empty bases at the same out count, and any

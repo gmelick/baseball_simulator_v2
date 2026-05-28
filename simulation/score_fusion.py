@@ -159,7 +159,7 @@ def _coerce_score(raw: object) -> float:
     """
     if raw is None:
         return float("nan")
-    if isinstance(raw, (int, float)):
+    if isinstance(raw, int | float):
         return float(raw)
     # Prefer an explicit similarity ``score``; else a ``distance``.
     for attr in ("score", "distance"):

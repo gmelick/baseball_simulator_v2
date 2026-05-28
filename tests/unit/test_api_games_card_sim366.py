@@ -449,7 +449,7 @@ class TestCardAndBoxscoreEndpoints:
         # The pitcher (201) gets K/BB/ER/OUTS means; a row exposes a means map.
         any_row = next(iter(body["players"].values()))
         assert "player_id" in any_row and "means" in any_row
-        assert all(isinstance(v, (int, float)) for v in any_row["means"].values())
+        assert all(isinstance(v, int | float) for v in any_row["means"].values())
         # The pitcher of the resolved state (201) should be present with K mean.
         assert "201" in body["players"]
         assert "K" in body["players"]["201"]["means"]
