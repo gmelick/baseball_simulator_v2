@@ -33,8 +33,6 @@ import pytest
 def steal_engine():
     """BaserunnerStealSimilarityEngine — 12 synthetic profiles, seed=2026."""
     from similarity.engines.baserunner_steal_similarity import (
-        JUMP_FEATURES,
-        RBF_SIGMA_JUMP,
         RBF_SIGMA_SUCCESS,
         RBF_SIGMA_TENDENCY,
         SUCCESS_FEATURES,
@@ -49,7 +47,6 @@ def steal_engine():
     rng = np.random.default_rng(2026)
     n = 12
     t_dim = len(TENDENCY_FEATURES)
-    j_dim = len(JUMP_FEATURES)
     s_dim = len(SUCCESS_FEATURES)
 
     profiles = [
@@ -59,7 +56,6 @@ def steal_engine():
             sample_steal_attempts=40 + i * 3,
             sample_first_base_opps=150 + i * 10,
             tendency_vec=rng.uniform(0.05, 0.95, t_dim),
-            jump_vec=rng.uniform(100.0, 350.0, j_dim),
             success_vec=rng.uniform(0.55, 0.90, s_dim),
             eb_alpha=1.0,
         )
@@ -74,9 +70,6 @@ def steal_engine():
     engine._partition.build(profiles, engine._normalizer)
     engine._tend_rbf = WeightedRBFSimilarity(
         RBF_SIGMA_TENDENCY, np.array([w for _, w in TENDENCY_FEATURES])
-    )
-    engine._jump_rbf = WeightedRBFSimilarity(
-        RBF_SIGMA_JUMP, np.array([w for _, w in JUMP_FEATURES])
     )
     engine._succ_rbf = WeightedRBFSimilarity(
         RBF_SIGMA_SUCCESS, np.array([w for _, w in SUCCESS_FEATURES])

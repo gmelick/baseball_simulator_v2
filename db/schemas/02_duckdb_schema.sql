@@ -463,6 +463,40 @@ COMMENT ON COLUMN derived.baserunner_season_metrics.stop_rate IS 'Fraction of ad
 COMMENT ON COLUMN derived.baserunner_season_metrics.below_minimum_sample IS 'TRUE when sample_advancement_opps < 20 or sample_sb_attempts < 5. Falls back to speed-bucket average.';
 
 -- =============================================================================
+-- DERIVED.BASERUNNER_STEAL_METRICS
+-- One row per baserunner per season, stolen-base dimension only.
+-- Indexed by the Step 2.5 Baserunner-Steal similarity engine. SIM-408: the
+-- engine referenced this table but the computor never built it. Built from
+-- raw.pitches SB attempt/success flags. Biomech jump features (reaction_time,
+-- burst_distance, break_angle) are intentionally ABSENT — Statcast does not
+-- publish them, and the engine's JUMP sub-score was removed accordingly.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS derived.baserunner_steal_metrics (
+    player_id                   INTEGER     NOT NULL,
+    season                      SMALLINT    NOT NULL,
+
+    sample_steal_attempts       INTEGER     NOT NULL DEFAULT 0,   -- total SB attempts as lead runner
+    sample_first_base_opps      INTEGER     NOT NULL DEFAULT 0,   -- PAs begun on 1B (steal-2B opp denom)
+
+    -- Tendency
+    steal_attempt_rate          FLOAT,      -- total attempts / first_base_opps
+    steal_attempt_rate_2b       FLOAT,      -- 2B→3B attempts / PAs begun on 2B
+    -- Success
+    steal_success_rate          FLOAT,      -- successes / attempts (overall)
+    steal_success_rate_2b       FLOAT,      -- 2B→3B successes / 2B→3B attempts
+
+    below_minimum_sample        BOOLEAN     NOT NULL DEFAULT FALSE,
+    updated_at                  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (player_id, season)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bsm_season ON derived.baserunner_steal_metrics(season);
+
+COMMENT ON TABLE derived.baserunner_steal_metrics IS 'SIM-408: per-runner per-season stolen-base tendency/success metrics for the Step 2.5 baserunner-steal engine. Built from raw.pitches SB flags. below_minimum_sample = sample_steal_attempts < 10 (the engine filters these out).';
+
+-- =============================================================================
 -- DERIVED.CATCHER_SEASON_METRICS
 -- One row per catcher per season.
 -- Full schema covering framing, blocking, and stolen base prevention.
@@ -623,6 +657,44 @@ COMMENT ON COLUMN derived.park_factors.factor_overall IS 'SIM-336: venue event r
 COMMENT ON COLUMN derived.park_factors.factor_vs_l IS 'SIM-336: venue-vs-LHB rate / league-vs-LHB rate. NULL when the venue had no vs-LHB sample for the factor type.';
 COMMENT ON COLUMN derived.park_factors.factor_vs_r IS 'SIM-336: venue-vs-RHB rate / league-vs-RHB rate. NULL when the venue had no vs-RHB sample for the factor type.';
 COMMENT ON COLUMN derived.park_factors.regressed_factor IS 'Bayesian-shrunk toward 1.0 based on sample_pa. Use this value in simulation rather than factor_overall. SIM-336 pool-neutralization policy: sim pools are drawn from real (already park-influenced) PAs, so apply park as base_rate * (target_factor / comp_origin_factor) — divide out the comp origin-venue factor before multiplying by the target venue factor, to avoid double-counting.';
+
+-- =============================================================================
+-- DERIVED.AT_BAT_SITUATIONS
+-- One row per plate appearance, capturing the pre-PA game state (the situation
+-- the batter came up to). Indexed by the Step 2.9 Situation-to-Situation KDTree
+-- engine (similarity/engines/situation_similarity.py). SIM-408: the engine
+-- referenced this table but the computor never built it, so the situation engine
+-- indexed 0 rows and normalized a degenerate empty matrix. Materialized from
+-- raw.pitches (the first pitch of each PA).
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS derived.at_bat_situations (
+    play_id                     VARCHAR     NOT NULL,   -- '<game_pk>-<at_bat_number>'
+    game_pk                     INTEGER     NOT NULL,
+    season                      SMALLINT    NOT NULL,
+    venue_id                    INTEGER,                -- joins derived.park_factors(venue_id, season)
+    at_bat_number               INTEGER     NOT NULL,
+
+    -- Pre-PA game state (the SituationVector dimensions)
+    inning                      SMALLINT,
+    top_or_bottom               SMALLINT,               -- 0 = top (away batting), 1 = bottom
+    outs_when_up                SMALLINT,
+    on_1b                       SMALLINT,               -- 0/1 base-occupied flag
+    on_2b                       SMALLINT,
+    on_3b                       SMALLINT,
+    home_score                  SMALLINT,
+    away_score                  SMALLINT,
+    leverage_index              FLOAT,                  -- compute_leverage_index(), computed in SQL
+    pitcher_pitch_count         INTEGER,                -- current pitcher's pitches entering the PA
+    batter_pa_count             INTEGER,                -- batter's PA sequence number in the game
+
+    PRIMARY KEY (game_pk, at_bat_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_abs_season       ON derived.at_bat_situations(season);
+CREATE INDEX IF NOT EXISTS idx_abs_venue_season ON derived.at_bat_situations(venue_id, season);
+
+COMMENT ON TABLE derived.at_bat_situations IS 'SIM-408: one row per plate appearance with the pre-PA game state (inning / top-bottom / outs / base-state / score / leverage / pitch-count / PA-count) indexed by the Step 2.9 situation KDTree engine. Built from raw.pitches at the first pitch of each PA; leverage_index replicates pipeline.batch.player_profile_computor.compute_leverage_index() as a SQL expression.';
 
 -- =============================================================================
 -- SIM.PITCH_POOL

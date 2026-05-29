@@ -1188,6 +1188,7 @@ class PlayerProfileComputor:
             self._compute_pitcher_profiles(seasons)  # 2. GMM — most expensive
             self._compute_batter_profiles(seasons)  # 3.
             self._compute_baserunner_profiles(seasons)  # 4. infield/DP need sprint speeds
+            self._build_baserunner_steal_metrics(seasons)  # 4b. SIM-408 steal-engine table
             self._compute_manager_profiles(seasons)  # 5.
 
             # ── Defensive metrics ────────────────────────────────────────────
@@ -1221,6 +1222,10 @@ class PlayerProfileComputor:
             self._build_outcome_pool(seasons, incremental=incremental)
             self._build_stolen_base_pool(seasons, incremental=incremental)
 
+            # SIM-408: per-PA situation facts for the Step 2.9 situation KDTree
+            # engine (idempotent INSERT OR REPLACE, so no incremental gating).
+            self._build_at_bat_situations(seasons)
+
             elapsed = time.time() - t0
             log.info("=== Completed in %.1f seconds ===", elapsed)
 
@@ -1252,9 +1257,13 @@ class PlayerProfileComputor:
             "derived.batter_season_metrics",
             "derived.fielder_season_metrics",
             "derived.baserunner_season_metrics",
+            "derived.baserunner_steal_metrics",  # SIM-408 steal-engine table
             "derived.catcher_season_metrics",
             "derived.manager_season_metrics",
             "derived.park_factors",
+            # SIM-408: per-PA situation facts (own INSERT OR REPLACE build, but
+            # season-keyed so full_rebuild must clear it — SIM-091 requires it here)
+            "derived.at_bat_situations",
             # Per-play detail tables (SIM-091 explicit enumeration)
             "derived.outfield_play_detail",
             "derived.infield_play_detail",
@@ -2224,6 +2233,108 @@ class PlayerProfileComputor:
             LEFT JOIN pg.raw.sprint_speed ss ON ap.player_id = ss.player_id AND ap.season = ss.season
         """)
         log.info("  Baserunner profiles done.")
+
+    def _build_baserunner_steal_metrics(self, seasons: list[int]) -> None:
+        """
+        SIM-408: build derived.baserunner_steal_metrics for the Step 2.5
+        baserunner-steal similarity engine, which SELECTed this table but the
+        computor never produced it.
+
+        Per runner-season, from raw.pitches SB flags:
+          * sample_steal_attempts  — SB attempts as the lead runner (2B/3B/home)
+          * sample_first_base_opps — PAs begun on 1B (the steal-2B opportunity)
+          * steal_attempt_rate     — attempts / first_base_opps
+          * steal_attempt_rate_2b  — 2B→3B attempts / PAs begun on 2B
+          * steal_success_rate / _2b — success fractions
+
+        Biomech jump features (reaction_time / burst_distance / break_angle) are
+        NOT computed — Statcast doesn't publish them and the engine's JUMP
+        sub-score was removed (see baserunner_steal_similarity.py). Idempotent
+        via INSERT OR REPLACE on (player_id, season).
+        """
+        log.info("Building derived.baserunner_steal_metrics …")
+        season_list = ", ".join(str(s) for s in seasons)
+        # Matches the engine's MIN_STEAL_ATTEMPTS gate (rows flagged below this
+        # are filtered out by the engine's `WHERE NOT below_minimum_sample`).
+        min_attempts = 10
+
+        self._conn.execute(f"""
+            INSERT OR REPLACE INTO derived.baserunner_steal_metrics (
+                player_id, season, sample_steal_attempts, sample_first_base_opps,
+                steal_attempt_rate, steal_attempt_rate_2b,
+                steal_success_rate, steal_success_rate_2b, below_minimum_sample
+            )
+            WITH clean AS (
+                SELECT
+                    game_pk, at_bat_number, pitch_number, season,
+                    on_1b, on_2b, on_3b,
+                    sb_attempt_2b, sb_attempt_3b, sb_attempt_home,
+                    sb_success_2b, sb_success_3b, sb_success_home
+                FROM pg.raw.pitches
+                WHERE data_quality_flag = FALSE
+                  AND season IN ({season_list})
+            ),
+            -- One SB-attempt event per qualifying pitch, attributed to the lead runner
+            attempts AS (
+                SELECT
+                    CASE
+                        WHEN sb_attempt_2b   THEN on_1b
+                        WHEN sb_attempt_3b   THEN on_2b
+                        WHEN sb_attempt_home THEN on_3b
+                    END                                       AS runner_id,
+                    season,
+                    sb_attempt_3b                             AS is_2b_steal,  -- runner from 2B → 3B
+                    CASE
+                        WHEN sb_attempt_2b   THEN sb_success_2b
+                        WHEN sb_attempt_3b   THEN sb_success_3b
+                        WHEN sb_attempt_home THEN sb_success_home
+                    END                                       AS success
+                FROM clean
+                WHERE sb_attempt_2b OR sb_attempt_3b OR sb_attempt_home
+            ),
+            attempt_agg AS (
+                SELECT
+                    runner_id AS player_id,
+                    season,
+                    COUNT(*)                                        AS n_attempts,
+                    SUM(CASE WHEN success THEN 1 ELSE 0 END)        AS n_success,
+                    SUM(CASE WHEN is_2b_steal THEN 1 ELSE 0 END)    AS n_attempts_2b,
+                    SUM(CASE WHEN is_2b_steal AND success THEN 1 ELSE 0 END) AS n_success_2b
+                FROM attempts
+                WHERE runner_id IS NOT NULL
+                GROUP BY runner_id, season
+            ),
+            -- Opportunities = distinct PAs begun on the base (first pitch of each PA)
+            pa_state AS (
+                SELECT game_pk, at_bat_number, season, on_1b, on_2b
+                FROM clean
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY game_pk, at_bat_number ORDER BY pitch_number
+                ) = 1
+            ),
+            opp_1b AS (
+                SELECT on_1b AS player_id, season, COUNT(*) AS opps_1b
+                FROM pa_state WHERE on_1b IS NOT NULL GROUP BY on_1b, season
+            ),
+            opp_2b AS (
+                SELECT on_2b AS player_id, season, COUNT(*) AS opps_2b
+                FROM pa_state WHERE on_2b IS NOT NULL GROUP BY on_2b, season
+            )
+            SELECT
+                a.player_id,
+                a.season,
+                a.n_attempts                                          AS sample_steal_attempts,
+                COALESCE(o1.opps_1b, 0)                               AS sample_first_base_opps,
+                a.n_attempts    * 1.0 / NULLIF(o1.opps_1b, 0)         AS steal_attempt_rate,
+                a.n_attempts_2b * 1.0 / NULLIF(o2.opps_2b, 0)         AS steal_attempt_rate_2b,
+                a.n_success     * 1.0 / NULLIF(a.n_attempts, 0)       AS steal_success_rate,
+                a.n_success_2b  * 1.0 / NULLIF(a.n_attempts_2b, 0)    AS steal_success_rate_2b,
+                (a.n_attempts < {min_attempts})                       AS below_minimum_sample
+            FROM attempt_agg a
+            LEFT JOIN opp_1b o1 ON o1.player_id = a.player_id AND o1.season = a.season
+            LEFT JOIN opp_2b o2 ON o2.player_id = a.player_id AND o2.season = a.season
+        """)
+        log.info("  derived.baserunner_steal_metrics done.")
 
     def _compute_manager_profiles(self, seasons: list[int]) -> None:
         """
@@ -4442,6 +4553,89 @@ class PlayerProfileComputor:
         """)
         log.info("  sim.stolen_base_pool done.")
         _record_pool_build(self._conn, "stolen_base_pool", seasons, ref_season)
+
+    def _build_at_bat_situations(self, seasons: list[int]) -> None:
+        """
+        SIM-408: materialize derived.at_bat_situations — one row per plate
+        appearance capturing the pre-PA game state the Step 2.9 Situation KDTree
+        engine indexes (similarity/engines/situation_similarity.py).  The engine
+        SELECTed this table but the computor never built it, so the situation
+        engine indexed 0 rows and normalized a degenerate empty matrix; this
+        closes that gap.
+
+        One row per (game_pk, at_bat_number), taken at the FIRST pitch of the PA
+        so outs / base-state / score reflect the situation the batter came up to.
+        ``leverage_index`` replicates :func:`compute_leverage_index` as a SQL
+        expression (inning × score-diff × runners × outs factors).  Idempotent
+        via INSERT OR REPLACE on the (game_pk, at_bat_number) PK.
+        """
+        log.info("Building derived.at_bat_situations …")
+        season_list = ", ".join(str(s) for s in seasons)
+
+        self._conn.execute(f"""
+            INSERT OR REPLACE INTO derived.at_bat_situations (
+                play_id, game_pk, season, venue_id, at_bat_number,
+                inning, top_or_bottom, outs_when_up,
+                on_1b, on_2b, on_3b, home_score, away_score,
+                leverage_index, pitcher_pitch_count, batter_pa_count
+            )
+            WITH clean AS (
+                SELECT
+                    game_pk, at_bat_number, pitch_number, season, venue_id,
+                    inning, inning_topbot, outs,
+                    on_1b, on_2b, on_3b,
+                    home_score, away_score, bat_score, fld_score,
+                    batter,
+                    -- pitches thrown by this pitcher in this game up to & incl. this pitch
+                    COUNT(*) OVER (
+                        PARTITION BY game_pk, pitcher
+                        ORDER BY at_bat_number, pitch_number
+                        ROWS UNBOUNDED PRECEDING
+                    ) AS pitcher_pitches_thru
+                FROM pg.raw.pitches
+                WHERE data_quality_flag = FALSE
+                  AND season IN ({season_list})
+            ),
+            pa AS (
+                SELECT
+                    *,
+                    -- batter's PA sequence number in the game (ties share a rank,
+                    -- so every pitch of the same PA gets the same value)
+                    DENSE_RANK() OVER (
+                        PARTITION BY game_pk, batter ORDER BY at_bat_number
+                    ) AS batter_pa_seq
+                FROM clean
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY game_pk, at_bat_number ORDER BY pitch_number
+                ) = 1
+            )
+            SELECT
+                CAST(game_pk AS VARCHAR) || '-' || CAST(at_bat_number AS VARCHAR) AS play_id,
+                game_pk,
+                season,
+                venue_id,
+                at_bat_number,
+                inning,
+                CASE WHEN inning_topbot = 'Bot' THEN 1 ELSE 0 END                 AS top_or_bottom,
+                outs                                                              AS outs_when_up,
+                CASE WHEN on_1b IS NOT NULL THEN 1 ELSE 0 END                     AS on_1b,
+                CASE WHEN on_2b IS NOT NULL THEN 1 ELSE 0 END                     AS on_2b,
+                CASE WHEN on_3b IS NOT NULL THEN 1 ELSE 0 END                     AS on_3b,
+                home_score,
+                away_score,
+                -- compute_leverage_index(inning, outs, runners_state, bat-fld) in SQL
+                (CASE WHEN inning <= 3 THEN 0.6 WHEN inning <= 6 THEN 0.9
+                      WHEN inning <= 8 THEN 1.3 ELSE 1.5 END)
+                  * GREATEST(0.3, 1.5 - LEAST(ABS(bat_score - fld_score), 5) * 0.24)
+                  * (1.0 + ((CASE WHEN on_1b IS NOT NULL THEN 1 ELSE 0 END)
+                          + (CASE WHEN on_2b IS NOT NULL THEN 1 ELSE 0 END)
+                          + (CASE WHEN on_3b IS NOT NULL THEN 1 ELSE 0 END)) * 0.15)
+                  * (CASE WHEN outs < 2 THEN 1.0 ELSE 1.1 END)                    AS leverage_index,
+                GREATEST(pitcher_pitches_thru - 1, 0)                             AS pitcher_pitch_count,
+                batter_pa_seq                                                     AS batter_pa_count
+            FROM pa
+        """)
+        log.info("  derived.at_bat_situations done.")
 
 
 class LeagueAverageProfiles:

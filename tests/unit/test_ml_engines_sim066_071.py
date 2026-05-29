@@ -45,8 +45,6 @@ class TestBaserunnerStealEngine(unittest.TestCase):
 
     def _make_engine(self, n_runners: int = 40, n_seasons: int = 2) -> object:
         from similarity.engines.baserunner_steal_similarity import (
-            JUMP_FEATURES,
-            RBF_SIGMA_JUMP,
             RBF_SIGMA_SUCCESS,
             RBF_SIGMA_TENDENCY,
             SUCCESS_FEATURES,
@@ -65,7 +63,6 @@ class TestBaserunnerStealEngine(unittest.TestCase):
 
         for pid in range(1, n_runners + 1):
             base_tend = rng.beta(3, 7, len(TENDENCY_FEATURES))
-            base_jump = rng.normal(0.5, 0.15, len(JUMP_FEATURES))
             base_succ = rng.beta(7, 3, len(SUCCESS_FEATURES))
             for season in seasons:
                 n_atts = int(rng.integers(15, 60))
@@ -78,9 +75,6 @@ class TestBaserunnerStealEngine(unittest.TestCase):
                         tendency_vec=(
                             base_tend + rng.normal(0, 0.02, len(TENDENCY_FEATURES))
                         ).astype(np.float64),
-                        jump_vec=(base_jump + rng.normal(0, 0.02, len(JUMP_FEATURES))).astype(
-                            np.float64
-                        ),
                         success_vec=np.clip(
                             base_succ + rng.normal(0, 0.02, len(SUCCESS_FEATURES)), 0, 1
                         ).astype(np.float64),
@@ -91,15 +85,12 @@ class TestBaserunnerStealEngine(unittest.TestCase):
         engine = BaserunnerStealSimilarityEngine.__new__(BaserunnerStealSimilarityEngine)
         engine._duckdb_path = ""
         engine._profiles = {(p.player_id, p.season): p for p in profiles}
-        engine._league_avg = {"tendency": {}, "jump": {}, "success": {}}
+        engine._league_avg = {"tendency": {}, "success": {}}
         engine._normalizer = FeatureNormalizer()
         engine._shrinkage = EmpiricalBayesShrinkage()
         engine._partition = StealPartition()
         engine._tend_rbf = WeightedRBFSimilarity(
             RBF_SIGMA_TENDENCY, np.array([w for _, w in TENDENCY_FEATURES])
-        )
-        engine._jump_rbf = WeightedRBFSimilarity(
-            RBF_SIGMA_JUMP, np.array([w for _, w in JUMP_FEATURES])
         )
         engine._succ_rbf = WeightedRBFSimilarity(
             RBF_SIGMA_SUCCESS, np.array([w for _, w in SUCCESS_FEATURES])
@@ -182,7 +173,6 @@ class TestBaserunnerStealEngine(unittest.TestCase):
         results = engine.query(1, 2023)
         for r in results:
             self.assertIsNotNone(r.tendency_score)
-            self.assertIsNotNone(r.jump_score)
             self.assertIsNotNone(r.success_score)
 
     def test_profile_count(self):
@@ -896,7 +886,7 @@ class TestRunGenericDiagnostics(unittest.TestCase):
         engine = self._make_steal_engine()
         report = run_generic_diagnostics(
             engine,
-            sub_score_names=["tendency_score", "jump_score", "success_score"],
+            sub_score_names=["tendency_score", "success_score"],
             n_query_samples=10,
             engine_name="BaserunnerSteal",
         )
@@ -908,7 +898,7 @@ class TestRunGenericDiagnostics(unittest.TestCase):
         engine = self._make_steal_engine()
         report = run_generic_diagnostics(
             engine,
-            sub_score_names=["tendency_score", "jump_score", "success_score"],
+            sub_score_names=["tendency_score", "success_score"],
             n_query_samples=10,
         )
         names = [d.name for d in report.distributions]
@@ -918,7 +908,7 @@ class TestRunGenericDiagnostics(unittest.TestCase):
         from similarity.similarity_diagnostics import run_generic_diagnostics
 
         engine = self._make_steal_engine()
-        sub_scores = ["tendency_score", "jump_score", "success_score"]
+        sub_scores = ["tendency_score", "success_score"]
         report = run_generic_diagnostics(engine, sub_score_names=sub_scores, n_query_samples=10)
         names = [d.name for d in report.distributions]
         for s in sub_scores:
@@ -930,7 +920,7 @@ class TestRunGenericDiagnostics(unittest.TestCase):
         engine = self._make_steal_engine(n=20)
         report = run_generic_diagnostics(
             engine,
-            sub_score_names=["tendency_score", "jump_score", "success_score"],
+            sub_score_names=["tendency_score", "success_score"],
             n_query_samples=5,
         )
         self.assertEqual(report.n_profiles, 40)  # 20 runners × 2 seasons
@@ -941,7 +931,7 @@ class TestRunGenericDiagnostics(unittest.TestCase):
         engine = self._make_steal_engine()
         report = run_generic_diagnostics(
             engine,
-            sub_score_names=["tendency_score", "jump_score", "success_score"],
+            sub_score_names=["tendency_score", "success_score"],
             n_query_samples=15,
         )
         comp = next(d for d in report.distributions if d.name == "composite")
@@ -950,8 +940,6 @@ class TestRunGenericDiagnostics(unittest.TestCase):
 
     def test_empty_engine_returns_empty_report(self):
         from similarity.engines.baserunner_steal_similarity import (
-            JUMP_FEATURES,
-            RBF_SIGMA_JUMP,
             RBF_SIGMA_SUCCESS,
             RBF_SIGMA_TENDENCY,
             SUCCESS_FEATURES,
@@ -967,15 +955,12 @@ class TestRunGenericDiagnostics(unittest.TestCase):
         engine = BaserunnerStealSimilarityEngine.__new__(BaserunnerStealSimilarityEngine)
         engine._duckdb_path = ""
         engine._profiles = {}
-        engine._league_avg = {"tendency": {}, "jump": {}, "success": {}}
+        engine._league_avg = {"tendency": {}, "success": {}}
         engine._normalizer = FeatureNormalizer()
         engine._shrinkage = EmpiricalBayesShrinkage()
         engine._partition = StealPartition()
         engine._tend_rbf = WeightedRBFSimilarity(
             RBF_SIGMA_TENDENCY, np.array([w for _, w in TENDENCY_FEATURES])
-        )
-        engine._jump_rbf = WeightedRBFSimilarity(
-            RBF_SIGMA_JUMP, np.array([w for _, w in JUMP_FEATURES])
         )
         engine._succ_rbf = WeightedRBFSimilarity(
             RBF_SIGMA_SUCCESS, np.array([w for _, w in SUCCESS_FEATURES])
@@ -983,7 +968,7 @@ class TestRunGenericDiagnostics(unittest.TestCase):
 
         report = run_generic_diagnostics(
             engine,
-            sub_score_names=["tendency_score", "jump_score", "success_score"],
+            sub_score_names=["tendency_score", "success_score"],
             n_query_samples=10,
         )
         self.assertEqual(report.n_profiles, 0)

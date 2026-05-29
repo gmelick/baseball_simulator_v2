@@ -93,8 +93,6 @@ from tests.regression.regression_config import (  # noqa: E402
 
 def _build_steal_engine():
     from similarity.engines.baserunner_steal_similarity import (
-        JUMP_FEATURES,
-        RBF_SIGMA_JUMP,
         RBF_SIGMA_SUCCESS,
         RBF_SIGMA_TENDENCY,
         SUCCESS_FEATURES,
@@ -115,7 +113,6 @@ def _build_steal_engine():
             sample_steal_attempts=40 + i * 3,
             sample_first_base_opps=150 + i * 10,
             tendency_vec=rng.uniform(0.05, 0.95, len(TENDENCY_FEATURES)),
-            jump_vec=rng.uniform(100.0, 350.0, len(JUMP_FEATURES)),
             success_vec=rng.uniform(0.55, 0.90, len(SUCCESS_FEATURES)),
             eb_alpha=1.0,
         )
@@ -129,9 +126,6 @@ def _build_steal_engine():
     engine._partition.build(profiles, engine._normalizer)
     engine._tend_rbf = WeightedRBFSimilarity(
         RBF_SIGMA_TENDENCY, np.array([w for _, w in TENDENCY_FEATURES])
-    )
-    engine._jump_rbf = WeightedRBFSimilarity(
-        RBF_SIGMA_JUMP, np.array([w for _, w in JUMP_FEATURES])
     )
     engine._succ_rbf = WeightedRBFSimilarity(
         RBF_SIGMA_SUCCESS, np.array([w for _, w in SUCCESS_FEATURES])

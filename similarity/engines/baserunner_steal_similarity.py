@@ -16,34 +16,26 @@ because the skill sets involved are meaningfully different:
     movement.  The dominant skills here are jump quality and lead size,
     not just raw sprint speed.
 
-Sub-score dimensions:
+Sub-score dimensions (SIM-408: the original Jump / First-Step sub-score was
+removed — reaction time, burst distance, and break angle are biomech signals
+Statcast does not publish per runner-season, so they cannot be computed; its
+35% weight was renormalized into the two surviving sub-scores):
 
-  1. Steal Tendency (40%) — how often does the runner attempt to steal?
-     Measured as attempt rate per first-base opportunity (or per any base
-     opportunity).  Also includes lead-distance tendency (proxy for
-     aggressiveness) and how the runner responds to different pitcher
-     looks.
+  1. Steal Tendency (~62%) — how often does the runner attempt to steal?
+     Measured as attempt rate per first-base opportunity, plus the 2B→3B
+     attempt rate.
 
-  2. Jump / First Step (35%) — quality of the initial burst off the bag.
-     Proxied by reaction_time (jump_distance / sprint_speed delta in the
-     first stride, estimated from Statcast) and break_angle toward second.
-     These are the most discriminating features for steal success: a
-     runner with elite sprint speed but a slow jump is no better than an
-     average runner with a great jump.
-
-  3. Success Efficiency (25%) — given the runner attempted, how often
-     did he succeed?  Noisy because it's conditional on the attempt AND
-     on pitcher/catcher matchup quality, but necessary to distinguish
-     efficient stealers from volume traders.
+  2. Success Efficiency (~38%) — given the runner attempted, how often did
+     he arrive safe?  Noisy because it's conditional on the attempt AND on
+     pitcher/catcher matchup quality, but necessary to distinguish efficient
+     stealers from volume traders.
 
 Research-Informed Design
 ------------------------
-  Jump quality (reaction time, lead distance, break angle) stabilizes by
-  approximately 30 steal attempts.  Attempt rate stabilizes by ~50
-  first-base opportunities.  Success rate is the noisiest — it requires
-  conditional sample sizes (attempts, not opportunities) and is heavily
-  influenced by catcher pop time in any given season.  Hence the weight
-  ordering: tendency > jump > success.
+  Attempt rate stabilizes by ~50 first-base opportunities.  Success rate is
+  the noisiest — it requires conditional sample sizes (attempts, not
+  opportunities) and is heavily influenced by catcher pop time in any given
+  season.  Hence the weight ordering: tendency > success.
 
 Dependencies
 ------------
@@ -88,21 +80,14 @@ log = logging.getLogger("baserunner_steal_similarity")
 
 # --- Steal Tendency features ---
 # How frequently and aggressively the runner initiates steal attempts.
+# SIM-408: lead_distance_tendency + disengagement_response_rate were dropped —
+# neither is derivable from historical Statcast (lead distance / disengagement-
+# response are tracking/biomech signals the feed does not publish per
+# runner-season), so derived.baserunner_steal_metrics can't supply them.
 TENDENCY_FEATURES = [
     # feature_name,                 reliability_weight
     ("steal_attempt_rate", 0.800),  # attempts / first_base_opps; stabilizes ~50 opps
     ("steal_attempt_rate_2b", 0.500),  # 2B→3B steal attempt rate; sparser
-    ("lead_distance_tendency", 0.600),  # avg lead in feet (proxy: aggressive vs. conservative)
-    ("disengagement_response_rate", 0.400),  # how often runner re-sets after pitcher disengages
-]
-
-# --- Jump / First Step features ---
-# Quality of the initial burst off the base.  These are the biggest
-# discriminators for steal success independent of top-end sprint speed.
-JUMP_FEATURES = [
-    ("reaction_time_ms", 0.900),  # time from first-move to initial stride; most reliable
-    ("burst_distance_ft", 0.700),  # distance covered in first 1.0s of steal attempt
-    ("break_angle_deg", 0.500),  # sharpness of first-step angle toward target base
 ]
 
 # --- Success / Efficiency features ---
@@ -113,16 +98,19 @@ SUCCESS_FEATURES = [
 ]
 
 # --- Sub-score weights (sum to 1.0) ---
-WEIGHT_TENDENCY = 0.40
-WEIGHT_JUMP = 0.35
-WEIGHT_SUCCESS = 0.25
-_TOTAL = WEIGHT_TENDENCY + WEIGHT_JUMP + WEIGHT_SUCCESS
+# SIM-408: the Jump / First-Step sub-score (reaction_time_ms / burst_distance_ft
+# / break_angle_deg) was removed — those are biomech features Statcast does not
+# publish, so they cannot be computed.  The original 0.40 / 0.35 / 0.25 split is
+# renormalized over the two surviving sub-scores, preserving their 0.40 : 0.25
+# relative emphasis (tendency > success).
+WEIGHT_TENDENCY = 0.40 / 0.65  # ≈ 0.6154
+WEIGHT_SUCCESS = 0.25 / 0.65  # ≈ 0.3846
+_TOTAL = WEIGHT_TENDENCY + WEIGHT_SUCCESS
 assert abs(_TOTAL - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
 # RBF bandwidth parameters (gamma = 1 / (2σ²))
 # Calibrated to keep median similarity score near 0.50 across the population.
 RBF_SIGMA_TENDENCY = 1.0500
-RBF_SIGMA_JUMP = 0.9800
 RBF_SIGMA_SUCCESS = 1.0200
 
 # Empirical Bayes shrinkage: at EB_N_PRIOR steal attempts, α = 0.5
@@ -148,7 +136,6 @@ class BaserunnerStealProfile:
 
     # Feature vectors (raw — normalized at query time)
     tendency_vec: NDArray[np.float64]  # shape (len(TENDENCY_FEATURES),)
-    jump_vec: NDArray[np.float64]  # shape (len(JUMP_FEATURES),)
     success_vec: NDArray[np.float64]  # shape (len(SUCCESS_FEATURES),)
 
     # Empirical Bayes
@@ -164,7 +151,6 @@ class SimilarityResult:
     season: int
     score: float  # composite [0, 1], 1 = identical
     tendency_score: float
-    jump_score: float
     success_score: float
     sample_steal_attempts: int
 
@@ -235,8 +221,6 @@ class EmpiricalBayesShrinkage:
 class FeatureNormalizer:
     tendency_mean: NDArray | None = None
     tendency_std: NDArray | None = None
-    jump_mean: NDArray | None = None
-    jump_std: NDArray | None = None
     success_mean: NDArray | None = None
     success_std: NDArray | None = None
 
@@ -252,7 +236,6 @@ class FeatureNormalizer:
             return m, s
 
         self.tendency_mean, self.tendency_std = _fit([p.tendency_vec for p in profiles])
-        self.jump_mean, self.jump_std = _fit([p.jump_vec for p in profiles])
         self.success_mean, self.success_std = _fit([p.success_vec for p in profiles])
 
     def _norm(self, vec: NDArray, mean: NDArray | None, std: NDArray | None) -> NDArray:
@@ -262,9 +245,6 @@ class FeatureNormalizer:
 
     def normalize_tendency(self, v: NDArray) -> NDArray:
         return self._norm(v, self.tendency_mean, self.tendency_std)
-
-    def normalize_jump(self, v: NDArray) -> NDArray:
-        return self._norm(v, self.jump_mean, self.jump_std)
 
     def normalize_success(self, v: NDArray) -> NDArray:
         return self._norm(v, self.success_mean, self.success_std)
@@ -282,7 +262,6 @@ class StealPartition:
         self.profiles: list[BaserunnerStealProfile] = []
         self.keys: list[tuple[int, int]] = []
         self._tendency_mat: NDArray | None = None
-        self._jump_mat: NDArray | None = None
         self._success_mat: NDArray | None = None
         self._eb_alphas: NDArray | None = None
 
@@ -292,7 +271,6 @@ class StealPartition:
         if not profiles:
             return
         self._tendency_mat = np.array([norm.normalize_tendency(p.tendency_vec) for p in profiles])
-        self._jump_mat = np.array([norm.normalize_jump(p.jump_vec) for p in profiles])
         self._success_mat = np.array([norm.normalize_success(p.success_vec) for p in profiles])
         self._eb_alphas = np.array([p.eb_alpha for p in profiles], dtype=np.float64)
 
@@ -301,7 +279,6 @@ class StealPartition:
         query: BaserunnerStealProfile,
         norm: FeatureNormalizer,
         tend_rbf: WeightedRBFSimilarity,
-        jump_rbf: WeightedRBFSimilarity,
         succ_rbf: WeightedRBFSimilarity,
     ) -> list[SimilarityResult]:
         if not self.profiles:
@@ -309,16 +286,12 @@ class StealPartition:
 
         query_key = (query.player_id, query.season)
         q_tend = norm.normalize_tendency(query.tendency_vec)
-        q_jump = norm.normalize_jump(query.jump_vec)
         q_succ = norm.normalize_success(query.success_vec)
 
         tend_scores = tend_rbf.score_batch(q_tend, self._tendency_mat)
-        jump_scores = jump_rbf.score_batch(q_jump, self._jump_mat)
         succ_scores = succ_rbf.score_batch(q_succ, self._success_mat)
 
-        composite = (
-            WEIGHT_TENDENCY * tend_scores + WEIGHT_JUMP * jump_scores + WEIGHT_SUCCESS * succ_scores
-        )
+        composite = WEIGHT_TENDENCY * tend_scores + WEIGHT_SUCCESS * succ_scores
 
         pair_conf = np.minimum(query.eb_alpha, self._eb_alphas)
         composite = np.clip(composite * np.sqrt(pair_conf), 0.0, 1.0)
@@ -329,7 +302,6 @@ class StealPartition:
                 season=self.profiles[i].season,
                 score=float(composite[i]),
                 tendency_score=float(tend_scores[i]),
-                jump_score=float(jump_scores[i]),
                 success_score=float(succ_scores[i]),
                 sample_steal_attempts=self.profiles[i].sample_steal_attempts,
             )
@@ -362,7 +334,6 @@ class BaserunnerStealSimilarityEngine:
         self._profiles: dict[tuple[int, int], BaserunnerStealProfile] = {}
         self._league_avg: dict[str, dict[int, NDArray]] = {
             "tendency": {},
-            "jump": {},
             "success": {},
         }
         self._normalizer = FeatureNormalizer()
@@ -372,10 +343,6 @@ class BaserunnerStealSimilarityEngine:
         self._tend_rbf = WeightedRBFSimilarity(
             RBF_SIGMA_TENDENCY,
             np.array([w for _, w in TENDENCY_FEATURES]),
-        )
-        self._jump_rbf = WeightedRBFSimilarity(
-            RBF_SIGMA_JUMP,
-            np.array([w for _, w in JUMP_FEATURES]),
         )
         self._succ_rbf = WeightedRBFSimilarity(
             RBF_SIGMA_SUCCESS,
@@ -433,9 +400,6 @@ class BaserunnerStealSimilarityEngine:
             self._league_avg["tendency"][season] = np.array(
                 [pj.get(f, 0.0) or 0.0 for f, _ in TENDENCY_FEATURES], dtype=np.float64
             )
-            self._league_avg["jump"][season] = np.array(
-                [pj.get(f, 0.0) or 0.0 for f, _ in JUMP_FEATURES], dtype=np.float64
-            )
             self._league_avg["success"][season] = np.array(
                 [pj.get(f, 0.0) or 0.0 for f, _ in SUCCESS_FEATURES], dtype=np.float64
             )
@@ -459,12 +423,6 @@ class BaserunnerStealSimilarityEngine:
                 -- Tendency
                 bss.steal_attempt_rate,
                 bss.steal_attempt_rate_2b,
-                bss.lead_distance_tendency,
-                bss.disengagement_response_rate,
-                -- Jump
-                bss.reaction_time_ms,
-                bss.burst_distance_ft,
-                bss.break_angle_deg,
                 -- Success
                 bss.steal_success_rate,
                 bss.steal_success_rate_2b,
@@ -484,11 +442,6 @@ class BaserunnerStealSimilarityEngine:
                 n_opps,
                 sar,
                 sar2,
-                lead,
-                diseng,
-                react,
-                burst,
-                angle,
                 suc,
                 suc2,
                 below_min,
@@ -502,8 +455,7 @@ class BaserunnerStealSimilarityEngine:
                 season=season,
                 sample_steal_attempts=n_attempts or 0,
                 sample_first_base_opps=n_opps or 0,
-                tendency_vec=_v(sar, sar2, lead, diseng),
-                jump_vec=_v(react, burst, angle),
+                tendency_vec=_v(sar, sar2),
                 success_vec=_v(suc, suc2),
                 eb_alpha=self._shrinkage.alpha(n_attempts or 0),
                 below_minimum=bool(below_min),
@@ -514,7 +466,6 @@ class BaserunnerStealSimilarityEngine:
             s = p.season
             for group, attr in [
                 ("tendency", "tendency_vec"),
-                ("jump", "jump_vec"),
                 ("success", "success_vec"),
             ]:
                 avg = self._league_avg[group].get(s)
@@ -561,7 +512,6 @@ class BaserunnerStealSimilarityEngine:
             profile,
             self._normalizer,
             self._tend_rbf,
-            self._jump_rbf,
             self._succ_rbf,
         )
         results.sort(key=lambda r: r.score, reverse=True)
@@ -583,15 +533,11 @@ class BaserunnerStealSimilarityEngine:
             norm.normalize_tendency(pa.tendency_vec),
             norm.normalize_tendency(pb.tendency_vec),
         )
-        jump_s = self._jump_rbf.score(
-            norm.normalize_jump(pa.jump_vec),
-            norm.normalize_jump(pb.jump_vec),
-        )
         succ_s = self._succ_rbf.score(
             norm.normalize_success(pa.success_vec),
             norm.normalize_success(pb.success_vec),
         )
-        composite = WEIGHT_TENDENCY * tend_s + WEIGHT_JUMP * jump_s + WEIGHT_SUCCESS * succ_s
+        composite = WEIGHT_TENDENCY * tend_s + WEIGHT_SUCCESS * succ_s
         composite = float(np.clip(composite * np.sqrt(min(pa.eb_alpha, pb.eb_alpha)), 0.0, 1.0))
 
         return SimilarityResult(
@@ -599,7 +545,6 @@ class BaserunnerStealSimilarityEngine:
             season=pb.season,
             score=composite,
             tendency_score=tend_s,
-            jump_score=jump_s,
             success_score=succ_s,
             sample_steal_attempts=pb.sample_steal_attempts,
         )
@@ -650,7 +595,7 @@ if __name__ == "__main__":
     engine.build(seasons=[2025, 2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017])
     report = run_generic_diagnostics(
         engine,
-        sub_score_names=["tendency_score", "jump_score", "success_score"],
+        sub_score_names=["tendency_score", "success_score"],
         n_query_samples=50,
         engine_name="BaserunnerSteal",
     )

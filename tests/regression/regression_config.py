@@ -91,7 +91,7 @@ ENGINE_REGISTRY: list[dict] = [
         "name": "baserunner_steal",
         "module": "similarity.engines.baserunner_steal_similarity",
         "class": "BaserunnerStealSimilarityEngine",
-        "sub_score_names": ["tendency_score", "jump_score", "success_score"],
+        "sub_score_names": ["tendency_score", "success_score"],
         "query_signature": ("player_id", "season"),  # positional arg names
     },
     {
