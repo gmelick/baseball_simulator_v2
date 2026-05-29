@@ -343,7 +343,7 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
         # (the per-game half-inning / PA state caches inside the sampler are
         # reset at the loop's natural boundaries — `new_half_inning` /
         # `battedball_new_pa` — so cross-game leakage is impossible).
-        if _CACHED_FULL_POOL_SAMPLER is not None and _CACHED_FULL_POOL_ART_DIR == art_dir:
+        if _CACHED_FULL_POOL_SAMPLER is not None and art_dir == _CACHED_FULL_POOL_ART_DIR:
             _CACHED_FULL_POOL_SAMPLER.rng = np.random.default_rng(seed)
             return _CACHED_FULL_POOL_SAMPLER
 
@@ -364,6 +364,75 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
         return sampler
     except Exception:
         return None
+
+
+def reset_caches() -> None:
+    """SIM-402: clear THIS process's cached full-pool sampler.
+
+    The cache lives at module scope, so it persists for the life of the worker
+    process (the intended behaviour) AND across tests in the same process.  Tests
+    that exercise the full-pool path call this in setup/teardown so one test's
+    cached sampler can't leak into the next; production never needs it (a worker
+    builds its cache once and keeps it).
+    """
+    global _CACHED_FULL_POOL_SAMPLER, _CACHED_FULL_POOL_ART_DIR
+    _CACHED_FULL_POOL_SAMPLER = None
+    _CACHED_FULL_POOL_ART_DIR = None
+
+
+def _warm_sampler(sampler: Any) -> None:
+    """SIM-402: force the FullPoolSampler's lazy, one-time per-hand precomputes so a
+    pre-warmed worker is FULLY hot.
+
+    ``FullPoolSampler.__init__`` is cheap — the expensive ``O(pool)`` index builds
+    are DEFERRED to first use: the pitch-pool ``_pool_meta(hand)`` (fires on the
+    first ``new_half_inning``) and the batted-ball ``_bb_pool_bat_idx(hand)``
+    (fires on the first ``battedball_new_pa``).  Building the sampler alone would
+    therefore leave both for the worker's FIRST real game — defeating the point of
+    pre-warming.  We trigger both for every hand in the bundle, so the first game
+    runs at the amortized per-game cost.  This only POPULATES caches (no rng /
+    matchup state is touched), so it cannot perturb a later game.  Defensive: a
+    partial bundle / missing attr just leaves that part to warm lazily.
+    """
+    art = getattr(sampler, "a", None)
+    for pools_attr, method_name in (("pools", "_pool_meta"), ("bb_pools", "_bb_pool_bat_idx")):
+        warm = getattr(sampler, method_name, None)
+        if warm is None:
+            continue
+        for hand in getattr(art, pools_attr, {}) or {}:
+            try:
+                warm(hand)
+            except Exception:
+                pass
+
+
+def warm_worker_cache(pool_dir: str | None = None) -> bool:
+    """SIM-402: populate THIS process's full-pool sampler cache up front.
+
+    Builds the full-pool sampler AND triggers its lazy per-hand precomputes
+    (:func:`_warm_sampler`) into the per-process cache
+    :func:`production_machine_factory` reads, so the FIRST real ``/simulate`` game
+    on this process is a warm cache hit instead of paying the ~per-worker
+    artifact-load + per-hand index-build cost on the request path.  This is the
+    function :meth:`simulation.batch_runner.BatchRunner.prewarm` runs on every
+    warm-pool worker at startup -- the fix for the n>1 cold-fan-out stall, where a
+    fresh pool gives each worker exactly one game so the per-worker cache (which
+    only pays off on the 2nd+ seed) never warms in time.
+
+    Returns ``True`` when a full-pool sampler is now cached (``SIM_FULL_POOL`` on
+    AND the engine-artifact bundle present), else ``False`` (full-pool disabled or
+    a missing/corrupt bundle -> the per-tile fallback warms lazily instead).  Never
+    raises: any build failure is swallowed and reported as ``False``.
+    """
+    try:
+        spec = GameSpec(sim_kwargs={"_pool_dir": pool_dir} if pool_dir else {})
+        sampler = _build_full_pool_sampler(spec, 0)
+        if sampler is None:
+            return False
+        _warm_sampler(sampler)
+        return True
+    except Exception:
+        return False
 
 
 def production_machine_factory(seed: int | None, spec: GameSpec) -> StateMachine:
@@ -393,18 +462,34 @@ def production_machine_factory(seed: int | None, spec: GameSpec) -> StateMachine
     """
     k = int(_kwarg(spec, "_k", _DEFAULT_K))
 
+    # SIM-402: build the full-pool sampler FIRST so we can short-circuit the
+    # per-seed deriver build below on the production (full-pool) path.
+    full_pool = _build_full_pool_sampler(spec, seed)
+
     sampler = _SAMPLER_BUILDER(spec, seed)
     if spec.shared_segments:
         _attach_shared_tiles(sampler, spec)
 
-    deriver = _DERIVER_BUILDER(spec)
+    # SIM-402: on the full-pool path the per-tile FingerprintDeriver is never
+    # consulted -- ``_full_pool_outcome`` (and the engine-backed batted-ball
+    # draw) read from ``full_pool`` exclusively, and every ``fingerprint_deriver``
+    # call site in the loop is None-guarded -- yet ``_default_deriver_builder``
+    # does THREE eager disk loads (provider + pitch_norm + battedball_norm) on
+    # EVERY seed.  Skipping it when the full-pool sampler is active removes that
+    # per-game waste from the cold-worker path (the SIM-372 SLA).  The per-tile
+    # fallback (``full_pool is None`` -- the unit-test default, ``SIM_FULL_POOL=0``)
+    # is UNCHANGED: it still builds the deriver every call.  The per-tile sampler
+    # itself stays per-seed -- its construction is free (lazy DuckDB connection,
+    # opened only on a ``sample_*`` call that the full-pool path never makes), so
+    # it needs no cache; it exists only to satisfy the StateMachine's ``_pa`` guard.
+    deriver = None if full_pool is not None else _DERIVER_BUILDER(spec)
 
     return StateMachine(
         sampler=sampler,
         k=k,
         rng=np.random.default_rng(seed),
         fingerprint_deriver=deriver,
-        full_pool_sampler=_build_full_pool_sampler(spec, seed),
+        full_pool_sampler=full_pool,
     )
 
 
@@ -413,6 +498,8 @@ __all__ = [
     "set_sampler_builder",
     "set_deriver_builder",
     "use_sampler_builder",
+    "warm_worker_cache",
+    "reset_caches",
     "SamplerBuilder",
     "DeriverBuilder",
 ]

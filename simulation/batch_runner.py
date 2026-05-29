@@ -74,11 +74,12 @@ from __future__ import annotations
 
 import importlib
 import os
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from multiprocessing import shared_memory
+from multiprocessing import Manager, shared_memory
 from typing import Any
 
 import numpy as np
@@ -102,6 +103,26 @@ POOL_QUERY_TTL_S = 300
 #: The hard worker ceiling from SIM-281 D1 (keeps total RAM under the 2 GB cap on
 #: >=16-core hosts; SIM-280 §4: 16 workers ~= 2.86 GB breaches).
 MAX_WORKER_CEILING = 10
+
+#: SIM-402: how long a prewarm worker waits to acquire the warm semaphore before
+#: warming anyway.  Bounds the WAIT, not the warm; generous so it rarely trips.
+_PREWARM_ACQUIRE_TIMEOUT_S = 60.0
+
+#: SIM-402: max workers that run the heavy full-pool warm CONCURRENTLY.  Each warm
+#: is a copy-on-write fork of a multi-GB parent plus per-hand index allocation, so
+#: warming all W at once spiked memory and OOM-killed a worker in the field; cap the
+#: simultaneous warms (the rest spawn cheaply and warm in waves).  The default is
+#: deliberately small; override via SIM_PREWARM_MAX_CONCURRENT.
+_PREWARM_MAX_CONCURRENT_WARM = max(1, int(os.environ.get("SIM_PREWARM_MAX_CONCURRENT", "2")))
+
+#: SIM-402: overall deadline for the pooled prewarm gather.  Past this, prewarm
+#: returns whatever warmed and lets the remaining warm tasks finish on the
+#: persistent pool (or warm lazily on first use), so a stalled environment (e.g. a
+#: full /dev/shm, a worker that can't spawn) can NEVER block prewarm — and thus
+#: startup — indefinitely.  The lifespan wraps the whole call in its own
+#: ``asyncio.wait_for`` backstop too, in case a hang precedes the gather (Manager
+#: spawn / shared-memory publish).
+_PREWARM_TIMEOUT_S = 120.0
 
 
 def default_max_workers(cpu_count: int | None = None) -> int:
@@ -371,6 +392,42 @@ def get_shared_view(name: str) -> np.ndarray | None:
     the signal to fall back to the SIM-332 per-process disk load (backward-compat).
     """
     return _WORKER_SHARED.get("views", {}).get(name)
+
+
+def _prewarm_worker(sem: Any, pool_dir: str | None) -> int:
+    """SIM-402 worker-side prewarm task: warm THIS worker's cache, gated by a shared
+    semaphore so only a few workers run the heavy warm AT ONCE.
+
+    Submitted once per worker by :meth:`BatchRunner.prewarm`.  Submitting one task
+    per worker makes the executor spawn every worker (cheap copy-on-write forks); the
+    semaphore then bounds how many run the *heavy*
+    :func:`simulation.production_factory.warm_worker_cache` simultaneously, so the
+    peak memory of forking + warming a multi-GB parent stays under the cgroup limit
+    (an unbounded all-at-once warm OOM-killed a worker in the field).  Returns
+    ``os.getpid()`` so the parent can count DISTINCT warmed workers.
+
+    Defensive: a semaphore hiccup or a warm failure is swallowed — the worst case is
+    a worker that warms lazily on its first real game (the prior behaviour).
+    """
+    acquired = False
+    if sem is not None:
+        try:
+            acquired = bool(sem.acquire(timeout=_PREWARM_ACQUIRE_TIMEOUT_S))
+        except Exception:
+            acquired = False
+    try:
+        from simulation.production_factory import warm_worker_cache
+
+        warm_worker_cache(pool_dir)
+    except Exception:
+        pass
+    finally:
+        if acquired:
+            try:
+                sem.release()
+            except Exception:
+                pass
+    return os.getpid()
 
 
 # ---------------------------------------------------------------------------
@@ -681,6 +738,9 @@ class BatchRunner:
         self._reuse_pool = bool(reuse_pool)
         self._pool: ProcessPoolExecutor | None = None
         self._pool_workers: int | None = None
+        # SIM-402: guards lazy pool creation so a background prewarm and a concurrent
+        # first request can't both create a pool / double-publish the shared segments.
+        self._pool_lock = threading.Lock()
 
     # ---- worker-count + cache-key helpers --------------------------------
 
@@ -750,19 +810,98 @@ class BatchRunner:
         Only ever called from :meth:`_execute` on the ``max_workers > 1`` path with
         ``reuse_pool`` True, so the synchronous in-process path never builds a pool.
         """
-        if self._pool is not None and self._pool_workers != max_workers:
-            # Worker count changed between runs -> drain + drop the stale pool and
-            # rebuild at the new size.
-            self._pool.shutdown(wait=True)
-            self._pool = None
-            self._pool_workers = None
-        if self._pool is None:
-            # `_pool_kwargs()` publishes the shared segments ONCE (idempotent) and
-            # wires the worker initializer; the warm pool keeps those segments
-            # attached for its whole lifetime.
-            self._pool = ProcessPoolExecutor(max_workers=max_workers, **self._pool_kwargs())
-            self._pool_workers = max_workers
-        return self._pool
+        with self._pool_lock:
+            if self._pool is not None and self._pool_workers != max_workers:
+                # Worker count changed between runs -> drain + drop the stale pool and
+                # rebuild at the new size.
+                self._pool.shutdown(wait=True)
+                self._pool = None
+                self._pool_workers = None
+            if self._pool is None:
+                # `_pool_kwargs()` publishes the shared segments ONCE (idempotent) and
+                # wires the worker initializer; the warm pool keeps those segments
+                # attached for its whole lifetime.
+                self._pool = ProcessPoolExecutor(max_workers=max_workers, **self._pool_kwargs())
+                self._pool_workers = max_workers
+            return self._pool
+
+    def prewarm(self, pool_dir: str | None = None, *, timeout: float | None = None) -> int:
+        """SIM-402: warm the sim machinery BEFORE the first request so ``/simulate``
+        never pays the cold per-worker full-pool warm-up on the request path.
+
+        The cold-fan-out problem: a fresh n-iteration request spreads its n games
+        across the pool, so with n ≈ workers each worker gets ONE game.  The
+        per-worker full-pool cache (SIM-402, in ``production_factory``) only pays
+        off on a worker's 2nd+ seed, so on that first batch every worker is cold and
+        pays the full ~artifact-load + per-hand-precompute cost — the n=10 ≈ 500 s
+        stall.  Prewarming does that warm-up ONCE per worker at startup, in
+        parallel, off the request path.
+
+        * **Pooled path** (``reuse_pool`` and resolved worker count > 1): submit one
+          warm task per worker (so the executor spawns all W — cheap COW forks) and
+          run :func:`simulation.production_factory.warm_worker_cache` on each, but cap
+          how many run the HEAVY warm concurrently (a shared semaphore) so peak
+          fork+warm memory stays bounded.  Uses the SAME persistent pool a later
+          :meth:`run` reuses, so the workers stay warm.  Returns the count of DISTINCT
+          workers warmed.
+        * **In-process path** (worker count <= 1, or ``reuse_pool`` off): there is no
+          separate worker, so warm THIS process's cache and return 1 (0 if the warm
+          found nothing to cache — full-pool off or no artifacts).
+
+        Bounded: the pooled gather is capped at ``timeout`` seconds (default
+        :data:`_PREWARM_TIMEOUT_S`) so a stalled worker / environment can't block
+        prewarm forever — past the deadline it returns whatever warmed and the rest
+        warm on the pool or lazily.  Never raises: any failure leaves the lazy
+        per-game warm-up as the fallback.  The caller logs the returned count.
+        """
+        # Pool size this runner WOULD use — uncapped by any n_iterations, since
+        # prewarm warms the whole pool rather than a single batch.
+        target = (
+            self._max_workers_override
+            if self._max_workers_override is not None
+            else default_max_workers()
+        )
+        target = max(1, int(target))
+
+        # In-process (no separate worker) -> warm the current process directly.
+        if target <= 1 or not self._reuse_pool:
+            try:
+                from simulation.production_factory import warm_worker_cache
+
+                return 1 if warm_worker_cache(pool_dir) else 0
+            except Exception:
+                return 0
+
+        # Pooled -> submit one warm task per worker (forces all W to spawn — cheap
+        # COW forks of the parent), but a shared semaphore caps how many run the
+        # HEAVY full-pool warm AT ONCE, so peak fork+warm memory stays bounded (an
+        # unbounded all-at-once warm OOM-killed a worker in the field).
+        deadline = float(timeout) if timeout is not None else _PREWARM_TIMEOUT_S
+        try:
+            pool = self._get_pool(target)
+            # `manager: Any` -- SyncManager.Semaphore is registered at runtime but
+            # missing from some typeshed versions (attr-defined false positive).
+            manager: Any = Manager()
+            pids: set[int] = set()
+            try:
+                sem = manager.Semaphore(_PREWARM_MAX_CONCURRENT_WARM)
+                futures = [pool.submit(_prewarm_worker, sem, pool_dir) for _ in range(target)]
+                # SIM-402: bound the gather. Past the deadline we return whatever
+                # warmed; the remaining warm tasks keep running on the persistent
+                # pool (and warm lazily on first use if they never finish).
+                try:
+                    for fut in as_completed(futures, timeout=deadline):
+                        try:
+                            pids.add(fut.result())
+                        except Exception:
+                            pass
+                except Exception:
+                    pass  # deadline (TimeoutError) or pool failure -> partial count
+            finally:
+                manager.shutdown()
+            return len(pids)
+        except Exception:
+            return 0
 
     # ---- shared-memory + pool lifecycle (parent owns create/unlink) -------
 

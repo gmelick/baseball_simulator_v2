@@ -94,6 +94,27 @@ def validate_environment() -> None:
 # ---------------------------------------------------------------------------
 
 
+async def _background_prewarm(runner, pool_dir: str) -> None:
+    """SIM-402: warm the sim-runner workers OFF the startup path.
+
+    Scheduled as a background task by the lifespan and NEVER awaited before
+    ``yield``, so a slow / stalled / OOM'd warm can't wedge startup (a blocking
+    pre-warm, even wrapped in ``asyncio.wait_for``, was observed to hang the
+    lifespan — ``wait_for`` can't interrupt a synchronous thread blocked in
+    multiprocessing C-calls).  Logs the outcome; any failure leaves the lazy
+    per-game warm-up as the fallback.
+    """
+    try:
+        n_warm = await asyncio.to_thread(runner.prewarm, pool_dir)
+        log.info("SIM-402: pre-warmed %d sim-runner worker(s).", n_warm)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "SIM-402: background pre-warm failed (%s: %s); workers will warm lazily.",
+            type(exc).__name__,
+            exc,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -373,9 +394,39 @@ async def lifespan(app: FastAPI):
         shared_arrays=shared_arrays_payload,
     )
 
+    # SIM-402: pre-warm the pool so the first /simulate hits WARM workers (a fresh
+    # n-iteration request otherwise spreads its games one-per-worker, so every worker
+    # is cold on that first batch and pays the full-pool warm-up on the request path).
+    # Run it in the BACKGROUND — never block startup on it. A blocking pre-warm (even
+    # wrapped in asyncio.wait_for) was observed to hang the lifespan indefinitely:
+    # wait_for cannot interrupt a synchronous thread blocked in multiprocessing
+    # C-calls, so a stalled / OOM'd warm wedged startup. As a background task the app
+    # yields + serves immediately; workers warm behind it (in bounded-concurrency
+    # waves, see BatchRunner.prewarm) and any failure degrades to the lazy per-game
+    # warm-up.
+    if _full_pool_env not in ("", "0", "false", "no", "off"):
+        prewarm_pool_dir = os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool")
+        log.info("SIM-402: scheduling background sim-runner pre-warm ...")
+        app.state.prewarm_task = asyncio.create_task(
+            _background_prewarm(app.state.sim_runner, prewarm_pool_dir)
+        )
+
     yield
 
     log.info("MLB Simulation Platform shutting down.")
+
+    # SIM-402: stop awaiting the background pre-warm if it's still running. Its worker
+    # threads are detached and finish on their own; cancelling just releases our await
+    # so shutdown isn't blocked, and close() (below) tears the pool + shm down.
+    prewarm_task = getattr(app.state, "prewarm_task", None)
+    if prewarm_task is not None and not prewarm_task.done():
+        prewarm_task.cancel()
+        try:
+            await prewarm_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001
+            pass
 
     # Phase 5 (SIM-360): shut the persistent BatchRunner down first (reverse
     # order of acquisition) — close() shutdown(wait=True)s its warm pool and
