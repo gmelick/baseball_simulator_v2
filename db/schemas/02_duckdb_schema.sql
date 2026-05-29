@@ -627,43 +627,49 @@ COMMENT ON COLUMN derived.catcher_season_metrics.below_minimum_sample IS 'TRUE w
 -- Drives Step 7 managerial substitution decisions.
 -- =============================================================================
 
+-- SIM-408: schema reconciled to the manager engine's feature vocabulary
+-- (USAGE / AGGRESSION / PLATOON sub-scores). The prior vocabulary
+-- (sp_pitch_count_mean / ph_rate_* / bullpen_leverage_mapping) was never read by
+-- the engine. USAGE columns are GATED on the SIM-427 bullpen-roster build and
+-- emitted NULL until it lands; aggression + platoon are computed from the play
+-- stream.
 CREATE TABLE IF NOT EXISTS derived.manager_season_metrics (
-    manager_id                  INTEGER     NOT NULL,
-    season                      SMALLINT    NOT NULL,
+    manager_id                              INTEGER     NOT NULL,
+    season                                  SMALLINT    NOT NULL,
+    sample_games                            INTEGER     NOT NULL DEFAULT 0,
+    sample_starter_decisions                INTEGER     NOT NULL DEFAULT 0,
 
-    -- Pitcher management
-    sp_pitch_count_mean         FLOAT,      -- Average SP exit pitch count
-    sp_leverage_threshold       FLOAT,      -- Avg leverage index at pitcher removal
-    quick_hook_rate             FLOAT,      -- Removed before 5 IP
-    opener_rate                 FLOAT,      -- Opener used as first pitcher
+    -- Usage (SIM-427-gated: NULL until the per-(team,season) bullpen roster exists)
+    starter_avg_pitch_count                 FLOAT,
+    starter_pull_pct_before_100             FLOAT,
+    closer_entry_leverage_index             FLOAT,
+    high_leverage_reliever_rate             FLOAT,
+    opener_usage_rate                       FLOAT,
+    bulk_innings_rate                       FLOAT,
 
-    -- Bullpen usage
-    closer_usage_rate           FLOAT,      -- Saves / save opportunities
-    -- JSONB mapping reliever roles to leverage index thresholds.
-    -- Structure: {"closer": 1.5, "setup": 1.1, "lefty_specialist": 0.9, ...}
-    bullpen_leverage_mapping    JSON,
+    -- Aggression (computed from the play stream; uncomputable ones NULL)
+    steal_order_rate_per_1b_opp             FLOAT,
+    hit_and_run_rate_per_opportunity        FLOAT,      -- not flagged in Statcast → NULL
+    sac_bunt_rate_high_leverage             FLOAT,
+    sac_bunt_rate_low_leverage              FLOAT,
+    squeeze_play_rate_per_3b_opp            FLOAT,
 
-    -- Positional substitutions
-    ph_rate_low_leverage        FLOAT,      -- PH usage when LI < 0.7
-    ph_rate_mid_leverage        FLOAT,      -- PH usage when 0.7 <= LI < 1.5
-    ph_rate_high_leverage       FLOAT,      -- PH usage when LI >= 1.5
-    pr_rate                     FLOAT,
-    defensive_sub_rate          FLOAT,      -- Late-game defensive replacement rate
+    -- Platoon (computed from the play stream; uncomputable ones NULL)
+    pinch_hit_rate_vs_same_hand             FLOAT,
+    pinch_hit_rate_high_leverage            FLOAT,
+    defensive_sub_rate_late_innings         FLOAT,
+    double_switch_rate_per_reliever_change  FLOAT,      -- not detectable in Statcast → NULL
+    platoon_advantage_exploitation_rate     FLOAT,
 
-    -- Sample
-    sample_games                INTEGER     NOT NULL DEFAULT 0,
-
-    below_minimum_sample        BOOLEAN     NOT NULL DEFAULT FALSE,
-    updated_at                  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    below_minimum_sample                    BOOLEAN     NOT NULL DEFAULT FALSE,
+    updated_at                              TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (manager_id, season)
 );
 
 CREATE INDEX IF NOT EXISTS idx_msm_season ON derived.manager_season_metrics(season);
 
-COMMENT ON TABLE  derived.manager_season_metrics IS 'Per-manager per-season tendencies. Input to Step 7 substitution decision engine.';
-COMMENT ON COLUMN derived.manager_season_metrics.bullpen_leverage_mapping IS 'JSON mapping reliever roles to leverage index thresholds. Structure: {"closer": 1.5, "setup": 1.1}.';
-COMMENT ON COLUMN derived.manager_season_metrics.below_minimum_sample IS 'TRUE when sample_games < 50. Falls back to league-average manager profile.';
+COMMENT ON TABLE  derived.manager_season_metrics IS 'SIM-408: per-manager per-season tendencies in the manager engine vocabulary (usage/aggression/platoon). Usage gated on SIM-427; aggression+platoon from the play stream. below_minimum_sample = sample_games < 50.';
 
 -- =============================================================================
 -- DERIVED.PARK_FACTORS
