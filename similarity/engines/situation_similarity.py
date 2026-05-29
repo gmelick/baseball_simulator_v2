@@ -503,11 +503,13 @@ class SituationSimilarityEngine:
                     COALESCE(abs.leverage_index, 1.0)  AS leverage_index,
                     COALESCE(abs.pitcher_pitch_count, 0) AS pitcher_pc,
                     COALESCE(abs.batter_pa_count, 1)   AS batter_pa,
-                    COALESCE(pf.run_factor, 1.0)        AS park_factor_runs
+                    COALESCE(pf.regressed_factor, 1.0) AS park_factor_runs
                 FROM derived.at_bat_situations abs
                 LEFT JOIN derived.park_factors pf
                     ON pf.venue_id = abs.venue_id
                     AND pf.season  = abs.season
+                    AND pf.factor_type = 'R'   -- SIM-408: park_factors has no run_factor col;
+                                               -- the run park factor is the 'R' factor_type row
                 WHERE abs.inning IS NOT NULL
                   {sf}
                 ORDER BY abs.game_pk, abs.inning, abs.at_bat_number
