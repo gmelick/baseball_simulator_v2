@@ -26,6 +26,7 @@ from similarity.engines.situation_similarity import (
     MIN_INDEX_SIZE,
     SCORE_DIFF_CLIP,
     SITUATION_FEATURES,
+    ColumnarSituationMeta,
     NearestSituation,
     SituationNormalizer,
     SituationSimilarityEngine,
@@ -316,8 +317,14 @@ class TestEngineBuild:
         assert eng.is_built() is True
         assert eng.index_size == 50
 
-    def test_build_handles_missing_catalog_gracefully(self):
-        """If derived.at_bat_situations doesn't exist, build() leaves engine empty."""
+    def test_build_missing_catalog_raises(self):
+        """SIM-408: a missing derived.at_bat_situations now SKIPS the engine.
+
+        Previously build() swallowed the CatalogException and registered an
+        empty, NaN-normalized index. It now raises (→ build_all_engines marks
+        the engine failed and skips it, like the steal engines whose source
+        tables are likewise absent).
+        """
         import duckdb as ddb_mod
 
         mock_conn = MagicMock()
@@ -327,10 +334,17 @@ class TestEngineBuild:
             return_value=mock_conn,
         ):
             eng = SituationSimilarityEngine(duckdb_path="/tmp/whatever.duckdb")
-            eng.build()
-        # No rows loaded — but build() still completed without raising
-        assert eng.index_size == 0
-        assert eng.is_built() is True  # tree was built on empty matrix
+            with pytest.raises(RuntimeError, match="no situations loaded"):
+                eng.build()
+        assert eng.is_built() is False  # left unbuilt → registry skips it
+
+    def test_build_zero_rows_raises(self):
+        """SIM-408: an empty (but present) situations table is also degenerate."""
+        with _patch_duckdb_with_rows([]):
+            eng = SituationSimilarityEngine(duckdb_path="/tmp/whatever.duckdb")
+            with pytest.raises(RuntimeError, match="degenerate empty index"):
+                eng.build()
+        assert eng.is_built() is False
 
     def test_build_row_unpack_handles_null_optionals(self):
         """A row with None values should be normalized to defaults, not raise."""
@@ -423,10 +437,16 @@ class TestQuery:
         assert isinstance(out[0].distance, float)
 
     def test_query_empty_index_returns_empty(self):
-        """Build with zero rows; query returns []."""
-        with _patch_duckdb_with_rows([]):
-            eng = SituationSimilarityEngine(duckdb_path="/tmp/whatever.duckdb")
-            eng.build()
+        """An empty index → query returns [] (defensive guard).
+
+        build() now raises on an empty index (SIM-408), so the empty state is
+        constructed directly here to keep exercising the ``_index_size == 0``
+        early-return guard in query().
+        """
+        eng = SituationSimilarityEngine(duckdb_path="/tmp/whatever.duckdb")
+        eng._kdtree = object()  # non-None so the "not built" guard passes
+        eng._index_meta = ColumnarSituationMeta.empty()
+        eng._index_size = 0
         assert eng.query(_make_vec(), k=10) == []
 
 
@@ -446,10 +466,14 @@ class TestQueryBatch:
         assert all(len(row) == 1 for row in out)
 
     def test_query_batch_empty_index_returns_empty_rows(self):
-        """Empty index → list of [] per query."""
-        with _patch_duckdb_with_rows([]):
-            eng = SituationSimilarityEngine(duckdb_path="/tmp/whatever.duckdb")
-            eng.build()
+        """Empty index → list of [] per query (defensive guard).
+
+        Constructed directly: build() raises on an empty index (SIM-408).
+        """
+        eng = SituationSimilarityEngine(duckdb_path="/tmp/whatever.duckdb")
+        eng._kdtree = object()  # non-None so the "not built" guard passes
+        eng._index_meta = ColumnarSituationMeta.empty()
+        eng._index_size = 0
         out = eng.query_batch([_make_vec(), _make_vec()], k=5)
         assert out == [[], []]
 
@@ -494,9 +518,12 @@ class TestCoverageReport:
         assert len(data_lines) >= 1
 
     def test_build_coverage_report_empty_engine(self):
-        """Empty engine still produces a report header but no per-inning rows."""
-        with _patch_duckdb_with_rows([]):
-            eng = SituationSimilarityEngine(duckdb_path="/tmp/whatever.duckdb")
-            eng.build()
+        """Empty engine still produces a report header but no per-inning rows.
+
+        Constructed directly: build() raises on an empty index (SIM-408).
+        """
+        eng = SituationSimilarityEngine(duckdb_path="/tmp/whatever.duckdb")
+        eng._index_meta = ColumnarSituationMeta.empty()
+        eng._index_size = 0
         report = build_coverage_report(eng)
         assert "Total indexed situations: 0" in report

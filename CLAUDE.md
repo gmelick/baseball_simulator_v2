@@ -293,8 +293,11 @@ for the first time — SIM-402's `/dev/shm` overflow + pre-warm hang/OOM are fix
 pre-warm is now a BACKGROUND task with bounded-concurrency warming + a `_get_pool` lock; healthcheck
 `start_period` 180s), and SIM-408 is now
 characterized: only **7/11** engines build (catcher/manager/baserunner_steal/pitcher_steal fail,
-situation indexes 0 rows) from an engine↔computor schema divergence — diagnosis + reconciliation plan
-in `docs/audit/2026-05-29-sim408-engine-schema-divergence.md`.
+situation indexes 0 rows) from an engine↔computor schema divergence — diagnosis in
+`docs/audit/2026-05-29-sim408-engine-schema-divergence.md`, turn-key reconciliation plan
+(per-engine column/table map + rebuild checklist) in `docs/audit/2026-05-29-sim408-reconciliation-plan.md`.
+A safe code-side hardening landed 2026-05-29 (situation engine raises/skips on a zero-row index
+instead of registering a NaN-poisoned one); the 11/11 build still awaits the live DuckDB rebuild.
 
 **Full-pool realism residual (SIM-422→429, the production path):** box rate stats (H/HR/2B/BB/K) are
 within ~4% of MLB and steals match MLB volume, but **runs sit ~10-12% low** — a hits→runs *conversion*

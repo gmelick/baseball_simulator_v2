@@ -1,3 +1,39 @@
+# Phase 7 — SIM-408 safe hardening (situation-engine skip) + reconciliation plan — 2026-05-29
+**Authors: Data Engineer (Agent 4), Backend Developer (Agent 5), QA/DevOps (Agent 9)**
+
+Follow-on to the SIM-408 engine-schema finding (below). Two additions; neither
+needs the (sandbox-impossible) DuckDB rebuild.
+
+**1. Safe hardening — situation engine now SKIPS instead of feeding NaN.**
+`SituationSimilarityEngine.build()` previously swallowed a missing/empty
+`derived.at_bat_situations` (`_load_situations` catches `CatalogException` →
+returns empty) and then fit the normalizer on a zero-row matrix — emitting
+`Mean of empty slice` / `Degrees of freedom <= 0` and registering a NaN-poisoned
+"working" engine. It now **raises on a zero-row index**, so
+`api.state.build_all_engines` skips it (honest 7/11, same as the steal engines
+whose source tables are likewise absent) rather than a hollow 8/11. Surgical
+change in `similarity/engines/situation_similarity.py`; the `< MIN_INDEX_SIZE`
+(nonempty) "may not be reliable" warning is unchanged. This inverts a
+deliberately-tested "empty build is valid" contract, so the affected unit tests
+were updated to the new contract + 1 new raise test
+(`tests/unit/test_situation_similarity.py`; 40 cases green, ruff + mypy clean).
+The empty-query defensive guards in `query`/`query_batch` are retained and now
+exercised by constructing the empty state directly.
+
+**2. Turn-key reconciliation plan** —
+`docs/audit/2026-05-29-sim408-reconciliation-plan.md`. Companion execution spec to
+the finding doc: per-engine canonical-direction decisions (EXTEND-COMPUTOR /
+TRIM-ENGINE / NEW-BUILDER) with the concrete engine-expected → computor-produced
+column/table map for situation, catcher, manager, baserunner_steal, pitcher_steal
+(+ computability flags — which features are derivable from Statcast vs. biomech/
+scout-grade and must be trimmed), the manager↔SIM-427 overlap, and the
+rebuild → regenerate-fixtures → verify-11/11 checklist. The `scripts/diag_actor_cols.py`
+DuckDB column-vocab introspector used to characterize the divergence is included.
+
+The production full-pool sim remains unaffected (it draws from the
+`engine_artifacts` bundle, not these live engines). **Still 🔴 pending the live
+DuckDB rebuild** — this lands the safe code-side hardening + the execution spec.
+
 # Phase 7 — live bring-up hardening: /dev/shm fix + bounded pre-warm + SIM-408 engine-schema finding — 2026-05-29
 **Authors: Backend Developer (Agent 5), Performance Engineer (Agent 6), Data Engineer (Agent 4), QA/DevOps (Agent 9)**
 

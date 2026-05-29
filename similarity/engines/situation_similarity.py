@@ -437,6 +437,23 @@ class SituationSimilarityEngine:
         finally:
             conn.close()
 
+        if len(raw_matrix) == 0:
+            # SIM-408 hardening: a zero-row index is degenerate. Normalizing an
+            # empty matrix yields a NaN normalization (numpy emits "Mean of
+            # empty slice" / "Degrees of freedom <= 0"), producing a hollow
+            # engine that would silently feed NaN situation similarities — which
+            # is strictly worse than being absent. Raise instead, so
+            # ``api.state.build_all_engines`` SKIPS this engine (marks it failed,
+            # exactly like the steal engines whose source tables are likewise
+            # missing) rather than registering a NaN-poisoned one. The live
+            # trigger is a missing/empty ``derived.at_bat_situations`` — see
+            # docs/audit/2026-05-29-sim408-engine-schema-divergence.md.
+            raise RuntimeError(
+                "SituationSimilarityEngine: no situations loaded "
+                "(derived.at_bat_situations is missing or empty) — refusing to "
+                "build a degenerate empty index."
+            )
+
         if len(raw_matrix) < MIN_INDEX_SIZE:
             log.warning(
                 "SituationSimilarityEngine: only %d situations loaded "
