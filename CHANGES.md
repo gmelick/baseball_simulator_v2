@@ -1,3 +1,36 @@
+# Phase 7 — SIM-408 engine↔DuckDB reconciliation: 3 of 5 engines (situation + steal ×2) — 2026-05-29
+**Authors: Data Engineer (Agent 4), ML Engineer (Agent 3), Backend Developer (Agent 5)**
+
+Code-side reconciliation of the SIM-408 engine↔schema divergence so the live
+11-engine build can reach 11/11. Three engines landed (commits `cc7fb60`,
+`ede86c7`); the SQL is turn-key but can't run in-sandbox (no raw Statcast/DuckDB).
+
+- **situation** — new `derived.at_bat_situations` (one row per PA: pre-PA game
+  state from `raw.pitches`, leverage_index replicated in SQL). The Step 2.9
+  KDTree engine now indexes real situations instead of 0 rows.
+- **baserunner_steal** — new `derived.baserunner_steal_metrics` (SB attempt/
+  success + 2B→3B splits from `raw.pitches`). **TRIM**: removed the JUMP /
+  First-Step sub-score (reaction_time/burst_distance/break_angle — biomech, not
+  in Statcast) + 2 biomech tendency features; weights renormalized; `jump_score`
+  dropped.
+- **pitcher_steal** — new `derived.pitcher_steal_metrics` (SB-against / CS /
+  attempt-rate, from the SB flags + outs for IP). **TRIM to outcome-only**:
+  Delivery (biomech timings) and Pickoff (raw.pitches has no pickoff/
+  disengagement columns) both removed; outcome is the sole sub-score (weight 1.0).
+
+DuckDB migration **0011** (`0011_sim408_engine_schema_reconciliation.sql`) carries
+all three tables; `duckdb_schema_version` 10 → 11 (+ test). Regression golden
+fixtures for the two steal engines regenerated **in-sandbox** (they build from
+synthetic seeded profiles, not the live DB). 100+ unit/regression tests green;
+ruff + mypy clean.
+
+**Remaining (2 of 5; decisions locked, specced in
+`docs/audit/2026-05-29-sim408-reconciliation-plan.md`):** **catcher** (EXTEND the
+4 defensive sub-scores incl. new shadow/heart zone-framing columns; TRIM the
+Offense sub-score) and **manager** (build aggression/platoon; GATE the Usage
+sub-score on the SIM-427 bullpen-roster build). Both are large multi-method
+computor changes; the registry degrades safely so they land incrementally.
+
 # Phase 7 — SIM-408 safe hardening (situation-engine skip) + reconciliation plan — 2026-05-29
 **Authors: Data Engineer (Agent 4), Backend Developer (Agent 5), QA/DevOps (Agent 9)**
 

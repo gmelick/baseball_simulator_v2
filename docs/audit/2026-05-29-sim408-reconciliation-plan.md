@@ -7,6 +7,63 @@ column/table actions, and the rebuild → fixtures → verify checklist. It is
 written to be run at the live box (raw Statcast + a multi-hour DuckDB rebuild),
 which the dev sandbox cannot do.*
 
+## Status & locked decisions (2026-05-29)
+
+**Landed on `fix/sim402-live-bringup` (code-side; verified in-sandbox, 🔴 pending the live rebuild):**
+
+- **situation** ✅ — `derived.at_bat_situations` built (commit `cc7fb60`).
+- **baserunner_steal** ✅ — `derived.baserunner_steal_metrics` + JUMP sub-score
+  TRIMmed (commit `cc7fb60`).
+- **pitcher_steal** ✅ — `derived.pitcher_steal_metrics`, reduced to an
+  **outcome-only** engine (Delivery biomech + Pickoff have no raw source) (commit
+  `ede86c7`).
+- Migration **0011** carries those 3 tables; `duckdb_schema_version` 10 → 11.
+
+**Remaining — decisions locked, work specced (turn-key):**
+
+- **catcher** (largest; EXTEND-heavy). **Decision: TRIM the Offense sub-score**
+  (the catcher's own batting — `k_rate`/`walk_rate`/`avg_exit_velo`/
+  `hard_hit_rate`); renormalize the 4 defensive weights (framing/blocking/
+  throwing/deterrence) over 0.85. EXTEND the 4 defensive sub-scores:
+  - **Engine-derivable** (rewrite the `_load` SELECT to compute from existing
+    `catcher_season_metrics` columns): `strike_rate_vs_expected` =
+    `(called_strikes − expected_called_strikes)/called_pitches`;
+    `runs_saved_framing` = `framing_runs`; `pop_time_avg` = `pop_time_mean`;
+    `arm_strength_mph` = `arm_strength_mean`; `cs_rate`,
+    `steal_attempt_rate_against` already exist.
+  - **Needs new computor columns** (the framing/blocking passes don't emit
+    these): `shadow_zone_strike_rate` + `heart_zone_strike_rate` (bucket called
+    pitches by `raw.pitches.zone` — heart = zones 1–9, shadow = 11–14 — in
+    `_compute_catcher_framing`); `block_success_rate` + `wild_pitch_prevention_rate`
+    (need `block_opps`); `passed_ball_rate_per_9` (needs innings caught). Add
+    these to the framing/blocking temp tables + `_aggregate_catcher_season_metrics`
+    + the schema, OR TRIM the ones whose denominators aren't worth materializing.
+  - **TRIM** `exchange_time_avg` (not separable from `pop_time` in the feed).
+  - Update `conftest`/`generate_fixtures`/`regression_config`/`test_engine_regression`
+    + `test_ml_engines_sim066_071` (drop offense + exchange_time); regenerate
+    `catcher.json`.
+
+- **manager**. **Decision: build aggression + platoon now; GATE Usage on
+  SIM-427.** The aggression (`steal_order_rate_per_1b_opp`,
+  `hit_and_run_rate_per_opportunity`, `sac_bunt_rate_high/low_leverage`,
+  `squeeze_play_rate_per_3b_opp`) + platoon (`pinch_hit_rate_*`,
+  `defensive_sub_rate_late_innings`, `double_switch_rate_per_reliever_change`,
+  `platoon_advantage_exploitation_rate`) tendencies are computable from the play
+  stream (substitution flags + base/out state). The Usage block
+  (`starter_avg_pitch_count`, `starter_pull_pct_before_100`,
+  `closer_entry_leverage_index`, `high_leverage_reliever_rate`,
+  `opener_usage_rate`, `bulk_innings_rate`) needs the per-(team,season)
+  bullpen-roster-with-roles that **SIM-427** must build from raw Statcast — emit
+  those columns as NULL with `below_minimum_sample` semantics until then, keeping
+  the engine's 3-sub-score architecture intact. The existing
+  `_compute_manager_profiles` produces a different vocabulary
+  (`ph_rate_*`/`sp_pitch_count_mean`); it must be rewritten to the engine's
+  `sample_starter_decisions` + usage/aggression/platoon column set (+ schema +
+  fixture/test updates).
+
+Both remaining engines are large multi-method computor changes; the registry
+degrades safely (10/11 or 9/11 boots fine) so they can land incrementally.
+
 ## 0. The decision rule (canonical direction)
 
 For each failing engine, pick ONE direction:
@@ -148,10 +205,13 @@ updated to the new contract (`tests/unit/test_situation_similarity.py`).
    (`db/migrations/duckdb/00NN_*.sql`) and **bump `db/schemas/duckdb_schema_version.txt`**
    (the version-file gotcha in CLAUDE.md §7).
 2. Rebuild profiles: `make profile-computor` → `make play-pool-cache`.
-3. **Regenerate regression fixtures on the rebuilt data**:
-   `python tests/regression/generate_fixtures.py --force` — engine query/feature
-   changes WILL move the golden files; regenerating against fabricated data would
-   bake in wrong scores, so this must run on the real rebuild.
+3. **Regenerate regression fixtures** (when an engine's features/weights change):
+   `python tests/regression/generate_fixtures.py --force`. NOTE: the regression
+   fixtures are built from **synthetic, seeded** profiles (`conftest.py` /
+   `generate_fixtures.py` — NOT the real DuckDB), so regeneration is
+   deterministic and runs **in-sandbox** — it does NOT need the live rebuild.
+   (This corrects an earlier assumption; the steal-engine fixtures were
+   regenerated in-sandbox.) Regenerate only the engine(s) you changed.
 4. Boot the app; confirm the lifespan logs `build_all_engines: 11/11`.
 5. Run `make test-regression` + `make test-unit`; update any engine unit-test mocks
    touched by a TRIM.
