@@ -9,6 +9,13 @@ which the dev sandbox cannot do.*
 
 ## Status & locked decisions (2026-05-29)
 
+> **UPDATE — all 5 engines landed code-side (2026-05-29).** catcher (`6b2c901`)
+> + manager (`95f5e1b`) joined situation/baserunner_steal (`cc7fb60`) +
+> pitcher_steal (`ede86c7`). Migration 0011 covers all of it; schema version 11;
+> 235 unit+regression tests green; ruff+mypy clean. The decisions/specs below are
+> what shipped. The ONLY remaining acceptance is the live `make profile-computor`
+> rebuild → `build_all_engines: 11/11` (can't run in-sandbox).
+
 **Landed on `fix/sim402-live-bringup` (code-side; verified in-sandbox, 🔴 pending the live rebuild):**
 
 - **situation** ✅ — `derived.at_bat_situations` built (commit `cc7fb60`).

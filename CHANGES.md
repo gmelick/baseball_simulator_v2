@@ -1,3 +1,23 @@
+# Phase 7 — SIM-408 engine↔DuckDB reconciliation COMPLETE (all 5 engines) — 2026-05-29
+**Authors: Data Engineer (Agent 4), ML Engineer (Agent 3), Backend Developer (Agent 5)**
+
+All five divergent engines reconciled code-side (commits `cc7fb60`, `ede86c7`,
+`6b2c901`, `95f5e1b`) so the live 11-engine build should reach 11/11 after the
+DuckDB rebuild. Beyond the 3 below: **catcher** — EXTEND the 4 defensive
+sub-scores (rates derived in the engine SELECT from existing counts + new
+shadow/heart zone-framing columns the framing pass now emits) and TRIM the
+Offense sub-score (+ exchange_time); weights renormalize over 0.85.
+**manager** — `_compute_manager_profiles` rewritten to the engine's
+usage/aggression/platoon vocabulary (offensive calls → batting manager,
+defensive → fielding manager); aggression/platoon computed from the play stream,
+the USAGE sub-score gated NULL on the SIM-427 bullpen-roster build; schema
+DROP+recreated in migration 0011 (engine/fixtures/tests unchanged). 235
+unit+regression tests green across the touched suites; ruff + mypy clean. The
+only remaining acceptance is the live `make profile-computor` rebuild →
+`build_all_engines: 11/11` (+ regenerate regression fixtures on the rebuilt data
+if any engine query changes — the 4 here that changed were regenerated
+in-sandbox from synthetic profiles).
+
 # Phase 7 — SIM-408 engine↔DuckDB reconciliation: 3 of 5 engines (situation + steal ×2) — 2026-05-29
 **Authors: Data Engineer (Agent 4), ML Engineer (Agent 3), Backend Developer (Agent 5)**
 
