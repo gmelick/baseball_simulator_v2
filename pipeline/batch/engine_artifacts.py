@@ -433,7 +433,35 @@ class EngineArtifacts:
                     emb[attr] = v
 
     @classmethod
-    def load(cls, art_dir: str) -> EngineArtifacts:
+    def load(
+        cls, art_dir: str, shared_views: dict[str, np.ndarray] | None = None
+    ) -> EngineArtifacts:
+        """Load the bundle from disk. When ``shared_views`` is supplied (the
+        SIM-403b shared-memory map from :func:`extract_shared_arrays`), the big
+        per-pool / per-embedding numpy arrays are taken DIRECTLY from the views
+        and the corresponding ``.npy`` disk reads are SKIPPED — turning a
+        ~150-300 MB cold-load into a ~5 MB metadata-only read per worker.  This
+        is the SIM-402 fix: without it, 9 cold workers all racing to read the
+        full bundle from a Windows-hosted Docker volume serializes into a
+        ~500 s stall on a 10-iteration request.  When ``shared_views`` is None
+        (the dev path / no published bundle), every array still loads from disk
+        exactly as before.
+
+        The OBJECT-dtype columns (``outcome_type`` on HandPool, ``event`` on
+        BattedBallPool), the metadata-only ids/seasons/recency columns, the
+        ``pitcher_sim`` dict-of-dicts, and the per-actor ``key_index`` / feature
+        lists are NEVER shareable through ``shared_memory`` and ALWAYS load
+        from disk — they're small (typically <5 MB combined per worker).
+        """
+        views = shared_views or {}
+
+        def _take(key: str, disk_path: str) -> np.ndarray:
+            """Either a shared view (zero-cost) or a fresh ``np.load`` (cold)."""
+            v = views.get(key)
+            if isinstance(v, np.ndarray):
+                return v
+            return np.load(disk_path)
+
         pool_dir = os.path.join(art_dir, "pitch_pool")
         with open(os.path.join(pool_dir, "manifest.json"), encoding="utf-8") as fh:
             manifest = json.load(fh)
@@ -441,22 +469,47 @@ class EngineArtifacts:
         pools: dict[str, HandPool] = {}
         try:
             for hand in ("L", "R"):
-                geom = np.load(os.path.join(pool_dir, f"{hand}.geom.npy"))
-                sit = np.load(os.path.join(pool_dir, f"{hand}.sit.npy"))
+                geom = _take(f"pool.{hand}.geom", os.path.join(pool_dir, f"{hand}.geom.npy"))
+                sit = _take(f"pool.{hand}.sit", os.path.join(pool_dir, f"{hand}.sit.npy"))
+                # The metadata parquet stays disk-loaded — outcome_type is
+                # object-dtype (not shareable) and the ids/recency are small.
                 meta_path = os.path.join(pool_dir, f"{hand}.meta.parquet")
                 m = con.execute(
                     "SELECT pitcher_id, batter_id, season, outcome_type, recency_weight "
                     f"FROM read_parquet('{meta_path}')"
                 ).fetchnumpy()
+                # When the shared map has the id/season/recency columns too,
+                # prefer them (they round-trip identically and skip more disk).
+                pid_view = views.get(f"pool.{hand}.pitcher_id")
+                bid_view = views.get(f"pool.{hand}.batter_id")
+                ssn_view = views.get(f"pool.{hand}.season")
+                rec_view = views.get(f"pool.{hand}.recency")
                 pools[hand] = HandPool(
                     geom=geom,
                     sit=sit,
-                    pitcher_id=np.asarray(np.ma.filled(m["pitcher_id"], 0), dtype=np.int64),
-                    batter_id=np.asarray(np.ma.filled(m["batter_id"], 0), dtype=np.int64),
-                    season=np.asarray(np.ma.filled(m["season"], 0), dtype=np.int64),
+                    pitcher_id=(
+                        pid_view
+                        if isinstance(pid_view, np.ndarray)
+                        else np.asarray(np.ma.filled(m["pitcher_id"], 0), dtype=np.int64)
+                    ),
+                    batter_id=(
+                        bid_view
+                        if isinstance(bid_view, np.ndarray)
+                        else np.asarray(np.ma.filled(m["batter_id"], 0), dtype=np.int64)
+                    ),
+                    season=(
+                        ssn_view
+                        if isinstance(ssn_view, np.ndarray)
+                        else np.asarray(np.ma.filled(m["season"], 0), dtype=np.int64)
+                    ),
                     outcome_type=np.asarray(m["outcome_type"], dtype=object),
-                    recency=np.nan_to_num(
-                        np.ma.filled(m["recency_weight"], 1.0).astype(np.float32), nan=1.0
+                    recency=(
+                        rec_view
+                        if isinstance(rec_view, np.ndarray)
+                        else np.nan_to_num(
+                            np.ma.filled(m["recency_weight"], 1.0).astype(np.float32),
+                            nan=1.0,
+                        )
                     ),
                 )
             bb_pools: dict[str, BattedBallPool] = {}
@@ -467,16 +520,44 @@ class EngineArtifacts:
                         "SELECT batter_id, season, events, result_hits, result_outs, "
                         f"recency_weight FROM read_parquet('{os.path.join(bb_dir, f'{hand}.meta.parquet')}')"
                     ).fetchnumpy()
+                    bb_pid_view = views.get(f"bb_pool.{hand}.batter_id")
+                    bb_ssn_view = views.get(f"bb_pool.{hand}.season")
+                    bb_rh_view = views.get(f"bb_pool.{hand}.result_hits")
+                    bb_ro_view = views.get(f"bb_pool.{hand}.result_outs")
+                    bb_rec_view = views.get(f"bb_pool.{hand}.recency")
                     bb_pools[hand] = BattedBallPool(
-                        geom=np.load(os.path.join(bb_dir, f"{hand}.geom.npy")),
-                        sit=np.load(os.path.join(bb_dir, f"{hand}.sit.npy")),
-                        batter_id=np.asarray(np.ma.filled(m["batter_id"], 0), dtype=np.int64),
-                        season=np.asarray(np.ma.filled(m["season"], 0), dtype=np.int64),
+                        geom=_take(
+                            f"bb_pool.{hand}.geom", os.path.join(bb_dir, f"{hand}.geom.npy")
+                        ),
+                        sit=_take(f"bb_pool.{hand}.sit", os.path.join(bb_dir, f"{hand}.sit.npy")),
+                        batter_id=(
+                            bb_pid_view
+                            if isinstance(bb_pid_view, np.ndarray)
+                            else np.asarray(np.ma.filled(m["batter_id"], 0), dtype=np.int64)
+                        ),
+                        season=(
+                            bb_ssn_view
+                            if isinstance(bb_ssn_view, np.ndarray)
+                            else np.asarray(np.ma.filled(m["season"], 0), dtype=np.int64)
+                        ),
                         event=np.asarray(m["events"], dtype=object),
-                        result_hits=np.asarray(np.ma.filled(m["result_hits"], 0), dtype=np.int8),
-                        result_outs=np.asarray(np.ma.filled(m["result_outs"], 0), dtype=np.int8),
-                        recency=np.nan_to_num(
-                            np.ma.filled(m["recency_weight"], 1.0).astype(np.float32), nan=1.0
+                        result_hits=(
+                            bb_rh_view
+                            if isinstance(bb_rh_view, np.ndarray)
+                            else np.asarray(np.ma.filled(m["result_hits"], 0), dtype=np.int8)
+                        ),
+                        result_outs=(
+                            bb_ro_view
+                            if isinstance(bb_ro_view, np.ndarray)
+                            else np.asarray(np.ma.filled(m["result_outs"], 0), dtype=np.int8)
+                        ),
+                        recency=(
+                            bb_rec_view
+                            if isinstance(bb_rec_view, np.ndarray)
+                            else np.nan_to_num(
+                                np.ma.filled(m["recency_weight"], 1.0).astype(np.float32),
+                                nan=1.0,
+                            )
                         ),
                     )
         finally:
@@ -491,15 +572,34 @@ class EngineArtifacts:
         for actor in _ACTOR_TABLES:
             p = os.path.join(art_dir, f"{actor}_emb.npz")
             if os.path.exists(p):
-                z = np.load(p, allow_pickle=True)
-                keys = json.loads(str(z["keys"]))
-                actor_emb[actor] = {
-                    "key_index": {k: i for i, k in enumerate(keys)},
-                    "vecs": z["vecs"],
-                    "mean": z["mean"],
-                    "std": z["std"],
-                    "features": json.loads(str(z["features"])),
-                }
+                # When all three shareable arrays for this actor are in views,
+                # SKIP the .npz load entirely — load only the keys + features
+                # (the small picklable members) from a lightweight read.
+                vecs_v = views.get(f"actor_emb.{actor}.vecs")
+                mean_v = views.get(f"actor_emb.{actor}.mean")
+                std_v = views.get(f"actor_emb.{actor}.std")
+                if all(isinstance(v, np.ndarray) for v in (vecs_v, mean_v, std_v)):
+                    # Cheap partial-load of the npz: keys + features are tiny.
+                    z = np.load(p, allow_pickle=True)
+                    keys = json.loads(str(z["keys"]))
+                    features = json.loads(str(z["features"]))
+                    actor_emb[actor] = {
+                        "key_index": {k: i for i, k in enumerate(keys)},
+                        "vecs": vecs_v,
+                        "mean": mean_v,
+                        "std": std_v,
+                        "features": features,
+                    }
+                else:
+                    z = np.load(p, allow_pickle=True)
+                    keys = json.loads(str(z["keys"]))
+                    actor_emb[actor] = {
+                        "key_index": {k: i for i, k in enumerate(keys)},
+                        "vecs": z["vecs"],
+                        "mean": z["mean"],
+                        "std": z["std"],
+                        "features": json.loads(str(z["features"])),
+                    }
         return cls(pools, ps_index, ps_sims, manifest.get("seasons"), actor_emb, bb_pools)
 
 

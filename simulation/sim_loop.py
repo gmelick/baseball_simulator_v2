@@ -3291,6 +3291,13 @@ def simulate_game(
             and hasattr(pa.sampler, "rng")
         ):
             pa.sampler.rng = np.random.default_rng(seed)
+        # SIM-402: the full-pool sampler is now CACHED per worker process
+        # (`production_factory._build_full_pool_sampler` reuses one instance
+        # across seeds for the SLA win); the per-game rng must be re-seeded
+        # here so the cached sampler still produces reproducible per-seed draws.
+        fp = getattr(state_machine, "full_pool_sampler", None)
+        if fp is not None and hasattr(fp, "rng"):
+            fp.rng = np.random.default_rng(seed)
 
     # --- Build the initial GameState (fresh top of the 1st) ------------------
     if initial_state is None:

@@ -288,6 +288,21 @@ def _attach_shared_tiles(sampler: PlayPoolSampler, spec: GameSpec) -> int:
 # ---------------------------------------------------------------------------
 
 
+#: SIM-402: per-worker cache for the EngineArtifacts + FullPoolSampler the
+#: full-pool path needs.  WITHOUT this cache, :func:`_run_one` calls this
+#: factory PER SEED and the worker re-disk-loads the ~290 MB artifact bundle
+#: AND re-precomputes the FullPoolSampler's per-hand `_pool_cache` on every
+#: iteration — turning a ~1.5 s/game pool draw into a ~9 s/game stall that
+#: blows the SIM-372 2 s/30 s SLA.  WITH the cache, the first seed pays the
+#: load+precompute and every subsequent seed reuses the warm sampler (only
+#: the per-game rng is re-seeded; per-game state — half-inning / PA caches —
+#: is reset at the loop's natural boundaries inside `simulate_game`).  Lives
+#: per-process (not module-level across the fork), so each ProcessPool worker
+#: gets its own copy at first use; the parent never holds this object.
+_CACHED_FULL_POOL_SAMPLER = None
+_CACHED_FULL_POOL_ART_DIR: str | None = None
+
+
 def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     """SIM-424: build the full-pool sampler from the on-disk engine-artifact bundle
     when opted in (``SIM_FULL_POOL`` env or the ``_full_pool`` sim-kwarg).  Returns
@@ -304,8 +319,14 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     outcome_type / event arrays only — the loader does the same I/O either way)
     and then SPLICE the shared views over the big numerical arrays. Net effect:
     per-worker resident-set drops by the size of the shared subset (~hundreds of
-    MB at production scale). When no views are present (no-DB tests, sandboxes
-    without the published bundle), this is a no-op — the disk path is unchanged.
+    MB at production scale).
+
+    SIM-402: the loaded artifacts AND the FullPoolSampler itself are cached
+    at module scope.  First call per worker pays the disk load + shared-view
+    splice + per-hand `_pool_meta` precompute; every later call reuses the
+    warm sampler (only the per-game rng is re-assigned).  This is the cache
+    the SLA verification revealed was missing — without it, a 100-iteration
+    /simulate request paid the ~6-9 s warm-up cost N times.
     """
     env = os.environ.get("SIM_FULL_POOL", "").strip().lower()
     env_on = env not in ("", "0", "false", "no", "off")
@@ -314,20 +335,33 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     pool_dir = _kwarg(spec, "_pool_dir", None) or os.environ.get(
         "BASEBALL_PLAY_POOL_DIR", "/data/play_pool"
     )
+    art_dir = os.path.join(pool_dir, "engine_artifacts")
     try:
+        global _CACHED_FULL_POOL_SAMPLER, _CACHED_FULL_POOL_ART_DIR
+        # Reuse the cached sampler when the artifact dir matches.  Re-seed its
+        # rng so the per-game seed still governs the FAISS / weighted draws
+        # (the per-game half-inning / PA state caches inside the sampler are
+        # reset at the loop's natural boundaries — `new_half_inning` /
+        # `battedball_new_pa` — so cross-game leakage is impossible).
+        if _CACHED_FULL_POOL_SAMPLER is not None and _CACHED_FULL_POOL_ART_DIR == art_dir:
+            _CACHED_FULL_POOL_SAMPLER.rng = np.random.default_rng(seed)
+            return _CACHED_FULL_POOL_SAMPLER
+
         from pipeline.batch.engine_artifacts import EngineArtifacts
         from simulation.batch_runner import _WORKER_SHARED
         from simulation.full_pool_sampler import FullPoolSampler
 
-        art = EngineArtifacts.load(os.path.join(pool_dir, "engine_artifacts"))
-        # SIM-403b: splice in any shared-memory views the parent published. The
-        # worker initializer (simulation.batch_runner._worker_init) populates
-        # _WORKER_SHARED["views"] with {flat_name -> ndarray-over-shm}; the
-        # attach is a defensive no-op when the dict is empty.
+        # SIM-402: pass the shared views to load() so the disk-load path SKIPS
+        # the big .npy reads when the parent has already published them into
+        # shared memory.  This is the meaningful cold-worker speedup — without
+        # it, 9 cold workers each reading ~150 MB from the Windows-Docker
+        # volume serialize into a ~500 s stall on a 10-iteration request.
         views = _WORKER_SHARED.get("views") or {}
-        if views:
-            art.attach_shared_views(views)
-        return FullPoolSampler(art, np.random.default_rng(seed))
+        art = EngineArtifacts.load(art_dir, shared_views=views)
+        sampler = FullPoolSampler(art, np.random.default_rng(seed))
+        _CACHED_FULL_POOL_SAMPLER = sampler
+        _CACHED_FULL_POOL_ART_DIR = art_dir
+        return sampler
     except Exception:
         return None
 

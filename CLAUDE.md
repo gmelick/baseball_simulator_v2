@@ -21,36 +21,65 @@
 
 ## 2. Current status (read this)
 
-- **Phases 1–5 are COMPLETE and CI-green on Python 3.11.15.** Unit suite green (the unit lane runs the
-  per-tile path; see below).
-- **Similarity-engine-wiring / full-pool realism epic (SIM-422→429) — LANDED on `master`.** This was
-  the major work since the Phase-5 close: the simulator now scores the **entire same-hand play pool**
-  by the applicable similarity engines (no top-K; the batter's hand is the only hard filter — the
-  pitcher hand self-zeroes via the pitcher engine) and is the **production default** (`SIM_FULL_POOL=1`
-  in the docker-compose `app` env; per-tile path is the graceful fallback and the unit-test default,
-  pinned off in `tests/conftest.py`). Full-pool box output is **MLB-realistic**: H/HR/2B/BB/K within
-  ~4% of MLB-2023, steals at MLB volume (SB/CS/attempts). **Runs run ~12% low** — a hits→runs
-  *conversion* residual (root cause: batted-ball-with-RISP / sequencing, NOT advancement or rate
-  stats; see §11). What landed: SIM-422 (fork-safe engine-artifact bundle), 423 (full-pool sampler +
-  perf gate), 424 (count-bucketed pitch draw), 425 (engine-backed baserunner advancement + productive
-  outs), 426 (engine-backed steal path), 428 (catcher framing), 429 (the flip + a run-conversion
-  investigation; the `SIM_RUN_CALIB` knob is neutral by design). **Next free ticket ID: SIM-430.**
-- **Phase 6 (Frontend Build) is COMPLETE** (SIM-378→401 + the hardening batch SIM-415→420 all
-  closed in the 2026-05-25/26 sprints). The frontend is React 18 + Vite + TypeScript strict with
-  the Day Summary page, 3-state game cards, Game page (play-by-play + WebSocket), per-player
-  boxscore + prop distributions, betting card + CLV chart, and managerial override v1/v2.
-  Caveat: data-bound views are unverified against a live backend; all E2E runs against mocked
-  responses (see live-env verification debt below).
-- **2026-05-28 closure batch (5 P1/P2 tickets):** SIM-403 (real parallelism — worker-count fix) +
-  **SIM-403b** (zero-copy `EngineArtifacts` numpy arrays across workers via shared memory) +
-  SIM-404 (stress / concurrency / leak suite, 5 slow-marked integration tests) +
-  SIM-409 (lineup-ingestion guard: `LineupNotIngestedError` → 503 + `Retry-After: 900`;
-  `lineup_ready: bool | None` on `GameCard`) +
-  SIM-414 (W/L/S + ER + per-runner R cross-surface reconciliation — sub-5-IP starter winner rule,
-  inning-reconstruction unearned runs, walk-forced R credit) +
-  **SIM-412** (home-field run advantage — `_apply_home_field_bias` flips HOME batted-ball outs to
-  singles at the default 0.025 rate, calibrated to MLB ~.535-.540 `home_win_pct`; env override
-  `SIM_HOME_FIELD_BIAS`). **Next free ticket ID: SIM-430.**
+- **Phases 1–5 + Phase 6 Frontend Build (SIM-378→401 + hardening 415→420) are COMPLETE and CI-green
+  on Python 3.11.15.** Unit suite green (the unit lane runs the per-tile path; see below).
+- **2026-05-28 closure batch — SIX P1/P2 tickets closed in one day:**
+  - SIM-403 — real parallelism (worker-count fix: `SIM_RUNNER_WORKERS` unset → `default_max_workers()`)
+  - **SIM-403b** — `EngineArtifacts.{extract,attach}_shared_views` for zero-copy across workers
+    via `multiprocessing.shared_memory` (publishes 41 arrays = ~166 MB in the lifespan)
+  - SIM-404 — stress/concurrency/leak suite (5 slow-marked integration tests)
+  - SIM-409 — `LineupNotIngestedError` → 503 + `Retry-After: 900`; `lineup_ready: bool | None` on `GameCard`
+  - SIM-414 — W/L/S + ER + per-runner R reconciliation (sub-5-IP starter rule, inning-reconstruction
+    unearned runs, walk-forced R credit)
+  - **SIM-412** — home-field run advantage (`_apply_home_field_bias` flips HOME batted-ball outs
+    to singles at default 0.025; env override `SIM_HOME_FIELD_BIAS`).  Tuning note: 4×400-sim
+    harness run shows current default slightly overshoots (delta R = +0.198 vs target +0.13);
+    a future tweak to ~0.017 would land closer.
+- **Similarity-engine-wiring / full-pool realism epic (SIM-422→429) — LANDED on `master`.** The
+  simulator scores the **entire same-hand play pool** by the applicable similarity engines (no top-K;
+  the batter's hand is the only hard filter — the pitcher hand self-zeroes via the pitcher engine)
+  and is the **production default** (`SIM_FULL_POOL=1` in the docker-compose `app` env; per-tile
+  path is the fallback and unit-test default, pinned off in `tests/conftest.py`).
+- **DP-rate bug fix propagated 2026-05-28:** the player-profile computor's
+  `dp_turned = outs_on_pitch >= 2` always-False bug was fixed and the 5.7-hour 2017-2025
+  recompute completed.  Per-season DP rates now 42-48% (was 0.0).  Actor embeddings rebuilt
+  (`fielder_emb` = 11346 × 51 features).  Box output now MLB-realistic: H/HR/2B/BB/K within
+  ~3-5% of MLB-2023, steals match MLB volume.  **Runs run ~7-8% low** (down from ~12% pre-fix) —
+  remaining hits→runs *conversion* residual lives in batted-ball-with-RISP / sequencing
+  (see §11). **Next free ticket ID: SIM-430.**
+
+- **SIM-402 — IN PROGRESS as of 2026-05-28 mid-day; UNCOMMITTED code changes on `master`-like
+  state.** Live API was probed at `http://localhost:8000/api/games/{pk}/simulate`.
+  - Warm n=1 served in **1.7s** (under 2s SLA) after a SIM-402 per-worker cache landed.
+  - n=10 still **498-507s** — way over expected.  Two SIM-402 code changes are live on disk
+    (volume-mounted into the running container) but the cold-worker case remains broken:
+    1. `simulation/production_factory.py::_build_full_pool_sampler` now caches the loaded
+       `EngineArtifacts` + `FullPoolSampler` at module-global scope, re-seeding only the rng
+       per call.  This fixed the warm-path (per-seed disk reload was the warm-path bug).
+    2. `pipeline/batch/engine_artifacts.py::EngineArtifacts.load` got a `shared_views`
+       parameter — when present, `np.load` calls are SKIPPED for the big numeric arrays
+       (geom / sit / id columns / actor_emb vecs/mean/std).  Object-dtype columns and small
+       dict metadata still disk-load.
+  - **The second fix did NOT move n=10**, so the cold-worker bottleneck is NOT disk I/O on
+    EngineArtifacts.  Remaining suspects: `_default_sampler_builder` opening a fresh
+    `PlayPoolSampler` (DuckDB read-only connection) PER SEED; `_default_deriver_builder`
+    loading provider + pitch_norm + battedball_norm PER SEED; or DuckDB serializing
+    ~10 parallel connection-opens to `/data/baseball_sim.duckdb` on the Windows-Docker
+    volume.  Pre-warming workers in the lifespan is another lever (submit 10 dummy 1-iter
+    jobs at startup so all worker caches populate before real load arrives).
+
+## 2a. Operational caveats (Windows + Docker)
+
+- **`scripts/` is NOT volume-mounted** into the running app container; only `api/`, `pipeline/`,
+  `similarity/`, `simulation/`, `db/` are (see `docker-compose.yml` line ~110).  Edits to
+  `scripts/` are picked up by the running container only after `docker compose build app` +
+  `docker compose up -d app` (recreate).  Edits to the mounted dirs are picked up by
+  `docker compose restart app` alone.
+- **Git Bash on Windows mangles container paths.** Any `docker compose exec` / `docker compose run`
+  command from Git Bash that uses a Linux container path like `/app/scripts/foo.py` gets translated
+  to `C:/Program Files/Git/app/scripts/foo.py` before Docker sees it.  Prefix with
+  `MSYS_NO_PATHCONV=1` to disable the translation.  Tell: the error message includes
+  `C:/Program Files/Git/`.
 - **Open follow-ons (tracked, blocked on data/infra, not shipped hollow):** SIM-427 engine-backed
   manager (needs a per-(team,season) bullpen roster built from raw Statcast — no role/team source in
   `derived.*`); SIM-425b Fielder RBF (needs per-row fielder identity baked into the batted-ball
@@ -59,9 +88,9 @@
   SIM-429 granular run-conversion calibration + the CLV backtest (the larger sim harness landed
   2026-05-28 as `scripts/sim_stats.py` v2 — defaults to 200 sims/game, reports per-channel + home/
   away splits + R standard error; calibration sweeps + CLV backtest pending the live-odds path).
-- **Live-env verification debt** (open, mostly waiting on the play-pool rebuild that runs after the
-  nightly profile computor finishes): SIM-402 (real-DB SLA), SIM-406 (fitted CalibrationReport
-  over real data), SIM-407 (prop-PMF validation + ablation), SIM-408 (DuckDB 11-engine provisioning).
+- **Live-env verification debt** — SIM-402 IS IN PROGRESS (see §2 above; warm path under SLA but
+  cold-worker case remains broken); SIM-406 (fitted CalibrationReport over real data), SIM-407
+  (prop-PMF validation + ablation), SIM-408 (DuckDB 11-engine provisioning) still open.
 - Canonical git repo: this directory. Primary shell: **Windows Command Prompt (cmd.exe)**;
   development + tests run through Docker (`docker compose run --rm app ...`).
 
