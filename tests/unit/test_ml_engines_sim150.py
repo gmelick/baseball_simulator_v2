@@ -89,12 +89,12 @@ class TestCatcherV2CalibrationRegression(unittest.TestCase):
     def _synthetic_catcher_matrix(self, n: int = 600, seed: int = 150) -> np.ndarray:
         """A realistic, well-separated synthetic catcher feature matrix
         spanning every catcher sub-score group (framing/blocking/
-        throwing/deterrence/offense), z-scored as the calibrator expects."""
+        throwing/deterrence), z-scored as the calibrator expects.
+        SIM-408: the Offense sub-score was TRIMmed from the engine."""
         from similarity.engines.catcher_similarity import (
             BLOCKING_FEATURES,
             DETERRENCE_FEATURES,
             FRAMING_FEATURES,
-            OFFENSE_FEATURES,
             THROWING_FEATURES,
         )
 
@@ -103,7 +103,6 @@ class TestCatcherV2CalibrationRegression(unittest.TestCase):
             + len(BLOCKING_FEATURES)
             + len(THROWING_FEATURES)
             + len(DETERRENCE_FEATURES)
-            + len(OFFENSE_FEATURES)
         )
         rng = np.random.default_rng(seed)
         # Genuine between-catcher spread (well separated, not collapsed):

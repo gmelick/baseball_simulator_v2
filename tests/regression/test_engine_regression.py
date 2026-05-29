@@ -216,11 +216,10 @@ class TestCatcherEngineProperties:
         assert ab is not None and ba is not None
         assert abs(ab.score - ba.score) <= SYMMETRY_TOLERANCE
 
-    def test_five_sub_scores_present(self, catcher_engine):
-        """SIM-072 v2: catcher composite is a 5-sub-score blend.
-
-        Framing 45 + Blocking 20 + Throwing/Execution 12 + Deterrence 8 +
-        Offense 15 = 100.
+    def test_four_sub_scores_present(self, catcher_engine):
+        """SIM-408: catcher composite is a 4-sub-score defensive blend
+        (Offense TRIMmed). Framing + Blocking + Throwing/Execution + Deterrence,
+        renormalized over 0.85.
         """
         ids = catcher_engine.profile_ids()
         cid, season = ids[0]
@@ -231,7 +230,6 @@ class TestCatcherEngineProperties:
             "blocking_score",
             "throwing_score",
             "deterrence_score",
-            "offense_score",
         ):
             val = getattr(r, attr)
             assert math.isfinite(val)
@@ -618,41 +616,35 @@ class TestWeightConstants:
         assert abs(total - 1.0) < 1e-9, f"steal weights sum to {total}"
 
     def test_catcher_weights_sum_to_one(self):
-        """SIM-072 v2: 5-sub-score composite must sum to 1.0.
-
-        Framing 45 + Blocking 20 + Throwing/Execution 12 + Deterrence 8 +
-        Offense 15 = 100.
-        """
+        """SIM-408: 4-sub-score defensive composite must sum to 1.0 (Offense
+        TRIMmed; the 45/20/12/8 split renormalizes over 0.85)."""
         from similarity.engines.catcher_similarity import (
             WEIGHT_BLOCKING,
             WEIGHT_DETERRENCE,
             WEIGHT_FRAMING,
-            WEIGHT_OFFENSE,
             WEIGHT_THROWING,
         )
 
-        total = (
-            WEIGHT_FRAMING + WEIGHT_BLOCKING + WEIGHT_THROWING + WEIGHT_DETERRENCE + WEIGHT_OFFENSE
-        )
+        total = WEIGHT_FRAMING + WEIGHT_BLOCKING + WEIGHT_THROWING + WEIGHT_DETERRENCE
         assert abs(total - 1.0) < 1e-9, f"catcher weights sum to {total}"
 
     def test_catcher_v2_split_weights(self):
-        """SIM-072: Throwing was split 20% → 12% execution + 8% deterrence."""
+        """SIM-408: Offense (15%) TRIMmed; the 45/20/12/8 defensive split
+        renormalizes over 0.85. Throwing stays split 12% execution + 8%
+        deterrence (combined 0.20/0.85)."""
         from similarity.engines.catcher_similarity import (
             WEIGHT_BLOCKING,
             WEIGHT_DETERRENCE,
             WEIGHT_FRAMING,
-            WEIGHT_OFFENSE,
             WEIGHT_THROWING,
         )
 
-        assert WEIGHT_FRAMING == 0.45
-        assert WEIGHT_BLOCKING == 0.20
-        assert WEIGHT_THROWING == 0.12
-        assert WEIGHT_DETERRENCE == 0.08
-        assert WEIGHT_OFFENSE == 0.15
-        # The two throwing-derived sub-scores must still combine to 20%.
-        assert abs((WEIGHT_THROWING + WEIGHT_DETERRENCE) - 0.20) < 1e-9
+        assert abs(WEIGHT_FRAMING - 0.45 / 0.85) < 1e-9
+        assert abs(WEIGHT_BLOCKING - 0.20 / 0.85) < 1e-9
+        assert abs(WEIGHT_THROWING - 0.12 / 0.85) < 1e-9
+        assert abs(WEIGHT_DETERRENCE - 0.08 / 0.85) < 1e-9
+        # The two throwing-derived sub-scores still combine to 0.20/0.85.
+        assert abs((WEIGHT_THROWING + WEIGHT_DETERRENCE) - 0.20 / 0.85) < 1e-9
 
     def test_pitcher_steal_weights_sum_to_one(self):
         # SIM-408: Delivery + Pickoff sub-scores removed (not in Statcast);
@@ -672,19 +664,17 @@ class TestWeightConstants:
         assert abs(total - 1.0) < 1e-9, f"manager weights sum to {total}"
 
     def test_catcher_framing_dominates(self):
-        """Framing is the highest-weight sub-score (45%) per spec."""
+        """Framing is the highest-weight sub-score per spec."""
         from similarity.engines.catcher_similarity import (
             WEIGHT_BLOCKING,
             WEIGHT_DETERRENCE,
             WEIGHT_FRAMING,
-            WEIGHT_OFFENSE,
             WEIGHT_THROWING,
         )
 
         assert WEIGHT_FRAMING > WEIGHT_BLOCKING
         assert WEIGHT_FRAMING > WEIGHT_THROWING
         assert WEIGHT_FRAMING > WEIGHT_DETERRENCE
-        assert WEIGHT_FRAMING > WEIGHT_OFFENSE
 
     def test_manager_eb_prior(self):
         from similarity.engines.manager_similarity import EB_N_PRIOR

@@ -92,5 +92,15 @@ CREATE TABLE IF NOT EXISTS derived.pitcher_steal_metrics (
 
 CREATE INDEX IF NOT EXISTS idx_pitcher_steal_season ON derived.pitcher_steal_metrics(season);
 
+-- ---------------------------------------------------------------------------
+-- 4. derived.catcher_season_metrics — zone-framing called-strike rates
+--    The catcher engine's FRAMING sub-score needs shadow/heart zone strike
+--    rates; the framing pass now emits them. (All other engine-expected catcher
+--    columns are derived in the engine's load SELECT from existing counts; the
+--    Offense sub-score was TRIMmed.) ADD COLUMN IF NOT EXISTS for existing DBs.
+-- ---------------------------------------------------------------------------
+ALTER TABLE derived.catcher_season_metrics ADD COLUMN IF NOT EXISTS shadow_zone_strike_rate FLOAT;
+ALTER TABLE derived.catcher_season_metrics ADD COLUMN IF NOT EXISTS heart_zone_strike_rate FLOAT;
+
 INSERT OR IGNORE INTO migration_history (migration_id, description)
 VALUES ('0011', 'SIM-408 engine/DuckDB schema reconciliation: derived.at_bat_situations (situation engine) + (appended) baserunner_steal_metrics / pitcher_steal_metrics + catcher/manager engine-vocabulary columns');

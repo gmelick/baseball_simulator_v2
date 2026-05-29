@@ -2647,6 +2647,12 @@ class PlayerProfileComputor:
         df["zone_inside"] = (df["pitch_side"] > 0.4).astype(int)
         df["zone_outside"] = (df["pitch_side"] < -0.4).astype(int)
 
+        # SIM-408: heart (clearly in-zone) vs shadow (just off the edge, where
+        # framing skill lives) buckets for the catcher engine's zone-framing
+        # features (shadow_zone_strike_rate / heart_zone_strike_rate).
+        df["zone_heart"] = df["in_zone"]
+        df["zone_shadow"] = ((df["in_zone"] == 0) & (df["zone_distance"] <= 0.6)).astype(int)
+
         # Fit the logistic model: P(called_strike) = f(location, count, handedness)
         feature_cols = [
             "plate_x",
@@ -2702,6 +2708,20 @@ class PlayerProfileComputor:
                     "expected_strike",
                     lambda x: x[df.loc[x.index, "zone_outside"] == 1].sum(),
                 ),
+                # SIM-408: heart/shadow called-strike rates (counts here; rate below)
+                strikes_heart=("is_strike", lambda x: x[df.loc[x.index, "zone_heart"] == 1].sum()),
+                pitches_heart=(
+                    "is_strike",
+                    lambda x: int((df.loc[x.index, "zone_heart"] == 1).sum()),
+                ),
+                strikes_shadow=(
+                    "is_strike",
+                    lambda x: x[df.loc[x.index, "zone_shadow"] == 1].sum(),
+                ),
+                pitches_shadow=(
+                    "is_strike",
+                    lambda x: int((df.loc[x.index, "zone_shadow"] == 1).sum()),
+                ),
             )
             .reset_index()
         )
@@ -2720,6 +2740,14 @@ class PlayerProfileComputor:
         framing_agg["framing_outside"] = (
             framing_agg["strikes_outside"] - framing_agg["expected_outside"]
         )
+        # SIM-408: zone-framing strike rates (NaN when the bucket is empty;
+        # the engine COALESCEs NULL → 0 / falls back to league average).
+        framing_agg["heart_zone_strike_rate"] = framing_agg["strikes_heart"] / framing_agg[
+            "pitches_heart"
+        ].replace(0, np.nan)
+        framing_agg["shadow_zone_strike_rate"] = framing_agg["strikes_shadow"] / framing_agg[
+            "pitches_shadow"
+        ].replace(0, np.nan)
 
         # Store framing results in a temp table for later aggregation
         self._conn.execute("DROP TABLE IF EXISTS _tmp_framing")
@@ -4165,7 +4193,8 @@ class PlayerProfileComputor:
                     expected_called_strikes FLOAT, strikes_above_average FLOAT,
                     framing_runs FLOAT,
                     framing_low FLOAT, framing_high FLOAT,
-                    framing_inside FLOAT, framing_outside FLOAT
+                    framing_inside FLOAT, framing_outside FLOAT,
+                    shadow_zone_strike_rate FLOAT, heart_zone_strike_rate FLOAT
                 )
             """,
             "_tmp_blocking": """
@@ -4230,6 +4259,9 @@ class PlayerProfileComputor:
                 f.framing_high,
                 f.framing_inside,
                 f.framing_outside,
+                -- SIM-408: zone-framing strike rates (catcher engine)
+                f.shadow_zone_strike_rate,
+                f.heart_zone_strike_rate,
 
                 -- Blocking
                 b.expected_pbwp,

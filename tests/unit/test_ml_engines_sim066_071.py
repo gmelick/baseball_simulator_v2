@@ -194,11 +194,9 @@ class TestCatcherEngine(unittest.TestCase):
             DETERRENCE_FEATURES,
             EB_N_PRIOR,
             FRAMING_FEATURES,
-            OFFENSE_FEATURES,
             RBF_SIGMA_BLOCKING,
             RBF_SIGMA_DETERRENCE,
             RBF_SIGMA_FRAMING,
-            RBF_SIGMA_OFFENSE,
             RBF_SIGMA_THROWING,
             THROWING_FEATURES,
             CatcherPartition,
@@ -218,7 +216,6 @@ class TestCatcherEngine(unittest.TestCase):
             base_bl = rng.beta(8, 2, len(BLOCKING_FEATURES))
             base_th = rng.normal(0.0, 0.03, len(THROWING_FEATURES))
             base_det = rng.uniform(0.05, 0.12, len(DETERRENCE_FEATURES))
-            base_of = rng.beta(5, 5, len(OFFENSE_FEATURES))
 
             for season in seasons:
                 n_pitches = int(rng.integers(500, 4000))
@@ -243,9 +240,6 @@ class TestCatcherEngine(unittest.TestCase):
                             0.0,
                             1.0,
                         ).astype(np.float64),
-                        offense_vec=np.clip(
-                            base_of + rng.normal(0, 0.02, len(OFFENSE_FEATURES)), 0, 1
-                        ).astype(np.float64),
                         eb_alpha=float(n_pitches / (n_pitches + EB_N_PRIOR)),
                     )
                 )
@@ -258,7 +252,6 @@ class TestCatcherEngine(unittest.TestCase):
             "blocking": {},
             "throwing": {},
             "deterrence": {},
-            "offense": {},
         }
         engine._normalizer = FeatureNormalizer()
         engine._shrinkage = EmpiricalBayesShrinkage()
@@ -275,9 +268,6 @@ class TestCatcherEngine(unittest.TestCase):
         engine._deterrence_rbf = WeightedRBFSimilarity(
             RBF_SIGMA_DETERRENCE, np.array([w for _, w in DETERRENCE_FEATURES])
         )
-        engine._offense_rbf = WeightedRBFSimilarity(
-            RBF_SIGMA_OFFENSE, np.array([w for _, w in OFFENSE_FEATURES])
-        )
         engine._normalizer.fit(profiles)
         engine._partition.build(profiles, engine._normalizer)
         return engine
@@ -289,8 +279,8 @@ class TestCatcherEngine(unittest.TestCase):
             self.assertGreaterEqual(r.score, 0.0)
             self.assertLessEqual(r.score, 1.0 + 1e-9)
 
-    def test_five_sub_scores_present(self):
-        """SIM-072 v2: deterrence_score joined the prior four sub-scores."""
+    def test_four_sub_scores_present(self):
+        """SIM-408: Offense sub-score TRIMmed; 4 defensive sub-scores remain."""
         engine = self._make_engine()
         results = engine.query(1, 2023)
         self.assertGreater(len(results), 0)
@@ -299,7 +289,6 @@ class TestCatcherEngine(unittest.TestCase):
         self.assertIsNotNone(r.blocking_score)
         self.assertIsNotNone(r.throwing_score)
         self.assertIsNotNone(r.deterrence_score)
-        self.assertIsNotNone(r.offense_score)
 
     def test_symmetry(self):
         engine = self._make_engine()

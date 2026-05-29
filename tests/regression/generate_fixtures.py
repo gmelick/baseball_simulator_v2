@@ -138,11 +138,9 @@ def _build_catcher_engine():
         BLOCKING_FEATURES,
         DETERRENCE_FEATURES,
         FRAMING_FEATURES,
-        OFFENSE_FEATURES,
         RBF_SIGMA_BLOCKING,
         RBF_SIGMA_DETERRENCE,
         RBF_SIGMA_FRAMING,
-        RBF_SIGMA_OFFENSE,
         RBF_SIGMA_THROWING,
         THROWING_FEATURES,
         CatcherPartition,
@@ -166,7 +164,6 @@ def _build_catcher_engine():
             throwing_vec=rng.uniform(0.0, 1.0, len(THROWING_FEATURES)),
             # SIM-072: steal_attempt_rate_against ~ [0.02, 0.18] for MLB catchers
             deterrence_vec=rng.uniform(0.02, 0.18, len(DETERRENCE_FEATURES)),
-            offense_vec=rng.uniform(0.0, 1.0, len(OFFENSE_FEATURES)),
             eb_alpha=1.0,
         )
         for i in range(n)
@@ -188,9 +185,6 @@ def _build_catcher_engine():
     )
     engine._deterrence_rbf = WeightedRBFSimilarity(
         RBF_SIGMA_DETERRENCE, np.array([w for _, w in DETERRENCE_FEATURES])
-    )
-    engine._offense_rbf = WeightedRBFSimilarity(
-        RBF_SIGMA_OFFENSE, np.array([w for _, w in OFFENSE_FEATURES])
     )
     return engine, "catcher"
 

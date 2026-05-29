@@ -556,6 +556,10 @@ CREATE TABLE IF NOT EXISTS derived.catcher_season_metrics (
     framing_inside              FLOAT,      -- on inside-edge pitches
     framing_outside             FLOAT,      -- on outside-edge pitches
 
+    -- SIM-408: zone-framing called-strike rates for the catcher engine
+    shadow_zone_strike_rate     FLOAT,      -- called-strike rate just off the edge (framing skill)
+    heart_zone_strike_rate      FLOAT,      -- called-strike rate clearly in-zone (low signal)
+
     -- =========================================================================
     -- BLOCKING
     -- =========================================================================
