@@ -4236,7 +4236,21 @@ class PlayerProfileComputor:
         """)
 
         self._conn.execute(f"""
-            INSERT INTO derived.catcher_season_metrics
+            INSERT INTO derived.catcher_season_metrics (
+                player_id, season,
+                pitches_received_total, called_pitches, called_strikes,
+                expected_called_strikes, strikes_above_average, framing_runs,
+                framing_low, framing_high, framing_inside, framing_outside,
+                shadow_zone_strike_rate, heart_zone_strike_rate,
+                expected_pbwp, actual_pbwp, blocks_above_average, blocking_runs,
+                blocks_aa_bounced, blocks_aa_high, blocks_aa_lateral,
+                pop_time_mean, pop_time_std, arm_strength_mean,
+                sb_attempts_faced, cs_total, cs_rate, sb_allowed_rate,
+                sb_attempts_2b, cs_rate_2b, sb_attempts_3b, cs_rate_3b,
+                steal_attempt_rate_against,
+                pickoff_attempts, pickoff_successes, pickoff_rate,
+                below_minimum_sample, updated_at
+            )
 
             SELECT
                 COALESCE(f.catcher_id, b.catcher_id, t.catcher_id) AS player_id,
