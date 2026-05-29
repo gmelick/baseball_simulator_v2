@@ -1,3 +1,24 @@
+# Phase 7 — SIM-408 VERIFIED LIVE: build_all_engines 11/11 (+ SIM-402 pre-warm) — 2026-05-29
+**Authors: Data Engineer (Agent 4), Backend Developer (Agent 5), QA/DevOps (Agent 9)**
+
+The SIM-408 reconciliation was applied + validated on the live Docker stack.
+Migration 0011 applied to `/data/baseball_sim.duckdb` (non-destructive — manager
+switched from DROP+recreate to ALTER ADD COLUMN); a 2024 validation rebuild ran
+the new/changed builders against real raw Statcast in ~55s and populated every
+new table with MLB-plausible values (at_bat_situations 185,485 rows; baserunner_
+steal 122 above-min; pitcher_steal 600; manager 30; catcher zone rates present).
+The serving app now logs **`build_all_engines: 11/11 engines built`** (was 7/11)
+and **`SIM-402: pre-warmed 1 sim-runner worker(s)`** — closing the SIM-408 and
+SIM-402 live-env debts on this stack.
+
+Running it live shook out two more divergences (fixed): the catcher aggregation's
+positional INSERT misaligned against the ALTER-appended zone columns (→ explicit
+38-column list), and the situation engine's park-factor join referenced a
+non-existent `pf.run_factor` (→ `factor_type='R'` + `regressed_factor`). The new
+tables currently hold 2024 only; a full all-seasons `make profile-computor`
+rebuild is the production follow-up (now de-risked — the SQL is proven on real
+data).
+
 # Phase 7 — SIM-408 engine↔DuckDB reconciliation COMPLETE (all 5 engines) — 2026-05-29
 **Authors: Data Engineer (Agent 4), ML Engineer (Agent 3), Backend Developer (Agent 5)**
 
