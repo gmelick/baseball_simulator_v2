@@ -104,39 +104,32 @@ ALTER TABLE derived.catcher_season_metrics ADD COLUMN IF NOT EXISTS heart_zone_s
 
 -- ---------------------------------------------------------------------------
 -- 5. derived.manager_season_metrics — reconcile to the engine vocabulary
---    The prior columns (sp_pitch_count_mean / ph_rate_* / bullpen_leverage_mapping)
---    are NOT read by the engine; the manager engine needs the
---    usage/aggression/platoon vocabulary. This is a derived table fully rebuilt
---    by the computor, so we DROP + recreate (disjoint column sets). USAGE cols
---    are SIM-427-gated (NULL until the bullpen roster exists).
+--    The manager engine needs the usage/aggression/platoon column set; the prior
+--    columns (sp_pitch_count_mean / ph_rate_* / bullpen_leverage_mapping) are NOT
+--    read by anything, so they're left in place (harmless, unused) and the new
+--    engine-vocabulary columns are ADDED — a NON-DESTRUCTIVE migration. The
+--    computor's explicit-column INSERT OR REPLACE populates the new columns; the
+--    dead old columns become NULL on rebuilt rows. USAGE cols are SIM-427-gated
+--    (NULL until the bullpen roster exists). Fresh builds from
+--    02_duckdb_schema.sql get only the new vocabulary.
 -- ---------------------------------------------------------------------------
-DROP TABLE IF EXISTS derived.manager_season_metrics;
-CREATE TABLE IF NOT EXISTS derived.manager_season_metrics (
-    manager_id                              INTEGER     NOT NULL,
-    season                                  SMALLINT    NOT NULL,
-    sample_games                            INTEGER     NOT NULL DEFAULT 0,
-    sample_starter_decisions                INTEGER     NOT NULL DEFAULT 0,
-    starter_avg_pitch_count                 FLOAT,
-    starter_pull_pct_before_100             FLOAT,
-    closer_entry_leverage_index             FLOAT,
-    high_leverage_reliever_rate             FLOAT,
-    opener_usage_rate                       FLOAT,
-    bulk_innings_rate                       FLOAT,
-    steal_order_rate_per_1b_opp             FLOAT,
-    hit_and_run_rate_per_opportunity        FLOAT,
-    sac_bunt_rate_high_leverage             FLOAT,
-    sac_bunt_rate_low_leverage              FLOAT,
-    squeeze_play_rate_per_3b_opp            FLOAT,
-    pinch_hit_rate_vs_same_hand             FLOAT,
-    pinch_hit_rate_high_leverage            FLOAT,
-    defensive_sub_rate_late_innings         FLOAT,
-    double_switch_rate_per_reliever_change  FLOAT,
-    platoon_advantage_exploitation_rate     FLOAT,
-    below_minimum_sample                    BOOLEAN     NOT NULL DEFAULT FALSE,
-    updated_at                              TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (manager_id, season)
-);
-CREATE INDEX IF NOT EXISTS idx_msm_season ON derived.manager_season_metrics(season);
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS sample_starter_decisions INTEGER;
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS starter_avg_pitch_count FLOAT;
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS starter_pull_pct_before_100 FLOAT;
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS closer_entry_leverage_index FLOAT;
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS high_leverage_reliever_rate FLOAT;
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS opener_usage_rate FLOAT;
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS bulk_innings_rate FLOAT;
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS steal_order_rate_per_1b_opp FLOAT;
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS hit_and_run_rate_per_opportunity FLOAT;
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS sac_bunt_rate_high_leverage FLOAT;
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS sac_bunt_rate_low_leverage FLOAT;
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS squeeze_play_rate_per_3b_opp FLOAT;
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS pinch_hit_rate_vs_same_hand FLOAT;
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS pinch_hit_rate_high_leverage FLOAT;
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS defensive_sub_rate_late_innings FLOAT;
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS double_switch_rate_per_reliever_change FLOAT;
+ALTER TABLE derived.manager_season_metrics ADD COLUMN IF NOT EXISTS platoon_advantage_exploitation_rate FLOAT;
 
 INSERT OR IGNORE INTO migration_history (migration_id, description)
 VALUES ('0011', 'SIM-408 engine/DuckDB schema reconciliation: derived.at_bat_situations (situation engine) + (appended) baserunner_steal_metrics / pitcher_steal_metrics + catcher/manager engine-vocabulary columns');
