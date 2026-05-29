@@ -95,6 +95,8 @@ dmypy.json
 *.tmp
 *.bak
 *.orig
+# sim_stats.py / harness measurement dumps (SIM-429) — run artifacts, not source
+scripts/sim_stats*.json
 
 # ---------------------------------------------------------------------------
 # JavaScript / Node (Phase 6 frontend — SIM-379)

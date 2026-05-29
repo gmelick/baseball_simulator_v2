@@ -33,8 +33,6 @@ import pytest
 def steal_engine():
     """BaserunnerStealSimilarityEngine — 12 synthetic profiles, seed=2026."""
     from similarity.engines.baserunner_steal_similarity import (
-        JUMP_FEATURES,
-        RBF_SIGMA_JUMP,
         RBF_SIGMA_SUCCESS,
         RBF_SIGMA_TENDENCY,
         SUCCESS_FEATURES,
@@ -49,7 +47,6 @@ def steal_engine():
     rng = np.random.default_rng(2026)
     n = 12
     t_dim = len(TENDENCY_FEATURES)
-    j_dim = len(JUMP_FEATURES)
     s_dim = len(SUCCESS_FEATURES)
 
     profiles = [
@@ -59,7 +56,6 @@ def steal_engine():
             sample_steal_attempts=40 + i * 3,
             sample_first_base_opps=150 + i * 10,
             tendency_vec=rng.uniform(0.05, 0.95, t_dim),
-            jump_vec=rng.uniform(100.0, 350.0, j_dim),
             success_vec=rng.uniform(0.55, 0.90, s_dim),
             eb_alpha=1.0,
         )
@@ -74,9 +70,6 @@ def steal_engine():
     engine._partition.build(profiles, engine._normalizer)
     engine._tend_rbf = WeightedRBFSimilarity(
         RBF_SIGMA_TENDENCY, np.array([w for _, w in TENDENCY_FEATURES])
-    )
-    engine._jump_rbf = WeightedRBFSimilarity(
-        RBF_SIGMA_JUMP, np.array([w for _, w in JUMP_FEATURES])
     )
     engine._succ_rbf = WeightedRBFSimilarity(
         RBF_SIGMA_SUCCESS, np.array([w for _, w in SUCCESS_FEATURES])
@@ -96,11 +89,9 @@ def catcher_engine():
         BLOCKING_FEATURES,
         DETERRENCE_FEATURES,
         FRAMING_FEATURES,
-        OFFENSE_FEATURES,
         RBF_SIGMA_BLOCKING,
         RBF_SIGMA_DETERRENCE,
         RBF_SIGMA_FRAMING,
-        RBF_SIGMA_OFFENSE,
         RBF_SIGMA_THROWING,
         THROWING_FEATURES,
         CatcherPartition,
@@ -126,7 +117,6 @@ def catcher_engine():
             # SIM-072: steal_attempt_rate_against typically lives in [0.02, 0.18]
             # for MLB catchers; uniform draw mirrors that envelope.
             deterrence_vec=rng.uniform(0.02, 0.18, len(DETERRENCE_FEATURES)),
-            offense_vec=rng.uniform(0.0, 1.0, len(OFFENSE_FEATURES)),
             eb_alpha=1.0,
         )
         for i in range(n)
@@ -151,9 +141,6 @@ def catcher_engine():
     engine._deterrence_rbf = WeightedRBFSimilarity(
         RBF_SIGMA_DETERRENCE, np.array([w for _, w in DETERRENCE_FEATURES])
     )
-    engine._offense_rbf = WeightedRBFSimilarity(
-        RBF_SIGMA_OFFENSE, np.array([w for _, w in OFFENSE_FEATURES])
-    )
     return engine
 
 
@@ -166,12 +153,8 @@ def catcher_engine():
 def pitcher_steal_engine():
     """PitcherStealSimilarityEngine — 12 synthetic profiles, seed=2026."""
     from similarity.engines.pitcher_steal_similarity import (
-        DELIVERY_FEATURES,
         OUTCOME_FEATURES,
-        PICKOFF_FEATURES,
-        RBF_SIGMA_DELIVERY,
         RBF_SIGMA_OUTCOME,
-        RBF_SIGMA_PICKOFF,
         FeatureNormalizer,
         PitcherStealPartition,
         PitcherStealProfile,
@@ -189,8 +172,6 @@ def pitcher_steal_engine():
             throws="R" if i % 2 == 0 else "L",
             sample_baserunner_events=60 + i * 5,
             sample_steal_attempts_against=15 + i * 2,
-            delivery_vec=rng.uniform(0.9, 2.0, len(DELIVERY_FEATURES)),
-            pickoff_vec=rng.uniform(0.0, 0.3, len(PICKOFF_FEATURES)),
             outcome_vec=rng.uniform(0.0, 1.0, len(OUTCOME_FEATURES)),
             eb_alpha=1.0,
         )
@@ -204,12 +185,6 @@ def pitcher_steal_engine():
     engine._normalizer.fit(profiles)
     engine._partition = PitcherStealPartition()
     engine._partition.build(profiles, engine._normalizer)
-    engine._del_rbf = WeightedRBFSimilarity(
-        RBF_SIGMA_DELIVERY, np.array([w for _, w in DELIVERY_FEATURES])
-    )
-    engine._pick_rbf = WeightedRBFSimilarity(
-        RBF_SIGMA_PICKOFF, np.array([w for _, w in PICKOFF_FEATURES])
-    )
     engine._out_rbf = WeightedRBFSimilarity(
         RBF_SIGMA_OUTCOME, np.array([w for _, w in OUTCOME_FEATURES])
     )

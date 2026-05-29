@@ -87,6 +87,11 @@ services:
       # ``target: runtime`` for a leaner image.
       target: dev
     restart: unless-stopped
+    # SIM-403b publishes ~166 MB of engine-artifact arrays into
+    # multiprocessing.shared_memory (backed by /dev/shm); Docker's default
+    # /dev/shm is only 64 MB, which overflows ("No space left on device") and
+    # wedges the SIM-402 pre-warm. Give the app a roomy shared-memory segment.
+    shm_size: "1gb"
     env_file:
       - .env
     environment:
@@ -138,7 +143,12 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      # SIM-402: startup now builds the 11 engines AND pre-warms the worker pool
+      # (bounded, but can legitimately take a minute+ on a cold box). A generous
+      # start_period lets a slow-but-healthy warm finish without racking up
+      # unhealthy strikes; a successful /health still flips the container healthy
+      # immediately once the app yields.
+      start_period: 180s
     networks:
       - baseball_net
 

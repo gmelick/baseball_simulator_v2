@@ -5,8 +5,8 @@ Dedicated unit tests for ``BaserunnerStealSimilarityEngine``
 
 The baserunner-steal engine was the only similarity engine without its
 own dedicated test file (it was only exercised incidentally inside
-``test_ml_engines_sim066_071.py``).  This module pins down 9 invariants
-of the RBF engine's scoring contract.
+``test_ml_engines_sim066_071.py``).  This module pins down invariants of
+the RBF engine's scoring contract.
 
 All engines are tested without DuckDB using in-memory profile
 construction (via ``__new__`` to bypass the DB-dependent constructor),
@@ -20,6 +20,12 @@ Notes on the engine's real behaviour (learned from the source):
     candidates down.  A self/identical pair therefore only reaches the
     documented maximum (1.0) when ``eb_alpha == 1.0``.
   * The top-N limit is the keyword ``n`` (not ``k``).
+
+SIM-408: the engine's Jump / First-Step sub-score (reaction_time_ms /
+burst_distance_ft / break_angle_deg) was removed — those biomech features
+are not published by Statcast, so derived.baserunner_steal_metrics cannot
+supply them.  The engine now blends only Tendency + Success, and the
+tendency feature vector is 2-dim (steal_attempt_rate, steal_attempt_rate_2b).
 
 Run with:
     pytest tests/unit/test_baserunner_steal_engine.py -v
@@ -58,8 +64,6 @@ def _make_engine(
         self/identical max-score invariant).
     """
     from similarity.engines.baserunner_steal_similarity import (
-        JUMP_FEATURES,
-        RBF_SIGMA_JUMP,
         RBF_SIGMA_SUCCESS,
         RBF_SIGMA_TENDENCY,
         SUCCESS_FEATURES,
@@ -78,7 +82,6 @@ def _make_engine(
 
     for pid in range(1, n_runners + 1):
         base_tend = rng.beta(3, 7, len(TENDENCY_FEATURES))
-        base_jump = rng.normal(0.5, 0.15, len(JUMP_FEATURES))
         base_succ = rng.beta(7, 3, len(SUCCESS_FEATURES))
         for season in seasons:
             n_atts = int(rng.integers(15, 60))
@@ -91,9 +94,6 @@ def _make_engine(
                     tendency_vec=(base_tend + rng.normal(0, 0.02, len(TENDENCY_FEATURES))).astype(
                         np.float64
                     ),
-                    jump_vec=(base_jump + rng.normal(0, 0.02, len(JUMP_FEATURES))).astype(
-                        np.float64
-                    ),
                     success_vec=np.clip(
                         base_succ + rng.normal(0, 0.02, len(SUCCESS_FEATURES)), 0, 1
                     ).astype(np.float64),
@@ -104,15 +104,12 @@ def _make_engine(
     engine = BaserunnerStealSimilarityEngine.__new__(BaserunnerStealSimilarityEngine)
     engine._duckdb_path = ""
     engine._profiles = {(p.player_id, p.season): p for p in profiles}
-    engine._league_avg = {"tendency": {}, "jump": {}, "success": {}}
+    engine._league_avg = {"tendency": {}, "success": {}}
     engine._normalizer = FeatureNormalizer()
     engine._shrinkage = EmpiricalBayesShrinkage()
     engine._partition = StealPartition()
     engine._tend_rbf = WeightedRBFSimilarity(
         RBF_SIGMA_TENDENCY, np.array([w for _, w in TENDENCY_FEATURES])
-    )
-    engine._jump_rbf = WeightedRBFSimilarity(
-        RBF_SIGMA_JUMP, np.array([w for _, w in JUMP_FEATURES])
     )
     engine._succ_rbf = WeightedRBFSimilarity(
         RBF_SIGMA_SUCCESS, np.array([w for _, w in SUCCESS_FEATURES])
@@ -123,12 +120,12 @@ def _make_engine(
 
 
 # ===========================================================================
-# SIM-149 — 9 invariant tests
+# SIM-149 — scoring-contract invariants
 # ===========================================================================
 
 
 class TestBaserunnerStealEngineInvariants(unittest.TestCase):
-    """Nine scoring-contract invariants for BaserunnerStealSimilarityEngine."""
+    """Scoring-contract invariants for BaserunnerStealSimilarityEngine."""
 
     # (1) Zero distance to self → composite == documented max (1.0).
     def test_zero_distance_to_self_scores_max(self):
@@ -141,8 +138,7 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
         engine = _make_engine(eb_alpha_full=True)
 
         # Inject two byte-identical profiles with eb_alpha=1.0.
-        tend = _v(0.2, 0.1, 12.0, 0.3)
-        jump = _v(250.0, 8.0, 30.0)
+        tend = _v(0.2, 0.1)
         succ = _v(0.78, 0.55)
         for pid in (9001, 9002):
             engine._profiles[(pid, 2023)] = BaserunnerStealProfile(
@@ -151,7 +147,6 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
                 sample_steal_attempts=50,
                 sample_first_base_opps=500,
                 tendency_vec=tend.copy(),
-                jump_vec=jump.copy(),
                 success_vec=succ.copy(),
                 eb_alpha=1.0,
             )
@@ -161,7 +156,6 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
         self.assertIsNotNone(r)
         self.assertAlmostEqual(r.score, 1.0, places=9)
         self.assertAlmostEqual(r.tendency_score, 1.0, places=9)
-        self.assertAlmostEqual(r.jump_score, 1.0, places=9)
         self.assertAlmostEqual(r.success_score, 1.0, places=9)
 
     # (2) Monotonic ordering — a more-similar candidate scores higher.
@@ -179,8 +173,7 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
             season=2023,
             sample_steal_attempts=50,
             sample_first_base_opps=500,
-            tendency_vec=_v(0.20, 0.10, 11.0, 0.30),
-            jump_vec=_v(250.0, 8.0, 30.0),
+            tendency_vec=_v(0.20, 0.10),
             success_vec=_v(0.80, 0.55),
             eb_alpha=1.0,
         )
@@ -189,8 +182,7 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
             season=2023,
             sample_steal_attempts=50,
             sample_first_base_opps=500,
-            tendency_vec=_v(0.21, 0.11, 11.2, 0.31),  # tiny perturbation
-            jump_vec=_v(252.0, 8.1, 30.5),
+            tendency_vec=_v(0.21, 0.11),  # tiny perturbation
             success_vec=_v(0.79, 0.56),
             eb_alpha=1.0,
         )
@@ -199,8 +191,7 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
             season=2023,
             sample_steal_attempts=50,
             sample_first_base_opps=500,
-            tendency_vec=_v(0.85, 0.70, 3.0, 0.05),  # very different
-            jump_vec=_v(400.0, 2.0, 75.0),
+            tendency_vec=_v(0.85, 0.70),  # very different
             success_vec=_v(0.30, 0.20),
             eb_alpha=1.0,
         )
@@ -232,7 +223,7 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
         for r in results:
             self.assertGreaterEqual(r.score, 0.0)
             self.assertLessEqual(r.score, 1.0 + 1e-9)
-            for sub in (r.tendency_score, r.jump_score, r.success_score):
+            for sub in (r.tendency_score, r.success_score):
                 self.assertGreaterEqual(sub, 0.0)
                 self.assertLessEqual(sub, 1.0 + 1e-9)
 
@@ -250,8 +241,7 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
 
         engine = _make_engine()
 
-        tend = _v(0.25, 0.12, 10.0, 0.30)
-        jump = _v(255.0, 8.0, 32.0)
+        tend = _v(0.25, 0.12)
         succ = _v(0.77, 0.54)
 
         query = BaserunnerStealProfile(
@@ -260,7 +250,6 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
             sample_steal_attempts=80,
             sample_first_base_opps=800,
             tendency_vec=tend.copy(),
-            jump_vec=jump.copy(),
             success_vec=succ.copy(),
             eb_alpha=1.0,
         )
@@ -272,7 +261,6 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
             sample_steal_attempts=high_n,
             sample_first_base_opps=high_n * 10,
             tendency_vec=tend.copy(),
-            jump_vec=jump.copy(),
             success_vec=succ.copy(),
             eb_alpha=shrink.alpha(high_n),
         )
@@ -282,7 +270,6 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
             sample_steal_attempts=low_n,
             sample_first_base_opps=low_n * 10,
             tendency_vec=tend.copy(),
-            jump_vec=jump.copy(),
             success_vec=succ.copy(),
             eb_alpha=shrink.alpha(low_n),
         )
@@ -317,7 +304,6 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
         self.assertIsNotNone(r_ba)
         self.assertAlmostEqual(r_ab.score, r_ba.score, places=12)
         self.assertAlmostEqual(r_ab.tendency_score, r_ba.tendency_score, places=12)
-        self.assertAlmostEqual(r_ab.jump_score, r_ba.jump_score, places=12)
         self.assertAlmostEqual(r_ab.success_score, r_ba.success_score, places=12)
 
     # (6) Below-minimum-sample profiles behave as documented.
@@ -341,8 +327,7 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
             season=2023,
             sample_steal_attempts=3,
             sample_first_base_opps=30,
-            tendency_vec=_v(0.10, 0.05, 9.0, 0.20),
-            jump_vec=_v(260.0, 7.5, 28.0),
+            tendency_vec=_v(0.10, 0.05),
             success_vec=_v(0.70, 0.45),
             eb_alpha=0.13,
             below_minimum=True,
@@ -360,7 +345,6 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
         """A feature column with zero variance across the population must
         not produce NaN scores (std==0 is replaced by 1.0 in fit)."""
         from similarity.engines.baserunner_steal_similarity import (
-            JUMP_FEATURES,
             SUCCESS_FEATURES,
             TENDENCY_FEATURES,
             BaserunnerStealProfile,
@@ -372,8 +356,6 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
         for pid in range(1, 26):
             tend = rng.beta(3, 7, len(TENDENCY_FEATURES))
             tend[0] = 0.5  # constant first tendency feature across all
-            jump = rng.normal(0.5, 0.1, len(JUMP_FEATURES))
-            jump[:] = 0.0  # entire jump vector is a constant/zero column block
             succ = rng.beta(7, 3, len(SUCCESS_FEATURES))
             profiles.append(
                 BaserunnerStealProfile(
@@ -382,7 +364,6 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
                     sample_steal_attempts=40,
                     sample_first_base_opps=400,
                     tendency_vec=tend.astype(np.float64),
-                    jump_vec=jump.astype(np.float64),
                     success_vec=succ.astype(np.float64),
                     eb_alpha=1.0,
                 )
@@ -390,15 +371,12 @@ class TestBaserunnerStealEngineInvariants(unittest.TestCase):
 
         norm = FeatureNormalizer()
         norm.fit(profiles)
-        # std of the constant columns must have been coerced to 1.0 (no /0).
+        # std of the constant column must have been coerced to 1.0 (no /0).
         self.assertTrue(np.all(norm.tendency_std != 0))
-        self.assertTrue(np.all(norm.jump_std != 0))
         for p in profiles:
             nt = norm.normalize_tendency(p.tendency_vec)
-            nj = norm.normalize_jump(p.jump_vec)
             ns = norm.normalize_success(p.success_vec)
             self.assertFalse(np.any(np.isnan(nt)))
-            self.assertFalse(np.any(np.isnan(nj)))
             self.assertFalse(np.any(np.isnan(ns)))
 
     # (8) query(n=...) respects the limit and returns sorted-descending scores.

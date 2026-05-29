@@ -1,3 +1,211 @@
+# Phase 7 — SIM-408 engine↔DuckDB reconciliation COMPLETE (all 5 engines) — 2026-05-29
+**Authors: Data Engineer (Agent 4), ML Engineer (Agent 3), Backend Developer (Agent 5)**
+
+All five divergent engines reconciled code-side (commits `cc7fb60`, `ede86c7`,
+`6b2c901`, `95f5e1b`) so the live 11-engine build should reach 11/11 after the
+DuckDB rebuild. Beyond the 3 below: **catcher** — EXTEND the 4 defensive
+sub-scores (rates derived in the engine SELECT from existing counts + new
+shadow/heart zone-framing columns the framing pass now emits) and TRIM the
+Offense sub-score (+ exchange_time); weights renormalize over 0.85.
+**manager** — `_compute_manager_profiles` rewritten to the engine's
+usage/aggression/platoon vocabulary (offensive calls → batting manager,
+defensive → fielding manager); aggression/platoon computed from the play stream,
+the USAGE sub-score gated NULL on the SIM-427 bullpen-roster build; schema
+DROP+recreated in migration 0011 (engine/fixtures/tests unchanged). 235
+unit+regression tests green across the touched suites; ruff + mypy clean. The
+only remaining acceptance is the live `make profile-computor` rebuild →
+`build_all_engines: 11/11` (+ regenerate regression fixtures on the rebuilt data
+if any engine query changes — the 4 here that changed were regenerated
+in-sandbox from synthetic profiles).
+
+# Phase 7 — SIM-408 engine↔DuckDB reconciliation: 3 of 5 engines (situation + steal ×2) — 2026-05-29
+**Authors: Data Engineer (Agent 4), ML Engineer (Agent 3), Backend Developer (Agent 5)**
+
+Code-side reconciliation of the SIM-408 engine↔schema divergence so the live
+11-engine build can reach 11/11. Three engines landed (commits `cc7fb60`,
+`ede86c7`); the SQL is turn-key but can't run in-sandbox (no raw Statcast/DuckDB).
+
+- **situation** — new `derived.at_bat_situations` (one row per PA: pre-PA game
+  state from `raw.pitches`, leverage_index replicated in SQL). The Step 2.9
+  KDTree engine now indexes real situations instead of 0 rows.
+- **baserunner_steal** — new `derived.baserunner_steal_metrics` (SB attempt/
+  success + 2B→3B splits from `raw.pitches`). **TRIM**: removed the JUMP /
+  First-Step sub-score (reaction_time/burst_distance/break_angle — biomech, not
+  in Statcast) + 2 biomech tendency features; weights renormalized; `jump_score`
+  dropped.
+- **pitcher_steal** — new `derived.pitcher_steal_metrics` (SB-against / CS /
+  attempt-rate, from the SB flags + outs for IP). **TRIM to outcome-only**:
+  Delivery (biomech timings) and Pickoff (raw.pitches has no pickoff/
+  disengagement columns) both removed; outcome is the sole sub-score (weight 1.0).
+
+DuckDB migration **0011** (`0011_sim408_engine_schema_reconciliation.sql`) carries
+all three tables; `duckdb_schema_version` 10 → 11 (+ test). Regression golden
+fixtures for the two steal engines regenerated **in-sandbox** (they build from
+synthetic seeded profiles, not the live DB). 100+ unit/regression tests green;
+ruff + mypy clean.
+
+**Remaining (2 of 5; decisions locked, specced in
+`docs/audit/2026-05-29-sim408-reconciliation-plan.md`):** **catcher** (EXTEND the
+4 defensive sub-scores incl. new shadow/heart zone-framing columns; TRIM the
+Offense sub-score) and **manager** (build aggression/platoon; GATE the Usage
+sub-score on the SIM-427 bullpen-roster build). Both are large multi-method
+computor changes; the registry degrades safely so they land incrementally.
+
+# Phase 7 — SIM-408 safe hardening (situation-engine skip) + reconciliation plan — 2026-05-29
+**Authors: Data Engineer (Agent 4), Backend Developer (Agent 5), QA/DevOps (Agent 9)**
+
+Follow-on to the SIM-408 engine-schema finding (below). Two additions; neither
+needs the (sandbox-impossible) DuckDB rebuild.
+
+**1. Safe hardening — situation engine now SKIPS instead of feeding NaN.**
+`SituationSimilarityEngine.build()` previously swallowed a missing/empty
+`derived.at_bat_situations` (`_load_situations` catches `CatalogException` →
+returns empty) and then fit the normalizer on a zero-row matrix — emitting
+`Mean of empty slice` / `Degrees of freedom <= 0` and registering a NaN-poisoned
+"working" engine. It now **raises on a zero-row index**, so
+`api.state.build_all_engines` skips it (honest 7/11, same as the steal engines
+whose source tables are likewise absent) rather than a hollow 8/11. Surgical
+change in `similarity/engines/situation_similarity.py`; the `< MIN_INDEX_SIZE`
+(nonempty) "may not be reliable" warning is unchanged. This inverts a
+deliberately-tested "empty build is valid" contract, so the affected unit tests
+were updated to the new contract + 1 new raise test
+(`tests/unit/test_situation_similarity.py`; 40 cases green, ruff + mypy clean).
+The empty-query defensive guards in `query`/`query_batch` are retained and now
+exercised by constructing the empty state directly.
+
+**2. Turn-key reconciliation plan** —
+`docs/audit/2026-05-29-sim408-reconciliation-plan.md`. Companion execution spec to
+the finding doc: per-engine canonical-direction decisions (EXTEND-COMPUTOR /
+TRIM-ENGINE / NEW-BUILDER) with the concrete engine-expected → computor-produced
+column/table map for situation, catcher, manager, baserunner_steal, pitcher_steal
+(+ computability flags — which features are derivable from Statcast vs. biomech/
+scout-grade and must be trimmed), the manager↔SIM-427 overlap, and the
+rebuild → regenerate-fixtures → verify-11/11 checklist. The `scripts/diag_actor_cols.py`
+DuckDB column-vocab introspector used to characterize the divergence is included.
+
+The production full-pool sim remains unaffected (it draws from the
+`engine_artifacts` bundle, not these live engines). **Still 🔴 pending the live
+DuckDB rebuild** — this lands the safe code-side hardening + the execution spec.
+
+# Phase 7 — live bring-up hardening: /dev/shm fix + bounded pre-warm + SIM-408 engine-schema finding — 2026-05-29
+**Authors: Backend Developer (Agent 5), Performance Engineer (Agent 6), Data Engineer (Agent 4), QA/DevOps (Agent 9)**
+
+The first real `docker compose up` of the SIM-402 pre-warm surfaced three things; two
+are fixed here, the third is diagnosed + filed.
+
+**1. `/dev/shm` overflow wedged startup (fixed).** The SIM-403b shared-memory publish
+(~166 MB across 41 arrays) overflows Docker's default **64 MB** `/dev/shm`
+("No space left on device" — hit by joblib and the `multiprocessing.shared_memory`
+publish), and the then-unbounded pre-warm hung the lifespan for ~22 min with no
+completion. `docker-compose.yml` now gives the `app` service `shm_size: "1gb"`.
+
+**2. Pre-warm hung startup, then OOM-killed a worker — redesigned to background +
+bounded-concurrency.** Two findings across the bring-up rounds: (a) a *blocking*
+pre-warm wedged the lifespan (~22 min, then ~30 min) and an `asyncio.wait_for` backstop
+did NOT save it — `wait_for` can't interrupt a synchronous thread blocked in
+multiprocessing C-calls, so the `to_thread` runs on and startup never yields; and (b)
+forcing all 10 workers to warm simultaneously (the `Barrier`) spiked memory — each warm
+is a copy-on-write fork of the ~3 GB parent (the 6.3 M-pitch FAISS index etc.) — and the
+cgroup OOM-killed a worker (`docker inspect` → `OOMKilled=true`). The redesign:
+- **Background, never blocking** (`api/main.py`): the lifespan does
+  `asyncio.create_task(_background_prewarm(...))` and yields immediately — the app is
+  ready/serving in seconds regardless of pre-warm, and any failure degrades to the lazy
+  per-game warm-up. The task is cancelled on shutdown.
+- **Bounded-concurrency warm** (`BatchRunner.prewarm` + `_prewarm_worker`): submit one
+  task per worker (so the executor spawns all W — cheap COW forks) but a shared
+  `Manager().Semaphore(_PREWARM_MAX_CONCURRENT_WARM=2`, env `SIM_PREWARM_MAX_CONCURRENT`)
+  caps how many run the HEAVY warm at once, so peak fork+warm memory stays bounded. The
+  `as_completed` gather is still capped at `_PREWARM_TIMEOUT_S=120`.
+- **Pool-creation lock** (`BatchRunner._get_pool`): a `threading.Lock` so the background
+  pre-warm and a concurrent first request can't both create the pool / double-publish the
+  shared segments.
+- `app` healthcheck `start_period` 20s → 180s (covers the ~50 s engine build before the
+  app yields; a successful `/health` still flips healthy immediately).
+
++3 tests (warm-sampler precompute trigger, timeout kwarg, a slow bounded pooled-warm
+check); 19 prewarm cases green across repeated runs; ruff + mypy clean; no regression to
+the SIM-352 / SIM-360 / SIM-403b suites.
+
+**3. Only 7/11 engines build — engine↔DuckDB schema divergence (diagnosed → SIM-408).**
+NOT stale typos: the catcher/manager engines query a column vocabulary the computor +
+`db/schemas/02_duckdb_schema.sql` never produced (catcher overlaps the computed table on
+only `season`/`cs_rate`/`steal_attempt_rate_against`/`below_minimum_sample`), and
+`baserunner_steal_metrics` / `pitcher_steal_metrics` / `at_bat_situations` are never
+built (→ the situation engine indexes 0 rows and normalizes a NaN matrix). The engines
+were only ever verified against unit-test mocks; the live 11-engine build (SIM-408) was
+never run, so the divergence stayed latent. This is a data-layer reconciliation + DuckDB
+rebuild that can't be run/verified in the sandbox and would break the regression gate if
+hacked blind — full diagnosis + the reconciliation plan in
+`docs/audit/2026-05-29-sim408-engine-schema-divergence.md`. The production full-pool sim
+is unaffected (it draws from the `engine_artifacts` bundle, not these live engines).
+
+# Phase 6 — SIM-402: cold-worker /simulate SLA — lifespan worker pre-warm + full-pool deriver-skip — 2026-05-28
+**Authors: Performance Engineer (Agent 6), Backend Developer (Agent 5)**
+
+Resolves the cold-worker root cause behind SIM-402's n=10 ≈ 500 s stall (warm
+n=1 was already 1.7 s, under SLA, after the per-worker `FullPoolSampler` cache
+landed in the wip commit).  The wall-clock 2 s/30 s acceptance still re-measures
+in the live container; this lands the code fix the investigation pointed to.
+
+**Root cause (confirmed by reading the loop, not just timing).**  A fresh
+n-iteration `/simulate` spreads its n games ONE-per-worker, so with n ≈ workers
+each worker gets exactly one game.  The per-worker full-pool cache only pays off
+on a worker's 2nd+ seed, so on that first batch EVERY worker is cold and pays the
+full ~artifact-load + per-hand-precompute warm-up — in parallel but evidently
+serialised on the Windows-Docker volume into the ~500 s wall time.  On top of
+that, `production_machine_factory` rebuilt the per-tile sampler AND the
+`FingerprintDeriver` on every seed.
+
+**Two changes:**
+
+1. **Deriver-skip on the full-pool path** (`simulation/production_factory.py`).
+   `production_machine_factory` now builds the full-pool sampler FIRST and passes
+   `fingerprint_deriver=None` when it is active.  On the full-pool path
+   `_full_pool_outcome` (and the engine-backed batted-ball draw) read from the
+   full-pool sampler exclusively and every deriver call site is None-guarded — yet
+   `_default_deriver_builder` did THREE eager disk loads (provider + pitch_norm +
+   battedball_norm) on EVERY seed.  Skipping it removes that per-game waste.  The
+   per-tile fallback path (`SIM_FULL_POOL=0`, the unit-test default) is UNCHANGED.
+   The per-tile sampler stays per-seed — its construction is free (lazy DuckDB
+   connection the full-pool path never opens); it exists only to satisfy the
+   StateMachine `_pa` guard.
+
+2. **Lifespan worker pre-warm** (`simulation/batch_runner.py` + `api/main.py`).
+   New `BatchRunner.prewarm(pool_dir)` forces every warm-pool worker to spawn
+   (a `Manager().Barrier` makes the executor create all W workers rather than
+   servicing the warm tasks on a couple) and runs the new
+   `production_factory.warm_worker_cache()` on each.  `warm_worker_cache` builds
+   the FullPoolSampler AND triggers its two lazy, one-time per-hand precomputes
+   (pitch `_pool_meta` + batted-ball `_bb_pool_bat_idx`, both `O(pool)` index
+   builds otherwise deferred to a worker's first game) so a pre-warmed worker is
+   FULLY hot — its first real game runs at the amortized ~1.5 s, not the cold
+   index build.  The lifespan calls it (off the event loop via
+   `asyncio.to_thread`) right after building the persistent runner whenever
+   `SIM_FULL_POOL` is on.  Net: the ~per-worker warm-up happens ONCE per worker at
+   startup, in parallel, off the request path — so the FIRST real n=10 request
+   hits warm workers and serves at the proven ~1.7 s/game warm latency.  The
+   in-process path (workers ≤ 1 / `reuse_pool` off) warms the API process
+   directly.  All paths are best-effort: a prewarm failure logs a warning and
+   leaves the prior lazy per-game warm-up as the fallback, so startup never breaks.
+
+**Also (drive-by, pre-existing):** fixed 3 latent mypy `[var-annotated]` errors in
+`simulation/full_pool_sampler.py` (the SIM-422 epic's `diff` locals) that would
+fail the type-check job independently of this work.
+
+**Tests** (`tests/unit/test_sim402_prewarm.py`, 13 cases): the full-pool factory
+skips the deriver + still wires the full-pool sampler and a per-tile sampler; the
+per-tile path still builds the deriver; `warm_worker_cache` true/false +
+`reset_caches`; `prewarm` in-process warms the current process / returns 0 when
+nothing caches / swallows warm errors; plus a slow-marked real-process test that
+`prewarm` spawns + warms all W distinct workers via the barrier.  No regression to
+the SIM-352 factory, SIM-360 warm-pool, or SIM-403b shared-array suites.  ruff +
+mypy clean (CI scope).
+
+**Remaining (the SIM-402 acceptance):** re-measure the wall-clock 2 s-game /
+30 s-batch SLA over the real DB-backed factory in the live container with the
+pre-warm active — probe `/api/games/{pk}/simulate` at n=1 / n=10 / n=100 after the
+startup log shows `SIM-402: pre-warmed N sim-runner worker(s)`.
+
 # Phase 6 — SIM-412 + SIM-429 harness v2 + doc refresh — 2026-05-28
 **Authors: Baseball Analyst (Agent 2), ML Engineer (Agent 3), Product Manager (Agent 1)**
 

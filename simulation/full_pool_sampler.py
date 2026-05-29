@@ -140,7 +140,7 @@ class FullPoolSampler:
 
     def _f_situation(self, hand: str, state: np.ndarray) -> np.ndarray:
         pool = self.a.pools[hand]
-        diff = pool.sit - np.asarray(state, dtype=np.float32)
+        diff: np.ndarray = pool.sit - np.asarray(state, dtype=np.float32)
         d2 = np.einsum("ij,ij->i", diff, diff)
         return np.exp(-d2 / (2.0 * self.sit_sigma**2 * pool.sit.shape[1])).astype(np.float32)
 
@@ -148,7 +148,7 @@ class FullPoolSampler:
         """RBF over the base-out dims only (outs, runners, inning, score_diff) —
         count is handled by the per-pitch bucket, not this factor (SIM-429)."""
         s = self.a.pools[hand].sit[:, 2:6]
-        diff = s - np.asarray(base_out, dtype=np.float32)
+        diff: np.ndarray = s - np.asarray(base_out, dtype=np.float32)
         d2 = np.einsum("ij,ij->i", diff, diff)
         return np.exp(-d2 / (2.0 * self.sit_sigma**2 * s.shape[1])).astype(np.float32)
 
@@ -227,7 +227,7 @@ class FullPoolSampler:
             )
         else:
             f_bat = np.ones(pool.n, dtype=np.float32)
-        diff = pool.sit - np.asarray(state, dtype=np.float32)
+        diff: np.ndarray = pool.sit - np.asarray(state, dtype=np.float32)
         d2 = np.einsum("ij,ij->i", diff, diff)
         f_sit = np.exp(-d2 / (2.0 * self.sit_sigma**2 * pool.sit.shape[1])).astype(np.float32)
         self._bb_cdf = np.cumsum(f_bat * f_sit * pool.recency, dtype=np.float64)

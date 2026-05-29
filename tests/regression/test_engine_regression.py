@@ -48,7 +48,6 @@ from __future__ import annotations
 import json
 import math
 
-import numpy as np
 import pytest
 
 from tests.regression.regression_config import (
@@ -125,9 +124,9 @@ class TestStealEngineProperties:
         ab = steal_engine.query_pair(a, b)
         ba = steal_engine.query_pair(b, a)
         assert ab is not None and ba is not None
-        assert abs(ab.score - ba.score) <= SYMMETRY_TOLERANCE, (
-            f"Asymmetry {abs(ab.score - ba.score):.2e} > {SYMMETRY_TOLERANCE:.2e}"
-        )
+        assert (
+            abs(ab.score - ba.score) <= SYMMETRY_TOLERANCE
+        ), f"Asymmetry {abs(ab.score - ba.score):.2e} > {SYMMETRY_TOLERANCE:.2e}"
 
     def test_no_nan_inf(self, steal_engine):
         ids = steal_engine.profile_ids()
@@ -141,7 +140,7 @@ class TestStealEngineProperties:
         results = steal_engine.query(pid, season)
         assert len(results) > 0
         r = results[0]
-        for attr in ("tendency_score", "jump_score", "success_score"):
+        for attr in ("tendency_score", "success_score"):
             val = getattr(r, attr)
             assert math.isfinite(val), f"{attr} is not finite: {val}"
             assert 0.0 <= val <= 1.0, f"{attr}={val} out of [0, 1]"
@@ -161,7 +160,6 @@ class TestStealEngineProperties:
             sample_steal_attempts=orig.sample_steal_attempts,
             sample_first_base_opps=orig.sample_first_base_opps,
             tendency_vec=orig.tendency_vec.copy(),
-            jump_vec=orig.jump_vec.copy(),
             success_vec=orig.success_vec.copy(),
             eb_alpha=1.0,
         )
@@ -175,9 +173,9 @@ class TestStealEngineProperties:
         result = steal_engine.query_pair(orig_key, dup_key)
         assert result is not None
         # With eb_alpha=1.0 and identical features, RBF(x, x) = 1.0
-        assert abs(result.score - 1.0) < 1e-9, (
-            f"Identical profiles scored {result.score:.9f}, expected ≈ 1.0"
-        )
+        assert (
+            abs(result.score - 1.0) < 1e-9
+        ), f"Identical profiles scored {result.score:.9f}, expected ≈ 1.0"
 
         # Clean up — remove dup so other tests aren't affected
         del steal_engine._profiles[dup_key]
@@ -218,11 +216,10 @@ class TestCatcherEngineProperties:
         assert ab is not None and ba is not None
         assert abs(ab.score - ba.score) <= SYMMETRY_TOLERANCE
 
-    def test_five_sub_scores_present(self, catcher_engine):
-        """SIM-072 v2: catcher composite is a 5-sub-score blend.
-
-        Framing 45 + Blocking 20 + Throwing/Execution 12 + Deterrence 8 +
-        Offense 15 = 100.
+    def test_four_sub_scores_present(self, catcher_engine):
+        """SIM-408: catcher composite is a 4-sub-score defensive blend
+        (Offense TRIMmed). Framing + Blocking + Throwing/Execution + Deterrence,
+        renormalized over 0.85.
         """
         ids = catcher_engine.profile_ids()
         cid, season = ids[0]
@@ -233,7 +230,6 @@ class TestCatcherEngineProperties:
             "blocking_score",
             "throwing_score",
             "deterrence_score",
-            "offense_score",
         ):
             val = getattr(r, attr)
             assert math.isfinite(val)
@@ -276,29 +272,16 @@ class TestPitcherStealEngineProperties:
         assert ab is not None and ba is not None
         assert abs(ab.score - ba.score) <= SYMMETRY_TOLERANCE
 
-    def test_three_sub_scores_present(self, pitcher_steal_engine):
+    def test_outcome_sub_score_present(self, pitcher_steal_engine):
+        # SIM-408: the Delivery + Pickoff sub-scores were removed (Statcast
+        # publishes neither); the engine is now outcome-only.
         ids = pitcher_steal_engine.profile_ids()
         pid, season = ids[0]
         results = pitcher_steal_engine.query(pid, season)
         r = results[0]
-        for attr in ("delivery_score", "pickoff_score", "outcome_score"):
-            val = getattr(r, attr)
-            assert math.isfinite(val)
-            assert 0.0 <= val <= 1.0
-
-    def test_delivery_weight_dominant(self, pitcher_steal_engine):
-        """Delivery sub-score (50%) drives composite more than pickoff (30%)."""
-        ids = pitcher_steal_engine.profile_ids()
-        pid, season = ids[0]
-        results = pitcher_steal_engine.query(pid, season)
-        assert len(results) > 0
-        # Cannot test exact weighting without live data, but delivery_score
-        # should not be systematically lower than pickoff/outcome across the pool.
-        delivery_mean = np.mean([r.delivery_score for r in results])
-        outcome_mean = np.mean([r.outcome_score for r in results])
-        # Both should be in a reasonable range; neither should be degenerate
-        assert delivery_mean > 0.01
-        assert outcome_mean > 0.01
+        val = r.outcome_score
+        assert math.isfinite(val)
+        assert 0.0 <= val <= 1.0
 
 
 # ============================================================================
@@ -548,9 +531,9 @@ class TestPitcherStealEngineGoldenFile:
             for _i, (actual, expected) in enumerate(
                 zip(results[:TOP_K_STABLE], q["top5_scores"], strict=False)
             ):
-                assert abs(actual.score - expected) <= SCORE_ABS_TOLERANCE, (
-                    f"Score drift delta={abs(actual.score - expected):.2e}"
-                )
+                assert (
+                    abs(actual.score - expected) <= SCORE_ABS_TOLERANCE
+                ), f"Score drift delta={abs(actual.score - expected):.2e}"
 
 
 class TestManagerEngineGoldenFile:
@@ -571,9 +554,9 @@ class TestManagerEngineGoldenFile:
             for _i, (actual, expected) in enumerate(
                 zip(results[:TOP_K_STABLE], q["top5_scores"], strict=False)
             ):
-                assert abs(actual.score - expected) <= SCORE_ABS_TOLERANCE, (
-                    f"Score drift delta={abs(actual.score - expected):.2e}"
-                )
+                assert (
+                    abs(actual.score - expected) <= SCORE_ABS_TOLERANCE
+                ), f"Score drift delta={abs(actual.score - expected):.2e}"
 
 
 class TestSituationEngineGoldenFile:
@@ -622,61 +605,53 @@ class TestWeightConstants:
     """
 
     def test_steal_weights_sum_to_one(self):
+        # SIM-408: the JUMP sub-score was removed (biomech features Statcast
+        # can't supply); the two surviving sub-scores renormalize to 1.0.
         from similarity.engines.baserunner_steal_similarity import (
-            WEIGHT_JUMP,
             WEIGHT_SUCCESS,
             WEIGHT_TENDENCY,
         )
 
-        total = WEIGHT_TENDENCY + WEIGHT_JUMP + WEIGHT_SUCCESS
+        total = WEIGHT_TENDENCY + WEIGHT_SUCCESS
         assert abs(total - 1.0) < 1e-9, f"steal weights sum to {total}"
 
     def test_catcher_weights_sum_to_one(self):
-        """SIM-072 v2: 5-sub-score composite must sum to 1.0.
-
-        Framing 45 + Blocking 20 + Throwing/Execution 12 + Deterrence 8 +
-        Offense 15 = 100.
-        """
+        """SIM-408: 4-sub-score defensive composite must sum to 1.0 (Offense
+        TRIMmed; the 45/20/12/8 split renormalizes over 0.85)."""
         from similarity.engines.catcher_similarity import (
             WEIGHT_BLOCKING,
             WEIGHT_DETERRENCE,
             WEIGHT_FRAMING,
-            WEIGHT_OFFENSE,
             WEIGHT_THROWING,
         )
 
-        total = (
-            WEIGHT_FRAMING + WEIGHT_BLOCKING + WEIGHT_THROWING + WEIGHT_DETERRENCE + WEIGHT_OFFENSE
-        )
+        total = WEIGHT_FRAMING + WEIGHT_BLOCKING + WEIGHT_THROWING + WEIGHT_DETERRENCE
         assert abs(total - 1.0) < 1e-9, f"catcher weights sum to {total}"
 
     def test_catcher_v2_split_weights(self):
-        """SIM-072: Throwing was split 20% → 12% execution + 8% deterrence."""
+        """SIM-408: Offense (15%) TRIMmed; the 45/20/12/8 defensive split
+        renormalizes over 0.85. Throwing stays split 12% execution + 8%
+        deterrence (combined 0.20/0.85)."""
         from similarity.engines.catcher_similarity import (
             WEIGHT_BLOCKING,
             WEIGHT_DETERRENCE,
             WEIGHT_FRAMING,
-            WEIGHT_OFFENSE,
             WEIGHT_THROWING,
         )
 
-        assert WEIGHT_FRAMING == 0.45
-        assert WEIGHT_BLOCKING == 0.20
-        assert WEIGHT_THROWING == 0.12
-        assert WEIGHT_DETERRENCE == 0.08
-        assert WEIGHT_OFFENSE == 0.15
-        # The two throwing-derived sub-scores must still combine to 20%.
-        assert abs((WEIGHT_THROWING + WEIGHT_DETERRENCE) - 0.20) < 1e-9
+        assert abs(WEIGHT_FRAMING - 0.45 / 0.85) < 1e-9
+        assert abs(WEIGHT_BLOCKING - 0.20 / 0.85) < 1e-9
+        assert abs(WEIGHT_THROWING - 0.12 / 0.85) < 1e-9
+        assert abs(WEIGHT_DETERRENCE - 0.08 / 0.85) < 1e-9
+        # The two throwing-derived sub-scores still combine to 0.20/0.85.
+        assert abs((WEIGHT_THROWING + WEIGHT_DETERRENCE) - 0.20 / 0.85) < 1e-9
 
     def test_pitcher_steal_weights_sum_to_one(self):
-        from similarity.engines.pitcher_steal_similarity import (
-            WEIGHT_DELIVERY,
-            WEIGHT_OUTCOME,
-            WEIGHT_PICKOFF,
-        )
+        # SIM-408: Delivery + Pickoff sub-scores removed (not in Statcast);
+        # outcome is now the sole sub-score with weight 1.0.
+        from similarity.engines.pitcher_steal_similarity import WEIGHT_OUTCOME
 
-        total = WEIGHT_DELIVERY + WEIGHT_PICKOFF + WEIGHT_OUTCOME
-        assert abs(total - 1.0) < 1e-9, f"pitcher_steal weights sum to {total}"
+        assert abs(WEIGHT_OUTCOME - 1.0) < 1e-9, f"pitcher_steal weight is {WEIGHT_OUTCOME}"
 
     def test_manager_weights_sum_to_one(self):
         from similarity.engines.manager_similarity import (
@@ -688,35 +663,18 @@ class TestWeightConstants:
         total = WEIGHT_USAGE + WEIGHT_AGGRESSION + WEIGHT_PLATOON
         assert abs(total - 1.0) < 1e-9, f"manager weights sum to {total}"
 
-    def test_pitcher_steal_delivery_dominates(self):
-        """Delivery is the highest-weight sub-score (50%) per spec."""
-        from similarity.engines.pitcher_steal_similarity import (
-            WEIGHT_DELIVERY,
-            WEIGHT_OUTCOME,
-            WEIGHT_PICKOFF,
-        )
-
-        assert WEIGHT_DELIVERY > WEIGHT_PICKOFF, (
-            f"Delivery ({WEIGHT_DELIVERY}) should outweigh Pickoff ({WEIGHT_PICKOFF})"
-        )
-        assert WEIGHT_DELIVERY > WEIGHT_OUTCOME, (
-            f"Delivery ({WEIGHT_DELIVERY}) should outweigh Outcome ({WEIGHT_OUTCOME})"
-        )
-
     def test_catcher_framing_dominates(self):
-        """Framing is the highest-weight sub-score (45%) per spec."""
+        """Framing is the highest-weight sub-score per spec."""
         from similarity.engines.catcher_similarity import (
             WEIGHT_BLOCKING,
             WEIGHT_DETERRENCE,
             WEIGHT_FRAMING,
-            WEIGHT_OFFENSE,
             WEIGHT_THROWING,
         )
 
         assert WEIGHT_FRAMING > WEIGHT_BLOCKING
         assert WEIGHT_FRAMING > WEIGHT_THROWING
         assert WEIGHT_FRAMING > WEIGHT_DETERRENCE
-        assert WEIGHT_FRAMING > WEIGHT_OFFENSE
 
     def test_manager_eb_prior(self):
         from similarity.engines.manager_similarity import EB_N_PRIOR

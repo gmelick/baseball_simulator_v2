@@ -91,21 +91,21 @@ ENGINE_REGISTRY: list[dict] = [
         "name": "baserunner_steal",
         "module": "similarity.engines.baserunner_steal_similarity",
         "class": "BaserunnerStealSimilarityEngine",
-        "sub_score_names": ["tendency_score", "jump_score", "success_score"],
+        "sub_score_names": ["tendency_score", "success_score"],
         "query_signature": ("player_id", "season"),  # positional arg names
     },
     {
         "name": "catcher",
         "module": "similarity.engines.catcher_similarity",
         "class": "CatcherSimilarityEngine",
-        "sub_score_names": ["framing_score", "blocking_score", "throwing_score", "offense_score"],
+        "sub_score_names": ["framing_score", "blocking_score", "throwing_score", "deterrence_score"],
         "query_signature": ("player_id", "season"),
     },
     {
         "name": "pitcher_steal",
         "module": "similarity.engines.pitcher_steal_similarity",
         "class": "PitcherStealSimilarityEngine",
-        "sub_score_names": ["delivery_score", "pickoff_score", "outcome_score"],
+        "sub_score_names": ["outcome_score"],
         "query_signature": ("player_id", "season"),
     },
     {
