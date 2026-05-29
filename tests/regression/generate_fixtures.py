@@ -197,12 +197,8 @@ def _build_catcher_engine():
 
 def _build_pitcher_steal_engine():
     from similarity.engines.pitcher_steal_similarity import (
-        DELIVERY_FEATURES,
         OUTCOME_FEATURES,
-        PICKOFF_FEATURES,
-        RBF_SIGMA_DELIVERY,
         RBF_SIGMA_OUTCOME,
-        RBF_SIGMA_PICKOFF,
         FeatureNormalizer,
         PitcherStealPartition,
         PitcherStealProfile,
@@ -219,8 +215,6 @@ def _build_pitcher_steal_engine():
             throws="R" if i % 2 == 0 else "L",
             sample_baserunner_events=60 + i * 5,
             sample_steal_attempts_against=15 + i * 2,
-            delivery_vec=rng.uniform(0.9, 2.0, len(DELIVERY_FEATURES)),
-            pickoff_vec=rng.uniform(0.0, 0.3, len(PICKOFF_FEATURES)),
             outcome_vec=rng.uniform(0.0, 1.0, len(OUTCOME_FEATURES)),
             eb_alpha=1.0,
         )
@@ -232,12 +226,6 @@ def _build_pitcher_steal_engine():
     engine._normalizer.fit(profiles)
     engine._partition = PitcherStealPartition()
     engine._partition.build(profiles, engine._normalizer)
-    engine._del_rbf = WeightedRBFSimilarity(
-        RBF_SIGMA_DELIVERY, np.array([w for _, w in DELIVERY_FEATURES])
-    )
-    engine._pick_rbf = WeightedRBFSimilarity(
-        RBF_SIGMA_PICKOFF, np.array([w for _, w in PICKOFF_FEATURES])
-    )
     engine._out_rbf = WeightedRBFSimilarity(
         RBF_SIGMA_OUTCOME, np.array([w for _, w in OUTCOME_FEATURES])
     )

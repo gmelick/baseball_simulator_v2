@@ -69,5 +69,28 @@ CREATE TABLE IF NOT EXISTS derived.baserunner_steal_metrics (
 
 CREATE INDEX IF NOT EXISTS idx_bsm_season ON derived.baserunner_steal_metrics(season);
 
+-- ---------------------------------------------------------------------------
+-- 3. derived.pitcher_steal_metrics (Step 2.7 pitcher-steal engine, outcome-only)
+--    Built by PlayerProfileComputor._build_pitcher_steal_metrics from
+--    raw.pitches (SB-against flags + outs for IP). Delivery + pickoff features
+--    are intentionally absent (not in Statcast; the engine's Delivery + Pickoff
+--    sub-scores were removed, leaving an outcome-only engine).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS derived.pitcher_steal_metrics (
+    pitcher_id                      INTEGER     NOT NULL,
+    season                          SMALLINT    NOT NULL,
+    throws                          CHAR(1),
+    sample_baserunner_events        INTEGER     NOT NULL DEFAULT 0,
+    sample_steal_attempts_against   INTEGER     NOT NULL DEFAULT 0,
+    sb_against_per_9                FLOAT,
+    cs_rate_forced                  FLOAT,
+    steal_attempt_rate_allowed      FLOAT,
+    below_minimum_sample            BOOLEAN     NOT NULL DEFAULT FALSE,
+    updated_at                      TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (pitcher_id, season)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pitcher_steal_season ON derived.pitcher_steal_metrics(season);
+
 INSERT OR IGNORE INTO migration_history (migration_id, description)
 VALUES ('0011', 'SIM-408 engine/DuckDB schema reconciliation: derived.at_bat_situations (situation engine) + (appended) baserunner_steal_metrics / pitcher_steal_metrics + catcher/manager engine-vocabulary columns');

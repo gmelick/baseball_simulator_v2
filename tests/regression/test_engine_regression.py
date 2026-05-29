@@ -48,7 +48,6 @@ from __future__ import annotations
 import json
 import math
 
-import numpy as np
 import pytest
 
 from tests.regression.regression_config import (
@@ -275,29 +274,16 @@ class TestPitcherStealEngineProperties:
         assert ab is not None and ba is not None
         assert abs(ab.score - ba.score) <= SYMMETRY_TOLERANCE
 
-    def test_three_sub_scores_present(self, pitcher_steal_engine):
+    def test_outcome_sub_score_present(self, pitcher_steal_engine):
+        # SIM-408: the Delivery + Pickoff sub-scores were removed (Statcast
+        # publishes neither); the engine is now outcome-only.
         ids = pitcher_steal_engine.profile_ids()
         pid, season = ids[0]
         results = pitcher_steal_engine.query(pid, season)
         r = results[0]
-        for attr in ("delivery_score", "pickoff_score", "outcome_score"):
-            val = getattr(r, attr)
-            assert math.isfinite(val)
-            assert 0.0 <= val <= 1.0
-
-    def test_delivery_weight_dominant(self, pitcher_steal_engine):
-        """Delivery sub-score (50%) drives composite more than pickoff (30%)."""
-        ids = pitcher_steal_engine.profile_ids()
-        pid, season = ids[0]
-        results = pitcher_steal_engine.query(pid, season)
-        assert len(results) > 0
-        # Cannot test exact weighting without live data, but delivery_score
-        # should not be systematically lower than pickoff/outcome across the pool.
-        delivery_mean = np.mean([r.delivery_score for r in results])
-        outcome_mean = np.mean([r.outcome_score for r in results])
-        # Both should be in a reasonable range; neither should be degenerate
-        assert delivery_mean > 0.01
-        assert outcome_mean > 0.01
+        val = r.outcome_score
+        assert math.isfinite(val)
+        assert 0.0 <= val <= 1.0
 
 
 # ============================================================================
@@ -669,14 +655,11 @@ class TestWeightConstants:
         assert abs((WEIGHT_THROWING + WEIGHT_DETERRENCE) - 0.20) < 1e-9
 
     def test_pitcher_steal_weights_sum_to_one(self):
-        from similarity.engines.pitcher_steal_similarity import (
-            WEIGHT_DELIVERY,
-            WEIGHT_OUTCOME,
-            WEIGHT_PICKOFF,
-        )
+        # SIM-408: Delivery + Pickoff sub-scores removed (not in Statcast);
+        # outcome is now the sole sub-score with weight 1.0.
+        from similarity.engines.pitcher_steal_similarity import WEIGHT_OUTCOME
 
-        total = WEIGHT_DELIVERY + WEIGHT_PICKOFF + WEIGHT_OUTCOME
-        assert abs(total - 1.0) < 1e-9, f"pitcher_steal weights sum to {total}"
+        assert abs(WEIGHT_OUTCOME - 1.0) < 1e-9, f"pitcher_steal weight is {WEIGHT_OUTCOME}"
 
     def test_manager_weights_sum_to_one(self):
         from similarity.engines.manager_similarity import (
@@ -687,21 +670,6 @@ class TestWeightConstants:
 
         total = WEIGHT_USAGE + WEIGHT_AGGRESSION + WEIGHT_PLATOON
         assert abs(total - 1.0) < 1e-9, f"manager weights sum to {total}"
-
-    def test_pitcher_steal_delivery_dominates(self):
-        """Delivery is the highest-weight sub-score (50%) per spec."""
-        from similarity.engines.pitcher_steal_similarity import (
-            WEIGHT_DELIVERY,
-            WEIGHT_OUTCOME,
-            WEIGHT_PICKOFF,
-        )
-
-        assert (
-            WEIGHT_DELIVERY > WEIGHT_PICKOFF
-        ), f"Delivery ({WEIGHT_DELIVERY}) should outweigh Pickoff ({WEIGHT_PICKOFF})"
-        assert (
-            WEIGHT_DELIVERY > WEIGHT_OUTCOME
-        ), f"Delivery ({WEIGHT_DELIVERY}) should outweigh Outcome ({WEIGHT_OUTCOME})"
 
     def test_catcher_framing_dominates(self):
         """Framing is the highest-weight sub-score (45%) per spec."""

@@ -340,12 +340,8 @@ class TestPitcherStealEngine(unittest.TestCase):
 
     def _make_engine(self, n_pitchers: int = 40, n_seasons: int = 2) -> object:
         from similarity.engines.pitcher_steal_similarity import (
-            DELIVERY_FEATURES,
             OUTCOME_FEATURES,
-            PICKOFF_FEATURES,
-            RBF_SIGMA_DELIVERY,
             RBF_SIGMA_OUTCOME,
-            RBF_SIGMA_PICKOFF,
             EmpiricalBayesShrinkage,
             FeatureNormalizer,
             PitcherStealPartition,
@@ -360,8 +356,6 @@ class TestPitcherStealEngine(unittest.TestCase):
 
         for pid in range(1, n_pitchers + 1):
             throws = "R" if rng.random() > 0.3 else "L"
-            base_del = rng.normal(4.0, 0.4, len(DELIVERY_FEATURES))  # delivery ~4s
-            base_pick = rng.beta(2, 10, len(PICKOFF_FEATURES))
             base_out = rng.beta(5, 5, len(OUTCOME_FEATURES))
 
             for season in seasons[:n_seasons]:
@@ -373,12 +367,6 @@ class TestPitcherStealEngine(unittest.TestCase):
                         throws=throws,
                         sample_baserunner_events=n_br,
                         sample_steal_attempts_against=int(n_br * 0.15),
-                        delivery_vec=(
-                            base_del + rng.normal(0, 0.05, len(DELIVERY_FEATURES))
-                        ).astype(np.float64),
-                        pickoff_vec=np.clip(
-                            base_pick + rng.normal(0, 0.01, len(PICKOFF_FEATURES)), 0, 1
-                        ).astype(np.float64),
                         outcome_vec=np.clip(
                             base_out + rng.normal(0, 0.02, len(OUTCOME_FEATURES)), 0, 1
                         ).astype(np.float64),
@@ -389,16 +377,10 @@ class TestPitcherStealEngine(unittest.TestCase):
         engine = PitcherStealSimilarityEngine.__new__(PitcherStealSimilarityEngine)
         engine._duckdb_path = ""
         engine._profiles = {(p.pitcher_id, p.season): p for p in profiles}
-        engine._league_avg = {"delivery": {}, "pickoff": {}, "outcome": {}}
+        engine._league_avg = {"outcome": {}}
         engine._normalizer = FeatureNormalizer()
         engine._shrinkage = EmpiricalBayesShrinkage()
         engine._partition = PitcherStealPartition()
-        engine._del_rbf = WeightedRBFSimilarity(
-            RBF_SIGMA_DELIVERY, np.array([w for _, w in DELIVERY_FEATURES])
-        )
-        engine._pick_rbf = WeightedRBFSimilarity(
-            RBF_SIGMA_PICKOFF, np.array([w for _, w in PICKOFF_FEATURES])
-        )
         engine._out_rbf = WeightedRBFSimilarity(
             RBF_SIGMA_OUTCOME, np.array([w for _, w in OUTCOME_FEATURES])
         )
@@ -413,12 +395,11 @@ class TestPitcherStealEngine(unittest.TestCase):
             self.assertGreaterEqual(r.score, 0.0)
             self.assertLessEqual(r.score, 1.0 + 1e-9)
 
-    def test_three_sub_scores(self):
+    def test_outcome_sub_score(self):
+        # SIM-408: outcome-only engine (Delivery + Pickoff removed).
         engine = self._make_engine()
         results = engine.query(1, 2023)
         r = results[0]
-        self.assertIsNotNone(r.delivery_score)
-        self.assertIsNotNone(r.pickoff_score)
         self.assertIsNotNone(r.outcome_score)
 
     def test_symmetry(self):
@@ -427,45 +408,37 @@ class TestPitcherStealEngine(unittest.TestCase):
         r_ba = engine.query_pair((2, 2023), (1, 2023))
         self.assertAlmostEqual(r_ab.score, r_ba.score, places=10)
 
-    def test_slow_delivery_pitcher_different_from_quick(self):
-        """A slow-delivery pitcher and a quick-delivery pitcher should be dissimilar."""
+    def test_divergent_outcomes_pitcher_different(self):
+        """SIM-408: outcome-only. A pitcher who allows steals freely and one who
+        shuts them down should be dissimilar on the outcome dimension."""
         engine = self._make_engine()
-        from similarity.engines.pitcher_steal_similarity import PitcherStealProfile
-
-        # Manually override two profiles to be maximally different on delivery
-        slow_pid = 990
-        quick_pid = 991
-        n_feats_del = len(engine._del_rbf.weights)
-        n_feats_pick = len(engine._pick_rbf.weights)
-        n_feats_out = len(engine._out_rbf.weights)
-
-        engine._profiles[(slow_pid, 2023)] = PitcherStealProfile(
-            pitcher_id=slow_pid,
-            season=2023,
-            throws="L",
-            sample_baserunner_events=200,
-            sample_steal_attempts_against=30,
-            delivery_vec=np.full(n_feats_del, 5.5),  # slow
-            pickoff_vec=np.full(n_feats_pick, 0.05),
-            outcome_vec=np.full(n_feats_out, 0.6),
-            eb_alpha=0.9,
-        )
-        engine._profiles[(quick_pid, 2023)] = PitcherStealProfile(
-            pitcher_id=quick_pid,
-            season=2023,
-            throws="R",
-            sample_baserunner_events=200,
-            sample_steal_attempts_against=10,
-            delivery_vec=np.full(n_feats_del, 2.5),  # very quick
-            pickoff_vec=np.full(n_feats_pick, 0.3),
-            outcome_vec=np.full(n_feats_out, 0.3),
-            eb_alpha=0.9,
-        )
-
-        # Rebuild engine with new profiles
         from similarity.engines.pitcher_steal_similarity import (
             FeatureNormalizer,
             PitcherStealPartition,
+            PitcherStealProfile,
+        )
+
+        free_pid = 990  # runners run wild
+        shutdown_pid = 991  # shuts the running game down
+        n_feats_out = len(engine._out_rbf.weights)
+
+        engine._profiles[(free_pid, 2023)] = PitcherStealProfile(
+            pitcher_id=free_pid,
+            season=2023,
+            throws="L",
+            sample_baserunner_events=200,
+            sample_steal_attempts_against=40,
+            outcome_vec=np.full(n_feats_out, 0.95),  # high sb-against / attempt-rate
+            eb_alpha=0.9,
+        )
+        engine._profiles[(shutdown_pid, 2023)] = PitcherStealProfile(
+            pitcher_id=shutdown_pid,
+            season=2023,
+            throws="R",
+            sample_baserunner_events=200,
+            sample_steal_attempts_against=5,
+            outcome_vec=np.full(n_feats_out, 0.05),  # low across the board
+            eb_alpha=0.9,
         )
 
         all_p = list(engine._profiles.values())
@@ -476,22 +449,15 @@ class TestPitcherStealEngine(unittest.TestCase):
         part.build(all_p, norm)
         engine._partition = part
 
-        r = engine.query_pair((slow_pid, 2023), (quick_pid, 2023))
+        r = engine.query_pair((free_pid, 2023), (shutdown_pid, 2023))
         self.assertIsNotNone(r)
-        self.assertLess(
-            r.score, 0.7, msg="Slow vs. quick delivery pitcher should have low similarity"
-        )
+        self.assertLess(r.score, 0.7, msg="Opposite steal-prevention outcomes should be dissimilar")
 
-    def test_delivery_weight_is_dominant(self):
-        """Delivery weight (0.50) should be the largest sub-score weight."""
-        from similarity.engines.pitcher_steal_similarity import (
-            WEIGHT_DELIVERY,
-            WEIGHT_OUTCOME,
-            WEIGHT_PICKOFF,
-        )
+    def test_outcome_is_sole_weight(self):
+        """SIM-408: outcome is the only sub-score, weight 1.0."""
+        from similarity.engines.pitcher_steal_similarity import WEIGHT_OUTCOME
 
-        self.assertGreater(WEIGHT_DELIVERY, WEIGHT_PICKOFF)
-        self.assertGreater(WEIGHT_DELIVERY, WEIGHT_OUTCOME)
+        self.assertAlmostEqual(WEIGHT_OUTCOME, 1.0, places=9)
 
 
 # ===========================================================================

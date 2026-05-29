@@ -497,6 +497,39 @@ CREATE INDEX IF NOT EXISTS idx_bsm_season ON derived.baserunner_steal_metrics(se
 COMMENT ON TABLE derived.baserunner_steal_metrics IS 'SIM-408: per-runner per-season stolen-base tendency/success metrics for the Step 2.5 baserunner-steal engine. Built from raw.pitches SB flags. below_minimum_sample = sample_steal_attempts < 10 (the engine filters these out).';
 
 -- =============================================================================
+-- DERIVED.PITCHER_STEAL_METRICS
+-- One row per pitcher per season, steal-prevention OUTCOME dimension only.
+-- Indexed by the Step 2.7 Pitcher-Steal similarity engine. SIM-408: the engine
+-- referenced this table but the computor never built it. Built from raw.pitches.
+-- Delivery (biomech timings) + Pickoff (no source columns in raw.pitches) are
+-- intentionally ABSENT — Statcast doesn't publish them; the engine's Delivery
+-- and Pickoff sub-scores were removed, leaving an outcome-only engine.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS derived.pitcher_steal_metrics (
+    pitcher_id                      INTEGER     NOT NULL,
+    season                          SMALLINT    NOT NULL,
+    throws                          CHAR(1),
+
+    sample_baserunner_events        INTEGER     NOT NULL DEFAULT 0,   -- PAs pitched with a runner on
+    sample_steal_attempts_against   INTEGER     NOT NULL DEFAULT 0,
+
+    -- Outcome
+    sb_against_per_9                FLOAT,      -- stolen bases allowed per 9 IP
+    cs_rate_forced                  FLOAT,      -- CS / attempts against
+    steal_attempt_rate_allowed      FLOAT,      -- attempts against / baserunner events
+
+    below_minimum_sample            BOOLEAN     NOT NULL DEFAULT FALSE,
+    updated_at                      TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (pitcher_id, season)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pitcher_steal_season ON derived.pitcher_steal_metrics(season);
+
+COMMENT ON TABLE derived.pitcher_steal_metrics IS 'SIM-408: per-pitcher per-season steal-prevention OUTCOME metrics for the Step 2.7 pitcher-steal engine. Built from raw.pitches (SB-against flags + outs for IP). Delivery/pickoff features omitted (not in Statcast). below_minimum_sample = sample_baserunner_events < 30.';
+
+-- =============================================================================
 -- DERIVED.CATCHER_SEASON_METRICS
 -- One row per catcher per season.
 -- Full schema covering framing, blocking, and stolen base prevention.

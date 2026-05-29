@@ -105,7 +105,7 @@ ENGINE_REGISTRY: list[dict] = [
         "name": "pitcher_steal",
         "module": "similarity.engines.pitcher_steal_similarity",
         "class": "PitcherStealSimilarityEngine",
-        "sub_score_names": ["delivery_score", "pickoff_score", "outcome_score"],
+        "sub_score_names": ["outcome_score"],
         "query_signature": ("player_id", "season"),
     },
     {

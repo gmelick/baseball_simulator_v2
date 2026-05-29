@@ -1189,6 +1189,7 @@ class PlayerProfileComputor:
             self._compute_batter_profiles(seasons)  # 3.
             self._compute_baserunner_profiles(seasons)  # 4. infield/DP need sprint speeds
             self._build_baserunner_steal_metrics(seasons)  # 4b. SIM-408 steal-engine table
+            self._build_pitcher_steal_metrics(seasons)  # 4c. SIM-408 pitcher-steal table
             self._compute_manager_profiles(seasons)  # 5.
 
             # ── Defensive metrics ────────────────────────────────────────────
@@ -1258,6 +1259,7 @@ class PlayerProfileComputor:
             "derived.fielder_season_metrics",
             "derived.baserunner_season_metrics",
             "derived.baserunner_steal_metrics",  # SIM-408 steal-engine table
+            "derived.pitcher_steal_metrics",  # SIM-408 pitcher-steal-engine table
             "derived.catcher_season_metrics",
             "derived.manager_season_metrics",
             "derived.park_factors",
@@ -2335,6 +2337,91 @@ class PlayerProfileComputor:
             LEFT JOIN opp_2b o2 ON o2.player_id = a.player_id AND o2.season = a.season
         """)
         log.info("  derived.baserunner_steal_metrics done.")
+
+    def _build_pitcher_steal_metrics(self, seasons: list[int]) -> None:
+        """
+        SIM-408: build derived.pitcher_steal_metrics for the Step 2.7
+        pitcher-steal (hold-runner) engine, which SELECTed this table but the
+        computor never produced it.
+
+        OUTCOME-only, per pitcher-season, from raw.pitches:
+          * sample_baserunner_events       — PAs pitched with a runner on base
+          * sample_steal_attempts_against  — SB attempts while this pitcher threw
+          * sb_against_per_9               — SB allowed × 27 / outs recorded
+          * cs_rate_forced                 — (attempts − successes) / attempts
+          * steal_attempt_rate_allowed     — attempts / baserunner_events
+
+        Delivery (biomech timings) + Pickoff (no pickoff/disengagement columns
+        exist in raw.pitches) are NOT computed — the engine's Delivery and
+        Pickoff sub-scores were removed (see pitcher_steal_similarity.py).
+        Idempotent via INSERT OR REPLACE on (pitcher_id, season).
+        """
+        log.info("Building derived.pitcher_steal_metrics …")
+        season_list = ", ".join(str(s) for s in seasons)
+        min_events = 30  # matches the engine's MIN_BASERUNNER_EVENTS gate
+
+        self._conn.execute(f"""
+            INSERT OR REPLACE INTO derived.pitcher_steal_metrics (
+                pitcher_id, season, throws,
+                sample_baserunner_events, sample_steal_attempts_against,
+                sb_against_per_9, cs_rate_forced, steal_attempt_rate_allowed,
+                below_minimum_sample
+            )
+            WITH clean AS (
+                SELECT
+                    pitcher, season, p_throws,
+                    game_pk, at_bat_number, pitch_number,
+                    on_1b, on_2b, on_3b, outs_on_pitch,
+                    sb_attempt_2b, sb_attempt_3b, sb_attempt_home,
+                    sb_success_2b, sb_success_3b, sb_success_home
+                FROM pg.raw.pitches
+                WHERE data_quality_flag = FALSE
+                  AND season IN ({season_list})
+            ),
+            -- Outs recorded (for IP) + SB attempts/successes against, per pitcher
+            pitch_agg AS (
+                SELECT
+                    pitcher AS pitcher_id,
+                    season,
+                    MIN(p_throws)                                            AS throws,
+                    SUM(outs_on_pitch)                                       AS outs_recorded,
+                    SUM(CASE WHEN sb_attempt_2b OR sb_attempt_3b OR sb_attempt_home
+                             THEN 1 ELSE 0 END)                              AS sb_attempts_against,
+                    SUM(CASE WHEN sb_success_2b OR sb_success_3b OR sb_success_home
+                             THEN 1 ELSE 0 END)                              AS sb_allowed
+                FROM clean
+                GROUP BY pitcher, season
+            ),
+            -- Baserunner events = distinct PAs pitched with a runner on base
+            br_events AS (
+                SELECT pitcher AS pitcher_id, season, COUNT(*) AS n_br_events
+                FROM (
+                    SELECT
+                        pitcher, season,
+                        (on_1b IS NOT NULL OR on_2b IS NOT NULL OR on_3b IS NOT NULL) AS has_runner
+                    FROM clean
+                    QUALIFY ROW_NUMBER() OVER (
+                        PARTITION BY game_pk, at_bat_number ORDER BY pitch_number
+                    ) = 1
+                ) pa
+                WHERE has_runner
+                GROUP BY pitcher, season
+            )
+            SELECT
+                p.pitcher_id,
+                p.season,
+                p.throws,
+                COALESCE(b.n_br_events, 0)                                   AS sample_baserunner_events,
+                p.sb_attempts_against                                        AS sample_steal_attempts_against,
+                p.sb_allowed * 27.0 / NULLIF(p.outs_recorded, 0)             AS sb_against_per_9,
+                (p.sb_attempts_against - p.sb_allowed) * 1.0
+                    / NULLIF(p.sb_attempts_against, 0)                       AS cs_rate_forced,
+                p.sb_attempts_against * 1.0 / NULLIF(b.n_br_events, 0)       AS steal_attempt_rate_allowed,
+                (COALESCE(b.n_br_events, 0) < {min_events})                  AS below_minimum_sample
+            FROM pitch_agg p
+            LEFT JOIN br_events b ON b.pitcher_id = p.pitcher_id AND b.season = p.season
+        """)
+        log.info("  derived.pitcher_steal_metrics done.")
 
     def _compute_manager_profiles(self, seasons: list[int]) -> None:
         """
