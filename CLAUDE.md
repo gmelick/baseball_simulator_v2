@@ -46,32 +46,31 @@
   (`fielder_emb` = 11346 × 51 features).  Box output now MLB-realistic: H/HR/2B/BB/K within
   ~3-5% of MLB-2023, steals match MLB volume.  **Runs run ~7-8% low** (down from ~12% pre-fix) —
   remaining hits→runs *conversion* residual lives in batted-ball-with-RISP / sequencing
-  (see §11). **Next free ticket ID: SIM-430.**
+  (see §11). **Next free ticket ID: SIM-431** (SIM-430 = the full-pool `/simulate`
+  throughput / 2s-30s SLA perf gap, filed 2026-05-30 off the SIM-402 live re-measure).
 
-- **SIM-402 — code-complete 2026-05-28 (cold-worker root cause fixed); wall-clock SLA
-  pending a live-container re-measure.** Live API was probed at
+- **SIM-402 — CLOSED 2026-05-30 (code complete + re-measured live); the residual throughput
+  gap is spun off to SIM-430.** Live API probed at
   `http://localhost:8000/api/games/{pk}/simulate`.
-  - Warm n=1 was already **1.7s** (under the 2s SLA) after the per-worker `FullPoolSampler`
-    cache (the wip commit).  The n=10 ≈ **498-507s** stall was the **cold-worker fan-out**: a
-    fresh n-iteration request spreads its games ONE-per-worker, so each worker gets one game
-    and the per-worker cache (which only helps a worker's 2nd+ seed) never warms in time —
-    every worker pays the full artifact-load + per-hand-precompute warm-up on the request path.
-  - **Fix landed (uncommitted on `simulation/` + `api/`):**
-    1. `simulation/production_factory.py::production_machine_factory` builds the full-pool
-       sampler first and passes `fingerprint_deriver=None` on the full-pool path — the deriver
-       is unused there (every call site is None-guarded) but `_default_deriver_builder` did 3
-       eager per-seed disk loads (provider + pitch/battedball norms).  The per-tile sampler
-       stays per-seed (its construction is free — the lazy DuckDB conn is never opened on the
-       full-pool path; it only satisfies the StateMachine `_pa` guard).
-    2. `BatchRunner.prewarm()` + `production_factory.warm_worker_cache()` + a lifespan call
-       (`api/main.py`, gated on `SIM_FULL_POOL`) force every worker to spawn (a
-       `Manager().Barrier` makes the executor create all W) and populate its per-process
-       full-pool cache AT STARTUP, in parallel, off the request path — so the first real
-       request hits warm workers.  +13 unit tests (`tests/unit/test_sim402_prewarm.py`);
-       ruff + mypy clean (also fixed 3 pre-existing `full_pool_sampler.py` mypy annotations).
-  - **Remaining (the acceptance):** re-measure n=1 / n=10 / n=100 in the live container after
-    the startup log `SIM-402: pre-warmed N sim-runner worker(s)`; confirm the 2s-game /
-    30s-batch SLA holds.
+  - **Cold-worker fix shipped.** `production_machine_factory` passes `fingerprint_deriver=None`
+    on the full-pool path (the deriver is unused there but `_default_deriver_builder` did 3 eager
+    per-seed disk loads), and a BACKGROUND pre-warm (`BatchRunner.prewarm()` +
+    `production_factory.warm_worker_cache()`, lifespan-gated on `SIM_FULL_POOL`, bounded-concurrency
+    + a `_get_pool` lock) populates each worker's per-process full-pool cache off the request path.
+    This eliminated the n=10 ≈ **498-507s** cold-fan-out stall (a fresh n-iteration request used to
+    spread games one-per-worker, so the per-worker cache never warmed in time and every worker paid
+    the full artifact-load + per-hand-precompute on the request path).  +13 unit tests
+    (`tests/unit/test_sim402_prewarm.py`); ruff + mypy clean.
+  - **Live re-measure (2026-05-30, all-seasons DuckDB, 1 worker):** warm n=1 ≈ **2.2-2.3s**,
+    n=100 ≈ **215s** serial.  The 2s-game / 30s-batch SLA is **NOT met** on the full-pool path —
+    per-game cost is ~2.2s and the n-iteration fan-out does not parallelize at 1 worker.
+  - **`SIM_RUNNER_WORKERS=10` is non-viable on this 15.5 GiB host:** a pre-warm worker is
+    OOM-killed → the ProcessPool deadlocks → every `/simulate` hangs >400s (the 10-worker
+    re-measure returned all-n TimeoutError).  The host `.env` is pinned to **1 worker**, with the
+    reason documented inline there.
+  - **Remaining work → SIM-430** (new perf ticket): cut the full-pool per-game cost and/or give
+    `/simulate` a fan-out that scales without OOM (lighter per-worker footprint or intra-request
+    game batching).
 
 ## 2a. Operational caveats (Windows + Docker)
 
@@ -93,16 +92,20 @@
   SIM-429 granular run-conversion calibration + the CLV backtest (the larger sim harness landed
   2026-05-28 as `scripts/sim_stats.py` v2 — defaults to 200 sims/game, reports per-channel + home/
   away splits + R standard error; calibration sweeps + CLV backtest pending the live-odds path).
-- **Live-env verification debt** — SIM-402 code-complete (cold-worker pre-warm + deriver-skip; see
-  §2 above).  **2026-05-29 live bring-up** fixed a `/dev/shm` overflow (`shm_size: 1gb` on the `app`
-  service) + redesigned the pre-warm as a BACKGROUND task with bounded-concurrency warming
-  (a blocking pre-warm hung startup ~22 min, then ~30 min — `asyncio.wait_for` can't interrupt a
-  multiprocessing-blocked thread — and forcing all 10 workers to warm at once OOM-killed one); the
-  wall-clock 2s/30s SLA re-measure is still pending.  SIM-408 surfaced as **only 7/11 engines build**
-  — an engine↔DuckDB schema divergence (NOT stale typos: catcher/manager column-vocab mismatch +
-  `baserunner_steal_metrics`/`pitcher_steal_metrics`/`at_bat_situations` never built) needing schema
-  reconciliation + a DuckDB rebuild (`docs/audit/2026-05-29-sim408-engine-schema-divergence.md`).
-  SIM-406 (fitted CalibrationReport over real data), SIM-407 (prop-PMF validation + ablation) still open.
+- **Live-env verification debt — largely retired 2026-05-30.**  `docker compose up`
+  (nginx+app+monitoring) runs; the 2026-05-29 bring-up fixed a `/dev/shm` overflow
+  (`shm_size: 1gb` on the `app` service) and made the pre-warm a BACKGROUND task with
+  bounded-concurrency warming + a `_get_pool` lock (a blocking pre-warm hung startup ~22-30 min —
+  `asyncio.wait_for` can't interrupt a multiprocessing-blocked thread — and warming all 10 workers
+  at once OOM-killed one).
+  - **SIM-402 CLOSED** — re-measured live; the 2s/30s SLA is not met and the throughput gap is now
+    **SIM-430** (see §2).
+  - **SIM-408 CLOSED** — the engine↔DuckDB schema divergence (was **only 7/11 engines build**:
+    catcher/manager/baserunner_steal/pitcher_steal failing, situation indexing 0 rows) was
+    reconciled and a full all-seasons (2017-2026) profile rebuild ran; the live app now logs
+    `build_all_engines: 11/11`.  See §11 for what was trimmed/built per engine.
+  - **Still open (now UNBLOCKED by the 11/11 real-data build — the next work):** SIM-406 (a fitted
+    `CalibrationReport` over real data) and SIM-407 (prop-PMF validation + ablation).
 - Canonical git repo: this directory. Primary shell: **Windows Command Prompt (cmd.exe)**;
   development + tests run through Docker (`docker compose run --rm app ...`).
 
@@ -187,7 +190,8 @@ consolidates; QA cross-validates and never self-certifies its own work.
 - **TDD:** tests first, then implementation (Backend Developer convention). Unit tests use the `__new__`
   constructor-bypass + in-memory mock pattern (no live DB) — see `tests/conftest.py`.
 - **Ticketing:** every change maps to a `SIM-NNN` ticket. Next free ID is tracked in `BACKLOG.md`
-  (currently **SIM-430**; the SIM-422→429 full-pool epic is filed there under its own banner). NOTE: a
+  (currently **SIM-431**; SIM-430 is the full-pool `/simulate` throughput / 2s-30s SLA perf ticket
+  filed 2026-05-30, and the SIM-422→429 full-pool epic is filed there under its own banner). NOTE: a
   realism-work batch was tagged `SIM-421` *in code comments* before the epic was filed — `SIM-421` the
   ticket is the P3 book-offered-market projection, so treat in-code `SIM-421` tags as the realism work
   and reconcile if you touch them.
@@ -284,20 +288,30 @@ The audit-era list of issues (kept here for historical context; tickets marked �
   (**SIM-409** — closed 2026-05-28; `LineupNotIngestedError` → 503 + `Retry-After: 900`;
   `lineup_ready: bool | None` field on `GameCard`).
 
-**Live-environment verification debt** (code-complete, only mock/unit-verified — confirm on a staging
-bring-up): real-DB `/simulate` 2s/30s SLA (SIM-402), a fitted `CalibrationReport` (SIM-406),
-prop-PMF validation + ablation (SIM-407), the DuckDB-profile 11-engine build (SIM-408), and a full
-`docker compose up` of nginx+app+monitoring. (SIM-405 real odds provider, SIM-410 p95 timing, and
-the SIM-403 worker-count fix all closed.) **2026-05-29 live bring-up update:** `docker compose up` ran
-for the first time — SIM-402's `/dev/shm` overflow + pre-warm hang/OOM are fixed (`shm_size: 1gb`;
-pre-warm is now a BACKGROUND task with bounded-concurrency warming + a `_get_pool` lock; healthcheck
-`start_period` 180s), and SIM-408 is now
-characterized: only **7/11** engines build (catcher/manager/baserunner_steal/pitcher_steal fail,
-situation indexes 0 rows) from an engine↔computor schema divergence — diagnosis in
-`docs/audit/2026-05-29-sim408-engine-schema-divergence.md`, turn-key reconciliation plan
-(per-engine column/table map + rebuild checklist) in `docs/audit/2026-05-29-sim408-reconciliation-plan.md`.
-A safe code-side hardening landed 2026-05-29 (situation engine raises/skips on a zero-row index
-instead of registering a NaN-poisoned one); the 11/11 build still awaits the live DuckDB rebuild.
+**Live-environment verification debt** — mostly retired over the 2026-05-29/30 live bring-up.
+`docker compose up` of nginx+app+monitoring runs. (SIM-405 real odds provider, SIM-410 p95 timing,
+and the SIM-403 worker-count fix closed earlier.) **2026-05-29 → 2026-05-30 update:**
+- **SIM-402 — CLOSED.** `/dev/shm` overflow + pre-warm hang/OOM fixed (`shm_size: 1gb`; pre-warm is
+  a BACKGROUND task with bounded-concurrency warming + a `_get_pool` lock; healthcheck `start_period`
+  180s). Re-measured live (all-seasons DuckDB, 1 worker): n=1 ≈ 2.2-2.3s, n=100 ≈ 215s — the 2s/30s
+  SLA is **not met** on the full-pool path, and 10 workers OOM-deadlock on this 15.5 GiB host. The
+  throughput gap is now **SIM-430**; the host `.env` is pinned to 1 worker. See §2.
+- **SIM-408 — CLOSED.** The engine↔DuckDB schema divergence (was **7/11**: catcher / manager /
+  baserunner_steal / pitcher_steal failing, situation indexing 0 rows) was reconciled via the TRIM
+  approach and a full all-seasons (2017-2026) profile rebuild — the live app now logs
+  `build_all_engines: 11/11`. What changed, per engine: situation now reads a new
+  `derived.at_bat_situations` table (+ a fixed park-factor join `pf.factor_type='R'`/`regressed_factor`)
+  and raises on a zero-row index; baserunner_steal + pitcher_steal read new metrics tables with the
+  biomech (jump/delivery/pickoff) features trimmed (pitcher_steal is now outcome-only); catcher
+  derives its rates from existing count columns + two new shadow/heart zone-framing columns (the
+  Offense + exchange_time sub-scores were trimmed, weights renormalized); manager's computor was
+  rewritten to the engine's usage/aggression/platoon vocabulary with the USAGE sub-score gated NULL
+  on SIM-427. Shipped as DuckDB migration `0011` (non-destructive — CREATE new tables +
+  `ALTER ... ADD COLUMN IF NOT EXISTS`); schema version 10 → 11. Diagnosis +
+  reconciliation map in `docs/audit/2026-05-29-sim408-engine-schema-divergence.md` and
+  `docs/audit/2026-05-29-sim408-reconciliation-plan.md`.
+- **Still open (now UNBLOCKED by the 11/11 real-data build — the next work):** a fitted
+  `CalibrationReport` over real data (SIM-406) and prop-PMF validation + ablation (SIM-407).
 
 **Full-pool realism residual (SIM-422→429, the production path):** box rate stats (H/HR/2B/BB/K) are
 within ~4% of MLB and steals match MLB volume, but **runs sit ~10-12% low** — a hits→runs *conversion*
@@ -322,8 +336,8 @@ breakouts (RISP, advancement, DP rate) are the right lens, not the global R mean
 | 3 | Play Pool Architecture | ✅ Complete |
 | 4 | Core Simulation Loop | ✅ Complete |
 | 5 | Simulation Runner & Backend API | ✅ Complete (CI-green on 3.11.15) |
-| 6 | **Frontend Build + P1 backend prerequisites** | ✅ **Code-complete** — SIM-378→401 + 415→420 + 414 closed; SIM-402/406/407/408 are live-env verification only |
-| 7 | Integration, Testing & Deployment | Pending live-env bring-up (closes SIM-402/406/407/408 in one pass) |
+| 6 | **Frontend Build + P1 backend prerequisites** | ✅ **Code-complete** — SIM-378→401 + 415→420 + 414 closed; SIM-402 + 408 now verified live (closed); SIM-406/407 remain (unblocked) |
+| 7 | Integration, Testing & Deployment | Live-env bring-up DONE 2026-05-30 (SIM-402 + 408 closed; full-pool `/simulate` throughput → SIM-430). Remaining: SIM-406 calibration + SIM-407 prop-PMF validation |
 
 **Realism sub-track (interleaved, landed on `master`):** the SIM-422→429 full-pool similarity-wiring
 epic replaced the per-tile k-NN draw with whole-pool engine-weighted sampling and made it the
