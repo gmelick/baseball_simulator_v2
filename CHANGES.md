@@ -1,3 +1,22 @@
+# Phase 7 — all-seasons rebuild + SIM-402 SLA re-measure → SIM-430 filed — 2026-05-30
+**Authors: Data Engineer (Agent 4), Performance Engineer (Agent 6), Backend Developer (Agent 5)**
+
+**Full all-seasons profile rebuild ran (2017–2026, ~5.2h) + verified.** All five
+SIM-408 tables now hold production data across all 10 seasons (at_bat_situations
+1.62M rows; baserunner_steal 3,947; pitcher_steal 8,095; manager 327 with the new
+vocabulary non-null on every row; catcher zone rates on 1,080/1,082). The serving
+app rebuilds **`build_all_engines: 11/11`** over it (situation indexes 1,619,472
+situations) — SIM-408 is fully closed in the live environment.
+
+**SIM-402 SLA re-measured live → spun off SIM-430.** The cold-worker stall is
+FIXED (n=10 ~500s → ~20s; pre-warm validated), but the 2s/30s wall-clock SLA is
+not met on the full-pool path. At 1 worker (stable): n=1 ~2.3s warm / n=10 ~20s /
+n=100 ~215s (serial, ~2.2s/iter). `SIM_RUNNER_WORKERS=10` is non-viable on the
+15.5 GiB host — a pre-warm worker OOM-kills, the ProcessPool deadlocks, and every
+`/simulate` then hangs (>400s); the host `.env` is pinned to 1 worker. SIM-402's
+code is correct/complete; the residual throughput gap (per-game full-pool cost +
+the fan-out that doesn't scale / OOM-deadlocks) is filed as **SIM-430**.
+
 # Phase 7 — SIM-408 VERIFIED LIVE: build_all_engines 11/11 (+ SIM-402 pre-warm) — 2026-05-29
 **Authors: Data Engineer (Agent 4), Backend Developer (Agent 5), QA/DevOps (Agent 9)**
 
