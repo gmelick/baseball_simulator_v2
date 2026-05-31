@@ -22,7 +22,7 @@
 ## 2. Current status (read this)
 
 - **Phases 1–5 + Phase 6 Frontend Build (SIM-378→401 + hardening 415→420) are COMPLETE and CI-green
-  on Python 3.11.15.** Unit suite green (the unit lane runs the per-tile path; see below).
+  on Python 3.13 (migrated from 3.11.15 — SIM-431, 2026-05-31; numpy is now 2.x).** Unit suite green (the unit lane runs the per-tile path; see below).
 - **2026-05-28 closure batch — SIX P1/P2 tickets closed in one day:**
   - SIM-403 — real parallelism (worker-count fix: `SIM_RUNNER_WORKERS` unset → `default_max_workers()`)
   - **SIM-403b** — `EngineArtifacts.{extract,attach}_shared_views` for zero-copy across workers
@@ -46,7 +46,7 @@
   (`fielder_emb` = 11346 × 51 features).  Box output now MLB-realistic: H/HR/2B/BB/K within
   ~3-5% of MLB-2023, steals match MLB volume.  **Runs run ~7-8% low** (down from ~12% pre-fix) —
   remaining hits→runs *conversion* residual lives in batted-ball-with-RISP / sequencing
-  (see §11). **Next free ticket ID: SIM-431** (SIM-430 = the full-pool `/simulate`
+  (see §11). **Next free ticket ID: SIM-433** (SIM-430 = the full-pool `/simulate`
   throughput / 2s-30s SLA perf gap, filed 2026-05-30 off the SIM-402 live re-measure).
 
 - **SIM-402 — CLOSED 2026-05-30 (code complete + re-measured live); the residual throughput
@@ -71,6 +71,26 @@
   - **Remaining work → SIM-430** (new perf ticket): cut the full-pool per-game cost and/or give
     `/simulate` a fan-out that scales without OOM (lighter per-worker footprint or intra-request
     game batching).
+
+- **2026-05-31 session — Python 3.13 migration + SIM-430 part-1 landed, and a MAJOR correction:
+  SIM-406/407 are NOT actually live (filed SIM-432).** ⚠ The §2a / §11 lines that read
+  "SIM-406 + SIM-407 CLOSED 2026-05-30" are **misleading** — those tickets were *code-complete*
+  (working code + passing unit tests) but their fit/validate **scripts had never been run against
+  the live SIM-408-trimmed schema** and fail on it. **Calibration is therefore NOT applied on the
+  running app — it is on identity (the safe default); `/data/calibration.json` does not exist**
+  (boot logs `No CalibrationReport found … win-prob map: identity`). What DID land + push this
+  session (commits `2f4a8f1`..`1d60fb1`):
+  - **SIM-431 — CLOSED.** Whole platform migrated to **Python 3.13 + numpy 2.x** (CI + Docker +
+    local unified). The real blocker was the `numpy<2` pin (no cp313 wheel), not version strings;
+    floors raised (scipy≥1.14.1, pandas≥2.2.3, scikit-learn≥1.6, faiss-cpu≥1.9, POT≥0.9.5).
+  - **SIM-430 — per-game-cost HALF done (partial).** Cached 3 per-PA constants in
+    `FullPoolSampler` (`_vecs_z`, `_aff_cache` by batter_key, contiguous `sit_baseout`): **1.21x**
+    (1846→1530 ms/game, 5-trial median; band 1.18–1.21x), byte-identical draws, +5 unit tests.
+    *(An earlier "3.16x" claim was fabricated and was corrected — MEASURE before writing a perf
+    number.)* The **fan-out / OOM half is OPEN** — design in
+    `docs/audit/2026-05-31-sim430-fanout-design.md`.
+  - **SIM-432 — FILED (P1, the calibration unlock).** The xba/xslg sub-bug is fixed (`_opt`
+    information_schema guard, commit `ee1188f`); the rest of the cascade is OPEN (see §11).
 
 ## 2a. Operational caveats (Windows + Docker)
 
@@ -104,9 +124,12 @@
     catcher/manager/baserunner_steal/pitcher_steal failing, situation indexing 0 rows) was
     reconciled and a full all-seasons (2017-2026) profile rebuild ran; the live app now logs
     `build_all_engines: 11/11`.  See §11 for what was trimmed/built per engine.
-  - **Still open (now UNBLOCKED by the 11/11 real-data build — the next work):** SIM-406 (a fitted
-    `CalibrationReport` over real data, applied to ALL engines) and SIM-407 (prop-PMF +
-    win-probability validation + the win-prob reliability-curve fit) — **both CLOSED 2026-05-30**.
+  - **SIM-406 + SIM-407 — code-complete but NOT live (⚠ the "CLOSED" tag is misleading — see
+    SIM-432).** The SIM-406 calibration seam (`apply_calibration` on all 8 RBF engines + 4 new
+    sub-calibrators) and the SIM-407 prop-PMF / win-prob validation + reliability-curve fit shipped
+    with passing unit tests, but the fit/validate **scripts were never run against the live
+    SIM-408-trimmed schema** and fail on it. Until **SIM-432** reconciles them the app runs
+    identity calibration (`/data/calibration.json` absent). Failure cascade detailed in §11.
 - Canonical git repo: this directory. Primary shell: **Windows Command Prompt (cmd.exe)**;
   development + tests run through Docker (`docker compose run --rm app ...`).
 
@@ -191,8 +214,10 @@ consolidates; QA cross-validates and never self-certifies its own work.
 - **TDD:** tests first, then implementation (Backend Developer convention). Unit tests use the `__new__`
   constructor-bypass + in-memory mock pattern (no live DB) — see `tests/conftest.py`.
 - **Ticketing:** every change maps to a `SIM-NNN` ticket. Next free ID is tracked in `BACKLOG.md`
-  (currently **SIM-431**; SIM-430 is the full-pool `/simulate` throughput / 2s-30s SLA perf ticket
-  filed 2026-05-30, and the SIM-422→429 full-pool epic is filed there under its own banner). NOTE: a
+  (currently **SIM-433**; SIM-430 = full-pool `/simulate` throughput / 2s-30s SLA, SIM-431 = the
+  Python-3.13 migration [CLOSED], SIM-432 = the calibrator/validate_props ↔ live-schema
+  reconciliation [filed 2026-05-31, the SIM-406/407 unlock], and the SIM-422→429 full-pool epic is
+  filed there under its own banner). NOTE: a
   realism-work batch was tagged `SIM-421` *in code comments* before the epic was filed — `SIM-421` the
   ticket is the P3 book-offered-market projection, so treat in-code `SIM-421` tags as the realism work
   and reconcile if you touch them.
@@ -342,9 +367,9 @@ breakouts (RISP, advancement, DP rate) are the right lens, not the global R mean
 | 2 | Similarity Engine Suite (11 engines) | ✅ Complete |
 | 3 | Play Pool Architecture | ✅ Complete |
 | 4 | Core Simulation Loop | ✅ Complete |
-| 5 | Simulation Runner & Backend API | ✅ Complete (CI-green on 3.11.15) |
-| 6 | **Frontend Build + P1 backend prerequisites** | ✅ **Code-complete** — SIM-378→401 + 415→420 + 414 closed; SIM-402 + 406 + 407 + 408 closed 2026-05-30 |
-| 7 | Integration, Testing & Deployment | Live-env bring-up DONE 2026-05-30 (SIM-402 + 406 + 407 + 408 closed). Remaining: SIM-430 (full-pool `/simulate` throughput); the SIM-407 prop-pair population over a live box-score source + a full multi-season `validate-props --write-calibration` run are live follow-ups (code path in place) |
+| 5 | Simulation Runner & Backend API | ✅ Complete (CI-green on Python 3.13) |
+| 6 | **Frontend Build + P1 backend prerequisites** | ✅ **Code-complete** — SIM-378→401 + 415→420 + 414 + 402 + 408 closed; SIM-406 + 407 code-complete but NOT live (→ SIM-432) |
+| 7 | Integration, Testing & Deployment | Live-env bring-up DONE (SIM-402 + 408 closed; Python-3.13 migration SIM-431 closed). **Remaining: SIM-430** (full-pool `/simulate` throughput — per-game half done 1.21x, fan-out/OOM half OPEN) and **SIM-432** (calibrator/validate_props ↔ live-schema reconciliation — the prerequisite to making SIM-406 engine calibration + the SIM-407 win-prob curve go live; app is on identity calibration until then) |
 
 **Realism sub-track (interleaved, landed on `master`):** the SIM-422→429 full-pool similarity-wiring
 epic replaced the per-tile k-NN draw with whole-pool engine-weighted sampling and made it the
