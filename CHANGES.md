@@ -29,19 +29,31 @@ seam/backtest; ablation is synthetic-only").
   - **`build_validation_report`** aggregator + **`write_reliability_curve_to_calibration_report`**
     (writes the fitted curve into the on-disk `CalibrationReport` without clobbering
     its sigmas), and a JSON-round-trippable `PropValidationReport`.
+  - **`real_props_from_pa_events`** — derives the REAL per-player prop totals from
+    the per-PA `events` label in `raw.pitches` (the SAME pitch table the engines
+    are built from, so NO extra data source is needed). Only props EXACTLY
+    recoverable from the label are produced — batter H/HR/TB, pitcher K/BB; RBI/ER/
+    OUTS are deliberately excluded (the label carries no runs-driven-in /
+    earned-run / per-event-out info — deriving them would corrupt the
+    calibration). Intentional walks are excluded from BB (the sim models no IBB).
+    `pair_props_for_validation` pairs those actuals with the sim PMFs where present.
 - **`scripts/validate_props.py`** — offline orchestration: pulls Final games from
-  `raw.games`, runs the real `BatchRunner` per game (the SAME sim seam the API
-  serves), pairs the sim's home win prob against the actual result, builds + writes
-  the report, and (with `--write-calibration`) writes the fitted curve into
-  `CALIBRATION_REPORT_PATH`. `make validate-props` wraps it. The win-prob fit is the
-  shippable deliverable; prop-pair population is gated on a completed-game
-  box-score source (`--no-props` runs win-prob alone).
-- **Tests:** `tests/unit/test_ml_engines_sim407.py` (28 tests) — binary metrics
+  `raw.games`, replays each via the SIM-356 `record_game_plays` seam (the SAME
+  factory the API/batch runner use — `BatchRunner` retains only the aggregate
+  summary, so the per-iteration boxscores the prop PMFs need come from this seam,
+  exactly as `/api/.../boxscore` does), pairs the sim's home win prob against the
+  real score AND the sim's prop PMFs against the real per-player totals from
+  `raw.pitches.events`, builds + writes the report, and (with `--write-calibration`)
+  writes the fitted curve into `CALIBRATION_REPORT_PATH`. `make validate-props`
+  wraps it. Props are ON by default; `--no-props` is a faster win-prob-only mode.
+- **Tests:** `tests/unit/test_ml_engines_sim407.py` (35 tests) — binary metrics
   (calibrated→low ECE, over-confident→high, finite log-loss, input validation), the
   reliability fit + the end-to-end handoff (fitted curve → non-identity corrective
   `CalibrationMap`), prop over/under (matched vs biased detection, integer-line push),
-  PIT/coverage (calibrated mean≈0.5, biased shift), report round-trip, and the
-  aggregator + curve write-back.
+  PIT/coverage (calibrated mean≈0.5, biased shift), report round-trip, the
+  aggregator + curve write-back, the real-prop derivation (hits/HR/TB, K/BB, IBB
+  excluded, case/blank tolerance) + pairing, and script contract guards (the
+  BatchRunner signature + the `record_game_plays` seam — both review-caught).
 
 ruff + ruff-format + mypy clean. **Out of scope (existing, not regressed):** the
 multi-class outcome ablation/walk-forward already exists as SIM-220

@@ -10,12 +10,13 @@ WHAT IT DOES
 ------------
 For each completed ("Final") game in the requested seasons:
   1. resolve the game's lineup into a GameState (the SIM-353 path),
-  2. run an N-iteration Monte-Carlo batch (the SAME BatchRunner the API uses),
+  2. replay N iterations via ``record_game_plays`` (the SAME factory the API /
+     batch runner use), collecting one :class:`GameSimResult` per iteration,
   3. take the simulator's home win probability (SIM-330) + per-player prop PMFs
-     (SIM-329), and
-  4. pair each against what ACTUALLY happened (the real home/away score from
-     ``raw.games``; the real per-player box-score line from ``raw.*`` if a
-     box-source is available — see ``--no-props`` below).
+     (SIM-329, built from the per-iteration boxscores), and
+  4. pair each against what ACTUALLY happened — the real home/away score from
+     ``raw.games`` (win prob), and the real per-player prop totals aggregated
+     from ``raw.pitches.events`` (props: batter H/HR/TB, pitcher K/BB).
 
 It then scores those (prediction, actual) pairs with
 ``simulation.prop_validation`` — win-prob ECE/Brier/log-loss + the fitted
@@ -24,15 +25,21 @@ reliability curve + per-prop over/under calibration + PMF coverage — writes a
 fitted reliability curve into the CalibrationReport at ``CALIBRATION_REPORT_PATH``
 so the next API boot applies the empirical win-prob correction.
 
-WIN-PROB vs PROP SCOPE
-----------------------
-The win-prob validation needs only the real final score (always in ``raw.games``),
-so it runs by default. The PROP validation needs the real per-player box-score
-line (K/H/HR/...) for the game; that requires a completed-game box-score source in
-the DB. If your environment doesn't expose one yet, pass ``--no-props`` to run the
-win-prob fit alone (the prop scaffolding + report fields stay, just unpopulated) —
-the win-prob reliability curve (the SIM-406 → 407 deliverable) does not depend on
-it.
+WHAT PROPS ARE VALIDATED
+------------------------
+The prop ground truth comes from ``raw.pitches.events`` — the SAME pitch-by-pitch
+table the similarity engines are built from, so NO extra data source is needed.
+Only the props EXACTLY recoverable from the per-PA event label are scored:
+
+  * batter:  H, HR, TB
+  * pitcher: K, BB
+
+RBI / ER / OUTS are intentionally NOT derived — RBI needs the per-PA
+runs-driven-in count, ER needs earned/unearned attribution, and OUTS needs a
+per-event out count, none of which the event label carries; deriving them from
+``events`` would produce wrong actuals that corrupt the calibration. They are left
+for a richer box-score source. ``--no-props`` runs the win-prob fit alone (a fast
+smoke run) — the win-prob reliability curve does not depend on the props.
 
 USAGE
 -----
@@ -44,8 +51,8 @@ USAGE
     # Via the Makefile wrapper:
     make validate-props FLAGS="--seasons 2024 --write-calibration"
 
-This is an OFFLINE validation/fitting job (it runs real sims, so it is slow — use
-``--max-games`` to cap a smoke run). It never serves a request; the API only
+This is an OFFLINE validation/fitting job (it replays real sims, so it is slow —
+use ``--max-games`` to cap a smoke run). It never serves a request; the API only
 *reads* the artifacts it writes.
 """
 
@@ -61,9 +68,12 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+from simulation.prop_distributions import PropDistributionSet  # noqa: E402
 from simulation.prop_validation import (  # noqa: E402
     PropValidationReport,
     build_validation_report,
+    pair_props_for_validation,
+    real_props_from_pa_events,
     write_reliability_curve_to_calibration_report,
 )
 
@@ -75,6 +85,9 @@ DEFAULT_DSN = os.environ.get(
 )
 DEFAULT_CALIBRATION_PATH = os.environ.get("CALIBRATION_REPORT_PATH", "/data/calibration.json")
 DEFAULT_OUTPUT = os.environ.get("PROP_VALIDATION_PATH", "/data/prop_validation.json")
+
+#: The production machine factory (dotted ref) — the SAME one the API serves with.
+_FACTORY_REF = "simulation.production_factory:production_machine_factory"
 
 
 async def _fetch_final_games(dsn: str, seasons: list[int], max_games: int | None) -> list[dict]:
@@ -113,26 +126,51 @@ async def _fetch_final_games(dsn: str, seasons: list[int], max_games: int | None
     ]
 
 
-def _run_one_game_sim(state, runner, factory_ref, n_iter: int, seed: int):
-    """Simulate ONE already-resolved game; return its GameSimSummary.
+async def _fetch_pa_events(pool, game_pk: int) -> list[tuple]:
+    """Return one ``(batter, pitcher, events)`` tuple per COMPLETED plate
+    appearance for ``game_pk``, read from ``raw.pitches``.
 
-    Reuses the API's own sim seam (``api.routes.games`` helpers) so the validation
-    runs the SAME path production serves: build a GameSpec from the resolved
-    GameState under the production factory, run the BatchRunner. The state is
-    resolved by the async caller (``run``) because ``resolve_game_state`` is async
-    and this function runs on a worker thread (``asyncio.to_thread``).
+    ``raw.pitches.events`` is populated only on the terminal pitch of each PA, so
+    filtering non-empty ``events`` yields exactly one row per PA — the real
+    per-player outcomes :func:`real_props_from_pa_events` aggregates into the prop
+    ground truth (the SAME table the similarity engines are built from).
     """
-    from api.routes.games import _run_batch, _sim_kwargs_from_state
-    from simulation.batch_runner import GameSpec
+    rows = await pool.fetch(
+        "SELECT batter, pitcher, events FROM raw.pitches "
+        "WHERE game_pk = $1 AND events IS NOT NULL AND events <> ''",
+        int(game_pk),
+    )
+    return [(r["batter"], r["pitcher"], r["events"]) for r in rows]
 
-    spec = GameSpec(machine_factory=factory_ref, sim_kwargs=_sim_kwargs_from_state(state))
-    batch = _run_batch(runner, spec, n_iterations=n_iter, base_seed=seed, use_cache=False)
-    return batch.summary
+
+def _collect_game_results(state, n_iter: int, base_seed: int | None) -> list:
+    """Replay one already-resolved game N times; return the per-iteration results.
+
+    Uses the SIM-356 ``record_game_plays`` seam (the SAME one ``/api/.../boxscore``
+    uses to materialise per-game boxscores, which ``BatchRunner`` does not retain):
+    builds the live machine from the production ``factory_ref`` + the resolved
+    GameState's sim_kwargs, runs ``simulate_game`` at each derived seed, and
+    collects the :class:`GameSimResult` (carrying ``.boxscore`` + the score) per
+    iteration. The list feeds BOTH the win-probability aggregation AND the prop-PMF
+    set. Sync + CPU-bound, so the async caller offloads it via ``asyncio.to_thread``.
+    """
+    from api.routes.games import _sim_kwargs_from_state
+    from simulation.batch_runner import derive_seed
+    from simulation.play_recorder import record_game_plays
+
+    sim_kwargs = _sim_kwargs_from_state(state)
+    results = []
+    for i in range(int(n_iter)):
+        seed = derive_seed(base_seed, i)
+        result, _plays = record_game_plays(
+            factory_ref=_FACTORY_REF, seed=seed, sim_kwargs=sim_kwargs
+        )
+        results.append(result)
+    return results
 
 
 async def run(args: argparse.Namespace) -> int:
     from api.routes.games import _resolve_state_or_error
-    from simulation.batch_runner import BatchRunner, default_max_workers, make_cache
     from simulation.win_probability import win_probability
 
     seasons = sorted({int(s) for s in args.seasons}, reverse=True)
@@ -146,23 +184,14 @@ async def run(args: argparse.Namespace) -> int:
 
     import asyncpg
 
-    # SIM_RUNNER_WORKERS is honored by the runner; default to a modest pool. The
-    # per-game machine factory travels on the GameSpec (see _run_one_game_sim), NOT
-    # on the BatchRunner — BatchRunner.__init__ takes (cache, max_workers, ...).
-    workers_env = os.environ.get("SIM_RUNNER_WORKERS")
-    workers = int(workers_env) if workers_env else default_max_workers()
-    factory_ref = "simulation.production_factory:production_machine_factory"
-
     winprob_pairs: list[tuple[float, int]] = []
     prop_pairs_by_line: dict[tuple[str, float], list] = {}
     n_done = 0
-    # Create the pool + runner INSIDE the try so a construction failure still hits
-    # the finally (no leaked asyncpg pool / executor).
+    n_props = 0
+    # Pool created INSIDE the try so a construction failure still hits the finally.
     pool = None
-    runner = None
     try:
         pool = await asyncpg.create_pool(args.dsn, min_size=1, max_size=4)
-        runner = BatchRunner(cache=make_cache(), max_workers=workers)
         for g in games:
             game_pk = g["game_pk"]
             try:
@@ -171,40 +200,37 @@ async def run(args: argparse.Namespace) -> int:
                 log.info("skip game %s (state unresolved: %s)", game_pk, type(exc).__name__)
                 continue
 
-            summary = await asyncio.to_thread(
-                _run_one_game_sim,
-                state,
-                runner,
-                factory_ref,
-                args.iterations,
-                args.base_seed,
+            results = await asyncio.to_thread(
+                _collect_game_results, state, args.iterations, args.base_seed
             )
-            if summary is None:
+            if not results:
                 continue
 
-            # Win prob (calibrated transform, identity map here — we are FITTING the
-            # map, so we validate the raw smoothed probability) vs the real result.
-            wp = win_probability(summary)
+            # Win prob (identity map here — we are FITTING the map, so we validate
+            # the RAW smoothed probability). win_probability accepts the per-
+            # iteration results list and aggregates it (SIM-330).
+            wp = win_probability(results)
             home_won = 1 if g["home_score"] > g["away_score"] else 0
             winprob_pairs.append((float(wp.home_win_prob), home_won))
 
-            # Prop PMFs would be paired here against the real box line; gated on a
-            # completed-game box-score source (see module docstring / --no-props).
+            # Prop PMFs (from the per-iteration boxscores) paired against the REAL
+            # per-player outcomes derived from raw.pitches.events for this game.
             if not args.no_props:
-                # Placeholder for the prop pairing — populated when a box-source is
-                # wired. Left empty rather than fabricating actuals.
-                pass
+                pset = PropDistributionSet.from_results(results)
+                pa_events = await _fetch_pa_events(pool, game_pk)
+                batter_actuals, pitcher_actuals = real_props_from_pa_events(pa_events)
+                n_props += pair_props_for_validation(
+                    pset, batter_actuals, pitcher_actuals, prop_pairs_by_line
+                )
 
             n_done += 1
             if n_done % 25 == 0:
-                log.info("  validated %d/%d games ...", n_done, len(games))
+                log.info("  validated %d/%d games (%d prop pairs) ...", n_done, len(games), n_props)
     finally:
-        if runner is not None:
-            runner.close()
         if pool is not None:
             await pool.close()
 
-    log.info("Building validation report from %d games.", n_done)
+    log.info("Building validation report from %d games (%d prop pairs).", n_done, n_props)
     report = build_validation_report(
         winprob_pairs,
         prop_pairs_by_line,
@@ -286,7 +312,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--no-props",
         action="store_true",
-        help="Win-prob validation only (skip prop pairing; needs no box-source).",
+        help="Win-prob validation only (skip the per-game prop pairing; faster smoke run).",
     )
     p.add_argument("--output", default=DEFAULT_OUTPUT, help="PropValidationReport JSON path.")
     p.add_argument(

@@ -84,6 +84,11 @@ __all__ = [
     "build_validation_report",
     "reliability_curve_for_calibration_report",
     "write_reliability_curve_to_calibration_report",
+    "real_props_from_pa_events",
+    "pair_props_for_validation",
+    "DERIVABLE_BATTER_PROPS",
+    "DERIVABLE_PITCHER_PROPS",
+    "DEFAULT_PROP_LINES",
     "PropCalibration",
     "PropValidationReport",
 ]
@@ -401,6 +406,122 @@ def pmf_coverage(
         "pit_mean": float(pit.mean()),
         "n": int(pit.size),
     }
+
+
+# ---------------------------------------------------------------------------
+# Real prop outcomes from raw.pitches `events` (the prop ground truth)
+# ---------------------------------------------------------------------------
+
+#: MLB Stats API / Statcast per-PA `events` labels that are HITS, mapped to their
+#: total-bases value (for the H and TB props).
+_HIT_EVENTS: dict[str, int] = {"single": 1, "double": 2, "triple": 3, "home_run": 4}
+#: `events` labels that are pitcher strikeouts (the K prop).
+_STRIKEOUT_EVENTS = frozenset({"strikeout", "strikeout_double_play"})
+#: `events` labels counted as a pitcher walk (the BB prop). Intentional walks
+#: (``intent_walk``) are EXCLUDED: a pitch-by-pitch sim does not model the IBB
+#: managerial decision, so its BB PMF is unintentional-walks only — counting IBB
+#: in the realized total would unfairly penalise the sim's high tail. (One-line
+#: change here if the sim is ever found to model the IBB.)
+_WALK_EVENTS = frozenset({"walk"})
+
+#: Prop totals EXACTLY recoverable from the per-PA event LABEL alone. RBI, ER and
+#: OUTS are intentionally NOT derived: RBI needs the per-PA runs-driven-in count,
+#: ER needs earned/unearned run attribution, and OUTS needs a per-event out count
+#: — none carried by the event label — so deriving them from ``events`` would
+#: produce wrong "actuals" that silently corrupt the calibration. They are scored
+#: only when a richer box-score source supplies them.
+DERIVABLE_BATTER_PROPS: tuple[str, ...] = ("H", "HR", "TB")
+DERIVABLE_PITCHER_PROPS: tuple[str, ...] = ("K", "BB")
+
+#: Default over/under lines per prop for the binary calibration metric (typical
+#: half-integer book lines, so no push). The PIT / coverage goodness-of-fit check
+#: is line-free and does not use these.
+DEFAULT_PROP_LINES: dict[str, float] = {
+    "H": 1.5,
+    "HR": 0.5,
+    "TB": 1.5,
+    "K": 5.5,
+    "BB": 1.5,
+}
+
+
+def real_props_from_pa_events(
+    pa_events: Sequence[tuple[int | None, int | None, str | None]],
+) -> tuple[dict[int, dict[str, int]], dict[int, dict[str, int]]]:
+    """Aggregate per-PA ``events`` rows into real per-player prop totals.
+
+    ``pa_events`` is one tuple ``(batter_id, pitcher_id, event_label)`` per
+    COMPLETED plate appearance — i.e. the terminal pitch of each PA, where
+    ``raw.pitches.events`` is populated (the caller filters
+    ``events IS NOT NULL AND events <> ''``). Returns two dicts:
+
+        batter_actuals[batter_id]   = {"H": int, "HR": int, "TB": int}
+        pitcher_actuals[pitcher_id] = {"K": int, "BB": int}
+
+    Only props exactly recoverable from the event LABEL are produced (see
+    ``DERIVABLE_*_PROPS``); RBI/ER/OUTS are omitted. Unknown / out labels (field
+    outs, GIDP, HBP, …) correctly contribute 0. The event match is
+    case-insensitive and whitespace-tolerant. This is the prop ground truth the
+    sim's prop PMFs are validated against — derived from the SAME ``raw.pitches``
+    the engines are built from, so no extra data source is needed.
+    """
+    batter: dict[int, dict[str, int]] = {}
+    pitcher: dict[int, dict[str, int]] = {}
+    for bid, pid, raw_event in pa_events:
+        event = (raw_event or "").strip().lower()
+        if bid is not None:
+            b = batter.setdefault(int(bid), {"H": 0, "HR": 0, "TB": 0})
+            bases = _HIT_EVENTS.get(event)
+            if bases is not None:
+                b["H"] += 1
+                b["TB"] += bases
+                if event == "home_run":
+                    b["HR"] += 1
+        if pid is not None:
+            p = pitcher.setdefault(int(pid), {"K": 0, "BB": 0})
+            if event in _STRIKEOUT_EVENTS:
+                p["K"] += 1
+            elif event in _WALK_EVENTS:
+                p["BB"] += 1
+    return batter, pitcher
+
+
+def pair_props_for_validation(
+    pset: Any,
+    batter_actuals: dict[int, dict[str, int]],
+    pitcher_actuals: dict[int, dict[str, int]],
+    prop_pairs_by_line: dict[tuple[str, float], list],
+    *,
+    prop_lines: dict[str, float] | None = None,
+) -> int:
+    """Pair this game's sim prop PMFs with the realized per-player prop totals.
+
+    For every (player, derivable prop) that BOTH the sim PMF set (``pset``, a
+    :class:`~simulation.prop_distributions.PropDistributionSet`) and the realized
+    actuals contain, appends ``(PropDistribution, actual_value)`` onto
+    ``prop_pairs_by_line[(prop, line)]`` (accumulated across games). A player/prop
+    absent from the PMF set (e.g. a reliever the projected lineup didn't include)
+    is skipped — we only score where the sim actually made a prediction. Returns
+    the number of pairs added.
+
+    ``pset`` is typed ``Any`` so this module needn't import the heavy
+    prop_distributions at module load; it just needs ``pset.get(pid, prop)``.
+    """
+    lines = prop_lines or DEFAULT_PROP_LINES
+    added = 0
+    for actuals, props in (
+        (batter_actuals, DERIVABLE_BATTER_PROPS),
+        (pitcher_actuals, DERIVABLE_PITCHER_PROPS),
+    ):
+        for pid, totals in actuals.items():
+            for prop in props:
+                dist = pset.get(int(pid), prop)
+                if dist is None:
+                    continue
+                line = float(lines.get(prop, 0.5))
+                prop_pairs_by_line.setdefault((prop, line), []).append((dist, int(totals[prop])))
+                added += 1
+    return added
 
 
 # ---------------------------------------------------------------------------
