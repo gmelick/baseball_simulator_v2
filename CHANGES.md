@@ -12,8 +12,8 @@ those expected-stats columns — the batter ENGINE already guards them via its
 **Correction (2026-05-31): this fix is necessary but NOT sufficient — `fit_calibration`
 does NOT yet complete on the live DB.** Running it surfaced a cascade of further
 calibrator↔live-schema mismatches (the calibrator was written against an un-trimmed
-schema; the live `derived.*` tables are the SIM-408-trimmed ones): `RESULTS_FEATURES`
-import typo (fixed), `first_pitch_take_rate` / `max_exit_velo` / the whole batter
+schema; the live `derived.*` tables are the SIM-408-trimmed ones): the pitcher sub-calibrator's `RESULT_FEATURES`
+import (NOT fixed — `pitcher_similarity` exports only `COMMAND_FEATURES` now; SIM-432), `first_pitch_take_rate` / `max_exit_velo` / the whole batter
 platoon block (`*_vs_r`) absent, and likely the other sub-calibrators. Full
 reconciliation is filed as **SIM-432**; calibration is NOT live yet (app stays on
 identity, which is the safe default). SIM-406 unit suite (29) still green; ruff clean.
