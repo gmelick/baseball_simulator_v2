@@ -14,7 +14,7 @@
 # Installs all Python dependencies into a prefix so the runtime stage
 # only copies the compiled packages, not build tools.
 # ---------------------------------------------------------------------------
-FROM python:3.11-slim AS builder
+FROM python:3.13-slim AS builder
 
 # Prevent .pyc files and enable unbuffered stdout/stderr
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -42,7 +42,7 @@ RUN pip install --upgrade pip \
 # Minimal image: only the installed packages + application source.
 # No build tools, no package manager caches.
 # ---------------------------------------------------------------------------
-FROM python:3.11-slim AS runtime
+FROM python:3.13-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

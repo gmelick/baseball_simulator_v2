@@ -112,7 +112,7 @@
 
 ## 3. Tech stack
 
-Python 3.11+ · FastAPI · Pydantic v2 · PostgreSQL (async SQLAlchemy + Alembic) · **DuckDB** (in-process,
+Python 3.13 · FastAPI · Pydantic v2 · PostgreSQL (async SQLAlchemy + Alembic) · **DuckDB** (in-process,
 no container — postgres extension) · Redis · scikit-learn (GMMs) · **FAISS** · NumPy/pandas · scipy · POT
 (Wasserstein) · pybaseball · Docker / docker-compose · nginx · Prometheus + Grafana · pytest (+asyncio,
 cov, timeout, benchmark, mock, hypothesis) · ruff (lint+format) · mypy. Frontend framework (React vs
@@ -228,7 +228,7 @@ make profile-computor  # nightly: rebuild DuckDB profiles + sim pools
 make play-pool-cache   # nightly (after profile-computor): materialize FAISS tiles
 ```
 
-Raw equivalents (if running Python directly, target **Python 3.11**):
+Raw equivalents (if running Python directly, target **Python 3.13**):
 
 ```
 pytest tests/unit/ -m "not slow" --cov=similarity --cov=pipeline --cov=simulation --cov=betting --cov=api
@@ -242,7 +242,9 @@ mypy similarity/ pipeline/ api/        # CI scope; config in pyproject.toml; pin
   **unit-tests + 80% coverage gate**, regression, e2e (SIM-371 TestClient), secrets-check, file-integrity,
   docker-build-check. Plus weekly `integration-weekly.yml` (testcontainers) and a perf job that hard-gates
   the `/simulate` SLA under `PERF_STRICT`. `docker-release.yml` pushes the API image to ghcr on main.
-- **CI Python is 3.11.x.** The coverage gate is 80 (currently met at 89%). CI uses `--tb=native`
+- **CI Python is 3.13.x (SIM-431, migrated from 3.11 on 2026-05-30 so CI + Docker + local dev all
+  match).** numpy is now 2.x (cp313 has no numpy-1.26 wheel; the codebase uses no numpy-2-removed APIs).
+  The coverage gate is 80 (currently met at 89%). CI uses `--tb=native`
   (a pytest `--tb=short` renderer bug — `tb_lineno=None` INTERNALERROR — can otherwise mask real failures).
 - **Slow tests** (~15) are `@pytest.mark.slow` and currently run in the default unit lane at
   `--timeout=30`; SIM-418 will split them into a dedicated lane. A per-test `@pytest.mark.timeout(N)`
@@ -371,6 +373,6 @@ status enum; typed WebSocket schema; calibration-wiring fix; auth enforcement) �
 - Keep the agent-team rhythm: implement → independent QA cross-validation → run the full suite → document
   (CHANGES/BACKLOG/SPRINT) → regenerate `backlog.xlsx`.
 - Run `make test-unit` + `make lint` + `make type-check` before committing; run `make test-regression`
-  after any engine/model change. Target Python 3.11 to match CI.
+  after any engine/model change. Target Python 3.13 to match CI (SIM-431; numpy 2.x).
 - Don't commit credentials; honor the migration + regression conventions above.
 - Prefer surgical edits to `simulation/sim_loop.py` (it's the largest, most-touched file).

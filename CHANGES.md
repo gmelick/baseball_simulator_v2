@@ -1,3 +1,36 @@
+# Phase 7 — SIM-431: migrate the platform to Python 3.13 (CI + Docker + local dev unified) — 2026-05-30
+**Authors: QA/DevOps (Agent 9), ML Engineer (Agent 3), Backend Developer (Agent 5)**
+
+Local dev had drifted to Python 3.13 while CI/Docker were pinned to 3.11, so green-local
+could still be red-CI (and vice versa). Migrated the whole platform to **Python 3.13** so all
+three run the same interpreter.
+
+**The actual blocker was the numpy pin, not the version strings.** Python 3.13 has no
+`numpy==1.26` wheel, so `numpy>=1.26,<2.0` could never install on cp313 — numpy must be 2.x.
+An audit for numpy-2.0-REMOVED APIs (`np.float_`, `np.NaN`, `np.product`, `np.in1d`,
+`np.row_stack`, `np.trapz`, `np.alltrue`, `np.string_`, etc.) across similarity/ simulation/
+pipeline/ api/ betting/ found ZERO usages, so numpy 2.x is a drop-in.
+
+**What changed:**
+- **`requirements.txt`** — `numpy>=2.1,<3.0` (was `>=1.26,<2.0`); floors raised to first
+  cp313 + numpy-2 wheels: `scipy>=1.14.1`, `pandas>=2.2.3`, `scikit-learn>=1.5.1`,
+  `faiss-cpu>=1.9` (1.8 has no cp313 wheel). POT/the rest already had cp313 wheels.
+- **`.github/workflows/{ci,integration-weekly,perf-weekly}.yml`** — `PYTHON_VERSION: '3.13'`.
+- **`Dockerfile`** — `python:3.11-slim` → `python:3.13-slim` (builder + runtime).
+- **`pyproject.toml`** — ruff `target-version = "py313"`, mypy `python_version = "3.13"`.
+  (ruff's py313 target auto-flagged + fixed two UP043 `Generator[X, None, None]` →
+  `Generator[X]` in tests/integration/conftest.py.)
+- Docs (`CLAUDE.md`) updated to say 3.13 / numpy 2.x.
+
+**Verification (on local 3.13.7 + numpy 2.1.3 + faiss 1.14.2 + POT 0.9.6, matching the new CI):**
+- `pip install -r requirements.txt` resolves cleanly on cp313 (dry-run rc=0, all wheels, no source build).
+- Full unit lane: **2087 passed, 1 skipped** (identical to CI's pre-migration count, minus the
+  2 SIM-334 failures fixed earlier).
+- Regression golden-file suite: **53 passed** — the fixtures do NOT drift under numpy 2.x
+  (numpy's seeded Generator bit-stream + IEEE float ops are version-stable), so no regen needed.
+- `ruff check .` + `ruff format --check .` clean under the py313 target; mypy clean on the
+  CI scope (the lone local "types-requests not installed" note is a pre-existing env gap CI installs).
+
 # Phase 7 — SIM-407: prop-PMF + win-probability validation; fit the reliability curve SIM-406 left empty — 2026-05-30
 **Authors: ML Engineer (Agent 3), Betting/Markets Analyst (Agent 8), QA/DevOps (Agent 9)**
 

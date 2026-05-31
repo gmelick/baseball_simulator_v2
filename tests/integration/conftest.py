@@ -144,7 +144,7 @@ def pg_container():
 
 
 @pytest.fixture(scope="session")
-def pg_engine(pg_container) -> Generator[sa.Engine, None, None]:
+def pg_engine(pg_container) -> Generator[sa.Engine]:
     """Return a SQLAlchemy Engine connected to the test PostgreSQL instance.
 
     Session-scoped: one engine per test session, connection pool shared
@@ -162,7 +162,7 @@ def pg_engine(pg_container) -> Generator[sa.Engine, None, None]:
 
 
 @pytest.fixture()
-def pg_connection(pg_engine) -> Generator[sa.Connection, None, None]:
+def pg_connection(pg_engine) -> Generator[sa.Connection]:
     """Yield a transactional connection that auto-rolls back after each test.
 
     This isolates every test: writes made during the test are never committed

@@ -1,6 +1,6 @@
 # =============================================================================
 # MLB Baseball Simulation Platform — Development & Test Dependencies
-# Python 3.11+
+# Python 3.13+  (SIM-431)
 #
 # Install: pip install -r requirements-dev.txt
 # (includes all runtime deps via -r requirements.txt)
