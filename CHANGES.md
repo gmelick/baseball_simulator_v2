@@ -9,10 +9,14 @@ those expected-stats columns — the batter ENGINE already guards them via its
 `information_schema.columns` and select `NULL AS xba` / `NULL AS xslg` when absent
 (the `_v(... or 0.0)` coercion drops the feature).
 
-Verified on the live stack: `fit_calibration.py` now completes and writes
-`/data/calibration.json` with **19/20 engine sigmas fitted** (the lone 0.0 is
-manager USAGE, intentionally gated NULL on SIM-427). SIM-406 unit suite (29) still
-green; ruff+format clean.
+**Correction (2026-05-31): this fix is necessary but NOT sufficient — `fit_calibration`
+does NOT yet complete on the live DB.** Running it surfaced a cascade of further
+calibrator↔live-schema mismatches (the calibrator was written against an un-trimmed
+schema; the live `derived.*` tables are the SIM-408-trimmed ones): `RESULTS_FEATURES`
+import typo (fixed), `first_pitch_take_rate` / `max_exit_velo` / the whole batter
+platoon block (`*_vs_r`) absent, and likely the other sub-calibrators. Full
+reconciliation is filed as **SIM-432**; calibration is NOT live yet (app stays on
+identity, which is the safe default). SIM-406 unit suite (29) still green; ruff clean.
 
 # Phase 7 — SIM-430 (partial): full-pool per-PA hot-path caching — 1.21x faster /simulate — 2026-05-30
 **Authors: Performance Engineer (Agent 6), ML Engineer (Agent 3), QA/DevOps (Agent 9)**
