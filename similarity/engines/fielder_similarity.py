@@ -94,12 +94,16 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import duckdb
 import numpy as np
 from numpy.typing import NDArray
 
 from similarity.similarity_diagnostics import run_fielder_diagnostics
+
+if TYPE_CHECKING:
+    from similarity.similarity_calibration import CalibrationReport
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -731,6 +735,98 @@ class FielderSimilarityEngine:
         self._of_error_rbf = WeightedRBFSimilarity(
             sigma=RBF_SIGMA_OF_ERRORS,
             reliability_weights=np.array([w for _, w in OF_ERROR_FEATURES]),
+        )
+
+    # ------------------------------------------------------------------
+    # Calibration wiring (SIM-406)
+    # ------------------------------------------------------------------
+
+    def apply_calibration(self, report: CalibrationReport) -> None:
+        """SIM-406: rebuild the nine position-group RBF scorers from a fitted report.
+
+        Each sub-score's sigma — and its reliability weights, when present —
+        replaces the module default. A field left at 0.0 / None keeps the engine's
+        current value, so a partial report degrades gracefully. The two DP scorers
+        share ``sigma_if_dp``; the full ``_if_dp_rbf`` concatenates the DP + pivot
+        reliability weights (matching ``__init__``), while ``_if_dp_rbf_corner``
+        uses the DP weights only. Only the query-time scorers are swapped.
+        """
+
+        def _sig(field: str, current: float) -> float:
+            v = float(getattr(report, field, 0.0) or 0.0)
+            return v if v > 0.0 else current
+
+        def _wts(field: str, default: list[float]) -> NDArray[np.float64]:
+            w = getattr(report, field, None)
+            return np.asarray(w, dtype=np.float64) if w is not None else np.array(default)
+
+        self._if_range_rbf = WeightedRBFSimilarity(
+            sigma=_sig("sigma_if_range", self._if_range_rbf.sigma),
+            reliability_weights=_wts(
+                "reliability_weights_if_range", [w for _, w in IF_RANGE_FEATURES]
+            ),
+        )
+        # The full middle-infield DP scorer pairs DP + PIVOT features. Build the
+        # combo from INDEPENDENT per-array fallbacks (each part falls back to its
+        # own module default when the report omits it) so a partial report carrying
+        # only the DP weights still feeds the fitted DP portion to BOTH the middle
+        # (`_if_dp_rbf`) and corner (`_if_dp_rbf_corner`) scorers — consistent
+        # graceful degradation, not an all-or-nothing revert (SIM-406 review fix).
+        dp_part = _wts("reliability_weights_if_dp", [w for _, w in IF_DP_FEATURES])
+        pivot_part = _wts("reliability_weights_if_pivot", [w for _, w in IF_PIVOT_FEATURES])
+        self._if_dp_rbf = WeightedRBFSimilarity(
+            sigma=_sig("sigma_if_dp", self._if_dp_rbf.sigma),
+            reliability_weights=np.concatenate([dp_part, pivot_part]),
+        )
+        self._if_dp_rbf_corner = WeightedRBFSimilarity(
+            sigma=_sig("sigma_if_dp", self._if_dp_rbf_corner.sigma),
+            reliability_weights=_wts("reliability_weights_if_dp", [w for _, w in IF_DP_FEATURES]),
+        )
+        self._if_error_rbf = WeightedRBFSimilarity(
+            sigma=_sig("sigma_if_errors", self._if_error_rbf.sigma),
+            reliability_weights=_wts(
+                "reliability_weights_if_error", [w for _, w in IF_ERROR_FEATURES]
+            ),
+        )
+        self._if_specialty_rbf = WeightedRBFSimilarity(
+            sigma=_sig("sigma_if_specialty", self._if_specialty_rbf.sigma),
+            reliability_weights=_wts(
+                "reliability_weights_if_specialty", [w for _, w in IF_SPECIALTY_FEATURES]
+            ),
+        )
+        self._of_range_rbf = WeightedRBFSimilarity(
+            sigma=_sig("sigma_of_range", self._of_range_rbf.sigma),
+            reliability_weights=_wts(
+                "reliability_weights_of_range", [w for _, w in OF_RANGE_FEATURES]
+            ),
+        )
+        self._of_arm_rbf = WeightedRBFSimilarity(
+            sigma=_sig("sigma_of_arm", self._of_arm_rbf.sigma),
+            reliability_weights=_wts("reliability_weights_of_arm", [w for _, w in OF_ARM_FEATURES]),
+        )
+        self._of_star_rbf = WeightedRBFSimilarity(
+            sigma=_sig("sigma_of_stars", self._of_star_rbf.sigma),
+            reliability_weights=_wts(
+                "reliability_weights_of_star", [w for _, w in OF_STAR_FEATURES]
+            ),
+        )
+        self._of_error_rbf = WeightedRBFSimilarity(
+            sigma=_sig("sigma_of_errors", self._of_error_rbf.sigma),
+            reliability_weights=_wts(
+                "reliability_weights_of_error", [w for _, w in OF_ERROR_FEATURES]
+            ),
+        )
+        log.info(
+            "SIM-406: applied calibration to FielderSimilarityEngine "
+            "(IF range/dp/err/spec=%.3f/%.3f/%.3f/%.3f, OF range/arm/star/err=%.3f/%.3f/%.3f/%.3f).",
+            self._if_range_rbf.sigma,
+            self._if_dp_rbf.sigma,
+            self._if_error_rbf.sigma,
+            self._if_specialty_rbf.sigma,
+            self._of_range_rbf.sigma,
+            self._of_arm_rbf.sigma,
+            self._of_star_rbf.sigma,
+            self._of_error_rbf.sigma,
         )
 
     # ------------------------------------------------------------------

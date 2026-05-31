@@ -55,12 +55,16 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import duckdb
 import numpy as np
 from numpy.typing import NDArray
 
 from similarity.similarity_diagnostics import run_generic_diagnostics
+
+if TYPE_CHECKING:
+    from similarity.similarity_calibration import CalibrationReport
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -347,6 +351,36 @@ class BaserunnerStealSimilarityEngine:
         self._succ_rbf = WeightedRBFSimilarity(
             RBF_SIGMA_SUCCESS,
             np.array([w for _, w in SUCCESS_FEATURES]),
+        )
+
+    # ------------------------------------------------------------------
+    # Calibration wiring (SIM-406)
+    # ------------------------------------------------------------------
+
+    def apply_calibration(self, report: CalibrationReport) -> None:
+        """SIM-406: rebuild the tendency + success RBF scorers from a fitted report.
+
+        A sigma field left at its 0.0 default keeps the engine's current value, so
+        a partial report degrades gracefully.
+        """
+
+        def _sig(field: str, current: float) -> float:
+            v = float(getattr(report, field, 0.0) or 0.0)
+            return v if v > 0.0 else current
+
+        self._tend_rbf = WeightedRBFSimilarity(
+            _sig("sigma_baserunner_steal_tendency", self._tend_rbf.sigma),
+            np.array([w for _, w in TENDENCY_FEATURES]),
+        )
+        self._succ_rbf = WeightedRBFSimilarity(
+            _sig("sigma_baserunner_steal_success", self._succ_rbf.sigma),
+            np.array([w for _, w in SUCCESS_FEATURES]),
+        )
+        log.info(
+            "SIM-406: applied calibration to BaserunnerStealSimilarityEngine "
+            "(sigma_tendency=%.4f, sigma_success=%.4f).",
+            self._tend_rbf.sigma,
+            self._succ_rbf.sigma,
         )
 
     # ------------------------------------------------------------------

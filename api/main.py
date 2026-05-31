@@ -32,9 +32,10 @@ from fastapi.staticfiles import StaticFiles
 from api.auth import LatencyMiddleware, RateLimitMiddleware, resolve_cors_origins
 from api.errors import install_exception_handlers
 from api.state import (
+    apply_calibration_to_engines,
     build_all_engines,
     build_pitcher_engine,
-    load_calibration_map,
+    load_calibration_report,
     make_pg_name_resolver,
     open_pg_pool,
     open_redis_cache,
@@ -219,8 +220,33 @@ async def lifespan(app: FastAPI):
     # failure. Always attached so consumers can read app.state.calibration_map
     # unconditionally.
     # ----------------------------------------------------------------
-    app.state.calibration_map = await asyncio.to_thread(load_calibration_map)
-    log.info("Win-probability calibration map: %s", app.state.calibration_map.name)
+    # SIM-406: load the persisted CalibrationReport ONCE, then both
+    #   (a) APPLY it to every similarity engine that supports apply_calibration
+    #       (the engine-layer similarity calibration — closes the audit gap that
+    #       calibration was wired only on the pitcher engine), and
+    #   (b) derive the win-probability CalibrationMap from its fitted reliability
+    #       curve (SIM-361).
+    # Best-effort throughout: a missing/corrupt report degrades to identity win-prob
+    # + uncalibrated engine defaults — never a boot failure.
+    from simulation.win_probability import IDENTITY_CALIBRATION, CalibrationMap
+
+    calibration_report = await asyncio.to_thread(load_calibration_report)
+    app.state.calibration_report = calibration_report
+    if calibration_report is not None:
+        applied = apply_calibration_to_engines(app.state.engines, calibration_report)
+        app.state.calibration_map = CalibrationMap.from_report(calibration_report)
+        log.info(
+            "SIM-406: applied fitted calibration to %d engines; win-prob map: %s",
+            len(applied),
+            app.state.calibration_map.name,
+        )
+    else:
+        app.state.calibration_map = IDENTITY_CALIBRATION
+        log.info(
+            "No CalibrationReport found (CALIBRATION_REPORT_PATH unset/missing) — "
+            "engines on locked defaults, win-prob map: %s",
+            app.state.calibration_map.name,
+        )
 
     # ----------------------------------------------------------------
     # Phase 5 (SIM-354): live ingestion pipeline.

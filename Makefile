@@ -11,7 +11,7 @@
 # =============================================================================
 
 .PHONY: help dev down build migrate test test-unit test-integration test-regression lint \
-        type-check format shell logs clean nuke profile-computor play-pool-cache
+        type-check format shell logs clean nuke profile-computor play-pool-cache calibrate
 
 # Default target — show help.
 ##
@@ -74,6 +74,15 @@ profile-computor: _require_env_file
 ## profile-computor.  Pass FLAGS="--no-recency-boost --seasons 2024" to tune.
 play-pool-cache:
 	docker compose run --rm app python -m pipeline.batch.play_pool_cache $(FLAGS)
+
+## Nightly (SIM-406): fit + persist the CalibrationReport over the DuckDB profiles.
+## Runs AFTER profile-computor (it reads the derived.* season-metrics tables) and
+## writes CALIBRATION_REPORT_PATH (/data/calibration.json), which the API loads at
+## boot to calibrate EVERY similarity engine + the win-prob map.  Default fits all
+## seasons incl. the arsenal W2 anchor; pass FLAGS="--no-arsenal" to skip the slow
+## pitcher-engine W2 sample, or FLAGS="--seasons 2024 --validate" to subset/verify.
+calibrate: _require_env_file
+	docker compose run --rm app python scripts/fit_calibration.py $(FLAGS)
 
 ## Tail logs for all services (Ctrl-C to exit)
 logs:

@@ -55,12 +55,16 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import duckdb
 import numpy as np
 from numpy.typing import NDArray
 
 from similarity.similarity_diagnostics import run_generic_diagnostics
+
+if TYPE_CHECKING:
+    from similarity.similarity_calibration import CalibrationReport
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -281,6 +285,19 @@ class PitcherStealSimilarityEngine:
 
         self._out_rbf = WeightedRBFSimilarity(
             RBF_SIGMA_OUTCOME, np.array([w for _, w in OUTCOME_FEATURES])
+        )
+
+    def apply_calibration(self, report: CalibrationReport) -> None:
+        """SIM-406: rebuild the outcome RBF scorer from a fitted report.
+
+        A sigma field left at its 0.0 default keeps the engine's current value.
+        """
+        v = float(getattr(report, "sigma_pitcher_steal_outcome", 0.0) or 0.0)
+        sigma = v if v > 0.0 else self._out_rbf.sigma
+        self._out_rbf = WeightedRBFSimilarity(sigma, np.array([w for _, w in OUTCOME_FEATURES]))
+        log.info(
+            "SIM-406: applied calibration to PitcherStealSimilarityEngine (sigma_outcome=%.4f).",
+            self._out_rbf.sigma,
         )
 
     def build(self, seasons: list[int] | None = None) -> None:

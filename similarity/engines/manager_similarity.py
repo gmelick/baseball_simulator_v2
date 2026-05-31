@@ -70,12 +70,16 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import duckdb
 import numpy as np
 from numpy.typing import NDArray
 
 from similarity.similarity_diagnostics import run_generic_diagnostics
+
+if TYPE_CHECKING:
+    from similarity.similarity_calibration import CalibrationReport
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -357,6 +361,38 @@ class ManagerSimilarityEngine:
         )
         self._plat_rbf = WeightedRBFSimilarity(
             RBF_SIGMA_PLATOON, np.array([w for _, w in PLATOON_FEATURES])
+        )
+
+    def apply_calibration(self, report: CalibrationReport) -> None:
+        """SIM-406: rebuild the usage / aggression / platoon RBF scorers from a report.
+
+        A sigma field left at its 0.0 default keeps the engine's current value, so a
+        partial report degrades gracefully (the USAGE sub-score is gated NULL on
+        SIM-427, so its sigma typically stays the module default).
+        """
+
+        def _sig(field: str, current: float) -> float:
+            v = float(getattr(report, field, 0.0) or 0.0)
+            return v if v > 0.0 else current
+
+        self._usage_rbf = WeightedRBFSimilarity(
+            _sig("sigma_manager_usage", self._usage_rbf.sigma),
+            np.array([w for _, w in USAGE_FEATURES]),
+        )
+        self._agg_rbf = WeightedRBFSimilarity(
+            _sig("sigma_manager_aggression", self._agg_rbf.sigma),
+            np.array([w for _, w in AGGRESSION_FEATURES]),
+        )
+        self._plat_rbf = WeightedRBFSimilarity(
+            _sig("sigma_manager_platoon", self._plat_rbf.sigma),
+            np.array([w for _, w in PLATOON_FEATURES]),
+        )
+        log.info(
+            "SIM-406: applied calibration to ManagerSimilarityEngine "
+            "(sigma_usage=%.4f, sigma_aggression=%.4f, sigma_platoon=%.4f).",
+            self._usage_rbf.sigma,
+            self._agg_rbf.sigma,
+            self._plat_rbf.sigma,
         )
 
     def build(self, seasons: list[int] | None = None) -> None:

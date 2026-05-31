@@ -109,6 +109,12 @@ services:
       # nightly build has produced the artifacts. Unit tests don't set it -> they
       # keep the per-tile default. Set SIM_FULL_POOL=0 to force the per-tile path.
       SIM_FULL_POOL:   "1"
+      # SIM-406: the fitted CalibrationReport the lifespan loads to calibrate every
+      # similarity engine + the win-prob map. Produced by `make calibrate` /
+      # scripts/fit_calibration.py (and the nightly chain) into the /data volume.
+      # Missing file -> engines keep locked defaults + identity win-prob (no boot
+      # failure), so this is safe before the first fit has run.
+      CALIBRATION_REPORT_PATH: /data/calibration.json
     ports:
       # Host port is overridable via APP_HOST_PORT (default 8000).
       - "${APP_HOST_PORT:-8000}:8000"

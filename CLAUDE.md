@@ -105,7 +105,8 @@
     reconciled and a full all-seasons (2017-2026) profile rebuild ran; the live app now logs
     `build_all_engines: 11/11`.  See §11 for what was trimmed/built per engine.
   - **Still open (now UNBLOCKED by the 11/11 real-data build — the next work):** SIM-406 (a fitted
-    `CalibrationReport` over real data) and SIM-407 (prop-PMF validation + ablation).
+    `CalibrationReport` over real data, applied to ALL engines) — **CLOSED 2026-05-30** — and
+    SIM-407 (prop-PMF validation + win-prob reliability fit), which remains.
 - Canonical git repo: this directory. Primary shell: **Windows Command Prompt (cmd.exe)**;
   development + tests run through Docker (`docker compose run --rm app ...`).
 
@@ -311,7 +312,11 @@ and the SIM-403 worker-count fix closed earlier.) **2026-05-29 → 2026-05-30 up
   reconciliation map in `docs/audit/2026-05-29-sim408-engine-schema-divergence.md` and
   `docs/audit/2026-05-29-sim408-reconciliation-plan.md`.
 - **Still open (now UNBLOCKED by the 11/11 real-data build — the next work):** a fitted
-  `CalibrationReport` over real data (SIM-406) and prop-PMF validation + ablation (SIM-407).
+  `CalibrationReport` over real data, **applied to all 8 similarity-score engines** (SIM-406 —
+  CLOSED 2026-05-30: `apply_calibration` on every RBF engine + the calibrator extended to the 4
+  SIM-408-era engines + `scripts/fit_calibration.py`/`make calibrate`/nightly persist to
+  `CALIBRATION_REPORT_PATH`), and prop-PMF validation + the win-prob reliability-curve fit (SIM-407,
+  still open).
 
 **Full-pool realism residual (SIM-422→429, the production path):** box rate stats (H/HR/2B/BB/K) are
 within ~4% of MLB and steals match MLB volume, but **runs sit ~10-12% low** — a hits→runs *conversion*
@@ -336,8 +341,8 @@ breakouts (RISP, advancement, DP rate) are the right lens, not the global R mean
 | 3 | Play Pool Architecture | ✅ Complete |
 | 4 | Core Simulation Loop | ✅ Complete |
 | 5 | Simulation Runner & Backend API | ✅ Complete (CI-green on 3.11.15) |
-| 6 | **Frontend Build + P1 backend prerequisites** | ✅ **Code-complete** — SIM-378→401 + 415→420 + 414 closed; SIM-402 + 408 now verified live (closed); SIM-406/407 remain (unblocked) |
-| 7 | Integration, Testing & Deployment | Live-env bring-up DONE 2026-05-30 (SIM-402 + 408 closed; full-pool `/simulate` throughput → SIM-430). Remaining: SIM-406 calibration + SIM-407 prop-PMF validation |
+| 6 | **Frontend Build + P1 backend prerequisites** | ✅ **Code-complete** — SIM-378→401 + 415→420 + 414 closed; SIM-402 + 406 + 408 verified live (closed); SIM-407 remains (unblocked) |
+| 7 | Integration, Testing & Deployment | Live-env bring-up DONE 2026-05-30 (SIM-402 + 408 closed; full-pool `/simulate` throughput → SIM-430). Remaining: SIM-407 prop-PMF validation + win-prob reliability fit (SIM-406 calibration closed 2026-05-30) |
 
 **Realism sub-track (interleaved, landed on `master`):** the SIM-422→429 full-pool similarity-wiring
 epic replaced the per-tile k-NN draw with whole-pool engine-weighted sampling and made it the

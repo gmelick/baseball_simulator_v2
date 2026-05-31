@@ -1,3 +1,66 @@
+# Phase 7 — SIM-406: fitted CalibrationReport over real data, applied to ALL engines — 2026-05-30
+**Authors: ML Engineer (Agent 3), Backend Developer (Agent 5), QA/DevOps (Agent 9)**
+
+Closed the SIM-406 calibration debt: the platform now FITS a `CalibrationReport`
+over the real all-seasons DuckDB profiles, PERSISTS it, and APPLIES it to every
+similarity engine at boot — closing the Phase-5-audit gap that `apply_calibration`
+was wired only on the pitcher engine ("today: nothing fits it; `apply_calibration`
+only on the pitcher engine"). Uncalibrated similarity no longer reaches the sim.
+
+**What landed:**
+- **`apply_calibration` on all 8 similarity-score engines.** batter / fielder /
+  baserunner / catcher / baserunner_steal / pitcher_steal / manager each gained a
+  uniform `apply_calibration(report)` that rebuilds their RBF sub-score scorers
+  (and reliability weights, where the report carries them) from the fitted sigmas.
+  A 0.0/None field falls back to the locked module default, so a partial report
+  degrades gracefully; the swap is query-time only (safe before or after
+  `build()`). Pitcher already had the SIM-346 arsenal seam. The 3 *distance*
+  engines (situation / pitch_pitch / batted_ball) have no RBF sigma and are
+  intentionally without the seam.
+- **Calibrator extended to the 4 SIM-408-era engines.** `SimilarityCalibrator`
+  now also fits catcher (framing/blocking/throwing/deterrence), baserunner-steal
+  (tendency/success), pitcher-steal (outcome) and manager (usage/aggression/
+  platoon) sigmas from their `derived.*` season-metrics tables (mirroring each
+  engine's own feature SQL), each guarded so a missing table leaves the engine on
+  its default. New `CalibrationReport` sigma fields round-trip through the lossless
+  JSON persistence. (Reliability weights for these four stay the stabilization-
+  research priors; only the median-target sigma is population-fit.)
+- **Boot wiring.** `api.state.apply_calibration_to_engines` applies a loaded
+  report to every engine exposing the seam (best-effort per engine — one bad
+  engine never blocks boot); the `api.main` lifespan loads the `CalibrationReport`
+  ONCE and both (a) applies it to the engines and (b) derives the win-prob
+  `CalibrationMap` from its reliability curve (SIM-361). `app.state.calibration_report`
+  is now exposed alongside `app.state.calibration_map`.
+- **Fit + persist tooling.** `scripts/fit_calibration.py` fits over the real
+  DuckDB (sampling same-hand arsenal W₂ distances for the pitcher anchor; skip
+  with `--no-arsenal`), writes `CALIBRATION_REPORT_PATH` (default
+  `/data/calibration.json`), with an optional `--validate` per-engine median
+  check. `make calibrate` wraps it; the nightly chain (`scripts/nightly_ingest.sh`)
+  re-fits over the full population each night (`--no-arsenal` for speed/memory);
+  docker-compose `app` sets `CALIBRATION_REPORT_PATH` so the serving app loads it.
+- **Tests.** `tests/unit/test_ml_engines_sim406.py` (29 tests): per-engine apply
+  (override / default fallback / reliability-weight override), the fielder DP+pivot
+  weight concatenation + the one-array-present partial-report path, the live-instance
+  sigma fallback chain, the 8-engine seam roster, `apply_calibration_to_engines`
+  (apply / skip-no-seam / resilient-to-failure / None-report), the new report-field
+  JSON round-trip, and the `_fit_sigma` degenerate→0.0 sentinel.
+- **Adversarial self-review (4-dimension workflow) findings folded in:** (a) the
+  fielder DP/pivot apply now uses INDEPENDENT per-array fallbacks (a partial report
+  carrying only `reliability_weights_if_dp` feeds the fitted DP weights to BOTH the
+  middle and corner scorers, instead of an all-or-nothing revert); (b) the four new
+  sub-calibrators route through a new `SimilarityCalibrator._fit_sigma` that returns
+  the 0.0 keep-default sentinel on a no-variance feature matrix (e.g. the manager
+  USAGE column gated NULL on SIM-427) rather than persisting `calibrate_sigma`'s
+  degenerate `1.0` and silently overriding the engine's tuned default — making the
+  "keep module default" contract hold regardless of the module default's value.
+
+ruff + ruff-format + mypy clean; unit suite green (the only local failures are
+pre-existing `faiss`-absent / no-DuckDB env gaps in the FAISS+situation engines,
+which gained no calibration seam — CI runs them in Docker on 3.11). **Out of scope (→ SIM-407):**
+the win-probability reliability-curve fit from sim-vs-actual outcomes + prop-PMF
+validation/ablation — this ticket leaves `reliability_curve` empty, so the
+win-prob map stays identity until SIM-407 fits one.
+
 # Phase 7 — all-seasons rebuild + SIM-402 SLA re-measure → SIM-430 filed — 2026-05-30
 **Authors: Data Engineer (Agent 4), Performance Engineer (Agent 6), Backend Developer (Agent 5)**
 

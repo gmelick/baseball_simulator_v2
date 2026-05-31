@@ -59,12 +59,16 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import duckdb
 import numpy as np
 from numpy.typing import NDArray
 
 from similarity.similarity_diagnostics import run_baserunner_diagnostics
+
+if TYPE_CHECKING:
+    from similarity.similarity_calibration import CalibrationReport
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -438,6 +442,52 @@ class BaserunnerSimilarityEngine:
         self._success_rbf = WeightedRBFSimilarity(
             sigma=RBF_SIGMA_SUCCESS,
             reliability_weights=np.array([w for _, w in SUCCESS_FEATURES]),
+        )
+
+    # ------------------------------------------------------------------
+    # Calibration wiring (SIM-406)
+    # ------------------------------------------------------------------
+
+    def apply_calibration(self, report: CalibrationReport) -> None:
+        """SIM-406: rebuild the speed/aggression/success RBF scorers from a report.
+
+        A sigma (or reliability-weight) field left at its 0.0 / None default keeps
+        the engine's current value, so a partial report degrades gracefully. Only
+        the query-time scorers are swapped (safe before or after ``build``).
+        """
+
+        def _sig(field: str, current: float) -> float:
+            v = float(getattr(report, field, 0.0) or 0.0)
+            return v if v > 0.0 else current
+
+        def _wts(field: str, default: list[float]) -> NDArray[np.float64]:
+            w = getattr(report, field, None)
+            return np.asarray(w, dtype=np.float64) if w is not None else np.array(default)
+
+        self._speed_rbf = WeightedRBFSimilarity(
+            sigma=_sig("sigma_baserunner_speed", self._speed_rbf.sigma),
+            reliability_weights=_wts(
+                "reliability_weights_baserunner_speed", [w for _, w in SPEED_FEATURES]
+            ),
+        )
+        self._agg_rbf = WeightedRBFSimilarity(
+            sigma=_sig("sigma_baserunner_aggression", self._agg_rbf.sigma),
+            reliability_weights=_wts(
+                "reliability_weights_baserunner_aggression", [w for _, w in AGGRESSION_FEATURES]
+            ),
+        )
+        self._success_rbf = WeightedRBFSimilarity(
+            sigma=_sig("sigma_baserunner_success", self._success_rbf.sigma),
+            reliability_weights=_wts(
+                "reliability_weights_baserunner_success", [w for _, w in SUCCESS_FEATURES]
+            ),
+        )
+        log.info(
+            "SIM-406: applied calibration to BaserunnerSimilarityEngine "
+            "(sigma_speed=%.4f, sigma_agg=%.4f, sigma_suc=%.4f).",
+            self._speed_rbf.sigma,
+            self._agg_rbf.sigma,
+            self._success_rbf.sigma,
         )
 
     # ------------------------------------------------------------------

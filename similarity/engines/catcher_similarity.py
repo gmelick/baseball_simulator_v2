@@ -74,12 +74,16 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import duckdb
 import numpy as np
 from numpy.typing import NDArray
 
 from similarity.similarity_diagnostics import run_generic_diagnostics
+
+if TYPE_CHECKING:
+    from similarity.similarity_calibration import CalibrationReport
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -436,6 +440,43 @@ class CatcherSimilarityEngine:
         )
         self._deterrence_rbf = WeightedRBFSimilarity(
             RBF_SIGMA_DETERRENCE, np.array([w for _, w in DETERRENCE_FEATURES])
+        )
+
+    def apply_calibration(self, report: CalibrationReport) -> None:
+        """SIM-406: rebuild the four defensive RBF scorers from a fitted report.
+
+        A sigma field left at its 0.0 default keeps the engine's current value, so
+        a partial report degrades gracefully. Reliability weights for this engine
+        stay the stabilization-research priors (the report fits only the sigmas).
+        """
+
+        def _sig(field: str, current: float) -> float:
+            v = float(getattr(report, field, 0.0) or 0.0)
+            return v if v > 0.0 else current
+
+        self._framing_rbf = WeightedRBFSimilarity(
+            _sig("sigma_catcher_framing", self._framing_rbf.sigma),
+            np.array([w for _, w in FRAMING_FEATURES]),
+        )
+        self._blocking_rbf = WeightedRBFSimilarity(
+            _sig("sigma_catcher_blocking", self._blocking_rbf.sigma),
+            np.array([w for _, w in BLOCKING_FEATURES]),
+        )
+        self._throwing_rbf = WeightedRBFSimilarity(
+            _sig("sigma_catcher_throwing", self._throwing_rbf.sigma),
+            np.array([w for _, w in THROWING_FEATURES]),
+        )
+        self._deterrence_rbf = WeightedRBFSimilarity(
+            _sig("sigma_catcher_deterrence", self._deterrence_rbf.sigma),
+            np.array([w for _, w in DETERRENCE_FEATURES]),
+        )
+        log.info(
+            "SIM-406: applied calibration to CatcherSimilarityEngine "
+            "(sigma_framing=%.4f, sigma_blocking=%.4f, sigma_throwing=%.4f, sigma_deterrence=%.4f).",
+            self._framing_rbf.sigma,
+            self._blocking_rbf.sigma,
+            self._throwing_rbf.sigma,
+            self._deterrence_rbf.sigma,
         )
 
     def build(self, seasons: list[int] | None = None) -> None:

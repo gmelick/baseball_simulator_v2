@@ -250,6 +250,48 @@ def load_calibration_map(path: str | None = None):
     return CalibrationMap.from_report(report)
 
 
+def apply_calibration_to_engines(engines: dict[str, Any] | None, report: Any) -> list[str]:
+    """SIM-406: apply a fitted ``CalibrationReport`` to every engine that supports it.
+
+    Each engine exposing ``apply_calibration`` gets the report wired into its RBF /
+    arsenal scorers, so similarity is scored on the population-fit 0.50-median curve
+    rather than hardcoded module literals (closing the audit gap: ``apply_calibration``
+    used to be wired only on the pitcher engine). The FAISS / KD-tree *distance*
+    engines (``situation`` / ``pitch_pitch`` / ``batted_ball``) have no RBF sigma to
+    calibrate and simply lack the seam — they are skipped.
+
+    Best-effort per engine: a failure is logged and skipped so one bad engine never
+    blocks boot. Returns the names of the engines calibration was applied to. A
+    ``None`` report (no fitted file) is a no-op returning ``[]`` (engines keep their
+    locked module defaults).
+    """
+    if report is None:
+        return []
+    engines = engines or {}
+    applied: list[str] = []
+    for name, engine in engines.items():
+        fn = getattr(engine, "apply_calibration", None)
+        if not callable(fn):
+            continue
+        try:
+            fn(report)
+            applied.append(name)
+        except Exception as exc:  # noqa: BLE001 — one bad engine must not block boot
+            log.warning(
+                "SIM-406: calibration apply failed for engine '%s' (%s: %s) — keeping defaults.",
+                name,
+                type(exc).__name__,
+                exc,
+            )
+    log.info(
+        "SIM-406: calibration applied to %d/%d engines: %s",
+        len(applied),
+        len(engines),
+        ", ".join(sorted(applied)) or "(none)",
+    )
+    return applied
+
+
 # ---------------------------------------------------------------------------
 # Player name resolver
 # ---------------------------------------------------------------------------

@@ -89,12 +89,16 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import duckdb
 import numpy as np
 from numpy.typing import NDArray
 
 from similarity.similarity_diagnostics import run_batter_diagnostics
+
+if TYPE_CHECKING:
+    from similarity.similarity_calibration import CalibrationReport
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -675,6 +679,61 @@ class BatterSimilarityEngine:
         self._power_rbf = WeightedRBFSimilarity(
             sigma=RBF_SIGMA_POWER,
             reliability_weights=np.array([w for _, w in POWER_FEATURES]),
+        )
+
+    # ------------------------------------------------------------------
+    # Calibration wiring (SIM-406)
+    # ------------------------------------------------------------------
+
+    def apply_calibration(self, report: CalibrationReport) -> None:
+        """SIM-406: rebuild the four RBF sub-score scorers from a fitted report.
+
+        Each sub-score's sigma — and its reliability weights, when the report
+        carries them — replaces the module default so the engine scores on the
+        population-fit 0.50-median curve instead of a hardcoded literal.  A field
+        left at its 0.0 / None default keeps the engine's current value, so a
+        partial report degrades gracefully.  Only the query-time scorers are
+        swapped (safe before or after ``build``); the EB prior is a build-time
+        knob and is intentionally not re-applied here.
+        """
+
+        def _sig(field: str, current: float) -> float:
+            v = float(getattr(report, field, 0.0) or 0.0)
+            return v if v > 0.0 else current
+
+        def _wts(field: str, default: list[float]) -> NDArray[np.float64]:
+            w = getattr(report, field, None)
+            return np.asarray(w, dtype=np.float64) if w is not None else np.array(default)
+
+        self._disc_rbf = WeightedRBFSimilarity(
+            sigma=_sig("sigma_discipline", self._disc_rbf.sigma),
+            reliability_weights=_wts(
+                "reliability_weights_discipline", [w for _, w in DISCIPLINE_FEATURES]
+            ),
+        )
+        self._bb_rbf = WeightedRBFSimilarity(
+            sigma=_sig("sigma_batted_ball", self._bb_rbf.sigma),
+            reliability_weights=_wts(
+                "reliability_weights_batted_ball", [w for _, w in BATTED_BALL_FEATURES]
+            ),
+        )
+        self._platoon_rbf = WeightedRBFSimilarity(
+            sigma=_sig("sigma_platoon", self._platoon_rbf.sigma),
+            reliability_weights=_wts(
+                "reliability_weights_platoon", [w for _, w in PLATOON_FEATURES]
+            ),
+        )
+        self._power_rbf = WeightedRBFSimilarity(
+            sigma=_sig("sigma_power", self._power_rbf.sigma),
+            reliability_weights=_wts("reliability_weights_power", [w for _, w in POWER_FEATURES]),
+        )
+        log.info(
+            "SIM-406: applied calibration to BatterSimilarityEngine "
+            "(sigma_disc=%.4f, sigma_bb=%.4f, sigma_plat=%.4f, sigma_pow=%.4f).",
+            self._disc_rbf.sigma,
+            self._bb_rbf.sigma,
+            self._platoon_rbf.sigma,
+            self._power_rbf.sigma,
         )
 
     # ------------------------------------------------------------------

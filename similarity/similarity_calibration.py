@@ -546,6 +546,27 @@ class CalibrationReport:
     reliability_weights_baserunner_aggression: NDArray | None = None
     reliability_weights_baserunner_success: NDArray | None = None
 
+    # ------------------------------------------------------------------
+    # SIM-406: the four SIM-408-era RBF engines (catcher / baserunner-steal /
+    # pitcher-steal / manager).  Their per-sub-score RBF sigmas are fit to the
+    # 0.50-median target the same way as the engines above; the engines consume
+    # them via their own ``apply_calibration``.  Left at 0.0 (the dataclass
+    # default) when the engine's metrics table is absent, so the engine keeps its
+    # locked module-default sigma — never a regression on a partial DuckDB.
+    # (Reliability weights for these four stay the engines' stabilization-research
+    # priors; only the sigma — the median-target knob — is population-fit.)
+    # ------------------------------------------------------------------
+    sigma_catcher_framing: float = 0.0
+    sigma_catcher_blocking: float = 0.0
+    sigma_catcher_throwing: float = 0.0
+    sigma_catcher_deterrence: float = 0.0
+    sigma_baserunner_steal_tendency: float = 0.0
+    sigma_baserunner_steal_success: float = 0.0
+    sigma_pitcher_steal_outcome: float = 0.0
+    sigma_manager_usage: float = 0.0
+    sigma_manager_aggression: float = 0.0
+    sigma_manager_platoon: float = 0.0
+
     # Tier 2
     batter_subscores: NDArray | None = None
     pitcher_subscores: NDArray | None = None
@@ -612,6 +633,20 @@ class CalibrationReport:
             f"    Speed:       {self.sigma_baserunner_speed:.4f}",
             f"    Aggression:  {self.sigma_baserunner_aggression:.4f}",
             f"    Success:     {self.sigma_baserunner_success:.4f}",
+            "",
+            "  RBF Sigma (catcher):",
+            f"    Framing:     {self.sigma_catcher_framing:.4f}",
+            f"    Blocking:    {self.sigma_catcher_blocking:.4f}",
+            f"    Throwing:    {self.sigma_catcher_throwing:.4f}",
+            f"    Deterrence:  {self.sigma_catcher_deterrence:.4f}",
+            "",
+            "  RBF Sigma (steal / manager):",
+            f"    BR-steal tendency: {self.sigma_baserunner_steal_tendency:.4f}",
+            f"    BR-steal success:  {self.sigma_baserunner_steal_success:.4f}",
+            f"    P-steal outcome:   {self.sigma_pitcher_steal_outcome:.4f}",
+            f"    Mgr usage:         {self.sigma_manager_usage:.4f}",
+            f"    Mgr aggression:    {self.sigma_manager_aggression:.4f}",
+            f"    Mgr platoon:       {self.sigma_manager_platoon:.4f}",
             "",
             f"  Arsenal Gamma:           {self.arsenal_gamma:.4f}",
             f"  EB N_PRIOR (batter):     {self.eb_n_prior_batter:.1f}",
@@ -827,6 +862,17 @@ class CalibrationReport:
             "sigma_baserunner_aggression": self.sigma_baserunner_aggression,
             "sigma_baserunner_success": self.sigma_baserunner_success,
             "eb_n_prior_baserunner": self.eb_n_prior_baserunner,
+            # SIM-406: the four SIM-408-era RBF engines.
+            "sigma_catcher_framing": self.sigma_catcher_framing,
+            "sigma_catcher_blocking": self.sigma_catcher_blocking,
+            "sigma_catcher_throwing": self.sigma_catcher_throwing,
+            "sigma_catcher_deterrence": self.sigma_catcher_deterrence,
+            "sigma_baserunner_steal_tendency": self.sigma_baserunner_steal_tendency,
+            "sigma_baserunner_steal_success": self.sigma_baserunner_steal_success,
+            "sigma_pitcher_steal_outcome": self.sigma_pitcher_steal_outcome,
+            "sigma_manager_usage": self.sigma_manager_usage,
+            "sigma_manager_aggression": self.sigma_manager_aggression,
+            "sigma_manager_platoon": self.sigma_manager_platoon,
         }
         if self.reliability_weights_discipline is not None:
             d["reliability_weights_discipline"] = self.reliability_weights_discipline.tolist()
@@ -1028,6 +1074,17 @@ class SimilarityCalibrator:
             )
             report = self._calibrate_fielder_params(conn, seasons, target_median_score, report)
             report = self._calibrate_baserunner_params(conn, seasons, target_median_score, report)
+            # SIM-406: the four SIM-408-era RBF engines. Each is wrapped so a
+            # missing metrics table (older DuckDB) leaves its sigmas at 0.0 (the
+            # engine keeps its module default) rather than aborting the whole fit.
+            report = self._calibrate_catcher_params(conn, seasons, target_median_score, report)
+            report = self._calibrate_baserunner_steal_params(
+                conn, seasons, target_median_score, report
+            )
+            report = self._calibrate_pitcher_steal_params(
+                conn, seasons, target_median_score, report
+            )
+            report = self._calibrate_manager_params(conn, seasons, target_median_score, report)
         finally:
             conn.close()
 
@@ -1535,6 +1592,220 @@ class SimilarityCalibrator:
             report.sigma_baserunner_aggression,
             report.sigma_baserunner_success,
             report.eb_n_prior_baserunner,
+        )
+        return report
+
+    # ------------------------------------------------------------------
+    # SIM-406: the four SIM-408-era RBF engines.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _zscore_matrix(mat: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Z-score columns (std==0 -> 1.0) — shared by the SIM-406 calibrators."""
+        m = np.nanmean(mat, axis=0)
+        s = np.nanstd(mat, axis=0)
+        s[s == 0] = 1.0
+        return (mat - m) / s
+
+    @staticmethod
+    def _fit_sigma(zmatrix: NDArray[np.float64], target: float) -> float:
+        """Calibrate the RBF sigma, returning 0.0 (the engines' keep-module-default
+        sentinel) when the z-scored feature matrix has NO usable variance.
+
+        A fully gated/NULL column (e.g. manager USAGE under SIM-427, or any feature
+        the computor doesn't yet produce) z-scores to all-zeros; every sampled pair
+        then has distance 0, so :func:`calibrate_sigma` hits its ``median_dist_sq<=0``
+        guard and returns its degenerate ``1.0`` fallback. Persisting that ``1.0``
+        would SILENTLY override the engine's tuned default (harmless only when the
+        default happens to equal 1.0). Returning ``0.0`` instead makes
+        ``apply_calibration``'s ``v if v > 0 else current`` correctly preserve the
+        module default regardless of its value — so the "keep module default" contract
+        actually holds. A matrix with variance in at least one column calibrates
+        normally (zero columns contribute 0 distance, exactly as before)."""
+        if zmatrix.size == 0 or not np.any(np.nanstd(zmatrix, axis=0) > 0):
+            return 0.0
+        return calibrate_sigma(zmatrix, target_median_score=target)
+
+    def _calibrate_catcher_params(
+        self,
+        conn: Any,
+        seasons: list[int],
+        target: float,
+        report: CalibrationReport,
+    ) -> CalibrationReport:
+        """SIM-406: calibrate the catcher engine's four defensive RBF sigmas.
+
+        Mirrors ``catcher_similarity._load_profiles`` exactly (the same derived
+        framing / blocking expressions) so each sigma is fit over the SAME
+        feature space the engine scores in.  Guarded: a missing
+        ``derived.catcher_season_metrics`` leaves the four sigmas at 0.0 (the
+        engine keeps its module defaults) rather than aborting the whole fit.
+        """
+        sl = ", ".join(str(s) for s in seasons)
+        try:
+            rows = conn.execute(f"""
+                SELECT
+                    (csm.called_strikes - csm.expected_called_strikes)
+                        / NULLIF(csm.called_pitches, 0)                          AS strike_rate_vs_expected,
+                    csm.framing_runs                                             AS runs_saved_framing,
+                    csm.shadow_zone_strike_rate,
+                    csm.heart_zone_strike_rate,
+                    csm.blocks_above_average / NULLIF(csm.expected_pbwp, 0)      AS block_success_rate,
+                    csm.actual_pbwp * 1.0 / NULLIF(csm.pitches_received_total, 0) AS passed_ball_rate,
+                    COALESCE(csm.blocks_aa_bounced, 0)
+                        / NULLIF(csm.expected_pbwp, 0)                           AS wild_pitch_prevention_rate,
+                    csm.pop_time_mean,
+                    csm.cs_rate,
+                    csm.arm_strength_mean,
+                    csm.steal_attempt_rate_against
+                FROM derived.catcher_season_metrics csm
+                WHERE NOT csm.below_minimum_sample AND csm.season IN ({sl})
+            """).fetchall()
+        except Exception as exc:  # noqa: BLE001 - missing table -> keep defaults
+            log.warning("Catcher calibration skipped (%s: %s).", type(exc).__name__, exc)
+            return report
+        if not rows:
+            log.warning("No catcher profiles found for calibration.")
+            return report
+
+        def col(start: int, n: int) -> NDArray[np.float64]:
+            return self._zscore_matrix(
+                np.array([[(r[start + i] or 0.0) for i in range(n)] for r in rows], dtype=float)
+            )
+
+        report.sigma_catcher_framing = self._fit_sigma(col(0, 4), target)
+        report.sigma_catcher_blocking = self._fit_sigma(col(4, 3), target)
+        report.sigma_catcher_throwing = self._fit_sigma(col(7, 3), target)
+        report.sigma_catcher_deterrence = self._fit_sigma(col(10, 1), target)
+        log.info(
+            "Catcher calibration complete: %d profiles, sigma_framing=%.3f, "
+            "sigma_blocking=%.3f, sigma_throwing=%.3f, sigma_deterrence=%.3f",
+            len(rows),
+            report.sigma_catcher_framing,
+            report.sigma_catcher_blocking,
+            report.sigma_catcher_throwing,
+            report.sigma_catcher_deterrence,
+        )
+        return report
+
+    def _calibrate_baserunner_steal_params(
+        self,
+        conn: Any,
+        seasons: list[int],
+        target: float,
+        report: CalibrationReport,
+    ) -> CalibrationReport:
+        """SIM-406: calibrate the stolen-base engine's tendency + success sigmas."""
+        sl = ", ".join(str(s) for s in seasons)
+        try:
+            rows = conn.execute(f"""
+                SELECT steal_attempt_rate, steal_attempt_rate_2b,
+                       steal_success_rate, steal_success_rate_2b
+                FROM derived.baserunner_steal_metrics
+                WHERE NOT below_minimum_sample AND season IN ({sl})
+            """).fetchall()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Baserunner-steal calibration skipped (%s: %s).", type(exc).__name__, exc)
+            return report
+        if not rows:
+            log.warning("No baserunner-steal profiles found for calibration.")
+            return report
+
+        tend = self._zscore_matrix(np.array([[(r[0] or 0.0), (r[1] or 0.0)] for r in rows]))
+        succ = self._zscore_matrix(np.array([[(r[2] or 0.0), (r[3] or 0.0)] for r in rows]))
+        report.sigma_baserunner_steal_tendency = self._fit_sigma(tend, target)
+        report.sigma_baserunner_steal_success = self._fit_sigma(succ, target)
+        log.info(
+            "Baserunner-steal calibration complete: %d profiles, sigma_tendency=%.3f, "
+            "sigma_success=%.3f",
+            len(rows),
+            report.sigma_baserunner_steal_tendency,
+            report.sigma_baserunner_steal_success,
+        )
+        return report
+
+    def _calibrate_pitcher_steal_params(
+        self,
+        conn: Any,
+        seasons: list[int],
+        target: float,
+        report: CalibrationReport,
+    ) -> CalibrationReport:
+        """SIM-406: calibrate the pitcher steal-prevention engine's outcome sigma."""
+        sl = ", ".join(str(s) for s in seasons)
+        try:
+            rows = conn.execute(f"""
+                SELECT sb_against_per_9, cs_rate_forced, steal_attempt_rate_allowed
+                FROM derived.pitcher_steal_metrics
+                WHERE NOT below_minimum_sample AND season IN ({sl})
+            """).fetchall()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Pitcher-steal calibration skipped (%s: %s).", type(exc).__name__, exc)
+            return report
+        if not rows:
+            log.warning("No pitcher-steal profiles found for calibration.")
+            return report
+
+        out = self._zscore_matrix(
+            np.array([[(r[0] or 0.0), (r[1] or 0.0), (r[2] or 0.0)] for r in rows])
+        )
+        report.sigma_pitcher_steal_outcome = self._fit_sigma(out, target)
+        log.info(
+            "Pitcher-steal calibration complete: %d profiles, sigma_outcome=%.3f",
+            len(rows),
+            report.sigma_pitcher_steal_outcome,
+        )
+        return report
+
+    def _calibrate_manager_params(
+        self,
+        conn: Any,
+        seasons: list[int],
+        target: float,
+        report: CalibrationReport,
+    ) -> CalibrationReport:
+        """SIM-406: calibrate the manager engine's usage / aggression / platoon sigmas."""
+        sl = ", ".join(str(s) for s in seasons)
+        try:
+            rows = conn.execute(f"""
+                SELECT
+                    starter_avg_pitch_count, starter_pull_pct_before_100,
+                    closer_entry_leverage_index, high_leverage_reliever_rate,
+                    opener_usage_rate, bulk_innings_rate,
+                    steal_order_rate_per_1b_opp, hit_and_run_rate_per_opportunity,
+                    sac_bunt_rate_high_leverage, sac_bunt_rate_low_leverage,
+                    squeeze_play_rate_per_3b_opp,
+                    pinch_hit_rate_vs_same_hand, pinch_hit_rate_high_leverage,
+                    defensive_sub_rate_late_innings, double_switch_rate_per_reliever_change,
+                    platoon_advantage_exploitation_rate
+                FROM derived.manager_season_metrics
+                WHERE NOT below_minimum_sample AND season IN ({sl})
+            """).fetchall()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Manager calibration skipped (%s: %s).", type(exc).__name__, exc)
+            return report
+        if not rows:
+            log.warning("No manager profiles found for calibration.")
+            return report
+
+        def col(start: int, n: int) -> NDArray[np.float64]:
+            return self._zscore_matrix(
+                np.array([[(r[start + i] or 0.0) for i in range(n)] for r in rows], dtype=float)
+            )
+
+        # USAGE sub-score is gated NULL on SIM-427 (no bullpen-role source); when
+        # every usage cell is NULL the z-scored matrix is all-zero -> calibrate_sigma
+        # returns its 1.0 default, which the engine treats as "keep module default".
+        report.sigma_manager_usage = calibrate_sigma(col(0, 6), target_median_score=target)
+        report.sigma_manager_aggression = calibrate_sigma(col(6, 5), target_median_score=target)
+        report.sigma_manager_platoon = calibrate_sigma(col(11, 5), target_median_score=target)
+        log.info(
+            "Manager calibration complete: %d profiles, sigma_usage=%.3f, "
+            "sigma_aggression=%.3f, sigma_platoon=%.3f",
+            len(rows),
+            report.sigma_manager_usage,
+            report.sigma_manager_aggression,
+            report.sigma_manager_platoon,
         )
         return report
 
