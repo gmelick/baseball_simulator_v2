@@ -1,3 +1,53 @@
+# Phase 7 — SIM-407: prop-PMF + win-probability validation; fit the reliability curve SIM-406 left empty — 2026-05-30
+**Authors: ML Engineer (Agent 3), Betting/Markets Analyst (Agent 8), QA/DevOps (Agent 9)**
+
+Closed the SIM-407 validation debt and completed the SIM-406→407 calibration loop.
+SIM-406 fitted the *similarity* dials but deliberately left
+`CalibrationReport.reliability_curve` EMPTY (so the win-probability `CalibrationMap`
+stayed the identity). SIM-407 fits that curve from real outcomes and adds the
+prop-PMF backtest the Phase-5 audit said was missing ("PMFs have no calibration
+seam/backtest; ablation is synthetic-only").
+
+**What landed:**
+- **`simulation/prop_validation.py`** — the pure, deterministic metric + fit core:
+  - **Binary calibration metrics** (`binary_reliability_curve` / `binary_ece` /
+    `binary_brier` / `binary_log_loss`). A win probability and an over/under are
+    BINARY events; the SIM-220 multi-class spine bins the argmax *confidence*,
+    which is the wrong quantity for a binary forecast, so this is the binary
+    counterpart (reusing SIM-220's log-loss eps so the layers agree).
+  - **`fit_reliability_curve`** — bins predicted probs, measures the observed rate
+    per bin, emits the `[[predicted_p, observed_p], …]` anchor list that
+    `CalibrationReport.reliability_curve` consumes. Written onto a report,
+    `CalibrationMap.from_report` turns it into a monotone p→p map that pulls an
+    over-confident forecaster back toward the truth — the SIM-406→407 handoff.
+  - **`validate_prop_over_under`** — scores a `PropDistribution.p_over(line)` against
+    the realized over/under (the sportsbook push convention: a value ON an integer
+    line is NOT an over), returning per-(prop,line) ECE/Brier/log-loss + a
+    predicted-vs-observed over-rate bias check.
+  - **`pit_values` / `pmf_coverage`** — the deterministic mid-P PIT of a discrete
+    PMF (calibrated ⇒ PIT mean ≈ 0.5, central interval covers at nominal).
+  - **`build_validation_report`** aggregator + **`write_reliability_curve_to_calibration_report`**
+    (writes the fitted curve into the on-disk `CalibrationReport` without clobbering
+    its sigmas), and a JSON-round-trippable `PropValidationReport`.
+- **`scripts/validate_props.py`** — offline orchestration: pulls Final games from
+  `raw.games`, runs the real `BatchRunner` per game (the SAME sim seam the API
+  serves), pairs the sim's home win prob against the actual result, builds + writes
+  the report, and (with `--write-calibration`) writes the fitted curve into
+  `CALIBRATION_REPORT_PATH`. `make validate-props` wraps it. The win-prob fit is the
+  shippable deliverable; prop-pair population is gated on a completed-game
+  box-score source (`--no-props` runs win-prob alone).
+- **Tests:** `tests/unit/test_ml_engines_sim407.py` (28 tests) — binary metrics
+  (calibrated→low ECE, over-confident→high, finite log-loss, input validation), the
+  reliability fit + the end-to-end handoff (fitted curve → non-identity corrective
+  `CalibrationMap`), prop over/under (matched vs biased detection, integer-line push),
+  PIT/coverage (calibrated mean≈0.5, biased shift), report round-trip, and the
+  aggregator + curve write-back.
+
+ruff + ruff-format + mypy clean. **Out of scope (existing, not regressed):** the
+multi-class outcome ablation/walk-forward already exists as SIM-220
+(`similarity/backtesting/backtester.py::walk_forward_ablation`); SIM-407 adds the
+BINARY win-prob/prop layer it lacked and wires the fit into the live calibration.
+
 # Phase 7 — SIM-406: fitted CalibrationReport over real data, applied to ALL engines — 2026-05-30
 **Authors: ML Engineer (Agent 3), Backend Developer (Agent 5), QA/DevOps (Agent 9)**
 

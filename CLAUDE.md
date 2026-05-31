@@ -105,8 +105,8 @@
     reconciled and a full all-seasons (2017-2026) profile rebuild ran; the live app now logs
     `build_all_engines: 11/11`.  See §11 for what was trimmed/built per engine.
   - **Still open (now UNBLOCKED by the 11/11 real-data build — the next work):** SIM-406 (a fitted
-    `CalibrationReport` over real data, applied to ALL engines) — **CLOSED 2026-05-30** — and
-    SIM-407 (prop-PMF validation + win-prob reliability fit), which remains.
+    `CalibrationReport` over real data, applied to ALL engines) and SIM-407 (prop-PMF +
+    win-probability validation + the win-prob reliability-curve fit) — **both CLOSED 2026-05-30**.
 - Canonical git repo: this directory. Primary shell: **Windows Command Prompt (cmd.exe)**;
   development + tests run through Docker (`docker compose run --rm app ...`).
 
@@ -341,8 +341,8 @@ breakouts (RISP, advancement, DP rate) are the right lens, not the global R mean
 | 3 | Play Pool Architecture | ✅ Complete |
 | 4 | Core Simulation Loop | ✅ Complete |
 | 5 | Simulation Runner & Backend API | ✅ Complete (CI-green on 3.11.15) |
-| 6 | **Frontend Build + P1 backend prerequisites** | ✅ **Code-complete** — SIM-378→401 + 415→420 + 414 closed; SIM-402 + 406 + 408 verified live (closed); SIM-407 remains (unblocked) |
-| 7 | Integration, Testing & Deployment | Live-env bring-up DONE 2026-05-30 (SIM-402 + 408 closed; full-pool `/simulate` throughput → SIM-430). Remaining: SIM-407 prop-PMF validation + win-prob reliability fit (SIM-406 calibration closed 2026-05-30) |
+| 6 | **Frontend Build + P1 backend prerequisites** | ✅ **Code-complete** — SIM-378→401 + 415→420 + 414 closed; SIM-402 + 406 + 407 + 408 closed 2026-05-30 |
+| 7 | Integration, Testing & Deployment | Live-env bring-up DONE 2026-05-30 (SIM-402 + 406 + 407 + 408 closed). Remaining: SIM-430 (full-pool `/simulate` throughput); the SIM-407 prop-pair population over a live box-score source + a full multi-season `validate-props --write-calibration` run are live follow-ups (code path in place) |
 
 **Realism sub-track (interleaved, landed on `master`):** the SIM-422→429 full-pool similarity-wiring
 epic replaced the per-tile k-NN draw with whole-pool engine-weighted sampling and made it the

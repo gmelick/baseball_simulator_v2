@@ -11,7 +11,8 @@
 # =============================================================================
 
 .PHONY: help dev down build migrate test test-unit test-integration test-regression lint \
-        type-check format shell logs clean nuke profile-computor play-pool-cache calibrate
+        type-check format shell logs clean nuke profile-computor play-pool-cache calibrate \
+        validate-props
 
 # Default target — show help.
 ##
@@ -83,6 +84,14 @@ play-pool-cache:
 ## pitcher-engine W2 sample, or FLAGS="--seasons 2024 --validate" to subset/verify.
 calibrate: _require_env_file
 	docker compose run --rm app python scripts/fit_calibration.py $(FLAGS)
+
+## Offline (SIM-407): validate win-prob + prop PMFs against real completed games and
+## (with --write-calibration) fit the win-prob reliability curve back into the
+## CalibrationReport.  Runs real sims, so it is slow — cap a smoke run with
+## FLAGS="--seasons 2024 --max-games 50".  Typical full run:
+## FLAGS="--seasons 2023 2024 --iterations 100 --write-calibration".
+validate-props: _require_env_file
+	docker compose run --rm app python scripts/validate_props.py $(FLAGS)
 
 ## Tail logs for all services (Ctrl-C to exit)
 logs:
