@@ -14,7 +14,7 @@ Verified on the live stack: `fit_calibration.py` now completes and writes
 manager USAGE, intentionally gated NULL on SIM-427). SIM-406 unit suite (29) still
 green; ruff+format clean.
 
-# Phase 7 — SIM-430 (partial): full-pool per-PA hot-path caching — 1.31x faster /simulate — 2026-05-30
+# Phase 7 — SIM-430 (partial): full-pool per-PA hot-path caching — 1.21x faster /simulate — 2026-05-30
 **Authors: Performance Engineer (Agent 6), ML Engineer (Agent 3), QA/DevOps (Agent 9)**
 
 The full-pool `/simulate` path was the SIM-402 throughput gap (→ SIM-430). An
@@ -34,11 +34,12 @@ and a contiguous `sit_baseout` in `_pool_meta`). Pure memoization — the drawn
 outcome sequence is **byte-identical** (verified: 270/270 draws match old vs new
 on the real bundle at a fixed seed).
 
-**Measured (A/B on the real bundle in-container, warm, 9-batter lineup, best of
-2×12 games): 1773 ms → 1352 ms per game = 1.31x (421 ms/game saved).** This is the
-PER-GAME-COST portion of SIM-430 only; it does NOT by itself meet the 2 s/30 s
-SLA (n=100 serial ≈ 177 s → 135 s), and the worker-count fan-out / OOM half of
-SIM-430 remains open. A modest, zero-risk win banked while that larger
+**Measured (A/B on the real bundle in-container, warm, 9-batter lineup, median of
+5×10-game trials each): 1846 ms → 1530 ms per game = 1.21x (316 ms/game saved; OLD
+trials 1844-1849 ms, very tight).** This is the PER-GAME-COST portion of SIM-430
+only; it does NOT by itself meet the 2 s/30 s SLA (n=100 serial ≈ 185 s → 153 s),
+and the worker-count fan-out / OOM half of SIM-430 remains open. (An earlier
+single-run A/B showed 1.31x — a noisy outlier; the 5-trial median is 1.21x.) A modest, zero-risk win banked while that larger
 fan-out/footprint work is scoped.
 
 - `simulation/full_pool_sampler.py` — the three caches + `_batter_affinity`
