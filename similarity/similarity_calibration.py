@@ -1107,6 +1107,26 @@ class SimilarityCalibrator:
         )
 
         sl = ", ".join(str(s) for s in seasons)
+        # SIM-406 follow-up: xba/xslg are not always materialized by the profile
+        # computor (the batter ENGINE already guards them); select a NULL placeholder
+        # when the column is absent so the calibrator runs on a live DB lacking the
+        # expected-stats columns. Positional parsing is preserved; the downstream
+        # ``r[col + i] or 0.0`` coercion drops the None.
+        try:
+            _present = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'derived' "
+                    "AND table_name = 'batter_season_metrics'"
+                ).fetchall()
+            }
+        except Exception:
+            _present = {"xba", "xslg"}
+
+        def _opt(name: str) -> str:
+            return name if name in _present else f"NULL AS {name}"
+
         rows = conn.execute(f"""
             SELECT
                 batter_id, season, sample_pa,
@@ -1117,7 +1137,7 @@ class SimilarityCalibrator:
                 gb_rate, fb_rate, pull_rate, oppo_rate,
                 avg_exit_velo, avg_launch_angle, hard_hit_rate, barrel_rate,
                 -- Power (4)
-                hr_rate, xba, xslg, max_exit_velo,
+                hr_rate, {_opt("xba")}, {_opt("xslg")}, max_exit_velo,
                 -- Platoon vs R (7) — larger split, better for calibration
                 o_swing_rate_vs_r, z_swing_rate_vs_r, whiff_rate_vs_r,
                 walk_rate_vs_r, k_rate_vs_r, gb_rate_vs_r, barrel_rate_vs_r,
