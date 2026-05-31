@@ -1,3 +1,37 @@
+# Phase 7 — SIM-430 (partial): full-pool per-PA hot-path caching — 1.31x faster /simulate — 2026-05-30
+**Authors: Performance Engineer (Agent 6), ML Engineer (Agent 3), QA/DevOps (Agent 9)**
+
+The full-pool `/simulate` path was the SIM-402 throughput gap (→ SIM-430). An
+in-container cProfile of `FullPoolSampler` on the real all-seasons bundle (pitch
+pool 935K rows, BB pool 156K) showed `new_plate_appearance` recomputing THREE
+constants on every plate appearance:
+
+  * **`vecs_z`** — the z-scored batter-embedding matrix, rebuilt in BOTH `_f_batter`
+    and `_batter_aff` every PA though it never changes.
+  * **the per-batter RBF affinity** — computed twice per PA (once for the pitch
+    pool, once for the batted-ball pool) for the same batter.
+  * **`pool.sit[:, 2:6]`** — a non-contiguous 4-column slice+copy of the whole
+    935K-row pool in `_f_situation_baseout` every PA (the profiler's #1 cost).
+
+SIM-430 hoists all three into caches (`_vecs_z`, `_aff_cache` keyed by batter_key,
+and a contiguous `sit_baseout` in `_pool_meta`). Pure memoization — the drawn
+outcome sequence is **byte-identical** (verified: 270/270 draws match old vs new
+on the real bundle at a fixed seed).
+
+**Measured (A/B on the real bundle in-container, warm, 9-batter lineup, best of
+2×12 games): 1773 ms → 1352 ms per game = 1.31x (421 ms/game saved).** This is the
+PER-GAME-COST portion of SIM-430 only; it does NOT by itself meet the 2 s/30 s
+SLA (n=100 serial ≈ 177 s → 135 s), and the worker-count fan-out / OOM half of
+SIM-430 remains open. A modest, zero-risk win banked while that larger
+fan-out/footprint work is scoped.
+
+- `simulation/full_pool_sampler.py` — the three caches + `_batter_affinity`
+  (shared memoized affinity) + `_batter_vecs_z`.
+- `tests/unit/test_full_pool_sampler_sim430.py` (5 tests) — behavioral equivalence
+  (cached path == recompute, byte-identical draw sequence), cache-populates-and-
+  reuses, affinity shared across the pitch + batted-ball draws, and the contiguous
+  `sit_baseout`. ruff + format + mypy clean.
+
 # Phase 7 — SIM-431: migrate the platform to Python 3.13 (CI + Docker + local dev unified) — 2026-05-30
 **Authors: QA/DevOps (Agent 9), ML Engineer (Agent 3), Backend Developer (Agent 5)**
 

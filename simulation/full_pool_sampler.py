@@ -47,6 +47,18 @@ class FullPoolSampler:
         self.batter_sigma = float(batter_sigma)
         # Per-pool precompute: dense candidate->profile indices for O(1) gathers.
         self._pool_cache: dict[str, dict] = {}
+        # SIM-430 hot-path caches (all hold CONSTANTS that the original code
+        # recomputed every PA — the per-game profiler's top costs):
+        #   * _vecs_z: the z-scored batter-embedding matrix, recomputed in both
+        #     _f_batter and _batter_aff every PA (~0.5 s/game) though it never
+        #     changes once the artifacts are loaded.
+        #   * _aff_cache: the per-batter RBF affinity vector keyed by batter_key,
+        #     so the pitch-pool draw and the batted-ball draw in the SAME PA (and
+        #     the same batter across PAs) reuse one einsum+exp pass.
+        # Both are pure memoization — identical numeric output, just hoisted out
+        # of the per-PA loop.
+        self._vecs_z: np.ndarray | None = None
+        self._aff_cache: dict[str, np.ndarray] = {}
         # State across the matchup.
         self._hand: str | None = None
         self._base: np.ndarray | None = None  # f_pitcher * recency  (half-inning)
@@ -101,6 +113,12 @@ class FullPoolSampler:
             "pool_bat": pool_bat,
             "outcome": np.asarray(pool.outcome_type, dtype=object),
             "bucket_rows": bucket_rows,
+            # SIM-430: the base-out columns as a CONTIGUOUS copy. _f_situation_baseout
+            # ran ``pool.sit[:, 2:6]`` (a non-contiguous 4-col slice + copy over the
+            # whole ~935K-row pool) on EVERY PA — the profiler's single biggest cost
+            # (~0.67 s/game). Materialising it once here makes the per-PA RBF a plain
+            # contiguous subtract.
+            "sit_baseout": np.ascontiguousarray(pool.sit[:, 2:6]),
         }
         self._pool_cache[hand] = meta
         return meta
@@ -122,17 +140,37 @@ class FullPoolSampler:
         out = np.where(pp >= 0, prof_score[np.clip(pp, 0, n_prof - 1)], np.float32(1.0))
         return out.astype(np.float32)
 
-    def _f_batter(self, hand: str, batter_key: str) -> np.ndarray:
-        meta = self._pool_meta(hand)
+    def _batter_vecs_z(self, bemb: dict) -> np.ndarray:
+        """The z-scored batter-embedding matrix (SIM-430: cached — constant across
+        the whole sampler life, but the original recomputed it per PA)."""
+        if self._vecs_z is None:
+            self._vecs_z = ((bemb["vecs"] - bemb["mean"]) / bemb["std"]).astype(np.float32)
+        return self._vecs_z
+
+    def _batter_affinity(self, batter_key: str) -> np.ndarray | None:
+        """Per-embedding-row RBF affinity to ``batter_key`` (None if absent),
+        memoized by batter_key (SIM-430). Shared by the pitch-pool factor
+        (:meth:`_f_batter`) and the batted-ball factor (:meth:`_batter_aff`), so a
+        batter's affinity is computed at most once — not twice per PA, every PA."""
+        cached = self._aff_cache.get(batter_key)
+        if cached is not None:
+            return cached
         bemb = self.a.actor_emb.get("batter")
         if bemb is None or batter_key not in bemb["key_index"]:
-            return np.ones(meta["pool"].n, dtype=np.float32)
-        mean, std = bemb["mean"], bemb["std"]
-        vecs_z = (bemb["vecs"] - mean) / std
+            return None
+        vecs_z = self._batter_vecs_z(bemb)
         q = vecs_z[bemb["key_index"][batter_key]]
-        # RBF affinity per embedding row, then gather to the pool.
-        d2 = np.einsum("ij,ij->i", vecs_z - q, vecs_z - q)
+        diff = vecs_z - q
+        d2 = np.einsum("ij,ij->i", diff, diff)
         aff = np.exp(-d2 / (2.0 * self.batter_sigma**2 * vecs_z.shape[1])).astype(np.float32)
+        self._aff_cache[batter_key] = aff
+        return aff
+
+    def _f_batter(self, hand: str, batter_key: str) -> np.ndarray:
+        meta = self._pool_meta(hand)
+        aff = self._batter_affinity(batter_key)
+        if aff is None:
+            return np.ones(meta["pool"].n, dtype=np.float32)
         pb = meta["pool_bat"]
         return np.where(pb >= 0, aff[np.clip(pb, 0, len(aff) - 1)], np.float32(1.0)).astype(
             np.float32
@@ -147,7 +185,7 @@ class FullPoolSampler:
     def _f_situation_baseout(self, hand: str, base_out: np.ndarray) -> np.ndarray:
         """RBF over the base-out dims only (outs, runners, inning, score_diff) —
         count is handled by the per-pitch bucket, not this factor (SIM-429)."""
-        s = self.a.pools[hand].sit[:, 2:6]
+        s = self._pool_meta(hand)["sit_baseout"]  # SIM-430: contiguous, cached
         diff: np.ndarray = s - np.asarray(base_out, dtype=np.float32)
         d2 = np.einsum("ij,ij->i", diff, diff)
         return np.exp(-d2 / (2.0 * self.sit_sigma**2 * s.shape[1])).astype(np.float32)
@@ -186,14 +224,13 @@ class FullPoolSampler:
 
     # ---- SIM-425: batted-ball draw (step 5) -------------------------------
     def _batter_aff(self, batter_key: str) -> np.ndarray | None:
-        """Per-batter-embedding RBF affinity to the current batter (None if absent)."""
-        bemb = self.a.actor_emb.get("batter")
-        if bemb is None or batter_key not in bemb["key_index"]:
-            return None
-        vecs_z = (bemb["vecs"] - bemb["mean"]) / bemb["std"]
-        q = vecs_z[bemb["key_index"][batter_key]]
-        d2 = np.einsum("ij,ij->i", vecs_z - q, vecs_z - q)
-        return np.exp(-d2 / (2.0 * self.batter_sigma**2 * vecs_z.shape[1])).astype(np.float32)
+        """Per-batter-embedding RBF affinity to the current batter (None if absent).
+
+        SIM-430: delegates to the memoized :meth:`_batter_affinity` so the
+        batted-ball draw reuses the affinity the pitch-pool factor already computed
+        for this batter (was a duplicate full einsum+exp + a per-call vecs_z
+        recompute)."""
+        return self._batter_affinity(batter_key)
 
     def _bb_pool_bat_idx(self, hand: str) -> np.ndarray:
         if hand in self._bb_pool_bat:
