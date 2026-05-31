@@ -338,12 +338,24 @@ and the SIM-403 worker-count fix closed earlier.) **2026-05-29 → 2026-05-30 up
   `ALTER ... ADD COLUMN IF NOT EXISTS`); schema version 10 → 11. Diagnosis +
   reconciliation map in `docs/audit/2026-05-29-sim408-engine-schema-divergence.md` and
   `docs/audit/2026-05-29-sim408-reconciliation-plan.md`.
-- **Still open (now UNBLOCKED by the 11/11 real-data build — the next work):** a fitted
-  `CalibrationReport` over real data, **applied to all 8 similarity-score engines** (SIM-406 —
-  CLOSED 2026-05-30: `apply_calibration` on every RBF engine + the calibrator extended to the 4
-  SIM-408-era engines + `scripts/fit_calibration.py`/`make calibrate`/nightly persist to
-  `CALIBRATION_REPORT_PATH`), and prop-PMF validation + the win-prob reliability-curve fit (SIM-407,
-  still open).
+- **SIM-406 + SIM-407 — code-complete, NOT live; the unlock is SIM-432.** The SIM-406
+  `apply_calibration` seam (all 8 RBF engines + 4 new sub-calibrators) and the SIM-407 prop-PMF /
+  win-prob validation + reliability-curve fit shipped with passing unit tests, BUT the fit/validate
+  **scripts had never been run against the live SIM-408-trimmed schema** and fail on it. Cascade
+  found 2026-05-31 by actually running them:
+  - ✓ batter calibrator selected `xba`/`xslg` (absent) → `Binder Error` — **FIXED** (`_opt`
+    information_schema guard, commit `ee1188f`).
+  - ✗ pitcher sub-calibrator imports `RESULT_FEATURES`, but `pitcher_similarity` now exports **only
+    `COMMAND_FEATURES`** → `ImportError` — OPEN.
+  - ✗ batter query needs `first_pitch_take_rate` / `max_exit_velo` / the whole platoon `*_vs_r`
+    block → **absent** in live `derived.batter_season_metrics` — OPEN.
+  - ✗ `validate_props._fetch_final_games` selects `raw.games.home_score` → **absent** in live
+    Postgres — OPEN.
+  - the 6 non-batter sub-calibrators likely diverge too (not yet exercised).
+  **→ SIM-432** (P1) is the SIM-408-style trim/guard reconciliation pass that unblocks BOTH; until
+  it lands the running app uses **identity calibration** (the safe default; `/data/calibration.json`
+  absent). NB SIM-407 is **not** data-blocked — all 21,562 Final games (2017-2026) have ingested
+  lineups in `raw.game_lineups` (an earlier "only 8 of 46,109" was a glitched-terminal artifact).
 
 **Full-pool realism residual (SIM-422→429, the production path):** box rate stats (H/HR/2B/BB/K) are
 within ~4% of MLB and steals match MLB volume, but **runs sit ~10-12% low** — a hits→runs *conversion*
