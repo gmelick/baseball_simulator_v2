@@ -1,3 +1,19 @@
+# Phase 7 — SIM-406 follow-up: calibrator xba/xslg graceful-optional (live-DB fix) — 2026-05-30
+**Authors: ML Engineer (Agent 3)**
+
+`make calibrate` aborted on the live all-seasons DuckDB with `Binder Error:
+Referenced column "xba" not found`. The SIM-406 batter sub-calibrator selected
+`xba`/`xslg` unconditionally, but the profile computor does not always produce
+those expected-stats columns — the batter ENGINE already guards them via its
+`_opt()` helper; the calibrator did not. Mirrored the engine: introspect
+`information_schema.columns` and select `NULL AS xba` / `NULL AS xslg` when absent
+(the `_v(... or 0.0)` coercion drops the feature).
+
+Verified on the live stack: `fit_calibration.py` now completes and writes
+`/data/calibration.json` with **19/20 engine sigmas fitted** (the lone 0.0 is
+manager USAGE, intentionally gated NULL on SIM-427). SIM-406 unit suite (29) still
+green; ruff+format clean.
+
 # Phase 7 — SIM-430 (partial): full-pool per-PA hot-path caching — 1.31x faster /simulate — 2026-05-30
 **Authors: Performance Engineer (Agent 6), ML Engineer (Agent 3), QA/DevOps (Agent 9)**
 
