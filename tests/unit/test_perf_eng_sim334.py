@@ -284,16 +284,15 @@ class TestQueryBatchEquivalence:
 
 
 class TestEdgeCases:
-    def test_empty_index_query_returns_empty(self):
-        eng = _build_engine([])
-        assert eng.index_size == 0
-        assert isinstance(eng._index_meta, ColumnarSituationMeta)
-        assert len(eng._index_meta) == 0
-        assert eng.query(_make_vec(), k=10) == []
-
-    def test_empty_index_query_batch_returns_empty_rows(self):
-        eng = _build_engine([])
-        assert eng.query_batch([_make_vec(), _make_vec()], k=5) == [[], []]
+    def test_empty_index_build_raises(self):
+        # SIM-408: the situation engine deliberately REFUSES to build a degenerate
+        # empty index (an empty matrix normalizes to NaN, which would silently
+        # poison every situation similarity). build() raises so
+        # api.state.build_all_engines SKIPS the engine instead of registering a
+        # NaN-poisoned one. The empty-but-queryable state these tests previously
+        # asserted is therefore unreachable by design — assert the guard instead.
+        with pytest.raises(RuntimeError, match="degenerate empty index"):
+            _build_engine([])
 
     def test_single_row_index(self):
         """A one-row index: k=1 returns exactly that row's metadata."""

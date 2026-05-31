@@ -98,7 +98,12 @@ ENGINE_REGISTRY: list[dict] = [
         "name": "catcher",
         "module": "similarity.engines.catcher_similarity",
         "class": "CatcherSimilarityEngine",
-        "sub_score_names": ["framing_score", "blocking_score", "throwing_score", "deterrence_score"],
+        "sub_score_names": [
+            "framing_score",
+            "blocking_score",
+            "throwing_score",
+            "deterrence_score",
+        ],
         "query_signature": ("player_id", "season"),
     },
     {
