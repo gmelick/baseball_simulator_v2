@@ -182,10 +182,32 @@ def build_pitcher_sim_matrix(
         results = engine.query(pid, s)  # all same-hand profiles, sorted
         sims[f"{pid}:{s}"] = {f"{r.pitcher_id}:{r.season}": float(r.score) for r in results}
     os.makedirs(out_dir, exist_ok=True)
+    # SIM-430: also store a DENSE (n_prof x n_prof) float32 similarity matrix.
+    # The dict-of-dicts costs ~2 GB resident per process (Python str/float/dict
+    # overhead) and is NOT shareable through multiprocessing.shared_memory, so
+    # every ProcessPool worker held a full private copy -> 10 workers OOM-killed
+    # the host (the SIM-430 fan-out blocker). The dense matrix is ~11 MB for 1677
+    # profiles and rides the existing SIM-403b shared-memory seam, so ALL workers
+    # attach one read-only view. Row i = the prof_score vector for query profile
+    # index i (M[i, j] = sim(i, j), 0.0 when absent) — exactly what _f_pitcher
+    # scatters from the dict today, so the drawn outcome is byte-identical. The
+    # dict is kept in the npz for back-compat (older loaders + the matrix-absent
+    # fallback path).
+    n_prof = len(index)
+    sim_matrix = np.zeros((n_prof, n_prof), dtype=np.float32)
+    for qk, srow in sims.items():
+        i = index.get(qk)
+        if i is None:
+            continue
+        for tk, v in srow.items():
+            j = index.get(tk)
+            if j is not None:
+                sim_matrix[i, j] = v
     np.savez_compressed(
         os.path.join(out_dir, "pitcher_sim.npz"),
         index=json.dumps(index),
         sims=json.dumps(sims),
+        pitcher_sim_matrix=sim_matrix,
     )
     log.info("pitcher_sim: %d query profiles scored (of %d total)", len(rows), len(profiles))
     return len(rows)
@@ -340,11 +362,18 @@ class EngineArtifacts:
         seasons=None,
         actor_emb=None,
         bb_pools=None,
+        pitcher_sim_matrix=None,
     ):
         self.pools: dict[str, HandPool] = pools
         self.bb_pools: dict[str, BattedBallPool] = bb_pools or {}
         self.pitcher_sim_index: dict[str, int] = pitcher_sim_index or {}
         self.pitcher_sim: dict[str, dict[str, float]] = pitcher_sim or {}
+        #: SIM-430: dense (n_prof x n_prof) float32 same-hand similarity matrix.
+        #: When present, :meth:`FullPoolSampler._f_pitcher` reads a contiguous row
+        #: instead of scattering the ~2 GB ``pitcher_sim`` dict, and the dict is
+        #: NOT loaded per worker (it rides the SIM-403b shared-memory seam as one
+        #: read-only view). None on a legacy bundle that predates the matrix.
+        self.pitcher_sim_matrix: np.ndarray | None = pitcher_sim_matrix
         self.seasons: list[int] = seasons or []
         #: actor -> {"key_index": {id:season -> row}, "vecs", "mean", "std", "features"}
         self.actor_emb: dict[str, dict] = actor_emb or {}
@@ -371,10 +400,13 @@ class EngineArtifacts:
             :data:`_ACTOR_EMB_SHAREABLE_ATTRS` and any actor present in
             :attr:`actor_emb`.
 
-        Object-dtype arrays (``outcome_type`` / ``event``) and the
+        The object-dtype arrays (``outcome_type`` / ``event``) and the legacy
         ``pitcher_sim`` dict-of-dicts are NOT included — they are not shareable
-        through ``shared_memory`` and stay per-worker (each worker loads them
-        from disk as today; they're a small fraction of the bundle by size).
+        through ``shared_memory`` and stay per-worker.  SIM-430: the ``pitcher_sim``
+        dict is ~2 GB resident (NOT "a small fraction" as previously claimed here —
+        it was the dominant per-worker cost and the OOM driver), so it is replaced
+        by the dense ``pitcher_sim_matrix`` (~11 MB), which IS published here under
+        ``"pitcher_sim.matrix"`` and attached read-only by every worker.
         """
         out: dict[str, np.ndarray] = {}
         for hand, pool in self.pools.items():
@@ -392,6 +424,9 @@ class EngineArtifacts:
                 v = emb.get(attr)
                 if isinstance(v, np.ndarray):
                     out[f"actor_emb.{actor}.{attr}"] = v
+        # SIM-430: the dense pitcher similarity matrix (replaces the ~2 GB dict).
+        if isinstance(self.pitcher_sim_matrix, np.ndarray):
+            out["pitcher_sim.matrix"] = self.pitcher_sim_matrix
         return out
 
     def attach_shared_views(self, views: dict[str, np.ndarray]) -> None:
@@ -431,6 +466,10 @@ class EngineArtifacts:
                 v = views.get(key)
                 if isinstance(v, np.ndarray):
                     emb[attr] = v
+        # SIM-430: attach the shared dense pitcher-sim matrix view.
+        mv = views.get("pitcher_sim.matrix")
+        if isinstance(mv, np.ndarray):
+            self.pitcher_sim_matrix = mv
 
     @classmethod
     def load(
@@ -562,12 +601,25 @@ class EngineArtifacts:
                     )
         finally:
             con.close()
-        ps_index, ps_sims = {}, {}
+        ps_index: dict[str, int] = {}
+        ps_sims: dict[str, dict[str, float]] = {}
+        ps_matrix: np.ndarray | None = None
         ps_path = os.path.join(art_dir, "pitcher_sim.npz")
         if os.path.exists(ps_path):
+            # SIM-430: prefer the dense matrix. A worker gets it as a shared view
+            # (``views["pitcher_sim.matrix"]``); the parent/dev path reads it from
+            # the npz. In EITHER case we read ONLY the tiny ``index`` from disk and
+            # SKIP json-parsing the ~2 GB ``sims`` dict. The dict is parsed solely
+            # on a legacy bundle that has no ``pitcher_sim_matrix`` array.
+            mv = views.get("pitcher_sim.matrix")
             z = np.load(ps_path, allow_pickle=True)
             ps_index = json.loads(str(z["index"]))
-            ps_sims = json.loads(str(z["sims"]))
+            if isinstance(mv, np.ndarray):
+                ps_matrix = mv
+            elif "pitcher_sim_matrix" in z.files:
+                ps_matrix = z["pitcher_sim_matrix"]
+            else:
+                ps_sims = json.loads(str(z["sims"]))
         actor_emb: dict[str, dict] = {}
         for actor in _ACTOR_TABLES:
             p = os.path.join(art_dir, f"{actor}_emb.npz")
@@ -600,7 +652,15 @@ class EngineArtifacts:
                         "std": z["std"],
                         "features": json.loads(str(z["features"])),
                     }
-        return cls(pools, ps_index, ps_sims, manifest.get("seasons"), actor_emb, bb_pools)
+        return cls(
+            pools,
+            ps_index,
+            ps_sims,
+            manifest.get("seasons"),
+            actor_emb,
+            bb_pools,
+            ps_matrix,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

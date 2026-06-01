@@ -1,3 +1,38 @@
+# Phase 7 — SIM-430 (fan-out, part 2): densify pitcher_sim → kill the 2 GB/worker dict — 2026-06-01
+**Authors: Performance Engineer (Agent 6), Backend Developer (Agent 5), ML Engineer (Agent 3)**
+
+A code-grounded re-measurement on the live bundle **corrected the SIM-430 design doc's
+assumption**: the per-worker OOM driver was NOT the object-dtype `outcome_type`/`event`
+arrays (~15 MB) — it was `EngineArtifacts.pitcher_sim`, a dict-of-dicts costing **~2.0 GB
+resident per process** and unshareable through `multiprocessing.shared_memory`, so every
+ProcessPool worker held a full private copy.
+
+**Fix (shipped):** `build_pitcher_sim_matrix` now also writes a dense `(n_prof×n_prof)`
+float32 `pitcher_sim_matrix` (1677² = **11.2 MB**, 60.3% nonzero) into `pitcher_sim.npz`;
+`EngineArtifacts.load` reads it and **skips the ~2 GB dict parse** (dict kept only as a
+legacy fallback); it rides the existing SIM-403b seam (`extract_shared_arrays` /
+`attach_shared_views` → `pitcher_sim.matrix`) so all workers attach ONE read-only view;
+`FullPoolSampler._f_pitcher` reads a contiguous matrix row instead of scattering the dict.
+**Byte-identical** draws (8 unit tests, incl. a full draw-sequence equivalence + the
+all-zero-row / absent-key fallback parity).
+
+**Live-verified on the running stack:** isolated worker-path load **2364 MB → 367 MB**
+(with `len(pitcher_sim)==0` — dict skipped — and the 11.2 MB matrix present); serving
+parent **~2.4 GB → 270 MB**; boot now publishes **42 shared arrays (176.9 MB)**. The live
+`pitcher_sim.npz` was densified in place (minutes, no engine re-run) and the app restarted
+onto the matrix path; calibration still applied; total container RSS down ~0.7 GB.
+
+**STILL OPEN — the SLA / worker-scaling half, with a sharper blocker.** Raising
+`SIM_RUNNER_WORKERS` is still unsafe here: the live prewarmed pool worker measures
+**~6.4 GB private-anon**, which NO isolated path reproduces (load 367 MB, in-process warm
+760 MB, spawn-child warm 467 MB, `_pool_meta` ≈ 80 MB → a *fresh* worker is ~470 MB). So a
+second, larger per-worker consumer manifests only in the live shared-views warm path and
+must be root-caused (live `tracemalloc`/`py-spy` or `MALLOC_ARENA_MAX`) on a **dedicated**
+(non-shared) host before scaling. The dict was necessary but not sufficient.
+`SIM_RUNNER_WORKERS` left at **1**. ruff + mypy clean; +8 unit tests
+(`test_sim430_pitcher_sim_matrix.py`). Findings + the SIM-429/411-413-425b/427 execution
+plans: `docs/audit/2026-06-01-roadmap-sim430-429-411-413-425b-427.md`.
+
 # Phase 7 — SIM-432: calibrator + validate_props ↔ live-schema reconciliation — calibration is now LIVE — 2026-06-01
 **Authors: ML Engineer (Agent 3), Data Engineer (Agent 4), QA/DevOps (Agent 9)**
 

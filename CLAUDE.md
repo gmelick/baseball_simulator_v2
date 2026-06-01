@@ -94,12 +94,22 @@
   - **SIM-431 — CLOSED.** Whole platform migrated to **Python 3.13 + numpy 2.x** (CI + Docker +
     local unified). The real blocker was the `numpy<2` pin (no cp313 wheel), not version strings;
     floors raised (scipy≥1.14.1, pandas≥2.2.3, scikit-learn≥1.6, faiss-cpu≥1.9, POT≥0.9.5).
-  - **SIM-430 — per-game-cost HALF done (partial).** Cached 3 per-PA constants in
-    `FullPoolSampler` (`_vecs_z`, `_aff_cache` by batter_key, contiguous `sit_baseout`): **1.21x**
-    (1846→1530 ms/game, 5-trial median; band 1.18–1.21x), byte-identical draws, +5 unit tests.
-    *(An earlier "3.16x" claim was fabricated and was corrected — MEASURE before writing a perf
-    number.)* The **fan-out / OOM half is OPEN** — design in
-    `docs/audit/2026-05-31-sim430-fanout-design.md`.
+  - **SIM-430 — per-game-cost half done (1.21x per-PA caching) + fan-out part-2 SHIPPED
+    2026-06-01; SLA/worker-scaling half STILL OPEN.** Part-2 (2026-06-01) corrected the design
+    doc: the per-worker OOM driver was the **~2 GB `pitcher_sim` dict-of-dicts** (unshareable),
+    not the object arrays. Fix: densify it into an **11.2 MB `(n_prof×n_prof)` float32 matrix**
+    published via the SIM-403b seam (`pitcher_sim.matrix`); `EngineArtifacts.load` skips the
+    ~2 GB dict; `FullPoolSampler._f_pitcher` reads a contiguous row (byte-identical, +8 tests).
+    Live-verified: worker-path load **2364→367 MB**, serving parent **~2.4 GB→270 MB**, boot
+    publishes 42 shared arrays. ⚠ **The SLA/worker-scaling half is STILL OPEN:** the live
+    prewarmed pool worker measures **~6.4 GB private-anon** — NOT reproduced by isolated load
+    (367 MB)/warm (760 MB)/spawn-warm (467 MB), so a *fresh* worker is ~470 MB but a second
+    consumer manifests only in the live shared-views warm path; root-cause it (tracemalloc/
+    py-spy/`MALLOC_ARENA_MAX`) on a **dedicated** host before raising `SIM_RUNNER_WORKERS`
+    (left at 1). Findings + the SIM-429/411-413-425b/427 plans:
+    `docs/audit/2026-06-01-roadmap-sim430-429-411-413-425b-427.md`.
+    *(An earlier "3.16x" per-game claim was fabricated and corrected — MEASURE before writing
+    a perf number.)*
   - **SIM-432 — FILED 2026-05-31, CLOSED 2026-06-01 (see the top bullet of this section).**
     Calibration is now live; the cascade is fully resolved.
 

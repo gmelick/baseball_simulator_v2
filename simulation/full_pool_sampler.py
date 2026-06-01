@@ -126,16 +126,32 @@ class FullPoolSampler:
     # ---- factor builders --------------------------------------------------
     def _f_pitcher(self, hand: str, pitcher_key: str) -> np.ndarray:
         meta = self._pool_meta(hand)
-        sims = self.a.pitcher_sim.get(pitcher_key)
         n_prof = len(self.a.pitcher_sim_index)
-        if not sims or n_prof == 0:
+        if n_prof == 0:
             return np.ones(meta["pool"].n, dtype=np.float32)
-        prof_score = np.full(n_prof, 0.0, dtype=np.float32)
-        idx = self.a.pitcher_sim_index
-        for k, v in sims.items():
-            j = idx.get(k)
-            if j is not None:
-                prof_score[j] = v
+        matrix = getattr(self.a, "pitcher_sim_matrix", None)
+        if matrix is not None:
+            # SIM-430: dense fast path — one contiguous (shared) row instead of
+            # scattering the ~2 GB pitcher_sim dict. Byte-identical to the dict
+            # path: a key absent from the index, or an unscored/empty query (an
+            # all-zero row — a populated query always has >0 same-hand scores),
+            # both fall back to the flat-ones weighting exactly as ``if not sims``.
+            i = self.a.pitcher_sim_index.get(pitcher_key)
+            if i is None:
+                return np.ones(meta["pool"].n, dtype=np.float32)
+            prof_score = matrix[i]
+            if not prof_score.any():
+                return np.ones(meta["pool"].n, dtype=np.float32)
+        else:
+            sims = self.a.pitcher_sim.get(pitcher_key)
+            if not sims:
+                return np.ones(meta["pool"].n, dtype=np.float32)
+            prof_score = np.full(n_prof, 0.0, dtype=np.float32)
+            idx = self.a.pitcher_sim_index
+            for k, v in sims.items():
+                j = idx.get(k)
+                if j is not None:
+                    prof_score[j] = v
         pp = meta["pool_prof"]
         out = np.where(pp >= 0, prof_score[np.clip(pp, 0, n_prof - 1)], np.float32(1.0))
         return out.astype(np.float32)
