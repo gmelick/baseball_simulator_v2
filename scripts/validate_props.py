@@ -96,6 +96,12 @@ async def _fetch_final_games(dsn: str, seasons: list[int], max_games: int | None
 
     Reads ``raw.games`` (status='Final'); the real final score is the win-prob
     validation's ground truth. ``max_games`` caps the count for a smoke run.
+
+    SIM-432: the live ``raw.games`` schema stores the final score in
+    ``home_score_final`` / ``away_score_final`` (not the bare ``home_score`` /
+    ``away_score`` the original query assumed — those columns don't exist, so the
+    query failed with an ``UndefinedColumnError`` against the real Postgres). We
+    select the real columns and alias them back to the names the caller consumes.
     """
     import asyncpg
 
@@ -105,11 +111,13 @@ async def _fetch_final_games(dsn: str, seasons: list[int], max_games: int | None
     try:
         rows = await conn.fetch(
             f"""
-            SELECT game_pk, home_score, away_score
+            SELECT game_pk,
+                   home_score_final AS home_score,
+                   away_score_final AS away_score
             FROM raw.games
             WHERE status = 'Final'
               AND season IN ({sl})
-              AND home_score IS NOT NULL AND away_score IS NOT NULL
+              AND home_score_final IS NOT NULL AND away_score_final IS NOT NULL
             ORDER BY game_pk
             {limit}
             """

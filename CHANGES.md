@@ -1,3 +1,62 @@
+# Phase 7 — SIM-432: calibrator + validate_props ↔ live-schema reconciliation — calibration is now LIVE — 2026-06-01
+**Authors: ML Engineer (Agent 3), Data Engineer (Agent 4), QA/DevOps (Agent 9)**
+
+SIM-406 (fit + apply a `CalibrationReport`) and SIM-407 (win-prob reliability curve)
+were code-complete with green **unit** tests but had NEVER been run against the live
+SIM-408-trimmed schema, so the app booted on **identity** calibration
+(`/data/calibration.json` absent). SIM-432 reconciled the fit + validate **scripts**
+to the live schema (the SIM-408 "trim/guard" pattern) and **actually ran them on the
+running stack** — the app now boots with a real, applied calibration.
+
+**Ground truth was read from the LIVE containers, not the `.sql` files** (canonical
+`02_duckdb_schema.sql` diverges from the rebuilt all-seasons DB). That corrected the
+filed cascade: `first_pitch_take_rate` / `max_exit_velo` / the batter `*_vs_r` block
+are in fact **present** post-rebuild — the batter `_opt` xba/xslg guard (`ee1188f`)
+already covered the only missing batter columns. Two real divergences remained, plus a
+safety fix surfaced by actually running the fit:
+
+1. **Pitcher calibrator `ImportError`** — `_calibrate_pitcher_params` imported
+   `RESULT_FEATURES`, removed in SIM-067 (the engine has only arsenal + command
+   sub-scores). Now imports only `COMMAND_FEATURES`, SELECTs exactly those 7 columns
+   behind an `information_schema` guard, fits `sigma_command`, and leaves
+   `sigma_results` at the 0.0 keep-default sentinel (it has no consumer).
+2. **`validate_props` ↔ `raw.games`** — `_fetch_final_games` selected
+   `home_score`/`away_score` (absent); live Postgres stores
+   `home_score_final`/`away_score_final`. Fixed (aliased back to the consumed names).
+3. **Degenerate-sigma regression guard** — the fit exposed 7 sub-scores returning
+   `calibrate_sigma`'s degenerate `1.0` (no data spread). Because every
+   `apply_calibration` uses `v if v > 0 else current`, a `1.0` is a real override —
+   harmless where the default is already `1.000` but a **silent regression** for
+   baserunner `RBF_SIGMA_SPEED=0.8171` (sprint_speed is unpopulated live). Extended the
+   SIM-406 `_fit_sigma` keep-default sentinel (via a new
+   `calibrate_sigma(degenerate_value=…)`) to the older fielder / baserunner / manager
+   calibrators AND hardened it to catch *mostly*-constant (not just fully-constant)
+   matrices. Net: the report applies with **zero silent regressions** — every sigma is
+   a real population fit or the keep-default sentinel.
+
+**Ran live (running stack), now applied at boot:**
+- `make calibrate` (all seasons 2017–2026, `--arsenal-sample 30000`) →
+  `/data/calibration.json`: arsenal median W₂ **2.818** / γ 0.0873 (→ ARSENAL_SCALE
+  4.0655), σ_command 1.078, batter σ 1.049/1.073/1.085/0.659, catcher/steal/manager
+  fit; 7 keep-default sentinels; batter `--validate` median sim 0.461 (target 0.50).
+- `make validate-props` (60 games of 2024, 20 iters, `--write-calibration`) → win-prob
+  **ECE 0.171 / Brier 0.281**, **7 reliability anchors** merged into `calibration.json`.
+- App restart boot log: `build_all_engines: 11/11` → `Loaded calibration report` →
+  `SIM-346: applied … ARSENAL_SCALE=4.0655` → `SIM-406: applied fitted calibration to
+  8 engines; win-prob map: reliability-curve(2026,…,2017)` (was
+  `No CalibrationReport found … win-prob map: identity`).
+
+13 new unit tests (`tests/unit/test_sim432_calibration_reconciliation.py`); 219
+existing calibration/engine tests green; ruff + mypy clean. App image rebuilt so
+`make calibrate` / `make validate-props` work for operators. Audit:
+`docs/audit/2026-06-01-sim432-calibration-schema-reconciliation.md`.
+
+**Caveats (follow-ups, NOT SIM-432):** the win-prob curve is fit over a bounded
+60-game 2024 sample (full-pool replay is ~2 s/iter — the open **SIM-430** throughput
+gap); a fuller multi-season fit is a follow-up batch. Pitcher K/BB props are
+over-predicted (ECE 0.52/0.39, PMFs too narrow) — informational, the **SIM-429**
+hits→runs/sequencing family, not a calibration-pipeline defect.
+
 # Phase 7 — SIM-406 follow-up: calibrator xba/xslg graceful-optional (live-DB fix) — 2026-05-30
 **Authors: ML Engineer (Agent 3)**
 

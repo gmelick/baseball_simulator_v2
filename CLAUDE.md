@@ -72,14 +72,25 @@
     `/simulate` a fan-out that scales without OOM (lighter per-worker footprint or intra-request
     game batching).
 
-- **2026-05-31 session — Python 3.13 migration + SIM-430 part-1 landed, and a MAJOR correction:
-  SIM-406/407 are NOT actually live (filed SIM-432).** ⚠ The §2a / §11 lines that read
-  "SIM-406 + SIM-407 CLOSED 2026-05-30" are **misleading** — those tickets were *code-complete*
-  (working code + passing unit tests) but their fit/validate **scripts had never been run against
-  the live SIM-408-trimmed schema** and fail on it. **Calibration is therefore NOT applied on the
-  running app — it is on identity (the safe default); `/data/calibration.json` does not exist**
-  (boot logs `No CalibrationReport found … win-prob map: identity`). What DID land + push this
-  session (commits `2f4a8f1`..`1d60fb1`):
+- **2026-06-01 session — SIM-432 CLOSED: CALIBRATION IS NOW LIVE.** The SIM-406 fit + SIM-407
+  validate **scripts** were reconciled to the live SIM-408-trimmed schema and **actually run on the
+  running stack**, so `/data/calibration.json` now exists and is applied at boot. Ground truth was
+  read from the LIVE containers (not the `.sql` files, which diverge from the rebuilt all-seasons
+  DB) — which corrected the filed cascade: `first_pitch_take_rate`/`max_exit_velo`/the batter
+  `*_vs_r` block are PRESENT post-rebuild (so cascade item (c) was stale); only the pitcher
+  `RESULT_FEATURES` import (b) and the `raw.games` final-score columns (d) were real divergences,
+  plus a degenerate-sigma regression guard surfaced by running the fit. **Boot now logs**
+  `build_all_engines: 11/11` → `Loaded calibration report from /data/calibration.json` →
+  `SIM-346: applied … ARSENAL_SCALE=4.0655` → `SIM-406: applied fitted calibration to 8 engines;
+  win-prob map: reliability-curve(2026..2017)` (was `No CalibrationReport found … identity`). Fit:
+  arsenal median W₂ 2.818, σ_command 1.078, 7 keep-default sentinels; validate: 60 games of 2024,
+  win-prob ECE 0.171, 7 reliability anchors. See `docs/audit/2026-06-01-sim432-calibration-schema-reconciliation.md`.
+  ⚠ Caveats (NOT SIM-432): the win-prob curve is fit over a bounded 60-game sample (full-pool replay
+  ~2 s/iter — the open SIM-430 gap; a fuller multi-season fit is a follow-up batch), and pitcher
+  K/BB props are over-predicted (→ SIM-429). **The §11 SIM-406/407/432 lines below predate this
+  closure where they still say "NOT live / identity" — treat THIS bullet as authoritative.**
+- **2026-05-31 session — Python 3.13 migration + SIM-430 part-1 landed.** What landed + pushed
+  (commits `2f4a8f1`..`1d60fb1`):
   - **SIM-431 — CLOSED.** Whole platform migrated to **Python 3.13 + numpy 2.x** (CI + Docker +
     local unified). The real blocker was the `numpy<2` pin (no cp313 wheel), not version strings;
     floors raised (scipy≥1.14.1, pandas≥2.2.3, scikit-learn≥1.6, faiss-cpu≥1.9, POT≥0.9.5).
@@ -89,8 +100,8 @@
     *(An earlier "3.16x" claim was fabricated and was corrected — MEASURE before writing a perf
     number.)* The **fan-out / OOM half is OPEN** — design in
     `docs/audit/2026-05-31-sim430-fanout-design.md`.
-  - **SIM-432 — FILED (P1, the calibration unlock).** The xba/xslg sub-bug is fixed (`_opt`
-    information_schema guard, commit `ee1188f`); the rest of the cascade is OPEN (see §11).
+  - **SIM-432 — FILED 2026-05-31, CLOSED 2026-06-01 (see the top bullet of this section).**
+    Calibration is now live; the cascade is fully resolved.
 
 ## 2a. Operational caveats (Windows + Docker)
 
@@ -124,12 +135,13 @@
     catcher/manager/baserunner_steal/pitcher_steal failing, situation indexing 0 rows) was
     reconciled and a full all-seasons (2017-2026) profile rebuild ran; the live app now logs
     `build_all_engines: 11/11`.  See §11 for what was trimmed/built per engine.
-  - **SIM-406 + SIM-407 — code-complete but NOT live (⚠ the "CLOSED" tag is misleading — see
-    SIM-432).** The SIM-406 calibration seam (`apply_calibration` on all 8 RBF engines + 4 new
-    sub-calibrators) and the SIM-407 prop-PMF / win-prob validation + reliability-curve fit shipped
-    with passing unit tests, but the fit/validate **scripts were never run against the live
-    SIM-408-trimmed schema** and fail on it. Until **SIM-432** reconciles them the app runs
-    identity calibration (`/data/calibration.json` absent). Failure cascade detailed in §11.
+  - **SIM-406 + SIM-407 — ✅ LIVE as of 2026-06-01 (SIM-432 closed).** The SIM-406 calibration seam
+    (`apply_calibration` on all 8 RBF engines + 4 sub-calibrators) and the SIM-407 prop-PMF /
+    win-prob validation + reliability-curve fit are now actually applied: `/data/calibration.json`
+    is fitted (`make calibrate`) + the win-prob reliability curve written (`make validate-props
+    --write-calibration`), and the app applies both at boot. SIM-432 was the schema-reconciliation
+    that unblocked it (see §2 top bullet + §11). *(The earlier "scripts never run / identity
+    calibration" wording here described the pre-2026-06-01 state.)*
 - Canonical git repo: this directory. Primary shell: **Windows Command Prompt (cmd.exe)**;
   development + tests run through Docker (`docker compose run --rm app ...`).
 
@@ -338,24 +350,32 @@ and the SIM-403 worker-count fix closed earlier.) **2026-05-29 → 2026-05-30 up
   `ALTER ... ADD COLUMN IF NOT EXISTS`); schema version 10 → 11. Diagnosis +
   reconciliation map in `docs/audit/2026-05-29-sim408-engine-schema-divergence.md` and
   `docs/audit/2026-05-29-sim408-reconciliation-plan.md`.
-- **SIM-406 + SIM-407 — code-complete, NOT live; the unlock is SIM-432.** The SIM-406
-  `apply_calibration` seam (all 8 RBF engines + 4 new sub-calibrators) and the SIM-407 prop-PMF /
-  win-prob validation + reliability-curve fit shipped with passing unit tests, BUT the fit/validate
-  **scripts had never been run against the live SIM-408-trimmed schema** and fail on it. Cascade
-  found 2026-05-31 by actually running them:
-  - ✓ batter calibrator selected `xba`/`xslg` (absent) → `Binder Error` — **FIXED** (`_opt`
-    information_schema guard, commit `ee1188f`).
-  - ✗ pitcher sub-calibrator imports `RESULT_FEATURES`, but `pitcher_similarity` now exports **only
-    `COMMAND_FEATURES`** → `ImportError` — OPEN.
-  - ✗ batter query needs `first_pitch_take_rate` / `max_exit_velo` / the whole platoon `*_vs_r`
-    block → **absent** in live `derived.batter_season_metrics` — OPEN.
-  - ✗ `validate_props._fetch_final_games` selects `raw.games.home_score` → **absent** in live
-    Postgres — OPEN.
-  - the 6 non-batter sub-calibrators likely diverge too (not yet exercised).
-  **→ SIM-432** (P1) is the SIM-408-style trim/guard reconciliation pass that unblocks BOTH; until
-  it lands the running app uses **identity calibration** (the safe default; `/data/calibration.json`
-  absent). NB SIM-407 is **not** data-blocked — all 21,562 Final games (2017-2026) have ingested
-  lineups in `raw.game_lineups` (an earlier "only 8 of 46,109" was a glitched-terminal artifact).
+- **SIM-406 + SIM-407 — ✅ LIVE 2026-06-01 (SIM-432 reconciled the scripts to the live schema).**
+  The SIM-406 `apply_calibration` seam (all 8 RBF engines + 4 sub-calibrators) and the SIM-407
+  prop-PMF / win-prob validation + reliability-curve fit are now actually applied at boot. SIM-432
+  resolved the cascade (ground truth was read from the LIVE containers, which corrected several
+  filed-but-stale items):
+  - ✓ batter `xba`/`xslg` — already `_opt`-guarded (commit `ee1188f`); the only genuinely-absent
+    batter columns.
+  - ✓ pitcher sub-calibrator's `RESULT_FEATURES` import — **FIXED**: removed (SIM-067 deleted the
+    results sub-score); now fits `sigma_command` over the engine's 7 `COMMAND_FEATURES` behind an
+    info_schema guard, `sigma_results` left as a vestigial keep-default.
+  - ✓ `first_pitch_take_rate` / `max_exit_velo` / the `*_vs_r` platoon block — **STALE finding**:
+    they are PRESENT in the rebuilt all-seasons `derived.batter_season_metrics` (the filing predated
+    the rebuild), so no change was needed.
+  - ✓ `validate_props._fetch_final_games` `raw.games.home_score` — **FIXED**: the live schema stores
+    the final score as `home_score_final` / `away_score_final`; the query now selects + aliases those.
+  - ✓ the 6 non-batter sub-calibrators were verified against the live column set (all match); a
+    regression guard was added so 7 degenerate sub-scores (sprint_speed etc.) keep the engine's tuned
+    default (`_fit_sigma` 0.0 sentinel via `calibrate_sigma(degenerate_value=…)`) instead of a
+    spurious 1.0.
+  **Result:** `make calibrate` → `/data/calibration.json` (arsenal median W₂ 2.818, ARSENAL_SCALE
+  4.0655, σ_command 1.078); `make validate-props --write-calibration` (60 games 2024 → ECE 0.171,
+  7 anchors); boot logs `applied fitted calibration to 8 engines; win-prob map:
+  reliability-curve(2026..2017)`. Audit: `docs/audit/2026-06-01-sim432-calibration-schema-reconciliation.md`.
+  SIM-407 is **not** data-blocked — all 21,562 Final games (2017-2026) have ingested lineups in
+  `raw.game_lineups`. *(Follow-ups, NOT SIM-432: a fuller multi-season win-prob curve fit is gated
+  on SIM-430 throughput; pitcher K/BB props are over-predicted → SIM-429.)*
 
 **Full-pool realism residual (SIM-422→429, the production path):** box rate stats (H/HR/2B/BB/K) are
 within ~4% of MLB and steals match MLB volume, but **runs sit ~10-12% low** — a hits→runs *conversion*
@@ -380,8 +400,8 @@ breakouts (RISP, advancement, DP rate) are the right lens, not the global R mean
 | 3 | Play Pool Architecture | ✅ Complete |
 | 4 | Core Simulation Loop | ✅ Complete |
 | 5 | Simulation Runner & Backend API | ✅ Complete (CI-green on Python 3.13) |
-| 6 | **Frontend Build + P1 backend prerequisites** | ✅ **Code-complete** — SIM-378→401 + 415→420 + 414 + 402 + 408 closed; SIM-406 + 407 code-complete but NOT live (→ SIM-432) |
-| 7 | Integration, Testing & Deployment | Live-env bring-up DONE (SIM-402 + 408 closed; Python-3.13 migration SIM-431 closed). **Remaining: SIM-430** (full-pool `/simulate` throughput — per-game half done 1.21x, fan-out/OOM half OPEN) and **SIM-432** (calibrator/validate_props ↔ live-schema reconciliation — the prerequisite to making SIM-406 engine calibration + the SIM-407 win-prob curve go live; app is on identity calibration until then) |
+| 6 | **Frontend Build + P1 backend prerequisites** | ✅ **Complete** — SIM-378→401 + 415→420 + 414 + 402 + 408 closed; SIM-406 + 407 calibration LIVE (unblocked by SIM-432, 2026-06-01) |
+| 7 | Integration, Testing & Deployment | Live-env bring-up DONE (SIM-402 + 408 closed; Python-3.13 migration SIM-431 closed; **SIM-432 closed 2026-06-01 — calibration fitted + applied at boot, win-prob map = fitted reliability-curve**). **Remaining: SIM-430** (full-pool `/simulate` throughput — per-game half done 1.21x, fan-out/OOM half OPEN) and **SIM-429** (granular run/prop calibration + CLV backtest; a fuller multi-season win-prob curve fit is gated on SIM-430 throughput) |
 
 **Realism sub-track (interleaved, landed on `master`):** the SIM-422→429 full-pool similarity-wiring
 epic replaced the per-tile k-NN draw with whole-pool engine-weighted sampling and made it the

@@ -63,6 +63,7 @@ def calibrate_sigma(
     target_median_score: float = 0.50,
     n_sample_pairs: int = 50_000,
     seed: int = 42,
+    degenerate_value: float = 1.0,
 ) -> float:
     """
     Find the RBF sigma that produces a target median similarity score
@@ -90,6 +91,12 @@ def calibrate_sigma(
         Number of random pairs to sample.
     seed : int
         Random seed for reproducibility.
+    degenerate_value : float
+        Value returned when the matrix cannot yield a real sigma (no usable
+        pairwise spread, i.e. ``median_dist_sq <= 0``, or an out-of-range target).
+        Defaults to ``1.0`` for backward compatibility; SIM-432 callers that treat
+        sigma as an *override* pass ``0.0`` so a degenerate sub-score preserves the
+        engine's tuned module default instead of clobbering it with a spurious 1.0.
 
     Returns
     -------
@@ -120,8 +127,8 @@ def calibrate_sigma(
     #        gamma = -ln(target) / median_dist_sq
     #        sigma = sqrt(1 / (2 * gamma))
     if median_dist_sq <= 0 or target_median_score <= 0 or target_median_score >= 1:
-        log.warning("Cannot calibrate sigma: invalid inputs. Returning default 1.0.")
-        return 1.0
+        log.warning("Cannot calibrate sigma: invalid inputs. Returning %.4g.", degenerate_value)
+        return degenerate_value
 
     gamma = -np.log(target_median_score) / median_dist_sq
     sigma = np.sqrt(1.0 / (2.0 * gamma))
@@ -1245,15 +1252,43 @@ class SimilarityCalibrator:
         target: float,
         report: CalibrationReport,
     ) -> CalibrationReport:
-        """Load pitcher profiles and calibrate pitcher constants."""
-        from similarity.engines.pitcher_similarity import COMMAND_FEATURES, RESULT_FEATURES
+        """Load pitcher profiles and calibrate the command-RBF sigma.
+
+        SIM-432: the engine now has exactly TWO sub-scores — arsenal (W₂) and
+        command (RBF over ``COMMAND_FEATURES``).  The ``results`` sub-score and its
+        ``RESULT_FEATURES`` export were removed in SIM-067 (results were folded into
+        the EB confidence multiplier), so importing ``RESULT_FEATURES`` here raised
+        ``ImportError`` against the live engine and the old 10-column SELECT no
+        longer matched the engine's command vocabulary.  We now fit
+        ``sigma_command`` over the engine's *actual* ``COMMAND_FEATURES`` (pulled by
+        their canonical names with an information_schema guard so a trimmed DuckDB
+        degrades to a NULL placeholder instead of a Binder Error) and leave
+        ``sigma_results`` at the 0.0 keep-default sentinel (it has no consumer).
+        """
+        from similarity.engines.pitcher_similarity import COMMAND_FEATURES
 
         sl = ", ".join(str(s) for s in seasons)
+        # SIM-432: guard each command column the way the batter calibrator guards
+        # xba/xslg — a column absent from a SIM-408-trimmed DuckDB becomes a NULL
+        # placeholder (the ``r[...] or 0.0`` coercion drops the None) rather than
+        # aborting the whole fit with a Binder Error.
+        try:
+            _present = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'derived' "
+                    "AND table_name = 'pitcher_season_metrics'"
+                ).fetchall()
+            }
+        except Exception:  # noqa: BLE001 - assume all present if introspection fails
+            _present = set(COMMAND_FEATURES)
+
+        cmd_cols = ", ".join(f if f in _present else f"NULL AS {f}" for f in COMMAND_FEATURES)
         rows = conn.execute(f"""
             SELECT
                 pitcher_id, season, sample_pitches,
-                bb_rate, k_rate, csw_rate, zone_rate, chase_rate,
-                ground_ball_rate, fly_ball_rate, line_drive_rate, whip, hr_per_9
+                {cmd_cols}
             FROM derived.pitcher_season_metrics
             WHERE season IN ({sl}) AND below_minimum_sample = FALSE
         """).fetchall()
@@ -1262,14 +1297,10 @@ class SimilarityCalibrator:
             log.warning("No pitcher profiles found for calibration.")
             return report
 
-        np.array([r[0] for r in rows])
         samples = np.array([r[2] for r in rows])
 
         n_cmd = len(COMMAND_FEATURES)
-        n_res = len(RESULT_FEATURES)
-
         cmd_raw = np.array([[r[3 + i] or 0.0 for i in range(n_cmd)] for r in rows])
-        res_raw = np.array([[r[3 + n_cmd + i] or 0.0 for i in range(n_res)] for r in rows])
 
         def _zscore(mat):
             m = np.nanmean(mat, axis=0)
@@ -1278,21 +1309,16 @@ class SimilarityCalibrator:
             return (mat - m) / s
 
         cmd_z = _zscore(cmd_raw)
-        res_z = _zscore(res_raw)
-
         report.sigma_command = calibrate_sigma(cmd_z, target_median_score=target)
-        report.sigma_results = calibrate_sigma(res_z, target_median_score=target)
+        # sigma_results stays at 0.0 — the engine dropped the results sub-score in
+        # SIM-067, so there is nothing to fit and nothing to apply it to.
 
-        # EB prior
-        all_raw = np.hstack([cmd_raw, res_raw])
-        report.eb_n_prior_pitcher = calibrate_eb_prior(all_raw, samples, min_sample=200)
+        report.eb_n_prior_pitcher = calibrate_eb_prior(cmd_raw, samples, min_sample=200)
 
         log.info(
-            "Pitcher calibration complete: %d profiles, sigma_cmd=%.3f, "
-            "sigma_res=%.3f, eb_prior=%.1f",
+            "Pitcher calibration complete: %d profiles, sigma_cmd=%.3f, eb_prior=%.1f",
             len(rows),
             report.sigma_command,
-            report.sigma_results,
             report.eb_n_prior_pitcher,
         )
         return report
@@ -1428,19 +1454,19 @@ class SimilarityCalibrator:
 
             ids = np.array([r[0] for r in if_rows])
 
-            report.sigma_if_range = calibrate_sigma(
-                _zscore(range_raw), target_median_score=target_median_score
-            )
-            report.sigma_if_dp = calibrate_sigma(
+            # SIM-432: _fit_sigma (not raw calibrate_sigma) so a NO-variance
+            # sub-score (e.g. a metric the live computor leaves all-NULL) returns
+            # the 0.0 keep-default sentinel instead of calibrate_sigma's degenerate
+            # 1.0 — which apply_calibration's ``v if v > 0 else current`` would
+            # otherwise apply as a real override, silently clobbering the engine's
+            # tuned module default.
+            report.sigma_if_range = self._fit_sigma(_zscore(range_raw), target_median_score)
+            report.sigma_if_dp = self._fit_sigma(
                 _zscore(np.concatenate((dp_raw, pivot_raw), axis=1)),
-                target_median_score=target_median_score,
+                target_median_score,
             )
-            report.sigma_if_errors = calibrate_sigma(
-                _zscore(err_raw), target_median_score=target_median_score
-            )
-            report.sigma_if_specialty = calibrate_sigma(
-                _zscore(spec_raw), target_median_score=target_median_score
-            )
+            report.sigma_if_errors = self._fit_sigma(_zscore(err_raw), target_median_score)
+            report.sigma_if_specialty = self._fit_sigma(_zscore(spec_raw), target_median_score)
 
             report.reliability_weights_if_range = calibrate_reliability_weights(range_raw, ids)
             report.reliability_weights_if_dp = calibrate_reliability_weights(dp_raw, ids)
@@ -1488,18 +1514,10 @@ class SimilarityCalibrator:
 
             ids = np.array([r[0] for r in of_rows])
 
-            report.sigma_of_range = calibrate_sigma(
-                _zscore(range_raw), target_median_score=target_median_score
-            )
-            report.sigma_of_arm = calibrate_sigma(
-                _zscore(arm_raw), target_median_score=target_median_score
-            )
-            report.sigma_of_stars = calibrate_sigma(
-                _zscore(star_raw), target_median_score=target_median_score
-            )
-            report.sigma_of_errors = calibrate_sigma(
-                _zscore(err_raw), target_median_score=target_median_score
-            )
+            report.sigma_of_range = self._fit_sigma(_zscore(range_raw), target_median_score)
+            report.sigma_of_arm = self._fit_sigma(_zscore(arm_raw), target_median_score)
+            report.sigma_of_stars = self._fit_sigma(_zscore(star_raw), target_median_score)
+            report.sigma_of_errors = self._fit_sigma(_zscore(err_raw), target_median_score)
 
             report.reliability_weights_of_range = calibrate_reliability_weights(range_raw, ids)
             report.reliability_weights_of_arm = calibrate_reliability_weights(arm_raw, ids)
@@ -1580,18 +1598,13 @@ class SimilarityCalibrator:
             s[s == 0] = 1.0
             return (mat - m) / s
 
-        report.sigma_baserunner_speed = calibrate_sigma(
-            _zscore(speed_raw),
-            target_median_score=target_median_score,
-        )
-        report.sigma_baserunner_aggression = calibrate_sigma(
-            _zscore(agg_raw),
-            target_median_score=target_median_score,
-        )
-        report.sigma_baserunner_success = calibrate_sigma(
-            _zscore(suc_raw),
-            target_median_score=target_median_score,
-        )
+        # SIM-432: _fit_sigma so a degenerate (all-NULL) sub-score keeps the
+        # engine's tuned default instead of overriding it with calibrate_sigma's
+        # spurious 1.0 — sprint_speed in particular is unpopulated on the live DB,
+        # and a raw 1.0 would clobber the calibrated RBF_SIGMA_SPEED=0.8171.
+        report.sigma_baserunner_speed = self._fit_sigma(_zscore(speed_raw), target_median_score)
+        report.sigma_baserunner_aggression = self._fit_sigma(_zscore(agg_raw), target_median_score)
+        report.sigma_baserunner_success = self._fit_sigma(_zscore(suc_raw), target_median_score)
 
         # EB prior
         all_raw = np.hstack([speed_raw, agg_raw, suc_raw])
@@ -1630,21 +1643,22 @@ class SimilarityCalibrator:
     @staticmethod
     def _fit_sigma(zmatrix: NDArray[np.float64], target: float) -> float:
         """Calibrate the RBF sigma, returning 0.0 (the engines' keep-module-default
-        sentinel) when the z-scored feature matrix has NO usable variance.
+        sentinel) whenever the z-scored feature matrix cannot yield a real sigma.
 
-        A fully gated/NULL column (e.g. manager USAGE under SIM-427, or any feature
-        the computor doesn't yet produce) z-scores to all-zeros; every sampled pair
-        then has distance 0, so :func:`calibrate_sigma` hits its ``median_dist_sq<=0``
-        guard and returns its degenerate ``1.0`` fallback. Persisting that ``1.0``
-        would SILENTLY override the engine's tuned default (harmless only when the
-        default happens to equal 1.0). Returning ``0.0`` instead makes
-        ``apply_calibration``'s ``v if v > 0 else current`` correctly preserve the
-        module default regardless of its value — so the "keep module default" contract
-        actually holds. A matrix with variance in at least one column calibrates
-        normally (zero columns contribute 0 distance, exactly as before)."""
-        if zmatrix.size == 0 or not np.any(np.nanstd(zmatrix, axis=0) > 0):
+        A sub-score the live computor leaves all-NULL (e.g. manager USAGE under
+        SIM-427, or sprint_speed on the current DuckDB) z-scores to a column with no
+        usable pairwise spread, so :func:`calibrate_sigma` hits its
+        ``median_dist_sq <= 0`` guard. Its default fallback is ``1.0``, which
+        ``apply_calibration`` (``v if v > 0 else current``) would apply as a REAL
+        override — silently clobbering the engine's tuned module default whenever
+        that default isn't itself 1.0 (e.g. baserunner RBF_SIGMA_SPEED=0.8171). We
+        pass ``degenerate_value=0.0`` so any uncalibratable matrix — fully constant
+        OR merely mostly-constant (>half the sampled pairs identical) — yields the
+        0.0 keep-default sentinel instead, making the "keep module default" contract
+        hold universally. A matrix with real spread calibrates normally."""
+        if zmatrix.size == 0:
             return 0.0
-        return calibrate_sigma(zmatrix, target_median_score=target)
+        return calibrate_sigma(zmatrix, target_median_score=target, degenerate_value=0.0)
 
     def _calibrate_catcher_params(
         self,
@@ -1814,11 +1828,12 @@ class SimilarityCalibrator:
             )
 
         # USAGE sub-score is gated NULL on SIM-427 (no bullpen-role source); when
-        # every usage cell is NULL the z-scored matrix is all-zero -> calibrate_sigma
-        # returns its 1.0 default, which the engine treats as "keep module default".
-        report.sigma_manager_usage = calibrate_sigma(col(0, 6), target_median_score=target)
-        report.sigma_manager_aggression = calibrate_sigma(col(6, 5), target_median_score=target)
-        report.sigma_manager_platoon = calibrate_sigma(col(11, 5), target_median_score=target)
+        # every usage cell is NULL the z-scored matrix has no variance, so SIM-432's
+        # _fit_sigma returns the 0.0 keep-default sentinel and the engine keeps its
+        # module-default RBF_SIGMA_USAGE rather than taking a spurious calibrated value.
+        report.sigma_manager_usage = self._fit_sigma(col(0, 6), target)
+        report.sigma_manager_aggression = self._fit_sigma(col(6, 5), target)
+        report.sigma_manager_platoon = self._fit_sigma(col(11, 5), target)
         log.info(
             "Manager calibration complete: %d profiles, sigma_usage=%.3f, "
             "sigma_aggression=%.3f, sigma_platoon=%.3f",
