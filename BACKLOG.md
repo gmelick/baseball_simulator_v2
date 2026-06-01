@@ -2,11 +2,55 @@
 
 *Owner: Product Manager (Agent 1) · Last updated: 2026-06-01 (SIM-432 CLOSED — calibration LIVE. SIM-430 fan-out part-2 SHIPPED: densified pitcher_sim → killed the ~2 GB/worker dict [load 2364→367 MB, parent →270 MB, byte-identical, +8 tests]; SLA/worker-scaling half STILL OPEN — live pool worker measures ~6.4 GB private-anon NOT reproduced by any isolated path [fresh worker ~470 MB], needs root-cause on a dedicated host before raising workers. Remaining open: SIM-430 [worker-scaling]; P2 SIM-411+413 + SIM-425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV blocked — raw.*_odds empty]. Plans: docs/audit/2026-06-01-roadmap-sim430-429-411-413-425b-427.md. SIM-402/406/407/408/431/432 closed.)*
 
+# 🔭 2026-06-01 — Roadmap tickets filed (SIM-433 / SIM-434 / SIM-435, all P1)
+
+*Filed off the SIM-430/432 session + the operator's roadmap. **Execution order:**
+(1) SIM-430 worker-scaling → (2) SIM-433 bullpen availability → (3) SIM-427 + SIM-434 manager
+decision model + recompute profiles → (4) full sims on the updated profiles → (5) SIM-429
+calibration → (6) SIM-435 historical odds → (7) SIM-429 CLV backtest. Plans:
+`docs/audit/2026-06-01-roadmap-sim430-429-411-413-425b-427.md`.*
+
+| ID | Title | Type | Pri | Size | Depends-on | Status |
+|---|---|---|---|---|---|---|
+| SIM-433 | Per-game bullpen availability + IL ingestion (MLB Stats API) | Feature/Data | P1 | M | live-ingestion | 🔵 Open |
+| SIM-434 | Manager pull + reliever-selection decision model (fatigue/rest · TTO · leverage · platoon) | Feature | P1 | L | SIM-427, SIM-433 | 🔵 Open |
+| SIM-435 | Historical odds loader (opening + closing lines) — unblock the CLV backtest | Feature/Data | P1 | M | SIM-405 odds provider | 🔵 Open |
+
+**SIM-433** — `raw.game_lineups` records who PLAYED, not who was AVAILABLE. To compute a manager's
+bullpen tendencies we must distinguish "didn't pitch = manager CHOSE not to" (signal) from "couldn't
+pitch = IL/unavailable" (NOT signal). Ingest the per-game 26-man active pitching staff + IL status from
+the MLB Stats API (boxscore/roster + transactions endpoints — same source the SIM-405 BettingPros
+bridge + live pipeline already use), and derive recent-workload availability (days since last
+appearance, pitches in last N days, back-to-back) from `raw.pitches`. New table
+`raw.game_bullpen_availability(game_pk, team_id, pitcher_id, available, reason[active/IL/rest],
+days_rest, pitches_last_3d)`. Feeds SIM-427's manager-profile USAGE columns (the available-but-unused
+signal) — the prerequisite that makes SIM-427's roster meaningful.
+
+**SIM-434** — the pull / replacement DECISION model the sim lacks (today `_maybe_pull_starter` sees
+only pitch-count + leverage; `_pick_reliever` is crude). Build: (a) a per-pitcher fatigue/rest state in
+the loop (days rest + recent pitch counts, seeded from SIM-433); (b) a times-through-the-order
+effectiveness decay on the starter; (c) reliever-selection scoring over the AVAILABLE bullpen by
+leverage × platoon × effectiveness × rest; (d) a pull decision combining pitch-count + TTO + leverage +
+the manager's fitted pull tendency. Replaces the crude hooks; wires the manager into production (incl.
+the `pitcher_pitch_count`-never-incremented bug fix) behind a `SIM_MANAGER=1` flag. ALSO fixes the
+SIM-429 pitcher-K/BB over-prediction (starters finally get pulled). Distribution-shifting → regenerate
+the regression golden fixtures + validate at ≥400 sims/game; gate so each effect is measured alone.
+
+**SIM-435** — the CLV backtest (the trading-fund north star) is blocked ONLY by missing historical odds
+(`raw.game_odds`/`raw.prop_odds` are empty). The hooked-up provider
+(`pipeline/bettingpros_odds_provider.py`, SIM-405) exposes historical lines; extend it to read CLOSING
+lines (today: opening + current only) and build a loader that backfills `raw.game_odds` +
+`raw.prop_odds` for Final games with `line_type='opening'` and `'closing'` (via the SIM-370 provider
+seam + the existing `odds_hash` ON CONFLICT dedup + SIM-340 `mark_closing_*` convention). Unblocks the
+SIM-429 CLV backtest (entry=opening vs closing line).
+
+---
+
 > # 🚀 PHASE 6 — Frontend Build — OPEN 2026-09-02 (audit executed 2026-05-25)
 >
 > **Phase 5 is fully CLOSED and CI-green on Python 3.11.15** (unit+regression **1814 pass / 1 skip / 0 fail @ 89% coverage**; 8 CI jobs; the post-close CI-stabilization — ruff 0.15.14 config, mypy, coverage measurement, and 2 py3.11 failures [a gitignored fixture + a slow-test timeout] — is done). A full **9-agent program audit + independent QA cross-validation** filed **43 Phase-6 tickets (SIM-378→SIM-420)**. **Phase 6 = the Frontend Build** — a greenfield UI on the complete backend, PLUS the API contracts the UI can't start without and the live-env / realism / hardening debt. See `docs/HANDOFF_PHASE6.md`, `docs/audit/2026-09-02-phase5-close-program-audit.md`, `docs/audit/2026-09-02-phase6-prioritized-tickets.md`.
 >
-> **⚠ Reality check (QA-confirmed):** the pre-existing Phase-6 tickets SIM-127–131 cite parent tickets SIM-108/109/112/122–126 that **don't exist**; `frontend/{components,graphics,pages}/` are **empty dirs**; there is no build tooling or API→UI serving path. SIM-382 backfills the chain. **Next free ID: SIM-433** (SIM-430 = full-pool `/simulate` throughput / 2s-30s SLA perf ticket, filed 2026-05-30 from the SIM-402 live re-measure — see the SIM-402 row: per-game ~2.2s full-pool cost + the n-iteration fan-out that's serial at 1 worker and OOM-deadlocks at 10; SIM-431 = the Python-3.13 migration (CLOSED 2026-05-30); SIM-430 per-game cost cut 1.21x (full-pool per-PA caching, 2026-05-30) + fan-out part-2 2026-06-01 (densified pitcher_sim → 11.2 MB shared matrix, killed the ~2 GB/worker dict; load 2364→367 MB; byte-identical; +8 tests) — SLA/worker-scaling STILL OPEN (live pool worker ~6.4 GB private-anon, unexplained by isolated paths; root-cause on a dedicated host before raising workers); SIM-432 = calibrator/validate_props ↔ live-schema reconciliation (CLOSED 2026-06-01 — calibration now live); SIM-422→429 = the similarity-engine-wiring epic; SIM-421 = the P3 full-market-projection enhancement).
+> **⚠ Reality check (QA-confirmed):** the pre-existing Phase-6 tickets SIM-127–131 cite parent tickets SIM-108/109/112/122–126 that **don't exist**; `frontend/{components,graphics,pages}/` are **empty dirs**; there is no build tooling or API→UI serving path. SIM-382 backfills the chain. **Next free ID: SIM-436** (SIM-433 = per-game bullpen availability/IL ingestion, SIM-434 = manager pull/reliever decision model, SIM-435 = historical odds loader — all P1, filed 2026-06-01, see the top banner; SIM-430 = full-pool `/simulate` throughput / 2s-30s SLA perf ticket, filed 2026-05-30 from the SIM-402 live re-measure — see the SIM-402 row: per-game ~2.2s full-pool cost + the n-iteration fan-out that's serial at 1 worker and OOM-deadlocks at 10; SIM-431 = the Python-3.13 migration (CLOSED 2026-05-30); SIM-430 per-game cost cut 1.21x (full-pool per-PA caching, 2026-05-30) + fan-out part-2 2026-06-01 (densified pitcher_sim → 11.2 MB shared matrix, killed the ~2 GB/worker dict; load 2364→367 MB; byte-identical; +8 tests) — SLA/worker-scaling STILL OPEN (live pool worker ~6.4 GB private-anon, unexplained by isolated paths; root-cause on a dedicated host before raising workers); SIM-432 = calibrator/validate_props ↔ live-schema reconciliation (CLOSED 2026-06-01 — calibration now live); SIM-422→429 = the similarity-engine-wiring epic; SIM-421 = the P3 full-market-projection enhancement).
 >
 > **SIM-432 (P1) — calibrator + validate_props ↔ live-schema reconciliation — ✅ CLOSED 2026-06-01. CALIBRATION IS NOW LIVE.** The SIM-406 fit + SIM-407 validate scripts were reconciled to the live (SIM-408-trimmed, all-seasons-rebuilt) schema — ground truth read from the running containers, NOT the `.sql` files — and actually run on the stack. Cascade resolution: (a) batter `xba`/`xslg` already guarded (`_opt`, ee1188f) — and the rebuilt DB in fact HAS `first_pitch_take_rate`/`max_exit_velo`/the `*_vs_r` block, so (c) was a stale finding; (b) pitcher calibrator dropped the `RESULT_FEATURES` import (removed in SIM-067), now fits `sigma_command` over the engine's 7 `COMMAND_FEATURES` behind an info_schema guard, `sigma_results` vestigial keep-default; (d) `validate_props._fetch_final_games` now selects `home_score_final`/`away_score_final`. PLUS a regression guard: 7 degenerate sub-scores were returning `calibrate_sigma`'s 1.0 (would clobber baserunner `RBF_SIGMA_SPEED=0.8171` on apply) — extended the `_fit_sigma` 0.0 keep-default sentinel (new `calibrate_sigma(degenerate_value=…)`, mostly-constant-aware) to the fielder/baserunner/manager calibrators so the report applies with ZERO silent regressions. **Ran live:** `make calibrate` (2017–2026, arsenal-sample 30000) → `/data/calibration.json` (arsenal median W₂ 2.818, ARSENAL_SCALE 4.0655, σ_command 1.078, 7 keep-default sentinels); `make validate-props` (60 games 2024 → win-prob ECE 0.171, 7 reliability anchors merged). App boot now logs `applied fitted calibration to 8 engines; win-prob map: reliability-curve(2026..2017)` (was identity). 13 new unit tests; 219 calibration/engine tests green; ruff+mypy clean. Audit: `docs/audit/2026-06-01-sim432-calibration-schema-reconciliation.md`. Follow-ups (NOT SIM-432): a fuller multi-season curve fit gated on SIM-430 throughput; pitcher K/BB prop over-prediction → SIM-429.
 >
