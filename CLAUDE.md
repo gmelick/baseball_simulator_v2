@@ -126,14 +126,28 @@
   to `C:/Program Files/Git/app/scripts/foo.py` before Docker sees it.  Prefix with
   `MSYS_NO_PATHCONV=1` to disable the translation.  Tell: the error message includes
   `C:/Program Files/Git/`.
+- **SIM-433/434/435 — CODE-COMPLETE 2026-06-02 (data-runs pending); commit `812f0e8`.** The
+  bullpen/manager/odds foundations landed (unit+regression green, ruff+mypy clean): **SIM-433**
+  per-game bullpen availability (Alembic 0015 `raw.game_bullpen_availability` + `_compute_bullpen_workload`
+  from raw.pitches + `pipeline/live/bullpen_availability_ingest.py` MLB-API roster/IL ingest);
+  **SIM-434** manager pull/reliever decision model (fatigue/rest + TTO decay + reliever scoring +
+  the `pitcher_pitch_count` bug fix), **gated `SIM_MANAGER` (default OFF) — flag-off is byte-identical**
+  (verified by the green regression lane); **SIM-435** historical odds loader (`scripts/
+  load_historical_odds.py` + a provider `closing`-line branch) → unblocks the SIM-429 CLV backtest.
+  Pending data-runs: the MLB-API ingest (`pipeline.live.bullpen_availability_ingest`, ~21k games),
+  the odds backfill (`scripts/load_historical_odds.py`, needs `ODDS_API_KEY`), and enabling
+  `SIM_MANAGER=1` with a ≥400-sim validation + golden-fixture regen. **SIM-436** (P3 low) tracks the
+  /simulate 30 s SLA (per-game cost). ⚠ Avoid rebuilding the app image repeatedly — it fills the
+  Docker build cache on C: (it hit 100% disk this session; `docker builder prune -f` reclaims it;
+  api/pipeline/similarity/simulation/db are bind-mounted so most edits need no rebuild).
 - **Open follow-ons (tracked, blocked on data/infra, not shipped hollow):** SIM-427 engine-backed
-  manager (needs a per-(team,season) bullpen roster built from raw Statcast — no role/team source in
-  `derived.*`); SIM-425b Fielder RBF (needs per-row fielder identity baked into the batted-ball
+  manager (the SIM-433 bullpen-availability table is now its prerequisite-in-code; still needs the
+  ingest run); SIM-425b Fielder RBF (needs per-row fielder identity baked into the batted-ball
   artifact → a play-pool rebuild); SIM-411 park factor + SIM-413 pitcher-hand platoon (both also
   blocked on a play-pool rebuild — engine artifact has no `venue_id` / `p_throws` per row);
   SIM-429 granular run-conversion calibration + the CLV backtest (the larger sim harness landed
   2026-05-28 as `scripts/sim_stats.py` v2 — defaults to 200 sims/game, reports per-channel + home/
-  away splits + R standard error; calibration sweeps + CLV backtest pending the live-odds path).
+  away splits + R standard error; the CLV backtest is unblocked once the SIM-435 odds backfill runs).
 - **Live-env verification debt — largely retired 2026-05-30.**  `docker compose up`
   (nginx+app+monitoring) runs; the 2026-05-29 bring-up fixed a `/dev/shm` overflow
   (`shm_size: 1gb` on the `app` service) and made the pre-warm a BACKGROUND task with
