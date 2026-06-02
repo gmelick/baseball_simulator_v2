@@ -73,6 +73,7 @@ the runner falls back to the SIM-332 per-process load path, so the always-on tes
 from __future__ import annotations
 
 import importlib
+import multiprocessing
 import os
 import threading
 import time
@@ -123,6 +124,33 @@ _PREWARM_MAX_CONCURRENT_WARM = max(1, int(os.environ.get("SIM_PREWARM_MAX_CONCUR
 #: ``asyncio.wait_for`` backstop too, in case a hang precedes the gather (Manager
 #: spawn / shared-memory publish).
 _PREWARM_TIMEOUT_S = 120.0
+
+
+#: SIM-430 — the pool's multiprocessing start method. The pool workers used the
+#: platform default ('fork' on Linux), which COW-forks the worker FROM the
+#: engine-loaded (~6 GB) parent; CPython's refcounting + cyclic GC then write to
+#: every inherited object header, defeating copy-on-write, so each worker's RSS
+#: balloons toward the full ~6 GB it inherited but does NOT need (a full-pool
+#: worker needs only the ~470 MB bundle it loads itself). 'forkserver' forks
+#: workers from a clean, lean server process instead — they never inherit the
+#: engines — and is also safer than forking the multi-threaded uvicorn process
+#: (Python 3.14 makes forkserver the Linux default for the same reasons).
+#: Override via SIM_MP_START_METHOD (e.g. 'fork'/'spawn') if ever needed.
+_MP_START_METHOD = os.environ.get("SIM_MP_START_METHOD", "forkserver").strip().lower()
+
+
+def _pool_mp_context() -> Any:
+    """Return the multiprocessing context for the worker pool (SIM-430).
+
+    Defaults to ``forkserver`` so workers do NOT COW-inherit the parent's ~6 GB of
+    engines. Falls back to the platform default if the requested method is
+    unavailable (e.g. a non-Linux host without forkserver)."""
+    try:
+        if _MP_START_METHOD in multiprocessing.get_all_start_methods():
+            return multiprocessing.get_context(_MP_START_METHOD)
+    except Exception:  # noqa: BLE001 - any oddity -> platform default
+        pass
+    return multiprocessing.get_context()
 
 
 def default_max_workers(cpu_count: int | None = None) -> int:
@@ -791,7 +819,14 @@ class BatchRunner:
         shared arrays the registry is ``None`` -> the SIM-332 per-process fallback.
         """
         registry = self._ensure_shared_published()
-        return {"initializer": _worker_init, "initargs": (registry or None,)}
+        # SIM-430: mp_context=forkserver so workers fork from a lean server, not the
+        # engine-loaded (~6 GB) parent (see _pool_mp_context). The shared segments
+        # are attached by name in _worker_init regardless of start method.
+        return {
+            "initializer": _worker_init,
+            "initargs": (registry or None,),
+            "mp_context": _pool_mp_context(),
+        }
 
     # ---- persistent (warm) pool lifecycle (SIM-360) -----------------------
 

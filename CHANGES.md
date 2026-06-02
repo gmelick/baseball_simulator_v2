@@ -1,3 +1,33 @@
+# Phase 7 — SIM-430 (fan-out, part 3): forkserver → workers stop inheriting the 6 GB engines; /simulate now scales — 2026-06-02
+**Authors: Performance Engineer (Agent 6), Backend Developer (Agent 5)**
+
+**Root-caused the worker-scaling OOM and resolved it.** The pool used the platform-default
+**`fork`** start method, so each worker COW-forked from the ~6 GB engine-loaded parent. CPython's
+refcounting + cyclic GC write to every inherited object header, **defeating copy-on-write**, so each
+worker's RSS ballooned toward the full ~6 GB it inherited but does NOT need (a full-pool worker needs
+only the ~470 MB bundle). That's why 10 workers OOM-deadlocked the host. Diagnosis was nailed by
+confirming the pool forks (a no-`mp_context` `ProcessPoolExecutor` here reports `fork`) and that the
+6 GB was present at `_worker_init` *entry* (pre-load), C/numpy (tracemalloc saw only 368 MB — it was
+allocated in the parent, pre-fork).
+
+**Fix:** `BatchRunner._pool_kwargs` now passes `mp_context=forkserver` (env-overridable via
+`SIM_MP_START_METHOD`) — workers fork from a clean ~30 MB server, never inheriting the engines — plus a
+**`mem_limit: 10g`** cgroup cap on the `app` service so a runaway is contained to the container, never
+the host (this is also why Python 3.14 makes forkserver the Linux default, and it's safer than forking
+the multi-threaded uvicorn process).
+
+**Measured live:** pool workers **~6 GB → 373 MB each** (16×); app healthy with 8 workers at 8.4 / 10 GiB
+(was OOM-deadlock at 10). **n=100 `/simulate`: 215 s serial → ~38 s (5.6×)**, no OOM. The 30 s SLA is
+NOT fully met — throughput **plateaus past ~6 workers** (6 ≈ 8 ≈ ~38 s), a serial bottleneck (parent-side
+result un-pickling/aggregation + per-game machine rebuild) that more workers can't fix; that's the
+remaining SIM-430 "per-game cost" work. `SIM_RUNNER_WORKERS` set to **6** (the memory-efficient sweet
+spot; 8 gave no gain for more RAM). +4 unit tests (`test_sim430_forkserver.py`); ruff + mypy clean.
+
+⚠ **Process note:** while tracing this, `PYTHONTRACEMALLOC=1` on the live multi-GB boot ballooned the
+app and wedged Docker Desktop (needed a restart). All such probes were reverted; the lasting fix is
+`mem_limit`, which makes that class of accident impossible. Do not run interpreter-wide tracemalloc on
+the live boot — use memray/py-spy in a memory-capped container.
+
 # Phase 7 — SIM-430 (fan-out, part 2): densify pitcher_sim → kill the 2 GB/worker dict — 2026-06-01
 **Authors: Performance Engineer (Agent 6), Backend Developer (Agent 5), ML Engineer (Agent 3)**
 

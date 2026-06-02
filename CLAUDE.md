@@ -94,22 +94,23 @@
   - **SIM-431 — CLOSED.** Whole platform migrated to **Python 3.13 + numpy 2.x** (CI + Docker +
     local unified). The real blocker was the `numpy<2` pin (no cp313 wheel), not version strings;
     floors raised (scipy≥1.14.1, pandas≥2.2.3, scikit-learn≥1.6, faiss-cpu≥1.9, POT≥0.9.5).
-  - **SIM-430 — per-game-cost half done (1.21x per-PA caching) + fan-out part-2 SHIPPED
-    2026-06-01; SLA/worker-scaling half STILL OPEN.** Part-2 (2026-06-01) corrected the design
-    doc: the per-worker OOM driver was the **~2 GB `pitcher_sim` dict-of-dicts** (unshareable),
-    not the object arrays. Fix: densify it into an **11.2 MB `(n_prof×n_prof)` float32 matrix**
-    published via the SIM-403b seam (`pitcher_sim.matrix`); `EngineArtifacts.load` skips the
-    ~2 GB dict; `FullPoolSampler._f_pitcher` reads a contiguous row (byte-identical, +8 tests).
-    Live-verified: worker-path load **2364→367 MB**, serving parent **~2.4 GB→270 MB**, boot
-    publishes 42 shared arrays. ⚠ **The SLA/worker-scaling half is STILL OPEN:** the live
-    prewarmed pool worker measures **~6.4 GB private-anon** — NOT reproduced by isolated load
-    (367 MB)/warm (760 MB)/spawn-warm (467 MB), so a *fresh* worker is ~470 MB but a second
-    consumer manifests only in the live shared-views warm path; root-cause it (tracemalloc/
-    py-spy/`MALLOC_ARENA_MAX`) on a **dedicated** host before raising `SIM_RUNNER_WORKERS`
-    (left at 1). Findings + the SIM-429/411-413-425b/427 plans:
-    `docs/audit/2026-06-01-roadmap-sim430-429-411-413-425b-427.md`.
-    *(An earlier "3.16x" per-game claim was fabricated and corrected — MEASURE before writing
-    a perf number.)*
+  - **SIM-430 — WORKER-SCALING RESOLVED 2026-06-02 (workers no longer OOM); 30 s SLA not fully
+    met (plateaus past ~6 workers).** Three parts: (1) per-game caching 1.21x; (2) densified
+    `pitcher_sim` (the ~2 GB dict → an 11.2 MB shared matrix via the SIM-403b seam; load
+    2364→367 MB, parent 2.4 GB→270 MB, byte-identical); (3) **the real OOM-at-scale fix** — the
+    pool used the default **`fork`**, so each worker COW-forked from the ~6 GB engine-loaded
+    parent and CPython refcount/GC **defeated copy-on-write**, materialising ~6 GB/worker (10
+    workers OOM-deadlocked). Fixed by **`mp_context=forkserver`** in `BatchRunner._pool_kwargs`
+    (workers fork from a lean ~30 MB server → **373 MB each**, measured; env `SIM_MP_START_METHOD`)
+    + a **`mem_limit: 10g`** cgroup cap on the `app` service (a runaway is contained to the
+    container, never the host). Live: **n=100 `/simulate` 215 s → ~38 s (5.6×)**, healthy, no OOM;
+    `SIM_RUNNER_WORKERS=6` (8 gave no gain). ⚠ **30 s SLA NOT met** — throughput plateaus past ~6
+    workers (6 ≈ 8 ≈ ~38 s): a serial bottleneck (parent-side result un-pickling/aggregation +
+    per-game machine rebuild), the remaining SIM-430 "per-game cost" work — NOT a worker-memory
+    issue. +4 tests (`test_sim430_forkserver.py`). ⚠ Tracing this, `PYTHONTRACEMALLOC=1` on the
+    live multi-GB boot wedged Docker Desktop (reverted; `mem_limit` now prevents that class of
+    accident — use memray/py-spy in a capped container, never interpreter-wide tracemalloc on the
+    live boot). Diagnosis: `docs/audit/2026-06-01-roadmap-sim430-429-411-413-425b-427.md`.
   - **SIM-432 — FILED 2026-05-31, CLOSED 2026-06-01 (see the top bullet of this section).**
     Calibration is now live; the cascade is fully resolved.
 

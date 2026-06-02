@@ -92,6 +92,11 @@ services:
     # /dev/shm is only 64 MB, which overflows ("No space left on device") and
     # wedges the SIM-402 pre-warm. Give the app a roomy shared-memory segment.
     shm_size: "1gb"
+    # SIM-430: hard cgroup memory cap so the app + its ProcessPool workers can
+    # NEVER pressure the host (a runaway is OOM-killed in THIS container only,
+    # protecting other tenants/Docker). Sized for the ~6 GB serving engines + a
+    # forkserver worker pool (~0.5 GB/worker): fits ~6-8 workers under the cap.
+    mem_limit: "10g"
     env_file:
       - .env
     environment:
