@@ -1,0 +1,40 @@
+{
+  "copyright": "Copyright 2026 MLB Advanced Media, L.P.",
+  "roster": [
+    {
+      "person": { "id": 669373, "fullName": "Tarik Skubal" },
+      "jerseyNumber": "29",
+      "position": { "code": "1", "name": "Pitcher", "type": "Pitcher", "abbreviation": "P" },
+      "status": { "code": "A", "description": "Active" },
+      "parentTeamId": 116
+    },
+    {
+      "person": { "id": 622663, "fullName": "Jason Foley" },
+      "jerseyNumber": "68",
+      "position": { "code": "1", "name": "Pitcher", "type": "Pitcher", "abbreviation": "P" },
+      "status": { "code": "A", "description": "Active" },
+      "parentTeamId": 116
+    },
+    {
+      "person": { "id": 643410, "fullName": "Tyler Holton" },
+      "jerseyNumber": "87",
+      "position": { "code": "1", "name": "Pitcher", "type": "Pitcher", "abbreviation": "P" },
+      "status": { "code": "A", "description": "Active" },
+      "parentTeamId": 116
+    },
+    {
+      "person": { "id": 656298, "fullName": "Injured Reliever" },
+      "jerseyNumber": "40",
+      "position": { "code": "1", "name": "Pitcher", "type": "Pitcher", "abbreviation": "P" },
+      "status": { "code": "D60", "description": "60-Day Injured List" },
+      "parentTeamId": 116
+    },
+    {
+      "person": { "id": 596059, "fullName": "Spencer Torkelson" },
+      "jerseyNumber": "20",
+      "position": { "code": "3", "name": "First Base", "type": "Infielder", "abbreviation": "1B" },
+      "status": { "code": "A", "description": "Active" },
+      "parentTeamId": 116
+    }
+  ]
+}

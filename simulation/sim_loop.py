@@ -326,6 +326,166 @@ _PULL_PITCH_CEILING = 110
 #: manager-similarity features use for sac-bunt / pinch-hit gating).
 _HIGH_LEVERAGE = 1.5
 
+# ---------------------------------------------------------------------------
+# SIM-434 — manager pull + reliever-selection model (fatigue / TTO / rest)
+# ---------------------------------------------------------------------------
+#
+# A per-pitcher fatigue / times-through-the-order (TTO) effectiveness model + a
+# reliever-selection scoring function, all PURE helpers (no GameState mutation,
+# no rng) so they unit-test in isolation.  They are CONSULTED by the SIM-323
+# manager hooks ONLY when a manager + bullpen are wired (i.e. when SIM_MANAGER
+# enables the wiring); with the flag off, ``manager is None`` and none of this
+# runs — production output is byte-identical (see SIM-434 integration notes).
+
+#: A starter's "typical" pitch budget; fatigue ramps as the count approaches and
+#: exceeds it.  Used as the denominator of the in-game pitch-count fatigue term
+#: when real per-team rest data is not yet available (SIM-433 not ingested).
+_FATIGUE_PITCH_BUDGET = 95.0
+#: Each time through the order beyond the first adds this much to the pitcher's
+#: effective fatigue (the documented "times-through-the-order penalty": a
+#: starter loses effectiveness the 2nd and especially the 3rd time facing a
+#: lineup).  Linear, capped at the 3rd time through (TTO >= 3 is treated as 3).
+_TTO_FATIGUE_PER_TIME = 0.12
+#: A full season's "fully rested" starter rest, in days; rest at/above this gives
+#: the maximum rest bonus, rest at 0 (back-to-back) the minimum.  Used only when
+#: a per-pitcher rest map is wired; the in-game fatigue fallback ignores it.
+_FULL_REST_DAYS = 5.0
+
+
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    """Parse an on/off env flag the same way ``SIM_FULL_POOL`` is parsed in
+    :mod:`simulation.production_factory` (SIM-434).
+
+    Unset -> ``default``; ``"0"``/``"false"``/``"no"``/``"off"`` (any case) ->
+    ``False``; anything else -> ``True``.  Centralised so the SIM_MANAGER gate is
+    read identically in the loop and the factory.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    return raw.strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def times_through_order(batters_faced: int, lineup_size: int = 9) -> int:
+    """How many times through the batting order a pitcher is on (SIM-434).
+
+    ``batters_faced`` is the number of plate appearances the pitcher has worked
+    (0-based count of batters retired/reached); on his Nth batter he is in the
+    ``(N // lineup_size) + 1``-th time through.  Returns >= 1 once he has faced a
+    batter, 1 before any.  Defensive: a non-positive lineup size collapses to a
+    9-man order so a bad lineup never divides by zero.
+    """
+    size = lineup_size if lineup_size and lineup_size > 0 else 9
+    bf = max(0, int(batters_faced))
+    return (bf // size) + 1
+
+
+def pitcher_fatigue(
+    pitch_count: int,
+    *,
+    tto: int = 1,
+    rest_days: float | None = None,
+) -> float:
+    """A bounded [0, 1] fatigue index for the current pitcher (SIM-434).
+
+    0.0 == fully fresh, 1.0 == maximally gassed.  Three additive drivers, each a
+    documented, monotone proxy (so the gating is transparent + DB-free):
+
+      * **in-game pitch count** — ramps from 0 toward 1 as the count approaches
+        and exceeds :data:`_FATIGUE_PITCH_BUDGET` (the dominant signal, always
+        available);
+      * **times through the order** — each time through beyond the first adds
+        :data:`_TTO_FATIGUE_PER_TIME` (the TTO penalty), capped at the 3rd time;
+      * **rest** — when a per-pitcher ``rest_days`` is wired (SIM-433 follow-on),
+        short rest ADDS fatigue (back-to-back work tires an arm); when ``None``
+        (the data-not-ingested fallback) this term is simply 0 and the index is
+        driven by pitch count + TTO alone.
+
+    Monotone in the obvious directions (more pitches / more times through / less
+    rest -> higher) and clamped to ``[0.0, 1.0]``.
+    """
+    pc = max(0, int(pitch_count))
+    pc_term = pc / _FATIGUE_PITCH_BUDGET if _FATIGUE_PITCH_BUDGET > 0 else 0.0
+    times = max(1, min(int(tto), 3))
+    tto_term = (times - 1) * _TTO_FATIGUE_PER_TIME
+    rest_term = 0.0
+    if rest_days is not None:
+        # Short rest tires the arm; full (>=_FULL_REST_DAYS) rest contributes 0.
+        deficit = max(0.0, _FULL_REST_DAYS - max(0.0, float(rest_days)))
+        rest_term = 0.06 * (deficit / _FULL_REST_DAYS if _FULL_REST_DAYS > 0 else 0.0)
+    return float(max(0.0, min(1.0, pc_term + tto_term + rest_term)))
+
+
+def tto_effectiveness(tto: int) -> float:
+    """A bounded (0, 1] effectiveness multiplier from the times-through-the-order
+    penalty (SIM-434).
+
+    A starter is most effective the 1st time through a lineup and decays the 2nd
+    and (especially) the 3rd time; a reliever, called for one trip, sits at the
+    top.  Returns 1.0 for the 1st time through and decays by
+    :data:`_TTO_FATIGUE_PER_TIME` per subsequent time, floored so it never reaches
+    0 (a tired pitcher is still *some* use).
+    """
+    times = max(1, int(tto))
+    decay = (times - 1) * _TTO_FATIGUE_PER_TIME
+    return float(max(0.25, 1.0 - decay))
+
+
+def platoon_factor(bat_hand: str | None, throw_hand: str | None) -> float:
+    """The platoon multiplier for a reliever vs the current batter (SIM-434).
+
+    Same-handed matchup (R-vs-R / L-vs-L) favours the pitcher; opposite-handed
+    favours the batter.  Returns ``> 1`` when the matchup is in the *pitcher's*
+    favour (same hand), ``< 1`` when it is not, ``1.0`` when either hand is
+    unknown (a switch hitter resolved to 'S', or an unwired hand) so the score is
+    platoon-neutral rather than guessing.
+    """
+    if not bat_hand or not throw_hand:
+        return 1.0
+    bh = str(bat_hand).upper()
+    th = str(throw_hand).upper()
+    if bh not in ("L", "R") or th not in ("L", "R"):
+        return 1.0
+    return 1.15 if bh == th else 0.87
+
+
+def score_reliever(
+    *,
+    leverage: float,
+    platoon: float,
+    effectiveness: float,
+    rest_days: float | None = None,
+) -> float:
+    """Score a candidate reliever for the current spot (SIM-434).
+
+    The multiplicative product of the four levers the manager weighs:
+    ``leverage × platoon × effectiveness × rest_bonus``.  A higher score is a
+    better fit for THIS spot:
+
+      * **leverage** — a high-LI spot wants the best available arm (the score
+        scales with the live Leverage Index);
+      * **platoon** — :func:`platoon_factor` (same-hand advantage);
+      * **effectiveness** — the arm's fresh-arm effectiveness (a closer's
+        :func:`tto_effectiveness` is 1.0; a tired bulk arm scores lower);
+      * **rest** — a rested arm (``rest_days`` high, or ``None`` == treated as
+        rested) scores at full; a short-rest arm is discounted.
+
+    Pure + monotone (higher leverage / platoon / effectiveness / rest -> higher
+    score); never negative.  Used by :meth:`StateMachine._pick_reliever` to RANK
+    a wired bullpen when SIM_MANAGER is on.
+    """
+    lev = max(0.0, float(leverage))
+    plt = max(0.0, float(platoon))
+    eff = max(0.0, float(effectiveness))
+    if rest_days is None:
+        rest_bonus = 1.0
+    else:
+        rd = max(0.0, float(rest_days))
+        # 0 days -> 0.7 (tired), >=_FULL_REST_DAYS -> 1.0 (rested), linear between.
+        frac = min(1.0, rd / _FULL_REST_DAYS) if _FULL_REST_DAYS > 0 else 1.0
+        rest_bonus = 0.7 + 0.3 * frac
+    return float(max(0.0, lev * plt * eff * rest_bonus))
+
 
 def _safe_float(val, default: float = 0.0) -> float:
     """Coerce ``val`` to a finite float, falling back to ``default`` on a None /
@@ -900,6 +1060,18 @@ class StateMachine:
         # base-out + score delta stays canonical, then the PA is rolled over.
         if state.manager.intentional_walk_signalled:
             return self._issue_intentional_walk(state)
+
+        # --- SIM-434: count this pitch ------------------------------------
+        # The current pitcher's pitch count was NEVER incremented (the
+        # ``state.pitcher_pitch_count = 0`` reset on a pull existed, but nothing
+        # ever advanced it), so the SIM-323 starter-pull floor/ceiling gate could
+        # never fire even when a manager + bullpen were wired.  A real pitch is
+        # thrown on every path below (the IBB short-circuit above threw none and
+        # returned already), so increment exactly here, once per pitch.  This is a
+        # pure counter bump: it consumes no rng and is read ONLY by
+        # ``_maybe_pull_starter`` (no-op while ``manager is None``), so with
+        # SIM_MANAGER off the simulated game is byte-identical to before.
+        state.pitcher_pitch_count += 1
 
         if pitch_outcome is not None and outcome_distribution is not None:
             raise ValueError(
@@ -2038,6 +2210,14 @@ class StateMachine:
         # just finished the PA.
         self._accumulate_pa(state, result)
 
+        # SIM-434: count the batter the CURRENT pitcher just faced (a terminal PA)
+        # so the times-through-the-order effectiveness decay has an input.  A pure
+        # counter bump keyed by pitcher id, read only by the manager model -> inert
+        # (byte-identical) while ``manager is None``.
+        pid = state.pitcher_id
+        if pid is not None:
+            state.pitcher_bf[pid] = state.pitcher_bf.get(pid, 0) + 1
+
         # Advance the batting-order pointer for the team that just batted.
         self._advance_batting_order(state)
 
@@ -2369,8 +2549,19 @@ class StateMachine:
         if lineup:
             state.batter_id = lineup[slot % len(lineup)]
         if pitcher is not None:
+            # SIM-434: when the manager model is active, save the OUTGOING pitcher's
+            # accrued count and restore the INCOMING pitcher's own count so the two
+            # starters don't share one ledger across half-innings (the pull gate
+            # reads the live ``pitcher_pitch_count``).  Manager-gated + manager-only-
+            # read -> byte-identical with the flag off.  Once a starter is pulled
+            # mid-game, the half-swap correctly resumes the reliever-in-place / the
+            # opposing starter without resurrecting the pulled arm's count.
+            if self.manager is not None and state.pitcher_id is not None:
+                state.pitcher_pc[state.pitcher_id] = int(state.pitcher_pitch_count)
             state.pitcher_id = pitcher
             state.throw_hand = state.throw_hands.get(pitcher, state.throw_hand)
+            if self.manager is not None:
+                state.pitcher_pitch_count = int(state.pitcher_pc.get(pitcher, 0))
         state.bat_hand = state.bat_hand_for(state.batter_id)
 
     # ===================================================================
@@ -2820,6 +3011,17 @@ class StateMachine:
         pull_tend = self._tendency("starter_pull_pct_before_100", 0.0)
         # Leverage scales the pull aggression; a high-LI jam hastens the hook.
         fire_p = min(1.0, pull_tend * (0.5 + 0.5 * min(li / _HIGH_LEVERAGE, 2.0)))
+        # SIM-434: a fatigued / deep-into-the-order starter hastens the hook.  The
+        # fatigue index (pitch count + times-through-the-order + optional rest) is
+        # a >= 0 BOOST applied multiplicatively, so it can only RAISE fire_p (a
+        # fresh, 1st-time-through starter has fatigue ~ pc/budget and TTO term 0 ->
+        # boost ~1.0).  fire_p stays clamped to [0, 1], so a pull that fired before
+        # still fires (the SIM-323 gate is monotone under this term).
+        tto = times_through_order(state.pitcher_bf.get(state.pitcher_id, 0))
+        fatigue = pitcher_fatigue(
+            pc, tto=tto, rest_days=state.pitcher_rest_days.get(state.pitcher_id)
+        )
+        fire_p = min(1.0, fire_p * (1.0 + fatigue))
         forced = pc >= _PULL_PITCH_CEILING
         if not forced and self._manager_rng() >= fire_p:
             return
@@ -2841,13 +3043,24 @@ class StateMachine:
         )
 
     def _pick_reliever(self, state: GameState, li: float) -> int | None:
-        """Choose a reliever from the defending team's bullpen BY LEVERAGE.
+        """Choose a reliever from the defending team's bullpen (SIM-323/SIM-434).
 
-        High-LI + late -> the **closer** (the first arm in the list, by
-        convention the highest-leverage role); otherwise a middle reliever from
-        the back of the list.  Pops the chosen arm so it cannot be reused.  Reads
-        ``ManagerContext.bullpen_available`` keyed by the defending Team (or its
-        int value).  Returns ``None`` when no arm is available.
+        Two selection modes, both popping the chosen arm so it cannot be reused
+        and reading ``ManagerContext.bullpen_available`` keyed by the defending
+        Team (or its int value):
+
+          * **SIM-434 scored mode** — when per-arm metadata is wired (a hand in
+            ``state.throw_hands`` and/or a rest in ``state.pitcher_rest_days`` for
+            ANY candidate), rank the arms by :func:`score_reliever`
+            (leverage × platoon × fresh-arm effectiveness × rest) and pop the
+            best fit for THIS spot.  Ties break by list position (the closer / top
+            arm first), so a no-metadata bullpen behaves exactly like the legacy
+            positional mode below.
+          * **legacy positional mode (SIM-323)** — High-LI + late -> the
+            **closer** (the first arm in the list); otherwise a middle reliever
+            from the back of the list.
+
+        Returns ``None`` when no arm is available.
         """
         pen_map = state.manager.bullpen_available or {}
         team = state.defense
@@ -2856,6 +3069,32 @@ class StateMachine:
             arms = pen_map.get(int(team))
         if not arms:
             return None
+        # SIM-434 scored mode: only when at least one arm carries hand/rest meta,
+        # so a metadata-less bullpen (the SIM-323 tests) keeps the positional path
+        # byte-identical.
+        has_meta = any((a in state.throw_hands) or (a in state.pitcher_rest_days) for a in arms)
+        if has_meta:
+            bat_hand = state.bat_hand_for(state.batter_id)
+            best_i = 0
+            best_score = float("-inf")
+            for i, arm in enumerate(arms):
+                throw = state.throw_hands.get(arm)
+                score = score_reliever(
+                    leverage=li,
+                    platoon=platoon_factor(bat_hand, throw),
+                    # A fresh reliever enters on his 1st time through -> top
+                    # effectiveness; a tired bulk arm could carry a TTO via
+                    # ``pitcher_bf`` if it has already pitched this game.
+                    effectiveness=tto_effectiveness(
+                        times_through_order(state.pitcher_bf.get(arm, 0))
+                    ),
+                    rest_days=state.pitcher_rest_days.get(arm),
+                )
+                # Strictly-greater keeps the first (top / closer) arm on a tie.
+                if score > best_score:
+                    best_score = score
+                    best_i = i
+            return int(arms.pop(best_i))
         high_lev_late = li >= _HIGH_LEVERAGE and int(state.inning) >= _LATE_INNING
         if high_lev_late:
             return int(arms.pop(0))  # closer / highest-leverage arm.
@@ -3229,6 +3468,10 @@ def simulate_game(
     away_pitcher_id: int | None = None,
     home_catcher_id: int | None = None,
     away_catcher_id: int | None = None,
+    manager=None,
+    bench=None,
+    bullpen=None,
+    pitcher_rest_days: dict[int, float] | None = None,
     max_innings: int = _MAX_INNINGS,
 ) -> GameSimResult:
     """Drive the SIM-316 :class:`StateMachine` to a completed game (SIM-320).
@@ -3255,6 +3498,18 @@ def simulate_game(
     ``initial_state`` or let the driver build a fresh "top of the 1st" GameState
     from ``pitcher_id`` / ``bat_hand`` / ``season`` / the two lineups.
 
+    SIM-434 manager passthrough (GATED by ``SIM_MANAGER``): ``manager`` /
+    ``bench`` / ``bullpen`` / ``pitcher_rest_days`` are wired ONLY when supplied
+    (the production factory passes them only when ``SIM_MANAGER`` is on).  With
+    none supplied this is a total no-op: the machine keeps ``manager is None`` so
+    every §3/§5.3 hook early-returns and the simulated game is byte-identical to
+    the manager-less default.  When supplied, ``manager`` (+ optional ``bench``)
+    are attached to the machine (only if it does not already carry one — a
+    pre-built machine wins), ``bullpen`` (a ``{Team|int: [pitcher_id, ...]}`` map)
+    seeds ``initial_state.manager.bullpen_available`` so the pull hook has arms,
+    and ``pitcher_rest_days`` (a ``{pitcher_id: days}`` map, SIM-433 follow-on)
+    feeds the fatigue / reliever-scoring model.
+
     Returns a :class:`GameSimResult`.  ``state_machine`` is driven with a single
     deterministically-supplied pitch outcome ONLY when the machine has no sampler
     AND a caller supplies ``_outcome_for`` via a subclass; the normal no-DB test
@@ -3275,6 +3530,17 @@ def simulate_game(
         # Re-seed the supplied machine's loop rng so the per-game seed governs the
         # loop-level draws (steal / foul re-weight / outcome choice).
         state_machine.rng = np.random.default_rng(seed)
+
+    # --- SIM-434: manager / bench passthrough (GATED by the caller) ----------
+    # Attach a supplied manager (+ bench) to the machine ONLY when one is given
+    # AND the machine does not already carry one (a pre-built machine wins — the
+    # production factory wires the manager there when SIM_MANAGER is on).  With no
+    # manager supplied anywhere, ``state_machine.manager`` stays None and every
+    # SIM-323 hook is a no-op -> byte-identical to the manager-less game.
+    if manager is not None and getattr(state_machine, "manager", None) is None:
+        state_machine.manager = manager
+        if bench:
+            state_machine.bench = dict(bench)
 
     # --- Thread the seed through the sampler's k-NN rng (§6.3) ---------------
     # The sampler holds its OWN injected Generator; re-seed it so the FAISS draws
@@ -3327,6 +3593,24 @@ def simulate_game(
     state = initial_state
     if seed is not None and state.seed is None:
         state.seed = seed
+
+    # --- SIM-434: seed the bullpen + per-pitcher rest onto the state ---------
+    # Applied whether the state was built here or passed in.  ``bullpen`` is the
+    # per-defending-team available-arms map the pull hook pops from; copy the
+    # arm lists so popping a reliever never mutates the caller's bullpen.  When no
+    # explicit bullpen is passed, fall back to one staged on the machine (the
+    # production factory does this when SIM_MANAGER is on).  Both are no-ops when
+    # neither is present -> no behaviour change with the flag off.
+    eff_bullpen = bullpen if bullpen else getattr(state_machine, "bullpen", None)
+    if eff_bullpen:
+        state.manager.bullpen_available = {team: list(arms) for team, arms in eff_bullpen.items()}
+    eff_rest = (
+        pitcher_rest_days
+        if pitcher_rest_days
+        else getattr(state_machine, "pitcher_rest_days", None)
+    )
+    if eff_rest:
+        state.pitcher_rest_days = dict(eff_rest)
 
     # --- The game loop -------------------------------------------------------
     total_pitches = 0

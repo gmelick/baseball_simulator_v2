@@ -1,3 +1,45 @@
+# Phase 7 — SIM-433/434/435: bullpen-availability + manager-decision-model + historical-odds foundations — 2026-06-02
+**Authors: Data Engineer (Agent 4), Backend Developer (Agent 5), Betting Analyst (Agent 8)**
+
+Implemented (code-complete + unit-tested; the live data runs are the follow-on) the three
+"bullpen / manager / odds" tickets:
+
+- **SIM-433 — per-game bullpen availability + IL ingestion.** New `raw.game_bullpen_availability`
+  (Alembic migration **0015**, additive/IF NOT EXISTS) records who was AVAILABLE per game (active
+  26-man minus IL minus rest-blocked), not just who played — the available-but-unused signal that
+  makes the SIM-427/434 manager USAGE profiles meaningful (distinguish "the manager chose NOT to use
+  reliever X" from "X was on the IL"). The rest/workload fields (`days_rest` / `pitches_last_3d` /
+  `back_to_back`) derive from `raw.pitches` (`PlayerProfileComputor._compute_bullpen_workload`,
+  code-now, no network); `available`/`reason` come from the MLB Stats API active roster + transactions
+  (`pipeline/live/bullpen_availability_ingest.py`, network behind one stubbable seam).
+- **SIM-434 — manager pull + reliever-selection decision model.** Fixed the latent bug where
+  `GameState.pitcher_pitch_count` was NEVER incremented (so the pull gate could never fire); added a
+  per-pitcher fatigue/rest state + times-through-the-order effectiveness decay + reliever-selection
+  scoring (leverage × platoon × effectiveness × rest), wired through `simulate_game` /
+  `production_machine_factory`. **ALL gated behind `SIM_MANAGER` (default OFF)** — with the flag off
+  the simulated game is byte-identical to before (VERIFIED: the full unit+regression lane is green,
+  incl. the golden-file engine-drift, 1000-game invalid-state, simulate_game + batch-runner suites). A
+  pulled reliever uses a generic negative-id arm (a league-flat draw, never aliasing a real player)
+  until SIM-427/433 supply real per-team pens.
+- **SIM-435 — historical odds loader.** Extended the BettingPros provider with a
+  `line_type='closing'` branch and added `scripts/load_historical_odds.py` to backfill
+  `raw.game_odds` + `raw.prop_odds` with opening + closing lines for Final games (via the SIM-370
+  provider seam + the `home_score_final` SIM-432 fix + the `odds_hash` ON CONFLICT dedup), unblocking
+  the SIM-429 CLV backtest (entry=opening vs closing line).
+
+Built in parallel within strict disjoint file scopes. +3 unit-test suites
+(`test_sim433/434/435_*.py`, ~1,400 lines) + a captured MLB-roster fixture; full not-slow
+unit+regression lane green (only the 3 pre-existing deploy-monitoring env failures — `deploy/` isn't
+baked into the dev image); ruff + mypy clean.
+
+**Data-run follow-ons (NOT run here — network / long / validation; the tickets stay open until done):**
+- SIM-433: `make migrate` (apply 0015) → `python -m pipeline.live.bullpen_availability_ingest …`
+  (MLB API, ~21k games) + the `_compute_bullpen_workload` derivation in the profile rebuild.
+- SIM-435: `python scripts/load_historical_odds.py --seasons …` (needs `ODDS_API_KEY` + network).
+- SIM-434: set `SIM_MANAGER=1`, validate at ≥400 sims/game (`scripts/sim_stats.py`), and regenerate
+  the regression golden fixtures (the manager-on path intentionally shifts the run/W-L/win-prob
+  distribution) before enabling it in production.
+
 # Phase 7 — SIM-430 (fan-out, part 3): forkserver → workers stop inheriting the 6 GB engines; /simulate now scales — 2026-06-02
 **Authors: Performance Engineer (Agent 6), Backend Developer (Agent 5)**
 

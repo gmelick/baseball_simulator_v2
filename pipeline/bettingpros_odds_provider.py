@@ -25,10 +25,13 @@ Markets (discovered from /v3/markets?sport=MLB):
   props: strikeouts 285, hits 287, home_runs 299, earned_runs 290,
          walks 408, total_bases 293, rbis 289
 
-``line_type``: ``"opening"`` reads each selection's ``opening_line``; any other
-value reads the current best/main book line. CLV is therefore available by
-comparing opening vs current. ``book``/``is_sharp_book`` are echoed through; a
-specific BettingPros ``book_id`` can be preferred via ``prefer_book_id``.
+``line_type``: ``"opening"`` reads each selection's ``opening_line``;
+``"closing"`` reads the most-recently-updated line (SIM-435 — the last line the
+market posted before game time, the canonical closing-line proxy; BettingPros
+has no explicit closing field); any other value reads the current best/main book
+line. CLV is therefore available by comparing opening vs closing (or current).
+``book``/``is_sharp_book`` are echoed through; a specific BettingPros ``book_id``
+can be preferred via ``prefer_book_id`` (it also scopes the closing-line scan).
 
 HTTP is stdlib ``urllib`` (sync — the protocol methods are sync; the module
 stays importable without aiohttp). The two ``_bp_get`` / ``_mlb_get`` seams are
@@ -197,13 +200,38 @@ class BettingProsOddsProvider:
     ) -> tuple[float | None, float | None]:
         """Return (american_cost, line) for a selection at the requested line_type.
 
-        ``opening`` reads ``selection.opening_line``; otherwise the preferred
-        book's line (``prefer_book_id`` if set, else the ``best`` then ``main``
-        line, else the first available).
+        ``opening`` reads ``selection.opening_line``; ``closing`` reads the LAST
+        line posted before game time (SIM-435 — the line whose ``updated`` stamp
+        is the most recent, the canonical closing-line proxy: BettingPros has no
+        explicit "closing" field, so the latest-updated line as captured at /
+        near first pitch IS the closing line); any other value reads the current
+        best/main book line.
         """
         if line_type == "opening":
             ol = selection.get("opening_line") or {}
             return _opt_float(ol.get("cost")), _opt_float(ol.get("line"))
+
+        # SIM-435: closing line = the most-recently-updated line (the last line
+        # the market posted before game time). When prefer_book_id is set we
+        # restrict to that book's lines; otherwise we scan every book's lines and
+        # take the max-``updated`` one. This mirrors the SIM-340 "closing line is
+        # the latest snapshot at/before first pitch" convention, applied at the
+        # line level since one BettingPros offers pull is a single point in time.
+        if line_type == "closing":
+            best_line: dict[str, Any] | None = None
+            best_updated = ""
+            for book in selection.get("books", []):
+                if self._prefer_book_id is not None and book.get("id") != self._prefer_book_id:
+                    continue
+                for ln in book.get("lines") or []:
+                    updated = str(ln.get("updated") or "")
+                    # >= so a later book at the same timestamp can still win, and
+                    # an empty-timestamp line is only chosen if nothing else has one.
+                    if best_line is None or updated >= best_updated:
+                        best_line, best_updated = ln, updated
+            if best_line is None:
+                return None, None
+            return _opt_float(best_line.get("cost")), _opt_float(best_line.get("line"))
 
         chosen: dict[str, Any] | None = None
         for book in selection.get("books", []):

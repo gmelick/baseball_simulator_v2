@@ -267,6 +267,23 @@ class GameState:
     batter_pa_count: int = 0  # PAs the current batter has had (3rd-time-thru)
     park: str | None = None  # venue id for park/venue context (spec step 1/6)
 
+    # SIM-434: per-pitcher fatigue / rest state for the manager pull + reliever-
+    # selection model.  ``pitcher_bf`` counts batters-faced PER pitcher id
+    # (incremented at each terminal PA in the loop) so the times-through-the-order
+    # effectiveness decay has an input; ``pitcher_rest_days`` is an OPTIONAL map of
+    # pitcher_id -> days of rest (wired only when SIM-433 per-team rest data is
+    # ingested; absent -> the model falls back to in-game pitch-count fatigue).
+    # Both default empty -> on the no-manager / count-machine path they are inert.
+    pitcher_bf: dict[int, int] = field(default_factory=dict)
+    pitcher_rest_days: dict[int, float] = field(default_factory=dict)
+    # SIM-434: per-pitcher pitch-count ledger so the half-inning pitcher swap
+    # (``_set_half_matchup``) restores the incoming pitcher's OWN accrued count
+    # instead of carrying the other starter's.  ``pitcher_pitch_count`` remains the
+    # CURRENT pitcher's live count (the field the manager pull gate reads); this
+    # map is the per-pitcher save/restore store the swap uses.  Empty by default
+    # and read only on the manager path -> inert (byte-identical) with the flag off.
+    pitcher_pc: dict[int, int] = field(default_factory=dict)
+
     # ---- manager / leverage context hook (spec §3 / §5.3; SIM-323) ----------
     manager: ManagerContext = field(default_factory=ManagerContext)
 

@@ -435,6 +435,82 @@ def warm_worker_cache(pool_dir: str | None = None) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# SIM-434 — manager wiring (GATED by SIM_MANAGER; default OFF == unchanged)
+# ---------------------------------------------------------------------------
+#
+# With SIM_MANAGER off (the production default today + the unit-test default),
+# the factory wires NO manager onto the StateMachine, so every SIM-323 §3/§5.3
+# hook early-returns and the simulated game is byte-identical to before.  With
+# SIM_MANAGER on, the factory attaches a default manager-tendency profile + a
+# generic per-team bullpen so the starter is actually pulled at a realistic
+# workload (the SIM-429 K/BB-distribution unlock).  Populating REAL per-team
+# bullpen rosters + true reliever similarity profiles is the SIM-427 follow-on
+# (blocked on a profile recompute); the generic default here is a valid
+# league-flat stand-in until then.
+
+#: A default manager-tendency profile: a plain dict of the SIM-2.8 manager-
+#: similarity rate names the SIM-323 hooks read by name.  Tuned to league-typical
+#: behaviour (a starter is reliably pulled around the floor/ceiling; modest
+#: small-ball aggression).  A duck-typed dict so no engine import is needed.
+_DEFAULT_MANAGER_PROFILE: dict[str, float] = {
+    "starter_pull_pct_before_100": 0.35,
+    "pinch_hit_rate_high_leverage": 0.20,
+    "sac_bunt_rate_high_leverage": 0.10,
+    "sac_bunt_rate_low_leverage": 0.05,
+    "steal_order_rate_per_1b_opp": 0.08,
+    "platoon_advantage_exploitation_rate": 0.30,
+}
+
+
+def _manager_enabled() -> bool:
+    """Whether SIM_MANAGER enables the SIM-434 manager wiring (default OFF).
+
+    Parsed identically to ``SIM_FULL_POOL`` (unset / ``0`` / ``false`` / ``no`` /
+    ``off`` -> disabled).  Centralised so the factory and any test read the gate
+    the same way.
+    """
+    env = os.environ.get("SIM_MANAGER", "").strip().lower()
+    return env not in ("", "0", "false", "no", "off")
+
+
+def _default_bullpen_for_spec(spec: GameSpec) -> dict[int, list[int]]:
+    """Build a generic per-team bullpen (SIM-434), keyed by the ``Team`` int value.
+
+    Until SIM-427 ingests real per-(team, season) bullpen rosters, we synthesise a
+    small generic pen per team from a deterministic id offset so a pulled reliever
+    is a distinct (league-flat) arm rather than re-using the starter.  Keyed by the
+    int Team value (0 == AWAY, 1 == HOME) so it survives pickling through the
+    GameSpec without importing the Team enum here.  Six arms per side (closer
+    first), enough to cover a full game's worth of changes.
+    """
+    away_starter = int(_kwarg(spec, "away_pitcher_id", 0) or 0)
+    home_starter = int(_kwarg(spec, "home_pitcher_id", 0) or 0)
+    # Synthetic, deterministic, collision-avoiding ids (negative so they never
+    # alias a real player id in the pool — a pulled arm degrades to a league-flat
+    # draw, which is valid per the SIM-427 note).
+    base = 9_000_000
+    away_pen = [-(base + away_starter * 10 + i) for i in range(1, 7)]
+    home_pen = [-(base + home_starter * 10 + i) for i in range(1, 7)]
+    return {0: away_pen, 1: home_pen}
+
+
+#: Injectable bullpen builder (the no-DB test seam, mirroring _SAMPLER_BUILDER).
+#: A test swaps this to assert the factory wires a known bullpen.
+_BULLPEN_BUILDER: Callable[[GameSpec], dict[int, list[int]]] = _default_bullpen_for_spec
+
+
+def set_bullpen_builder(
+    builder: Callable[[GameSpec], dict[int, list[int]]] | None,
+) -> Callable[[GameSpec], dict[int, list[int]]]:
+    """Install ``builder`` as the active bullpen builder; return the previous one
+    (SIM-434).  ``None`` restores :func:`_default_bullpen_for_spec`."""
+    global _BULLPEN_BUILDER
+    prev = _BULLPEN_BUILDER
+    _BULLPEN_BUILDER = builder if builder is not None else _default_bullpen_for_spec
+    return prev
+
+
 def production_machine_factory(seed: int | None, spec: GameSpec) -> StateMachine:
     """Build a REAL, DuckDB/FAISS-backed :class:`StateMachine` for the worker.
 
@@ -484,19 +560,33 @@ def production_machine_factory(seed: int | None, spec: GameSpec) -> StateMachine
     # it needs no cache; it exists only to satisfy the StateMachine's ``_pa`` guard.
     deriver = None if full_pool is not None else _DERIVER_BUILDER(spec)
 
-    return StateMachine(
+    # SIM-434: GATED manager wiring.  With SIM_MANAGER off (default) ``manager``
+    # stays None -> the StateMachine makes every §3/§5.3 hook a no-op and the game
+    # is byte-identical to before.  With it on, attach a default tendency profile
+    # and stage a generic per-team bullpen on the machine; ``simulate_game`` seeds
+    # that bullpen onto the GameState (its own ``bullpen=`` param takes priority).
+    manager = _DEFAULT_MANAGER_PROFILE if _manager_enabled() else None
+    machine = StateMachine(
         sampler=sampler,
         k=k,
         rng=np.random.default_rng(seed),
         fingerprint_deriver=deriver,
         full_pool_sampler=full_pool,
+        manager=manager,
     )
+    if manager is not None:
+        # Stage the generic bullpen on the machine so ``simulate_game`` can seed it
+        # onto the GameState (it falls back to ``machine.bullpen`` when no explicit
+        # ``bullpen=`` is passed — the production path through ``_run_one``).
+        machine.bullpen = _BULLPEN_BUILDER(spec)
+    return machine
 
 
 __all__ = [
     "production_machine_factory",
     "set_sampler_builder",
     "set_deriver_builder",
+    "set_bullpen_builder",
     "use_sampler_builder",
     "warm_worker_cache",
     "reset_caches",

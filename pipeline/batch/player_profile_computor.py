@@ -1111,6 +1111,10 @@ class PlayerProfileComputor:
         self._duckdb_path = duckdb_path
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._re_matrix: dict = {}  # populated before defensive steps
+        # SIM-433: per-game bullpen workload (rest/recent-pitch-count) derived
+        # from raw.pitches by _compute_bullpen_workload during run(); consumed by
+        # the bullpen-availability ingest (which persists raw.game_bullpen_availability).
+        self._bullpen_workload: pd.DataFrame | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -1190,6 +1194,12 @@ class PlayerProfileComputor:
             self._compute_baserunner_profiles(seasons)  # 4. infield/DP need sprint speeds
             self._build_baserunner_steal_metrics(seasons)  # 4b. SIM-408 steal-engine table
             self._build_pitcher_steal_metrics(seasons)  # 4c. SIM-408 pitcher-steal table
+            # 4d. SIM-433: derive per-game bullpen rest/workload from raw.pitches.
+            # Returned (not persisted — Postgres is attached READ_ONLY here); the
+            # bullpen-availability ingest merges it with the MLB-API roster/IL and
+            # writes raw.game_bullpen_availability. Cached for the same-process
+            # consumer / inspection.
+            self._bullpen_workload = self._compute_bullpen_workload(seasons)
             self._compute_manager_profiles(seasons)  # 5.
 
             # ── Defensive metrics ────────────────────────────────────────────
@@ -2422,6 +2432,106 @@ class PlayerProfileComputor:
             LEFT JOIN br_events b ON b.pitcher_id = p.pitcher_id AND b.season = p.season
         """)
         log.info("  derived.pitcher_steal_metrics done.")
+
+    def _compute_bullpen_workload(self, seasons: list[int]) -> pd.DataFrame:
+        """
+        SIM-433: derive the per-game rest / recent-workload signal that the
+        availability table (``raw.game_bullpen_availability``) needs, straight
+        from ``raw.pitches`` (no network).
+
+        ``raw.game_lineups`` records who *played*; the manager-profile USAGE
+        sub-score (SIM-427/434) also needs the available-but-unused signal, which
+        starts with workload: an arm that threw 45 pitches yesterday is
+        rest-unavailable today regardless of whether the manager "chose" not to
+        use it. This method builds, per (game_pk, team_id, pitcher_id) where the
+        pitcher actually appeared:
+
+          * ``last_game_date``   — this pitcher's appearance date (the game's date)
+          * ``days_rest``        — days since the pitcher's PREVIOUS appearance
+                                   (NULL for the first appearance in the window)
+          * ``pitches_last_3d``  — pitches thrown in the 3 calendar days BEFORE
+                                   this game's date (excludes this game)
+          * ``back_to_back``     — pitched on the immediately preceding calendar
+                                   day
+
+        ``team_id`` is the FIELDING team for the pitcher in each appearance: the
+        home team when the half-inning is the top (``inning_topbot='Top'``), else
+        the away team. (A pitcher only ever fields for one team in a game, so the
+        per-(game, pitcher) MIN over the half-inning derivation is unambiguous.)
+
+        This is the raw.pitches-derived HALF of SIM-433. It does NOT persist —
+        the computor attaches PostgreSQL READ_ONLY, so it returns the workload
+        rows as a DataFrame for
+        :class:`pipeline.live.bullpen_availability_ingest.BullpenAvailabilityIngest`
+        to merge with the MLB-API active-roster / IL fetch and persist to
+        ``raw.game_bullpen_availability``. Returns an EMPTY DataFrame (with the
+        documented columns) when there are no qualifying rows.
+        """
+        log.info("Deriving bullpen workload (SIM-433) …")
+        season_list = ", ".join(str(s) for s in seasons)
+
+        # One row per (game_pk, pitcher) appearance with that game's date, the
+        # pitcher's fielding team, and pitches thrown; then a self-referential
+        # window over the pitcher's appearance timeline derives rest/workload.
+        df = self._conn.execute(f"""
+            WITH appearances AS (
+                SELECT
+                    game_pk,
+                    pitcher                                                  AS pitcher_id,
+                    season,
+                    MIN(game_date)                                           AS game_date,
+                    -- Fielding team: home fields the top half, away the bottom.
+                    MIN(CASE WHEN inning_topbot = 'Top' THEN home_id ELSE away_id END)
+                                                                             AS team_id,
+                    COUNT(*)                                                 AS pitches_in_game
+                FROM pg.raw.pitches
+                WHERE data_quality_flag = FALSE
+                  AND season IN ({season_list})
+                GROUP BY game_pk, pitcher, season
+            ),
+            with_prev AS (
+                SELECT
+                    a.*,
+                    LAG(a.game_date) OVER (
+                        PARTITION BY a.pitcher_id ORDER BY a.game_date, a.game_pk
+                    )                                                        AS prev_game_date
+                FROM appearances a
+            )
+            SELECT
+                w.game_pk,
+                w.team_id,
+                w.pitcher_id,
+                w.season,
+                w.game_date,
+                w.pitches_in_game,
+                CASE WHEN w.prev_game_date IS NOT NULL
+                     THEN DATE_DIFF('day', w.prev_game_date, w.game_date)
+                END                                                          AS days_rest,
+                CASE WHEN w.prev_game_date IS NOT NULL
+                       AND DATE_DIFF('day', w.prev_game_date, w.game_date) = 1
+                     THEN TRUE ELSE FALSE END                                AS back_to_back,
+                -- Pitches thrown by this arm in the 3 calendar days BEFORE this
+                -- game (a correlated sum over the same appearances set).
+                COALESCE((
+                    SELECT SUM(p.pitches_in_game)
+                    FROM appearances p
+                    WHERE p.pitcher_id = w.pitcher_id
+                      AND p.game_date < w.game_date
+                      AND p.game_date >= w.game_date - INTERVAL 3 DAY
+                ), 0)                                                        AS pitches_last_3d
+            FROM with_prev w
+            ORDER BY w.pitcher_id, w.game_date, w.game_pk
+        """).fetchdf()
+
+        if df.empty:
+            log.info("  bullpen workload: no qualifying appearances.")
+            return df
+        log.info(
+            "  bullpen workload: %d appearance rows (%d pitchers).",
+            len(df),
+            df["pitcher_id"].nunique(),
+        )
+        return df
 
     def _compute_manager_profiles(self, seasons: list[int]) -> None:
         """
