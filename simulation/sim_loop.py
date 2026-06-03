@@ -351,6 +351,31 @@ _TTO_FATIGUE_PER_TIME = 0.12
 #: a per-pitcher rest map is wired; the in-game fatigue fallback ignores it.
 _FULL_REST_DAYS = 5.0
 
+#: SIM-425b: scorekeeping position number (sim.outcome_pool.fielded_by_position) ->
+#: the position string the fielder embedding is keyed by (player_id:position:season).
+_POS_NUM_TO_STR: dict[int, str] = {
+    1: "P",
+    2: "C",
+    3: "1B",
+    4: "2B",
+    5: "3B",
+    6: "SS",
+    7: "LF",
+    8: "CF",
+    9: "RF",
+}
+#: SIM-425b: per-play out↔hit flip probability per unit of OAA quality delta between
+#: the live defender and the pool play's fielder, and the hard cap on that flip
+#: probability. OAA is a season-scale stat (~±15), so a small per-play coefficient
+#: keeps the marginal effect realistic; both are tuned by the ≥400-sim sweep.
+_FIELDER_RBF_PER_OAA = 0.010
+_FIELDER_RBF_CAP = 0.05
+#: SIM-411: park out<->hit flip probability per unit of |park_run_factor - 1|. A
+#: 1.10 hitter's park (factor 1.10) flips ~0.05 of eligible outs to singles; a 0.90
+#: pitcher's park flips ~0.05 of eligible singles to outs. Tuned by the sim sweep.
+_PARK_FACTOR_STRENGTH = 0.5
+_PARK_FACTOR_CAP = 0.08
+
 
 def _env_flag(name: str, *, default: bool = False) -> bool:
     """Parse an on/off env flag the same way ``SIM_FULL_POOL`` is parsed in
@@ -933,6 +958,15 @@ class StateMachine:
         # None keeps the validated default path untouched.
         self.full_pool_sampler = full_pool_sampler
         self._fp_matchup: tuple | None = None
+        # SIM-411/413/425b realism nudges, each GATED OFF by default so a game is
+        # byte-identical to before unless the operator opts in (mirrors SIM_FULL_POOL
+        # / SIM_MANAGER). All three are ALSO graceful-optional: they no-op when the
+        # data they read (the migration-0012 batted-ball columns / a venue park
+        # factor / a per-position defense map) is absent, so turning a flag on
+        # without the rebuilt artifact is still a no-op. Read once per machine.
+        self._bb_platoon = _env_flag("SIM_BB_PLATOON")  # SIM-413
+        self._fielder_rbf = _env_flag("SIM_FIELDER_RBF")  # SIM-425b
+        self._park_factor = _env_flag("SIM_PARK_FACTOR")  # SIM-411
         # The single-pitch helper owns the (SIM-317 real / stub) fingerprint +
         # sampler call.  When no sampler is supplied the machine is "count-machine
         # only": the caller passes a pitch_outcome directly into step_pitch (the
@@ -1333,8 +1367,19 @@ class StateMachine:
             [state.balls, state.strikes, state.outs, state.runners_state, state.inning, sd],
             dtype=np.float32,
         )
-        fp.battedball_new_pa(hand, f"{state.batter_id}:{season}", sit)
+        # SIM-413: pass the live pitcher hand so the batted-ball draw is softly
+        # conditioned on the platoon matchup (no-op when the flag is off or the pool
+        # / pitcher hand is unknown).
+        pthrows = state.throw_hand if self._bb_platoon else None
+        fp.battedball_new_pa(hand, f"{state.batter_id}:{season}", sit, pitcher_throws=pthrows)
         ev, rh, _ro, la = fp.battedball_draw()
+        # SIM-425b: nudge out<->hit (and a share of those to a reach-on-error) by the
+        # live defender's quality vs the drawn pool play's fielder at the same
+        # position. No-op when the flag is off / the fielder columns or defense map
+        # are absent. Applied BEFORE the DP/out inference so it sees the nudged hits.
+        is_error, fielder_id = False, None
+        if self._fielder_rbf:
+            ev, rh, is_error, fielder_id = self._fielder_rbf_nudge(state, fp, ev, rh, season)
         # SIM-425/429: outs_on_pitch is unreliable in the pool (~0 for most field
         # outs), so infer outs from the event (as the default resolver does) —
         # otherwise only strikeouts end the half-inning and games bloat.
@@ -1359,7 +1404,54 @@ class StateMachine:
             result_outs=int(outs),
             result_runs=0,
             launch_angle=float(la),
+            is_error=is_error,
+            fielder_id=fielder_id,
         )
+
+    def _fielder_rbf_nudge(
+        self, state: GameState, fp, ev: str, rh: int, season: int
+    ) -> tuple[str, int, bool, int | None]:
+        """SIM-425b: nudge a fieldable batted-ball single<->out by the LIVE defender's
+        quality vs the drawn pool play's fielder, at the same position.
+
+        Only the single<->out boundary is touched (``rh in {0, 1}``); extra-base
+        hits / HRs / double plays are left alone. A better live defender (positive
+        OAA delta) converts a pool single into an out; a worse one lets a pool out
+        reach for a single. The flip probability is the OAA delta times
+        :data:`_FIELDER_RBF_PER_OAA`, capped at :data:`_FIELDER_RBF_CAP`.
+
+        Returns ``(event, result_hits, is_error, fielder_id)``. ``is_error`` is
+        always False in this v1 (reach-on-error modelling is a documented
+        refinement — it needs hit-vs-reach box semantics); ``fielder_id`` is the
+        live defender at the play's position (real attribution, else None). Returns
+        the inputs unchanged when any required datum is missing, so the path stays
+        neutral on a legacy bundle / a game with no defense map."""
+        if int(rh) not in (0, 1):
+            return ev, rh, False, None
+        f = fp.last_battedball_fielder()
+        if f is None:
+            return ev, rh, False, None
+        pos_num, pool_fid = f
+        pos_str = _POS_NUM_TO_STR.get(int(pos_num))
+        if pos_str is None:
+            return ev, rh, False, None
+        defense = state.home_defense if state.defense == Team.HOME else state.away_defense
+        cur_fid = defense.get(int(pos_num)) if defense else None
+        if not cur_fid:
+            return ev, rh, False, None
+        q_cur = fp.fielder_quality(int(cur_fid), pos_str, season)
+        q_pool = fp.fielder_quality(int(pool_fid), pos_str, season)
+        if q_cur is None or q_pool is None:
+            return ev, rh, False, int(cur_fid)
+        # delta > 0 == the live defender is better than the pool play's fielder.
+        p = (q_cur - q_pool) * _FIELDER_RBF_PER_OAA
+        p = max(-_FIELDER_RBF_CAP, min(_FIELDER_RBF_CAP, p))
+        r = float(self.rng.random())
+        if int(rh) == 1 and p > 0.0 and r < p:
+            return "field_out", 0, False, int(cur_fid)
+        if int(rh) == 0 and p < 0.0 and r < -p:
+            return "single", 1, False, int(cur_fid)
+        return ev, rh, False, int(cur_fid)
 
     def _tag_rate(self, runner_id: int | None, season: int, event: str) -> float:
         """SIM-425: probability the runner on 3rd tags & scores on a fly out.  An
@@ -2036,6 +2128,60 @@ class StateMachine:
             spray_angle=sig.spray_angle,
         )
 
+    def _apply_park_factor(self, state: GameState, sig: FieldingSignal) -> FieldingSignal:
+        """SIM-411: nudge the batted-ball outcome by the venue's run park factor.
+
+        ``state.park_run_factor`` is ~centred at 1.0 — the league-average park the
+        pool already reflects — so the nudge is RELATIVE: a hitter's park (>1) flips
+        a small fraction of eligible batted-ball OUTS to singles; a pitcher's park
+        (<1) flips a small fraction of batted-ball SINGLES to outs. The flip
+        probability is ``|factor - 1| × :data:`_PARK_FACTOR_STRENGTH``` capped at
+        :data:`_PARK_FACTOR_CAP`. Applies on BOTH halves (the park is shared) and is
+        distinct from + additive to the SIM-412 home-field bias (the home team's
+        edge, not the park); ordering them home-field-then-park means a single play
+        is never flipped twice. No-op when the flag is off, the factor is ~1.0, an
+        error is flagged, or the event is not a plain fieldable single/out."""
+        if not self._park_factor:
+            return sig
+        factor = float(getattr(state, "park_run_factor", 1.0) or 1.0)
+        if sig.is_error:
+            return sig
+        rh, ro = int(sig.result_hits), int(sig.result_outs)
+        if (
+            factor > 1.0
+            and rh == 0
+            and ro == 1
+            and str(sig.event) in self._HOME_FIELD_ELIGIBLE_OUTS
+        ):
+            p = min(_PARK_FACTOR_CAP, (factor - 1.0) * _PARK_FACTOR_STRENGTH)
+            if p > 0.0 and float(self.rng.random()) < p:
+                return FieldingSignal(
+                    event="single",
+                    result_hits=1,
+                    result_outs=0,
+                    result_runs=int(sig.result_runs),
+                    fielder_id=sig.fielder_id,
+                    is_error=False,
+                    exit_velo=sig.exit_velo,
+                    launch_angle=sig.launch_angle,
+                    spray_angle=sig.spray_angle,
+                )
+        elif factor < 1.0 and rh == 1 and str(sig.event) == "single":
+            p = min(_PARK_FACTOR_CAP, (1.0 - factor) * _PARK_FACTOR_STRENGTH)
+            if p > 0.0 and float(self.rng.random()) < p:
+                return FieldingSignal(
+                    event="field_out",
+                    result_hits=0,
+                    result_outs=1,
+                    result_runs=0,
+                    fielder_id=sig.fielder_id,
+                    is_error=False,
+                    exit_velo=sig.exit_velo,
+                    launch_angle=sig.launch_angle,
+                    spray_angle=sig.spray_angle,
+                )
+        return sig
+
     def _apply_sac_fly_bias(self, state: GameState, sig: FieldingSignal) -> FieldingSignal:
         """Bias a sampled fly-ball OUT toward a ``sacrifice_fly`` (SIM-349).
 
@@ -2145,6 +2291,12 @@ class StateMachine:
         # structural-only ~.510 toward MLB's ~.540.  No-op on the top half so
         # the away team's run environment is unchanged.
         sig = self._apply_home_field_bias(state, sig)
+        # --- SIM-411 park factor (relative run-environment nudge) ------------
+        # In a hitter's park flip a small fraction of batted-ball outs to singles;
+        # in a pitcher's park the reverse.  Applied AFTER the home-field bias so a
+        # play is never flipped twice; a no-op when SIM_PARK_FACTOR is off or the
+        # venue factor is ~1.0 (the default).
+        sig = self._apply_park_factor(state, sig)
         result.event = sig.event
         result.fielder_id = sig.fielder_id
         result.is_error = sig.is_error
@@ -3468,6 +3620,9 @@ def simulate_game(
     away_pitcher_id: int | None = None,
     home_catcher_id: int | None = None,
     away_catcher_id: int | None = None,
+    home_defense: dict[int, int] | None = None,
+    away_defense: dict[int, int] | None = None,
+    park_run_factor: float = 1.0,
     manager=None,
     bench=None,
     bullpen=None,
@@ -3589,6 +3744,15 @@ def simulate_game(
         initial_state.away_pitcher_id = away_pitcher_id
         initial_state.home_catcher_id = home_catcher_id
         initial_state.away_catcher_id = away_catcher_id
+        # SIM-425b/411: per-team defense maps (position 1-9 -> player_id) for the
+        # fielder-RBF nudge + the venue run factor for the park nudge. All picklable
+        # so they survive the BatchRunner sim_kwargs path; empty/1.0 -> the
+        # consumers stay neutral (the flags also gate them off by default).
+        if home_defense:
+            initial_state.home_defense = dict(home_defense)
+        if away_defense:
+            initial_state.away_defense = dict(away_defense)
+        initial_state.park_run_factor = float(park_run_factor)
         initial_state.bat_hand = initial_state.bat_hand_for(initial_state.batter_id)
     state = initial_state
     if seed is not None and state.seed is None:

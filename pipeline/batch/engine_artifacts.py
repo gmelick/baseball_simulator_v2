@@ -145,7 +145,15 @@ def build_battedball_pool_artifact(
         np.save(os.path.join(pool_dir, f"{hand}.sit.npy"), sit)
         con.execute(
             "COPY (SELECT batter_id, season, events, result_hits, result_outs, result_runs, "
-            f"recency_weight FROM sim.outcome_pool WHERE {w}) "
+            "recency_weight, "
+            # SIM-411/413/425b: per-row realism facts (migration 0012). p_throws (the
+            # pitcher hand) drives the SIM-413 platoon reweight; venue_id the SIM-411
+            # park multiplier; fielded_by_position + fielder_player_id the SIM-425b
+            # relative defensive nudge. The loader is back-compatible when these are
+            # absent (a pre-0012 artifact), so writing them is safe to roll out ahead
+            # of the consumers.
+            "p_throws, venue_id, fielded_by_position, fielder_player_id "
+            f"FROM sim.outcome_pool WHERE {w}) "
             f"TO '{os.path.join(pool_dir, f'{hand}.meta.parquet')}' (FORMAT parquet)"
         )
         counts[hand] = int(n)
@@ -244,12 +252,25 @@ def build_actor_embeddings(con: duckdb.DuckDBPyConnection, out_dir: str) -> dict
             and c not in (id_col, "season")
             and not c.startswith("sample_")
         ]
-        d = con.execute(
-            f"SELECT {id_col}, season, {', '.join(feats)} FROM derived.{table}"
-        ).fetchnumpy()
+        # SIM-425b: the fielder engine is POSITION-PARTITIONED — the same player has
+        # one row per position they played, so keying the embedding by
+        # player_id:season alone collapses multi-position fielders (last-wins;
+        # ~11.3k rows → ~5.3k keys). Key the FIELDER embedding by
+        # player_id:position:season so each (player, position, season) stays distinct.
+        # Every other actor keeps the player_id:season key its consumer looks up
+        # (batter/catcher/baserunner key lookups in FullPoolSampler).
+        use_position = actor == "fielder" and any(c == "position" for c, _ in schema)
+        select = [id_col, "season"] + (["position"] if use_position else []) + feats
+        d = con.execute(f"SELECT {', '.join(select)} FROM derived.{table}").fetchnumpy()
         ids = np.ma.filled(d[id_col], 0).astype(np.int64)
         seasons = np.ma.filled(d["season"], 0).astype(np.int64)
-        keys = [f"{int(i)}:{int(s)}" for i, s in zip(ids, seasons, strict=False)]
+        if use_position:
+            positions = np.asarray(d["position"], dtype=object)
+            keys = [
+                f"{int(i)}:{p}:{int(s)}" for i, p, s in zip(ids, positions, seasons, strict=False)
+            ]
+        else:
+            keys = [f"{int(i)}:{int(s)}" for i, s in zip(ids, seasons, strict=False)]
         mat = np.stack(
             [np.ma.filled(np.ma.asarray(d[f]).astype(np.float32), np.nan) for f in feats],
             axis=1,
@@ -294,7 +315,24 @@ class HandPool:
 
 @dataclass
 class BattedBallPool:
-    """One batter-hand's resident batted-ball pool for SIM-425 (step 5/6)."""
+    """One batter-hand's resident batted-ball pool for SIM-425 (step 5/6).
+
+    SIM-411/413/425b: the four trailing fields are the per-row realism facts the
+    migration-0012 outcome-pool rebuild bakes into the meta parquet. They are
+    OPTIONAL (``None`` on a legacy bundle built before 0012) so the sampler runs
+    unchanged on the old artifact and each consumer falls back to a neutral
+    factor until the rebuild lands:
+
+      * ``p_throws``   — SIM-413: the pitcher's throwing hand for this batted ball
+        ('L'/'R', object), so the batted-ball draw can reweight toward the live
+        same/opposite-hand matchup.
+      * ``venue_id``   — SIM-411: the park, for the run-environment multiplier
+        (joins ``derived.park_factors``).
+      * ``fielder_pos``— SIM-425b: the position 1–9 that fielded the ball.
+      * ``fielder_id`` — SIM-425b: the player who fielded it, so the resolver can
+        read that fielder's defensive quality and nudge out/hit/error RELATIVE to
+        the current defender at the same position.
+    """
 
     geom: np.ndarray  # (N, 3) float32 — exit_velo, launch_angle, spray
     sit: np.ndarray  # (N, 6)  float32
@@ -304,6 +342,11 @@ class BattedBallPool:
     result_hits: np.ndarray  # (N,) int8 (0=out,1=1B,2=2B,3=3B,4=HR)
     result_outs: np.ndarray  # (N,) int8
     recency: np.ndarray  # (N,) float32
+    # SIM-411/413/425b realism facts (None on a pre-0012 bundle).
+    p_throws: np.ndarray | None = None  # (N,) object 'L'/'R' — SIM-413 platoon
+    venue_id: np.ndarray | None = None  # (N,) int64 — SIM-411 park factor
+    fielder_pos: np.ndarray | None = None  # (N,) int8 (1–9) — SIM-425b
+    fielder_id: np.ndarray | None = None  # (N,) int64 — SIM-425b defensive quality
 
     @property
     def n(self) -> int:
@@ -335,6 +378,13 @@ _BB_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "result_hits",
     "result_outs",
     "recency",
+    # SIM-411/425b: the numeric realism columns are shareable (skipped when None on
+    # a legacy bundle — extract_shared_arrays' isinstance(arr, np.ndarray) guard).
+    # SIM-413's p_throws is object-dtype and stays per-worker (loaded from parquet),
+    # exactly like BattedBallPool.event.
+    "venue_id",
+    "fielder_pos",
+    "fielder_id",
 )
 _ACTOR_EMB_SHAREABLE_ATTRS: tuple[str, ...] = ("vecs", "mean", "std")
 
@@ -501,6 +551,20 @@ class EngineArtifacts:
                 return v
             return np.load(disk_path)
 
+        def _bb_take(
+            hand: str, meta: dict, attr: str, col: str, dtype: type, fill: int
+        ) -> np.ndarray | None:
+            """SIM-411/425b: load an OPTIONAL numeric batted-ball meta column.
+            Prefer a published shared view; else fill the parquet column (NULL ->
+            ``fill``); else (a pre-0012 artifact that lacks the column) return None
+            so the consumer falls back to a neutral factor."""
+            v = views.get(f"bb_pool.{hand}.{attr}")
+            if isinstance(v, np.ndarray):
+                return v
+            if col in meta:
+                return np.asarray(np.ma.filled(meta[col], fill), dtype=dtype)
+            return None
+
         pool_dir = os.path.join(art_dir, "pitch_pool")
         with open(os.path.join(pool_dir, "manifest.json"), encoding="utf-8") as fh:
             manifest = json.load(fh)
@@ -555,9 +619,35 @@ class EngineArtifacts:
             bb_dir = os.path.join(art_dir, "battedball_pool")
             if os.path.exists(os.path.join(bb_dir, "manifest.json")):
                 for hand in ("L", "R"):
+                    meta_path = os.path.join(bb_dir, f"{hand}.meta.parquet")
+                    # SIM-411/413/425b: select the realism columns only when present,
+                    # so a pre-0012 artifact (no venue/hand/fielder columns) still loads.
+                    avail = {
+                        str(d[0])
+                        for d in con.execute(
+                            f"SELECT * FROM read_parquet('{meta_path}') LIMIT 0"
+                        ).description
+                    }
+                    base_cols = [
+                        "batter_id",
+                        "season",
+                        "events",
+                        "result_hits",
+                        "result_outs",
+                        "recency_weight",
+                    ]
+                    opt_cols = [
+                        c
+                        for c in (
+                            "p_throws",
+                            "venue_id",
+                            "fielded_by_position",
+                            "fielder_player_id",
+                        )
+                        if c in avail
+                    ]
                     m = con.execute(
-                        "SELECT batter_id, season, events, result_hits, result_outs, "
-                        f"recency_weight FROM read_parquet('{os.path.join(bb_dir, f'{hand}.meta.parquet')}')"
+                        f"SELECT {', '.join(base_cols + opt_cols)} FROM read_parquet('{meta_path}')"
                     ).fetchnumpy()
                     bb_pid_view = views.get(f"bb_pool.{hand}.batter_id")
                     bb_ssn_view = views.get(f"bb_pool.{hand}.season")
@@ -597,6 +687,20 @@ class EngineArtifacts:
                                 np.ma.filled(m["recency_weight"], 1.0).astype(np.float32),
                                 nan=1.0,
                             )
+                        ),
+                        # SIM-413: pitcher hand per row (object 'L'/'R', not shared —
+                        # object-dtype like ``event``). None on a legacy artifact.
+                        p_throws=(
+                            np.asarray(m["p_throws"], dtype=object) if "p_throws" in m else None
+                        ),
+                        # SIM-411 / SIM-425b numeric realism columns (shared when
+                        # published; None on a pre-0012 bundle).
+                        venue_id=_bb_take(hand, m, "venue_id", "venue_id", np.int64, 0),
+                        fielder_pos=_bb_take(
+                            hand, m, "fielder_pos", "fielded_by_position", np.int8, 0
+                        ),
+                        fielder_id=_bb_take(
+                            hand, m, "fielder_id", "fielder_player_id", np.int64, 0
                         ),
                     )
         finally:

@@ -1,3 +1,108 @@
+# Phase 7 — SIM-411/413/425b: realism consumers wired (gated OFF) — 2026-06-03
+**Authors: Baseball Analyst (Agent 2), ML / Modeling Engineer (Agent 3), Backend Developer (Agent 5)**
+
+The consumer half of the three realism tickets — the code that READS the
+migration-0012 batted-ball columns + the (now multi-position-keyed) fielder
+embedding and turns them into run-environment behaviour. Each is behind its own env
+gate (default OFF, parsed like `SIM_FULL_POOL`/`SIM_MANAGER`) AND graceful-optional
+(no-op when the data it reads is absent), so flag-off is byte-identical to before
+and turning a flag on without the rebuilt artifact / a venue factor / a defense map
+is still a no-op. Verified: the full existing sampler + sim-loop + regression
+golden-file suites stay green (they run flag-off), and 25 new tests pin the flag-on
+mechanism + every neutral fallback.
+
+- **SIM-413 — `SIM_BB_PLATOON`.** `FullPoolSampler.battedball_new_pa(pitcher_throws=…)`
+  softly reweights the batted-ball draw toward pool rows from the SAME pitcher-hand
+  matchup (opposite-hand rows × `platoon_off_weight`, default 0.6), so the drawn ball
+  reflects the live platoon side. The loop passes `state.throw_hand` (already wired)
+  when the flag is on. No-op when the pool lacks `p_throws` (a legacy bundle).
+- **SIM-425b — `SIM_FIELDER_RBF`.** `battedball_draw` now remembers the drawn row;
+  `last_battedball_fielder()` + `fielder_quality(id, position, season)` expose the
+  pool play's fielder + any fielder's OAA (read by the `player_id:position:season`
+  key the 0012 build fixed). `StateMachine._fielder_rbf_nudge` flips a fieldable
+  single↔out by the OAA delta between the LIVE defender (from the new per-position
+  `GameState.home_defense`/`away_defense` maps) and the pool play's fielder
+  (`_FIELDER_RBF_PER_OAA` per OAA unit, capped at `_FIELDER_RBF_CAP`). v1 models
+  single↔out only; reach-on-error is a documented refinement (hit-vs-reach box
+  semantics).
+- **SIM-411 — `SIM_PARK_FACTOR`.** `StateMachine._apply_park_factor` applies a
+  RELATIVE run-environment nudge from `GameState.park_run_factor` (~1.0 = the
+  league-average park the pool already reflects): a hitter's park (>1) flips a small
+  fraction of batted-ball outs to singles, a pitcher's park (<1) the reverse, on
+  BOTH halves. Ordered AFTER the SIM-412 home-field bias in the in-play chain so a
+  play is never flipped twice (the two model distinct effects — park vs the home
+  team's edge).
+
+New `GameState` fields (all picklable → survive the BatchRunner sim_kwargs path):
+`home_defense`/`away_defense` (position 1-9 → player_id), `park_run_factor`;
+`simulate_game` gains matching kwargs. New tunables in `sim_loop.py`
+(`_FIELDER_RBF_*`, `_PARK_FACTOR_*`, `_POS_NUM_TO_STR`) + `FullPoolSampler`
+(`platoon_off_weight`). ruff + mypy clean.
+
+**Remaining for these three to affect PRODUCTION sims (gated + data-dependent):**
+1. The DuckDB migration 0012 + cheap outcome-pool/artifact rebuild (so the columns
+   exist) — the data run, still pending authorization.
+2. A thin API/factory wiring so a real `/simulate` GameSpec carries
+   `home_defense`/`away_defense` (the SIM-363 build_defense_map already resolves all
+   9 — only the catcher is threaded today) + `park_run_factor` (resolve venue →
+   `derived.park_factors` factor_type='R'/regressed at request time) in `sim_kwargs`.
+3. Turn each flag on and run the ≥400-sim/game `scripts/sim_stats.py` validation to
+   tune the strength constants per channel + regen the regression golden fixtures
+   (each effect is independently gated so it can be validated alone).
+
+# Phase 7 — SIM-411/413/425b: batted-ball realism-column plumbing (one rebuild, three tickets) — 2026-06-03
+**Authors: Data Engineer (Agent 4), ML / Modeling Engineer (Agent 3), Performance Engineer (Agent 6)**
+
+Landed the **code half** of the three realism tickets that share one cheap outcome-pool
+rebuild — the per-row facts each consumer needs are now baked into the batted-ball
+artifact, so a single ~minutes-scale `sim.outcome_pool` rebuild (it already JOINs
+`raw.pitches`, 3-season window) unblocks all three at once instead of paying three rebuilds:
+
+- **SIM-411 (park factor)** — `sim.outcome_pool.venue_id` (joins `derived.park_factors`).
+- **SIM-413 (pitcher-hand platoon)** — `p_throws` (already on `sim.outcome_pool`; now exported
+  into the batted-ball artifact for the same/opposite-hand reweight).
+- **SIM-425b (fielder RBF)** — `fielder_player_id` (new; `fielded_by_position` 1–9 already
+  existed), so the resolver can read the pool fielder's defensive quality and nudge
+  out/hit/error RELATIVE to the current defender at that position.
+
+What changed (no live DB / no rebuild run here — pure code, unit-tested):
+- **DuckDB migration `0012`** (`ALTER TABLE sim.outcome_pool ADD COLUMN IF NOT EXISTS
+  venue_id / fielder_player_id`, idempotent) + the same two columns appended to
+  `02_duckdb_schema.sql` (fresh-build parity) + schema version **11 → 12**.
+- **`PlayerProfileComputor._build_outcome_pool`** populates the two columns from
+  `raw.pitches` (`rp.venue_id`, `rp.fielded_by`), appended AFTER `recency_weight` so the
+  positional `INSERT ... SELECT * FROM bip` maps identically on a migrated and a fresh DB.
+- **`build_battedball_pool_artifact`** widens the meta COPY to export
+  `p_throws, venue_id, fielded_by_position, fielder_player_id`; **`BattedBallPool`** carries
+  four new OPTIONAL fields; **`EngineArtifacts.load`** introspects the parquet columns and is
+  **back-compatible** with a pre-0012 artifact (fields come back `None` → consumers stay
+  neutral, so the running app's existing bundle keeps loading). The numeric columns ride the
+  SIM-403b shared-memory seam; object-dtype `p_throws` stays per-worker like `event`.
+- **SIM-425b fielder-embedding key fix** — `build_actor_embeddings` now keys the FIELDER
+  embedding by `player_id:position:season` (was `player_id:season`, which collapsed
+  multi-position fielders last-wins). Every other actor keeps `player_id:season` (the form
+  the batter/catcher/baserunner consumers look up).
+
++1 unit-test suite (`test_engine_artifacts_realism_sim411_413_425b.py`, 10 tests: builder
+export, loader round-trip, legacy-artifact back-compat, fielder multi-position key,
+shared-memory publish/attach of the new numeric cols) + the DuckDB-0012 + version-12 tests in
+`test_sim_store.py`. ruff + mypy clean; the existing SIM-403b / SIM-430 / data-engineer pool
+suites stay green. No `_delete_seasons` change needed — `sim.outcome_pool` has its own
+per-season DELETE in `_build_outcome_pool` (it is intentionally NOT in the SIM-091 enumeration).
+
+**Follow-ons (NOT in this change):**
+- **The consumer math + `GameState` wiring** (the actual realism behaviour) is the next step
+  and is gated on the rebuilt data: SIM-411 park run-multiplier (needs `state.park` wired — a
+  dead field today — + a RELATIVE application reconciled with the SIM-412 flat home bias),
+  SIM-413 same/opposite-hand reweight in `FullPoolSampler.battedball_new_pa`, SIM-425b
+  out↔hit↔error nudge in `_full_pool_fielding` from the (now multi-position-correct) fielder
+  embedding. Each should be gated + validated independently at ≥400 sims/game.
+- **Run order:** apply migration `0012` → rebuild `sim.outcome_pool` (the 3-season pass) →
+  rebuild the engine artifact (`python -m pipeline.batch.engine_artifacts --what all`). The
+  fielder-key change shifts the fielder embedding's key set → regen regression golden fixtures
+  when the SIM-425b consumer lands (the fielder ENGINE's fixtures are unaffected — it reads
+  `derived.fielder_season_metrics` directly, not the artifact).
+
 # Phase 7 — SIM-433/434/435: bullpen-availability + manager-decision-model + historical-odds foundations — 2026-06-02
 **Authors: Data Engineer (Agent 4), Backend Developer (Agent 5), Betting Analyst (Agent 8)**
 

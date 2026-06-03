@@ -359,10 +359,32 @@ class TestMigrationSanity:
         assert "def downgrade()" in text
         assert "sim.sim_runs" in text
 
-    def test_duckdb_schema_version_is_11(self):
+    def test_duckdb_schema_version_is_12(self):
         # SIM-357 bumped 8 -> 9 (0009); SIM-362/364 -> 10 (0010);
-        # SIM-408 -> 11 (0011 engine ↔ schema reconciliation).
-        assert DUCKDB_VERSION_FILE.read_text().strip() == "11"
+        # SIM-408 -> 11 (0011 engine ↔ schema reconciliation);
+        # SIM-411/413/425b -> 12 (0012 batted-ball realism columns).
+        assert DUCKDB_VERSION_FILE.read_text().strip() == "12"
+
+    def test_duckdb_0012_adds_battedball_realism_cols(self):
+        # SIM-411/413/425b: venue_id (park) + fielder_player_id (fielder RBF) on
+        # sim.outcome_pool; p_throws (platoon) was already present.
+        path = (
+            REPO_ROOT
+            / "db"
+            / "migrations"
+            / "duckdb"
+            / "0012_sim411_413_425b_battedball_realism_cols.sql"
+        )
+        text = path.read_text(encoding="utf-8")
+        assert "sim.outcome_pool" in text
+        assert "ADD COLUMN IF NOT EXISTS venue_id" in text
+        assert "ADD COLUMN IF NOT EXISTS fielder_player_id" in text
+        assert "'0012'" in text  # migration_history entry
+        # The canonical schema must carry the same two columns (fresh-build parity).
+        schema = (REPO_ROOT / "db" / "schemas" / "02_duckdb_schema.sql").read_text(
+            encoding="utf-8"
+        )
+        assert "fielder_player_id" in schema
 
     def test_duckdb_0008_creates_play_stream(self):
         text = DUCKDB_MIGRATION.read_text()

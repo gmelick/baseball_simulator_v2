@@ -901,6 +901,12 @@ CREATE TABLE IF NOT EXISTS sim.outcome_pool (
     -- SIM-076: sampling recency weight (see sim.pitch_pool.recency_weight).
     recency_weight              FLOAT       NOT NULL DEFAULT 1.0,
 
+    -- SIM-411/413/425b realism facts (migration 0012). Appended AFTER recency_weight
+    -- so the computor's positional `INSERT ... SELECT * FROM bip` maps identically on
+    -- a fresh build and a 0012-migrated DB. Nullable: NULL on rows from a pre-0012 build.
+    venue_id                    INTEGER,                -- SIM-411: joins derived.park_factors(venue_id, season)
+    fielder_player_id           INTEGER,                -- SIM-425b: raw.pitches.fielded_by (who fielded; NULL when uncredited)
+
     PRIMARY KEY (pitch_id)
 );
 

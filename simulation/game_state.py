@@ -257,6 +257,13 @@ class GameState:
     # can apply the fielding catcher's framing to the ball/called-strike draw.
     home_catcher_id: int | None = None
     away_catcher_id: int | None = None
+    # SIM-425b: each team's per-position defense map, ``{position(1-9): player_id}``,
+    # so the batted-ball resolver can nudge out/hit/error by the CURRENT defender's
+    # quality at the position the drawn pool ball was fielded at. Empty by default ->
+    # the fielder-RBF consumer falls back to neutral (no nudge), so the count-machine
+    # / no-defense path is unchanged.
+    home_defense: dict[int, int] = field(default_factory=dict)
+    away_defense: dict[int, int] = field(default_factory=dict)
 
     # ---- current matchup ids (spec step 2 matchup) --------------------------
     batter_id: int | None = None  # current batter; None until lineup set
@@ -266,6 +273,12 @@ class GameState:
     pitcher_pitch_count: int = 0  # current pitcher's pitch count (fatigue/sub)
     batter_pa_count: int = 0  # PAs the current batter has had (3rd-time-thru)
     park: str | None = None  # venue id for park/venue context (spec step 1/6)
+    # SIM-411: the venue's run park-factor (factor_type='R', regressed) for this
+    # game, ~centred at 1.0 (>1 a hitter's park, <1 a pitcher's park). Resolved
+    # once per game (the API/factory looks it up from derived.park_factors by
+    # ``park``+season) and threaded here; the worker has no DB, so it is carried
+    # as a scalar. 1.0 == neutral -> the park consumer is a no-op (the default).
+    park_run_factor: float = 1.0
 
     # SIM-434: per-pitcher fatigue / rest state for the manager pull + reliever-
     # selection model.  ``pitcher_bf`` counts batters-faced PER pitcher id

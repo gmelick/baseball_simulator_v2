@@ -40,11 +40,17 @@ class FullPoolSampler:
         *,
         sit_sigma: float = 2.0,
         batter_sigma: float = 3.0,
+        platoon_off_weight: float = 0.6,
     ) -> None:
         self.a = artifacts
         self.rng = rng if rng is not None else np.random.default_rng()
         self.sit_sigma = float(sit_sigma)
         self.batter_sigma = float(batter_sigma)
+        # SIM-413: the relative weight given to OPPOSITE-hand batted-ball pool rows
+        # when the platoon reweight is active (same-hand rows keep weight 1.0). <1
+        # softly conditions the batted-ball draw on the live pitcher hand so the
+        # drawn outcome reflects the platoon matchup; 1.0 disables the reweight.
+        self.platoon_off_weight = float(platoon_off_weight)
         # Per-pool precompute: dense candidate->profile indices for O(1) gathers.
         self._pool_cache: dict[str, dict] = {}
         # SIM-430 hot-path caches (all hold CONSTANTS that the original code
@@ -69,6 +75,14 @@ class FullPoolSampler:
         self._bb_pool_bat: dict[str, np.ndarray] = {}
         self._br_idx: dict[str, int] | None = None  # baserunner feature-name -> col
         self._cat_idx: dict[str, int] | None = None  # catcher feature-name -> col
+        # SIM-413: per-hand cached mask of pool rows pitched by a RHP (p_throws=='R'),
+        # so the platoon reweight is one cheap boolean select per PA instead of an
+        # object-array compare over the whole pool.
+        self._bb_throws_r: dict[str, np.ndarray] = {}
+        # SIM-425b: index of the row the last battedball_draw returned, so the
+        # resolver can read that pool play's fielder identity/position.
+        self._bb_last_i: int | None = None
+        self._fld_idx: dict[str, int] | None = None  # fielder feature-name -> col
 
     # ---- per-pool one-time precompute ------------------------------------
     def _pool_meta(self, hand: str) -> dict:
@@ -268,8 +282,33 @@ class FullPoolSampler:
         self._bb_pool_bat[hand] = pb
         return pb
 
-    def battedball_new_pa(self, hand: str, batter_key: str, state: np.ndarray) -> None:
-        """Assemble the batted-ball weight CDF for the PA (f_batter · f_situation · recency)."""
+    def _bb_same_hand_mask(self, hand: str, pitcher_throws: str) -> np.ndarray | None:
+        """SIM-413: boolean mask of batted-ball pool rows whose pitcher threw the
+        SAME hand as ``pitcher_throws``. None when the pool carries no per-row
+        ``p_throws`` (a legacy bundle) so the caller leaves the draw unweighted."""
+        pool = self.a.bb_pools[hand]
+        pt = getattr(pool, "p_throws", None)
+        if pt is None:
+            return None
+        tr = self._bb_throws_r.get(hand)
+        if tr is None:
+            tr = np.asarray(pt, dtype=object) == "R"
+            self._bb_throws_r[hand] = tr
+        return tr if pitcher_throws == "R" else ~tr
+
+    def battedball_new_pa(
+        self,
+        hand: str,
+        batter_key: str,
+        state: np.ndarray,
+        pitcher_throws: str | None = None,
+    ) -> None:
+        """Assemble the batted-ball weight CDF for the PA (f_batter · f_situation · recency).
+
+        SIM-413: when ``pitcher_throws`` ('L'/'R') is supplied AND the pool carries
+        per-row ``p_throws``, softly reweight toward same-hand-matchup rows (opposite
+        hand rows ×:attr:`platoon_off_weight`) so the drawn batted ball reflects the
+        live platoon matchup. Omitted / legacy pool -> the draw is unchanged."""
         self._bb_hand = hand
         pool = self.a.bb_pools[hand]
         aff = self._batter_aff(batter_key)
@@ -283,7 +322,12 @@ class FullPoolSampler:
         diff: np.ndarray = pool.sit - np.asarray(state, dtype=np.float32)
         d2 = np.einsum("ij,ij->i", diff, diff)
         f_sit = np.exp(-d2 / (2.0 * self.sit_sigma**2 * pool.sit.shape[1])).astype(np.float32)
-        self._bb_cdf = np.cumsum(f_bat * f_sit * pool.recency, dtype=np.float64)
+        w = f_bat * f_sit * pool.recency
+        if pitcher_throws and self.platoon_off_weight != 1.0:
+            same = self._bb_same_hand_mask(hand, pitcher_throws)
+            if same is not None:
+                w = w * np.where(same, np.float32(1.0), np.float32(self.platoon_off_weight))
+        self._bb_cdf = np.cumsum(w, dtype=np.float64)
 
     def battedball_draw(self) -> tuple[str, int, int, float]:
         """Draw one batted ball -> (event, result_hits, result_outs, launch_angle).
@@ -292,17 +336,53 @@ class FullPoolSampler:
         fly out (tag-up eligible) from a ground out for productive-out advancement.
         """
         if self._bb_hand is None or self._bb_cdf is None or self._bb_cdf[-1] <= 0:
+            self._bb_last_i = None
             return ("field_out", 0, 1, 0.0)
         pool = self.a.bb_pools[self._bb_hand]
         i = min(
             int(np.searchsorted(self._bb_cdf, self.rng.random() * self._bb_cdf[-1])), pool.n - 1
         )
+        self._bb_last_i = i  # SIM-425b: remember the row for the fielder lookup
         return (
             str(pool.event[i]),
             int(pool.result_hits[i]),
             int(pool.result_outs[i]),
             float(pool.geom[i, 1]),
         )
+
+    def last_battedball_fielder(self) -> tuple[int, int] | None:
+        """SIM-425b: ``(fielded_by_position, fielder_player_id)`` of the row the
+        last :meth:`battedball_draw` returned, or None when the pool lacks the
+        fielder columns (a legacy bundle) or no draw has happened."""
+        i = self._bb_last_i
+        if i is None or self._bb_hand is None:
+            return None
+        pool = self.a.bb_pools[self._bb_hand]
+        pos, fid = getattr(pool, "fielder_pos", None), getattr(pool, "fielder_id", None)
+        if pos is None or fid is None:
+            return None
+        return (int(pos[i]), int(fid[i]))
+
+    def fielder_quality(self, fielder_id: int, position: str, season: int) -> float | None:
+        """SIM-425b: the fielder's outs-above-average (per the fielder embedding,
+        keyed ``player_id:position:season``), or None when the fielder / feature is
+        absent. A higher value == a better defender at that position; the resolver
+        nudges out↔hit by the delta between the live defender and the pool play's
+        fielder. Returns None (-> neutral) on a legacy bundle or an unknown fielder."""
+        femb = self.a.actor_emb.get("fielder")
+        if femb is None or not fielder_id:
+            return None
+        feats = femb.get("features")
+        idx = femb["key_index"].get(f"{int(fielder_id)}:{position}:{int(season)}")
+        if feats is None or idx is None:
+            return None
+        if self._fld_idx is None:
+            self._fld_idx = {f: i for i, f in enumerate(feats)}
+        oaa_i = self._fld_idx.get("outs_above_average")
+        if oaa_i is None:
+            return None
+        v = float(femb["vecs"][idx][oaa_i])
+        return v if np.isfinite(v) else None
 
     def has_battedball(self) -> bool:
         return bool(self.a.bb_pools)

@@ -4656,7 +4656,16 @@ class PlayerProfileComputor:
                     END::SMALLINT                   AS result_hits,
                     rp.outs_on_pitch::SMALLINT      AS result_outs,
                     rp.runs_on_pitch::SMALLINT      AS result_runs,
-                    {recency_expr} AS recency_weight
+                    {recency_expr} AS recency_weight,
+                    -- SIM-411/413/425b: realism facts appended AFTER recency_weight to
+                    -- match the migration-0012 column order (the table's INSERT is a
+                    -- positional `SELECT * FROM bip`). venue_id → park run-environment
+                    -- (SIM-411); fielded_by → the play's fielder identity for the
+                    -- SIM-425b relative defensive nudge (fielded_by_position already
+                    -- records the position 1–9). p_throws (SIM-413 platoon) is carried
+                    -- by the pp.* columns above.
+                    rp.venue_id::INTEGER            AS venue_id,
+                    rp.fielded_by::INTEGER          AS fielder_player_id
                 FROM sim.pitch_pool pp
                 JOIN pg.raw.pitches rp
                     ON rp.game_pk       = pp.game_pk
