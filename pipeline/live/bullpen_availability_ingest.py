@@ -8,6 +8,13 @@ USAGE profile (SIM-427 / SIM-434) needs the available-but-unused signal: was a
 reliever NOT used because the manager chose to hold him, or because he *couldn't*
 pitch (on the IL, or rest-unavailable after a heavy / back-to-back outing)?
 
+SIM-433-v2: a row is emitted for every pitcher on each team's FULL active roster
+(both home + away), not just the arms that pitched — so the available-but-UNUSED
+relievers (the "chose-not-to-use" signal) are captured. The rest of an arm that
+did not pitch in a given game is derived from its appearance timeline (see
+:func:`_rest_as_of`), so an unused arm that threw yesterday is still correctly
+'rest'-unavailable rather than falsely 'active'.
+
 This module produces ``raw.game_bullpen_availability`` rows (migration 0015) by
 combining two sources:
 
@@ -56,6 +63,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any
 
 log = logging.getLogger("pipeline.live.bullpen_availability_ingest")
@@ -302,34 +310,86 @@ class BullpenAvailabilityIngest:
         game_pk: int,
         workload: Iterable[Mapping[str, Any]],
         roster_by_team: Mapping[int, Mapping[int, PitcherStatus]],
+        timeline: Mapping[int, Iterable[tuple[date, int]]] | None = None,
+        game_date: date | None = None,
     ) -> list[AvailabilityRow]:
-        """Merge per-(team,pitcher) workload with roster status → availability rows.
+        """SIM-433-v2: build one availability row per pitcher on each team's FULL
+        active roster — not just the arms that pitched — so the available-but-UNUSED
+        relievers (the manager USAGE "chose-not-to-use" signal) are captured.
 
-        ``workload`` is an iterable of mappings carrying at least
-        ``team_id``/``pitcher_id``/``days_rest``/``pitches_last_3d``/``back_to_back``
-        (the per-game slice of the ``_compute_bullpen_workload`` DataFrame, e.g.
-        ``df.to_dict('records')``). ``roster_by_team`` maps team_id → the
-        {pitcher_id: PitcherStatus} from :meth:`_fetch_team_pitchers`.
+        ``workload`` is the per-game slice of the ``_compute_bullpen_workload``
+        DataFrame (``team_id``/``pitcher_id``/``days_rest``/``pitches_last_3d``/
+        ``back_to_back`` for arms that APPEARED). ``roster_by_team`` maps team_id →
+        the {pitcher_id: PitcherStatus} from :meth:`_fetch_team_pitchers` (the full
+        26-man pitching staff + IL). ``timeline`` maps pitcher_id → that arm's
+        ``(date, pitches)`` appearance history (built once from the whole workload),
+        used by :func:`_rest_as_of` to compute rest for a roster arm that did NOT
+        pitch in this game (so an unused arm that threw yesterday is still correctly
+        'rest'-unavailable, not falsely 'active').
 
-        An arm that pitched in this game (present in ``workload``) but is missing
-        from its team's roster fetch is still emitted as available='active'
-        (it demonstrably pitched), so a roster-API gap can't erase a real arm.
+        Rest precedence per (team, pitcher): the per-game workload record if the arm
+        appeared (authoritative), else the timeline rest as of ``game_date``, else
+        defaults (no prior appearance → fully rested). An arm that appeared but is
+        absent from the roster fetch is still emitted available (a roster-API gap
+        can't erase a real arm; ``source='workload'``).
         """
+        wl: dict[tuple[int, int], Mapping[str, Any]] = {
+            (int(r["team_id"]), int(r["pitcher_id"])): r for r in workload
+        }
         rows: list[AvailabilityRow] = []
-        for rec in workload:
-            team_id = int(rec["team_id"])
-            pitcher_id = int(rec["pitcher_id"])
-            status = roster_by_team.get(team_id, {}).get(pitcher_id)
+        emitted: set[tuple[int, int]] = set()
+
+        def _rest_for(team_id: int, pid: int) -> tuple[int | None, int, bool]:
+            rec = wl.get((team_id, pid))
+            if rec is not None:  # appeared → authoritative per-game workload
+                return (
+                    _opt_int(rec.get("days_rest")),
+                    int(rec.get("pitches_last_3d") or 0),
+                    bool(rec.get("back_to_back")),
+                )
+            if timeline is not None:  # did not appear → derive from the timeline
+                return _rest_as_of(timeline.get(pid, ()), game_date)
+            return None, 0, False
+
+        # 1) The full roster of every team in this game (the v2 superset).
+        for team_id, roster in roster_by_team.items():
+            tid = int(team_id)
+            for pid, status in roster.items():
+                pid = int(pid)
+                emitted.add((tid, pid))
+                days_rest, pitches_last_3d, back_to_back = _rest_for(tid, pid)
+                available, reason = self.decide(
+                    pitcher_id=pid,
+                    status=status,
+                    days_rest=days_rest,
+                    pitches_last_3d=pitches_last_3d,
+                    back_to_back=back_to_back,
+                )
+                rows.append(
+                    AvailabilityRow(
+                        game_pk=game_pk,
+                        team_id=tid,
+                        pitcher_id=pid,
+                        available=available,
+                        reason=reason,
+                        days_rest=days_rest,
+                        pitches_last_3d=pitches_last_3d,
+                        back_to_back=back_to_back,
+                        source="mlb_api",
+                    )
+                )
+
+        # 2) Arms that APPEARED but are missing from the roster fetch — emit them
+        #    available (they demonstrably pitched); a roster gap can't erase them.
+        for (tid, pid), rec in wl.items():
+            if (tid, pid) in emitted:
+                continue
             days_rest = _opt_int(rec.get("days_rest"))
             pitches_last_3d = int(rec.get("pitches_last_3d") or 0)
             back_to_back = bool(rec.get("back_to_back"))
-            # If the arm pitched in THIS game we know it was available; trust that
-            # over an absent/active-roster-lagging fetch, but still honour an
-            # explicit IL flag (a same-day activation edge case is rare).
-            if status is None:
-                status = PitcherStatus(pitcher_id=pitcher_id, on_active_roster=True, on_il=False)
+            status = PitcherStatus(pitcher_id=pid, on_active_roster=True, on_il=False)
             available, reason = self.decide(
-                pitcher_id=pitcher_id,
+                pitcher_id=pid,
                 status=status,
                 days_rest=days_rest,
                 pitches_last_3d=pitches_last_3d,
@@ -338,26 +398,31 @@ class BullpenAvailabilityIngest:
             rows.append(
                 AvailabilityRow(
                     game_pk=game_pk,
-                    team_id=team_id,
-                    pitcher_id=pitcher_id,
+                    team_id=tid,
+                    pitcher_id=pid,
                     available=available,
                     reason=reason,
                     days_rest=days_rest,
                     pitches_last_3d=pitches_last_3d,
                     back_to_back=back_to_back,
+                    source="workload",
                 )
             )
         return rows
 
     def ingest_game(
-        self, game_pk: int, workload: Iterable[Mapping[str, Any]]
+        self,
+        game_pk: int,
+        workload: Iterable[Mapping[str, Any]],
+        timeline: Mapping[int, Iterable[tuple[date, int]]] | None = None,
     ) -> list[AvailabilityRow]:
         """Resolve + persist availability for one game; returns the rows written.
 
-        Fetches the active-roster/IL status for each team that has workload rows
-        in this game, builds the availability rows, and persists them. The two
-        teams are taken from the workload's ``team_id`` values (falling back to
-        the schedule's home/away if needed).
+        SIM-433-v2: fetches the active-roster/IL status for BOTH teams (the
+        schedule's home + away — not just the teams that pitched), so the full
+        bullpen of each side is captured, then builds one row per roster arm
+        (:meth:`build_rows`) using ``timeline`` for the rest of arms that did not
+        pitch. ``timeline`` maps pitcher_id → ``(date, pitches)`` appearances.
         """
         records = list(workload)
         if not records:
@@ -366,11 +431,14 @@ class BullpenAvailabilityIngest:
         if meta is None:
             log.warning("SIM-433: skipping game_pk %s — unresolved meta.", game_pk)
             return []
-        team_ids = {int(r["team_id"]) for r in records}
+        # v2: both teams' FULL rosters (union with the workload's teams as a guard).
+        team_ids = {meta.home_team_id, meta.away_team_id} | {int(r["team_id"]) for r in records}
         roster_by_team: dict[int, dict[int, PitcherStatus]] = {}
         for team_id in team_ids:
             roster_by_team[team_id] = self._fetch_team_pitchers(team_id, meta.date)
-        rows = self.build_rows(game_pk, records, roster_by_team)
+        rows = self.build_rows(
+            game_pk, records, roster_by_team, timeline=timeline, game_date=_as_date(meta.date)
+        )
         self._persist(rows)
         return rows
 
@@ -380,14 +448,24 @@ class BullpenAvailabilityIngest:
         ``workload_records`` is the full ``_compute_bullpen_workload`` output
         (``df.to_dict('records')``). Returns the total rows persisted. Per-game
         failures are logged and skipped (never abort the whole run).
+
+        SIM-433-v2: builds the per-pitcher appearance ``timeline`` ONCE from the
+        whole workload so :meth:`ingest_game` can derive rest for roster arms that
+        did not pitch in a given game (the available-but-unused signal).
         """
+        records = list(workload_records)
+        timeline: dict[int, list[tuple[date, int]]] = {}
         by_game: dict[int, list[Mapping[str, Any]]] = {}
-        for rec in workload_records:
+        for rec in records:
+            pid = int(rec["pitcher_id"])
+            d = _as_date(rec.get("game_date"))
+            if d is not None:
+                timeline.setdefault(pid, []).append((d, int(rec.get("pitches_in_game") or 0)))
             by_game.setdefault(int(rec["game_pk"]), []).append(rec)
         total = 0
         for game_pk, recs in by_game.items():
             try:
-                total += len(self.ingest_game(game_pk, recs))
+                total += len(self.ingest_game(game_pk, recs, timeline=timeline))
             except Exception as exc:  # noqa: BLE001
                 log.warning("SIM-433: ingest failed for game_pk %s: %s", game_pk, exc)
         log.info("SIM-433: persisted %d availability rows across %d games.", total, len(by_game))
@@ -444,6 +522,43 @@ def _opt_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _as_date(value: Any) -> date | None:
+    """Coerce a workload/schedule date (str 'YYYY-MM-DD' / datetime / pandas
+    Timestamp / date) to a plain :class:`datetime.date`, or None."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):  # also catches pandas.Timestamp (a datetime subclass)
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _rest_as_of(
+    appearances: Iterable[tuple[date, int]], game_date: date | None
+) -> tuple[int | None, int, bool]:
+    """SIM-433-v2: rest state of an arm AS OF ``game_date`` from its appearance
+    timeline — so a roster pitcher who did NOT appear in this game still gets the
+    same (days_rest, pitches_last_3d, back_to_back) the appeared-pitcher workload
+    carries. Mirrors ``_compute_bullpen_workload``: pitches in the 3 calendar days
+    BEFORE the game (the current game excluded), days since the previous appearance.
+    Returns ``(None, 0, False)`` when the arm has no prior appearance (e.g. a fresh
+    call-up) — i.e. fully rested / available."""
+    if game_date is None:
+        return None, 0, False
+    prior = sorted((d, int(p)) for (d, p) in appearances if d is not None and d < game_date)
+    if not prior:
+        return None, 0, False
+    last_date = prior[-1][0]
+    days_rest = (game_date - last_date).days
+    back_to_back = days_rest == 1
+    pitches_last_3d = sum(p for (d, p) in prior if 1 <= (game_date - d).days <= 3)
+    return days_rest, int(pitches_last_3d), back_to_back
 
 
 def _load_workload_records(

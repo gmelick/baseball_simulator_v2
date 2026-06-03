@@ -29,7 +29,9 @@ from pipeline.live.bullpen_availability_ingest import (
     AvailabilityRow,
     BullpenAvailabilityIngest,
     PitcherStatus,
+    _as_date,
     _opt_int,
+    _rest_as_of,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -359,6 +361,16 @@ class TestBuildRows:
         # 643410 well-rested + active → available.
         assert by_pid[643410].available is True
         assert by_pid[643410].reason == "active"
+        # SIM-433-v2: the FULL roster is emitted, including arms that did NOT pitch.
+        # 669373 is active + absent from the workload → available-but-UNUSED (the
+        # signal v1 missed entirely).
+        assert by_pid[669373].available is True
+        assert by_pid[669373].reason == "active"
+        # 656298 is on the IL (D60) and did not pitch → unavailable.
+        assert by_pid[656298].available is False
+        assert by_pid[656298].reason == "IL"
+        # All 4 roster pitchers are emitted (v1 emitted only the 2 that pitched).
+        assert len(rows) == 4
 
     def test_arm_absent_from_roster_but_pitched_is_available(self):
         # An arm that pitched in the game (in workload) but missing from the
@@ -395,8 +407,10 @@ class TestBuildRows:
             }
         ]
         rows = ingest.build_rows(746437, workload, roster)
-        assert rows[0].available is False
-        assert rows[0].reason == "IL"
+        # v2 emits the full roster; find the IL arm by id (IL wins over the workload).
+        by_pid = {r.pitcher_id: r for r in rows}
+        assert by_pid[656298].available is False
+        assert by_pid[656298].reason == "IL"
 
     def test_nan_days_rest_becomes_none(self):
         ingest = BullpenAvailabilityIngest()
@@ -419,7 +433,11 @@ class TestIngestGame:
         ingest = _FixtureIngest()
         workload = _workload_df().to_dict("records")
         rows = ingest.ingest_game(746437, workload)
-        assert len(rows) == 2
+        by_pid = {r.pitcher_id: r for r in rows}
+        # v2: the FULL team-116 roster (4 pitchers) — incl. the unused arm 669373 —
+        # not just the 2 that pitched.
+        assert len(rows) == 4
+        assert by_pid[669373].available is True and by_pid[669373].reason == "active"
         # Persisted exactly the rows it returned.
         assert ingest.persisted == rows
         # Resolved the roster for team 116 on the game's date.
@@ -446,8 +464,10 @@ class TestIngestGame:
         ingest = _FixtureIngest()
         records = _workload_df().to_dict("records")
         total = ingest.ingest(records)
-        assert total == 2
-        assert len(ingest.persisted) == 2
+        # v2: the full team-116 roster (4 pitchers) for the single game, not just
+        # the 2 that pitched.
+        assert total == 4
+        assert len(ingest.persisted) == 4
 
     def test_ingest_per_game_failure_isolated(self):
         ingest = _FixtureIngest()
@@ -511,3 +531,69 @@ class TestOptInt:
 
     def test_garbage(self):
         assert _opt_int("not-a-number") is None
+
+
+# ===========================================================================
+# 4. SIM-433-v2 — full-roster capture + timeline rest for unused arms
+# ===========================================================================
+
+
+class TestRestAsOf:
+    def test_no_prior_appearance_is_fully_rested(self):
+        from datetime import date
+
+        assert _rest_as_of([], date(2024, 8, 15)) == (None, 0, False)
+
+    def test_back_to_back_from_timeline(self):
+        from datetime import date
+
+        # threw yesterday (35 pitches) → days_rest 1, back_to_back, 35 in last 3d.
+        tl = [(date(2024, 8, 14), 35)]
+        days_rest, p3, b2b = _rest_as_of(tl, date(2024, 8, 15))
+        assert (days_rest, p3, b2b) == (1, 35, True)
+
+    def test_three_day_window_excludes_current_and_older(self):
+        from datetime import date
+
+        tl = [
+            (date(2024, 8, 11), 20),  # 4 days before → excluded
+            (date(2024, 8, 13), 15),  # 2 days before → included
+            (date(2024, 8, 15), 99),  # the game day → excluded (< game_date only)
+        ]
+        days_rest, p3, b2b = _rest_as_of(tl, date(2024, 8, 15))
+        assert days_rest == 2  # since 08-13
+        assert p3 == 15  # only the 08-13 appearance is in the 1..3-day window
+        assert b2b is False
+
+    def test_as_date_coerces_str_and_datetime(self):
+        from datetime import date, datetime
+
+        assert _as_date("2024-08-15") == date(2024, 8, 15)
+        assert _as_date(datetime(2024, 8, 15, 17, 10)) == date(2024, 8, 15)
+        assert _as_date(date(2024, 8, 15)) == date(2024, 8, 15)
+        assert _as_date(None) is None
+
+
+class TestV2UnusedArmRest:
+    def test_unused_arm_with_recent_workload_is_rest_blocked(self):
+        # SIM-433-v2: an arm on the roster that did NOT pitch in this game but threw
+        # yesterday must be 'rest'-unavailable (from the timeline), not falsely
+        # 'active'. Without the timeline it would look available.
+        from datetime import date
+
+        ingest = BullpenAvailabilityIngest()
+        roster = {
+            116: BullpenAvailabilityIngest.parse_roster(_load_roster("mlb_roster_active_116.json"))
+        }
+        # 669373 is active + absent from the workload; give it a back-to-back timeline.
+        timeline = {669373: [(date(2024, 8, 14), 30)]}
+        rows = ingest.build_rows(
+            746437, workload=[], roster_by_team=roster, timeline=timeline, game_date=date(2024, 8, 15)
+        )
+        by_pid = {r.pitcher_id: r for r in rows}
+        assert by_pid[669373].available is False
+        assert by_pid[669373].reason == "rest"
+        assert by_pid[669373].back_to_back is True
+        # A different active arm with no timeline → fully rested / available.
+        assert by_pid[643410].available is True
+        assert by_pid[643410].reason == "active"

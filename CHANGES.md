@@ -1,3 +1,36 @@
+# Phase 7 — SIM-433-v2: capture the available-but-unused relievers (full per-game roster) — 2026-06-03
+**Authors: Data Engineer (Agent 4), Baseball Analyst (Agent 2)**
+
+The v1 ingest (`build_rows`) iterated the workload — only arms that **pitched** — so the
+table never recorded the available-but-*unused* relievers, which is the entire point of
+the SIM-433 signal (distinguish "the manager chose not to use arm X" from "X couldn't").
+v2 fixes this:
+
+- **`build_rows` now emits one row per pitcher on each team's FULL active roster** (both
+  home + away, from the schedule), not just the appeared arms. `ingest_game` fetches both
+  teams' rosters (was: only the teams in the workload).
+- **Timeline-based rest for unused arms.** A roster arm that did NOT pitch in a game still
+  needs its rest state — so an unused arm that threw yesterday is correctly `rest`-blocked,
+  not falsely `active`. New `ingest()` builds a per-pitcher `(date, pitches)` appearance
+  timeline once from the whole workload; `_rest_as_of(timeline, game_date)` derives
+  `days_rest`/`pitches_last_3d`/`back_to_back` for non-appeared arms (mirrors
+  `_compute_bullpen_workload`'s definition). Appeared arms keep their authoritative
+  per-game workload rest. New `_as_date` coerces str/datetime/Timestamp/date.
+- Rows carry `source='mlb_api'` (roster-derived) vs `'workload'` (appeared but missing
+  from the roster fetch — the v1 fallback, preserved).
+
+**Validated on 2 real 2024 games** (read-only): v2 captured 28 pitchers/game (both ~14-man
+staffs) vs v1's 7–10 appeared, surfacing **10–11 available-but-unused relievers per game**,
+with the timeline rest firing (`rest`/`recent_use` on arms that threw recently but didn't
+pitch this game). +7 v2 tests (full-roster capture, IL/unused arms, `_rest_as_of` window +
+back-to-back, `_as_date`); the 3 v1 count-assertion tests updated to the full-roster counts.
+Full SIM-433 suite green; ruff + mypy clean.
+
+**Follow-on:** the persisted table needs a **v2 re-ingest** to replace the v1 (appeared-only)
+rows with the full-roster data (idempotent UPSERT; the v2 re-run augments — adds the unused
+arms + updates the appeared ones). The downstream USAGE refinement (normalising manager
+bullpen usage by the now-captured availability) is the SIM-427 follow-on.
+
 # Phase 7 — SIM-427/433: un-gate manager USAGE + apply migration 0015 + kick off bullpen ingest — 2026-06-03
 **Authors: Data Engineer (Agent 4), Baseball Analyst (Agent 2), ML/Modeling Engineer (Agent 3)**
 
