@@ -179,21 +179,21 @@ class TestFielderRbfNudge:
     def test_better_live_fielder_turns_single_into_out(self):
         sm = _sm("_fielder_rbf", rng_v=0.0)
         fp = _FakeFielderFP(drawn=(6, 555), quality={555: -5.0, 666: 10.0})
-        state = self._state({6: 666})
+        state = self._state({"SS": 666})  # drawn pos 6 -> 'SS'
         ev, rh, is_err, fid = sm._fielder_rbf_nudge(state, fp, "single", 1, _SEASON)
         assert (ev, rh, is_err, fid) == ("field_out", 0, False, 666)
 
     def test_worse_live_fielder_turns_out_into_single(self):
         sm = _sm("_fielder_rbf", rng_v=0.0)
         fp = _FakeFielderFP(drawn=(6, 666), quality={555: -5.0, 666: 10.0})
-        state = self._state({6: 555})
+        state = self._state({"SS": 555})  # drawn pos 6 -> 'SS'
         ev, rh, is_err, fid = sm._fielder_rbf_nudge(state, fp, "field_out", 0, _SEASON)
         assert (ev, rh, is_err, fid) == ("single", 1, False, 555)
 
     def test_no_flip_when_rng_above_probability(self):
         sm = _sm("_fielder_rbf", rng_v=0.99)
         fp = _FakeFielderFP(drawn=(6, 555), quality={555: -5.0, 666: 10.0})
-        state = self._state({6: 666})
+        state = self._state({"SS": 666})  # drawn pos 6 -> 'SS'
         ev, rh, _e, fid = sm._fielder_rbf_nudge(state, fp, "single", 1, _SEASON)
         assert (ev, rh, fid) == ("single", 1, 666)  # attributed, not flipped
 
@@ -206,7 +206,7 @@ class TestFielderRbfNudge:
     def test_neutral_when_quality_unknown(self):
         sm = _sm("_fielder_rbf", rng_v=0.0)
         fp = _FakeFielderFP(drawn=(6, 555), quality={})  # no OAA for anyone
-        state = self._state({6: 666})
+        state = self._state({"SS": 666})  # drawn pos 6 -> 'SS'
         ev, rh, _e, fid = sm._fielder_rbf_nudge(state, fp, "single", 1, _SEASON)
         assert (ev, rh, fid) == ("single", 1, 666)
 

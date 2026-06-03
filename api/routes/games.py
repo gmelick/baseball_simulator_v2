@@ -516,9 +516,56 @@ def _sim_kwargs_from_state(state: Any) -> dict[str, Any]:
         # SIM-428: catchers for the framing nudge.
         "home_catcher_id": getattr(state, "home_catcher_id", None),
         "away_catcher_id": getattr(state, "away_catcher_id", None),
+        # SIM-425b: per-position defense maps for the fielder-RBF nudge
+        # (SIM_FIELDER_RBF). SIM-411: the venue run park-factor for the park nudge
+        # (SIM_PARK_FACTOR) — resolved onto the state by the endpoint when a sim
+        # DuckDB is available; defaults to 1.0 (neutral) otherwise. Both are no-ops
+        # with their gate off, so passing them is always safe.
+        "home_defense": dict(getattr(state, "home_defense", {}) or {}),
+        "away_defense": dict(getattr(state, "away_defense", {}) or {}),
+        "park_run_factor": float(getattr(state, "park_run_factor", 1.0) or 1.0),
         "k": int(getattr(state, "k", 25) or 25) if hasattr(state, "k") else 25,
         "max_innings": 12,
     }
+
+
+async def _resolve_park_run_factor(pool: Any, con: Any, game_pk: int, season: int) -> float:
+    """SIM-411: resolve the venue run park-factor for a game (~1.0 = neutral).
+
+    The venue lives in Postgres (``raw.games.venue_id``) and the factor in DuckDB
+    (``derived.park_factors``), so this is a two-source lookup: fetch the game's
+    venue from ``pool``, then its regressed run factor (``factor_type='R'``) for the
+    season from ``con`` (``app.state.sim_duckdb``). Returns ``1.0`` on ANY missing
+    piece (no DuckDB wired, unknown venue, no park-factor row, or a query error) so
+    the park nudge simply stays neutral and ``/simulate`` is never broken by it."""
+    if con is None:
+        return 1.0
+    try:
+        acquire = getattr(pool, "acquire", None)
+        if acquire is not None:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT venue_id FROM raw.games WHERE game_pk = $1", int(game_pk)
+                )
+        else:
+            row = await pool.fetchrow(
+                "SELECT venue_id FROM raw.games WHERE game_pk = $1", int(game_pk)
+            )
+        venue_id = None if row is None else row["venue_id"]
+        if venue_id is None:
+            return 1.0
+        res = con.execute(
+            "SELECT regressed_factor FROM derived.park_factors "
+            "WHERE venue_id = ? AND season = ? AND factor_type = 'R'",
+            [int(venue_id), int(season)],
+        ).fetchone()
+        if not res or res[0] is None:
+            return 1.0
+        f = float(res[0])
+        # Guard against a degenerate/garbage factor; clamp to a sane park range.
+        return f if 0.5 <= f <= 2.0 else 1.0
+    except Exception:
+        return 1.0
 
 
 def _apply_override(base_kwargs: dict[str, Any], override: RosterOverride) -> dict[str, Any]:
@@ -1270,6 +1317,11 @@ async def simulate_game_endpoint(
 ) -> SimulateResponse:
     pool = _get_pool(request)
     state = await _resolve_state_or_error(pool, game_pk)
+    # SIM-411: resolve the venue park-factor onto the state so _sim_kwargs_from_state
+    # carries it (no-op when SIM_PARK_FACTOR is off or no factor is found -> 1.0).
+    state.park_run_factor = await _resolve_park_run_factor(
+        pool, _get_sim_duckdb(request), int(game_pk), int(getattr(state, "season", 2024) or 2024)
+    )
 
     factory_ref = resolve_factory_ref(request)
     spec = GameSpec(
@@ -1336,6 +1388,10 @@ async def simulate_with_override_endpoint(
 ) -> WithOverrideResponse:
     pool = _get_pool(request)
     state = await _resolve_state_or_error(pool, game_pk)
+    # SIM-411: park-factor onto the state (shared by baseline + override kwargs).
+    state.park_run_factor = await _resolve_park_run_factor(
+        pool, _get_sim_duckdb(request), int(game_pk), int(getattr(state, "season", 2024) or 2024)
+    )
 
     factory_ref = resolve_factory_ref(request)
     runner = _build_runner(request)

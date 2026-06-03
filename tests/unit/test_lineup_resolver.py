@@ -398,6 +398,18 @@ class TestBuildGameState:
         state = build_game_state(self._resolved(), half=Half.TOP, seed=42)
         assert state.seed == 42
 
+    def test_defense_maps_populated_by_position_name(self):
+        # SIM-425b: build_game_state fills the per-team defense map (canonical
+        # position name -> player_id) from the same resolution that yields the
+        # catcher, so the fielder-RBF nudge has the live defenders.
+        state = build_game_state(self._resolved(), half=Half.TOP)
+        assert state.home_defense and state.away_defense
+        # The catcher field mirrors the map's 'C' slot (consistency).
+        assert state.home_catcher_id == state.home_defense.get("C")
+        assert state.away_catcher_id == state.away_defense.get("C")
+        # The pitcher always owns 'P'; in the top the home team is in the field.
+        assert state.home_defense.get("P") == state.pitcher_id
+
     def test_substitution_shows_in_built_lineup(self):
         rows = _starting_rows()
         rows.append(

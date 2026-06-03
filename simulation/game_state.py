@@ -257,13 +257,14 @@ class GameState:
     # can apply the fielding catcher's framing to the ball/called-strike draw.
     home_catcher_id: int | None = None
     away_catcher_id: int | None = None
-    # SIM-425b: each team's per-position defense map, ``{position(1-9): player_id}``,
-    # so the batted-ball resolver can nudge out/hit/error by the CURRENT defender's
-    # quality at the position the drawn pool ball was fielded at. Empty by default ->
-    # the fielder-RBF consumer falls back to neutral (no nudge), so the count-machine
-    # / no-defense path is unchanged.
-    home_defense: dict[int, int] = field(default_factory=dict)
-    away_defense: dict[int, int] = field(default_factory=dict)
+    # SIM-425b: each team's per-position defense map, ``{position-name: player_id}``,
+    # keyed by the canonical slot name ('P','C','1B'..'RF' — the build_team_defense_map
+    # / DEFENSE_POSITIONS / fielder-embedding vocabulary), so the batted-ball resolver
+    # can nudge out/hit by the CURRENT defender's quality at the position the drawn
+    # pool ball was fielded at. Empty by default -> the fielder-RBF consumer falls back
+    # to neutral, so the count-machine / no-defense path is unchanged.
+    home_defense: dict[str, int] = field(default_factory=dict)
+    away_defense: dict[str, int] = field(default_factory=dict)
 
     # ---- current matchup ids (spec step 2 matchup) --------------------------
     batter_id: int | None = None  # current batter; None until lineup set

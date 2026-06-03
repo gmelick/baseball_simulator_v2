@@ -1,3 +1,38 @@
+# Phase 7 — SIM-411/425b: production API wiring (defense map + park factor) — 2026-06-03
+**Authors: Backend Developer (Agent 5), Data Engineer (Agent 4)**
+
+Threads the two realism inputs the gated consumers need into the production
+`/simulate` path (SIM-413 needed nothing here — it uses `state.throw_hand`, already
+wired). Both remain no-ops with their gate off / data absent.
+
+- **SIM-425b defense map.** `lineup_resolver.build_game_state` now fills
+  `GameState.home_defense`/`away_defense` (canonical position name → player_id) from
+  the same `build_team_defense_map` resolution that already yields the catcher — so
+  the fielder-RBF nudge sees the live defenders. The maps are switched to NAME keys
+  ('P','C','1B'..'RF' — the `DEFENSE_POSITIONS`/fielder-embedding vocabulary) so the
+  resolver assigns the map verbatim and the consumer uses one position-name lookup.
+  `_sim_kwargs_from_state` passes both through.
+- **SIM-411 park factor.** New `_resolve_park_run_factor(pool, con, game_pk, season)`
+  does the two-source lookup — venue from Postgres `raw.games`, the regressed
+  `factor_type='R'` factor from DuckDB `derived.park_factors` — clamped to a sane
+  [0.5, 2.0] park range and defaulting to **1.0 on any missing piece** (no DuckDB, an
+  unknown venue, no row, a query error), so it can never break `/simulate`. The
+  `/simulate` + `/simulate/with_override` endpoints set `state.park_run_factor` from
+  it, and `_sim_kwargs_from_state` carries it.
+
++18 tests (`test_api_realism_wiring_sim411_425b` + a build_game_state defense-map
+case); existing api/lineup/sim suites green; ruff clean; the changed files are
+mypy-clean (the 2 mypy errors under the CI scope — `etl_historical_loader` missing
+`requests` stubs + the SIM-434 `production_factory` `bullpen` attr — are pre-existing
+and untouched here).
+
+**Still required to ACTIVATE in production:** the cheap outcome-pool + engine-artifact
+rebuild (so the BB artifact carries `p_throws`/`venue_id`/`fielded_by_position`/
+`fielder_player_id` and the multi-position fielder embedding), then turn each
+`SIM_BB_PLATOON`/`SIM_FIELDER_RBF`/`SIM_PARK_FACTOR` flag on and run the ≥400-sim/game
+calibration sweep (tune `platoon_off_weight` / `_FIELDER_RBF_*` / `_PARK_FACTOR_*`) +
+regen the regression golden fixtures.
+
 # Phase 7 — SIM-411/413/425b: realism consumers wired (gated OFF) — 2026-06-03
 **Authors: Baseball Analyst (Agent 2), ML / Modeling Engineer (Agent 3), Backend Developer (Agent 5)**
 

@@ -1435,8 +1435,9 @@ class StateMachine:
         pos_str = _POS_NUM_TO_STR.get(int(pos_num))
         if pos_str is None:
             return ev, rh, False, None
+        # The defense map is keyed by the canonical position NAME (build_team_defense_map).
         defense = state.home_defense if state.defense == Team.HOME else state.away_defense
-        cur_fid = defense.get(int(pos_num)) if defense else None
+        cur_fid = defense.get(pos_str) if defense else None
         if not cur_fid:
             return ev, rh, False, None
         q_cur = fp.fielder_quality(int(cur_fid), pos_str, season)
@@ -3620,8 +3621,8 @@ def simulate_game(
     away_pitcher_id: int | None = None,
     home_catcher_id: int | None = None,
     away_catcher_id: int | None = None,
-    home_defense: dict[int, int] | None = None,
-    away_defense: dict[int, int] | None = None,
+    home_defense: dict[str, int] | None = None,
+    away_defense: dict[str, int] | None = None,
     park_run_factor: float = 1.0,
     manager=None,
     bench=None,
