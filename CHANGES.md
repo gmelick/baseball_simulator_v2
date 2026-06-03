@@ -1,3 +1,39 @@
+# Phase 7 — SIM-427/433: un-gate manager USAGE + apply migration 0015 + kick off bullpen ingest — 2026-06-03
+**Authors: Data Engineer (Agent 4), Baseball Analyst (Agent 2), ML/Modeling Engineer (Agent 3)**
+
+Made the manager USAGE path buildable and populated it with real values.
+
+- **Migration 0015 applied** (`alembic upgrade head`, 0014→0015): `raw.game_bullpen_availability`
+  now exists in Postgres (it had never been applied — SIM-433 was code-complete only).
+- **SIM-427: un-gated `_compute_manager_profiles`.** The 6 USAGE columns were hard-coded
+  `NULL::FLOAT` (gated). They now derive from `raw.pitches` pitcher-**stints** attributed to the
+  FIELDING manager (new `staff`/`staff_ranked`/`game_usage`/`mgr_usage`/`hi_lev` CTEs):
+  `starter_avg_pitch_count`, `starter_pull_pct_before_100`, `opener_usage_rate` (starter ≤2 IP),
+  `bulk_innings_rate` (a reliever ≥3 IP), `closer_entry_leverage_index` (last reliever's entry
+  leverage), `high_leverage_reliever_rate` (high-LI fielding pitches thrown by a non-starter).
+  **Validated read-only against real 2024 data** (33 managers, all populated): starter pitch
+  count avg 84.9 (74–91), pull-before-100 0.88, opener avg 0.044 / max 0.207 (isolates
+  opener-heavy staffs), bulk 0.16, closer-entry-LI 0.91, high-lev-reliever 0.93 (0.74–1.0) —
+  all baseball-realistic with meaningful between-manager spread. +1 source-guard test
+  (`test_manager_usage_ungate_sim427.py`) against silent re-gating; ruff + mypy clean.
+- **SIM-433 ingest kicked off** for 2024 (running in the background; idempotent UPSERT). Run with
+  `--duckdb :memory:` so the workload query (which reads only `pg.raw.pitches`) needs no `/data`
+  DuckDB file and doesn't contend with the app workers' lock.
+
+**Findings / operational notes (important):**
+- **The SIM-433 ingest captures appeared-pitcher availability only** — `build_rows` iterates the
+  workload (pitchers who *pitched*), so the table does NOT yet record the available-but-*unused*
+  relievers (the core SIM-433 signal). A SIM-433-v2 follow-on must iterate the full per-game roster.
+  Consequently the un-gated USAGE metrics derive from `raw.pitches` usage alone and do **not** depend
+  on this table; the availability data would only *refine* them later.
+- **Production population of the USAGE columns** (running `_compute_manager_profiles` to write
+  `derived.manager_season_metrics`) needs **exclusive DuckDB write access** — the app's pre-warmed
+  SIM-runner workers hold an intermittent read lock on `/data/baseball_sim.duckdb`, so the write must
+  run with the app stopped (the standard nightly-profile-computor pattern). The un-gating CODE is in
+  place + validated; the all-seasons write + an app restart is the deploy step.
+- The manager USAGE columns feed the manager *similarity* engine (SIM-427), consulted only under
+  `SIM_MANAGER` (default OFF) — so populating them does not change default sims.
+
 # Phase 7 — SIM-411/413/425b: data run + validation + defense-map fix + SIM_FRAMING gate — 2026-06-03
 **Authors: Data Engineer (Agent 4), ML/Modeling Engineer (Agent 3), Backend Developer (Agent 5), QA/DevOps (Agent 9)**
 

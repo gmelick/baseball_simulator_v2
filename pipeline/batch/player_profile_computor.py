@@ -2540,12 +2540,19 @@ class PlayerProfileComputor:
 
         Offensive decisions (pinch-hit, steal order, sac bunt, squeeze, platoon
         exploitation) are attributed to the BATTING manager; defensive ones
-        (defensive sub) to the FIELDING manager.  The USAGE sub-score
-        (starter-pull timing, closer/reliever roles) is GATED on the SIM-427
-        bullpen-roster build and emitted NULL until that lands; two further
-        tendencies are not flagged in Statcast (hit-and-run, double-switch) and
-        are likewise NULL.  Idempotent via INSERT OR REPLACE on
-        (manager_id, season).
+        (defensive sub) to the FIELDING manager.  The USAGE sub-score (SIM-427:
+        starter pitch-count / quick-hook, opener + bulk usage, closer-entry
+        leverage, high-leverage bullpen reliance) is derived from raw.pitches
+        pitcher-STINTS attributed to the fielding manager (see the ``staff`` /
+        ``game_usage`` / ``mgr_usage`` / ``hi_lev`` CTEs); two further tendencies
+        are not flagged in Statcast (hit-and-run, double-switch) and stay NULL.
+        Idempotent via INSERT OR REPLACE on (manager_id, season).
+
+        NOTE: the SIM-433 ``raw.game_bullpen_availability`` available-but-unused
+        signal would refine these once it records the full per-game roster (it
+        currently captures only arms that appeared) — a SIM-433-v2 follow-on. The
+        metrics here stand on observed usage alone and need no network / no
+        availability table.
         """
         log.info("Computing manager profiles …")
         season_list = ", ".join(str(s) for s in seasons)
@@ -2641,19 +2648,113 @@ class PlayerProfileComputor:
                     SELECT fld_mgr AS manager_id, season, game_pk FROM p WHERE fld_mgr IS NOT NULL
                 )
                 GROUP BY manager_id, season
+            ),
+            -- ============================================================
+            -- SIM-427: USAGE sub-score — bullpen-management tendencies derived
+            -- from raw.pitches pitcher-STINTS, attributed to the FIELDING manager
+            -- (home manager fields the Top half, away the Bottom). One stint row
+            -- per (game, fielding-manager, pitcher): pitch count, innings, the
+            -- in-game entry order, and the leverage bucket at the FIRST pitch.
+            -- (The SIM-433 raw.game_bullpen_availability "available-but-unused"
+            -- signal would refine these once it captures the full roster, not just
+            -- appeared arms — a SIM-433-v2 follow-on; the metrics below stand on
+            -- actual usage alone.)
+            -- ============================================================
+            staff AS (
+                SELECT
+                    game_pk, season,
+                    CASE WHEN inning_topbot = 'Top' THEN home_manager_id
+                         ELSE away_manager_id END                     AS manager_id,
+                    pitcher,
+                    COUNT(*)                                          AS n_pitches,
+                    COUNT(DISTINCT inning)                            AS n_innings,
+                    MIN(at_bat_number * 1000 + pitch_number)          AS entry_seq,
+                    -- leverage bucket (low=0 / mid=1 / high=2) at this arm's FIRST pitch
+                    arg_min(
+                        CASE WHEN ABS(bat_score - fld_score) <= 1 AND inning >= 7 THEN 2
+                             WHEN ABS(bat_score - fld_score) >= 4 OR inning <= 5 THEN 0
+                             ELSE 1 END,
+                        at_bat_number * 1000 + pitch_number
+                    )                                                 AS entry_li
+                FROM pg.raw.pitches
+                WHERE data_quality_flag = FALSE
+                  AND season IN ({season_list})
+                  AND (CASE WHEN inning_topbot = 'Top' THEN home_manager_id
+                            ELSE away_manager_id END) IS NOT NULL
+                GROUP BY game_pk, season,
+                         CASE WHEN inning_topbot = 'Top' THEN home_manager_id
+                              ELSE away_manager_id END,
+                         pitcher
+            ),
+            staff_ranked AS (
+                SELECT *,
+                    ROW_NUMBER() OVER (PARTITION BY game_pk, manager_id ORDER BY entry_seq) AS arm_rank,
+                    MAX(entry_seq) OVER (PARTITION BY game_pk, manager_id)                  AS last_entry_seq
+                FROM staff
+            ),
+            -- per-(game, fielding-manager) usage facts (starter = first arm)
+            game_usage AS (
+                SELECT game_pk, manager_id, season,
+                    MAX(CASE WHEN arm_rank = 1 THEN n_pitches END)                   AS starter_pitches,
+                    MAX(CASE WHEN arm_rank = 1 THEN n_innings END)                   AS starter_innings,
+                    -- a non-starter throwing >= 3 innings (bulk / long-man)
+                    MAX(CASE WHEN arm_rank > 1 AND n_innings >= 3 THEN 1 ELSE 0 END) AS has_bulk,
+                    -- entry leverage of the LAST reliever to enter (the closing arm;
+                    -- NULL on a complete game so the starter isn't miscounted)
+                    MAX(CASE WHEN entry_seq = last_entry_seq AND arm_rank > 1
+                             THEN entry_li END)                                      AS closer_entry_li
+                FROM staff_ranked
+                GROUP BY game_pk, manager_id, season
+            ),
+            mgr_usage AS (
+                SELECT manager_id, season,
+                    AVG(starter_pitches * 1.0)                                  AS starter_avg_pitch_count,
+                    AVG(CASE WHEN starter_pitches < 100 THEN 1.0 ELSE 0.0 END)  AS starter_pull_pct_before_100,
+                    AVG(CASE WHEN starter_innings <= 2 THEN 1.0 ELSE 0.0 END)   AS opener_usage_rate,
+                    AVG(has_bulk * 1.0)                                         AS bulk_innings_rate,
+                    AVG(closer_entry_li * 1.0)                                  AS closer_entry_leverage_index
+                FROM game_usage
+                GROUP BY manager_id, season
+            ),
+            -- high-leverage bullpen reliance: of the manager's high-LI fielding
+            -- pitches, the fraction thrown by a non-starter (a quick-to-the-pen hook).
+            hi_lev AS (
+                SELECT sp.manager_id, sp.season,
+                    SUM(CASE WHEN sp.li_bucket = 'high' AND sr.arm_rank > 1 THEN 1 ELSE 0 END) * 1.0
+                        / NULLIF(SUM(CASE WHEN sp.li_bucket = 'high' THEN 1 ELSE 0 END), 0)
+                                                                                AS high_leverage_reliever_rate
+                FROM (
+                    SELECT game_pk, season, pitcher,
+                        CASE WHEN inning_topbot = 'Top' THEN home_manager_id
+                             ELSE away_manager_id END AS manager_id,
+                        CASE WHEN ABS(bat_score - fld_score) <= 1 AND inning >= 7 THEN 'high'
+                             WHEN ABS(bat_score - fld_score) >= 4 OR inning <= 5 THEN 'low'
+                             ELSE 'mid' END            AS li_bucket
+                    FROM pg.raw.pitches
+                    WHERE data_quality_flag = FALSE
+                      AND season IN ({season_list})
+                      AND (CASE WHEN inning_topbot = 'Top' THEN home_manager_id
+                                ELSE away_manager_id END) IS NOT NULL
+                ) sp
+                JOIN staff_ranked sr
+                  ON sr.game_pk = sp.game_pk AND sr.manager_id = sp.manager_id
+                 AND sr.pitcher = sp.pitcher
+                GROUP BY sp.manager_id, sp.season
             )
             SELECT
                 g.manager_id,
                 g.season,
                 g.sample_games,
-                g.sample_games                                                AS sample_starter_decisions,  -- proxy (~1 SP pull/game); SIM-427 refines
-                -- Usage (6) — GATED on the SIM-427 bullpen-roster build
-                NULL::FLOAT AS starter_avg_pitch_count,
-                NULL::FLOAT AS starter_pull_pct_before_100,
-                NULL::FLOAT AS closer_entry_leverage_index,
-                NULL::FLOAT AS high_leverage_reliever_rate,
-                NULL::FLOAT AS opener_usage_rate,
-                NULL::FLOAT AS bulk_innings_rate,
+                g.sample_games                                                AS sample_starter_decisions,  -- proxy (~1 SP pull/game)
+                -- Usage (6) — SIM-427: derived from raw.pitches pitcher-stints
+                -- (fielding-manager attribution). NULL only when a manager has no
+                -- qualifying fielding games / reliever entries in the window.
+                u.starter_avg_pitch_count,
+                u.starter_pull_pct_before_100,
+                u.closer_entry_leverage_index,
+                h.high_leverage_reliever_rate,
+                u.opener_usage_rate,
+                u.bulk_innings_rate,
                 -- Aggression (5)
                 s.n_steal_orders * 1.0 / NULLIF(b.opp_1b, 0)                  AS steal_order_rate_per_1b_opp,
                 NULL::FLOAT                                                   AS hit_and_run_rate_per_opportunity,  -- not flagged in Statcast
@@ -2671,6 +2772,8 @@ class PlayerProfileComputor:
             LEFT JOIN bat_agg b   ON b.manager_id = g.manager_id AND b.season = g.season
             LEFT JOIN steal_agg s ON s.manager_id = g.manager_id AND s.season = g.season
             LEFT JOIN fld_agg f   ON f.manager_id = g.manager_id AND f.season = g.season
+            LEFT JOIN mgr_usage u ON u.manager_id = g.manager_id AND u.season = g.season
+            LEFT JOIN hi_lev h    ON h.manager_id = g.manager_id AND h.season = g.season
         """)
         log.info("  Manager profiles done.")
 
