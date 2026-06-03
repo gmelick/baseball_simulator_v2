@@ -491,9 +491,16 @@ def build_team_defense_map(team: TeamLineup) -> dict[str, int]:
     # collision resolves to the higher-sequence (current) occupant.
     best: dict[str, tuple[int, int]] = {}
     for slot in team.slots:
-        name = POSITION_CODE_TO_NAME.get(str(slot.position_code))
+        code = str(slot.position_code)
+        # raw.game_lineups stores position_code as the canonical NAME ('SS','C',
+        # '1B'..) — accept it directly. Also map a numeric scorebook code ('1'..'9')
+        # for any legacy/alternate source. 'DH' / pinch role / anything else has no
+        # fielding slot -> skipped. (Before this, the name-format real data fell
+        # through POSITION_CODE_TO_NAME — which is keyed by NUMBER — so only the
+        # explicitly-added pitcher survived: the catcher + the 7 other fielders were
+        # silently dropped, leaving SIM-428 framing + SIM-425b fielder-RBF inert.)
+        name = code if code in DEFENSE_POSITION_NAMES else POSITION_CODE_TO_NAME.get(code)
         if name is None:
-            # DH / pinch role / anything not a 1..9 fielding code: no glove slot.
             continue
         cur = best.get(name)
         if cur is None or slot.sequence > cur[0]:

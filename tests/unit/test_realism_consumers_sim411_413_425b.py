@@ -140,7 +140,7 @@ class TestFielderAccessors:
         fp = FullPoolSampler(_fielder_artifacts(), np.random.default_rng(0))
         fp.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32))
         fp.battedball_draw()
-        assert fp.last_battedball_fielder() == (6, 555)
+        assert fp.last_battedball_fielder() == (6, 555, _SEASON)  # (pos, fid, pool season)
 
     def test_fielder_quality_reads_oaa_by_position_key(self):
         fp = FullPoolSampler(_fielder_artifacts(), np.random.default_rng(0))
@@ -178,34 +178,34 @@ class TestFielderRbfNudge:
 
     def test_better_live_fielder_turns_single_into_out(self):
         sm = _sm("_fielder_rbf", rng_v=0.0)
-        fp = _FakeFielderFP(drawn=(6, 555), quality={555: -5.0, 666: 10.0})
+        fp = _FakeFielderFP(drawn=(6, 555, _SEASON), quality={555: -5.0, 666: 10.0})
         state = self._state({"SS": 666})  # drawn pos 6 -> 'SS'
         ev, rh, is_err, fid = sm._fielder_rbf_nudge(state, fp, "single", 1, _SEASON)
         assert (ev, rh, is_err, fid) == ("field_out", 0, False, 666)
 
     def test_worse_live_fielder_turns_out_into_single(self):
         sm = _sm("_fielder_rbf", rng_v=0.0)
-        fp = _FakeFielderFP(drawn=(6, 666), quality={555: -5.0, 666: 10.0})
+        fp = _FakeFielderFP(drawn=(6, 666, _SEASON), quality={555: -5.0, 666: 10.0})
         state = self._state({"SS": 555})  # drawn pos 6 -> 'SS'
         ev, rh, is_err, fid = sm._fielder_rbf_nudge(state, fp, "field_out", 0, _SEASON)
         assert (ev, rh, is_err, fid) == ("single", 1, False, 555)
 
     def test_no_flip_when_rng_above_probability(self):
         sm = _sm("_fielder_rbf", rng_v=0.99)
-        fp = _FakeFielderFP(drawn=(6, 555), quality={555: -5.0, 666: 10.0})
+        fp = _FakeFielderFP(drawn=(6, 555, _SEASON), quality={555: -5.0, 666: 10.0})
         state = self._state({"SS": 666})  # drawn pos 6 -> 'SS'
         ev, rh, _e, fid = sm._fielder_rbf_nudge(state, fp, "single", 1, _SEASON)
         assert (ev, rh, fid) == ("single", 1, 666)  # attributed, not flipped
 
     def test_neutral_without_defense_map(self):
         sm = _sm("_fielder_rbf", rng_v=0.0)
-        fp = _FakeFielderFP(drawn=(6, 555), quality={555: -5.0, 666: 10.0})
+        fp = _FakeFielderFP(drawn=(6, 555, _SEASON), quality={555: -5.0, 666: 10.0})
         state = self._state({})  # no defender at the position
         assert sm._fielder_rbf_nudge(state, fp, "single", 1, _SEASON) == ("single", 1, False, None)
 
     def test_neutral_when_quality_unknown(self):
         sm = _sm("_fielder_rbf", rng_v=0.0)
-        fp = _FakeFielderFP(drawn=(6, 555), quality={})  # no OAA for anyone
+        fp = _FakeFielderFP(drawn=(6, 555, _SEASON), quality={})  # no OAA for anyone
         state = self._state({"SS": 666})  # drawn pos 6 -> 'SS'
         ev, rh, _e, fid = sm._fielder_rbf_nudge(state, fp, "single", 1, _SEASON)
         assert (ev, rh, fid) == ("single", 1, 666)
@@ -253,6 +253,44 @@ class TestParkFactor:
         sm = _sm("_park_factor", rng_v=0.99)
         sig = _out_sig()
         assert sm._apply_park_factor(self._state(1.2), sig) is sig
+
+
+# ===========================================================================
+# SIM-428 — the framing gate (SIM_FRAMING). Framing is ON by default but the
+# defense-map fix activates it in production (catcher now resolves), so it gains
+# an explicit, auditable off switch for byte-identical / reproducibility mode.
+# ===========================================================================
+
+
+class _FakeFramingFP:
+    """A sampler whose catcher framing strongly steals strikes (delta 1.0)."""
+
+    def catcher_framing(self, catcher_key: str) -> float:
+        return 1.0
+
+
+class TestFramingGate:
+    def _state(self):
+        # half=TOP => offense AWAY => _apply_framing reads home_catcher_id.
+        return GameState(
+            pitcher_id=1, bat_hand="R", season=_SEASON, half=Half.TOP, home_catcher_id=900
+        )
+
+    def test_framing_on_by_default(self):
+        assert StateMachine()._framing is True
+
+    def test_framing_on_flips_ball_to_called_strike(self):
+        sm = StateMachine(full_pool_sampler=_FakeFramingFP())
+        sm._framing = True
+        sm.rng = _FixedRNG(0.0)  # type: ignore[assignment]
+        assert sm._apply_framing(self._state(), "ball") == "called_strike"
+
+    def test_framing_gate_off_is_noop(self):
+        # SIM_FRAMING=0 short-circuits before any framing/rng draw.
+        sm = StateMachine(full_pool_sampler=_FakeFramingFP())
+        sm._framing = False
+        sm.rng = _FixedRNG(0.0)  # type: ignore[assignment]
+        assert sm._apply_framing(self._state(), "ball") == "ball"
 
 
 if __name__ == "__main__":  # pragma: no cover

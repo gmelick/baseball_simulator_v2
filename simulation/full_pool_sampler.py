@@ -350,10 +350,15 @@ class FullPoolSampler:
             float(pool.geom[i, 1]),
         )
 
-    def last_battedball_fielder(self) -> tuple[int, int] | None:
-        """SIM-425b: ``(fielded_by_position, fielder_player_id)`` of the row the
-        last :meth:`battedball_draw` returned, or None when the pool lacks the
-        fielder columns (a legacy bundle) or no draw has happened."""
+    def last_battedball_fielder(self) -> tuple[int, int, int] | None:
+        """SIM-425b: ``(fielded_by_position, fielder_player_id, season)`` of the row
+        the last :meth:`battedball_draw` returned, or None when the pool lacks the
+        fielder columns (a legacy bundle) or no draw has happened.
+
+        The ``season`` is the pool ROW's own season, so the caller scores that
+        fielder by their CONTEMPORANEOUS OAA — not the game season, which would drop
+        any pool fielder lacking a game-season row (a survivorship filter that biases
+        the live-vs-pool comparison)."""
         i = self._bb_last_i
         if i is None or self._bb_hand is None:
             return None
@@ -361,7 +366,7 @@ class FullPoolSampler:
         pos, fid = getattr(pool, "fielder_pos", None), getattr(pool, "fielder_id", None)
         if pos is None or fid is None:
             return None
-        return (int(pos[i]), int(fid[i]))
+        return (int(pos[i]), int(fid[i]), int(pool.season[i]))
 
     def fielder_quality(self, fielder_id: int, position: str, season: int) -> float | None:
         """SIM-425b: the fielder's outs-above-average (per the fielder embedding,

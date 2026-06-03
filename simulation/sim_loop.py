@@ -967,6 +967,14 @@ class StateMachine:
         self._bb_platoon = _env_flag("SIM_BB_PLATOON")  # SIM-413
         self._fielder_rbf = _env_flag("SIM_FIELDER_RBF")  # SIM-425b
         self._park_factor = _env_flag("SIM_PARK_FACTOR")  # SIM-411
+        # SIM-428 catcher framing is ON by default — it was always meant to be live
+        # (the SIM-363/425b defense-map fix is what finally lets the catcher resolve
+        # in production; before, the catcher was None so framing was silently inert).
+        # It is NOT one of the three default-OFF realism nudges: framing is
+        # aggregate-neutral. SIM_FRAMING=0 restores the pre-fix catcher-inert path
+        # (no per-taken-pitch rng draw) for a strict byte-identical-to-prior-prod /
+        # seeded-reproducibility mode.
+        self._framing = _env_flag("SIM_FRAMING", default=True)  # SIM-428
         # The single-pitch helper owns the (SIM-317 real / stub) fingerprint +
         # sampler call.  When no sampler is supplied the machine is "count-machine
         # only": the caller passes a pitch_outcome directly into step_pitch (the
@@ -1331,7 +1339,12 @@ class StateMachine:
         catcher's centred framing delta — a good framer steals a strike, a poor one
         loses one.  Swings (foul / swinging_strike / in_play) are never frameable.
         Aggregate-neutral across the league (the delta is ~centred); the effect is
-        per-catcher differentiation.  No-op when no catcher / framing signal."""
+        per-catcher differentiation.  No-op when no catcher / framing signal.
+
+        SIM_FRAMING=0 disables it entirely (no rng draw) — the pre-fix
+        catcher-inert path, for a strict reproducibility / byte-identical mode."""
+        if not self._framing:
+            return outcome
         if outcome not in ("ball", "called_strike"):
             return outcome
         fp = self.full_pool_sampler
@@ -1431,7 +1444,7 @@ class StateMachine:
         f = fp.last_battedball_fielder()
         if f is None:
             return ev, rh, False, None
-        pos_num, pool_fid = f
+        pos_num, pool_fid, pool_season = f
         pos_str = _POS_NUM_TO_STR.get(int(pos_num))
         if pos_str is None:
             return ev, rh, False, None
@@ -1440,8 +1453,12 @@ class StateMachine:
         cur_fid = defense.get(pos_str) if defense else None
         if not cur_fid:
             return ev, rh, False, None
+        # The live defender is scored at the GAME season; the pool play's fielder at
+        # the POOL ROW's OWN season (so a pool fielder isn't dropped for lacking a
+        # game-season row — that filter biased the comparison toward marginal/low-OAA
+        # players being excluded, tilting nudges toward more hits).
         q_cur = fp.fielder_quality(int(cur_fid), pos_str, season)
-        q_pool = fp.fielder_quality(int(pool_fid), pos_str, season)
+        q_pool = fp.fielder_quality(int(pool_fid), pos_str, pool_season)
         if q_cur is None or q_pool is None:
             return ev, rh, False, int(cur_fid)
         # delta > 0 == the live defender is better than the pool play's fielder.

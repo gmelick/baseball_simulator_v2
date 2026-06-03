@@ -1,3 +1,51 @@
+# Phase 7 — SIM-411/413/425b: data run + validation + defense-map fix + SIM_FRAMING gate — 2026-06-03
+**Authors: Data Engineer (Agent 4), ML/Modeling Engineer (Agent 3), Backend Developer (Agent 5), QA/DevOps (Agent 9)**
+
+Activated the realism plumbing end-to-end and validated it. Full record:
+`docs/audit/2026-06-03-sim411-413-425b-validation.md`.
+
+**Data run (live, verified):** migration 0012 applied; `sim.outcome_pool` rebuilt for 2024/2025/2026
+(per-season aggregates byte-identical → no column shift; `venue_id` 100% / `fielder_player_id` ~95%);
+engine artifacts rebuilt (BB pool carries the 4 realism cols; fielder embedding = 11,373 unique
+`player:position:season` keys, **3,259 previously-collapsed player-seasons recovered**); app restarted
+clean (11/11 engines, calibration applied, 6 workers pre-warmed).
+
+**Defense-map bug found + fixed (the big one):** `build_team_defense_map` mapped the name-format
+`raw.game_lineups.position_code` (`'SS'`,`'C'`,… — all 543K rows) through the *number-keyed*
+`POSITION_CODE_TO_NAME`, so only the pitcher resolved. This had left **SIM-425b fielder-RBF AND
+SIM-428 catcher framing silently inert in production** (SIM-428 was marked DONE but never had a
+resolvable catcher on real data). Fixed to accept names (numeric fallback retained); test fixtures use
+numeric codes so no fixture drift; added a name-format regression-guard test.
+
+**Validation (2-game instrumented sweep + a 4-agent adversarial workflow):** all three flags engage
+end-to-end — platoon (10,056 reweights), park (570/179 flips, **direction correct**: hitter's park
+@1.20 R 8.85→10.71, pitcher's @0.80 →8.62), fielder (140 flips post-fix). The workflow flagged real
+issues, two fixed here, the rest deferred to SIM-429 calibration.
+
+**Fixes applied from the review:**
+- **`SIM_FRAMING` gate (default ON).** ⚠ **Correction to the earlier "flag-off byte-identical" claim:**
+  the three *named* realism flags ARE byte-identical when off (they consume zero RNG — proven), **but
+  the defense-map fix activates always-on SIM-428 catcher framing**, which consumes a per-taken-pitch
+  `rng.random()` → the all-flags-off baseline shifts (8.85→8.65) and seeded games no longer reproduce
+  pre-fix output. This is SIM-428 working as designed (it was inert), but it IS a flag-off
+  behaviour/reproducibility change. The new `SIM_FRAMING` gate (default ON) makes it auditable;
+  `SIM_FRAMING=0` restores the pre-fix catcher-inert path for a strict byte-identical mode. Any
+  persisted/seeded sim caches from before this change will not reproduce.
+- **Fielder `q_pool` season fix.** `q_pool` was looked up at the *game* season → a survivorship filter
+  (dropped pool fielders lacking a game-season row, 77% coverage, biased toward hits).
+  `last_battedball_fielder()` now returns the pool row's own season and the nudge scores the pool
+  fielder contemporaneously (live defender stays at the game season).
+
+**Also note:** `GET /state` now returns the full 9-fielder `home_defense`/`away_defense` map (was 8
+empty slots) — a positive, user-visible frontend change from the defense-map fix.
+
+**Deferred to SIM-429 (pre-production-default calibration — flags default OFF, not blockers):**
+seed-paired ≥400-sim×≥20-game re-validation (the 2-game sweep is noise-dominated); park pitcher-side
+asymmetry (single→out pool ~3× smaller than out→single; `_PARK_FACTOR_STRENGTH` was cap-bound at the
+tested 1.20/0.80 so it's unvalidated — re-run at 1.08/0.92); fielder cap/per-OAA re-derivation from the
+§10 run-value constants; a platoon *effect* counter; a game-level determinism + framing-path golden test.
+Full unit + regression lane green; ruff + mypy clean on changed files.
+
 # Phase 7 — SIM-411/425b: production API wiring (defense map + park factor) — 2026-06-03
 **Authors: Backend Developer (Agent 5), Data Engineer (Agent 4)**
 

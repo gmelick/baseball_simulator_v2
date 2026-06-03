@@ -410,6 +410,31 @@ class TestBuildGameState:
         # The pitcher always owns 'P'; in the top the home team is in the field.
         assert state.home_defense.get("P") == state.pitcher_id
 
+    def test_defense_map_handles_name_format_position_codes(self):
+        # SIM-425b/428 regression: raw.game_lineups stores position_code as canonical
+        # NAMES ('SS','C',..), NOT numeric scorebook codes. build_team_defense_map
+        # must map these directly; before the fix it routed names through the
+        # number-keyed POSITION_CODE_TO_NAME, dropped everything but the explicitly-
+        # added pitcher, and left the catcher (SIM-428) + the 8 fielders (SIM-425b)
+        # silently absent on real data.
+        names = ["CF", "2B", "RF", "1B", "LF", "3B", "SS", "C", "P"]
+        rows: list[dict] = []
+        for slot, (pid, pos) in enumerate(zip(HOME_BATTERS, names, strict=False), start=1):
+            rows.append(_lineup_row(HOME_TEAM, pid, slot, pos))
+        for slot, (pid, pos) in enumerate(zip(AWAY_BATTERS, names, strict=False), start=1):
+            rows.append(_lineup_row(AWAY_TEAM, pid, slot, pos))
+        resolved = resolve_lineup_from_rows(
+            game_pk=GAME_PK,
+            season=SEASON,
+            home_team_id=HOME_TEAM,
+            away_team_id=AWAY_TEAM,
+            lineup_rows=rows,
+        )
+        state = build_game_state(resolved, half=Half.TOP)
+        assert set(state.home_defense) == {"P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"}
+        assert set(state.away_defense) == {"P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"}
+        assert state.home_catcher_id == state.home_defense["C"]
+
     def test_substitution_shows_in_built_lineup(self):
         rows = _starting_rows()
         rows.append(
