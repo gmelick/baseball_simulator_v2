@@ -1,3 +1,33 @@
+# Phase 7 — SIM-427 capstone: manager USAGE normalized by opportunity — 2026-06-03
+**Authors: ML/Modeling Engineer (Agent 3), Baseball Analyst (Agent 2), Data Engineer (Agent 4)**
+
+Fed the SIM-433-v2 available-but-unused signal into `_compute_manager_profiles`: a new USAGE
+metric **`available_reliever_usage_rate`** = relievers USED / (used + AVAILABLE-but-held), from
+`raw.game_bullpen_availability`. This is the opportunity normalization the whole SIM-433 signal
+existed for — it separates "the manager chose to hold an arm" from "no arm could pitch".
+
+- New `bullpen_opp` CTE: USED = appeared non-starters (`arm_rank>1`); HELD = `available=TRUE` arms
+  that did NOT appear (anti-join to the appeared staff). The `staff` CTE gained `team_id` to join
+  the availability table. **Bounded [0,1]** by construction (a used-but-tired arm counts in USED,
+  never inflating the rate >1) and starter-free.
+- DuckDB migration **0013** + the column on `02_duckdb_schema.sql` (`derived.manager_season_metrics`)
+  + version **12 → 13**.
+
+**Validated read-only on the partial v2 data** (840 v2 game-teams): avg rate **0.397**, range
+**[0, 1.0]**, used ~3.8/game, **held ~6.3/game** — managers hold ~6 available arms on average, the
+exact signal SIM-433 captures.
+
+**Caught + fixed a definitional flaw mid-validation:** a naive used/available exceeded 1.0 (the
+availability decision marks back-to-back arms `rest`-unavailable even when they pitched); the bounded
+`used/(used+held)` form fixes it. +1 guard test; full schema-version + 0013 migration tests; ruff +
+mypy clean.
+
+**Remaining (deploy chain — flags off / not blocking):** apply migration 0013 + re-run
+`_compute_manager_profiles` with the app stopped (exclusive DuckDB) to WRITE the column once the v2
+ingest completes; then wire it as a 7th manager-engine USAGE feature (`USAGE_FEATURES` + `usage_vec`)
++ regen the manager-engine golden fixtures + recalibrate `sigma_usage`. The metric is computed +
+persisted by the computor now; the engine consumption is the next, deliberate (drift + calibration) step.
+
 # Phase 7 — SIM-433-v2: capture the available-but-unused relievers (full per-game roster) — 2026-06-03
 **Authors: Data Engineer (Agent 4), Baseball Analyst (Agent 2)**
 

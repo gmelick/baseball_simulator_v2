@@ -646,6 +646,9 @@ CREATE TABLE IF NOT EXISTS derived.manager_season_metrics (
     high_leverage_reliever_rate             FLOAT,
     opener_usage_rate                       FLOAT,
     bulk_innings_rate                       FLOAT,
+    -- SIM-427 capstone: relievers used / relievers available (the SIM-433-v2
+    -- available-but-unused signal) — usage normalized by opportunity.
+    available_reliever_usage_rate           FLOAT,
 
     -- Aggression (computed from the play stream; uncomputable ones NULL)
     steal_order_rate_per_1b_opp             FLOAT,

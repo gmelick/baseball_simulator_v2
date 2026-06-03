@@ -43,6 +43,16 @@ def test_usage_derived_from_stint_ctes():
     assert "LEFT JOIN mgr_usage u" in _SRC
 
 
+def test_available_reliever_usage_rate_capstone():
+    # SIM-427 capstone: the opportunity-normalized metric joins the SIM-433-v2
+    # availability table; bounded used/(used+held) via an anti-join for held arms.
+    assert "bullpen_opp" in _SRC
+    assert "available_reliever_usage_rate" in _SRC
+    assert "game_bullpen_availability" in _SRC
+    assert "used_rel" in _SRC and "held_rel" in _SRC
+    assert "LEFT JOIN bullpen_opp bo" in _SRC
+
+
 if __name__ == "__main__":  # pragma: no cover
     import pytest
 

@@ -2563,6 +2563,7 @@ class PlayerProfileComputor:
                 starter_avg_pitch_count, starter_pull_pct_before_100,
                 closer_entry_leverage_index, high_leverage_reliever_rate,
                 opener_usage_rate, bulk_innings_rate,
+                available_reliever_usage_rate,
                 steal_order_rate_per_1b_opp, hit_and_run_rate_per_opportunity,
                 sac_bunt_rate_high_leverage, sac_bunt_rate_low_leverage,
                 squeeze_play_rate_per_3b_opp,
@@ -2655,16 +2656,19 @@ class PlayerProfileComputor:
             -- (home manager fields the Top half, away the Bottom). One stint row
             -- per (game, fielding-manager, pitcher): pitch count, innings, the
             -- in-game entry order, and the leverage bucket at the FIRST pitch.
-            -- (The SIM-433 raw.game_bullpen_availability "available-but-unused"
-            -- signal would refine these once it captures the full roster, not just
-            -- appeared arms — a SIM-433-v2 follow-on; the metrics below stand on
-            -- actual usage alone.)
+            -- The SIM-433-v2 raw.game_bullpen_availability table (full per-game
+            -- roster) adds the opportunity-normalized signal in ``bullpen_opp`` below
+            -- (available_reliever_usage_rate); the stint metrics here stand on actual
+            -- usage and need no availability table.
             -- ============================================================
             staff AS (
                 SELECT
                     game_pk, season,
                     CASE WHEN inning_topbot = 'Top' THEN home_manager_id
                          ELSE away_manager_id END                     AS manager_id,
+                    -- the fielding team (joins the SIM-433 availability table)
+                    MIN(CASE WHEN inning_topbot = 'Top' THEN home_id
+                             ELSE away_id END)                        AS team_id,
                     pitcher,
                     COUNT(*)                                          AS n_pitches,
                     COUNT(DISTINCT inning)                            AS n_innings,
@@ -2740,6 +2744,40 @@ class PlayerProfileComputor:
                   ON sr.game_pk = sp.game_pk AND sr.manager_id = sp.manager_id
                  AND sr.pitcher = sp.pitcher
                 GROUP BY sp.manager_id, sp.season
+            ),
+            -- SIM-427 (capstone): bullpen usage normalized by OPPORTUNITY —
+            -- relievers USED / (relievers used + relievers AVAILABLE-but-held), from
+            -- the SIM-433-v2 full-roster table. Separates "chose to hold an arm" from
+            -- "no arm could pitch". USED = appeared non-starters (arm_rank>1); HELD =
+            -- available=TRUE arms that did NOT appear (anti-join to the appeared
+            -- staff). Bounded [0,1] by construction (a used-but-tired arm counts in
+            -- USED, never inflating the rate >1) and starter-free (the starter is
+            -- arm_rank=1, in neither term). Aggregated over the season; NULL when no
+            -- availability rows exist yet for a manager's games (ingested separately)
+            -- → the engine's degenerate-sigma guard keeps the default.
+            bullpen_opp AS (
+                SELECT u.manager_id, u.season,
+                    SUM(u.used_rel) * 1.0
+                        / NULLIF(SUM(u.used_rel + h.held_rel), 0)
+                                                                AS available_reliever_usage_rate
+                FROM (
+                    SELECT game_pk, manager_id, season,
+                        ANY_VALUE(team_id)                       AS team_id,
+                        COUNT(*) FILTER (WHERE arm_rank > 1)     AS used_rel
+                    FROM staff_ranked
+                    GROUP BY game_pk, manager_id, season
+                ) u
+                JOIN (
+                    -- available-but-HELD relievers: available=TRUE arms that did not
+                    -- appear in the game (anti-join to the appeared staff).
+                    SELECT a.game_pk, a.team_id,
+                        COUNT(*) FILTER (WHERE a.available AND s.pitcher IS NULL) AS held_rel
+                    FROM pg.raw.game_bullpen_availability a
+                    LEFT JOIN staff s
+                      ON s.game_pk = a.game_pk AND s.pitcher = a.pitcher_id
+                    GROUP BY a.game_pk, a.team_id
+                ) h ON h.game_pk = u.game_pk AND h.team_id = u.team_id
+                GROUP BY u.manager_id, u.season
             )
             SELECT
                 g.manager_id,
@@ -2755,6 +2793,8 @@ class PlayerProfileComputor:
                 h.high_leverage_reliever_rate,
                 u.opener_usage_rate,
                 u.bulk_innings_rate,
+                -- SIM-427 capstone: usage normalized by availability (opportunity).
+                bo.available_reliever_usage_rate,
                 -- Aggression (5)
                 s.n_steal_orders * 1.0 / NULLIF(b.opp_1b, 0)                  AS steal_order_rate_per_1b_opp,
                 NULL::FLOAT                                                   AS hit_and_run_rate_per_opportunity,  -- not flagged in Statcast
@@ -2774,6 +2814,7 @@ class PlayerProfileComputor:
             LEFT JOIN fld_agg f   ON f.manager_id = g.manager_id AND f.season = g.season
             LEFT JOIN mgr_usage u ON u.manager_id = g.manager_id AND u.season = g.season
             LEFT JOIN hi_lev h    ON h.manager_id = g.manager_id AND h.season = g.season
+            LEFT JOIN bullpen_opp bo ON bo.manager_id = g.manager_id AND bo.season = g.season
         """)
         log.info("  Manager profiles done.")
 

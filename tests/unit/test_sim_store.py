@@ -359,11 +359,27 @@ class TestMigrationSanity:
         assert "def downgrade()" in text
         assert "sim.sim_runs" in text
 
-    def test_duckdb_schema_version_is_12(self):
+    def test_duckdb_schema_version_is_13(self):
         # SIM-357 bumped 8 -> 9 (0009); SIM-362/364 -> 10 (0010);
         # SIM-408 -> 11 (0011 engine ↔ schema reconciliation);
-        # SIM-411/413/425b -> 12 (0012 batted-ball realism columns).
-        assert DUCKDB_VERSION_FILE.read_text().strip() == "12"
+        # SIM-411/413/425b -> 12 (0012 batted-ball realism columns);
+        # SIM-427 -> 13 (0013 manager available_reliever_usage_rate).
+        assert DUCKDB_VERSION_FILE.read_text().strip() == "13"
+
+    def test_duckdb_0013_adds_manager_available_reliever_usage(self):
+        path = (
+            REPO_ROOT
+            / "db"
+            / "migrations"
+            / "duckdb"
+            / "0013_sim427_manager_available_reliever_usage.sql"
+        )
+        text = path.read_text(encoding="utf-8")
+        assert "manager_season_metrics" in text
+        assert "ADD COLUMN IF NOT EXISTS available_reliever_usage_rate" in text
+        assert "'0013'" in text
+        schema = (REPO_ROOT / "db" / "schemas" / "02_duckdb_schema.sql").read_text(encoding="utf-8")
+        assert "available_reliever_usage_rate" in schema
 
     def test_duckdb_0012_adds_battedball_realism_cols(self):
         # SIM-411/413/425b: venue_id (park) + fielder_player_id (fielder RBF) on
