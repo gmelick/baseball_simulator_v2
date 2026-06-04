@@ -9,8 +9,8 @@ Computes a composite similarity score [0, 1] between any two MLB
 pitcher-season profiles by combining:
   1. Arsenal similarity  — GMM-to-GMM distance via Wasserstein-2 optimal
                            transport across mixture components
-  2. Command similarity  — Gaussian RBF kernel over plate-discipline and
-                           result metrics
+  2. Command similarity  — Gaussian RBF kernel over plate-discipline
+                           metrics
 
 Each sub-score is individually normalized to [0, 1] and then combined
 using a configurable weighted average (arsenal most-weighted per the
@@ -27,7 +27,7 @@ CRITICAL DESIGN PRINCIPLE — EXHAUSTIVE SCORING:
 Architecture
 ------------
   DuckDB (read-only)
-    ├── derived.pitcher_season_metrics   → command/result metrics + GMM JSON
+    ├── derived.pitcher_season_metrics   → command metrics + GMM JSON
     ├── derived.pitcher_gmm_components   → fast SQL-queryable component centroids
     └── derived.league_averages          → fallback profiles for small-sample pitchers
          │
@@ -1208,17 +1208,24 @@ class ArsenalCache:
         inf values (which represent pairs where one or both GMMs were
         missing).
 
-        SIM-148: docstring updated to use ``calibrate_arsenal_scale``
-        (the current API).  ``calibrate_arsenal_gamma`` was renamed during
-        SIM-066; pre-SIM-148 docstring still referenced the dead name.
+        SIM-148: docstring updated to use the real calibration API
+        (``calibrate_arsenal_gamma`` → ``arsenal_scale_from_gamma``).  A prior
+        docstring referenced a phantom calibrator that does not exist and would
+        raise ImportError.
 
-        This is the array you pass to calibrate_arsenal_scale():
+        This is the array you pass to calibrate_arsenal_gamma(), whose
+        squared-exponential gamma is then converted to the engine's linear
+        ARSENAL_SCALE via arsenal_scale_from_gamma():
 
-            from similarity.similarity_calibration import calibrate_arsenal_scale
+            from similarity.similarity_calibration import calibrate_arsenal_gamma
+            from similarity.engines.pitcher_similarity import arsenal_scale_from_gamma
+
+            import numpy as np
 
             engine.precompute_arsenal_cache()
             dists = engine._arsenal_cache.finite_distances()
-            optimal_scale = calibrate_arsenal_scale(dists, target_median_score=0.50)
+            gamma = calibrate_arsenal_gamma(dists, target_median_score=0.50)
+            optimal_scale = arsenal_scale_from_gamma(gamma, float(np.median(dists)))
         """
         all_dists = np.array(list(self._cache.values()), dtype=np.float64)
         return all_dists[np.isfinite(all_dists)]

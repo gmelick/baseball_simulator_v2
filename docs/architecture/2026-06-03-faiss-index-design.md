@@ -1,7 +1,9 @@
 # FAISS Index Design Spec (Phase 4)
 
 *Ticket: SIM-114 · Owners: Performance Engineer + ML Engineer · Date: 2026-06-03*
-*Status: PROPOSED — awaiting PM sign-off (§7). Closes the IVF/HNSW deferral left
+*Status: PROPOSED — awaiting PM sign-off (§7). Applies to the per-tile FAISS path only
+(the fallback/unit-test path; production pitch-selection is full-pool, SIM_FULL_POOL=1).
+Closes the IVF/HNSW deferral left
 open by SIM-300 §4.2 / §9 and confirmed-but-not-quantified by SIM-281 D3. Consumes
 the RAM budget from SIM-280 (`docs/perf/2026-05-27-ram-budget.md`) and the
 parallelism contract from SIM-281 (`docs/architecture/2026-05-27-parallelism.md`).*

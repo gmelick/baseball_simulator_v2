@@ -1283,6 +1283,12 @@ __all__ = [
     "ConfidenceIntervalModel",
     "GameSimSummaryModel",
     "GameSimSummaryLite",
+    # Audit note (2026-06-03, both-agree, LOW): the six models below
+    #   (PlayerStatLineModel, BoxScoreModel, CalibrationMapModel, WinProbabilityModel,
+    #   PropDistributionModel, PropDistributionSetModel) are RESERVED for the v2
+    #   endpoint surface -- no route binds them as `response_model` yet, but they are
+    #   live internal building blocks (Box/Prop set models nest the per-line/per-prop
+    #   models; all carry `from_dataclass` adapters) -- NOT genuinely orphaned. Keep.
     # sim_loop.py boxscore (re-exported via results.py)
     "PlayerStatLineModel",
     "BoxScoreModel",

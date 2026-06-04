@@ -110,6 +110,10 @@ class AvailabilityRow:
     days_rest: int | None
     pitches_last_3d: int
     back_to_back: bool
+    # RESERVED — always False for now. The starting-pitcher discriminator (flag
+    # the game's starter / arm_rank==1) is a follow-on; no code path sets this
+    # True yet, so every persisted row carries False. A downstream consumer must
+    # NOT treat is_starter as a populated signal until that follow-on lands.
     is_starter: bool = False
     source: str = "mlb_api"
 

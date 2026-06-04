@@ -230,6 +230,10 @@ def compute_leverage_index(
     """
     Simplified leverage index based on the Tango/Litchman framework.
 
+    Canonical spec: production mirrors this formula as an inline SQL expression
+    when building ``derived.at_bat_situations`` (see ``_build_at_bat_situations``);
+    keep the two in sync.
+
     Full LI requires win-probability tables; this implementation uses a
     well-calibrated approximation that captures the key drivers:
       - Late innings increase leverage
@@ -420,27 +424,6 @@ def _classify_direction_of(
 def _sigmoid(x: np.ndarray, L: float, k: float, x0: float) -> np.ndarray:
     """Standard sigmoid function."""
     return L / (1.0 + np.exp(-k * (x - x0)))
-
-
-def _asymmetric_sigmoid(
-    x: np.ndarray,
-    L_left: float,
-    k_left: float,
-    x0_left: float,
-    L_right: float,
-    k_right: float,
-    x0_right: float,
-    blend_k: float,
-    blend_x0: float,
-) -> np.ndarray:
-    """
-    Tango's two-sigmoid blend for asymmetric probability curves.
-    Used for catch probability, infield out probability, and DP probability.
-    """
-    left = _sigmoid(x, L_left, k_left, x0_left)
-    right = _sigmoid(x, L_right, k_right, x0_right)
-    blend = _sigmoid(x, 1.0, blend_k, blend_x0)
-    return blend * left + (1.0 - blend) * right
 
 
 def _fit_logistic_model(
@@ -1111,10 +1094,6 @@ class PlayerProfileComputor:
         self._duckdb_path = duckdb_path
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._re_matrix: dict = {}  # populated before defensive steps
-        # SIM-433: per-game bullpen workload (rest/recent-pitch-count) derived
-        # from raw.pitches by _compute_bullpen_workload during run(); consumed by
-        # the bullpen-availability ingest (which persists raw.game_bullpen_availability).
-        self._bullpen_workload: pd.DataFrame | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -1194,12 +1173,10 @@ class PlayerProfileComputor:
             self._compute_baserunner_profiles(seasons)  # 4. infield/DP need sprint speeds
             self._build_baserunner_steal_metrics(seasons)  # 4b. SIM-408 steal-engine table
             self._build_pitcher_steal_metrics(seasons)  # 4c. SIM-408 pitcher-steal table
-            # 4d. SIM-433: derive per-game bullpen rest/workload from raw.pitches.
-            # Returned (not persisted — Postgres is attached READ_ONLY here); the
-            # bullpen-availability ingest merges it with the MLB-API roster/IL and
-            # writes raw.game_bullpen_availability. Cached for the same-process
-            # consumer / inspection.
-            self._bullpen_workload = self._compute_bullpen_workload(seasons)
+            # SIM-433: per-game bullpen rest/workload (_compute_bullpen_workload) is
+            # NOT derived here — the bullpen-availability ingest builds its own computor
+            # and recomputes it against the live roster/IL, so running it in the nightly
+            # rebuild would only pay for a discarded query.
             self._compute_manager_profiles(seasons)  # 5.
 
             # ── Defensive metrics ────────────────────────────────────────────

@@ -15,7 +15,7 @@ Coverage
     INSERT and returns the run_id; load_latest_sim_run / load_sim_run parse a
     row into the documented dict incl. JSONB summary round-trip.
   * Migration sanity: Alembic 0014 revision/down_revision/upgrade/downgrade;
-    duckdb_schema_version.txt reads 8; DuckDB 0008 names its table.
+    duckdb_schema_version.txt reads 13; DuckDB 0013 names its table.
 
 Owned by Data Engineer.
 """

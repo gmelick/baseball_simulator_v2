@@ -241,6 +241,13 @@ def load_calibration_map(path: str | None = None):
     carries no fitted reliability curve — the win-prob layer's documented
     "well-calibrated until a curve says otherwise" default. Otherwise returns a
     monotone ``CalibrationMap`` built via ``CalibrationMap.from_report``.
+
+    NOTE (2026-06-03 audit, both-agree, LOW): this is a TEST/LEGACY convenience
+    wrapper — it has no non-test caller. The CANONICAL boot path is inline in
+    ``api/main.py`` (``load_calibration_report`` + ``CalibrationMap.from_report``),
+    which is kept separate so the same loaded report can also be fed to
+    :func:`apply_calibration_to_engines`. Retained as low-risk library surface
+    (deleting it would also touch ``tests/unit/test_ml_engines_sim361.py``).
     """
     from simulation.win_probability import IDENTITY_CALIBRATION, CalibrationMap
 

@@ -136,9 +136,12 @@ GAME_TYPES = ["R", "F", "D", "L", "W", "C", "P"]
 # capture the line the public actually bets into.  Capturing both lets the
 # CLV engine (SIM-339) measure soft-vs-sharp divergence per prop.
 #
-# Phase 7 swap: replace MockOddsAPI.get_prop_odds() in _fetch_prop_odds() with
-# a real provider that returns one quote per (book, player, prop_stat); the
-# is_sharp_book classification stays here so it survives the provider swap.
+# The provider behind _fetch_prop_odds() is selected by ODDS_PROVIDER (via the
+# SIM-370 get_odds_provider() seam): the deterministic MockOddsAPI is the
+# default, and ODDS_PROVIDER=bettingpros switches to the real
+# BettingProsOddsProvider, which returns one quote per (book, player,
+# prop_stat).  The is_sharp_book classification stays here so it survives the
+# provider switch.
 PROP_BOOKS: list[tuple[str, bool]] = [
     ("pinnacle", True),  # sharp — CLV reference
     ("circa", True),  # sharp — CLV reference
@@ -188,10 +191,10 @@ class MockOddsAPI:
     game_pk.  All values are consistent within a session (same game_pk always
     returns the same lines) so the frontend never sees odds flicker.
 
-    To swap in a real provider in Phase 7:
-      1. Replace `_fetch_odds()` in LiveIngestionPipeline with a real HTTP call.
-      2. Replace `get_prop_odds()` with a real provider call.
-      3. Keep this class for local dev / testing.
+    This is the deterministic default behind the SIM-370 provider seam
+    (get_odds_provider()); set ODDS_PROVIDER=bettingpros to switch the live
+    pipeline to the real BettingProsOddsProvider instead.  This class stays as
+    the local dev / testing source.
 
     American odds encoding:
       Favourite:  odds = -(prob / (1-prob)) * 100  (negative integer)
@@ -266,8 +269,9 @@ class MockOddsAPI:
         # overround prices.  Without vig, implied probs sum to exactly 1.0 —
         # no real book prices this way.  Every edge calculation, calibration
         # target, and display component built through Phase 6 would be trained
-        # against lines that don't exist in real markets; when Phase 7 swaps
-        # in real lines the edge estimates shrink 3–8 pp overnight.
+        # against lines that don't exist in real markets; switching the seam to
+        # real lines (ODDS_PROVIDER=bettingpros) shrinks the edge estimates
+        # 3–8 pp overnight.
         #
         # vig is the total overround, split evenly between home and away:
         #   home_inflated = home_win_prob * (1 + vig/2)
@@ -398,8 +402,10 @@ odds_router = APIRouter(prefix="/api/odds", tags=["odds"])
 @odds_router.get("/{game_pk}")
 async def get_game_odds(game_pk: int) -> dict:
     """
-    Returns mock betting lines for a game.  In Phase 7, replace this handler
-    with a call to a real odds provider and flip is_mock=False.
+    Returns mock betting lines for a game.  This handler calls MockOddsAPI
+    directly (it predates the SIM-370 seam); the live ingestion path instead
+    goes through get_odds_provider(), so ODDS_PROVIDER=bettingpros yields real
+    lines (is_mock=False) there.
     """
     return MockOddsAPI.get_odds(game_pk)
 
@@ -1425,8 +1431,8 @@ class LiveIngestionPipeline:
     async def _fetch_odds(self, game_pk: int) -> dict:
         """
         Returns odds from the configured provider (SIM-370).  Defaults to the
-        deterministic MockOddsAPI; set ODDS_PROVIDER (and implement
-        RealOddsAPIProvider) to swap in a real feed without touching this code.
+        deterministic MockOddsAPI; set ODDS_PROVIDER=bettingpros to use the real
+        BettingProsOddsProvider feed without touching this code.
         """
         return self._odds_provider().get_odds(game_pk)
 
@@ -1480,10 +1486,12 @@ class LiveIngestionPipeline:
         both sharp (Pinnacle, Circa) and soft (DraftKings, FanDuel) quotes lets
         the CLV engine (SIM-339) measure soft-vs-sharp divergence per prop.
 
-        In Phase 7, replace the MockOddsAPI.get_prop_odds() call with a real
-        provider that returns one quote per (book, player, prop_stat).  The book
-        list and is_sharp_book classification live in PROP_BOOKS so they survive
-        the provider swap untouched.
+        The provider's get_prop_odds() is resolved via the SIM-370 seam
+        (mock by default, the real BettingProsOddsProvider under
+        ODDS_PROVIDER=bettingpros) and returns one quote per
+        (book, player, prop_stat).  The book list and is_sharp_book
+        classification live in PROP_BOOKS so they survive the provider switch
+        untouched.
         """
         books = books if books is not None else PROP_BOOKS
         provider = self._odds_provider()  # SIM-370: env-selected, mock by default
@@ -1892,8 +1900,9 @@ class LiveIngestionPipeline:
 
         Parameters
         ----------
-        prop : dict returned by MockOddsAPI.get_prop_odds() (or a real provider
-               in Phase 7).  Required keys:
+        prop : dict returned by the configured provider's get_prop_odds()
+               (MockOddsAPI by default, or BettingProsOddsProvider under
+               ODDS_PROVIDER=bettingpros).  Required keys:
                  game_pk, player_id, prop_stat, line,
                  over_ml, under_ml, book, line_type, is_sharp_book,
                  source, is_mock

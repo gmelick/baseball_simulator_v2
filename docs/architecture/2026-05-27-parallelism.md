@@ -9,7 +9,8 @@ Alternatives). Consumes the budget from SIM-280
 
 ## Status
 
-**PROPOSED** -- awaiting PM sign-off (§9) before Phase 4 (SIM-303 wiring) begins.
+**Accepted (D1/D2/D3 in force) -- fork-method + worker-scaling superseded by SIM-430
+(forkserver, not fork).**
 
 Resolves the two open follow-ups left by SIM-300:
 - §9 "Cross-process `shared_memory` attach mechanism -> SIM-281"

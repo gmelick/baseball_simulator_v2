@@ -51,6 +51,19 @@ PUBLIC API
 Engines stay pure: this module accepts *injected* per-engine outputs (a number,
 or an engine's result object) and a ``score_type`` per engine -- it never builds
 or queries an engine and never needs a DB to unit-test.
+
+CURRENTLY UNWIRED IN PRODUCTION (status note)
+---------------------------------------------
+This whole module is **dead-wired on the production path**.  ``ScoreFusion.fuse()``
+is reached only through ``FingerprintDeriver``'s fusion-tilt branches, and those
+never fire in production: every fingerprint call site in ``simulation/sim_loop.py``
+calls the deriver with NO ``pitch_signals`` / ``battedball_signals``, and the
+full-pool production path (``SIM_FULL_POOL=1``) sets ``deriver=None`` outright
+(``simulation/production_factory.py`` line ~561).  So fusion runs only on the
+per-tile FAISS fallback / unit-test path -- and even there only the tests inject
+signals.  Kept (not deleted) pending an ML-owner decision to either thread fusion
+signals into the deriver or retire the centroid-tilt approach now that full-pool
+scoring is the production default.  Mirrors the note in ``simulation/fingerprints.py``.
 """
 
 from __future__ import annotations
@@ -342,6 +355,11 @@ class ScoreFusion:
     Engines stay pure: construct with a profile name (or explicit weights/rule)
     and call :meth:`fuse` with injected per-engine signals.  No DB, no engine
     construction.
+
+    NOTE (currently unwired in production): :meth:`fuse` never runs on the
+    production path -- see the module docstring's "CURRENTLY UNWIRED IN
+    PRODUCTION" note.  It is exercised only by the per-tile fallback / unit-test
+    path (and only the tests inject signals).
 
     Examples
     --------

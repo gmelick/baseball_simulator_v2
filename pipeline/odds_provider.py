@@ -109,14 +109,17 @@ class OddsProvider(Protocol):
 
 class RealOddsAPIProvider:
     """
-    SIM-370 stub for a real odds/prop provider (e.g. The Odds API).
+    SIM-370 TEMPLATE for a real odds/prop provider (e.g. The Odds API).
 
     Conforms to :class:`OddsProvider` so it is a structural drop-in, but every
-    method raises until a live integration is actually wired.  There is no real
-    odds feed in this environment; this class marks *exactly* where the HTTP
-    calls go and what configuration they need.
+    method raises until a live integration is actually wired.  This is a
+    reference template only: no ``ODDS_PROVIDER`` value resolves to it — both
+    ``ODDS_PROVIDER=bettingpros`` and ``ODDS_PROVIDER=real`` now map to the live
+    :class:`~pipeline.bettingpros_odds_provider.BettingProsOddsProvider`
+    (SIM-405).  It marks *exactly* where the HTTP calls go and what
+    configuration they need, should a third provider ever be added.
 
-    To implement:
+    To implement (as a new named provider):
       1. Read the API key from ``ODDS_PROVIDER_API_KEY`` (see ``__init__``).
       2. In ``get_odds`` issue the game-odds request and map the response onto
          the dict shape documented in this module / produced by ``MockOddsAPI``

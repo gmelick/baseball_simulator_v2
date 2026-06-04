@@ -12,7 +12,7 @@
 
 .PHONY: help dev down build migrate test test-unit test-integration test-regression lint \
         type-check format shell logs clean nuke profile-computor play-pool-cache calibrate \
-        validate-props
+        validate-props load-historical-odds
 
 # Default target — show help.
 ##
@@ -92,6 +92,15 @@ calibrate: _require_env_file
 ## FLAGS="--seasons 2023 2024 --iterations 100 --write-calibration".
 validate-props: _require_env_file
 	docker compose run --rm app python scripts/validate_props.py $(FLAGS)
+
+## Offline (SIM-435): backfill OPENING + CLOSING odds for Final games into
+## raw.game_odds / raw.prop_odds so the CLV backtest (SIM-429) has entry+closing
+## lines to score against.  Network-bound (one provider request per game/market) —
+## set ODDS_PROVIDER=bettingpros + ODDS_API_KEY, or leave unset for the
+## deterministic MockOddsAPI.  Cap a smoke run with
+## FLAGS="--seasons 2024 --max-games 200".
+load-historical-odds: _require_env_file
+	docker compose run --rm app python scripts/load_historical_odds.py $(FLAGS)
 
 ## Tail logs for all services (Ctrl-C to exit)
 logs:

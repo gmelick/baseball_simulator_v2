@@ -296,9 +296,6 @@ class LineMovement:
 # Pure derivation
 # ===========================================================================
 
-#: Sentinel for "infer the side-pairing from the market_type" in the builder.
-_AUTO = object()
-
 
 def _coerce_quote(
     row: Mapping[str, Any] | LineQuote,

@@ -31,9 +31,6 @@ Usage:
     # Tier 1: derive from population (fast, no outcome data needed)
     params = cal.calibrate_from_population(seasons=[2022, 2023, 2024])
     print(params)
-
-    # Tier 2: optimize weights against outcomes (slower, needs outcome pool)
-    weights = cal.optimize_subscores(seasons=[2022, 2023, 2024])
 """
 
 from __future__ import annotations
@@ -180,22 +177,6 @@ def calibrate_arsenal_gamma(
     #        γ = -ln(target) / median²
     gamma = -np.log(target_median_score) / (median_dist**2)
     return float(gamma)
-
-
-# Keep the old function name as an alias for backwards compatibility
-def calibrate_arsenal_norm_scale(
-    w2_distances: NDArray[np.float64],
-    target_median_score: float = 0.50,
-) -> float:
-    """Deprecated — use calibrate_arsenal_gamma() instead."""
-    gamma = calibrate_arsenal_gamma(w2_distances, target_median_score)
-    # Convert gamma to the old scale form for any legacy callers:
-    #   exp(-d/scale) ≈ exp(-γd²) when scale = 1/(γ * median_d)
-    finite = w2_distances[np.isfinite(w2_distances)]
-    median_dist = np.median(finite) if len(finite) > 0 else 4.0
-    if gamma > 0 and median_dist > 0:
-        return 1.0 / (gamma * median_dist)
-    return 5.8
 
 
 # ============================================================================
@@ -393,115 +374,6 @@ def calibrate_reliability_weights(
 
 
 # ============================================================================
-# Tier 2: Sub-Score Weight Optimization
-# ============================================================================
-
-
-def optimize_subscore_weights(
-    sub_scores: NDArray[np.float64],
-    outcome_similarities: NDArray[np.float64],
-    n_subscores: int = 4,
-) -> NDArray[np.float64]:
-    """
-    Find sub-score weights that maximize the correlation between the
-    composite similarity and an external measure of outcome similarity.
-
-    The "outcome similarity" could be computed as the RBF similarity
-    between two batters' actual outcome distributions (wOBA, K%, BB%,
-    HR rate) in a held-out season — i.e., "did batters the engine
-    called similar actually produce similar results?"
-
-    Method: constrained optimization (weights ≥ 0, sum to 1) of the
-    Pearson correlation between the weighted composite and the outcome
-    similarity vector.
-
-    Parameters
-    ----------
-    sub_scores : (N_pairs, n_subscores) array
-        Per-sub-score similarities for each pair.
-    outcome_similarities : (N_pairs,) array
-        External outcome similarity for each pair.
-    n_subscores : int
-        Number of sub-scores.
-
-    Returns
-    -------
-    Optimal weight vector (sums to 1.0).
-    """
-    from scipy.optimize import minimize
-
-    def neg_correlation(w):
-        composite = sub_scores @ w
-        if np.std(composite) == 0:
-            return 0.0
-        return -np.corrcoef(composite, outcome_similarities)[0, 1]
-
-    # Initial guess: uniform
-    w0 = np.ones(n_subscores) / n_subscores
-
-    # Constraints: weights sum to 1
-    constraints = {"type": "eq", "fun": lambda w: w.sum() - 1.0}
-    # Bounds: each weight in [0.02, 0.80]
-    bounds = [(0.02, 0.80)] * n_subscores
-
-    result = minimize(
-        neg_correlation,
-        w0,
-        method="SLSQP",
-        bounds=bounds,
-        constraints=constraints,
-    )
-
-    if result.success:
-        return result.x / result.x.sum()  # re-normalize for safety
-    else:
-        log.warning("Weight optimization did not converge. Returning uniform.")
-        return w0
-
-
-# ============================================================================
-# Tier 3: Bats Penalty Measurement
-# ============================================================================
-
-
-def measure_bats_penalty(
-    spray_angles_l: NDArray[np.float64],
-    spray_angles_r: NDArray[np.float64],
-) -> float:
-    """
-    Measure the bats-mismatch penalty empirically from the overlap of
-    spray-angle distributions between LHB and RHB.
-
-    Uses the Bhattacharyya coefficient (histogram overlap) as the
-    penalty. Two identical distributions → 1.0. No overlap → 0.0.
-    In practice, LHB and RHB spray distributions are roughly mirrored,
-    so the overlap is moderate (~0.7-0.85).
-
-    Parameters
-    ----------
-    spray_angles_l : 1-D array
-        Spray angles (degrees) for all LHB balls in play.
-    spray_angles_r : 1-D array
-        Spray angles (degrees) for all RHB balls in play.
-
-    Returns
-    -------
-    Bhattacharyya coefficient in [0, 1].
-    """
-    bins = np.linspace(-45, 45, 61)
-    hist_l, _ = np.histogram(spray_angles_l, bins=bins, density=True)
-    hist_r, _ = np.histogram(spray_angles_r, bins=bins, density=True)
-
-    # Normalize to probability distributions
-    hist_l = hist_l / (hist_l.sum() + 1e-10)
-    hist_r = hist_r / (hist_r.sum() + 1e-10)
-
-    # Bhattacharyya coefficient
-    bc = np.sum(np.sqrt(hist_l * hist_r))
-    return float(bc)
-
-
-# ============================================================================
 # Calibration Report
 # ============================================================================
 
@@ -574,11 +446,15 @@ class CalibrationReport:
     sigma_manager_aggression: float = 0.0
     sigma_manager_platoon: float = 0.0
 
-    # Tier 2
+    # Tier 2 — NOT WIRED: the Tier-1-only live calibrator never populates these
+    # (the sub-score weight optimizer that would fill them was removed as
+    # callerless). Retained as round-trippable persistence fields for a future
+    # Tier-2 pass.
     batter_subscores: NDArray | None = None
     pitcher_subscores: NDArray | None = None
 
-    # Tier 3
+    # Tier 3 — NOT WIRED: same as the Tier-2 fields above (the bats-penalty
+    # measurer that would fill this was removed as callerless).
     bats_penalty_lr: float = 0.0
 
     # ------------------------------------------------------------------
@@ -720,8 +596,6 @@ class CalibrationReport:
 
         if self.reliability_weights_if_pivot is not None:
             lines.append("  Reliability Weights (IF Pivot):")
-            from similarity.engines.fielder_similarity import IF_PIVOT_FEATURES
-
             for (name, _), w in zip(
                 IF_PIVOT_FEATURES, self.reliability_weights_if_pivot, strict=False
             ):
@@ -842,94 +716,9 @@ class CalibrationReport:
         lines.append("=" * 70)
         return "\n".join(lines)
 
-    def as_dict(self) -> dict:
-        """Export as a flat dictionary for programmatic use."""
-        d = {
-            "sigma_discipline": self.sigma_discipline,
-            "sigma_batted_ball": self.sigma_batted_ball,
-            "sigma_platoon": self.sigma_platoon,
-            "sigma_power": self.sigma_power,
-            "sigma_command": self.sigma_command,
-            "sigma_results": self.sigma_results,
-            "arsenal_gamma": self.arsenal_gamma,
-            "arsenal_median_w2": self.arsenal_median_w2,
-            "eb_n_prior_batter": self.eb_n_prior_batter,
-            "eb_n_prior_pitcher": self.eb_n_prior_pitcher,
-            "bats_penalty_lr": self.bats_penalty_lr,
-            "target_median_score": self.target_median_score,
-            "sigma_if_range": self.sigma_if_range,
-            "sigma_if_dp": self.sigma_if_dp,
-            "sigma_if_errors": self.sigma_if_errors,
-            "sigma_if_specialty": self.sigma_if_specialty,
-            "sigma_of_range": self.sigma_of_range,
-            "sigma_of_arm": self.sigma_of_arm,
-            "sigma_of_stars": self.sigma_of_stars,
-            "sigma_of_errors": self.sigma_of_errors,
-            "sigma_baserunner_speed": self.sigma_baserunner_speed,
-            "sigma_baserunner_aggression": self.sigma_baserunner_aggression,
-            "sigma_baserunner_success": self.sigma_baserunner_success,
-            "eb_n_prior_baserunner": self.eb_n_prior_baserunner,
-            # SIM-406: the four SIM-408-era RBF engines.
-            "sigma_catcher_framing": self.sigma_catcher_framing,
-            "sigma_catcher_blocking": self.sigma_catcher_blocking,
-            "sigma_catcher_throwing": self.sigma_catcher_throwing,
-            "sigma_catcher_deterrence": self.sigma_catcher_deterrence,
-            "sigma_baserunner_steal_tendency": self.sigma_baserunner_steal_tendency,
-            "sigma_baserunner_steal_success": self.sigma_baserunner_steal_success,
-            "sigma_pitcher_steal_outcome": self.sigma_pitcher_steal_outcome,
-            "sigma_manager_usage": self.sigma_manager_usage,
-            "sigma_manager_aggression": self.sigma_manager_aggression,
-            "sigma_manager_platoon": self.sigma_manager_platoon,
-        }
-        if self.reliability_weights_discipline is not None:
-            d["reliability_weights_discipline"] = self.reliability_weights_discipline.tolist()
-        if self.reliability_weights_batted_ball is not None:
-            d["reliability_weights_batted_ball"] = self.reliability_weights_batted_ball.tolist()
-        if self.reliability_weights_power is not None:
-            d["reliability_weights_power"] = self.reliability_weights_power.tolist()
-        if self.reliability_weights_platoon is not None:
-            d["reliability_weights_platoon"] = self.reliability_weights_platoon.tolist()
-        if self.reliability_weights_if_range is not None:
-            d["reliability_weights_if_range"] = self.reliability_weights_if_range.tolist()
-        if self.reliability_weights_if_dp is not None:
-            d["reliability_weights_if_dp"] = self.reliability_weights_if_dp.tolist()
-        if self.reliability_weights_if_pivot is not None:
-            d["reliability_weights_if_pivot"] = self.reliability_weights_if_pivot.tolist()
-        if self.reliability_weights_if_error is not None:
-            d["reliability_weights_if_error"] = self.reliability_weights_if_error.tolist()
-        if self.reliability_weights_if_specialty is not None:
-            d["reliability_weights_if_specialty"] = self.reliability_weights_if_specialty.tolist()
-        if self.reliability_weights_of_range is not None:
-            d["reliability_weights_of_range"] = self.reliability_weights_of_range.tolist()
-        if self.reliability_weights_of_arm is not None:
-            d["reliability_weights_of_arm"] = self.reliability_weights_of_arm.tolist()
-        if self.reliability_weights_of_star is not None:
-            d["reliability_weights_of_star"] = self.reliability_weights_of_star.tolist()
-        if self.reliability_weights_of_error is not None:
-            d["reliability_weights_of_error"] = self.reliability_weights_of_error.tolist()
-        if self.reliability_weights_baserunner_speed is not None:
-            d["reliability_weights_baserunner_speed"] = (
-                self.reliability_weights_baserunner_speed.tolist()
-            )
-        if self.reliability_weights_baserunner_aggression is not None:
-            d["reliability_weights_baserunner_aggression"] = (
-                self.reliability_weights_baserunner_aggression.tolist()
-            )
-        if self.reliability_weights_baserunner_success is not None:
-            d["reliability_weights_baserunner_success"] = (
-                self.reliability_weights_baserunner_success.tolist()
-            )
-        if self.batter_subscores is not None:
-            d["batter_subscores"] = self.batter_subscores.tolist()
-        if self.pitcher_subscores is not None:
-            d["pitcher_subscores"] = self.pitcher_subscores.tolist()
-        return d
-
     # ------------------------------------------------------------------
     # SIM-361: lossless JSON persistence (to_dict/to_json ↔ from_dict/from_json)
     #
-    # ``as_dict`` above is a *flat, human-facing export* (drops zero-valued
-    # arrays, loses the NDArray-vs-list distinction) — it is NOT round-trippable.
     # The pair below is the persistence format the API loads at boot: it walks
     # EVERY dataclass field so adding a field to CalibrationReport is picked up
     # automatically, tags numpy arrays so ``from_dict`` restores them as
@@ -1186,24 +975,22 @@ class SimilarityCalibrator:
         plat_ids = ids[plat_mask]
 
         # Z-score normalize
-        def _zscore(mat):
-            m = np.nanmean(mat, axis=0)
-            s = np.nanstd(mat, axis=0)
-            s[s == 0] = 1.0
-            return (mat - m) / s
+        disc_z = self._zscore_matrix(disc_raw)
+        bb_z = self._zscore_matrix(bb_raw)
+        pow_z = self._zscore_matrix(pow_raw)
 
-        disc_z = _zscore(disc_raw)
-        bb_z = _zscore(bb_raw)
-        pow_z = _zscore(pow_raw)
-
-        # Calibrate sigmas
-        report.sigma_discipline = calibrate_sigma(disc_z, target_median_score=target)
-        report.sigma_batted_ball = calibrate_sigma(bb_z, target_median_score=target)
-        report.sigma_power = calibrate_sigma(pow_z, target_median_score=target)
+        # Calibrate sigmas. SIM-432: _fit_sigma (not raw calibrate_sigma) so a
+        # degenerate (all-NULL / no-variance) sub-score returns the 0.0
+        # keep-default sentinel instead of calibrate_sigma's spurious 1.0, which
+        # apply_calibration's ``v if v > 0 else current`` would otherwise apply as
+        # a real override — clobbering the engine's tuned module default.
+        report.sigma_discipline = self._fit_sigma(disc_z, target)
+        report.sigma_batted_ball = self._fit_sigma(bb_z, target)
+        report.sigma_power = self._fit_sigma(pow_z, target)
 
         if len(plat_filtered) >= 20:
-            plat_z = _zscore(plat_filtered)
-            report.sigma_platoon = calibrate_sigma(plat_z, target_median_score=target)
+            plat_z = self._zscore_matrix(plat_filtered)
+            report.sigma_platoon = self._fit_sigma(plat_z, target)
         else:
             report.sigma_platoon = report.sigma_discipline  # reasonable fallback
             log.warning("Insufficient platoon data for sigma calibration; using discipline sigma.")
@@ -1302,14 +1089,12 @@ class SimilarityCalibrator:
         n_cmd = len(COMMAND_FEATURES)
         cmd_raw = np.array([[r[3 + i] or 0.0 for i in range(n_cmd)] for r in rows])
 
-        def _zscore(mat):
-            m = np.nanmean(mat, axis=0)
-            s = np.nanstd(mat, axis=0)
-            s[s == 0] = 1.0
-            return (mat - m) / s
-
-        cmd_z = _zscore(cmd_raw)
-        report.sigma_command = calibrate_sigma(cmd_z, target_median_score=target)
+        # SIM-432: _fit_sigma (not raw calibrate_sigma) so a degenerate (all-NULL /
+        # no-variance) command matrix on a trimmed DuckDB returns the 0.0
+        # keep-default sentinel instead of calibrate_sigma's spurious 1.0, which
+        # apply_calibration would otherwise apply as a real override.
+        cmd_z = self._zscore_matrix(cmd_raw)
+        report.sigma_command = self._fit_sigma(cmd_z, target)
         # sigma_results stays at 0.0 — the engine dropped the results sub-score in
         # SIM-067, so there is nothing to fit and nothing to apply it to.
 
@@ -1420,12 +1205,6 @@ class SimilarityCalibrator:
               AND NOT below_minimum_sample
         """).fetchall()
 
-        def _zscore(mat):
-            m = np.nanmean(mat, axis=0)
-            s = np.nanstd(mat, axis=0)
-            s[s == 0] = 1.0
-            return (mat - m) / s
-
         # Calibrate IF sigmas
         if if_rows:
             n_range = len(IF_RANGE_FEATURES)
@@ -1460,13 +1239,19 @@ class SimilarityCalibrator:
             # 1.0 — which apply_calibration's ``v if v > 0 else current`` would
             # otherwise apply as a real override, silently clobbering the engine's
             # tuned module default.
-            report.sigma_if_range = self._fit_sigma(_zscore(range_raw), target_median_score)
+            report.sigma_if_range = self._fit_sigma(
+                self._zscore_matrix(range_raw), target_median_score
+            )
             report.sigma_if_dp = self._fit_sigma(
-                _zscore(np.concatenate((dp_raw, pivot_raw), axis=1)),
+                self._zscore_matrix(np.concatenate((dp_raw, pivot_raw), axis=1)),
                 target_median_score,
             )
-            report.sigma_if_errors = self._fit_sigma(_zscore(err_raw), target_median_score)
-            report.sigma_if_specialty = self._fit_sigma(_zscore(spec_raw), target_median_score)
+            report.sigma_if_errors = self._fit_sigma(
+                self._zscore_matrix(err_raw), target_median_score
+            )
+            report.sigma_if_specialty = self._fit_sigma(
+                self._zscore_matrix(spec_raw), target_median_score
+            )
 
             report.reliability_weights_if_range = calibrate_reliability_weights(range_raw, ids)
             report.reliability_weights_if_dp = calibrate_reliability_weights(dp_raw, ids)
@@ -1514,10 +1299,16 @@ class SimilarityCalibrator:
 
             ids = np.array([r[0] for r in of_rows])
 
-            report.sigma_of_range = self._fit_sigma(_zscore(range_raw), target_median_score)
-            report.sigma_of_arm = self._fit_sigma(_zscore(arm_raw), target_median_score)
-            report.sigma_of_stars = self._fit_sigma(_zscore(star_raw), target_median_score)
-            report.sigma_of_errors = self._fit_sigma(_zscore(err_raw), target_median_score)
+            report.sigma_of_range = self._fit_sigma(
+                self._zscore_matrix(range_raw), target_median_score
+            )
+            report.sigma_of_arm = self._fit_sigma(self._zscore_matrix(arm_raw), target_median_score)
+            report.sigma_of_stars = self._fit_sigma(
+                self._zscore_matrix(star_raw), target_median_score
+            )
+            report.sigma_of_errors = self._fit_sigma(
+                self._zscore_matrix(err_raw), target_median_score
+            )
 
             report.reliability_weights_of_range = calibrate_reliability_weights(range_raw, ids)
             report.reliability_weights_of_arm = calibrate_reliability_weights(arm_raw, ids)
@@ -1592,19 +1383,19 @@ class SimilarityCalibrator:
         col += n_agg
         suc_raw = np.array([[r[col + i] or 0.0 for i in range(n_suc)] for r in rows])
 
-        def _zscore(mat):
-            m = np.nanmean(mat, axis=0)
-            s = np.nanstd(mat, axis=0)
-            s[s == 0] = 1.0
-            return (mat - m) / s
-
         # SIM-432: _fit_sigma so a degenerate (all-NULL) sub-score keeps the
         # engine's tuned default instead of overriding it with calibrate_sigma's
         # spurious 1.0 — sprint_speed in particular is unpopulated on the live DB,
         # and a raw 1.0 would clobber the calibrated RBF_SIGMA_SPEED=0.8171.
-        report.sigma_baserunner_speed = self._fit_sigma(_zscore(speed_raw), target_median_score)
-        report.sigma_baserunner_aggression = self._fit_sigma(_zscore(agg_raw), target_median_score)
-        report.sigma_baserunner_success = self._fit_sigma(_zscore(suc_raw), target_median_score)
+        report.sigma_baserunner_speed = self._fit_sigma(
+            self._zscore_matrix(speed_raw), target_median_score
+        )
+        report.sigma_baserunner_aggression = self._fit_sigma(
+            self._zscore_matrix(agg_raw), target_median_score
+        )
+        report.sigma_baserunner_success = self._fit_sigma(
+            self._zscore_matrix(suc_raw), target_median_score
+        )
 
         # EB prior
         all_raw = np.hstack([speed_raw, agg_raw, suc_raw])

@@ -1,3 +1,5 @@
+> Stale snapshot — superseded; repo moved off OneDrive; migration numbers here are obsolete (live head is Alembic 0015 / DuckDB v13). See CLAUDE.md for current status.
+
 # Phase 5 Handoff — Backend API & Simulation Runner
 
 *Author: Product Manager (Agent 1) · Date: 2026-05-24 · Phase 4 closure*

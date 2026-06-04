@@ -19,8 +19,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
+
+from api.routes._common import _get_pool, _row_get
 
 router = APIRouter(prefix="/api/data", tags=["data"])
 
@@ -67,24 +69,14 @@ _PER_SEASON_SQL = """
 """
 
 
-def _get_pool(request: Request) -> Any:
-    pool = getattr(request.app.state, "pg_pool", None)
-    if pool is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="database pool unavailable",
-        )
-    return pool
-
-
-def _row_get(row: Any, key: str) -> Any:
-    """Read a column from an asyncpg Record or a plain dict (test stub)."""
-    if isinstance(row, dict):
-        return row.get(key)
-    try:
-        return row[key]
-    except (KeyError, IndexError, TypeError):
-        return None
+# ``_get_pool`` + ``_row_get`` are imported from api.routes._common (audit
+# 2026-06-03 "api/ duplication").  ``_get_pool`` was byte-identical to games.py's
+# copy.  The canonical ``_common._row_get`` is the games.py variant (it takes an
+# explicit ``default`` and collapses present-but-None to it).  data_health's old
+# local copy never passed a non-None default and wraps every read in ``_iso(...)``
+# / ``int(... or 0)``, so the canonical version is behaviour-identical for every
+# call site here (the only drift -- None-vs-default collapse -- is unobservable
+# without a non-None default).
 
 
 def _iso(value: Any) -> str | None:

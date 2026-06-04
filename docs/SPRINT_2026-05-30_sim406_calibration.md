@@ -1,3 +1,5 @@
+> SUPERSEDED by SIM-432 (2026-06-01): calibration is now live; the identity-map / not-yet-run-live caveats below are historical.
+
 # Sprint — SIM-406: Fit + persist a CalibrationReport over real data + apply to all engines
 
 **Date:** 2026-05-30

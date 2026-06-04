@@ -3,6 +3,9 @@
 -- Engine: PostgreSQL 16+
 -- Schemas: raw (ingested data), sim (session/operational state)
 --
+-- Snapshot authoritative only through migration 0013; Alembic
+-- (db/migrations/versions/) is the source of truth.
+--
 -- Tables:
 --   raw.venues          raw.teams           raw.players
 --   raw.managers        raw.games           raw.game_lineups
@@ -799,3 +802,68 @@ LEFT  JOIN sim.lineup_state ls ON ls.game_pk = g.game_pk AND ls.is_live_game = T
 WHERE g.status = 'Live' AND g.game_date = CURRENT_DATE;
 
 COMMENT ON VIEW sim.live_games IS 'Currently live games with their active simulation session. Consumed by 30-second polling loop.';
+
+-- =============================================================================
+-- SIM.SIM_RUNS
+-- SIM-356 (Alembic migration 0014): durable per-run GameSimSummary history.
+-- The Postgres half of the sim-result + pitch-snapshot persistence pair (the
+-- pitch-level play-stream is the DuckDB half).  One row per Monte-Carlo run;
+-- run_id is the stable handle a DuckDB sim.play_stream and the API key their
+-- lookups on.  Purely additive — sim.lineup_state (the ephemeral live blob) is
+-- left untouched.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS sim.sim_runs (
+    run_id          BIGSERIAL   PRIMARY KEY,
+    game_pk         INTEGER     NOT NULL,
+    n_iterations    INTEGER     NOT NULL,
+    base_seed       BIGINT,
+    summary         JSONB       NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Dominant read path: "latest / last-N runs for this matchup". DESC so the
+-- planner can satisfy ORDER BY created_at DESC LIMIT n with an index scan.
+CREATE INDEX IF NOT EXISTS idx_sim_runs_game_created
+    ON sim.sim_runs(game_pk, created_at DESC);
+
+COMMENT ON TABLE sim.sim_runs IS
+    'SIM-356: durable per-run GameSimSummary history (to_jsonable(GameSimSummary) in summary). Backs /simulate result lookup + sim history; run_id is the handle the DuckDB sim.play_stream keys on.';
+
+-- =============================================================================
+-- RAW.GAME_BULLPEN_AVAILABILITY
+-- SIM-433 (Alembic migration 0015): per-game bullpen availability + IL signal.
+-- raw.game_lineups records who PLAYED, not who was AVAILABLE.  This table is the
+-- available-but-unused signal that makes the SIM-427/SIM-434 manager USAGE
+-- sub-score meaningful — one row per (game_pk, team_id, pitcher_id).  The rest /
+-- recent-workload fields (days_rest, pitches_last_3d, back_to_back) are derived
+-- from raw.pitches by the profile computor; available/reason come from the MLB
+-- Stats API active roster + IL.  Purely additive.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS raw.game_bullpen_availability (
+    game_pk         INTEGER     NOT NULL REFERENCES raw.games(game_pk),
+    team_id         INTEGER     NOT NULL,
+    pitcher_id      INTEGER     NOT NULL REFERENCES raw.players(player_id),
+    available       BOOLEAN     NOT NULL,
+    reason          VARCHAR(16)
+                        CHECK (reason IN ('active','IL','rest','recent_use')),
+    days_rest       INTEGER,
+    pitches_last_3d INTEGER     NOT NULL DEFAULT 0,
+    back_to_back    BOOLEAN     NOT NULL DEFAULT FALSE,
+    is_starter      BOOLEAN     NOT NULL DEFAULT FALSE,
+    source          VARCHAR(16) NOT NULL DEFAULT 'mlb_api',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (game_pk, team_id, pitcher_id)
+);
+
+-- Per-game availability read path ("which arms could this team use tonight").
+CREATE INDEX IF NOT EXISTS idx_gba_game_team
+    ON raw.game_bullpen_availability(game_pk, team_id);
+-- Per-pitcher availability history.
+CREATE INDEX IF NOT EXISTS idx_gba_pitcher
+    ON raw.game_bullpen_availability(pitcher_id);
+
+COMMENT ON TABLE raw.game_bullpen_availability IS
+    'SIM-433: per-game bullpen availability (who was AVAILABLE, not just who played). reason in active/IL/rest/recent_use; rest fields (days_rest/pitches_last_3d/back_to_back) derived from raw.pitches by the profile computor, available/reason from the MLB Stats API active roster + IL. The available-but-unused signal that makes SIM-427/434 manager USAGE profiles meaningful.';

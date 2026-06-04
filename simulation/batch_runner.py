@@ -12,14 +12,22 @@ per-game :class:`~simulation.results.GameSimResult`s into a single
 :class:`~simulation.results.GameSimSummary` (SIM-327).  This module is the
 fan-out / fan-in that does that, honoring the locked SIM-281 parallelism ADR
 (``docs/architecture/2026-05-27-parallelism.md``) and the SIM-119 / SIM-280
-2 s-game / 30 s-batch / <=2 GB budgets.
+2 s-game / 30 s-batch budgets.  (SIM-430 superseded the original <=2 GB RAM budget:
+the pool now spawns forkserver workers under a 10 GB cgroup ``mem_limit`` at ~373 MB
+each; the 30 s batch SLA is the remaining open gap, tracked as SIM-436.)
 
 THE LOCKED DESIGN THIS HONORS
 -----------------------------
-  * **Concurrency backend (SIM-281 D1).**  ``concurrent.futures.ProcessPoolExecutor``
-    with ``max_workers = min(os.cpu_count() - 1, 10)`` -- the explicit 10-worker
-    ceiling keeps ``total(W) = 290 MB + W x 165 MB`` under the 2 GB cap on
-    >=16-core hosts (SIM-280 §4).  See :func:`default_max_workers`.
+  * **Concurrency backend (SIM-281 D1, scaling per SIM-430).**
+    ``concurrent.futures.ProcessPoolExecutor`` with
+    ``max_workers = min(os.cpu_count() - 1, 10)`` (the ceiling of 10 still holds; the
+    host is pinned to ``SIM_RUNNER_WORKERS=6``, which is where full-pool throughput
+    plateaus).  Workers no longer COW-fork from the engine-loaded parent: SIM-430
+    switched the pool to ``mp_context=forkserver`` (workers fork from a lean ~30 MB
+    server → ~373 MB each, measured), and the ``app`` service runs under a 10 GB
+    cgroup ``mem_limit``.  The pre-SIM-430 ``total(W) = 290 MB + W x 165 MB`` ≤ 2 GB
+    model (10-worker COW-from-parent) no longer describes the live footprint -- see
+    the SIM-430 note on :data:`_MP_START_METHOD`.  See :func:`default_max_workers`.
   * **Per-game seed isolation (spec §6.3).**  Each iteration ``i`` gets a distinct
     deterministic seed ``derive_seed(base_seed, i)`` so (a) a fixed ``base_seed``
     reproduces the WHOLE batch (every per-game seed is a pure function of the
@@ -101,8 +109,12 @@ SIM_RESULT_TTL_S = 60
 #: results live 5 minutes (they change only on the nightly build).
 POOL_QUERY_TTL_S = 300
 
-#: The hard worker ceiling from SIM-281 D1 (keeps total RAM under the 2 GB cap on
-#: >=16-core hosts; SIM-280 §4: 16 workers ~= 2.86 GB breaches).
+#: The hard worker ceiling from SIM-281 D1.  Originally sized to keep total RAM under
+#: the pre-SIM-430 2 GB cap on >=16-core hosts (SIM-280 §4: 16 workers ~= 2.86 GB
+#: breaches); SIM-430 reworked the memory model (forkserver workers ~373 MB each under
+#: a 10 GB ``app`` cgroup ``mem_limit``), and in practice the host is pinned to
+#: ``SIM_RUNNER_WORKERS=6`` (full-pool throughput plateaus past ~6).  The ceiling of
+#: 10 remains the upper bound.
 MAX_WORKER_CEILING = 10
 
 #: SIM-402: how long a prewarm worker waits to acquire the warm semaphore before
@@ -110,10 +122,11 @@ MAX_WORKER_CEILING = 10
 _PREWARM_ACQUIRE_TIMEOUT_S = 60.0
 
 #: SIM-402: max workers that run the heavy full-pool warm CONCURRENTLY.  Each warm
-#: is a copy-on-write fork of a multi-GB parent plus per-hand index allocation, so
-#: warming all W at once spiked memory and OOM-killed a worker in the field; cap the
-#: simultaneous warms (the rest spawn cheaply and warm in waves).  The default is
-#: deliberately small; override via SIM_PREWARM_MAX_CONCURRENT.
+#: loads the multi-GB full-pool artifacts + allocates per-hand indices in its worker
+#: (SIM-430: workers are forkserver-spawned, ~373 MB each, NOT COW forks of the
+#: parent), so warming all W at once spiked memory and OOM-killed a worker in the
+#: field; cap the simultaneous warms (the rest spawn cheaply and warm in waves).  The
+#: default is deliberately small; override via SIM_PREWARM_MAX_CONCURRENT.
 _PREWARM_MAX_CONCURRENT_WARM = max(1, int(os.environ.get("SIM_PREWARM_MAX_CONCURRENT", "2")))
 
 #: SIM-402: overall deadline for the pooled prewarm gather.  Past this, prewarm
@@ -159,7 +172,9 @@ def default_max_workers(cpu_count: int | None = None) -> int:
     ``cpu_count`` is injectable for deterministic tests; defaults to
     ``os.cpu_count()`` (treated as 1 if the OS reports ``None``).  The floor of 1
     guarantees a usable pool on a single-core host; the ceiling of
-    :data:`MAX_WORKER_CEILING` honors the 2 GB cap.
+    :data:`MAX_WORKER_CEILING` is the SIM-281 upper bound (SIM-430 reworked the
+    underlying memory model — forkserver workers under a 10 GB ``mem_limit`` — so this
+    no longer enforces the old 2 GB cap; the host is pinned to ``SIM_RUNNER_WORKERS=6``).
     """
     cpu = cpu_count if cpu_count is not None else (os.cpu_count() or 1)
     return max(1, min(int(cpu) - 1, MAX_WORKER_CEILING))
@@ -262,8 +277,17 @@ def _resolve_dotted(ref: str) -> Callable:
 # SIM-333 — shared-memory zero-copy attach for the read-only payload
 # ===========================================================================
 #
-# WHAT IS SHARED (and why ≤2 GB holds)
-# ------------------------------------
+# SIM-430 NOTE: the RAM-budget arithmetic in this block (≤2 GB cap; ``290 MB shared
+# + W × ~165 MB private``) describes the PRE-SIM-430 per-tile COW-from-parent model
+# and no longer governs the live footprint.  Production runs the full-pool sampler
+# under ``mp_context=forkserver`` (workers fork from a lean ~30 MB server, ~373 MB
+# each) inside a 10 GB ``app`` cgroup ``mem_limit``; this shared-memory attach is now
+# the per-tile fallback / unit-test path.  The mechanics below (what is shared, the
+# parent-owns-unlink lifecycle) are still accurate — only the budget conclusion is
+# superseded.
+#
+# WHAT IS SHARED (and why ≤2 GB held, pre-SIM-430)
+# ------------------------------------------------
 # The read-only payload SIM-280 §4 quantifies at ~290 MB is, by *byte volume*,
 # almost entirely raw numpy buffers: the situation KDTree's ``N×11`` float64 data
 # (~88 MB), the RBF/GMM stacked partition matrices (~18 MB), and the FAISS tiles'
@@ -427,12 +451,14 @@ def _prewarm_worker(sem: Any, pool_dir: str | None) -> int:
     semaphore so only a few workers run the heavy warm AT ONCE.
 
     Submitted once per worker by :meth:`BatchRunner.prewarm`.  Submitting one task
-    per worker makes the executor spawn every worker (cheap copy-on-write forks); the
-    semaphore then bounds how many run the *heavy*
+    per worker makes the executor spawn every worker (SIM-430: forkserver forks from
+    a lean ~30 MB server, NOT a copy-on-write fork of the engine-loaded parent — that
+    was the bug, CPython refcount/GC defeated COW and ballooned each worker toward the
+    inherited ~6 GB); the semaphore then bounds how many run the *heavy*
     :func:`simulation.production_factory.warm_worker_cache` simultaneously, so the
-    peak memory of forking + warming a multi-GB parent stays under the cgroup limit
-    (an unbounded all-at-once warm OOM-killed a worker in the field).  Returns
-    ``os.getpid()`` so the parent can count DISTINCT warmed workers.
+    peak memory of spawning + warming workers stays under the ``app`` service's 10 GB
+    cgroup ``mem_limit`` (an unbounded all-at-once warm OOM-killed a worker in the
+    field).  Returns ``os.getpid()`` so the parent can count DISTINCT warmed workers.
 
     Defensive: a semaphore hiccup or a warm failure is swallowed — the worst case is
     a worker that warms lazily on its first real game (the prior behaviour).
@@ -873,10 +899,11 @@ class BatchRunner:
         parallel, off the request path.
 
         * **Pooled path** (``reuse_pool`` and resolved worker count > 1): submit one
-          warm task per worker (so the executor spawns all W — cheap COW forks) and
-          run :func:`simulation.production_factory.warm_worker_cache` on each, but cap
+          warm task per worker (so the executor spawns all W — SIM-430: forkserver
+          spawns, NOT COW forks of the parent) and run
+          :func:`simulation.production_factory.warm_worker_cache` on each, but cap
           how many run the HEAVY warm concurrently (a shared semaphore) so peak
-          fork+warm memory stays bounded.  Uses the SAME persistent pool a later
+          spawn+warm memory stays bounded.  Uses the SAME persistent pool a later
           :meth:`run` reuses, so the workers stay warm.  Returns the count of DISTINCT
           workers warmed.
         * **In-process path** (worker count <= 1, or ``reuse_pool`` off): there is no
@@ -907,10 +934,11 @@ class BatchRunner:
             except Exception:
                 return 0
 
-        # Pooled -> submit one warm task per worker (forces all W to spawn — cheap
-        # COW forks of the parent), but a shared semaphore caps how many run the
-        # HEAVY full-pool warm AT ONCE, so peak fork+warm memory stays bounded (an
-        # unbounded all-at-once warm OOM-killed a worker in the field).
+        # Pooled -> submit one warm task per worker (forces all W to spawn — SIM-430:
+        # forkserver spawns from a lean server, NOT a COW fork of the parent), but a
+        # shared semaphore caps how many run the HEAVY full-pool warm AT ONCE, so peak
+        # spawn+warm memory stays bounded (an unbounded all-at-once warm OOM-killed a
+        # worker in the field).
         deadline = float(timeout) if timeout is not None else _PREWARM_TIMEOUT_S
         try:
             pool = self._get_pool(target)

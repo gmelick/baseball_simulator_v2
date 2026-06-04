@@ -56,7 +56,7 @@ Behind the scenes, two databases work together. **PostgreSQL** handles all the l
 
 ### 4.2 The similarity engines (the IP)
 
-This is the actual intellectual property of the platform. There are **11 similarity engines** planned, 9 of which are built. Each one answers a specific question of the form *"Which historical X is most like this current X?"*:
+This is the actual intellectual property of the platform. There are **11 similarity engines**, all of which are built and live (the app boots logging `build_all_engines: 11/11`). Each one answers a specific question of the form *"Which historical X is most like this current X?"*:
 
 | # | Engine | Question it answers |
 |---|--------|---------------------|
@@ -99,7 +99,7 @@ The simulator's outputs need to get to the user. That's done via:
   - A **Day Summary** page showing every MLB game on a given date, with simulated win probabilities, betting odds, and live scores.
   - A **Game Page** with detailed play-by-play, simulation projections per player, and a **managerial override** tool that lets the user say *"swap in this pinch hitter"* and instantly see how the simulation projection shifts.
 
-The API and frontend are **planned for Phases 5 and 6** — they don't exist yet. A skeleton FastAPI app exists today (`api/main.py`) with health endpoints, but the simulation routes haven't been built.
+The API and frontend are **both built and live** (Phases 5 and 6 complete). The FastAPI app (`api/main.py`) wires up a full set of routes under `api/routes/` — games, simulation, betting/CLV, similarity, metrics, and auth — plus the live-update WebSocket. The frontend is a real React 18 + Vite + TypeScript application in `frontend/`, with both the Day Summary and Game pages (including the managerial override tool) implemented.
 
 ---
 
@@ -110,20 +110,14 @@ The project is structured into **7 sequential phases** spanning roughly 24 weeks
 | Phase | What it delivers | Status |
 |-------|------------------|--------|
 | 1. Data Infrastructure & Pipeline | Working ETL, populated database, data API layer | ✅ Complete |
-| 2. Similarity Engine Suite | All 11 similarity engines, fully tested | 🔄 In progress (9 of 11 built — 82%) |
-| 3. Play Pool Architecture | Indexed, query-optimized historical pitch pool | 🔲 Not started |
-| 4. Core Simulation Loop | The 8-step pitch-by-pitch simulator | 🔲 Not started |
-| 5. Simulation Runner & Backend API | FastAPI endpoints, parallel 100-iteration runner | 🔲 Not started |
-| 6. Frontend Build | Day Summary + Game pages | 🔲 Not started |
-| 7. Integration, Testing & Deployment | Production-ready hosted system | 🔲 Not started |
+| 2. Similarity Engine Suite | All 11 similarity engines, fully tested | ✅ Complete |
+| 3. Play Pool Architecture | Indexed, query-optimized historical pitch pool | ✅ Complete |
+| 4. Core Simulation Loop | The 8-step pitch-by-pitch simulator | ✅ Complete |
+| 5. Simulation Runner & Backend API | FastAPI endpoints, parallel 100-iteration runner | ✅ Complete |
+| 6. Frontend Build | Day Summary + Game pages | ✅ Complete |
+| 7. Integration, Testing & Deployment | Production-ready hosted system | 🔄 In progress (live-env bring-up) |
 
-**Today's reality:** Data flows in, the database is populated, and most of the similarity engines work. The simulator itself, the API, and the frontend are all unbuilt. Anyone joining today is most likely working on either the last two engines (pitch-to-pitch and batted ball), the play pool architecture, or starting the simulation loop itself.
-
-The two remaining engines blocking the end of Phase 2 are:
-- **Pitch-to-Pitch** (SIM-041) — using FAISS to find the closest historical pitches to a given pitch vector.
-- **Batted Ball-to-Batted Ball** (SIM-042) — same idea, for batted balls.
-
-Once Phase 2 is finished, the natural next step is the `SimilarityEngineRegistry` (SIM-048) — a single object that wires all 11 engines together behind a unified interface for the simulator to call.
+**Today's reality:** The whole pipeline is built and runs end-to-end. Data flows in, the database is populated, all 11 similarity engines are live (the app boots logging `build_all_engines: 11/11`), the pitch-by-pitch simulator runs, the FastAPI backend serves it over REST + WebSocket, and the React frontend renders the Day Summary and Game pages. The work now is **Phase 7** — the live-environment bring-up and the remaining production-hardening work: calibration is fitted and applied at boot, and the open items are throughput tuning (hitting the 100-game batch SLA), granular run/prop calibration plus the CLV backtest, and a handful of realism follow-ons. Anyone joining today is most likely working on one of those Phase-7 threads rather than building a phase from scratch.
 
 ---
 
@@ -256,12 +250,15 @@ baseball_simulator_v2/
 │   └── batch/                     # Nightly aggregation jobs (player profiles, defensive metrics)
 │
 ├── similarity/
-│   ├── engines/                   # One file per similarity engine (9 of 11 exist today)
+│   ├── engines/                   # One file per similarity engine (all 11 exist)
 │   ├── similarity_calibration.py  # Shared calibration utilities
 │   └── similarity_diagnostics.py  # Diagnostic runner used by all RBF engines
 │
 ├── api/
-│   └── main.py                    # FastAPI app skeleton (only health endpoints today)
+│   ├── main.py                    # FastAPI app (create_app + lifespan, engine build)
+│   └── routes/                    # Full REST surface: games, simulate, betting, similarity, metrics, auth (+ WebSocket)
+│
+├── frontend/                      # React 18 + Vite + TypeScript app (src/main.tsx, components/, pages/, built dist/)
 │
 ├── db/
 │   ├── migrations/                # Alembic Postgres migrations + numbered DuckDB SQL
@@ -332,5 +329,5 @@ baseball_simulator_v2/
 ## 13. If you only remember three things
 
 1. **The product is a Monte Carlo MLB game simulator built around 11 similarity engines, designed to find mispriced bets.** Closing Line Value is the metric that ultimately decides whether it's working.
-2. **We're at the end of Phase 2 of 7.** The data pipeline and 9 of 11 similarity engines are done. The simulation loop, API, and frontend are still unbuilt.
+2. **Phases 1–6 are complete; we're in Phase 7.** The data pipeline, all 11 similarity engines, the simulation loop, the API, and the frontend are all built and live. The remaining work is live-environment bring-up and production hardening (throughput, calibration, CLV backtest).
 3. **Work is divided across 9 specialist agents.** Knowing who owns what (`agent_team.md`) is the fastest way to get a useful answer.

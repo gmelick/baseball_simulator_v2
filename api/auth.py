@@ -6,12 +6,12 @@ Baseline API security primitives for the MLB Simulation Platform (SIM-351).
 This module is intentionally dependency-free beyond FastAPI/Starlette (no
 ``slowapi``, no Redis). It provides two seams Phase-5 routers can attach:
 
-  - ``require_api_key`` — a FastAPI dependency that validates an ``X-API-Key``
-    request header against a comma-separated ``API_KEYS`` env var. In
-    ``development`` env, or when no keys are configured, it is a no-op
-    pass-through so local dev + the test suite work without ceremony. In any
-    non-dev environment with keys configured, a missing/invalid key yields
-    ``401``.
+  - ``require_auth`` — a FastAPI dependency that accepts a valid session
+    cookie OR an ``X-API-Key`` header. In ``development`` env, or when neither
+    a password nor keys are configured, it is a no-op pass-through so local
+    dev + the test suite work without ceremony. In any non-dev environment
+    with credentials configured, a missing/invalid credential yields ``401``.
+    This is the primary route gate for expensive / sensitive routes.
 
   - ``RateLimitMiddleware`` — a pure-stdlib in-memory sliding-window limiter
     keyed by API key (falling back to client IP). Defaults to
@@ -217,38 +217,6 @@ def cookie_kwargs(*, max_age: int | None = None) -> dict:
 API_KEY_HEADER = "X-API-Key"
 
 
-async def require_api_key(request: Request) -> str | None:
-    """FastAPI dependency enforcing ``X-API-Key`` on a protected route.
-
-    Behaviour matrix:
-      - development env                         → pass-through (returns None)
-      - non-dev env AND no API_KEYS configured  → pass-through (returns None)
-      - non-dev env AND keys configured:
-            valid X-API-Key   → returns the matched key
-            missing/invalid   → raises 401
-
-    Phase-5 routers attach this via ``dependencies=[Depends(require_api_key)]``
-    on the router or ``Depends(require_api_key)`` on individual handlers. It is
-    deliberately NOT applied to ``/health`` / ``/ready`` / ``/`` so liveness and
-    readiness probes never require a credential.
-    """
-    keys = _configured_api_keys()
-
-    # Relaxed mode: dev env, or no keys configured anywhere → no-op.
-    if _is_development() or not keys:
-        return None
-
-    presented = request.headers.get(API_KEY_HEADER)
-    if presented and presented in keys:
-        return presented
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Missing or invalid API key.",
-        headers={"WWW-Authenticate": API_KEY_HEADER},
-    )
-
-
 # ---------------------------------------------------------------------------
 # Combined browser + programmatic auth dependency (SIM-389)
 # ---------------------------------------------------------------------------
@@ -275,7 +243,7 @@ async def require_auth(request: Request) -> str | None:
     lets staging environments that haven't set up credentials yet behave as
     unauthenticated pass-through rather than hard-failing every request.
     """
-    # 1a. Dev bypass — same transparent behaviour as require_api_key.
+    # 1a. Dev bypass — transparent pass-through in development.
     if _is_development():
         return None
 
@@ -451,6 +419,17 @@ class LatencyMiddleware(BaseHTTPMiddleware):
         elapsed = time.monotonic() - t0
 
         self._window.append(elapsed)
+
+        # SIM-410: feed the served-request counter via the /metrics seam, so
+        # baseball_sim_requests_total reflects real traffic (was perpetually 0 —
+        # the counter had no production caller). Local import avoids any import
+        # cycle; record_request is best-effort and never raises.
+        try:
+            from api.routes.metrics import record_request
+
+            record_request(request.app.state)
+        except Exception:  # noqa: BLE001
+            pass
 
         # Compute p95 from the window and stash it on app.state.
         w = self._window

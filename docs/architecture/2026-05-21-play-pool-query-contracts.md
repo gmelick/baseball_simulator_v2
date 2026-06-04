@@ -1,7 +1,8 @@
 # Play-Pool Query Column Contracts (Phase 3 / Phase 4)
 
 *Ticket: SIM-111 · Owner: Backend Developer + Data Engineer · Date: 2026-05-21*
-*Status: ACTIVE — authoritative column contract for the play-pool query API
+*Status: ACTIVE (fallback/unit-test path only; production pitch-selection is full-pool,
+SIM_FULL_POOL=1) — authoritative column contract for the play-pool query API
 (the `PlayPoolSampler`, SIM-302, and the Phase 4 sim loop, SIM-303). This is the
 reference SIM-115 (index pruning) acts on and the reference any future change to
 `sim.pitch_pool` / `sim.outcome_pool` / `sim.stolen_base_pool` must update.*

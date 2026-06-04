@@ -97,6 +97,17 @@ dmypy.json
 *.orig
 # sim_stats.py / harness measurement dumps (SIM-429) — run artifacts, not source
 scripts/sim_stats*.json
+# Excel lock files (the ~$ shadow file Excel opens alongside any .xlsx)
+~$*
+# backlog.xlsx RETIRED 2026-06-04 (comprehensive audit): hand-maintained, drifted
+# badly from BACKLOG.md, no generator script — BACKLOG.md is now the single source
+# of truth. Ignored so a stray local copy is never re-tracked.
+backlog.xlsx
+backlog_v2.xlsx
+# Audit scratch dumps (xlsx/sheets extraction — not source)
+sheets_dump.json
+xlsx_dump.json
+xlsx_fullbacklog.json
 
 # ---------------------------------------------------------------------------
 # JavaScript / Node (Phase 6 frontend — SIM-379)

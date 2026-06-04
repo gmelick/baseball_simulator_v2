@@ -1,6 +1,6 @@
 # MLB Baseball Simulation Platform — End-to-End Workflow
 
-*Last updated: 2026-05-21 (post-Phase-2 audit · URL fix)*
+*Last updated: 2026-06-04 (Phase-7 refresh: Python 3.13 · Alembic 0015 · DuckDB v13 · full API surface live)*
 
 This document is the operator's manual.  It describes how to run the
 platform end-to-end from a clean checkout, and how to confirm each
@@ -15,8 +15,8 @@ exited zero.
 > forward slashes for paths.
 
 > **Phase note.** As of 2026-09-02 (executed 2026-05-25) the platform is at **Phase 6 —
-> Frontend Build**.  Phases 1–5 are fully COMPLETE and CI-green (Python 3.11.15;
-> 1814 pass / 0 fail / 89% coverage; DuckDB v10 / Alembic 0014).  The full API
+> Frontend Build**.  Phases 1–5 are fully COMPLETE and CI-green (Python 3.13;
+> 1814 pass / 0 fail / 89% coverage; DuckDB v13 / Alembic 0015).  The full API
 > surface (games, simulate, betting, WebSocket, odds, similarity, metrics) is
 > live.  Steps marked **[Phase 4+]** below are now implemented; this document
 > will be refreshed in Sprint 2 (SIM-421) to reflect the full Phase-5 endpoint
@@ -26,9 +26,10 @@ exited zero.
 
 ## API endpoint reference (currently shipping)
 
-The only similarity endpoint that's currently wired through the FastAPI
-router (per `api/routes/similarity.py`) is the **pitcher distribution**
-endpoint:
+The full Phase-5 API surface is live: the games router (`/api/games/*`,
+including `/simulate`), the betting/CLV surface, the typed WebSocket
+channel, the odds path, similarity, and metrics.  The **pitcher
+distribution** similarity endpoint (per `api/routes/similarity.py`) is:
 
 ```
 GET /api/similarity/pitcher/{pitcher_id}/{season}
@@ -52,7 +53,7 @@ defined in `api/main.py`.
 | Requirement | Version | Notes |
 |---|---|---|
 | Docker Desktop | latest | Required by `make dev`.  Ensure WSL2 backend is healthy. |
-| Python | 3.11+ | `pyproject.toml` pins 3.11.  3.13 has no POT/faiss wheels yet. |
+| Python | 3.13 | `pyproject.toml` pins 3.13 (SIM-431); CI + Docker + local unified. |
 | Git for Windows | any | Includes Git Bash if you prefer bash semantics. |
 | Make for Windows | GNU | `choco install make` or use the WSL2 alternative. |
 | `curl` | any | Ships with Windows 10+. |
@@ -70,13 +71,13 @@ make test
 ```
 
 **What good looks like.**
-- `make migrate` ends with `alembic current` printing head revision (currently `0012`).
+- `make migrate` ends with `alembic current` printing head revision (currently `0015`).
 - `make test` exits 0.  After the recent fixes: 767 passed, ~22 skipped, 0 failed, 0 errors.
 
 ### 1.3 Local Python development (without Docker)
 
 ```bat
-py -3.11 -m venv .venv
+py -3.13 -m venv .venv
 .venv\Scripts\activate.bat
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
@@ -140,14 +141,14 @@ curl "http://localhost:8000/api/similarity/pitcher/605400/2024?bins=30&top_n=10"
 > escape as `^&` or wrap the URL in double quotes (the doc uses
 > double-quoted URLs throughout).
 
-### 1.7 Run a simulation **[Phase 4+]**
+### 1.7 Run a simulation
 
-Phase 4 ships in sprint 2026-06-10 onward (see SIM-303).  Until then:
+The simulation loop is live (Phase 4 complete).  Kick off a 100-iteration
+run for a game:
 
 ```bat
-:: NOT YET IMPLEMENTED — Phase 4
-curl -X POST "http://localhost:8000/api/games/745000/simulate"
-:: Returns 404 until SIM-303 wires the simulation loop.
+curl "http://localhost:8000/api/games/745000/simulate"
+:: Returns win probabilities, per-player prop PMFs, boxscore + linescore.
 ```
 
 ---
@@ -168,13 +169,13 @@ python scripts\check_bat_side_coverage.py --out docs\data_quality\2026-05-20-bat
 echo %ERRORLEVEL%
 ```
 
-**What good looks like.**  ~700 000 rows per fully-loaded season; `alembic current` prints `0012`; `check_bat_side_coverage.py` exits 0.
+**What good looks like.**  ~700 000 rows per fully-loaded season; `alembic current` prints `0015`; `check_bat_side_coverage.py` exits 0.
 
 ### 2.2 DuckDB analytical layer
 
 ```bat
 type db\schemas\duckdb_schema_version.txt
-:: Expected: 3
+:: Expected: 13
 
 duckdb db\schemas\baseball_simulator.duckdb -c "SELECT * FROM migration_history ORDER BY applied_at;"
 
@@ -226,8 +227,9 @@ curl "http://localhost:8000/api/similarity/pitcher/605400/2024"
 
 :: Surface inventory:
 curl http://localhost:8000/openapi.json > openapi.json
-:: Currently lists: /health, /ready, /api/similarity/pitcher/{pitcher_id}/{season}
-:: Phase 5 will add /api/games/* and the WebSocket channel.
+:: Lists the full surface: /health, /ready, /api/games/* (incl. /simulate),
+:: the betting/CLV routes, /api/similarity/pitcher/{pitcher_id}/{season},
+:: /metrics, and the WebSocket channel.
 ```
 
 ### 2.6 Redis cache
@@ -267,10 +269,9 @@ make test-integration
 `POT` (pitcher engine W₂), `scipy` (situation engine), `pybaseball`
 (ETL loader), `pytest-asyncio` (integration).  `pip install -r requirements-dev.txt` covers all.
 
-**Python 3.13 caveat.**  POT and `faiss-cpu` have no cp313 wheels yet.
-On 3.13 the pitcher engine + FAISS engine smoke tests skip cleanly
-rather than fail (the engines themselves raise a clean RuntimeError
-when invoked).  Use 3.11 / 3.12 for full coverage.
+**Python 3.13.**  `POT>=0.9.5` and `faiss-cpu>=1.9` both ship cp313
+manylinux wheels, so the pitcher engine (W₂) and FAISS engine run with
+full coverage on 3.13 — no source build required (SIM-431).
 
 ### 2.9 CI pipelines
 
@@ -337,11 +338,11 @@ echo %BASEBALL_DB_DSN%
 | Live pipeline misses pitches | Check `raw.etl_errors` — SIM-093 audits skipped rows. |
 | Vig flake | Fixed in SIM-159; check `_VIG_LOWER`/`_VIG_UPPER` in `test_live_pipeline_bugs.py`. |
 | Mock odds returns NULL hash | Run `python scripts\backfill_odds_hash.py`. |
-| DuckDB schema mismatch | Re-apply `db\migrations\duckdb\000{1,2,3}_*.sql` in order and bump `duckdb_schema_version.txt`. |
+| DuckDB schema mismatch | Re-apply `db\migrations\duckdb\*.sql` in numbered order (through `0013_*`) and bump `duckdb_schema_version.txt` to match the latest migration (currently `13`). |
 | `curl` truncates URL | Escape `&` as `^&` or wrap the URL in double quotes. |
 | `set VAR=value` doesn't persist | Use `setx VAR "value"` and open a new cmd window. |
 | `make test` shows 21 errors | Integration tests can't reach Docker daemon — fixed in conftest.py; rebuild image with `make build`. |
-| Pitcher engine smoke fails with `import ot` | Python 3.13 has no POT wheel — use 3.11/3.12 or `pip install POT` from source. |
+| Pitcher engine smoke fails with `import ot` | POT isn't installed — `pip install -r requirements.txt` (pins `POT>=0.9.5`, which ships a cp313 wheel). |
 | `asyncpg.exceptions.InvalidPasswordError: password authentication failed for user "baseball_user"` even though `.env` and `docker compose exec db env` agree | **Stale `postgres_data` volume.**  `POSTGRES_PASSWORD` only takes effect on the volume's first init.  Reset the password in-band:<br>`docker compose exec db psql -U baseball_user -d baseball_sim -c "ALTER USER baseball_user WITH PASSWORD 'baseball_pass';"`<br>If that ALSO fails: `docker compose exec -u postgres db psql -c "ALTER USER baseball_user WITH PASSWORD 'baseball_pass';"`<br>Nuclear option (loses all data): `docker compose down -v && docker compose up -d db && make migrate`. |
 
 ---

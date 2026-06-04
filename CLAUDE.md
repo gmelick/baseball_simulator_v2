@@ -21,6 +21,31 @@
 
 ## 2. Current status (read this)
 
+- **▶ STATE AS OF 2026-06-04 (TL;DR — this bullet is authoritative; the rest of §2 is the dated log).**
+  - **Phases 1–6 COMPLETE and CI-green** on **Python 3.13 / numpy 2.x** (SIM-431). Frontend shipped as
+    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001).
+  - **Calibration is LIVE** (SIM-432, closed 2026-06-01): `/data/calibration.json` is fitted (`make
+    calibrate`) and **applied at boot**; the win-prob map is a **fitted reliability-curve** (was identity).
+  - **Production simulation path = the full-pool similarity sampler** (`SIM_FULL_POOL=1`); the per-tile
+    FAISS k-NN sampler is the fallback / unit-test default.
+  - **`/simulate` worker-scaling RESOLVED** (SIM-430): `mp_context=forkserver` + a 10 GB app `mem_limit`
+    → workers ~6 GB → 373 MB each, **n=100 ≈ 38 s at 6 workers, no OOM** (was 215 s serial). The **30 s
+    SLA is NOT yet met** — throughput plateaus past ~6 workers (serial parent-side result handling /
+    per-game rebuild) → tracked as **SIM-436 (P3, low)**.
+  - **Manager + realism models LIVE (2026-06-04)** — Alembic head **0015**, DuckDB schema **v13**.
+    **SIM-433** bullpen-availability ingest complete (21,612 games, all 10 seasons). **SIM-427** capstone
+    deployed: `available_reliever_usage_rate` is the manager engine's 7th USAGE feature, recalibrated
+    (`sigma_usage=1.030`); profiles recomputed for all seasons. **SIM-434** manager decision model
+    **ENABLED** (`SIM_MANAGER=1`) — 400-sim validated (pitchers/game 2→9, starter IP ~9→~6.4, runs
+    unchanged); fixes the pitcher-K/BB over-prediction. **SIM-411/413/425b** realism nudges **ENABLED**
+    (`SIM_PARK_FACTOR`/`SIM_BB_PLATOON`/`SIM_FIELDER_RBF`=1) — seed-paired validated, no run distortion.
+    All new flags pinned OFF in `tests/conftest.py`, so the flag-off baseline + CI stay byte-identical.
+  - **Next free ticket ID: SIM-437.** Open work: **SIM-435** (historical-odds backfill — needs
+    `ODDS_API_KEY`; unblocks the CLV backtest), **SIM-429** (granular run-conversion + K/BB prop
+    calibration + the CLV backtest — the fund's gold-standard metric), and **SIM-436** (per-game cost /
+    30 s SLA, P3). Realism follow-ons (fold into SIM-429): the ≥400×≥20 magnitude calibration of the
+    SIM-411/413/425b nudges, and wiring the real per-team SIM-427 manager profiles into the SIM-434
+    decision model (which currently uses a league-flat default).
 - **Phases 1–5 + Phase 6 Frontend Build (SIM-378→401 + hardening 415→420) are COMPLETE and CI-green
   on Python 3.13 (migrated from 3.11.15 — SIM-431, 2026-05-31; numpy is now 2.x).** Unit suite green (the unit lane runs the per-tile path; see below).
 - **2026-05-28 closure batch — SIX P1/P2 tickets closed in one day:**
@@ -46,8 +71,9 @@
   (`fielder_emb` = 11346 × 51 features).  Box output now MLB-realistic: H/HR/2B/BB/K within
   ~3-5% of MLB-2023, steals match MLB volume.  **Runs run ~7-8% low** (down from ~12% pre-fix) —
   remaining hits→runs *conversion* residual lives in batted-ball-with-RISP / sequencing
-  (see §11). **Next free ticket ID: SIM-433** (SIM-430 = the full-pool `/simulate`
-  throughput / 2s-30s SLA perf gap, filed 2026-05-30 off the SIM-402 live re-measure).
+  (see §11). **Next free ticket ID at the time: SIM-433** (now **SIM-437** — see the TL;DR at the top
+  of §2; SIM-430 = the full-pool `/simulate` throughput / 2s-30s SLA perf gap, filed 2026-05-30 off the
+  SIM-402 live re-measure).
 
 - **SIM-402 — CLOSED 2026-05-30 (code complete + re-measured live); the residual throughput
   gap is spun off to SIM-430.** Live API probed at
@@ -175,8 +201,9 @@
 Python 3.13 · FastAPI · Pydantic v2 · PostgreSQL (async SQLAlchemy + Alembic) · **DuckDB** (in-process,
 no container — postgres extension) · Redis · scikit-learn (GMMs) · **FAISS** · NumPy/pandas · scipy · POT
 (Wasserstein) · pybaseball · Docker / docker-compose · nginx · Prometheus + Grafana · pytest (+asyncio,
-cov, timeout, benchmark, mock, hypothesis) · ruff (lint+format) · mypy. Frontend framework (React vs
-vanilla-JS + WebSocket) is the Phase-6 kickoff decision (SIM-378).
+cov, timeout, benchmark, mock, hypothesis) · ruff (lint+format) · mypy. **Frontend: React 18 + Vite +
+TypeScript** (chosen in SIM-378 / `docs/architecture/2026-09-02-adr-frontend-framework.md`, "Accepted"),
+with Playwright e2e — talks to the API over REST + a typed WebSocket.
 
 ## 4. Architecture (layered)
 
@@ -192,10 +219,10 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
     (SIM_FULL_POOL=1). The per-tile FAISS k-NN sampler is the fallback / unit-test path.  [SIM-422→429]
   → Core sim loop (simulation/sim_loop.py) : 8-step pitch-by-pitch state machine + manager/situational
     decisions → GameSimResult                                     [Phase 4]
-  → Runner + API (simulation/batch_runner.py, api/) : 100-iteration ProcessPool runner, REST + WebSocket,
-    Redis cache, persistence (DuckDB v10 / Alembic 0014), betting/CLV surface, auth/rate-limit/CORS,
-    nginx, Prometheus/Grafana                                     [Phase 5 — COMPLETE]
-  → Frontend (frontend/)                                          [Phase 6 — OPEN]
+  → Runner + API (simulation/batch_runner.py, api/) : 100-iteration ProcessPool runner (forkserver
+    workers — SIM-430), REST + WebSocket, Redis cache, persistence (DuckDB v13 / Alembic 0015),
+    betting/CLV surface, auth/rate-limit/CORS, nginx, Prometheus/Grafana   [Phase 5 — COMPLETE]
+  → Frontend (frontend/) : React 18 + Vite + TypeScript, Playwright e2e   [Phase 6 — COMPLETE]
 ```
 
 ## 5. Repository map
@@ -203,29 +230,38 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
 - `api/` — FastAPI app. `main.py` (create_app + lifespan), `routes/` (games, betting, metrics, similarity),
   `schemas.py` (Pydantic), `serialization.py` (numpy-safe `to_jsonable`), `auth.py`, `state.py` (engine build).
 - `simulation/` — `sim_loop.py` (the simulator, biggest file; full-pool draw + engine-backed
-  advancement/steal/framing live here), `full_pool_sampler.py` (SIM-423 full-pool similarity sampler:
-  count-bucket CDFs, batted-ball draw, `runner_rate`/`catcher_framing`), `matchup_provider.py` (SIM-421
-  fork-safe deriver/centroid provider), `game_state.py` (carries bat/throw hands + per-team
-  pitcher/catcher ids), `results.py`, `batch_runner.py` (ProcessPool runner), `production_factory.py`
-  (builds the full-pool sampler from disk per worker when `SIM_FULL_POOL` is set), `lineup_resolver.py`
-  (also resolves the per-team catcher via the SIM-363 defense map), `linescore.py`, `pitcher_decisions.py`,
-  `play_recorder.py`, `prop_distributions.py`, `win_probability.py`, `snapshots.py`, `score_fusion.py`,
-  `fingerprints.py`, `validation/replay_chi_squared.py`.
+  advancement/steal/framing live here; also the SIM-434 manager fatigue/rest/TTO + reliever-selection
+  helpers, all gated `SIM_MANAGER`), `full_pool_sampler.py` (SIM-423 full-pool similarity sampler:
+  count-bucket CDFs, batted-ball draw, `runner_rate`/`catcher_framing`; reads the SIM-430 dense
+  `pitcher_sim_matrix` fast path), `matchup_provider.py` (SIM-421 fork-safe deriver/centroid provider),
+  `game_state.py` (carries bat/throw hands + per-team pitcher/catcher ids + the SIM-434 per-pitcher
+  rest / pitch-count fields), `results.py`, `batch_runner.py` (ProcessPool runner — `mp_context=forkserver`
+  per SIM-430), `production_factory.py` (builds the full-pool sampler from disk per worker when
+  `SIM_FULL_POOL` is set; `_manager_enabled()` + synthetic-bullpen builder gate SIM-434), `lineup_resolver.py`
+  (also resolves the per-team catcher via the SIM-363 defense map), `linescore.py`, `pitcher_decisions.py`
+  (W/L/S + the manager pull model), `play_recorder.py`, `prop_distributions.py`, `win_probability.py`,
+  `snapshots.py`, `score_fusion.py`, `fingerprints.py`, `validation/replay_chi_squared.py`.
 - `similarity/` — `engines/` (the 11 engines), `similarity_calibration.py`, `backtesting/` (backtester +
   walk-forward), `registry.py`.
 - `betting/` — `clv_engine.py`, `bet_signal.py`, `line_movement.py`.
 - `pipeline/` — `etl/` (historical loader), `live/live_ingestion_pipeline.py` (MLB WS + REST + odds),
-  `batch/player_profile_computor.py` + `play_pool_cache.py` (normalized tiles + persisted norms/centroids)
-  + `engine_artifacts.py` (SIM-422 builder + per-worker loader for the full-pool bundle: hand pools,
-  pitcher×pitcher sim, batter/catcher/fielder/baserunner/manager embeddings, batted-ball pools),
-  `odds_provider.py`.
-- `db/` — `migrations/` (Alembic, head 0014) + `migrations/duckdb/` (numbered SQL, schema v10) +
+  `live/bullpen_availability_ingest.py` (SIM-433 MLB-API active-roster/IL → `raw.game_bullpen_availability`),
+  `batch/player_profile_computor.py` (+ the SIM-433 `_compute_bullpen_workload` from `raw.pitches`) +
+  `play_pool_cache.py` (normalized tiles + persisted norms/centroids) + `engine_artifacts.py` (SIM-422
+  builder + per-worker loader for the full-pool bundle: hand pools, pitcher×pitcher sim — incl. the
+  SIM-430 dense `pitcher_sim_matrix` — batter/catcher/fielder/baserunner/manager embeddings, batted-ball
+  pools), `odds_provider.py`, `bettingpros_odds_provider.py` (SIM-435 `closing`-line branch).
+- `scripts/` — operational scripts (NOT bind-mounted; see §2a): `sim_stats.py` (v2 sim harness),
+  `load_historical_odds.py` (SIM-435 opening+closing backfill → `raw.game_odds`/`raw.prop_odds`),
+  `validate_props.py`, `check_file_integrity.py`.
+- `db/` — `migrations/` (Alembic, head **0015**) + `migrations/duckdb/` (numbered SQL, schema **v13**) +
   `schemas/duckdb_schema_version.txt`.
 - `tests/` — `unit/`, `regression/` (golden-file engine-drift gate), `integration/` (E2E TestClient),
   `performance/` (pytest-benchmark). `conftest.py` has shared fixtures + the event-loop guard.
-- `deploy/` — nginx + Prometheus/Grafana. `frontend/` — greenfield (empty component dirs today).
+- `deploy/` — nginx + Prometheus/Grafana. `frontend/` — **React 18 + Vite + TypeScript** app
+  (`src/`, `components/`, `pages/`, `graphics/`, `e2e/` Playwright, `vite.config.ts`, `openapi.json`).
 - `docs/` — `HANDOFF_PHASE*.md`, `SPRINT_*.md`, `audit/`, `architecture/`. Root: `BACKLOG.md`,
-  `CHANGES.md`, `agent_team.md`, `README.md`, `WORKFLOW.md`, `PRODUCT_GUIDE.md`, `backlog.xlsx`.
+  `CHANGES.md`, `agent_team.md`, `README.md`, `WORKFLOW.md`, `PRODUCT_GUIDE.md`.
 
 ## 6. The 9-agent team (see `agent_team.md` for full scopes)
 
@@ -247,14 +283,17 @@ consolidates; QA cross-validates and never self-certifies its own work.
 - **Sprint workflow:** for each sprint, role agents implement their owned tickets (partition by file
   ownership to avoid concurrent edits to the same file), then an **independent QA cross-validation pass**
   runs the full suite. Document in `CHANGES.md` (grows, per-agent detail), trim `BACKLOG.md` to one-line
-  rows under a sprint banner, add `docs/SPRINT_<date>_<name>.md`, and regenerate `backlog.xlsx`.
+  rows under a sprint banner, and add `docs/SPRINT_<date>_<name>.md`. (`backlog.xlsx` was RETIRED
+  2026-06-04 — it had no generator and drifted badly; **`BACKLOG.md` is the single source of truth**.)
 - **TDD:** tests first, then implementation (Backend Developer convention). Unit tests use the `__new__`
   constructor-bypass + in-memory mock pattern (no live DB) — see `tests/conftest.py`.
 - **Ticketing:** every change maps to a `SIM-NNN` ticket. Next free ID is tracked in `BACKLOG.md`
-  (currently **SIM-433**; SIM-430 = full-pool `/simulate` throughput / 2s-30s SLA, SIM-431 = the
-  Python-3.13 migration [CLOSED], SIM-432 = the calibrator/validate_props ↔ live-schema
-  reconciliation [filed 2026-05-31, the SIM-406/407 unlock], and the SIM-422→429 full-pool epic is
-  filed there under its own banner). NOTE: a
+  (currently **SIM-437**). Recent IDs: SIM-430 = full-pool `/simulate` throughput / 2s-30s SLA
+  (worker-scaling CLOSED, per-game cost → SIM-436), SIM-431 = the Python-3.13 migration [CLOSED],
+  SIM-432 = the calibrator/validate_props ↔ live-schema reconciliation [CLOSED 2026-06-01, the
+  SIM-406/407 unlock], SIM-433/434/435 = bullpen-availability / manager-decision-model / historical-odds
+  loader [code-complete, data-runs pending], SIM-436 = revisit `/simulate` per-game cost for the 30 s
+  SLA [P3, open], and the SIM-422→429 full-pool epic is filed under its own banner. NOTE: a
   realism-work batch was tagged `SIM-421` *in code comments* before the epic was filed — `SIM-421` the
   ticket is the P3 book-offered-market projection, so treat in-code `SIM-421` tags as the realism work
   and reconcile if you touch them.
@@ -288,6 +327,8 @@ make format            # ruff format
 make type-check        # mypy
 make profile-computor  # nightly: rebuild DuckDB profiles + sim pools
 make play-pool-cache   # nightly (after profile-computor): materialize FAISS tiles
+make calibrate         # fit /data/calibration.json (arsenal W2 + per-engine sigmas) — SIM-406/432
+make validate-props    # SIM-407 prop-PMF / win-prob validation (add --write-calibration for the curve)
 ```
 
 Raw equivalents (if running Python directly, target **Python 3.13**):
@@ -426,7 +467,7 @@ breakouts (RISP, advancement, DP rate) are the right lens, not the global R mean
 | 4 | Core Simulation Loop | ✅ Complete |
 | 5 | Simulation Runner & Backend API | ✅ Complete (CI-green on Python 3.13) |
 | 6 | **Frontend Build + P1 backend prerequisites** | ✅ **Complete** — SIM-378→401 + 415→420 + 414 + 402 + 408 closed; SIM-406 + 407 calibration LIVE (unblocked by SIM-432, 2026-06-01) |
-| 7 | Integration, Testing & Deployment | Live-env bring-up DONE (SIM-402 + 408 closed; Python-3.13 migration SIM-431 closed; **SIM-432 closed 2026-06-01 — calibration fitted + applied at boot, win-prob map = fitted reliability-curve**). **Remaining: SIM-430** (full-pool `/simulate` throughput — per-game half done 1.21x, fan-out/OOM half OPEN) and **SIM-429** (granular run/prop calibration + CLV backtest; a fuller multi-season win-prob curve fit is gated on SIM-430 throughput) |
+| 7 | Integration, Testing & Deployment | Live-env bring-up DONE (SIM-402 + 408 closed; Python-3.13 migration SIM-431 closed; **SIM-432 closed 2026-06-01 — calibration fitted + applied at boot, win-prob map = fitted reliability-curve**; **SIM-430 worker-scaling RESOLVED 2026-06-02 — forkserver + mem_limit, n=100 ≈ 38 s, no OOM**). **Remaining:** SIM-436 (`/simulate` per-game cost → 30 s SLA, P3), SIM-429 (granular run/prop calibration + CLV backtest), the SIM-433/434/435 data-runs (bullpen ingest · `SIM_MANAGER=1` enable+validate · odds backfill), and the SIM-411/413/425b/427 realism follow-ons (one play-pool rebuild + engine-backed manager) |
 
 **Realism sub-track (interleaved, landed on `master`):** the SIM-422→429 full-pool similarity-wiring
 epic replaced the per-tile k-NN draw with whole-pool engine-weighted sampling and made it the
@@ -444,16 +485,18 @@ status enum; typed WebSocket schema; calibration-wiring fix; auth enforcement) �
 - `docs/HANDOFF_PHASE6.md` — Phase 6 onboarding (what Phase 5 leaves you, scope, risks, how to start).
 - `docs/audit/2026-09-02-phase6-prioritized-tickets.md` — the full tiered 43-ticket list + sprint plan.
 - `docs/audit/2026-09-02-phase5-close-program-audit.md` — the audit narrative + findings.
-- `BACKLOG.md` / `backlog.xlsx` — authoritative ticket status (verify before acting on any ticket).
+- `BACKLOG.md` — the authoritative ticket status, single source of truth (verify before acting on any
+  ticket). `backlog.xlsx` was RETIRED 2026-06-04 (drifted, hand-maintained, no generator script).
 - `CHANGES.md` — the running changelog (**newest entries prepended at the top**; per-agent detail).
 - `agent_team.md` — full agent scopes + the cross-agent collaboration map.
 - `WORKFLOW.md` — the operator's manual (clean-checkout bring-up, health checks).
 
 ## 14. Working conventions for Claude Code
 
-- Confirm a ticket's status in `BACKLOG.md`/`backlog.xlsx` before acting — they change.
+- Confirm a ticket's status in `BACKLOG.md` before acting — it changes (it is the single source of truth;
+  `backlog.xlsx` was retired 2026-06-04).
 - Keep the agent-team rhythm: implement → independent QA cross-validation → run the full suite → document
-  (CHANGES/BACKLOG/SPRINT) → regenerate `backlog.xlsx`.
+  (CHANGES/BACKLOG/SPRINT).
 - Run `make test-unit` + `make lint` + `make type-check` before committing; run `make test-regression`
   after any engine/model change. Target Python 3.13 to match CI (SIM-431; numpy 2.x).
 - Don't commit credentials; honor the migration + regression conventions above.

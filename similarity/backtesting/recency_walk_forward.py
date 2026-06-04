@@ -9,6 +9,14 @@ reference season); this module does *not* recompute weights — it consumes
 whatever ``recency_weight`` is already attached to each pooled row, exactly as
 SIM-220's broader backtester will feed it real data.
 
+Status: DEV / OFFLINE-ONLY (whole module)
+-----------------------------------------
+This whole module is an offline validation library — there is **no live pipeline
+caller**. Production win-prob / prop calibration uses the binary path in
+:mod:`simulation.prop_validation` (which imports only the constants
+``DEFAULT_N_BINS`` and ``OUTCOME_PROB_EPS`` from the SIM-220 backtester). The math
+here is correct and unit-tested — this is a label, not a deprecation.
+
 Design goals
 ------------
 * **In-memory only.** Inputs are a pandas ``DataFrame`` (or anything with the

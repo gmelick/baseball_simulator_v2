@@ -1,3 +1,5 @@
+> **SUPERSEDED-BY** `docs/audit/2026-06-01-roadmap-sim430-429-411-413-425b-427.md` — the measured root cause was fork-COW-defeat → `forkserver` (NOT the object-dtype / `_pool_meta` duplication this doc theorizes).
+
 # SIM-430 — full-pool `/simulate` fan-out / OOM design (the open P1 half)
 
 **Date:** 2026-05-31 · **Owner:** Performance Engineer (Agent 6) · **Status:** design (implementation not started)

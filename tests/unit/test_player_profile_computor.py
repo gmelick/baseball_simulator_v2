@@ -6,8 +6,7 @@ Covers:
   - Module-level constants & dataclass-like config
   - Pure math/physics helpers (compute_leverage_index, _hc_to_feet,
     _euclidean_hc, _throw_time, _estimate_hang_time,
-    _estimate_gb_travel_time, _classify_direction_of, _sigmoid,
-    _asymmetric_sigmoid)
+    _estimate_gb_travel_time, _classify_direction_of, _sigmoid)
   - Logistic helpers (_fit_logistic_model, _predict_proba, _quick_auc)
   - GMM fitting helpers (_fit_gmm_for_pitcher, _label_component)
   - build_run_expectancy_matrix with a mocked DuckDB connection
@@ -276,21 +275,6 @@ class TestSigmoid:
         x = np.array([100.0])
         out = ppc._sigmoid(x, L=1.0, k=1.0, x0=0.0)
         assert out[0] == pytest.approx(1.0, abs=1e-3)
-
-    def test_asymmetric_sigmoid_outputs(self):
-        x = np.linspace(-5, 5, 11)
-        out = ppc._asymmetric_sigmoid(
-            x,
-            L_left=1.0,
-            k_left=1.0,
-            x0_left=0.0,
-            L_right=0.5,
-            k_right=1.0,
-            x0_right=0.0,
-            blend_k=1.0,
-            blend_x0=0.0,
-        )
-        assert out.shape == x.shape
 
 
 # ===========================================================================

@@ -39,6 +39,22 @@ to a weight: SIM-321 fusion gives a bounded ``[0, 1]`` *shaping scalar* per engi
 that tilts the fingerprint centroid (a comparability transform, not a weight); the
 sampler still owns distance->weight.  See ``simulation/score_fusion.py``.
 
+THE SIM-321 FUSION TILT IS CURRENTLY UNWIRED IN PRODUCTION (status note)
+-----------------------------------------------------------------------
+The fusion-tilt machinery below (``_pitch_fusion`` / ``_bb_fusion``,
+``_tilt_location`` / ``_tilt_exit_velo``, and the ``if pitch_signals:`` /
+``if battedball_signals:`` branches in ``pitch_fingerprint`` /
+``battedball_fingerprint``) **never runs on the production path**.  Two reasons:
+(1) every fingerprint call site in ``simulation/sim_loop.py`` calls the deriver
+with NO ``pitch_signals`` / ``battedball_signals``, so the signal branches are
+skipped and the centroid is used untilted; and (2) the full-pool production path
+(``SIM_FULL_POOL=1``) sets ``deriver=None`` outright
+(``simulation/production_factory.py`` line ~561), so the deriver -- and therefore
+this whole module -- is reached only on the per-tile FAISS fallback / unit-test
+path (and only the tests inject signals).  The non-fusion derivation (centroid
+assembly + ``_normalize``) is live on that per-tile path; the fusion tilt is not.
+Kept (not deleted) pending an ML-owner decision -- see ``simulation/score_fusion.py``.
+
 NO LIVE DB / FAISS REQUIRED (the injection seam)
 ------------------------------------------------
 The expensive matchup geometry (the pitcher arsenal centroid, the batter's
@@ -247,6 +263,9 @@ class FingerprintDeriver:
         self._provider = profile_provider
         # SIM-321 fusion shapes WHICH neighbourhood the draw favours.  Default to
         # the documented profiles (``pitch_draw`` / ``batted_ball``).
+        # CURRENTLY UNWIRED IN PRODUCTION: these fusers fire only when a call site
+        # passes pitch/battedball signals, which none does, and the deriver itself
+        # is never built on the full-pool production path (see the module docstring).
         self._pitch_fusion = pitch_fusion or ScoreFusion(profile="pitch_draw")
         self._bb_fusion = battedball_fusion or ScoreFusion(profile="batted_ball")
         # Engine-fitted normalizer stats (None == sqrt-weight-only, the engine's
@@ -338,6 +357,9 @@ class FingerprintDeriver:
         # tilt, NOT a distance->weight conversion (the sampler owns that).  At the
         # neutral scalar 0.5 the location is unchanged; >0.5 expands toward the
         # edge, <0.5 attacks the middle -- a bounded, deterministic nudge.
+        # CURRENTLY UNWIRED IN PRODUCTION: no call site passes ``pitch_signals``,
+        # so this branch is dead on the per-tile path and the deriver is never
+        # built on the full-pool production path (see the module docstring).
         if pitch_signals:
             shape = self._pitch_fusion.fuse(pitch_signals).fused
             raw[8:] = self._tilt_location(raw[8:], shape)
@@ -367,6 +389,10 @@ class FingerprintDeriver:
         )
         raw = np.array(prof.batted_ball, dtype=np.float64, copy=True)
 
+        # CURRENTLY UNWIRED IN PRODUCTION: no call site passes
+        # ``battedball_signals``, so this branch is dead on the per-tile path and
+        # the deriver is never built on the full-pool production path (see the
+        # module docstring).
         if battedball_signals:
             shape = self._bb_fusion.fuse(battedball_signals).fused
             # Tilt exit velocity toward harder contact as the shaping scalar
@@ -381,6 +407,9 @@ class FingerprintDeriver:
     def _tilt_location(location: NDArray[np.float64], shape: float) -> NDArray[np.float64]:
         """Tilt ``(plate_x, plate_z)`` by the SIM-321 shaping scalar in ``[0,1]``.
 
+        CURRENTLY UNWIRED IN PRODUCTION: reached only via the ``pitch_signals``
+        branch, which no call site exercises (see the module docstring).
+
         Deterministic and bounded: ``0.5`` is neutral (no change).  Above 0.5 the
         location is pushed marginally toward the edge of its current quadrant
         (expand the zone -- ahead in count); below 0.5 it is pulled toward the
@@ -394,6 +423,9 @@ class FingerprintDeriver:
     @staticmethod
     def _tilt_exit_velo(exit_velo: float, shape: float) -> float:
         """Tilt the contact-centroid exit velocity by the shaping scalar.
+
+        CURRENTLY UNWIRED IN PRODUCTION: reached only via the ``battedball_signals``
+        branch, which no call site exercises (see the module docstring).
 
         Neutral at ``0.5``; a small bounded nudge (+/- up to ~5 mph at the
         extremes) toward harder contact as the favoured-neighbourhood signal

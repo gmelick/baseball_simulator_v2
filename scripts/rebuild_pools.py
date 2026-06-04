@@ -8,8 +8,10 @@ Usage: python scripts/rebuild_pools.py [season ...]   (default: 2026)
 
 import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "/app")
+REPO_ROOT = Path(__file__).parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 from pipeline.batch.player_profile_computor import PlayerProfileComputor
 
 seasons = [int(a) for a in sys.argv[1:]] or [2026]

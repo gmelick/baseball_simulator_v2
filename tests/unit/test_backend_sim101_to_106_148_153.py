@@ -387,18 +387,24 @@ class TestSim148PitcherSimilarityCleanup:
         assert "release_score" not in names
 
     @pytest.mark.skipif(not _SCIPY_AVAILABLE, reason="scipy not installed")
-    def test_finite_distances_docstring_uses_calibrate_arsenal_scale(self) -> None:
+    def test_finite_distances_docstring_uses_real_calibration_api(self) -> None:
         from similarity.engines.pitcher_similarity import ArsenalCache
 
         doc = ArsenalCache.finite_distances.__doc__ or ""
-        assert "calibrate_arsenal_scale" in doc, (
+        # The docstring must reference the REAL calibration API:
+        # calibrate_arsenal_gamma → arsenal_scale_from_gamma.
+        assert "calibrate_arsenal_gamma" in doc, (
             "SIM-148 AC #4: finite_distances() docstring must reference the "
-            "current calibrate_arsenal_scale API (post-SIM-066 rename)."
+            "real calibrate_arsenal_gamma API."
         )
-        # The stale gamma reference must be gone from the SIGNATURE line —
-        # the file's SIM-148 historical comment is allowed to mention it.
-        assert "calibrate_arsenal_gamma()" not in doc, (
-            "SIM-148 AC #4: stale calibrate_arsenal_gamma() call signature "
+        assert "arsenal_scale_from_gamma" in doc, (
+            "SIM-148 AC #4: finite_distances() docstring must reference "
+            "arsenal_scale_from_gamma (gamma → linear ARSENAL_SCALE)."
+        )
+        # The phantom calibrate_arsenal_scale name (which would raise
+        # ImportError) must NOT appear.
+        assert "calibrate_arsenal_scale" not in doc, (
+            "SIM-148 AC #4: phantom calibrate_arsenal_scale (no such function) "
             "still in finite_distances() docstring."
         )
 

@@ -1,12 +1,15 @@
 # SIM-119 -- Phase 4 Simulation-Loop Per-Step Time Budget
 
 *Ticket: SIM-119 · Owner: Performance Engineer (+ Backend Developer) · Date: 2026-06-03*
-*Status: ACTIVE -- this is the per-step latency contract that gates the Phase 4
-loop step implementations (SIM-303 wiring). It allocates the 2 s single-game /
-30 s 100-game SLA (Performance Engineer scope) across the 8 loop steps so each
-step ships against a number, not a vibe. Grounded in the SIM-118 perf suite
-(`tests/performance/bench_simulation.py`) and direct measurements of the
-SIM-302 `PlayPoolSampler` hot path on this hardware.*
+*Status: ARCHIVE -- this is the Phase-4 per-tile per-step latency contract that
+gated the Phase 4 loop step implementations (SIM-303 wiring). It allocates the 2 s
+single-game / 30 s 100-game SLA (Performance Engineer scope) across the 8 loop
+steps so each step ships against a number, not a vibe. Grounded in the SIM-118
+perf suite (`tests/performance/bench_simulation.py`) and direct measurements of
+the SIM-302 `PlayPoolSampler` hot path on this hardware. Note: the live production
+path is the full-pool sampler, not this per-tile path, and it runs n=100 ≈ 38 s
+with the 30 s SLA NOT yet met (open SIM-436) -- so the "PASS with wide headroom"
+verdict below is historical (it characterizes the per-tile Phase-4 path).*
 
 **Verdict: PASS with wide headroom.** The measured per-pitch roll-up is
 **~0.62 ms/pitch** -> **~0.19 s/game** at 300 pitches, **~9.4%** of the 2 s

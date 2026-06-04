@@ -1,6 +1,6 @@
 # Wiring the 11 Similarity Engines into the Live Sim + Full-Pool Similarity-Weighted Selection
 
-> **Status:** PROPOSED (design doc for review — no implementation yet).
+> **Status:** IMPLEMENTED — production default (SIM-422→429; SIM_FULL_POOL=1); full_pool_sampler.py + engine_artifacts.py shipped.
 > **Core principle:** every loop decision scores the **entire** candidate pool by the
 > applicable similarity engines and draws from that full weighted distribution. There
 > are **NO hard filters and NO top-K truncation** anywhere — the *only* hard filter is
@@ -266,20 +266,21 @@ Full-pool scoring per pitch is the central performance risk; it is made affordab
 
 ## 7. Sequencing & ticket breakdown
 
-Provisional IDs — **confirm against `BACKLOG.md`** (note: the SIM-421 realism work in
-this session was provisionally tagged SIM-421 in code comments, which collides with the
-prop-markets ticket; reconcile the IDs when filing).
+Filed as the **SIM-422→429 full-pool epic** (the provisional A–H letters below were
+reconciled to these IDs when filed; note: the SIM-421 realism work in this session was
+provisionally tagged SIM-421 in code comments, which collides with the prop-markets
+ticket — treat in-code `SIM-421` tags as the realism work).
 
 | # | Ticket | Scope | Depends on |
 |---|---|---|---|
-| A | Fork-safe **engine-artifact bundle** + loader | nightly build writes §3.1 artifacts; worker loads them; `EngineArtifacts` object threaded via the factory | SIM-421 deriver pattern |
-| B | **Full-pool resident sampler** + alias draw | build per-hand full pools (geometry + metadata) into shared memory; factorized-weight + alias-table sampler API; drop per-pitcher tiles | A |
-| C | **Pitch full-pool scoring** (steps 2/3) | feed ScoreFusion `pitch_draw` with pitcher/batter/situation/catcher affinities over the full pool; delete jitter | B + pitcher_sim/batter/situation/catcher artifacts |
-| D | **Engine-backed `PlayResolver`** (steps 5/6) | full batted-ball pool scoring; Fielder RBF out/error; Baserunner(extra) advancement (replace constants) | A, B |
-| E | **Steal path** (steps 1b/4) | wire `stolen_base_pool` + baserunner/catcher/pitcher-steal scoring | A |
-| F | **Manager decisions** (step 1) | engine-backed manager + situation leverage | A |
-| G | **Catcher framing** (step 3) | framing-conditioned ball/called-strike adjustment | C |
-| H | **Re-calibration + CLV** | re-fit calibration map; CLV backtest; perf-gate the new path | C–G |
+| SIM-422 | Fork-safe **engine-artifact bundle** + loader | nightly build writes §3.1 artifacts; worker loads them; `EngineArtifacts` object threaded via the factory | SIM-421 deriver pattern |
+| SIM-423 | **Full-pool resident sampler** + alias draw | build per-hand full pools (geometry + metadata) into shared memory; factorized-weight + alias-table sampler API; drop per-pitcher tiles | SIM-422 |
+| SIM-424 | **Pitch full-pool scoring** (steps 2/3) | feed ScoreFusion `pitch_draw` with pitcher/batter/situation/catcher affinities over the full pool; delete jitter | SIM-423 + pitcher_sim/batter/situation/catcher artifacts |
+| SIM-425 | **Engine-backed `PlayResolver`** (steps 5/6) | full batted-ball pool scoring; Fielder RBF out/error; Baserunner(extra) advancement (replace constants) | SIM-422, SIM-423 |
+| SIM-426 | **Steal path** (steps 1b/4) | wire `stolen_base_pool` + baserunner/catcher/pitcher-steal scoring | SIM-422 |
+| SIM-427 | **Manager decisions** (step 1) | engine-backed manager + situation leverage | SIM-422 |
+| SIM-428 | **Catcher framing** (step 3) | framing-conditioned ball/called-strike adjustment | SIM-424 |
+| SIM-429 | **Re-calibration + CLV** | re-fit calibration map; CLV backtest; perf-gate the new path | SIM-424–SIM-428 |
 
 Each of B–G is independently shippable behind the resolver/manager seams (the loop
 already tolerates partial wiring), so realism can be validated incrementally.

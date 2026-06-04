@@ -47,9 +47,9 @@ without touching this file's contract:
                                                               exposed as a summary-style
                                                               gauge set (last/count) in
                                                               the fallback path.
-    baseball_sim_api_p95_seconds            gauge      PLACEHOLDER — API p95 latency;
-                                                              0 until the ASGI timing
-                                                              middleware feeds it.
+    baseball_sim_api_p95_seconds            gauge      Live API p95 latency, fed by the
+                                                              SIM-410 LatencyMiddleware
+                                                              (rolling 200-request window).
     baseball_sim_pipeline_freshness_seconds gauge      LIVE-WHERE-WIRED — seconds
                                                               since the last live re-sim
                                                               signal (app.state.last_resim_signal),
@@ -96,7 +96,7 @@ router = APIRouter(tags=["ops"])
 
 # App build version surfaced as a label on the info gauge. Kept in sync with
 # api/main.py's FastAPI(version=...) intent; overridable via env for releases.
-_APP_VERSION = os.environ.get("APP_VERSION", "0.1.0-phase5")
+_APP_VERSION = os.environ.get("APP_VERSION", "0.1.0-phase7")
 
 
 # ---------------------------------------------------------------------------

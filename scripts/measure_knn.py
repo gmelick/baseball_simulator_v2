@@ -14,10 +14,12 @@ For each tile we report, for the CENTROID query (the deriver's output) and for
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, "/app")
+REPO_ROOT = Path(__file__).parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 from simulation.batch_runner import GameSpec
 from simulation.game_state import GameState
 from simulation.play_pool_sampler import POOL_BATTEDBALL, POOL_PITCH

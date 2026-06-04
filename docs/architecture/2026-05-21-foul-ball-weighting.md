@@ -1,7 +1,7 @@
 # Count-Stratified Foul-Ball Weighting (Phase 3/4)
 
 *Ticket: SIM-056 · Owner: Baseball Analyst · Date: 2026-05-21*
-*Status: PROPOSED — design only, no production code. Plugs into the SIM-300
+*Status: IMPLEMENTED in SIM-318 (was PROPOSED — design only). Plugs into the SIM-300
 play-pool sampling contract (`docs/architecture/2026-05-20-play-pool.md`) and the
 sim-loop outcome-determination step (`docs/perf/2026-06-03-sim-loop-time-budget.md`
 §2 step 4). Consumes `sim.pitch_pool.outcome_type='foul'` /

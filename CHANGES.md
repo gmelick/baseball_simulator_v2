@@ -1,3 +1,50 @@
+# Phase 7 — Comprehensive-audit remediation: all both-agree doc + code fixes applied — 2026-06-04
+**Authors: all 9 roles (fanned out one file-group per agent across two workflows) + direct edits**
+
+Applied every both-agree action from `docs/audit/2026-06-03-comprehensive-project-audit.md` (the 19
+documentation + 23 code actions both the knowledge-ful audit and the independent knowledge-free verify
+agreed on). The disputed _zscore-scope item was applied at the verify-narrowed scope (batter + pitcher
+only); the audit-only `backfill_odds_hash` finding was left (dead one-shot, verify-only). Orchestrated
+via two fan-out workflows (one agent per file-group, no concurrent edits to a file) + direct edits for
+the canonical/cross-file/git-level pieces; the full test+lint+mypy suite is the backstop.
+
+**Documentation (the highest-severity both-agree fixes were live-facing docs contradicting the code):**
+- **README.md / PRODUCT_GUIDE.md** rewritten from mid-Phase-2 to current reality (Phases 1-6 complete,
+  Phase 7 live; all 11 engines; the REST+WS API + the React 18/Vite/TS frontend exist). README's two
+  NONEXISTENT install-script names fixed (→ `etl_historical_loader.py` / `player_profile_computor.py`),
+  bring-up aligned to the Makefile, Python 3.11→3.13.
+- **engine-wiring spec** status PROPOSED→IMPLEMENTED (full-pool IS the production default).
+- **CLAUDE.md** DuckDB schema **v11→v13** (3 places) + TL;DR refreshed to 2026-06-04 (manager + realism
+  now ENABLED) + the `backlog.xlsx` workflow references retired.
+- **WORKFLOW.md / agent_team.md** version pins (3.13 / 0015 / v13) + removed false claims (POT/faiss
+  wheels, /simulate-404, pitcher-only route). Perf budgets + RAM budget + sim430-fanout + sim315 +
+  5 architecture docs re-statused (superseded / implemented / fallback-path-only). `01_postgres_schema.sql`
+  banner + the two newest tables appended. Archive banners on the calibration sprint logs + handoffs.
+- **`backlog.xlsx` RETIRED** (untracked + gitignored): hand-maintained, drifted badly from BACKLOG.md
+  (SIM-043 + ~40 closed Phase-4 tickets still "Open"), no generator script. **BACKLOG.md is now the
+  single source of truth.** Added `~$*` (Excel lock) + scratch-dump `.gitignore` patterns; deleted the
+  `*_output.txt` / `*_dump.json` strays.
+
+**Code (no correctness bugs were found; these close dead-wiring + stale comments):**
+- **Dead-wiring fixed:** the metrics `record_request` counter is now fed by the SIM-410 LatencyMiddleware
+  and `record_sim_latency` by the `/simulate` endpoint (both were perpetually 0); the pipeline-freshness
+  gauge now reads `last_resim_signal_ts` (the lifespan stamps it — was always -1); `opening_line_job`
+  routes through the `get_odds_provider()` seam (was hardcoded to the mock, silently undermining CLV
+  reference data); `require_api_key` (attached to zero routes, subsumed by `require_auth`) deleted.
+- **Dead code removed (verified zero callers):** `CalibrationReport.as_dict`, `calibrate_arsenal_norm_scale`,
+  the `_AUTO` sentinel, the redundant `IF_PIVOT_FEATURES` re-import, the discarded `_bullpen_workload`
+  recompute in `run()`. The 4 duplicated `_zscore` closures → the shared `_zscore_matrix`; batter + pitcher
+  sigma fits routed through `_fit_sigma` (closes the spurious sigma=1.0 risk).
+- **Hot-path micro-opt (SIM_HOME_FIELD_BIAS / SIM_RUN_CALIB / SIM_STEAL_K):** resolved once in
+  `StateMachine.__init__` instead of per-call env-parse; the cheap 0-0 steal gate moved ahead of the read.
+- **Stale comments/docstrings corrected:** the phantom `calibrate_arsenal_scale` (→ `calibrate_arsenal_gamma`
+  / `arsenal_scale_from_gamma`), the `batch_runner` COW-fork story (→ forkserver), the "Phase 7 swap the
+  mock" comments (the swap is done behind the seam), `RealOddsAPIProvider` (a template — unreachable),
+  `is_starter` (reserved/always-False), `test_sim_store` schema version (8→13), the `api_p95`
+  PLACEHOLDER docstring + stale version strings. `score_fusion`/fingerprint-tilt + the SIM-220 backtester
+  labelled dev/offline-only (unwired in production). `rebuild_pools`/`measure_knn` `/app` path → portable.
+  `make load-historical-odds` target added.
+
 # Phase 7 — SIM-411/413/425b ENABLED in production: park factor + L/R platoon + fielder RBF — 2026-06-04
 **Authors: Backend Developer (Agent 5), Baseball Analyst (Agent 2), Performance Engineer (Agent 6)**
 

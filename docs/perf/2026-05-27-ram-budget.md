@@ -1,10 +1,12 @@
 # SIM-280 -- Phase 4 RAM Budget (resident play-pool + engine footprint)
 
 *Ticket: SIM-280 · Owner: Performance Engineer · Date: 2026-05-27*
-*Status: ACTIVE -- the quantified budget behind the SIM-300 §7 / SIM-114 hard cap
-(total resident play-pool + FAISS memory ≤ 2 GB regardless of worker count). This
-report is consumed by SIM-281 (parallelism ADR), which cites the per-worker scaling
-table in §4.*
+*Status: HISTORICAL / SUPERSEDED -- the quantified Phase-4 budget behind the
+SIM-300 §7 / SIM-114 hard cap (total resident play-pool + FAISS memory ≤ 2 GB
+regardless of worker count). This report is consumed by SIM-281 (parallelism ADR),
+which cites the per-worker scaling table in §4. Superseded by the SIM-430 reality:
+`mp_context=forkserver` + a 10 GB app `mem_limit` -> ~373 MB/worker at
+`SIM_RUNNER_WORKERS=6` (not the COW-shared-payload model projected below).*
 
 **Verdict: PASS up to 8 workers (≈1.6 GB); RISK at 16 workers (≈2.9 GB) and
 RISK if the pitcher engine's arsenal cache is exhaustively precomputed (≈0.58 GB).

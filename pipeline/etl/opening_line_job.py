@@ -48,9 +48,10 @@ import logging
 import os
 import pathlib
 
-# MockOddsAPI lives in live_ingestion_pipeline; import it from there so mock
-# logic stays in a single place.  In Phase 7, swap _fetch_current_odds() to
-# call a real provider.
+# Odds/prop lines are fetched through the SIM-370 provider seam
+# (get_odds_provider) so ODDS_PROVIDER selects the source — the same seam
+# scripts/load_historical_odds.py uses.  The seam's default is the deterministic
+# MockOddsAPI, so behaviour is unchanged when ODDS_PROVIDER is unset.
 import sys
 from datetime import date, timedelta
 from typing import Any
@@ -62,7 +63,7 @@ _PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from pipeline.live.live_ingestion_pipeline import MockOddsAPI  # noqa: E402
+from pipeline.odds_provider import get_odds_provider  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -92,11 +93,9 @@ PITCHER_PROP_TYPES = ["strikeouts", "earned_runs", "walks"]
 BATTER_PROP_TYPES = ["hits", "home_runs", "total_bases", "rbis"]
 
 # Legacy _MOCK_PROP_LINES and local _mock_prop_odds() removed in SIM-134.
-# All mock prop generation is now delegated to MockOddsAPI.get_prop_odds()
-# so the vig model, RNG seeding, and line centres live in a single place.
-# Phase 7 swap: replace the MockOddsAPI call with a real provider in
-# _capture_prop_opening_lines() just as _fetch_current_odds() is swapped for
-# game-level markets.
+# All prop generation is now delegated to the configured provider's
+# get_prop_odds() (the default mock keeps the vig model, RNG seeding, and line
+# centres in a single place) — the provider is selected via the SIM-370 seam.
 
 
 # ---------------------------------------------------------------------------
@@ -292,15 +291,16 @@ class OpeningLineJob:
         return row is not None
 
     # ------------------------------------------------------------------
-    # Odds fetch  (mock — swap with real provider in Phase 7)
+    # Odds fetch  (via the SIM-370 provider seam; ODDS_PROVIDER selects source)
     # ------------------------------------------------------------------
 
     def _fetch_current_odds(self, game_pk: int) -> dict[str, Any]:
         """
-        Returns odds dict for the given game.  In Phase 7, replace this with
-        an async call to a real odds provider (The Odds API, Sportradar, etc.).
+        Returns the game-level odds dict for ``game_pk`` from the configured
+        provider (the SIM-370 seam; defaults to the deterministic mock when
+        ODDS_PROVIDER is unset).
         """
-        return MockOddsAPI.get_odds(
+        return get_odds_provider().get_odds(
             game_pk,
             line_type="opening",
             market_type="moneyline",
@@ -364,11 +364,13 @@ class OpeningLineJob:
           - Batter props deferred: lineup order not reliably known this far
             in advance; captured intraday once lineup is posted.
 
-        All mock generation is delegated to MockOddsAPI.get_prop_odds() so the
-        vig model and RNG seeding stay in a single canonical place (SIM-134).
+        Prop generation is delegated to the configured provider's
+        get_prop_odds() via the SIM-370 seam (the default mock keeps the vig
+        model and RNG seeding in a single canonical place — SIM-134).
 
         Returns the number of prop rows inserted.
         """
+        provider = get_odds_provider()
         inserted = 0
 
         for pitcher_id in filter(None, [home_pitcher_id, away_pitcher_id]):
@@ -392,11 +394,10 @@ class OpeningLineJob:
                 continue
 
             for prop_stat in PITCHER_PROP_TYPES:
-                # SIM-134: delegate to MockOddsAPI.get_prop_odds() — single
-                # source of truth for line centres, vig, and RNG seeding.
-                prop = MockOddsAPI.get_prop_odds(
-                    game_pk, pitcher_id, prop_stat, line_type="opening"
-                )
+                # SIM-370 seam: delegate to the configured provider's
+                # get_prop_odds() (the default mock is the single source of
+                # truth for line centres, vig, and RNG seeding — SIM-134).
+                prop = provider.get_prop_odds(game_pk, pitcher_id, prop_stat, line_type="opening")
                 if not self._dry_run:
                     await self._db.execute(
                         """

@@ -163,8 +163,6 @@ All engines share a unified interface: `engine.query(entity_features, n=50) -> L
 
 ## API Reference
 
-> **Note:** All API endpoints below are planned deliverables for Phase 5. They are not yet implemented.
-
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/games/{date}` | All games for a date with state, scores, lineups |
@@ -180,8 +178,6 @@ All engines share a unified interface: `engine.query(entity_features, n=50) -> L
 ---
 
 ## Frontend
-
-> **Note:** Frontend components below are planned deliverables for Phase 6. They are not yet implemented.
 
 ### Day Summary Page
 
@@ -218,7 +214,7 @@ All Day Summary information plus:
 
 | Layer | Technology |
 |-------|-----------|
-| Language | Python 3.11+ |
+| Language | Python 3.13 |
 | Web Framework | FastAPI |
 | Operational DB | PostgreSQL + async SQLAlchemy + Alembic |
 | Analytical DB | DuckDB (with `postgres` extension) |
@@ -226,7 +222,7 @@ All Day Summary information plus:
 | ML / Similarity | scikit-learn (GMMs), FAISS, NumPy |
 | Data Ingestion | pybaseball, MLB Stats API |
 | Containerization | Docker / docker-compose |
-| Frontend | JavaScript + WebSocket (React migration optional at Phase 6) |
+| Frontend | React 18 + Vite + TypeScript (REST + typed WebSocket) |
 | Monitoring | Prometheus + Grafana |
 
 ---
@@ -238,12 +234,12 @@ The platform is organized into 7 sequential phases across ~24 weeks:
 | Phase | Name | Key Output | Duration | Status |
 |-------|------|------------|----------|--------|
 | **1** | Data Infrastructure & Pipeline | Populated play pool DB + data API layer | 2 weeks | ✅ Complete |
-| **2** | Similarity Engine Suite | 11 similarity models, fully tested | 5 weeks | 🔄 In progress (4/11) |
-| **3** | Play Pool Architecture | Indexed, query-optimized play pool | 1 week | 🔲 Not started |
-| **4** | Core Simulation Loop | Full pitch-by-pitch game simulator | 4 weeks | 🔲 Not started |
-| **5** | Simulation Runner & Backend API | FastAPI endpoints, 100-iteration runner | 3 weeks | 🔲 Not started |
-| **6** | Frontend Build | Day Summary + Game pages, all UI components | 6 weeks | 🔲 Not started |
-| **7** | Integration, Testing & Deployment | Production-ready deployed system | 3 weeks | 🔲 Not started |
+| **2** | Similarity Engine Suite | 11 similarity models, fully tested | 5 weeks | ✅ Complete |
+| **3** | Play Pool Architecture | Indexed, query-optimized play pool | 1 week | ✅ Complete |
+| **4** | Core Simulation Loop | Full pitch-by-pitch game simulator | 4 weeks | ✅ Complete |
+| **5** | Simulation Runner & Backend API | FastAPI endpoints, 100-iteration runner | 3 weeks | ✅ Complete |
+| **6** | Frontend Build | Day Summary + Game pages, all UI components | 6 weeks | ✅ Complete |
+| **7** | Integration, Testing & Deployment | Production-ready deployed system | 3 weeks | 🔄 In progress |
 
 ### Validation Framework
 - Backtesting on held-out historical data: MAE on simulated prop distributions, calibration curves (ECE), Brier Score, log-loss
@@ -258,10 +254,10 @@ The platform is organized into 7 sequential phases across ~24 weeks:
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.13
 - PostgreSQL 15+
 - Docker & docker-compose
-- Node.js (for frontend tooling, Phase 6)
+- Node.js (for frontend tooling)
 
 ### Installation
 
@@ -269,31 +265,26 @@ The platform is organized into 7 sequential phases across ~24 weeks:
 git clone https://github.com/gmelick/baseball_simulator.git
 cd baseball_simulator
 
-# Install Python dependencies
-pip install -r requirements.txt
+# Configure environment
+cp .env.example .env
 
-# Start infrastructure (PostgreSQL, Redis)
-docker-compose up -d
+# Build + start all services (db, redis, app)
+make dev
 
-# Run database migrations
-alembic upgrade head
+# Run database migrations (in a separate terminal once db is healthy)
+make migrate
 
 # Load historical Statcast data (2022–2024)
-python pipeline/etl/load_historical.py --seasons 2022 2023 2024
+python pipeline/etl/etl_historical_loader.py --seasons 2022 2023 2024
 
 # Load sprint speed data from Baseball Savant
 python pipeline/etl/etl_sprint_speed_loader.py --seasons 2022 2023 2024
 
 # Pre-compute player profiles and defensive metrics
-python pipeline/batch/build_profiles.py
-
-# Build similarity indices (Phase 3 deliverable — not yet available)
-# python pipeline/batch/build_indices.py
+python pipeline/batch/player_profile_computor.py
 ```
 
 ### Running Simulations
-
-> **Note:** The Phase 4 simulation loop is implemented (`simulation/`). The Phase 5 REST/WebSocket API is still planned.
 
 ```python
 from simulation.sim_loop import simulate_game
@@ -341,11 +332,11 @@ baseball_simulator/
 │   ├── batch_runner.py       # ProcessPool 100-iteration runner (+ shared-memory attach)
 │   └── validation/           # chi-squared historical-replay harness
 ├── betting/                  # [✅ Phase 4] CLV engine (implied / de-vig / edge / EV / CLV)
-├── api/                      # [Phase 5 — planned]
+├── api/                      # [✅ Phase 5]
 │   ├── main.py               # FastAPI app
 │   ├── routes/               # REST endpoints
 │   └── websocket/            # Live game WebSocket channels
-├── frontend/                 # [Phase 6 — planned]
+├── frontend/                 # [✅ Phase 6 — React 18 + Vite + TypeScript]
 │   ├── components/           # Shared UI components
 │   ├── pages/                # Day Summary + Game pages
 │   └── graphics/             # SVG baseball field, linescore

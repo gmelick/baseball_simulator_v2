@@ -976,6 +976,19 @@ class StateMachine:
         # (no per-taken-pitch rng draw) for a strict byte-identical-to-prior-prod /
         # seeded-reproducibility mode.
         self._framing = _env_flag("SIM_FRAMING", default=True)  # SIM-428
+        # Hot-path env knobs resolved ONCE here (they are constant for the machine's
+        # lifetime but were re-read + re-parsed thousands of times per game). Tests
+        # set the env BEFORE constructing the machine, so a construct-time read is
+        # correct; the per-call resolver methods are kept (the env-parse unit tests
+        # call them directly). Mirrors the _bb_platoon / _fielder_rbf / _park_factor
+        # one-shot reads above.
+        self._home_field_bias_value = self._home_field_bias()  # SIM-412
+        self._run_calib_value = self._run_calib()  # SIM-429
+        _env_sk = os.environ.get("SIM_STEAL_K")  # SIM-426
+        try:
+            self._steal_k = float(_env_sk) if _env_sk is not None else self._STEAL_ATTEMPT_K
+        except ValueError:
+            self._steal_k = self._STEAL_ATTEMPT_K
         # The single-pitch helper owns the (SIM-317 real / stub) fingerprint +
         # sampler call.  When no sampler is supplied the machine is "count-machine
         # only": the caller passes a pitch_outcome directly into step_pitch (the
@@ -1488,8 +1501,8 @@ class StateMachine:
         if fp is not None and runner_id is not None:
             r = fp.runner_rate(f"{int(runner_id)}:{int(season)}", "tag_up_attempt_rate")
             if r is not None:
-                return float(min(max(r * self._run_calib(), 0.0), 0.95))
-        return float(min(0.45 * self._run_calib(), 0.95))
+                return float(min(max(r * self._run_calib_value, 0.0), 0.95))
+        return float(min(0.45 * self._run_calib_value, 0.95))
 
     def _full_pool_out_advancement(
         self, state: GameState, result: PlayResult, sig: FieldingSignal
@@ -1529,7 +1542,7 @@ class StateMachine:
                 advances[old.second] = 3
         else:
             # Ground out: lead runner advances one base on a productive grounder.
-            calib = self._run_calib()
+            calib = self._run_calib_value
             if old.third is not None and float(self.rng.random()) < 0.28 * calib:
                 runs += 1
                 new_third = None
@@ -1665,7 +1678,7 @@ class StateMachine:
         if fp is not None and feat is not None and runner_id is not None:
             rate = fp.runner_rate(f"{int(runner_id)}:{int(season)}", feat)
             if rate is not None:
-                return float(min(max(rate * self._run_calib(), 0.0), 0.97))
+                return float(min(max(rate * self._run_calib_value, 0.0), 0.97))
         return constant
 
     def _extra_advance(
@@ -2127,7 +2140,7 @@ class StateMachine:
         non-eligible event, so the away half-innings (and rate-stat shape for
         K/BB/HR) are untouched.
         """
-        bias = self._home_field_bias()
+        bias = self._home_field_bias_value
         if bias <= 0.0:
             return sig
         if state.half != Half.BOTTOM:
@@ -3088,17 +3101,12 @@ class StateMachine:
         fp = self.full_pool_sampler
         if fp is None or self._pending_steal is not None:
             return
-        k = self._STEAL_ATTEMPT_K
-        env_k = os.environ.get("SIM_STEAL_K")
-        if env_k is not None:
-            try:
-                k = float(env_k)
-            except ValueError:
-                pass
-        if k <= 0.0:
-            return
         # One decision per PA: only at the fresh count (the hook fires every pitch).
+        # This is the cheapest gate, so bail here FIRST (before reading k).
         if int(state.balls) != 0 or int(state.strikes) != 0:
+            return
+        k = self._steal_k  # SIM-426: resolved once in __init__ (was env-read per pitch)
+        if k <= 0.0:
             return
         b = state.bases
         if b.first is not None and b.second is None:

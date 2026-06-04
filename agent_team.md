@@ -341,18 +341,18 @@ This document defines the 9-agent team for the MLB Baseball Simulation Platform.
 
 **Repository:** github.com/gmelick/baseball_simulator
 
-**Current phase:** Phase 6 — Frontend Build (OPEN as of 2026-09-02 / executed 2026-05-25)
+**Current phase:** Phases 1–6 complete; Phase 7 — Integration, Testing & Deployment (live-env bring-up)
 
 **Similarity engines status:** All 11 / 11 COMPLETE (Phases 1–5 done and CI-green):
 - pitcher (GMM W₂), batter (RBF), fielder (position-partitioned RBF), baserunner extra-base (RBF),
   baserunner steal (RBF), catcher (RBF v2), pitcher-steal (RBF), manager (RBF),
   situation (KDTree), pitch-to-pitch (FAISS), batted-ball (FAISS)
 
-**Test suite:** 1814 pass / 1 skip / 0 fail @ 89% coverage on Python 3.11.15; 8 CI jobs green.
+**Test suite:** 1814 pass / 1 skip / 0 fail @ 89% coverage on Python 3.13; 8 CI jobs green.
 
-**Tech stack:** Python 3.11+, FastAPI, PostgreSQL + async SQLAlchemy + Alembic, DuckDB v10 (in-process),
+**Tech stack:** Python 3.13, FastAPI, PostgreSQL + async SQLAlchemy + Alembic, DuckDB v13 (in-process),
 Redis, scikit-learn (GMMs), FAISS, NumPy/pandas, scipy, POT (Wasserstein), pybaseball,
-Docker/docker-compose, nginx, Prometheus + Grafana. Frontend framework: **TBD via SIM-378 ADR** (React vs vanilla JS + WebSocket).
+Docker/docker-compose, nginx, Prometheus + Grafana. Frontend framework: **React 18 + Vite + TypeScript** (chosen in SIM-378 ADR, with Playwright e2e).
 
 **Primary use case:** Player prop prediction and betting edge validation anchored to Closing Line Value as the gold-standard metric.
 
@@ -364,8 +364,8 @@ Docker/docker-compose, nginx, Prometheus + Grafana. Frontend framework: **TBD vi
 | 2 | Similarity Engine Suite (11 engines) | ✅ Complete |
 | 3 | Play Pool Architecture | ✅ Complete |
 | 4 | Core Simulation Loop | ✅ Complete |
-| 5 | Simulation Runner & Backend API | ✅ Complete (CI-green 3.11.15) |
-| 6 | Frontend Build | 🚀 OPEN — 43 tickets SIM-378→420 |
-| 7 | Integration, Testing & Deployment | Not started |
+| 5 | Simulation Runner & Backend API | ✅ Complete (CI-green on Python 3.13) |
+| 6 | Frontend Build | ✅ Complete |
+| 7 | Integration, Testing & Deployment | 🚀 Live-env bring-up |
 
-**Next free ticket ID: SIM-421.**
+**Next free ticket ID: SIM-437.**

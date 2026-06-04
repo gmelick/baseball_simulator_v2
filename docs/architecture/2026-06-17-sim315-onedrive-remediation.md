@@ -1,7 +1,7 @@
 # SIM-315 — OneDrive truncation remediation plan (DEFERRED)
 
 *Author: QA / DevOps (Agent 9) · Sprint 2026-06-17 (Phase 4 P0 gates) · executed 2026-05-22*
-*Status: **document-only this sprint** (per Greg). Ticket stays **Open**; no code shipped.*
+*Status: **RESOLVED** — Option A (repo moved off OneDrive, now at `C:\Users\grego\Documents`) + Option B (`scripts/check_file_integrity.py` + `.pre-commit-config.yaml`) both landed.*
 
 ## Why this is a P0 gate
 

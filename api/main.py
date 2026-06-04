@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -287,6 +288,10 @@ async def lifespan(app: FastAPI):
                 game_state.get("away_score"),
             )
             app.state.last_resim_signal = {"game_pk": game_pk, "game_state": game_state}
+            # SIM-410 metrics: the freshness gauge reads last_resim_signal_ts (a unix
+            # ts); stamp it here so baseball_sim_pipeline_freshness_seconds reports the
+            # real age of the last signal instead of always -1 ("no data").
+            app.state.last_resim_signal_ts = time.time()
 
         log.info("Starting live ingestion pipeline (LIVE_PIPELINE_ENABLED=true) ...")
         pipeline = LiveIngestionPipeline(
@@ -497,7 +502,7 @@ def create_app() -> FastAPI:
             "Pitch-by-pitch MLB game simulator powered by Statcast data and "
             "multi-dimensional similarity engines. Full API available in Phase 5."
         ),
-        version="0.1.0-phase2",
+        version="0.1.0-phase7",
         lifespan=lifespan,
         docs_url="/docs",
         redoc_url="/redoc",

@@ -9,6 +9,18 @@ to **probabilistic** PA-outcome prediction: the thing being scored is a
 ``{"single": 0.31, "field_out": 0.55, ...}``) against the held-out *actual*
 outcome label.
 
+Status: DEV / OFFLINE-ONLY (the higher-level SIM-220 functions)
+--------------------------------------------------------------
+The higher-level functions here (``walk_forward_ablation`` and the
+``evaluate_distributions`` ablation spine) are an offline validation library —
+there is **no live pipeline caller**. The only production import from this module
+is the two constants ``DEFAULT_N_BINS`` and ``OUTCOME_PROB_EPS``, consumed by
+:mod:`simulation.prop_validation`, which REIMPLEMENTS the binary case (a win
+probability / over-under is a binary event the multi-class confidence reliability
+does not score correctly). Production win-prob / prop calibration therefore runs
+on that binary path, not on these functions. The math here is correct and
+unit-tested — this is a label, not a deprecation.
+
 What it computes
 ----------------
 Given an ``(n, c)`` matrix of predicted class probabilities and the ``(n,)``

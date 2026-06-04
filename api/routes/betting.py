@@ -81,9 +81,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from api.auth import require_auth
+from api.routes._common import _get_pool
 from api.routes.games import (
     _build_runner,
-    _get_pool,
     _resolve_state_or_error,
     _run_batch,
     _sim_kwargs_from_state,

@@ -63,6 +63,7 @@ import asyncio
 import dataclasses
 import logging
 import os
+import time
 from collections.abc import Mapping
 from datetime import date as _date
 from datetime import datetime
@@ -73,6 +74,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from api.auth import require_auth
+from api.routes._common import _get_pool, _row_get
 from api.schemas import (
     BoxscoreCardModel,
     EdgeReportModel,
@@ -150,21 +152,12 @@ def resolve_factory_ref(request: Request) -> str:
 # ---------------------------------------------------------------------------
 # app.state accessors (mirror similarity.py's get_* dependencies)
 # ---------------------------------------------------------------------------
-
-
-def _get_pool(request: Request) -> Any:
-    """The asyncpg pool, or 503 if the lifespan has not attached one.
-
-    Mirrors ``similarity.get_pitcher_engine``'s 503-on-missing posture: a route
-    that needs the DB fails loudly rather than 500-ing on an attribute error.
-    """
-    pool = getattr(request.app.state, "pg_pool", None)
-    if pool is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="database pool unavailable",
-        )
-    return pool
+#
+# ``_get_pool`` (the ``app.state.pg_pool`` accessor) lives in
+# ``api.routes._common`` and is imported above -- it was byte-identical to
+# data_health.py's copy (audit 2026-06-03 "api/ duplication"); it is re-exported
+# here for the existing ``from api.routes.games import _get_pool`` callers
+# (betting.py uses the _common import directly).
 
 
 def _get_sim_cache(request: Request) -> Any:
@@ -408,15 +401,26 @@ class GameCardAggregateResponse(BaseModel):
     odds: None = None
 
 
-#: SQL to fetch the SIM-383-enriched identity + final scores for a single
-#: game_pk.  The ``team_records`` CTE computes season-to-date win/loss records
-#: from ``raw.games`` final results strictly before the game's own date.
-#: Single parameter: ``$1 = game_pk (int)``.
-_GAME_CARD_SQL = """
-    WITH game_date_lookup AS (
-        SELECT game_date, season FROM raw.games WHERE game_pk = $1
-    ),
-    team_records AS (
+# ---------------------------------------------------------------------------
+# Shared SIM-383 win/loss-records SQL (audit 2026-06-03 "api/ duplication")
+# ---------------------------------------------------------------------------
+# The ``team_records`` CTE (season-to-date W/L from ``raw.games`` finals strictly
+# before a cutoff date) and the team/venue/records JOIN tail were copy-pasted in
+# both _GAME_CARD_SQL and _GAMES_ON_DATE_SQL.  They are factored here so any
+# change to the records computation happens in ONE place.  The ONLY thing that
+# varies between the two callers is the date-cutoff expression, threaded in via
+# ``{cutoff}``: a single game_pk lookup vs the listed date param ``$1``.
+
+
+def _team_records_cte(cutoff: str) -> str:
+    """The ``team_records`` CTE body, with the date cutoff expression spliced in.
+
+    ``cutoff`` is a trusted SQL fragment (a literal/sub-select chosen by THIS
+    module, never user input) -- e.g. ``"$1"`` or
+    ``"(SELECT game_date FROM game_date_lookup)"``.
+    """
+    return f"""team_records AS (
+        -- Season-to-date records: only Final games BEFORE the cutoff date.
         SELECT team_id, season,
                SUM(CASE WHEN (is_home AND home_score_final > away_score_final)
                              OR (NOT is_home AND away_score_final > home_score_final)
@@ -428,17 +432,36 @@ _GAME_CARD_SQL = """
                 SELECT home_team_id AS team_id, season, TRUE::BOOLEAN AS is_home,
                        home_score_final, away_score_final
                   FROM raw.games
-                 WHERE status = 'Final'
-                   AND game_date < (SELECT game_date FROM game_date_lookup)
+                 WHERE status = 'Final' AND game_date < {cutoff}
                 UNION ALL
                 SELECT away_team_id AS team_id, season, FALSE::BOOLEAN AS is_home,
                        home_score_final, away_score_final
                   FROM raw.games
-                 WHERE status = 'Final'
-                   AND game_date < (SELECT game_date FROM game_date_lookup)
+                 WHERE status = 'Final' AND game_date < {cutoff}
                ) t
          GROUP BY team_id, season
-    )
+    )"""
+
+
+#: The team/venue/records LEFT JOIN tail shared by both record-bearing queries
+#: (byte-identical in the original two copies).
+_TEAM_RECORDS_JOIN_TAIL = """      FROM raw.games g
+      LEFT JOIN raw.teams    ht  ON ht.team_id  = g.home_team_id AND ht.season  = g.season
+      LEFT JOIN raw.teams    at_ ON at_.team_id = g.away_team_id AND at_.season = g.season
+      LEFT JOIN raw.venues    v  ON  v.venue_id = g.venue_id     AND  v.season  = g.season
+      LEFT JOIN team_records hr  ON hr.team_id  = g.home_team_id AND hr.season  = g.season
+      LEFT JOIN team_records ar  ON ar.team_id  = g.away_team_id AND ar.season  = g.season"""
+
+
+#: SQL to fetch the SIM-383-enriched identity + final scores for a single
+#: game_pk.  The ``team_records`` CTE computes season-to-date win/loss records
+#: from ``raw.games`` final results strictly before the game's own date.
+#: Single parameter: ``$1 = game_pk (int)``.
+_GAME_CARD_SQL = f"""
+    WITH game_date_lookup AS (
+        SELECT game_date, season FROM raw.games WHERE game_pk = $1
+    ),
+    {_team_records_cte("(SELECT game_date FROM game_date_lookup)")}
     SELECT g.game_pk, g.season, g.game_date, g.status,
            g.home_team_id, g.away_team_id, g.venue_id,
            g.home_score_final, g.away_score_final,
@@ -455,12 +478,7 @@ _GAME_CARD_SQL = """
            EXISTS(
                SELECT 1 FROM raw.game_lineups gl WHERE gl.game_pk = g.game_pk
            ) AS lineup_ready
-      FROM raw.games g
-      LEFT JOIN raw.teams    ht  ON ht.team_id  = g.home_team_id AND ht.season  = g.season
-      LEFT JOIN raw.teams    at_ ON at_.team_id = g.away_team_id AND at_.season = g.season
-      LEFT JOIN raw.venues    v  ON  v.venue_id = g.venue_id     AND  v.season  = g.season
-      LEFT JOIN team_records hr  ON hr.team_id  = g.home_team_id AND hr.season  = g.season
-      LEFT JOIN team_records ar  ON ar.team_id  = g.away_team_id AND ar.season  = g.season
+{_TEAM_RECORDS_JOIN_TAIL}
      WHERE g.game_pk = $1
 """
 
@@ -939,27 +957,8 @@ async def _resolve_lineup_best_effort(pool: Any, game_pk: int) -> Any:
 # Queries
 # ---------------------------------------------------------------------------
 
-_GAMES_ON_DATE_SQL = """
-    WITH team_records AS (
-        -- Season-to-date records: only Final games BEFORE the requested date.
-        SELECT team_id, season,
-               SUM(CASE WHEN (is_home AND home_score_final > away_score_final)
-                             OR (NOT is_home AND away_score_final > home_score_final)
-                        THEN 1 ELSE 0 END) AS wins,
-               SUM(CASE WHEN (is_home AND home_score_final < away_score_final)
-                             OR (NOT is_home AND away_score_final < home_score_final)
-                        THEN 1 ELSE 0 END) AS losses
-          FROM (
-                SELECT home_team_id AS team_id, season, TRUE::BOOLEAN AS is_home,
-                       home_score_final, away_score_final
-                  FROM raw.games WHERE status = 'Final' AND game_date < $1
-                UNION ALL
-                SELECT away_team_id AS team_id, season, FALSE::BOOLEAN AS is_home,
-                       home_score_final, away_score_final
-                  FROM raw.games WHERE status = 'Final' AND game_date < $1
-               ) t
-         GROUP BY team_id, season
-    )
+_GAMES_ON_DATE_SQL = f"""
+    WITH {_team_records_cte("$1")}
     SELECT g.game_pk, g.season, g.game_date, g.status,
            g.home_team_id, g.away_team_id, g.venue_id,
            ht.team_name     AS home_team_name,
@@ -975,12 +974,7 @@ _GAMES_ON_DATE_SQL = """
            EXISTS(
                SELECT 1 FROM raw.game_lineups gl WHERE gl.game_pk = g.game_pk
            ) AS lineup_ready
-      FROM raw.games g
-      LEFT JOIN raw.teams    ht  ON ht.team_id  = g.home_team_id AND ht.season  = g.season
-      LEFT JOIN raw.teams    at_ ON at_.team_id = g.away_team_id AND at_.season = g.season
-      LEFT JOIN raw.venues    v  ON  v.venue_id = g.venue_id     AND  v.season  = g.season
-      LEFT JOIN team_records hr  ON hr.team_id  = g.home_team_id AND hr.season  = g.season
-      LEFT JOIN team_records ar  ON ar.team_id  = g.away_team_id AND ar.season  = g.season
+{_TEAM_RECORDS_JOIN_TAIL}
      WHERE g.game_date = $1
      ORDER BY g.game_pk
 """
@@ -1006,13 +1000,26 @@ def _parse_date(date_str: str) -> _date:
         ) from exc
 
 
-def _row_get(row: Any, key: str, default: Any = None) -> Any:
-    """Read ``key`` from an asyncpg Record or a plain dict uniformly."""
-    try:
-        val = row[key]
-    except (KeyError, IndexError, TypeError):
-        return default
-    return default if val is None else val
+# ``_row_get`` (uniform Record/dict column read) lives in api.routes._common and
+# is imported at the top of this module -- it was the canonical variant the audit
+# (2026-06-03 "api/ duplication") chose over data_health.py's near-identical copy.
+
+
+def _opt_str(row: Any, key: str) -> str | None:
+    """``str(row[key])`` or ``None`` when the column is absent/NULL.
+
+    Module-level (takes ``row`` explicitly) so the identical _game_card /
+    _enriched_game_card closures share one definition -- audit 2026-06-03
+    "api/ duplication".
+    """
+    v = _row_get(row, key)
+    return None if v is None else str(v)
+
+
+def _opt_int(row: Any, key: str) -> int | None:
+    """``int(row[key])`` or ``None`` when the column is absent/NULL (see _opt_str)."""
+    v = _row_get(row, key)
+    return None if v is None else int(v)
 
 
 def _game_card(row: Any) -> GameCard:
@@ -1028,33 +1035,25 @@ def _game_card(row: Any) -> GameCard:
     # game_date may be a date/datetime (asyncpg) or an ISO string (canned rows).
     game_date = gd.isoformat() if hasattr(gd, "isoformat") else str(gd)
 
-    def _opt_str(key: str) -> str | None:
-        v = _row_get(row, key)
-        return None if v is None else str(v)
-
-    def _opt_int(key: str) -> int | None:
-        v = _row_get(row, key)
-        return None if v is None else int(v)
-
     return GameCard(
         game_pk=int(_row_get(row, "game_pk")),
         season=int(_row_get(row, "season", 0) or 0),
         game_date=game_date,
-        status=_opt_str("status"),
-        home_team_id=_opt_int("home_team_id"),
-        away_team_id=_opt_int("away_team_id"),
-        venue_id=_opt_int("venue_id"),
+        status=_opt_str(row, "status"),
+        home_team_id=_opt_int(row, "home_team_id"),
+        away_team_id=_opt_int(row, "away_team_id"),
+        venue_id=_opt_int(row, "venue_id"),
         # SIM-383 enrichment fields (None when the row predates the enriched query)
-        home_team_name=_opt_str("home_team_name"),
-        home_team_abbrev=_opt_str("home_team_abbrev"),
-        away_team_name=_opt_str("away_team_name"),
-        away_team_abbrev=_opt_str("away_team_abbrev"),
-        venue_name=_opt_str("venue_name"),
-        venue_city=_opt_str("venue_city"),
-        home_wins=_opt_int("home_wins"),
-        home_losses=_opt_int("home_losses"),
-        away_wins=_opt_int("away_wins"),
-        away_losses=_opt_int("away_losses"),
+        home_team_name=_opt_str(row, "home_team_name"),
+        home_team_abbrev=_opt_str(row, "home_team_abbrev"),
+        away_team_name=_opt_str(row, "away_team_name"),
+        away_team_abbrev=_opt_str(row, "away_team_abbrev"),
+        venue_name=_opt_str(row, "venue_name"),
+        venue_city=_opt_str(row, "venue_city"),
+        home_wins=_opt_int(row, "home_wins"),
+        home_losses=_opt_int(row, "home_losses"),
+        away_wins=_opt_int(row, "away_wins"),
+        away_losses=_opt_int(row, "away_losses"),
         # SIM-409: bool from the EXISTS(...) subquery; None when absent.
         lineup_ready=bool(_row_get(row, "lineup_ready"))
         if _row_get(row, "lineup_ready") is not None
@@ -1170,34 +1169,26 @@ async def get_game_status_card(
     gd = _row_get(row, "game_date")
     game_date = gd.isoformat() if hasattr(gd, "isoformat") else str(gd)
 
-    def _opt_str(key: str) -> str | None:
-        v = _row_get(row, key)
-        return None if v is None else str(v)
-
-    def _opt_int(key: str) -> int | None:
-        v = _row_get(row, key)
-        return None if v is None else int(v)
-
     return GameCardAggregateResponse(
         game_pk=int(_row_get(row, "game_pk")),
         game_status=game_status,
         game_date=game_date,
         season=int(_row_get(row, "season", 0) or 0),
-        home_team_id=_opt_int("home_team_id"),
-        away_team_id=_opt_int("away_team_id"),
-        venue_id=_opt_int("venue_id"),
-        home_team_name=_opt_str("home_team_name"),
-        home_team_abbrev=_opt_str("home_team_abbrev"),
-        away_team_name=_opt_str("away_team_name"),
-        away_team_abbrev=_opt_str("away_team_abbrev"),
-        venue_name=_opt_str("venue_name"),
-        venue_city=_opt_str("venue_city"),
-        home_wins=_opt_int("home_wins"),
-        home_losses=_opt_int("home_losses"),
-        away_wins=_opt_int("away_wins"),
-        away_losses=_opt_int("away_losses"),
-        home_score_final=_opt_int("home_score_final"),
-        away_score_final=_opt_int("away_score_final"),
+        home_team_id=_opt_int(row, "home_team_id"),
+        away_team_id=_opt_int(row, "away_team_id"),
+        venue_id=_opt_int(row, "venue_id"),
+        home_team_name=_opt_str(row, "home_team_name"),
+        home_team_abbrev=_opt_str(row, "home_team_abbrev"),
+        away_team_name=_opt_str(row, "away_team_name"),
+        away_team_abbrev=_opt_str(row, "away_team_abbrev"),
+        venue_name=_opt_str(row, "venue_name"),
+        venue_city=_opt_str(row, "venue_city"),
+        home_wins=_opt_int(row, "home_wins"),
+        home_losses=_opt_int(row, "home_losses"),
+        away_wins=_opt_int(row, "away_wins"),
+        away_losses=_opt_int(row, "away_losses"),
+        home_score_final=_opt_int(row, "home_score_final"),
+        away_score_final=_opt_int(row, "away_score_final"),
         sim_summary=sim_summary,
         odds=None,
     )
@@ -1331,6 +1322,7 @@ async def simulate_game_endpoint(
     runner = _build_runner(request)
 
     # The batch is CPU-bound -- offload to a worker thread so the loop stays free.
+    _t0 = time.perf_counter()
     batch = await asyncio.to_thread(
         _run_batch,
         runner,
@@ -1339,6 +1331,16 @@ async def simulate_game_endpoint(
         base_seed=base_seed,
         use_cache=use_cache,
     )
+    # SIM-374 metrics: record the batch wall-clock so baseball_sim_latency_seconds
+    # reflects real /simulate cost (the gauge previously had no production caller).
+    # Best-effort, never breaks the response; skipped on a cache hit (no real sim ran).
+    if not batch.from_cache:
+        try:
+            from api.routes.metrics import record_sim_latency
+
+            record_sim_latency(request.app.state, time.perf_counter() - _t0)
+        except Exception:  # noqa: BLE001
+            pass
 
     # SIM-357: persist the /plays + /state replay artifacts (record ONE game at
     # the run's base_seed -> play-stream + per-pitch state snapshots + sim-run
