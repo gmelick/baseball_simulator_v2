@@ -1009,6 +1009,11 @@ class StateMachine:
         # pinch-hit degrades to a no-op (the no-DB test path).  Production wires the
         # real bench off the roster.
         self.bench = dict(bench) if bench else {}
+        # SIM-434: per-defending-team available-arms bullpen map, staged on the machine
+        # by the production factory (when SIM_MANAGER is on) and read by ``simulate_game``
+        # as the fallback when no explicit ``bullpen=`` is passed. ``None`` -> no bullpen
+        # wired, so the pull→bullpen hook degrades to a no-op (flag-off byte-identical).
+        self.bullpen: dict | None = None
         # SIM-323: a log of the manager decisions actually taken this game (the
         # observable side of the §3/§5.3 hooks the SIM-323 tests assert against).
         # Each entry is a small dict: {"kind": ..., "inning": ..., "leverage": ...,

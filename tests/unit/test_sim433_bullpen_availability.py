@@ -588,7 +588,11 @@ class TestV2UnusedArmRest:
         # 669373 is active + absent from the workload; give it a back-to-back timeline.
         timeline = {669373: [(date(2024, 8, 14), 30)]}
         rows = ingest.build_rows(
-            746437, workload=[], roster_by_team=roster, timeline=timeline, game_date=date(2024, 8, 15)
+            746437,
+            workload=[],
+            roster_by_team=roster,
+            timeline=timeline,
+            game_date=date(2024, 8, 15),
         )
         by_pid = {r.pitcher_id: r for r in rows}
         assert by_pid[669373].available is False

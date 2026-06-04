@@ -397,9 +397,7 @@ class TestMigrationSanity:
         assert "ADD COLUMN IF NOT EXISTS fielder_player_id" in text
         assert "'0012'" in text  # migration_history entry
         # The canonical schema must carry the same two columns (fresh-build parity).
-        schema = (REPO_ROOT / "db" / "schemas" / "02_duckdb_schema.sql").read_text(
-            encoding="utf-8"
-        )
+        schema = (REPO_ROOT / "db" / "schemas" / "02_duckdb_schema.sql").read_text(encoding="utf-8")
         assert "fielder_player_id" in schema
 
     def test_duckdb_0008_creates_play_stream(self):
