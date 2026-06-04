@@ -122,6 +122,15 @@ services:
       # default manager profile + synthetic bullpen (real per-team rosters are the
       # SIM-427 follow-on). Unit tests pin it OFF (tests/conftest.py). =0 reverts.
       SIM_MANAGER:     "1"
+      # SIM-411/413/425b: realism nudges, each a small CAPPED out<->single (or
+      # batted-ball reweight) adjustment, default OFF. Park factor (out<->single by
+      # the venue run factor), L/R platoon (batted-ball draw reweight by pitcher
+      # hand), fielder RBF (out<->single by the live-vs-pool fielder OAA delta).
+      # Enabled + seed-paired validated 2026-06-04 (no run distortion). Unit tests
+      # pin them OFF (tests/conftest.py). Set any to 0 to revert that effect.
+      SIM_PARK_FACTOR: "1"
+      SIM_BB_PLATOON:  "1"
+      SIM_FIELDER_RBF: "1"
       # SIM-406: the fitted CalibrationReport the lifespan loads to calibrate every
       # similarity engine + the win-prob map. Produced by `make calibrate` /
       # scripts/fit_calibration.py (and the nightly chain) into the /data volume.

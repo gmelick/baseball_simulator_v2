@@ -1,3 +1,31 @@
+# Phase 7 — SIM-411/413/425b ENABLED in production: park factor + L/R platoon + fielder RBF — 2026-06-04
+**Authors: Backend Developer (Agent 5), Baseball Analyst (Agent 2), Performance Engineer (Agent 6)**
+
+Turned ON the three realism nudges that were code-complete but gated OFF: `SIM_PARK_FACTOR`
+(out↔single by the venue run factor), `SIM_BB_PLATOON` (batted-ball draw reweighted by pitcher hand),
+`SIM_FIELDER_RBF` (out↔single by the live-vs-pool fielder OAA delta). Each is a small, CAPPED effect
+and runs on the API path (which supplies the per-game defense maps + park factor).
+
+**Validation — seed-paired off vs on, 4 games × 150 iters (2024), via `/simulate`:**
+
+| metric | OFF | ON | delta |
+|---|---|---|---|
+| total runs/game | 8.782 | 8.835 | +0.053 |
+| home runs/game | 4.593 | 4.413 | −0.180 |
+| away runs/game | 4.188 | 4.422 | +0.233 |
+| home win % | 0.567 | 0.523 | −0.043 |
+
+**Verdict: enabled.** The nudges clearly fire (seed-paired per-game run deltas −0.27..+0.36; the
+home/away split shifts) while **total run scoring is unchanged (+0.05 — noise)** — no distortion. As a
+bonus the home-win-% drifted from a slightly-high 0.567 toward the MLB ~0.535 target (0.523). The fine
+magnitude calibration (per-OAA run value, cap re-derivation, the ≥400×≥20 sweep) remains the deferred
+SIM-429 follow-on; this enablement is the "turn the validated features on" step.
+
+- `docker-compose.yml`: `SIM_PARK_FACTOR`/`SIM_BB_PLATOON`/`SIM_FIELDER_RBF` = "1" on the app env.
+- `tests/conftest.py`: pin all three OFF (mirrors the `SIM_FULL_POOL`/`SIM_MANAGER` pins) so the env
+  never leaks into the unit suite; the SIM-411/413/425b tests opt in explicitly. CI unaffected.
+- `SIM_FRAMING` was already ON (default). No code change — pure flag flip + validation.
+
 # Phase 7 — SIM-434 ENABLED in production: manager decision model turned ON + validated — 2026-06-04
 **Authors: Backend Developer (Agent 5), Baseball Analyst (Agent 2), QA/DevOps (Agent 9)**
 
