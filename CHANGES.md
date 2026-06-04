@@ -1,3 +1,35 @@
+# Phase 7 — SIM-434 ENABLED in production: manager decision model turned ON + validated — 2026-06-04
+**Authors: Backend Developer (Agent 5), Baseball Analyst (Agent 2), QA/DevOps (Agent 9)**
+
+Flipped `SIM_MANAGER` ON in the docker-compose `app` env (was default OFF). The starter-pull +
+reliever-selection decision model (SIM-434, fatigue/leverage/TTO) now runs in every production sim.
+
+**Validation — 400 sims × 3 games (2024), manager OFF vs ON** (the SIM-434 "enable + ≥400-sim" gate):
+
+| metric | OFF | ON | delta | read |
+|---|---|---|---|---|
+| pitchers / game | 2.00 | 9.25 | +7.25 | OFF = starters finish games (unreal); ON ≈ 4.6/team (MLB ≈ 4.4) ✓ |
+| starter IP (home/away) | 9.11 / 8.52 | 6.54 / 6.23 | ≈ −2.5 | realistic pull (still ~1 IP above MLB ~5.2 — tunable) |
+| runs (both teams) | 9.03 | 8.84 | −0.19 | −0.10/team — within noise, **no run distortion** |
+| H / HR / BB / K | 18.5 / 2.36 / 7.09 / 16.45 | 18.2 / 2.47 / 7.50 / 16.35 | tiny | box environment preserved ✓ |
+
+**Verdict: net improvement, shipped ON.** Enabling the manager fixes the unrealistic "starters pitch
+complete games" behavior (the root of the SIM-429 pitcher-K/BB over-prediction the SIM-407 validation
+flagged) while leaving the run/box environment essentially unchanged. The earlier 3-iteration "runs
+collapse" was pure small-sample noise (OFF and ON converge to ~8.9 total runs at 400 iters).
+
+- **Enablement:** `SIM_MANAGER: "1"` added to the `app` service env in `docker-compose.yml`; app
+  recreated. Uses the league-flat `_DEFAULT_MANAGER_PROFILE` + a synthetic per-team bullpen (real
+  per-team manager profiles + reliever rosters are the SIM-427/SIM-433 follow-on; the generic default
+  is a valid stand-in). Boot: `11/11` engines, manager wiring active per-game in the production factory.
+- **Test isolation:** `tests/conftest.py` now pins `SIM_MANAGER=0` (mirroring the `SIM_FULL_POOL` /
+  `SIM_HOME_FIELD_BIAS` pins), so the docker-compose env never leaks the manager into the unit suite —
+  the flag-OFF byte-identical baseline + the SIM-434 explicit-opt-in tests stay valid. CI (host pytest)
+  is unaffected. No sim-output golden fixtures exist, so there is nothing to regen.
+- **Follow-on (not blocking):** the pull model leaves starters ~1 IP long vs MLB (6.4 vs ~5.2) — a
+  `_DEFAULT_MANAGER_PROFILE` / pull-floor tuning refinement; and wiring the REAL per-team managers (the
+  just-deployed SIM-427 profiles) in place of the league-flat default.
+
 # Phase 7 — SIM-427 capstone DEPLOYED: 7th manager USAGE feature wired + recalibrated — 2026-06-03
 **Authors: ML/Modeling Engineer (Agent 3), Baseball Analyst (Agent 2), Data Engineer (Agent 4); independent design+verify via a 5-agent workflow**
 

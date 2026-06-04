@@ -38,6 +38,12 @@ os.environ["SIM_FULL_POOL"] = "0"
 # OFF here and let the SIM-412 tests opt in by monkeypatching the env back on.
 os.environ["SIM_HOME_FIELD_BIAS"] = "0"
 
+# SIM-434: production enables the manager decision model via SIM_MANAGER=1 (set
+# in the docker-compose `app` env, which `docker compose run app pytest` inherits).
+# The unit suite asserts the flag-OFF (manager-is-None) byte-identical baseline,
+# so force it off here; the SIM-434 tests opt in explicitly via monkeypatch.
+os.environ["SIM_MANAGER"] = "0"
+
 # ---------------------------------------------------------------------------
 # Shared lightweight fixtures
 # ---------------------------------------------------------------------------

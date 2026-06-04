@@ -114,6 +114,14 @@ services:
       # nightly build has produced the artifacts. Unit tests don't set it -> they
       # keep the per-tile default. Set SIM_FULL_POOL=0 to force the per-tile path.
       SIM_FULL_POOL:   "1"
+      # SIM-434: enable the manager decision model (starter pull + reliever
+      # selection by fatigue/leverage/TTO). Validated 2026-06-04 at 400 sims x 3
+      # games: pitchers/game 2.0 -> 9.25, starter IP ~9 -> ~6.4 (realistic), with
+      # runs unchanged (-0.10/team) and box stats flat — fixes the pitcher K/BB
+      # over-prediction without distorting the run environment. Uses a league-flat
+      # default manager profile + synthetic bullpen (real per-team rosters are the
+      # SIM-427 follow-on). Unit tests pin it OFF (tests/conftest.py). =0 reverts.
+      SIM_MANAGER:     "1"
       # SIM-406: the fitted CalibrationReport the lifespan loads to calibrate every
       # similarity engine + the win-prob map. Produced by `make calibrate` /
       # scripts/fit_calibration.py (and the nightly chain) into the /data volume.
