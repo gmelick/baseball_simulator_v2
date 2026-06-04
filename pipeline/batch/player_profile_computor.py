@@ -2548,11 +2548,13 @@ class PlayerProfileComputor:
         are not flagged in Statcast (hit-and-run, double-switch) and stay NULL.
         Idempotent via INSERT OR REPLACE on (manager_id, season).
 
-        NOTE: the SIM-433 ``raw.game_bullpen_availability`` available-but-unused
-        signal would refine these once it records the full per-game roster (it
-        currently captures only arms that appeared) — a SIM-433-v2 follow-on. The
-        metrics here stand on observed usage alone and need no network / no
-        availability table.
+        SIM-427 capstone: ``available_reliever_usage_rate`` (the ``bullpen_opp`` CTE)
+        normalizes bullpen usage by OPPORTUNITY — relievers used / (used + available-
+        but-held) — by joining the SIM-433-v2 ``raw.game_bullpen_availability`` table
+        (the full per-game roster, including arms that were available but never
+        appeared). It degrades to NULL (LEFT JOIN) for a manager-season with no
+        availability rows; the engine's degenerate-sigma guard then keeps the default.
+        The other six USAGE metrics stand on observed raw.pitches usage alone.
         """
         log.info("Computing manager profiles …")
         season_list = ", ".join(str(s) for s in seasons)
@@ -2784,8 +2786,10 @@ class PlayerProfileComputor:
                 g.season,
                 g.sample_games,
                 g.sample_games                                                AS sample_starter_decisions,  -- proxy (~1 SP pull/game)
-                -- Usage (6) — SIM-427: derived from raw.pitches pitcher-stints
-                -- (fielding-manager attribution). NULL only when a manager has no
+                -- Usage (7) — SIM-427: the first six are derived from raw.pitches
+                -- pitcher-stints (fielding-manager attribution); the seventh
+                -- (available_reliever_usage_rate) is opportunity-normalized via the
+                -- SIM-433-v2 availability join. NULL only when a manager has no
                 -- qualifying fielding games / reliever entries in the window.
                 u.starter_avg_pitch_count,
                 u.starter_pull_pct_before_100,

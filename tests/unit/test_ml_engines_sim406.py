@@ -415,15 +415,18 @@ class TestNewFieldsPersistence:
 
 class TestFitSigmaSentinel:
     """The SIM-406 calibrator must return the 0.0 keep-default sentinel (NOT the
-    degenerate 1.0 fallback) when a feature matrix has no usable variance — e.g.
-    the manager USAGE column gated NULL on SIM-427. Otherwise a literal 1.0 would
-    be persisted and silently override the engine's tuned sigma."""
+    degenerate 1.0 fallback) when a feature matrix has no usable variance — e.g. a
+    DuckDB whose manager USAGE columns have not been repopulated (all-NULL → no
+    variance). Otherwise a literal 1.0 would be persisted and silently override the
+    engine's tuned sigma. (SIM-427 un-gated USAGE to 7 populated features, so the
+    live fit is now genuine; this sentinel remains the graceful-degradation guard.)"""
 
     def test_zero_variance_matrix_returns_zero_sentinel(self):
         from similarity.similarity_calibration import SimilarityCalibrator
 
-        # An all-zero z-scored matrix (what an all-NULL gated column produces).
-        zmat = np.zeros((50, 6), dtype=np.float64)
+        # An all-zero z-scored matrix (what an un-repopulated all-NULL column produces);
+        # width 7 mirrors the manager USAGE sub-score's feature count post-SIM-427.
+        zmat = np.zeros((50, 7), dtype=np.float64)
         assert SimilarityCalibrator._fit_sigma(zmat, 0.50) == 0.0
 
     def test_empty_matrix_returns_zero_sentinel(self):
@@ -446,7 +449,7 @@ class TestFitSigmaSentinel:
         from similarity.engines.manager_similarity import ManagerSimilarityEngine
         from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
 
-        usage_sigma = SimilarityCalibrator._fit_sigma(np.zeros((30, 6)), 0.50)
+        usage_sigma = SimilarityCalibrator._fit_sigma(np.zeros((30, 7)), 0.50)
         assert usage_sigma == 0.0
         eng = ManagerSimilarityEngine(duckdb_path=":memory:")
         eng.apply_calibration(CalibrationReport(sigma_manager_usage=usage_sigma))

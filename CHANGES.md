@@ -1,3 +1,44 @@
+# Phase 7 — SIM-427 capstone DEPLOYED: 7th manager USAGE feature wired + recalibrated — 2026-06-03
+**Authors: ML/Modeling Engineer (Agent 3), Baseball Analyst (Agent 2), Data Engineer (Agent 4); independent design+verify via a 5-agent workflow**
+
+The "Remaining (deploy chain)" from the entry below is now **DONE end-to-end** — `available_reliever_usage_rate`
+is a live 7th feature of the manager-similarity engine's USAGE sub-score, and the engine is recalibrated.
+
+- **Data run (app stopped for exclusive DuckDB write):** applied DuckDB migration **0013**, recomputed
+  `_compute_manager_profiles` for all 10 seasons against the now-complete `raw.game_bullpen_availability`
+  (SIM-433-v2 ingest finished: 21,612 games / 649,685 rows / 258,593 available-but-held arms). Result:
+  **100% coverage** — all 305 qualifying manager-seasons carry a non-NULL value (so the NULL→0.0
+  coercion concern is moot in practice). Range **0.227–0.75**, avg **0.385**, with a sensible rising
+  trend (0.380 in 2017 → 0.404 in 2026, matching the league-wide shift to heavier bullpen use).
+- **Engine wiring (`similarity/engines/manager_similarity.py`):** `USAGE_FEATURES` gains
+  `("available_reliever_usage_rate", 0.550)` as the 7th feature; `_load_profiles` SELECTs + unpacks it
+  into a 7-element `usage_vec`. **Weight 0.55** chosen via an independent 3-lens design panel (Baseball
+  Analyst 0.60 / ML 0.55 / red-team 0.30): the red-team's low value was premised on sparse coverage +
+  an incomplete ingest, **both invalidated by the 100%-coverage data run**; all three agreed the feature
+  is *not* redundant (an orthogonal "bullpen-depletion vs. availability" axis). 0.55 sits just below the
+  0.60 bullpen-reliance features, acknowledging the modestly noisier availability source.
+- **Calibrator (`similarity/similarity_calibration.py`):** `_calibrate_manager_params` now SELECTs the
+  7th column and slices `col(0,7)`/`col(7,5)`/`col(12,5)`. Re-fit live: **`sigma_usage=1.030`** — a
+  *genuine* 7-feature fit (was the 1.000 module default, kept via the degenerate-sigma sentinel when the
+  USAGE columns were un-repopulated). `sigma_aggression=0.846`, `sigma_platoon=0.969` are likewise now
+  real fits over 305 repopulated manager-seasons. The win-prob reliability curve (SIM-407) was
+  re-fit and restored to SIM-432 parity (`validate-props --write-calibration`, 60 games / 2024) after
+  `fit_calibration.py` reset it.
+- **`simulation/sim_loop.py`:** `_MANAGER_TENDENCY_INDEX` gains `available_reliever_usage_rate → (usage_vec, 6)`
+  so the (gated) SIM-434 manager decision model can read it by name; preserves the "mirrors USAGE_FEATURES
+  exactly" invariant. `_tendency` is a None-safe `.get()` lookup so the addition is inert until consumed.
+- **Golden fixtures:** regenerated `tests/regression/fixtures/manager.json` (the synthetic seed=2026
+  build auto-adapts to 7 features; the four non-manager fixtures are byte-identical and were left
+  untouched). +2 source-guard unit tests pin the 7th feature into `USAGE_FEATURES` + the load SQL + the
+  calibrator offsets. Stale "gated NULL on SIM-427" comments updated across the engine, calibrator,
+  computor docstring, and `test_ml_engines_sim406.py`.
+- **Verification:** two independent adversarial wiring audits (no project knowledge) confirmed every
+  touch point and the calibrator offsets; their one extra find (test matrix widths 6→7, cosmetic — the
+  sentinel returns 0.0 at any width) was folded in. Regression + manager/calibration unit suites green
+  (140 tests); ruff + ruff-format clean; mypy adds no new errors (the 2 it reports are pre-existing,
+  in files this change never touched). Live boot: `build_all_engines: 11/11` →
+  `applied calibration to ManagerSimilarityEngine (sigma_usage=1.0298, ...)`.
+
 # Phase 7 — SIM-427 capstone: manager USAGE normalized by opportunity — 2026-06-03
 **Authors: ML/Modeling Engineer (Agent 3), Baseball Analyst (Agent 2), Data Engineer (Agent 4)**
 

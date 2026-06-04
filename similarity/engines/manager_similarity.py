@@ -107,6 +107,15 @@ USAGE_FEATURES = [
     ("high_leverage_reliever_rate", 0.600),  # % high-LI PA handled by top 2 relievers
     ("opener_usage_rate", 0.500),  # openers used / total starts
     ("bulk_innings_rate", 0.500),  # games with bulk-inning reliever after opener
+    # SIM-427 capstone: of the relievers the manager had AVAILABLE, the fraction
+    # actually used per game (opportunity-normalized; from the SIM-433-v2 full-roster
+    # availability table). An orthogonal "bullpen-depletion" axis — how aggressively a
+    # manager empties the pen relative to what's available, separating "chose to hold
+    # an arm" from "no arm could pitch". Weight 0.55: just below the 0.60 bullpen-
+    # reliance features because its availability source (rest/IL inference) is modestly
+    # noisier than the pure pitch-count anchors. 100% manager-season coverage on the
+    # 2017-2026 ingest (no NULL-coercion bias in practice).
+    ("available_reliever_usage_rate", 0.550),
 ]
 
 # --- Offensive Aggressiveness features ---
@@ -367,8 +376,9 @@ class ManagerSimilarityEngine:
         """SIM-406: rebuild the usage / aggression / platoon RBF scorers from a report.
 
         A sigma field left at its 0.0 default keeps the engine's current value, so a
-        partial report degrades gracefully (the USAGE sub-score is gated NULL on
-        SIM-427, so its sigma typically stays the module default).
+        partial report degrades gracefully (e.g. a DuckDB whose USAGE columns have not
+        been repopulated yields a degenerate, no-variance fit → the 0.0 keep-default
+        sentinel → the module-default RBF_SIGMA_USAGE).
         """
 
         def _sig(field: str, current: float) -> float:
@@ -443,13 +453,14 @@ class ManagerSimilarityEngine:
             SELECT
                 msm.manager_id, msm.season,
                 msm.sample_games, msm.sample_starter_decisions,
-                -- Usage (6)
+                -- Usage (7)
                 msm.starter_avg_pitch_count,
                 msm.starter_pull_pct_before_100,
                 msm.closer_entry_leverage_index,
                 msm.high_leverage_reliever_rate,
                 msm.opener_usage_rate,
                 msm.bulk_innings_rate,
+                msm.available_reliever_usage_rate,
                 -- Aggression (5)
                 msm.steal_order_rate_per_1b_opp,
                 msm.hit_and_run_rate_per_opportunity,
@@ -482,6 +493,7 @@ class ManagerSimilarityEngine:
                 hl_rate,
                 opener_rate,
                 bulk_rate,
+                avail_rel_usage,
                 steal_rate,
                 hnr_rate,
                 bunt_hl,
@@ -503,7 +515,9 @@ class ManagerSimilarityEngine:
                 season=season,
                 sample_games=n_games or 0,
                 sample_starter_decisions=n_start_dec or 0,
-                usage_vec=_v(avg_pc, pull_b100, closer_li, hl_rate, opener_rate, bulk_rate),
+                usage_vec=_v(
+                    avg_pc, pull_b100, closer_li, hl_rate, opener_rate, bulk_rate, avail_rel_usage
+                ),
                 aggression_vec=_v(steal_rate, hnr_rate, bunt_hl, bunt_ll, squeeze_rate),
                 platoon_vec=_v(ph_sh, ph_hl, def_sub, dbl_sw, plat_exploit),
                 eb_alpha=self._shrinkage.alpha(n_games or 0),

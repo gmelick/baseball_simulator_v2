@@ -300,6 +300,7 @@ _MANAGER_TENDENCY_INDEX = {
     "high_leverage_reliever_rate": ("usage_vec", 3),
     "opener_usage_rate": ("usage_vec", 4),
     "bulk_innings_rate": ("usage_vec", 5),
+    "available_reliever_usage_rate": ("usage_vec", 6),  # SIM-427 capstone
     # aggression_vec
     "steal_order_rate_per_1b_opp": ("aggression_vec", 0),
     "hit_and_run_rate_per_opportunity": ("aggression_vec", 1),

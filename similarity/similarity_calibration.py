@@ -1806,6 +1806,7 @@ class SimilarityCalibrator:
                     starter_avg_pitch_count, starter_pull_pct_before_100,
                     closer_entry_leverage_index, high_leverage_reliever_rate,
                     opener_usage_rate, bulk_innings_rate,
+                    available_reliever_usage_rate,
                     steal_order_rate_per_1b_opp, hit_and_run_rate_per_opportunity,
                     sac_bunt_rate_high_leverage, sac_bunt_rate_low_leverage,
                     squeeze_play_rate_per_3b_opp,
@@ -1827,13 +1828,14 @@ class SimilarityCalibrator:
                 np.array([[(r[start + i] or 0.0) for i in range(n)] for r in rows], dtype=float)
             )
 
-        # USAGE sub-score is gated NULL on SIM-427 (no bullpen-role source); when
-        # every usage cell is NULL the z-scored matrix has no variance, so SIM-432's
-        # _fit_sigma returns the 0.0 keep-default sentinel and the engine keeps its
-        # module-default RBF_SIGMA_USAGE rather than taking a spurious calibrated value.
-        report.sigma_manager_usage = self._fit_sigma(col(0, 6), target)
-        report.sigma_manager_aggression = self._fit_sigma(col(6, 5), target)
-        report.sigma_manager_platoon = self._fit_sigma(col(11, 5), target)
+        # USAGE is now 7 features (SIM-427 un-gated the 6 stint-derived columns and
+        # added available_reliever_usage_rate). sigma_manager_usage is therefore a
+        # genuine fit. The 0.0 keep-default sentinel still guards a DuckDB whose USAGE
+        # columns have not been repopulated (an all-NULL → no-variance matrix), so the
+        # engine keeps its module-default RBF_SIGMA_USAGE rather than a spurious value.
+        report.sigma_manager_usage = self._fit_sigma(col(0, 7), target)
+        report.sigma_manager_aggression = self._fit_sigma(col(7, 5), target)
+        report.sigma_manager_platoon = self._fit_sigma(col(12, 5), target)
         log.info(
             "Manager calibration complete: %d profiles, sigma_usage=%.3f, "
             "sigma_aggression=%.3f, sigma_platoon=%.3f",
