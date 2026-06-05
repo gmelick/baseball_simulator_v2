@@ -62,12 +62,31 @@ they are unit-testable on synthetic prices. Everything DB/sim-touching lives in
 the ``_fetch_*`` readers and :func:`run`. The trust labels
 (:data:`MARKET_TRUST`) and the prop vocab (:data:`PROP_VOCAB_MAP`) are plain data.
 
+ACROSS-GAMES PARALLELISM
+------------------------
+A full-season backtest is feasible because the slate is fanned out OVER GAMES, not
+over a single game's iterations: per-game cost is the irreducible per-PA full-pool
+scoring (~1.5 s/iter) and the host is core-bound (~6 cores), so one game can't go
+below ~30 s — but ~6 GAMES AT ONCE gives ~6× throughput. ``--workers N`` (default 6)
+maps each WHOLE game onto a ``forkserver`` ``ProcessPoolExecutor`` worker that runs
+it serially (resolve → N sims → prop dists → read odds → CLV bet records); each
+worker holds only its own ~373 MB full-pool sampler cache (SIM-430), so 6 workers fit
+in ~2.2 GB and the parent stays lean (loads NO engine artifacts). ``--workers 1`` is
+the SERIAL in-process fallback (the no-pool debug mode + the byte-identical-verify
+reference). The run is byte-identical to serial for the same (game set, base_seed,
+iterations): each game is independent + deterministic from its per-iteration seed, so
+the only thing parallelism changes — completion order — never affects any bet record.
+
 USAGE
 -----
     # In the app container (Postgres at db:5432, DuckDB at /data/...):
     python scripts/clv_backtest.py --seasons 2024 --max-games 50 --iterations 100
     python scripts/clv_backtest.py --seasons 2023 2024 --markets game
     python scripts/clv_backtest.py --seasons 2024 --markets props --min-edge 0.02
+    # full season, 6 games at once (the across-games parallel mode):
+    python scripts/clv_backtest.py --seasons 2024 --workers 6 --iterations 100
+    # serial fallback (no pool — debug / byte-identical verify reference):
+    python scripts/clv_backtest.py --seasons 2024 --max-games 2 --workers 1
 """
 
 from __future__ import annotations
@@ -112,6 +131,36 @@ _FACTORY_REF = "simulation.production_factory:production_machine_factory"
 
 #: The two line_types every CLV computation needs (entry + close).
 LINE_TYPES: tuple[str, ...] = ("opening", "closing")
+
+#: ACROSS-GAMES default worker count. The host is ~6-core (SIM-430), and the
+#: per-game cost is the irreducible per-PA full-pool scoring, so ~6 GAMES AT ONCE
+#: is the throughput lever; each forkserver worker holds ~373 MB → ~2.2 GB total.
+DEFAULT_WORKERS = 6
+
+#: SIM-430: the pool's multiprocessing start method (mirrors
+#: ``simulation.batch_runner``). ``forkserver`` forks workers from a lean ~30 MB
+#: server so they do NOT COW-inherit any engine artifacts the parent might hold —
+#: each worker loads its own ~373 MB bundle. Override via ``SIM_MP_START_METHOD``.
+_MP_START_METHOD = os.environ.get("SIM_MP_START_METHOD", "forkserver").strip().lower()
+
+
+def _pool_mp_context() -> Any:
+    """Return the multiprocessing context for the across-games pool (SIM-430).
+
+    Defaults to ``forkserver`` (workers fork from a lean server, never COW-inherit a
+    big parent); falls back to the platform-default context when the requested
+    method is unavailable (e.g. a host without forkserver). Mirrors
+    :func:`simulation.batch_runner._pool_mp_context`.
+    """
+    import multiprocessing
+
+    try:
+        if _MP_START_METHOD in multiprocessing.get_all_start_methods():
+            return multiprocessing.get_context(_MP_START_METHOD)
+    except Exception:  # noqa: BLE001 — any oddity → platform default
+        pass
+    return multiprocessing.get_context()
+
 
 # ===========================================================================
 # Vocab: odds prop_stat -> model PropDistribution stat (the SIM-134 7 markets)
@@ -202,6 +251,16 @@ class BetRecord:
     def to_jsonable(self) -> dict[str, Any]:
         """A JSON-safe dict of this record (all fields are already plain types)."""
         return asdict(self)
+
+    @classmethod
+    def from_jsonable(cls, d: dict[str, Any]) -> BetRecord:
+        """Rebuild a :class:`BetRecord` from its :meth:`to_jsonable` dict.
+
+        The parent uses this to reconstruct the records a parallel worker returns as
+        plain dicts (the picklable across-process payload), so the aggregation runs
+        on the SAME :class:`BetRecord`s either execution mode produces.
+        """
+        return cls(**d)
 
 
 @dataclass(frozen=True, slots=True)
@@ -735,6 +794,11 @@ def _collect_game_results(state, n_iter: int, base_seed: int | None) -> list:
     sim_kwargs and runs ``simulate_game`` at each derived seed, collecting the
     ``GameSimResult`` (carrying ``.boxscore`` + the score) per iteration. Sync +
     CPU-bound, so the async caller offloads it via ``asyncio.to_thread``.
+
+    This is the SINGLE serial per-game replay both execution modes use, so the
+    per-iteration seeds (``derive_seed(base_seed, i)``) — and therefore the sims —
+    are IDENTICAL whether a game runs in the parent (``--workers 1``) or inside a
+    parallel worker (``--workers > 1``).
     """
     from api.routes.games import _sim_kwargs_from_state
     from simulation.batch_runner import derive_seed
@@ -751,6 +815,173 @@ def _collect_game_results(state, n_iter: int, base_seed: int | None) -> list:
     return results
 
 
+# ===========================================================================
+# The per-game unit of work — shared by the serial AND parallel execution paths
+# ===========================================================================
+
+
+async def _score_one_game(
+    pool: Any,
+    game_pk: int,
+    *,
+    do_game: bool,
+    do_props: bool,
+    iterations: int,
+    base_seed: int,
+    min_edge: float,
+) -> tuple[list[BetRecord], str]:
+    """Resolve, replay, and score ONE game; return ``(bet_records, status)``.
+
+    This is the ENTIRE per-game pipeline, factored out of :func:`run`'s old loop so
+    BOTH the serial in-process path and a parallel worker call the exact same code:
+
+      1. read the game's opening+closing odds (``raw.game_odds`` / ``raw.prop_odds``);
+      2. resolve the :class:`GameState` (lineup → state);
+      3. replay ``iterations`` sims via the SAME :func:`_collect_game_results` seam
+         (per-iteration seed = ``derive_seed(base_seed, i)`` — deterministic per game);
+      4. build the :class:`GameSimSummary` + calibrated :class:`WinProbability`
+         (+ the :class:`PropDistributionSet` for props);
+      5. produce the per-bet records via the pure ``score_game_markets`` /
+         ``score_prop_markets``.
+
+    ``status`` is one of ``"scored"`` / ``"no_odds"`` / ``"unresolved"`` / ``"empty"``
+    so the caller can keep the SAME run counters. A degenerate/failed game yields no
+    bets and a non-``"scored"`` status; it NEVER raises out of here.
+
+    Deterministic: the only RNG is the per-iteration seed derived from ``base_seed``,
+    so the returned records are byte-identical regardless of where this runs.
+    """
+    from api.routes.games import _resolve_state_or_error
+    from simulation.prop_distributions import PropDistributionSet
+    from simulation.results import GameSimSummary
+    from simulation.win_probability import win_probability
+
+    # Read odds first — a game with NO odds rows is skipped (counts as 'no_odds').
+    game_odds = await _fetch_game_odds(pool, game_pk) if do_game else {}
+    prop_odds = await _fetch_prop_odds(pool, game_pk) if do_props else {}
+    if not game_odds and not prop_odds:
+        return [], "no_odds"
+
+    try:
+        state = await _resolve_state_or_error(pool, game_pk)
+    except Exception as exc:  # noqa: BLE001 — skip un-resolvable games
+        log.info("skip game %s (state unresolved: %s)", game_pk, type(exc).__name__)
+        return [], "unresolved"
+
+    results = await asyncio.to_thread(_collect_game_results, state, iterations, base_seed)
+    if not results:
+        return [], "empty"
+
+    summary = GameSimSummary.from_results(results)
+    wp = win_probability(summary)
+
+    bets: list[BetRecord] = []
+    if do_game and game_odds:
+        bets.extend(score_game_markets(game_pk, wp, summary, game_odds, min_edge=min_edge))
+    if do_props and prop_odds:
+        pset = PropDistributionSet.from_results(results)
+        bets.extend(score_prop_markets(game_pk, pset, prop_odds, min_edge=min_edge))
+    return bets, "scored"
+
+
+# ===========================================================================
+# ACROSS-GAMES parallelism: a module-level, picklable worker + per-worker init
+# ===========================================================================
+#
+# The lever (per the SIM-430 profiling note): per-game cost is the irreducible
+# per-PA full-pool scoring (~1.5 s/iter) and the host is core-bound, so a single
+# game can't go below ~30 s.  The fix is to run ~6 WHOLE GAMES AT ONCE: each
+# forkserver worker runs one game serially (resolve → N sims → prop dists → read
+# odds → CLV bet records) and holds only its own ~373 MB full-pool sampler cache
+# (SIM-430), so 6 workers fit in ~2.2 GB.  The PARENT stays lean — it loads NO
+# engine artifacts — so the forkserver workers never COW-inherit a big parent.
+
+#: Per-worker process globals (one set per forkserver worker). ``_WORKER_INITED``
+#: guards the one-time lazy init; ``_WORKER_LOOP`` is this worker's dedicated
+#: asyncio event loop; ``_WORKER_POOL`` is its single asyncpg connection pool. All
+#: are amortized across every game the worker handles.
+_WORKER_INITED: bool = False
+_WORKER_LOOP: Any = None
+_WORKER_POOL: Any = None
+_WORKER_DSN: str = DEFAULT_DSN
+
+
+def _worker_lazy_init(dsn: str) -> None:
+    """One-time per-worker setup (first call only; cheap no-op thereafter).
+
+    Amortizes the two big per-worker costs across all the games this worker
+    handles:
+
+      * ``(a)`` warm THIS worker's ~373 MB full-pool sampler cache ONCE via
+        :func:`simulation.production_factory.warm_worker_cache` (the SIM-402 seam),
+        so the worker's FIRST game is a warm-cache hit, not a cold artifact-load;
+      * ``(b)`` open ONE dedicated asyncio loop + ONE asyncpg pool for this worker
+        (each worker reads odds / resolves state on its own connection).
+
+    Guarded by the ``_WORKER_INITED`` module global so it runs exactly once per
+    forkserver worker. The warm step is best-effort (full-pool off / missing
+    artifacts → it returns False and the per-tile path warms lazily); the pool is
+    required (a worker that can't reach Postgres can't score a game).
+    """
+    global _WORKER_INITED, _WORKER_LOOP, _WORKER_POOL, _WORKER_DSN
+    if _WORKER_INITED:
+        return
+    _WORKER_DSN = dsn
+
+    # (a) warm the full-pool sampler cache ONCE for this worker (best-effort).
+    try:
+        from simulation.production_factory import warm_worker_cache
+
+        warm_worker_cache(None)
+    except Exception:  # noqa: BLE001 — full-pool off / no artifacts → lazy warm
+        pass
+
+    # (b) one event loop + one asyncpg pool, owned by this worker for its lifetime.
+    import asyncpg
+
+    _WORKER_LOOP = asyncio.new_event_loop()
+    asyncio.set_event_loop(_WORKER_LOOP)
+    _WORKER_POOL = _WORKER_LOOP.run_until_complete(asyncpg.create_pool(dsn, min_size=1, max_size=2))
+    _WORKER_INITED = True
+
+
+def _process_one_game(game_pk: int, params: dict[str, Any]) -> dict[str, Any]:
+    """Module-level, picklable across-games worker: score ONE game end-to-end.
+
+    The function the ``ProcessPoolExecutor`` maps across the slate's ``game_pk``s.
+    On its FIRST call in a given worker it runs :func:`_worker_lazy_init` (warm the
+    sampler cache + open the asyncpg pool); every call then drives the SAME
+    :func:`_score_one_game` pipeline on this worker's dedicated loop + pool.
+
+    Returns a fully-picklable payload ``{"status": str, "bets": list[dict]}`` where
+    each bet dict is ``BetRecord.to_jsonable()`` — the parent turns those back into
+    :class:`BetRecord`s and folds ``status`` into the SAME run counters the serial
+    path keeps. Returning plain dicts (not the dataclass) keeps the cross-process
+    boundary robust to how this script module is named in the worker.
+
+    A degenerate / failing game logs and contributes NO bets (status ``"unresolved"``)
+    — it NEVER raises out, so one bad game can never sink the parallel run.
+    """
+    dsn = str(params.get("dsn", DEFAULT_DSN))
+    try:
+        _worker_lazy_init(dsn)
+        bets, status = _WORKER_LOOP.run_until_complete(
+            _score_one_game(
+                _WORKER_POOL,
+                int(game_pk),
+                do_game=bool(params["do_game"]),
+                do_props=bool(params["do_props"]),
+                iterations=int(params["iterations"]),
+                base_seed=int(params["base_seed"]),
+                min_edge=float(params["min_edge"]),
+            )
+        )
+        return {"status": status, "bets": [b.to_jsonable() for b in bets]}
+    except Exception as exc:  # noqa: BLE001 — never sink the run on one game
+        log.warning("worker: game %s failed (%s) — no bets", game_pk, type(exc).__name__)
+        return {"status": "unresolved", "bets": []}
+
+
 @dataclass
 class _Counters:
     """Running tallies for the run summary log."""
@@ -762,29 +993,32 @@ class _Counters:
     bets: list[BetRecord] = field(default_factory=list)
 
 
-async def run(args: argparse.Namespace) -> int:
+def _tally(counters: _Counters, status: str) -> None:
+    """Fold one game's status into the run counters (shared by both paths)."""
+    counters.games_attempted += 1
+    if status == "no_odds":
+        counters.games_no_odds += 1
+    elif status == "unresolved":
+        counters.games_unresolved += 1
+    elif status == "scored":
+        counters.games_scored += 1
+    # "empty" -> attempted but produced no results: no scored/skip bucket (as before).
+
+
+async def _run_serial(
+    game_pks: list[int],
+    *,
+    do_game: bool,
+    do_props: bool,
+    args: argparse.Namespace,
+) -> _Counters:
+    """SERIAL fallback (``--workers 1``): the original in-process path.
+
+    Opens ONE asyncpg pool in this process and scores each game in turn via the
+    SAME :func:`_score_one_game` pipeline the workers use — so this is the
+    no-pool debug mode AND the reference the verify step compares against.
+    """
     import asyncpg
-
-    from api.routes.games import _resolve_state_or_error
-    from simulation.prop_distributions import PropDistributionSet
-    from simulation.results import GameSimSummary
-    from simulation.win_probability import win_probability
-
-    seasons = sorted({int(s) for s in args.seasons})
-    do_game = args.markets in ("game", "all")
-    do_props = args.markets in ("props", "all")
-    log.info(
-        "SIM-429 CLV backtest — seasons=%s iterations=%d markets=%s min_edge=%s",
-        seasons,
-        args.iterations,
-        args.markets,
-        args.min_edge,
-    )
-
-    game_pks = await _fetch_final_games(args.dsn, seasons, args.max_games)
-    log.info("Found %d completed games to backtest.", len(game_pks))
-    if not game_pks:
-        log.warning("No completed games found — nothing to backtest.")
 
     counters = _Counters()
     pool = None
@@ -792,44 +1026,18 @@ async def run(args: argparse.Namespace) -> int:
         if game_pks:
             pool = await asyncpg.create_pool(args.dsn, min_size=1, max_size=4)
         for game_pk in game_pks:
-            counters.games_attempted += 1
-
-            # Read odds first — skip a game with NO odds rows (log + count).
-            game_odds = await _fetch_game_odds(pool, game_pk) if do_game else {}
-            prop_odds = await _fetch_prop_odds(pool, game_pk) if do_props else {}
-            if not game_odds and not prop_odds:
-                counters.games_no_odds += 1
-                log.info("skip game %s (no odds rows)", game_pk)
-                continue
-
-            try:
-                state = await _resolve_state_or_error(pool, game_pk)
-            except Exception as exc:  # noqa: BLE001 — skip un-resolvable games
-                counters.games_unresolved += 1
-                log.info("skip game %s (state unresolved: %s)", game_pk, type(exc).__name__)
-                continue
-
-            results = await asyncio.to_thread(
-                _collect_game_results, state, args.iterations, args.base_seed
+            bets, status = await _score_one_game(
+                pool,
+                game_pk,
+                do_game=do_game,
+                do_props=do_props,
+                iterations=args.iterations,
+                base_seed=args.base_seed,
+                min_edge=args.min_edge,
             )
-            if not results:
-                continue
-
-            summary = GameSimSummary.from_results(results)
-            wp = win_probability(summary)
-
-            if do_game and game_odds:
-                counters.bets.extend(
-                    score_game_markets(game_pk, wp, summary, game_odds, min_edge=args.min_edge)
-                )
-            if do_props and prop_odds:
-                pset = PropDistributionSet.from_results(results)
-                counters.bets.extend(
-                    score_prop_markets(game_pk, pset, prop_odds, min_edge=args.min_edge)
-                )
-
-            counters.games_scored += 1
-            if counters.games_scored % 25 == 0:
+            _tally(counters, status)
+            counters.bets.extend(bets)
+            if counters.games_scored and counters.games_scored % 25 == 0:
                 log.info(
                     "  scored %d/%d games (%d bet rows) ...",
                     counters.games_scored,
@@ -839,6 +1047,109 @@ async def run(args: argparse.Namespace) -> int:
     finally:
         if pool is not None:
             await pool.close()
+    return counters
+
+
+def _run_parallel(
+    game_pks: list[int],
+    *,
+    workers: int,
+    do_game: bool,
+    do_props: bool,
+    args: argparse.Namespace,
+) -> _Counters:
+    """ACROSS-GAMES parallel path (``--workers > 1``).
+
+    Builds a ``ProcessPoolExecutor`` with ``mp_context=forkserver`` (SIM-430) and
+    maps :func:`_process_one_game` across the ``game_pk``s. Each worker runs a WHOLE
+    game serially (its own ~373 MB sampler cache + asyncpg pool, lazily inited once);
+    ``workers`` games run at once. Bet records are collected AS THEY COMPLETE, then
+    the parent aggregates with the SAME :func:`aggregate_scoreboard` and emits the
+    SAME scoreboard/JSON. The PARENT loads NO engine artifacts (stays lean so the
+    forkserver workers never COW-inherit a big parent).
+
+    Byte-identical to the serial path for the SAME (game set, base_seed, iterations):
+    each game is independent and deterministic from its per-iteration seed
+    (``derive_seed(base_seed, i)``), so completion order — the only thing parallelism
+    changes — does not affect any game's bet records.
+    """
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    worker_params: dict[str, Any] = {
+        "do_game": do_game,
+        "do_props": do_props,
+        "iterations": int(args.iterations),
+        "base_seed": int(args.base_seed),
+        "min_edge": float(args.min_edge),
+        "dsn": args.dsn,
+    }
+    counters = _Counters()
+    if not game_pks:
+        return counters
+
+    log.info(
+        "ACROSS-GAMES parallel: %d games over %d forkserver workers (~373 MB each).",
+        len(game_pks),
+        workers,
+    )
+    with ProcessPoolExecutor(max_workers=workers, mp_context=_pool_mp_context()) as pool:
+        futures = {
+            pool.submit(_process_one_game, int(pk), worker_params): int(pk) for pk in game_pks
+        }
+        done = 0
+        for fut in as_completed(futures):
+            game_pk = futures[fut]
+            try:
+                payload = fut.result()
+            except Exception as exc:  # noqa: BLE001 — one bad game never sinks the run
+                log.warning("game %s worker crashed (%s)", game_pk, type(exc).__name__)
+                _tally(counters, "unresolved")
+                continue
+            _tally(counters, str(payload.get("status", "unresolved")))
+            counters.bets.extend(BetRecord.from_jsonable(d) for d in payload.get("bets", []))
+            done += 1
+            if done % 25 == 0:
+                log.info(
+                    "  completed %d/%d games (%d bet rows) ...",
+                    done,
+                    len(game_pks),
+                    len(counters.bets),
+                )
+    return counters
+
+
+async def run(args: argparse.Namespace) -> int:
+    seasons = sorted({int(s) for s in args.seasons})
+    do_game = args.markets in ("game", "all")
+    do_props = args.markets in ("props", "all")
+    workers = max(1, int(args.workers))
+    log.info(
+        "SIM-429 CLV backtest — seasons=%s iterations=%d markets=%s min_edge=%s workers=%d",
+        seasons,
+        args.iterations,
+        args.markets,
+        args.min_edge,
+        workers,
+    )
+
+    game_pks = await _fetch_final_games(args.dsn, seasons, args.max_games)
+    log.info("Found %d completed games to backtest.", len(game_pks))
+    if not game_pks:
+        log.warning("No completed games found — nothing to backtest.")
+
+    if workers <= 1:
+        # SERIAL fallback (the original in-process path; the verify reference).
+        counters = await _run_serial(game_pks, do_game=do_game, do_props=do_props, args=args)
+    else:
+        # ACROSS-GAMES parallel — the pool is sync, so offload it off the loop.
+        counters = await asyncio.to_thread(
+            _run_parallel,
+            game_pks,
+            workers=workers,
+            do_game=do_game,
+            do_props=do_props,
+            args=args,
+        )
 
     scoreboard = aggregate_scoreboard(counters.bets)
     params = {
@@ -847,6 +1158,7 @@ async def run(args: argparse.Namespace) -> int:
         "markets": args.markets,
         "min_edge": float(args.min_edge),
         "base_seed": int(args.base_seed),
+        "workers": workers,
         "dsn": args.dsn,
         "duckdb": args.duckdb,
         "factory_ref": _FACTORY_REF,
@@ -893,6 +1205,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Minimum model edge to PLACE a bet (default 0.0).",
     )
     p.add_argument("--base-seed", type=int, default=0, help="Reproducibility seed.")
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help=(
+            "ACROSS-GAMES parallel workers (default %(default)s). Each forkserver "
+            "worker runs a WHOLE game serially (~373 MB sampler cache each). "
+            "--workers 1 is the SERIAL in-process fallback."
+        ),
+    )
     p.add_argument("--output", default=DEFAULT_OUTPUT, help="CLV backtest JSON report path.")
     p.add_argument("--dsn", default=DEFAULT_DSN, help="Postgres DSN (completed games + odds).")
     p.add_argument("--duckdb", default=DEFAULT_DUCKDB_PATH, help="Sim DuckDB path.")
