@@ -14,13 +14,14 @@ exited zero.
 > `curl`; bash users can substitute `export VAR=…` for `set VAR=…` and
 > forward slashes for paths.
 
-> **Phase note.** As of 2026-09-02 (executed 2026-05-25) the platform is at **Phase 6 —
-> Frontend Build**.  Phases 1–5 are fully COMPLETE and CI-green (Python 3.13;
-> 1814 pass / 0 fail / 89% coverage; DuckDB v13 / Alembic 0015).  The full API
-> surface (games, simulate, betting, WebSocket, odds, similarity, metrics) is
-> live.  Steps marked **[Phase 4+]** below are now implemented; this document
-> will be refreshed in Sprint 2 (SIM-421) to reflect the full Phase-5 endpoint
-> inventory and Phase-6 serving path.
+> **Phase note.** As of 2026-06-06 the platform is at **Phase 7 — live
+> bring-up (largely complete)**; Phases 1–6 are COMPLETE and CI-green
+> (Python 3.13 / numpy 2.x; 89% coverage; DuckDB v13 / Alembic 0015).  The
+> full API surface (games, simulate, betting, WebSocket, odds, similarity,
+> metrics) is live.  Calibration is LIVE (SIM-432; win-prob map = fitted
+> reliability-curve), the full-pool sampler + all realism flags are ON in
+> production (§1.8), and the SIM-435 odds backfill + SIM-429 CLV backtest
+> chain is shipped + measured (§1.9).
 
 ---
 
@@ -72,7 +73,7 @@ make test
 
 **What good looks like.**
 - `make migrate` ends with `alembic current` printing head revision (currently `0015`).
-- `make test` exits 0.  After the recent fixes: 767 passed, ~22 skipped, 0 failed, 0 errors.
+- `make test` exits 0 (unit suite green at 89% coverage; ~22 slow/skipped).
 
 ### 1.3 Local Python development (without Docker)
 
@@ -150,6 +151,85 @@ run for a game:
 curl "http://localhost:8000/api/games/745000/simulate"
 :: Returns win probabilities, per-player prop PMFs, boxscore + linescore.
 ```
+
+At 6 workers (forkserver + a 10 GB app `mem_limit`, SIM-430), an n=100
+batch runs in ~38 s with no OOM.
+
+### 1.8 Production simulation flags
+
+The production simulation path is the **full-pool similarity sampler**,
+and all realism flags are **ON** in the docker-compose `app` env.  These
+same flags are **pinned OFF in `tests/conftest.py`** so the unit suite
+exercises the validated baseline path (each flag's own tests opt back in
+explicitly).  Do not change them ad hoc — they are a validated set.
+
+| Flag | Ticket | Default in compose | What it does |
+|---|---|---|---|
+| `SIM_FULL_POOL` | SIM-429 | `1` | Use the whole-pool engine-weighted sampler (production path); `0` forces the per-tile FAISS k-NN fallback (the unit-test default). |
+| `SIM_MANAGER` | SIM-434/427 | `1` | Manager starter-pull + reliever-selection decisions (fatigue/leverage/TTO).  Enabled + validated 2026-06-04 (pitchers/game 2→9, runs unchanged). |
+| `SIM_PARK_FACTOR` | SIM-411 | `1` | Capped out↔single nudge by the venue run factor. |
+| `SIM_BB_PLATOON` | SIM-413 | `1` | Batted-ball draw reweight by pitcher hand (L/R platoon). |
+| `SIM_FIELDER_RBF` | SIM-425b | `1` | Out↔single nudge by the live-vs-pool fielder OAA delta. |
+| `SIM_FRAMING` | SIM-428 | ON (default; not pinned in compose) | Catcher pitch-framing activation; `SIM_FRAMING=0` restores the pre-fix catcher-inert path (a strict byte-identical mode). |
+
+The realism nudges (`SIM_PARK_FACTOR` / `SIM_BB_PLATOON` /
+`SIM_FIELDER_RBF`) were enabled + seed-paired validated 2026-06-04 with
+no run distortion.  Set any flag to `0` to revert just that effect.
+
+### 1.9 Calibration, odds backfill, and the CLV backtest
+
+The calibration → odds → CLV chain (the gold-standard edge-validation
+loop).  All run inside the `app` container against the live Postgres +
+DuckDB:
+
+```bat
+:: Fit /data/calibration.json (arsenal W2 + per-engine sigmas + win-prob
+:: map). The API loads this at boot — see CALIBRATION_REPORT_PATH.
+make calibrate
+::   smoke run:  make calibrate FLAGS="--seasons 2024 --validate"
+
+:: Validate win-prob + prop PMFs against real Final games; --write-calibration
+:: fits the win-prob reliability curve back into the report.
+make validate-props FLAGS="--seasons 2024 --max-games 50"
+
+:: SIM-435: backfill OPENING + CLOSING odds for Final games into
+:: raw.game_odds / raw.prop_odds (the entry+closing lines the CLV backtest
+:: scores against). Network-bound: set ODDS_PROVIDER=bettingpros + ODDS_API_KEY
+:: for real lines, or leave unset for the deterministic MockOddsAPI.
+make load-historical-odds
+::   smoke run:  make load-historical-odds FLAGS="--seasons 2024 --max-games 200"
+```
+
+**SIM-429 CLV backtest (`scripts/clv_backtest.py`).**  Scores the model's
+entry prices against the closing line — the project's gold-standard edge
+metric.  The slate is fanned out **over games** (`--workers N`, default 6,
+each a `forkserver` worker holding its own ~373 MB sampler — ~2.2 GB at 6
+workers), giving ~6× throughput; `--workers 1` is the serial byte-identical
+reference.  A single game can't go below ~30 s (core-bound at ~6).
+
+> **`scripts/` is NOT bind-mounted into the `app` container** (only
+> `api/`, `pipeline/`, `similarity/`, `simulation/`, `db/` are).  The make
+> targets above run scripts that are already baked into the image, but a
+> *new or edited* script needs an explicit `-v` mount (or a rebuild).
+> Mount it for the CLV backtest:
+
+```bat
+:: Full 2024 season, 6 games at once (PowerShell/bash use $PWD; cmd uses %CD%):
+docker compose run --rm -v "%CD%\scripts:/app/scripts" app ^
+    python scripts/clv_backtest.py --seasons 2024 --workers 6 --iterations 100
+
+:: Smoke / byte-identical serial reference (no pool):
+docker compose run --rm -v "%CD%\scripts:/app/scripts" app ^
+    python scripts/clv_backtest.py --seasons 2024 --max-games 2 --workers 1
+```
+
+> bash/PowerShell users: substitute `-v "$PWD/scripts:/app/scripts"` for
+> the `-v "%CD%\scripts:..."` mount above.
+
+**What good looks like.**  The backtest writes a CLV scoreboard JSON
+report.  First full result (120 games, 2024): ~49% beat-close — i.e. **no
+demonstrable edge yet**; the gold-standard loop works end-to-end, the
+model still needs the run-conversion / calibration work to develop an edge.
 
 ---
 

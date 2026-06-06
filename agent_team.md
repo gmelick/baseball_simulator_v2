@@ -341,7 +341,12 @@ This document defines the 9-agent team for the MLB Baseball Simulation Platform.
 
 **Repository:** github.com/gmelick/baseball_simulator
 
-**Current phase:** Phases 1–6 complete; Phase 7 — Integration, Testing & Deployment (live-env bring-up)
+**Current phase:** Phases 1–6 complete; Phase 7 (Integration, Testing & Deployment) largely complete —
+live-env bring-up done, calibration LIVE, the full CLV pipeline measured end-to-end, and the realism +
+manager-decision flags enabled and validated in production.
+
+**Source of truth:** `BACKLOG.md` is now the SINGLE source of truth for ticket status — `backlog.xlsx`
+has been RETIRED (do not regenerate or consult it).
 
 **Similarity engines status:** All 11 / 11 COMPLETE (Phases 1–5 done and CI-green):
 - pitcher (GMM W₂), batter (RBF), fielder (position-partitioned RBF), baserunner extra-base (RBF),
@@ -366,6 +371,6 @@ Docker/docker-compose, nginx, Prometheus + Grafana. Frontend framework: **React 
 | 4 | Core Simulation Loop | ✅ Complete |
 | 5 | Simulation Runner & Backend API | ✅ Complete (CI-green on Python 3.13) |
 | 6 | Frontend Build | ✅ Complete |
-| 7 | Integration, Testing & Deployment | 🚀 Live-env bring-up |
+| 7 | Integration, Testing & Deployment | 🚀 Largely complete — calibration LIVE, CLV pipeline measured, realism + manager flags live |
 
 **Next free ticket ID: SIM-437.**

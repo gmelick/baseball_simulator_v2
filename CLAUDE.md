@@ -21,31 +21,42 @@
 
 ## 2. Current status (read this)
 
-- **▶ STATE AS OF 2026-06-04 (TL;DR — this bullet is authoritative; the rest of §2 is the dated log).**
+- **▶ STATE AS OF 2026-06-06 (TL;DR — this bullet is authoritative; the rest of §2 is the dated log).**
   - **Phases 1–6 COMPLETE and CI-green** on **Python 3.13 / numpy 2.x** (SIM-431). Frontend shipped as
-    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001).
-  - **Calibration is LIVE** (SIM-432, closed 2026-06-01): `/data/calibration.json` is fitted (`make
-    calibrate`) and **applied at boot**; the win-prob map is a **fitted reliability-curve** (was identity).
-  - **Production simulation path = the full-pool similarity sampler** (`SIM_FULL_POOL=1`); the per-tile
-    FAISS k-NN sampler is the fallback / unit-test default.
-  - **`/simulate` worker-scaling RESOLVED** (SIM-430): `mp_context=forkserver` + a 10 GB app `mem_limit`
-    → workers ~6 GB → 373 MB each, **n=100 ≈ 38 s at 6 workers, no OOM** (was 215 s serial). The **30 s
-    SLA is NOT yet met** — throughput plateaus past ~6 workers (serial parent-side result handling /
-    per-game rebuild) → tracked as **SIM-436 (P3, low)**.
-  - **Manager + realism models LIVE (2026-06-04)** — Alembic head **0015**, DuckDB schema **v13**.
-    **SIM-433** bullpen-availability ingest complete (21,612 games, all 10 seasons). **SIM-427** capstone
-    deployed: `available_reliever_usage_rate` is the manager engine's 7th USAGE feature, recalibrated
-    (`sigma_usage=1.030`); profiles recomputed for all seasons. **SIM-434** manager decision model
-    **ENABLED** (`SIM_MANAGER=1`) — 400-sim validated (pitchers/game 2→9, starter IP ~9→~6.4, runs
-    unchanged); fixes the pitcher-K/BB over-prediction. **SIM-411/413/425b** realism nudges **ENABLED**
-    (`SIM_PARK_FACTOR`/`SIM_BB_PLATOON`/`SIM_FIELDER_RBF`=1) — seed-paired validated, no run distortion.
-    All new flags pinned OFF in `tests/conftest.py`, so the flag-off baseline + CI stay byte-identical.
-  - **Next free ticket ID: SIM-437.** Open work: **SIM-435** (historical-odds backfill — needs
-    `ODDS_API_KEY`; unblocks the CLV backtest), **SIM-429** (granular run-conversion + K/BB prop
-    calibration + the CLV backtest — the fund's gold-standard metric), and **SIM-436** (per-game cost /
-    30 s SLA, P3). Realism follow-ons (fold into SIM-429): the ≥400×≥20 magnitude calibration of the
-    SIM-411/413/425b nudges, and wiring the real per-team SIM-427 manager profiles into the SIM-434
-    decision model (which currently uses a league-flat default).
+    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v13**, Alembic head **0015**.
+  - **Calibration is LIVE** (SIM-432): `/data/calibration.json` fitted + applied at boot; win-prob map =
+    fitted reliability-curve. Post-SIM_MANAGER validation (120 games): win-prob **ECE 0.047**, batter
+    **H/HR/TB ECE 0.02–0.05** (bettable); pitcher **K/BB ECE 0.22/0.21** (improved from 0.52/0.37, not yet
+    bet-grade).
+  - **Production sim path = the full-pool similarity sampler** (`SIM_FULL_POOL=1`); per-tile FAISS k-NN is
+    the fallback / unit-test default. **All production realism flags are ON** in the docker-compose `app`
+    env and **pinned OFF in `tests/conftest.py`** (so CI + the flag-off baseline stay byte-identical):
+    `SIM_MANAGER` (SIM-434 manager pull/reliever decisions), `SIM_PARK_FACTOR` / `SIM_BB_PLATOON` /
+    `SIM_FIELDER_RBF` (SIM-411/413/425b realism nudges), `SIM_FRAMING` (default ON). All enabled +
+    validated 2026-06-04 (manager: pitchers/game 2→9, runs unchanged; realism: no run distortion).
+    **SIM-427** manager-USAGE capstone deployed (7th feature `available_reliever_usage_rate`,
+    `sigma_usage=1.030`, profiles recomputed all 10 seasons). **SIM-433** bullpen-availability ingest
+    complete (21,612 games).
+  - **CLV pipeline COMPLETE + measuring at scale (the fund's gold-standard metric).** **SIM-435**: full
+    2024-season historical odds backfilled (**2,378 games**, real BettingPros opening+closing — game
+    moneyline/run-line/total + 7 props). **SIM-429**: the CLV backtest scoreboard shipped
+    (`scripts/clv_backtest.py`) — sim → model prices → opening/closing → CLV per market/side, trust-labeled.
+    **First result (120 games): ~49% beat-close = NO demonstrable edge yet** (stable across n=65/n=100;
+    the trustworthy markets — moneyline + batter H/HR/TB — all ≤50%). The model isn't beating the sharp
+    close; the remaining **SIM-429** work (close the ~10–12% run-conversion gap + sharpen the edge
+    estimates) is the path to a real edge. The full-season CLV run is executing.
+  - **`/simulate` perf (SIM-430 / SIM-436):** forkserver workers + a 10 GB app `mem_limit` → **n=100 ≈
+    38 s at 6 workers, no OOM**. SIM-436 PROFILED the per-game cost: it is the IRREDUCIBLE per-PA
+    full-pool scoring (~1.5–1.9 s/iter × ~83 PAs); the machine build is free and the host is **core-bound
+    at ~6**, so a single game can't go <30 s on this hardware without fewer iters or a smaller pool. The
+    throughput fix: **the CLV backtest is parallelized ACROSS games** (`--workers`, forkserver,
+    byte-identical, ~373 MB/worker) → ~6× → **~20–32 s effective/game**; n=65 gives the same CLV as n=100.
+  - **Next free ticket ID: SIM-437.** Open work: **SIM-429** (granular run-conversion + K/BB prop
+    calibration to DEVELOP a CLV edge — the now-measurable gold-standard says there is none yet); the
+    realism follow-ons fold into it (≥400×≥20 magnitude calibration of the SIM-411/413/425b nudges; wiring
+    the real per-team SIM-427 profiles into the SIM-434 decision model, which currently uses a league-flat
+    default). **CLOSED:** SIM-435/433/434/427/411/413/425b/430/432/431 + the 2026-06-03 comprehensive-audit
+    remediation (**`backlog.xlsx` RETIRED → `BACKLOG.md` is the single source of truth**).
 - **Phases 1–5 + Phase 6 Frontend Build (SIM-378→401 + hardening 415→420) are COMPLETE and CI-green
   on Python 3.13 (migrated from 3.11.15 — SIM-431, 2026-05-31; numpy is now 2.x).** Unit suite green (the unit lane runs the per-tile path; see below).
 - **2026-05-28 closure batch — SIX P1/P2 tickets closed in one day:**
@@ -253,7 +264,10 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   pools), `odds_provider.py`, `bettingpros_odds_provider.py` (SIM-435 `closing`-line branch).
 - `scripts/` — operational scripts (NOT bind-mounted; see §2a): `sim_stats.py` (v2 sim harness),
   `load_historical_odds.py` (SIM-435 opening+closing backfill → `raw.game_odds`/`raw.prop_odds`),
-  `validate_props.py`, `check_file_integrity.py`.
+  `clv_backtest.py` (SIM-429 CLV scoreboard: sim → model prices → opening/closing → CLV per market/side;
+  `--workers` parallelizes across games — SIM-436), `validate_props.py`, `check_file_integrity.py`.
+  *(scripts/ is baked into the image; run a not-yet-rebuilt new script via
+  `docker compose run --rm -v "$PWD/scripts:/app/scripts" app python scripts/<x>.py`.)*
 - `db/` — `migrations/` (Alembic, head **0015**) + `migrations/duckdb/` (numbered SQL, schema **v13**) +
   `schemas/duckdb_schema_version.txt`.
 - `tests/` — `unit/`, `regression/` (golden-file engine-drift gate), `integration/` (E2E TestClient),
@@ -467,7 +481,7 @@ breakouts (RISP, advancement, DP rate) are the right lens, not the global R mean
 | 4 | Core Simulation Loop | ✅ Complete |
 | 5 | Simulation Runner & Backend API | ✅ Complete (CI-green on Python 3.13) |
 | 6 | **Frontend Build + P1 backend prerequisites** | ✅ **Complete** — SIM-378→401 + 415→420 + 414 + 402 + 408 closed; SIM-406 + 407 calibration LIVE (unblocked by SIM-432, 2026-06-01) |
-| 7 | Integration, Testing & Deployment | Live-env bring-up DONE (SIM-402 + 408 closed; Python-3.13 migration SIM-431 closed; **SIM-432 closed 2026-06-01 — calibration fitted + applied at boot, win-prob map = fitted reliability-curve**; **SIM-430 worker-scaling RESOLVED 2026-06-02 — forkserver + mem_limit, n=100 ≈ 38 s, no OOM**). **Remaining:** SIM-436 (`/simulate` per-game cost → 30 s SLA, P3), SIM-429 (granular run/prop calibration + CLV backtest), the SIM-433/434/435 data-runs (bullpen ingest · `SIM_MANAGER=1` enable+validate · odds backfill), and the SIM-411/413/425b/427 realism follow-ons (one play-pool rebuild + engine-backed manager) |
+| 7 | Integration, Testing & Deployment | **Largely COMPLETE.** Closed: SIM-402/408/431/432/430 (calibration live, forkserver perf), SIM-433/434/427/411/413/425b (bullpen ingest · manager-decision + realism models ENABLED + validated, all flags ON in prod / pinned off in tests), SIM-435 (full-2024-season odds backfill — 2,378 games), and the 2026-06-03 comprehensive-audit remediation (backlog.xlsx RETIRED). **CLV is now measured at scale** — SIM-429 scoreboard (`scripts/clv_backtest.py`) shipped; SIM-436 parallelized it across games (~6×); first read = ~49% beat-close (no demonstrable edge yet). **Remaining:** SIM-429 (run-conversion + prop calibration to DEVELOP a CLV edge; the realism magnitude-calibration + real-per-team-manager-profile follow-ons fold in). The single-game <30 s SLA is hardware-bound (core-bound at ~6) and de-prioritized — throughput is solved via across-game parallelism. |
 
 **Realism sub-track (interleaved, landed on `master`):** the SIM-422→429 full-pool similarity-wiring
 epic replaced the per-tile k-NN draw with whole-pool engine-weighted sampling and made it the

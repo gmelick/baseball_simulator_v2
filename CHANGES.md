@@ -1,3 +1,38 @@
+# Phase 7 — CLV measured at scale: odds backfill + CLV scoreboard + per-game perf — 2026-06-06
+**Authors: Betting/Markets Analyst (Agent 8), Performance Engineer (Agent 6), ML/Modeling Engineer (Agent 3), Data Engineer (Agent 4)**
+
+The CLV (Closing Line Value) loop — the fund's gold-standard metric — is now built end-to-end and
+measured on real data.
+
+**SIM-435 — historical odds backfilled (full 2024 season).** Ran `scripts/load_historical_odds.py` with
+the real BettingPros provider (`--provider bettingpros`; `ODDS_PROVIDER` defaults to mock, so the flag is
+required). A smoke run first PROVED the API serves historical CLOSING lines with real movement (e.g.
+744795 home ML +100 → +123 open→close). Then the full backfill: **2,378 of 2,472 Final games** →
+`raw.game_odds` (14,268 rows) + `raw.prop_odds` (171,771 rows), opening+closing, game (ML/run-line/total)
++ 7 props. Idempotent (odds_hash ON CONFLICT); ~15h network run.
+
+**SIM-429 — the CLV backtest scoreboard (`scripts/clv_backtest.py`).** For a slate, it replays N sims per
+game (production factory), derives the model prices (calibrated win-prob, total/run-line distributions,
+per-player prop PMFs), identifies the bets the model would PLACE at the OPENING line, and measures whether
+they beat the CLOSING line (CLV). Reuses `betting/clv_engine` + the sim seams. Covers all 10 markets
+(moneyline/run-line/total + 7 props), trust-labeled (batter H/HR/TB trustworthy; moneyline good post-fix;
+pitcher K/BB + RBI not yet bet-grade). Pure `evaluate_two_way_market` + `aggregate_scoreboard` (unit-tested,
+8 tests; independently verified — clv_from_odds entry-vs-close on the correct side with proper de-vig,
+numerically confirmed). **First result (120 games): ~49% beat-close = NO demonstrable edge yet** — the
+model isn't beating the sharp close. Stable across n=65/n=100; the trustworthy markets all ≤50%. This is
+the gold-standard doing its job: it tells us, before risking capital, that the edge isn't there yet.
+
+**SIM-436 — per-game perf profiled + the backtest parallelized.** cProfile overturned the prior theory:
+the machine build is FREE (sampler is process-cached), and the cost is the IRREDUCIBLE per-PA full-pool
+scoring (`new_plate_appearance` → `_f_situation_baseout`, ~1.5–1.9 s/iter × ~83 PAs). Per-PA memoization
+was tried (`_f_batter` is constant per batter, ~9× reuse) but the dominant situational factor varies every
+PA (no reuse), so it was reverted — the sampler is unchanged. The host is CORE-BOUND at ~6, so a single
+game can't go <30 s at n=100. The throughput fix: **`clv_backtest.py --workers` parallelizes ACROSS games**
+(forkserver ProcessPool, each worker warms its own ~373 MB sampler once + an asyncpg pool, lean parent →
+no COW), **byte-identical** to serial (verified: all 109 per-bet records match to full float precision,
+order-independent) → ~6× → ~20–32 s effective/game. n=65 gives the same CLV as n=100, so a full-season run
+is feasible in ~half a day. The single-game <30 s SLA is de-prioritized (hardware-bound).
+
 # Phase 7 — Comprehensive-audit remediation: all both-agree doc + code fixes applied — 2026-06-04
 **Authors: all 9 roles (fanned out one file-group per agent across two workflows) + direct edits**
 

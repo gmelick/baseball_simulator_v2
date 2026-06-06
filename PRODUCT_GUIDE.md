@@ -1,6 +1,6 @@
 # Baseball Simulator — Product Guide
 
-*Author: Product Manager (Agent 1) · Last updated: 2026-05-06*
+*Author: Product Manager (Agent 1) · Last updated: 2026-06-06*
 
 > **Who this guide is for.** Anyone — engineer, analyst, designer, investor, or curious newcomer — who needs to understand what this program is, why it exists, and how to use, build on, or evaluate it. **No baseball, betting, or programming background required.** Terms are defined the first time they appear, and a glossary at the end fills in the rest.
 
@@ -87,7 +87,9 @@ Once the engines exist, the simulator can run a game. Every pitch goes through 8
 7. **Manager decisions** — End of plate appearance: pitching change? Pinch hitter? Defensive replacement?
 8. **Loop control** — Move to the next pitch, or end the game.
 
-One full game should run in **under 2 seconds**, and a batch of 100 games should run in **under 30 seconds.** That's the performance contract the simulator must meet to be useful for live, real-time updates during actual MLB games.
+One full game should run in **under 2 seconds**, and a batch of 100 games should run in **under 30 seconds.** That's the performance contract the simulator must meet to be useful for live, real-time updates during actual MLB games. (Today a 100-game batch runs in about 38 seconds — close, with the last bit of throughput tuning still open.)
+
+The manager decisions in step 7 — and a handful of realism refinements (park-factor effects, batter-vs-pitcher-hand platoon splits, fielder skill, catcher framing) — are **now live in the production simulator**. They were enabled and validated in June 2026: turning the manager on raised the realistic number of pitchers used per game (from ~2 to ~9) without distorting run totals, and the realism nudges produced no run-environment distortion.
 
 ### 4.4 The application layer (API + frontend)
 
@@ -115,9 +117,11 @@ The project is structured into **7 sequential phases** spanning roughly 24 weeks
 | 4. Core Simulation Loop | The 8-step pitch-by-pitch simulator | ✅ Complete |
 | 5. Simulation Runner & Backend API | FastAPI endpoints, parallel 100-iteration runner | ✅ Complete |
 | 6. Frontend Build | Day Summary + Game pages | ✅ Complete |
-| 7. Integration, Testing & Deployment | Production-ready hosted system | 🔄 In progress (live-env bring-up) |
+| 7. Integration, Testing & Deployment | Production-ready hosted system | 🔄 Largely complete (live-env bring-up done; final tuning open) |
 
-**Today's reality:** The whole pipeline is built and runs end-to-end. Data flows in, the database is populated, all 11 similarity engines are live (the app boots logging `build_all_engines: 11/11`), the pitch-by-pitch simulator runs, the FastAPI backend serves it over REST + WebSocket, and the React frontend renders the Day Summary and Game pages. The work now is **Phase 7** — the live-environment bring-up and the remaining production-hardening work: calibration is fitted and applied at boot, and the open items are throughput tuning (hitting the 100-game batch SLA), granular run/prop calibration plus the CLV backtest, and a handful of realism follow-ons. Anyone joining today is most likely working on one of those Phase-7 threads rather than building a phase from scratch.
+**Today's reality:** The whole pipeline is built and runs end-to-end. Data flows in, the database is populated, all 11 similarity engines are live (the app boots logging `build_all_engines: 11/11`), the pitch-by-pitch simulator runs with the manager-decision and realism features turned on, the FastAPI backend serves it over REST + WebSocket, and the React frontend renders the Day Summary and Game pages. **Phase 7 is largely complete:** the live-environment bring-up is done, calibration is fitted and applied at boot (and validated — see §10), the manager and realism features are live, and — most importantly for a betting product — **the CLV measurement pipeline is now built and running** (see the note below). The remaining open items are narrow: the last bit of throughput tuning (the 100-game batch runs in ~38s vs. the 30s target), and the run-conversion / prop-calibration work the model needs in order to actually develop a betting edge. Anyone joining today is most likely working on one of those final Phase-7 threads rather than building a phase from scratch.
+
+**The CLV scoreboard is built and measuring — and the honest first read is: no edge yet.** Because Closing Line Value is the metric that decides whether this whole product works (§2, §10), the most important Phase-7 milestone is that we can now actually measure it. A full 2024 season of real bookmaker odds was loaded (2,378 games, with both opening and closing prices on the moneyline and seven prop markets), and a CLV backtest tool (`scripts/clv_backtest.py`) now replays the simulator against those games and scores how often its recommended bets beat the closing line. **The first result, over 120 games: the model beat the closing line about 49% of the time — i.e. no demonstrable edge yet.** This is exactly what the gold-standard metric is *for*: it works, and it is telling us plainly that the simulator's predictions are not yet sharp enough to make money. The path to an edge is the calibration and run-conversion work already on the board (the model's win probabilities and batter props are now bet-grade accurate, but its pitcher strikeout/walk projections are not yet). In short: the scoreboard is finally on, and it's giving us the truth instead of flattering numbers.
 
 ---
 
@@ -145,10 +149,10 @@ A simple rule of thumb when starting any task: **"Whose desk does this belong on
 
 You need:
 
-- **Python 3.11 or newer**
+- **Python 3.13** (the platform was migrated to 3.13 / numpy 2.x; CI, Docker, and local dev all match)
 - **PostgreSQL 15 or newer**
 - **Docker** and **docker-compose** (for the supporting services)
-- **Node.js** (only when you start working on the frontend, Phase 6+)
+- **Node.js** (only when you start working on the frontend)
 
 The project ships with a `Makefile` that wraps the most common commands. The full first-time setup is:
 
@@ -224,6 +228,8 @@ Predictions without validation are entertainment. The project has a defined vali
 - **Chi-squared goodness-of-fit** on simulated run distributions vs. real historical run distributions (target: p > 0.05, meaning we can't statistically distinguish them).
 - **CLV** as the gold standard for live betting performance.
 - Results sliced by **player archetype** and **park** to surface systematic biases (e.g. *"the model is great on power hitters in pitcher-friendly parks but bad on contact hitters in Coors Field"*).
+
+**Where validation stands today (June 2026).** Calibration is fitted and applied at boot, and it has been measured against real games (a 120-game sample). The win-probability output is now well-calibrated (Expected Calibration Error ≈ 0.047 — small is good), and the batter prop markets (hits, home runs, total bases) are sharp enough to bet (ECE ≈ 0.02–0.05). The pitcher strikeout and walk props are *not* yet bet-grade (ECE ≈ 0.21–0.22 — improved, but still too coarse). And, as noted in §5, the CLV scoreboard is now live and reads ~49% beat-close over 120 games — no demonstrable betting edge yet. The takeaway is consistent across every lens: the machinery works and the measurements are honest; the remaining work is sharpening the model (especially pitcher props and run-conversion) until those numbers cross into profitable territory.
 
 The QA/DevOps role owns the test suite that enforces this; the ML Engineer designs the validation experiments; the Betting Analyst signs off that the metrics are calibrated to the actual betting use case (a 1% accuracy gain that doesn't translate to CLV is academic).
 
@@ -328,6 +334,6 @@ baseball_simulator_v2/
 
 ## 13. If you only remember three things
 
-1. **The product is a Monte Carlo MLB game simulator built around 11 similarity engines, designed to find mispriced bets.** Closing Line Value is the metric that ultimately decides whether it's working.
-2. **Phases 1–6 are complete; we're in Phase 7.** The data pipeline, all 11 similarity engines, the simulation loop, the API, and the frontend are all built and live. The remaining work is live-environment bring-up and production hardening (throughput, calibration, CLV backtest).
-3. **Work is divided across 9 specialist agents.** Knowing who owns what (`agent_team.md`) is the fastest way to get a useful answer.
+1. **The product is a Monte Carlo MLB game simulator built around 11 similarity engines, designed to find mispriced bets.** Closing Line Value is the metric that ultimately decides whether it's working — and that scoreboard is now built and running.
+2. **Phases 1–6 are complete; Phase 7 is largely done.** The data pipeline, all 11 similarity engines, the simulation loop (with manager decisions and realism features now live), the API, and the frontend are all built and live. Calibration is applied and validated. The remaining work is final throughput tuning and sharpening the model.
+3. **The CLV scoreboard is on, and it's telling the truth: no edge yet.** The first measured read (120 games) shows the model beats the closing line ~49% of the time — meaning the predictions aren't yet sharp enough to be profitable. The fix is the calibration / run-conversion work already underway, especially on pitcher props. **Work is divided across 9 specialist agents** (`agent_team.md`) — knowing who owns what is the fastest way to a useful answer.
