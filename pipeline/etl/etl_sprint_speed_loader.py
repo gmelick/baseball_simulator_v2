@@ -47,6 +47,8 @@ from urllib.request import Request, urlopen
 import psycopg2
 from psycopg2.extras import execute_batch
 
+from pipeline.etl.coercion import to_float, to_int
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
@@ -55,25 +57,6 @@ logging.basicConfig(
 log = logging.getLogger("sprint_speed_loader")
 
 SAVANT_URL = "https://baseballsavant.mlb.com/leaderboard/sprint_speed"
-
-
-# Savant returns empty strings for missing numerics; handle uniformly.
-def _to_float(v: Any) -> float | None:
-    if v is None or v == "":
-        return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
-
-
-def _to_int(v: Any) -> int | None:
-    if v is None or v == "":
-        return None
-    try:
-        return int(float(v))
-    except (TypeError, ValueError):
-        return None
 
 
 class SprintSpeedLoader:
@@ -241,9 +224,9 @@ class SprintSpeedLoader:
             )
 
         for raw in reader:
-            player_id = _to_int(raw.get("player_id"))
-            sprint_speed = _to_float(raw.get("sprint_speed"))
-            comp_runs = _to_int(raw.get("competitive_runs"))
+            player_id = to_int(raw.get("player_id"))
+            sprint_speed = to_float(raw.get("sprint_speed"))
+            comp_runs = to_int(raw.get("competitive_runs"))
 
             # Hard skip: no player_id or no measurement at all.
             if player_id is None or sprint_speed is None or comp_runs is None:
@@ -254,8 +237,8 @@ class SprintSpeedLoader:
                 "season": season,
                 "sprint_speed": sprint_speed,
                 "competitive_runs": comp_runs,
-                "bolts": _to_int(raw.get("bolts")),
-                "hp_to_1b": _to_float(raw.get("hp_to_1b")),
+                "bolts": to_int(raw.get("bolts")),
+                "hp_to_1b": to_float(raw.get("hp_to_1b")),
             }
 
     # ------------------------------------------------------------------

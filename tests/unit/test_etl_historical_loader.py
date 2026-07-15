@@ -2,7 +2,7 @@
 Unit tests for pipeline/etl/etl_historical_loader.py
 =====================================================
 Targets:
-  - Pure type-coercion helpers (_to_float / _to_int / _to_bool / _to_str)
+  - Pure type-coercion helpers (to_float / to_int / to_bool / to_str, now shared in pipeline/etl/coercion.py)
   - _build_row_dict column rename + coercion
   - _validate_row two-tier validation rules
   - _parse_height, _map_game_status helpers
@@ -26,6 +26,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from pipeline.etl.coercion import to_bool, to_float, to_int, to_str
 from pipeline.etl.etl_historical_loader import (
     ALWAYS_REQUIRED,
     BATCH_SIZE,
@@ -41,10 +42,6 @@ from pipeline.etl.etl_historical_loader import (
     _fetch_game_pitches,
     _map_game_status,
     _parse_height,
-    _to_bool,
-    _to_float,
-    _to_int,
-    _to_str,
     _validate_row,
 )
 
@@ -97,11 +94,11 @@ class TestToFloat:
         ],
     )
     def test_valid_inputs(self, value, expected):
-        assert _to_float(value) == expected
+        assert to_float(value) == expected
 
     @pytest.mark.parametrize("value", [None, "", "abc", "not-a-number", float("nan")])
     def test_returns_none_for_missing_or_invalid(self, value):
-        assert _to_float(value) is None
+        assert to_float(value) is None
 
 
 class TestToInt:
@@ -116,11 +113,11 @@ class TestToInt:
         ],
     )
     def test_valid_inputs(self, value, expected):
-        assert _to_int(value) == expected
+        assert to_int(value) == expected
 
     @pytest.mark.parametrize("value", [None, "", "abc", float("nan")])
     def test_returns_none(self, value):
-        assert _to_int(value) is None
+        assert to_int(value) is None
 
 
 class TestToBool:
@@ -142,7 +139,7 @@ class TestToBool:
         ],
     )
     def test_various_inputs(self, value, expected):
-        assert _to_bool(value) is expected
+        assert to_bool(value) is expected
 
 
 class TestToStr:
@@ -156,11 +153,11 @@ class TestToStr:
         ],
     )
     def test_valid_inputs(self, value, expected):
-        assert _to_str(value) == expected
+        assert to_str(value) == expected
 
     @pytest.mark.parametrize("value", [None, "", "   "])
     def test_empty_returns_none(self, value):
-        assert _to_str(value) is None
+        assert to_str(value) is None
 
 
 # ===========================================================================
@@ -363,7 +360,7 @@ class TestBuildRowDict:
         raw["pre_play_runner_on_first"] = 0
         raw["pre_play_runner_on_second"] = 200002
         row = _build_row_dict(raw, game_pk=745001, season=2024, game_date="2024-08-15")
-        # `_to_int(0) or None` collapses 0 → None for runner IDs
+        # `to_int(0) or None` collapses 0 → None for runner IDs
         assert row["on_1b"] is None
         assert row["on_2b"] == 200002
 

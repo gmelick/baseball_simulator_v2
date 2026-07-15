@@ -51,12 +51,14 @@
     at ~6**, so a single game can't go <30 s on this hardware without fewer iters or a smaller pool. The
     throughput fix: **the CLV backtest is parallelized ACROSS games** (`--workers`, forkserver,
     byte-identical, ~373 MB/worker) → ~6× → **~20–32 s effective/game**; n=65 gives the same CLV as n=100.
-  - **Next free ticket ID: SIM-437.** Open work: **SIM-429** (granular run-conversion + K/BB prop
+  - **Next free ticket ID: SIM-438.** Open work: **SIM-429** (granular run-conversion + K/BB prop
     calibration to DEVELOP a CLV edge — the now-measurable gold-standard says there is none yet); the
     realism follow-ons fold into it (≥400×≥20 magnitude calibration of the SIM-411/413/425b nudges; wiring
     the real per-team SIM-427 profiles into the SIM-434 decision model, which currently uses a league-flat
-    default). **CLOSED:** SIM-435/433/434/427/411/413/425b/430/432/431 + the 2026-06-03 comprehensive-audit
-    remediation (**`backlog.xlsx` RETIRED → `BACKLOG.md` is the single source of truth**).
+    default). **CLOSED:** SIM-435/433/434/427/411/413/425b/430/432/431 + **SIM-437** (2026-06-22: the two
+    ETL loaders' duplicate `_to_float`/`_to_int`/`_to_bool`/`_to_str` coercion helpers consolidated into
+    `pipeline/etl/coercion.py`) + the 2026-06-03 comprehensive-audit remediation (**`backlog.xlsx` RETIRED
+    → `BACKLOG.md` is the single source of truth**).
 - **Phases 1–5 + Phase 6 Frontend Build (SIM-378→401 + hardening 415→420) are COMPLETE and CI-green
   on Python 3.13 (migrated from 3.11.15 — SIM-431, 2026-05-31; numpy is now 2.x).** Unit suite green (the unit lane runs the per-tile path; see below).
 - **2026-05-28 closure batch — SIX P1/P2 tickets closed in one day:**
@@ -82,7 +84,7 @@
   (`fielder_emb` = 11346 × 51 features).  Box output now MLB-realistic: H/HR/2B/BB/K within
   ~3-5% of MLB-2023, steals match MLB volume.  **Runs run ~7-8% low** (down from ~12% pre-fix) —
   remaining hits→runs *conversion* residual lives in batted-ball-with-RISP / sequencing
-  (see §11). **Next free ticket ID at the time: SIM-433** (now **SIM-437** — see the TL;DR at the top
+  (see §11). **Next free ticket ID at the time: SIM-433** (now **SIM-438** — see the TL;DR at the top
   of §2; SIM-430 = the full-pool `/simulate` throughput / 2s-30s SLA perf gap, filed 2026-05-30 off the
   SIM-402 live re-measure).
 
@@ -255,7 +257,8 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
 - `similarity/` — `engines/` (the 11 engines), `similarity_calibration.py`, `backtesting/` (backtester +
   walk-forward), `registry.py`.
 - `betting/` — `clv_engine.py`, `bet_signal.py`, `line_movement.py`.
-- `pipeline/` — `etl/` (historical loader), `live/live_ingestion_pipeline.py` (MLB WS + REST + odds),
+- `pipeline/` — `etl/` (historical loader + `coercion.py`, the SIM-437 shared type-coercion helpers
+  imported by both ETL loaders), `live/live_ingestion_pipeline.py` (MLB WS + REST + odds),
   `live/bullpen_availability_ingest.py` (SIM-433 MLB-API active-roster/IL → `raw.game_bullpen_availability`),
   `batch/player_profile_computor.py` (+ the SIM-433 `_compute_bullpen_workload` from `raw.pitches`) +
   `play_pool_cache.py` (normalized tiles + persisted norms/centroids) + `engine_artifacts.py` (SIM-422
@@ -302,7 +305,8 @@ consolidates; QA cross-validates and never self-certifies its own work.
 - **TDD:** tests first, then implementation (Backend Developer convention). Unit tests use the `__new__`
   constructor-bypass + in-memory mock pattern (no live DB) — see `tests/conftest.py`.
 - **Ticketing:** every change maps to a `SIM-NNN` ticket. Next free ID is tracked in `BACKLOG.md`
-  (currently **SIM-437**). Recent IDs: SIM-430 = full-pool `/simulate` throughput / 2s-30s SLA
+  (currently **SIM-438**). Recent IDs: SIM-437 = consolidate the two ETL loaders' duplicate type-coercion
+  helpers into `pipeline/etl/coercion.py` [CLOSED 2026-06-22], SIM-430 = full-pool `/simulate` throughput / 2s-30s SLA
   (worker-scaling CLOSED, per-game cost → SIM-436), SIM-431 = the Python-3.13 migration [CLOSED],
   SIM-432 = the calibrator/validate_props ↔ live-schema reconciliation [CLOSED 2026-06-01, the
   SIM-406/407 unlock], SIM-433/434/435 = bullpen-availability / manager-decision-model / historical-odds

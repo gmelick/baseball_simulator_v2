@@ -2,6 +2,12 @@
 
 *Owner: Product Manager (Agent 1) · Last updated: 2026-06-02 (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
 
+# 🧹 2026-06-22 — SIM-437: ETL type-coercion helpers consolidated (next free ID → SIM-438)
+
+| ID | Title | Type | Pri | Size | Depends-on | Status |
+|---|---|---|---|---|---|---|
+| SIM-437 | Consolidate the two ETL loaders' duplicate `_to_float`/`_to_int`/`_to_bool`/`_to_str` coercion helpers into one shared module | Tech-debt/Refactor | P3 | S | — | ✅ **DONE 2026-06-22**: new `pipeline/etl/coercion.py` (public `to_float`/`to_int`/`to_bool`/`to_str`, robust historical semantics incl. `NaN`→`None` — a strict SUPERSET that also closes the sprint loader's latent NaN gap). `etl_historical_loader.py` + `etl_sprint_speed_loader.py` + the unit test import from it; `import math` dropped from the historical loader. ruff + mypy clean, 158 loader tests green. Docs synced (CODE_REVIEW_CHECKLIST counts + new section, CHANGES, CLAUDE.md §5). **Left separate (different family, would be a behavior change):** `_opt_int` (`pipeline/live/bullpen_availability_ingest.py`) + `_opt_float` (`pipeline/bettingpros_odds_provider.py`) — they do NOT treat `""` as missing; flagged as a future consolidation candidate. |
+
 # 🔭 2026-06-01 — Roadmap tickets filed (SIM-433 / SIM-434 / SIM-435, all P1)
 
 *Filed off the SIM-430/432 session + the operator's roadmap. **Execution order:**

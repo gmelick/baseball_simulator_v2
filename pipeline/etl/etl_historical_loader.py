@@ -60,7 +60,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import os
 import time
 from contextlib import contextmanager
@@ -73,6 +72,8 @@ import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 import requests
+
+from pipeline.etl.coercion import to_bool, to_float, to_int, to_str
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -197,46 +198,10 @@ HALF_INNING_MAP = {
     "bottom": "Bot",
 }
 
-# ---------------------------------------------------------------------------
-# Float / int coercion helpers
-# ---------------------------------------------------------------------------
-
-
-def _to_float(v: Any) -> float | None:
-    """Convert API value to float; return None for empty/missing."""
-    if v is None or v == "" or (isinstance(v, float) and math.isnan(v)):
-        return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
-
-
-def _to_int(v: Any) -> int | None:
-    f = _to_float(v)
-    return None if f is None else int(f)
-
-
-def _to_bool(v: Any) -> bool:
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, str):
-        return v.strip().lower() in ("true", "1", "yes")
-    return bool(v) if v is not None else False
-
-
-def _to_str(v: Any) -> str | None:
-    if v is None or v == "":
-        return None
-    s = str(v).strip()
-    return s if s else None
-
 
 # ---------------------------------------------------------------------------
 # Row builder — rename + coerce every field
 # ---------------------------------------------------------------------------
-
-
 def _build_row_dict(
     raw: dict[str, Any], game_pk: int, season: int, game_date: str
 ) -> dict[str, Any]:
@@ -263,157 +228,154 @@ def _build_row_dict(
 
     row: dict[str, Any] = {
         # --- Natural key ---
-        "game_pk": _to_int(renamed.get("game_pk")),
-        "at_bat_number": _to_int(renamed.get("at_bat_number")),
-        "pitch_number": _to_int(renamed.get("pitch_number")),
+        "game_pk": to_int(renamed.get("game_pk")),
+        "at_bat_number": to_int(renamed.get("at_bat_number")),
+        "pitch_number": to_int(renamed.get("pitch_number")),
         # --- Game context ---
         "game_date": renamed.get("game_date"),
-        "season": _to_int(season),
-        "venue_id": _to_int(renamed.get("venue_id")),
-        "venue": _to_str(renamed.get("venue")),
-        "home_id": _to_int(renamed.get("home_id")),
-        "home_team": _to_str(renamed.get("home_team")),
-        "away_id": _to_int(renamed.get("away_id")),
-        "away_team": _to_str(renamed.get("away_team")),
-        "home_manager_id": _to_int(renamed.get("home_manager_id")),
-        "home_manager_name": _to_str(renamed.get("home_manager_name")),
-        "away_manager_id": _to_int(renamed.get("away_manager_id")),
-        "away_manager_name": _to_str(renamed.get("away_manager_name")),
+        "season": to_int(season),
+        "venue_id": to_int(renamed.get("venue_id")),
+        "venue": to_str(renamed.get("venue")),
+        "home_id": to_int(renamed.get("home_id")),
+        "home_team": to_str(renamed.get("home_team")),
+        "away_id": to_int(renamed.get("away_id")),
+        "away_team": to_str(renamed.get("away_team")),
+        "home_manager_id": to_int(renamed.get("home_manager_id")),
+        "home_manager_name": to_str(renamed.get("home_manager_name")),
+        "away_manager_id": to_int(renamed.get("away_manager_id")),
+        "away_manager_name": to_str(renamed.get("away_manager_name")),
         # --- Inning state ---
-        "inning": _to_int(renamed.get("inning")),
-        "inning_topbot": _to_str(renamed.get("inning_topbot")),
+        "inning": to_int(renamed.get("inning")),
+        "inning_topbot": to_str(renamed.get("inning_topbot")),
         # --- Pitcher / batter ---
-        "pitcher": _to_int(renamed.get("pitcher")),
-        "p_throws": _to_str(renamed.get("p_throws")),
-        "batter": _to_int(renamed.get("batter")),
-        "stand": _to_str(renamed.get("stand")),
-        "bat_hand": _to_str(renamed.get("bat_hand")),
+        "pitcher": to_int(renamed.get("pitcher")),
+        "p_throws": to_str(renamed.get("p_throws")),
+        "batter": to_int(renamed.get("batter")),
+        "stand": to_str(renamed.get("stand")),
+        "bat_hand": to_str(renamed.get("bat_hand")),
         # --- Score state ---
-        "home_score": _to_int(renamed.get("home_score")) or 0,
-        "away_score": _to_int(renamed.get("away_score")) or 0,
-        "bat_score": _to_int(renamed.get("bat_score")) or 0,
-        "fld_score": _to_int(renamed.get("fld_score")) or 0,
+        "home_score": to_int(renamed.get("home_score")) or 0,
+        "away_score": to_int(renamed.get("away_score")) or 0,
+        "bat_score": to_int(renamed.get("bat_score")) or 0,
+        "fld_score": to_int(renamed.get("fld_score")) or 0,
         # --- Count ---
-        "balls": _to_int(renamed.get("balls")) or 0,
-        "strikes": _to_int(renamed.get("strikes")) or 0,
-        "outs": _to_int(renamed.get("outs")) or 0,
+        "balls": to_int(renamed.get("balls")) or 0,
+        "strikes": to_int(renamed.get("strikes")) or 0,
+        "outs": to_int(renamed.get("outs")) or 0,
         # --- Pitch result ---
-        "type": _to_str(renamed.get("type")),
-        "description": _to_str(renamed.get("description")),
-        "pitch_type": _to_str(renamed.get("pitch_type")),
-        "pitch_name": _to_str(renamed.get("pitch_name")),
-        "events": _to_str(renamed.get("events")) or _to_str(renamed.get("event")),
+        "type": to_str(renamed.get("type")),
+        "description": to_str(renamed.get("description")),
+        "pitch_type": to_str(renamed.get("pitch_type")),
+        "pitch_name": to_str(renamed.get("pitch_name")),
+        "events": to_str(renamed.get("events")) or to_str(renamed.get("event")),
         # --- Strike zone ---
-        "sz_top": _to_float(renamed.get("sz_top")),
-        "sz_bot": _to_float(renamed.get("sz_bot")),
+        "sz_top": to_float(renamed.get("sz_top")),
+        "sz_bot": to_float(renamed.get("sz_bot")),
         # --- Physics ---
-        "release_speed": _to_float(renamed.get("release_speed")),
-        "end_speed": _to_float(renamed.get("end_speed")),
-        "release_pos_x": _to_float(renamed.get("release_pos_x")),
-        "release_pos_y": _to_float(renamed.get("release_pos_y")),
-        "release_pos_z": _to_float(renamed.get("release_pos_z")),
-        "vx0": _to_float(renamed.get("vx0")),
-        "vy0": _to_float(renamed.get("vy0")),
-        "vz0": _to_float(renamed.get("vz0")),
-        "ax": _to_float(renamed.get("ax")),
-        "ay": _to_float(renamed.get("ay")),
-        "az": _to_float(renamed.get("az")),
+        "release_speed": to_float(renamed.get("release_speed")),
+        "end_speed": to_float(renamed.get("end_speed")),
+        "release_pos_x": to_float(renamed.get("release_pos_x")),
+        "release_pos_y": to_float(renamed.get("release_pos_y")),
+        "release_pos_z": to_float(renamed.get("release_pos_z")),
+        "vx0": to_float(renamed.get("vx0")),
+        "vy0": to_float(renamed.get("vy0")),
+        "vz0": to_float(renamed.get("vz0")),
+        "ax": to_float(renamed.get("ax")),
+        "ay": to_float(renamed.get("ay")),
+        "az": to_float(renamed.get("az")),
         # --- Movement ---
-        "pfx_x": _to_float(renamed.get("pfx_x")),
-        "pfx_z": _to_float(renamed.get("pfx_z")),
-        "plate_x": _to_float(renamed.get("plate_x")),
-        "plate_z": _to_float(renamed.get("plate_z")),
-        "x": _to_float(renamed.get("x")),
-        "y": _to_float(renamed.get("y")),
-        "release_spin_rate": _to_int(renamed.get("release_spin_rate")),
-        "spin_axis": _to_int(renamed.get("spin_axis")),
-        "break_angle": _to_float(renamed.get("break_angle")),
-        "break_length": _to_float(renamed.get("break_length")),
-        "break_y": _to_float(renamed.get("break_y")),
-        "break_vertical": _to_float(renamed.get("break_vertical")),
-        "break_vertical_induced": _to_float(renamed.get("break_vertical_induced")),
-        "break_horizontal": _to_float(renamed.get("break_horizontal")),
-        "zone": _to_int(renamed.get("zone")),
-        "release_extension": _to_float(renamed.get("release_extension")),
+        "pfx_x": to_float(renamed.get("pfx_x")),
+        "pfx_z": to_float(renamed.get("pfx_z")),
+        "plate_x": to_float(renamed.get("plate_x")),
+        "plate_z": to_float(renamed.get("plate_z")),
+        "x": to_float(renamed.get("x")),
+        "y": to_float(renamed.get("y")),
+        "release_spin_rate": to_int(renamed.get("release_spin_rate")),
+        "spin_axis": to_int(renamed.get("spin_axis")),
+        "break_angle": to_float(renamed.get("break_angle")),
+        "break_length": to_float(renamed.get("break_length")),
+        "break_y": to_float(renamed.get("break_y")),
+        "break_vertical": to_float(renamed.get("break_vertical")),
+        "break_vertical_induced": to_float(renamed.get("break_vertical_induced")),
+        "break_horizontal": to_float(renamed.get("break_horizontal")),
+        "zone": to_int(renamed.get("zone")),
+        "release_extension": to_float(renamed.get("release_extension")),
         # --- Batted ball ---
-        "launch_speed": _to_float(renamed.get("launch_speed")),
-        "launch_angle": _to_float(renamed.get("launch_angle")),
-        "hit_distance_sc": _to_float(renamed.get("hit_distance_sc")),
-        "hc_x": _to_float(renamed.get("hc_x")),
-        "hc_y": _to_float(renamed.get("hc_y")),
-        "spray_angle": _to_float(renamed.get("spray_angle")),
-        "bb_type": _to_str(renamed.get("bb_type")),
-        "hit_location": _to_float(renamed.get("hit_location")),
-        "des": _to_str(renamed.get("des")),
+        "launch_speed": to_float(renamed.get("launch_speed")),
+        "launch_angle": to_float(renamed.get("launch_angle")),
+        "hit_distance_sc": to_float(renamed.get("hit_distance_sc")),
+        "hc_x": to_float(renamed.get("hc_x")),
+        "hc_y": to_float(renamed.get("hc_y")),
+        "spray_angle": to_float(renamed.get("spray_angle")),
+        "bb_type": to_str(renamed.get("bb_type")),
+        "hit_location": to_float(renamed.get("hit_location")),
+        "des": to_str(renamed.get("des")),
         # --- Baserunners ---
-        "on_1b": _to_int(renamed.get("on_1b")) or None,
-        "on_2b": _to_int(renamed.get("on_2b")) or None,
-        "on_3b": _to_int(renamed.get("on_3b")) or None,
-        "post_on_1b": _to_int(renamed.get("post_on_1b")) or None,
-        "post_on_2b": _to_int(renamed.get("post_on_2b")) or None,
-        "post_on_3b": _to_int(renamed.get("post_on_3b")) or None,
+        "on_1b": to_int(renamed.get("on_1b")) or None,
+        "on_2b": to_int(renamed.get("on_2b")) or None,
+        "on_3b": to_int(renamed.get("on_3b")) or None,
+        "post_on_1b": to_int(renamed.get("post_on_1b")) or None,
+        "post_on_2b": to_int(renamed.get("post_on_2b")) or None,
+        "post_on_3b": to_int(renamed.get("post_on_3b")) or None,
         # --- Fielders ---
-        "fielder_2": _to_int(renamed.get("fielder_2")),
-        "fielder_3": _to_int(renamed.get("fielder_3")),
-        "fielder_4": _to_int(renamed.get("fielder_4")),
-        "fielder_5": _to_int(renamed.get("fielder_5")),
-        "fielder_6": _to_int(renamed.get("fielder_6")),
-        "fielder_7": _to_int(renamed.get("fielder_7")),
-        "fielder_8": _to_int(renamed.get("fielder_8")),
-        "fielder_9": _to_int(renamed.get("fielder_9")),
+        "fielder_2": to_int(renamed.get("fielder_2")),
+        "fielder_3": to_int(renamed.get("fielder_3")),
+        "fielder_4": to_int(renamed.get("fielder_4")),
+        "fielder_5": to_int(renamed.get("fielder_5")),
+        "fielder_6": to_int(renamed.get("fielder_6")),
+        "fielder_7": to_int(renamed.get("fielder_7")),
+        "fielder_8": to_int(renamed.get("fielder_8")),
+        "fielder_9": to_int(renamed.get("fielder_9")),
         # --- Outcome counts ---
-        "runs_on_pitch": _to_int(renamed.get("runs_on_pitch")) or 0,
-        "outs_on_pitch": _to_int(renamed.get("outs_on_pitch")) or 0,
-        "rbis_on_pitch": _to_int(renamed.get("rbis_on_pitch")) or 0,
-        "earned_runs_on_pitch": _to_int(renamed.get("earned_runs_on_pitch")) or 0,
+        "runs_on_pitch": to_int(renamed.get("runs_on_pitch")) or 0,
+        "outs_on_pitch": to_int(renamed.get("outs_on_pitch")) or 0,
+        "rbis_on_pitch": to_int(renamed.get("rbis_on_pitch")) or 0,
+        "earned_runs_on_pitch": to_int(renamed.get("earned_runs_on_pitch")) or 0,
         # --- Runner scoring flags ---
-        "runner_1b_scored": _to_bool(renamed.get("runner_1b_scored")),
-        "runner_2b_scored": _to_bool(renamed.get("runner_2b_scored")),
-        "runner_3b_scored": _to_bool(renamed.get("runner_3b_scored")),
+        "runner_1b_scored": to_bool(renamed.get("runner_1b_scored")),
+        "runner_2b_scored": to_bool(renamed.get("runner_2b_scored")),
+        "runner_3b_scored": to_bool(renamed.get("runner_3b_scored")),
         # --- Runner out advancing (thrown out attempting extra base) ---
-        "runner_1b_out_advancing": _to_bool(renamed.get("runner_1b_out_advancing")),
-        "runner_2b_out_advancing": _to_bool(renamed.get("runner_2b_out_advancing")),
-        "runner_3b_out_advancing": _to_bool(renamed.get("runner_3b_out_advancing")),
+        "runner_1b_out_advancing": to_bool(renamed.get("runner_1b_out_advancing")),
+        "runner_2b_out_advancing": to_bool(renamed.get("runner_2b_out_advancing")),
+        "runner_3b_out_advancing": to_bool(renamed.get("runner_3b_out_advancing")),
         # --- Stolen base ---
-        "sb_attempt_2b": _to_bool(renamed.get("sb_attempt_2b")),
-        "sb_attempt_3b": _to_bool(renamed.get("sb_attempt_3b")),
-        "sb_attempt_home": _to_bool(renamed.get("sb_attempt_home")),
-        "sb_success_2b": _to_bool(renamed.get("sb_success_2b")),
-        "sb_success_3b": _to_bool(renamed.get("sb_success_3b")),
-        "sb_success_home": _to_bool(renamed.get("sb_success_home")),
+        "sb_attempt_2b": to_bool(renamed.get("sb_attempt_2b")),
+        "sb_attempt_3b": to_bool(renamed.get("sb_attempt_3b")),
+        "sb_attempt_home": to_bool(renamed.get("sb_attempt_home")),
+        "sb_success_2b": to_bool(renamed.get("sb_success_2b")),
+        "sb_success_3b": to_bool(renamed.get("sb_success_3b")),
+        "sb_success_home": to_bool(renamed.get("sb_success_home")),
         # --- Substitution flags ---
-        "passed_ball_wild_pitch": _to_bool(renamed.get("passed_ball_wild_pitch")),
-        "pinch_hitter": _to_bool(renamed.get("pinch_hitter")),
-        "pinch_runner": _to_bool(renamed.get("pinch_runner")),
-        "pitcher_sub": _to_bool(renamed.get("pitcher_sub")),
-        "defensive_sub": _to_bool(renamed.get("defensive_sub")),
+        "passed_ball_wild_pitch": to_bool(renamed.get("passed_ball_wild_pitch")),
+        "pinch_hitter": to_bool(renamed.get("pinch_hitter")),
+        "pinch_runner": to_bool(renamed.get("pinch_runner")),
+        "pitcher_sub": to_bool(renamed.get("pitcher_sub")),
+        "defensive_sub": to_bool(renamed.get("defensive_sub")),
         # --- Fielding detail ---
-        "fielded_by": _to_float(renamed.get("fielded_by")),
-        "fielding_error": _to_float(renamed.get("fielding_error")),
-        "dropped_ball": _to_float(renamed.get("dropped_ball")),
-        "of_assist": _to_float(renamed.get("of_assist")),
-        "field_assist_1": _to_float(renamed.get("field_assist_1")),
-        "field_assist_2": _to_float(renamed.get("field_assist_2")),
-        "field_assist_3": _to_float(renamed.get("field_assist_3")),
-        "field_assist_4": _to_float(renamed.get("field_assist_4")),
-        "field_assist_5": _to_float(renamed.get("field_assist_5")),
-        "field_putout_1": _to_float(renamed.get("field_putout_1")),
-        "field_putout_2": _to_float(renamed.get("field_putout_2")),
-        "field_putout_3": _to_float(renamed.get("field_putout_3")),
-        "throwing_error_1": _to_float(renamed.get("throwing_error_1")),
-        "throwing_error_2": _to_float(renamed.get("throwing_error_2")),
+        "fielded_by": to_float(renamed.get("fielded_by")),
+        "fielding_error": to_float(renamed.get("fielding_error")),
+        "dropped_ball": to_float(renamed.get("dropped_ball")),
+        "of_assist": to_float(renamed.get("of_assist")),
+        "field_assist_1": to_float(renamed.get("field_assist_1")),
+        "field_assist_2": to_float(renamed.get("field_assist_2")),
+        "field_assist_3": to_float(renamed.get("field_assist_3")),
+        "field_assist_4": to_float(renamed.get("field_assist_4")),
+        "field_assist_5": to_float(renamed.get("field_assist_5")),
+        "field_putout_1": to_float(renamed.get("field_putout_1")),
+        "field_putout_2": to_float(renamed.get("field_putout_2")),
+        "field_putout_3": to_float(renamed.get("field_putout_3")),
+        "throwing_error_1": to_float(renamed.get("throwing_error_1")),
+        "throwing_error_2": to_float(renamed.get("throwing_error_2")),
         # DB trigger sets data_quality_flag on insert; initialised to FALSE here.
         "data_quality_flag": False,
     }
-
     return row
 
 
 # ---------------------------------------------------------------------------
 # Pre-insert validation
 # ---------------------------------------------------------------------------
-
-
 @dataclass
 class ValidationResult:
     hard_errors: list[str] = field(default_factory=list)  # skip the row

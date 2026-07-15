@@ -1,3 +1,24 @@
+# Tech-debt — SIM-437: ETL type-coercion helpers consolidated into `pipeline/etl/coercion.py` — 2026-06-22
+**Author: Data Engineer (Agent 4)**
+
+`etl_historical_loader.py` and `etl_sprint_speed_loader.py` each carried their own private
+`_to_float`/`_to_int` (the historical loader also `_to_bool`/`_to_str`) — near-duplicate copy-paste that
+had quietly DRIFTED: the historical loader's `_to_float` mapped a `NaN` float to `None`, the sprint
+loader's did NOT (it passed `nan` straight through). Consolidated both into one shared module
+`pipeline/etl/coercion.py` exposing public `to_float`/`to_int`/`to_bool`/`to_str` with the robust
+historical semantics — a strict SUPERSET, so it is behavior-preserving for the historical loader and a
+latent-bug FIX for the sprint loader. Both loaders + `tests/unit/test_etl_historical_loader.py` now import
+from it; the call sites were repointed mechanically and `import math` was dropped from the historical
+loader (it was used only by the old `_to_float`). ruff + mypy clean; the 158 loader unit tests pass.
+
+Left intentionally separate: `_opt_int` (`pipeline/live/bullpen_availability_ingest.py`) and `_opt_float`
+(`pipeline/bettingpros_odds_provider.py`) are a DIFFERENT family — they do NOT treat `""` as missing — so
+folding them in would be a behavior change, not a refactor. Flagged as a future consolidation candidate.
+
+Docs updated: `docs/CODE_REVIEW_CHECKLIST.md` (new `coercion.py` section; the moved rows removed from both
+loaders; counts 79→80 files / 1664→1662 symbols, Phase 0 8→9 files / 195→193 symbols), CLAUDE.md §5 repo
+map, BACKLOG.md (SIM-437 row; next free ID → SIM-438).
+
 # Phase 7 — CLV measured at scale: odds backfill + CLV scoreboard + per-game perf — 2026-06-06
 **Authors: Betting/Markets Analyst (Agent 8), Performance Engineer (Agent 6), ML/Modeling Engineer (Agent 3), Data Engineer (Agent 4)**
 
