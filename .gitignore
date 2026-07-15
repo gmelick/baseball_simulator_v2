@@ -135,3 +135,10 @@ models/
 *.faiss
 *.pkl
 *.joblib
+
+# ---------------------------------------------------------------------------
+# Local Claude Code tool config — machine-local, not shared (permission
+# allowlists, scheduled-task locks). A shared project settings.json, if the
+# team ever wants one, can be re-included with a `!.claude/settings.json` line.
+# ---------------------------------------------------------------------------
+.claude/
