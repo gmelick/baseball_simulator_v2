@@ -10,7 +10,15 @@
 # ---------------------------------------------------------------------------
 # Web framework & ASGI server
 # ---------------------------------------------------------------------------
-fastapi>=0.111,<1.0
+# Pinned to the FastAPI 0.115 / Starlette 0.41 line the suite is validated on.
+# The old `fastapi>=0.111,<1.0` floor let a fresh install pull FastAPI 0.116+,
+# which relaxed its Starlette pin and silently jumped to Starlette 1.x — a major
+# release that changes `include_router` to store lazy `_IncludedRouter` wrappers
+# (route introspection + other web-surface behavior differ). A framework major
+# bump must be validated deliberately, not resolved silently. The durable fix is
+# a lock file (tracked as SIM-470 / audit I10); until then, pin explicitly.
+fastapi>=0.115,<0.116
+starlette>=0.41,<0.42
 uvicorn[standard]>=0.29,<1.0
 pydantic>=2.7,<3.0
 pydantic-settings>=2.3,<3.0
