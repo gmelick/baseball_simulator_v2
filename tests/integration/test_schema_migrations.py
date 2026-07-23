@@ -5,9 +5,19 @@ Verifies that ``alembic upgrade head`` produces the complete production schema
 in a fresh PostgreSQL 15 database.
 
 Acceptance criteria (SIM-145):
-  - All expected raw.* and sim.* tables are present after migration.
+  - The raw.* and sim.* base tables match the canonical set exactly.
   - The unique partial index required by SIM-082 exists.
   - Alembic's ``alembic_version`` table records the head revision.
+
+The table lists below are the *canonical* set produced by the migration chain
+in ``db/migrations/versions/`` and are asserted for exact equality, so the test
+guards drift in both directions: a table silently dropped by a migration fails,
+and a table added without updating this list fails too (update the list in the
+same commit as the migration that adds it).
+
+Note that ``sim.live_games`` is a VIEW, not a base table, so it is deliberately
+absent from ``_SIM_TABLES`` — the queries below filter on
+``table_type = 'BASE TABLE'``.
 
 These tests run against the session-scoped testcontainers PostgreSQL instance
 spun up in conftest.py — migrations are applied once per session before any
@@ -17,8 +27,12 @@ Run:
     pytest tests/integration/test_schema_migrations.py -v -m integration
 """
 
+from pathlib import Path
+
 import pytest
 import sqlalchemy as sa
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 
 from tests.integration.conftest import assert_table_exists
@@ -26,70 +40,104 @@ from tests.integration.conftest import assert_table_exists
 pytestmark = pytest.mark.integration
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 # ---------------------------------------------------------------------------
-# Expected tables — must exist after alembic upgrade head
+# Expected tables — the canonical set after `alembic upgrade head`
+# Each entry is annotated with the migration that creates it.
 # ---------------------------------------------------------------------------
 
-_RAW_TABLES = [
-    "venues",
-    "teams",
-    "players",
-    "games",
-    "statcast_events",
-    "sprint_speed",
-    "etl_data_freshness",
-    "game_odds",
-    "prop_odds",
-    "pipeline_run_log",
-]
+_RAW_TABLES = {
+    "venues",  # 0001
+    "teams",  # 0001
+    "players",  # 0001
+    "managers",  # 0001
+    "games",  # 0001
+    "game_lineups",  # 0001
+    "sprint_speed",  # 0001
+    "pitches",  # 0001 — the pitch-level Statcast table
+    "etl_data_freshness",  # 0003 (SIM-083)
+    "game_odds",  # 0003 (SIM-083 / SIM-133)
+    "prop_odds",  # 0003 (SIM-083), renamed column in 0004
+    "pipeline_run_log",  # 0003 (SIM-083 / SIM-138)
+    "etl_errors",  # 0011 (SIM-093)
+    "game_bullpen_availability",  # 0015 (SIM-433)
+}
 
-_SIM_TABLES = [
-    "player_similarity_profiles",
-    "batter_similarity_scores",
-    "pitcher_similarity_scores",
-    "fielder_similarity_scores",
-    "baserunner_similarity_scores",
-    "pitch_profiles",
-    "pitch_similarity_scores",
-    "batted_ball_profiles",
-    "batted_ball_similarity_scores",
-    "situation_similarity_scores",
-    "lineup_state",
-    "game_simulations",
-    "simulation_results",
-    "player_season_stats",
-    "betting_lines",
-    "line_movement",
-    "sim_run_log",
-]
+_SIM_TABLES = {
+    "lineup_state",  # 0001 (unique partial index added in 0002 / SIM-082)
+    "sim_runs",  # 0014 (SIM-356)
+}
+
+#: Views are tracked separately — information_schema.tables lists them too, so
+#: the base-table assertions must filter them out to stay meaningful.
+_SIM_VIEWS = {"live_games"}  # 0001
+
+
+def _base_tables(conn: sa.Connection, schema: str) -> set[str]:
+    rows = conn.execute(
+        text(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = :s AND table_type = 'BASE TABLE'"
+        ),
+        {"s": schema},
+    ).fetchall()
+    return {r[0] for r in rows}
 
 
 class TestSchemaMigrations:
     """All Alembic migrations apply cleanly to a fresh database."""
 
     def test_raw_schema_tables_exist(self, pg_connection: sa.Connection) -> None:
-        """Every expected raw.* table must exist after running migrations."""
-        for table in _RAW_TABLES:
+        """The raw.* base tables must match the canonical set exactly."""
+        for table in sorted(_RAW_TABLES):
             assert_table_exists(pg_connection, "raw", table)
 
+        found = _base_tables(pg_connection, "raw")
+        assert found == _RAW_TABLES, (
+            f"raw.* schema drift — missing: {sorted(_RAW_TABLES - found)}, "
+            f"unexpected: {sorted(found - _RAW_TABLES)}. "
+            "If a migration intentionally added or removed a table, update "
+            "_RAW_TABLES in this file in the same commit."
+        )
+
     def test_sim_schema_tables_exist(self, pg_connection: sa.Connection) -> None:
-        """Every expected sim.* table must exist after running migrations."""
-        for table in _SIM_TABLES:
+        """The sim.* base tables must match the canonical set exactly."""
+        for table in sorted(_SIM_TABLES):
             assert_table_exists(pg_connection, "sim", table)
 
-    def test_alembic_version_is_head(self, pg_connection: sa.Connection) -> None:
-        """alembic_version must contain exactly one row pointing to the head revision.
+        found = _base_tables(pg_connection, "sim")
+        assert found == _SIM_TABLES, (
+            f"sim.* schema drift — missing: {sorted(_SIM_TABLES - found)}, "
+            f"unexpected: {sorted(found - _SIM_TABLES)}. "
+            "If a migration intentionally added or removed a table, update "
+            "_SIM_TABLES in this file in the same commit."
+        )
 
-        The head revision is the last migration applied (0003 at time of writing).
-        This test will pass for any future head as long as the chain is unbroken.
+        # sim.live_games is a view over raw.games + sim.lineup_state; it is not a
+        # base table but the API's live-slate read path depends on it existing.
+        view_rows = pg_connection.execute(
+            text("SELECT table_name FROM information_schema.views WHERE table_schema = 'sim'")
+        ).fetchall()
+        assert {r[0] for r in view_rows} == _SIM_VIEWS
+
+    def test_alembic_version_is_head(self, pg_connection: sa.Connection) -> None:
+        """alembic_version must record the head revision of the migration chain.
+
+        The expected head is read from ``db/migrations/versions/`` via Alembic's
+        own ScriptDirectory rather than hard-coded, so this test keeps passing as
+        migrations are added — but still fails if the container was migrated to
+        something other than head (a broken or branched chain).
         """
         row = pg_connection.execute(text("SELECT version_num FROM alembic_version")).fetchone()
         assert row is not None, "alembic_version table is empty — did migrations run?"
-        # Verify the version string is non-empty and looks like a revision ID
-        version_num: str = row[0]
-        assert version_num, "version_num is blank"
-        assert len(version_num) >= 4, (
-            f"version_num '{version_num}' looks too short to be a valid Alembic revision"
+
+        expected_head = ScriptDirectory.from_config(
+            Config(str(_REPO_ROOT / "alembic.ini"))
+        ).get_current_head()
+        assert row[0] == expected_head, (
+            f"Database is at revision '{row[0]}' but the migration chain head is "
+            f"'{expected_head}' — `alembic upgrade head` did not fully apply."
         )
 
     def test_sim082_unique_partial_index_exists(self, pg_connection: sa.Connection) -> None:
