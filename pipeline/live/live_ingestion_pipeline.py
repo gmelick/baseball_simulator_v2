@@ -1726,18 +1726,38 @@ class LiveIngestionPipeline:
         }
         status = status_map.get(gd.get("status", {}).get("abstractGameState", "Preview"), "Preview")
 
+        game_date = date.fromisoformat(gd["gameDate"][:10])
+
+        # SIM-438: supply season.  raw.games.season is INTEGER NOT NULL and is
+        # half of all three composite FKs — (venue_id, season) -> raw.venues and
+        # (home/away_team_id, season) -> raw.teams — but it was never included in
+        # the INSERT, so EVERY game this pipeline had not seen before failed with
+        # NotNullViolationError.  The failure was silent because the call site is
+        # fire-and-forget (asyncio.create_task), and the ON CONFLICT DO UPDATE
+        # path kept working for games the ETL had already loaded — so status
+        # transitions looked healthy while no new game was ever created.
+        #
+        # The schedule API returns season as a STRING ("2024"), hence the int().
+        # Fall back to the game-date year when the key is absent/unparseable so a
+        # thin payload can never re-break the insert on a NOT NULL column.
+        try:
+            season = int(gd["season"])
+        except (KeyError, TypeError, ValueError):
+            season = game_date.year
+
         await self._db.execute(
             """
             INSERT INTO raw.games (
-                game_pk, game_date, game_type, status,
+                game_pk, season, game_date, game_type, status,
                 venue_id, home_team_id, away_team_id
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (game_pk) DO UPDATE SET
                 status     = EXCLUDED.status,
                 updated_at = NOW()
             """,
             gd["gamePk"],
-            date.fromisoformat(gd["gameDate"][:10]),
+            season,
+            game_date,
             gd.get("gameType", "R"),
             status,
             # SIM-086: fall back to None (not 0) when the schedule API omits the

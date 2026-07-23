@@ -1,3 +1,24 @@
+# Bug — SIM-438: live pipeline could never create a new game (missing `season`) — 2026-07-23
+**Author: Data Engineer (Agent 4)**
+
+`raw.games.season` is `INTEGER NOT NULL` (migration 0001, never relaxed) and is half of all three
+composite foreign keys — `(venue_id, season)` → `raw.venues` and `(home/away_team_id, season)` →
+`raw.teams` — but `LiveIngestionPipeline._upsert_game_record()` never included it in the INSERT. Every
+game the live pipeline had not seen before therefore raised `NotNullViolationError` and was **never
+created**. The failure was invisible because the call site is fire-and-forget
+(`asyncio.create_task(self._upsert_game_record(game))`), so the exception never propagated, and the
+`ON CONFLICT (game_pk) DO UPDATE` path kept updating games the historical ETL had already loaded — so
+status transitions (Preview → Live → Final) worked the whole time while no new game was ever inserted.
+
+Fix: supply `season` from the schedule API's `game["season"]` field. The MLB API returns it as a
+**string** ("2024") and the column is INTEGER, hence the explicit `int()`; a missing/unparseable value
+falls back to the game-date year so a thin payload can never re-break a NOT NULL column. Found during
+the 2026-07-23 weekly-integration repair and proved empirically against a migrated database rather than
+by inspection. +3 integration tests (`tests/integration/test_sim438_live_game_upsert.py`) covering the
+API-string insert, the fallback, and the ON CONFLICT status transition; mutation-checked — reverting the
+fix reproduces `NotNullViolationError`. Note the insert still requires `raw.teams`/`raw.venues` rows for
+that season to exist; this fix makes the insert possible, it does not seed FK parents.
+
 # Tech-debt — SIM-437: ETL type-coercion helpers consolidated into `pipeline/etl/coercion.py` — 2026-06-22
 **Author: Data Engineer (Agent 4)**
 

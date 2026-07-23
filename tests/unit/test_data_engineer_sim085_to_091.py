@@ -90,6 +90,23 @@ class TestSim085SituationIndex:
 # ===========================================================================
 
 
+def _games_insert_arg(call_args, column: str):
+    """Return the positional value bound to ``column`` in the raw.games INSERT.
+
+    ``_db.execute`` is called as ``(sql, *values)`` where ``values`` follow the
+    INSERT's column-list order, so adding a column shifts every later index.
+    Resolving the position from the SQL itself keeps these assertions stable —
+    SIM-438 added ``season`` and moved ``venue_id`` from index 5 to 6, which
+    silently broke the previously hard-coded lookups.
+    """
+    sql = call_args.args[0]
+    match = re.search(r"INSERT INTO raw\.games\s*\((.*?)\)\s*VALUES", sql, re.DOTALL)
+    assert match, "could not parse the raw.games INSERT column list"
+    columns = [c.strip() for c in match.group(1).replace("\n", " ").split(",") if c.strip()]
+    assert column in columns, f"{column!r} is not in the INSERT column list {columns}"
+    return call_args.args[1 + columns.index(column)]
+
+
 class TestSim086VenueIdFallback:
     """Live pipeline must not insert venue_id=0 sentinel."""
 
@@ -148,13 +165,12 @@ class TestSim086VenueIdFallback:
 
         asyncio.run(pipeline._upsert_game_record(game))
 
-        # The fifth positional argument to execute() (after the SQL string and
-        # game_pk/game_date/game_type/status) is venue_id.  Per SIM-086 it must
-        # be None, not 0.
+        # The value bound to the venue_id column must be None, not 0 (SIM-086).
+        # Resolved by column name rather than a fixed index so a future column
+        # addition can't silently point this assertion at the wrong argument.
         assert pipeline._db.execute.call_count == 1
         call_args = pipeline._db.execute.call_args
-        # call_args.args = (sql, game_pk, game_date, game_type, status, venue_id, home_id, away_id)
-        venue_id_arg = call_args.args[5]
+        venue_id_arg = _games_insert_arg(call_args, "venue_id")
         assert venue_id_arg is None, (
             f"SIM-086 regression: venue_id should be None when venue key is missing, got {venue_id_arg!r}. "
             "The previous .get('id', 0) sentinel re-introduced the FK violation."
@@ -184,8 +200,11 @@ class TestSim086VenueIdFallback:
 
         asyncio.run(pipeline._upsert_game_record(game))
 
-        venue_id_arg = pipeline._db.execute.call_args.args[5]
+        venue_id_arg = _games_insert_arg(pipeline._db.execute.call_args, "venue_id")
         assert venue_id_arg == 4169
+        # SIM-438: season is supplied from the API's string field as an int, so
+        # the row can actually be inserted (raw.games.season is NOT NULL).
+        assert _games_insert_arg(pipeline._db.execute.call_args, "season") == 2026
 
     def test_venue_backfill_job_imports(self) -> None:
         """The new backfill job must import cleanly (catches syntax/import bugs in CI)."""
