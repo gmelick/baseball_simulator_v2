@@ -32,6 +32,14 @@ target-version = "py313"
 line-length    = 100
 src            = ["api", "pipeline", "similarity", "simulation", "betting", "db", "tests"]
 
+# Markdown is prose, not source. Ruff 0.16 began formatting Python code blocks
+# INSIDE .md files, which would rewrite (a) illustrative snippets in README /
+# docs/architecture and (b) — the reason this matters — source quoted VERBATIM as
+# evidence in docs/audit/*. An audit that quotes the code it is indicting must
+# reproduce it exactly; letting a formatter respace it falsifies the evidence.
+# Ruff's contract here is the codebase, so keep .md out of its file discovery.
+extend-exclude = ["*.md"]
+
 [tool.ruff.lint]
 # PTH (flake8-use-pathlib) is intentionally NOT selected: the codebase uses os.path
 # pervasively across all phases; enforcing pathlib would mean rewriting dozens of

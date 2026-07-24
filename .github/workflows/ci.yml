@@ -64,7 +64,12 @@ jobs:
           cache: pip
 
       - name: Install ruff
-        run: pip install "ruff>=0.4,<1"
+        # Pinned to the validated line. The old `>=0.4,<1` floor let a fresh CI
+        # install pick up any future ruff, and 0.16 duly changed SCOPE (it began
+        # formatting Python inside .md), turning a green lint job red with zero
+        # code changes. Same failure class as the FastAPI/Starlette drift — a
+        # floor-only spec silently upgrades a tool across a behavior change.
+        run: pip install "ruff>=0.15,<0.17"
 
       - name: Ruff — lint check
         run: ruff check . --output-format=github
