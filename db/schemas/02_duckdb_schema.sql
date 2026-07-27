@@ -884,8 +884,13 @@ CREATE TABLE IF NOT EXISTS sim.outcome_pool (
     launch_angle                FLOAT,
     spray_angle                 FLOAT,                  -- raw spray angle (Statcast)
     -- SIM-051: handedness-corrected spray angle.  Same sign convention for
-    -- LHB pull doubles and RHB pull doubles — flips on bat_hand at ETL time.
-    -- NULL when bat_hand is 'S' (unresolved switch hitter).
+    -- LHB pull doubles and RHB pull doubles.
+    -- SIM-440: flips on `stand` (the side actually batted from this PA, never
+    -- 'S'), NOT on `bat_hand`.  It previously flipped on `bat_hand`, which is
+    -- the roster-DECLARED side and is 'S' for every switch hitter — so ~1 in 8
+    -- batted balls got NULL here and was then filtered straight out of the
+    -- production batted-ball pool.  See the canonical column note in
+    -- db/schemas/01_postgres_schema.sql.  NULL now only when spray_angle is NULL.
     pull_relative_spray_angle   FLOAT,
     bb_type                     VARCHAR(20),            -- ground_ball, fly_ball, line_drive, popup
     hit_distance                FLOAT,

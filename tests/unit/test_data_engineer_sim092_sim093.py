@@ -308,11 +308,24 @@ class TestSim093EtlErrorsTable:
 
     # ----- Loader integration -----
 
-    def test_loader_has_log_etl_errors_method(self) -> None:
+    def test_loader_has_error_ledger_writer(self) -> None:
+        """SIM-441 renamed _log_etl_errors -> _write_error_ledger.
+
+        It is now a staticmethod that runs on the CALLER's cursor, so the ledger
+        shares the pitch-insert transaction. It previously opened its own
+        connection and committed BEFORE the pitch insert ran, which made it
+        structurally blind to insert-path losses: if the pitch insert then failed
+        and rolled back, the error rows survived describing a game that had not
+        been written, and a rolled-back reload left orphan rows behind.
+        """
         from pipeline.etl.etl_historical_loader import HistoricalDataLoader
 
-        assert callable(getattr(HistoricalDataLoader, "_log_etl_errors", None)), (
-            "SIM-093: HistoricalDataLoader._log_etl_errors() missing"
+        assert callable(getattr(HistoricalDataLoader, "_write_error_ledger", None)), (
+            "SIM-093/441: HistoricalDataLoader._write_error_ledger() missing"
+        )
+        assert not hasattr(HistoricalDataLoader, "_log_etl_errors"), (
+            "SIM-441: the old self-committing _log_etl_errors must be gone, not "
+            "left alongside the transactional one"
         )
 
     def test_loader_has_reprocess_errored_games_method(self) -> None:
@@ -322,26 +335,21 @@ class TestSim093EtlErrorsTable:
             "SIM-093: HistoricalDataLoader.reprocess_errored_games() missing"
         )
 
-    def test_log_etl_errors_inserts_per_skipped_pitch(self) -> None:
-        """
-        _log_etl_errors must run psycopg2.extras.execute_batch once with one
-        row per skipped pitch, then commit exactly once.
+    def test_write_error_ledger_inserts_per_skipped_pitch(self) -> None:
+        """One raw.etl_errors row per skipped pitch, on the caller's cursor.
 
-        Uses hand-rolled stub classes (not MagicMock) for the cursor, because
-        psycopg2.extras.execute_batch does ``b";".join([cur.mogrify(...)])``
-        which fails when mogrify returns MagicMock instead of bytes.
+        SIM-441: the writer no longer opens its own connection or commits — it
+        runs inside the pitch-insert transaction, so the ledger and the pitch
+        rows commit or roll back together. It also carries ON CONFLICT DO UPDATE
+        on the natural key, because a game whose rows ALL hard-error writes no
+        pitch rows and was therefore re-processed every night, appending a full
+        duplicate error set each time.
+
+        Uses hand-rolled stubs (not MagicMock) because
+        psycopg2.extras.execute_batch does ``b";".join([cur.mogrify(...)])``,
+        which fails when mogrify returns a MagicMock instead of bytes.
         """
         from pipeline.etl.etl_historical_loader import HistoricalDataLoader
-
-        class _CtxManager:
-            def __init__(self, target):
-                self.target = target
-
-            def __enter__(self):
-                return self.target
-
-            def __exit__(self, *a):
-                return False
 
         class _StubCursor:
             def __init__(self):
@@ -350,58 +358,39 @@ class TestSim093EtlErrorsTable:
 
             def mogrify(self, sql, params=None):
                 self.mogrify_calls.append((sql, params))
-                # Real psycopg2.extras.execute_batch joins these with b";"
                 return b"INSERT INTO raw.etl_errors VALUES ()"
 
             def execute(self, sql):
                 self.execute_calls.append((sql,))
 
-        class _StubConn:
-            def __init__(self):
-                self.cur = _StubCursor()
-                self.commit_count = 0
-
-            def cursor(self):
-                return _CtxManager(self.cur)
-
-            def commit(self):
-                self.commit_count += 1
-
-        conn = _StubConn()
-        loader = HistoricalDataLoader.__new__(HistoricalDataLoader)
-        loader._get_conn = lambda: _CtxManager(conn)
-
+        cur = _StubCursor()
         errors = [
             (1, 1, ["NULL primary key column: pitch_number"]),
-            (1, 2, ["Inning out of range: 99", "balls out of range: 5"]),
-            (2, 1, ["Invalid inning_topbot: 'Middle'"]),
+            (1, 2, ["Inning out of range: 99"]),
+            (2, 1, ["Invalid inning_topbot: None"]),
         ]
-        loader._log_etl_errors(745001, errors)
+        HistoricalDataLoader._write_error_ledger(cur, 745001, errors)
 
-        # One mogrify call per skipped pitch
-        assert len(conn.cur.mogrify_calls) == 3, (
-            f"expected 3 mogrify calls; got {len(conn.cur.mogrify_calls)}"
+        assert len(cur.mogrify_calls) == 3, "one row per skipped pitch"
+        sql = cur.mogrify_calls[0][0]
+        assert "INSERT INTO raw.etl_errors" in sql
+        assert "ON CONFLICT (game_pk, at_bat_number, pitch_number, error_type)" in sql, (
+            "SIM-441: the ledger insert must be idempotent"
         )
-        # Each mogrify call's first param is our INSERT template
-        for sql_arg, params in conn.cur.mogrify_calls:
-            assert "INSERT INTO raw.etl_errors" in sql_arg
-            assert "'HARD'" in sql_arg
-            assert params[0] == 745001
-            assert isinstance(params[3], list)
-        # Exactly one commit
-        assert conn.commit_count == 1
+        params = cur.mogrify_calls[0][1]
+        assert params[0] == 745001
+        assert params[1] == 1 and params[2] == 1
+        assert params[3] == ["NULL primary key column: pitch_number"]
 
-    def test_log_etl_errors_no_op_on_empty_input(self) -> None:
+    def test_write_error_ledger_no_op_on_empty_input(self) -> None:
+        from unittest.mock import patch
+
         from pipeline.etl.etl_historical_loader import HistoricalDataLoader
 
-        loader = HistoricalDataLoader.__new__(HistoricalDataLoader)
-        loader._get_conn = MagicMock(
-            side_effect=AssertionError(
-                "SIM-093: _log_etl_errors must short-circuit on empty input — "
-                "it should never open a DB connection just to write zero rows."
-            )
-        )
-        loader._log_etl_errors(745001, [])  # no AssertionError → pass
+        cur = MagicMock()
+        with patch("pipeline.etl.etl_historical_loader.psycopg2.extras.execute_batch") as eb:
+            HistoricalDataLoader._write_error_ledger(cur, 745001, [])
+        eb.assert_not_called()
 
     def test_reprocess_errored_games_returns_distinct_game_pks(self) -> None:
         """

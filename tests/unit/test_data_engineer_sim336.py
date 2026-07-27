@@ -328,28 +328,73 @@ class TestCanonicalRefSeason(unittest.TestCase):
 
 
 class TestStandBatHandContract(unittest.TestCase):
-    def test_pool_stand_resolves_to_bat_hand(self):
-        """The pool `stand` is the RESOLVED batting side: bat_hand when L/R,
-        else the declared stand. We exercise the CASE expression directly in
-        DuckDB to lock the contract."""
+    """SIM-345 pool `stand` contract, corrected by SIM-440.
+
+    This test used to assert the CASE
+    ``WHEN bat_hand IN ('L','R') THEN bat_hand ELSE stand END`` against its own
+    copied SQL and its own fixture, on the belief that ``bat_hand`` was the
+    per-PA resolved side and ``stand`` the declared one. That is inverted:
+
+        raw.pitches.stand    = side actually batted from this PA. 'S' on 0 rows.
+        raw.pitches.bat_hand = ROSTER-DECLARED side. 'S' on 10.4-13.3% of rows.
+
+    (Measured, docs/data_quality/2026-05-20-bat-side-coverage.md; canonical note
+    in db/schemas/01_postgres_schema.sql.) Two of the six fixture rows —
+    ``["S","R"]`` and ``["S","L"]``, i.e. stand='S' with a resolved bat_hand —
+    cannot occur in the real corpus at all; they were the inverted premise
+    written down as data.
+
+    The production projection is now simply ``stand``. This asserts that against
+    the LIVE source rather than a copy.
+    """
+
+    def test_pool_stand_is_raw_pitches_stand(self):
+        """`sim.pitch_pool.stand` must be raw.pitches.stand, read directly.
+
+        `_build_pitch_pool` is where the pool's handedness key is produced;
+        `_build_outcome_pool` then carries it forward as `pp.stand`.
+        """
+        import inspect
+
+        from pipeline.batch.player_profile_computor import PlayerProfileComputor
+
+        src = inspect.getsource(PlayerProfileComputor._build_pitch_pool)
+        code = "\n".join(ln for ln in src.splitlines() if not ln.strip().startswith("--"))
+
+        self.assertNotIn(
+            "WHEN bat_hand IN ('L', 'R') THEN bat_hand",
+            code,
+            "the pool `stand` projection must read raw.pitches.stand directly; the old "
+            "CASE was only accidentally correct (a switch hitter's bat_hand is 'S', "
+            "which is not IN ('L','R'), so it fell through to `stand`)",
+        )
+        self.assertNotIn(
+            "AS stand,",
+            code,
+            "no `AS stand` alias should remain — `stand` is selected directly",
+        )
+        self.assertRegex(
+            code,
+            r"(?m)^\s+stand,\s*$",
+            "expected a bare `stand,` projection in _build_pitch_pool",
+        )
+
+    def test_pool_stand_is_never_S_in_practice(self):
+        """The pool pre-filter key has no 'S' tile, and never needs one."""
         c = duckdb.connect(":memory:")
         c.execute("CREATE TABLE t (stand VARCHAR, bat_hand VARCHAR)")
         c.executemany(
             "INSERT INTO t VALUES (?, ?)",
             [
-                ["R", "R"],  # RHB → R
-                ["L", "L"],  # LHB → L
-                ["S", "R"],  # switch hitter batting R this PA → R (not S)
-                ["S", "L"],  # switch hitter batting L this PA → L (not S)
-                ["S", "S"],  # unresolved switch → fall back to declared stand
-                ["L", None],  # bat_hand missing → fall back to declared stand
+                ["R", "R"],  # RHB
+                ["L", "L"],  # LHB
+                ["R", "S"],  # switch hitter batting righty this PA
+                ["L", "S"],  # switch hitter batting lefty this PA
             ],
         )
-        rows = c.execute(
-            "SELECT CASE WHEN bat_hand IN ('L','R') THEN bat_hand ELSE stand END "
-            "AS pool_stand FROM t"
-        ).fetchall()
-        self.assertEqual([r[0] for r in rows], ["R", "L", "R", "L", "S", "L"])
+        rows = c.execute("SELECT stand AS pool_stand FROM t").fetchall()
+        self.assertEqual([r[0] for r in rows], ["R", "L", "R", "L"])
+        self.assertNotIn("S", [r[0] for r in rows])
 
 
 # ---------------------------------------------------------------------------

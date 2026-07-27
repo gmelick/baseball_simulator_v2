@@ -26,7 +26,39 @@ log() { echo "[nightly-ingest $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
 log "start — season ${YEAR}"
 
 log "1/3 refresh_seasons(${YEAR}) — load newly-Final games"
-python -c "from pipeline.etl.etl_historical_loader import HistoricalDataLoader; l = HistoricalDataLoader('${BASEBALL_DB_DSN}'); l.refresh_seasons(${YEAR}, ${YEAR}); l.close()"
+# SIM-441: refresh_seasons now returns {attempted, loaded, failed, skipped,
+# rows_written} and contains per-game failures (a single malformed feed no longer
+# aborts the run; _CONSECUTIVE_FAILURE_LIMIT successive failures still do). Exit
+# non-zero if ANY game failed, so `set -e` stops the chain here rather than
+# rebuilding profiles and FAISS tiles on a knowingly incomplete season.
+# NOTE: the heredoc delimiter is QUOTED ('PY'), so the shell performs NO
+# parameter expansion inside it — which is what we want for Python code, but it
+# means ${YEAR} would arrive as a literal string. The year is therefore passed
+# through the ENVIRONMENT and read with os.environ, not interpolated.
+export YEAR
+python - <<'PY'
+import os
+import sys
+
+from pipeline.etl.etl_historical_loader import HistoricalDataLoader
+
+year = int(os.environ["YEAR"])
+loader = HistoricalDataLoader()
+try:
+    summary = loader.refresh_seasons(year, year)
+finally:
+    loader.close()
+
+print(f"[nightly-ingest] refresh_seasons summary: {summary}")
+if summary["failed"]:
+    print(
+        f"[nightly-ingest] {summary['failed']} game(s) failed — refusing to rebuild "
+        "profiles/tiles on an incomplete season. Re-run after investigating; "
+        "already-loaded games are skipped.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+PY
 
 log "2/3 player_profile_computor --seasons ${YEAR}"
 python -m pipeline.batch.player_profile_computor --seasons "${YEAR}"

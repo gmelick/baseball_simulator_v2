@@ -1,3 +1,285 @@
+# Bug/Data — SIM-441: ETL hardening batch (12 defects) — 2026-07-27
+**Authors: Data Engineer (Agent 4) · QA (Agent 9) [cross-validation]**
+
+Follow-on to SIM-440. Twelve defects in `pipeline/etl/etl_historical_loader.py`, plus the schema support
+they need (Alembic **0017**). None of the parser-value fixes take effect on stored rows until
+`refresh_seasons(reload=True)` runs.
+
+## Robustness — a bad feed no longer kills the run
+
+* **Per-game isolation on the INCREMENTAL path.** `_dispatch_game` caught failures only on the reload
+  sweep; the incremental path called `load_game` bare, and `__main__` uses the default. Because
+  `nightly_ingest.sh` runs under `set -eu` with this as step 1 of 3, one `KeyError` on a hard subscript
+  meant the profile rebuild and FAISS tile build never ran — and since the poison game genuinely has no
+  pitch rows, `_game_already_loaded` reported it unloaded, so the chain re-wedged on the same game every
+  night with nothing alerting. Containment is **bounded**: `_CONSECUTIVE_FAILURE_LIMIT` (default 5,
+  env-tunable) successive failures still re-raise, so an API outage or schema mismatch fails loudly
+  instead of quietly producing a run that loaded almost nothing. `nightly_ingest.sh` now exits non-zero
+  if any game failed.
+* **`_ensure_venue` retry hardening.** Both Savant scrapes looped the full `MAX_API_RETRIES` with **no
+  `break` on success** (~10 redundant requests per venue-season, ~3,000 across a backfill), and `resp`
+  was reassigned each iteration — so a fetch that succeeded on attempt 1 was **discarded** if attempt 10
+  failed transiently, and the method raised despite having held valid data. The trailing
+  `if resp is None: raise` was a bare re-raise outside any except block (`RuntimeError: No active
+  exception`) and dead code besides. Replaced by `_http_get`.
+* **HTTP hygiene.** One pooled `requests.Session` (a backfill makes ~65,000 requests, each previously
+  paying a fresh TCP+TLS handshake); permanent 4xx no longer retried (a 404 was a ~90-second stall);
+  429/5xx retried honouring `Retry-After`, capped at 60 s. `_ensure_pool`'s lazy `if self._pool is None`
+  was a check-then-set race — two threads could each build a pool and the loser's connections would leak
+  — now double-checked under a lock.
+* **Savant scraping fails loudly.** `_parse_savant_embedded_json` + `SavantScrapeError` replace unguarded
+  `.find()` slicing that would mis-slice silently on a page-shape change and write plausible-but-wrong
+  stadium dimensions.
+
+## Correctness — data that was silently wrong
+
+* **`load_date_range`**: MLB's schedule endpoint clamps >365-day windows to `startDate + 365` and still
+  returns HTTP 200, so a multi-season call loaded ~one season and exited 0 — the module's own header
+  recipe was broken by this. Now chunked into <=364-day slices with a coverage check. Also gained the
+  **Final gate** `refresh_seasons` always had; without it an in-progress game was ingested half-played
+  and then skipped forever.
+* **`_ensure_players` no longer fabricates handedness.** It wrote `bats/throws='R'` and the full name
+  into BOTH `first_name` and `last_name` on any lookup failure (realistically: a 200 with an empty
+  `people[]`, which raises `IndexError` with no retry — and a *successful* response merely missing
+  `batSide` defaulted to `'R'` with no warning at all). It was write-once, and its `ON CONFLICT DO
+  UPDATE` was unreachable because every id inserted had been proven absent moments earlier. A wrong hand
+  was silent, permanent and unrepairable — repo-wide grep finds no `UPDATE raw.players` — while
+  `lineup_resolver` reads that column straight into the full-pool sampler's only hard pre-filter. Now:
+  prefer the full person record the feed already carries at `gameData.players.ID<pid>` (no extra HTTP
+  call), **skip** a player whose handedness cannot be established, and upsert every boxscore player so a
+  wrong row is corrected on the next reload. `primary_position` defaults to `'UT'`, not `'P'` — the
+  boxscore position IS the primary position, and defaulting to pitcher asserted a fact.
+* **Manager fallback stopped guessing.** With no NTRM/MNGR/COAB match the loader installed
+  `coaches[0]` — typically a pitching coach — with no log line, and the closeout branch then set the
+  REAL manager's `season_end`, marking him departed. Now left unset with a warning. The closeout probe
+  gained `season_end IS NULL` + `ORDER BY season_start DESC LIMIT 1` (a bare `fetchone()` over an
+  unordered set closed an arbitrary manager). `season_end = NULL` on conflict is now deliberate and
+  documented: seeing a manager in the dugout again is the evidence he is active, which is how a return
+  from suspension is recorded. The old clause assigned `season_end = EXCLUDED.season_end` where
+  `season_end` was not in the INSERT list — writing NULL by accident while silently failing to record
+  `season_start`.
+* **Wind is parsed.** The feed exposes ONE string (`weather.wind` = `"8 mph, L To R"`); the loader read
+  `weather["speed"]`/`["direction"]`, keys that have never existed — both variables were even bound to
+  the same dict. Both columns were NULL on every game ever loaded. `_parse_wind` handles the standard
+  shape, `"Calm"` (a real observation -> `(0, "Calm")`, not missing data), and unknown shapes.
+* **Spray angle skipped behind home plate.** `coord_y > 198.27` is behind the plate (a foul pop into the
+  backstop); `arctan` of a negative denominator mirrored those into the fair-field quadrant, reporting a
+  plausible pull or oppo angle. `arctan2` is not the fix — the true angle is outside +/-90 deg and the
+  pull/oppo thresholds cannot represent it — so the value is left NULL.
+* **Comma stripping removed.** `.replace(",", "")` on both description fields was a CSV-lineage leftover;
+  both destinations are bound psycopg2 parameters, so it was pure lossy mutation, storing
+  `"In play out(s)"` for `"In play, out(s)"` on ~6.55M rows.
+* **`GAME_TYPES` no longer contains `'C'`** — an obsolete "Championship" code predating our window that
+  the `raw.games` CHECK rejects, so one such game would raise a CheckViolation.
+
+## Audit trail — the ledger can no longer lie
+
+* **The error ledger rides the pitch transaction.** `_log_etl_errors` -> `_write_error_ledger`, a
+  staticmethod on the CALLER's cursor. It used to open its own connection and commit BEFORE the pitch
+  insert, so it was structurally blind to insert-path losses: a failed insert rolled back and left error
+  rows describing a game that was never written, and a rolled-back reload left orphans.
+* **Idempotent ledger** (`ON CONFLICT` on a new natural-key unique index). A game whose rows ALL
+  hard-error writes no pitch rows, so it was re-processed every night, appending a full duplicate set —
+  ~54,000 identical rows per season for one broken game.
+* **`raw.etl_game_ingest`** records the terminal per-game outcome. `_game_already_loaded` keyed only on
+  pitch rows existing, which cannot distinguish "never loaded" from "loaded and legitimately produced
+  zero pitches". `reload=True` ignores it by design — the escape hatch after a parser fix.
+* **`_validate_row` mirrors the remaining `raw.pitches` CHECKs** (`p_throws`, `stand`, `bat_hand`,
+  `launch_speed`, `launch_angle`, `spin_axis`, `zone`). It was a strict subset, so a violating row raised
+  inside `_batch_insert` — rolling back the ENTIRE game, reaching no ledger row, and aborting the run.
+  Now it is one skipped pitch with an audit trail.
+
+## Schema (Alembic 0017)
+
+`raw.pitches.field_assist_6_plus` (new BOOLEAN — credits past `field_assist_1..5` /
+`field_putout_1..3` / `throwing_error_1..2` were silently dropped; the 6th+ assist is not worth its own
+column, but the overflow must be visible so a consumer can exclude or measure those plays);
+`raw.players.active` **dropped** (NOT NULL DEFAULT TRUE with a partial index, never written, never
+updated — it read TRUE for every player ever ingested, the "partial" index covered 100% of rows, and a
+SQL-console user filtering `WHERE active = TRUE` silently got retired players);
+`uq_etl_errors_natural_key`; `raw.etl_game_ingest`.
+
+## Tests
+
+`tests/unit/test_sim441_etl_hardening.py` (new, 45). **17 mutations run; all 17 caught.** Two of the
+tests were themselves found hollow during that check and rewritten: the manager-probe test sliced from
+the wrong `SELECT` and was satisfied by the explanatory COMMENT (it passed with the predicate deleted),
+and the assist-overflow test was a source grep rather than a behavioural assertion.
+`test_etl_historical_loader.py` and `test_data_engineer_sim092_sim093.py` updated for the new contracts.
+
+**Gates:** unit **2,479** pass (20 slow deselected), regression **53**, ruff + format + mypy clean.
+
+---
+
+# Bug/Data — SIM-440: ETL corrective-reingest path + the bat_hand/stand semantics correction — 2026-07-27
+**Authors: Data Engineer (Agent 4) [ETL + schema] · Baseball Analyst (Agent 2) [handedness semantics] · QA (Agent 9) [cross-validation]**
+
+Two linked pieces of work: a way to actually REPAIR already-ingested pitch data, and the correction of a
+column-semantics error that had been documented backwards in 13+ places for over a year.
+
+## 1. `reload_game` — corrective re-ingest
+
+`raw.pitches` is append-only: the INSERT carries `ON CONFLICT (game_pk, at_bat_number, pitch_number)
+DO NOTHING`, and `_batch_insert` used to return `len(rows)` — the number of rows *attempted*. So re-running
+`load_game` after a parser fix discarded every row and logged a full success. There was no delete-or-update
+path anywhere in the repo (`grep "DELETE FROM raw.pitches"` hit only negative test fixtures). Every parser
+fix in the backlog was un-deployable.
+
+* **`HistoricalDataLoader.reload_game(game_pk, season, *, allow_shrink=False)`** — DELETEs the game's pitch
+  rows and re-inserts the freshly-parsed ones inside ONE transaction. Also re-runs `_ensure_prerequisites`.
+* **`_batch_insert(rows, *, replace_game_pk=None, allow_shrink=False)`** — issues the DELETE and returns the
+  **measured** row count, bracketing the insert with an exact `COUNT(*)` on the affected game. A discarded
+  re-ingest now reports 0.
+* **Shrink guard (`ReloadShrinkError`)** — a reload that would write back fewer rows than it deleted raises
+  BEFORE the commit, so the rollback restores the rows. Reachable with no exception at all:
+  `_fetch_game_pitches` returns `([], game_dict)` for an HTTP-200 feed with an empty/pitch-less `allPlays`
+  (postponed game, feed blip, or an unplayed game reached via `load_date_range`, which has no Final gate).
+* **`refresh_seasons(..., reload=True)` / `load_date_range(..., reload=True)`** — bypass the
+  `_game_already_loaded` skip via a shared `_dispatch_game`, and return
+  `{attempted, loaded, failed, skipped, rows_written}`. `rows_written` exists so a sweep cannot report
+  "21,600 loaded" while writing nothing. On a reload sweep per-game failures are contained and counted; the
+  incremental path deliberately still fails fast so a systemic outage surfaces during the nightly chain.
+* **`backfill_lineups_and_scores` REMOVED** — `reload_game` re-runs the same `_ensure_prerequisites` and
+  additionally rewrites the pitch rows the old helper could not touch. It had no callers.
+
+## 2. Parser + validator fixes (all require a reload sweep to take effect on stored rows)
+
+* **`isOut` read from the wrong object.** `runner["details"].get("isOut")` -> `runner["movement"]`, matching
+  the four sibling reads directly above it. All three `runner_*_out_advancing` columns had been FALSE on every
+  one of ~6.55M rows, which makes baserunner "attempts" identical to "successes" and collapses five
+  success-rate features to exactly 1.0 for every player-season — including `extra_base_success_rate`, weighted
+  **0.500** in the baserunner engine. Had **zero** test coverage; now covered.
+* **`rbi` read from the wrong object** (D-5) — `runner.get("rbi")` -> `runner["details"]`, the sibling of the
+  `details.earned` read three lines above. `rbis_on_pitch` was 0 on all 6.55M rows.
+* **Substitution scan.** Was re-scanning from index 0 on every pitch, so a substitution broadcast to every
+  pitch of the plate appearance (~4x inflation of `defensive_sub_rate_late_innings`, the manager engine's
+  heaviest feature at weight 0.550) and the reset was dead code. Now latches on the event where the
+  substitution occurs and is consumed by the next pitch row.
+* **In-play completeness gate** widened `type == 'X'` -> `type IN ('D','E','X')`. Gating on 'X' alone made the
+  quality flag asymmetric: an untracked ball that was an OUT got flagged and excluded from every downstream
+  query, while an identical untracked HIT was retained.
+* **Velocity band** `release_speed` 60-102 -> **50-110**, in BOTH layers (validator + `raw.flag_pitch_quality`
+  trigger, Alembic **0016**). 102 was never a physical ceiling — Statcast logs 102-105 mph every season — and
+  flagging them stripped the whole high-velocity tail out of `sim.pitch_pool` and the arsenal GMMs. This also
+  finally delivers SIM-087: migration 0007 widened the trigger floor to 50 mph, but the Python validator still
+  warned below 60, and a validator warning force-sets `data_quality_flag` before the row reaches the database
+  — so the stricter Python bound silently won and no pitch in [50, 60) was ever rescued. `launch_speed` stays
+  at **125**: the column CHECK is `BETWEEN 0 AND 130`, so a `> 130` warning is unreachable dead code.
+
+## 3. The `bat_hand` / `stand` semantics correction
+
+Measured over 2017-2025 (`docs/data_quality/2026-05-20-bat-side-coverage.md`, live DB):
+
+| Column | What it actually is | `'S'` share |
+|---|---|---|
+| `raw.pitches.stand` | the side ACTUALLY BATTED FROM this PA (feed/live in-game context; MLB resolves switch hitters against the pitcher) | **0 rows, every season** |
+| `raw.pitches.bat_hand` | the ROSTER-DECLARED side (`/api/v1/people/{id}`), constant per player | **10.4-13.3% of rows, every season** |
+
+The repo documented these **exactly backwards** — "`bat_hand` is the per-PA resolved batter handedness (NOT
+the roster `bats` value)" — in DuckDB migration 0003's persisted `COMMENT ON COLUMN`, the DuckDB schema, three
+architecture docs, the park-factor docstring, the AI assistant's schema prompt, and two test files. Each new
+consumer copied it forward.
+
+**Concrete cost:** `_build_outcome_pool` keyed `pull_relative_spray_angle`'s sign flip on `bat_hand`, so every
+switch-hitter batted ball got NULL — and `engine_artifacts.build_battedball_pool_artifact` filters on
+`pull_relative_spray_angle IS NOT NULL`. Roughly **1 batted ball in 8** was silently excluded from the
+production batted-ball draw.
+
+Corrected everywhere it is stated: a **canonical definition** on the `raw.pitches` columns in
+`db/schemas/01_postgres_schema.sql` (the single authority), the spray flip re-keyed to `stand`, DuckDB
+migration **0014** rewriting the persisted column comments (schema version **13 -> 14**), SUPERSEDED headers on
+DuckDB 0003/0006/0007 (applied SQL left byte-for-byte as a historical record), `02_duckdb_schema.sql`, the AI
+assistant's `_SCHEMA_CATALOG`, three architecture docs, and `_build_pitch_pool`'s pool-`stand` projection —
+which was a `CASE WHEN bat_hand IN ('L','R') THEN bat_hand ELSE stand END` that produced the right answer only
+by accident (a switch hitter's `bat_hand` is `'S'`, not in `('L','R')`, so it fell through to `stand`). It now
+reads `stand` directly.
+
+## 4. Tests
+
+* **`tests/unit/test_sim440_reload_game.py`** (new, 44): reload/DELETE atomicity + rollback, the shrink guard,
+  measured-vs-attempted counts, sweep wiring and failure containment, the substitution state machine, `isOut`
+  at all three bases, D/E/X validation, the spray key, **validator<->trigger lock-step**, and a
+  single-Alembic-head assertion.
+* **`tests/unit/test_data_engineer_sim051.py`** rewritten. It was **structurally incapable of failing**: own
+  copied `_FLIP_SQL`, own Python reference, own in-memory table — reverting production left it green — and it
+  enshrined the inverted premise in a test literally named
+  `test_switch_hitter_uses_per_pa_bat_hand_not_roster_bats`. It now extracts the CASE from the LIVE production
+  source via `inspect.getsource` and runs THAT against DuckDB.
+* **`tests/unit/test_data_engineer_sim336.py`** `TestStandBatHandContract` likewise re-pointed at the live
+  source; two of its six fixture rows (`stand='S'` with a resolved `bat_hand`) cannot occur in the real corpus
+  at all — they were the inverted premise written down as data.
+* **`test_sim_store.py`**: version assertion 13 -> 14, plus a new guard deriving the expected version from the
+  highest-numbered migration (CLAUDE.md §7 records this exact drift as a past incident).
+* Every fix above was **mutation-checked** — reverting it turns the named test red.
+
+**Gates:** unit **2,418** pass (20 slow deselected), regression **53**, ruff + ruff format + mypy clean.
+
+**NOT YET LIVE.** Every parser fix changes values that are only written on re-ingest. Nothing in `raw.pitches`,
+`derived.*` or `sim.*` changes until `refresh_seasons(reload=True)` runs, and a **partial** reload is worse than
+none — it leaves two incompatible substitution-flag semantics in one column. Sequencing: full sweep -> drive
+`failed` to zero -> `make profile-computor` -> `make calibrate` + `make validate-props --write-calibration`
+(the baserunner SUCCESS sub-score stops being degenerate, and the manager platoon feature rescales) -> rebuild
+engine artifacts -> regenerate the baserunner/manager goldens deliberately.
+
+---
+
+# Feature — SIM-439: Data Lab (raw.pitches explorer) + generalized Similarity Explorer — 2026-07-24
+**Authors: Baseball Analyst (Agent 2) + UX Designer (Agent 7) [requirements] · Backend Developer (Agent 5) + ML Engineer (Agent 3) [backend] · UX Designer (Agent 7) [frontend] · QA (Agent 9) [cross-validation]**
+
+A new internal front-end for exploring the backend data the platform is built on, requested by the owner. Two
+expert agents drove the design — a top baseball analyst decided *what* is worth surfacing (grounded in the real
+`raw.pitches` columns + each engine's real component scores), and a top UI/UX designer decided the *look & feel*
+(matching the existing `--sim-*` design system, hand-rolled-SVG chart house style, and app-shell). Their specs were
+synthesized into a file-by-file build plan, then implemented.
+
+**Two areas.** (1) **Data Lab** over `raw.pitches` (Postgres, ~10⁷ rows): a *Summary* dashboard (KPI strip +
+season/handedness/pitcher filter → independently-loaded cards: pitch-type mix, PA-outcomes, whiff-by-count heatmap,
+release-velo histogram, whiff-by-zone grid, coverage), a *SQL Console* (write + run read-only SQL, sortable grid,
+CSV export, schema browser, localStorage history, starter-query library), and an *AI Assistant* (ask in natural
+language → it writes read-only SQL, runs it through the SAME safe path, and explains the result — every query shown
+verbatim). (2) **Similarity Explorer**: an engine index, a per-engine explorer (search a subject → ranked comps →
+per-comp component sub-score bars → pair-drill radar), a Situation Finder for the KDTree distance engine, and a
+cross-engine Player Detail hub. Every id renders as a name that deep-links.
+
+**Safety is the spine.** `api/routes/sql_safety.py` is the single read-only path shared by the console AND the
+assistant: `validate_read_only_sql` rejects anything but one `SELECT`/`WITH…SELECT` (no `;`, no write/DDL keyword
+even inside a CTE, no `pg_read_file`/`dblink`/`pg_sleep`/…, length cap) BEFORE the DB is touched; `run_read_only_sql`
+then executes inside a `transaction(readonly=True)` with a `SET LOCAL statement_timeout` and an in-SQL row cap
+(the user query is wrapped in a bounded subquery). The assistant's `run_sql` tool calls the exact same functions, so
+it is physically incapable of exceeding the console's powers. Optional `BASEBALL_DB_RO_DSN` runs it on a
+`GRANT SELECT`-only role.
+
+**Honesty, per the analyst.** The generalized similarity route (`similarity_explorer.py`) adapts all 8 RBF/GMM score
+engines via `SCORE_ADAPTERS` (each engine's REAL sub-score fields + weights, verified against the dataclasses) and
+**404s the 3 distance engines** on the score path (they aren't player-keyed — routed to the Situation Finder / Data
+Lab instead). The composite is **never** presented as the weighted sum of the sub-scores: the √(min Empirical-Bayes)
+confidence discount + the sample size are always surfaced, and the pair-drill spells out the discount + the batter
+bats penalty.
+
+**Backend:** new `api/routes/{sql_safety,sql_runner,analytics,players,schema_introspect,similarity_explorer,ai_assistant}.py`;
+`api/main.py` registers them + attaches an optional `AsyncAnthropic` client (gated on `ANTHROPIC_API_KEY`, best-effort,
+never a boot failure) + an optional read-only pool. `anthropic>=0.40,<1.0` added to `requirements.txt` (import-gated).
+`.env.example` documents the new optional vars. `pyproject.toml` adds the live-DB/engine routes to the coverage-omit
+list (consistent with `games.py`); the pure `sql_safety.py` stays in coverage and is unit-tested.
+
+**Frontend (React 18 / Vite / TS):** zero new npm deps — hand-rolled SVG charts (`ScoreBar`/`BarList`/`ColumnChart`/
+`HeatGrid`/`RadarChart`), a styled `<textarea>` SQL editor (no Monaco), a hand-rolled MarkdownLite (no markdown lib),
+and SSE via `fetch` ReadableStream. New pages (`DataLabLayout`/`SummaryPage`/`ConsolePage`/`AssistantPage`/
+`EngineIndexPage`/`EngineExplorerPage`/`SituationFinderPage`/`PlayerDetailPage`), components, api clients, a `Drawer`
+ui primitive, and a `useAsync` hook. `App.tsx` gains the routes + a primary nav (Games / Data Lab / Similarity);
+`global.css` gains the nav rule. Everything uses the `--sim-*` tokens and is dark-mode-safe.
+
+**Verification:** ruff + mypy clean; `tests/unit/test_sql_safety.py` (41 — accepts SELECT/WITH, rejects every write/
+DDL/multi-statement/CTE-write/dangerous-fn, and the executor wraps+caps+read-only) + `test_similarity_explorer_adapters.py`
+(11 — every adapter's fields pinned to the real `SimilarityResult` dataclasses, fielder IF/OF relabeling, batter
+vs-hand reweight); frontend `tsc` + `eslint --max-warnings 0` + `vite build` (110 modules) all green; `api.main`
+imports with 54 routes. Live data requires the running Docker stack (Postgres + built DuckDB engines); the AI
+assistant additionally requires `ANTHROPIC_API_KEY`. **Not yet run:** the live end-to-end smoke against a populated
+DB, and CI (unit lane / e2e). Ticket ID note: filed as **SIM-439** (SIM-438 was already taken by the live-pipeline
+`season` bug closed 2026-07-23); next free ID → **SIM-440**.
+
+---
+
 # Bug — SIM-438: live pipeline could never create a new game (missing `season`) — 2026-07-23
 **Author: Data Engineer (Agent 4)**
 

@@ -25,6 +25,7 @@ from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from pipeline.etl.coercion import to_bool, to_float, to_int, to_str
 from pipeline.etl.etl_historical_loader import (
@@ -481,29 +482,67 @@ class TestValidateRowWarnings:
         assert not any("launch_speed" in w for w in vr.warnings)
 
     def test_release_speed_too_low_warns(self):
-        """SIM-087: floor lowered to 60 mph; 59 should warn."""
-        row = _valid_row(release_speed=59.0)
+        """SIM-440: floor is 50 mph; 49 should warn."""
+        row = _valid_row(release_speed=49.0)
         vr = _validate_row(row)
         assert vr.is_valid
         assert any("release_speed" in w for w in vr.warnings)
 
     def test_release_speed_at_boundary_passes(self):
-        row = _valid_row(release_speed=60.0)
-        vr = _validate_row(row)
-        assert vr.is_valid
-        assert not any("release_speed" in w for w in vr.warnings)
+        """SIM-440: both ends of the [50, 110] band are inclusive and clean."""
+        for velo in (50.0, 110.0):
+            row = _valid_row(release_speed=velo)
+            vr = _validate_row(row)
+            assert vr.is_valid
+            assert not any("release_speed" in w for w in vr.warnings), (
+                f"{velo} mph is inside the band and must not warn"
+            )
 
     def test_release_speed_too_high_warns(self):
-        row = _valid_row(release_speed=110.0)
+        """SIM-440: ceiling raised 102 -> 110, so 112 is the implausible case."""
+        row = _valid_row(release_speed=112.0)
         vr = _validate_row(row)
         assert vr.is_valid
         assert any("release_speed" in w for w in vr.warnings)
 
     def test_launch_speed_too_high_warns(self):
-        row = _valid_row(launch_speed=140.0)
+        """128 mph is implausible but insertable -> warn."""
+        row = _valid_row(launch_speed=128.0)
         vr = _validate_row(row)
         assert vr.is_valid
         assert any("launch_speed" in w for w in vr.warnings)
+
+    def test_launch_speed_above_the_db_check_is_a_hard_error(self):
+        """SIM-441: >130 violates the raw.pitches CHECK.
+
+        Letting it through meant the row raised inside _batch_insert, which rolls
+        back the ENTIRE game and reaches no etl_errors row. Skipping the single
+        pitch here keeps the rest of the game.
+        """
+        vr = _validate_row(_valid_row(launch_speed=140.0))
+        assert not vr.is_valid
+        assert any("launch_speed" in e for e in vr.hard_errors)
+
+    @pytest.mark.parametrize(
+        ("col", "bad"),
+        [
+            ("p_throws", "X"),
+            ("stand", "Q"),
+            ("bat_hand", "Z"),
+            ("launch_angle", 120.0),
+            ("spin_axis", 400),
+            ("zone", 99),
+        ],
+    )
+    def test_db_check_violations_are_hard_errors(self, col, bad):
+        """SIM-441: the validator must mirror every raw.pitches CHECK.
+
+        It was a strict subset, so a violating row aborted the whole game inside
+        _batch_insert instead of being skipped with an audit trail.
+        """
+        vr = _validate_row(_valid_row(**{col: bad}))
+        assert not vr.is_valid
+        assert any(col in e for e in vr.hard_errors)
 
     def test_ivb_out_of_range_warns(self):
         row = _valid_row(break_vertical_induced=30.0)
@@ -513,7 +552,7 @@ class TestValidateRowWarnings:
 
     def test_warning_forces_data_quality_flag(self):
         """If any warning fires, the row is mutated: data_quality_flag → True."""
-        row = _valid_row(release_speed=59.0, data_quality_flag=False)
+        row = _valid_row(release_speed=49.0, data_quality_flag=False)
         _validate_row(row)
         assert row["data_quality_flag"] is True
 
@@ -530,24 +569,34 @@ class TestValidateRowWarnings:
 # ===========================================================================
 
 
+def _resp(status=200, payload=None, headers=None):
+    """A stand-in requests.Response with the attributes _http_get inspects."""
+    r = MagicMock()
+    r.status_code = status
+    r.headers = headers or {}
+    r.json.return_value = payload if payload is not None else {}
+    if status >= 400:
+        r.raise_for_status.side_effect = requests.HTTPError(f"{status}")
+    else:
+        r.raise_for_status.return_value = None
+    return r
+
+
 class TestConnect:
+    """SIM-441: transport moved to a pooled ``requests.Session``."""
+
     def test_success_first_try(self):
-        with patch("pipeline.etl.etl_historical_loader.requests.get") as mock_get:
-            mock_get.return_value.json.return_value = {"hello": "world"}
-            mock_get.return_value.raise_for_status.return_value = None
-            out = _connect("http://example.com")
-        assert out == {"hello": "world"}
+        with patch(
+            "pipeline.etl.etl_historical_loader._SESSION.get",
+            return_value=_resp(200, {"hello": "world"}),
+        ):
+            assert _connect("http://example.com") == {"hello": "world"}
 
     def test_retries_then_succeeds(self):
-        """First call raises; second succeeds."""
-        good_resp = MagicMock()
-        good_resp.json.return_value = {"ok": True}
-        good_resp.raise_for_status.return_value = None
-
         with (
             patch(
-                "pipeline.etl.etl_historical_loader.requests.get",
-                side_effect=[Exception("transient"), good_resp],
+                "pipeline.etl.etl_historical_loader._SESSION.get",
+                side_effect=[requests.ConnectionError("transient"), _resp(200, {"ok": True})],
             ),
             patch("pipeline.etl.etl_historical_loader.time.sleep") as mock_sleep,
         ):
@@ -558,13 +607,59 @@ class TestConnect:
     def test_raises_after_max_retries(self):
         with (
             patch(
-                "pipeline.etl.etl_historical_loader.requests.get",
-                side_effect=Exception("permanent"),
+                "pipeline.etl.etl_historical_loader._SESSION.get",
+                side_effect=requests.ConnectionError("permanent"),
             ),
             patch("pipeline.etl.etl_historical_loader.time.sleep"),
-            pytest.raises(Exception, match="permanent"),
+            pytest.raises(requests.ConnectionError, match="permanent"),
         ):
             _connect("http://example.com")
+
+    def test_permanent_4xx_is_not_retried(self):
+        """SIM-441: a 404 is a final answer.
+
+        The old loop retried it MAX_API_RETRIES times with backoff, turning one
+        missing resource into a ~90-second stall.
+        """
+        with (
+            patch(
+                "pipeline.etl.etl_historical_loader._SESSION.get", return_value=_resp(404)
+            ) as get,
+            patch("pipeline.etl.etl_historical_loader.time.sleep") as sleep,
+            pytest.raises(requests.HTTPError),
+        ):
+            _connect("http://example.com/missing")
+        assert get.call_count == 1, "a 404 must not be retried"
+        assert not sleep.called
+
+    def test_429_is_retried_and_honours_retry_after(self):
+        with (
+            patch(
+                "pipeline.etl.etl_historical_loader._SESSION.get",
+                side_effect=[
+                    _resp(429, headers={"Retry-After": "7"}),
+                    _resp(200, {"ok": True}),
+                ],
+            ),
+            patch("pipeline.etl.etl_historical_loader.time.sleep") as sleep,
+        ):
+            assert _connect("http://example.com") == {"ok": True}
+        sleep.assert_called_once_with(7.0)
+
+    def test_retry_after_is_capped(self):
+        """A server asking for an hour must not stall the whole backfill."""
+        with (
+            patch(
+                "pipeline.etl.etl_historical_loader._SESSION.get",
+                side_effect=[
+                    _resp(503, headers={"Retry-After": "3600"}),
+                    _resp(200, {"ok": True}),
+                ],
+            ),
+            patch("pipeline.etl.etl_historical_loader.time.sleep") as sleep,
+        ):
+            _connect("http://example.com")
+        assert sleep.call_args.args[0] <= 60.0
 
 
 # ===========================================================================
@@ -635,27 +730,32 @@ class TestLoaderDBMethods:
         loader, _, cur = _make_loader_with_mock_conn(fetchone_returned=None)
         assert loader._game_already_loaded(745001) is False
 
-    def test_log_etl_errors_noop_on_empty(self):
-        loader, conn, _ = _make_loader_with_mock_conn()
-        loader._log_etl_errors(745001, [])
-        # No DB call should happen for empty errors
-        assert not loader._get_conn.called
+    def test_write_error_ledger_noop_on_empty(self):
+        cur = MagicMock()
+        with patch("pipeline.etl.etl_historical_loader.psycopg2.extras.execute_batch") as eb:
+            HistoricalDataLoader._write_error_ledger(cur, 745001, [])
+        eb.assert_not_called()
 
-    def test_log_etl_errors_inserts_per_error(self):
-        loader, conn, cur = _make_loader_with_mock_conn()
+    def test_write_error_ledger_inserts_per_error(self):
+        cur = MagicMock()
         errors = [
             (1, 1, ["NULL primary key column: pitch_number"]),
             (1, 2, ["Inning out of range: 99"]),
         ]
         with patch("pipeline.etl.etl_historical_loader.psycopg2.extras.execute_batch") as eb:
-            loader._log_etl_errors(745001, errors)
+            HistoricalDataLoader._write_error_ledger(cur, 745001, errors)
         eb.assert_called_once()
-        args = eb.call_args.args
-        passed_rows = args[2]
+        passed_rows = eb.call_args.args[2]
         assert len(passed_rows) == 2
-        # row[0] = (game_pk, ab, pitch_number, list_of_messages)
         assert passed_rows[0][0] == 745001
-        conn.commit.assert_called_once()
+
+    def test_write_error_ledger_is_idempotent(self):
+        """SIM-441: a totally-failing game re-runs nightly; the ledger must not grow."""
+        cur = MagicMock()
+        with patch("pipeline.etl.etl_historical_loader.psycopg2.extras.execute_batch") as eb:
+            HistoricalDataLoader._write_error_ledger(cur, 745001, [(1, 1, ["boom"])])
+        sql = eb.call_args.args[1]
+        assert "ON CONFLICT (game_pk, at_bat_number, pitch_number, error_type)" in sql
 
     def test_reprocess_errored_games(self):
         loader, _, cur = _make_loader_with_mock_conn(rows_returned=[(745001,), (745002,)])
@@ -773,7 +873,6 @@ class TestProcessAndInsert:
         loader = HistoricalDataLoader(dsn="postgresql://test/db")
         loader._batch_insert = MagicMock(return_value=0)
         loader._log_freshness = MagicMock()
-        loader._log_etl_errors = MagicMock()
 
         # Missing pitch_number (hard error)
         bad = {
@@ -799,7 +898,11 @@ class TestProcessAndInsert:
         result = loader._process_and_insert(745001, 2024, [bad])
         assert result["inserted"] == 0
         assert result["skipped"] == 1
-        loader._log_etl_errors.assert_called_once()
+        # SIM-441: the ledger is written INSIDE the pitch transaction, so the
+        # error rows are handed to _batch_insert rather than committed separately
+        # on their own connection (which was blind to insert-path losses).
+        assert len(loader._batch_insert.call_args.kwargs["error_rows"]) == 1
+        assert loader._batch_insert.call_args.kwargs["season"] == 2024
 
     def test_warning_row_inserted_and_flagged(self):
         loader = HistoricalDataLoader(dsn="postgresql://test/db")
@@ -825,7 +928,7 @@ class TestProcessAndInsert:
             "away_score": 2,
             "game_date": "2024-08-15",
             "pitch_code": "B",
-            "start_speed": 110.0,  # release_speed too high → warning
+            "start_speed": 112.0,  # release_speed above the SIM-440 ceiling → warning
         }
         result = loader._process_and_insert(745001, 2024, [warn_row])
         assert result["inserted"] == 1
@@ -893,7 +996,12 @@ class TestLoaderOrchestration:
             "dates": [
                 {
                     "date": "2024-08-15",
-                    "games": [{"gamePk": 745001}, {"gamePk": 745002}],
+                    "games": [
+                        # SIM-441: load_date_range now applies the same Final
+                        # gate refresh_seasons has.
+                        {"gamePk": 745001, "status": {"abstractGameState": "Final"}},
+                        {"gamePk": 745002, "status": {"abstractGameState": "Final"}},
+                    ],
                 }
             ]
         }
@@ -913,7 +1021,13 @@ class TestLoaderOrchestration:
             "dates": [
                 {
                     "date": "2024-08-15",
-                    "games": [{"gamePk": 745001}, {"gamePk": 745002}],
+                    # SIM-441: load_date_range now applies the same Final gate
+                    # refresh_seasons has — an in-progress game ingested here was
+                    # then skipped forever by _game_already_loaded.
+                    "games": [
+                        {"gamePk": 745001, "status": {"abstractGameState": "Final"}},
+                        {"gamePk": 745002, "status": {"abstractGameState": "Final"}},
+                    ],
                 }
             ]
         }
@@ -935,7 +1049,7 @@ class TestLoaderOrchestration:
                     "games": [
                         {"gamePk": 745001, "rescheduleGameDate": "2024-08-16"},
                         {"gamePk": 745002, "resumeGameDate": "2024-08-16"},
-                        {"gamePk": 745003},
+                        {"gamePk": 745003, "status": {"abstractGameState": "Final"}},
                     ],
                 }
             ]
@@ -1215,157 +1329,168 @@ class TestEnsureTeams:
 
 
 class TestEnsurePlayers:
+    """SIM-441 rewrote _ensure_players.
+
+    It used to (a) fabricate ``bats/throws='R'`` on any lookup failure, (b) return
+    early when the player_id already existed — and ``raw.players`` has no season
+    column, so a 2017 value applied to all ten seasons — and (c) carry an
+    ``ON CONFLICT DO UPDATE`` that was unreachable, because every id it inserted
+    had been proven absent moments earlier. A wrong hand was therefore silent,
+    permanent, and unrepairable by any code path in the repo, while
+    ``simulation/lineup_resolver`` reads that column straight into the full-pool
+    sampler's only hard pre-filter.
+    """
+
+    @staticmethod
+    def _boxscore(players: dict) -> dict:
+        return {
+            "liveData": {
+                "boxscore": {"teams": {"home": {"players": players}, "away": {"players": {}}}}
+            }
+        }
+
+    @staticmethod
+    def _person(pid: int, **over) -> dict:
+        person = {
+            "id": pid,
+            "fullName": "John Doe",
+            "firstName": "John",
+            "lastName": "Doe",
+            "batSide": {"code": "R"},
+            "pitchHand": {"code": "R"},
+            "birthDate": "1995-01-01",
+            "height": "6' 2\"",
+            "weight": 200,
+            "mlbDebutDate": "2020-03-26",
+        }
+        person.update(over)
+        return person
+
     def test_empty_boxscore_noop(self):
         loader = _make_loader_with_seq_conns()
         loader._ensure_players({"liveData": {"boxscore": {"teams": {}}}})
-        # No DB call should have happened
         loader._get_conn.assert_not_called()
 
-    def test_all_players_already_exist(self):
-        loader = _make_loader_with_seq_conns(fetchall_seq=[[(100001,), (200001,)]])
-        gd = {
-            "liveData": {
-                "boxscore": {
-                    "teams": {
-                        "home": {
-                            "players": {
-                                "ID100001": {
-                                    "person": {
-                                        "id": 100001,
-                                        "fullName": "John Doe",
-                                        "batSide": {"code": "R"},
-                                        "pitchHand": {"code": "R"},
-                                    },
-                                    "position": {"abbreviation": "P"},
-                                }
-                            }
-                        },
-                        "away": {
-                            "players": {
-                                "ID200001": {
-                                    "person": {
-                                        "id": 200001,
-                                        "fullName": "Jane Doe",
-                                        "batSide": {"code": "L"},
-                                        "pitchHand": {"code": "R"},
-                                    },
-                                    "position": {"abbreviation": "C"},
-                                }
-                            }
-                        },
-                    }
-                }
+    def test_every_boxscore_player_is_upserted(self):
+        """Not just the missing ones — that is what makes a wrong row repairable."""
+        loader = _make_loader_with_seq_conns()
+        gd = self._boxscore(
+            {
+                "ID100001": {"person": self._person(100001), "position": {"abbreviation": "P"}},
+                "ID200001": {
+                    "person": self._person(200001, batSide={"code": "L"}),
+                    "position": {"abbreviation": "C"},
+                },
             }
-        }
-        loader._ensure_players(gd)
-        # Only the existence check; no inserts
-        assert loader._get_conn.call_count == 1
+        )
+        with patch("pipeline.etl.etl_historical_loader.psycopg2.extras.execute_batch") as eb:
+            loader._ensure_players(gd)
+        eb.assert_called_once()
+        rows = eb.call_args.args[2]
+        assert {r[0] for r in rows} == {100001, 200001}
 
-    def test_missing_players_inserted_with_complete_boxscore(self):
-        """Players present in boxscore with full bat/throw should NOT trigger people-API fallback."""
-        loader = _make_loader_with_seq_conns(fetchall_seq=[[]])  # nothing exists
-        gd = {
-            "liveData": {
-                "boxscore": {
-                    "teams": {
-                        "home": {
-                            "players": {
-                                "ID100001": {
-                                    "person": {
-                                        "id": 100001,
-                                        "fullName": "John Doe",
-                                        "firstName": "John",
-                                        "lastName": "Doe",
-                                        "batSide": {"code": "R"},
-                                        "pitchHand": {"code": "R"},
-                                        "birthDate": "1995-01-01",
-                                        "height": "6' 2\"",
-                                        "weight": 200,
-                                        "mlbDebutDate": "2020-03-26",
-                                    },
-                                    "position": {"abbreviation": "P"},
-                                }
-                            }
-                        },
-                        "away": {"players": {}},
-                    }
-                }
-            }
-        }
-        loader._ensure_players(gd)
-        # 1 existence check + 1 insert ctx
-        assert loader._get_conn.call_count >= 2
+    def test_upsert_refreshes_handedness_and_position(self):
+        loader = _make_loader_with_seq_conns()
+        gd = self._boxscore(
+            {"ID100001": {"person": self._person(100001), "position": {"abbreviation": "P"}}}
+        )
+        with patch("pipeline.etl.etl_historical_loader.psycopg2.extras.execute_batch") as eb:
+            loader._ensure_players(gd)
+        sql = eb.call_args.args[1]
+        for col in ("bats", "throws", "primary_position", "first_name", "last_name"):
+            assert (
+                f"{col}             = EXCLUDED.{col}" in sql
+                or f"{col} = EXCLUDED.{col}" in sql
+                or (f"{col}" in sql.split("DO UPDATE SET")[1])
+            ), f"{col} must be refreshed on conflict"
 
-    def test_missing_players_with_incomplete_boxscore_falls_back_to_api(self):
-        loader = _make_loader_with_seq_conns(fetchall_seq=[[]])  # all missing
-        gd = {
-            "liveData": {
-                "boxscore": {
-                    "teams": {
-                        "home": {
-                            "players": {
-                                "ID100001": {
-                                    "person": {
-                                        "id": 100001,
-                                        "fullName": "John Doe",
-                                        # bats/throws absent → trigger people-API fallback
-                                    },
-                                    "position": {"abbreviation": "P"},
-                                }
-                            }
-                        },
-                        "away": {"players": {}},
-                    }
-                }
-            }
-        }
-        people_resp = {
-            "people": [
-                {
-                    "firstName": "John",
-                    "lastName": "Doe",
-                    "batSide": {"code": "R"},
-                    "pitchHand": {"code": "R"},
-                    "birthDate": "1995-01-01",
-                    "height": "6' 2\"",
-                    "weight": 200,
-                    "mlbDebutDate": "2020-03-26",
-                }
-            ]
-        }
-        with patch(
-            "pipeline.etl.etl_historical_loader._connect",
-            return_value=people_resp,
+    def test_prefers_the_feeds_own_person_record_over_an_http_call(self):
+        """gameData.players.ID<pid> already carries the full record — use it."""
+        loader = _make_loader_with_seq_conns()
+        gd = self._boxscore(
+            {"ID100001": {"person": {"id": 100001}, "position": {"abbreviation": "P"}}}
+        )
+        gd["gameData"] = {"players": {"ID100001": self._person(100001, batSide={"code": "L"})}}
+        with (
+            patch("pipeline.etl.etl_historical_loader.psycopg2.extras.execute_batch") as eb,
+            patch("pipeline.etl.etl_historical_loader._connect") as conn,
         ):
             loader._ensure_players(gd)
+        conn.assert_not_called()
+        assert eb.call_args.args[2][0][5] == "L"  # bats
 
-    def test_missing_players_api_failure_uses_defaults(self):
-        loader = _make_loader_with_seq_conns(fetchall_seq=[[]])
-        gd = {
-            "liveData": {
-                "boxscore": {
-                    "teams": {
-                        "home": {
-                            "players": {
-                                "ID100001": {
-                                    "person": {
-                                        "id": 100001,
-                                        "fullName": "John Doe",
-                                    },
-                                    "position": {"abbreviation": "P"},
-                                }
-                            }
-                        },
-                        "away": {"players": {}},
-                    }
+    def test_falls_back_to_the_people_endpoint(self):
+        loader = _make_loader_with_seq_conns()
+        gd = self._boxscore(
+            {
+                "ID100001": {
+                    "person": {"id": 100001, "fullName": "John Doe"},  # no bats/throws
+                    "position": {"abbreviation": "P"},
                 }
             }
-        }
-        with patch(
-            "pipeline.etl.etl_historical_loader._connect",
-            side_effect=Exception("network down"),
+        )
+        with (
+            patch("pipeline.etl.etl_historical_loader.psycopg2.extras.execute_batch") as eb,
+            patch(
+                "pipeline.etl.etl_historical_loader._connect",
+                return_value={"people": [self._person(100001)]},
+            ),
         ):
             loader._ensure_players(gd)
+        assert eb.call_args.args[2][0][5] == "R"
+
+    def test_unknown_handedness_is_skipped_never_fabricated(self):
+        """The headline fix.
+
+        The old code wrote bats/throws='R' and the full name into BOTH first_name
+        and last_name whenever the people endpoint failed — silently asserting a
+        fact about a real player that nothing could ever correct.
+        """
+        loader = _make_loader_with_seq_conns()
+        gd = self._boxscore(
+            {
+                "ID100001": {
+                    "person": {"id": 100001, "fullName": "John Doe"},
+                    "position": {"abbreviation": "P"},
+                }
+            }
+        )
+        with (
+            patch("pipeline.etl.etl_historical_loader.psycopg2.extras.execute_batch") as eb,
+            patch(
+                "pipeline.etl.etl_historical_loader._connect",
+                side_effect=Exception("network down"),
+            ),
+        ):
+            loader._ensure_players(gd)
+        eb.assert_not_called()
+        loader._get_conn.assert_not_called()
+
+    def test_empty_people_list_is_skipped_not_defaulted(self):
+        """A 200 with `people: []` raised IndexError and hit the same fabrication."""
+        loader = _make_loader_with_seq_conns()
+        gd = self._boxscore(
+            {
+                "ID100001": {
+                    "person": {"id": 100001, "fullName": "John Doe"},
+                    "position": {"abbreviation": "P"},
+                }
+            }
+        )
+        with (
+            patch("pipeline.etl.etl_historical_loader.psycopg2.extras.execute_batch") as eb,
+            patch("pipeline.etl.etl_historical_loader._connect", return_value={"people": []}),
+        ):
+            loader._ensure_players(gd)
+        eb.assert_not_called()
+
+    def test_absent_position_defaults_to_utility_not_pitcher(self):
+        """SIM-441: 'P' silently asserted a pitcher; 'UT' matches the sibling helper."""
+        loader = _make_loader_with_seq_conns()
+        gd = self._boxscore({"ID100001": {"person": self._person(100001)}})
+        with patch("pipeline.etl.etl_historical_loader.psycopg2.extras.execute_batch") as eb:
+            loader._ensure_players(gd)
+        assert eb.call_args.args[2][0][7] == "UT"
 
 
 class TestEnsureManagers:

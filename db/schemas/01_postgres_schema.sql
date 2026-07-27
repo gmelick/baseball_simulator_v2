@@ -100,14 +100,16 @@ CREATE TABLE raw.players (
     height_inches       INTEGER,
     weight_lbs          INTEGER,
     mlb_debut_date      DATE,
-    active              BOOLEAN         NOT NULL DEFAULT TRUE,
+    -- SIM-441: `active` was dropped (migration 0017). It was NOT NULL DEFAULT TRUE
+    -- with a partial index, never written and never updated — so it read TRUE for
+    -- every player ever ingested, the "partial" index covered 100% of rows, and a
+    -- SQL-console user filtering `WHERE active = TRUE` silently got retired players.
     created_at          TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_players_last_name      ON raw.players(last_name);
 CREATE INDEX idx_players_full_name_trgm ON raw.players USING GIN (full_name gin_trgm_ops);
-CREATE INDEX idx_players_active         ON raw.players(active) WHERE active = TRUE;
 CREATE INDEX idx_players_position       ON raw.players(primary_position);
 
 COMMENT ON COLUMN raw.players.primary_position IS 'Default position. Actual game position tracked per-game in raw.game_lineups.';
@@ -265,9 +267,16 @@ CREATE TABLE raw.pitches (
     home_team                   VARCHAR(10),
     away_id                     INTEGER     NOT NULL,
     away_team                   VARCHAR(10),
-    home_manager_id             INTEGER     NOT NULL,
+    -- SIM-441: nullable (migration 0017), matching raw.games. The loader no
+    -- longer fabricates a manager when a coaches roster carries no
+    -- NTRM/MNGR/COAB job code; NOT NULL here turned "we could not identify the
+    -- manager" into a NotNullViolation that rolled back the whole game's pitch
+    -- insert. Losing a full game of pitch-by-pitch data over two denormalised
+    -- convenience columns is the worse outcome. The composite FKs below are
+    -- unaffected — Postgres does not enforce an FK when part of the key is NULL.
+    home_manager_id             INTEGER,
     home_manager_name           VARCHAR(100),
-    away_manager_id             INTEGER     NOT NULL,
+    away_manager_id             INTEGER,
     away_manager_name           VARCHAR(100),
 
     -- Inning state
@@ -279,6 +288,27 @@ CREATE TABLE raw.pitches (
     p_throws                    CHAR(1)     NOT NULL CHECK (p_throws IN ('L','R')),
 
     -- Batter
+    --
+    -- SIM-440 — CANONICAL DEFINITION of the two handedness columns. Read this
+    -- before using either. Several places in this repo documented them the
+    -- WRONG WAY ROUND for years; the statement below is measured, not assumed
+    -- (docs/data_quality/2026-05-20-bat-side-coverage.md, live DB, 2017-2025).
+    --
+    --   stand    = the side the batter ACTUALLY BATTED FROM in this plate
+    --              appearance. Parsed from the feed/live in-game context
+    --              (playEvents[].offense.batter.batSide.code), which MLB has
+    --              already resolved against the pitcher for switch hitters.
+    --              MEASURED: 'S' on 0 rows in every season. Use THIS whenever
+    --              you need "which side did he swing from" — spray-angle sign,
+    --              platoon splits, pool pre-filter keys, tile keys.
+    --
+    --   bat_hand = the batter's ROSTER-DECLARED side, from /api/v1/people/{id}
+    --              batSide.code. Constant for a player across his whole career,
+    --              and 'S' for every switch hitter. MEASURED: 'S' on 10.4-13.3%
+    --              of rows in EVERY season. It is NOT per-PA and NOT resolved.
+    --
+    -- The CHECK below still allows 'S' on `stand` only because the constraint
+    -- predates the measurement; nothing has ever written it.
     batter                      INTEGER     NOT NULL REFERENCES raw.players(player_id),
     stand                       CHAR(1)     NOT NULL CHECK (stand    IN ('L','R','S')),
     bat_hand                    CHAR(1)     NOT NULL CHECK (bat_hand IN ('L','R','S')),
@@ -415,6 +445,12 @@ CREATE TABLE raw.pitches (
     field_putout_3              INTEGER,
     throwing_error_1            INTEGER,
     throwing_error_2            INTEGER,
+    -- SIM-441: TRUE when a pitch recorded MORE fielding credits than the slots
+    -- above can hold, so at least one was dropped. Practically only reachable on
+    -- a multi-runner rundown. Modelling the 6th+ assist is not worth a column
+    -- each, but the overflow must be visible rather than silent so a consumer can
+    -- exclude or measure those plays instead of under-counting assists.
+    field_assist_6_plus         BOOLEAN     NOT NULL DEFAULT FALSE,
 
     -- Quality flag (auto-set by trigger)
     data_quality_flag           BOOLEAN     NOT NULL DEFAULT FALSE,
@@ -693,6 +729,31 @@ CREATE TABLE IF NOT EXISTS raw.etl_errors (
     created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 
+-- SIM-441: the ledger insert had no conflict clause and the table only a
+-- surrogate key, so a game whose rows ALL hard-error (and therefore writes no
+-- pitch rows, so `_game_already_loaded` stays False) was re-processed every
+-- night, appending a full duplicate error set each time.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_etl_errors_natural_key
+    ON raw.etl_errors (game_pk, at_bat_number, pitch_number, error_type);
+
+-- SIM-441: terminal per-game ETL outcome. `_game_already_loaded` keys on pitch
+-- rows existing, which cannot tell "never loaded" from "loaded and legitimately
+-- produced zero pitches" — so a pitch-less or totally-failing game was re-fetched
+-- forever. outcome='empty' stops that. reload_game() / reload=True ignore this
+-- table by design: that is the escape hatch after a parser fix.
+CREATE TABLE IF NOT EXISTS raw.etl_game_ingest (
+    game_pk         INTEGER         PRIMARY KEY,
+    season          SMALLINT        NOT NULL,
+    outcome         VARCHAR(16)     NOT NULL
+                        CHECK (outcome IN ('loaded','empty','failed')),
+    pitch_rows      INTEGER         NOT NULL DEFAULT 0,
+    skipped_rows    INTEGER         NOT NULL DEFAULT 0,
+    attempts        INTEGER         NOT NULL DEFAULT 1,
+    last_error      TEXT,
+    first_seen_at   TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_etl_errors_game_pk
     ON raw.etl_errors(game_pk, created_at);
 
@@ -745,15 +806,21 @@ CREATE TRIGGER trg_games_updated_at         BEFORE UPDATE ON raw.games         F
 CREATE TRIGGER trg_game_lineups_updated_at  BEFORE UPDATE ON raw.game_lineups  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER trg_lineup_state_updated_at  BEFORE UPDATE ON sim.lineup_state  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- SIM-087: release_speed lower bound is < 50 (impossible) so legitimate eephus
--- pitches and slow curveballs (60–65 mph) are NOT flagged.  The ETL Python
--- validator uses 60 as a softer warn-only floor; the DB trigger only flags
--- the truly impossible.  Migration 0007 applies this change to live DBs.
+-- SIM-087 / SIM-440: plausibility band is release_speed [50, 110] and
+-- launch_speed <= 125.  This MUST match etl_historical_loader._validate_row
+-- exactly: that validator force-sets data_quality_flag=TRUE on its own warnings
+-- and this trigger only ever SETS the flag (never clears it), so whichever of
+-- the two layers is stricter is silently authoritative.  A narrower Python band
+-- is how SIM-087's widened 50 mph floor stayed unreachable for five years.
+-- 102 was never a physical ceiling — Statcast logs 102-105 mph pitches every
+-- season, and flagging them stripped the whole high-velocity tail out of
+-- sim.pitch_pool and the arsenal GMMs.  Migrations 0007 + 0017 apply this to
+-- live DBs.
 CREATE OR REPLACE FUNCTION raw.flag_pitch_quality()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
     IF (
-        (NEW.release_speed IS NOT NULL AND (NEW.release_speed > 102 OR NEW.release_speed < 50)) OR
+        (NEW.release_speed IS NOT NULL AND (NEW.release_speed > 110 OR NEW.release_speed < 50)) OR
         (NEW.launch_speed  IS NOT NULL AND NEW.launch_speed > 125) OR
         (NEW.break_vertical_induced IS NOT NULL AND
             (NEW.break_vertical_induced < -25 OR NEW.break_vertical_induced > 25))

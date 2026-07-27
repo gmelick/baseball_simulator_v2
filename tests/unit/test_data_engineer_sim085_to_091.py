@@ -295,22 +295,52 @@ class TestSim087ReleaseSpeedThreshold:
         assert rs_warnings, "SIM-087: 35 mph still must trigger a validator warning."
 
     def test_validate_row_still_flags_too_fast(self) -> None:
-        """The 102 mph upper bound is unchanged."""
+        """SIM-440: the ceiling moved 102 -> 110, so 112 mph is the impossible case."""
         from pipeline.etl.etl_historical_loader import _validate_row
 
-        result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": 108.0})
+        result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": 112.0})
         assert not result.hard_errors
         rs_warnings = [w for w in result.warnings if "release_speed" in w]
-        assert rs_warnings, "SIM-087: 108 mph still must trigger a validator warning."
+        assert rs_warnings, "SIM-440: 112 mph must still trigger a validator warning."
 
-    def test_validator_warning_text_advertises_60_mph(self) -> None:
-        """Warning text should reflect the new lower bound."""
+    def test_validate_row_accepts_real_high_velocity_tail(self) -> None:
+        """SIM-440: 102-110 mph is a real, recorded velocity band — never flag it.
+
+        The old 102 ceiling removed the entire high-velocity tail from
+        sim.pitch_pool and the arsenal GMMs.  Statcast records four-figure counts
+        of 102-105 mph pitches every season (max ~105.8).
+        """
+        from pipeline.etl.etl_historical_loader import _validate_row
+
+        for velo in (102.5, 104.0, 105.8, 110.0):
+            result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": velo})
+            rs_warnings = [w for w in result.warnings if "release_speed" in w]
+            assert not rs_warnings, f"SIM-440: {velo} mph must NOT be flagged, got {rs_warnings}"
+
+    def test_validate_row_accepts_eephus_floor(self) -> None:
+        """SIM-440: SIM-087's 50 mph floor is now actually reachable.
+
+        Migration 0007 widened the DB trigger's floor to 50, but the Python
+        validator still warned below 60 — and a validator warning force-sets
+        data_quality_flag=TRUE before the row reaches the database, so the
+        stricter Python bound won on every row and no pitch in [50, 60) was ever
+        rescued.  Both layers now state 50.
+        """
+        from pipeline.etl.etl_historical_loader import _validate_row
+
+        for velo in (50.0, 55.0, 59.9):
+            result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": velo})
+            rs_warnings = [w for w in result.warnings if "release_speed" in w]
+            assert not rs_warnings, f"SIM-440: {velo} mph must NOT be flagged, got {rs_warnings}"
+
+    def test_validator_warning_text_advertises_actual_bounds(self) -> None:
+        """Warning text must state the band the code actually enforces."""
         from pipeline.etl.etl_historical_loader import _validate_row
 
         result = _validate_row({**_MINIMAL_CLEAN_PITCH_ROW, "release_speed": 35.0})
         rs_warnings = [w for w in result.warnings if "release_speed" in w]
-        assert any("60" in w for w in rs_warnings), (
-            f"SIM-087: warning text should reference the new 60 mph bound, got: {rs_warnings}"
+        assert any("50" in w and "110" in w for w in rs_warnings), (
+            f"SIM-440: warning text must reference the 50-110 mph band, got: {rs_warnings}"
         )
 
     def test_canonical_schema_trigger_threshold(self) -> None:

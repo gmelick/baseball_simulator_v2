@@ -1,3 +1,13 @@
+-- ############################################################################
+-- SUPERSEDED IN PART BY DuckDB MIGRATION 0014 (SIM-440), 2026-07-27.
+-- The header/comment text below states the `bat_hand` vs `stand` semantics
+-- EXACTLY BACKWARDS. Ground truth, measured over 2017-2025:
+--   * `stand`    = the side actually batted from THIS PA. 'S' on 0 rows.
+--   * `bat_hand` = the ROSTER-DECLARED side. 'S' on 10.4-13.3% of rows.
+-- The SQL below is left byte-for-byte as applied (it is a historical record);
+-- read db/schemas/01_postgres_schema.sql for the canonical definition.
+-- ############################################################################
+
 -- DuckDB Migration 0006: reconcile sim-pool indexes to the SIM-111 contract (SIM-337)
 -- Applied: 2026-05-22 (SIM-337)
 --

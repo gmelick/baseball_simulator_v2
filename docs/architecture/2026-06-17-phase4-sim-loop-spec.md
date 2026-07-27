@@ -265,9 +265,14 @@ event (single / double / … / out) from the launch-condition neighbourhood.
 Both FAISS distances are **pure physics**: categorical matchup keys (`pitcher_id`,
 `bat_hand`, `season`) are the **tile pre-filter** (play-pool spec §3), passed as
 arguments to `sample_pitch` / `sample_batted_ball`, NOT dimensions of the query
-vector. The loop must pass `bat_hand` as the **batter's hand for this PA** (the
-switch-hitter's hand vs the current pitcher), not the roster `bats` value
-(play-pool spec §3 / HANDOFF §4). Count is also NOT a fingerprint dimension — its
+vector. The loop must pass the **batter's hand for this PA** (the switch-hitter's
+hand vs the current pitcher), not the roster-declared side.
+
+> **Corrected 2026-07-27 (SIM-440).** The hand-for-this-PA lives in
+> `raw.pitches.stand` (`'S'` on 0 rows), NOT in `raw.pitches.bat_hand`, which is
+> the roster-declared side and is `'S'` for every switch hitter. The parameter is
+> still spelled `bat_hand` in the sampler signature; its VALUE must come from
+> `stand`. Canonical definition: `db/schemas/01_postgres_schema.sql`. Count is also NOT a fingerprint dimension — its
 effect enters at step 4 via the SIM-056 foul re-weight, not the FAISS distance.
 
 ---

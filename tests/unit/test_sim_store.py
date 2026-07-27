@@ -15,7 +15,7 @@ Coverage
     INSERT and returns the run_id; load_latest_sim_run / load_sim_run parse a
     row into the documented dict incl. JSONB summary round-trip.
   * Migration sanity: Alembic 0014 revision/down_revision/upgrade/downgrade;
-    duckdb_schema_version.txt reads 13; DuckDB 0013 names its table.
+    duckdb_schema_version.txt reads 14 and matches the latest migration.
 
 Owned by Data Engineer.
 """
@@ -359,12 +359,28 @@ class TestMigrationSanity:
         assert "def downgrade()" in text
         assert "sim.sim_runs" in text
 
-    def test_duckdb_schema_version_is_13(self):
+    def test_duckdb_schema_version_is_14(self):
         # SIM-357 bumped 8 -> 9 (0009); SIM-362/364 -> 10 (0010);
         # SIM-408 -> 11 (0011 engine ↔ schema reconciliation);
         # SIM-411/413/425b -> 12 (0012 batted-ball realism columns);
-        # SIM-427 -> 13 (0013 manager available_reliever_usage_rate).
-        assert DUCKDB_VERSION_FILE.read_text().strip() == "13"
+        # SIM-427 -> 13 (0013 manager available_reliever_usage_rate);
+        # SIM-440 -> 14 (0014 corrected bat_hand/stand column comments).
+        assert DUCKDB_VERSION_FILE.read_text().strip() == "14"
+
+    def test_duckdb_version_matches_latest_migration(self):
+        """The version file must equal the highest-numbered DuckDB migration.
+
+        CLAUDE.md §7 records this exact drift as a past incident: a sprint bumped
+        a migration and forgot the version file.  Derive it rather than restate
+        it, so the next migration cannot silently skip the bump.
+        """
+        mig_dir = REPO_ROOT / "db" / "migrations" / "duckdb"
+        numbers = sorted(int(p.name[:4]) for p in mig_dir.glob("[0-9][0-9][0-9][0-9]_*.sql"))
+        assert numbers, "no DuckDB migrations found"
+        assert int(DUCKDB_VERSION_FILE.read_text().strip()) == numbers[-1], (
+            f"duckdb_schema_version.txt says {DUCKDB_VERSION_FILE.read_text().strip()} "
+            f"but the latest migration is {numbers[-1]:04d}"
+        )
 
     def test_duckdb_0013_adds_manager_available_reliever_usage(self):
         path = (

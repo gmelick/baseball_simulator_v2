@@ -1356,10 +1356,15 @@ class PlayerProfileComputor:
         handedness (``stand``), the standard sabermetric convention — short
         porches and outfield dimensions interact with the batter's pull side,
         and ``stand`` is the same key the pitch/outcome read path pre-filters
-        on (SIM-337 indexes, SIM-345 contract). Switch hitters (``stand='S'``)
-        contribute only to ``factor_overall`` (the per-PA resolved batting side
-        is carried by ``bat_hand``, which is not retained at venue grain here),
-        so an 'S' PA is neutral w.r.t. the L/R splits but still counted overall.
+        on (SIM-337 indexes, SIM-345 contract).
+
+        SIM-440 correction: this docstring previously said switch hitters land
+        in ``stand='S'`` and contribute only to ``factor_overall``. That is
+        backwards — ``stand`` is the per-PA resolved side and is 'S' on **zero**
+        rows; ``bat_hand`` is the roster-declared side and is 'S' for every
+        switch hitter (see db/schemas/01_postgres_schema.sql for the canonical
+        definition). So every PA, switch hitters included, already lands in a
+        real L or R bucket here and the 'S' carve-out never applied.
         Each L/R split is the venue's vs-hand rate over its own vs-hand league
         average, so it is independently centered on 1.0.
 
@@ -4613,20 +4618,20 @@ class PlayerProfileComputor:
                     p_throws,
                     batter                              AS batter_id,
                     -- SIM-345 pool `stand` contract: the pool's `stand` column is
-                    -- the RESOLVED batting side for the PA, so it agrees with the
-                    -- `bat_hand`-keyed spray angle / FAISS tile key and with the
-                    -- read-path pre-filter (which scopes on the batter's actual
-                    -- side, never 'S'). For a switch hitter (`stand`='S'),
-                    -- `bat_hand` carries the side they batted from that PA; we
-                    -- adopt it. When `bat_hand` is itself unresolved ('S' or
-                    -- NULL — gate-capped ≤1 %/season by SIM-160) we fall back to
-                    -- the declared `stand`. Result is always 'L' or 'R' except
-                    -- for the residual unresolved-switch tail, keeping `stand`
-                    -- and `bat_hand` consistent for every fully-resolved row.
-                    CASE
-                        WHEN bat_hand IN ('L', 'R') THEN bat_hand
-                        ELSE stand
-                    END                                 AS stand,
+                    -- the RESOLVED batting side for the PA — never 'S'.
+                    --
+                    -- SIM-440: this was a `CASE WHEN bat_hand IN ('L','R') THEN
+                    -- bat_hand ELSE stand END`, written on the belief that
+                    -- `bat_hand` was the per-PA value and `stand` the declared
+                    -- one. That is exactly backwards (see the canonical note on
+                    -- raw.pitches in db/schemas/01_postgres_schema.sql). The old
+                    -- expression still produced the right answer, but only by
+                    -- accident: a switch hitter's bat_hand is 'S', which is not
+                    -- IN ('L','R'), so it fell through to `stand` — the correct
+                    -- column — and for everyone else the two agree. Reading
+                    -- `stand` directly is identical in output and removes the
+                    -- trap that the next reader would copy.
+                    stand,
                     release_speed                       AS velo,
                     break_vertical_induced              AS ivb,
                     break_horizontal                    AS hb,
@@ -4736,12 +4741,26 @@ class PlayerProfileComputor:
                     rp.spray_angle,
                     -- SIM-051: handedness-corrected pull-relative spray angle.
                     -- Sign convention: positive = pull side (LF for RHB, RF for LHB).
-                    -- `bat_hand` is the per-pitch resolved handedness; switch
-                    -- hitters with bat_hand='S' get NULL (gate-controlled to
-                    -- ≤ 1 % per season by SIM-160).
+                    --
+                    -- Keyed on `stand`, NOT `bat_hand`.  `stand` is the side the
+                    -- batter actually hit from in THIS plate appearance (the MLB
+                    -- feed resolves switch hitters against the pitcher), and is
+                    -- never 'S'.  `bat_hand` is the roster-DECLARED side and is
+                    -- 'S' for switch hitters — 10.4-13.3% of all rows in every
+                    -- season 2017-2025 (docs/data_quality/2026-05-20-bat-side-
+                    -- coverage.md, measured; `stand` is 'S' on 0 rows).
+                    --
+                    -- Keying on bat_hand sent every switch-hitter batted ball to
+                    -- NULL here, and build_battedball_pool_artifact filters on
+                    -- `pull_relative_spray_angle IS NOT NULL` — so ~1 in 8 batted
+                    -- balls was silently missing from the production batted-ball
+                    -- draw.  The old comment claimed this was "gate-controlled to
+                    -- <= 1% per season by SIM-160"; that gate measures the NULL
+                    -- rate of the source columns, not the 'S' rate, and was never
+                    -- a constraint on this expression.
                     CASE
-                        WHEN rp.bat_hand = 'R' THEN  rp.spray_angle
-                        WHEN rp.bat_hand = 'L' THEN -rp.spray_angle
+                        WHEN rp.stand = 'R' THEN  rp.spray_angle
+                        WHEN rp.stand = 'L' THEN -rp.spray_angle
                         ELSE NULL
                     END                              AS pull_relative_spray_angle,
                     rp.bb_type,

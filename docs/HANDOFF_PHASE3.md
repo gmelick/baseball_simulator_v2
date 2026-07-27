@@ -50,7 +50,24 @@ the SIM-163 script fix. Report at `docs/perf/2026-05-13-index-acceptance.md`.
 **Bat-side data quality**: All 9 seasons (2017-2025) clear the 1% NULL gate
 on `raw.pitches.bat_hand`. Report at
 `docs/data_quality/2026-05-20-bat-side-coverage.md`. 11-13% of pitches are
-to switch hitters (informational).
+to switch hitters.
+
+> **Read this before using either handedness column (SIM-440, 2026-07-27).**
+> That 11-13% figure is NOT "informational" — it is the `'S'` share of
+> `bat_hand`, and it bit hard. The two columns are:
+>
+> * **`stand`** — the side the batter ACTUALLY BATTED FROM this plate
+>   appearance. Measured `'S'` on **0** rows, every season. Use this for
+>   handedness, platoon splits, spray-angle sign and pool/tile keys.
+> * **`bat_hand`** — the batter's ROSTER-DECLARED side, constant across his
+>   career and `'S'` for every switch hitter (**10.4-13.3%** of rows).
+>
+> The repo documented these exactly backwards for over a year, and the 1% gate
+> above measures the **NULL** rate, not the `'S'` rate — it was never a
+> constraint on switch hitters. Keying `pull_relative_spray_angle` on
+> `bat_hand` NULLed every switch-hitter batted ball and dropped ~1 in 8 out of
+> the production batted-ball pool. Canonical definition:
+> `db/schemas/01_postgres_schema.sql`.
 
 ---
 
@@ -317,7 +334,7 @@ on this folder — see §3). Each one is a P0 follow-up:
 | `docs/audit/2026-05-21-program-audit.md` | "Audit 2026-05-21" | The 53-ticket follow-up list is unanchored; PM can't trace Tier-P0 priorities back to findings. | Re-do the audit at Phase 3 kickoff if memory of the original is gone. |
 | `docs/audit/2026-05-21-prioritized-tickets.md` | "Audit 2026-05-21" | Same as above. | Same. |
 | `db/migrations/duckdb/0003_*.sql` (SIM-051) | SIM-051 | The `pull_relative_spray_angle` column IS in `02_duckdb_schema.sql`, but there's no migration. Fresh DuckDB instances will get the column from the schema script; existing instances may not. | Write `0003_sim051_pull_relative_spray_angle.sql` that adds the column conditionally. |
-| `tests/unit/test_data_engineer_sim051.py` | SIM-051 | No unit-test coverage of the handedness flip logic. | Write 4-5 tests: LHB pull, RHB pull, switch hitter using `bat_hand`, NULL row. |
+| `tests/unit/test_data_engineer_sim051.py` | SIM-051 | ~~No unit-test coverage of the handedness flip logic.~~ **Done, then rewritten by SIM-440** — the first version keyed on `bat_hand` (wrong: that is the roster-declared side) and was structurally incapable of failing against production. Now extracts the CASE from live source. | ~~Write 4-5 tests: LHB pull, RHB pull, switch hitter using `bat_hand`, NULL row.~~ Switch hitters must resolve via **`stand`**, not `bat_hand`. |
 | `tests/unit/test_data_engineer_sim162.py` | SIM-162 | No regression test that `LeagueAverageProfiles.compute()` produces non-empty inserts for all 5 entity types. | Write a single integration-style test against an in-memory DuckDB. |
 | `tests/unit/test_baserunner_steal_engine.py` | SIM-149 | The only similarity engine without a dedicated unit test file. | Write 9 invariant tests (zero distance to self, ordering, partition behavior, etc.). |
 | `tests/unit/test_ml_engines_sim150.py` | SIM-150 | No calibration regression coverage on catcher v2, FAISS pitch, FAISS batted-ball. | Write the three calibration tests the SIM-150 acceptance criteria require. |

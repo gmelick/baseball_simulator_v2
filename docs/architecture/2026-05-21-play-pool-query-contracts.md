@@ -86,7 +86,7 @@ handedness — SIM-300 §3). PK: `pitch_id`.
 | **`pitcher_id`** | INTEGER | **pre-filter key** | Pitch geometry is a property of who threw it. First half of the pitch tile key; filtered on in `_fetch_pitch_group` (`AND pitcher_id IN (...)`). |
 | `p_throws` | VARCHAR(1) | situation | Pitcher hand. Available for matchup features; not a pre-filter key for the pitch tile. |
 | `batter_id` | INTEGER | situation | Batter identity. Not a pitch-pool pre-filter key. |
-| **`stand`** | VARCHAR(1) | **pre-filter key** | Batter handedness (`L`/`R`; switch hitters resolved per-PA at ETL). Second half of the pitch tile key. Builder selects `bat_hand` if present else `stand` (`BAT_HAND_COLUMN_CANDIDATES`); production DDL spells it `stand`. No `S` tile. |
+| **`stand`** | VARCHAR(1) | **pre-filter key** | The side the batter ACTUALLY BATTED FROM this PA (`L`/`R`, never `S`) — copied from `raw.pitches.stand`. Second half of the pitch tile key. No `S` tile. **SIM-440:** do NOT substitute `raw.pitches.bat_hand` here; that is the roster-DECLARED side and is `'S'` for every switch hitter (10.4-13.3% of rows). |
 | `velo` | FLOAT | **fingerprint** | release_speed. Fingerprint dim 1. |
 | `ivb` | FLOAT | **fingerprint** | Induced vertical break (gravity removed). Fingerprint dim 2. |
 | `hb` | FLOAT | **fingerprint** | Horizontal break. Fingerprint dim 3. |
@@ -141,7 +141,7 @@ The columns duplicated from `pitch_pool` carry the same semantics and roles as
 | `events` | VARCHAR(50) | **outcome** | The PA event (`single`, `double`, `field_out`, …). The payload `sample_batted_ball` returns as `event` (`BATTEDBALL_OUTCOME_COLUMN`); also the group-by key for `return_distribution=True`. |
 | **`exit_velo`** | FLOAT | **fingerprint** | launch_speed. Batted-ball dim 1. Build query requires `IS NOT NULL`. |
 | **`launch_angle`** | FLOAT | **fingerprint** | Batted-ball dim 2. Build query requires `IS NOT NULL`. |
-| **`pull_relative_spray_angle`** | FLOAT | **fingerprint** (preferred) | SIM-051 handedness-corrected spray. Batted-ball dim 3 when present. NULL for unresolved switch hitters (`bat_hand = 'S'`). |
+| **`pull_relative_spray_angle`** | FLOAT | **fingerprint** (preferred) | SIM-051 handedness-corrected spray, sign-flipped on **`stand`** (SIM-440; it was flipped on `bat_hand`, which NULLed every switch hitter and dropped ~1 in 8 batted balls from the pool). Batted-ball dim 3 when present. NULL only when `spray_angle` is NULL. |
 | `spray_angle` | FLOAT | **fingerprint** (fall-back) | Raw Statcast spray. Used as dim 3 only when `pull_relative_spray_angle` is absent (`_select_spray_column()`, SIM-042 / SIM-300 §3.1). |
 | `bb_type` | VARCHAR(20) | outcome | ground_ball/fly_ball/line_drive/popup. Step 3b/4 input; not in the fingerprint. |
 | `hit_distance` | FLOAT | outcome | Step 4 input. |
