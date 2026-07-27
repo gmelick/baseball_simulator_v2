@@ -68,6 +68,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 PROGRESS_DIR = REPO / ".sweep_progress"
 
+# How often --quiet emits a "still alive" line, in games.
+_HEARTBEAT_EVERY = 25
+
 # The child does the real work. It is run as a SUBPROCESS on purpose: the fault
 # kills the interpreter outright, so it cannot be caught in-process.
 _CHILD = r"""
@@ -118,7 +121,19 @@ finally:
 
 
 def _run_attempt(season: int, progress: Path, native: bool, quiet: bool) -> tuple[int, bool]:
-    """Run one child attempt. Returns (exit_code, saw_complete_marker)."""
+    """Run one child attempt. Returns (exit_code, saw_complete_marker).
+
+    The child's output is STREAMED through to our stdout as it arrives. It has to
+    be captured (we read it to detect the completion marker and the fatal-error
+    signature), but capturing is not a licence to swallow it: an earlier version
+    printed only ``CHILD_SUMMARY``/``Fatal Python error`` lines, which meant a
+    multi-hour season looked completely dead from the outside. The per-game log
+    lines ARE the progress indicator — the sweep is long enough that silence is
+    indistinguishable from a hang.
+
+    ``--quiet`` keeps the filtered behaviour, but even then emits a heartbeat
+    every :data:`_HEARTBEAT_EVERY` games so the run is never fully silent.
+    """
     code = _CHILD.format(repo=str(REPO), native=str(native))
     proc = subprocess.Popen(
         [sys.executable, "-u", "-c", code, str(season), str(progress)],
@@ -127,14 +142,27 @@ def _run_attempt(season: int, progress: Path, native: bool, quiet: bool) -> tupl
         stderr=subprocess.STDOUT,
         text=True,
         errors="replace",
+        bufsize=1,  # line-buffered: emit each line as it arrives, not in blocks
     )
     complete = False
+    games = 0
     assert proc.stdout is not None
-    for line in proc.stdout:
+    # readline() rather than `for line in proc.stdout` so streaming is explicit
+    # and cannot be defeated by iterator read-ahead.
+    for line in iter(proc.stdout.readline, ""):
         if "CHILD_COMPLETE" in line:
             complete = True
-        if not quiet and ("CHILD_SUMMARY" in line or "Fatal Python error" in line):
-            print("   " + line.rstrip())
+        if "Reloading game" in line:
+            games += 1
+
+        if not quiet:
+            print(line.rstrip(), flush=True)
+        elif "CHILD_SUMMARY" in line or "Fatal Python error" in line:
+            print("   " + line.rstrip(), flush=True)
+        elif games and games % _HEARTBEAT_EVERY == 0 and "Reloading game" in line:
+            print(f"   … {games} games this attempt", flush=True)
+
+    proc.stdout.close()
     proc.wait()
     return proc.returncode, complete
 
@@ -151,7 +179,12 @@ def main() -> int:
         action="store_true",
         help="child connects via the compose DSN instead of 127.0.0.1:DB_HOST_PORT",
     )
-    ap.add_argument("--quiet", action="store_true")
+    ap.add_argument(
+        "--quiet",
+        action="store_true",
+        help="suppress the child's per-game log; keep summaries, fatal errors and a "
+        f"heartbeat every {_HEARTBEAT_EVERY} games (default: stream everything)",
+    )
     args = ap.parse_args()
 
     PROGRESS_DIR.mkdir(exist_ok=True)
