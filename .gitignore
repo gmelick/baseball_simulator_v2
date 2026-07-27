@@ -142,3 +142,5 @@ models/
 # team ever wants one, can be re-included with a `!.claude/settings.json` line.
 # ---------------------------------------------------------------------------
 .claude/
+.host_dsn
+.sweep_progress/

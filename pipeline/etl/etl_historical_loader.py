@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -83,7 +84,6 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
 
-import numpy as np
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
@@ -949,8 +949,15 @@ def _fetch_game_pitches(
                     elif coord_y == 198.27:
                         spray_angle = 90 if coord_x > 125.42 else -90
                     else:
-                        spray_angle = np.arctan((coord_x - 125.42) / (198.27 - coord_y)) * (
-                            180 / np.pi
+                        # SIM-445: `math.atan`, not `np.arctan`. This was the ONLY
+                        # numpy call in this 2,900-line module, and importing numpy
+                        # for it drags OpenBLAS (DYNAMIC_ARCH, MAX_THREADS=64),
+                        # libgfortran and libquadmath into every ETL process. It is
+                        # also a scalar, so numpy bought nothing but returned a
+                        # numpy.float64 that then had to be coerced back on every
+                        # batted ball.
+                        spray_angle = math.atan((coord_x - 125.42) / (198.27 - coord_y)) * (
+                            180 / math.pi
                         )
                 batted_ball_type = hd["trajectory"]
                 hit_location = hd.get("location", "")

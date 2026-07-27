@@ -27,7 +27,19 @@ pydantic-settings>=2.3,<3.0
 # Database — PostgreSQL
 # ---------------------------------------------------------------------------
 asyncpg>=0.29,<1.0
-psycopg2-binary>=2.9,<3.0
+# SIM-445: psycopg2 (SOURCE build), NOT psycopg2-binary.
+# The binary wheel bundles its OWN libpq, libssl and libcrypto. This process
+# also loads the SYSTEM OpenSSL via `requests`/`ssl`, so a psycopg2-binary
+# install maps FOUR OpenSSL objects into one address space:
+#   psycopg2_binary.libs/libssl-fe1b61af.so.3 + libcrypto-88208852.so.3
+#   /lib/x86_64-linux-gnu/libssl.so.3         + libcrypto.so.3
+# psycopg2's own docs recommend against the binary wheel in production for
+# exactly this reason. The ETL sweep is the first workload to interleave heavy
+# `requests` and psycopg2 traffic at scale, and it segfaults non-deterministically
+# inside CPython's allocator (ExitCode 139, OOMKilled=false, memory flat at
+# 67 MiB, dying at a DIFFERENT game every run). Source-building links the system
+# libpq/libssl, so exactly one OpenSSL is present.
+psycopg2>=2.9,<3.0
 SQLAlchemy>=2.0,<3.0
 alembic>=1.13,<2.0
 

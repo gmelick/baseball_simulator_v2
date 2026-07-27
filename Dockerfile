@@ -24,10 +24,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /build
 
-# Install system build deps needed to compile native extensions
-# (psycopg2-binary ships wheels, but faiss-cpu needs libgomp)
+# Install system build deps needed to compile native extensions.
+#
+# SIM-445: libpq-dev is REQUIRED — psycopg2 is now SOURCE-BUILT rather than
+# installed from the psycopg2-binary wheel, so it links the SYSTEM libpq and
+# libssl instead of bundling its own copies. The binary wheel put FOUR OpenSSL
+# objects in one address space (its own libssl/libcrypto plus the system pair
+# loaded by `requests`/`ssl`), which psycopg2's own docs warn against for
+# production. See requirements.txt for the full reasoning.
+#
+# faiss-cpu needs libgomp.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
+        libpq-dev \
         libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -50,9 +59,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # are copied from the builder into /usr/local, which is already on PATH).
     PYTHONPATH=/app
 
-# libgomp is needed at runtime for faiss-cpu
+# libgomp is needed at runtime for faiss-cpu.
+# SIM-445: libpq5 is the RUNTIME half of the source-built psycopg2 — the compiled
+# extension links the system libpq and cannot import without it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 \
+        libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder
