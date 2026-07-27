@@ -436,10 +436,7 @@ The single place a play's RE24 run value and base-out delta are computed. Two of
 - **No moved-line / DP-shape / steal-of-home coverage**: no test covers C-N3's three wrong-runner DP shapes, C-N4's steal-of-home RBI, or C-N5's ROE run value.
 - **`PERF_STRICT` hard-gates an rng stub, weekly** — no benchmark exercises `FullPoolSampler` at all, which is exactly why E-B2's +22%/PA regression passed CI. The "authoritative DB-backed perf job" the bench file promises was never built.
 - **Byte-identity and flag-off-identity are asserted only in prose**, never by a gate — the regression lane CLAUDE.md credits runs no simulation.
-- **The `__new__` constructor-bypass pattern** leaves every engine's DuckDB SQL contract untested (build-smoke mocks return empty rows and assert `profile_count == 0` *passes*) — the exact gap that shipped SIM-408's 4 dead engines under green CI. A `:memory:` DuckDB schema-contract test closes this in the unit lane.agentId: a73ab206bdd57dc38 (use SendMessage with to: 'a73ab206bdd57dc38', summary: '<5-10 word recap>' to continue this agent)
-<usage>subagent_tokens: 193408
-tool_uses: 38
-duration_ms: 536302</usage>
+- **The `__new__` constructor-bypass pattern** leaves every engine's DuckDB SQL contract untested (build-smoke mocks return empty rows and assert `profile_count == 0` *passes*) — the exact gap that shipped SIM-408's 4 dead engines under green CI. A `:memory:` DuckDB schema-contract test closes this in the unit lane.
 
 ---
 ---
@@ -623,10 +620,7 @@ No findings against these three files appear in any of the three source document
 - **HTTP resilience** in `bettingpros_odds_provider.py` and `bullpen_availability_ingest.py` — no test covers retry, backoff, or the negative-caching of a transient failure.
 - **`opening_line_job` scheduling** — no test or CI check asserts that the job the docstrings describe is actually wired into any scheduler; the same absence hides the uncalled `mark_closing_*` markers.
 - The **live pipeline's date convention** — no test asserts `raw.games.game_date` agrees between the historical ETL (`officialDate`) and `_upsert_game_record` (`gameDate[:10]`), which is why SIM-live-1 is invisible.
-- **No golden/regression coverage of the pitcher engine, batter engine, or the full-pool sampler**, which are precisely the consumers of every column and embedding this cluster produces (E-B3; audit QA table row 3).agentId: a56235071ba3a78bb (use SendMessage with to: 'a56235071ba3a78bb', summary: '<5-10 word recap>' to continue this agent)
-<usage>subagent_tokens: 207926
-tool_uses: 46
-duration_ms: 595189</usage>
+- **No golden/regression coverage of the pitcher engine, batter engine, or the full-pool sampler**, which are precisely the consumers of every column and embedding this cluster produces (E-B3; audit QA table row 3).
 
 ---
 ---
