@@ -2619,7 +2619,35 @@ class PlayerProfileComputor:
             fld_agg AS (
                 SELECT fld_mgr AS manager_id, season,
                     COUNT(DISTINCT game_pk)                                        AS n_fld_games,
-                    SUM(CASE WHEN defensive_sub AND inning >= 7 THEN 1 ELSE 0 END) AS n_def_sub_late
+                    -- SIM-441: count distinct PLATE APPEARANCES with a late
+                    -- defensive sub, not pitch ROWS.
+                    --
+                    -- `defensive_sub` is a per-pitch column, and how many pitch
+                    -- rows carry the flag is a property of the ETL parser, not of
+                    -- the manager. Before SIM-440 the parser broadcast the flag to
+                    -- every pitch of the plate appearance, so `SUM(CASE ...)` here
+                    -- counted ~4 rows per substitution and inflated
+                    -- defensive_sub_rate_late_innings accordingly — the manager
+                    -- engine's heaviest feature at weight 0.550. The parser now
+                    -- sets it on exactly one pitch.
+                    --
+                    -- Counting distinct PAs makes this expression INVARIANT to
+                    -- that difference: 4 broadcast rows and 1 latched row both
+                    -- yield 1. That matters because the corrective reload sweep
+                    -- rewrites games one at a time, so mid-sweep the corpus holds
+                    -- BOTH conventions at once — and a row-counting aggregate
+                    -- would silently mix two incompatible units in one column.
+                    --
+                    -- Note this deliberately does NOT aggregate over the `pa` CTE
+                    -- the way the pinch-hit features do. `pa` keeps only the first
+                    -- pitch of each PA; a pinch hitter is by definition substituted
+                    -- before the PA begins, but a DEFENSIVE sub can occur between
+                    -- pitches, and under the new parser semantics its flag lands on
+                    -- whichever pitch follows — which `pa` would drop.
+                    COUNT(DISTINCT CASE
+                        WHEN defensive_sub AND inning >= 7
+                        THEN CAST(game_pk AS VARCHAR) || '-' || CAST(at_bat_number AS VARCHAR)
+                    END)                                                           AS n_def_sub_late
                 FROM p
                 WHERE fld_mgr IS NOT NULL
                 GROUP BY fld_mgr, season
