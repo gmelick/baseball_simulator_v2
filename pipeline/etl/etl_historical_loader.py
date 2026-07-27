@@ -72,6 +72,7 @@ one malformed feed cannot abort a 21,600-game re-ingest.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import math
@@ -79,6 +80,9 @@ import os
 import re
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -87,7 +91,6 @@ from typing import Any
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
-import requests
 
 from pipeline.etl.coercion import to_bool, to_float, to_int, to_str
 
@@ -111,13 +114,60 @@ BATCH_SIZE = 500  # rows per executemany call
 MAX_API_RETRIES = 10  # infinite-retry inherited from original; capped here
 RETRY_BACKOFF_S = 2.0  # seconds between retries
 
-# SIM-441: one pooled HTTP session for every outbound call. A full backfill makes
-# ~65,000 requests (feed/live + 2 coaches endpoints per game, plus venue/people
-# lookups); with a bare ``requests.get`` each one opens a fresh TCP+TLS
-# connection. A Session keeps the keep-alive pool, which is both faster and much
-# politer to statsapi.mlb.com.
-_SESSION = requests.Session()
-_SESSION.headers.update({"User-Agent": "baseball-sim-etl/1.0 (+historical loader)"})
+HTTP_TIMEOUT_S = 30.0
+_USER_AGENT = "baseball-sim-etl/1.0 (+historical loader)"
+
+# SIM-446: the ETL's HTTP transport is stdlib ``urllib.request`` BY DEFAULT.
+#
+# The corrective reload sweep used to die with::
+#
+#     Fatal Python error: _PyEval_EvalFrameDefault: Executing a cache.
+#
+# — CPython's evaluation loop dispatching into an inline-cache entry instead of a
+# real instruction, i.e. the bytecode / inline cache of ``_build_row_dict`` being
+# corrupted underneath it. It presented as SIGSEGV (exit 139) in the container and
+# as that fatal error natively on Windows, at a DIFFERENT game every run (observed
+# at 3, 5, 66, 191, 193, 318 and 405 games). Memory exhaustion, the Docker/WSL2
+# layer, psycopg2-binary's bundled OpenSSL, numpy/OpenBLAS and the host's BSOD
+# driver were each ruled out by direct measurement rather than inference.
+#
+# Running the identical workload on ``urllib.request`` completed the FULL 2017
+# season — 2,468 games, 732,475 pitch rows — with no crash. Against a fault that
+# had been firing roughly every 200 games, surviving 2,468 is about a 1-in-10^5
+# coincidence, so the transport is treated as the cause. What urllib takes out of
+# the loop: ``requests`` itself, plus the mypyc-compiled ``charset_normalizer``
+# (FOUR copies were resident — two standalone, two vendored inside requests),
+# ``_brotli`` and ``simplejson._speedups``.
+#
+# TRADE-OFFS, stated plainly and MEASURED rather than estimated:
+#
+#   1. No keep-alive pool — each of the ~65,000 requests in a full backfill pays
+#      its own TCP+TLS handshake.
+#   2. No transparent decompression. ``requests`` sent
+#      ``Accept-Encoding: gzip, deflate, br`` and decompressed for you. urllib does
+#      NOT merely omit the header — ``http.client.putrequest`` injects
+#      ``Accept-Encoding: identity``, which per RFC 9110 explicitly forbids the
+#      server from compressing (verified against a loopback server on 3.13).
+#      That is load-bearing: it is WHY :func:`_decode_body` has no gunzip branch.
+#      A compressed body cannot arrive, so there is nothing to decompress — the
+#      two facts are a matched pair, not an oversight. See the lock-step guard in
+#      ``test_compression_is_not_requested_without_decompression_support``.
+#      Cost, measured on a real feed/live payload (game 492011): 865,506 bytes
+#      identity vs 116,619 gzipped — 7.4x. Across a 9-season backfill (~21,600
+#      games) that is ~18.7 GB instead of ~2.5 GB.
+#
+# Both are accepted. The TIME cost of (2) is only ~70 ms/game (0.21 s vs 0.14 s per
+# fetch, i.e. ~25 min across a whole backfill that already runs for hours), and a
+# slower backfill that finishes beats a faster one that dies at game 200. Do NOT add
+# gzip here casually: it would put C-extension decompression back into the very loop
+# whose corruption is still unexplained, and would no longer be the configuration
+# that survived 2,468 consecutive games. Only revisit it on a metered connection,
+# and re-validate at season scale if you do.
+#
+# ``ETL_HTTP_TRANSPORT=requests`` restores the pooled Session for A/B comparison;
+# ``requests`` is imported LAZILY so the default path never loads those extensions
+# into the address space at all.
+_HTTP_TRANSPORT = os.environ.get("ETL_HTTP_TRANSPORT", "urllib").strip().lower()
 
 # SIM-441: statuses worth retrying. A 404/400/403 is a permanent answer — the old
 # code retried it 10 times over ~90 s, turning one missing game into a 90-second
@@ -611,9 +661,136 @@ def _parse_savant_embedded_json(html: str, start_marker: str, end_marker: str, e
         ) from exc
 
 
-def _retry_after_seconds(resp: requests.Response, attempt: int) -> float:
+class HttpError(OSError):
+    """A non-2xx response the retry policy could not resolve.
+
+    SIM-446: replaces ``requests.HTTPError`` so callers stay transport-agnostic.
+    Subclasses ``OSError`` to match ``requests.RequestException``'s own ancestry,
+    which keeps every existing ``except OSError`` handler behaving identically.
+    """
+
+    def __init__(self, message: str, *, status_code: int, url: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.url = url
+
+
+class _Response:
+    """The slice of an HTTP response this module actually consumes.
+
+    Deliberately tiny: ``.text``, the status, the headers, and the two methods
+    the retry policy calls. Both transports build one of these, so nothing
+    downstream of :func:`_fetch_once` knows which library made the request.
+    """
+
+    __slots__ = ("headers", "status_code", "text", "url")
+
+    def __init__(self, status_code: int, headers: dict[str, str], text: str, url: str) -> None:
+        self.status_code = status_code
+        self.headers = headers
+        self.text = text
+        self.url = url
+
+    def header(self, name: str) -> str | None:
+        """Case-insensitive lookup — HTTP header names are not case-sensitive."""
+        target = name.lower()
+        for key, value in self.headers.items():
+            if key.lower() == target:
+                return value
+        return None
+
+    def json(self) -> Any:
+        return json.loads(self.text)
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise HttpError(
+                f"HTTP {self.status_code} for {self.url}",
+                status_code=self.status_code,
+                url=self.url,
+            )
+
+
+def _decode_body(body: bytes, headers: Any) -> str:
+    """Decode a response body using the declared charset, defaulting to UTF-8."""
+    ctype = ""
+    getter = getattr(headers, "get", None)
+    if getter is not None:
+        ctype = getter("Content-Type") or getter("content-type") or ""
+    charset = "utf-8"
+    if "charset=" in ctype.lower():
+        charset = ctype.lower().split("charset=", 1)[1].split(";")[0].strip() or "utf-8"
+    try:
+        return body.decode(charset, errors="replace")
+    except LookupError:  # server named a charset Python doesn't know
+        return body.decode("utf-8", errors="replace")
+
+
+def _urllib_fetch(url: str, params: dict | None) -> _Response:
+    """One round-trip over stdlib ``urllib.request`` — the default transport."""
+    if params:
+        # doseq=True matches requests' handling of list values (e.g. gameTypes).
+        url = f"{url}?{urllib.parse.urlencode(params, doseq=True)}"
+    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:  # noqa: S310
+            body = _decode_body(resp.read(), resp.headers)
+            return _Response(resp.status, dict(resp.headers), body, url)
+    except urllib.error.HTTPError as exc:
+        # urllib RAISES on 4xx/5xx. The retry policy has to inspect the status to
+        # decide permanent-vs-transient, so hand it back as a response instead.
+        try:
+            body = _decode_body(exc.read(), exc.headers)
+            return _Response(exc.code, dict(exc.headers), body, url)
+        finally:
+            exc.close()
+
+
+_requests_session_lock = threading.Lock()
+_requests_session_cache: Any = None
+
+
+def _requests_session() -> Any:
+    """Build the pooled ``requests`` Session on first use (opt-in transport).
+
+    Lazy on purpose: importing ``requests`` pulls ``charset_normalizer``,
+    ``_brotli`` and ``simplejson._speedups`` into the address space, which is
+    exactly what the default transport exists to avoid. See ``_HTTP_TRANSPORT``.
+    """
+    global _requests_session_cache
+    with _requests_session_lock:
+        if _requests_session_cache is None:
+            import requests  # noqa: PLC0415 — deliberately deferred; see the docstring
+
+            session = requests.Session()
+            session.headers.update({"User-Agent": _USER_AGENT})
+            _requests_session_cache = session
+        return _requests_session_cache
+
+
+def _requests_fetch(url: str, params: dict | None) -> _Response:
+    """One round-trip over a pooled ``requests`` Session — opt-in transport."""
+    resp = _requests_session().get(url, params=params, timeout=HTTP_TIMEOUT_S)
+    return _Response(resp.status_code, dict(resp.headers), resp.text, resp.url)
+
+
+def _fetch_once(url: str, params: dict | None = None) -> _Response:
+    """A single HTTP round-trip with NO retry — the transport seam."""
+    if _HTTP_TRANSPORT == "requests":
+        return _requests_fetch(url, params)
+    return _urllib_fetch(url, params)
+
+
+# Transient failures worth retrying. ``urllib.error.URLError``, ``TimeoutError``,
+# ``ConnectionError`` and ``requests.RequestException`` are ALL ``OSError``
+# subclasses, so one entry covers both transports; ``http.client.HTTPException``
+# (malformed response, remote disconnect) is the one that isn't.
+_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (OSError, http.client.HTTPException)
+
+
+def _retry_after_seconds(resp: _Response, attempt: int) -> float:
     """Seconds to wait before the next attempt, honouring ``Retry-After``."""
-    raw = resp.headers.get("Retry-After") if resp is not None else None
+    raw = resp.header("Retry-After") if resp is not None else None
     if raw:
         try:
             return min(float(raw), _MAX_RETRY_AFTER_S)
@@ -622,7 +799,7 @@ def _retry_after_seconds(resp: requests.Response, attempt: int) -> float:
     return RETRY_BACKOFF_S * attempt
 
 
-def _http_get(url: str, params: dict | None = None) -> requests.Response:
+def _http_get(url: str, params: dict | None = None) -> _Response:
     """GET with bounded retry, returning the first SUCCESSFUL response.
 
     SIM-441 fixed three things here:
@@ -636,12 +813,18 @@ def _http_get(url: str, params: dict | None = None) -> requests.Response:
       attempt 10 — and if THAT one failed transiently, the caller raised despite
       having held valid data.
     * **One pooled Session** instead of a fresh TCP+TLS handshake per call.
+
+    SIM-446 moved the round-trip itself behind :func:`_fetch_once` so the retry
+    policy is shared by both transports. Note the pooling bullet above now only
+    applies to ``ETL_HTTP_TRANSPORT=requests``.
     """
     last_exc: Exception | None = None
     for attempt in range(1, MAX_API_RETRIES + 1):
         try:
-            resp = _SESSION.get(url, params=params, timeout=30)
-        except requests.RequestException as exc:  # connection/timeout — transient
+            resp = _fetch_once(url, params)
+        except HttpError:
+            raise  # a status we already classified as permanent — do not retry
+        except _TRANSIENT_ERRORS as exc:  # connection/timeout — transient
             last_exc = exc
             if attempt == MAX_API_RETRIES:
                 raise
@@ -656,7 +839,9 @@ def _http_get(url: str, params: dict | None = None) -> requests.Response:
             # Permanent: fail now rather than burning the retry budget.
             resp.raise_for_status()
 
-        last_exc = requests.HTTPError(f"{resp.status_code} for {url}", response=resp)
+        last_exc = HttpError(
+            f"HTTP {resp.status_code} for {url}", status_code=resp.status_code, url=url
+        )
         if attempt == MAX_API_RETRIES:
             resp.raise_for_status()
         delay = _retry_after_seconds(resp, attempt)

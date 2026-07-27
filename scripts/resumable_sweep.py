@@ -4,19 +4,18 @@ stochastic interpreter crash.
 
 THE PROBLEM
 -----------
-The sweep dies with::
+The sweep used to die with::
 
     Fatal Python error: _PyEval_EvalFrameDefault: Executing a cache.
 
 CPython's evaluation loop dispatched into an inline-cache entry instead of a real
-instruction — i.e. the bytecode / inline cache of ``_build_row_dict`` is being
-corrupted. It presents as SIGSEGV (exit 139) in Linux containers and as this
+instruction — i.e. the bytecode / inline cache of ``_build_row_dict`` was being
+corrupted. It presented as SIGSEGV (exit 139) in Linux containers and as this
 fatal error natively on Windows.
 
 **It is STOCHASTIC.** Observed failure points across runs: 3, 5, 66, 191, 193,
-318 and 405 games — with clean survivals at 600 and 808 under configurations
-that had previously crashed early. Any single-run A/B of this is worthless; only
-repeated trials could distinguish configurations.
+318 and 405 games. Any single short A/B of this is worthless; only season-scale
+runs or repeated trials can distinguish configurations.
 
 Ruled out by direct measurement (not inference):
 
@@ -25,10 +24,16 @@ Ruled out by direct measurement (not inference):
   * Riot Vanguard (host BSODs) . vgk stopped, zero bugchecks, still crashes
   * psycopg2-binary dual SSL ... source-built psycopg2, 1 OpenSSL, still crashes
   * numpy / OpenBLAS ........... import removed entirely, still crashes
-  * charset_normalizer ......... measured ZERO calls (API sends charset=UTF-8)
+  * charset_normalizer calls ... measured ZERO (the API sends charset=UTF-8)
   * simplejson C speedups ...... forced stdlib json, crashed at 193
   * psycopg2 connection churn .. 20,000 borrow/return cycles clean
   * TLS handshake churn ........ pg_stat_ssl shows ssl=False
+
+**SIM-446 addressed it** by moving the HTTP transport to stdlib
+``urllib.request`` (the loader's default since), which completed a full 2,468-game
+season cleanly. This wrapper is therefore no longer the primary defence — but it
+is kept, because that evidence is statistical rather than a proven root cause, and
+one transient in-flight corruption still surfaced during the clean run.
 
 WHY A WRAPPER IS A LEGITIMATE ANSWER HERE
 -----------------------------------------
@@ -39,8 +44,8 @@ corrupt a game — it can only stop the run. So retrying is safe, and the only c
 of a crash is lost progress, which this script eliminates by recording every
 completed ``game_pk`` and skipping it on the next attempt.
 
-This unblocks the Phase-7 sweep today. It does NOT fix the underlying fault, and
-it should not be mistaken for a fix — see docs/audit for the open investigation.
+It does NOT fix the underlying fault and should not be mistaken for one — it is
+the belt to SIM-446's braces. See docs/audit for the investigation record.
 
 USAGE
 -----

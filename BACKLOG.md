@@ -2,7 +2,42 @@
 
 *Owner: Product Manager (Agent 1) · Last updated: 2026-06-02 (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
 
-# 📋 2026-07-27 — REMEDIATION PLAN + register re-status (next free ID → SIM-444)
+# 💥 2026-07-27 — SIM-445 + SIM-446: the sweep-crash investigation, and the ETL HTTP transport (next free ID → SIM-447)
+
+**The blocker:** the SIM-440/441 corrective reload sweep — the data run that every downstream
+number depends on — could not finish. It died with `Fatal Python error:
+_PyEval_EvalFrameDefault: Executing a cache.` (SIGSEGV / exit 139 in the container), i.e. CPython
+dispatching into an inline-cache entry instead of a real instruction: the bytecode of
+`_build_row_dict` being corrupted underneath the interpreter. **Stochastic** — observed failures at
+games 3, 5, 66, 191, 193, 318 and 405.
+
+**Seven hypotheses were tested and SIX were killed by direct measurement, not inference:** memory
+exhaustion (flat 67 MiB, `OOMKilled=false`); numpy scalar coercion (3M iterations clean); the host's
+BSOD driver (Riot Vanguard `vgk.sys`, 21 bugchecks in 45 days — real, and separately fixed, but the
+crash persisted with it stopped); psycopg2-binary's bundled OpenSSL (source-built psycopg2 took the
+address space from four OpenSSL objects to one — still crashed); numpy/OpenBLAS (import removed
+entirely — still crashed); `charset_normalizer` (instrumented: **zero** calls, the API sends
+`charset=UTF-8`); `simplejson` C speedups (forced stdlib `json` — crashed at 193). Docker/WSL2 was
+excluded by reproducing the fault **natively on Windows** with no container.
+
+⚠ **A methodological correction is recorded here on purpose:** single runs of a stochastic process
+were briefly treated as valid A/B evidence, and one "clean" run turned out to have silently kept the
+supposedly-crashing configuration. Nothing below rests on a short run.
+
+| ID | Title | Type | Pri | Size | Depends-on | Status |
+|---|---|---|---|---|---|---|
+| SIM-445 | Source-build psycopg2, drop numpy from the ETL, add sweep crash probes | Bug/Ops | P1 | M | — | ✅ **DONE** (`191b151`). `psycopg2-binary` → `psycopg2` (+ `libpq-dev` builder / `libpq5` runtime) so the extension links the *system* libpq+libssl instead of bundling its own — psycopg2's own docs warn against the binary wheel in production, and it had put four OpenSSL objects in one address space. `numpy` removed from the ETL entirely (`math.atan` replaces `np.arctan` in the spray-angle calc). Two probes added: `scripts/native_sweep_probe.py` (runs the sweep outside Docker) and `scripts/resumable_sweep.py` (subprocess-per-attempt, records each committed `game_pk`, aborts on zero forward progress so a *deterministic* per-game defect can't spin forever). **Neither change fixed the crash** — both were correct on their own merits and are kept. |
+| SIM-446 | ETL HTTP transport: `requests` → stdlib `urllib.request` | Bug/Perf | P1 | M | SIM-445 | ✅ **DONE.** The seventh hypothesis. Swapping the transport removed `requests`, the mypyc-compiled `charset_normalizer` (**four** resident copies — two standalone, two vendored), `_brotli` and `simplejson._speedups` from the loop in one step. That run **completed the full 2017 season: 2,468 games, 732,475 pitch rows, zero crashes.** Against a fault firing roughly every 200 games, surviving 2,468 is ~1-in-10⁵ — evidence, not variance. Shipped as a transport **seam**: `_fetch_once` dispatches on `ETL_HTTP_TRANSPORT` (default `urllib`), the retry policy sits above it unchanged (bounded retry, permanent-4xx-not-retried, `Retry-After` honoured + capped), and `requests` is imported **lazily** so the default path never loads those extensions at all. `requests.HTTPError` → `HttpError(OSError)`; `_Response` carries `.text/.json()/.header()` with case-insensitive header lookup. **Verified live, not just in tests:** clean run in the container (system CA store validates both hosts; `José Ramírez` round-trips), `doseq` list params correct, a 404 fails in 0.1 s, and the Savant HTML scrape still parses 31 venue rows. **Cost, measured:** no keep-alive and no compression — 865,506 B vs 116,619 B per feed/live (7.4×), ~18.7 GB vs ~2.5 GB over a 9-season backfill, but only ~70 ms/game (~25 min total). Accepted; adding gzip would put C-extension work back in the unexplained loop. (urllib does not *omit* `Accept-Encoding` — `http.client` sends `identity`, which forbids the server compressing, which is precisely why the absent gunzip branch is safe; a lock-step test now binds the pair.) Tests +30, **8 mutations run, 1 hollow test found and rewritten** (`RemoteDisconnected` also inherits `ConnectionResetError`, so it passed via `OSError` even with `HTTPException` removed from the transient set). Gates: unit **2,529**, regression **53**, ruff + format + mypy clean. |
+
+**⚠ NOT claimed to be root-caused.** The mechanism is still unexplained, and one anomaly survived the
+clean run: game **492011** failed once with `integer out of range`, then reloaded perfectly on demand.
+Sequence exhaustion and a smallint mismatch were both ruled out (`integer`, not `smallint`; no
+sequence past 1e9) — so that is a *transient bad value*, which is a corruption fingerprint rather than
+a data defect. It was contained by design (per-game transaction rolled back; one retry fixed it). The
+rate is reduced, not provably zero. **`scripts/resumable_sweep.py` stays in use as the belt to this
+change's braces.**
+
+# 📋 2026-07-27 — REMEDIATION PLAN + register re-status (next free ID → SIM-444, now → SIM-447)
 
 **`docs/audit/2026-07-27-REMEDIATION-PLAN.md`** supersedes the 2026-07-23 register as the working
 document. It re-states all 273 findings against master `66746df`, groups every open item by FILE, and

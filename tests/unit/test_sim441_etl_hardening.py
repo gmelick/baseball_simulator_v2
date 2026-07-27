@@ -27,7 +27,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-import requests
 
 from pipeline.etl.etl_historical_loader import (
     _MAX_SCHEDULE_WINDOW_DAYS,
@@ -714,17 +713,47 @@ class TestNightlyIngestScript:
 
 
 class TestHttpHygiene:
-    def test_a_single_pooled_session_is_used(self):
+    def test_every_outbound_call_goes_through_the_retry_policy(self):
+        """No bare per-call transport use: everything funnels through
+        ``_http_get``/``_connect`` so retry, Retry-After and the permanent-4xx
+        rule apply uniformly."""
         from pipeline.etl import etl_historical_loader as mod
 
-        assert isinstance(mod._SESSION, requests.Session)
         src = inspect.getsource(mod)
         code = "\n".join(ln for ln in src.splitlines() if not ln.strip().startswith("#"))
-        assert "requests.get(" not in code, (
-            "every outbound call must go through the pooled Session — a full "
-            "backfill makes ~65,000 requests and a bare requests.get pays a fresh "
-            "TCP+TLS handshake for each"
+        assert "requests.get(" not in code
+        # urlopen appears exactly once — inside _urllib_fetch, below the retry loop.
+        assert code.count("urlopen(") == 1, (
+            "urlopen must only be called from _urllib_fetch; a direct call would "
+            "bypass the bounded retry, the Retry-After cap and the permanent-4xx rule"
         )
+
+    def test_requests_is_not_imported_by_the_default_transport(self):
+        """SIM-446: importing ``requests`` drags in the mypyc-compiled
+        ``charset_normalizer`` (four resident copies), ``_brotli`` and
+        ``simplejson._speedups`` — the exact stack whose removal let a full
+        2,468-game season complete without the interpreter-corruption crash.
+        The import must therefore stay INSIDE the opt-in branch."""
+        from pipeline.etl import etl_historical_loader as mod
+
+        assert mod._HTTP_TRANSPORT == "urllib", "stdlib urllib is the default transport"
+        src = inspect.getsource(mod)
+        for line in src.splitlines():
+            stripped = line.strip()
+            if stripped.startswith(("import requests", "from requests")):
+                assert line.startswith(" "), (
+                    "`import requests` must be indented (i.e. lazy, inside "
+                    "_requests_session) so the default path never loads it"
+                )
+
+    def test_opt_in_requests_transport_still_pools(self):
+        """The escape hatch has to remain a genuine A/B: one pooled Session, not
+        a fresh TCP+TLS handshake per call across ~65,000 backfill requests."""
+        src = inspect.getsource(
+            __import__("pipeline.etl.etl_historical_loader", fromlist=["x"])._requests_session
+        )
+        assert "Session()" in src
+        assert "_requests_session_cache" in src, "the Session must be cached, not rebuilt"
 
     def test_pool_construction_is_locked(self):
         src = inspect.getsource(HistoricalDataLoader._ensure_pool)

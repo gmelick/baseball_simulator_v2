@@ -3,48 +3,56 @@ native_sweep_probe.py — run the ETL sweep OUTSIDE Docker, on the Windows host.
 
 WHY THIS EXISTS
 ---------------
-The corrective reload sweep segfaults inside the container: SIGSEGV (exit 139),
-``OOMKilled=false``, memory flat at ~67 MiB, crashing inside CPython's own
-allocator at a DIFFERENT game every run (observed at 3, 5, 66, 318 and 405
-games). Every component has been isolated and none reproduces alone:
+The corrective reload sweep used to die with::
 
-  * pure-Python allocation loop ....... 32M ops, clean (both images)
-  * numpy scalar coercion ............. 3M iterations, clean
-  * psycopg2 connection churn ......... 20,000 borrow/return cycles, clean
-  * HTTP path (real MLB API) .......... 480 requests, clean
-  * psycopg2-binary dual OpenSSL ...... removed; still crashes
-  * numpy / OpenBLAS entirely ......... removed; still crashes
-  * Riot Vanguard (host BSOD driver) .. stopped, no bugchecks; still crashes
+    Fatal Python error: _PyEval_EvalFrameDefault: Executing a cache.
 
-It only reproduces under the full interleaved loop. The open question is
-whether the fault is in the application stack or in the Docker/WSL2 layer.
+CPython's evaluation loop dispatched into an inline-cache entry instead of a real
+instruction — i.e. the bytecode / inline cache of ``_build_row_dict`` was being
+corrupted underneath it. It presented as SIGSEGV (exit 139) in the container and
+as the fatal error above natively, at a DIFFERENT game every run (observed at 3,
+5, 66, 191, 193, 318 and 405 games).
 
-This script answers that. It runs the IDENTICAL workload against the SAME
-database using the Windows host's own CPython — no container, no WSL2, no
-Docker networking.
+Ruled out by direct measurement, not inference:
 
-  * Survives here, crashes in the container -> the Docker/WSL2 layer.
-  * Crashes here too                        -> the application/library stack,
-                                               and this becomes a clean minimal
-                                               reproducer to report upstream.
+  * memory exhaustion .......... flat 67 MiB, OOMKilled=false
+  * Docker / WSL2 .............. reproduced NATIVELY on Windows, no container
+  * Riot Vanguard (host BSODs) . vgk stopped, zero bugchecks, still crashed
+  * psycopg2-binary dual SSL ... source-built psycopg2, 1 OpenSSL, still crashed
+  * numpy / OpenBLAS ........... import removed entirely, still crashed
+  * charset_normalizer calls ... instrumented: ZERO (the API sends charset=UTF-8)
+  * simplejson C speedups ...... forced stdlib json, still crashed
+  * psycopg2 connection churn .. 20,000 borrow/return cycles clean
+  * TLS handshake churn ........ pg_stat_ssl shows ssl=False
 
-PREREQUISITE
-------------
-The host must be able to reach Postgres. As of this writing it CANNOT: Docker
-Desktop's published port (``DB_HOST_PORT``, currently 5434) accepts the TCP
-connection and then drops it during the Postgres startup handshake. Restarting
-Docker Desktop / ``wsl --shutdown`` normally clears that. Verify with::
+WHAT ACTUALLY FIXED IT (SIM-446)
+--------------------------------
+Swapping the HTTP transport from ``requests`` to stdlib ``urllib.request``. That
+run completed the FULL 2017 season — 2,468 games, 732,475 pitch rows, no crash.
+Against a fault that had been firing roughly every 200 games, surviving 2,468 is
+about a 1-in-10^5 coincidence.
 
-    python scripts/native_sweep_probe.py --check
+urllib is now the loader's DEFAULT (``ETL_HTTP_TRANSPORT``), so this script no
+longer patches anything — it runs the production code path, just outside Docker.
+
+HONEST LIMITS OF THAT CONCLUSION
+--------------------------------
+The fault is STOCHASTIC, so this is strong evidence, not proof. One anomaly
+remains from the clean run: game 492011 failed once with ``integer out of
+range``, then reloaded perfectly on demand — a transient bad value, which is a
+corruption fingerprint rather than a data defect. It was contained (per-game
+transaction rolled back; one retry fixed it), but it means the rate was reduced,
+not provably driven to zero. Re-read this file before declaring the bug closed.
 
 USAGE
 -----
-    python scripts/native_sweep_probe.py --check          # connectivity only
-    python scripts/native_sweep_probe.py --season 2017    # run the sweep
+    python scripts/native_sweep_probe.py --check              # connectivity only
+    python scripts/native_sweep_probe.py --season 2017        # run the sweep
     python scripts/native_sweep_probe.py --season 2017 --limit 500
+    python scripts/native_sweep_probe.py --transport requests # A/B the old path
 
 Reads the DSN from ``.env`` (``BASEBALL_DB_DSN``) and rewrites the host/port to
-``127.0.0.1:<DB_HOST_PORT>``. Nothing is printed that contains the password.
+``127.0.0.1:<DB_HOST_PORT>``. Nothing printed contains the password.
 
 The sweep is idempotent — ``reload_game`` deletes and re-inserts each game in one
 transaction, and the shrink guard refuses to replace a game with fewer rows — so
@@ -90,55 +98,6 @@ def _redact(dsn: str) -> str:
     return re.sub(r"//[^@]+@", "//***:***@", dsn)
 
 
-def _install_urllib_transport() -> None:
-    """Replace the loader's `requests`-based `_connect` with a stdlib one.
-
-    DIAGNOSTIC ONLY. The native crash reports::
-
-        Fatal Python error: _PyEval_EvalFrameDefault: Executing a cache.
-
-    which means CPython's evaluation loop dispatched into an inline-cache entry
-    instead of a real instruction — the bytecode or inline cache of
-    ``_build_row_dict`` is being corrupted. The surviving C extensions in that
-    process are ``psycopg2._psycopg``, ``_brotli``, ``simplejson._speedups`` and
-    FOUR copies of the mypyc-compiled ``charset_normalizer`` (two standalone, two
-    vendored inside ``requests``).
-
-    ``urllib.request`` reaches the same endpoints using only stdlib code, so this
-    removes ``requests``, ``charset_normalizer``, ``_brotli`` and ``simplejson``
-    from the loop in one step. If the sweep then survives, the fault is in that
-    stack; if it still crashes, the whole HTTP layer is exonerated.
-    """
-    import json as _json
-    import urllib.parse
-    import urllib.request
-
-    from pipeline.etl import etl_historical_loader as m
-
-    def _urllib_connect(url: str, params: dict | None = None) -> dict:
-        if params:
-            # doseq=True matches requests' handling of list values (gameTypes).
-            url = f"{url}?{urllib.parse.urlencode(params, doseq=True)}"
-        last: Exception | None = None
-        for attempt in range(1, m.MAX_API_RETRIES + 1):
-            try:
-                req = urllib.request.Request(
-                    url, headers={"User-Agent": "baseball-sim-etl/1.0 (urllib probe)"}
-                )
-                with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
-                    return _json.loads(resp.read().decode("utf-8"))
-            except Exception as exc:  # noqa: BLE001 — mirrors _http_get's retry shape
-                last = exc
-                if attempt == m.MAX_API_RETRIES:
-                    raise
-                time_mod = __import__("time")
-                time_mod.sleep(m.RETRY_BACKOFF_S * attempt)
-        raise last or RuntimeError("unreachable")
-
-    m._connect = _urllib_connect  # type: ignore[assignment]
-    print("HTTP transport: urllib.request (stdlib) — requests/charset_normalizer bypassed")
-
-
 def check(dsn: str) -> int:
     import psycopg2
 
@@ -176,9 +135,10 @@ def main() -> int:
     ap.add_argument("--season", type=int, default=2017)
     ap.add_argument("--limit", type=int, default=0, help="stop after N games (0 = whole season)")
     ap.add_argument(
-        "--urllib",
-        action="store_true",
-        help="use stdlib urllib.request instead of requests (bypasses charset_normalizer)",
+        "--transport",
+        choices=("urllib", "requests"),
+        default=None,
+        help="override ETL_HTTP_TRANSPORT (default: the loader's own default, urllib)",
     )
     args = ap.parse_args()
 
@@ -190,15 +150,18 @@ def main() -> int:
         return check(dsn)
 
     os.environ["BASEBALL_DB_DSN"] = dsn
+    if args.transport:
+        # Must precede the import — the loader reads this at module load.
+        os.environ["ETL_HTTP_TRANSPORT"] = args.transport
+
     print(f"platform : {sys.platform}  python {sys.version.split()[0]}  (NOT in Docker)")
     print(f"DSN      : {_redact(dsn)}")
 
-    from pipeline.etl.etl_historical_loader import HistoricalDataLoader
+    from pipeline.etl.etl_historical_loader import _HTTP_TRANSPORT, HistoricalDataLoader
 
-    if args.urllib:
-        _install_urllib_transport()
-
-    print("numpy loaded:", "numpy" in sys.modules, "(should be False)")
+    print(f"transport: {_HTTP_TRANSPORT}")
+    for mod in ("requests", "charset_normalizer", "numpy"):
+        print(f"  {mod} loaded: {mod in sys.modules}")
 
     loader = HistoricalDataLoader()
     if args.limit:
@@ -217,7 +180,10 @@ def main() -> int:
     try:
         summary = loader.refresh_seasons(args.season, args.season, reload=True)
         print("SUMMARY:", summary)
-        print("\nSURVIVED — no segfault on the host. That points at the Docker/WSL2 layer.")
+        print(
+            "\nCompleted without an interpreter crash. Note the fault is STOCHASTIC —\n"
+            "a single clean run is only meaningful at season scale (~2,400 games)."
+        )
         return 0
     except KeyboardInterrupt as exc:
         print(f"\nstopped early: {exc}")

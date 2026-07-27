@@ -1,3 +1,163 @@
+# Bug/Ops — SIM-445 + SIM-446: the sweep-crash investigation and the ETL HTTP transport — 2026-07-27
+**Authors: Data Engineer (Agent 4) · Performance Engineer (Agent 6) · QA (Agent 9) [cross-validation]**
+
+The SIM-440/441 corrective reload sweep — the data run every downstream number depends on — could not
+finish. This is the record of finding out why, including the hypotheses that were wrong.
+
+## The fault
+
+```
+Fatal Python error: _PyEval_EvalFrameDefault: Executing a cache.
+```
+
+CPython's evaluation loop dispatched into an inline-cache entry instead of a real instruction: the
+bytecode / inline cache of `_build_row_dict` was being corrupted underneath the interpreter. It
+presented as SIGSEGV (exit 139) in the container and as the fatal error above natively on Windows.
+
+**It is stochastic.** Observed failure points across runs: games 3, 5, 66, 191, 193, 318, 405.
+
+## Hypotheses killed by measurement
+
+Each was tested directly rather than reasoned about, and each was wrong:
+
+| Hypothesis | How it was killed |
+|---|---|
+| Memory exhaustion | RSS flat at 67 MiB; `OOMKilled=false` |
+| numpy scalar coercion | 3M-iteration isolation loop, clean |
+| Docker / WSL2 layer | **Reproduced natively on Windows**, no container involved |
+| Riot Vanguard (`vgk.sys`) | Real — 21 host bugchecks in 45 days, separately fixed — but the sweep still crashed with the driver stopped and zero bugchecks |
+| psycopg2-binary's bundled OpenSSL | Source-built psycopg2 took the address space from four OpenSSL objects to one; still crashed |
+| numpy / OpenBLAS | Import removed from the ETL entirely; still crashed |
+| `charset_normalizer` | Instrumented — **zero calls** (the API sends `charset=UTF-8`) |
+| `simplejson` C speedups | Forced stdlib `json`; crashed at game 193 |
+
+⚠ **Methodological correction, recorded deliberately.** Single runs of a stochastic process were
+briefly treated as valid A/B evidence. One "clean" run was later found to have silently kept the
+supposedly-crashing configuration, because a patch had failed to apply. Nothing in this entry rests
+on a short run.
+
+## SIM-445 — correct on its own merits, but not the fix
+
+* **`psycopg2-binary` → `psycopg2`** (source build; `libpq-dev` in the builder stage, `libpq5` at
+  runtime). The extension now links the *system* libpq and libssl instead of bundling its own copies.
+  psycopg2's own documentation warns against the binary wheel for production precisely because of the
+  dual-OpenSSL-in-one-address-space problem.
+* **numpy removed from the ETL entirely** — `math.atan` replaces `np.arctan` in the spray-angle
+  calculation. The ETL no longer imports numpy at all.
+* **Two probes added.** `scripts/native_sweep_probe.py` runs the sweep outside Docker against the same
+  database. `scripts/resumable_sweep.py` drives the sweep as one subprocess per attempt, records every
+  committed `game_pk`, and **aborts if an attempt makes zero forward progress** — so a *deterministic*
+  per-game defect surfaces instead of spinning forever. This is safe because `reload_game` is
+  idempotent by construction: DELETE + re-INSERT in one transaction, with a shrink guard that refuses
+  to replace a game with fewer rows than it removed.
+
+Neither change fixed the crash. Both are kept.
+
+## SIM-446 — the seventh hypothesis, and what actually completed a season
+
+Swapping the ETL's HTTP transport from `requests` to stdlib `urllib.request` removes `requests`, the
+mypyc-compiled `charset_normalizer` (**four** resident copies — two standalone, two vendored inside
+requests), `_brotli` and `simplejson._speedups` from the loop in one step.
+
+**That run completed the full 2017 season: 2,468 games, 2,467 loaded, 732,475 pitch rows, zero
+crashes.** Against a fault that had been firing roughly every 200 games, surviving 2,468 is about a
+1-in-10^5 coincidence. That is evidence, not variance.
+
+### Shape of the change
+
+Implemented as a **transport seam** rather than a rip-and-replace, so the retry policy is shared and
+the old path stays available for comparison:
+
+* `_fetch_once(url, params)` — one round-trip, no retry; dispatches on `ETL_HTTP_TRANSPORT`
+  (default `urllib`, opt-in `requests`).
+* `_http_get` is unchanged in behaviour and sits *above* the seam: bounded retry, permanent 4xx never
+  retried, `Retry-After` honoured and capped at 60 s.
+* `requests.HTTPError` → `HttpError(OSError)` carrying `.status_code`/`.url`. Subclassing `OSError`
+  matches `requests.RequestException`'s own ancestry, so every existing `except OSError` handler
+  behaves identically.
+* `_Response` — `.text`, `.json()`, `.raise_for_status()`, and `.header()` with **case-insensitive**
+  lookup (urllib preserves the server's header casing verbatim, so a plain dict lookup on
+  `Retry-After` would miss).
+* `_TRANSIENT_ERRORS = (OSError, http.client.HTTPException)`. `URLError`, `TimeoutError`,
+  `ConnectionError` and `requests.RequestException` are all `OSError` subclasses, so one entry covers
+  both transports; `HTTPException` is the one that isn't.
+* **`import requests` is lazy**, inside `_requests_session()`. The default path never loads those
+  extensions into the address space at all.
+
+### Verified live, not only in tests
+
+* In the **container** (where the CA store differs from Windows): system trust validates both
+  `statsapi.mlb.com` and `baseballsavant.mlb.com`; `requests`/`charset_normalizer` confirmed absent
+  from `sys.modules`; `José Ramírez` round-trips through `_decode_body` intact.
+* `doseq=True` list-param encoding correct — `gameTypes=R&gameTypes=F`, not `['R', 'F']`, which would
+  have silently returned the wrong set of games.
+* A permanent 404 fails in **0.1 s** (the permanent-4xx rule survives the swap).
+* The Savant HTML scrape still parses **31 venue rows**; `Content-Encoding` is `None`, so no brotli
+  decoder is needed.
+
+### Cost, measured rather than estimated
+
+No keep-alive pool, and no transparent decompression. Note the precise mechanism, because it is
+load-bearing: urllib does **not** merely omit `Accept-Encoding` — `http.client.putrequest` injects
+`Accept-Encoding: identity`, which per RFC 9110 explicitly *forbids* the server from compressing
+(verified against a loopback server on 3.13). That is exactly why `_decode_body` is allowed to have
+no gunzip branch — a compressed body cannot arrive, so the two facts are a matched pair rather than
+an oversight. A lock-step test now fails if either half changes without the other, because asking for
+gzip *without* decompressing would feed mojibake straight into `json.loads` and the Savant parser:
+
+| | per feed/live payload | 9-season backfill (~21,600 games) |
+|---|---|---|
+| identity (current) | 865,506 B | ~18.7 GB |
+| gzip | 116,619 B | ~2.5 GB |
+
+7.4x more bytes — but only **~70 ms per game** (0.21 s vs 0.14 s per fetch), i.e. ~25 min across a
+backfill that already runs for hours. Accepted. Adding gzip is deliberately *not* done: it would put
+C-extension decompression back into the very loop whose corruption is still unexplained, and the
+result would no longer be the configuration that survived 2,468 consecutive games.
+
+### Tests
+
++30 tests. `TestConnect` now patches the `_fetch_once` seam instead of a library's `get`, so it is
+valid for both transports; `TestUrllibTransport` covers the stdlib path directly (doseq encoding,
+`HTTPError` → `_Response` conversion, charset decoding, unknown-codec fallback, connection-error
+propagation, the compression lock-step guard, and a real-socket check that CPython still sends
+`identity`).
+
+**8 mutations run; 1 hollow test found and rewritten.** `test_malformed_response_is_retried` stayed
+GREEN when `http.client.HTTPException` was removed from the transient set — because
+`RemoteDisconnected` *also* inherits `ConnectionResetError` and so was caught as an `OSError` anyway.
+Rewritten to use `BadStatusLine`, with an in-test assertion that the exception is outside the
+`OSError` tree so it cannot silently regress to passing for the wrong reason.
+
+Gates: unit **2,529**, regression **53**, ruff + ruff format + mypy clean.
+
+### Independent review
+
+The change was put through an adversarial multi-agent review (5 independent lenses — HTTP semantics,
+retry/error parity, body decoding, call sites/config, test quality — each finding then handed to a
+separate agent instructed to refute it). **19 findings raised, 18 refuted, 1 confirmed**, and the one
+that survived is the `Accept-Encoding: identity` mechanism recorded above: the original comment said
+urllib "sends no `Accept-Encoding`", which was wrong in a way that mattered, because the correct fact
+is what makes the missing gunzip branch safe rather than latent. Notable refutations worth not
+re-litigating: the 3xx-as-success concern (the `status_code < 400` gate is unchanged SIM-441 code, not
+a regression) and the quoted-charset concern (CPython's `encodings.normalize_encoding` collapses
+quote marks, so `charset="iso-8859-1"` still resolves).
+
+## What is NOT claimed
+
+The mechanism is still unexplained. One anomaly survived the clean run: game **492011** failed once
+with `integer out of range`, then reloaded perfectly on demand. Sequence exhaustion and a smallint
+mismatch were both ruled out (the error is `integer`, not `smallint`; no sequence is past 1e9) — so it
+was a *transient bad value*, which is a corruption fingerprint rather than a data defect. It was
+contained by design: the per-game transaction rolled back and one retry fixed it. **The rate is
+reduced, not provably zero**, so `scripts/resumable_sweep.py` stays in use as the belt to this
+change's braces.
+
+## Status of the data
+
+**2017 is complete** — 2,468 games, 732,475 rows, zero non-loaded in `raw.etl_game_ingest`.
+2018-2025 remain to run.
+
 # Bug/Data — SIM-441: ETL hardening batch (12 defects) — 2026-07-27
 **Authors: Data Engineer (Agent 4) · QA (Agent 9) [cross-validation]**
 

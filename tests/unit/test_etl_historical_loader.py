@@ -6,7 +6,7 @@ Targets:
   - _build_row_dict column rename + coercion
   - _validate_row two-tier validation rules
   - _parse_height, _map_game_status helpers
-  - _connect HTTP retry behavior (with mocked `requests`)
+  - _connect HTTP retry behavior (patched at the `_fetch_once` transport seam)
   - HistoricalDataLoader constructor DSN resolution (SIM-153)
   - HistoricalDataLoader DB methods (psycopg2 mocked end-to-end)
   - _process_and_insert orchestration including hard-error / warning paths
@@ -21,12 +21,16 @@ connections are MagicMock objects that simulate context-manager semantics.
 
 from __future__ import annotations
 
+import http.client
+import inspect
+import json
+import urllib.error
 from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pytest
-import requests
 
+from pipeline.etl import etl_historical_loader as etl_mod
 from pipeline.etl.coercion import to_bool, to_float, to_int, to_str
 from pipeline.etl.etl_historical_loader import (
     ALWAYS_REQUIRED,
@@ -570,24 +574,26 @@ class TestValidateRowWarnings:
 
 
 def _resp(status=200, payload=None, headers=None):
-    """A stand-in requests.Response with the attributes _http_get inspects."""
-    r = MagicMock()
-    r.status_code = status
-    r.headers = headers or {}
-    r.json.return_value = payload if payload is not None else {}
-    if status >= 400:
-        r.raise_for_status.side_effect = requests.HTTPError(f"{status}")
-    else:
-        r.raise_for_status.return_value = None
-    return r
+    """A real ``_Response`` — the transport-agnostic shape ``_http_get`` inspects."""
+    return etl_mod._Response(
+        status_code=status,
+        headers=headers or {},
+        text=json.dumps(payload if payload is not None else {}),
+        url="http://example.com",
+    )
 
 
 class TestConnect:
-    """SIM-441: transport moved to a pooled ``requests.Session``."""
+    """SIM-446: the retry policy sits above a transport seam (``_fetch_once``).
+
+    Patching that seam rather than a library's own ``get`` keeps these tests
+    valid for BOTH transports — stdlib urllib (the default) and the opt-in
+    pooled ``requests`` Session.
+    """
 
     def test_success_first_try(self):
         with patch(
-            "pipeline.etl.etl_historical_loader._SESSION.get",
+            "pipeline.etl.etl_historical_loader._fetch_once",
             return_value=_resp(200, {"hello": "world"}),
         ):
             assert _connect("http://example.com") == {"hello": "world"}
@@ -595,8 +601,8 @@ class TestConnect:
     def test_retries_then_succeeds(self):
         with (
             patch(
-                "pipeline.etl.etl_historical_loader._SESSION.get",
-                side_effect=[requests.ConnectionError("transient"), _resp(200, {"ok": True})],
+                "pipeline.etl.etl_historical_loader._fetch_once",
+                side_effect=[ConnectionError("transient"), _resp(200, {"ok": True})],
             ),
             patch("pipeline.etl.etl_historical_loader.time.sleep") as mock_sleep,
         ):
@@ -607,13 +613,36 @@ class TestConnect:
     def test_raises_after_max_retries(self):
         with (
             patch(
-                "pipeline.etl.etl_historical_loader._SESSION.get",
-                side_effect=requests.ConnectionError("permanent"),
+                "pipeline.etl.etl_historical_loader._fetch_once",
+                side_effect=ConnectionError("permanent"),
             ),
             patch("pipeline.etl.etl_historical_loader.time.sleep"),
-            pytest.raises(requests.ConnectionError, match="permanent"),
+            pytest.raises(ConnectionError, match="permanent"),
         ):
             _connect("http://example.com")
+
+    def test_malformed_response_is_retried(self):
+        """``http.client.HTTPException`` is NOT an OSError — it needs its own
+        entry in the transient set or a malformed reply would abort the game.
+
+        ``BadStatusLine`` is used deliberately: ``RemoteDisconnected`` ALSO
+        inherits ``ConnectionResetError``, so it is an OSError and would pass
+        this test even with ``HTTPException`` removed from the transient set.
+        """
+        assert not issubclass(http.client.BadStatusLine, OSError), (
+            "this test is only meaningful with an exception OUTSIDE the OSError tree"
+        )
+        with (
+            patch(
+                "pipeline.etl.etl_historical_loader._fetch_once",
+                side_effect=[
+                    http.client.BadStatusLine("garbage"),
+                    _resp(200, {"ok": True}),
+                ],
+            ),
+            patch("pipeline.etl.etl_historical_loader.time.sleep"),
+        ):
+            assert _connect("http://example.com") == {"ok": True}
 
     def test_permanent_4xx_is_not_retried(self):
         """SIM-441: a 404 is a final answer.
@@ -622,20 +651,19 @@ class TestConnect:
         missing resource into a ~90-second stall.
         """
         with (
-            patch(
-                "pipeline.etl.etl_historical_loader._SESSION.get", return_value=_resp(404)
-            ) as get,
+            patch("pipeline.etl.etl_historical_loader._fetch_once", return_value=_resp(404)) as get,
             patch("pipeline.etl.etl_historical_loader.time.sleep") as sleep,
-            pytest.raises(requests.HTTPError),
+            pytest.raises(etl_mod.HttpError) as excinfo,
         ):
             _connect("http://example.com/missing")
+        assert excinfo.value.status_code == 404
         assert get.call_count == 1, "a 404 must not be retried"
         assert not sleep.called
 
     def test_429_is_retried_and_honours_retry_after(self):
         with (
             patch(
-                "pipeline.etl.etl_historical_loader._SESSION.get",
+                "pipeline.etl.etl_historical_loader._fetch_once",
                 side_effect=[
                     _resp(429, headers={"Retry-After": "7"}),
                     _resp(200, {"ok": True}),
@@ -646,11 +674,27 @@ class TestConnect:
             assert _connect("http://example.com") == {"ok": True}
         sleep.assert_called_once_with(7.0)
 
+    def test_retry_after_is_matched_case_insensitively(self):
+        """HTTP header names are case-insensitive; urllib preserves the server's
+        casing verbatim, so a plain dict lookup on ``Retry-After`` would miss."""
+        with (
+            patch(
+                "pipeline.etl.etl_historical_loader._fetch_once",
+                side_effect=[
+                    _resp(429, headers={"retry-after": "9"}),
+                    _resp(200, {"ok": True}),
+                ],
+            ),
+            patch("pipeline.etl.etl_historical_loader.time.sleep") as sleep,
+        ):
+            _connect("http://example.com")
+        sleep.assert_called_once_with(9.0)
+
     def test_retry_after_is_capped(self):
         """A server asking for an hour must not stall the whole backfill."""
         with (
             patch(
-                "pipeline.etl.etl_historical_loader._SESSION.get",
+                "pipeline.etl.etl_historical_loader._fetch_once",
                 side_effect=[
                     _resp(503, headers={"Retry-After": "3600"}),
                     _resp(200, {"ok": True}),
@@ -660,6 +704,157 @@ class TestConnect:
         ):
             _connect("http://example.com")
         assert sleep.call_args.args[0] <= 60.0
+
+
+class TestUrllibTransport:
+    """SIM-446: the stdlib transport is the DEFAULT production path, so its own
+    behaviour is tested directly rather than only through the retry policy."""
+
+    @staticmethod
+    def _fake_urlopen(status, body, headers):
+        """A stand-in for urlopen's context-manager response object."""
+        resp = MagicMock()
+        resp.status = status
+        resp.read.return_value = body
+        resp.headers = headers
+        resp.__enter__ = lambda self: self
+        resp.__exit__ = lambda self, *a: False
+        return resp
+
+    def test_params_are_urlencoded_with_doseq(self):
+        """``gameTypes`` is a LIST. Without doseq it stringifies as ``['R', 'F']``
+        and the schedule endpoint silently returns the wrong set of games."""
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["ua"] = req.get_header("User-agent")
+            return self._fake_urlopen(200, b"{}", {"Content-Type": "application/json"})
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            etl_mod._urllib_fetch(
+                "https://statsapi.mlb.com/api/v1/schedule",
+                {"sportId": 1, "gameTypes": ["R", "F"]},
+            )
+        assert "gameTypes=R&gameTypes=F" in captured["url"]
+        assert "sportId=1" in captured["url"]
+        assert captured["ua"] == etl_mod._USER_AGENT
+
+    def test_http_error_becomes_a_response_not_an_exception(self):
+        """urllib RAISES on 4xx. If that escaped, the retry policy could never
+        see the status code and a 404 would be retried as if transient."""
+        err = urllib.error.HTTPError(
+            "http://example.com", 404, "Not Found", {"Content-Type": "text/plain"}, None
+        )
+        err.read = lambda: b"missing"  # type: ignore[method-assign]
+        err.close = lambda: None  # type: ignore[method-assign]
+
+        with patch("urllib.request.urlopen", side_effect=err):
+            resp = etl_mod._urllib_fetch("http://example.com", None)
+        assert resp.status_code == 404
+        assert resp.text == "missing"
+
+    def test_a_404_from_the_real_transport_is_not_retried(self):
+        """End-to-end through _http_get with only urlopen faked — proves the
+        HTTPError→_Response conversion and the permanent-4xx rule compose."""
+        err = urllib.error.HTTPError("http://example.com", 404, "NF", {}, None)
+        err.read = lambda: b""  # type: ignore[method-assign]
+        err.close = lambda: None  # type: ignore[method-assign]
+
+        with (
+            patch("urllib.request.urlopen", side_effect=err) as urlopen,
+            patch("pipeline.etl.etl_historical_loader.time.sleep") as sleep,
+            pytest.raises(etl_mod.HttpError),
+        ):
+            _connect("http://example.com")
+        assert urlopen.call_count == 1
+        assert not sleep.called
+
+    def test_body_is_decoded_using_the_declared_charset(self):
+        body = "Muñoz".encode("latin-1")
+        with patch(
+            "urllib.request.urlopen",
+            return_value=self._fake_urlopen(
+                200, body, {"Content-Type": "text/html; charset=latin-1"}
+            ),
+        ):
+            resp = etl_mod._urllib_fetch("http://example.com", None)
+        assert resp.text == "Muñoz"
+
+    def test_unknown_charset_falls_back_to_utf8(self):
+        """A server naming a codec Python doesn't have must not abort the game."""
+        with patch(
+            "urllib.request.urlopen",
+            return_value=self._fake_urlopen(
+                200, b"ok", {"Content-Type": "text/html; charset=x-not-a-codec"}
+            ),
+        ):
+            assert etl_mod._urllib_fetch("http://example.com", None).text == "ok"
+
+    def test_connection_error_propagates_for_the_retry_loop(self):
+        """``URLError`` must reach _http_get as an exception so it is retried."""
+        with (
+            patch("urllib.request.urlopen", side_effect=urllib.error.URLError("down")),
+            pytest.raises(urllib.error.URLError),
+        ):
+            etl_mod._urllib_fetch("http://example.com", None)
+
+    def test_compression_is_not_requested_without_decompression_support(self):
+        """LOCK-STEP GUARD: asking for compression and being able to decompress it
+        must change together.
+
+        urllib does not merely omit ``Accept-Encoding`` — ``http.client`` injects
+        ``Accept-Encoding: identity``, which forbids the server from compressing.
+        That is the ONLY reason ``_decode_body`` is allowed to have no gunzip
+        branch: a compressed body cannot arrive. If someone adds
+        ``Accept-Encoding: gzip`` to claw back the measured 7.4x bandwidth without
+        also decompressing, every response body silently becomes mojibake fed
+        straight into ``json.loads`` and the Savant HTML parser. This test fails
+        the moment half of that pair lands.
+        """
+        asks_for_compression = "accept-encoding" in inspect.getsource(etl_mod._urllib_fetch).lower()
+        can_decompress = any(
+            token in inspect.getsource(etl_mod._decode_body).lower()
+            for token in ("content-encoding", "gzip", "zlib", "decompress")
+        )
+        assert asks_for_compression == can_decompress, (
+            "Accept-Encoding and Content-Encoding handling must be added together: "
+            f"requests compression={asks_for_compression}, can decompress={can_decompress}"
+        )
+
+    def test_urllib_sends_identity_encoding_over_a_real_socket(self):
+        """The claim above is a fact about CPython, so pin it against a real
+        server rather than trusting the docs — if a future CPython stops sending
+        ``identity``, the no-gunzip assumption quietly stops being safe."""
+        import http.server
+        import threading
+
+        seen: dict[str, str] = {}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 — stdlib callback name
+                seen.update({k.lower(): v for k, v in self.headers.items()})
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"ok": true}')
+
+            def log_message(self, *args):  # silence the stderr access log
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.handle_request, daemon=True).start()
+        try:
+            resp = etl_mod._urllib_fetch(f"http://127.0.0.1:{server.server_address[1]}/", None)
+        finally:
+            server.server_close()
+
+        assert resp.json() == {"ok": True}
+        assert seen.get("accept-encoding") == "identity", (
+            f"expected identity encoding, got {seen.get('accept-encoding')!r} — "
+            "a compressed body could now arrive and _decode_body cannot handle one"
+        )
+        assert seen.get("user-agent") == etl_mod._USER_AGENT
 
 
 # ===========================================================================
@@ -1125,7 +1320,7 @@ class TestEnsurePrerequisitesShortCircuit:
 
     def test_ensure_venue_already_exists(self):
         loader, _, cur = _make_loader_with_mock_conn(fetchone_returned=(1,))
-        with patch("pipeline.etl.etl_historical_loader.requests.get") as mock_req:
+        with patch("pipeline.etl.etl_historical_loader._fetch_once") as mock_req:
             loader._ensure_venue(17, 2024)
         mock_req.assert_not_called()  # No API call needed when venue exists
 
