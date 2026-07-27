@@ -106,6 +106,16 @@ omit = [
     "simulation/play_pool_sampler.py",
     "pipeline/batch/play_pool_cache.py",
     "api/routes/games.py",
+    # SIM-439 Data Lab / Similarity Explorer: live-DB + engine-backed routes,
+    # exercised by integration/E2E, not the unit suite (same rationale as
+    # games.py). The pure SELECT-only validator (api/routes/sql_safety.py) is
+    # NOT omitted — it is unit-tested in tests/unit/test_sql_safety.py.
+    "api/routes/analytics.py",
+    "api/routes/players.py",
+    "api/routes/schema_introspect.py",
+    "api/routes/sql_runner.py",
+    "api/routes/ai_assistant.py",
+    "api/routes/similarity_explorer.py",
 ]
 
 [tool.coverage.report]

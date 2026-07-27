@@ -1,0 +1,95 @@
+/* states.module.css — SIM-439 shared page states */
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sim-space-2);
+  padding: var(--sim-space-8);
+  color: var(--sim-color-text-muted);
+  font-size: var(--sim-text-sm);
+}
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--sim-color-border-strong);
+  border-top-color: var(--sim-color-interactive);
+  border-radius: var(--sim-radius-full);
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
+.empty,
+.warming,
+.notConfigured {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sim-space-2);
+  padding: var(--sim-space-8) var(--sim-space-4);
+  text-align: center;
+  color: var(--sim-color-text-muted);
+}
+.emptyTitle {
+  color: var(--sim-color-text);
+  font-weight: var(--sim-font-semibold);
+  font-size: var(--sim-text-base);
+}
+.emptyHint {
+  color: var(--sim-color-text-muted);
+  font-size: var(--sim-text-sm);
+  max-width: 52ch;
+  line-height: var(--sim-leading-normal);
+}
+.warmingTitle {
+  color: var(--sim-color-text);
+  font-weight: var(--sim-font-semibold);
+  margin-top: var(--sim-space-1);
+}
+.notConfiguredIcon {
+  font-size: var(--sim-text-4xl);
+}
+.code {
+  font-family: var(--sim-font-mono);
+  background: var(--sim-color-surface-alt);
+  padding: 1px 5px;
+  border-radius: var(--sim-radius-sm);
+  font-size: var(--sim-text-xs);
+}
+
+.error {
+  padding: var(--sim-space-3) var(--sim-space-4);
+  background: var(--sim-danger-100);
+  color: var(--sim-danger-700);
+  border: 1px solid var(--sim-danger-500);
+  border-radius: var(--sim-radius-md);
+  font-size: var(--sim-text-sm);
+}
+.errorHint {
+  margin-top: var(--sim-space-1);
+  font-size: var(--sim-text-xs);
+  opacity: 0.85;
+}
+
+.retryBtn {
+  margin-top: var(--sim-space-2);
+  background: var(--sim-color-interactive);
+  color: var(--sim-color-text-inverse);
+  border: none;
+  border-radius: var(--sim-radius-md);
+  padding: var(--sim-space-2) var(--sim-space-4);
+  font-size: var(--sim-text-sm);
+  font-weight: var(--sim-font-medium);
+}
+.retryBtn:hover {
+  background: var(--sim-color-interactive-hover);
+}

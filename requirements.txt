@@ -64,6 +64,15 @@ faiss-cpu>=1.9,<2.0
 POT>=0.9.5,<1.0                 # Wasserstein distance for GMM arsenal similarity (>=0.9.5 ships cp313 manylinux2014 wheels — works on python:3.13-slim without compiling from source)
 
 # ---------------------------------------------------------------------------
+# AI assistant (optional — SIM-439)
+# ---------------------------------------------------------------------------
+# The Data Lab AI assistant's LLM client. Import-gated in api/main.py's lifespan
+# (created only when ANTHROPIC_API_KEY is set), so the app + test suite boot fine
+# with or without this package installed. Pinned below the 1.0 line so a major
+# SDK bump is a deliberate upgrade, not a silent resolve.
+anthropic>=0.40,<1.0
+
+# ---------------------------------------------------------------------------
 # Baseball data ingestion
 # ---------------------------------------------------------------------------
 pybaseball>=2.2,<3.0

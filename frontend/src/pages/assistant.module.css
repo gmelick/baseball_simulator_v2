@@ -1,0 +1,198 @@
+/* assistant.module.css — SIM-439 */
+
+.page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: var(--sim-space-4) var(--sim-space-6);
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - var(--sim-header-height) - 120px);
+}
+
+.headerStrip {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-3);
+  padding-bottom: var(--sim-space-3);
+  border-bottom: 1px solid var(--sim-color-border);
+  margin-bottom: var(--sim-space-3);
+  flex-wrap: wrap;
+}
+.headerNote {
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+}
+
+.thread {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-4);
+  padding-bottom: var(--sim-space-4);
+}
+
+.turnUser {
+  align-self: flex-end;
+  max-width: 80%;
+  background: var(--sim-primary-600);
+  color: var(--sim-color-text-inverse);
+  padding: var(--sim-space-2) var(--sim-space-3);
+  border-radius: var(--sim-radius-lg);
+  font-size: var(--sim-text-sm);
+}
+.turnAssistant {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-3);
+}
+.msgText {
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text);
+  line-height: var(--sim-leading-relaxed);
+  white-space: pre-wrap;
+}
+.msgText code {
+  font-family: var(--sim-font-mono);
+  font-size: var(--sim-text-xs);
+  background: var(--sim-color-surface-alt);
+  padding: 1px 4px;
+  border-radius: var(--sim-radius-sm);
+}
+
+.sqlBlock {
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-md);
+  overflow: hidden;
+  background: var(--sim-color-surface);
+}
+.sqlHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sim-space-2);
+  padding: var(--sim-space-1p5) var(--sim-space-3);
+  background: var(--sim-color-surface-alt);
+  border-bottom: 1px solid var(--sim-color-border);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+}
+.sqlActions {
+  display: flex;
+  gap: var(--sim-space-2);
+}
+.sqlBtn {
+  background: none;
+  border: 1px solid var(--sim-color-border-strong);
+  border-radius: var(--sim-radius-sm);
+  color: var(--sim-color-interactive);
+  font-size: var(--sim-text-xs);
+  padding: 1px var(--sim-space-2);
+}
+.sqlBtn:hover {
+  background: var(--sim-color-surface);
+}
+.sqlCode {
+  margin: 0;
+  padding: var(--sim-space-2) var(--sim-space-3);
+  font-family: var(--sim-font-mono);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text);
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+.resultLine {
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+  font-family: var(--sim-font-mono);
+  margin-top: var(--sim-space-1);
+}
+.errorLine {
+  padding: var(--sim-space-2) var(--sim-space-3);
+  background: var(--sim-danger-100);
+  color: var(--sim-danger-700);
+  border-radius: var(--sim-radius-md);
+  font-size: var(--sim-text-xs);
+  font-family: var(--sim-font-mono);
+}
+
+.caret {
+  display: inline-block;
+  width: 7px;
+  height: 1em;
+  background: var(--sim-color-interactive);
+  vertical-align: text-bottom;
+  animation: blink 1s step-start infinite;
+}
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .caret {
+    animation: none;
+  }
+}
+
+/* Composer */
+.composer {
+  position: sticky;
+  bottom: 0;
+  background: var(--sim-color-bg);
+  padding-top: var(--sim-space-3);
+  border-top: 1px solid var(--sim-color-border);
+  display: flex;
+  gap: var(--sim-space-2);
+  align-items: flex-end;
+}
+.composerInput {
+  flex: 1;
+  resize: none;
+  padding: var(--sim-space-2) var(--sim-space-3);
+  font-family: var(--sim-font-sans);
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text);
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border-strong);
+  border-radius: var(--sim-radius-md);
+  min-height: 44px;
+  max-height: 140px;
+}
+.composerInput:focus {
+  outline: none;
+  border-color: var(--sim-color-interactive);
+}
+.sendBtn {
+  background: var(--sim-color-interactive);
+  color: var(--sim-color-text-inverse);
+  border: none;
+  border-radius: var(--sim-radius-md);
+  padding: var(--sim-space-2) var(--sim-space-5);
+  font-size: var(--sim-text-sm);
+  font-weight: var(--sim-font-medium);
+  height: 44px;
+}
+.sendBtn:disabled {
+  opacity: 0.5;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sim-space-2);
+  margin-top: var(--sim-space-3);
+}
+.chip {
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border-strong);
+  border-radius: var(--sim-radius-full);
+  color: var(--sim-color-text);
+  font-size: var(--sim-text-xs);
+  padding: var(--sim-space-1p5) var(--sim-space-3);
+  cursor: pointer;
+}
+.chip:hover {
+  border-color: var(--sim-color-interactive);
+  color: var(--sim-color-interactive);
+}

@@ -13,3 +13,6 @@ export type { CardProps } from './Card'
 
 export { Panel } from './Panel'
 export type { PanelAccent, PanelProps } from './Panel'
+
+export { Drawer } from './Drawer'
+export type { DrawerProps } from './Drawer'

@@ -1,0 +1,63 @@
+/* ComponentScoreBars.module.css — SIM-439 */
+
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-3);
+}
+
+.compositeRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-2);
+}
+.compositeLabel {
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text-muted);
+}
+.compositeVal {
+  font-family: var(--sim-font-mono);
+  font-size: var(--sim-text-xl);
+  font-weight: var(--sim-font-semibold);
+  color: var(--sim-color-text);
+}
+
+.bars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-2);
+}
+.barRow {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  align-items: center;
+  gap: var(--sim-space-3);
+}
+.barLabel {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sim-space-2);
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text);
+}
+.weight {
+  font-family: var(--sim-font-mono);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+}
+
+.footnote {
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+  line-height: var(--sim-leading-normal);
+  border-top: 1px solid var(--sim-color-border);
+  padding-top: var(--sim-space-2);
+}
+.mono {
+  font-family: var(--sim-font-mono);
+  color: var(--sim-color-text);
+}
+.note {
+  display: inline;
+}

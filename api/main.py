@@ -250,6 +250,52 @@ async def lifespan(app: FastAPI):
         )
 
     # ----------------------------------------------------------------
+    # SIM-439: optional Data Lab integrations (both feature-gated on env).
+    #   - app.state.anthropic_client : the AI assistant's LLM client, created
+    #     ONLY when ANTHROPIC_API_KEY is set (best-effort; None otherwise so the
+    #     assistant route 503s and /api/assistant/status reports configured:false).
+    #   - app.state.pg_pool_ro       : an optional dedicated read-only Postgres
+    #     pool (BASEBALL_DB_RO_DSN → a GRANT-SELECT-only role) for the SQL runner
+    #     + assistant; when unset the runner uses pg_pool inside a read-only txn.
+    # Neither is in _REQUIRED_ENV_VARS — absence never blocks boot (mirrors
+    # ODDS_API_KEY / the calibration report).
+    # ----------------------------------------------------------------
+    app.state.anthropic_client = None
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        try:
+            import anthropic
+
+            app.state.anthropic_client = anthropic.AsyncAnthropic()
+            log.info(
+                "SIM-439: AI assistant enabled (model=%s).",
+                os.environ.get("ASSISTANT_MODEL", "claude-sonnet-5"),
+            )
+        except Exception as exc:  # noqa: BLE001 — a bad SDK/key must not crash boot
+            log.warning(
+                "SIM-439: ANTHROPIC_API_KEY set but client init failed (%s: %s); assistant disabled.",
+                type(exc).__name__,
+                exc,
+            )
+    else:
+        log.info(
+            "SIM-439: ANTHROPIC_API_KEY unset — AI assistant disabled "
+            "(SQL console + analytics still work)."
+        )
+
+    app.state.pg_pool_ro = None
+    ro_dsn = os.environ.get("BASEBALL_DB_RO_DSN")
+    if ro_dsn:
+        try:
+            app.state.pg_pool_ro = await open_pg_pool(ro_dsn)
+            log.info("SIM-439: opened dedicated read-only SQL pool (BASEBALL_DB_RO_DSN).")
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "SIM-439: BASEBALL_DB_RO_DSN set but pool open failed (%s); "
+                "SQL runner falls back to the main pool in a read-only transaction.",
+                type(exc).__name__,
+            )
+
+    # ----------------------------------------------------------------
     # Phase 5 (SIM-354): live ingestion pipeline.
     #
     # Gated behind LIVE_PIPELINE_ENABLED (default FALSE) so importing/booting
@@ -473,6 +519,12 @@ async def lifespan(app: FastAPI):
     # explicit close, just drop the reference.
     if hasattr(app.state, "redis_client"):
         await app.state.redis_client.aclose()
+    # SIM-439: close the optional read-only SQL pool before the main pool.
+    if getattr(app.state, "pg_pool_ro", None) is not None:
+        try:
+            await app.state.pg_pool_ro.close()
+        except Exception:  # noqa: BLE001
+            pass
     if hasattr(app.state, "pg_pool"):
         await app.state.pg_pool.close()
 
@@ -613,6 +665,29 @@ def create_app() -> FastAPI:
     from api.routes.metrics import router as metrics_router
 
     app.include_router(metrics_router)
+
+    # SIM-439: Data Lab (raw.pitches explorer) + generalized Similarity Explorer.
+    #   POST /api/sql/run           — read-only SQL console executor
+    #   GET  /api/analytics/*       — summary analytics over raw.pitches
+    #   GET  /api/players/*         — name typeahead + player identity
+    #   GET  /api/schema            — raw.* schema tree for the console/assistant
+    #   GET  /api/similarity/*      — generalized comps across all engines
+    #   *    /api/assistant/*       — optional AI assistant (gated on ANTHROPIC_API_KEY)
+    # Registered unconditionally (route registration needs no live DB/engine); the
+    # handlers read app.state and 503 gracefully when a dependency is missing.
+    from api.routes.ai_assistant import router as ai_assistant_router
+    from api.routes.analytics import router as analytics_router
+    from api.routes.players import router as players_router
+    from api.routes.schema_introspect import router as schema_router
+    from api.routes.similarity_explorer import router as similarity_explorer_router
+    from api.routes.sql_runner import router as sql_runner_router
+
+    app.include_router(sql_runner_router)
+    app.include_router(analytics_router)
+    app.include_router(players_router)
+    app.include_router(schema_router)
+    app.include_router(similarity_explorer_router)
+    app.include_router(ai_assistant_router)
     # ----------------------------------------------------------------
 
     # ---- SIM-381: Serve the Vite-built SPA -----------------------------------

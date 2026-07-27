@@ -152,6 +152,30 @@ button {
   gap: var(--sim-space-4);
 }
 
+/* SIM-439: primary nav (Games / Data Lab / Similarity) in the app-shell header. */
+.app-header__left {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-6);
+  min-width: 0;
+}
+.app-header__nav a {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: var(--sim-text-sm);
+  text-decoration: none;
+  padding: var(--sim-space-1) 0;
+  white-space: nowrap;
+}
+.app-header__nav a:hover {
+  color: #fff;
+  text-decoration: none;
+}
+.app-header__nav a[aria-current='page'] {
+  color: #fff;
+  font-weight: var(--sim-font-medium);
+  border-bottom: 2px solid var(--sim-primary-400);
+}
+
 /* The routed pages (.page) own their own max-width + padding, so the shell
  * wrapper just grows to fill — avoids double-constraining width / padding. */
 .app-main {

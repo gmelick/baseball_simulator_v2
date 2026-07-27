@@ -1,0 +1,204 @@
+/* charts.module.css — SIM-439 hand-rolled chart system. Tokens only. */
+
+.svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.empty {
+  color: var(--sim-color-text-muted);
+  font-size: var(--sim-text-sm);
+  padding: var(--sim-space-3);
+  text-align: center;
+}
+
+/* -------- ScoreBar -------- */
+.scoreBar {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sim-space-2);
+  width: 100%;
+  min-width: 90px;
+}
+.scoreTrack {
+  position: relative;
+  flex: 1;
+  height: 8px;
+  background: var(--sim-color-surface-alt);
+  border-radius: var(--sim-radius-full);
+  overflow: hidden;
+}
+.scoreFill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  border-radius: var(--sim-radius-full);
+}
+.tone-primary {
+  background: var(--sim-primary-500);
+}
+.tone-muted {
+  background: var(--sim-gray-400);
+}
+.tone-success {
+  background: var(--sim-success-500);
+}
+.weightTick {
+  position: absolute;
+  top: -2px;
+  width: 2px;
+  height: 12px;
+  background: var(--sim-color-text-muted);
+  opacity: 0.6;
+  z-index: 1;
+}
+.scoreVal {
+  font-family: var(--sim-font-mono);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text);
+  min-width: 42px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* -------- BarList -------- */
+.barList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-1p5);
+}
+.barRow {
+  display: grid;
+  grid-template-columns: minmax(96px, 34%) 1fr auto;
+  align-items: center;
+  gap: var(--sim-space-2);
+  font-size: var(--sim-text-sm);
+}
+.barLabel {
+  color: var(--sim-color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.barSub {
+  color: var(--sim-color-text-muted);
+  font-size: var(--sim-text-xs);
+  margin-left: var(--sim-space-2);
+}
+.barTrack {
+  height: 14px;
+  background: var(--sim-color-surface-alt);
+  border-radius: var(--sim-radius-sm);
+  overflow: hidden;
+}
+.barFill {
+  display: block;
+  height: 100%;
+  background: var(--sim-primary-500);
+  border-radius: var(--sim-radius-sm);
+  min-width: 2px;
+}
+.barFillHi {
+  background: var(--sim-success-500);
+}
+.barValue {
+  font-family: var(--sim-font-mono);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text);
+  font-variant-numeric: tabular-nums;
+  min-width: 44px;
+  text-align: right;
+}
+
+/* -------- ColumnChart (SVG) -------- */
+.axis {
+  stroke: var(--sim-color-border-strong);
+  stroke-width: 1;
+}
+.colBar {
+  fill: var(--sim-primary-500);
+}
+.colBarHi {
+  fill: var(--sim-success-500);
+}
+.marker {
+  stroke: var(--sim-color-text);
+  stroke-width: 1.4;
+  stroke-dasharray: 3 3;
+}
+.markerLabel {
+  fill: var(--sim-color-text);
+  font-size: 9px;
+  font-family: var(--sim-font-mono);
+}
+.tick {
+  fill: var(--sim-color-text-muted);
+  font-size: 9px;
+  font-family: var(--sim-font-mono);
+}
+.axisLabel {
+  fill: var(--sim-color-text-muted);
+  font-size: 9px;
+}
+
+/* -------- HeatGrid (CSS grid) -------- */
+.heatWrap {
+  display: grid;
+  gap: 3px;
+}
+.heatCorner {
+  background: transparent;
+}
+.heatColLabel,
+.heatRowLabel {
+  color: var(--sim-color-text-muted);
+  font-size: var(--sim-text-xs);
+  font-family: var(--sim-font-mono);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.heatCell {
+  aspect-ratio: 1.6 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--sim-radius-sm);
+  border: 1px solid var(--sim-color-border);
+  font-family: var(--sim-font-mono);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text);
+  font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--sim-primary-500) calc(var(--heat, 0) * 65%), transparent);
+}
+
+/* -------- RadarChart (SVG) -------- */
+.radarRing {
+  fill: none;
+  stroke: var(--sim-color-border);
+  stroke-width: 1;
+}
+.radarSpoke {
+  stroke: var(--sim-color-border);
+  stroke-width: 1;
+}
+.radarArea {
+  fill: var(--sim-primary-500);
+  fill-opacity: 0.28;
+  stroke: var(--sim-primary-600);
+  stroke-width: 2;
+}
+.radarCompare {
+  fill: var(--sim-warning-500);
+  fill-opacity: 0.18;
+  stroke: var(--sim-warning-500);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+.radarLabel {
+  fill: var(--sim-color-text-muted);
+  font-size: 10px;
+  font-family: var(--sim-font-sans);
+}

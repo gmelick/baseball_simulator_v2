@@ -1,0 +1,144 @@
+/* dataLab.module.css — SIM-439 shared styles for the Data Lab pages */
+
+.labShell {
+  max-width: var(--sim-max-width);
+  margin: 0 auto;
+  padding: var(--sim-space-5) var(--sim-space-6);
+}
+.labShell.wide {
+  max-width: none;
+}
+
+.labHeader {
+  margin-bottom: var(--sim-space-4);
+}
+.labTitle {
+  font-size: var(--sim-text-2xl);
+  color: var(--sim-color-text);
+}
+.labSubtitle {
+  color: var(--sim-color-text-muted);
+  font-size: var(--sim-text-sm);
+  margin-top: var(--sim-space-1);
+}
+
+/* Segmented tabs */
+.tabs {
+  display: inline-flex;
+  margin-top: var(--sim-space-3);
+  background: var(--sim-color-surface-alt);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-md);
+  padding: 3px;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+.tab {
+  padding: var(--sim-space-1p5) var(--sim-space-4);
+  border-radius: var(--sim-radius-sm);
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text-muted);
+  text-decoration: none;
+}
+.tab:hover {
+  color: var(--sim-color-text);
+  text-decoration: none;
+}
+.tabActive {
+  background: var(--sim-color-surface);
+  color: var(--sim-color-text);
+  font-weight: var(--sim-font-medium);
+  box-shadow: var(--sim-shadow-sm);
+}
+
+/* Filter bar */
+.filterBar {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-3);
+  flex-wrap: wrap;
+  padding: var(--sim-space-3);
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-lg);
+  margin-bottom: var(--sim-space-4);
+}
+.filterLabel {
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.select,
+.input {
+  padding: var(--sim-space-1p5) var(--sim-space-2);
+  font-size: var(--sim-text-sm);
+  font-family: var(--sim-font-sans);
+  color: var(--sim-color-text);
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border-strong);
+  border-radius: var(--sim-radius-md);
+}
+
+/* KPI + card grid */
+.kpiWrap {
+  margin-bottom: var(--sim-space-4);
+}
+.kpiHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sim-space-2);
+  margin-bottom: var(--sim-space-2);
+  flex-wrap: wrap;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: var(--sim-space-4);
+}
+.cardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sim-space-2);
+}
+.cardTitle {
+  font-size: var(--sim-text-base);
+  font-weight: var(--sim-font-semibold);
+  color: var(--sim-color-text);
+}
+.cardAction {
+  background: none;
+  border: 1px solid var(--sim-color-border-strong);
+  border-radius: var(--sim-radius-sm);
+  color: var(--sim-color-interactive);
+  font-size: var(--sim-text-xs);
+  padding: 2px var(--sim-space-2);
+  cursor: pointer;
+}
+.cardAction:hover {
+  background: var(--sim-primary-50);
+}
+.cardBody {
+  margin-top: var(--sim-space-3);
+}
+.cardNote {
+  margin-top: var(--sim-space-2);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+}
+
+.message {
+  padding: var(--sim-space-6);
+  text-align: center;
+  color: var(--sim-color-text-muted);
+}
+.error {
+  padding: var(--sim-space-3) var(--sim-space-4);
+  background: var(--sim-danger-100);
+  color: var(--sim-danger-700);
+  border: 1px solid var(--sim-danger-500);
+  border-radius: var(--sim-radius-md);
+  font-size: var(--sim-text-sm);
+}

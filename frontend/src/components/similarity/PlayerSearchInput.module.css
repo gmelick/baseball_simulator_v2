@@ -1,0 +1,89 @@
+/* PlayerSearchInput.module.css — SIM-439 */
+
+.box {
+  position: relative;
+  min-width: 240px;
+}
+
+.input {
+  width: 100%;
+  padding: var(--sim-space-2) var(--sim-space-3);
+  font-size: var(--sim-text-sm);
+  font-family: var(--sim-font-sans);
+  color: var(--sim-color-text);
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border-strong);
+  border-radius: var(--sim-radius-md);
+}
+.input:focus {
+  outline: none;
+  border-color: var(--sim-color-interactive);
+}
+
+.loading {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--sim-color-border-strong);
+  border-top-color: var(--sim-color-interactive);
+  border-radius: var(--sim-radius-full);
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: translateY(-50%) rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loading {
+    animation: none;
+  }
+}
+
+.listbox {
+  position: absolute;
+  z-index: var(--sim-z-dropdown);
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: var(--sim-space-1);
+  list-style: none;
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border-strong);
+  border-radius: var(--sim-radius-md);
+  box-shadow: var(--sim-shadow-md);
+  max-height: 320px;
+  overflow-y: auto;
+}
+.option {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sim-space-3);
+  padding: var(--sim-space-2) var(--sim-space-2);
+  border-radius: var(--sim-radius-sm);
+  cursor: pointer;
+}
+.optionActive {
+  background: var(--sim-primary-50);
+}
+.optName {
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text);
+}
+.optMeta {
+  font-family: var(--sim-font-mono);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .optionActive {
+    background: var(--sim-primary-800);
+  }
+}

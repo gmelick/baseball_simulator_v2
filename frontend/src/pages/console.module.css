@@ -1,0 +1,249 @@
+/* console.module.css — SIM-439 SQL Console */
+
+.wide {
+  max-width: none;
+  margin: 0;
+  padding: var(--sim-space-4) var(--sim-space-6);
+}
+
+.layout {
+  display: flex;
+  gap: var(--sim-space-4);
+  align-items: flex-start;
+}
+.main {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Editor */
+.editorPanel {
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-lg);
+  overflow: hidden;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sim-space-2);
+  padding: var(--sim-space-2) var(--sim-space-3);
+  border-bottom: 1px solid var(--sim-color-border);
+  flex-wrap: wrap;
+}
+.toolbarLeft,
+.toolbarRight {
+  display: flex;
+  align-items: center;
+  gap: var(--sim-space-2);
+  flex-wrap: wrap;
+}
+.runBtn {
+  background: var(--sim-color-interactive);
+  color: var(--sim-color-text-inverse);
+  border: none;
+  border-radius: var(--sim-radius-md);
+  padding: var(--sim-space-1p5) var(--sim-space-4);
+  font-size: var(--sim-text-sm);
+  font-weight: var(--sim-font-medium);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sim-space-2);
+}
+.runBtn:hover:not(:disabled) {
+  background: var(--sim-color-interactive-hover);
+}
+.runBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.cancelBtn,
+.ghostBtn {
+  background: var(--sim-color-surface);
+  color: var(--sim-color-text);
+  border: 1px solid var(--sim-color-border-strong);
+  border-radius: var(--sim-radius-md);
+  padding: var(--sim-space-1p5) var(--sim-space-3);
+  font-size: var(--sim-text-sm);
+}
+.ghostBtn:hover {
+  background: var(--sim-color-surface-alt);
+}
+.select {
+  padding: var(--sim-space-1p5) var(--sim-space-2);
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text);
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border-strong);
+  border-radius: var(--sim-radius-md);
+  max-width: 260px;
+}
+.helper {
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+}
+
+.editorArea {
+  display: flex;
+  font-family: var(--sim-font-mono);
+  font-size: var(--sim-text-sm);
+  line-height: 1.5;
+  max-height: 320px;
+  overflow: hidden;
+}
+.gutter {
+  padding: var(--sim-space-2) var(--sim-space-2);
+  text-align: right;
+  color: var(--sim-color-text-muted);
+  background: var(--sim-color-surface-alt);
+  user-select: none;
+  overflow: hidden;
+  white-space: pre;
+  min-width: 40px;
+}
+.textarea {
+  flex: 1;
+  border: none;
+  outline: none;
+  resize: vertical;
+  padding: var(--sim-space-2) var(--sim-space-3);
+  font-family: var(--sim-font-mono);
+  font-size: var(--sim-text-sm);
+  line-height: 1.5;
+  color: var(--sim-color-text);
+  background: var(--sim-color-surface);
+  min-height: 200px;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+}
+
+/* Results */
+.resultPanel {
+  margin-top: var(--sim-space-4);
+}
+.resultToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sim-space-3);
+  margin-bottom: var(--sim-space-2);
+  flex-wrap: wrap;
+}
+.resultMeta {
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+  font-family: var(--sim-font-mono);
+  display: flex;
+  gap: var(--sim-space-3);
+  flex-wrap: wrap;
+}
+.truncBadge {
+  color: var(--sim-warning-700);
+}
+.iconBtn {
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border-strong);
+  border-radius: var(--sim-radius-sm);
+  color: var(--sim-color-text);
+  font-size: var(--sim-text-xs);
+  padding: 2px var(--sim-space-2);
+}
+.iconBtn:hover {
+  background: var(--sim-color-surface-alt);
+}
+.errorPanel {
+  padding: var(--sim-space-3) var(--sim-space-4);
+  background: var(--sim-danger-100);
+  color: var(--sim-danger-700);
+  border: 1px solid var(--sim-danger-500);
+  border-radius: var(--sim-radius-md);
+  font-family: var(--sim-font-mono);
+  font-size: var(--sim-text-sm);
+  white-space: pre-wrap;
+}
+
+/* Sidebar (schema + history) */
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-3);
+}
+.sideCard {
+  background: var(--sim-color-surface);
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-lg);
+  overflow: hidden;
+}
+.sideHead {
+  padding: var(--sim-space-2) var(--sim-space-3);
+  font-size: var(--sim-text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--sim-color-text-muted);
+  border-bottom: 1px solid var(--sim-color-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.sideBody {
+  max-height: 340px;
+  overflow-y: auto;
+  padding: var(--sim-space-1);
+}
+.tableItem {
+  padding: var(--sim-space-1) var(--sim-space-2);
+}
+.tableName {
+  font-family: var(--sim-font-mono);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-interactive);
+  cursor: pointer;
+  font-weight: var(--sim-font-semibold);
+}
+.colChip {
+  display: inline-block;
+  font-family: var(--sim-font-mono);
+  font-size: 11px;
+  color: var(--sim-color-text-muted);
+  cursor: pointer;
+  padding: 1px 4px;
+  margin: 1px;
+  border-radius: var(--sim-radius-sm);
+}
+.colChip:hover {
+  background: var(--sim-color-surface-alt);
+  color: var(--sim-color-text);
+}
+.historyItem {
+  font-family: var(--sim-font-mono);
+  font-size: 11px;
+  color: var(--sim-color-text);
+  cursor: pointer;
+  padding: var(--sim-space-1) var(--sim-space-2);
+  border-radius: var(--sim-radius-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.historyItem:hover {
+  background: var(--sim-color-surface-alt);
+}
+
+@media (max-width: 900px) {
+  .layout {
+    flex-direction: column;
+  }
+  .sidebar {
+    width: 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .sideCard {
+    flex: 1;
+    min-width: 240px;
+  }
+}

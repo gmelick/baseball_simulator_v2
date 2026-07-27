@@ -1,0 +1,71 @@
+/* ResultGrid.module.css — SIM-439 */
+
+.scroller {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 60vh;
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-md);
+}
+
+.grid {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: var(--sim-font-mono);
+  font-size: var(--sim-text-xs);
+}
+
+.th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--sim-color-surface-alt);
+  color: var(--sim-color-text);
+  text-align: left;
+  padding: var(--sim-space-2) var(--sim-space-3);
+  border-bottom: 1px solid var(--sim-color-border-strong);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  font-weight: var(--sim-font-semibold);
+}
+.th:hover {
+  color: var(--sim-color-interactive);
+}
+.sortCaret {
+  color: var(--sim-color-interactive);
+}
+
+.tr:nth-child(even) {
+  background: var(--sim-color-surface-alt);
+}
+.td {
+  padding: var(--sim-space-1) var(--sim-space-3);
+  border-bottom: 1px solid var(--sim-color-border);
+  color: var(--sim-color-text);
+  white-space: nowrap;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.null {
+  color: var(--sim-color-text-muted);
+  opacity: 0.6;
+  font-style: italic;
+}
+.playerLink {
+  color: var(--sim-color-interactive);
+}
+.empty {
+  color: var(--sim-color-text-muted);
+  padding: var(--sim-space-3);
+}
+.windowNote {
+  color: var(--sim-color-text-muted);
+  font-size: var(--sim-text-xs);
+  padding: var(--sim-space-2) var(--sim-space-3);
+}

@@ -1,0 +1,101 @@
+/* CompTable.module.css — SIM-439 */
+
+.scroller {
+  overflow-x: auto;
+  border: 1px solid var(--sim-color-border);
+  border-radius: var(--sim-radius-md);
+}
+.table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--sim-text-sm);
+}
+.th,
+.thNum,
+.thScore,
+.thSub,
+.thRank {
+  position: sticky;
+  top: 0;
+  background: var(--sim-color-surface-alt);
+  color: var(--sim-color-text);
+  font-weight: var(--sim-font-semibold);
+  padding: var(--sim-space-2) var(--sim-space-3);
+  border-bottom: 1px solid var(--sim-color-border-strong);
+  text-align: left;
+  white-space: nowrap;
+}
+.thNum {
+  text-align: right;
+}
+.thScore {
+  min-width: 130px;
+}
+.thSub {
+  min-width: 96px;
+  font-size: var(--sim-text-xs);
+}
+.thRank {
+  text-align: right;
+  width: 34px;
+}
+
+.tr {
+  cursor: pointer;
+}
+.tr:hover {
+  background: var(--sim-primary-50);
+}
+.tr:nth-child(even) {
+  background: var(--sim-color-surface-alt);
+}
+.tr:nth-child(even):hover {
+  background: var(--sim-primary-50);
+}
+
+.rank,
+.num,
+.name,
+.scoreCell,
+.subCell {
+  padding: var(--sim-space-1p5) var(--sim-space-3);
+  border-bottom: 1px solid var(--sim-color-border);
+}
+.rank,
+.num {
+  text-align: right;
+  font-family: var(--sim-font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--sim-color-text);
+}
+.link {
+  color: var(--sim-color-interactive);
+  font-weight: var(--sim-font-medium);
+}
+.scoreCell {
+  min-width: 130px;
+}
+.subCell {
+  min-width: 96px;
+}
+.subVal {
+  font-family: var(--sim-font-mono);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+  margin-left: var(--sim-space-1);
+}
+.thin {
+  color: var(--sim-warning-700);
+}
+.empty {
+  color: var(--sim-color-text-muted);
+  padding: var(--sim-space-4);
+  text-align: center;
+}
+
+@media (prefers-color-scheme: dark) {
+  .tr:hover,
+  .tr:nth-child(even):hover {
+    background: var(--sim-primary-900);
+  }
+}
