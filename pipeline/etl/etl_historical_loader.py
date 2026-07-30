@@ -862,6 +862,90 @@ def _connect(url: str, params: dict | None = None) -> dict:
     return _http_get(url, params).json()
 
 
+class MissingVenueError(RuntimeError):
+    """A game's feed carries no venue, and no venue is known for it."""
+
+
+# SIM-447: games whose feed omits ``gameData.venue`` ENTIRELY.
+#
+# MLB's one-off neutral-site games can ship with no venue ANYWHERE in the feed:
+# ``gameData.venue`` is absent and the schedule endpoint returns
+# ``{"link": "/api/v1/venues/null"}``. Before this map, ``gd["venue"]["id"]``
+# raised a bare ``KeyError``, the sweep's per-game isolation swallowed it, and
+# the two affected games silently kept their pre-SIM-440 rows.
+#
+# The venue is not derivable from the game data, but MLB DOES publish it in the
+# unfiltered ``/api/v1/venues`` catalog — it is missing only from the
+# season-filtered lists — so each entry here is a lookup, not a guess.
+#
+# ``teams.home.venue`` is deliberately NOT used as a fallback: for these games it
+# reports the home team's REGULAR park, so it would attribute a game played in a
+# cornfield in Dyersville, Iowa to Guaranteed Rate Field and quietly distort that
+# park's SIM-411 park factor. A wrong venue_id satisfies the NOT NULL and the FK,
+# so nothing downstream would ever flag it.
+_VENUE_OVERRIDES: dict[int, tuple[int, str]] = {
+    632924: (5445, "Field of Dreams"),  # 2021-08-12 NYY @ CWS — Dyersville, IA
+    663023: (5445, "Field of Dreams"),  # 2022-08-11 CHC @ CIN — Dyersville, IA
+}
+
+
+def _resolve_venue(game_pk: int, game_data: dict) -> tuple[int, str]:
+    """The ``(id, name)`` of the venue a game was actually PLAYED at.
+
+    Fails loudly rather than guessing. ``raw.pitches.venue_id`` is NOT NULL with
+    an FK to ``raw.venues``, so a plausible-but-wrong venue is accepted by the
+    database without complaint and only ever surfaces as a distorted park factor
+    much later. An unrecognised neutral site should stop the game and say what to
+    do about it.
+    """
+    venue = game_data.get("venue") or {}
+    if venue.get("id") is not None:
+        return int(venue["id"]), to_str(venue.get("name")) or ""
+
+    override = _VENUE_OVERRIDES.get(game_pk)
+    if override is not None:
+        log.warning(
+            "game %s: feed omits gameData.venue; using documented override venue %s (%s)",
+            game_pk,
+            override[0],
+            override[1],
+        )
+        return override
+
+    raise MissingVenueError(
+        f"game {game_pk}: the feed has no gameData.venue and no override is registered. "
+        f"This is an MLB API gap on one-off neutral-site games (Field of Dreams, and "
+        f"potentially the Little League Classic / international series). Look the venue "
+        f"up in the UNFILTERED catalogue — https://statsapi.mlb.com/api/v1/venues — and "
+        f"add it to _VENUE_OVERRIDES with a dated comment. Do NOT substitute "
+        f"teams.home.venue: for these games that is the home team's regular park, and it "
+        f"would silently corrupt that park's park factor."
+    )
+
+
+def _resolve_venue_id(game_pk: int, game_data: dict) -> int:
+    """:func:`_resolve_venue` for the call sites that only need the id."""
+    return _resolve_venue(game_pk, game_data)[0]
+
+
+def _first_nonblank(*candidates: Any) -> str:
+    """The first candidate that is a non-blank string, else ``""``.
+
+    Whitespace must not count as a value — that is the whole point. The bug this
+    exists for defaulted a venue name to a single space, and ``" "`` is TRUTHY, so
+    every ``or``-style guard downstream accepted it as a real name and all 331
+    rows in ``raw.venues`` shipped blank to the API.
+
+    The blank-handling itself lives in :func:`to_str`, which strips and maps
+    whitespace-only to ``None``; re-stripping here would just duplicate it.
+    """
+    for candidate in candidates:
+        text = to_str(candidate)
+        if text:
+            return text
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Core per-game fetch — adapted from your write_rows()
 # Returns a list of raw dicts (one per pitch) instead of writing to a file.
@@ -889,8 +973,8 @@ def _fetch_game_pitches(
     home_team = game_dict["gameData"]["teams"]["home"]["abbreviation"]
     away_team_id = game_dict["gameData"]["teams"]["away"]["id"]
     away_team = game_dict["gameData"]["teams"]["away"]["abbreviation"]
-    venue_id = game_dict["gameData"]["venue"]["id"]
-    venue_name = game_dict["gameData"]["venue"]["name"]
+    # SIM-447: neutral-site games can ship with NO gameData.venue at all.
+    venue_id, venue_name = _resolve_venue(game_pk, game_dict["gameData"])
 
     home_manager_id, home_manager_name = "", ""
     away_manager_id, away_manager_name = "", ""
@@ -2087,7 +2171,7 @@ class HistoricalDataLoader:
         game_date = gd["datetime"]["officialDate"]
         season = int(game_date[:4])
 
-        venue_id = gd["venue"]["id"]
+        venue_id = _resolve_venue_id(game_pk, gd)  # SIM-447
         home_team_id = gd["teams"]["home"]["id"]
         away_team_id = gd["teams"]["away"]["id"]
 
@@ -2102,18 +2186,28 @@ class HistoricalDataLoader:
 
     # --- 1. Venues ----------------------------------------------------------
 
-    def _ensure_venue(self, venue_id: int, season: int) -> None:
+    def _ensure_venue(self, venue_id: int, season: int, *, force: bool = False) -> None:
         """
         Upserts raw.venues if the venue_id is not already present.
         Fetches full venue details (dimensions, surface, roof) from the
         MLB venues endpoint when the record is missing.
+
+        ``force=True`` skips the existence short-circuit and re-fetches, so an
+        already-present row can be CORRECTED. The INSERT below has always carried
+        ``ON CONFLICT … DO UPDATE``, so the only thing standing between a bad row
+        and a good one was the early return. Used by
+        ``scripts/reload_games.py --refresh-venues`` to repair the SIM-447 blank
+        venue_name; a plain FK-satisfying row cannot simply be deleted and reloaded
+        because raw.pitches references it.
         """
-        with self._get_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM raw.venues WHERE venue_id = %s AND season = %s", (venue_id, season)
-            )
-            if cur.fetchone() is not None:
-                return  # already exists
+        if not force:
+            with self._get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM raw.venues WHERE venue_id = %s AND season = %s",
+                    (venue_id, season),
+                )
+                if cur.fetchone() is not None:
+                    return  # already exists
 
         log.info("  Fetching missing venue %s, season %s", venue_id, season)
 
@@ -2209,7 +2303,18 @@ class HistoricalDataLoader:
                     (
                         venue_id,
                         season,
-                        dimensions.get("venu_name_short", " "),
+                        # SIM-447: was `dimensions.get("venu_name_short", " ")` — a
+                        # typo (missing the 'e'), so the key NEVER matched and every
+                        # row fell through to the " " default. All 331 rows in
+                        # raw.venues had a blank name. The two payload shapes use
+                        # different keys: the park-factors scrape has
+                        # `venue_name_short`, the statcast-venue fallback has `name`;
+                        # statsapi's own record is the last resort.
+                        _first_nonblank(
+                            dimensions.get("venue_name_short"),
+                            dimensions.get("name"),
+                            v.get("name"),
+                        ),
                         location.get("city", ""),
                         location.get("stateAbbrev", ""),
                         surface,
@@ -2274,7 +2379,17 @@ class HistoricalDataLoader:
             league_name = t.get("league", {}).get("name", "")
             league_code = "AL" if "American" in league_name else "NL"
             division = div_map.get(t.get("division", {}).get("name", ""), "AL East")
-            venue_id = t.get("venue", {}).get("id") or gd["venue"]["id"]
+            # A team's OWN venue is the right value for raw.teams (its home park),
+            # so the game's venue is only a fallback — and on a neutral-site game
+            # it may be absent entirely (SIM-447), hence the guarded lookup rather
+            # than gd["venue"]["id"].
+            venue_id = t.get("venue", {}).get("id") or (gd.get("venue") or {}).get("id")
+            if venue_id is None:
+                raise MissingVenueError(
+                    f"team {tid} is missing from raw.teams and neither it nor the game "
+                    f"feed carries a venue, so its home park cannot be established. "
+                    f"Backfill the team first, or register the game in _VENUE_OVERRIDES."
+                )
             self._ensure_venue(venue_id, season)
 
             rows.append(
@@ -2590,7 +2705,7 @@ class HistoricalDataLoader:
         live = game_dict.get("liveData", {})
 
         game_date = gd["datetime"]["officialDate"]
-        venue_id = gd["venue"]["id"]
+        venue_id = _resolve_venue_id(game_pk, gd)  # SIM-447
         home_team_id = gd["teams"]["home"]["id"]
         away_team_id = gd["teams"]["away"]["id"]
         game_type = gd.get("game", {}).get("type", "R")

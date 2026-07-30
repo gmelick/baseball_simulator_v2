@@ -1603,7 +1603,7 @@ class StateMachine:
         result.canonical_event = rr.canonical_event
         result.re_start = rr.re_start
         result.re_end = rr.re_end
-        result.runs_scored = int(result_runs)
+        result.runs_scored += int(result_runs)
         if result_runs:
             state.add_runs(int(result_runs))
             state.assert_score_valid()
@@ -3215,6 +3215,10 @@ class StateMachine:
         old = state.pitcher_id
         state.pitcher_id = int(new_arm)
         state.pitcher_pitch_count = 0  # fresh arm
+        if state.half == Half.TOP:
+            state.home_pitcher_id = int(new_arm)
+        else:
+            state.away_pitcher_id = int(new_arm)
         self.manager_decisions.append(
             {
                 "kind": "pitching_change",

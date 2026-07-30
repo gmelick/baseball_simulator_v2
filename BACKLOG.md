@@ -2,7 +2,34 @@
 
 *Owner: Product Manager (Agent 1) · Last updated: 2026-06-02 (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
 
-# 💥 2026-07-27 — SIM-445 + SIM-446: the sweep-crash investigation, and the ETL HTTP transport (next free ID → SIM-447)
+# 🔍 2026-07-27 — SIM-447: sweep completeness — 4 silently-skipped games, the neutral-site venue crash, and 331 blank venue names (next free ID → SIM-448)
+
+**How this was found.** After the 2017-2025 sweep the ledger looked clean — 6 games "failed", all
+`outcome='empty'`. Those 6 turned out to need nothing (all `status='Cancelled'`; zero pitches is the
+correct answer and `empty` is the SIM-441 terminal marker that stops them being retried nightly).
+But **reconciling `raw.etl_game_ingest` against `raw.pitches` per season** told a different story:
+four seasons had one more game in `raw.pitches` than the ledger accounted for.
+
+| ID | Title | Type | Pri | Size | Depends-on | Status |
+|---|---|---|---|---|---|---|
+| SIM-447a | `resumable_sweep.py` recorded FAILED games as done | Bug/Ops | P1 | S | SIM-446 | ✅ **FIXED.** The wrapper appended a `game_pk` to its progress file whenever `_dispatch_game` **returned** — but that dispatcher deliberately SWALLOWS per-game exceptions (bumps `summary["failed"]`, returns) so one bad feed cannot kill a multi-hour run. So "returned" ≠ "loaded". Four games (**529440**/2018, **632924**/2021, **663023**/2022, **777962**/2025) failed, were marked complete, and were skipped by every later attempt. **The sweep reported success while those games silently kept their pre-SIM-440 rows** — the worst failure shape available: invisible, and indistinguishable from a clean run. Now gated on the `loaded` counter incrementing. |
+| SIM-447b | `KeyError: 'venue'` on one-off neutral-site games | Bug/Data | P1 | M | — | ✅ **FIXED.** The underlying cause of 2 of those 4. `gd["venue"]["id"]` raised a bare `KeyError` for the two **Field of Dreams** games (632924 = 2021-08-12 NYY@CWS, 663023 = 2022-08-11 CHC@CIN): MLB ships them with **no venue anywhere** — `gameData.venue` absent AND the schedule endpoint returning `{"link": "/api/v1/venues/null"}`. New `_resolve_venue()` + a documented `_VENUE_OVERRIDES` map (venue **5445 "Field of Dreams", Dyersville IA** — present in MLB's UNFILTERED `/api/v1/venues` catalogue, missing only from the season-filtered lists, so each entry is a lookup, not a guess). **The tempting wrong fix is `teams.home.venue`:** it is always populated and makes the crash go away, but for these games it reports the home team's REGULAR park — so it would attribute a game played in an Iowa cornfield to Guaranteed Rate Field, and because `raw.pitches.venue_id` is NOT NULL with an FK to `raw.venues`, a wrong-but-real venue satisfies every constraint and would only ever surface as a quietly distorted SIM-411 park factor. An unregistered neutral site now raises `MissingVenueError` carrying the remediation steps. Fixed at **all 4 call sites** (`_fetch_game_pitches`, `_ensure_prerequisites`, `_ensure_game`, `_ensure_teams`). |
+| SIM-447c | `venu_name_short` typo → 331/331 blank venue names | Bug/Data | P2 | S | — | ✅ **FIXED + DATA REPAIRED.** `dimensions.get("venu_name_short", " ")` — missing the `e` — so the key **never matched** and every row fell through to the `" "` default. **All 331 rows in `raw.venues` stored a single space.** It survived because `" "` is TRUTHY, so every `or`-style guard downstream took it for a real name. Not cosmetic: `api/routes/games.py` selects `v.venue_name` and serves it to the front end. Fixed via `_first_nonblank(venue_name_short, name, statsapi name)` — the two Savant payload shapes use different keys (`venue_name_short` on park-factors, `name` on the statcast-venue fallback). `_ensure_venue(..., force=True)` added because the row could not be deleted and reloaded (raw.pitches FK) — the INSERT always had `ON CONFLICT DO UPDATE`; only the early return stood in the way. **All 331 repaired: 0 blank, 47 distinct names.** |
+| SIM-447d | `scripts/reload_games.py` — targeted corrective reload | Tooling | P2 | M | — | ✅ **DONE.** Answers "which games actually need re-running" instead of guessing. Classifies every anomaly into **STALE** (rows but no ledger row — looks loaded, isn't), **FAILED** (not-loaded but `status='Final'`), **NEVER LOADED**, and **NOT PLAYED** (reported and deliberately skipped). `--dry-run`, `--game-pk`, `--season`, `--allow-shrink`, `--refresh-venues`. Prints rows-before→after per game and ends with the per-season ledger-vs-pitches reconciliation that found all of this. |
+
+**Result: 2017-2025 now fully reconciles** — every season's ledger count equals its distinct
+`game_pk` count in `raw.pitches`. Tests +28 (`test_sim447_venue_resolution.py` 20,
+`test_sim446_sweep_streaming.py` 8); **13 mutations run across the three fixes, 12 caught, 1 test found
+hollow and corrected** (`_first_nonblank`'s whitespace guard duplicated `to_str`, so the mutation was
+undetectable at that layer — the test now binds the contract rather than the implementation). Gates:
+unit **2,557**, regression **53**, ruff + format + mypy clean.
+
+**⚠ STILL OPEN — 2026 was never swept.** `raw.pitches` holds **1,585 games / 465,793 rows** for 2026
+with **zero** ledger rows, because the sweep command covered 2018-2025 only (2017 ran separately).
+That is a full season of pre-SIM-440 parser data still live. Fix: `python scripts/resumable_sweep.py
+--season 2026`.
+
+# 💥 2026-07-27 — SIM-445 + SIM-446: the sweep-crash investigation, and the ETL HTTP transport (next free ID → SIM-447, now → SIM-448)
 
 **The blocker:** the SIM-440/441 corrective reload sweep — the data run that every downstream
 number depends on — could not finish. It died with `Fatal Python error:

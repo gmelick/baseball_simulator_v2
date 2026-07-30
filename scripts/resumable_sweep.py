@@ -103,8 +103,20 @@ def dispatch(game_pk, season_, cache, *, reload, summary):
     if game_pk in done:
         summary["skipped"] = summary.get("skipped", 0) + 1
         return
+    # SIM-446: record a game ONLY when it actually loaded.
+    #
+    # _dispatch_game deliberately SWALLOWS per-game exceptions (it bumps
+    # summary["failed"] and returns) so one bad feed cannot kill a multi-hour
+    # run. So "the dispatcher returned" does NOT mean "the game loaded". An
+    # earlier version recorded progress on return, which permanently marked
+    # FAILED games as done -- every later attempt skipped them, the sweep
+    # reported success, and those games silently kept their pre-SIM-440 rows.
+    # That cost 4 games across the 2018-2025 sweep, found only by diffing the
+    # ledger against raw.pitches. Gate on the loaded counter instead.
+    before = summary.get("loaded", 0)
     original(game_pk, season_, cache, reload=reload, summary=summary)
-    # Record only AFTER the game's transaction has committed.
+    if summary.get("loaded", 0) <= before:
+        return  # failed or skipped -- leave it out so the next attempt retries it
     with progress.open("a") as fh:
         fh.write(str(game_pk) + "\n")
         fh.flush()
