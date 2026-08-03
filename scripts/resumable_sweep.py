@@ -126,14 +126,18 @@ loader._dispatch_game = dispatch
 try:
     s = loader.refresh_seasons(season, season, reload=True)
     print("CHILD_SUMMARY:", s, flush=True)
+    # Machine-readable, so the driver never has to parse a dict repr. A season
+    # can finish with per-game failures -- those games are NOT in the progress
+    # file, so the driver must run another attempt to pick them up.
+    print("CHILD_FAILED:", int(s.get("failed", 0)), flush=True)
     print("CHILD_COMPLETE", flush=True)
 finally:
     loader.close()
 """
 
 
-def _run_attempt(season: int, progress: Path, native: bool, quiet: bool) -> tuple[int, bool]:
-    """Run one child attempt. Returns (exit_code, saw_complete_marker).
+def _run_attempt(season: int, progress: Path, native: bool, quiet: bool) -> tuple[int, bool, int]:
+    """Run one child attempt. Returns (exit_code, saw_complete_marker, failed_count).
 
     The child's output is STREAMED through to our stdout as it arrives. It has to
     be captured (we read it to detect the completion marker and the fatal-error
@@ -158,12 +162,18 @@ def _run_attempt(season: int, progress: Path, native: bool, quiet: bool) -> tupl
     )
     complete = False
     games = 0
+    failed = 0
     assert proc.stdout is not None
     # readline() rather than `for line in proc.stdout` so streaming is explicit
     # and cannot be defeated by iterator read-ahead.
     for line in iter(proc.stdout.readline, ""):
         if "CHILD_COMPLETE" in line:
             complete = True
+        if "CHILD_FAILED:" in line:
+            try:
+                failed = int(line.split("CHILD_FAILED:", 1)[1].strip())
+            except ValueError:
+                failed = 0
         if "Reloading game" in line:
             games += 1
 
@@ -176,7 +186,7 @@ def _run_attempt(season: int, progress: Path, native: bool, quiet: bool) -> tupl
 
     proc.stdout.close()
     proc.wait()
-    return proc.returncode, complete
+    return proc.returncode, complete, failed
 
 
 def main() -> int:
@@ -211,12 +221,12 @@ def main() -> int:
         for attempt in range(1, args.max_attempts + 1):
             before = len(progress.read_text().split()) if progress.exists() else 0
             t0 = time.time()
-            rc, complete = _run_attempt(season, progress, not args.in_docker, args.quiet)
+            rc, complete, failed = _run_attempt(season, progress, not args.in_docker, args.quiet)
             after = len(progress.read_text().split()) if progress.exists() else 0
             gained = after - before
             mins = (time.time() - t0) / 60
 
-            if complete:
+            if complete and not failed:
                 print(
                     f"  attempt {attempt}: COMPLETE — {after} games total "
                     f"(+{gained} this attempt, {mins:.1f} min)",
@@ -224,18 +234,37 @@ def main() -> int:
                 )
                 break
 
-            print(
-                f"  attempt {attempt}: crashed rc={rc} after +{gained} games "
-                f"({after} total, {mins:.1f} min) — resuming",
-                flush=True,
-            )
+            if complete:
+                # SIM-447: a season can reach the end of its schedule while
+                # individual games failed -- _dispatch_game contains those by
+                # design. Those games are deliberately absent from the progress
+                # file, so ANOTHER attempt retries exactly them and nothing else.
+                # Breaking here (the old behaviour) is how game 824014 was left on
+                # pre-fix data: the 2026 run reported COMPLETE with 1 failure and
+                # never went back for it. Transient faults are the common case and
+                # succeed on retry; a deterministic one gains nothing and trips the
+                # zero-progress guard below.
+                print(
+                    f"  attempt {attempt}: reached the end of the season but "
+                    f"{failed} game(s) FAILED (+{gained} loaded, {mins:.1f} min) — "
+                    f"retrying just those",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"  attempt {attempt}: crashed rc={rc} after +{gained} games "
+                    f"({after} total, {mins:.1f} min) — resuming",
+                    flush=True,
+                )
 
             if gained == 0:
                 # No forward progress: a genuine per-game defect, not the
                 # stochastic fault. Retrying forever would spin.
                 print(
-                    "  STOPPING: an attempt made zero progress. The next game is failing "
-                    "deterministically — investigate it rather than retrying.",
+                    "  STOPPING: an attempt made zero progress, so a game is failing "
+                    "deterministically rather than transiently — retrying would spin "
+                    "forever. Run `python scripts/reload_games.py --dry-run` to see "
+                    "exactly which games are outstanding, then investigate one.",
                     flush=True,
                 )
                 return 1

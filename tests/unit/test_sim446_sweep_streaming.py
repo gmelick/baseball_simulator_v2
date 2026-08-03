@@ -67,7 +67,21 @@ CHILD_LINES = [
     "INFO    Reloading game 529401\n",
     "INFO    game 529401: 291 inserted, 0 skipped (hard errors), 2 flagged\n",
     "INFO    Reloading game 529402\n",
-    "CHILD_SUMMARY: {'attempted': 2, 'loaded': 2}\n",
+    "CHILD_SUMMARY: {'attempted': 2, 'loaded': 2, 'failed': 0}\n",
+    "CHILD_FAILED: 0\n",
+    "CHILD_COMPLETE\n",
+]
+
+# A season that reaches the end of its schedule with one game failed. This is the
+# shape that lost game 824014 in the 2026 sweep: the driver saw CHILD_COMPLETE and
+# stopped, but the failed game is deliberately NOT in the progress file, so nothing
+# ever went back for it.
+CHILD_LINES_WITH_FAILURE = [
+    "INFO  === Season 2026 ===\n",
+    "INFO    Reloading game 824014\n",
+    "ERROR   reload failed for game 824014 (1 consecutive): integer out of range\n",
+    "CHILD_SUMMARY: {'attempted': 1626, 'loaded': 1625, 'failed': 1}\n",
+    "CHILD_FAILED: 1\n",
     "CHILD_COMPLETE\n",
 ]
 
@@ -79,8 +93,8 @@ def run_attempt(monkeypatch, tmp_path):
     def _run(lines=CHILD_LINES, returncode=0, quiet=False, capsys=None):
         proc = _FakeProc(lines, returncode)
         monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: proc)
-        rc, complete = sweep._run_attempt(2018, tmp_path / "2018.txt", True, quiet)
-        return proc, rc, complete
+        rc, complete, failed = sweep._run_attempt(2018, tmp_path / "2018.txt", True, quiet)
+        return proc, rc, complete, failed
 
     return _run
 
@@ -104,22 +118,79 @@ class TestChildOutputIsStreamed:
     def test_completion_marker_is_still_detected_while_streaming(self, run_attempt):
         """Streaming must not cost us the marker — without it the driver would
         treat a finished season as a crash and retry it forever."""
-        _, rc, complete = run_attempt()
+        _, rc, complete, _failed = run_attempt()
         assert complete is True
         assert rc == 0
 
     def test_crash_is_reported_with_its_exit_code(self, run_attempt):
         lines = ["INFO  Reloading game 1\n", "Fatal Python error: Executing a cache.\n"]
-        _, rc, complete = run_attempt(lines=lines, returncode=139)
+        _, rc, complete, _failed = run_attempt(lines=lines, returncode=139)
         assert complete is False, "no CHILD_COMPLETE marker => the attempt crashed"
         assert rc == 139
 
     def test_the_pipe_is_closed_and_the_child_reaped(self, run_attempt):
         """An unclosed pipe plus an unreaped child leaks a handle and a zombie per
         attempt, and a season can take hundreds of attempts."""
-        proc, _, _ = run_attempt()
+        proc, _, _, _ = run_attempt()
         assert proc.stdout.closed is True
         assert proc.waited is True
+
+
+class TestFailuresWithinACompletedSeason:
+    """SIM-447: reaching the end of the schedule is NOT the same as loading every
+    game. ``_dispatch_game`` contains per-game failures by design, so a season can
+    report COMPLETE with games still outstanding — and since the fix, those games
+    are deliberately absent from the progress file. The driver has to notice."""
+
+    def test_failed_count_is_reported_to_the_driver(self, run_attempt):
+        _, _, complete, failed = run_attempt(lines=CHILD_LINES_WITH_FAILURE)
+        assert complete is True, "the season did reach the end of its schedule"
+        assert failed == 1, "but one game failed and is not in the progress file"
+
+    def test_a_clean_season_reports_zero_failures(self, run_attempt):
+        _, _, complete, failed = run_attempt()
+        assert (complete, failed) == (True, 0)
+
+    def test_a_missing_marker_is_not_mistaken_for_failures(self, run_attempt):
+        """Older children, or a crash before the marker prints, must default to 0
+        rather than to a truthy value that would retry a finished season forever."""
+        lines = [ln for ln in CHILD_LINES if "CHILD_FAILED" not in ln]
+        _, _, complete, failed = run_attempt(lines=lines)
+        assert complete is True
+        assert failed == 0
+
+    def test_a_malformed_marker_does_not_crash_the_driver(self, run_attempt):
+        lines = [ln.replace("CHILD_FAILED: 0", "CHILD_FAILED: ???") for ln in CHILD_LINES]
+        _, _, complete, failed = run_attempt(lines=lines)
+        assert complete is True
+        assert failed == 0
+
+    def test_the_child_emits_the_marker_the_driver_parses(self):
+        """The child runs as an embedded SOURCE STRING, so the producer and the
+        consumer of ``CHILD_FAILED`` live in different halves of this file and can
+        drift apart with nothing failing. If the child stops emitting it, the
+        driver silently reads 0 failures forever and we are back to the 824014 bug
+        — every canned-output test would still pass. Bind the two halves."""
+        import inspect
+
+        assert "CHILD_FAILED:" in sweep._CHILD, "the child must EMIT the marker"
+        assert 'int(s.get("failed", 0))' in sweep._CHILD, (
+            "the marker must carry the real failed count from the summary"
+        )
+        assert "CHILD_FAILED:" in inspect.getsource(sweep._run_attempt), (
+            "the driver must PARSE the same marker the child emits"
+        )
+
+    def test_the_driver_retries_rather_than_breaking_on_a_failed_game(self):
+        """Guards the actual control flow: `if complete and not failed` must gate
+        the break. `if complete` alone is what lost game 824014."""
+        import inspect
+
+        src = inspect.getsource(sweep.main)
+        assert "if complete and not failed:" in src, (
+            "the break must require BOTH completion and zero failures — otherwise a "
+            "season that ends with a failed game is never retried"
+        )
 
 
 class TestQuietMode:
