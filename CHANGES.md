@@ -1,3 +1,76 @@
+# Test/CI — SIM-448: weekly integration failure — the 0017 schema-drift guard, and the coverage 0017 never had — 2026-08-03
+**Authors: Data Engineer (Agent 4) · QA (Agent 9) [cross-validation]**
+
+The weekly integration suite failed on 2026-08-03 (run `30789553329`): **1 failed, 23 passed**.
+
+## What failed, and why it is a good failure
+
+```
+tests/integration/test_schema_migrations.py::TestSchemaMigrations::test_raw_schema_tables_exist
+AssertionError: raw.* schema drift — missing: [], unexpected: ['etl_game_ingest'].
+If a migration intentionally added or removed a table, update _RAW_TABLES in this file
+in the same commit.
+```
+
+Migration **0017** (SIM-441) created `raw.etl_game_ingest` and the canonical table list in the
+integration suite was not updated in the same commit, exactly as that message anticipates. The guard
+asserts set *equality*, so it catches additions as well as silent drops — it did its job.
+
+It surfaced a week late only because this suite runs weekly rather than per-push: 0017 landed
+2026-07-27 at 16:46 UTC, and that day's scheduled run had already gone green at 06:22 UTC. 2026-08-03
+was the first run to see it.
+
+**Fix:** `"etl_game_ingest",  # 0017 (SIM-441)` added to `_RAW_TABLES`.
+
+## The earlier failures were a different, already-fixed problem
+
+Runs on 06-29, 07-06, 07-13 and 07-20 also failed, which makes this look like a long-running
+flake. It is not the same fault: those failed on `raw.etl_data_freshness is missing columns
+{source_name, last_game_date_loaded, rows_loaded_last_run, last_successful_load_at,
+pipeline_version}` plus `pipeline_run_log.run_id`. That was resolved before the 07-23 run and has
+stayed green. No action needed, but worth recording so the history is not misread as one flaky test.
+
+## The coverage 0017 never had
+
+The table guard caught the new *table*. Nothing at all covered 0017's four other changes — and a
+column-level drift is precisely what went undetected for three weeks in the `etl_data_freshness`
+failures above. Four integration tests added, each asserting a distinct 0017 acceptance criterion:
+
+* `raw.etl_game_ingest` accepts exactly `loaded` / `empty` / `failed` and rejects anything else —
+  the CHECK is what lets the loader tell "never loaded" from "loaded and legitimately produced zero
+  pitches", which is what stops a cancelled game being re-fetched nightly forever.
+* `raw.pitches.field_assist_6_plus` exists, is NOT NULL, defaults FALSE.
+* `raw.players.active` is gone, along with `idx_players_active`.
+* `uq_etl_errors_natural_key` actually **rejects a duplicate insert** — asserted behaviourally, since
+  a catalogue check would happily pass on a non-unique index.
+
+## Verifying the tests are not vacuous
+
+Rather than mutating source, the schema itself was mutated: a throwaway Postgres was migrated to
+head, snapshotted, **downgraded to 0016**, and snapshotted again. Every assertion must flip.
+
+| property | at head | at 0016 | verdict |
+|---|---|---|---|
+| `etl_game_ingest` table | present | absent | detects 0017 |
+| `pitches.field_assist_6_plus` | present | absent | detects 0017 |
+| `uq_etl_errors_natural_key` | present | absent | detects 0017 |
+| `players.active` | absent | present | detects 0017 |
+| `pitches.home_manager_id` nullable | YES | **YES** | **vacuous** |
+
+**That fifth check caught a real problem in my own work.** A test asserting the manager-id columns are
+nullable was written as 0017 coverage — but they were already nullable at **0015**, so 0017's two
+`ALTER COLUMN … DROP NOT NULL` statements are no-ops and the test proves nothing about that migration.
+Confirmed by diffing `is_nullable` across 0015 / 0016 / head: `YES` at every revision.
+
+The test is kept, because NULL-ability is a genuine invariant the loader depends on — it no longer
+invents a manager from `coaches[0]` when the feed has none — but it is renamed and documented as an
+INVARIANT, explicitly not as evidence that 0017 applied. The migration body is left untouched: applied
+migrations are immutable history, and a redundant `DROP NOT NULL` is harmless.
+
+## Verification
+
+Full integration suite run locally against real testcontainers Postgres: **29 passed** (was 24, of
+which 1 failed). Lint clean.
 # Bug/Data — SIM-447: sweep completeness, the neutral-site venue crash, and 331 blank venue names — 2026-07-27
 **Authors: Data Engineer (Agent 4) · QA (Agent 9) [cross-validation]**
 

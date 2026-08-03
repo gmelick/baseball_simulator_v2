@@ -62,6 +62,7 @@ _RAW_TABLES = {
     "pipeline_run_log",  # 0003 (SIM-083 / SIM-138)
     "etl_errors",  # 0011 (SIM-093)
     "game_bullpen_availability",  # 0015 (SIM-433)
+    "etl_game_ingest",  # 0017 (SIM-441)
 }
 
 _SIM_TABLES = {
@@ -184,6 +185,132 @@ class TestSchemaMigrations:
             f"raw.game_odds is missing CLV columns: {missing}. "
             "Migrations 0003 (SIM-083 / SIM-133) may not have been applied."
         )
+
+    # -- migration 0017 (SIM-441) ------------------------------------------
+    #
+    # 0017 shipped without any integration coverage. The exact-set table guard
+    # above caught the new TABLE a week later, on the next scheduled run — but
+    # nothing covered the four column/index changes in the same migration, and a
+    # column-level drift is exactly what went undetected here before (the
+    # raw.etl_data_freshness failures of 2026-06-29 → 07-20). These close that gap.
+
+    def test_sim441_etl_game_ingest_records_terminal_outcomes(
+        self, pg_connection: sa.Connection
+    ) -> None:
+        """0017: raw.etl_game_ingest must accept exactly the three outcomes.
+
+        This table is what lets the loader tell "never loaded" apart from "loaded
+        and legitimately produced zero pitches" — the distinction that stops a
+        cancelled game being re-fetched every night forever. A widened or missing
+        CHECK would let a typo'd outcome through and silently break that.
+        """
+        trans = pg_connection.begin_nested()
+        try:
+            for i, outcome in enumerate(("loaded", "empty", "failed")):
+                pg_connection.execute(
+                    text(
+                        "INSERT INTO raw.etl_game_ingest (game_pk, season, outcome) "
+                        "VALUES (:pk, 2024, :o)"
+                    ),
+                    {"pk": -1000 - i, "o": outcome},
+                )
+            with pytest.raises(sa.exc.IntegrityError):
+                pg_connection.execute(
+                    text(
+                        "INSERT INTO raw.etl_game_ingest (game_pk, season, outcome) "
+                        "VALUES (-1099, 2024, 'partially_loaded')"
+                    )
+                )
+        finally:
+            trans.rollback()
+
+    def test_sim441_pitches_has_fielding_overflow_flag(self, pg_connection: sa.Connection) -> None:
+        """0017: raw.pitches.field_assist_6_plus marks pitches whose fielding
+        credits overflowed the fixed assist/putout slots. Without it, a
+        multi-runner rundown looks identical to a clean play."""
+        row = pg_connection.execute(
+            text("""
+                SELECT is_nullable, column_default
+                FROM   information_schema.columns
+                WHERE  table_schema = 'raw' AND table_name = 'pitches'
+                AND    column_name  = 'field_assist_6_plus'
+            """)
+        ).fetchone()
+        assert row is not None, "raw.pitches.field_assist_6_plus is missing (migration 0017)"
+        is_nullable, default = row
+        assert is_nullable == "NO", "the flag must be NOT NULL — NULL is not 'no overflow'"
+        assert default is not None and "false" in default.lower()
+
+    def test_sim441_players_active_column_is_gone(self, pg_connection: sa.Connection) -> None:
+        """0017 dropped raw.players.active — it was never populated or read, and a
+        column that always says TRUE invites being trusted."""
+        row = pg_connection.execute(
+            text("""
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'raw' AND table_name = 'players' AND column_name = 'active'
+            """)
+        ).fetchone()
+        assert row is None, "raw.players.active should have been dropped by migration 0017"
+
+        idx = pg_connection.execute(
+            text(
+                "SELECT 1 FROM pg_indexes WHERE schemaname='raw' AND indexname='idx_players_active'"
+            )
+        ).fetchone()
+        assert idx is None, "idx_players_active should have been dropped with its column"
+
+    def test_sim441_etl_errors_natural_key_rejects_duplicates(
+        self, pg_connection: sa.Connection
+    ) -> None:
+        """0017: the error ledger must be idempotent.
+
+        Re-running a game used to append a fresh copy of every error it hit, so
+        the ledger inflated on each retry and could not be counted. Asserted
+        BEHAVIOURALLY — a catalogue check would pass on a non-unique index.
+        """
+        trans = pg_connection.begin_nested()
+        try:
+            # error_messages is a TEXT[] — one row can carry several messages for
+            # the same pitch, which is precisely why the natural key excludes it.
+            insert = text(
+                "INSERT INTO raw.etl_errors "
+                "(game_pk, at_bat_number, pitch_number, error_type, error_messages) "
+                "VALUES (-1001, 1, 1, 'HARD', :m)"
+            )
+            pg_connection.execute(insert, {"m": ["first"]})
+            with pytest.raises(sa.exc.IntegrityError):
+                pg_connection.execute(insert, {"m": ["different message, same natural key"]})
+        finally:
+            trans.rollback()
+
+    def test_manager_ids_are_nullable(self, pg_connection: sa.Connection) -> None:
+        """raw.pitches.{home,away}_manager_id must accept NULL.
+
+        The loader no longer invents a manager when the feed has none — it used to
+        fall back to ``coaches[0]``, i.e. whoever the API happened to list first.
+        NOT NULL here would force that guess back.
+
+        ⚠ This is an INVARIANT, not migration-0017 coverage. 0017 contains
+        ``ALTER COLUMN ... DROP NOT NULL`` for both columns, but they were already
+        nullable at 0015, so those two statements are no-ops — verified by
+        migrating a throwaway database to 0015/0016/head and diffing
+        ``is_nullable`` (YES at every revision). Do not cite this test as evidence
+        that 0017 applied; the four tests above are.
+        """
+        rows = pg_connection.execute(
+            text("""
+                SELECT column_name, is_nullable
+                FROM   information_schema.columns
+                WHERE  table_schema = 'raw' AND table_name = 'pitches'
+                AND    column_name IN ('home_manager_id', 'away_manager_id')
+                ORDER  BY column_name
+            """)
+        ).fetchall()
+        assert len(rows) == 2, "manager id columns missing from raw.pitches"
+        for column_name, is_nullable in rows:
+            assert is_nullable == "YES", (
+                f"raw.pitches.{column_name} is still NOT NULL — migration 0017 did not apply"
+            )
 
     def test_raw_etl_freshness_table_exists(self, pg_connection: sa.Connection) -> None:
         """SIM-083: raw.etl_data_freshness must exist.
