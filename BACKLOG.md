@@ -17,7 +17,7 @@ four seasons had one more game in `raw.pitches` than the ledger accounted for.
 | SIM-447c | `venu_name_short` typo → 331/331 blank venue names | Bug/Data | P2 | S | — | ✅ **FIXED + DATA REPAIRED.** `dimensions.get("venu_name_short", " ")` — missing the `e` — so the key **never matched** and every row fell through to the `" "` default. **All 331 rows in `raw.venues` stored a single space.** It survived because `" "` is TRUTHY, so every `or`-style guard downstream took it for a real name. Not cosmetic: `api/routes/games.py` selects `v.venue_name` and serves it to the front end. Fixed via `_first_nonblank(venue_name_short, name, statsapi name)` — the two Savant payload shapes use different keys (`venue_name_short` on park-factors, `name` on the statcast-venue fallback). `_ensure_venue(..., force=True)` added because the row could not be deleted and reloaded (raw.pitches FK) — the INSERT always had `ON CONFLICT DO UPDATE`; only the early return stood in the way. **All 331 repaired: 0 blank, 47 distinct names.** |
 | SIM-447d | `scripts/reload_games.py` — targeted corrective reload | Tooling | P2 | M | — | ✅ **DONE.** Answers "which games actually need re-running" instead of guessing. Classifies every anomaly into **STALE** (rows but no ledger row — looks loaded, isn't), **FAILED** (not-loaded but `status='Final'`), **NEVER LOADED**, and **NOT PLAYED** (reported and deliberately skipped). `--dry-run`, `--game-pk`, `--season`, `--allow-shrink`, `--refresh-venues`. Prints rows-before→after per game and ends with the per-season ledger-vs-pitches reconciliation that found all of this. |
 
-| SIM-447e | The sweep exited COMPLETE while games were still failing | Bug/Ops | P1 | S | SIM-447a | ✅ **FIXED.** The other half of SIM-447a, exposed by the 2026 run. Once failures stopped being falsely recorded as done, they were correctly left out of the progress file — but the driver still broke out of its retry loop the moment the child printed , so nothing ever went back for them. Reaching the end of a schedule is NOT the same as loading every game:  contains per-game failures by design. **Game 824014** (2026-06-26, a Final regular-season game the schedule endpoint does return) was lost exactly this way — the 2026 sweep reported COMPLETE with 1 failure. The child now emits a machine-readable , and the driver only breaks on ; a completed-with-failures attempt retries **just** the outstanding games, and the existing zero-progress guard still stops a deterministic failure from spinning. 824014 reloaded clean on retry — transient, same family as the SIM-446 residual, not a data defect. |
+| SIM-447e | The sweep exited COMPLETE while games were still failing | Bug/Ops | P1 | S | SIM-447a | ✅ **FIXED.** The other half of SIM-447a, exposed by the 2026 run. Once failures stopped being falsely recorded as done, they were correctly left out of the progress file — but the driver still broke out of its retry loop the moment the child printed `CHILD_COMPLETE`, so nothing ever went back for them. Reaching the end of a schedule is NOT the same as loading every game: `_dispatch_game` contains per-game failures by design. **Game 824014** (2026-06-26, a Final regular-season game the schedule endpoint does return) was lost exactly this way — the 2026 sweep reported COMPLETE with 1 failure. The child now emits a machine-readable `CHILD_FAILED: N`, and the driver only breaks on `complete and not failed`; a completed-with-failures attempt retries **just** the outstanding games, and the existing zero-progress guard still stops a deterministic failure from spinning. 824014 reloaded clean on retry — transient, same family as the SIM-446 residual, not a data defect. |
 
 **Result: ALL TEN SEASONS (2017-2026) now fully reconcile** — every season's ledger count equals its distinct
 `game_pk` count in `raw.pitches`. Tests +28 (`test_sim447_venue_resolution.py` 20,
@@ -26,10 +26,24 @@ hollow and corrected** (`_first_nonblank`'s whitespace guard duplicated `to_str`
 undetectable at that layer — the test now binds the contract rather than the implementation). Gates:
 unit **2,557**, regression **53**, ruff + format + mypy clean.
 
-**⚠ STILL OPEN — 2026 was never swept.** `raw.pitches` holds **1,585 games / 465,793 rows** for 2026
-with **zero** ledger rows, because the sweep command covered 2018-2025 only (2017 ran separately).
-That is a full season of pre-SIM-440 parser data still live. Fix: `python scripts/resumable_sweep.py
---season 2026`.
+**✅ 2026 SWEPT — the last gap is closed.** It had held **1,585 games / 465,793 rows** with **zero**
+ledger rows, because the original sweep command covered 2018-2025 only (2017 ran separately) — a full
+season of pre-SIM-440 parser data live. Now **1,626 games / 478,067 rows**, ledger reconciles. That run
+is also what exposed SIM-447e.
+
+**Confirmed repaired — the four games that failed on the first sweep**, each `outcome='loaded'` with
+its ledger count matching its stored rows, and each carrying post-SIM-440 parser values:
+
+| game_pk | season | rows | RBIs | runner-outs |
+|---|---|---|---|---|
+| 529440 | 2018 | 323 | 16 | 3 |
+| 632924 | 2021 | 317 | 17 | 5 |
+| 663023 | 2022 | 312 | 6 | 3 |
+| 777962 | 2025 | 265 | 7 | 4 |
+
+The last two columns are the check that matters: both were **zero corpus-wide** before SIM-440, so
+non-zero values prove these rows were genuinely re-parsed by the fixed code rather than re-inserted
+unchanged.
 
 # 💥 2026-07-27 — SIM-445 + SIM-446: the sweep-crash investigation, and the ETL HTTP transport (next free ID → SIM-447, now → SIM-448)
 

@@ -117,28 +117,45 @@ per game, and ends with the per-season reconciliation that found all of this.
 The other half of SIM-447a, and it only became visible once that fix was in.
 
 With failures no longer falsely recorded as done, they were correctly left out of the progress file —
-but the driver still broke out of its retry loop the instant the child printed . So
+but the driver still broke out of its retry loop the instant the child printed `CHILD_COMPLETE`. So
 the games were queued for retry and nothing ever ran the retry. **Reaching the end of a schedule is
-not the same as loading every game**;  contains per-game failures by design.
+not the same as loading every game**; `_dispatch_game` contains per-game failures by design.
 
 Game **824014** (2026-06-26) was lost exactly this way. It is a Final regular-season game, the
 schedule endpoint returns it (15 games that day; the ledger had 14), and the sweep processed 403 games
 after that date — it was attempted, it failed, and the run reported COMPLETE anyway.
 
-The child now emits a machine-readable  and the driver breaks only on
-. A completed-with-failures attempt retries exactly the outstanding games,
-and the existing zero-progress guard still stops a deterministic failure from spinning forever.
+The child now emits a machine-readable `CHILD_FAILED: N` — no dict-repr parsing — and the driver
+breaks only on `complete and not failed`. A completed-with-failures attempt retries exactly the
+outstanding games, and the existing zero-progress guard still stops a deterministic failure from
+spinning forever (its message now points at `reload_games.py --dry-run`).
 
 824014 reloaded clean on retry, so it was transient — the same residual class as SIM-446's game
 492011, not a data defect.
 
-## Still open
+## Verification of the whole corpus
 
-~~**2026 was never swept.**~~ **DONE** — 1,626 games / 478,067 rows, ledger reconciles.
+**All ten seasons (2017-2026) reconcile**: every season's ledger `loaded` count equals its distinct
+`game_pk` count in `raw.pitches`.
 
-*(historical note)* **2026 was never swept.** `raw.pitches` holds 1,585 games / 465,793 rows for 2026 with zero ledger
-rows — the sweep command covered 2018-2025, and 2017 ran separately. That is a full season of
-pre-SIM-440 parser data still live. Fix: `python scripts/resumable_sweep.py --season 2026`.
+The four games that failed on the first sweep are confirmed repaired:
+
+| game_pk | season | outcome | ledger rows | actual rows | RBIs | runner-outs |
+|---|---|---|---|---|---|---|
+| 529440 | 2018 | loaded | 323 | 323 | 16 | 3 |
+| 632924 | 2021 | loaded | 317 | 317 | 17 | 5 |
+| 663023 | 2022 | loaded | 312 | 312 | 6 | 3 |
+| 777962 | 2025 | loaded | 265 | 265 | 7 | 4 |
+
+The last two columns are the check that matters: both were **zero corpus-wide** before SIM-440
+(`isOut` read from the wrong dict, `rbi` from the wrong level). Non-zero values prove these rows were
+re-parsed by the fixed code rather than merely re-inserted.
+
+## Closed since this entry was drafted
+
+**2026 has now been swept** — 1,626 games / 478,067 rows, ledger reconciles. It had been the one
+outstanding gap: the original sweep command covered 2018-2025 and 2017 ran separately, leaving a full
+season of pre-SIM-440 parser data live.
 
 # Bug/Ops — SIM-445 + SIM-446: the sweep-crash investigation and the ETL HTTP transport — 2026-07-27
 **Authors: Data Engineer (Agent 4) · Performance Engineer (Agent 6) · QA (Agent 9) [cross-validation]**
