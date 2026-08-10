@@ -509,7 +509,43 @@ status enum; typed WebSocket schema; calibration-wiring fix; auth enforcement) �
 - `agent_team.md` — full agent scopes + the cross-agent collaboration map.
 - `WORKFLOW.md` — the operator's manual (clean-checkout bring-up, health checks).
 
-## 14. Working conventions for Claude Code
+## 14. Writing standard (applies to ALL prose: chat replies, docs, commit messages, code comments)
+
+Write in **Simplified Technical English (ASD-STE100 style)** and follow **Zinsser's four principles**.
+This is a hard requirement, not a preference. It applies to every summary, explanation, audit document,
+ticket description, docstring, and inline comment.
+
+**Simplified Technical English — the rules to keep:**
+
+- **One idea per sentence.** Keep sentences to 20 words or fewer. Split a long sentence into two.
+- **Use the active voice.** Write "the manager pulls the pitcher", not "the pitcher is pulled".
+- **Use the present tense.** Write "the gate blocks the steal", not "the gate would block the steal".
+- **Use one term for one thing, every time.** Do not switch between "green-light", "green", and
+  "aggression rate" for the same value. Pick one name and keep it.
+- **Define a technical term the first time you use it.** Then reuse the same term.
+- **Say who does what.** Name the actor in every sentence. Avoid "it" and "this" with no clear subject.
+- **Use simple words.** Write "use", not "utilize". Write "start", not "initiate".
+- **Write one instruction per step.** Do not join two actions with "and" in a procedure step.
+- **Do not use noun stacks.** Write "the rate of the steal attempt", not "steal attempt rate scaling".
+- **Keep the article.** Write "the pool", not "pool".
+
+**Zinsser's four principles — the test to apply before you send:**
+
+1. **Clarity** — the reader must not have to read a sentence twice. If a sentence is unclear, the thought
+   behind it is unclear. Fix the thought first.
+2. **Simplicity** — cut every word that does no work. Delete "very", "quite", "in order to", "the fact
+   that", "it should be noted that".
+3. **Brevity** — say it once. Do not restate a point in a summary that the body already made.
+4. **Humanity** — write to a person, not to a file. Say "you", say "I", and admit uncertainty plainly.
+
+**Do not do these things:**
+
+- Do not open with a windup ("It's worth noting that…"). Start with the point.
+- Do not hedge to sound careful. Say "I did not verify this" instead of "this may potentially differ".
+- Do not use jargon as a shortcut in a summary for the owner. Explain the term in plain words.
+- Do not pad a list to look complete. A short list of real items beats a long list with filler.
+
+## 15. Working conventions for Claude Code
 
 - Confirm a ticket's status in `BACKLOG.md` before acting — it changes (it is the single source of truth;
   `backlog.xlsx` was retired 2026-06-04).

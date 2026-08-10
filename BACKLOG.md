@@ -2,7 +2,90 @@
 
 *Owner: Product Manager (Agent 1) · Last updated: 2026-06-02 (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
 
-# 🧪 2026-08-03 — SIM-448: the weekly integration failure — 0017 schema drift + the coverage 0017 never had (next free ID → SIM-449)
+# 🏗️ 2026-08-10 — SIM-449→493: the sim-loop remediation programme — 19 open items resolved into ONE architecture (next free ID → SIM-494)
+
+**What this is.** A full walk-through of every open defect in `simulation/sim_loop.py` with the owner,
+decision by decision. The 19 items did **not** resolve into 19 fixes. They resolved into one
+architectural rule, stated by the owner and now governing the whole simulator:
+
+> **Every decision is a similarity-weighted draw from the play pool.** Hard-filter the pool on the
+> situation (outs, runners, count, score band, home/away), score every surviving play with a **subset
+> of 3–5** applicable similarity engines, then draw one weighted by similarity. **Never** a hand-tuned
+> probability formula.
+
+Full reasoning + evidence: `docs/audit/2026-08-10-sim-loop-remediation-decisions.md`.
+Ticket detail + critical path: `docs/audit/2026-08-10-sim-loop-remediation-tickets.md`.
+
+**The headline finding: the data layer is far ahead of the simulator.** Of the 11 column changes below,
+**8 move data that already exists** into the artifact. Nine park-factor types are computed and one is
+read. Four previous-pitch columns are rebuilt nightly and read nowhere. Ten pitch-feature columns are
+selected into the batted-ball pool build and none reach the workers. The stolen-base pool has exactly
+the right columns and was never loaded. The count-bucket filter index — the mechanism the entire
+redesign needs — already works. **The artifact loads 3 of the 10 swept seasons**, capped by the very
+performance problem SIM-467 deletes.
+
+**Four defects were found in this session that were on no prior ticket:** the run-expectancy matrix is
+biased low (SIM-458); the weight cache goes stale mid-plate-appearance on any steal or wild pitch
+(SIM-455); `whiff_rate` measures called strikes so swing-and-miss is absent from the pitcher engine
+entirely (SIM-456); and the batted-ball draw discards the pitch that caused it, so the pitch and
+contact draws can contradict each other (SIM-472).
+
+**Data constraint:** 2015/2016 **cannot** be added — the MLB API this project scrapes does not serve
+them. 2017 is the earliest year. Cell occupancy comes from SIM-460/461, never from more seasons.
+
+| ID | Title | Type | Pri | Size | Depends-on | Status |
+|---|---|---|---|---|---|---|
+| **SIM-449** | Harness passes the defense maps + park factor — `_sim_kwargs` drops both, so A/B tests of `SIM_PARK_FACTOR` / `SIM_FIELDER_RBF` compare two identical no-ops | Test/CI | P1 | S | — | 🔲 **OPEN.** Blocks all park work + flag re-validation. |
+| **SIM-450** | Acceptance-band validation lane in the production configuration | Test/CI | P1 | L | SIM-449 | 🔲 **OPEN.** Per-channel bands vs real MLB rates, **not** a golden — a golden made now freezes the bugs. |
+| **SIM-451** | Measure the filter cell-occupancy distribution (2,880 cells, at 3 and at 10 seasons) | Data | P1 | S | — | 🔲 **OPEN.** Sets `MIN_CELL` for SIM-475. |
+| **SIM-452** | Two independent RNG streams — the loop rng and the full-pool rng are built from the same integer | Sim | P2 | XS | — | 🔲 **OPEN.** `SeedSequence.spawn(2)`. Measure prop spread after. |
+| **SIM-453** | Explicit pre/post states on the run-value ledger; delete the conservation derivation | Sim | P1 | M | — | 🔲 **OPEN.** Dissolves 3 tracked defects at once (state-read-after-mutation, DP desync, ROE at 0.00 run value). |
+| **SIM-454** | Real base-state invariants + a transition assertion | Sim | P2 | S | SIM-453 | 🔲 **OPEN.** `assert_consistent` today rejects only a negative id, yet is called as a correctness guard. |
+| **SIM-455** | Split the weight cache into three lifetimes (pitcher / batter / base-out) | Perf | P2 | S | — | 🔲 **OPEN.** ~78 wasted full-pool passes per game **+ an unfiled staleness bug**: base-out is absent from the key. |
+| **SIM-456** | `whiff_rate` computes the **called-strike** rate — swing-and-miss is absent from the pitcher engine | Data | P1 | XS | — | 🔲 **OPEN.** A correct version already exists 200 lines away for another table. |
+| **SIM-457** | GB/FB/LD rates use an **outs-only** denominator — inflate ~1.4×, biased by pitcher quality | Data | P1 | XS | — | 🔲 **OPEN.** Detection: the three rates sum to ~1.4, not ~1.0. |
+| **SIM-458** | The run-expectancy matrix misses last-plate-appearance runs | Data | P1 | S | — | 🔲 **OPEN.** Biased low; worst at (2 outs, runner on 3B). Now load-bearing twice. |
+| **SIM-459** | Profile recompute (~5.7 h) | Data | P1 | M | 456, 457, 458 | 🔲 **OPEN.** One pass for all three. |
+| **SIM-460** | Raise the recency floor from **3 seasons to 10** | Data | P1 | XS | SIM-467 | 🔲 **OPEN.** ~3.3× every cell, free. The 3-season cap exists for the perf problem SIM-467 removes. |
+| **SIM-461** | Make batter hand a **weight**, not a pool partition | ML | P2 | M | SIM-470 | 🔲 **OPEN.** ~2× every cell. Validate against SIM-450 bands. |
+| **SIM-462** | Runner-identity columns (`on_1b/2b/3b`, `post_on_*`) on `sim.outcome_pool` | Data | P1 | S | — | 🔲 **OPEN.** No pool carries runner identities today. Enables SIM-473. |
+| **SIM-463** | Ten pitch-feature columns + `pitcher_id` into the batted-ball artifact | Data | P1 | S | — | 🔲 **OPEN.** ~55 MB. Already selected by the build; the artifact loads none. |
+| **SIM-464** | Home-or-away flag on both pools | Data | P1 | XS | — | 🔲 **OPEN.** `inning_topbot` is ETL-validated and in **zero** pool tables. |
+| **SIM-465** | Pitch-count + times-through-the-order columns (window functions) | Data | P2 | S | — | 🔲 **OPEN.** Same pattern the build already uses. |
+| **SIM-466** | Wire the four existing previous-pitch columns into the artifact | Data | P2 | XS | — | 🔲 **OPEN.** Built nightly, read **nowhere**. The clustering lever. |
+| **SIM-467** | Extend the bucket index from 12 cells to the full 2,880-cell filter | Perf | P1 | L | — | 🔲 **OPEN.** ~1000× less per-draw work. **This is the answer to the open 30-s SLA**, which the notes wrongly call irreducible. |
+| **SIM-468** | New table `sim.steal_opportunity_pool` | Data | P1 | M | — | 🔲 **OPEN.** `stolen_base_pool` holds only attempts — no denominator, so a draw over it attempts 100% of the time. |
+| **SIM-469** | Pool + artifact rebuild | Data | P1 | M | 459, 462–468 | 🔲 **OPEN.** One rebuild for everything. |
+| **SIM-470** | Per-decision weight-table framework (the subset rule) | ML | P1 | L | SIM-469 | 🔲 **OPEN.** 3–5 scores per draw, high/low tiers. The situation engine leaves the draw — the filter replaces it. |
+| **SIM-471** | Pitch-outcome draw | ML | P1 | M | SIM-470 | 🔲 **OPEN.** Filter + pitcher/batter high, framing/prev-pitch/fatigue low. |
+| **SIM-472** | Batted-ball draw with **pitch similarity primary** | ML | P1 | M | 463, 471 | 🔲 **OPEN.** The pitch draw must first expose the row it drew — today it discards the index. |
+| **SIM-473** | Advancement draw: the transition mapping | ML | P1 | M | 462, 458 | 🔲 **OPEN.** Replaces 7 tuned constants; a runner on 1B currently **cannot advance on any out**. |
+| **SIM-474** | Steal draw (attempt + outcome) from the opportunity pool | ML | P1 | M | SIM-468 | 🔲 **OPEN.** Production has had **zero steal attempts** since 2026-06-04. |
+| **SIM-475** | Thin-cell widening (fixed order) + effective-sample-size emission | ML | P2 | S | 451, 470 | 🔲 **OPEN.** Report only. Relax score band → home/away → count. |
+| **SIM-476** | Weight-temperature backtest harness | ML | P1 | L | SIM-470 | 🔲 **OPEN.** Unbuilt work, on no prior ticket. Train/test split by season. |
+| **SIM-477** | Fit the weight temperatures | ML | P1 | M | 476, 471–474 | 🔲 **OPEN.** |
+| **SIM-478** | `derived.park_geometry` (~360 rows, hand-curated) | Data | P2 | M | — | 🔲 **OPEN.** Fence distance + height by spray sector. |
+| **SIM-479** | Batted-ball trajectory model | ML | P2 | L | SIM-463 | 🔲 **OPEN.** ⚠ **Largest technical unknown.** Statcast distance = where the ball **stopped**, confirmed by the owner — wrong for wall-scrapers, the park-sensitive case. Validate on home runs. |
+| **SIM-480** | Fence resolution stage | ML | P2 | M | 478, 479 | 🔲 **OPEN.** Replaces `_apply_park_factor`, which leaves **HR projections perfectly park-invariant**. Neutralize the comp's own park first. |
+| **SIM-481** | Delete the hand-tuned nudges (~350–400 lines) | Sim | P1 | M | 471–474, 480 | 🔲 **OPEN.** Incl. the 0.025 home-field bias whose measured 0.017 retune was **never applied** — ~50% too much HFA ever since. |
+| **SIM-482** | Manager small-ball as draw weights | Sim | P3 | S | SIM-470 | 🔲 **OPEN.** Bunts/pitch-outs are signalled, never resolved, and **narrated to users** as if they happened. |
+| **SIM-483** | Exclude steal runs from the RBI + earned-run credit (Rule 9.04(b)) | Sim | P3 | XS | SIM-474 | 🔲 **OPEN.** Latent today; SIM-468 makes it live. |
+| **SIM-484** | Wire the dropped third strike through the catcher engine | Sim | P2 | S | SIM-470 | 🔲 **OPEN.** Gated on a hook **no production resolver implements** — it can never fire. |
+| **SIM-485** | Hit-by-pitch channel | Data | P2 | S | — | 🔲 **OPEN.** Ships with **no** re-sweep — `events` already records it. |
+| **SIM-486** | Retire the per-tile fallback path | Sim | P2 | M | 467, 450 | 🔲 **OPEN.** Its being the **test default** is why four critical bugs survived 8 weeks. Removes the divergence at the root. |
+| **SIM-487** | ETL parser batch — split `passed_ball_wild_pitch`; add `balk` + `pickoff` | Data | P2 | M | — | 🔲 **OPEN.** Collect **every** column first; the free window closed 07-30. |
+| **SIM-488** | Batched ETL re-sweep (~55 h) | Data | P2 | L | SIM-487 | 🔲 **OPEN.** Run once, for everything. |
+| **SIM-489** | Wild-pitch / passed-ball / balk / pickoff channels | Sim | P2 | M | SIM-488 | 🔲 **OPEN.** ~0.15–0.25 R/team-game with SIM-485. |
+| **SIM-490** | Wire the real per-team manager profiles | ML | P2 | S | — | 🔲 **OPEN.** Computed, never connected; the model uses a league-flat default. |
+| **SIM-491** | Re-validate all six realism flags, **one at a time**, 400 sims × 20 games | Test/CI | P1 | L | 449, 450 | 🔲 **OPEN.** All five were enabled together at 3–4 games, the day after that bar was set. |
+| **SIM-492** | Calibration refit + multi-season win-probability curve | ML | P1 | M | all | 🔲 **OPEN.** The live curve was fitted on 60 games of one season, on the **pre-fix** run environment. |
+| **SIM-493** | Decompose `sim_loop.py` | Sim | P3 | L | 481, 486 | 🔲 **OPEN.** Deferred deliberately — the architecture work deletes ~400 lines and SIM-486 several hundred more. Decompose once, on the final shape. |
+
+**Critical path:** SIM-449 → 459 → 469 → 470 → 471 → 472 → 477 → 481 → 492 (nine deep). The two
+long-running jobs — the 5.7 h profile recompute and the 55 h re-sweep — are independent of each other
+and of most code work, provided SIM-487 lands before the sweep starts.
+
+# 🧪 2026-08-03 — SIM-448: the weekly integration failure — 0017 schema drift + the coverage 0017 never had (next free ID → SIM-449, now → SIM-494)
 
 | ID | Title | Type | Pri | Size | Depends-on | Status |
 |---|---|---|---|---|---|---|
