@@ -85,8 +85,8 @@ from api.routes._common import _get_pool
 from api.routes.games import (
     _build_runner,
     _resolve_state_or_error,
+    _resolved_sim_kwargs,
     _run_batch,
-    _sim_kwargs_from_state,
     resolve_factory_ref,
 )
 from api.schemas import (
@@ -308,12 +308,19 @@ async def _summary_and_winprob(
     (cache-memoized). The :class:`WinProbability` is derived from the summary's
     raw arrays so the moneyline report consumes a calibrated SIM-330 probability
     (here uncalibrated -- identity -- since this is a best-effort edge surface).
+
+    SIM-452: the kwargs come from ``_resolved_sim_kwargs``, which looks the venue
+    park factor up first. This surface used to call the bare builder, so every
+    edge and CLV number it produced came from a park-blind simulation.
     """
     pool = _get_pool(request)
     state = await _resolve_state_or_error(pool, game_pk)
 
     factory_ref = resolve_factory_ref(request)
-    spec = GameSpec(machine_factory=factory_ref, sim_kwargs=_sim_kwargs_from_state(state))
+    spec = GameSpec(
+        machine_factory=factory_ref,
+        sim_kwargs=await _resolved_sim_kwargs(request, pool, state, game_pk),
+    )
     runner = _build_runner(request)
 
     batch = await asyncio.to_thread(

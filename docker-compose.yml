@@ -131,6 +131,25 @@ services:
       SIM_PARK_FACTOR: "1"
       SIM_BB_PLATOON:  "1"
       SIM_FIELDER_RBF: "1"
+      # SIM-453: WHERE the park factors come from. SIM_PARK_FACTOR above was on,
+      # but the factors were dark: api/routes/games.py read them through
+      # app.state.sim_duckdb, and api/main.py only opened that connection under
+      # REPLAY_PERSISTENCE_ENABLED — a variable set in NEITHER .env NOR this file
+      # (only in .env.production.example and .env.staging.example). So the nudge had
+      # a neutral 1.0 to act on for every venue, and the resolver reported it as
+      # "resolved". derived.park_factors held 2,952 rows the whole time (35 for 2024
+      # factor_type='R', from 0.8724 to 1.1339).
+      #
+      # We did NOT fix that by setting REPLAY_PERSISTENCE_ENABLED here. That flag
+      # opens a WRITABLE DuckDB connection, and the file has no sim.play_stream /
+      # sim.state_snapshots tables, so the replay routes would 500 instead of 503.
+      # api/main.py now opens the park-factor source READ-ONLY as its own concern.
+      # This line just makes the path explicit instead of an implicit code default,
+      # so the compose file names the source the simulator reads.
+      #
+      # REPLAY_PERSISTENCE_ENABLED stays UNSET on purpose. It is a write path and is
+      # no longer the gate on park factors.
+      BASEBALL_DUCKDB_PATH: /data/baseball_sim.duckdb
       # SIM-406: the fitted CalibrationReport the lifespan loads to calibrate every
       # similarity engine + the win-prob map. Produced by `make calibrate` /
       # scripts/fit_calibration.py (and the nightly chain) into the /data volume.

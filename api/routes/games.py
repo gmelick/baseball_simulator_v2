@@ -109,6 +109,22 @@ from simulation.lineup_resolver import (
 from simulation.pitcher_decisions import decisions_from_plays
 from simulation.play_recorder import record_game_plays
 from simulation.prop_distributions import ALL_PROPS, PropDistributionSet
+from simulation.sim_kwargs import (
+    build_sim_kwargs as _build_sim_kwargs,
+)
+from simulation.sim_kwargs import (
+    mark_park_factor_unresolved,
+)
+
+# SIM-449 re-exports. Nothing in THIS module calls them any more -- every route
+# goes through ``_resolved_sim_kwargs`` (SIM-452) -- but importers outside the
+# package (``scripts/``, the unit tests) still reach them here under these names.
+from simulation.sim_kwargs import (  # noqa: F401 -- kept as a public re-export
+    resolve_park_run_factor as _resolve_park_run_factor,
+)
+from simulation.sim_kwargs import (  # noqa: F401 -- kept as a public re-export
+    sim_kwargs_from_state as _sim_kwargs_from_state,
+)
 from simulation.snapshots import (
     FieldSnapshot,
     OverrideDelta,
@@ -508,82 +524,41 @@ def _sim_summary_lite_from_stored(summary: dict | None) -> GameSimSummaryLite | 
 
 # ---------------------------------------------------------------------------
 # Helpers -- sim_kwargs assembly from a resolved GameState
+#
+# SIM-449: ``_sim_kwargs_from_state`` and ``_resolve_park_run_factor`` MOVED to
+# ``simulation/sim_kwargs.py``. This module imports them above under their
+# original names, so every existing caller and importer is unchanged.
+# ``scripts/sim_stats.py`` held a second copy of the builder that dropped the two
+# defense maps and the park factor, so SIM_FIELDER_RBF and SIM_PARK_FACTOR ran as
+# no-ops under the validation harness. One definition now serves both callers.
+#
+# SIM-452: SIM-449 unified the BUILDER but not the park-factor RESOLUTION. Five of
+# the eight call sites never looked the venue up, so they sent the GameState
+# default 1.0 and SIM_PARK_FACTOR was inert for them. ``_resolved_sim_kwargs``
+# below is now the ONLY way a route gets sim kwargs, and it always resolves first.
 # ---------------------------------------------------------------------------
 
 
-def _sim_kwargs_from_state(state: Any) -> dict[str, Any]:
-    """Build the ``simulate_game`` kwargs from a resolved GameState (SIM-353).
+async def _resolved_sim_kwargs(
+    request: Request, pool: Any, state: Any, game_pk: int
+) -> dict[str, Any]:
+    """Resolve the venue park factor onto ``state``, then build the sim kwargs (SIM-452).
 
-    Pulls the lineup contract off the GameState's public fields (the same fields
-    ``lineup_resolver.build_game_state`` populated) into the ``sim_kwargs`` dict
-    the BatchRunner / ``simulate_game`` consume.
+    Every route uses this. ``_resolve_state_or_error`` stamps the unresolved
+    sentinel on the state, and ``simulation.sim_kwargs.build_sim_kwargs`` clears the
+    sentinel by writing the looked-up factor. A route that called the bare builder
+    instead would raise ``UnresolvedParkFactorError``.
+
+    The DuckDB connection comes from ``app.state.sim_duckdb``. When it is absent the
+    resolver returns a real neutral ``1.0``, which is a resolved answer, not a
+    skipped lookup.
     """
-    return {
-        "away_lineup": list(getattr(state, "away_lineup", []) or []),
-        "home_lineup": list(getattr(state, "home_lineup", []) or []),
-        "season": int(getattr(state, "season", 2024)),
-        "pitcher_id": int(getattr(state, "pitcher_id", 0) or 0),
-        "bat_hand": str(getattr(state, "bat_hand", "R") or "R"),
-        # SIM-421: carry the per-batter hand map + both starters so the matchup
-        # pre-filter follows the lineup across PAs/half-innings (picklable, so
-        # they survive the ProcessPool sim_kwargs path).
-        "bat_hands": dict(getattr(state, "bat_hands", {}) or {}),
-        "throw_hands": dict(getattr(state, "throw_hands", {}) or {}),
-        "home_pitcher_id": getattr(state, "home_pitcher_id", None),
-        "away_pitcher_id": getattr(state, "away_pitcher_id", None),
-        # SIM-428: catchers for the framing nudge.
-        "home_catcher_id": getattr(state, "home_catcher_id", None),
-        "away_catcher_id": getattr(state, "away_catcher_id", None),
-        # SIM-425b: per-position defense maps for the fielder-RBF nudge
-        # (SIM_FIELDER_RBF). SIM-411: the venue run park-factor for the park nudge
-        # (SIM_PARK_FACTOR) — resolved onto the state by the endpoint when a sim
-        # DuckDB is available; defaults to 1.0 (neutral) otherwise. Both are no-ops
-        # with their gate off, so passing them is always safe.
-        "home_defense": dict(getattr(state, "home_defense", {}) or {}),
-        "away_defense": dict(getattr(state, "away_defense", {}) or {}),
-        "park_run_factor": float(getattr(state, "park_run_factor", 1.0) or 1.0),
-        "k": int(getattr(state, "k", 25) or 25) if hasattr(state, "k") else 25,
-        "max_innings": 12,
-    }
-
-
-async def _resolve_park_run_factor(pool: Any, con: Any, game_pk: int, season: int) -> float:
-    """SIM-411: resolve the venue run park-factor for a game (~1.0 = neutral).
-
-    The venue lives in Postgres (``raw.games.venue_id``) and the factor in DuckDB
-    (``derived.park_factors``), so this is a two-source lookup: fetch the game's
-    venue from ``pool``, then its regressed run factor (``factor_type='R'``) for the
-    season from ``con`` (``app.state.sim_duckdb``). Returns ``1.0`` on ANY missing
-    piece (no DuckDB wired, unknown venue, no park-factor row, or a query error) so
-    the park nudge simply stays neutral and ``/simulate`` is never broken by it."""
-    if con is None:
-        return 1.0
-    try:
-        acquire = getattr(pool, "acquire", None)
-        if acquire is not None:
-            async with pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    "SELECT venue_id FROM raw.games WHERE game_pk = $1", int(game_pk)
-                )
-        else:
-            row = await pool.fetchrow(
-                "SELECT venue_id FROM raw.games WHERE game_pk = $1", int(game_pk)
-            )
-        venue_id = None if row is None else row["venue_id"]
-        if venue_id is None:
-            return 1.0
-        res = con.execute(
-            "SELECT regressed_factor FROM derived.park_factors "
-            "WHERE venue_id = ? AND season = ? AND factor_type = 'R'",
-            [int(venue_id), int(season)],
-        ).fetchone()
-        if not res or res[0] is None:
-            return 1.0
-        f = float(res[0])
-        # Guard against a degenerate/garbage factor; clamp to a sane park range.
-        return f if 0.5 <= f <= 2.0 else 1.0
-    except Exception:
-        return 1.0
+    return await _build_sim_kwargs(
+        state,
+        pool=pool,
+        con=_get_sim_duckdb(request),
+        game_pk=int(game_pk),
+    )
 
 
 def _apply_override(base_kwargs: dict[str, Any], override: RosterOverride) -> dict[str, Any]:
@@ -643,14 +618,23 @@ async def _resolve_state_or_error(pool: Any, game_pk: int) -> Any:
     * ``LineupNotIngestedError`` (game exists, lineups not yet published by MLB)
       → 503 Service Unavailable with a Retry-After: 900 hint.
     * ``LineupResolutionError`` (game not found in raw.games) → 404 Not Found.
+
+    SIM-452: every state this factory returns leaves stamped with
+    ``UNRESOLVED_PARK_FACTOR``. This is the ONE state factory all eight sim-kwargs
+    call sites use, so the stamp reaches all eight. A caller that skips the venue
+    lookup now raises ``UnresolvedParkFactorError`` at build time instead of
+    running a park-blind simulation that reports success.
     """
     acquire = getattr(pool, "acquire", None)
     try:
         if acquire is not None:
             async with pool.acquire() as conn:
-                return await resolve_game_state(conn, game_pk)
-        # The pool itself exposes fetch/fetchrow (mock-pool / direct-conn path).
-        return await resolve_game_state(pool, game_pk)
+                state = await resolve_game_state(conn, game_pk)
+        else:
+            # The pool itself exposes fetch/fetchrow (mock-pool / direct-conn path).
+            state = await resolve_game_state(pool, game_pk)
+        mark_park_factor_unresolved(state)
+        return state
     except LineupNotIngestedError as exc:
         # Transient: lineup not published yet. Suggest retry in 15 min.
         raise HTTPException(
@@ -1308,16 +1292,12 @@ async def simulate_game_endpoint(
 ) -> SimulateResponse:
     pool = _get_pool(request)
     state = await _resolve_state_or_error(pool, game_pk)
-    # SIM-411: resolve the venue park-factor onto the state so _sim_kwargs_from_state
-    # carries it (no-op when SIM_PARK_FACTOR is off or no factor is found -> 1.0).
-    state.park_run_factor = await _resolve_park_run_factor(
-        pool, _get_sim_duckdb(request), int(game_pk), int(getattr(state, "season", 2024) or 2024)
-    )
 
     factory_ref = resolve_factory_ref(request)
+    # SIM-411 / SIM-452: resolve the venue park factor, THEN build the kwargs.
     spec = GameSpec(
         machine_factory=factory_ref,
-        sim_kwargs=_sim_kwargs_from_state(state),
+        sim_kwargs=await _resolved_sim_kwargs(request, pool, state, game_pk),
     )
     runner = _build_runner(request)
 
@@ -1390,15 +1370,12 @@ async def simulate_with_override_endpoint(
 ) -> WithOverrideResponse:
     pool = _get_pool(request)
     state = await _resolve_state_or_error(pool, game_pk)
-    # SIM-411: park-factor onto the state (shared by baseline + override kwargs).
-    state.park_run_factor = await _resolve_park_run_factor(
-        pool, _get_sim_duckdb(request), int(game_pk), int(getattr(state, "season", 2024) or 2024)
-    )
 
     factory_ref = resolve_factory_ref(request)
     runner = _build_runner(request)
 
-    base_kwargs = _sim_kwargs_from_state(state)
+    # SIM-411 / SIM-452: one resolved park factor, shared by baseline + override.
+    base_kwargs = await _resolved_sim_kwargs(request, pool, state, game_pk)
     override_kwargs = _apply_override(base_kwargs, override)
 
     baseline_spec = GameSpec(machine_factory=factory_ref, sim_kwargs=base_kwargs)
@@ -1724,7 +1701,8 @@ async def get_game_boxscore(
     state = await _resolve_state_or_error(pool, game_pk)
 
     factory_ref = resolve_factory_ref(request)
-    sim_kwargs = _sim_kwargs_from_state(state)
+    # SIM-452: this route was one of the five park-blind callers. It resolves now.
+    sim_kwargs = await _resolved_sim_kwargs(request, pool, state, game_pk)
 
     pset = await asyncio.to_thread(
         _build_prop_set,
@@ -1796,7 +1774,8 @@ async def get_player_prop_edge(
     pool = _get_pool(request)
     state = await _resolve_state_or_error(pool, game_pk)
     factory_ref = resolve_factory_ref(request)
-    sim_kwargs = _sim_kwargs_from_state(state)
+    # SIM-452: this route was one of the five park-blind callers. It resolves now.
+    sim_kwargs = await _resolved_sim_kwargs(request, pool, state, game_pk)
 
     pset = await asyncio.to_thread(
         _build_prop_set,

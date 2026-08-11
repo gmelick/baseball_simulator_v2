@@ -45,6 +45,11 @@ HOW IT REUSES THE EXISTING SEAMS (no re-invention)
     beat the close).
   * **Odds I/O** — read directly from Postgres (``raw.game_odds`` /
     ``raw.prop_odds``), pulling the OPENING and CLOSING two-way prices per market.
+  * **Park factor (SIM-452)** — ``simulation.sim_kwargs.build_sim_kwargs`` resolves
+    the venue run park factor onto the GameState before the replay. This script used
+    to skip that step, so every CLV number it ever produced came from a park-blind
+    simulator. The run now REFUSES to start when the sim DuckDB will not open (exit
+    code 2), because a neutral 1.0 is indistinguishable from a real neutral park.
 
 THE MARKETS
 -----------
@@ -93,6 +98,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
 import json
 import logging
 import os
@@ -131,6 +137,27 @@ _FACTORY_REF = "simulation.production_factory:production_machine_factory"
 
 #: The two line_types every CLV computation needs (entry + close).
 LINE_TYPES: tuple[str, ...] = ("opening", "closing")
+
+# ---------------------------------------------------------------------------
+# Exit codes (SIM-454). Every ABANDONED run leaves a distinct, documented code.
+# A backtest that measured nothing must never exit 0: the whole point of this
+# programme is that a silent no-op reads exactly like a healthy run.
+# ---------------------------------------------------------------------------
+#: Everything ran and at least one game was priced.
+EXIT_OK = 0
+#: The sim DuckDB would not open and the operator did not pass
+#: ``--allow-neutral-parks`` (SIM-452 precondition).
+EXIT_NO_PARK_SOURCE = 2
+#: A worker could not build its event loop / Postgres pool / park-factor source.
+EXIT_WORKER_INIT = 3
+#: A game replayed park-blind — a defect in this script (SIM-452).
+EXIT_UNRESOLVED_PARK = 4
+#: The run finished but priced NOTHING: no games found, or every game landed in
+#: ``no_odds`` / ``unresolved`` / ``empty``. The scoreboard is empty, so the run
+#: measured nothing and must not look successful.
+EXIT_NOTHING_SCORED = 5
+#: The parent process could not reach Postgres at all.
+EXIT_INFRASTRUCTURE = 6
 
 #: ACROSS-GAMES default worker count. The host is ~6-core (SIM-430), and the
 #: per-game cost is the irreducible per-PA full-pool scoring, so ~6 GAMES AT ONCE
@@ -188,7 +215,11 @@ PROP_VOCAB_MAP: dict[str, str] = {
 #: Tiers (per the §11 realism residual + SIM-429 over-prediction notes):
 #:   trustworthy  — box rate stats within ~4% of MLB (H/HR/TB).
 #:   loose        — moneyline (win-prob fit over a bounded sample).
-#:   caution      — total/runline (the hits→runs conversion gap lives here).
+#:   caution      — total/runline (the hits→runs conversion gap lives here). The
+#:                  AUTHORITATIVE size of that gap is **runs ~7-8% low**
+#:                  (CLAUDE.md:85). CLAUDE.md:465 still says "~10-12% low"; that
+#:                  line predates the 2026-05-28 DP-rate fix and is STALE. Read
+#:                  7-8% when you size a total/runline bias.
 #:   untrustworthy— K/BB/ER/RBI (over-predicted props / not validated — SIM-429).
 MARKET_TRUST: dict[str, str] = {
     # trustworthy
@@ -799,6 +830,14 @@ def _collect_game_results(state, n_iter: int, base_seed: int | None) -> list:
     per-iteration seeds (``derive_seed(base_seed, i)``) — and therefore the sims —
     are IDENTICAL whether a game runs in the parent (``--workers 1``) or inside a
     parallel worker (``--workers > 1``).
+
+    SIM-452: ``state`` must arrive with its venue park factor ALREADY resolved.
+    :func:`_score_one_game` resolves it, because the lookup is async and this body
+    runs in a worker thread with no event loop. The builder enforces the ordering: a
+    state that skipped the lookup still carries ``UNRESOLVED_PARK_FACTOR`` and
+    ``sim_kwargs_from_state`` raises on it rather than replaying park-blind. That is
+    what this script did on every run before SIM-452, so every CLV number it has
+    ever produced came from a park-blind simulator.
     """
     from api.routes.games import _sim_kwargs_from_state
     from simulation.batch_runner import derive_seed
@@ -824,29 +863,39 @@ async def _score_one_game(
     pool: Any,
     game_pk: int,
     *,
+    duck: Any,
     do_game: bool,
     do_props: bool,
     iterations: int,
     base_seed: int,
     min_edge: float,
-) -> tuple[list[BetRecord], str]:
-    """Resolve, replay, and score ONE game; return ``(bet_records, status)``.
+) -> tuple[list[BetRecord], str, float]:
+    """Resolve, replay, and score ONE game; return ``(bet_records, status, park_factor)``.
 
     This is the ENTIRE per-game pipeline, factored out of :func:`run`'s old loop so
     BOTH the serial in-process path and a parallel worker call the exact same code:
 
       1. read the game's opening+closing odds (``raw.game_odds`` / ``raw.prop_odds``);
       2. resolve the :class:`GameState` (lineup → state);
-      3. replay ``iterations`` sims via the SAME :func:`_collect_game_results` seam
+      3. resolve the venue park factor onto that state and build the sim kwargs
+         (SIM-452 — the step this script skipped, which made every CLV number a
+         park-blind measurement);
+      4. replay ``iterations`` sims via the SAME :func:`_collect_game_results` seam
          (per-iteration seed = ``derive_seed(base_seed, i)`` — deterministic per game);
-      4. build the :class:`GameSimSummary` + calibrated :class:`WinProbability`
+      5. build the :class:`GameSimSummary` + calibrated :class:`WinProbability`
          (+ the :class:`PropDistributionSet` for props);
-      5. produce the per-bet records via the pure ``score_game_markets`` /
+      6. produce the per-bet records via the pure ``score_game_markets`` /
          ``score_prop_markets``.
 
     ``status`` is one of ``"scored"`` / ``"no_odds"`` / ``"unresolved"`` / ``"empty"``
     so the caller can keep the SAME run counters. A degenerate/failed game yields no
-    bets and a non-``"scored"`` status; it NEVER raises out of here.
+    bets and a non-``"scored"`` status; it NEVER raises out of here — EXCEPT for
+    :class:`UnresolvedParkFactorError`, which means the code itself regressed and
+    must not be tallied as one skipped game.
+
+    ``park_factor`` is the factor this game actually ran with. The caller counts how
+    many games got a non-neutral one, so an operator can see whether the park nudge
+    was live for this run.
 
     Deterministic: the only RNG is the per-iteration seed derived from ``base_seed``,
     so the returned records are byte-identical regardless of where this runs.
@@ -854,23 +903,35 @@ async def _score_one_game(
     from api.routes.games import _resolve_state_or_error
     from simulation.prop_distributions import PropDistributionSet
     from simulation.results import GameSimSummary
+    from simulation.sim_kwargs import resolve_park_factor_onto_state
     from simulation.win_probability import win_probability
 
     # Read odds first — a game with NO odds rows is skipped (counts as 'no_odds').
     game_odds = await _fetch_game_odds(pool, game_pk) if do_game else {}
     prop_odds = await _fetch_prop_odds(pool, game_pk) if do_props else {}
     if not game_odds and not prop_odds:
-        return [], "no_odds"
+        return [], "no_odds", 1.0
 
     try:
         state = await _resolve_state_or_error(pool, game_pk)
-    except Exception as exc:  # noqa: BLE001 — skip un-resolvable games
+    except Exception as exc:  # noqa: BLE001 — skip games with UNRESOLVABLE DATA
+        # SIM-454: the same split as _process_one_game. A missing lineup is one bad
+        # game. A dead Postgres is every game, so it must not be booked as one.
+        if _is_process_broken(exc):
+            log.error("game %s: process-level failure while resolving state", game_pk)
+            raise
         log.info("skip game %s (state unresolved: %s)", game_pk, type(exc).__name__)
-        return [], "unresolved"
+        return [], "unresolved", 1.0
+
+    # SIM-452: resolve the park factor HERE, where the connections live. The replay
+    # below runs in a worker thread with no event loop, and the builder rejects an
+    # unresolved state, so an edit that drops this line fails loudly instead of
+    # replaying park-blind.
+    park_factor = await resolve_park_factor_onto_state(state, pool, duck, int(game_pk))
 
     results = await asyncio.to_thread(_collect_game_results, state, iterations, base_seed)
     if not results:
-        return [], "empty"
+        return [], "empty", park_factor
 
     summary = GameSimSummary.from_results(results)
     wp = win_probability(summary)
@@ -881,7 +942,7 @@ async def _score_one_game(
     if do_props and prop_odds:
         pset = PropDistributionSet.from_results(results)
         bets.extend(score_prop_markets(game_pk, pset, prop_odds, min_edge=min_edge))
-    return bets, "scored"
+    return bets, "scored", park_factor
 
 
 # ===========================================================================
@@ -896,6 +957,54 @@ async def _score_one_game(
 # (SIM-430), so 6 workers fit in ~2.2 GB.  The PARENT stays lean — it loads NO
 # engine artifacts — so the forkserver workers never COW-inherit a big parent.
 
+
+class WorkerInitError(RuntimeError):
+    """A worker process could not build the resources every game needs (SIM-454).
+
+    This is NOT "one bad game". It says the PROCESS is broken: no event loop, no
+    Postgres pool, or no sim DuckDB. Every game this worker is handed will fail the
+    same way, so :func:`_process_one_game` lets it out and :func:`_run_parallel`
+    stops the run on it. Booking it as one more ``"unresolved"`` game is what turned
+    a broken worker into a full season of silence that exited 0.
+    """
+
+
+def _is_process_broken(exc: BaseException) -> bool:
+    """Say whether ``exc`` means "this PROCESS is broken", not "this game is bad".
+
+    The per-game handlers must swallow bad DATA (a game with no ingested lineup, a
+    degenerate boxscore) and must NOT swallow broken INFRASTRUCTURE. The difference
+    matters because a swallowed infrastructure failure repeats on every remaining
+    game: the run books 2,378 "unresolved" rows, prints an empty scoreboard, and
+    exits 0. Bad data affects one game. Broken infrastructure affects all of them.
+
+    A ``True`` here makes the caller re-raise, which stops the run with a non-zero
+    exit and a named cause.
+    """
+    if isinstance(exc, WorkerInitError | ImportError | MemoryError):
+        return True
+    # A dead / unreachable Postgres, a closed pool, an exhausted connection limit.
+    if isinstance(exc, OSError):
+        return True
+    try:
+        import asyncpg
+    except Exception:  # noqa: BLE001 — asyncpg absent → nothing more to classify
+        return False
+    # SIM-454: a real server under load reports exhaustion and shutdown as SERVER
+    # errors, not as connection errors, so `PostgresConnectionError` (class 08)
+    # alone misses them. `InsufficientResourcesError` is class 53 — too many
+    # connections (53300), out of memory (53200). `OperatorInterventionError` is
+    # class 57 — admin shutdown (57P01), crash shutdown (57P02), cannot connect
+    # now (57P03). Every one of those breaks every remaining game, not this one.
+    return isinstance(
+        exc,
+        asyncpg.InterfaceError
+        | asyncpg.PostgresConnectionError
+        | asyncpg.exceptions.InsufficientResourcesError
+        | asyncpg.exceptions.OperatorInterventionError,
+    )
+
+
 #: Per-worker process globals (one set per forkserver worker). ``_WORKER_INITED``
 #: guards the one-time lazy init; ``_WORKER_LOOP`` is this worker's dedicated
 #: asyncio event loop; ``_WORKER_POOL`` is its single asyncpg connection pool. All
@@ -904,9 +1013,42 @@ _WORKER_INITED: bool = False
 _WORKER_LOOP: Any = None
 _WORKER_POOL: Any = None
 _WORKER_DSN: str = DEFAULT_DSN
+#: SIM-452: this worker's OWN read-only sim-DuckDB connection. A DuckDB connection
+#: is not fork-safe, so each worker opens its own instead of inheriting the parent's.
+_WORKER_DUCK: Any = None
+#: SIM-454: the LATCHED init failure. Once init fails, this worker is broken for
+#: good, so the next call re-raises this instead of building the loop and the pool
+#: again. Without the latch every game retried the init and leaked one event loop
+#: and one Postgres pool per retry.
+_WORKER_INIT_ERROR: BaseException | None = None
 
 
-def _worker_lazy_init(dsn: str) -> None:
+def _close_worker_resources(loop: Any, pool: Any, duck: Any) -> None:
+    """Release whatever a failed init managed to build (SIM-454).
+
+    Order matters: the pool must close ON the loop that created it, so the loop
+    closes last. Every step is best-effort — a cleanup that raises would mask the
+    init failure the caller is about to report.
+    """
+    if pool is not None and loop is not None:
+        try:
+            loop.run_until_complete(pool.close())
+        except Exception:  # noqa: BLE001 — best-effort release
+            log.debug("worker init cleanup: pool.close() failed", exc_info=True)
+    if duck is not None:
+        try:
+            duck.close()
+        except Exception:  # noqa: BLE001 — best-effort release
+            log.debug("worker init cleanup: duckdb.close() failed", exc_info=True)
+    if loop is not None:
+        try:
+            asyncio.set_event_loop(None)
+            loop.close()
+        except Exception:  # noqa: BLE001 — best-effort release
+            log.debug("worker init cleanup: loop.close() failed", exc_info=True)
+
+
+def _worker_lazy_init(dsn: str, duckdb_path: str, *, allow_neutral_parks: bool = False) -> None:
     """One-time per-worker setup (first call only; cheap no-op thereafter).
 
     Amortizes the two big per-worker costs across all the games this worker
@@ -916,33 +1058,107 @@ def _worker_lazy_init(dsn: str) -> None:
         :func:`simulation.production_factory.warm_worker_cache` (the SIM-402 seam),
         so the worker's FIRST game is a warm-cache hit, not a cold artifact-load;
       * ``(b)`` open ONE dedicated asyncio loop + ONE asyncpg pool for this worker
-        (each worker reads odds / resolves state on its own connection).
+        (each worker reads odds / resolves state on its own connection);
+      * ``(c)`` open ONE read-only sim-DuckDB connection for this worker (SIM-452),
+        which the park-factor lookup reads.
 
     Guarded by the ``_WORKER_INITED`` module global so it runs exactly once per
     forkserver worker. The warm step is best-effort (full-pool off / missing
     artifacts → it returns False and the per-tile path warms lazily); the pool is
     required (a worker that can't reach Postgres can't score a game).
+
+    The DuckDB open is required too — UNLESS the operator passed
+    ``--allow-neutral-parks``. :func:`run` honours that flag and runs park-neutral.
+    The worker used to ignore it and raise anyway, so that flag combination broke
+    every worker while the parent believed it had permission to continue.
+
+    SIM-454 — THIS FUNCTION IS ATOMIC. It builds the loop, the pool and the DuckDB
+    connection into LOCALS, and publishes them to the module globals only when all
+    three succeed. Any failure releases everything it built and raises
+    :class:`WorkerInitError`. It used to publish each resource as it built it and
+    set ``_WORKER_INITED = True`` only at the very end, so a failure at step (c)
+    left an open loop and an open Postgres pool behind with the flag still False —
+    and the caller's blanket ``except`` booked the game as ``"unresolved"`` and
+    called the function again for the next game. At ``--workers 6`` over a 2,378-game
+    season that leaked roughly 400 event loops and 400 Postgres pools per worker,
+    and the run still exited 0.
+
+    The failure is also LATCHED. A worker that failed once cannot succeed later, so
+    the next call re-raises immediately and builds nothing.
     """
-    global _WORKER_INITED, _WORKER_LOOP, _WORKER_POOL, _WORKER_DSN
+    global _WORKER_INITED, _WORKER_LOOP, _WORKER_POOL, _WORKER_DSN, _WORKER_DUCK
+    global _WORKER_INIT_ERROR
     if _WORKER_INITED:
         return
-    _WORKER_DSN = dsn
+    if _WORKER_INIT_ERROR is not None:
+        # Latched: this worker is broken for good. Build nothing, leak nothing.
+        raise _WORKER_INIT_ERROR
 
-    # (a) warm the full-pool sampler cache ONCE for this worker (best-effort).
+    loop: Any = None
+    pool: Any = None
+    duck: Any = None
     try:
-        from simulation.production_factory import warm_worker_cache
+        # (a) warm the full-pool sampler cache ONCE for this worker (best-effort).
+        try:
+            from simulation.production_factory import warm_worker_cache
 
-        warm_worker_cache(None)
-    except Exception:  # noqa: BLE001 — full-pool off / no artifacts → lazy warm
-        pass
+            warm_worker_cache(None)
+        except Exception:  # noqa: BLE001 — full-pool off / no artifacts → lazy warm
+            pass
 
-    # (b) one event loop + one asyncpg pool, owned by this worker for its lifetime.
-    import asyncpg
+        # (b) one event loop + one asyncpg pool, owned by this worker for its lifetime.
+        import asyncpg
 
-    _WORKER_LOOP = asyncio.new_event_loop()
-    asyncio.set_event_loop(_WORKER_LOOP)
-    _WORKER_POOL = _WORKER_LOOP.run_until_complete(asyncpg.create_pool(dsn, min_size=1, max_size=2))
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        pool = loop.run_until_complete(asyncpg.create_pool(dsn, min_size=1, max_size=2))
+
+        # (c) this worker's own read-only sim DuckDB (SIM-452).
+        from simulation.sim_kwargs import open_sim_duckdb
+
+        duck = open_sim_duckdb(duckdb_path)
+        if duck is None and not allow_neutral_parks:
+            raise WorkerInitError(
+                f"SIM-452: worker could not open the sim DuckDB at {duckdb_path!r}, so every "
+                "park factor would silently fall back to a neutral 1.0. Fix --duckdb, or "
+                "pass --allow-neutral-parks to accept a park-neutral run."
+            )
+    except BaseException as exc:
+        # Release EVERYTHING this attempt built, whatever went wrong. This is the
+        # whole point of building into locals: there is exactly one place that owns
+        # the half-built state, and it is here.
+        _close_worker_resources(loop, pool, duck)
+        if isinstance(exc, KeyboardInterrupt | SystemExit):
+            raise
+        if isinstance(exc, WorkerInitError):
+            _WORKER_INIT_ERROR = exc
+            raise
+        err = WorkerInitError(f"worker init failed: {type(exc).__name__}: {exc}")
+        _WORKER_INIT_ERROR = err
+        raise err from exc
+
+    # Publish only now: either every resource exists, or none of them do.
+    _WORKER_DSN = dsn
+    _WORKER_LOOP = loop
+    _WORKER_POOL = pool
+    _WORKER_DUCK = duck
     _WORKER_INITED = True
+    atexit.register(_worker_shutdown)
+
+
+def _worker_shutdown() -> None:
+    """Release this worker's loop / pool / DuckDB at process exit (SIM-454).
+
+    Registered with :mod:`atexit` after a successful init, so a worker hands its
+    Postgres backends back when the pool shuts down instead of holding them until
+    the OS reaps the process.
+    """
+    global _WORKER_INITED, _WORKER_LOOP, _WORKER_POOL, _WORKER_DUCK
+    if not _WORKER_INITED:
+        return
+    _WORKER_INITED = False
+    _close_worker_resources(_WORKER_LOOP, _WORKER_POOL, _WORKER_DUCK)
+    _WORKER_LOOP = _WORKER_POOL = _WORKER_DUCK = None
 
 
 def _process_one_game(game_pk: int, params: dict[str, Any]) -> dict[str, Any]:
@@ -959,16 +1175,34 @@ def _process_one_game(game_pk: int, params: dict[str, Any]) -> dict[str, Any]:
     path keeps. Returning plain dicts (not the dataclass) keeps the cross-process
     boundary robust to how this script module is named in the worker.
 
-    A degenerate / failing game logs and contributes NO bets (status ``"unresolved"``)
-    — it NEVER raises out, so one bad game can never sink the parallel run.
+    A game with BAD DATA logs and contributes NO bets (status ``"unresolved"``) — it
+    NEVER raises out, so one bad game can never sink the parallel run.
+
+    A BROKEN PROCESS is the opposite case and it propagates:
+
+      * :class:`UnresolvedParkFactorError` (SIM-452) says the code skipped the
+        park-factor lookup. That is a defect in this script, not a bad game, and the
+        old blanket ``except`` booked it as one more "unresolved" game while the
+        whole run went park-blind.
+      * :class:`WorkerInitError` (SIM-454) says this worker has no loop, no pool or
+        no park-factor source. Every game it is handed fails identically, so
+        swallowing it converts a broken worker into a whole season of "unresolved"
+        rows and a zero exit code.
+      * Anything :func:`_is_process_broken` recognises — a dead Postgres, an
+        exhausted connection limit, an ``ImportError`` — for the same reason.
     """
+    from simulation.sim_kwargs import UnresolvedParkFactorError
+
     dsn = str(params.get("dsn", DEFAULT_DSN))
+    duckdb_path = str(params.get("duckdb", DEFAULT_DUCKDB_PATH))
+    allow_neutral = bool(params.get("allow_neutral_parks", False))
     try:
-        _worker_lazy_init(dsn)
-        bets, status = _WORKER_LOOP.run_until_complete(
+        _worker_lazy_init(dsn, duckdb_path, allow_neutral_parks=allow_neutral)
+        bets, status, park_factor = _WORKER_LOOP.run_until_complete(
             _score_one_game(
                 _WORKER_POOL,
                 int(game_pk),
+                duck=_WORKER_DUCK,
                 do_game=bool(params["do_game"]),
                 do_props=bool(params["do_props"]),
                 iterations=int(params["iterations"]),
@@ -976,10 +1210,21 @@ def _process_one_game(game_pk: int, params: dict[str, Any]) -> dict[str, Any]:
                 min_edge=float(params["min_edge"]),
             )
         )
-        return {"status": status, "bets": [b.to_jsonable() for b in bets]}
-    except Exception as exc:  # noqa: BLE001 — never sink the run on one game
+        return {
+            "status": status,
+            "bets": [b.to_jsonable() for b in bets],
+            "park_run_factor": float(park_factor),
+        }
+    except UnresolvedParkFactorError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — one BAD GAME never sinks the run
+        if _is_process_broken(exc):
+            # SIM-454: this worker is broken, not this game. Let it out so the run
+            # stops with a named cause instead of booking every remaining game.
+            log.error("worker: process-level failure on game %s — stopping the run", game_pk)
+            raise
         log.warning("worker: game %s failed (%s) — no bets", game_pk, type(exc).__name__)
-        return {"status": "unresolved", "bets": []}
+        return {"status": "unresolved", "bets": [], "park_run_factor": 1.0}
 
 
 @dataclass
@@ -991,11 +1236,17 @@ class _Counters:
     games_no_odds: int = 0
     games_unresolved: int = 0
     bets: list[BetRecord] = field(default_factory=list)
+    #: SIM-452: games that ran with a park factor the lookup actually moved off 1.0.
+    #: A scored run with zero of these means the park nudge did nothing all run, and
+    #: the operator gets to see that instead of guessing.
+    games_park_nonneutral: int = 0
 
 
-def _tally(counters: _Counters, status: str) -> None:
+def _tally(counters: _Counters, status: str, park_factor: float = 1.0) -> None:
     """Fold one game's status into the run counters (shared by both paths)."""
     counters.games_attempted += 1
+    if status == "scored" and abs(float(park_factor) - 1.0) > 1e-9:
+        counters.games_park_nonneutral += 1
     if status == "no_odds":
         counters.games_no_odds += 1
     elif status == "unresolved":
@@ -1008,6 +1259,7 @@ def _tally(counters: _Counters, status: str) -> None:
 async def _run_serial(
     game_pks: list[int],
     *,
+    duck: Any,
     do_game: bool,
     do_props: bool,
     args: argparse.Namespace,
@@ -1017,6 +1269,9 @@ async def _run_serial(
     Opens ONE asyncpg pool in this process and scores each game in turn via the
     SAME :func:`_score_one_game` pipeline the workers use — so this is the
     no-pool debug mode AND the reference the verify step compares against.
+
+    ``duck`` is the parent's read-only sim-DuckDB connection (SIM-452); the park
+    factor comes from it.
     """
     import asyncpg
 
@@ -1026,16 +1281,17 @@ async def _run_serial(
         if game_pks:
             pool = await asyncpg.create_pool(args.dsn, min_size=1, max_size=4)
         for game_pk in game_pks:
-            bets, status = await _score_one_game(
+            bets, status, park_factor = await _score_one_game(
                 pool,
                 game_pk,
+                duck=duck,
                 do_game=do_game,
                 do_props=do_props,
                 iterations=args.iterations,
                 base_seed=args.base_seed,
                 min_edge=args.min_edge,
             )
-            _tally(counters, status)
+            _tally(counters, status, park_factor)
             counters.bets.extend(bets)
             if counters.games_scored and counters.games_scored % 25 == 0:
                 log.info(
@@ -1073,7 +1329,9 @@ def _run_parallel(
     (``derive_seed(base_seed, i)``), so completion order — the only thing parallelism
     changes — does not affect any game's bet records.
     """
-    from concurrent.futures import ProcessPoolExecutor, as_completed
+    from concurrent.futures import BrokenExecutor, ProcessPoolExecutor, as_completed
+
+    from simulation.sim_kwargs import UnresolvedParkFactorError
 
     worker_params: dict[str, Any] = {
         "do_game": do_game,
@@ -1082,6 +1340,13 @@ def _run_parallel(
         "base_seed": int(args.base_seed),
         "min_edge": float(args.min_edge),
         "dsn": args.dsn,
+        # SIM-452: each worker opens this path read-only for the park-factor lookup.
+        "duckdb": args.duckdb,
+        # SIM-454: the workers must honour the SAME escape hatch the parent honours.
+        # The parent used to accept --allow-neutral-parks and continue while every
+        # worker still raised on the missing DuckDB, so the whole run booked
+        # "unresolved" and exited 0.
+        "allow_neutral_parks": bool(getattr(args, "allow_neutral_parks", False)),
     }
     counters = _Counters()
     if not game_pks:
@@ -1101,11 +1366,42 @@ def _run_parallel(
             game_pk = futures[fut]
             try:
                 payload = fut.result()
-            except Exception as exc:  # noqa: BLE001 — one bad game never sinks the run
+            except Exception as exc:  # noqa: BLE001 — split into fatal vs one bad game
+                # A defect / a broken worker / a dead pool is NOT one bad game.
+                #
+                # SIM-454 (round 3): the fatal branch used to name a FIXED tuple —
+                # (UnresolvedParkFactorError, WorkerInitError, BrokenExecutor) — while
+                # `_is_process_broken` ALREADY classified OSError, MemoryError,
+                # ImportError and the asyncpg connection errors as fatal. The two
+                # lists had drifted, so a worker raising any of those was booked
+                # "unresolved" and the run carried on to book the whole season the
+                # same way and exit 0. That is the exact silent no-op this guard
+                # exists to stop. One classifier now decides, so they cannot drift
+                # apart again.
+                fatal = isinstance(
+                    exc, UnresolvedParkFactorError | BrokenExecutor
+                ) or _is_process_broken(exc)
+                if fatal:
+                    # Cancel the queue FIRST: the `with` block's exit waits for every
+                    # pending future, so without this the run would keep feeding games
+                    # to broken workers for the rest of the season before the error
+                    # surfaced.
+                    log.error(
+                        "STOPPING the run at game %s — %s: %s",
+                        game_pk,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    raise
                 log.warning("game %s worker crashed (%s)", game_pk, type(exc).__name__)
                 _tally(counters, "unresolved")
                 continue
-            _tally(counters, str(payload.get("status", "unresolved")))
+            _tally(
+                counters,
+                str(payload.get("status", "unresolved")),
+                float(payload.get("park_run_factor", 1.0)),
+            )
             counters.bets.extend(BetRecord.from_jsonable(d) for d in payload.get("bets", []))
             done += 1
             if done % 25 == 0:
@@ -1118,7 +1414,24 @@ def _run_parallel(
     return counters
 
 
+def _open_parent_duckdb(args: argparse.Namespace) -> Any:
+    """Open the sim DuckDB for the parent process, or return ``None`` (SIM-452).
+
+    The park factor lives in ``derived.park_factors`` in this file. Without the file
+    every game runs at a neutral 1.0 and ``SIM_PARK_FACTOR`` does nothing, so the
+    whole backtest measures a different simulator than the one production serves.
+
+    :func:`run` turns a ``None`` here into a non-zero exit unless the operator passes
+    ``--allow-neutral-parks``.
+    """
+    from simulation.sim_kwargs import open_sim_duckdb
+
+    return open_sim_duckdb(args.duckdb)
+
+
 async def run(args: argparse.Namespace) -> int:
+    from simulation.sim_kwargs import UnresolvedParkFactorError as _UnresolvedParkFactorError
+
     seasons = sorted({int(s) for s in args.seasons})
     do_game = args.markets in ("game", "all")
     do_props = args.markets in ("props", "all")
@@ -1132,23 +1445,90 @@ async def run(args: argparse.Namespace) -> int:
         workers,
     )
 
-    game_pks = await _fetch_final_games(args.dsn, seasons, args.max_games)
+    # SIM-452 PRECONDITION. Check the park-factor source BEFORE any sim runs. A
+    # backtest that cannot read it is not a weaker backtest, it is a measurement of
+    # a simulator nobody ships, so it refuses to start.
+    duck = _open_parent_duckdb(args)
+    if duck is None:
+        if not args.allow_neutral_parks:
+            log.error(
+                "SIM-452: the sim DuckDB at %r would not open, so every park factor "
+                "falls back to a neutral 1.0 and SIM_PARK_FACTOR is a no-op. This run "
+                "would score CLV for a simulator production does not serve. Fix the "
+                "path (--duckdb) or pass --allow-neutral-parks to accept it.",
+                args.duckdb,
+            )
+            return EXIT_NO_PARK_SOURCE
+        log.warning(
+            "SIM-452: running WITHOUT park factors (--allow-neutral-parks). Every game "
+            "uses a neutral 1.0 and SIM_PARK_FACTOR does nothing this run."
+        )
+
+    try:
+        game_pks = await _fetch_final_games(args.dsn, seasons, args.max_games)
+    except Exception:
+        # SIM-454: the parent cannot reach Postgres. That used to escape as a raw
+        # traceback out of asyncio.run; name it and exit on a documented code.
+        log.exception("Could not read the game list from Postgres at %r.", args.dsn)
+        if duck is not None:
+            try:
+                duck.close()
+            except Exception:  # noqa: BLE001 — a close failure never masks the cause
+                pass
+        return EXIT_INFRASTRUCTURE
     log.info("Found %d completed games to backtest.", len(game_pks))
     if not game_pks:
         log.warning("No completed games found — nothing to backtest.")
 
-    if workers <= 1:
-        # SERIAL fallback (the original in-process path; the verify reference).
-        counters = await _run_serial(game_pks, do_game=do_game, do_props=do_props, args=args)
+    try:
+        if workers <= 1:
+            # SERIAL fallback (the original in-process path; the verify reference).
+            counters = await _run_serial(
+                game_pks,
+                duck=duck,
+                do_game=do_game,
+                do_props=do_props,
+                args=args,
+            )
+        else:
+            # ACROSS-GAMES parallel — the pool is sync, so offload it off the loop.
+            counters = await asyncio.to_thread(
+                _run_parallel,
+                game_pks,
+                workers=workers,
+                do_game=do_game,
+                do_props=do_props,
+                args=args,
+            )
+    except WorkerInitError:
+        # SIM-454: a worker could not build its loop / pool / park-factor source.
+        # Every remaining game would fail the same way. Stop with a named cause
+        # instead of writing a season of "unresolved" rows and exiting 0.
+        log.exception("SIM-454: worker initialisation failed — the run is ABANDONED.")
+        return EXIT_WORKER_INIT
+    except _UnresolvedParkFactorError:
+        log.exception("SIM-452: a game replayed park-blind — the run is ABANDONED.")
+        return EXIT_UNRESOLVED_PARK
+    finally:
+        if duck is not None:
+            try:
+                duck.close()
+            except Exception:  # noqa: BLE001 — a close failure never sinks the run
+                pass
+
+    # SIM-452: say out loud how many scored games actually got a non-neutral park
+    # factor. All-neutral over a real slate means the park nudge did nothing.
+    if counters.games_scored and not counters.games_park_nonneutral:
+        log.warning(
+            "SIM-452: %d games scored and NOT ONE used a non-neutral park factor. "
+            "SIM_PARK_FACTOR had no effect on this backtest.",
+            counters.games_scored,
+        )
     else:
-        # ACROSS-GAMES parallel — the pool is sync, so offload it off the loop.
-        counters = await asyncio.to_thread(
-            _run_parallel,
-            game_pks,
-            workers=workers,
-            do_game=do_game,
-            do_props=do_props,
-            args=args,
+        log.info(
+            "SIM-452: %d/%d scored games ran with a non-neutral park factor.",
+            counters.games_park_nonneutral,
+            counters.games_scored,
         )
 
     scoreboard = aggregate_scoreboard(counters.bets)
@@ -1161,6 +1541,7 @@ async def run(args: argparse.Namespace) -> int:
         "workers": workers,
         "dsn": args.dsn,
         "duckdb": args.duckdb,
+        "park_factors_available": duck is not None,
         "factory_ref": _FACTORY_REF,
     }
     print(format_scoreboard(scoreboard, params=params))
@@ -1172,6 +1553,7 @@ async def run(args: argparse.Namespace) -> int:
             "games_scored": counters.games_scored,
             "games_no_odds": counters.games_no_odds,
             "games_unresolved": counters.games_unresolved,
+            "games_park_nonneutral": counters.games_park_nonneutral,
             "n_bets": len(counters.bets),
         },
         "scoreboard": scoreboard,
@@ -1182,7 +1564,34 @@ async def run(args: argparse.Namespace) -> int:
     with open(args.output, "w", encoding="utf-8") as fh:
         json.dump(report, fh, indent=2)
     log.info("Wrote CLV backtest report -> %s", args.output)
-    return 0
+
+    # SIM-454: a run that priced NOTHING is a failure, not a result. The report is
+    # already written (an operator still gets the artifact to diagnose from), but
+    # the exit code says the backtest measured nothing. A whole season booked as
+    # "unresolved" with a zero exit is the silent no-op this programme exists to end.
+    if counters.games_scored == 0:
+        log.error(
+            "SIM-454: the backtest scored 0 games (attempted=%d, no_odds=%d, "
+            "unresolved=%d) and placed %d bets. This run measured NOTHING. "
+            "Exiting %d.",
+            counters.games_attempted,
+            counters.games_no_odds,
+            counters.games_unresolved,
+            len(counters.bets),
+            EXIT_NOTHING_SCORED,
+        )
+        return EXIT_NOTHING_SCORED
+
+    # A run that scored SOME games but lost most of them is still suspect. Say so
+    # out loud; do not fail it, because a season legitimately holds bad games.
+    if counters.games_unresolved > counters.games_scored:
+        log.warning(
+            "SIM-454: %d games came back UNRESOLVED against %d scored. Check the "
+            "worker logs before you read the scoreboard as a measurement.",
+            counters.games_unresolved,
+            counters.games_scored,
+        )
+    return EXIT_OK
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -1218,6 +1627,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--output", default=DEFAULT_OUTPUT, help="CLV backtest JSON report path.")
     p.add_argument("--dsn", default=DEFAULT_DSN, help="Postgres DSN (completed games + odds).")
     p.add_argument("--duckdb", default=DEFAULT_DUCKDB_PATH, help="Sim DuckDB path.")
+    p.add_argument(
+        "--allow-neutral-parks",
+        action="store_true",
+        help=(
+            "SIM-452 escape hatch. Run even when the sim DuckDB will not open, with "
+            "every park factor at a neutral 1.0. The run then measures a simulator "
+            "production does not serve, so use it only for a plumbing smoke test."
+        ),
+    )
     return p.parse_args(argv)
 
 

@@ -2,7 +2,73 @@
 
 *Owner: Product Manager (Agent 1) · Last updated: 2026-06-02 (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
 
-# 🏗️ 2026-08-10 — SIM-449→493: the sim-loop remediation programme — 19 open items resolved into ONE architecture (next free ID → SIM-494)
+# 📐 2026-08-10 — SIM-497: the acceptance lane measures 12 games, so it is BIASED, not merely noisy (next free ID → SIM-498)
+
+**The owner's finding, and it is correct.** SIM-450 compares the simulator against MLB season averages
+using **12 hand-picked 2024 games**, each simulated thousands of times. Those 12 games are 12 specific
+matchups — specific starting pitchers, specific lineups, specific parks. Simulating them 10,000 times
+converges on *the true answer for those 12 matchups*, which is **not** 4.62 runs per team unless those
+12 happen to be league-average. **More iterations reduce noise. They do nothing about this.** Every
+run-length figure quoted for SIM-450 was therefore buying PRECISION ON A BIASED ESTIMATE.
+
+**The code already confessed it.** `ACCEPTANCE_GAME_PKS` was ascending by park run factor, so the first
+8 games were the 8 most pitcher-friendly parks (mean factor **0.9684** against **0.9995** for all 12).
+The fix was a hand-built `BALANCED_GAME_ORDER` that makes the bias cancel. You do not hand-balance a
+representative sample. You hand-balance one you already know is too small to be representative.
+
+**The replacement: a date-range backtest.** Build a function that runs simulations over a **specified
+date range** rather than a fixed game list. One pass over the ~2,430 games of 2024 costs about
+**1.5 hours** and yields 4,860 team-game observations across all 30 parks with **no selection to
+defend**. Runs need ~10,196 observations to detect the documented 7% gap — about **2.1 passes, 3.2
+hours**. That is the SAME cost previously quoted for 12 games, spread over ~2,430 matchups instead
+of 12.
+
+**Measure against BOTH references, side by side** (owner's decision):
+  1. **Paired** — the ACTUAL outcome of each simulated game. No argument about whether the sample
+     represents the league; it IS the league. Gives per-park and per-team breakdowns free.
+  2. **League averages** — the existing `_MLB_2023` rates, already cited and written down.
+  Disagreement between the two is itself diagnostic and must be reported, not reconciled away.
+
+**On demand only** — no schedule. A full-season pass is far too long for a nightly, and the owner has
+ruled that robustness beats cadence.
+
+| ID | Title | Type | Pri | Size | Depends-on | Status |
+|---|---|---|---|---|---|---|
+| **SIM-497a** | Date-range backtest function — replace the 12-game fixture | Test/CI | P1 | L | SIM-450 | 🔲 **OPEN.** Runs every game in a given date range. Delete `ACCEPTANCE_GAME_PKS`, `BALANCED_GAME_ORDER`, the prefix slice and the park-balance machinery — all of it exists only to compensate for a sample too small to be representative. |
+| **SIM-497b** | Dual reference: paired actuals + league averages | Test/CI | P1 | M | SIM-497a | 🔲 **OPEN.** Report both per channel, side by side. Where they disagree, print both rather than choosing. |
+| **SIM-497c** | Mark the 12-game lane as known-biased until 497a lands | Doc | P1 | XS | — | 🔲 **OPEN.** A biased instrument left unlabelled is exactly the failure mode this programme exists to end. |
+
+**What SURVIVES from SIM-450 — do not rebuild it.** `tests/acceptance/bands.py` is sound and reusable:
+the reference rates and their citations, the tri-state verdict (PASS / FAIL / **UNDERPOWERED**), the
+Z = 4.0 rationale, the floor-to-documented-defect calibration, the minimum-sample gate and the
+`n_matchups` diversity gate. **Only the game selection and the run structure change.**
+
+**What does NOT change.** `home_win_pct` still needs ~25,600 games, because a game outcome carries one
+bit and separating 51.25% from 53.5% takes an enormous number of trials. That is arithmetic, not
+design. The date-range rewrite makes the answer TRUSTWORTHY; it does not make it CHEAP.
+
+# 🔬 2026-08-10 — SIM-494 → SIM-496: three defects the Phase 0 acceptance lane measured on its first production run (next free ID → SIM-497, now → SIM-498)
+
+**Where these come from.** The SIM-450 acceptance lane ran the production configuration for the first
+time on 2026-08-10: **8 games × 50 iterations = 400 game-sims, n = 800 team-games, 901.6 s**. Every
+production flag was confirmed ON at run time and the SIM-449 kwargs were confirmed complete. The lane
+measured twelve box-score channels against real MLB rates. **Three channels came back red.** Those
+three reds are the three tickets below.
+
+Two of them confirm a diagnosis that is already on file. They cite it and do not repeat it. The third
+is new and is still unexplained.
+
+| ID | Title | Type | Pri | Size | Depends-on | Status |
+|---|---|---|---|---|---|---|
+| **SIM-494** | Double plays are under-counted about **5×** in the production configuration | Sim | P1 | M | SIM-450 | 🔲 **OPEN. NEW — no prior ticket, no `CLAUDE.md` entry, no explanation yet.** Measured **0.1600 double plays per team per game against an MLB centre of 0.8160 — 80.4% low**, at 400 production game-sims (n = 800 team-games). **This is not a sample-size artifact:** the band was FLOOR-driven, Z·SE = 0.0561 against a 0.1632 floor, so the standard error is a third of the floor and a fifth of the gap. The centre comes from this project's own ingested data — 2023 regular-season Final games, 4,860 team-games, 3,966 double plays (SQL in `tests/acceptance/bands.py`). The lane counts a double play only when the drawn event is in `_DOUBLE_PLAY_EVENTS` **and** the play recorded at least two outs, so a relabelled draw is excluded by design and cannot inflate the count. **Likely site, not yet proved:** the SIM-429 phantom-double-play guard at `simulation/sim_loop.py:1424-1434`. It records a second out only when `state.bases.first` holds a runner **and** `state.outs < 2`, and relabels every other drawn double play to a plain `field_out`. That guard fixed a real over-count and may now over-correct. **Measure before changing it** — the guard's own defect was an over-count, so a blind revert trades one error for the other. Too few double plays lengthens innings and adds runs, so this works against the SIM-429 run-conversion gap and may be masking part of it. The lane carries the measurement as `@pytest.mark.xfail(strict=True)` on `test_double_play_band_sim450`: the day DP lands inside its band the lane turns **red** on an XPASS and the engineer must delete the marker. |
+| **SIM-495** | `_full_pool_steal_decision` is unreachable when `SIM_MANAGER=1` — measured confirmation | Sim | P1 | XS | SIM-468, SIM-474 | 🔲 **OPEN — CONFIRMS SIM-474. Do not re-diagnose it; SIM-474 is the fix.** This ticket records the measurement, not a new analysis. In the production configuration the lane measured **SB = 0.0000 against 0.59 and CS = 0.0000 against 0.17 — both exactly zero** — and `_full_pool_steal_decision` (`simulation/sim_loop.py:3091`) was called **0 times** across 400 game-sims, while `_full_pool_outcome` was called 123,205 times in the same run. Production has therefore attempted **no stolen base at all** since `SIM_MANAGER` was enabled on 2026-06-04. The chain SIM-474 already records is confirmed end to end: the default manager profile sets `steal_order_rate_per_1b_opp = 0.08`, so `green > 0` at `:2909`, so the SIM-426 fallback at `:2949` never runs, so control reaches `resolver.resolve_steal` and the base stub answers `attempted=False` because production wires no stolen-base pool. **Why file it separately:** SIM-474 held a code reading; this holds a number, and the SB / CS bands plus the `_full_pool_steal_decision` call-count assertion are the guard that keeps it visible. All three ship as `@pytest.mark.xfail(strict=True)` and turn the lane red the day steals return. **`CLAUDE.md` §11 says "steals match MLB volume". That is wrong for the configuration users get** and should be corrected when SIM-474 lands. |
+| **SIM-496** | A drawn reach-on-error is converted into an out — the batter is retired and credited a hit | Sim | P1 | S | SIM-453 | 🔲 **OPEN — CONFIRMS SIM-453.** `_full_pool_fielding` infers outs from the drawn event: `outs = 0 if int(rh) > 0 else 1` (`simulation/sim_loop.py:1432`). A pool `field_error` row carries `result_hits = 0`, so **every drawn reach on error becomes a one-out `field_out` and the batter never reaches base.** `simulation/constants.py:177` then aliases `field_error` to the canonical `single`, so the same play is **also** credited as a hit in the boxscore — retired on the bases, credited at the plate. The only code that builds the correct shape is the dropped-third-strike path at `sim_loop.py:1992` (`event="field_error"`, batter safe at 1B, no out), and **SIM-484 records that this path can never fire in production**, so nothing reaches base on an error today. SIM-453 records the ledger half of the same defect — a reach on error commits a run value of exactly 0.00 against a true value of about +0.38. Same play, two sites: SIM-453 fixes what the ledger records, SIM-496 fixes what the play is. **⚠ The lane's ROE channel PASSED at 0.2437 against 0.2193 (+11.1%), and that pass is evidence FOR this defect, not against it.** The probe counts the **drawn** event at the `_full_pool_fielding` boundary (`tests/acceptance/conftest.py:344`), so a green ROE band proves only that the pool supplies errors at about the right rate. It says nothing about what the loop does with them. **The lane cannot register this failure and must gain a second ROE channel counted after resolution** — batters who actually reached — as part of this fix. **One magnitude correction:** the 2026-07-13 audit sized the suppressed runs at 0.25-0.35 per team-game from an assumed MLB rate of 0.5-0.6 reaches on error per team-game. This project's own 2023 data gives **0.2193** (1,066 `events='field_error'` over 4,860 team-games), which is under half that. Recompute the estimate on the measured rate before quoting it. |
+
+**A green channel is not automatically good news.** SIM-496 is the worked example: the ROE probe counts
+a draw, the defect lives after the draw, and the band passed. Before citing any green channel in this
+lane, check where its probe reads the value — at the draw or after the play resolves.
+
+# 🏗️ 2026-08-10 — SIM-449→493: the sim-loop remediation programme — 19 open items resolved into ONE architecture (next free ID → SIM-494, now → SIM-497)
 
 **What this is.** A full walk-through of every open defect in `simulation/sim_loop.py` with the owner,
 decision by decision. The 19 items did **not** resolve into 19 fixes. They resolved into one
@@ -35,9 +101,9 @@ them. 2017 is the earliest year. Cell occupancy comes from SIM-460/461, never fr
 
 | ID | Title | Type | Pri | Size | Depends-on | Status |
 |---|---|---|---|---|---|---|
-| **SIM-449** | Harness passes the defense maps + park factor — `_sim_kwargs` drops both, so A/B tests of `SIM_PARK_FACTOR` / `SIM_FIELDER_RBF` compare two identical no-ops | Test/CI | P1 | S | — | 🔲 **OPEN.** Blocks all park work + flag re-validation. |
-| **SIM-450** | Acceptance-band validation lane in the production configuration | Test/CI | P1 | L | SIM-449 | 🔲 **OPEN.** Per-channel bands vs real MLB rates, **not** a golden — a golden made now freezes the bugs. |
-| **SIM-451** | Measure the filter cell-occupancy distribution (2,880 cells, at 3 and at 10 seasons) | Data | P1 | S | — | 🔲 **OPEN.** Sets `MIN_CELL` for SIM-475. |
+| **SIM-449** | Harness passes the defense maps + park factor — `_sim_kwargs` drops both, so A/B tests of `SIM_PARK_FACTOR` / `SIM_FIELDER_RBF` compare two identical no-ops | Test/CI | P1 | S | — | 🟡 **OPEN — BUILT, NOT TRUSTED.** `simulation/sim_kwargs.py` and `tests/unit/test_sim449_sim_kwargs.py` ship the shared builder, and `scripts/sim_stats.py` calls it. An independent review then found the fix **incomplete**: SIM-449 unified the kwargs **builder** but not the park-factor **resolution**, so **5 of 8 callers still sent a neutral `1.0`** — including `scripts/clv_backtest.py`, the script that produces the fund's gold-standard CLV number, which left `SIM_PARK_FACTOR` inert on the CLV path. `scripts/validate_props.py` had the same gap, so the win-probability reliability curve was **fitted on a park-blind simulator**. Both were repaired in this same round: each now calls `build_sim_kwargs(state, pool=, con=, game_pk=)`, and a new `UnresolvedParkFactorError` propagates so a park-blind run **stops** instead of quietly reporting a number. Censused 2026-08-10 — all five production and measurement callers resolve the factor. **Not closed:** the repair has not been re-validated end to end, and every CLV read and every calibration curve produced before it was park-blind. Re-run both before citing either. |
+| **SIM-450** | Acceptance-band validation lane in the production configuration | Test/CI | P1 | L | SIM-449 | 🟡 **OPEN — BUILT, NOT TRUSTED. The instrument carries the defect it was built to detect.** The lane exists (`tests/acceptance/`, `.github/workflows/acceptance-nightly.yml`) and its first production run produced SIM-494, SIM-495 and SIM-496 above. An independent review then found **three ways it cannot go red**: (1) the **R band passes at 10%, 12% and 14.5% low and first fails at 15%**, so it cannot fail on this platform's own documented 10-12% run-conversion defect (`CLAUDE.md` §11) — blind to the exact defect it exists to catch; (2) **`home_win_pct` returns `passed=True` for a coin-flip simulator**, mean 0.500 against a 0.535 centre, because the band is standard-error-driven (half = 0.0578 against a delta of 0.035) at every sample size the lane can reach; (3) the nightly targeted `runs-on: [self-hosted, baseball-data]`, a **label no runner is registered for** — a scheduled job matching no runner queues and is cancelled silently, so its silence read as success — and no CI lane collected `tests/acceptance` at all. **(1) and (2) are still live, re-measured against the working tree on 2026-08-10.** (3) was repaired in this same round by the workflow owner: the schedule is gone, `runs-on` falls back to `ubuntu-latest` so the job always starts and fails loudly on missing data, and `ci.yml` gained an `acceptance-arithmetic` job. ⚠ **That repair covers the band ARITHMETIC only** — the heavy production module still runs on manual dispatch and still needs a registered runner plus the data, so **the production lane has still never produced a CI signal**. **Not closed.** |
+| **SIM-451** | Measure the filter cell-occupancy distribution (2,880 cells, at 3 and at 10 seasons) | Data | P1 | S | — | 🟡 **OPEN — BUILT, NOT TRUSTED.** `scripts/measure_filter_cells.py`, `tests/unit/test_sim451_filter_cells.py` and a report (`docs/audit/2026-08-10-sim451-filter-cell-occupancy.json`) all ship. An independent review then found the script **writes `coverage_ok: true` over a report whose `outcome_pool` is missing 2026**, and **exits 0 regardless**. Verified in the shipped report on 2026-08-10: `season_row_counts.outcome_pool` carries keys 2017-2025 and **no 2026 key at all**, while `season_row_counts.pitch_pool` records **464,063 rows for 2026** — so one pool is a season short of the other and the report still reads `coverage_ok: true`. Every `configurations.*` block nonetheless lists `seasons: [2017 … 2026]`, because that field records the span **requested**, not the span **realised**. The script carries no `sys.exit(1)` and no non-zero return, so no caller can detect any of this. The measurement that sets `MIN_CELL` for SIM-475 therefore reports success over incomplete input. A second round is fixing it. **Not closed — do not set `MIN_CELL` from the current report.** |
 | **SIM-452** | Two independent RNG streams — the loop rng and the full-pool rng are built from the same integer | Sim | P2 | XS | — | 🔲 **OPEN.** `SeedSequence.spawn(2)`. Measure prop spread after. |
 | **SIM-453** | Explicit pre/post states on the run-value ledger; delete the conservation derivation | Sim | P1 | M | — | 🔲 **OPEN.** Dissolves 3 tracked defects at once (state-read-after-mutation, DP desync, ROE at 0.00 run value). |
 | **SIM-454** | Real base-state invariants + a transition assertion | Sim | P2 | S | SIM-453 | 🔲 **OPEN.** `assert_consistent` today rejects only a negative id, yet is called as a correctness guard. |
@@ -80,6 +146,49 @@ them. 2017 is the earliest year. Cell occupancy comes from SIM-460/461, never fr
 | **SIM-491** | Re-validate all six realism flags, **one at a time**, 400 sims × 20 games | Test/CI | P1 | L | 449, 450 | 🔲 **OPEN.** All five were enabled together at 3–4 games, the day after that bar was set. |
 | **SIM-492** | Calibration refit + multi-season win-probability curve | ML | P1 | M | all | 🔲 **OPEN.** The live curve was fitted on 60 games of one season, on the **pre-fix** run environment. |
 | **SIM-493** | Decompose `sim_loop.py` | Sim | P3 | L | 481, 486 | 🔲 **OPEN.** Deferred deliberately — the architecture work deletes ~400 lines and SIM-486 several hundred more. Decompose once, on the final shape. |
+
+**⚠ PHASE 0 IS BUILT AND NOT TRUSTED — read this before you cite any Phase 0 number.** SIM-449,
+SIM-450 and SIM-451 shipped on 2026-08-10. An independent review then found that **all three
+instruments carry the silent-no-op defect they were built to detect**: each one reports success while
+failing to measure the thing it exists to measure. Six blockers, every one confirmed by direct
+execution rather than by reading the code. **Status re-measured against the working tree on
+2026-08-10, while the second round was landing: three still live, two repaired, one partly repaired.**
+
+1. 🔴 **STILL LIVE.** The **R acceptance band passes at 10%, 12% and 14.5% low**, and first fails at
+   15%. This platform's documented run-conversion defect is 10-12% low (`CLAUDE.md` §11). **The band
+   cannot fail on the defect it exists to catch.**
+2. 🔴 **STILL LIVE.** **`home_win_pct` returns `passed=True` for a coin-flip simulator** — mean 0.500
+   against a 0.535 MLB centre. The band is standard-error-driven (half = 0.0578 at n = 1,200 decisive
+   games against a delta of 0.035), so no reachable sample size makes it bind.
+3. 🟢 **REPAIRED THIS ROUND.** The nightly lane **targeted a self-hosted runner label no runner is
+   registered for**. A scheduled job that matches no runner does not fail — it queues, and GitHub
+   cancels it after 24 hours. The lane produced no signal for its whole life and the silence read as
+   success. `runs-on` now falls back to `ubuntu-latest`, so the job always starts and fails loudly on
+   the missing data.
+4. 🟡 **PARTLY REPAIRED.** **No CI lane collected `tests/acceptance`.** `ci.yml` now has an
+   `acceptance-arithmetic` job covering the band **arithmetic**. The **heavy production module is
+   still not in CI** — manual dispatch only, and it still needs a registered runner plus the data. The
+   production lane has never produced a CI signal.
+5. 🔴 **STILL LIVE.** **`scripts/measure_filter_cells.py` writes `coverage_ok: true`** over a report
+   whose `outcome_pool` holds **no 2026 rows at all** while `pitch_pool` holds 464,063, and it carries
+   **no non-zero exit path**.
+6. 🟢 **REPAIRED THIS ROUND.** **SIM-449 unified the kwargs BUILDER but not the park-factor
+   RESOLUTION**, so five of eight callers sent a neutral `1.0` — including `scripts/clv_backtest.py`,
+   which produces the fund's gold-standard CLV number, and `scripts/validate_props.py`, which fits the
+   win-probability reliability curve. Both therefore ran **park-blind**. All five production and
+   measurement callers now resolve the factor (`api/routes/games.py`, `scripts/clv_backtest.py`,
+   `scripts/sim_stats.py`, `scripts/validate_props.py`, `tests/acceptance/conftest.py`), and the first
+   two stop on an `UnresolvedParkFactorError` rather than reporting a park-blind number. ⚠ **The
+   curve and the CLV read produced before this repair were both fitted park-blind** and are not
+   evidence about the model.
+
+The second round is fixing all six, and three of them landed while this entry was being written — so
+re-measure before you cite any line above. **The rule that governs that round: every fix ships with a test that proves
+the instrument REGISTERS the failure it exists to detect** — a case that turns the band red on
+purpose, a case that trips the guard, a case that returns a non-zero exit. A test that only passes on
+good input proves nothing here. **Nothing in Phase 0 closes until that test exists and is seen to
+fail.** Phase 0 gates the whole programme, so a Phase 0 instrument that cannot fail would certify
+every ticket below it.
 
 **Critical path:** SIM-449 → 459 → 469 → 470 → 471 → 472 → 477 → 481 → 492 (nine deep). The two
 long-running jobs — the 5.7 h profile recompute and the 55 h re-sweep — are independent of each other

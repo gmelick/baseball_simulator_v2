@@ -43,8 +43,8 @@
     (`scripts/clv_backtest.py`) — sim → model prices → opening/closing → CLV per market/side, trust-labeled.
     **First result (120 games): ~49% beat-close = NO demonstrable edge yet** (stable across n=65/n=100;
     the trustworthy markets — moneyline + batter H/HR/TB — all ≤50%). The model isn't beating the sharp
-    close; the remaining **SIM-429** work (close the ~10–12% run-conversion gap + sharpen the edge
-    estimates) is the path to a real edge. The full-season CLV run is executing.
+    close; the remaining **SIM-429** work (close the **~7-8%** run-conversion gap + sharpen the edge
+    estimates) is the path to a real edge. The full-season CLV run is executing. *(This bullet said "~10–12%" until 2026-08-10; see the §11 reconciliation note.)*
   - **`/simulate` perf (SIM-430 / SIM-436):** forkserver workers + a 10 GB app `mem_limit` → **n=100 ≈
     38 s at 6 workers, no OOM**. SIM-436 PROFILED the per-game cost: it is the IRREDUCIBLE per-PA
     full-pool scoring (~1.5–1.9 s/iter × ~83 PAs); the machine build is free and the host is **core-bound
@@ -82,9 +82,15 @@
   `dp_turned = outs_on_pitch >= 2` always-False bug was fixed and the 5.7-hour 2017-2025
   recompute completed.  Per-season DP rates now 42-48% (was 0.0).  Actor embeddings rebuilt
   (`fielder_emb` = 11346 × 51 features).  Box output now MLB-realistic: H/HR/2B/BB/K within
-  ~3-5% of MLB-2023, steals match MLB volume.  **Runs run ~7-8% low** (down from ~12% pre-fix) —
-  remaining hits→runs *conversion* residual lives in batted-ball-with-RISP / sequencing
-  (see §11). **Next free ticket ID at the time: SIM-433** (now **SIM-438** — see the TL;DR at the top
+  ~3-5% of MLB-2023.  **Runs run ~7-8% low** (down from ~12% pre-fix) — this is the AUTHORITATIVE
+  run-conversion figure; see the reconciliation note at the head of §11.  The remaining
+  hits→runs *conversion* residual lives in batted-ball-with-RISP / sequencing (see §11).
+  ⚠ **This bullet used to end "steals match MLB volume". That claim is now wrong.** It was true
+  when it was written, on 2026-05-28. The owner enabled `SIM_MANAGER` on 2026-06-04 and the
+  steal gate closed. The SIM-450 acceptance lane measured the production configuration on
+  2026-08-10 and read **SB = 0.0000 against 0.59 and CS = 0.0000 against 0.17** — exactly zero
+  steals, across 400 game-sims. **SIM-495** holds that measurement; **SIM-474** is the fix.
+  **Next free ticket ID at the time: SIM-433** (now **SIM-438** — see the TL;DR at the top
   of §2; SIM-430 = the full-pool `/simulate` throughput / 2s-30s SLA perf gap, filed 2026-05-30 off the
   SIM-402 live re-measure).
 
@@ -461,8 +467,20 @@ and the SIM-403 worker-count fix closed earlier.) **2026-05-29 → 2026-05-30 up
   `raw.game_lineups`. *(Follow-ups, NOT SIM-432: a fuller multi-season win-prob curve fit is gated
   on SIM-430 throughput; pitcher K/BB props are over-predicted → SIM-429.)*
 
+**⚠ FIGURE RECONCILED 2026-08-10 — the run-conversion gap is ~7-8%.**
+This guide carried two sizes for one defect. The **DP-rate bug fix bullet in §2** (dated 2026-05-28,
+at `CLAUDE.md:85`) said "~7-8% low". The paragraph below said "~10-12% low". The
+§2 CLV bullet said "~10–12%". The owner ruled on 2026-08-10 that **the §2 DP-fix bullet wins**: the
+gap is **~7-8%**, measured after the DP-rate fix, down from ~12% before it. The 10-12% figure
+predates that fix and is stale everywhere it appears. Both stale copies are corrected. Do not
+re-split the number. Any band, floor or calibration target that measures this gap must be
+calibrated to catch **7-8%**, not 10-12% — a band that only reds at 10% reports PASS on the defect
+this platform actually has. *(`tests/acceptance/bands.py` cites `CLAUDE.md:85` by line number, so
+the 2026-08-10 edit kept that statement on line 85 on purpose. If you add a line above it, re-point
+that citation in the same commit. Better: cite the section.)*
+
 **Full-pool realism residual (SIM-422→429, the production path):** box rate stats (H/HR/2B/BB/K) are
-within ~4% of MLB and steals match MLB volume, but **runs sit ~10-12% low** — a hits→runs *conversion*
+within ~4% of MLB, but **runs sit ~7-8% low** — a hits→runs *conversion*
 gap, not a rate-stat or baserunning-aggression problem (advancement rates are already MLB-realistic; a
 global advancement multiplier `SIM_RUN_CALIB` was investigated and rejected as the wrong lever). The
 gap lives in batted-ball-with-RISP / sequencing. One concrete contributor identified + fixed: the
@@ -474,6 +492,19 @@ splits + R standard error so a calibration sweep can target the right channel). 
 conversion gap → granular per-channel calibration on this larger harness (SIM-429 follow-on).
 *Validation caveat:* run a multi-game × ≥400-sim batch before reading R-level moves; the per-channel
 breakouts (RISP, advancement, DP rate) are the right lens, not the global R mean.
+
+**⚠ STEALS DO NOT MATCH MLB VOLUME — corrected 2026-08-10.** The paragraph above used to open
+"box rate stats are within ~4% of MLB and steals match MLB volume". The second half is wrong for
+the configuration users get, so it is deleted here and at line 85. The SIM-450 acceptance lane ran
+the production flags on 2026-08-10 and measured **SB = 0.0000 against 0.59, and CS = 0.0000 against
+0.17** — no stolen base is ever attempted, so none is ever caught. `_full_pool_steal_decision`
+(`simulation/sim_loop.py:3091`) was called **0 times** in 400 game-sims, while `_full_pool_outcome`
+was called 123,205 times in the same run. The chain: `SIM_MANAGER=1` wires the default manager
+profile with `steal_order_rate_per_1b_opp=0.08`, so `green > 0` at `sim_loop.py:2909`, so the
+SIM-426 fallback at `:2949` never runs, so control reaches `resolver.resolve_steal` and the base
+stub answers `attempted=False`. Production has attempted no steal since `SIM_MANAGER` was enabled
+on 2026-06-04. **SIM-495** holds the measurement. **SIM-474** is the fix. Do not restore the
+steals-match-MLB claim until the SB and CS bands pass with the production flags on.
 
 ## 12. Phase roadmap
 

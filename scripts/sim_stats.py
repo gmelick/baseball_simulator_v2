@@ -39,6 +39,11 @@ USAGE
     # Toggle the SIM-412 home-field bias for an A/B read
     SIM_HOME_FIELD_BIAS=0    python scripts/sim_stats.py --iters 500 ...   # off
     SIM_HOME_FIELD_BIAS=0.025 python scripts/sim_stats.py --iters 500 ...  # default
+
+    # SIM-449: the run PRINTS the park factor and the defense-map sizes it
+    # actually passed, so a neutral no-op can never read as a measured
+    # "no effect".
+    SIM_PARK_FACTOR=1 python scripts/sim_stats.py --iters 400 744795 ...
 """
 
 from __future__ import annotations
@@ -51,6 +56,7 @@ import statistics
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
@@ -61,6 +67,11 @@ import asyncpg  # noqa: E402
 from simulation.batch_runner import GameSpec  # noqa: E402
 from simulation.lineup_resolver import resolve_game_state  # noqa: E402
 from simulation.production_factory import production_machine_factory  # noqa: E402
+from simulation.sim_kwargs import (  # noqa: E402
+    open_sim_duckdb,
+    resolve_park_run_factor,
+    sim_kwargs_from_state,
+)
 from simulation.sim_loop import BoxScore, simulate_game  # noqa: E402
 
 _FACTORY = "simulation.production_factory:production_machine_factory"
@@ -82,6 +93,20 @@ _MLB_2023 = {
 #: era).  The SIM-412 home-field bias is calibrated to land in this band.
 _MLB_HOME_WIN_PCT = 0.535
 
+#: SIM-449: every env flag that changes what the sim does.  The harness prints all
+#: of them, so an operator reads a result against the exact configuration that
+#: produced it.
+_REALISM_FLAGS = (
+    "SIM_FULL_POOL",
+    "SIM_MANAGER",
+    "SIM_PARK_FACTOR",
+    "SIM_BB_PLATOON",
+    "SIM_FIELDER_RBF",
+    "SIM_FRAMING",
+    "SIM_HOME_FIELD_BIAS",
+    "SIM_RUN_CALIB",
+)
+
 
 def _dsn() -> str:
     return os.environ.get(
@@ -89,30 +114,24 @@ def _dsn() -> str:
     )
 
 
-async def _resolve(game_pk: int):
+async def _resolve(game_pk: int, duck: Any):
+    """Resolve the GameState and put the venue park factor on it (SIM-449).
+
+    ``resolve_game_state`` fills the lineups, the hand maps and the per-position
+    defense maps.  It does NOT fill ``park_run_factor``.  The API endpoint resolves
+    that from Postgres plus DuckDB before it builds the kwargs, so the harness does
+    the same here.  A ``duck`` of ``None`` gives a neutral 1.0 — the same fallback
+    the API takes.
+    """
     conn = await asyncpg.connect(_dsn())
     try:
-        return await resolve_game_state(conn, game_pk, seed=0)
+        state = await resolve_game_state(conn, game_pk, seed=0)
+        state.park_run_factor = await resolve_park_run_factor(
+            conn, duck, int(game_pk), int(getattr(state, "season", 2024) or 2024)
+        )
+        return state
     finally:
         await conn.close()
-
-
-def _sim_kwargs(state) -> dict:
-    return {
-        "away_lineup": list(getattr(state, "away_lineup", []) or []),
-        "home_lineup": list(getattr(state, "home_lineup", []) or []),
-        "season": int(getattr(state, "season", 2024) or 2024),
-        "pitcher_id": int(getattr(state, "pitcher_id", 0) or 0),
-        "bat_hand": str(getattr(state, "bat_hand", "R") or "R"),
-        "bat_hands": dict(getattr(state, "bat_hands", {}) or {}),
-        "throw_hands": dict(getattr(state, "throw_hands", {}) or {}),
-        "home_pitcher_id": getattr(state, "home_pitcher_id", None),
-        "away_pitcher_id": getattr(state, "away_pitcher_id", None),
-        "home_catcher_id": getattr(state, "home_catcher_id", None),
-        "away_catcher_id": getattr(state, "away_catcher_id", None),
-        "k": 25,
-        "max_innings": 12,
-    }
 
 
 def _per_team_box(result, lineup_ids: set[int]) -> dict[str, int]:
@@ -279,39 +298,61 @@ def main() -> None:
         f"sim_stats: {len(args.game_pks)} games × {args.iters} sims = "
         f"{len(args.game_pks) * args.iters} total sims"
     )
-    if os.environ.get("SIM_HOME_FIELD_BIAS"):
-        print(f"  SIM_HOME_FIELD_BIAS={os.environ['SIM_HOME_FIELD_BIAS']} (env override)")
-    if os.environ.get("SIM_FULL_POOL"):
-        print(f"  SIM_FULL_POOL={os.environ['SIM_FULL_POOL']}")
-
-    for gp in args.game_pks:
-        state = asyncio.run(_resolve(gp))
-        home_ids = {int(x) for x in (getattr(state, "home_lineup", []) or [])}
-        away_ids = {int(x) for x in (getattr(state, "away_lineup", []) or [])}
-        # Include pitchers so per-pitcher pitching stats roll into "home/away".
-        if getattr(state, "home_pitcher_id", None):
-            home_ids.add(int(state.home_pitcher_id))
-        if getattr(state, "away_pitcher_id", None):
-            away_ids.add(int(state.away_pitcher_id))
-        kw = _sim_kwargs(state)
-        spec = GameSpec(machine_factory=_FACTORY, sim_kwargs=dict(kw))
-        machine = production_machine_factory(0, spec)
-        game_summaries: list[dict] = []
-        for seed in range(args.iters):
-            machine.boxscore = BoxScore()  # reset per iteration
-            res = simulate_game(state_machine=machine, seed=seed, **kw)
-            game_summaries.append(_game_summary(res, home_ids=home_ids, away_ids=away_ids))
-        per_game.append(game_summaries)
-        # Per-game one-line summary so a long run shows progress.
-        gm_means = {
-            k: statistics.mean([float(s[k]) for s in game_summaries])
-            for k in ("R", "H", "HR", "BB", "K", "home_R", "away_R")
-        }
+    # SIM-449: name every realism input.  A silent no-op — an empty defense map or
+    # a neutral park factor — used to look exactly like a measured "no effect".
+    print("  flags: " + "  ".join(f"{n}={os.environ.get(n, '<unset>')}" for n in _REALISM_FLAGS))
+    duck = open_sim_duckdb()
+    if duck is None:
         print(
-            f"  game {gp}: "
-            + "  ".join(f"{k}={gm_means[k]:.2f}" for k in ("R", "H", "HR", "BB", "K"))
-            + f"   (h_R={gm_means['home_R']:.2f}/a_R={gm_means['away_R']:.2f})"
+            "  sim DuckDB: UNAVAILABLE — every park_run_factor falls back to 1.0. "
+            "SIM_PARK_FACTOR is a NO-OP for this run. Do not read it as 'no effect'."
         )
+    else:
+        print("  sim DuckDB: open (read-only) — the harness resolves a park factor per game.")
+
+    park_factors: dict[int, float] = {}
+    try:
+        for gp in args.game_pks:
+            state = asyncio.run(_resolve(gp, duck))
+            pf = float(getattr(state, "park_run_factor", 1.0) or 1.0)
+            n_home = len(getattr(state, "home_defense", {}) or {})
+            n_away = len(getattr(state, "away_defense", {}) or {})
+            park_factors[int(gp)] = pf
+            print(
+                f"  game {gp}: park_run_factor={pf:.4f}"
+                + ("  [NEUTRAL — SIM_PARK_FACTOR cannot act]" if pf == 1.0 else "")
+                + f"   defense home={n_home}/9 away={n_away}/9"
+                + ("  [EMPTY — SIM_FIELDER_RBF cannot act]" if not (n_home and n_away) else "")
+            )
+            home_ids = {int(x) for x in (getattr(state, "home_lineup", []) or [])}
+            away_ids = {int(x) for x in (getattr(state, "away_lineup", []) or [])}
+            # Include pitchers so per-pitcher pitching stats roll into "home/away".
+            if getattr(state, "home_pitcher_id", None):
+                home_ids.add(int(state.home_pitcher_id))
+            if getattr(state, "away_pitcher_id", None):
+                away_ids.add(int(state.away_pitcher_id))
+            kw = sim_kwargs_from_state(state)
+            spec = GameSpec(machine_factory=_FACTORY, sim_kwargs=dict(kw))
+            machine = production_machine_factory(0, spec)
+            game_summaries: list[dict] = []
+            for seed in range(args.iters):
+                machine.boxscore = BoxScore()  # reset per iteration
+                res = simulate_game(state_machine=machine, seed=seed, **kw)
+                game_summaries.append(_game_summary(res, home_ids=home_ids, away_ids=away_ids))
+            per_game.append(game_summaries)
+            # Per-game one-line summary so a long run shows progress.
+            gm_means = {
+                k: statistics.mean([float(s[k]) for s in game_summaries])
+                for k in ("R", "H", "HR", "BB", "K", "home_R", "away_R")
+            }
+            print(
+                f"  game {gp}: "
+                + "  ".join(f"{k}={gm_means[k]:.2f}" for k in ("R", "H", "HR", "BB", "K"))
+                + f"   (h_R={gm_means['home_R']:.2f}/a_R={gm_means['away_R']:.2f})"
+            )
+    finally:
+        if duck is not None:
+            duck.close()
 
     elapsed = time.perf_counter() - started
     agg = _aggregate(per_game)
@@ -326,11 +367,11 @@ def main() -> None:
             "elapsed_s": elapsed,
             "aggregate": agg,
             "per_game": per_game,
-            "env": {
-                "SIM_HOME_FIELD_BIAS": os.environ.get("SIM_HOME_FIELD_BIAS"),
-                "SIM_FULL_POOL": os.environ.get("SIM_FULL_POOL"),
-                "SIM_RUN_CALIB": os.environ.get("SIM_RUN_CALIB"),
-            },
+            # SIM-449: the record names the park factor and the flag set that
+            # produced these numbers, so a later reader can tell a real effect
+            # from a neutral no-op.
+            "park_run_factors": {str(k): v for k, v in park_factors.items()},
+            "env": {n: os.environ.get(n) for n in _REALISM_FLAGS},
         }
         Path(args.json_out).write_text(json.dumps(out, indent=2))
         print(f"wrote {args.json_out}")

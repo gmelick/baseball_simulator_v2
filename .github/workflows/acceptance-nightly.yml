@@ -1,0 +1,341 @@
+# =============================================================================
+# MLB Baseball Simulation Platform — Production-config acceptance bands (SIM-450)
+#
+# WHAT THIS JOB DOES
+# ------------------
+# Runs the simulator with every production flag ON (SIM_FULL_POOL, SIM_MANAGER,
+# SIM_PARK_FACTOR, SIM_BB_PLATOON, SIM_FIELDER_RBF, SIM_FRAMING) and asserts each
+# box-score channel against a band around the real MLB rate. Every other test lane
+# in this repository pins those flags OFF (tests/conftest.py:33-53), so this is the
+# only job that measures the simulator users get.
+#
+# THE BAND ARITHMETIC IS NOT TESTED HERE
+# --------------------------------------
+# tests/acceptance splits in two. This lane runs only the heavy half, selected by
+# `-m acceptance` — 22 tests, collected 2026-08-10. The band ARITHMETIC
+# (tests/acceptance/test_band_arithmetic_sim450.py, 26 tests, no database) runs in
+# ci.yml on every push, in the `acceptance-arithmetic` job. Keep it there: the rule
+# that decides red-or-green must be checked more often than once a night on one box.
+# Both counts said "8" until 2026-08-10 and both were wrong, which is how the
+# post-run guard came to accept a lane missing most of its tests.
+#
+# WHY THERE IS NO SCHEDULE
+# ------------------------
+# This workflow used to run `on: schedule` against `runs-on: [self-hosted,
+# baseball-data]`. No runner carries that label. A scheduled job that matches no
+# runner does not fail — it queues, and GitHub cancels it silently after 24 hours.
+# The lane produced no signal at all for its whole life, and its silence read as
+# success. Manual dispatch replaces it, because a human who presses the button
+# waits for the answer and therefore notices when there is none.
+#
+# BEFORE YOU RE-ENABLE A SCHEDULE, ALL FIVE MUST BE TRUE
+# ------------------------------------------------------
+#  1. A self-hosted runner is registered on the box that owns the /data volume,
+#     and Settings > Actions > Runners shows it "Idle" (not "Offline").
+#  2. The repository variable ACCEPTANCE_RUNNER holds that runner's label, so the
+#     `runs-on` below targets it instead of falling back to ubuntu-latest.
+#  3. The repository secret BASEBALL_DB_DSN is set, and Postgres answers from
+#     that runner.
+#  4. That runner holds the data: the DuckDB file at BASEBALL_DUCKDB_PATH, and
+#     all three engine-artifact files under BASEBALL_PLAY_POOL_DIR.
+#  5. One workflow_dispatch run has finished GREEN on that runner, proving the
+#     path end to end.
+# Never add a schedule while `runs-on` can resolve to a label no runner carries.
+# That is the exact silent no-op this comment exists to prevent.
+#
+# THE HONEST-SKIP CONTRACT
+# ------------------------
+# A green tick that means "we ran nothing" is the failure this lane exists to end.
+# Three things enforce that, and none of them can be satisfied by silence:
+#  * `runs-on` falls back to ubuntu-latest, a runner that always exists. The job
+#    therefore always STARTS. It cannot queue forever unnoticed.
+#  * The precondition step FAILS when the DuckDB file, the artifact bundle or
+#    Postgres is absent. It does not skip, and there is no override variable. On
+#    a plain GitHub-hosted runner this lane is red within a minute, by design.
+#  * The post-run step reads the JUnit report and fails unless every named test
+#    in its roster actually ran. pytest exits 0 when every selected test skips, so
+#    a passing pytest step is not on its own proof that anything ran. The roster
+#    replaced a MIN_EXECUTED count on 2026-08-10 — see that step for the two
+#    measured ways the count could be defeated.
+#
+# WHY -rxX ON THE PYTEST STEP
+# ---------------------------
+# Several channels are known-red and ship as strict xfails, so the lane is green
+# while they stay broken. -rxX prints every XFAIL and XPASS in the run summary, so
+# a reviewer skimming a green tick still reads the list of open defects. Do not
+# drop that flag.
+# =============================================================================
+
+name: Acceptance bands (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual trigger'
+        required: false
+        default: 'Manual acceptance-band run'
+      games:
+        description: 'Games in the set (max 12)'
+        required: false
+        default: '12'
+      iters:
+        description: 'Iterations per game'
+        required: false
+        default: '100'
+
+env:
+  PYTHON_VERSION: '3.13'
+
+jobs:
+  acceptance:
+    name: Production-config acceptance bands (SIM-450)
+    # The box that owns /data. Set the repository variable ACCEPTANCE_RUNNER to
+    # that runner's label. The ubuntu-latest fallback is deliberate: a runner
+    # that always exists means the job always starts and then fails loudly on
+    # the missing data, instead of queueing against a label nobody registered.
+    runs-on: ${{ vars.ACCEPTANCE_RUNNER || 'ubuntu-latest' }}
+    # Measured 2.25 s per sim on 2026-08-10 (901.6 s for 400 sims), so 12 x 100
+    # is about 45 minutes serial. 120 minutes leaves headroom for a model change
+    # that lengthens games.
+    timeout-minutes: 120
+
+    env:
+      BASEBALL_DUCKDB_PATH: ${{ vars.BASEBALL_DUCKDB_PATH || '/data/baseball_sim.duckdb' }}
+      BASEBALL_PLAY_POOL_DIR: ${{ vars.BASEBALL_PLAY_POOL_DIR || '/data/play_pool' }}
+      BASEBALL_DB_DSN: ${{ secrets.BASEBALL_DB_DSN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Verify preconditions (loud)
+        run: |
+          set -uo pipefail
+          echo "Runner: ${RUNNER_NAME:-unknown}   labels resolved from ACCEPTANCE_RUNNER"
+          MISSING=""
+          [ -f "${BASEBALL_DUCKDB_PATH}" ] || MISSING="${MISSING} duckdb"
+          for f in pitch_pool/manifest.json battedball_pool/manifest.json pitcher_sim.npz; do
+            [ -f "${BASEBALL_PLAY_POOL_DIR}/engine_artifacts/${f}" ] \
+              || MISSING="${MISSING} artifact:${f}"
+          done
+          python - <<'PY' || MISSING="${MISSING} postgres"
+          import asyncio, os, sys
+          import asyncpg
+          async def main():
+              conn = await asyncpg.connect(os.environ["BASEBALL_DB_DSN"], timeout=30)
+              try:
+                  await conn.fetchval("SELECT 1")
+              finally:
+                  await conn.close()
+          try:
+              asyncio.run(main())
+          except Exception as exc:
+              print(f"postgres probe failed: {exc!r}", file=sys.stderr)
+              sys.exit(1)
+          PY
+          if [ -n "${MISSING}" ]; then
+            {
+              echo "## SIM-450 acceptance lane DID NOT RUN"
+              echo ""
+              echo "Missing preconditions:${MISSING}"
+              echo ""
+              echo "This job asserts the production simulator against real MLB rates."
+              echo "It cannot run without the data, and a green tick that means"
+              echo "\"we ran nothing\" is the failure this lane exists to end."
+              echo ""
+              echo "Most likely cause: the run landed on the ubuntu-latest fallback"
+              echo "because the repository variable ACCEPTANCE_RUNNER is not set to a"
+              echo "registered self-hosted runner that owns the /data volume."
+              echo ""
+              echo "Fix: register that runner, set ACCEPTANCE_RUNNER to its label, and"
+              echo "dispatch again. There is deliberately no variable that turns this"
+              echo "failure into a pass."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::SIM-450 preconditions missing:${MISSING}"
+            exit 1
+          fi
+          echo "OK - DuckDB, the engine-artifact bundle and Postgres are all present."
+
+      - name: Run the acceptance lane (production flags ON)
+        env:
+          SIM_ACCEPTANCE: '1'
+          SIM_ACCEPTANCE_GAMES: ${{ github.event.inputs.games || '12' }}
+          SIM_ACCEPTANCE_ITERS: ${{ github.event.inputs.iters || '100' }}
+          # The band table is printed by test_report_every_channel_sim450 and
+          # appended to the job summary, so a green run still shows its numbers.
+        run: |
+          pytest tests/acceptance/ \
+            -v -s -rxX \
+            --tb=native \
+            --strict-markers \
+            -m acceptance \
+            --junit-xml=test-results-acceptance.xml
+
+      - name: Prove the lane actually executed its bands
+        # Measured 2026-08-10: pytest exits 0 when every selected test SKIPS, so
+        # the step above going green does not prove a band was ever evaluated.
+        # If SIM_ACCEPTANCE were dropped the heavy module skips itself at
+        # collection and `-m acceptance` selects nothing, which exits 5 - but a
+        # per-test skip added later would exit 0 and read as success.
+        #
+        # This guard held MIN_EXECUTED = 21 until 2026-08-10. A count lost to two
+        # measured defeats, both reproduced against the old code that day:
+        #
+        #  1. xfail(run=False) scored as executed. pytest writes
+        #     <skipped type="pytest.xfail" message="[NOTRUN] ..."> and never calls
+        #     the body. 21 tests whose bodies raise AssertionError scored
+        #     "collected=21 executed=21 xfail=21 skipped=0 PASS". Every band in
+        #     this lane could be marked run=False and the guard would agree the
+        #     channels were measured.
+        #  2. A count cannot say WHICH tests ran. Any 21 of the 22 satisfied it,
+        #     so the R band or home_win_pct could go missing unnoticed.
+        #
+        # The roster below fixes both. Every name must be present AND must have
+        # actually run. The xfails here are all strict with run defaulting to
+        # True, so their bodies DO execute and their bands ARE measured - they
+        # stay in the roster. Adding a test needs no edit. Renaming or deleting
+        # one reds the lane until a human updates the roster on purpose.
+        run: |
+          python - <<'EOF'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          REPORT = "test-results-acceptance.xml"
+
+          # The two channels the betting product rests on head the roster: R is
+          # the run environment, home_win_pct is the home-field edge. The band
+          # ARITHMETIC behind them is proved in ci.yml's acceptance-arithmetic
+          # job, which names its own two flagship proofs.
+          REQUIRED = """
+          test_runs_band_sim450
+          test_home_win_pct_band_sim450
+
+          test_production_flags_are_on_sim450
+          test_sample_is_large_enough_to_mean_anything_sim450
+          test_the_game_set_does_not_bias_the_run_environment_sim450
+          test_sim449_inputs_reach_the_simulator_sim450
+          test_steal_totals_reconcile_sim450
+          test_full_pool_outcome_runs_sim450
+          test_full_pool_fielding_runs_sim450
+          test_full_pool_out_advancement_runs_sim450
+          test_full_pool_steal_decision_runs_sim450
+          test_hits_band_sim450
+          test_home_runs_band_sim450
+          test_doubles_band_sim450
+          test_triples_band_sim450
+          test_walks_band_sim450
+          test_strikeouts_band_sim450
+          test_stolen_bases_band_sim450
+          test_caught_stealing_band_sim450
+          test_double_play_band_sim450
+          test_reach_on_error_band_sim450
+          test_report_every_channel_sim450
+          """.split()
+
+          try:
+              root = ET.parse(REPORT).getroot()
+          except Exception as exc:
+              print(f"FAIL: cannot read {REPORT}: {exc!r}")
+              sys.exit(1)
+
+          executed = set()
+          not_run = {}
+          skipped = {}
+
+          for case in root.iter("testcase"):
+              name = (case.get("name") or "").split("[", 1)[0]
+              mark = case.find("skipped")
+              if mark is None:
+                  # Passed, failed or errored. pytest called the body either way.
+                  executed.add(name)
+                  continue
+              message = mark.get("message") or ""
+              if mark.get("type") == "pytest.xfail":
+                  # BOTH xfail forms land here and NEITHER proves a measurement.
+                  # `xfail(run=False)` writes "[NOTRUN] ..." and pytest never calls
+                  # the body. An IMPERATIVE `pytest.xfail()` call writes the bare
+                  # reason and aborts the body wherever it was called - which may be
+                  # before a single assertion ran. The XML cannot tell the two apart,
+                  # so a REQUIRED channel that xfails counts as not measured. A band
+                  # that is genuinely expected to be red must FAIL, not xfail.
+                  not_run[name] = message or "imperative pytest.xfail()"
+              else:
+                  skipped[name] = message
+
+          print(f"executed={len(executed)} not_run={len(not_run)} skipped={len(skipped)}")
+          for name in sorted(not_run):
+              print(f"  NOT RUN  {name}  {not_run[name]}")
+          for name in sorted(skipped):
+              print(f"  SKIPPED  {name}  {skipped[name]}")
+
+          # Order matters. `not_run` and `skipped` are checked BEFORE `executed`,
+          # because the name key drops the "[param]" suffix: a parametrized test
+          # with one passing case and one skipped case lands in BOTH sets. Checking
+          # `executed` first let the passing case mask the skipped one, so a
+          # required channel could be silently deselected one parameter at a time.
+          # Every collected case of a required test must run.
+          problems = []
+          for name in REQUIRED:
+              if name in not_run:
+                  problems.append(f"{name}: xfail - pytest did not evaluate its assertions")
+              elif name in skipped:
+                  problems.append(f"{name}: skipped - {skipped[name]}")
+              elif name not in executed:
+                  problems.append(f"{name}: absent - deleted, renamed or deselected")
+
+          if problems:
+              print(f"FAIL: {len(problems)} required test(s) did not run.")
+              for line in problems:
+                  print(f"  - {line}")
+              print("A test that did not run is not a measured channel.")
+              print("Renamed or removed one on purpose? Edit REQUIRED in the same commit.")
+              sys.exit(1)
+
+          print(f"PASS: all {len(REQUIRED)} required channels were measured.")
+          EOF
+
+      - name: Upload the JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-results-${{ github.run_id }}
+          path: test-results-acceptance.xml
+          retention-days: 90
+
+      - name: Explain a red lane (workflow summary)
+        if: failure()
+        run: |
+          {
+            echo "## SIM-450 acceptance bands FAILED"
+            echo ""
+            echo "A channel sat outside its band, a strict xfail turned into an XPASS,"
+            echo "or a test on the guard's roster did not run. The guard names every"
+            echo "test this lane must execute, and an xfail(run=False) does not count"
+            echo "as executed — pytest never calls that body, so it measures nothing."
+            echo ""
+            echo "**Band rule:** \`half_width = max(Z * sd / sqrt(n), floor)\`, Z = 4.0,"
+            echo "sd measured from the run itself. At Z = 4.0 across 12 channels the"
+            echo "false-red probability is 7.6e-04 per run - about one every 1,316"
+            echo "nights. So a red channel is almost certainly real."
+            echo ""
+            echo "**An XPASS(strict) is good news.** A known-red channel started passing."
+            echo "Delete its \`@pytest.mark.xfail\` marker and say which ticket fixed it."
+            echo ""
+            echo "**Do not widen a band to turn this green.** Read"
+            echo "\`tests/acceptance/bands.py\`, section MOVING A BAND. Moving a floor"
+            echo "needs a named ticket, a measured new value with its sample size, and a"
+            echo "dated line in the floor changelog. If a channel is red and nobody"
+            echo "changed the model, the model is wrong."
+          } >> "$GITHUB_STEP_SUMMARY"

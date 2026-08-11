@@ -25,10 +25,11 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from api.auth import LatencyMiddleware, RateLimitMiddleware, resolve_cors_origins
 from api.errors import install_exception_handlers
@@ -388,6 +389,64 @@ async def lifespan(app: FastAPI):
             )
 
     # ----------------------------------------------------------------
+    # SIM-453: the park-factor source, opened SEPARATELY from replay persistence.
+    #
+    # THE DEFECT. Before this block, api/routes/games.py read the venue park factor
+    # through app.state.sim_duckdb, which only the block above ever set. That block
+    # is gated on REPLAY_PERSISTENCE_ENABLED, and that variable is set in NEITHER
+    # .env NOR docker-compose.yml (it is set only in .env.production.example and
+    # .env.staging.example). So on the default stack every route resolved a neutral
+    # 1.0 park factor while the instrument reported the factor "resolved" — and the
+    # data was sitting in the file the whole time (2,952 rows in
+    # derived.park_factors; 35 for 2024 factor_type='R', from 0.8724 to 1.1339).
+    #
+    # THE DECISION. Reading park factors is a READ. Replay persistence is a WRITE.
+    # We open the read-only source on its own rather than switching
+    # REPLAY_PERSISTENCE_ENABLED on, because that flag opens a WRITABLE connection
+    # (the write lock the comment above says the default-off state exists to avoid)
+    # and because the replay tables sim.play_stream / sim.state_snapshots are not in
+    # the file — turning it on would move /plays, /state, /linescore and /card from
+    # a clean 503 to a 500 on a missing table. The full reasoning, with the queries
+    # that measured it, is in simulation/sim_kwargs.py.
+    #
+    # SKIPPED when replay already opened a connection: DuckDB will not give the same
+    # process a second handle on a file it already holds writable, and in that case
+    # the routes already pass a live connection, so the fallback is not needed.
+    # ----------------------------------------------------------------
+    from simulation.sim_kwargs import (
+        ParkFactorSource,
+        close_park_factor_source,
+        prime_park_factor_source,
+    )
+
+    if getattr(app.state, "sim_duckdb", None) is not None:
+        app.state.park_factor_source = ParkFactorSource(
+            available=True,
+            path=os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb"),
+            n_rows=-1,
+            detail="served by the replay-persistence connection (app.state.sim_duckdb)",
+        )
+        log.info("SIM-453: park factors read through the replay-persistence DuckDB connection.")
+    else:
+        park_source = await asyncio.to_thread(prime_park_factor_source)
+        app.state.park_factor_source = park_source
+        if park_source.available:
+            log.info(
+                "SIM-453: park-factor source OPEN (read-only) at %s — %d rows in "
+                "derived.park_factors. SIM_PARK_FACTOR has real factors to act on.",
+                park_source.path,
+                park_source.n_rows,
+            )
+        else:
+            log.warning(
+                "SIM-453: park-factor source UNAVAILABLE at %s — %s. Every /simulate "
+                "runs PARK-BLIND at a neutral 1.0, and every response carries "
+                "X-Park-Factor-Source: unavailable. This is reported, not hidden.",
+                park_source.path,
+                park_source.detail,
+            )
+
+    # ----------------------------------------------------------------
     # Phase 5 (SIM-360): the long-lived, persistent BatchRunner.
     #
     # Build ONE BatchRunner at startup and attach it as app.state.sim_runner so
@@ -541,6 +600,43 @@ async def lifespan(app: FastAPI):
         except Exception:  # noqa: BLE001
             pass
 
+    # SIM-453: close the read-only park-factor source. A no-op when nothing primed.
+    close_park_factor_source()
+
+
+# ---------------------------------------------------------------------------
+# SIM-453 — make an unavailable park-factor source visible to the CALLER
+# ---------------------------------------------------------------------------
+
+
+class ParkFactorSourceMiddleware(BaseHTTPMiddleware):
+    """Stamp ``X-Park-Factor-Source`` on every response (SIM-453).
+
+    A WARNING in the container log tells the OPERATOR that the park factor is
+    unavailable. It tells the API caller nothing, and the caller is the one holding
+    the numbers. This header carries the same fact out to them:
+
+    * ``duckdb:<n>`` — the source is open and holds ``n`` rows in
+      ``derived.park_factors``. Simulations use real venue factors.
+    * ``unavailable`` — nothing answered the lookup. Every simulation in this
+      response ran at a neutral 1.0 and ``SIM_PARK_FACTOR`` did nothing.
+    * ``unknown`` — the lifespan has not run (a TestClient built without it).
+
+    A header cannot break a client that ignores it, so no route needs editing and
+    no response body changes shape.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        source = getattr(request.app.state, "park_factor_source", None)
+        try:
+            response.headers["X-Park-Factor-Source"] = (
+                source.header_value() if source is not None else "unknown"
+            )
+        except Exception:  # noqa: BLE001 -- a header never breaks a response
+            pass
+        return response
+
 
 # ---------------------------------------------------------------------------
 # App factory
@@ -584,6 +680,11 @@ def create_app() -> FastAPI:
     # computed p95 on app.state.api_p95_seconds so /metrics can expose it to
     # Prometheus/Grafana. /health, /ready, /, /metrics are exempt.
     app.add_middleware(LatencyMiddleware)
+
+    # SIM-453 — tell the caller whether the park factor was real. An unavailable
+    # source used to be indistinguishable from a neutral park, in the logs and in
+    # the response alike. Now every response says which one it was.
+    app.add_middleware(ParkFactorSourceMiddleware)
 
     # ----------------------------------------------------------------
     # Routers — registered as phases complete

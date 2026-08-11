@@ -51,6 +51,15 @@ USAGE
     # Via the Makefile wrapper:
     make validate-props FLAGS="--seasons 2024 --write-calibration"
 
+PARK FACTORS (SIM-452)
+----------------------
+Each replay resolves the game's venue run park factor from the sim DuckDB before it
+simulates, through ``simulation.sim_kwargs.build_sim_kwargs``. This script used to
+skip that step, so it fitted the win-probability reliability curve on a park-blind
+simulator. The job now REFUSES to start when the sim DuckDB will not open (exit
+code 2), because a neutral 1.0 is indistinguishable from a real neutral park. Pass
+``--allow-neutral-parks`` to override it for a plumbing smoke test.
+
 This is an OFFLINE validation/fitting job (it replays real sims, so it is slow —
 use ``--max-games`` to cap a smoke run). It never serves a request; the API only
 *reads* the artifacts it writes.
@@ -85,6 +94,9 @@ DEFAULT_DSN = os.environ.get(
 )
 DEFAULT_CALIBRATION_PATH = os.environ.get("CALIBRATION_REPORT_PATH", "/data/calibration.json")
 DEFAULT_OUTPUT = os.environ.get("PROP_VALIDATION_PATH", "/data/prop_validation.json")
+#: SIM-452: the sim DuckDB that holds ``derived.park_factors``. The replay resolves
+#: each game's venue run park factor from it before simulating.
+DEFAULT_DUCKDB_PATH = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb")
 
 #: The production machine factory (dotted ref) — the SAME one the API serves with.
 _FACTORY_REF = "simulation.production_factory:production_machine_factory"
@@ -161,6 +173,14 @@ def _collect_game_results(state, n_iter: int, base_seed: int | None) -> list:
     collects the :class:`GameSimResult` (carrying ``.boxscore`` + the score) per
     iteration. The list feeds BOTH the win-probability aggregation AND the prop-PMF
     set. Sync + CPU-bound, so the async caller offloads it via ``asyncio.to_thread``.
+
+    SIM-452: ``state`` must arrive with its venue park factor ALREADY resolved.
+    :func:`run` resolves it, because the lookup is async and this body runs in a
+    worker thread with no event loop. The builder enforces the ordering: a state
+    that skipped the lookup still carries ``UNRESOLVED_PARK_FACTOR`` and
+    ``sim_kwargs_from_state`` raises on it rather than replaying park-blind. That
+    is what this script did on every run before SIM-452, so the reliability curve
+    it fitted described a simulator production does not serve.
     """
     from api.routes.games import _sim_kwargs_from_state
     from simulation.batch_runner import derive_seed
@@ -177,17 +197,49 @@ def _collect_game_results(state, n_iter: int, base_seed: int | None) -> list:
     return results
 
 
+def _close_quietly(con) -> None:
+    """Close the sim-DuckDB connection; never let a close failure sink the run."""
+    if con is None:
+        return
+    try:
+        con.close()
+    except Exception:  # noqa: BLE001 - a close failure never sinks the run
+        pass
+
+
 async def run(args: argparse.Namespace) -> int:
     from api.routes.games import _resolve_state_or_error
+    from simulation.sim_kwargs import open_sim_duckdb, resolve_park_factor_onto_state
     from simulation.win_probability import win_probability
 
     seasons = sorted({int(s) for s in args.seasons}, reverse=True)
     log.info("SIM-407 validation over seasons %s (iterations=%d).", seasons, args.iterations)
 
+    # SIM-452 PRECONDITION. The venue park factor lives in this DuckDB. Without it
+    # every replay runs at a neutral 1.0, SIM_PARK_FACTOR does nothing, and the
+    # reliability curve this job writes back into the CalibrationReport is fitted on
+    # a simulator production does not serve. Check it BEFORE replaying anything.
+    duck = open_sim_duckdb(args.duckdb)
+    if duck is None:
+        if not args.allow_neutral_parks:
+            log.error(
+                "SIM-452: the sim DuckDB at %r would not open, so every park factor "
+                "falls back to a neutral 1.0 and SIM_PARK_FACTOR is a no-op. The fitted "
+                "curve would describe a simulator production does not serve. Fix the "
+                "path (--duckdb) or pass --allow-neutral-parks to accept it.",
+                args.duckdb,
+            )
+            return 2
+        log.warning(
+            "SIM-452: validating WITHOUT park factors (--allow-neutral-parks). Every "
+            "game uses a neutral 1.0 and SIM_PARK_FACTOR does nothing this run."
+        )
+
     games = await _fetch_final_games(args.dsn, seasons, args.max_games)
     log.info("Found %d completed games to validate.", len(games))
     if not games:
         log.warning("No completed games found — nothing to validate.")
+        _close_quietly(duck)
         return 0
 
     import asyncpg
@@ -196,6 +248,7 @@ async def run(args: argparse.Namespace) -> int:
     prop_pairs_by_line: dict[tuple[str, float], list] = {}
     n_done = 0
     n_props = 0
+    n_park_nonneutral = 0
     # Pool created INSIDE the try so a construction failure still hits the finally.
     pool = None
     try:
@@ -207,6 +260,15 @@ async def run(args: argparse.Namespace) -> int:
             except Exception as exc:  # noqa: BLE001 - skip un-resolvable games
                 log.info("skip game %s (state unresolved: %s)", game_pk, type(exc).__name__)
                 continue
+
+            # SIM-452: resolve the park factor HERE, where the connections live. The
+            # replay below runs in a worker thread with no event loop, and the
+            # builder rejects an unresolved state, so an edit that drops this line
+            # fails loudly instead of replaying park-blind.
+            # season defaults to the state's own season.
+            park_factor = await resolve_park_factor_onto_state(state, pool, duck, int(game_pk))
+            if abs(park_factor - 1.0) > 1e-9:
+                n_park_nonneutral += 1
 
             results = await asyncio.to_thread(
                 _collect_game_results, state, args.iterations, args.base_seed
@@ -237,6 +299,21 @@ async def run(args: argparse.Namespace) -> int:
     finally:
         if pool is not None:
             await pool.close()
+        _close_quietly(duck)
+
+    # SIM-452: say out loud how many replays actually used a non-neutral park factor.
+    if n_done and not n_park_nonneutral:
+        log.warning(
+            "SIM-452: %d games validated and NOT ONE used a non-neutral park factor. "
+            "SIM_PARK_FACTOR had no effect on this validation.",
+            n_done,
+        )
+    else:
+        log.info(
+            "SIM-452: %d/%d validated games ran with a non-neutral park factor.",
+            n_park_nonneutral,
+            n_done,
+        )
 
     log.info("Building validation report from %d games (%d prop pairs).", n_done, n_props)
     report = build_validation_report(
@@ -332,6 +409,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--calibration-path",
         default=DEFAULT_CALIBRATION_PATH,
         help=f"CalibrationReport to update (default: {DEFAULT_CALIBRATION_PATH}).",
+    )
+    p.add_argument(
+        "--duckdb",
+        default=DEFAULT_DUCKDB_PATH,
+        help=f"Sim DuckDB path — the venue park factors (default: {DEFAULT_DUCKDB_PATH}).",
+    )
+    p.add_argument(
+        "--allow-neutral-parks",
+        action="store_true",
+        help=(
+            "SIM-452 escape hatch. Run even when the sim DuckDB will not open, with "
+            "every park factor at a neutral 1.0. The fitted curve then describes a "
+            "simulator production does not serve, so use it only for a smoke test."
+        ),
     )
     return p.parse_args(argv)
 

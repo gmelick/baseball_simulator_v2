@@ -305,6 +305,188 @@ jobs:
           retention-days: 30
 
   # ---------------------------------------------------------------------------
+  # Job 4e — Acceptance band arithmetic (SIM-450)
+  #
+  # tests/acceptance splits in two. The HEAVY half
+  # (test_production_config_bands_sim450.py) needs a 3.2 GB DuckDB, the
+  # engine-artifact bundle and Postgres, so it runs only in
+  # acceptance-nightly.yml. The band ARITHMETIC half
+  # (test_band_arithmetic_sim450.py) needs none of that — 26 tests, pure maths,
+  # 0.6 s measured on 2026-08-10. Until this job existed, CI collected neither
+  # half, so the rule that decides red-or-green for every box-score channel was
+  # itself untested on every push.
+  #
+  # The comment here used to say "8 tests". The module held 26. That gap was not
+  # cosmetic: the post-run guard below trusted the same figure and let 18 tests —
+  # including both flagship proofs — be deleted while the lane stayed green.
+  # Keep the count and the guard roster true, or the guard drifts back into
+  # decoration.
+  #
+  # No `needs:` on purpose. The band rule is the instrument that catches a
+  # broken simulator. It must never be gated behind another job's failure, or a
+  # red unit lane silently hides a broken band rule too.
+  # ---------------------------------------------------------------------------
+  acceptance-arithmetic:
+    name: Acceptance band arithmetic (SIM-450)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run the band-arithmetic tests (no DB, no artifact bundle)
+        # The heavy module in the same package skips itself at collection
+        # (SIM_ACCEPTANCE is unset here), so naming the file directly is what
+        # keeps this lane cheap and deterministic.
+        run: |
+          pytest tests/acceptance/test_band_arithmetic_sim450.py \
+            -v \
+            --tb=native \
+            --timeout=60 \
+            --strict-markers \
+            --junit-xml=test-results-acceptance-arithmetic.xml
+
+      - name: Prove the band tests actually executed
+        # pytest exits 0 when every selected test SKIPS. Measured 2026-08-10: a
+        # 2-test all-skip run exits 0 and prints "2 skipped". So a green tick
+        # from the step above does not by itself prove anything ran.
+        #
+        # This guard replaced a MIN_EXECUTED count on 2026-08-10, because the
+        # count lost to two measured defeats:
+        #
+        #  1. xfail(run=False) counted as executed. pytest writes
+        #     <skipped type="pytest.xfail" message="[NOTRUN] ..."> for it and
+        #     never calls the body. Measured: 21 tests whose bodies raise
+        #     AssertionError scored "collected=21 executed=21 ... PASS".
+        #  2. MIN_EXECUTED was 8 against 26 collected. Measured: deleting BOTH
+        #     flagship proofs left 24 executed and the guard still exited 0.
+        #
+        # The fix for both is a ROSTER, not a threshold. Every test below must be
+        # present AND must have actually run. Adding a test needs no edit here.
+        # Renaming or deleting one turns this lane red until a human updates the
+        # roster on purpose — which is the entire point.
+        run: |
+          python - <<'EOF'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          REPORT = "test-results-acceptance-arithmetic.xml"
+
+          # The two FLAGSHIP proofs head the roster. They are the reason this
+          # lane exists: one proves the R band goes red on the documented
+          # run-conversion gap, the other proves home_win_pct never reports PASS
+          # for a coin-flip simulator. Never remove them.
+          REQUIRED = """
+          test_the_R_band_reds_on_the_documented_run_conversion_gap_sim450
+          test_home_win_pct_never_passes_a_coin_flip_sim450
+
+          test_every_channel_has_a_reference_sim450
+          test_box_channels_and_home_win_pct_partition_the_lane_sim450
+          test_a_floor_never_rises_to_meet_a_documented_defect_sim450
+          test_the_two_repaired_floors_hold_their_measured_values_sim450
+          test_the_R_band_does_not_red_a_healthy_model_sim450
+          test_the_R_band_boundary_sits_where_the_floor_says_sim450
+          test_home_win_pct_passes_a_correct_model_at_the_required_sample_sim450
+          test_a_noise_driven_band_never_reports_a_pass_sim450
+          test_every_box_channel_resolves_at_the_documented_nightly_sim450
+          test_home_win_pct_costs_more_run_than_the_nightly_gives_sim450
+          test_required_sample_sizes_match_the_published_table_sim450
+          test_half_width_is_the_larger_of_the_two_terms_sim450
+          test_band_tightens_as_the_run_grows_sim450
+          test_a_band_can_actually_fail_sim450
+          test_a_band_does_not_fail_on_a_correct_model_sim450
+          test_a_short_run_reports_unresolved_and_the_nightly_reports_fail_sim450
+          test_verdict_covers_every_case_exactly_once_sim450
+          test_sample_sd_handles_a_degenerate_sample_sim450
+          test_z_pins_the_false_alarm_rate_sim450
+          test_balanced_game_order_covers_the_whole_set_sim450
+          test_balanced_game_order_keeps_every_prefix_near_the_set_mean_sim450
+          test_the_prefix_check_rejects_an_ascending_order_sim450
+          test_a_shortened_run_cannot_hide_a_park_shift_in_the_R_band_sim450
+          test_conftest_slices_the_balanced_game_order_sim450
+          """.split()
+
+          try:
+              root = ET.parse(REPORT).getroot()
+          except Exception as exc:
+              print(f"FAIL: cannot read {REPORT}: {exc!r}")
+              sys.exit(1)
+
+          executed = set()
+          not_run = {}
+          skipped = {}
+
+          for case in root.iter("testcase"):
+              name = (case.get("name") or "").split("[", 1)[0]
+              mark = case.find("skipped")
+              if mark is None:
+                  # Passed, failed or errored. pytest called the body either way.
+                  executed.add(name)
+                  continue
+              message = mark.get("message") or ""
+              if mark.get("type") == "pytest.xfail":
+                  # BOTH xfail forms land here and NEITHER proves a measurement.
+                  # `xfail(run=False)` writes "[NOTRUN] ..." and pytest never calls
+                  # the body. An IMPERATIVE `pytest.xfail()` call writes the bare
+                  # reason and aborts the body wherever it was called - which may be
+                  # before a single assertion ran. The XML cannot tell the two apart,
+                  # so a REQUIRED channel that xfails counts as not measured. A band
+                  # that is genuinely expected to be red must FAIL, not xfail.
+                  not_run[name] = message or "imperative pytest.xfail()"
+              else:
+                  skipped[name] = message
+
+          print(f"executed={len(executed)} not_run={len(not_run)} skipped={len(skipped)}")
+          for name in sorted(not_run):
+              print(f"  NOT RUN  {name}  {not_run[name]}")
+          for name in sorted(skipped):
+              print(f"  SKIPPED  {name}  {skipped[name]}")
+
+          # Order matters. `not_run` and `skipped` are checked BEFORE `executed`,
+          # because the name key drops the "[param]" suffix: a parametrized test
+          # with one passing case and one skipped case lands in BOTH sets. Checking
+          # `executed` first let the passing case mask the skipped one, so a
+          # required channel could be silently deselected one parameter at a time.
+          # Every collected case of a required test must run.
+          problems = []
+          for name in REQUIRED:
+              if name in not_run:
+                  problems.append(f"{name}: xfail - pytest did not evaluate its assertions")
+              elif name in skipped:
+                  problems.append(f"{name}: skipped - {skipped[name]}")
+              elif name not in executed:
+                  problems.append(f"{name}: absent - deleted, renamed or deselected")
+
+          if problems:
+              print(f"FAIL: {len(problems)} required test(s) did not run.")
+              for line in problems:
+                  print(f"  - {line}")
+              print("A test that did not run is not a measured channel.")
+              print("Renamed or removed one on purpose? Edit REQUIRED in the same commit.")
+              sys.exit(1)
+
+          print(f"PASS: all {len(REQUIRED)} required band-rule tests ran.")
+          EOF
+
+      - name: Upload band-arithmetic results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-arithmetic-results
+          path: test-results-acceptance-arithmetic.xml
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
   # Job 5 — Docker build check
   # Verifies the multi-stage Dockerfile builds to the runtime target without error.
   # Does NOT push. Push is handled by docker-release.yml on main.
