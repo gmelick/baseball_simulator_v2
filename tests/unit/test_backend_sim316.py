@@ -265,6 +265,9 @@ class TestInvalidStateGuards:
 
     def test_step_pitch_rejects_corrupt_base_runner_id(self):
         sm = StateMachine()
+        # SIM-500: opt into the base guard — see test_sim499_run_ledger.py for why
+        # it is off by default on a machine with no full-pool sampler.
+        sm._enforce_base_invariants = True
         state = _fresh_state()
         state.bases = Bases(first=-7)  # negative runner id
         with pytest.raises(ValueError):

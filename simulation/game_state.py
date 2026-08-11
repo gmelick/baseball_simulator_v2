@@ -24,8 +24,12 @@ deliberately does NOT implement:
   * **run resolution** (SIM-312 — already landed in
     ``simulation.run_resolution``; ``PlayResult`` carries its provenance);
   * the **manager** substitution/steal/IBB module (SIM-323 — the §3/§5.3 hooks);
-  * the **invalid-state harness** (SIM-326 enforces invalid-state detection;
-    validation here is intentionally lightweight, see ``GameState.assert_*``).
+  * the **invalid-state harness** (SIM-326 enforces invalid-state detection).
+    The count / outs / score guards here stay lightweight.  The **base-state**
+    guards do not: SIM-500 gave ``Bases.assert_consistent`` real invariants and
+    added ``Bases.assert_transition``, because the call sites in
+    ``simulation.sim_loop`` were already treating the base guard as a
+    correctness check while it only rejected a negative id.
 
 ALIGNMENT WITH THE SIM-310 SPEC (§2 step I/O)
 =============================================
@@ -58,6 +62,7 @@ directly.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any
@@ -68,6 +73,9 @@ from typing import Any
 
 #: Outs that end a half-inning (mirrors run_resolution.OUTS_PER_INNING).
 OUTS_PER_INNING = 3
+#: Bases a runner can stand on.  A legal base state holds at most this many
+#: runners, and each of them is a different player (SIM-500).
+MAX_RUNNERS_ON_BASE = 3
 #: Balls that terminate a PA as a walk (spec §5.1).
 BALLS_FOR_WALK = 4
 #: Strikes that terminate a PA as a strikeout (spec §5.1).
@@ -145,15 +153,204 @@ class Bases:
         """Empty all bases (half-inning transition, spec §6.1)."""
         self.first = self.second = self.third = None
 
-    def assert_consistent(self) -> None:
-        """Lightweight invariant: each occupied base holds a non-negative id.
+    def runner_ids(self) -> tuple[int, ...]:
+        """The ids of the runners on base, in base order.  Empty bags drop out."""
+        return tuple(int(r) for r in (self.first, self.second, self.third) if r is not None)
 
-        (Per-runner advancement legality is SIM-319; invalid-state *detection*
-        is SIM-326's harness — this only guards against obviously-corrupt ids.)
+    # ---- the invariant guards (SIM-500) -------------------------------------
+
+    @staticmethod
+    def assert_runner_set_legal(
+        runner_ids: Sequence[int | None],
+        *,
+        labels: Sequence[str] | None = None,
+        where: str = "Bases",
+    ) -> None:
+        """Assert that ``runner_ids`` is a legal set of runners on base.
+
+        This is the shared checker :meth:`assert_consistent` runs over the three
+        base slots.  A caller that holds a *list* of runner ids — the SIM-499
+        transition mapping builds one before it constructs a :class:`Bases` —
+        calls it directly.
+
+        Three rules, all of them real:
+
+          * **Every id is non-negative.**  A negative id is a corrupt id.
+          * **No id repeats.**  One player cannot stand on two bases at once.
+            This is the rule that catches a runner who is still on a base he was
+            doubled off, because the fielding code re-places him while the pool
+            transition also places the batter on that bag.
+          * **At most** :data:`MAX_RUNNERS_ON_BASE` **runners.**  Three bases
+            hold three runners.
+
+        ``labels`` names each position for the error message (``("1B", "2B",
+        "3B")`` from :meth:`assert_consistent`).  ``None`` falls back to the
+        index.  ``where`` names the caller in the message.
+
+        Raises ``ValueError`` on the first rule a caller breaks.
         """
-        for base, rid in (("1B", self.first), ("2B", self.second), ("3B", self.third)):
-            if rid is not None and int(rid) < 0:
-                raise ValueError(f"Bases.{base} has a negative runner id: {rid!r}")
+        ids = list(runner_ids)
+        names = list(labels) if labels is not None else []
+        # SIM-500: PAD, never truncate. The first version zipped ``names`` against
+        # ``ids`` with ``strict=False``, so a caller passing fewer labels than
+        # runners silently dropped every id past the end of ``labels`` BEFORE any
+        # rule ran — the guard then enforced nothing on exactly the runners it was
+        # not told the name of. Labels are for the error message only; they must
+        # never decide which runners get checked.
+        if len(names) < len(ids):
+            names += [f"[{i}]" for i in range(len(names), len(ids))]
+        occupied = [(name, rid) for name, rid in zip(names, ids, strict=True) if rid is not None]
+        if len(occupied) > MAX_RUNNERS_ON_BASE:
+            raise ValueError(
+                f"{where} holds {len(occupied)} runners "
+                f"({[rid for _, rid in occupied]!r}); at most "
+                f"{MAX_RUNNERS_ON_BASE} runners can stand on {MAX_RUNNERS_ON_BASE} bases."
+            )
+        seen: dict[int, str] = {}
+        for name, raw in occupied:
+            rid = int(raw)
+            if rid < 0:
+                raise ValueError(f"{where}.{name} has a negative runner id: {raw!r}")
+            first_seen = seen.get(rid)
+            if first_seen is not None:
+                raise ValueError(
+                    f"{where}: runner {rid} stands on both {first_seen} and {name}; "
+                    "one player cannot occupy two bases."
+                )
+            seen[rid] = name
+
+    def assert_consistent(self, *, batter_id: int | None = None) -> None:
+        """Assert the base state itself is legal (SIM-500).
+
+        The guard checks three invariants over the three bags — non-negative
+        ids, no duplicate id, at most :data:`MAX_RUNNERS_ON_BASE` runners — and
+        one optional invariant about the batter.
+
+        Pass ``batter_id`` to also assert **the batter is not already on base**.
+        The batter stands at the plate, so he is not a runner during his own
+        plate appearance.  A caller that finds him on a bag has placed the same
+        player twice.  The argument is optional because the short lineups the
+        count-machine tests use repeat a player id across slots; only a caller
+        with a real lineup passes it.
+
+        Raises ``ValueError`` naming the base and the runner.
+
+        (Per-runner advancement legality is SIM-319.  This guard answers "is
+        this base state possible", not "did the runners get there legally" —
+        for the second question use :meth:`assert_transition`.)
+        """
+        self.assert_runner_set_legal(
+            (self.first, self.second, self.third),
+            labels=("1B", "2B", "3B"),
+            where="Bases",
+        )
+        if batter_id is not None:
+            bid = int(batter_id)
+            for base, rid in (("1B", self.first), ("2B", self.second), ("3B", self.third)):
+                if rid is not None and int(rid) == bid:
+                    raise ValueError(
+                        f"Bases.{base} holds runner {bid}, who is also the batter; "
+                        "the batter is not a runner during his own plate appearance."
+                    )
+
+    def assert_transition(
+        self,
+        post: Bases,
+        *,
+        batter_reached: bool | int,
+        runners_scored: int,
+        runners_retired: int,
+        batter_id: int | None = None,
+    ) -> None:
+        """Assert one play conserves the bodies on the field (SIM-500).
+
+        ``self`` is the base state **before** the play.  ``post`` is the base
+        state **after** it.  The identity::
+
+            runners_before + batter_reached
+                == runners_after + runners_scored + runners_retired
+
+        is the conservation rule SIM-499 deletes from
+        ``run_resolution.advance_state``.  It is wrong as a way to *derive* the
+        after-state, because a derivation has no term for a runner retired on
+        the play, so a double play desyncs it.  It is right as a way to *check*
+        one, because the caller supplies the retired count instead of guessing
+        it.  The transition-application code is new, which is what wants a
+        check.
+
+        **How the batter enters the identity.**  The batter is not on base
+        before the play, so he never counts in ``runners_before``.  He enters on
+        the left side as ``batter_reached``, which is 1 exactly when the batter
+        **becomes a baserunner** on this play, and 0 otherwise.  Three
+        consequences, and they are the whole design:
+
+          * A batter retired at first base — a strikeout, a fly out, the batter
+            half of a ground-ball double play — never becomes a runner.  He is
+            ``batter_reached=0`` and he is **not** counted in
+            ``runners_retired``.  ``runners_retired`` counts *baserunners*
+            removed by the fielders, not outs.  An out on the batter is an out;
+            it moves no body off a base.
+          * A home run is ``batter_reached=1`` and the batter is also one of
+            ``runners_scored``.  He reaches and scores on the same play, so he
+            appears once on each side and the identity balances.
+          * A batter who reaches on an error or a fielder's choice and is then
+            retired later in the same play is ``batter_reached=1`` **and** one
+            of ``runners_retired``.
+
+        So ``runners_retired`` and ``runners_scored`` both count bodies that
+        left the bases, and ``batter_reached`` counts the one body that can join
+        them.  Outs recorded on the play are deliberately not an argument: the
+        out ledger and the body ledger are different books, and mixing them is
+        what broke the derivation.
+
+        Pass ``batter_id`` to switch on two further checks: the batter is not on
+        base in the pre-state, and every runner in the post-state is either a
+        pre-state runner or the batter.  The second one catches an
+        identity-swap — a runner retired and a different runner invented — which
+        the count identity alone cannot see.
+
+        Raises ``ValueError`` reporting every operand, so the failure names the
+        play that broke it.
+        """
+        reached = int(batter_reached)
+        scored = int(runners_scored)
+        retired = int(runners_retired)
+        if reached not in (0, 1):
+            raise ValueError(f"batter_reached must be 0 or 1, got {batter_reached!r}.")
+        if scored < 0 or retired < 0:
+            raise ValueError(
+                f"runners_scored and runners_retired must be >= 0, got "
+                f"scored={runners_scored!r} retired={runners_retired!r}."
+            )
+
+        self.assert_consistent(batter_id=batter_id)
+        post.assert_consistent()
+
+        before = self.count_on_base
+        after = post.count_on_base
+        if before + reached != after + scored + retired:
+            raise ValueError(
+                "base-state transition does not conserve runners: "
+                f"before={before} + batter_reached={reached} "
+                f"!= after={after} + scored={scored} + retired={retired} "
+                f"(pre={self.runner_ids()!r} post={post.runner_ids()!r})."
+            )
+
+        if batter_id is None:
+            return
+        bid = int(batter_id)
+        allowed = set(self.runner_ids()) | {bid}
+        invented = [rid for rid in post.runner_ids() if rid not in allowed]
+        if invented:
+            raise ValueError(
+                f"base-state transition invents runner(s) {invented!r} who were "
+                f"neither on base before the play nor the batter "
+                f"(pre={self.runner_ids()!r} post={post.runner_ids()!r} batter={bid})."
+            )
+        if not reached and bid in post.runner_ids():
+            raise ValueError(
+                f"batter {bid} stands on a base but batter_reached=0 (post={post.runner_ids()!r})."
+            )
 
 
 @dataclass
@@ -398,7 +595,8 @@ class GameState:
         """True once ``outs`` reaches 3 (spec §6.1)."""
         return self.outs >= OUTS_PER_INNING
 
-    # ---- lightweight invariant guards (SIM-326 owns the real harness) -------
+    # ---- invariant guards.  The count / outs / score checks below stay
+    # ---- lightweight; the base-state guard they aggregate does not (SIM-500).
 
     def assert_count_valid(self, *, mid_count: bool = True) -> None:
         """Lightweight count invariants.
@@ -447,17 +645,32 @@ class GameState:
                 f"scores must be non-negative: home={self.home_score} away={self.away_score}"
             )
 
-    def assert_invariants(self, *, in_play: bool = True) -> None:
-        """Run all the lightweight committed-state invariants together.
+    def assert_invariants(self, *, in_play: bool = True, check_bases: bool = True) -> None:
+        """Run every committed-state invariant together.
 
         ``in_play`` is threaded to the count/outs guards: a *committed*,
         ready-for-the-next-pitch state is in-play (count mid-PA, outs <= 2);
         pass ``in_play=False`` to inspect a transient terminal snapshot.
+
+        The base guard runs without a ``batter_id``.  It therefore checks that
+        the base state is possible, and it does not check that the batter is off
+        the bases.  The reason is a real ordering constraint: ``sim_loop``
+        advances the batting order **before** it re-validates the state, so the
+        due-up batter is already the next player.  A caller that holds the
+        batter for THIS plate appearance calls ``bases.assert_consistent(
+        batter_id=...)`` itself.
+
+        Set ``check_bases=False`` to skip the base guard alone and keep the count,
+        outs and score guards.  ``sim_loop`` passes its own
+        ``_enforce_base_invariants`` flag here, so the per-tile scaffold — which
+        strands runners on first and therefore reaches states real baseball cannot
+        — keeps the three guards that DO hold for it (SIM-500).
         """
         self.assert_count_valid(mid_count=in_play)
         self.assert_outs_valid(in_play=in_play)
         self.assert_score_valid()
-        self.bases.assert_consistent()
+        if check_bases:
+            self.bases.assert_consistent()
 
 
 # ---------------------------------------------------------------------------
@@ -573,6 +786,7 @@ __all__ = [
     "PlayResult",
     # constants
     "OUTS_PER_INNING",
+    "MAX_RUNNERS_ON_BASE",
     "BALLS_FOR_WALK",
     "STRIKES_FOR_STRIKEOUT",
     "PITCH_OUTCOMES",

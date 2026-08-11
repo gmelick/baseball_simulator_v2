@@ -15,7 +15,6 @@ from simulation.constants import (
 from simulation.run_resolution import (
     OUTS_PER_INNING,
     RE24_MATRIX,
-    advance_state,
     re24_from_rows,
     re24_value,
     resolve_runs,
@@ -153,14 +152,24 @@ class TestRE24Matrix(unittest.TestCase):
 class TestRE24Resolution(unittest.TestCase):
     def test_solo_hr(self):
         r = resolve_runs(
-            event="home_run", outs=0, runners_state=0, result_hits=4, result_outs=0, result_runs=1
+            event="home_run",
+            pre_outs=0,
+            pre_runners_state=0,
+            post_outs=0,
+            post_runners_state=0,
+            result_runs=1,
         )
         self.assertEqual(r.method, "re24_delta")
         self.assertAlmostEqual(r.runs, 1.0, places=6)
 
     def test_grand_slam(self):
         r = resolve_runs(
-            event="home_run", outs=0, runners_state=7, result_hits=4, result_outs=0, result_runs=4
+            event="home_run",
+            pre_outs=0,
+            pre_runners_state=7,
+            post_outs=0,
+            post_runners_state=0,
+            result_runs=4,
         )
         self.assertEqual(r.method, "re24_delta")
         self.assertGreater(r.runs, 1.5)
@@ -168,38 +177,59 @@ class TestRE24Resolution(unittest.TestCase):
 
     def test_k_two_outs_negative(self):
         r = resolve_runs(
-            event="strikeout", outs=2, runners_state=3, result_hits=0, result_outs=1, result_runs=0
+            event="strikeout",
+            pre_outs=2,
+            pre_runners_state=3,
+            post_outs=OUTS_PER_INNING,
+            post_runners_state=0,
+            result_runs=0,
         )
         self.assertEqual(r.method, "re24_delta")
         self.assertLess(r.runs, 0.0)
-        self.assertEqual(r.new_outs, OUTS_PER_INNING)
-        self.assertEqual(r.new_runners_state, 0)
+        self.assertEqual(r.post_outs, OUTS_PER_INNING)
+        self.assertEqual(r.post_runners_state, 0)
 
     def test_gidp_worse_than_out(self):
-        base = {"outs": 0, "runners_state": 1}
+        base = {"pre_outs": 0, "pre_runners_state": 1}
         gidp = resolve_runs(
-            event="grounded_into_double_play", result_hits=0, result_outs=2, result_runs=0, **base
+            event="grounded_into_double_play",
+            post_outs=2,
+            post_runners_state=0,
+            result_runs=0,
+            **base,
         )
-        out1 = resolve_runs(event="field_out", result_hits=0, result_outs=1, result_runs=0, **base)
+        out1 = resolve_runs(
+            event="field_out", post_outs=1, post_runners_state=1, result_runs=0, **base
+        )
         self.assertEqual(gidp.method, "re24_delta")
         self.assertLess(gidp.runs, out1.runs)
 
     def test_single_scoring_positive(self):
         r = resolve_runs(
-            event="single", outs=0, runners_state=2, result_hits=1, result_outs=0, result_runs=1
+            event="single",
+            pre_outs=0,
+            pre_runners_state=2,
+            post_outs=0,
+            post_runners_state=1,
+            result_runs=1,
         )
         self.assertEqual(r.method, "re24_delta")
         self.assertGreater(r.runs, 0.0)
 
-    def test_advance_conserves(self):
-        no, nr = advance_state(0, 1, result_hits=1, result_outs=0, result_runs=0)
-        self.assertEqual(no, 0)
-        self.assertEqual(bin(nr).count("1"), 2)
-
-    def test_inning_end_clears(self):
-        no, nr = advance_state(2, 7, result_hits=0, result_outs=1, result_runs=0)
-        self.assertEqual(no, OUTS_PER_INNING)
-        self.assertEqual(nr, 0)
+    # SIM-499 REMOVED two tests here: ``test_advance_conserves`` and
+    # ``test_inning_end_clears``. Both drove ``run_resolution.advance_state``,
+    # which SIM-499 deleted on purpose.
+    #
+    # That function DERIVED the after-state from a conservation identity,
+    # ``new_on_base = old_on_base + reached - runs_scored``. The identity has no
+    # notion of a runner RETIRED on the play, so a double play desynced it, and a
+    # reach-on-error — which carries ``result_hits=0`` — was invisible to it, which
+    # is why every reach-on-error recorded a run value of exactly 0.00.
+    #
+    # The ledger is now TOLD both states instead of deriving either. The identity
+    # survives as ``Bases.assert_transition``, where it is a CHECK rather than a
+    # derivation: wrong as a way to compute the after-state, right as a way to
+    # verify one. ``tests/unit/test_sim500_base_invariants.py`` covers it there.
 
 
 class TestFallback(unittest.TestCase):
@@ -214,8 +244,24 @@ class TestFallback(unittest.TestCase):
         self.assertLess(r.runs, 0.0)
         self.assertAlmostEqual(r.runs, RUN_VALUES["field_out"], places=6)
 
-    def test_partial_deltas_fallback(self):
-        r = resolve_runs(event="single", outs=0, runners_state=0, result_hits=1)
+    def test_partial_state_raises_rather_than_falling_back(self):
+        """SIM-499 changed this contract ON PURPOSE, so the test changed with it.
+
+        The old ``resolve_runs`` accepted a HALF-supplied state and quietly fell
+        back to the context-free linear weight.  That hid the caller's mistake:
+        the ledger looked like it had resolved a real RE24 value when it had
+        thrown the base-out context away.  A partial state is now an error, and
+        the message names which arguments are missing.
+
+        Give BOTH states and the runs, or give none of them.
+        """
+        with self.assertRaises(ValueError) as ctx:
+            resolve_runs(event="single", pre_outs=0, pre_runners_state=0)
+        self.assertIn("post_outs", str(ctx.exception))
+
+    def test_no_state_at_all_still_falls_back(self):
+        """The context-free path is still there for a caller with no state."""
+        r = resolve_runs(event="single")
         self.assertEqual(r.method, "linear_weight")
 
     def test_unknown_no_deltas_raises(self):

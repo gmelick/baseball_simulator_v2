@@ -31,24 +31,44 @@ codebase's ``derived.dp_play_detail`` as ``re24_start - re24_end`` for the
 defense's sign, and the ``derived.run_expectancy_matrix`` table stores exactly
 this 24-state matrix.)
 
-RESOLUTION POLICY (in priority order)
-=====================================
-``resolve_runs(...)`` resolves a play's run value as follows:
+RESOLUTION POLICY — EXPLICIT STATES ONLY (SIM-499)
+==================================================
+``resolve_runs(...)`` is told **both** base-out states.  The caller measures the
+state before the play and the state after it, and hands over both:
 
-  1. **PRIMARY — sampled deltas + RE24.**  If the sampled play carries
-     ``result_hits`` / ``result_outs`` / ``result_runs`` (the columns the play
-     pool stores), advance the base-out state by those deltas and return the
-     RE24 run value above plus the runs that scored.  This is fully
-     context-aware (uses the *actual* outs/bases at the start of the PA).
-  2. **FALLBACK — linear weights.**  When the deltas are unavailable (e.g. a
-     no-contact PA that the count machine resolved to ``walk``/``strikeout``, or
-     a pool row missing result columns), fall back to the context-free linear
-     weight via ``simulation.constants.run_value_for_event``.
+  1. **PRIMARY — the two states + the runs that scored.**  Supply ``pre_outs`` /
+     ``pre_runners_state``, ``post_outs`` / ``post_runners_state`` and
+     ``result_runs``.  The run value is ``RE(post) - RE(pre) + result_runs``.
+  2. **CONTEXT-FREE — linear weights.**  Supply an ``event`` and **no** state at
+     all.  The value is the context-free linear weight from
+     ``simulation.constants.run_value_for_event``.  This path is a lookup
+     utility.  **The simulator's ledger must never use it** —
+     ``StateMachine._commit_run_delta`` rejects any resolution whose ``method``
+     is not ``"re24_delta"``.
 
-A "known out" therefore can never silently score 0.0: the delta path scores the
-out via RE24, and the fallback path resolves the Statcast alias to its true
-(negative) linear weight.  An unknown event surfaces (``strict=True``) rather
-than corrupting the run total.
+A partial call — some state values but not all — **raises**.  There is no path
+that guesses a missing state, so a wrong run value cannot be produced silently.
+
+WHY THE OLD DERIVATION WAS DELETED (SIM-499)
+============================================
+This module used to *derive* the after-state from the before-state by
+conservation: ``new_on_base = old_on_base + reached - runs``, then place that
+many runners on the lead-most bags.  Two defects, both measured:
+
+  * **The formula has no term for a runner RETIRED on the play.**  A caught
+    stealing removed a body the formula could not account for, so it kept the
+    runner on base and undercharged the play: **-0.24 recorded against a true
+    -0.62**.  A double play desynced the same way.
+  * **The caller read the state at commit time, after it had already mutated
+    the bases.**  The "before" state was therefore the *after* state.  A walk
+    with a runner on first recorded **+0.50 against a true +0.60**; with the
+    bases loaded, **+0.69 against +1.00**.  A sac fly recorded **+0.76 against a
+    true -0.13**, and a steal of home **+1.00 against +0.11**.
+
+Both defects dissolve when the caller supplies the two states it already knows.
+The conservation identity survives as a **check** — ``Bases.assert_transition``
+(SIM-500), wired at the commit — because a caller can state the retired count
+that a derivation had to guess.
 
 RE24 MATRIX SOURCE
 ==================
@@ -117,11 +137,6 @@ RE24_MATRIX: dict[tuple[int, int], float] = {
 #: Number of outs that ends a half-inning (and zeroes the carry-over RE).
 OUTS_PER_INNING = 3
 
-# Bitmask helpers for the 3-base occupancy state.
-_BIT_1B = 0b001
-_BIT_2B = 0b010
-_BIT_3B = 0b100
-
 
 def re24_value(outs: int, runners_state: int, matrix: dict | None = None) -> float:
     """RE for a base-out state.  ≥3 outs ⇒ 0.0 (inning over, no carry-over RE)."""
@@ -150,71 +165,6 @@ def re24_from_rows(rows: list[tuple[int, int, float]]) -> dict[tuple[int, int], 
 
 
 # ---------------------------------------------------------------------------
-# Base-out state advancement from sampled result_* deltas.
-# ---------------------------------------------------------------------------
-
-
-def _popcount(runners_state: int) -> int:
-    return bin(int(runners_state) & 0b111).count("1")
-
-
-def advance_state(
-    outs: int,
-    runners_state: int,
-    *,
-    result_hits: int,
-    result_outs: int,
-    result_runs: int,
-) -> tuple[int, int]:
-    """Advance a base-out state by the sampled per-play deltas.
-
-    Returns ``(new_outs, new_runners_state)``.
-
-    The play pool stores ``result_hits`` (0-4: 0=out, 1=1B, 2=2B, 3=3B, 4=HR),
-    ``result_outs`` (outs recorded on the play), and ``result_runs`` (runs that
-    scored).  We don't have per-runner identities here, so we apply a standard,
-    deterministic base-advancement convention that is consistent with the
-    ``result_runs`` the pool already recorded:
-
-      * The number of runners physically on base after the play is fixed by
-        conservation:  ``new_on_base = old_on_base + reached - runs_scored``
-        where ``reached`` is 1 when the batter reached (hit value 1-4 → on a HR
-        the batter also scores so does not stay on base), else 0.
-      * We then *place* those ``new_on_base`` runners on the lead-most bases
-        (3B, then 2B, then 1B) — the closest base-occupancy summary available
-        without tracking runner identity.  This keeps the RE24 lookup well-defined
-        and conservative; full per-runner advancement is SIM-319's job.
-
-    If the half-inning ends (outs reach 3), the returned runners_state is 0.
-    """
-    outs = int(outs)
-    rs = int(runners_state) & 0b111
-    hits = int(result_hits)
-    d_outs = int(result_outs)
-    runs = int(result_runs)
-
-    new_outs = outs + d_outs
-    if new_outs >= OUTS_PER_INNING:
-        return OUTS_PER_INNING, 0  # inning over: bases cleared, no carry RE
-
-    reached = 1 if (1 <= hits <= 3) else 0  # batter stays on base only for 1B/2B/3B
-    old_on_base = _popcount(rs)
-    new_on_base = old_on_base + reached - runs
-    # Clamp into the physically-possible [0, 3] (defensive against odd pool rows).
-    new_on_base = max(0, min(3, new_on_base))
-
-    # Place runners on the lead-most bases (3B first), a base-occupancy summary.
-    new_rs = 0
-    if new_on_base >= 1:
-        new_rs |= _BIT_3B
-    if new_on_base >= 2:
-        new_rs |= _BIT_2B
-    if new_on_base >= 3:
-        new_rs |= _BIT_1B
-    return new_outs, new_rs
-
-
-# ---------------------------------------------------------------------------
 # The public resolution API.
 # ---------------------------------------------------------------------------
 
@@ -224,9 +174,13 @@ class RunResolution:
     """Result of resolving a play's run value.
 
     ``runs``      — the RE24 (or linear-weight) run value of the play.
-    ``method``    — ``"re24_delta"`` (primary) or ``"linear_weight"`` (fallback).
-    ``re_start`` / ``re_end`` — base-out RE before/after (None for the fallback).
-    ``new_outs`` / ``new_runners_state`` — resolved post-play state (None for fallback).
+    ``method``    — ``"re24_delta"`` (the ledger's only legal value) or
+                    ``"linear_weight"`` (the context-free lookup).
+    ``re_start`` / ``re_end`` — base-out RE before/after (None for the
+                    context-free path).
+    ``post_outs`` / ``post_runners_state`` — the after-state the CALLER supplied,
+                    echoed back for the record.  Nothing here derives it
+                    (SIM-499).
     ``canonical_event`` — the resolved canonical key (None if unresolved).
     """
 
@@ -234,76 +188,105 @@ class RunResolution:
     method: str
     re_start: float | None = None
     re_end: float | None = None
-    new_outs: int | None = None
-    new_runners_state: int | None = None
+    post_outs: int | None = None
+    post_runners_state: int | None = None
     canonical_event: str | None = None
+
+
+#: The five values the RE24 path needs.  All of them, or none of them.
+_STATE_ARG_NAMES = (
+    "pre_outs",
+    "pre_runners_state",
+    "post_outs",
+    "post_runners_state",
+    "result_runs",
+)
 
 
 def resolve_runs(
     *,
     event: str | None = None,
-    outs: int | None = None,
-    runners_state: int | None = None,
-    result_hits: int | None = None,
-    result_outs: int | None = None,
+    pre_outs: int | None = None,
+    pre_runners_state: int | None = None,
+    post_outs: int | None = None,
+    post_runners_state: int | None = None,
     result_runs: int | None = None,
     matrix: dict | None = None,
     strict: bool = False,
 ) -> RunResolution:
-    """Resolve the run value of one resolved play.
+    """Resolve the run value of one resolved play from its two base-out states.
 
-    PRIMARY (context-aware): when the base-out state (``outs``, ``runners_state``)
-    AND the sampled deltas (``result_hits``/``result_outs``/``result_runs``) are
-    all provided, compute the RE24 run value:
+    PRIMARY — supply all five of ``pre_outs``, ``pre_runners_state``,
+    ``post_outs``, ``post_runners_state`` and ``result_runs``::
 
-        runs = RE(end_state) - RE(start_state) + result_runs
+        runs = RE(post_state) - RE(pre_state) + result_runs
 
-    FALLBACK (context-free): otherwise use the linear-weight value of ``event``
-    via ``simulation.constants.run_value_for_event`` (which itself resolves the
-    Statcast alias → canonical key, so a known out is never silently 0.0).
+    The caller measures both states.  This function derives neither of them.
+    That is the whole point of SIM-499: the old code derived the after-state by
+    conservation, which has no term for a runner retired on the play, and the
+    caller read the before-state after it had already mutated the bases.
 
-    ``strict=True`` makes the fallback raise on an unknown event instead of
-    returning 0.0.
+    CONTEXT-FREE — supply an ``event`` and none of the five.  The value is the
+    linear weight from ``simulation.constants.run_value_for_event``, which
+    resolves the Statcast alias first, so a known out is never silently 0.0.
+    ``strict=True`` makes an unknown event raise.  **The simulator's ledger must
+    not use this path**; ``StateMachine._commit_run_delta`` rejects any
+    resolution whose ``method`` is not ``"re24_delta"``.
 
-    Raises ``ValueError`` if neither path can produce a value (no deltas AND no
-    resolvable event) — there is no silent-zero outcome.
+    Raises ``ValueError`` when the call is PARTIAL — some of the five but not all
+    — naming the ones that are missing.  A partial call used to fall through to
+    the context-free weight, which silently swapped a context-aware value for a
+    context-free one.  It now stops.
+
+    Also raises ``ValueError`` on an impossible transition: a negative out count,
+    a play that *removes* outs, or a negative ``result_runs``.
     """
-    have_deltas = (
-        outs is not None
-        and runners_state is not None
-        and result_hits is not None
-        and result_outs is not None
-        and result_runs is not None
-    )
+    supplied = (pre_outs, pre_runners_state, post_outs, post_runners_state, result_runs)
+    missing = [
+        name for name, value in zip(_STATE_ARG_NAMES, supplied, strict=True) if value is None
+    ]
 
-    if have_deltas:
-        re_start = re24_value(outs, runners_state, matrix)
-        new_outs, new_rs = advance_state(
-            outs,
-            runners_state,
-            result_hits=int(result_hits),
-            result_outs=int(result_outs),
-            result_runs=int(result_runs),
+    if missing and len(missing) != len(_STATE_ARG_NAMES):
+        given = [n for n in _STATE_ARG_NAMES if n not in missing]
+        raise ValueError(
+            "resolve_runs: a partial base-out state cannot resolve a run value "
+            f"(SIM-499). You gave {given!r} and left {missing!r} unset. Give the "
+            "state BEFORE the play, the state AFTER it, and the runs that "
+            "scored — or give none of them for the context-free linear weight."
         )
-        re_end = re24_value(new_outs, new_rs, matrix)
-        runs = re_end - re_start + float(int(result_runs))
+
+    if not missing:
+        pre_o, post_o = int(pre_outs), int(post_outs)  # type: ignore[arg-type]
+        runs_in = int(result_runs)  # type: ignore[arg-type]
+        if pre_o < 0 or post_o < 0:
+            raise ValueError(f"resolve_runs: outs cannot be negative (pre={pre_o} post={post_o}).")
+        if post_o < pre_o:
+            raise ValueError(
+                f"resolve_runs: a play cannot remove outs (pre_outs={pre_o} "
+                f"post_outs={post_o}). The two states are in the wrong order, or "
+                "the caller measured the after-state before the play."
+            )
+        if runs_in < 0:
+            raise ValueError(f"resolve_runs: result_runs cannot be negative ({runs_in}).")
+        re_start = re24_value(pre_o, int(pre_runners_state), matrix)  # type: ignore[arg-type]
+        re_end = re24_value(post_o, int(post_runners_state), matrix)  # type: ignore[arg-type]
         return RunResolution(
-            runs=float(runs),
+            runs=float(re_end - re_start + float(runs_in)),
             method="re24_delta",
             re_start=re_start,
             re_end=re_end,
-            new_outs=new_outs,
-            new_runners_state=new_rs,
+            post_outs=post_o,
+            post_runners_state=int(post_runners_state) & 0b111,  # type: ignore[operator]
             canonical_event=resolve_event_to_canonical(event),
         )
 
-    # ---- fallback: context-free linear weight ----
+    # ---- context-free linear weight (no state was supplied at all) ----
     lw = run_value_for_event(event, default=None, strict=strict)
     if lw is None:
         raise ValueError(
-            "resolve_runs: cannot resolve runs — no sampled result_* deltas were "
-            f"provided AND event {event!r} is not a known PA outcome. Provide "
-            "deltas + base-out state, or a resolvable terminal event."
+            "resolve_runs: cannot resolve runs — no base-out states were provided "
+            f"AND event {event!r} is not a known PA outcome. Provide the pre- and "
+            "post-play states plus result_runs, or a resolvable terminal event."
         )
     return RunResolution(
         runs=float(lw),
@@ -318,6 +301,5 @@ __all__ = [
     "RunResolution",
     "re24_value",
     "re24_from_rows",
-    "advance_state",
     "resolve_runs",
 ]
