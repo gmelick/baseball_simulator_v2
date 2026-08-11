@@ -109,6 +109,37 @@ MIN_FIELDER_PLAYS = 50
 MIN_CATCHER_SB_ATTEMPTS = 10
 MIN_MANAGER_GAMES = 50
 
+# ---------------------------------------------------------------------------
+# Statcast pitch-result codes (SIM-456 / SIM-501)
+#
+# These MUST agree with the pitch-pool classification in `_build_pitch_pool`
+# (search `THEN 'swinging_strike'`), because that classification builds the pool
+# the simulator draws from.  If a pitcher's whiff_rate counts a different set of
+# codes than the pool does, the metric describes a different event than the thing
+# it is used to sample.  `test_profile_code_sets_match_pool_build` fails if they
+# ever diverge again.
+# ---------------------------------------------------------------------------
+
+#: A swing and a miss: 'S' swinging strike, 'W' swinging strike the catcher did
+#: not hold, 'M' missed bunt.  Foul tips ('T', 'O') are CONTACT — the bat touches
+#: the ball — and the pool build classifies them as fouls, so they are excluded.
+#: Measured on 2024: 23.22% of swings, against an MLB whiff rate near 24%.
+WHIFF_TYPES: tuple[str, ...] = ("S", "W", "M")
+
+#: Codes where the bat never left the shoulder: ball, called strike, hit by pitch,
+#: pitchout, blocked ball.  A swing is the complement of this set, which makes it
+#: the denominator of every swing-conditioned rate.
+NON_SWING_TYPES: tuple[str, ...] = ("B", "C", "H", "P", "*B")
+
+
+def sql_in(types: tuple[str, ...]) -> str:
+    """Render Statcast type codes as a SQL ``IN`` list: ``('S', 'W', 'M')``."""
+    return "(" + ", ".join(f"'{t}'" for t in types) + ")"
+
+
+SQL_WHIFF = f"type IN {sql_in(WHIFF_TYPES)}"
+SQL_SWING = f"type NOT IN {sql_in(NON_SWING_TYPES)}"
+
 # FIP constant — approximation; update per-season if desired
 FIP_CONSTANT = 3.17
 
@@ -1627,7 +1658,13 @@ class PlayerProfileComputor:
                             NULLIF(SUM(CASE WHEN zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END),0) AS zone_take_rate,
 
                         -- Whiff Rate
-                        SUM(CASE WHEN type = 'C' THEN 1.0 ELSE 0 END) / COUNT(*) AS whiff_rate,
+                        -- SIM-456: this read `type = 'C'` / COUNT(*) — the CALLED-STRIKE
+                        -- rate over ALL pitches. The batter never swung. So swing-and-miss,
+                        -- the most separating thing a pitcher does, was absent from the
+                        -- pitcher engine, while one of its seven command features measured
+                        -- something else entirely.
+                        SUM(CASE WHEN {SQL_WHIFF} THEN 1.0 ELSE 0 END)
+                            / NULLIF(SUM(CASE WHEN {SQL_SWING} THEN 1 ELSE 0 END), 0) AS whiff_rate,
 
                         -- Zone rate: pitches in zone / total
                         SUM(CASE WHEN zone BETWEEN 1 AND 9 THEN 1.0 ELSE 0 END) / COUNT(*) AS zone_rate,
@@ -1841,20 +1878,29 @@ class PlayerProfileComputor:
                     COUNT(DISTINCT CASE WHEN events IS NOT NULL THEN game_pk || '-' || at_bat_number END) AS sample_pa,
 
                     -- Plate discipline
-                    -- First-pitch take: did NOT swing on pitch_number=1
-                    SUM(CASE WHEN pitch_number = 1 AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 ELSE 0 END) /
+                    -- First-pitch TAKE: the batter did NOT swing on pitch_number=1.
+                    -- SIM-501: this counted `type NOT IN (...)`, which is the set of
+                    -- codes that REQUIRE a swing — so the column held the first-pitch
+                    -- SWING rate under a name and a comment that both say take. Every
+                    -- consumer read it backwards. The non-swing codes are ball, called
+                    -- strike, hit by pitch, pitchout and blocked ball.
+                    SUM(CASE WHEN pitch_number = 1 AND type IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 ELSE 0 END) /
                         NULLIF(COUNT(CASE WHEN pitch_number = 1 THEN 1 END), 0) AS first_pitch_take_rate,
 
                     -- O-swing
                     SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 ELSE 0
                         END) / NULLIF(SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0) AS o_swing_rate,
 
-                    -- Z-swing
-                    SUM(CASE WHEN zone BETWEEN 1 AND 9 AND type IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 ELSE 0 END)
+                    -- Z-SWING: the batter DID swing at a pitch in the zone.
+                    -- SIM-501: this counted `type IN (...)`, the NON-swing set, so the
+                    -- column held the z-TAKE rate. `o_swing_rate` on the line above uses
+                    -- `NOT IN` and is correct, which is what makes this one easy to miss:
+                    -- the two sit three lines apart and read almost identically.
+                    SUM(CASE WHEN zone BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 ELSE 0 END)
                         * 1.0 / NULLIF(SUM(CASE WHEN zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0) AS z_swing_rate,
 
                     -- Whiff: swinging strikes / swings
-                    SUM(CASE WHEN type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type NOT IN
+                    SUM(CASE WHEN {SQL_WHIFF} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type NOT IN
                         ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0) AS whiff_rate,
 
                     -- Contact: in-play / swings
@@ -1915,7 +1961,7 @@ class PlayerProfileComputor:
                     SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9 AND type IN ('B', 'C', 'H', 'P', '*B') THEN 1.0
                         ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
                         AS z_swing_rate_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE
+                    SUM(CASE WHEN p_throws='L' AND {SQL_WHIFF} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE
                         WHEN p_throws='L' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0)
                         AS whiff_rate_vs_l,
                     SUM(CASE WHEN p_throws='L' AND type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) /
@@ -1945,7 +1991,7 @@ class PlayerProfileComputor:
                     SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 AND type IN ('B', 'C', 'H', 'P', '*B') THEN 1.0
                         ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
                         AS z_swing_rate_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE
+                    SUM(CASE WHEN p_throws='R' AND {SQL_WHIFF} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE
                         WHEN p_throws='R' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0)
                         AS whiff_rate_vs_r,
                     SUM(CASE WHEN p_throws='R' AND type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) /

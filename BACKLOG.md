@@ -2,6 +2,49 @@
 
 *Owner: Product Manager (Agent 1) · Last updated: 2026-06-02 (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
 
+# 🩻 2026-08-11 — SIM-501: `outs_on_pitch` is broken in the data, and it is the root of the Phase 2 mess (next free ID → SIM-502)
+
+**Measured on 2024, `raw.pitches`:**
+
+| check | result |
+|---|---|
+| `type='X'` rows (a ball in play that BECAME AN OUT) with `outs_on_pitch = 0` | **76,360 of 82,425 — 92.6%** |
+| strikeout rows with `outs_on_pitch = 0` | **41,866 of 41,866 — 100%** |
+
+**Every strikeout in the season records zero outs.** Nine in ten batted-ball outs record zero outs.
+
+**Root cause, in the ETL.** `pipeline/etl/etl_historical_loader.py:1487` ends each pitch with
+`outs = play_event["count"]["outs"] + outs_after_pitch`, and `:1234` computes
+`outs_on_pitch = play_event["count"]["outs"] - outs`. `count.outs` is the out total BEFORE the play and
+is CONSTANT across every pitch of a plate appearance, so that subtraction can never yield the delta it
+claims to — it yields `-outs_after_pitch`, or zero.
+
+**What it corrupts.** `SUM(outs_on_pitch) AS outs_recorded` is the innings-pitched denominator for
+**era, fip, xfip, hr_per_9 and whip**. It is also the out-LABEL behind every fielder metric:
+outfield catch probability, infield OAA, bunt defense, first-base scooping.
+
+**⚠ This is why the Phase 2 sweep (`c11c919`) was reverted.** That commit widened the fielder ROW
+FILTER from `type='X'` to `type IN ('X','D','E')` while leaving the broken `outs_on_pitch > 0` LABEL in
+place. `type='X'` was the only thing narrowing those queries to plays that really were outs, so
+widening it grew the denominator by 53% and left the numerator where it was — the metrics moved further
+from reality, not closer. Two independent reviewers caught it before the 5.7-hour recompute ran.
+
+**THE FIX DOES NOT NEED A RE-SWEEP.** `events` is clean and complete — 16 distinct values on 126,359
+in-play rows in 2024, every one interpretable. Derive the out-label from `events`, not from
+`outs_on_pitch`. Reuse `_OUT_EVENTS` (`simulation/sim_loop.py:246`); do not write a third definition.
+
+**⚠ Two DIFFERENT questions, do not conflate them** — this is the trap that sank the first attempt:
+  * *Did the fielder record an out?* — `fielders_choice` counts (a runner was retired).
+  * *Did the batter reach?* — `fielders_choice` counts as REACHED.
+Each site must be read for which question it asks. `_OUT_EVENTS` answers the second and lists
+`fielders_choice` as an out, which is wrong for that question and right for neither by accident.
+
+| ID | Title | Type | Pri | Size | Depends-on | Status |
+|---|---|---|---|---|---|---|
+| **SIM-501a** | Derive the out-label from `events` and re-land SIM-457 on it | Data | P1 | M | — | 🔲 **OPEN.** Per-site, not a sweep. Each site states which question it asks. |
+| **SIM-501b** | Fix `outs_on_pitch` in the ETL | Data | P2 | M | — | 🔲 **OPEN.** Needs a re-sweep, so batch with SIM-487. Not on the critical path — 501a removes the dependency. |
+| **SIM-501c** | Stop reading `outs_on_pitch` for innings pitched | Data | P1 | S | SIM-501a | 🔲 **OPEN.** `outs_recorded` drives era/fip/xfip/hr_per_9/whip and under-counts ~36%. |
+
 # ⚠️ 2026-08-10 — ID COLLISION RESOLVED: three Phase-1 tickets renumbered (next free ID → SIM-501)
 
 **What happened.** The Phase-0 build agents tagged their work `SIM-452`, `SIM-453` and `SIM-454` in
