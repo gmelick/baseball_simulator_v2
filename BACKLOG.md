@@ -2,6 +2,53 @@
 
 *Owner: Product Manager (Agent 1) · Last updated: 2026-06-02 (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
 
+# 🔬 2026-08-10 — SIM-457 EXPANDED: `type='X'` means "ball in play THAT BECAME AN OUT", and 15 queries read it as "ball in play"
+
+**The ticket said three lines. It is fifteen, across four engines.** SIM-457 was filed as "GB/FB/LD
+rates use an outs-only denominator". Investigating it before the recompute showed the same mistake
+everywhere the file asks "was this ball put in play?".
+
+Statcast splits in-play three ways: `X` an in-play **out**, `D` an in-play hit, `E` an in-play
+run-scoring play. Measured on this project's own 2024 data: **X 82,425 / D 27,976 / E 15,958**. `X`
+alone is 65% of balls in play and **the missing 35% are the hits**.
+
+**Measured impact, per metric:**
+
+| Metric | Real | Query saw | Blind to |
+|---|---|---|---|
+| **Fielding errors** | 1,083 | **5** | **99.5%** |
+| Outfield catch chances | 63,389 | 35,232 | 44% |
+| All batted-ball rates | 126,359 | 82,425 | 35% (inflation **1.53×**) |
+
+The error figure is the clearest: **an error means the batter REACHED**, so the row is coded D or E and
+never X. The query filtered out almost exactly the event it was counting. Outfield catch probability has
+the same shape — it asks "did the fielder convert this into an out?" over a set of balls that all became
+outs, so the denominator is nearly the numerator.
+
+For the pitcher rates the bias is worse than flat: the denominator omits hits, so **the inflation is
+larger for pitchers who allow more hits**. The error tracks pitcher quality, which is precisely what a
+similarity engine must not do.
+
+**The repo already knew.** `player_profile_computor.py:4747` reads *"old `type='X'`-only mapping silently
+dropped ~all hits"*. Someone diagnosed it, fixed the pool build, and left every other site — the same
+shape as SIM-449, where the shared builder was fixed and five callers were not.
+
+| ID | Title | Type | Pri | Size | Depends-on | Status |
+|---|---|---|---|---|---|---|
+| **SIM-456** | `whiff_rate` measured the CALLED-STRIKE rate | Data | P1 | XS | — | ✅ **FIXED (code).** Was `type='C' / COUNT(*)` — the batter never swung. Swing-and-miss was absent from the pitcher engine entirely while one of its seven command features measured something else. Now swings-and-misses over swings. Also folded in `W` (a blocked swinging strike, **4,027 in 2024**) which the file's *other* whiff definition omitted while `csw_rate` counted it. |
+| **SIM-457** | `type='X'` read as "ball in play" in **15 sites / 4 engines** | Data | P1 | **M** (was XS) | — | ✅ **FIXED (code).** Pitcher GB/FB/LD; batter pull/oppo/barrel on both platoon splits; outfield catch probability; infield OAA; bunt defense; first-base scooping; fielding errors; the situation feed. |
+| **SIM-458** | Run-expectancy matrix biased low | Data | P1 | S | — | ✅ **FIXED (code).** `MAX(bat_score)` is the score ENTERING the last plate appearance, so runs scored on it were invisible. **Measured: 126 of 39,543 half-innings (0.3%), 146 runs — far smaller than the ticket implied, and worth saying so.** Both candidate formulas are lower bounds missing different runs (11 half-innings where the running-score sum is lower), so the fix takes `GREATEST` of the two. Verified against 2024: 0 outs bases empty **0.477**, bases loaded **2.277**, 2 outs bases empty **0.097** — matching published MLB run expectancy. |
+| **SIM-459** | Profile recompute (~5.7 h) | Data | P1 | M | 456, 457, 458 | 🔲 **OPEN — NOT RUN.** The three fixes above are inert until this runs. Takes the DuckDB write lock for the duration; nothing that reads the sim database can run alongside it, including the acceptance lane. |
+
+**Durability fix:** the three code sets are now module constants — `IN_PLAY_TYPES`, `WHIFF_TYPES`,
+`NON_SWING_TYPES` — rendered once into `SQL_IN_PLAY` / `SQL_WHIFF` / `SQL_SWING`. Spelling them inline in
+fifteen places is how the file came to hold two definitions of "whiff", one of them wrong.
+
+⚠ **Expect fielder metrics to MOVE, a lot.** Error rates rise from near-zero to real values; catch
+probability falls from near-100% to something meaningful. These feed the fielder similarity engine, so
+comps will change. That is the fix working, not a regression — but re-read the fielder engine's
+calibration after SIM-459.
+
 # ⚠️ 2026-08-10 — ID COLLISION RESOLVED: three Phase-1 tickets renumbered (next free ID → SIM-501)
 
 **What happened.** The Phase-0 build agents tagged their work `SIM-452`, `SIM-453` and `SIM-454` in

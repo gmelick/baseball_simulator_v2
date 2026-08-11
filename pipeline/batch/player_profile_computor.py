@@ -109,6 +109,53 @@ MIN_FIELDER_PLAYS = 50
 MIN_CATCHER_SB_ATTEMPTS = 10
 MIN_MANAGER_GAMES = 50
 
+# ---------------------------------------------------------------------------
+# Statcast pitch-result codes — defined ONCE (SIM-456 / SIM-457)
+#
+# This file used to spell these sets out inline, differently, in fifteen places.
+# That is how it ended up carrying two definitions of "whiff", one of them wrong,
+# and how ``type='X'`` came to stand for "ball in play" in queries where it
+# actually means "ball in play THAT BECAME AN OUT".
+# ---------------------------------------------------------------------------
+
+#: A ball put IN PLAY.  Statcast splits this three ways: ``X`` an in-play out,
+#: ``D`` an in-play hit with no out, ``E`` an in-play run-scoring play.  Measured
+#: on 2024: X 82,425 / D 27,976 / E 15,958 = 126,359 balls in play.
+#:
+#: **``X`` alone is 65% of them, and the missing 35% are the hits.**  A rate built
+#: on an ``X``-only denominator inflates by ~1.53x, and inflates MORE for a pitcher
+#: who allows more hits — so the error tracks pitcher quality, which is precisely
+#: what a similarity engine must not do.  A FIELDER metric filtered to ``X`` is
+#: worse than biased: it asks "did the fielder convert this ball into an out?" over
+#: a set of balls that all became outs.  Measured on 2024, a fielding-error query
+#: filtered to ``X`` sees **5 of 1,083 real errors** — an error means the batter
+#: reached, so the row is coded D or E and never X.
+IN_PLAY_TYPES: tuple[str, ...] = ("X", "D", "E")
+
+#: A SWING AND A MISS.  ``S`` swinging strike, ``W`` swinging strike the catcher
+#: did not hold, ``T`` foul tip, ``M`` missed bunt, ``O`` foul tip on a bunt.
+#: Measured on 2024: S 76,210 / W 4,027 / T 7,464 / M 203 / O 17.
+#:
+#: ``W`` was absent from this file's whiff definition while ``csw_rate`` counted it
+#: — 4,027 swings and misses per season that one metric saw and the other did not.
+WHIFF_TYPES: tuple[str, ...] = ("S", "W", "T", "M", "O")
+
+#: Codes where the bat never left the shoulder: ball, called strike, hit by pitch,
+#: pitchout, blocked ball.  Every other code involves a swing, so the swing count —
+#: the denominator of a whiff rate — is the complement of this set.
+NON_SWING_TYPES: tuple[str, ...] = ("B", "C", "H", "P", "*B")
+
+
+def sql_in(types: tuple[str, ...]) -> str:
+    """Render Statcast type codes as a SQL ``IN`` list: ``('X', 'D', 'E')``."""
+    return "(" + ", ".join(f"'{t}'" for t in types) + ")"
+
+
+#: Pre-rendered fragments, so a query reads as English and cannot drift.
+SQL_IN_PLAY = f"type IN {sql_in(IN_PLAY_TYPES)}"
+SQL_WHIFF = f"type IN {sql_in(WHIFF_TYPES)}"
+SQL_SWING = f"type NOT IN {sql_in(NON_SWING_TYPES)}"
+
 # FIP constant — approximation; update per-season if desired
 FIP_CONSTANT = 3.17
 
@@ -492,12 +539,38 @@ def build_run_expectancy_matrix(conn: duckdb.DuckDBPyConnection, seasons: list[i
               AND inning <= 8            -- exclude 9th+ for unbiased estimates
               AND events IS NOT NULL     -- one row per PA
         ),
-        -- Get the final score for each half-inning
+        -- Get the final score for each half-inning.
+        --
+        -- SIM-458: this was `MAX(bat_score)` over the `plays` rows. `bat_score` is
+        -- the score ENTERING a plate appearance, so runs scored on the LAST plate
+        -- appearance of a half-inning appear on no later row and were invisible.
+        -- Every run-expectancy value was therefore biased LOW.
+        --
+        -- Measured on 2024, innings 1-8: 126 of 39,543 half-innings (0.3%) and 146
+        -- runs. Small, but systematic, and concentrated exactly where a run scores
+        -- on a play that also ends the inning — which is the (2 outs, runner on
+        -- third) cell. The matrix now feeds BOTH the SIM-499 run-value ledger and
+        -- the SIM-473 baserunner weighting, so it is load-bearing twice.
+        --
+        -- BOTH available formulas are LOWER BOUNDS and they miss different runs:
+        -- `MAX(bat_score)` misses the last plate appearance; the running-score sum
+        -- misses any run whose `runs_on_pitch` is unset (11 half-innings in 2024).
+        -- Neither can invent a run, so GREATEST of the two is the tighter bound.
+        -- Read from the RAW table, not from `plays`: `plays` keeps one row per
+        -- plate appearance (`events IS NOT NULL`), and a run can score on a pitch
+        -- that ends no plate appearance — a steal of home, a wild pitch, a balk.
+        -- Summing inside `plays` would miss exactly those.
         inning_final AS (
             SELECT
                 game_pk, inning, inning_topbot,
-                MAX(bat_score) AS final_bat_score
-            FROM plays
+                GREATEST(
+                    MAX(CASE WHEN inning_topbot = 'Top' THEN away_score ELSE home_score END),
+                    MIN(CASE WHEN inning_topbot = 'Top' THEN away_score ELSE home_score END)
+                        + SUM(COALESCE(runs_on_pitch, 0))
+                ) AS final_bat_score
+            FROM pg.raw.pitches
+            WHERE season IN ({season_list})
+              AND inning <= 8
             GROUP BY game_pk, inning, inning_topbot
         ),
         scored AS (
@@ -1627,7 +1700,13 @@ class PlayerProfileComputor:
                             NULLIF(SUM(CASE WHEN zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END),0) AS zone_take_rate,
 
                         -- Whiff Rate
-                        SUM(CASE WHEN type = 'C' THEN 1.0 ELSE 0 END) / COUNT(*) AS whiff_rate,
+                        -- SIM-456: this read `type = 'C'` / COUNT(*), which is the
+                        -- CALLED-STRIKE rate over ALL pitches. The batter never swung.
+                        -- Swing-and-miss — the single most separating thing a pitcher
+                        -- does — was therefore absent from the pitcher engine, while one
+                        -- of its seven command features measured something else entirely.
+                        SUM(CASE WHEN {SQL_WHIFF} THEN 1.0 ELSE 0 END)
+                            / NULLIF(SUM(CASE WHEN {SQL_SWING} THEN 1 ELSE 0 END), 0) AS whiff_rate,
 
                         -- Zone rate: pitches in zone / total
                         SUM(CASE WHEN zone BETWEEN 1 AND 9 THEN 1.0 ELSE 0 END) / COUNT(*) AS zone_rate,
@@ -1648,11 +1727,11 @@ class PlayerProfileComputor:
                         SUM(outs_on_pitch)              AS outs_recorded,
 
                         -- Batted ball types (of balls in play only)
-                        SUM(CASE WHEN bb_type = 'ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type='X'
+                        SUM(CASE WHEN bb_type = 'ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN {SQL_IN_PLAY}
                             THEN 1 ELSE 0 END),0) AS ground_ball_rate,
                         SUM(CASE WHEN bb_type IN ('fly_ball','popup') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN
-                            type='X' THEN 1 ELSE 0 END),0) AS fly_ball_rate,
-                        SUM(CASE WHEN bb_type = 'line_drive' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type='X'
+                            {SQL_IN_PLAY} THEN 1 ELSE 0 END),0) AS fly_ball_rate,
+                        SUM(CASE WHEN bb_type = 'line_drive' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN {SQL_IN_PLAY}
                             THEN 1 ELSE 0 END),0) AS line_drive_rate,
                         SUM(CASE WHEN bb_type IN ('fly_ball','popup') THEN 1 ELSE 0 END) AS fly_balls_total
 
@@ -1842,11 +1921,11 @@ class PlayerProfileComputor:
 
                     -- Plate discipline
                     -- First-pitch take: did NOT swing on pitch_number=1
-                    SUM(CASE WHEN pitch_number = 1 AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 ELSE 0 END) /
+                    SUM(CASE WHEN pitch_number = 1 AND {SQL_SWING} THEN 1.0 ELSE 0 END) /
                         NULLIF(COUNT(CASE WHEN pitch_number = 1 THEN 1 END), 0) AS first_pitch_take_rate,
 
                     -- O-swing
-                    SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1.0 ELSE 0
+                    SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 AND {SQL_SWING} THEN 1.0 ELSE 0
                         END) / NULLIF(SUM(CASE WHEN zone NOT BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0) AS o_swing_rate,
 
                     -- Z-swing
@@ -1854,12 +1933,10 @@ class PlayerProfileComputor:
                         * 1.0 / NULLIF(SUM(CASE WHEN zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0) AS z_swing_rate,
 
                     -- Whiff: swinging strikes / swings
-                    SUM(CASE WHEN type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type NOT IN
-                        ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0) AS whiff_rate,
+                    SUM(CASE WHEN {SQL_WHIFF} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN {SQL_SWING} THEN 1 ELSE 0 END), 0) AS whiff_rate,
 
                     -- Contact: in-play / swings
-                    SUM(CASE WHEN type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type NOT IN
-                        ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0) AS contact_rate,
+                    SUM(CASE WHEN type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN {SQL_SWING} THEN 1 ELSE 0 END), 0) AS contact_rate,
 
                     -- Walk / K rates (per PA)
                     SUM(CASE WHEN events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) /
@@ -1909,17 +1986,17 @@ class PlayerProfileComputor:
                         END) AS sample_pa_vs_r,
 
                     -- Platoon splits — vs LHP
-                    SUM(CASE WHEN p_throws='L' AND zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
+                    SUM(CASE WHEN p_throws='L' AND zone NOT BETWEEN 1 AND 9 AND {SQL_SWING}
                         THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND zone NOT BETWEEN 1 AND 9 THEN 1
                         ELSE 0 END), 0) AS o_swing_rate_vs_l,
                     SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9 AND type IN ('B', 'C', 'H', 'P', '*B') THEN 1.0
                         ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
                         AS z_swing_rate_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE
-                        WHEN p_throws='L' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0)
+                    SUM(CASE WHEN p_throws='L' AND {SQL_WHIFF} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE
+                        WHEN p_throws='L' AND {SQL_SWING} THEN 1 ELSE 0 END), 0)
                         AS whiff_rate_vs_l,
                     SUM(CASE WHEN p_throws='L' AND type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN p_throws='L' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END)
+                        NULLIF(SUM(CASE WHEN p_throws='L' AND {SQL_SWING} THEN 1 ELSE 0 END)
                         , 0) AS contact_rate_vs_l,
                     SUM(CASE WHEN p_throws='L' AND events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN p_throws='L' AND events IS NOT NULL THEN 1 ELSE 0 END), 0)
@@ -1931,25 +2008,25 @@ class PlayerProfileComputor:
                     SUM(CASE WHEN p_throws='L' AND bb_type = 'fly_ball' THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN p_throws='L' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS fb_rate_vs_l,
                     SUM(CASE WHEN spray_angle < -15 THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS pull_rate_vs_l,
+                        NULLIF(SUM(CASE WHEN {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS pull_rate_vs_l,
                     SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS oppo_rate_vs_l,
+                        NULLIF(SUM(CASE WHEN {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS oppo_rate_vs_l,
                     AVG(CASE WHEN p_throws='L' AND launch_speed IS NOT NULL THEN launch_speed END) AS avg_exit_velo_vs_l,
                     SUM(CASE WHEN {_barrel_case_sql("p_throws='L' AND ")} THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN p_throws='L' AND type='X' THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_l,
+                        NULLIF(SUM(CASE WHEN p_throws='L' AND {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_l,
 
                     -- Platoon splits — vs RHP
-                    SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
+                    SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9 AND {SQL_SWING}
                         THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9 THEN 1
                         ELSE 0 END), 0) AS o_swing_rate_vs_r,
                     SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 AND type IN ('B', 'C', 'H', 'P', '*B') THEN 1.0
                         ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
                         AS z_swing_rate_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND type IN ('M', 'O', 'S', 'T') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE
-                        WHEN p_throws='R' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0)
+                    SUM(CASE WHEN p_throws='R' AND {SQL_WHIFF} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE
+                        WHEN p_throws='R' AND {SQL_SWING} THEN 1 ELSE 0 END), 0)
                         AS whiff_rate_vs_r,
                     SUM(CASE WHEN p_throws='R' AND type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN p_throws='R' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END)
+                        NULLIF(SUM(CASE WHEN p_throws='R' AND {SQL_SWING} THEN 1 ELSE 0 END)
                         , 0) AS contact_rate_vs_r,
                     SUM(CASE WHEN p_throws='R' AND events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN p_throws='R' AND events IS NOT NULL THEN 1 ELSE 0 END), 0)
@@ -1961,12 +2038,12 @@ class PlayerProfileComputor:
                     SUM(CASE WHEN p_throws='R' AND bb_type = 'fly_ball' THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN p_throws='R' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS fb_rate_vs_r,
                     SUM(CASE WHEN spray_angle < -15 THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS pull_rate_vs_r,
+                        NULLIF(SUM(CASE WHEN {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS pull_rate_vs_r,
                     SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS oppo_rate_vs_r,
+                        NULLIF(SUM(CASE WHEN {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS oppo_rate_vs_r,
                     AVG(CASE WHEN p_throws='R' AND launch_speed IS NOT NULL THEN launch_speed END) AS avg_exit_velo_vs_r,
                     SUM(CASE WHEN {_barrel_case_sql("p_throws='R' AND ")} THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN p_throws='R' AND type='X' THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_r
+                        NULLIF(SUM(CASE WHEN p_throws='R' AND {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_r
 
                 FROM pg.raw.pitches
                 WHERE data_quality_flag = FALSE
@@ -3339,7 +3416,7 @@ class PlayerProfileComputor:
                 fielding_error
             FROM pg.raw.pitches
             WHERE season IN ({season_list})
-              AND type = 'X'
+              AND {SQL_IN_PLAY}
               AND hc_x IS NOT NULL AND hc_y IS NOT NULL
               AND launch_speed IS NOT NULL AND launch_angle IS NOT NULL
               -- Outfield plays: fly balls, line drives, and popups
@@ -3499,7 +3576,7 @@ class PlayerProfileComputor:
                     + (CASE WHEN on_3b IS NOT NULL THEN 4 ELSE 0 END) AS runners_state
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
-                  AND type = 'X'
+                  AND {SQL_IN_PLAY}
                   AND events IS NOT NULL
                   AND (on_1b IS NOT NULL OR on_2b IS NOT NULL OR on_3b IS NOT NULL)
                   AND (fielded_by = fielder_7 OR fielded_by = fielder_8 OR fielded_by = fielder_9)
@@ -3556,7 +3633,7 @@ class PlayerProfileComputor:
                 throwing_error_1, throwing_error_2
             FROM pg.raw.pitches
             WHERE season IN ({season_list})
-              AND type = 'X'
+              AND {SQL_IN_PLAY}
               AND events IS NOT NULL
               AND hc_x IS NOT NULL AND hc_y IS NOT NULL
               AND launch_speed IS NOT NULL
@@ -3979,7 +4056,7 @@ class PlayerProfileComputor:
                     END AS fielder_position
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
-                  AND type = 'X'
+                  AND {SQL_IN_PLAY}
                   AND events IS NOT NULL
                   -- Detect bunts: look for 'bunt' in description/events or very low EV + LA
                   AND (
@@ -4037,7 +4114,7 @@ class PlayerProfileComputor:
                          THEN TRUE ELSE FALSE END AS is_scoop_candidate
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
-                  AND type = 'X'
+                  AND {SQL_IN_PLAY}
                   AND events IS NOT NULL
                   AND fielder_3 IS NOT NULL
             )
@@ -4092,7 +4169,7 @@ class PlayerProfileComputor:
                            OR throwing_error_2 = fielded_by THEN 1 ELSE 0 END AS throwing_err
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
-                  AND type = 'X'
+                  AND {SQL_IN_PLAY}
                   AND events IS NOT NULL
                   AND fielded_by IS NOT NULL
             )
