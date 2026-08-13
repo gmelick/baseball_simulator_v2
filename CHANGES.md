@@ -1,4 +1,22 @@
 # Test/CI — SIM-448: weekly integration failure — the 0017 schema-drift guard, and the coverage 0017 never had — 2026-08-03
+
+## 2026-08-11 — SIM-501 out counting (LANDED) + SIM-502 play events (INERT, 4 open defects)
+
+**SIM-501 — LANDED AND VERIFIED.** `raw.pitches.outs` was wrong on **46% of plate appearances**: the
+loader updated its running counter AFTER building each row, so every row carried the previous play's
+value. Now read from the payload directly — 100% agreement over 70 games. `outs_on_pitch` was derived
+by a subtraction that cannot work (`count.outs` is constant across a plate appearance), so **92.6% of
+batted-ball outs and 100% of strikeouts recorded zero outs**; it now counts runner movements, giving
+0.990 of real outs. `prev_half` advanced inside the pitch branch, so a pitch-less play made the
+half-inning reset fire twice — 11 occurrences in 1,066 games.
+
+**SIM-502 — CODE LANDED, DELIBERATELY INERT.** `raw.play_events` captures the non-pitch plays
+`raw.pitches` cannot hold. Migration 0018 is NOT applied and the writer probes for the table and skips
+when absent, so this cannot break a nightly run. Four open defects (SIM-502a..d in `BACKLOG.md`):
+the extra-innings automatic runner is erased, the score columns carry look-ahead leakage, 161 outs
+reach no table, and `base` is NULL on 96.3% of pickoff rows.
+
+Handover: `docs/audit/2026-08-11-sim501-502-resumption-state.md`.
 **Authors: Data Engineer (Agent 4) · QA (Agent 9) [cross-validation]**
 
 The weekly integration suite failed on 2026-08-03 (run `30789553329`): **1 failed, 23 passed**.

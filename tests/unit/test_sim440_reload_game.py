@@ -50,6 +50,13 @@ def _make_loader_with_mock_conn(fetchone_side_effect=None):
 
     mock_cur = MagicMock()
     mock_cur.fetchall.return_value = []
+    # SIM-502: pin the play-events table as ABSENT. These tests assert the PITCH
+    # delete/insert interaction against a fixed `fetchone` side_effect list, and an
+    # unprimed loader would spend the first entry on its one-time
+    # `to_regclass('raw.play_events')` probe — leaving `_count()` to exhaust the
+    # list and raise StopIteration. There is no database here, so absent is also
+    # the truthful answer.
+    loader._play_events_table_exists = False
     if fetchone_side_effect is not None:
         mock_cur.fetchone.side_effect = fetchone_side_effect
     else:

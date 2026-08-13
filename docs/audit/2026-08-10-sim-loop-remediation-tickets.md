@@ -319,8 +319,13 @@ Split `passed_ball_wild_pitch` into two columns — a passed ball is the catcher
 is the pitcher's, and they need different engines. Add `balk` and `pickoff` to the event-type loop that
 already reads stolen-base events; `pickoff_*` columns exist in the schema and are hard-coded NULL.
 
-### SIM-488 — Run the batched re-sweep (~55 hours)
+### SIM-488 — Run the batched re-sweep (~6 hours)
 **Depends on:** SIM-487. Run once, for everything.
+
+> **Duration corrected 2026-08-11.** This said ~55 hours. MEASURED from `.sweep_progress/`:
+> 2017 through 2025 ran 17:53 to 00:02 — **6 hours 9 minutes for nine seasons**. The 55-hour
+> figure came from taking the span between the first and last file timestamp, but the 2026 file
+> is the IN-PROGRESS season and is appended to over days. A span is not a duration.
 
 ### SIM-489 — Wild pitch, passed ball, balk and pickoff channels
 Worth ~0.15–0.25 runs per team per game together with the hit-by-pitch channel.

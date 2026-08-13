@@ -2,6 +2,37 @@
 
 *Owner: Product Manager (Agent 1) · Last updated: 2026-06-02 (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
 
+# 🧟 2026-08-11 — SIM-502: `raw.play_events` — CODE LANDED, **4 OPEN DEFECTS, DO NOT SWEEP** (next free ID → SIM-503)
+
+**READ THIS FIRST IF YOU ARE RESUMING.** The code is on master. The migration is **NOT applied**.
+The write path is **INERT** until it is — `_write_play_events` probes `to_regclass('raw.play_events')`
+and returns 0 when the table is absent, so landing it cannot break a nightly run. **Do not apply
+Alembic 0018 and do not re-sweep until the four defects below are closed.**
+
+**What the table is for.** `raw.pitches` holds one row per PITCH, so a play with NO pitch produces no
+row. Measured over 150 real games (11,247 plays): 24 plays had zero pitch events — **21 intentional
+walks** and 3 pickoff caught-stealings. Verified in the live DB: **ZERO** rows carry
+`events='intent_walk'` against 14,683 ordinary walks, and `walk_rate` filters
+`events IN ('walk','intent_walk')` so that branch has never matched anything.
+
+**What works.** Over 300 real games: pickoff outs **42/42**, pickoff errors **22/22**, zero duplicate
+natural keys, every `base` value inside the widened 1..4 CHECK. Two rounds of adversarial review
+against 950+ real payloads produced everything below.
+
+| ID | Title | Type | Pri | Size | Depends-on | Status |
+|---|---|---|---|---|---|---|
+| **SIM-502a** | The half-inning reset erases the extra-innings automatic runner | Data | P1 | S | — | 🔲 **OPEN.** `etl_historical_loader.py` zeroes `runners_state_before` on a half-inning change. In extra innings a half does NOT start empty — the automatic runner is on 2B. **10 of 215 intent_walk rows record `runners_state=0` when a runner is really on second.** Game 744882 ab 85, bottom of the 11th: playEvent idx 0 is `action / eventType=runner_placed`, description *"Nathan Lukes starts inning at 2nd base."* **THE FIX IS IN THE FEED** — detect `runner_placed` and seed the state from it. ⚠ This is the THIRD appearance of this defect: fixed in the extractor, re-introduced in the caller. The test at `test_sim502_play_events.py:175` documents it and CANNOT catch it, because it hands state straight to the extractor and never drives the loader. |
+| **SIM-502b** | `bat_score` / `fld_score` carry look-ahead leakage | Data | P1 | S | — | 🔲 **OPEN.** Read from `result.awayScore` / `result.homeScore`, which the feed populates with the score **AFTER** the play. **676 of 5,479 rows (12.3%)** carry runs not yet scored when the event happened. Game 744799 ab 41: a pickoff at playEvent 4 is stamped `bat_score=2` from a two-run homer four pitches LATER; the same loader run writes `bat_score=0` on all five `raw.pitches` rows of that PA. The loader already proves the semantics — it uses `result.homeScore` to seed the NEXT play. Take the score from the previous play's result, as the pitch rows do. |
+| **SIM-502c** | 161 outs reach no table, and a shipped comment says otherwise | Data | P2 | M | — | 🔲 **OPEN.** `outs_on_pitch` now counts runner movements keyed to the pitch index. Of **253** outs not on a pitch index, only **92** are `r_pickoff*` and therefore reach `raw.play_events`; **161 reach nothing** — including **34 batter STRIKEOUTS** the feed anchors to a trailing `pickoff` or `no_pitch` event (game 744802 ab 41, *"Dylan Crews strikes out swinging"*, out hosted on index 9). The comment at `etl_historical_loader.py` asserting these are "a caught stealing, a pickoff" and "recorded properly in raw.play_events" is **FALSE for 161 of them** and must be corrected with the fix. Strikeouts are the platform's headline pitcher-prop market. |
+| **SIM-502d** | `base` is NULL on 96.3% of pickoff rows | Data | P3 | S | — | 🔲 **OPEN.** 3,709 of 3,853 pickoff rows have no base, though every `type=="pickoff"` playEvent names its target in `details.description`. Only rows joined to a runner movement get a base today. Parse the description, or carry the base from the throw. |
+
+**Sequencing.** 502a and 502b are one-line-ish and P1. 502c needs a decision about where a
+feed-displaced batter out belongs. 502d is cosmetic until a pickoff pool is built.
+
+**After closing them: a THIRD adversarial review before applying 0018.** Rounds 1 and 2 each found
+4 defects from real payloads at scale; nothing was found by reading code. Sample **hundreds** of
+games, never dozens — a 70-game sample reported "100%" on a metric that 950 games showed was wrong.
+
 # 🩻 2026-08-11 — SIM-501: `outs_on_pitch` is broken in the data, and it is the root of the Phase 2 mess (next free ID → SIM-502)
 
 **Measured on 2024, `raw.pitches`:**
@@ -208,7 +239,7 @@ them. 2017 is the earliest year. Cell occupancy comes from SIM-460/461, never fr
 | **SIM-485** | Hit-by-pitch channel | Data | P2 | S | — | 🔲 **OPEN.** Ships with **no** re-sweep — `events` already records it. |
 | **SIM-486** | Retire the per-tile fallback path | Sim | P2 | M | 467, 450 | 🔲 **OPEN.** Its being the **test default** is why four critical bugs survived 8 weeks. Removes the divergence at the root. |
 | **SIM-487** | ETL parser batch — split `passed_ball_wild_pitch`; add `balk` + `pickoff` | Data | P2 | M | — | 🔲 **OPEN.** Collect **every** column first; the free window closed 07-30. |
-| **SIM-488** | Batched ETL re-sweep (~55 h) | Data | P2 | L | SIM-487 | 🔲 **OPEN.** Run once, for everything. |
+| **SIM-488** | Batched ETL re-sweep (~6 h) | Data | P2 | L | SIM-487 | 🔲 **OPEN.** Run once, for everything. |
 | **SIM-489** | Wild-pitch / passed-ball / balk / pickoff channels | Sim | P2 | M | SIM-488 | 🔲 **OPEN.** ~0.15–0.25 R/team-game with SIM-485. |
 | **SIM-490** | Wire the real per-team manager profiles | ML | P2 | S | — | 🔲 **OPEN.** Computed, never connected; the model uses a league-flat default. |
 | **SIM-491** | Re-validate all six realism flags, **one at a time**, 400 sims × 20 games | Test/CI | P1 | L | 449, 450 | 🔲 **OPEN.** All five were enabled together at 3–4 games, the day after that bar was set. |
@@ -259,7 +290,7 @@ fail.** Phase 0 gates the whole programme, so a Phase 0 instrument that cannot f
 every ticket below it.
 
 **Critical path:** SIM-449 → 459 → 469 → 470 → 471 → 472 → 477 → 481 → 492 (nine deep). The two
-long-running jobs — the 5.7 h profile recompute and the 55 h re-sweep — are independent of each other
+long-running jobs — the 5.7 h profile recompute and the ~6 h re-sweep — are independent of each other
 and of most code work, provided SIM-487 lands before the sweep starts.
 
 # 🧪 2026-08-03 — SIM-448: the weekly integration failure — 0017 schema drift + the coverage 0017 never had (next free ID → SIM-449, now → SIM-494)

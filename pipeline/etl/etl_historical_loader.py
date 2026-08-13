@@ -93,6 +93,7 @@ import psycopg2.extras
 import psycopg2.pool
 
 from pipeline.etl.coercion import to_bool, to_float, to_int, to_str
+from pipeline.etl.play_events import extract_play_events
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -1045,6 +1046,15 @@ def _fetch_game_pitches(
     outs = 0
     prev_half = "bottom"
     pitch_rows: list[dict[str, Any]] = []
+    # SIM-502: non-pitch events (pickoff, stepoff, balk, intentional walk) go to
+    # raw.play_events. They cannot live on a pitch row: an intentional walk is
+    # signalled rather than thrown, so its play has NO pitch events at all.
+    play_event_rows: list[dict[str, Any]] = []
+    # Base state ENTERING the current play, tracked at PLAY scope. The per-pitch
+    # `offense` block cannot supply it for a pitch-less play, which is exactly
+    # the case raw.play_events exists to capture, so it is carried forward from
+    # the previous play's POST state and cleared at each half-inning.
+    runners_state_before = 0
 
     for play in game_dict["liveData"]["plays"]["allPlays"]:
         at_bat_number = play["atBatIndex"] + 1
@@ -1052,6 +1062,51 @@ def _fetch_game_pitches(
         top_bot = play["about"]["halfInning"]
         if top_bot != prev_half:
             outs = 0
+            runners_state_before = 0
+        # SIM-502: advance the half-inning marker HERE, at the play level.
+        #
+        # It used to be advanced inside the pitch branch below, so a play with NO
+        # pitches never reached it. The next play then re-entered this check with
+        # `prev_half` still stale, the reset fired a SECOND time, and it destroyed
+        # the base state carried forward from the pitch-less play. Measured over
+        # 1,066 real games: 11 plays lost their base state that way, every one of
+        # them following a half-inning that opened with an intentional walk.
+        #
+        # None of the 11 happened to be an intentional walk itself, so no bad row
+        # reached the table — luck, not correctness. This is the same defect class
+        # already fixed once inside the extractor, re-introduced in the caller.
+        prev_half = top_bot
+        # SIM-501: the PRE-play out count, read from the payload rather than
+        # accumulated. `playEvents[0].count.outs` is the state ENTERING the play;
+        # `play.count.outs` is the state after it. Verified on real games —
+        # ab=13 Flyout reads playEvents[0].outs=0 and play.count.outs=1.
+        # A pitch-less play (an intentional walk) has no events to read, so it
+        # falls back to the value carried from the previous play.
+        _first_events = play.get("playEvents") or []
+        if _first_events:
+            outs = int((_first_events[0].get("count") or {}).get("outs") or 0)
+        play_event_rows.extend(
+            extract_play_events(
+                play,
+                game_pk=game_pk,
+                game_date=game_date,
+                # `_fetch_game_pitches` never receives the season — the caller
+                # (`load_game`) holds it and stamps the pitch rows later. An MLB
+                # season never spans a calendar year, so the official date's year
+                # is the season.
+                season=int(str(game_date)[:4]),
+                outs_before_play=outs,
+                runners_state_before=runners_state_before,
+            )
+        )
+        # Carry the POST state forward for the next play. Assigned here, right
+        # after the extract call above has consumed the pre-play value.
+        _matchup = play.get("matchup") or {}
+        runners_state_before = (
+            (1 if _matchup.get("postOnFirst") else 0)
+            + (2 if _matchup.get("postOnSecond") else 0)
+            + (4 if _matchup.get("postOnThird") else 0)
+        )
         balls, strikes = 0, 0
         # SIM-441: bind the post-play score at PLAY scope. These are assigned
         # inside the pitch branch but read at play scope by the score re-sync
@@ -1231,8 +1286,15 @@ def _fetch_game_pitches(
                 batted_ball_type = hd["trajectory"]
                 hit_location = hd.get("location", "")
 
-            outs_on_pitch = play_event["count"]["outs"] - outs
-            outs_after_pitch = 0
+            # SIM-501: COUNT the outs this pitch caused; do not derive them.
+            # This read `play_event["count"]["outs"] - outs`, which cannot work:
+            # `count.outs` is the out total entering the play and is CONSTANT
+            # across every pitch of it, so subtracting a running total that
+            # already includes it yields zero. Measured: 92.6% of balls in play
+            # that BECAME AN OUT recorded outs_on_pitch=0, and 100% of
+            # strikeouts did. The runner loop below now counts instead, which
+            # also picks up baserunning outs the subtraction never saw.
+            outs_on_pitch = 0
             runner_on_first_score = runner_on_second_score = runner_on_third_score = False
             home_score_after = home_score_before
             away_score_after = away_score_before
@@ -1310,8 +1372,13 @@ def _fetch_game_pitches(
                             post_runner_2b = ""
                         if rid == post_runner_3b:
                             post_runner_3b = ""
-                        if i != runner["details"]["playIndex"]:
-                            outs_after_pitch += 1
+                        # The pitch that CAUSED the out owns it. This sits inside
+                        # the `[i .. max_play_index]` window, so an index OTHER than
+                        # `i` means a non-pitch action that followed this pitch — a
+                        # caught stealing, a pickoff. Those are not the pitch's outs,
+                        # and SIM-502 records them properly in `raw.play_events`.
+                        if runner["details"].get("playIndex") == i:
+                            outs_on_pitch += 1
                         # A retired runner is done: he cannot also score or reach
                         # a base. Without this the `movement.end` branches below
                         # run anyway, and a feed that populates BOTH `isOut` and
@@ -1386,7 +1453,12 @@ def _fetch_game_pitches(
                 "fld_score": field_score,
                 "balls": balls,
                 "strikes": strikes,
-                "outs": outs,
+                # SIM-501: this read a running variable that was updated AFTER the
+                # row was built, so every row carried the PREVIOUS play's entry
+                # value. Measured against the payload: raw.pitches.outs was wrong
+                # on 46% of plate appearances, almost always one too low. The
+                # pitch knows its own out count; ask it.
+                "outs": int((play_event.get("count") or {}).get("outs") or 0),
                 "pitch_code": pitch_code,  # → type
                 "pitch_code_description": pitch_code_description,  # → description
                 "pitch_type": pitch_type,
@@ -1484,10 +1556,13 @@ def _fetch_game_pitches(
             pinch_hitter = pinch_runner = pitcher_sub = defensive_sub = False
             balls = play_event["count"]["balls"]
             strikes = play_event["count"]["strikes"]
-            outs = play_event["count"]["outs"] + outs_after_pitch
             home_score_before = home_score_after
             away_score_before = away_score_after
             prev_half = top_bot
+        # SIM-501: carry the POST-play out count so a pitch-less play that follows
+        # still knows the state it began in. Reset to 0 on a half-inning change
+        # above, because the last play of a half-inning posts 3.
+        outs = int((play.get("count") or {}).get("outs") or outs)
         home_score_before = play["result"].get("homeScore", home_score_after)
         away_score_before = play["result"].get("awayScore", away_score_after)
 
@@ -1500,6 +1575,11 @@ def _fetch_game_pitches(
         "away_manager_id": away_manager_id,
         "away_manager_name": away_manager_name,
     }
+    # SIM-502: ride on game_dict rather than widening the return. This function
+    # already hands back side-channel data that way (`_managers`), and 38 tests
+    # mock it as a 2-tuple — a third element breaks every one of them for no
+    # gain.
+    game_dict["_play_events"] = play_event_rows
     return pitch_rows, game_dict
 
 
@@ -1911,9 +1991,15 @@ class HistoricalDataLoader:
         """Shared body of :meth:`load_game` / :meth:`reload_game`."""
         log.info("%s game %s …", "Reloading" if replace else "Loading", game_pk)
         raw_rows, game_dict = _fetch_game_pitches(game_pk, batter_hand_cache)
+        play_event_rows = game_dict.get("_play_events") or []
         self._ensure_prerequisites(game_pk, game_dict)
         result = self._process_and_insert(
-            game_pk, season, raw_rows, replace=replace, allow_shrink=allow_shrink
+            game_pk,
+            season,
+            raw_rows,
+            replace=replace,
+            allow_shrink=allow_shrink,
+            play_event_rows=play_event_rows,
         )
         log.info(
             "  game %s: %d inserted, %d skipped (hard errors), %d flagged",
@@ -2910,6 +2996,7 @@ class HistoricalDataLoader:
         *,
         replace: bool = False,
         allow_shrink: bool = False,
+        play_event_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, int]:
         """
         Validates, builds, and batch-inserts all pitch rows for a game.
@@ -2972,6 +3059,7 @@ class HistoricalDataLoader:
             error_rows=hard_errors,
             season=season,
             game_pk=game_pk,
+            play_event_rows=play_event_rows,
         )
         self._log_freshness(game_pk, to_insert)
 
@@ -3074,6 +3162,82 @@ class HistoricalDataLoader:
             cur.execute(sql, (since,))
             return [r[0] for r in cur.fetchall()]
 
+    #: SIM-502: non-pitch play events.  ON CONFLICT DO NOTHING makes a partial
+    #: re-run idempotent; the reload path DELETEs first so a genuine replace still
+    #: replaces rather than silently keeping the old rows.
+    #: SIM-502: tri-state cache of "does `raw.play_events` exist".  ``None`` means
+    #: not yet probed.  Cached because a 2,430-game sweep must not run 2,430
+    #: identical catalogue lookups, and because the answer cannot change mid-run:
+    #: applying a migration while a sweep is in flight is not a supported move.
+    _play_events_table_exists: bool | None = None
+
+    PLAY_EVENTS_INSERT_SQL = """
+        INSERT INTO raw.play_events (
+            game_pk, at_bat_number, play_index, game_date, season, event_type,
+            inning, inning_topbot, outs_before, runners_state, bat_score, fld_score,
+            pitcher_id, batter_id, runner_id, base,
+            is_out, out_number, fielder_putout, fielder_assist
+        ) VALUES (
+            %(game_pk)s, %(at_bat_number)s, %(play_index)s, %(game_date)s, %(season)s,
+            %(event_type)s, %(inning)s, %(inning_topbot)s, %(outs_before)s,
+            %(runners_state)s, %(bat_score)s, %(fld_score)s,
+            %(pitcher_id)s, %(batter_id)s, %(runner_id)s, %(base)s,
+            %(is_out)s, %(out_number)s, %(fielder_putout)s, %(fielder_assist)s
+        )
+        ON CONFLICT (game_pk, at_bat_number, play_index, event_type) DO NOTHING;
+    """
+
+    def _write_play_events(
+        self,
+        cur: Any,
+        game_pk: int,
+        rows: list[dict[str, Any]],
+        *,
+        replace: bool,
+    ) -> int:
+        """Write this game's non-pitch play events.  Returns rows written.
+
+        Takes the CALLER's cursor so it joins the game's single write
+        transaction: if the pitch insert rolls back, these roll back with it.
+        Writing them separately would let a game keep play events whose pitches
+        were never committed.
+
+        DELETEs only when ``replace``, matching the pitch rows exactly. The
+        incremental path must never delete — a reload REPLACES (so stale rows
+        must go, in case a parser fix produces fewer of them), while an ordinary
+        load relies on the natural-key ``ON CONFLICT DO NOTHING`` to stay
+        idempotent.
+        """
+        # SIM-502: SKIP ENTIRELY when the table is absent.
+        #
+        # Alembic 0018 creates `raw.play_events`, and this code lands BEFORE that
+        # migration is applied anywhere. Without this guard the statements below
+        # raise `UndefinedTable`, which aborts the whole game transaction — so
+        # merely landing the code would break every nightly ETL run until someone
+        # ran the migration. SIM-502 is NOT finished (four open defects, see
+        # SIM-502a..d in BACKLOG.md), so it must be INERT, never fatal.
+        if self._play_events_table_exists is None:
+            cur.execute("SELECT to_regclass('raw.play_events')")
+            probe = cur.fetchone()
+            self._play_events_table_exists = bool(probe and probe[0] is not None)
+            if not self._play_events_table_exists:
+                log.info(
+                    "raw.play_events is absent (Alembic 0018 not applied) — "
+                    "SIM-502 play-event capture is INERT for this run"
+                )
+        if not self._play_events_table_exists:
+            return 0
+
+        if replace:
+            cur.execute("DELETE FROM raw.play_events WHERE game_pk = %s", (game_pk,))
+        if not rows:
+            return 0
+        for offset in range(0, len(rows), BATCH_SIZE):
+            psycopg2.extras.execute_batch(
+                cur, self.PLAY_EVENTS_INSERT_SQL, rows[offset : offset + BATCH_SIZE]
+            )
+        return len(rows)
+
     def _batch_insert(
         self,
         rows: list[dict[str, Any]],
@@ -3083,6 +3247,7 @@ class HistoricalDataLoader:
         error_rows: list[tuple[int | None, int | None, list[str]]] | None = None,
         season: int | None = None,
         game_pk: int | None = None,
+        play_event_rows: list[dict[str, Any]] | None = None,
     ) -> int:
         """Insert rows in BATCH_SIZE chunks.  Returns rows ACTUALLY written.
 
@@ -3143,6 +3308,26 @@ class HistoricalDataLoader:
                             replace_game_pk,
                             deleted,
                         )
+
+                    # SIM-502: non-pitch play events, INSIDE this same
+                    # transaction. `_write_play_events` deletes the game's rows
+                    # first, so a load and a reload behave identically and a
+                    # re-run cannot double-count a pickoff. If the pitch insert
+                    # below rolls back, these roll back with it — a game must
+                    # never keep play events whose pitches were never committed.
+                    if count_pk is not None:
+                        written = self._write_play_events(
+                            cur,
+                            count_pk,
+                            list(play_event_rows or []),
+                            replace=replace_game_pk is not None,
+                        )
+                        if written:
+                            log.info(
+                                "  game %s: wrote %d non-pitch play events",
+                                count_pk,
+                                written,
+                            )
 
                     def _count() -> int | None:
                         """COUNT(*) for the game, or None if it can't be read."""

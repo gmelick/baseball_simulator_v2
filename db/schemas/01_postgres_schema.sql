@@ -718,6 +718,56 @@ COMMENT ON TABLE raw.prop_odds IS
 --                       Reserved for future use; current loader writes HARD only.
 -- =============================================================================
 
+-- =============================================================================
+-- RAW.PLAY_EVENTS  (SIM-502, Alembic 0018)
+-- Non-pitch play events: pickoff, stepoff, balk, intentional walk.
+--
+-- raw.pitches holds one row per PITCH, so a play with NO pitch has no row.
+-- Measured over 150 real 2024 games (11,247 plays): 24 plays had zero pitch
+-- events -- 21 intentional walks and 3 pickoff caught-stealings. An intentional
+-- walk is signalled rather than thrown; confirmed against the live database,
+-- raw.pitches holds ZERO rows with events='intent_walk' against 14,683 walks.
+--
+-- Synthetic rows in raw.pitches were rejected: eight profile metrics divide by
+-- COUNT(*) treating one row as one pitch, so a pitch-less row silently inflates
+-- every one of those denominators.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS raw.play_events (
+    id              BIGSERIAL       PRIMARY KEY,
+    game_pk         INTEGER         NOT NULL,
+    at_bat_number   INTEGER         NOT NULL,
+    play_index      SMALLINT        NOT NULL,   -- -1 = intentional walk (no event)
+    game_date       DATE            NOT NULL,
+    season          SMALLINT        NOT NULL,
+    event_type      VARCHAR(32)     NOT NULL
+                        CHECK (event_type IN (
+                            'pickoff','pickoff_error','stepoff','balk','intent_walk')),
+    inning          SMALLINT        NOT NULL,
+    inning_topbot   VARCHAR(3)      NOT NULL CHECK (inning_topbot IN ('Top','Bot')),
+    outs_before     SMALLINT        NOT NULL CHECK (outs_before BETWEEN 0 AND 2),
+    runners_state   SMALLINT        NOT NULL CHECK (runners_state BETWEEN 0 AND 7),
+    bat_score       SMALLINT        NOT NULL,
+    fld_score       SMALLINT        NOT NULL,
+    pitcher_id      INTEGER,
+    batter_id       INTEGER,
+    runner_id       INTEGER,
+    base            SMALLINT        CHECK (base BETWEEN 1 AND 4),
+    is_out          BOOLEAN         NOT NULL DEFAULT FALSE,
+    out_number      SMALLINT        CHECK (out_number BETWEEN 1 AND 3),
+    fielder_putout  INTEGER,
+    fielder_assist  INTEGER,
+    created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_play_events_natural
+        UNIQUE (game_pk, at_bat_number, play_index, event_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_play_events_game        ON raw.play_events(game_pk);
+CREATE INDEX IF NOT EXISTS idx_play_events_season_type ON raw.play_events(season, event_type);
+CREATE INDEX IF NOT EXISTS idx_play_events_runner      ON raw.play_events(runner_id)
+    WHERE runner_id IS NOT NULL;
+
+
 CREATE TABLE IF NOT EXISTS raw.etl_errors (
     id              BIGSERIAL       PRIMARY KEY,
     game_pk         INTEGER,

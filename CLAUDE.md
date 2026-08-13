@@ -159,6 +159,22 @@
   - **SIM-432 — FILED 2026-05-31, CLOSED 2026-06-01 (see the top bullet of this section).**
     Calibration is now live; the cascade is fully resolved.
 
+## 2b. ⚠ IN-FLIGHT WORK — read before touching the ETL or running a recompute (2026-08-11)
+
+**`docs/audit/2026-08-11-sim501-502-resumption-state.md` is the handover.** Read it first.
+
+- **DO NOT run the profile recompute** (`make profile-computor`). SIM-457 was reverted in `7226f85`
+  and `outs_recorded` still feeds era/fip/xfip/whip from a column whose consumers were built around
+  broken values.
+- **DO NOT apply Alembic 0018** and **do not re-sweep**. SIM-502 has four open defects
+  (SIM-502a..d). Its write path is deliberately INERT — it probes for the table and skips when
+  absent — so the code on master cannot break a nightly run. Leave that guard alone.
+- **The re-sweep takes ~6 hours, not 55.** Measured from `.sweep_progress/`: 2017-2025 ran in
+  6 h 9 m. The old figure took a SPAN between file timestamps as a duration.
+- **Sample hundreds of games when validating ETL work, never dozens.** Two adversarial review rounds
+  found four defects each, all from real payloads at scale, none from reading code. A 70-game sample
+  reported "100%" on a metric that 950 games disproved.
+
 ## 2a. Operational caveats (Windows + Docker)
 
 - **`scripts/` is NOT volume-mounted** into the running app container; only `api/`, `pipeline/`,
