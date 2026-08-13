@@ -1125,7 +1125,7 @@ CREATE TABLE IF NOT EXISTS derived.dp_play_detail (
 
     -- Outcome
     dp_turned                   BOOLEAN     NOT NULL,
-    outs_recorded               SMALLINT    NOT NULL,   -- 1 or 2
+    outs_recorded               SMALLINT    NOT NULL,   -- 0-3, events-derived (SIM-501a); 0 = batter reached, nobody retired
 
     -- RE24-based run value
     re24_start                  FLOAT,                  -- expected runs at start of play

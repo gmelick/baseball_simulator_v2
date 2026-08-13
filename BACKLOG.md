@@ -1,8 +1,72 @@
 # Product Backlog
 
-*Owner: Product Manager (Agent 1) · Last updated: 2026-06-02 (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
+*Owner: Product Manager (Agent 1) · Last updated: 2026-08-13 (SIM-501a/c CLOSED — the events-based out label; SIM-503 filed+fixed; next free ID → SIM-504; see the top banner). Older context from the 2026-06-02 stamp follows: (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
 
-# 🧟 2026-08-11 — SIM-502: `raw.play_events` — CODE LANDED, **4 OPEN DEFECTS, DO NOT SWEEP** (next free ID → SIM-503)
+# ✅ 2026-08-13 — SIM-501a/c CLOSED: the events-based out label is in; SIM-503 filed+fixed (next free ID → SIM-504)
+
+**SIM-501a + SIM-501c are CLOSED.** Every out label in the profile computor now derives from
+`events`; no site reads `outs_on_pitch` (comment mentions only). The vocabulary lives in ONE module —
+`pipeline/statcast_events.py` — with the two questions separated and every semantic claim pinned to a
+measurement:
+
+* **The fielders-choice trap, settled by data:** `fielders_choice` rows are typed D/E only — never X —
+  so NO out is recorded. `fielders_choice_out` records one (a runner); the batter stands on 1B after
+  the play on 90.5% of rows. `force_out`: 98.8% — the batter REACHES on all three.
+* **The IP formula:** outs = events term + hidden-hit-out term (an X-typed reach event carries one
+  runner out; 290 singles + 66 doubles in 2024) + caught-stealing term (the `sb_*` columns, measured
+  DISJOINT from the `caught_stealing_*` events — no double count). Completed-half-inning identity:
+  exactly 3 outs on **98.2% of 41,542 halves of 2024**; residual ~0.5% of outs = pickoffs + feed-
+  displaced outs (the SIM-502 domain). **Live check: the 2024 IP leaders match official innings
+  pitched within ±3 outs** (Gilbert 627 vs 626, Lugo 619 vs 620, Wheeler 598 vs 600). The replaced
+  column missed ~36%.
+* **SIM-457 re-landed per site** — 11 sites, each stating its question: pitcher GB/FB/LD + batter
+  platoon denominators (all balls in play); OF catch = batter-retired (a force out on a dropped fly
+  is not a catch); infield OAA + bunt defense = any-out-recorded; 1B scooping = batter-retired; error
+  decomposition + OF-arm row filters widened; the DP model's post-state and `sim.outcome_pool.
+  result_outs` now events-derived (the pool column was `outs_on_pitch` — zero on 92.6% of outs; the
+  loop currently ignores it, and a correct column is the SIM-473/494 prerequisite).
+* **The instrument:** `tests/unit/test_sim501a_out_label.py` fails if any computor site reads
+  `outs_on_pitch` again — proven able to fail before landing. It also pins the known sim_loop
+  `_OUT_EVENTS` divergence (`fielders_choice` listed as an out — wrong; fix belongs to SIM-473/499).
+* **The QA cross-validation round (8 finder angles) found 9 real problems; all fixed in the same
+  change.** The big four: (1) the spray-sign fix had missed the season-level `pull_rate`/`oppo_rate`
+  — the columns the batter engine actually consumes (see the SIM-503 row); (2) home runs entered the
+  widened OF-catch opportunity set as "missed catches" (~5.5k/season, a park+staff bias) — now
+  excluded; (3) the outcome-pool incremental rebuild is watermark-gated, so a FORMULA change never
+  landed on the default path — `_seasons_needing_rebuild` now also compares `builder_version`
+  (bumped to `sim501.1`), the same guard `play_pool_cache` already had; (4) the DP model's post-state
+  contradicted its own out count on hidden-runner-out rows and overflowed past 3 outs on triple
+  plays — rewritten with an inning-over short-circuit. Also: the hidden-out term is now the CLOSED
+  complement form (`type='X' AND events NOT IN fielding-out` — X means outs by definition, so a
+  future unmapped event still scores; verified equal on 2024, 361 = 361); the caught-stealing term
+  now excludes steal-out events STRUCTURALLY (measured disjoint on all 3,211 rows 2017-2026, and no
+  longer dependent on the feed keeping that promise); the AI-assistant schema prompt no longer
+  teaches `type='X'` filters or `outs_on_pitch`; infield OAA counts the hidden runner out like the
+  other sites. One refuted finding worth keeping: a reviewer argued from the ETL code that the
+  PA-ending caught-stealing rows would double-count — the all-season measurement disproves it, and
+  the structural guard makes the question moot.
+
+| ID | Title | Type | Pri | Size | Depends-on | Status |
+|---|---|---|---|---|---|---|
+| **SIM-503** | Batter pull/oppo rates were not platoon, and read the wrong field side | Data | P1 | S | — | ✅ **FIXED 2026-08-13** (found while re-landing SIM-457 on those lines). Defects in `pull/oppo_rate` and their `_vs_l/_vs_r` splits: (1) the platoon terms had no `p_throws` filter, so `_vs_l` ≡ `_vs_r` by construction; (2) the raw `spray_angle` sign is FIELD-side (negative = left field, measured), so `< -15` read the LEFT-FIELD rate — pull for a righty, OPPO for a lefty. **The QA review found the sign fix had landed only on the platoon splits, which have NO consumer, while the season-level `pull_rate`/`oppo_rate` — the columns the batter engine weights at 0.760/0.792 — still carried the wrong sign. Both are fixed.** (3) denominators kept only out plays (SIM-457) and counted rows with no measured spray; now in-play AND `spray_angle IS NOT NULL`. The pool build's `pull_relative_spray_angle` comment claimed "positive = pull side" — backwards under its own formula; corrected (formula untouched, it was always hand-consistent). Inert until SIM-459 runs, like all profile SQL. |
+
+**Sequencing note (recompute).** SIM-459 stays blocked: SIM-458 is still reverted, and the swept
+`raw.pitches.outs` (pre-play outs) is stale-by-one-play on 46% of plate appearances until the
+SIM-488 re-sweep — the situation/RE24 features group by it. Close SIM-502a..d → re-sweep →
+re-land SIM-458 → then run SIM-459 once for everything.
+
+**Two review findings deliberately NOT fixed here, for the SIM-459/491 window:**
+* `_FIELDER_RBF_PER_OAA = 0.010` / `_FIELDER_RBF_CAP = 0.05` (`simulation/sim_loop.py:372`) were
+  tuned while per-fielder OAA was near-degenerate (the broken label clustered it near 0). The
+  recompute widens OAA toward its real ±15 scale, so the SIM-425b nudge will pin at the cap on many
+  balls. Re-tune these in the SIM-491 flag re-validation, after SIM-459.
+* Bunt DETECTION is asymmetric (`_compute_bunt_defense`): a failed bunt matches `events LIKE
+  '%bunt%'` unconditionally, a bunt HIT must clear the EV/distance heuristic (`hit_distance_sc <
+  60` drops a 70-foot bunt single). The selection bias correlates with the outcome being measured,
+  so `bunt_fielding_rate` stays inflated even after the SIM-457 widening. Needs a measured
+  detection fix; do not quote that rate as calibrated.
+
+# 🧟 2026-08-11 — SIM-502: `raw.play_events` — CODE LANDED, **4 OPEN DEFECTS, DO NOT SWEEP** (next free ID → SIM-503, now → SIM-504)
 
 **READ THIS FIRST IF YOU ARE RESUMING.** The code is on master. The migration is **NOT applied**.
 The write path is **INERT** until it is — `_write_play_events` probes `to_regclass('raw.play_events')`
@@ -72,9 +136,9 @@ Each site must be read for which question it asks. `_OUT_EVENTS` answers the sec
 
 | ID | Title | Type | Pri | Size | Depends-on | Status |
 |---|---|---|---|---|---|---|
-| **SIM-501a** | Derive the out-label from `events` and re-land SIM-457 on it | Data | P1 | M | — | 🔲 **OPEN.** Per-site, not a sweep. Each site states which question it asks. |
-| **SIM-501b** | Fix `outs_on_pitch` in the ETL | Data | P2 | M | — | 🔲 **OPEN.** Needs a re-sweep, so batch with SIM-487. Not on the critical path — 501a removes the dependency. |
-| **SIM-501c** | Stop reading `outs_on_pitch` for innings pitched | Data | P1 | S | SIM-501a | 🔲 **OPEN.** `outs_recorded` drives era/fip/xfip/hr_per_9/whip and under-counts ~36%. |
+| **SIM-501a** | Derive the out-label from `events` and re-land SIM-457 on it | Data | P1 | M | — | ✅ **CLOSED 2026-08-13.** Per-site, 11 sites, each stating its question. Vocabulary + measurements in `pipeline/statcast_events.py`; guard test proven able to fail. See the 2026-08-13 banner. |
+| **SIM-501b** | Fix `outs_on_pitch` in the ETL | Data | P2 | M | — | 🟡 **CODE DONE** (landed `4915c16`; counts runner movements, 0.990 of real outs). The swept DATA is still pre-fix until the SIM-488 re-sweep. Nothing reads the column any more (SIM-501c), so this is no longer on any critical path. |
+| **SIM-501c** | Stop reading `outs_on_pitch` for innings pitched | Data | P1 | S | SIM-501a | ✅ **CLOSED 2026-08-13.** era/fip/xfip/hr_per_9/whip + `sb_against_per_9` now sum the events-based formula. Verified live: 2024 IP leaders within ±3 outs of official (was ~36% under). |
 
 # ⚠️ 2026-08-10 — ID COLLISION RESOLVED: three Phase-1 tickets renumbered (next free ID → SIM-501)
 

@@ -100,17 +100,36 @@ class TestSeasonsNeedingRebuild(unittest.TestCase):
         # metadata: 2023 built up to its latest date AND row count (fresh);
         # 2024 built to an older date (stale). SIM-345: source_row_count must
         # match the live source count for a season to count as fresh — 2023 has
-        # exactly 1 source row, recorded here as 1.
+        # exactly 1 source row, recorded here as 1. SIM-501a: a fresh season
+        # must ALSO carry the running POOL_BUILDER_VERSION.
         c.execute(
             "INSERT INTO sim.pool_build_metadata "
             "(pool_name, season, row_count, source_max_game_date, source_row_count, recency_ref_season, builder_version) "
-            "VALUES ('pitch_pool', 2023, 10, DATE '2023-09-01', 1, 2024, 'x'), "
-            "('pitch_pool', 2024, 10, DATE '2024-08-01', 1, 2024, 'x')"
+            f"VALUES ('pitch_pool', 2023, 10, DATE '2023-09-01', 1, 2024, '{ppc.POOL_BUILDER_VERSION}'), "
+            f"('pitch_pool', 2024, 10, DATE '2024-08-01', 1, 2024, '{ppc.POOL_BUILDER_VERSION}')"
         )
         stale = ppc._seasons_needing_rebuild(c, "pitch_pool", [2023, 2024, 2025])
         self.assertNotIn(2023, stale)  # fresh
         self.assertIn(2024, stale)  # source advanced
         self.assertIn(2025, stale)  # never built
+
+    def test_builder_version_change_rebuilds_unchanged_source(self):
+        """SIM-501a: a FORMULA change (new POOL_BUILDER_VERSION) makes a season
+        stale even when its source watermark and row count are unchanged.
+        Without this, the events-derived result_outs fix could never land on
+        the default incremental path."""
+        c = _conn_with_pg()
+        c.executemany(
+            "INSERT INTO pg.raw.pitches VALUES (?, ?, FALSE)",
+            [[2023, dt.date(2023, 9, 1)]],
+        )
+        c.execute(
+            "INSERT INTO sim.pool_build_metadata "
+            "(pool_name, season, row_count, source_max_game_date, source_row_count, recency_ref_season, builder_version) "
+            "VALUES ('pitch_pool', 2023, 10, DATE '2023-09-01', 1, 2024, 'sim076.1')"
+        )
+        stale = ppc._seasons_needing_rebuild(c, "pitch_pool", [2023])
+        self.assertIn(2023, stale)  # built by an older builder → rebuild
 
     def test_missing_metadata_table_rebuilds_all(self):
         c = duckdb.connect(":memory:")  # no sim.pool_build_metadata

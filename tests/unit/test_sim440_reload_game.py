@@ -810,9 +810,10 @@ class TestOutsAccumulator:
     `play_event["count"]["outs"]` only advances on pitch events, so a runner
     retired on a trailing pickoff / caught-stealing event left the accumulator
     one low — the next pitch then reported a phantom `outs_on_pitch` and a stale
-    pre-pitch `outs`. Downstream, `outs_on_pitch > 0` is what the outfield
-    catch-probability model reads as "a ball was caught", and `>= 2` is what the
-    double-play logic keys on.
+    pre-pitch `outs`. (Historical note: the profile computor used to read
+    `outs_on_pitch` as its out label; since SIM-501a it derives every out label
+    from `events` and reads this column nowhere. The column still matters as
+    ETL output — SIM-501b — and this test covers that contract.)
     """
 
     def test_trailing_non_pitch_out_advances_the_accumulator(self):

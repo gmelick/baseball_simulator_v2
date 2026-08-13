@@ -574,7 +574,12 @@ class FieldingSignal:
 
     event: str  # Statcast/canonical batted-ball event
     result_hits: int  # 0=out 1=1B 2=2B 3=3B 4=HR (pool vocab)
-    result_outs: int  # outs recorded on the play (0/1/2)
+    # Outs recorded on the play. The loop emits 0/1/2 today. ⚠ After the
+    # SIM-501a pool rebuild a raw pool row can carry 3 (triple play) and can
+    # carry result_hits>=1 WITH result_outs>=1 (a runner thrown out on a
+    # hit) — a resolver that forwards pool rows verbatim must handle both
+    # (SIM-473 scope).
+    result_outs: int
     result_runs: int  # runs that physically scored on the play
     fielder_id: int | None = None  # the fielder who handled the ball (RBF)
     is_error: bool = False  # error flag (fielder/catcher RBF)
@@ -1501,9 +1506,17 @@ class StateMachine:
         is_error, fielder_id = False, None
         if self._fielder_rbf:
             ev, rh, is_error, fielder_id = self._fielder_rbf_nudge(state, fp, ev, rh, season)
-        # SIM-425/429: outs_on_pitch is unreliable in the pool (~0 for most field
-        # outs), so infer outs from the event (as the default resolver does) —
-        # otherwise only strikeouts end the half-inning and games bloat.
+        # SIM-501a NOTE (2026-08-13): the pool's result_outs column is now
+        # events-derived and CORRECT after the next pool rebuild — the old
+        # rationale here ("outs_on_pitch is unreliable, ~0 for most field
+        # outs") no longer holds once SIM-459 runs. The draw still discards
+        # it (`_ro` above) on purpose: the loop's advancement model cannot
+        # yet retire the specific runner a >0 result_outs implies (that is
+        # the SIM-473 advancement draw), and the SIM-429 phantom-DP guard
+        # below exists for a DIFFERENT reason (the draw conditions only
+        # softly on base-out state). Do not switch to trusting `_ro` without
+        # doing SIM-473/SIM-494 — outs would be charged while the retired
+        # runner stays on base.
         # SIM-429: a double play needs a runner to double off, but the draw
         # conditions only softly on base-out, so ~55% of drawn DPs land with NO
         # forceable runner (audit).  Recording a phantom 2nd out there ends innings

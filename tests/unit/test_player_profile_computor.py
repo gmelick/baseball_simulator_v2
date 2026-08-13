@@ -745,9 +745,8 @@ def _make_outfield_plays_df(n: int = 800) -> pd.DataFrame:
             "spray_angle": rng.uniform(-45, 45, n),
             "hit_distance_sc": rng.uniform(150, 400, n),
             "bb_type": rng.choice(["fly_ball", "line_drive", "popup"], n),
-            "events": rng.choice(["single", "double", "out"], n),
-            "outs_on_pitch": rng.integers(0, 2, n),
-            "fielding_error": [None] * n,
+            # SIM-501a: the `caught` label is events-based (batter retired).
+            "events": rng.choice(["single", "double", "field_out", "sac_fly"], n),
         }
     )
 
@@ -830,8 +829,10 @@ def _make_infield_plays_df(n: int = 800) -> pd.DataFrame:
             "launch_angle": rng.uniform(-10, 10, n),
             "spray_angle": rng.uniform(-45, 45, n),
             "bb_type": ["ground_ball"] * n,
-            "events": rng.choice(["single", "double", "out"], n),
-            "outs_on_pitch": rng.integers(0, 2, n),
+            # SIM-501a: the out label is events-based (any out recorded, via
+            # play_outs(events, type) so the X-typed hidden runner out counts).
+            "events": rng.choice(["single", "field_out", "force_out", "field_error"], n),
+            "type": rng.choice(["X", "D"], n),
             "fielding_error": [None] * n,
             "throwing_error_1": [None] * n,
             "throwing_error_2": [None] * n,
@@ -872,8 +873,10 @@ def _make_dp_plays_df(n: int = 400) -> pd.DataFrame:
             "launch_speed": rng.uniform(70, 110, n),
             "launch_angle": rng.uniform(-10, 10, n),
             "bb_type": ["ground_ball"] * n,
+            # SIM-501a: outs and post state derive from `events` (+ `type`
+            # for the hidden runner out on an X-typed reach event).
             "events": rng.choice(["force_out", "double_play", "single"], n),
-            "outs_on_pitch": rng.integers(0, 3, n),
+            "type": rng.choice(["X", "D"], n),
             "field_assist_1": rng.choice([3001, 4001, 5001, 6001], n),
             "field_assist_2": rng.choice([3001, 4001, 5001, 6001], n),
             "field_putout_1": rng.choice([3001, 4001, 5001, 6001], n),

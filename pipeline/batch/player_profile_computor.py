@@ -74,6 +74,16 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 
+from pipeline.statcast_events import (
+    batter_retired,
+    play_outs,
+    sql_batter_retired,
+    sql_fielding_out,
+    sql_in_play,
+    sql_list,
+    sql_outs_recorded,
+    sql_play_outs,
+)
 from simulation.constants import DEFENSIVE_RUN_VALUES
 
 logging.basicConfig(
@@ -133,12 +143,36 @@ NON_SWING_TYPES: tuple[str, ...] = ("B", "C", "H", "P", "*B")
 
 
 def sql_in(types: tuple[str, ...]) -> str:
-    """Render Statcast type codes as a SQL ``IN`` list: ``('S', 'W', 'M')``."""
-    return "(" + ", ".join(f"'{t}'" for t in types) + ")"
+    """Render Statcast type codes as a SQL ``IN`` list: ``('S', 'W', 'M')``.
+
+    Delegates to the shared renderer so the two cannot drift (SIM-501a).
+    """
+    return sql_list(types)
 
 
 SQL_WHIFF = f"type IN {sql_in(WHIFF_TYPES)}"
 SQL_SWING = f"type NOT IN {sql_in(NON_SWING_TYPES)}"
+
+# ---------------------------------------------------------------------------
+# Out labels (SIM-501a/c) — every out label derives from `events`, never from
+# `outs_on_pitch` (zero on 92.6% of batted-ball outs in the swept data).
+# The vocabulary and its measurements live in pipeline/statcast_events.py.
+# Each site below states WHICH question it asks — "how many outs did the play
+# record?" and "was the batter retired?" are different questions, and the
+# fielders-choice events answer them differently.
+# ---------------------------------------------------------------------------
+
+SQL_IN_PLAY = sql_in_play()
+SQL_OUTS_RECORDED = sql_outs_recorded()
+SQL_FIELDING_OUT = sql_fielding_out()
+SQL_BATTER_RETIRED = sql_batter_retired()
+
+#: Pull-side spray angle. The raw `spray_angle` sign is FIELD-side, not
+#: pull-side: negative = left field (measured 2024: hc_x<100 rows average
+#: -31.7, hc_x>150 rows average +32.9). `stand` flips the sign per plate
+#: appearance, so "< -15" reads PULL for both hands (ground balls confirm:
+#: R -12.7 raw, L +18.4 raw — both pull-side). `stand` is never 'S'.
+SQL_PULL_SPRAY = "(CASE WHEN stand = 'L' THEN -spray_angle ELSE spray_angle END)"
 
 # FIP constant — approximation; update per-season if desired
 FIP_CONSTANT = 3.17
@@ -929,7 +963,10 @@ def _label_component(mean: list[float], fi: dict[str, int]) -> str | None:
 # SIM-076 / SIM-095: sim-pool recency weighting + incremental rebuild helpers
 # ---------------------------------------------------------------------------
 
-POOL_BUILDER_VERSION = "sim076.1"
+# Bump on any formula change to the pool SELECTs — the incremental rebuild
+# gate (_seasons_needing_rebuild) treats a season built by another version as
+# stale. sim501.1 = events-derived result_outs (SIM-501a).
+POOL_BUILDER_VERSION = "sim501.1"
 RECENCY_RECENT_SEASONS = 2  # seasons (incl. ref) that get the full peak weight
 RECENCY_DECAY = 0.75  # geometric decay per season beyond the recent window
 RECENCY_FLOOR = 0.25
@@ -1018,12 +1055,19 @@ def _seasons_needing_rebuild(conn, pool_name: str, seasons: list[int]) -> list[i
     unchanged season every night. If the metadata table is absent or has no row
     for a season (or a legacy row predates ``source_row_count``), the season is
     (re)built.
+
+    SIM-501a adds the builder-version guard: a season built by a DIFFERENT
+    ``POOL_BUILDER_VERSION`` is stale even when its source is unchanged. The
+    watermark test sees only the source data, so without this guard a FORMULA
+    change (like the SIM-501a ``result_outs`` fix) never lands on the default
+    incremental path — the sibling ``play_pool_cache`` already gates on its
+    builder version for the same reason.
     """
     try:
         meta = {
-            row[0]: (row[1], row[2])
+            row[0]: (row[1], row[2], row[3])
             for row in conn.execute(
-                "SELECT season, source_max_game_date, source_row_count "
+                "SELECT season, source_max_game_date, source_row_count, builder_version "
                 "FROM sim.pool_build_metadata WHERE pool_name = ?",
                 [pool_name],
             ).fetchall()
@@ -1037,16 +1081,16 @@ def _seasons_needing_rebuild(conn, pool_name: str, seasons: list[int]) -> list[i
         if prev is None:
             stale.append(s)
             continue
-        prev_max, prev_cnt = prev
+        prev_max, prev_cnt, prev_builder = prev
         if src_max is None or prev_max is None:
             stale.append(s)
             continue
         # Fresh only when the date has not advanced AND the source row count is
-        # unchanged. ``src_max >= prev_max`` is the freshness side; we rebuild
-        # when the date moved forward OR the count differs (same-date late row).
+        # unchanged AND the builder that produced the season is the running one.
         date_advanced = src_max > prev_max
         count_changed = prev_cnt is None or src_cnt != prev_cnt
-        if date_advanced or count_changed:
+        builder_changed = prev_builder != POOL_BUILDER_VERSION
+        if date_advanced or count_changed or builder_changed:
             stale.append(s)
     return stale
 
@@ -1682,14 +1726,24 @@ class PlayerProfileComputor:
                         SUM(CASE WHEN events = 'hit_by_pitch' THEN 1 ELSE 0 END) AS hbp,
 
                         SUM(earned_runs_on_pitch)       AS earned_runs,
-                        SUM(outs_on_pitch)              AS outs_recorded,
 
-                        -- Batted ball types (of balls in play only)
-                        SUM(CASE WHEN bb_type = 'ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type='X'
+                        -- SIM-501c. Question: how many outs did each play record
+                        -- while this pitcher threw? This is the innings-pitched
+                        -- denominator for era/fip/xfip/hr_per_9/whip. Derived
+                        -- from `events` + the caught-stealing columns; the old
+                        -- SUM(outs_on_pitch) missed ~36% of real outs.
+                        SUM({SQL_OUTS_RECORDED})        AS outs_recorded,
+
+                        -- Batted ball types (SIM-457). Question: of the balls
+                        -- this pitcher allowed IN PLAY, what mix? The denominator
+                        -- is every ball in play; the old `type='X'` kept only the
+                        -- out plays, so the rates inflated ~1.5x and the error
+                        -- grew with the hits a pitcher allowed.
+                        SUM(CASE WHEN bb_type = 'ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN {SQL_IN_PLAY}
                             THEN 1 ELSE 0 END),0) AS ground_ball_rate,
                         SUM(CASE WHEN bb_type IN ('fly_ball','popup') THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN
-                            type='X' THEN 1 ELSE 0 END),0) AS fly_ball_rate,
-                        SUM(CASE WHEN bb_type = 'line_drive' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN type='X'
+                            {SQL_IN_PLAY} THEN 1 ELSE 0 END),0) AS fly_ball_rate,
+                        SUM(CASE WHEN bb_type = 'line_drive' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN {SQL_IN_PLAY}
                             THEN 1 ELSE 0 END),0) AS line_drive_rate,
                         SUM(CASE WHEN bb_type IN ('fly_ball','popup') THEN 1 ELSE 0 END) AS fly_balls_total
 
@@ -1918,17 +1972,27 @@ class PlayerProfileComputor:
 
                     -- Batted ball profile (of BIP)
                     SUM(CASE WHEN bb_type = 'ground_ball' THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS gb_rate,
+                        NULLIF(SUM(CASE WHEN {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS gb_rate,
 
                     SUM(CASE WHEN bb_type = 'fly_ball' THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS fb_rate,
+                        NULLIF(SUM(CASE WHEN {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS fb_rate,
 
-                    -- Spray direction (hc_x relative to center of field = 125.42)
-                    SUM(CASE WHEN spray_angle < -15 THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS pull_rate,
+                    -- Spray direction (SIM-503). Question: what share of this
+                    -- batter's balls in play went to the PULL side? The raw
+                    -- spray sign is FIELD-side (negative = left field), so the
+                    -- old `spray_angle < -15` read the LEFT-FIELD rate — pull
+                    -- for a righty, OPPO for a lefty. These two columns are the
+                    -- ones the batter engine consumes (weights 0.760 / 0.792),
+                    -- so the sign fix must land HERE, not only on the platoon
+                    -- splits. The denominator keeps only rows with a measured
+                    -- spray angle, so pull + center + oppo sums to 1.
+                    SUM(CASE WHEN {SQL_PULL_SPRAY} < -15 THEN 1.0 ELSE 0 END) /
+                        NULLIF(SUM(CASE WHEN {SQL_IN_PLAY} AND spray_angle IS NOT NULL
+                        THEN 1 ELSE 0 END), 0) AS pull_rate,
 
-                    SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS oppo_rate,
+                    SUM(CASE WHEN {SQL_PULL_SPRAY} > 15 THEN 1.0 ELSE 0 END) /
+                        NULLIF(SUM(CASE WHEN {SQL_IN_PLAY} AND spray_angle IS NOT NULL
+                        THEN 1 ELSE 0 END), 0) AS oppo_rate,
 
                     -- Exit velocity & launch angle (on contact only)
                     AVG(CASE WHEN launch_speed IS NOT NULL THEN launch_speed END) AS avg_exit_velo,
@@ -1937,11 +2001,11 @@ class PlayerProfileComputor:
 
                     -- Hard hit rate (>= 95 mph exit velo)
                     SUM(CASE WHEN launch_speed >= {HARD_HIT_MIN_VELO} THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS hard_hit_rate,
+                        NULLIF(SUM(CASE WHEN {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS hard_hit_rate,
 
                     -- Barrel rate (Statcast sliding-scale: EV>=98 & LA band widening with EV)
                     SUM(CASE WHEN {_barrel_case_sql()} THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS barrel_rate,
+                        NULLIF(SUM(CASE WHEN {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS barrel_rate,
 
                     -- HR rate per PA
                     SUM(CASE WHEN events = 'home_run' THEN 1.0 ELSE 0 END) /
@@ -1973,16 +2037,25 @@ class PlayerProfileComputor:
                     SUM(CASE WHEN p_throws='L' AND events IN ('strikeout','strikeout_double_play') THEN 1.0 ELSE 0 END)
                         / NULLIF(SUM(CASE WHEN p_throws='L' AND events IS NOT NULL THEN 1 ELSE 0 END), 0) AS k_rate_vs_l,
                     SUM(CASE WHEN p_throws='L' AND bb_type='ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN
-                        p_throws='L' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS gb_rate_vs_l,
+                        p_throws='L' AND {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS gb_rate_vs_l,
                     SUM(CASE WHEN p_throws='L' AND bb_type = 'fly_ball' THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN p_throws='L' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS fb_rate_vs_l,
-                    SUM(CASE WHEN spray_angle < -15 THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS pull_rate_vs_l,
-                    SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS oppo_rate_vs_l,
+                        NULLIF(SUM(CASE WHEN p_throws='L' AND {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS fb_rate_vs_l,
+                    -- SIM-503 + SIM-457. Question: of this batter's balls in play
+                    -- vs THIS pitcher hand, what share went to the pull side?
+                    -- Three defects fixed here: (1) neither term filtered on
+                    -- p_throws, so _vs_l and _vs_r were the same number; (2) the
+                    -- raw spray sign is field-side, so `spray_angle < -15` read
+                    -- LEFT FIELD — pull for a righty, oppo for a lefty (see
+                    -- SQL_PULL_SPRAY); (3) the denominator kept only out plays.
+                    SUM(CASE WHEN p_throws='L' AND {SQL_PULL_SPRAY} < -15 THEN 1.0 ELSE 0 END) /
+                        NULLIF(SUM(CASE WHEN p_throws='L' AND {SQL_IN_PLAY} AND spray_angle IS NOT NULL
+                        THEN 1 ELSE 0 END), 0) AS pull_rate_vs_l,
+                    SUM(CASE WHEN p_throws='L' AND {SQL_PULL_SPRAY} > 15 THEN 1.0 ELSE 0 END) /
+                        NULLIF(SUM(CASE WHEN p_throws='L' AND {SQL_IN_PLAY} AND spray_angle IS NOT NULL
+                        THEN 1 ELSE 0 END), 0) AS oppo_rate_vs_l,
                     AVG(CASE WHEN p_throws='L' AND launch_speed IS NOT NULL THEN launch_speed END) AS avg_exit_velo_vs_l,
                     SUM(CASE WHEN {_barrel_case_sql("p_throws='L' AND ")} THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN p_throws='L' AND type='X' THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_l,
+                        NULLIF(SUM(CASE WHEN p_throws='L' AND {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_l,
 
                     -- Platoon splits — vs RHP
                     SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
@@ -2003,16 +2076,19 @@ class PlayerProfileComputor:
                     SUM(CASE WHEN p_throws='R' AND events IN ('strikeout','strikeout_double_play') THEN 1.0 ELSE 0 END)
                         / NULLIF(SUM(CASE WHEN p_throws='R' AND events IS NOT NULL THEN 1 ELSE 0 END), 0) AS k_rate_vs_r,
                     SUM(CASE WHEN p_throws='R' AND bb_type='ground_ball' THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN
-                        p_throws='R' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS gb_rate_vs_r,
+                        p_throws='R' AND {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS gb_rate_vs_r,
                     SUM(CASE WHEN p_throws='R' AND bb_type = 'fly_ball' THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN p_throws='R' AND type IN ('D', 'E', 'X') THEN 1 ELSE 0 END), 0) AS fb_rate_vs_r,
-                    SUM(CASE WHEN spray_angle < -15 THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS pull_rate_vs_r,
-                    SUM(CASE WHEN spray_angle > 15 THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN type='X' THEN 1 ELSE 0 END), 0) AS oppo_rate_vs_r,
+                        NULLIF(SUM(CASE WHEN p_throws='R' AND {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS fb_rate_vs_r,
+                    -- SIM-503 + SIM-457: same three fixes as the _vs_l block.
+                    SUM(CASE WHEN p_throws='R' AND {SQL_PULL_SPRAY} < -15 THEN 1.0 ELSE 0 END) /
+                        NULLIF(SUM(CASE WHEN p_throws='R' AND {SQL_IN_PLAY} AND spray_angle IS NOT NULL
+                        THEN 1 ELSE 0 END), 0) AS pull_rate_vs_r,
+                    SUM(CASE WHEN p_throws='R' AND {SQL_PULL_SPRAY} > 15 THEN 1.0 ELSE 0 END) /
+                        NULLIF(SUM(CASE WHEN p_throws='R' AND {SQL_IN_PLAY} AND spray_angle IS NOT NULL
+                        THEN 1 ELSE 0 END), 0) AS oppo_rate_vs_r,
                     AVG(CASE WHEN p_throws='R' AND launch_speed IS NOT NULL THEN launch_speed END) AS avg_exit_velo_vs_r,
                     SUM(CASE WHEN {_barrel_case_sql("p_throws='R' AND ")} THEN 1.0 ELSE 0 END) /
-                        NULLIF(SUM(CASE WHEN p_throws='R' AND type='X' THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_r
+                        NULLIF(SUM(CASE WHEN p_throws='R' AND {SQL_IN_PLAY} THEN 1 ELSE 0 END), 0) AS barrel_rate_vs_r
 
                 FROM pg.raw.pitches
                 WHERE data_quality_flag = FALSE
@@ -2409,7 +2485,7 @@ class PlayerProfileComputor:
                 SELECT
                     pitcher, season, p_throws,
                     game_pk, at_bat_number, pitch_number,
-                    on_1b, on_2b, on_3b, outs_on_pitch,
+                    on_1b, on_2b, on_3b, events, type,
                     sb_attempt_2b, sb_attempt_3b, sb_attempt_home,
                     sb_success_2b, sb_success_3b, sb_success_home
                 FROM pg.raw.pitches
@@ -2422,7 +2498,10 @@ class PlayerProfileComputor:
                     pitcher AS pitcher_id,
                     season,
                     MIN(p_throws)                                            AS throws,
-                    SUM(outs_on_pitch)                                       AS outs_recorded,
+                    -- SIM-501c. Question: how many outs did each play record?
+                    -- The innings-pitched denominator for sb_against_per_9,
+                    -- derived from `events` + the caught-stealing columns.
+                    SUM({SQL_OUTS_RECORDED})                                 AS outs_recorded,
                     SUM(CASE WHEN sb_attempt_2b OR sb_attempt_3b OR sb_attempt_home
                              THEN 1 ELSE 0 END)                              AS sb_attempts_against,
                     SUM(CASE WHEN sb_success_2b OR sb_success_3b OR sb_success_home
@@ -3380,12 +3459,21 @@ class PlayerProfileComputor:
                 launch_speed, launch_angle, spray_angle,
                 hit_distance_sc,
                 bb_type,
-                events,
-                outs_on_pitch,
-                fielding_error
+                events
             FROM pg.raw.pitches
             WHERE season IN ({season_list})
-              AND type = 'X'
+              -- SIM-457: every ball in play is a catch OPPORTUNITY. The old
+              -- `type='X'` kept only the plays that became outs, so 44% of
+              -- chances — the ones that fell for hits — were invisible and
+              -- catch probability read near 100%.
+              AND {SQL_IN_PLAY}
+              AND events IS NOT NULL
+              -- A home run leaves the field: no outfielder can catch it, so
+              -- it is not a catch opportunity. `type='X'` used to exclude
+              -- home runs implicitly (X = out, no run); the widened filter
+              -- must exclude them explicitly or ~5.5k/season enter as
+              -- "missed catches" charged to whoever plays nearest the wall.
+              AND events <> 'home_run'
               AND hc_x IS NOT NULL AND hc_y IS NOT NULL
               AND launch_speed IS NOT NULL AND launch_angle IS NOT NULL
               -- Outfield plays: fly balls, line drives, and popups
@@ -3446,8 +3534,12 @@ class PlayerProfileComputor:
             if going_back:
                 speed_needed += OF_GOING_BACK_PENALTY_FPS
 
-            # Outcome
-            caught = r["outs_on_pitch"] > 0 and pd.isna(r.get("fielding_error"))
+            # Outcome (SIM-501a). Question: did the outfielder CATCH this air
+            # ball? A catch retires the batter, so the label is the events-based
+            # batter-retired set. force_out / fielders_choice_out mean the ball
+            # hit the ground and a runner was forced — an out, but not a catch;
+            # field_error means it dropped; a hit means it fell in.
+            caught = batter_retired(r["events"])
 
             rows.append(
                 {
@@ -3537,7 +3629,7 @@ class PlayerProfileComputor:
                     on_1b, on_2b, on_3b,
                     post_on_1b, post_on_2b, post_on_3b,
                     runner_1b_scored, runner_2b_scored, runner_3b_scored,
-                    outs_on_pitch, of_assist,
+                    of_assist,
                     outs,
                     -- runners state bitmask
                     (CASE WHEN on_1b IS NOT NULL THEN 1 ELSE 0 END)
@@ -3545,7 +3637,10 @@ class PlayerProfileComputor:
                     + (CASE WHEN on_3b IS NOT NULL THEN 4 ELSE 0 END) AS runners_state
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
-                  AND type = 'X'
+                  -- SIM-457: an arm opportunity is ANY ball the outfielder
+                  -- fielded with runners on. The old `type='X'` excluded the
+                  -- main case — a hit that a runner tries to advance on.
+                  AND {SQL_IN_PLAY}
                   AND events IS NOT NULL
                   AND (on_1b IS NOT NULL OR on_2b IS NOT NULL OR on_3b IS NOT NULL)
                   AND (fielded_by = fielder_7 OR fielded_by = fielder_8 OR fielded_by = fielder_9)
@@ -3597,12 +3692,15 @@ class PlayerProfileComputor:
                 launch_speed, launch_angle, spray_angle,
                 bb_type,
                 events,
-                outs_on_pitch,
+                type,
                 fielding_error,
                 throwing_error_1, throwing_error_2
             FROM pg.raw.pitches
             WHERE season IN ({season_list})
-              AND type = 'X'
+              -- SIM-457: every ground ball is a conversion OPPORTUNITY. The
+              -- old `type='X'` kept only the plays that became outs, so the
+              -- model trained on a set with almost no failures.
+              AND {SQL_IN_PLAY}
               AND events IS NOT NULL
               AND hc_x IS NOT NULL AND hc_y IS NOT NULL
               AND launch_speed IS NOT NULL
@@ -3700,8 +3798,13 @@ class PlayerProfileComputor:
                 if cos_angle < -0.3:  # moving substantially away from 1B
                     time_margin -= 0.10
 
-            # Outcome
-            out_recorded = r["outs_on_pitch"] > 0
+            # Outcome (SIM-501a). Question: did the defense record at least one
+            # out on this ground ball? force_out and fielders_choice_out count —
+            # the defense converted a runner even though the batter reached. A
+            # clean hit, an error, or an all-safe fielders_choice counts zero.
+            # play_outs also counts the hidden runner out (an X-typed single
+            # means a runner was thrown out), matching the DP and pool sites.
+            out_recorded = play_outs(r["events"], r["type"]) > 0
             is_error = pd.notna(r.get("fielding_error")) or pd.notna(r.get("throwing_error_1"))
             error_type = None
             if pd.notna(r.get("throwing_error_1")) or pd.notna(r.get("throwing_error_2")):
@@ -3794,7 +3897,7 @@ class PlayerProfileComputor:
                 launch_speed, launch_angle,
                 bb_type,
                 events,
-                outs_on_pitch,
+                type,
                 field_assist_1, field_assist_2,
                 field_putout_1, field_putout_2,
                 home_score, away_score, inning, inning_topbot,
@@ -3809,6 +3912,7 @@ class PlayerProfileComputor:
               AND on_3b IS NULL
               AND outs < 2
               AND bb_type = 'ground_ball'
+              AND events IS NOT NULL
               AND hc_x IS NOT NULL AND hc_y IS NOT NULL
               AND launch_speed IS NOT NULL
         """).fetchdf()
@@ -3833,9 +3937,6 @@ class PlayerProfileComputor:
             speed_map[(int(r["player_id"]), int(r["season"]))] = (
                 r["sprint_speed"] if pd.notna(r["sprint_speed"]) else DEFAULT_SPRINT_SPEED_FPS
             )
-
-        # Runner on 1B speed lookup
-        speed_map.copy()
 
         rows = []
         for _, r in df.iterrows():
@@ -3913,9 +4014,12 @@ class PlayerProfileComputor:
             if not toward_2b and initiator_pos in ("3B", "1B"):
                 time_margin -= 0.15
 
-            # Outcome — Statcast never sets outs_on_pitch=2 for DPs; the relay
-            # out is recorded via the events field only.
+            # Outcome (SIM-501a). Question: did the defense turn two?
             dp_turned = r["events"] in ("grounded_into_double_play", "double_play")
+
+            # Question: how many outs did the play record, and which body was
+            # retired? Both derive from `events` — see pipeline/statcast_events.
+            outs_recorded = play_outs(r["events"], r["type"])
 
             # Identify pivot man
             pivot_id = None
@@ -3934,14 +4038,37 @@ class PlayerProfileComputor:
                 (pre_outs, pre_runners), RE24_APPROX.get((pre_outs, pre_runners), 0.5)
             )
 
-            if dp_turned:
-                post_outs = pre_outs + 2
-                post_runners = 0  # DP clears runners
+            # SIM-501a: the post state derives from `events`, per event kind.
+            # The scope is runner-on-1B-only ground balls with outs < 2, so:
+            #   3+ total outs — the inning is over; run expectancy is 0.
+            #   2 outs on the play (GIDP, lineout DP, bunt DP) — both bodies
+            #     retired: bases empty.
+            #   force_out / fielders_choice_out — the runner is out at 2B and
+            #     the batter reaches: 1B occupied.
+            #   batter retired (field_out, sac_bunt) — the batter is out and
+            #     the runner moves up: 2B occupied.
+            #   hidden runner out (an X-typed single/error: outs_recorded = 1
+            #     on a reach event) — the RUNNER was retired advancing and the
+            #     batter is aboard: 1B occupied.
+            #   nobody out (hit, error, all-safe FC) — both aboard.
+            #     (A deep single can put the runner on 3B instead of 2B;
+            #     RE24 treats 1B+2B as the approximation.)
+            post_outs = pre_outs + outs_recorded
+            if post_outs >= 3:
+                post_runners = 0
+                re_end = 0.0
+            elif outs_recorded >= 2:
+                post_runners = 0
                 re_end = self._re_matrix.get((min(post_outs, 2), post_runners), 0.10)
             else:
-                post_outs = pre_outs + (1 if r["outs_on_pitch"] > 0 else 0)
-                # Approximate: force at 2B successful, runner safe at 1B
-                post_runners = 0b001 if r["outs_on_pitch"] == 1 else pre_runners
+                if r["events"] in ("force_out", "fielders_choice_out"):
+                    post_runners = 0b001
+                elif batter_retired(r["events"]):
+                    post_runners = 0b010
+                elif outs_recorded == 1:
+                    post_runners = 0b001
+                else:
+                    post_runners = 0b011
                 re_end = self._re_matrix.get((min(post_outs, 2), post_runners), 0.30)
 
             dp_run_value = re_start - re_end  # positive = runs prevented
@@ -3960,7 +4087,7 @@ class PlayerProfileComputor:
                     "batter_speed": batter_speed,
                     "fielder_toward_2b": toward_2b,
                     "dp_turned": dp_turned,
-                    "outs_recorded": int(r["outs_on_pitch"]),
+                    "outs_recorded": outs_recorded,
                     "re24_start": re_start,
                     "re24_end": re_end,
                     "dp_run_value": dp_run_value,
@@ -4016,7 +4143,6 @@ class PlayerProfileComputor:
                     season,
                     fielded_by,
                     fielder_3, fielder_5,
-                    outs_on_pitch,
                     events,
                     CASE
                         WHEN fielded_by = fielder_3 THEN '1B'
@@ -4025,7 +4151,9 @@ class PlayerProfileComputor:
                     END AS fielder_position
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
-                  AND type = 'X'
+                  -- SIM-457: every bunt in play is an opportunity, not only
+                  -- the ones that became outs.
+                  AND {SQL_IN_PLAY}
                   AND events IS NOT NULL
                   -- Detect bunts: look for 'bunt' in description/events or very low EV + LA
                   AND (
@@ -4041,8 +4169,11 @@ class PlayerProfileComputor:
                 fielder_position AS position,
                 season,
                 COUNT(*) AS bunt_opportunities,
-                SUM(CASE WHEN outs_on_pitch > 0 THEN 1 ELSE 0 END) AS bunt_outs_recorded,
-                SUM(CASE WHEN outs_on_pitch > 0 THEN 1 ELSE 0 END) * 1.0
+                -- SIM-501a. Question: did the defense record at least one out
+                -- on this bunt? A sacrifice counts (the batter is retired); a
+                -- bunt single or an error counts zero.
+                SUM(CASE WHEN {SQL_FIELDING_OUT} THEN 1 ELSE 0 END) AS bunt_outs_recorded,
+                SUM(CASE WHEN {SQL_FIELDING_OUT} THEN 1 ELSE 0 END) * 1.0
                     / NULLIF(COUNT(*), 0) AS bunt_fielding_rate
             FROM bunt_plays
             WHERE fielder_position IN ('1B', '3B')
@@ -4073,7 +4204,7 @@ class PlayerProfileComputor:
                     field_putout_2,
                     field_assist_1,
                     fielded_by,
-                    outs_on_pitch,
+                    events,
                     throwing_error_1,
                     -- A scoop opportunity: throw from deep infield to 1B
                     -- Identified by: putout at 1B on a throw from SS/3B (longer throws)
@@ -4083,7 +4214,10 @@ class PlayerProfileComputor:
                          THEN TRUE ELSE FALSE END AS is_scoop_candidate
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
-                  AND type = 'X'
+                  -- SIM-457: a throw the first baseman could not handle means
+                  -- the batter REACHED, so the row is typed D or E — the old
+                  -- `type='X'` filtered out the failures being measured.
+                  AND {SQL_IN_PLAY}
                   AND events IS NOT NULL
                   AND fielder_3 IS NOT NULL
             )
@@ -4092,7 +4226,10 @@ class PlayerProfileComputor:
                 '1B' AS position,
                 season,
                 SUM(CASE WHEN is_scoop_candidate THEN 1 ELSE 0 END) AS scoop_opportunities,
-                SUM(CASE WHEN is_scoop_candidate AND outs_on_pitch > 0 THEN 1 ELSE 0 END)
+                -- SIM-501a. Question: was the BATTER retired at first base?
+                -- force_out / fielders_choice_out mean the throw went to
+                -- another bag, so they are not scoop successes.
+                SUM(CASE WHEN is_scoop_candidate AND {SQL_BATTER_RETIRED} THEN 1 ELSE 0 END)
                     * 1.0 / NULLIF(SUM(CASE WHEN is_scoop_candidate THEN 1 ELSE 0 END), 0)
                     AS scoop_success_rate
             FROM scoop_plays
@@ -4138,7 +4275,10 @@ class PlayerProfileComputor:
                            OR throwing_error_2 = fielded_by THEN 1 ELSE 0 END AS throwing_err
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
-                  AND type = 'X'
+                  -- SIM-457: an error means the batter REACHED, so error rows
+                  -- are typed D or E and never X — the old filter excluded
+                  -- 99.5% of the very events this query counts.
+                  AND {SQL_IN_PLAY}
                   AND events IS NOT NULL
                   AND fielded_by IS NOT NULL
             )
@@ -4814,7 +4954,13 @@ class PlayerProfileComputor:
                     rp.launch_angle,
                     rp.spray_angle,
                     -- SIM-051: handedness-corrected pull-relative spray angle.
-                    -- Sign convention: positive = pull side (LF for RHB, RF for LHB).
+                    -- Sign convention (corrected 2026-08-13, SIM-503 review):
+                    -- the raw spray sign is FIELD-side, negative = left field
+                    -- (measured), so under this formula NEGATIVE = pull side
+                    -- for both hands. The old comment here claimed positive =
+                    -- pull; the FORMULA was always hand-consistent, only the
+                    -- stated sign was wrong. Check any directional threshold
+                    -- against the measurement before trusting a sign.
                     --
                     -- Keyed on `stand`, NOT `bat_hand`.  `stand` is the side the
                     -- batter actually hit from in THIS plate appearance (the MLB
@@ -4872,7 +5018,20 @@ class PlayerProfileComputor:
                         WHEN 'home_run'  THEN 4
                         ELSE 0
                     END::SMALLINT                   AS result_hits,
-                    rp.outs_on_pitch::SMALLINT      AS result_outs,
+                    -- SIM-501a. Question: how many outs did the play record?
+                    -- Derived from `events` (an X-typed reach event carries one
+                    -- hidden runner out); `outs_on_pitch` is zero on 92.6% of
+                    -- batted-ball outs in the swept data. No consumer reads
+                    -- this column today: the production full-pool draw
+                    -- discards it (sim_loop.py `_ro`, the SIM-496 site) and
+                    -- the per-tile sampler never projects it. A correct value
+                    -- here is the prerequisite for the SIM-473 advancement
+                    -- draw and the SIM-494 double-play fix; a resolver that
+                    -- starts trusting it must first retire the implied runner
+                    -- (see the FieldingSignal note in sim_loop.py). No
+                    -- caught-stealing term: no in-play row carries a steal
+                    -- attempt (measured, 2024).
+                    ({sql_play_outs("rp.")})::SMALLINT AS result_outs,
                     rp.runs_on_pitch::SMALLINT      AS result_runs,
                     {recency_expr} AS recency_weight,
                     -- SIM-411/413/425b: realism facts appended AFTER recency_weight to

@@ -89,7 +89,12 @@ TABLE raw.pitches — one row per pitch (~700K/season, 2015-2026, ~10^7 rows tot
     bat_hand('L'/'R'/'S') — the ROSTER-DECLARED side, constant per player and 'S'
       for every switch hitter (~10-13% of rows). Do NOT use it as per-PA handedness.
   Count/outs/score: balls(0-3), strikes(0-2), outs(0-2), bat_score, fld_score, home_score, away_score.
-  Result: type('B'/'S'/'X'), description(e.g. 'called_strike','swinging_strike','foul','hit_into_play'),
+  Result: type — single-char pitch result code. Balls in play split THREE ways:
+    'X' (in play, out(s), no run), 'D' (in play, no out, no run), 'E' (in play, run(s)).
+    A ball-in-play filter is type IN ('X','D','E') — filtering on 'X' alone keeps only
+    the outs (65%) and drops the hits. Other codes: 'B' ball, 'C' called strike,
+    'S'/'W' swinging strike, 'F' foul, 'T' foul tip, 'H' HBP.
+    description(e.g. 'called_strike','swinging_strike','foul','hit_into_play'),
     events (PA outcome, non-NULL only on the last pitch: 'single','double','triple','home_run',
     'strikeout','strikeout_double_play','walk','field_out','hit_by_pitch',...), zone(1-9 in-zone, 11-14 out).
   Pitch physics: release_speed(mph), release_spin_rate(rpm), break_vertical_induced(IVB, in),
@@ -98,7 +103,10 @@ TABLE raw.pitches — one row per pitch (~700K/season, 2015-2026, ~10^7 rows tot
     ('ground_ball'/'fly_ball'/'line_drive'/'popup'), hit_location, fielded_by.
   Baserunning: on_1b/on_2b/on_3b (runner ids or NULL), sb_attempt_2b/3b/home (bool),
     sb_success_2b/3b/home (bool), fielder_2 (catcher id).
-  Runs: runs_on_pitch, outs_on_pitch, rbis_on_pitch, earned_runs_on_pitch.
+  Runs: runs_on_pitch, rbis_on_pitch, earned_runs_on_pitch.
+    ⚠ outs_on_pitch is BROKEN in the swept data (zero on 92.6% of batted-ball outs and
+    100% of strikeouts — SIM-501). Never use it for outs or innings pitched; derive outs
+    from `events` instead (e.g. strikeout/field_out/force_out=1, *double_play=2, triple_play=3).
   data_quality_flag BOOL — physically implausible rows; standard filter is = FALSE.
 TABLE raw.players — player_id (PK), full_name, first_name, last_name, bats('L'/'R'/'S'),
   throws('L'/'R'), primary_position. JOIN raw.players pl ON pl.player_id = p.pitcher (or p.batter).

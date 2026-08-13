@@ -163,9 +163,14 @@
 
 **`docs/audit/2026-08-11-sim501-502-resumption-state.md` is the handover.** Read it first.
 
-- **DO NOT run the profile recompute** (`make profile-computor`). SIM-457 was reverted in `7226f85`
-  and `outs_recorded` still feeds era/fip/xfip/whip from a column whose consumers were built around
-  broken values.
+- **DO NOT run the profile recompute** (`make profile-computor`) — but the reason changed on
+  2026-08-13. SIM-501a/c CLOSED: SIM-457 is re-landed on the events-based out label, no profile
+  site reads `outs_on_pitch` any more (a unit test enforces this), and `outs_recorded` now matches
+  official innings pitched within ~0.5% (verified against the 2024 IP leaders live). The recompute
+  stays blocked on two things: **SIM-458** (the run-expectancy fix, still reverted) and the
+  **SIM-488 re-sweep** — the swept `raw.pitches.outs` column (pre-play outs) is still
+  stale-by-one-play on 46% of plate appearances, and the situation/RE24 features group by it.
+  Sequence: close SIM-502a..d → re-sweep → re-land SIM-458 → then SIM-459.
 - **DO NOT apply Alembic 0018** and **do not re-sweep**. SIM-502 has four open defects
   (SIM-502a..d). Its write path is deliberately INERT — it probes for the table and skips when
   absent — so the code on master cannot break a nightly run. Leave that guard alone.
@@ -327,7 +332,8 @@ consolidates; QA cross-validates and never self-certifies its own work.
 - **TDD:** tests first, then implementation (Backend Developer convention). Unit tests use the `__new__`
   constructor-bypass + in-memory mock pattern (no live DB) — see `tests/conftest.py`.
 - **Ticketing:** every change maps to a `SIM-NNN` ticket. Next free ID is tracked in `BACKLOG.md`
-  (currently **SIM-438**). Recent IDs: SIM-437 = consolidate the two ETL loaders' duplicate type-coercion
+  — read it there; do not trust a number copied into this file (this line once said SIM-438 while
+  the true next ID was SIM-504). Recent IDs: SIM-437 = consolidate the two ETL loaders' duplicate type-coercion
   helpers into `pipeline/etl/coercion.py` [CLOSED 2026-06-22], SIM-430 = full-pool `/simulate` throughput / 2s-30s SLA
   (worker-scaling CLOSED, per-game cost → SIM-436), SIM-431 = the Python-3.13 migration [CLOSED],
   SIM-432 = the calibrator/validate_props ↔ live-schema reconciliation [CLOSED 2026-06-01, the

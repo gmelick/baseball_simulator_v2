@@ -138,9 +138,13 @@ is not a duration. Corrected in `BACKLOG.md` and the ticket list.
 
 ## Related open work
 
-* **SIM-501a/b/c** — the events-based out label, and re-landing SIM-457 per site. SIM-501b (fix
-  `outs_on_pitch` in the ETL) is now DONE; a/c remain.
-* **SIM-457** — reverted in `7226f85`. Re-land per site, never as a sweep, once the out label exists.
-* **The profile recompute must not run** until SIM-457 is re-landed — `outs_recorded` still feeds
-  ERA, FIP, xFIP and WHIP from `SUM(outs_on_pitch)`, which is now correct at the row level but whose
-  consumers were built around the broken values.
+*(Updated 2026-08-13.)*
+
+* **SIM-501a/c — CLOSED 2026-08-13.** The events-based out label is in
+  (`pipeline/statcast_events.py`), SIM-457 is re-landed per site, and no profile-computor site
+  reads `outs_on_pitch` (a unit test enforces it). SIM-501b's ETL fix is landed; the swept DATA
+  stays pre-fix until the re-sweep, and nothing reads the column any more.
+* **The profile recompute still must not run**, for two remaining reasons: **SIM-458** (the
+  run-expectancy fix) is still reverted, and the swept `raw.pitches.outs` (pre-play outs) is
+  stale-by-one-play on 46% of plate appearances until the re-sweep — the situation/RE24 features
+  group by it. Sequence: close SIM-502a..d → re-sweep → re-land SIM-458 → SIM-459.

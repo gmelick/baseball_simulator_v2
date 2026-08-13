@@ -1,3 +1,70 @@
+# Data — SIM-501a/c + SIM-503: the events-based out label; SIM-457 re-landed per site — 2026-08-13
+
+**SIM-501a — CLOSED.** Every out label in the profile computor now derives from `events`. The
+vocabulary lives in one new module, `pipeline/statcast_events.py`, with the two questions the first
+attempt conflated kept separate: *"how many outs did the play record?"* (PLAY_OUTS_BY_EVENT /
+FIELDING_OUT_EVENTS) and *"was the batter retired?"* (BATTER_RETIRED_EVENTS). Every semantic claim
+in the module is pinned to a measurement on the live DB, not to a reading of the rules:
+
+* `fielders_choice` rows are typed D/E only — never X — so NO out is recorded. The batter reaches
+  on `fielders_choice` (92.2% stand on 1B), `fielders_choice_out` (90.5%) and `force_out` (98.8%).
+* The steal columns are FALSE on every `caught_stealing_*` / `strikeout_double_play` row, so the
+  events out-count and the caught-stealing term never count the same out twice.
+* A runner thrown out advancing on a hit hides in the pitch `type` (290 singles + 66 doubles typed
+  X in 2024) — the formula adds one out for an X-typed reach event.
+* Completed-half-inning identity: the formula sums to exactly 3 outs on **98.2% of the 41,542
+  completed halves of 2024**. The residual (~0.5% of outs) is pickoffs and feed-displaced outs —
+  the SIM-502 domain — plus a 0.06% overcount from uncaught third strikes.
+
+**SIM-457 — RE-LANDED, this time on the correct label.** Eleven sites. Each site's comment states
+its question:
+
+* Pitcher GB/FB/LD + batter platoon denominators — all balls in play, not only the outs.
+* OF catch probability — a catch is BATTER-RETIRED. A force out on a dropped fly is an out but not
+  a catch; the c11c919 version could not make that distinction, which is why it was reverted.
+  Home runs are excluded from the opportunity set — no outfielder can catch one.
+* Infield OAA + bunt defense — ANY-OUT-RECORDED (force outs count; the hidden runner out counts).
+* 1B scooping — BATTER-RETIRED (a throw to another bag is not a scoop success).
+* Error decomposition + OF-arm row filters — widened; an error means the batter REACHED, so the
+  old X-only filter excluded 99.5% of the errors it was counting.
+* The DP model — post-state per event kind, with an inning-over short-circuit at 3+ outs.
+* `sim.outcome_pool.result_outs` — events-derived (was raw `outs_on_pitch`, zero on 92.6% of
+  batted-ball outs). No consumer reads it today; a correct value is the SIM-473/SIM-494
+  prerequisite, and the pool-metadata gate now compares `builder_version` so the fix actually
+  lands on the next incremental rebuild.
+
+**SIM-501c — CLOSED.** `outs_recorded` (the era/fip/xfip/hr_per_9/whip denominator, plus
+`sb_against_per_9`) sums the events formula. **Verified live: the 2024 regular-season IP leaders
+land within ±3 outs of official innings pitched** (Gilbert 627 vs 626, Lugo 619 vs 620, Wheeler
+598 vs 600). The column it replaces missed ~36%.
+
+**SIM-503 — FILED + FIXED** (found while editing those exact lines): batter `pull/oppo_rate_vs_l/_vs_r`
+had no `p_throws` filter on either term (so the platoon split was two copies of one number) and read
+raw `spray_angle < -15`, which is the LEFT-FIELD rate — pull for a righty, OPPO for a lefty. Now
+platoon-filtered and stand-corrected. **The QA round then caught the half-migration: the season-level
+`pull_rate`/`oppo_rate` — the columns the batter engine weights at 0.760/0.792, while the platoon
+splits have no consumer — still carried the wrong sign. Fixed, with spray-measured denominators.**
+The pool build's `pull_relative_spray_angle` comment stated the sign backwards; corrected (the
+formula was always hand-consistent).
+
+**QA cross-validation (8 finder angles, 5 agents):** nine confirmed findings, all fixed in this
+change — the pull/oppo half-migration, the home-run contamination of the OF catch set, the
+watermark-only pool rebuild gate (a formula change could never land; `_seasons_needing_rebuild` now
+compares `builder_version`, bumped to `sim501.1`), the DP post-state contradictions (hidden-runner-out
+rows and 3-out overflow), the open hidden-out whitelist (now the closed complement form — verified
+equal on 2024, 361 = 361), the empirically-only caught-stealing disjointness (now structural), the
+AI-assistant schema prompt still teaching `type='X'` and `outs_on_pitch`, infield OAA label parity,
+and a dangling `speed_map.copy()`. One finding refuted by measurement: the claimed ETL double-count
+of PA-ending caught stealings — zero overlap on all 3,211 such rows, 2017-2026.
+
+**The instrument:** `tests/unit/test_sim501a_out_label.py` (24 tests) pins every measured fact and
+fails if any computor site reads `outs_on_pitch` again — proven able to fail before landing. All
+profile SQL changes are inert until SIM-459 runs. **The recompute stays blocked**: SIM-458 is still
+reverted, and the swept `raw.pitches.outs` is stale-by-one-play until the SIM-488 re-sweep (the
+situation/RE24 features group by it). Sequence: SIM-502a..d → re-sweep → SIM-458 → SIM-459.
+
+**Authors: Data Engineer (Agent 4) · QA (Agent 9) [cross-validation]**
+
 # Test/CI — SIM-448: weekly integration failure — the 0017 schema-drift guard, and the coverage 0017 never had — 2026-08-03
 
 ## 2026-08-11 — SIM-501 out counting (LANDED) + SIM-502 play events (INERT, 4 open defects)
