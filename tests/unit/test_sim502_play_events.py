@@ -287,6 +287,62 @@ class TestTheBaseIsRecovered:
         assert rows[0]["base"] is None
 
 
+class TestTheThrowerIsThePitcherOnTheMound:
+    """Third adversarial review, 2026-08-13. `matchup.pitcher` is the FINAL
+    pitcher of the plate appearance. A pickoff or stepoff thrown BEFORE a
+    mid-PA (injury) pitching change belongs to the DEPARTING pitcher —
+    measured: 4 misattributed throws in 387 games (e.g. game 745499 ab 83).
+    The thrower is the pitcher of the nearest following pitch."""
+
+    @staticmethod
+    def _pitch(index, pitcher_id):
+        ev = _ev(index, "pitch")
+        ev["defense"] = {"pitcher": {"id": pitcher_id}}
+        return ev
+
+    @staticmethod
+    def _sub(index, incoming_id):
+        ev = _ev(index, "action", "pitching_substitution")
+        ev["player"] = {"id": incoming_id}
+        return ev
+
+    def test_a_throw_before_the_change_belongs_to_the_departing_pitcher(self):
+        # The shape of game 747154 ab 40: stepoff at idx 4, change at idx 6
+        # with NO pitch between them. The nearest-following-pitch heuristic
+        # gets this wrong (the next pitch is the reliever's); the forward
+        # walk keys the throw to the pitcher still on the mound.
+        play = _play(
+            [
+                self._pitch(0, 111),
+                _ev(1, "stepoff"),
+                self._pitch(2, 111),
+                _ev(4, "pickoff"),
+                self._sub(6, 222),
+                _ev(7, "stepoff"),
+                self._pitch(9, 222),
+            ]
+        )
+        rows = {r["play_index"]: r for r in _extract(play)}
+        assert rows[1]["pitcher_id"] == 111
+        assert rows[4]["pitcher_id"] == 111  # thrown BEFORE the change
+        assert rows[7]["pitcher_id"] == 222  # thrown AFTER it
+
+    def test_a_trailing_event_falls_back_to_the_preceding_pitch(self):
+        play = _play([self._pitch(0, 111), _ev(1, "stepoff")])
+        rows = _extract(play)
+        assert rows[0]["pitcher_id"] == 111
+
+    def test_no_defense_blocks_falls_back_to_the_matchup(self):
+        # The fixture's events carry no defense block (the un-hydrated shape);
+        # the matchup pitcher is the documented fallback.
+        rows = _extract(_play([_ev(0, "pickoff")]))
+        assert rows[0]["pitcher_id"] == 592866
+
+    def test_the_intent_walk_is_signalled_by_the_matchup_pitcher(self):
+        rows = _extract(_play([], result_type="intent_walk"))
+        assert rows[0]["pitcher_id"] == 592866
+
+
 class TestTheScoreIsPrePlay:
     """SIM-502b. `result.homeScore` / `result.awayScore` are the score AFTER
     the play — reading them stamped a pickoff with runs from a home run four

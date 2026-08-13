@@ -171,12 +171,12 @@
   **SIM-488 re-sweep** — the swept `raw.pitches.outs` column (pre-play outs) is still
   stale-by-one-play on 46% of plate appearances, and the situation/RE24 features group by it.
   Sequence: close SIM-502a..d → re-sweep → re-land SIM-458 → then SIM-459.
-- **DO NOT apply Alembic 0018** and **do not re-sweep** until the THIRD adversarial review runs.
-  All four SIM-502 defects (a..d) were CLOSED 2026-08-13 — a/b/d fixed and validated over 344 live
-  games, c resolved by measurement (the displaced outs land in `raw.play_events`, the `sb_*`
-  columns, or `events`; residual ~0.04% accepted). The write path is deliberately INERT — it
-  probes for the table and skips when absent — so the code on master cannot break a nightly run.
-  Leave that guard alone until 0018 is applied after the review.
+- **Alembic 0018 is CLEARED to apply (2026-08-13) but NOT yet applied.** All four SIM-502 defects
+  (a..d) closed; the THIRD adversarial review ran (four angles, ~1,100 game-loads) — one confirmed
+  fix landed (mid-PA pitcher attribution on pickoff/stepoff rows) and SIM-504 was filed for the
+  consumer wiring. The write path stays INERT (the to_regclass probe) until 0018 is applied; the
+  guard is harmless afterwards. Sequence: apply 0018 → SIM-488 re-sweep (~6 h) → re-land SIM-458 →
+  SIM-459.
 - **The re-sweep takes ~6 hours, not 55.** Measured from `.sweep_progress/`: 2017-2025 ran in
   6 h 9 m. The old figure took a SPAN between file timestamps as a duration.
 - **Sample hundreds of games when validating ETL work, never dozens.** Two adversarial review rounds

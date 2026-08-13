@@ -1,8 +1,14 @@
 # Product Backlog
 
-*Owner: Product Manager (Agent 1) · Last updated: 2026-08-13 (SIM-501a/c CLOSED — the events-based out label; SIM-503 filed+fixed; next free ID → SIM-504; see the top banner). Older context from the 2026-06-02 stamp follows: (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
+*Owner: Product Manager (Agent 1) · Last updated: 2026-08-13 (SIM-501a/c + SIM-502a..d CLOSED; SIM-503 filed+fixed; SIM-504 filed; next free ID → SIM-505; see the top banners). Older context from the 2026-06-02 stamp follows: (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
 
-# ✅ 2026-08-13 — SIM-501a/c CLOSED: the events-based out label is in; SIM-503 filed+fixed (next free ID → SIM-504)
+# 📋 2026-08-13 — SIM-504 FILED: wire `raw.play_events` into its consumers (next free ID → SIM-505)
+
+| ID | Title | Type | Pri | Size | Depends-on | Status |
+|---|---|---|---|---|---|---|
+| **SIM-504** | Wire `raw.play_events` into its consumers | Data | P2 | M | 0018 applied + re-sweep | 🔲 **OPEN.** Found by the third adversarial review (consumer-readiness angle): once 0018 is applied and the table fills, three consumers stay silently wrong without wiring work. (1) **Intent walks**: five profile-SQL sites filter `events IN ('walk','intent_walk')` on `raw.pitches` — that second branch stays DEAD forever, because intent walks live only in `raw.play_events`; batter/pitcher walk features need a UNION or join (decide whether an intentional walk should even count toward SIMILARITY walk rates — it says more about the situation than the batter). (2) **Innings pitched**: pickoff outs (~0.5% of outs, the documented SIM-501 residual) can now close via `is_out` rows; extend `sql_outs_recorded`'s accounting or document why not. (3) **The pickoff/steal-hold pool** (SIM-474 uses pickoff-throw rates as the hold-runner denominator). Do NOT start before the re-sweep populates the table. |
+
+# ✅ 2026-08-13 — SIM-501a/c CLOSED: the events-based out label is in; SIM-503 filed+fixed (next free ID → SIM-504, now → SIM-505)
 
 **SIM-501a + SIM-501c are CLOSED.** Every out label in the profile computor now derives from
 `events`; no site reads `outs_on_pitch` (comment mentions only). The vocabulary lives in ONE module —
@@ -71,8 +77,31 @@ re-land SIM-458 → then run SIM-459 once for everything.
 **Update 2026-08-13: SIM-502a, 502b, 502c and 502d are ALL CLOSED.** a/b/d validated over 344 live
 games (every 2024 extras game + 150 ordinary): 0 score mismatches on 2,452 rows, 31/31 ghost-runner
 intent walks correct, 0 of 1,572 pickoff rows missing `base`, pickoff outs still 55/55 against the
-feed. 502c resolved by measurement (see its row). **Remaining gate: the THIRD adversarial review,
-then apply 0018, then the SIM-488 re-sweep.**
+feed. 502c resolved by measurement (see its row).
+
+**THE THIRD ADVERSARIAL REVIEW RAN 2026-08-13 and 0018 is CLEARED to apply.** Four angles, ~1,100
+cumulative game-loads today, every finding adjudicated against real payloads:
+* **CONFIRMED + FIXED — pitcher attribution on mid-PA pitching changes.** `matchup.pitcher` is the
+  FINAL pitcher of the plate appearance, so a pickoff/stepoff thrown before an injury change was
+  stamped with the reliever's id (4 of 8 co-occurrences in 387 games, ~0.2% of pickoff rows — and
+  this column is the future SIM-474 hold-runner denominator). The extractor now walks the events
+  forward tracking who is on the mound: pitches name their pitcher (`defense.pitcher` under
+  `hydrate=alignment`), a `pitching_substitution` action names the INCOMING pitcher (`player.id`,
+  verified on game 747154). All 7 real flagged throws now resolve to the pitcher who threw them.
+* **DESIGN-GAP → SIM-504 (filed).** Three consumers stay silently wrong after 0018 without wiring:
+  the dead `intent_walk` branch in five walk-rate sites, the pickoff-out IP residual, the SIM-474
+  pool. See the SIM-504 banner.
+* **REFUTED with evidence:** (1) play-event `outs_before` vs pitch-row `outs` off-by-ones are BOTH
+  correct — play-entering vs pitch-entering state, when a pickoff out precedes the first pitch of
+  its own PA (~8/387 games; the extractor docstring states the per-play semantics); (2) intent-walk
+  batter "missing" from 1B on the next play = a pinch-runner replaced him (payload-verified);
+  (3) the DDL survived every attack: 90 weird games (43 postseason, 23 twelve-plus-inning
+  marathons, 21 doubleheaders, 3 suspended/resumed → 645 rows, ZERO invariant violations —
+  natural-key duplicates, CHECK ranges, sentinel misuse, base coverage, placement bases all clean),
+  the 20-column INSERT matches the row dict and the DDL exactly, `01_postgres_schema.sql` matches
+  0018 verbatim, and the Alembic chain is 0017 → 0018.
+
+**Remaining sequence: apply 0018 → SIM-488 re-sweep (~6 h) → re-land SIM-458 → SIM-459.**
 
 **READ THIS FIRST IF YOU ARE RESUMING.** The code is on master. The migration is **NOT applied**.
 The write path is **INERT** until it is — `_write_play_events` probes `to_regclass('raw.play_events')`

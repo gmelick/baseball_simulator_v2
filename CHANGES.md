@@ -1,3 +1,17 @@
+# Data — the SIM-502 third adversarial review: 0018 cleared; one fix, one ticket — 2026-08-13
+
+Four attack angles over ~1,100 cumulative game-loads. One CONFIRMED defect, fixed in this change:
+**pickoff/stepoff pitcher attribution across a mid-PA pitching change.** `matchup.pitcher` is the
+FINAL pitcher of the plate appearance, so a throw made before an injury change carried the
+reliever's id — 4 of 8 co-occurrences in 387 games, and the column is the future hold-runner
+denominator (SIM-474). The extractor now walks the playEvents forward tracking who is on the
+mound (a pitch names its pitcher; a `pitching_substitution` names the incoming one in `player.id`).
+All 7 real flagged throws verified correct after the fix. One DESIGN-GAP filed as **SIM-504**
+(wire `raw.play_events` into walk rates, IP and the pickoff pool after the re-sweep). Everything
+else refuted with payload evidence or clean: 90 weird games (postseason, marathons, doubleheaders,
+suspended) produced 645 rows with zero invariant violations; the write path, DDL, canonical schema
+and Alembic chain all agree. **Apply 0018 next, then the SIM-488 re-sweep.**
+
 # Data — SIM-502a/b/c/d: all four `raw.play_events` defects closed — 2026-08-13
 
 **SIM-502a — CLOSED.** The half-inning reset erased the extra-innings automatic runner. The fix

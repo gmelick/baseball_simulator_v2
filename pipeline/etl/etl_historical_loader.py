@@ -3247,8 +3247,9 @@ class HistoricalDataLoader:
         # migration is applied anywhere. Without this guard the statements below
         # raise `UndefinedTable`, which aborts the whole game transaction — so
         # merely landing the code would break every nightly ETL run until someone
-        # ran the migration. SIM-502 is NOT finished (four open defects, see
-        # SIM-502a..d in BACKLOG.md), so it must be INERT, never fatal.
+        # ran the migration. All four SIM-502 defects (a..d) closed 2026-08-13;
+        # the guard stays until 0018 is APPLIED, and is harmless after (the
+        # probe then answers true once per run).
         if self._play_events_table_exists is None:
             cur.execute("SELECT to_regclass('raw.play_events')")
             probe = cur.fetchone()

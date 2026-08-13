@@ -206,6 +206,47 @@ def extract_play_events(
     pitcher_id = (matchup.get("pitcher") or {}).get("id")
     batter_id = (matchup.get("batter") or {}).get("id")
 
+    # The thrower of a non-pitch event (third adversarial review, 2026-08-13).
+    # `matchup.pitcher` is the FINAL pitcher of the plate appearance, which
+    # misattributes a throw made BEFORE a mid-PA (injury) pitching change —
+    # measured: 4 such throws in 387 games. Walk the events once, forward,
+    # tracking who is on the mound: a pitch names its pitcher outright
+    # (`defense.pitcher`, present under the loader's `hydrate=alignment`),
+    # and a `pitching_substitution` action names the INCOMING pitcher in its
+    # `player.id` (verified, game 747154 ab 40). An event before any signal
+    # takes the nearest FOLLOWING pitch; the last resort is `matchup.pitcher`
+    # — correct whenever no mid-PA change happened, which is every
+    # plate appearance except the injury case.
+    thrower_at: dict[int, int] = {}
+    current: int | None = None
+    for event in events:
+        idx0 = event.get("index")
+        if str(((event.get("details") or {}).get("eventType")) or "") == "pitching_substitution":
+            pid = (event.get("player") or {}).get("id")
+            if pid:
+                current = int(pid)
+        if idx0 is not None and current is not None:
+            thrower_at[int(idx0)] = current
+        if event.get("isPitch"):
+            pid = ((event.get("defense") or {}).get("pitcher") or {}).get("id")
+            if pid:
+                current = int(pid)
+                if idx0 is not None:
+                    thrower_at[int(idx0)] = current
+    following_pitcher: dict[int, int] = {}
+    carry: int | None = None
+    for event in reversed(events):
+        if event.get("isPitch"):
+            pid = ((event.get("defense") or {}).get("pitcher") or {}).get("id")
+            if pid:
+                carry = int(pid)
+        idx0 = event.get("index")
+        if idx0 is not None and carry is not None:
+            following_pitcher[int(idx0)] = carry
+
+    def _thrower(play_index: int) -> int | None:
+        return thrower_at.get(play_index) or following_pitcher.get(play_index) or pitcher_id
+
     # Score entering the play, from the batting side's perspective. Supplied by
     # the caller — the play's own `result` scores are POST-play (SIM-502b).
     if topbot == "Top":
@@ -229,7 +270,7 @@ def extract_play_events(
             "runners_state": 0,
             "bat_score": bat_score,
             "fld_score": fld_score,
-            "pitcher_id": pitcher_id,
+            "pitcher_id": _thrower(play_index),
             "batter_id": batter_id,
             "runner_id": None,
             "base": None,
