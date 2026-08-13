@@ -104,9 +104,23 @@ cumulative game-loads today, every finding adjudicated against real payloads:
   the 20-column INSERT matches the row dict and the DDL exactly, `01_postgres_schema.sql` matches
   0018 verbatim, and the Alembic chain is 0017 → 0018.
 
-**0018 APPLIED 2026-08-13 12:19; the SIM-488 re-sweep (2017-2026) started 12:20** — owner-approved.
-`raw.play_events` began filling with the first games (pickoffs, balks and the first `intent_walk`
-rows the database has ever held). Remaining after the sweep: re-land SIM-458 → SIM-459.
+**SIM-488 RE-SWEEP COMPLETE 2026-08-13 19:41 — 22,533 games, 2017-2026, ~7.3 h wall** (one
+stochastic process hang at game 21,649 after 6 h; the game's feed fetched fine in 0.3 s, the
+process was killed and the resumable wrapper finished the rest in 14 min — the SIM-445-class
+fault, still stochastic, still survivable by design). **Verified across all ten seasons:**
+* `outs_on_pitch` on strikeout rows: **99.7-99.9% record the out in every season** (was 0.0% in
+  all ten); the residual is the dropped-third-strike reach, which records no out.
+* `raw.play_events` tracks baseball reality season by season: intent walks 994 (2017, MLB real
+  ~970) declining to ~500s in the 2020s; stepoffs exactly ZERO before 2023 and 2,894→4,435 after
+  (the pitch clock); pickoffs collapse ~17k → ~10k at the 2023 disengagement limit; balks jump to
+  207 in 2023 (the limit's forced balks); pickoff/steal outs ~300-380/season (~the extrapolated
+  340).
+* Zero row loss: per-season pitch counts match the July sweep exactly (2017: 732,475 = the
+  recorded figure). The wedged game re-loaded cleanly (231 rows).
+
+**Remaining: SIM-459** — the recompute now carries SIM-501a/457/503 + 458 + the pool
+`result_outs` fix in one pass. After it: regression golden regen + the SIM-450 acceptance lane +
+calibration refit before anything reaches users.
 
 **READ THIS FIRST IF YOU ARE RESUMING.** The code is on master. The migration is **NOT applied**.
 The write path is **INERT** until it is — `_write_play_events` probes `to_regclass('raw.play_events')`

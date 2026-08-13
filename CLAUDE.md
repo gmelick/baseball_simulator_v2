@@ -171,7 +171,9 @@
   **SIM-488 re-sweep** — the swept `raw.pitches.outs` column (pre-play outs) is still
   stale-by-one-play on 46% of plate appearances, and the situation/RE24 features group by it.
   Sequence: close SIM-502a..d → re-sweep → re-land SIM-458 → then SIM-459.
-- **Alembic 0018 is APPLIED (2026-08-13) and the SIM-488 re-sweep is RUNNING.** All four SIM-502
+- **Alembic 0018 is APPLIED and the SIM-488 re-sweep is COMPLETE (2026-08-13, 22,533 games,
+  verified: strikeout out-label 99.7-99.9% in every season, play_events tracks the real
+  pitch-clock era, zero row loss).** The next operational step is SIM-459. All four SIM-502
   defects (a..d) closed; the THIRD adversarial review ran (four angles, ~1,100 game-loads) — one
   confirmed fix landed (mid-PA pitcher attribution on pickoff/stepoff rows) and SIM-504 was filed
   for the consumer wiring. The re-sweep (2017-2026, ~6 h, `scripts/resumable_sweep.py`, log in
