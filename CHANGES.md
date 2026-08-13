@@ -1,3 +1,19 @@
+# Data — SIM-458 re-landed; 0018 applied; the SIM-488 re-sweep is running — 2026-08-13
+
+**SIM-458 — RE-LANDED, verbatim from c11c919** (it was reverted only because it shared a commit
+with the SIM-457 label defect). The run-expectancy matrix's half-inning final score was
+`MAX(bat_score)` — the score ENTERING the last plate appearance — so runs scored on the
+inning-ending play were invisible and every RE24 value read low (measured: 126 of 39,543
+half-innings, 146 runs, concentrated in the run-scores-as-the-inning-ends cells). The fix takes
+`GREATEST` of the two available lower bounds and reads the raw table so runs on non-PA-ending
+pitches (steal of home, wild pitch, balk) count. Verified against published MLB run expectancy at
+first landing (0 outs empty 0.477, loaded 2.277; 2 outs empty 0.097, loaded 0.804).
+
+**Operations:** Alembic 0018 APPLIED (head 0017 → 0018); `raw.play_events` live and filling; the
+2017-2026 re-sweep started 12:20 as a detached resumable process (~6 h; log in
+`.sweep_progress/sweep_20260813.log`). After it completes, SIM-459 runs the recompute with every
+fix from this session in one pass.
+
 # Data — the SIM-502 third adversarial review: 0018 cleared; one fix, one ticket — 2026-08-13
 
 Four attack angles over ~1,100 cumulative game-loads. One CONFIRMED defect, fixed in this change:

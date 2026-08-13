@@ -56,10 +56,13 @@ measurement:
 |---|---|---|---|---|---|---|
 | **SIM-503** | Batter pull/oppo rates were not platoon, and read the wrong field side | Data | P1 | S | — | ✅ **FIXED 2026-08-13** (found while re-landing SIM-457 on those lines). Defects in `pull/oppo_rate` and their `_vs_l/_vs_r` splits: (1) the platoon terms had no `p_throws` filter, so `_vs_l` ≡ `_vs_r` by construction; (2) the raw `spray_angle` sign is FIELD-side (negative = left field, measured), so `< -15` read the LEFT-FIELD rate — pull for a righty, OPPO for a lefty. **The QA review found the sign fix had landed only on the platoon splits, which have NO consumer, while the season-level `pull_rate`/`oppo_rate` — the columns the batter engine weights at 0.760/0.792 — still carried the wrong sign. Both are fixed.** (3) denominators kept only out plays (SIM-457) and counted rows with no measured spray; now in-play AND `spray_angle IS NOT NULL`. The pool build's `pull_relative_spray_angle` comment claimed "positive = pull side" — backwards under its own formula; corrected (formula untouched, it was always hand-consistent). Inert until SIM-459 runs, like all profile SQL. |
 
-**Sequencing note (recompute).** SIM-459 stays blocked: SIM-458 is still reverted, and the swept
-`raw.pitches.outs` (pre-play outs) is stale-by-one-play on 46% of plate appearances until the
-SIM-488 re-sweep — the situation/RE24 features group by it. Close SIM-502a..d → re-sweep →
-re-land SIM-458 → then run SIM-459 once for everything.
+**Sequencing note (recompute) — updated 2026-08-13.** SIM-502a..d are closed, 0018 is applied, the
+SIM-488 re-sweep is RUNNING, and **SIM-458 is RE-LANDED** (the c11c919 fix, verbatim: the
+half-inning final score is `GREATEST(MAX(entering-score), MIN(entering-score) +
+SUM(runs_on_pitch))` read from the raw table — both candidate formulas are lower bounds that miss
+DIFFERENT runs; verified against published MLB run expectancy when first landed). The only
+remaining gate for **SIM-459** is the sweep finishing; the recompute then carries SIM-501a/457/503
++ 458 + the corrected pool `result_outs` in one pass.
 
 **Two review findings deliberately NOT fixed here, for the SIM-459/491 window:**
 * `_FIELDER_RBF_PER_OAA = 0.010` / `_FIELDER_RBF_CAP = 0.05` (`simulation/sim_loop.py:372`) were

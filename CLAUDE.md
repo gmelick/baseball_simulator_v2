@@ -177,8 +177,9 @@
   for the consumer wiring. The re-sweep (2017-2026, ~6 h, `scripts/resumable_sweep.py`, log in
   `.sweep_progress/sweep_20260813.log`; the pre-sweep progress files are archived in
   `.sweep_progress_pre_sim501_20260813/`) rewrites `raw.pitches` with the fixed parser AND fills
-  `raw.play_events` — the first `intent_walk` rows this database has ever held. After it:
-  re-land SIM-458 → SIM-459 (the recompute also picks up the SIM-501a/457/503 profile SQL).
+  `raw.play_events` — the first `intent_walk` rows this database has ever held. **SIM-458 is
+  RE-LANDED** (2026-08-13, the c11c919 run-expectancy fix, verbatim). After the sweep: SIM-459
+  (the recompute picks up SIM-501a/457/503 + 458 + the corrected pool `result_outs` in one pass).
 - **The re-sweep takes ~6 hours, not 55.** Measured from `.sweep_progress/`: 2017-2025 ran in
   6 h 9 m. The old figure took a SPAN between file timestamps as a duration.
 - **Sample hundreds of games when validating ETL work, never dozens.** Two adversarial review rounds

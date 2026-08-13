@@ -557,12 +557,39 @@ def build_run_expectancy_matrix(conn: duckdb.DuckDBPyConnection, seasons: list[i
               AND inning <= 8            -- exclude 9th+ for unbiased estimates
               AND events IS NOT NULL     -- one row per PA
         ),
-        -- Get the final score for each half-inning
+        -- Get the final score for each half-inning.
+        --
+        -- SIM-458 (re-landed 2026-08-13; first landed in c11c919, reverted with
+        -- it for the OTHER tickets' defect): this was `MAX(bat_score)` over the
+        -- `plays` rows. `bat_score` is the score ENTERING a plate appearance, so
+        -- runs scored on the LAST plate appearance of a half-inning appear on no
+        -- later row and were invisible. Every run-expectancy value was biased
+        -- LOW. Measured on 2024, innings 1-8: 126 of 39,543 half-innings (0.3%)
+        -- and 146 runs — concentrated exactly where a run scores on a play that
+        -- also ends the inning. The matrix feeds BOTH the SIM-499 run-value
+        -- ledger and the SIM-473 baserunner weighting, so it is load-bearing
+        -- twice.
+        --
+        -- BOTH available formulas are LOWER BOUNDS and they miss different
+        -- runs: `MAX(bat_score)` misses the last plate appearance; the
+        -- running-score sum misses any run whose `runs_on_pitch` is unset (11
+        -- half-innings in 2024). Neither can invent a run, so GREATEST of the
+        -- two is the tighter bound. Read from the RAW table, not from `plays`:
+        -- `plays` keeps one row per plate appearance (`events IS NOT NULL`),
+        -- and a run can score on a pitch that ends no plate appearance — a
+        -- steal of home, a wild pitch, a balk. Summing inside `plays` would
+        -- miss exactly those.
         inning_final AS (
             SELECT
                 game_pk, inning, inning_topbot,
-                MAX(bat_score) AS final_bat_score
-            FROM plays
+                GREATEST(
+                    MAX(CASE WHEN inning_topbot = 'Top' THEN away_score ELSE home_score END),
+                    MIN(CASE WHEN inning_topbot = 'Top' THEN away_score ELSE home_score END)
+                        + SUM(COALESCE(runs_on_pitch, 0))
+                ) AS final_bat_score
+            FROM pg.raw.pitches
+            WHERE season IN ({season_list})
+              AND inning <= 8
             GROUP BY game_pk, inning, inning_topbot
         ),
         scored AS (
