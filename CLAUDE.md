@@ -171,12 +171,14 @@
   **SIM-488 re-sweep** — the swept `raw.pitches.outs` column (pre-play outs) is still
   stale-by-one-play on 46% of plate appearances, and the situation/RE24 features group by it.
   Sequence: close SIM-502a..d → re-sweep → re-land SIM-458 → then SIM-459.
-- **Alembic 0018 is CLEARED to apply (2026-08-13) but NOT yet applied.** All four SIM-502 defects
-  (a..d) closed; the THIRD adversarial review ran (four angles, ~1,100 game-loads) — one confirmed
-  fix landed (mid-PA pitcher attribution on pickoff/stepoff rows) and SIM-504 was filed for the
-  consumer wiring. The write path stays INERT (the to_regclass probe) until 0018 is applied; the
-  guard is harmless afterwards. Sequence: apply 0018 → SIM-488 re-sweep (~6 h) → re-land SIM-458 →
-  SIM-459.
+- **Alembic 0018 is APPLIED (2026-08-13) and the SIM-488 re-sweep is RUNNING.** All four SIM-502
+  defects (a..d) closed; the THIRD adversarial review ran (four angles, ~1,100 game-loads) — one
+  confirmed fix landed (mid-PA pitcher attribution on pickoff/stepoff rows) and SIM-504 was filed
+  for the consumer wiring. The re-sweep (2017-2026, ~6 h, `scripts/resumable_sweep.py`, log in
+  `.sweep_progress/sweep_20260813.log`; the pre-sweep progress files are archived in
+  `.sweep_progress_pre_sim501_20260813/`) rewrites `raw.pitches` with the fixed parser AND fills
+  `raw.play_events` — the first `intent_walk` rows this database has ever held. After it:
+  re-land SIM-458 → SIM-459 (the recompute also picks up the SIM-501a/457/503 profile SQL).
 - **The re-sweep takes ~6 hours, not 55.** Measured from `.sweep_progress/`: 2017-2025 ran in
   6 h 9 m. The old figure took a SPAN between file timestamps as a duration.
 - **Sample hundreds of games when validating ETL work, never dozens.** Two adversarial review rounds

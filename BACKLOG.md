@@ -101,7 +101,9 @@ cumulative game-loads today, every finding adjudicated against real payloads:
   the 20-column INSERT matches the row dict and the DDL exactly, `01_postgres_schema.sql` matches
   0018 verbatim, and the Alembic chain is 0017 → 0018.
 
-**Remaining sequence: apply 0018 → SIM-488 re-sweep (~6 h) → re-land SIM-458 → SIM-459.**
+**0018 APPLIED 2026-08-13 12:19; the SIM-488 re-sweep (2017-2026) started 12:20** — owner-approved.
+`raw.play_events` began filling with the first games (pickoffs, balks and the first `intent_walk`
+rows the database has ever held). Remaining after the sweep: re-land SIM-458 → SIM-459.
 
 **READ THIS FIRST IF YOU ARE RESUMING.** The code is on master. The migration is **NOT applied**.
 The write path is **INERT** until it is — `_write_play_events` probes `to_regclass('raw.play_events')`
