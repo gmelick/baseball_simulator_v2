@@ -68,8 +68,18 @@ def _run(index, reason, *, out=True, out_base="1B", out_number=1, runner_id=5471
     }
 
 
-def _extract(play, outs=0, state=0):
-    return extract_play_events(play, outs_before_play=outs, runners_state_before=state, **_CTX)
+def _extract(play, outs=0, state=0, home=3, away=1):
+    # home/away default to the same numbers the fixture's post-play `result`
+    # carries, so the situation tests read naturally; the SIM-502b tests pass
+    # DIFFERENT numbers to prove the extractor uses the caller's, not result's.
+    return extract_play_events(
+        play,
+        outs_before_play=outs,
+        runners_state_before=state,
+        home_score_before=home,
+        away_score_before=away,
+        **_CTX,
+    )
 
 
 class TestTheSignalsAreWhereTheRealFeedPutsThem:
@@ -233,4 +243,158 @@ class TestMalformedInputIsSurvived:
         assert rows[0]["is_out"] is False
 
     def test_missing_blocks_do_not_raise(self):
-        assert extract_play_events({}, outs_before_play=0, runners_state_before=0, **_CTX) == []
+        assert (
+            extract_play_events(
+                {},
+                outs_before_play=0,
+                runners_state_before=0,
+                home_score_before=0,
+                away_score_before=0,
+                **_CTX,
+            )
+            == []
+        )
+
+
+class TestTheBaseIsRecovered:
+    """SIM-502d. A bare pickoff throw names its base ONLY in the description
+    text ("Pickoff Attempt 1B" — verified, no structured field exists on the
+    event); an action-carried outcome names it in the eventType
+    (`pickoff_1b`). Before this, 96.3% of pickoff rows had base NULL."""
+
+    def test_a_bare_throw_parses_its_description(self):
+        ev = _ev(0, "pickoff")
+        ev["details"]["description"] = "Pickoff Attempt 2B"
+        rows = _extract(_play([ev]))
+        assert rows[0]["base"] == 2
+
+    def test_an_action_outcome_parses_its_eventtype(self):
+        rows = _extract(_play([_ev(0, "action", "pickoff_1b")]))
+        assert rows[0]["base"] == 1
+
+    def test_the_runner_movement_still_wins(self):
+        # The movement names where the OUT happened; the throw text is only
+        # the fallback. A runner picked off 1B can be tagged out at 2B.
+        ev = _ev(0, "pickoff")
+        ev["details"]["description"] = "Pickoff Attempt 1B"
+        rows = _extract(
+            _play([ev], runners=[_run(0, "r_pickoff_caught_stealing_2b", out_base="2B")])
+        )
+        assert rows[0]["base"] == 2
+
+    def test_no_signal_stays_null(self):
+        rows = _extract(_play([_ev(0, "pickoff")]))
+        assert rows[0]["base"] is None
+
+
+class TestTheScoreIsPrePlay:
+    """SIM-502b. `result.homeScore` / `result.awayScore` are the score AFTER
+    the play — reading them stamped a pickoff with runs from a home run four
+    pitches later (game 744799 ab 41; 676 of 5,479 rows, 12.3%). The extractor
+    now records the CALLER's pre-play score, the same numbers the pitch rows
+    get."""
+
+    def test_the_result_scores_are_ignored(self):
+        # The fixture's result says 3-1 (post-play). The caller says 0-0
+        # entered the play. The rows must say 0-0.
+        rows = _extract(_play([_ev(0, "pickoff")], half="top"), home=0, away=0)
+        assert rows[0]["bat_score"] == 0
+        assert rows[0]["fld_score"] == 0
+
+    def test_the_batting_side_maps_by_half(self):
+        top = _extract(_play([_ev(0, "pickoff")], half="top"), home=7, away=2)
+        bot = _extract(_play([_ev(0, "pickoff")], half="bottom"), home=7, away=2)
+        assert (top[0]["bat_score"], top[0]["fld_score"]) == (2, 7)
+        assert (bot[0]["bat_score"], bot[0]["fld_score"]) == (7, 2)
+
+
+# ---------------------------------------------------------------------------
+# Through the loader (SIM-502a). The extractor-level tests above hand state in
+# directly, so they CANNOT catch a caller that computes the state wrong — that
+# is exactly how the half-inning reset bug shipped three times. These drive
+# `_fetch_game_pitches` itself with a synthetic feed.
+# ---------------------------------------------------------------------------
+
+
+def _runner_placed_event(index: int, base: int = 2) -> dict:
+    """The automatic-runner announcement, shaped as game 744882 emits it:
+    an `action` playEvent whose `details.eventType` is `runner_placed`, with
+    the base carried DIRECTLY on the event (`base: 2`) and no offense block."""
+    return {
+        "index": index,
+        "type": "action",
+        "isPitch": False,
+        "details": {
+            "eventType": "runner_placed",
+            "event": "Runner Placed On Base",
+            "description": "Nathan Lukes starts inning at 2nd base.",
+        },
+        "player": {"id": 664770},
+        "base": base,
+    }
+
+
+def _intent_walk_play(at_bat: int, inning: int, half: str, events: list) -> dict:
+    return {
+        "atBatIndex": at_bat - 1,
+        "about": {"inning": inning, "halfInning": half},
+        "result": {"eventType": "intent_walk", "homeScore": 3, "awayScore": 3},
+        "matchup": {"pitcher": {"id": 592866}, "batter": {"id": 665489}},
+        "playEvents": events,
+        "pitchIndex": [],
+        "runners": [],
+    }
+
+
+def _drive_loader(extra_plays: list) -> list[dict]:
+    """Run `_fetch_game_pitches` on the shared full feed plus `extra_plays`,
+    returning the play-event rows the LOADER produced."""
+    from unittest.mock import patch
+
+    from tests.unit.test_etl_historical_loader import _full_feed_with_one_play
+
+    from pipeline.etl.etl_historical_loader import _fetch_game_pitches
+
+    feed = _full_feed_with_one_play()
+    feed["liveData"]["plays"]["allPlays"].extend(extra_plays)
+    coaches = {"roster": [{"jobId": "MNGR", "person": {"id": 9999, "fullName": "M"}}]}
+    with patch(
+        "pipeline.etl.etl_historical_loader._connect",
+        side_effect=[feed, coaches, coaches],
+    ):
+        _, returned = _fetch_game_pitches(745001, batter_hand_cache={200001: "R"})
+    return returned["_play_events"]
+
+
+class TestTheLoaderSeedsTheAutomaticRunner:
+    """SIM-502a. The loader zeroes its carried base state on a half-inning
+    change — correct for innings 1-9, WRONG in extras, where the automatic
+    runner starts on second. 10 of 215 intent_walk rows recorded an empty
+    diamond with a runner really on 2B. The fix reads the feed's own
+    announcement (`runner_placed`, base carried on the event)."""
+
+    def test_extras_intent_walk_records_the_ghost_runner(self):
+        # A new half opens (bottom after the fixture's top): the reset fires,
+        # then the runner_placed event re-seeds 2B. The intentional walk play
+        # has NO pitches, so only the loader's carried state can supply this.
+        rows = _drive_loader([_intent_walk_play(2, 10, "bottom", [_runner_placed_event(0)])])
+        iw = [r for r in rows if r["event_type"] == "intent_walk"]
+        assert len(iw) == 1
+        assert iw[0]["runners_state"] == 2  # bit 1 = second base
+
+    def test_the_announcement_index_does_not_matter(self):
+        # Measured indices for runner_placed: 0, 1 and 3. The runner is aboard
+        # from the first pitch wherever the feed logged the announcement.
+        rows = _drive_loader([_intent_walk_play(2, 10, "bottom", [_runner_placed_event(3)])])
+        assert [r["runners_state"] for r in rows if r["event_type"] == "intent_walk"] == [2]
+
+    def test_an_ordinary_half_still_opens_empty(self):
+        rows = _drive_loader([_intent_walk_play(2, 1, "bottom", [])])
+        assert [r["runners_state"] for r in rows if r["event_type"] == "intent_walk"] == [0]
+
+    def test_the_loader_passes_the_pre_play_score(self):
+        # SIM-502b through the caller: the play's result says 3-3 (post-play);
+        # nothing has scored before it, so the row must say 0-0.
+        rows = _drive_loader([_intent_walk_play(2, 10, "bottom", [_runner_placed_event(0)])])
+        iw = [r for r in rows if r["event_type"] == "intent_walk"][0]
+        assert (iw["bat_score"], iw["fld_score"]) == (0, 0)

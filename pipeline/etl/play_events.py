@@ -168,6 +168,8 @@ def extract_play_events(
     season: int,
     outs_before_play: int,
     runners_state_before: int,
+    home_score_before: int,
+    away_score_before: int,
 ) -> list[dict[str, Any]]:
     """Return one row dict per non-pitch event in ``play``.
 
@@ -181,6 +183,15 @@ def extract_play_events(
     function fell back to an empty dict and recorded every intentional walk with
     the bases empty. A tenth-inning intentional walk under the ghost-runner rule
     proved it: real state was a runner on second, recorded state was 0.
+
+    ``home_score_before`` / ``away_score_before`` are the score ENTERING the
+    play, exactly as the pitch rows record it. They cannot be read from the
+    play itself: ``result.homeScore`` / ``result.awayScore`` are the score
+    AFTER the play, and the first version of this function read them — so a
+    pickoff at playEvent 4 was stamped with the runs from a home run four
+    pitches LATER, look-ahead leakage on 12.3% of rows (SIM-502b, measured:
+    676 of 5,479). The loader already proves the pre-play semantics: it uses
+    ``result.homeScore`` to seed the NEXT play, never the current one.
     """
     rows: list[dict[str, Any]] = []
     consumed_indices: set[int] = set()
@@ -195,9 +206,12 @@ def extract_play_events(
     pitcher_id = (matchup.get("pitcher") or {}).get("id")
     batter_id = (matchup.get("batter") or {}).get("id")
 
-    # Score entering the play, from the batting side's perspective.
-    bat_score = int(result.get("awayScore" if topbot == "Top" else "homeScore") or 0)
-    fld_score = int(result.get("homeScore" if topbot == "Top" else "awayScore") or 0)
+    # Score entering the play, from the batting side's perspective. Supplied by
+    # the caller — the play's own `result` scores are POST-play (SIM-502b).
+    if topbot == "Top":
+        bat_score, fld_score = int(away_score_before), int(home_score_before)
+    else:
+        bat_score, fld_score = int(home_score_before), int(away_score_before)
 
     pickoff_by_index = _pickoff_runners(play)
 
@@ -228,7 +242,8 @@ def extract_play_events(
         return base
 
     for event in events:
-        etype = str(((event.get("details") or {}).get("eventType")) or "")
+        event_details = event.get("details") or {}
+        etype = str(event_details.get("eventType") or "")
         raw_type = str(event.get("type") or "")
         index = event.get("index")
         if index is None:
@@ -252,6 +267,13 @@ def extract_play_events(
             rows.append(_row(kind, index, runners_state=state))
             continue
 
+        # SIM-502d: the base the throw targeted. A bare throw carries it ONLY
+        # in the description text ("Pickoff Attempt 1B" — no structured field
+        # exists on the event, verified); an action-carried outcome names it in
+        # the eventType itself (`pickoff_1b` / `pickoff_error_3b`). Without
+        # this, 96.3% of pickoff rows had no base.
+        event_base = _base_of(etype) or _base_of(event_details.get("description"))
+
         # Join the runner movement recorded against this same index to learn
         # whether anyone was retired, and at which base. A bare throw normally has
         # no movement; an action-carried outcome always does. When there is none,
@@ -260,7 +282,7 @@ def extract_play_events(
         runner = pickoff_by_index.get(index)
         consumed_indices.add(index)
         if runner is None:
-            rows.append(_row(kind, index, runners_state=state))
+            rows.append(_row(kind, index, runners_state=state, base=event_base))
             continue
 
         details = runner.get("details") or {}
@@ -274,7 +296,9 @@ def extract_play_events(
                 index,
                 runners_state=state,
                 runner_id=(details.get("runner") or {}).get("id"),
-                base=_base_of(movement.get("outBase") or reason),
+                # The runner movement names where the OUT happened; the throw's
+                # own text is the fallback when the movement is silent.
+                base=_base_of(movement.get("outBase") or reason) or event_base,
                 # An errant throw ADVANCES the runner. It is never an out, even
                 # though it is reported on the same pickoff play.
                 is_out=bool(movement.get("isOut")) and not is_error,

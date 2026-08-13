@@ -1,3 +1,42 @@
+# Data — SIM-502a/b/c/d: all four `raw.play_events` defects closed — 2026-08-13
+
+**SIM-502a — CLOSED.** The half-inning reset erased the extra-innings automatic runner. The fix
+reads the feed's own announcement: the `runner_placed` action playEvent carries the base directly
+(`base: 2`) and the runner's `player.id`. The event sits at any index inside the half's first play
+(0, 1 and 3 all measured), so the loader scans every playEvent and re-seeds the state after the
+reset. This defect shipped three times because its test handed state straight to the extractor —
+the new `TestTheLoaderSeedsTheAutomaticRunner` drives `_fetch_game_pitches` itself.
+
+**SIM-502b — CLOSED.** `bat_score`/`fld_score` were read from `result.awayScore`/`result.homeScore`,
+the POST-play score — look-ahead leakage on 12.3% of rows. `extract_play_events` now REQUIRES
+`home_score_before`/`away_score_before` from the caller (the same pre-play numbers the pitch rows
+get) and never reads the play's own result scores.
+
+**SIM-502d — CLOSED.** `base` was NULL on 96.3% of pickoff rows. A bare throw names its base only
+in `details.description` ("Pickoff Attempt 1B" — verified: no structured field exists on the
+event); an action-carried outcome names it in its eventType (`pickoff_1b`). Both feed the existing
+`_base_of` parser; the runner movement still wins when present, because a runner picked off 1B can
+be tagged out at 2B.
+
+**Validated over 344 live games — every 2024 extras game plus 150 ordinary — by re-deriving every
+expectation independently from the raw feed:** 0 score mismatches on 2,452 play-event rows; 31/31
+ghost-runner intent walks carry the runner; 0 of 1,572 pickoff rows missing `base` (the throw
+vocabulary is exactly {Pickoff Attempt 1B/2B/3B}); pickoff outs still 55/55 against the feed.
+
+**SIM-502c — CLOSED, mostly by SIM-501a; the remainder measured and decided.** Fresh breakdown
+over 357 games / 19,072 outs: 131 out-movements are keyed to non-pitch indices. 53 pickoff-family
+outs reach `raw.play_events` (fixed this week); 63 mid-PA caught stealings reach the `sb_*`
+columns, which the SIM-501 innings-pitched formula counts; the 7 displaced batter strikeouts reach
+the PA's `events` column, the canonical out label since SIM-501a — so the headline pitcher-prop
+concern is fully counted. The decision the ticket asked for: **a feed-displaced batter out belongs
+to `events`, and it is already there.** Truly unrepresented: ~8 runner outs per 357 games on
+`other_out`/`wild_pitch` actions that do not end the PA — ~0.04% of all outs, accepted and
+documented in `pipeline/statcast_events.py`. The false loader comment ("recorded properly in
+raw.play_events") is replaced with this measured taxonomy — it was false for 78 of the 131.
+
+**Next: the third adversarial review, then Alembic 0018, then the SIM-488 re-sweep.** The write
+path stays INERT until then.
+
 # Data — SIM-501a/c + SIM-503: the events-based out label; SIM-457 re-landed per site — 2026-08-13
 
 **SIM-501a — CLOSED.** Every out label in the profile computor now derives from `events`. The

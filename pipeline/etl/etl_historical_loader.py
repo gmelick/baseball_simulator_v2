@@ -1076,6 +1076,19 @@ def _fetch_game_pitches(
         # reached the table — luck, not correctness. This is the same defect class
         # already fixed once inside the extractor, re-introduced in the caller.
         prev_half = top_bot
+        # SIM-502a: an extra-innings half does NOT start with the bases empty —
+        # the automatic runner is on second, and the reset above just erased
+        # him. THE FIX IS IN THE FEED: the placement is announced by an
+        # `action` playEvent with eventType `runner_placed` that carries the
+        # base directly (`base: 2`, verified on game 744882). The event can sit
+        # at any index inside the half's first play (0, 1 and 3 all measured),
+        # so every playEvent is scanned; the runner is aboard from the first
+        # pitch regardless of where the feed logged the announcement.
+        for _ev in play.get("playEvents") or []:
+            if str(((_ev.get("details") or {}).get("eventType")) or "") == "runner_placed":
+                _placed_base = _ev.get("base")
+                if _placed_base in (1, 2, 3):
+                    runners_state_before |= 1 << (int(_placed_base) - 1)
         # SIM-501: the PRE-play out count, read from the payload rather than
         # accumulated. `playEvents[0].count.outs` is the state ENTERING the play;
         # `play.count.outs` is the state after it. Verified on real games —
@@ -1097,6 +1110,11 @@ def _fetch_game_pitches(
                 season=int(str(game_date)[:4]),
                 outs_before_play=outs,
                 runners_state_before=runners_state_before,
+                # SIM-502b: the PRE-play score, the same numbers the pitch rows
+                # get. The extractor must not read the play's own `result`
+                # scores — those are post-play.
+                home_score_before=home_score_before,
+                away_score_before=away_score_before,
             )
         )
         # Carry the POST state forward for the next play. Assigned here, right
@@ -1374,9 +1392,24 @@ def _fetch_game_pitches(
                             post_runner_3b = ""
                         # The pitch that CAUSED the out owns it. This sits inside
                         # the `[i .. max_play_index]` window, so an index OTHER than
-                        # `i` means a non-pitch action that followed this pitch — a
-                        # caught stealing, a pickoff. Those are not the pitch's outs,
-                        # and SIM-502 records them properly in `raw.play_events`.
+                        # `i` means a non-pitch event that followed this pitch.
+                        #
+                        # SIM-502c — where every displaced out actually lands,
+                        # MEASURED over 357 games / 19,072 outs (131 displaced):
+                        #   * 53 pickoff-family outs -> `raw.play_events`
+                        #   * 63 mid-plate-appearance caught stealings -> the
+                        #     `sb_attempt_*`/`sb_success_*` columns on this pitch
+                        #     row (the scan above), which the IP formula counts
+                        #   * 7 batter strikeouts the feed anchors to a trailing
+                        #     `no_pitch` event -> the PA's `events` column, the
+                        #     canonical out label since SIM-501a
+                        #   * ~8 runner outs on `other_out`/`wild_pitch` actions
+                        #     reach NO table when they do not end the PA —
+                        #     ~0.04% of all outs, accepted and documented in
+                        #     pipeline/statcast_events.py.
+                        # An earlier version of this comment claimed ALL displaced
+                        # outs reach `raw.play_events`. That was false for 78 of
+                        # the 131.
                         if runner["details"].get("playIndex") == i:
                             outs_on_pitch += 1
                         # A retired runner is done: he cannot also score or reach

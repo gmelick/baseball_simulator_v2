@@ -247,6 +247,16 @@ def sql_outs_recorded(q: str = "") -> str:
     return f"({sql_play_outs(q)} + ({sql_cs_out(q)}))"
 
 
+#: SIM-502c — the measured residual of the IP formula, so nobody re-derives it.
+#: Over 357 games / 19,072 outs, 131 out-movements were keyed to a non-pitch
+#: index. 53 pickoffs live in `raw.play_events`; 63 mid-PA caught stealings live
+#: in the `sb_*` columns (the CS term above counts them); 7 displaced batter
+#: strikeouts live in `events` (the terms above count them). The ~8 runner outs
+#: anchored to `other_out`/`wild_pitch` actions that do not end the PA reach no
+#: table: ~0.04% of all outs, accepted. With the ~0.06% uncaught-third-strike
+#: over-count, the formula reads 3 outs on 98.2% of completed half-innings.
+
+
 def sql_fielding_out(q: str = "") -> str:
     """Boolean: the play recorded at least one out (question 1)."""
     return f"{q}events IN {sql_list(sorted(FIELDING_OUT_EVENTS))}"

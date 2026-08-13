@@ -69,16 +69,22 @@ nightly ETL run. **Do not remove that guard until the four defects are closed.**
 Over 300 real games: pickoff outs **42/42**, pickoff errors **22/22**, zero duplicate natural keys,
 every `base` value inside the widened 1..4 CHECK.
 
-### The four open defects
+### The four defects — three FIXED 2026-08-13, one open
 
 Full detail in `BACKLOG.md` under the SIM-502 banner. In short:
 
-* **502a** (P1) — the half-inning reset erases the extra-innings automatic runner. The feed announces
-  it: `action / runner_placed`, *"starts inning at 2nd base."*
-* **502b** (P1) — `bat_score` / `fld_score` are the POST-play score. Look-ahead leakage on 12.3% of rows.
-* **502c** (P2) — 161 outs reach no table, including 34 strikeouts, and a shipped comment claims
-  otherwise.
-* **502d** (P3) — `base` is NULL on 96.3% of pickoff rows.
+* **502a** (P1) — ✅ FIXED. The loader reads the feed's `runner_placed` announcement (the base is
+  carried directly on the event) and re-seeds the state after the half-inning reset. Tested
+  THROUGH the loader this time. 31/31 correct over all 216 extras games of 2024.
+* **502b** (P1) — ✅ FIXED. The extractor now requires the caller's pre-play score and ignores the
+  play's own `result` scores. 0 mismatches on 2,452 rows over 344 games.
+* **502c** (P2) — ✅ CLOSED, mostly by SIM-501a. Measured over 357 games: the displaced outs land
+  in `raw.play_events` (pickoffs), the `sb_*` columns (mid-PA caught stealings) or `events`
+  (batter strikeouts — the decision: a feed-displaced batter out belongs to `events`, and it is
+  already there). Residual ~0.04% of outs accepted and documented. The false loader comment is
+  replaced with the measured taxonomy.
+* **502d** (P3) — ✅ FIXED. Base parsed from the throw's description / the action's eventType;
+  the runner movement still wins. 0 of 1,572 pickoff rows missing base over 344 games.
 
 ---
 
