@@ -1,3 +1,21 @@
+# Data — SIM-459 COMPLETE AND VERIFIED: the recompute carries every fix — 2026-08-15
+
+The full all-seasons chain (profile computor `--seasons 2017..2026 --full-rebuild` →
+play_pool_cache → engine_artifacts `--what all`) ran ~14.8 h and every verification probe passed:
+2024 median ERA **4.07 vs MLB actual ~4.08** (was 6.24 — the missing-36%-of-outs arithmetic,
+closed); the 2024 outcome pool's hit-with-out rows are exactly the raw-data measurement (290
+singles + 66 doubles, zero impossible home runs); league pull 0.443 vs oppo 0.270 (the SIM-503
+sign); all pools `builder_version sim501.1` across all ten seasons.
+
+Two lessons paid for and recorded: (1) a bare `player_profile_computor` invocation recomputes THE
+CURRENT SEASON ONLY — the first attempt "succeeded" in 65 minutes having rebuilt just 2026, and
+only the verification battery caught it (never trust the OK marker; check
+`sim.pool_build_metadata`); (2) root-owned files under `/data` from any past root-run container
+break `appuser` writes mid-build — chown and verify in the same shell.
+
+Remaining before the recomputed numbers reach users: SIM-450 acceptance lane, regression vs the
+new artifacts, calibration refit, SIM-491 flag re-validation.
+
 # Data — SIM-458 re-landed; 0018 applied; the SIM-488 re-sweep is running — 2026-08-13
 
 **SIM-458 — RE-LANDED, verbatim from c11c919** (it was reverted only because it shared a commit

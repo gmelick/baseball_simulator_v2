@@ -171,9 +171,16 @@
   **SIM-488 re-sweep** — the swept `raw.pitches.outs` column (pre-play outs) is still
   stale-by-one-play on 46% of plate appearances, and the situation/RE24 features group by it.
   Sequence: close SIM-502a..d → re-sweep → re-land SIM-458 → then SIM-459.
-- **Alembic 0018 is APPLIED and the SIM-488 re-sweep is COMPLETE (2026-08-13, 22,533 games,
-  verified: strikeout out-label 99.7-99.9% in every season, play_events tracks the real
-  pitch-clock era, zero row loss).** The next operational step is SIM-459. All four SIM-502
+- **Alembic 0018 is APPLIED, the SIM-488 re-sweep is COMPLETE (2026-08-13, 22,533 games), and
+  SIM-459 is COMPLETE AND VERIFIED (2026-08-15).** The full all-seasons recompute chain ran:
+  profiles, RE24 matrix, sim pools, FAISS tiles and the engine-artifact bundle all rebuilt from
+  the re-swept data. Verified: 2024 median ERA 4.07 vs MLB ~4.08 (was 6.24 on the broken
+  denominator); the 2024 pool's hit-with-out rows exactly match the raw-data measurement (290+66,
+  zero home runs); league pull 0.443 > oppo 0.270. ⚠ A bare `player_profile_computor` run
+  defaults to THE CURRENT SEASON ONLY — a full recompute must pass `--seasons 2017 … 2026
+  --full-rebuild`, then verify `sim.pool_build_metadata.builder_version`. Remaining before the
+  new numbers reach users: the SIM-450 acceptance lane, regression vs the new artifacts,
+  calibration refit, SIM-491 flag re-validation. All four SIM-502
   defects (a..d) closed; the THIRD adversarial review ran (four angles, ~1,100 game-loads) — one
   confirmed fix landed (mid-PA pitcher attribution on pickoff/stepoff rows) and SIM-504 was filed
   for the consumer wiring. The re-sweep (2017-2026, ~6 h, `scripts/resumable_sweep.py`, log in

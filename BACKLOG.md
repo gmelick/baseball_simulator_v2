@@ -118,9 +118,26 @@ fault, still stochastic, still survivable by design). **Verified across all ten 
 * Zero row loss: per-season pitch counts match the July sweep exactly (2017: 732,475 = the
   recorded figure). The wedged game re-loaded cleanly (231 rows).
 
-**Remaining: SIM-459** — the recompute now carries SIM-501a/457/503 + 458 + the pool
-`result_outs` fix in one pass. After it: regression golden regen + the SIM-450 acceptance lane +
-calibration refit before anything reaches users.
+**SIM-459 — COMPLETE AND VERIFIED 2026-08-15.** The full all-seasons chain ran ~14.8 h (profile
+computor `--seasons 2017..2026 --full-rebuild` → play_pool_cache → engine_artifacts `--what all`)
+after a first attempt silently recomputed ONLY 2026 — bare `player_profile_computor` defaults to
+the current season, and the verification battery caught it (stale pools carried 418 impossible
+home-run-with-out rows; 2024 ERA read 6.24 off never-recomputed profiles). ⚠ Always pass
+`--seasons … --full-rebuild` and verify `sim.pool_build_metadata.builder_version` afterwards; the
+OK marker alone proves nothing. **Verification, all passed:** 2024 hit-with-out pool rows = 290
+singles + 66 doubles (exactly the raw-data measurement; zero home runs); median ERA over 475
+qualified 2024 pitcher-seasons = **4.07 vs MLB actual ~4.08** (was 6.24 stale — the missing-36%-
+of-outs arithmetic, closed); league pull 0.443 vs oppo 0.270 (the SIM-503 sign, correct); all
+three pools `sim501.1` across all ten seasons. Ops note: two mid-chain infrastructure failures
+were fixed en route — root-owned `/data/play_pool` files from a May root-run broke `appuser`
+tile writes (chown + verify in one shell), and the first play-pool relaunch via PowerShell
+`Start-Process docker` died silently (use `docker compose run -d`; both recorded in memory).
+
+**Remaining before the recomputed numbers reach users:** the SIM-450 acceptance lane at
+production flags, regression suite against the new artifacts, calibration refit
+(`make calibrate` + `make validate-props`), and the SIM-491 flag re-validation (the SIM-425b
+fielder-RBF constants were tuned on the degenerate pre-fix OAA scale — see the review note
+above).
 
 **READ THIS FIRST IF YOU ARE RESUMING.** The code is on master. The migration is **NOT applied**.
 The write path is **INERT** until it is — `_write_play_events` probes `to_regclass('raw.play_events')`
