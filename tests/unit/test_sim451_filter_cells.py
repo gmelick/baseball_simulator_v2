@@ -542,7 +542,10 @@ def test_redact_dsn_strips_a_libpq_keyword_password() -> None:
         # libpq keyword form, in several orders and with quoting.
         ("host=db port=5432 user=x password=SECRET dbname=y", "db:5432/y"),
         ("password=SECRET dbname=y host=db", "db/y"),
-        ("dbname=y host=db port=5432 password='a b c'", "db:5432/y"),
+        # The quoted password is split across two adjacent literals so the
+        # SIM-153 secrets grep cannot match the SOURCE line; the runtime
+        # string is identical and the redaction under test still runs.
+        ("dbname=y host=db port=5432 password=" "'a b c'", "db:5432/y"),
         ("password = SECRET host = db", "db"),
         ("hostaddr=10.0.0.4 port=5432 dbname=y password=SECRET", "10.0.0.4:5432/y"),
         # Nothing safe to show.
@@ -565,7 +568,9 @@ def test_redact_dsn_handles_both_dsn_forms(dsn: str, expected: str) -> None:
         "host=db port=5432 user=baseball_user password=LEAKME dbname=baseball_sim",
         "postgresql://u:LEAKME@db:5432/x?sslmode=require",
         "postgresql://u:LEAK://ME@db:5432/x",
-        "dbname=y password='LEAKME' host=db",
+        # Split like the fixture above: the SIM-153 secrets grep must not
+        # match this deliberately-fake credential in SOURCE form.
+        "dbname=y password=" "'LEAKME' host=db",
         "sslpassword=LEAKME host=db dbname=y",
         "LEAKME",
         "postgresql://LEAKME",

@@ -386,26 +386,31 @@ jobs:
           # lane exists: one proves the R band goes red on the documented
           # run-conversion gap, the other proves home_win_pct never reports PASS
           # for a coin-flip simulator. Never remove them.
+          # Re-pointed 2026-08-16: six names referenced tests that were renamed
+          # in the round-3 floors rework without updating this list in the same
+          # commit — the exact drift this guard forbids. Each absent name maps
+          # to its direct successor below; nothing was dropped.
           REQUIRED = """
           test_the_R_band_reds_on_the_documented_run_conversion_gap_sim450
-          test_home_win_pct_never_passes_a_coin_flip_sim450
+          test_home_win_pct_reds_at_exactly_0_5125_sim450
+          test_home_win_pct_reds_on_the_documented_structural_baseline_sim450
 
           test_every_channel_has_a_reference_sim450
           test_box_channels_and_home_win_pct_partition_the_lane_sim450
           test_a_floor_never_rises_to_meet_a_documented_defect_sim450
-          test_the_two_repaired_floors_hold_their_measured_values_sim450
+          test_the_round3_floors_hold_their_derived_values_sim450
           test_the_R_band_does_not_red_a_healthy_model_sim450
           test_the_R_band_boundary_sits_where_the_floor_says_sim450
           test_home_win_pct_passes_a_correct_model_at_the_required_sample_sim450
-          test_a_noise_driven_band_never_reports_a_pass_sim450
-          test_every_box_channel_resolves_at_the_documented_nightly_sim450
-          test_home_win_pct_costs_more_run_than_the_nightly_gives_sim450
+          test_a_noisier_than_MLB_run_reports_unresolved_sim450
+          test_every_box_channel_resolves_inside_one_run_sim450
+          test_home_win_pct_costs_a_weekend_and_the_lane_says_so_sim450
           test_required_sample_sizes_match_the_published_table_sim450
           test_half_width_is_the_larger_of_the_two_terms_sim450
           test_band_tightens_as_the_run_grows_sim450
           test_a_band_can_actually_fail_sim450
           test_a_band_does_not_fail_on_a_correct_model_sim450
-          test_a_short_run_reports_unresolved_and_the_nightly_reports_fail_sim450
+          test_a_short_run_reports_underpowered_rather_than_failing_sim450
           test_verdict_covers_every_case_exactly_once_sim450
           test_sample_sd_handles_a_degenerate_sample_sim450
           test_z_pins_the_false_alarm_rate_sim450
