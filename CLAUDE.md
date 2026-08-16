@@ -82,9 +82,9 @@
   `dp_turned = outs_on_pitch >= 2` always-False bug was fixed and the 5.7-hour 2017-2025
   recompute completed.  Per-season DP rates now 42-48% (was 0.0).  Actor embeddings rebuilt
   (`fielder_emb` = 11346 × 51 features).  Box output now MLB-realistic: H/HR/2B/BB/K within
-  ~3-5% of MLB-2023.  **Runs run ~7-8% low** (down from ~12% pre-fix) — this is the AUTHORITATIVE
-  run-conversion figure; see the reconciliation note at the head of §11.  The remaining
-  hits→runs *conversion* residual lives in batted-ball-with-RISP / sequencing (see §11).
+  ~3-5% of MLB-2023.  **Runs run ~7-8% low** (down from ~12% pre-fix) — CLOSED 2026-08-16: after SIM-459 the acceptance lane measured R INSIDE its band (the strict xfail XPASSed and was deleted).
+  This figure stays on THIS line as the floor-sizing anchor `tests/acceptance/bands.py` cites as
+  CLAUDE.md:85 — the R floor still rejects a 7% shortfall so a REGRESSION to the old gap reds.
   ⚠ **This bullet used to end "steals match MLB volume". That claim is now wrong.** It was true
   when it was written, on 2026-05-28. The owner enabled `SIM_MANAGER` on 2026-06-04 and the
   steal gate closed. The SIM-450 acceptance lane measured the production configuration on

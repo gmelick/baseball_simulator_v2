@@ -502,17 +502,11 @@ def _assert_band(run: AcceptanceRun, channel: str) -> None:
     assert result.passed, result.explain()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "SIM-429. CLAUDE.md:85 records the live run-conversion gap as 'Runs run ~7-8% "
-        "low (down from ~12% pre-fix)'. The round-3 floor is 2.76% of 4.62 = 0.1275, so "
-        "the band rejects a 7% shortfall at 2.54x the floor. Until the run-conversion "
-        "work lands this channel is expected red. CLAUDE.md:465's '10-12%' is STALE per "
-        "the owner's 2026-08-10 ruling; do not re-size the floor on it. Delete this "
-        "marker when R lands inside the band."
-    ),
-)
+# The SIM-429 expected-red xfail marker lived here from 2026-08-10 to
+# 2026-08-16. The 2026-08-15 lane (12 x 425 on the SIM-459-recomputed data)
+# measured R INSIDE the band and the strict marker XPASSed, which is the
+# marker's own deletion condition. The floor stays sized to reject a 7%
+# shortfall at 2.54x — it must catch a REGRESSION to the old gap.
 def test_runs_band_sim450(acceptance_run: AcceptanceRun) -> None:
     """Runs per team per game. The channel the whole betting surface rests on.
 

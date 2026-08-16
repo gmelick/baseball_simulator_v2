@@ -1090,15 +1090,17 @@ def test_the_prefix_check_rejects_an_ascending_order_sim450() -> None:
 
     ``conftest.py`` listed the twelve games in ASCENDING park-factor order on
     delivery, so an 8-game run took the eight most pitcher-friendly parks: mean
-    factor 0.96844 against 0.99952 for the full set. A check that could not
-    reject that order would protect nothing.
+    factor 0.96848 against 0.99874 for the full set (values re-pinned
+    2026-08-16 to the SIM-459-recomputed park factors; the rank order and the
+    verdict are unchanged). A check that could not reject that order would
+    protect nothing.
     """
     ascending = tuple(sorted(bands.ACCEPTANCE_PARK_FACTORS, key=bands.ACCEPTANCE_PARK_FACTORS.get))
     k, bias = bands.worst_prefix_park_bias(ascending)
     assert abs(bias) > bands.MAX_PREFIX_PARK_BIAS, "the check must reject the ascending order"
-    assert bands.mean_park_factor(ascending[:8]) == pytest.approx(0.96844, abs=5e-5)
-    assert bands.prefix_park_bias(ascending, 8) == pytest.approx(-0.03108, abs=5e-5)
-    assert bands.mean_park_factor(bands.BALANCED_GAME_ORDER[:8]) == pytest.approx(0.99640, abs=5e-5)
+    assert bands.mean_park_factor(ascending[:8]) == pytest.approx(0.96848, abs=5e-5)
+    assert bands.prefix_park_bias(ascending, 8) == pytest.approx(-0.03027, abs=5e-5)
+    assert bands.mean_park_factor(bands.BALANCED_GAME_ORDER[:8]) == pytest.approx(0.99553, abs=5e-5)
 
 
 def test_conftest_slices_the_balanced_game_order_sim450() -> None:

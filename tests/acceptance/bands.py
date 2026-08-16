@@ -785,20 +785,23 @@ REFERENCES: dict[str, Reference] = {
 
 #: 2024 park run factor per acceptance game, read from ``derived.park_factors``
 #: (season 2024, ``factor_type='R'``, ``regressed_factor``) in the live DuckDB on
-#: 2026-08-10. The league mean that season is 1.0014; this set's mean is 0.99952.
+#: 2026-08-16, after the SIM-459 recompute over the SIM-488 re-swept data. Every
+#: factor moved <=0.009 from the 2026-08-10 pins and the RANK ORDER is unchanged,
+#: so ``BALANCED_GAME_ORDER`` still balances. The league mean that season is
+#: 1.0007; this set's mean is 0.99874.
 ACCEPTANCE_PARK_FACTORS: dict[int, float] = {
-    745199: 0.8724,  # venue  680
-    745036: 0.9179,  # venue   12
-    745280: 0.9582,  # venue 2395
-    745118: 0.9760,  # venue 2889
-    744795: 0.9932,  # venue 3309
-    746331: 1.0033,  # venue 2392
-    745441: 1.0084,  # venue   31
-    745521: 1.0181,  # venue 2681
-    746088: 1.0235,  # venue   22
-    746560: 1.0371,  # venue 5340
-    745444: 1.0522,  # venue 5150
-    746494: 1.1339,  # venue   19
+    745199: 0.8726,  # venue  680
+    745036: 0.9183,  # venue   12
+    745280: 0.9597,  # venue 2395
+    745118: 0.9765,  # venue 2889
+    744795: 0.9908,  # venue 3309
+    746331: 1.0038,  # venue 2392
+    745441: 1.0092,  # venue   31
+    745521: 1.0169,  # venue 2681
+    746088: 1.0243,  # venue   22
+    746560: 1.0356,  # venue 5340
+    745444: 1.0432,  # venue 5150
+    746494: 1.1340,  # venue   19
 }
 
 #: The order ``tests/acceptance/conftest.py`` slices, so that a shortened run
@@ -806,18 +809,18 @@ ACCEPTANCE_PARK_FACTORS: dict[int, float] = {
 #: the widest pair first, each pair written low-then-high. ``ACCEPTANCE_GAME_PKS``
 #: in that file IS this tuple. See "THE GAME SET AND WHY ITS ORDER MATTERS".
 BALANCED_GAME_ORDER: tuple[int, ...] = (
-    745199,  # 0.8724  |  pair 1, the widest
-    746494,  # 1.1339  |
-    745036,  # 0.9179  |  pair 2
-    745444,  # 1.0522  |
-    745280,  # 0.9582  |  pair 3
-    746560,  # 1.0371  |
-    745118,  # 0.9760  |  pair 4
-    746088,  # 1.0235  |
-    744795,  # 0.9932  |  pair 5
-    745521,  # 1.0181  |
-    746331,  # 1.0033  |  pair 6, the narrowest
-    745441,  # 1.0084  |
+    745199,  # 0.8726  |  pair 1, the widest
+    746494,  # 1.1340  |
+    745036,  # 0.9183  |  pair 2
+    745444,  # 1.0432  |
+    745280,  # 0.9597  |  pair 3
+    746560,  # 1.0356  |
+    745118,  # 0.9765  |  pair 4
+    746088,  # 1.0243  |
+    744795,  # 0.9908  |  pair 5
+    745521,  # 1.0169  |
+    746331,  # 1.0038  |  pair 6, the narrowest
+    745441,  # 1.0092  |
 )
 
 #: How far a prefix's mean park run factor may sit from the full set's mean.

@@ -448,7 +448,14 @@ def _install_probes(machine: Any, tally: dict[str, list[int]], calls: dict[str, 
         result_outs: int,
         result_runs: int,
         _o: Any = orig_commit,
+        **kwargs: Any,
     ) -> Any:
+        # **kwargs passes through whatever the loop adds to the ledger call —
+        # SIM-499 added pre_outs/pre_bases/batter_reached/runners_scored/
+        # runners_retired after this probe was written, and pinning the old
+        # four kwargs broke the whole lane with a TypeError at setup. The
+        # probe only READS the four it tallies; it must never re-state the
+        # loop's signature.
         calls["_commit_run_delta"] += 1
         if event == "field_error" and int(result_outs) == 0 and int(result_hits) >= 1:
             tally["ROE_reached"][int(state.offense)] += 1
@@ -459,6 +466,7 @@ def _install_probes(machine: Any, tally: dict[str, list[int]], calls: dict[str, 
             result_hits=result_hits,
             result_outs=result_outs,
             result_runs=result_runs,
+            **kwargs,
         )
 
     machine._full_pool_outcome = outcome
