@@ -144,3 +144,5 @@ models/
 .claude/
 .host_dsn
 .sweep_progress/
+# archived per-sweep progress snapshots (e.g. .sweep_progress_pre_sim501_20260813/)
+.sweep_progress_*/
