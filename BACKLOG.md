@@ -133,11 +133,18 @@ were fixed en route — root-owned `/data/play_pool` files from a May root-run b
 tile writes (chown + verify in one shell), and the first play-pool relaunch via PowerShell
 `Start-Process docker` died silently (use `docker compose run -d`; both recorded in memory).
 
-**Remaining before the recomputed numbers reach users:** the SIM-450 acceptance lane at
-production flags, regression suite against the new artifacts, calibration refit
-(`make calibrate` + `make validate-props`), and the SIM-491 flag re-validation (the SIM-425b
-fielder-RBF constants were tuned on the degenerate pre-fix OAA scale — see the review note
-above).
+**THE VALIDATION LADDER RAN 2026-08-15/16 — headline: THE RUNS BAND PASSES.** The acceptance
+lane (12 × 425 = 5,098 game-sims, production flags) measured R INSIDE its band; the strict
+expected-red marker XPASSed and was deleted (commit b61001d). The ~7-8% run-conversion gap is
+CLOSED; the R floor still rejects a 7% shortfall so a regression reds. Calibration refit +
+120-game validate-props then ran on the recomputed profiles and `/data/calibration.json` is
+rewritten (next boot applies it): **win-prob ECE 0.0377** (was 0.047); props H 0.066 / HR 0.024 /
+TB 0.060 (the bettable class holds); **K 0.109 (was 0.22, halved)** and **BB 0.044 (was 0.21 —
+now in the bettable class)**. Remaining reds, all understood: 2B +8.2% / BB +10.8% / ROE +4.9%
+high (the new, much smaller SIM-429 calibration targets); home_win_pct under-powered at 425 iters
+by design (certifying needs 12 × 2,168, ~16 h); SB/CS expected-red until SIM-474. Still open:
+SIM-491 flag re-validation (the SIM-425b fielder-RBF constants were tuned on the degenerate
+pre-fix OAA scale — see the review note above).
 
 **READ THIS FIRST IF YOU ARE RESUMING.** The code is on master. The migration is **NOT applied**.
 The write path is **INERT** until it is — `_write_play_events` probes `to_regclass('raw.play_events')`

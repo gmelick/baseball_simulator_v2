@@ -1,3 +1,12 @@
+# Model — THE RUNS BAND PASSES; calibration refit on the recomputed data — 2026-08-16
+
+The acceptance lane (5,098 game-sims, production flags) measured runs INSIDE the band — the
+~7-8% run-conversion gap is CLOSED (marker deleted, b61001d). The refit + 120-game
+validate-props rewrote `/data/calibration.json` (applied at next boot): win-prob ECE 0.0377 (was
+0.047); H/HR/TB hold the bettable class (0.066/0.024/0.060); **K ECE halved to 0.109; BB 0.044 —
+from 0.21 into the bettable class.** New small calibration targets: 2B +8.2%, BB +10.8%, ROE
++4.9% (SIM-429 scope). home_win_pct needs the 16-h certifying run; SB/CS wait on SIM-474.
+
 # Data — SIM-459 COMPLETE AND VERIFIED: the recompute carries every fix — 2026-08-15
 
 The full all-seasons chain (profile computor `--seasons 2017..2026 --full-rebuild` →
