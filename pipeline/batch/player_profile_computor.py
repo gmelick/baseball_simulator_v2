@@ -83,6 +83,8 @@ from pipeline.statcast_events import (
     sql_list,
     sql_outs_recorded,
     sql_play_outs,
+    sql_steal_attempt,
+    sql_steal_success,
 )
 from simulation.constants import DEFENSIVE_RUN_VALUES
 
@@ -1226,6 +1228,32 @@ class PlayerProfileComputor:
             "WHERE is_out GROUP BY pitcher_id, season"
         )
 
+    def _play_events_disengagement_cte(self) -> str:
+        """SIM-504 item 3: pickoff throws + stepoffs per (thrower, season).
+
+        These are the hold-runner behaviours the SIM-474 steal draw kernels
+        on: how often does this pitcher throw over, and how often does he
+        step off. ``pitcher_id`` is the THROWER (the third adversarial
+        review's mid-PA attribution fix). A ``pickoff_error`` is still a
+        pickoff THROW, so it counts. Falls back to an empty relation when
+        the table is absent (a pre-0018 database or a unit-test fixture).
+        """
+        try:
+            self._conn.execute("SELECT 1 FROM pg.raw.play_events LIMIT 0")
+        except Exception:
+            return (
+                "SELECT NULL::INTEGER AS pitcher_id, NULL::SMALLINT AS season, "
+                "0 AS n_pickoffs, 0 AS n_stepoffs WHERE FALSE"
+            )
+        return (
+            "SELECT pitcher_id::INTEGER AS pitcher_id, season::SMALLINT AS season, "
+            "SUM(CASE WHEN event_type IN ('pickoff', 'pickoff_error') "
+            "THEN 1 ELSE 0 END) AS n_pickoffs, "
+            "SUM(CASE WHEN event_type = 'stepoff' THEN 1 ELSE 0 END) AS n_stepoffs "
+            "FROM pg.raw.play_events WHERE pitcher_id IS NOT NULL "
+            "GROUP BY pitcher_id, season"
+        )
+
     def _connect(self) -> None:
         log.info("Opening DuckDB at %s …", self._duckdb_path)
         self._conn = duckdb.connect(self._duckdb_path)
@@ -2332,22 +2360,25 @@ class PlayerProfileComputor:
                 ) combined
                 GROUP BY season, player_id
             ),
-            -- Stolen base stats
+            -- Stolen base stats.  SIM-506: attempt labels = columns OR events
+            -- (a PA-ending caught stealing lives only in `events`; reading the
+            -- columns alone inflated every runner's success rate ~5-7 points).
             sb_stats AS (
                 SELECT season,
                     -- Player attempting the steal is the runner on the lead base
                     CASE
-                        WHEN sb_attempt_home = TRUE AND on_3b IS NOT NULL THEN on_3b
-                        WHEN sb_attempt_3b  = TRUE AND on_2b IS NOT NULL THEN on_2b
-                        WHEN sb_attempt_2b  = TRUE AND on_1b IS NOT NULL THEN on_1b
+                        WHEN {sql_steal_attempt("home")} AND on_3b IS NOT NULL THEN on_3b
+                        WHEN {sql_steal_attempt("3b")}   AND on_2b IS NOT NULL THEN on_2b
+                        WHEN {sql_steal_attempt("2b")}   AND on_1b IS NOT NULL THEN on_1b
                     END AS player_id,
                     CASE
-                        WHEN sb_attempt_2b  = TRUE THEN sb_success_2b
-                        WHEN sb_attempt_3b  = TRUE THEN sb_success_3b
-                        WHEN sb_attempt_home = TRUE THEN sb_success_home
+                        WHEN {sql_steal_attempt("2b")}   THEN {sql_steal_success("2b")}
+                        WHEN {sql_steal_attempt("3b")}   THEN {sql_steal_success("3b")}
+                        WHEN {sql_steal_attempt("home")} THEN {sql_steal_success("home")}
                     END AS sb_success
                 FROM runner_events
-                WHERE sb_attempt_2b = TRUE OR sb_attempt_3b = TRUE OR sb_attempt_home = TRUE
+                WHERE {sql_steal_attempt("2b")} OR {sql_steal_attempt("3b")}
+                   OR {sql_steal_attempt("home")}
             ),
             sb_agg AS (
                 SELECT season, player_id,
@@ -2456,8 +2487,14 @@ class PlayerProfileComputor:
                 SELECT
                     game_pk, at_bat_number, pitch_number, season,
                     on_1b, on_2b, on_3b,
-                    sb_attempt_2b, sb_attempt_3b, sb_attempt_home,
-                    sb_success_2b, sb_success_3b, sb_success_home
+                    -- SIM-506: attempt labels = columns OR events (a PA-ending
+                    -- caught stealing lives only in `events`).
+                    {sql_steal_attempt("2b")}   AS att_2b,
+                    {sql_steal_attempt("3b")}   AS att_3b,
+                    {sql_steal_attempt("home")} AS att_home,
+                    {sql_steal_success("2b")}   AS suc_2b,
+                    {sql_steal_success("3b")}   AS suc_3b,
+                    {sql_steal_success("home")} AS suc_home
                 FROM pg.raw.pitches
                 WHERE data_quality_flag = FALSE
                   AND season IN ({season_list})
@@ -2466,19 +2503,19 @@ class PlayerProfileComputor:
             attempts AS (
                 SELECT
                     CASE
-                        WHEN sb_attempt_2b   THEN on_1b
-                        WHEN sb_attempt_3b   THEN on_2b
-                        WHEN sb_attempt_home THEN on_3b
+                        WHEN att_2b   THEN on_1b
+                        WHEN att_3b   THEN on_2b
+                        WHEN att_home THEN on_3b
                     END                                       AS runner_id,
                     season,
-                    sb_attempt_3b                             AS is_2b_steal,  -- runner from 2B → 3B
+                    att_3b                                    AS is_2b_steal,  -- runner from 2B → 3B
                     CASE
-                        WHEN sb_attempt_2b   THEN sb_success_2b
-                        WHEN sb_attempt_3b   THEN sb_success_3b
-                        WHEN sb_attempt_home THEN sb_success_home
+                        WHEN att_2b   THEN suc_2b
+                        WHEN att_3b   THEN suc_3b
+                        WHEN att_home THEN suc_home
                     END                                       AS success
                 FROM clean
-                WHERE sb_attempt_2b OR sb_attempt_3b OR sb_attempt_home
+                WHERE att_2b OR att_3b OR att_home
             ),
             attempt_agg AS (
                 SELECT
@@ -2536,15 +2573,21 @@ class PlayerProfileComputor:
           * sb_against_per_9               — SB allowed × 27 / outs recorded
           * cs_rate_forced                 — (attempts − successes) / attempts
           * steal_attempt_rate_allowed     — attempts / baserunner_events
+          * pickoff_rate / stepoff_rate    — SIM-504: disengagements per pitch
+            with a runner on 1B/2B, from raw.play_events (the thrower). The
+            feed records stepoffs only from 2023 (the pitch clock), so the
+            rate is a true 0 before then — a coverage zero, not a behaviour.
 
-        Delivery (biomech timings) + Pickoff (no pickoff/disengagement columns
-        exist in raw.pitches) are NOT computed — the engine's Delivery and
-        Pickoff sub-scores were removed (see pitcher_steal_similarity.py).
-        Idempotent via INSERT OR REPLACE on (pitcher_id, season).
+        Attempt labels use the SIM-506 shared expressions (columns OR events —
+        a PA-ending caught stealing lives only in `events`). Delivery (biomech
+        timings) is NOT computed — the engine's Delivery sub-score was removed
+        (see pitcher_steal_similarity.py). Idempotent via INSERT OR REPLACE on
+        (pitcher_id, season).
         """
         log.info("Building derived.pitcher_steal_metrics …")
         season_list = ", ".join(str(s) for s in seasons)
         pickoff_outs_cte = self._play_events_outs_cte()  # SIM-504
+        disengagement_cte = self._play_events_disengagement_cte()  # SIM-504 item 3
         min_events = 30  # matches the engine's MIN_BASERUNNER_EVENTS gate
 
         self._conn.execute(f"""
@@ -2552,6 +2595,7 @@ class PlayerProfileComputor:
                 pitcher_id, season, throws,
                 sample_baserunner_events, sample_steal_attempts_against,
                 sb_against_per_9, cs_rate_forced, steal_attempt_rate_allowed,
+                pickoff_rate, stepoff_rate,
                 below_minimum_sample
             )
             WITH clean AS (
@@ -2575,10 +2619,20 @@ class PlayerProfileComputor:
                     -- The innings-pitched denominator for sb_against_per_9,
                     -- derived from `events` + the caught-stealing columns.
                     SUM({SQL_OUTS_RECORDED})                                 AS outs_recorded,
-                    SUM(CASE WHEN sb_attempt_2b OR sb_attempt_3b OR sb_attempt_home
+                    -- SIM-506: attempt labels = columns OR events (a PA-ending
+                    -- caught stealing lives only in `events`).
+                    SUM(CASE WHEN {sql_steal_attempt("2b")}
+                              OR {sql_steal_attempt("3b")}
+                              OR {sql_steal_attempt("home")}
                              THEN 1 ELSE 0 END)                              AS sb_attempts_against,
-                    SUM(CASE WHEN sb_success_2b OR sb_success_3b OR sb_success_home
-                             THEN 1 ELSE 0 END)                              AS sb_allowed
+                    SUM(CASE WHEN {sql_steal_success("2b")}
+                              OR {sql_steal_success("3b")}
+                              OR {sql_steal_success("home")}
+                             THEN 1 ELSE 0 END)                              AS sb_allowed,
+                    -- SIM-504: the disengagement denominator — pitches thrown
+                    -- with a runner on 1B or 2B (someone to hold).
+                    SUM(CASE WHEN on_1b IS NOT NULL OR on_2b IS NOT NULL
+                             THEN 1 ELSE 0 END)                              AS runner_on_pitches
                 FROM clean
                 GROUP BY pitcher, season
             ),
@@ -2601,6 +2655,12 @@ class PlayerProfileComputor:
             -- innings-pitched denominator of sb_against_per_9.
             pickoff_outs AS (
                 {pickoff_outs_cte}
+            ),
+            -- SIM-504 item 3: pickoff throws + stepoffs per (thrower, season)
+            -- from raw.play_events — the hold-runner behaviour the SIM-474
+            -- steal draw kernels on.
+            disengagements AS (
+                {disengagement_cte}
             )
             SELECT
                 p.pitcher_id,
@@ -2613,10 +2673,17 @@ class PlayerProfileComputor:
                 (p.sb_attempts_against - p.sb_allowed) * 1.0
                     / NULLIF(p.sb_attempts_against, 0)                       AS cs_rate_forced,
                 p.sb_attempts_against * 1.0 / NULLIF(b.n_br_events, 0)       AS steal_attempt_rate_allowed,
+                -- COALESCE to 0.0, never NULL: a NaN feature poisons the whole
+                -- steal-draw weight vector (exp of a NaN distance).
+                COALESCE(dg.n_pickoffs * 1.0
+                    / NULLIF(p.runner_on_pitches, 0), 0.0)                   AS pickoff_rate,
+                COALESCE(dg.n_stepoffs * 1.0
+                    / NULLIF(p.runner_on_pitches, 0), 0.0)                   AS stepoff_rate,
                 (COALESCE(b.n_br_events, 0) < {min_events})                  AS below_minimum_sample
             FROM pitch_agg p
             LEFT JOIN br_events b ON b.pitcher_id = p.pitcher_id AND b.season = p.season
             LEFT JOIN pickoff_outs po ON po.pitcher_id = p.pitcher_id AND po.season = p.season
+            LEFT JOIN disengagements dg ON dg.pitcher_id = p.pitcher_id AND dg.season = p.season
         """)
         log.info("  derived.pitcher_steal_metrics done.")
 
@@ -2765,7 +2832,7 @@ class PlayerProfileComputor:
                     game_pk, at_bat_number, pitch_number, season,
                     inning, inning_topbot, on_1b, on_2b, on_3b,
                     stand, p_throws, pinch_hitter, defensive_sub,
-                    sb_attempt_2b, sb_attempt_3b, sb_attempt_home,
+                    sb_attempt_2b, sb_attempt_3b, sb_attempt_home, events,
                     -- batting manager makes offensive calls; fielding manager defensive
                     CASE WHEN inning_topbot = 'Top' THEN away_manager_id
                          ELSE home_manager_id END AS bat_mgr,
@@ -2811,10 +2878,14 @@ class PlayerProfileComputor:
                 WHERE bat_mgr IS NOT NULL
                 GROUP BY bat_mgr, season
             ),
-            -- steal attempts (per-pitch events, batting side)
+            -- steal attempts (per-pitch events, batting side).  SIM-506:
+            -- attempt labels = columns OR events (a PA-ending caught stealing
+            -- lives only in `events`) — this rate is the SIM-474 aggression
+            -- weight's numerator.
             steal_agg AS (
                 SELECT bat_mgr AS manager_id, season,
-                    SUM(CASE WHEN sb_attempt_2b OR sb_attempt_3b OR sb_attempt_home
+                    SUM(CASE WHEN {sql_steal_attempt("2b")} OR {sql_steal_attempt("3b")}
+                              OR {sql_steal_attempt("home")}
                              THEN 1 ELSE 0 END) AS n_steal_orders
                 FROM p
                 WHERE bat_mgr IS NOT NULL
@@ -3395,15 +3466,23 @@ class PlayerProfileComputor:
             CREATE TABLE _tmp_catcher_throwing AS
 
             WITH sb_events AS (
+                -- SIM-506: attempt labels = columns OR events (a PA-ending
+                -- caught stealing lives only in `events`; the columns alone
+                -- hid 43% of 2B caught stealings and READ every catcher's
+                -- cs_rate low).
                 SELECT
                     fielder_2 AS catcher_id,
                     season,
-                    sb_attempt_2b, sb_success_2b,
-                    sb_attempt_3b, sb_success_3b,
-                    sb_attempt_home, sb_success_home
+                    {sql_steal_attempt("2b")}   AS att_2b,
+                    {sql_steal_success("2b")}   AS suc_2b,
+                    {sql_steal_attempt("3b")}   AS att_3b,
+                    {sql_steal_success("3b")}   AS suc_3b,
+                    {sql_steal_attempt("home")} AS att_home,
+                    {sql_steal_success("home")} AS suc_home
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
-                  AND (sb_attempt_2b = TRUE OR sb_attempt_3b = TRUE OR sb_attempt_home = TRUE)
+                  AND ({sql_steal_attempt("2b")} OR {sql_steal_attempt("3b")}
+                       OR {sql_steal_attempt("home")})
             ),
             sb_aggregated AS (
                 SELECT
@@ -3412,39 +3491,39 @@ class PlayerProfileComputor:
                     COUNT(*) AS sb_attempts_faced,
 
                     -- Overall CS
-                    SUM(CASE WHEN (sb_attempt_2b AND NOT sb_success_2b)
-                               OR (sb_attempt_3b AND NOT sb_success_3b)
-                               OR (sb_attempt_home AND NOT sb_success_home)
+                    SUM(CASE WHEN (att_2b AND NOT suc_2b)
+                               OR (att_3b AND NOT suc_3b)
+                               OR (att_home AND NOT suc_home)
                              THEN 1 ELSE 0 END) AS cs_total,
 
                     -- 2B attempts
-                    SUM(CASE WHEN sb_attempt_2b THEN 1 ELSE 0 END) AS sb_attempts_2b,
-                    SUM(CASE WHEN sb_attempt_2b AND NOT sb_success_2b THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN sb_attempt_2b THEN 1 ELSE 0 END), 0)
+                    SUM(CASE WHEN att_2b THEN 1 ELSE 0 END) AS sb_attempts_2b,
+                    SUM(CASE WHEN att_2b AND NOT suc_2b THEN 1 ELSE 0 END)
+                        * 1.0 / NULLIF(SUM(CASE WHEN att_2b THEN 1 ELSE 0 END), 0)
                         AS cs_rate_2b,
 
                     -- 3B attempts
-                    SUM(CASE WHEN sb_attempt_3b THEN 1 ELSE 0 END) AS sb_attempts_3b,
-                    SUM(CASE WHEN sb_attempt_3b AND NOT sb_success_3b THEN 1 ELSE 0 END)
-                        * 1.0 / NULLIF(SUM(CASE WHEN sb_attempt_3b THEN 1 ELSE 0 END), 0)
+                    SUM(CASE WHEN att_3b THEN 1 ELSE 0 END) AS sb_attempts_3b,
+                    SUM(CASE WHEN att_3b AND NOT suc_3b THEN 1 ELSE 0 END)
+                        * 1.0 / NULLIF(SUM(CASE WHEN att_3b THEN 1 ELSE 0 END), 0)
                         AS cs_rate_3b,
 
                     -- Overall rates
-                    SUM(CASE WHEN (sb_attempt_2b AND NOT sb_success_2b)
-                               OR (sb_attempt_3b AND NOT sb_success_3b)
-                               OR (sb_attempt_home AND NOT sb_success_home)
+                    SUM(CASE WHEN (att_2b AND NOT suc_2b)
+                               OR (att_3b AND NOT suc_3b)
+                               OR (att_home AND NOT suc_home)
                              THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0) AS cs_rate,
 
-                    1.0 - (SUM(CASE WHEN (sb_attempt_2b AND NOT sb_success_2b)
-                                      OR (sb_attempt_3b AND NOT sb_success_3b)
-                                      OR (sb_attempt_home AND NOT sb_success_home)
+                    1.0 - (SUM(CASE WHEN (att_2b AND NOT suc_2b)
+                                      OR (att_3b AND NOT suc_3b)
+                                      OR (att_home AND NOT suc_home)
                                     THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0))
                         AS sb_allowed_rate,
 
                     -- SIM-073 numerator: total steal *attempts* against this catcher
                     -- across 2B + 3B (home steal attempts excluded — they're a
                     -- different baseball action, not a catcher-arm decision).
-                    SUM(CASE WHEN sb_attempt_2b OR sb_attempt_3b THEN 1 ELSE 0 END)
+                    SUM(CASE WHEN att_2b OR att_3b THEN 1 ELSE 0 END)
                         AS steal_attempts_2b_or_3b
                 FROM sb_events
                 GROUP BY catcher_id, season
@@ -5186,21 +5265,23 @@ class PlayerProfileComputor:
                     rp.strikes                  AS count_strikes,
                     rp.release_speed            AS velo,
                     rp.break_vertical_induced   AS ivb,
-                    -- Determine which base was attempted and the runner ID
+                    -- Determine which base was attempted and the runner ID.
+                    -- SIM-506: attempt labels = columns OR events (a PA-ending
+                    -- caught stealing lives only in `events`).
                     CASE
-                        WHEN rp.sb_attempt_home = TRUE AND rp.on_3b IS NOT NULL THEN rp.on_3b
-                        WHEN rp.sb_attempt_3b   = TRUE AND rp.on_2b IS NOT NULL THEN rp.on_2b
-                        WHEN rp.sb_attempt_2b   = TRUE AND rp.on_1b IS NOT NULL THEN rp.on_1b
+                        WHEN {sql_steal_attempt("home", "rp.")} AND rp.on_3b IS NOT NULL THEN rp.on_3b
+                        WHEN {sql_steal_attempt("3b", "rp.")}   AND rp.on_2b IS NOT NULL THEN rp.on_2b
+                        WHEN {sql_steal_attempt("2b", "rp.")}   AND rp.on_1b IS NOT NULL THEN rp.on_1b
                     END                         AS runner_id,
                     CASE
-                        WHEN rp.sb_attempt_home = TRUE THEN 'home'
-                        WHEN rp.sb_attempt_3b   = TRUE THEN '3B'
-                        WHEN rp.sb_attempt_2b   = TRUE THEN '2B'
+                        WHEN {sql_steal_attempt("home", "rp.")} THEN 'home'
+                        WHEN {sql_steal_attempt("3b", "rp.")}   THEN '3B'
+                        WHEN {sql_steal_attempt("2b", "rp.")}   THEN '2B'
                     END                         AS base_attempted,
                     CASE
-                        WHEN rp.sb_attempt_home = TRUE THEN rp.sb_success_home
-                        WHEN rp.sb_attempt_3b   = TRUE THEN rp.sb_success_3b
-                        WHEN rp.sb_attempt_2b   = TRUE THEN rp.sb_success_2b
+                        WHEN {sql_steal_attempt("home", "rp.")} THEN {sql_steal_success("home", "rp.")}
+                        WHEN {sql_steal_attempt("3b", "rp.")}   THEN {sql_steal_success("3b", "rp.")}
+                        WHEN {sql_steal_attempt("2b", "rp.")}   THEN {sql_steal_success("2b", "rp.")}
                     END                         AS success
                 FROM pg.raw.pitches rp
                 JOIN sim.pitch_pool pp
@@ -5209,8 +5290,8 @@ class PlayerProfileComputor:
                    AND pp.pitch_number  = rp.pitch_number
                 WHERE rp.data_quality_flag = FALSE
                   AND rp.season IN ({season_list})
-                  AND (rp.sb_attempt_2b = TRUE OR rp.sb_attempt_3b = TRUE
-                       OR rp.sb_attempt_home = TRUE)
+                  AND ({sql_steal_attempt("2b", "rp.")} OR {sql_steal_attempt("3b", "rp.")}
+                       OR {sql_steal_attempt("home", "rp.")})
             )
             SELECT
                 s.pitch_id,
@@ -5325,15 +5406,19 @@ class PlayerProfileComputor:
                                                     AS score_diff,
                     -- The flags for THIS pair's target base only: an attempt of
                     -- another base on the same pitch is a different decision.
+                    -- SIM-506: the labels OR the `events` column in — a PA-ending
+                    -- caught stealing lives ONLY there (measured disjoint from the
+                    -- sb_* columns; 43% of 2B caught stealings). Columns alone
+                    -- read the pool 87.6% safe against a real ~82.7%.
                     CASE
                         WHEN rp.on_1b IS NOT NULL AND rp.on_2b IS NULL
-                            THEN COALESCE(rp.sb_attempt_2b, FALSE)
-                        ELSE COALESCE(rp.sb_attempt_3b, FALSE)
+                            THEN {sql_steal_attempt("2b", "rp.")}
+                        ELSE {sql_steal_attempt("3b", "rp.")}
                     END                             AS attempted,
                     CASE
                         WHEN rp.on_1b IS NOT NULL AND rp.on_2b IS NULL
-                            THEN COALESCE(rp.sb_success_2b, FALSE)
-                        ELSE COALESCE(rp.sb_success_3b, FALSE)
+                            THEN {sql_steal_success("2b", "rp.")}
+                        ELSE {sql_steal_success("3b", "rp.")}
                     END                             AS success
                 FROM pg.raw.pitches rp
                 JOIN sim.pitch_pool pp

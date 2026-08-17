@@ -25,11 +25,23 @@ the sampler runs with a partial bundle (e.g. before the pitcher-sim nightly buil
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from pipeline.batch.engine_artifacts import EngineArtifacts, HandPool
 
 _OUTCOMES = ("ball", "called_strike", "swinging_strike", "foul", "in_play")
+
+#: SIM-476 diagnostics (2026-08-17): skip ONE similarity factor in the steal
+#: draw to locate the source of the safe/caught-split inflation (certified
+#: 88.1% vs MLB ~77.6%). The catcher arm REFUTED its suspect (ablating it made
+#: the split WORSE, 0.869 -> 0.916); the runner arm tests the attempt-
+#: composition theory (the runner kernel may concentrate attempted-row weight
+#: on elite-stealer-like rows more sharply than real attempt composition).
+#: Default OFF; never set in production.
+_STEAL_ABLATE_CATCHER = os.environ.get("SIM_STEAL_ABLATE_CATCHER", "0") == "1"
+_STEAL_ABLATE_RUNNER = os.environ.get("SIM_STEAL_ABLATE_RUNNER", "0") == "1"
 
 
 class FullPoolSampler:
@@ -466,7 +478,16 @@ class FullPoolSampler:
         "cs_rate",
         "steal_attempt_rate_against",
     )
-    _PITCHER_STEAL_FEATURES = ("sb_against_per_9", "cs_rate_forced", "steal_attempt_rate_allowed")
+    #: SIM-504 item 3 added pickoff_rate/stepoff_rate (raw.play_events
+    #: disengagements). `_steal_feat_cols` skips names a legacy artifact lacks,
+    #: so an old bundle degrades to the 3-feature kernel instead of failing.
+    _PITCHER_STEAL_FEATURES = (
+        "sb_against_per_9",
+        "cs_rate_forced",
+        "steal_attempt_rate_allowed",
+        "pickoff_rate",
+        "stepoff_rate",
+    )
 
     def has_steal_pool(self) -> bool:
         return bool(self.a.steal_pools)
@@ -614,11 +635,12 @@ class FullPoolSampler:
         w = pool.recency[rows].astype(np.float32).copy()
         sd = pool.sit[rows, 3] - np.float32(score_diff)
         w *= np.exp(-(sd * sd) / (2.0 * self.steal_score_sigma**2)).astype(np.float32)
-        f = self._steal_actor_factor(
-            "baserunner", runner_key, meta["runner_rows"], rows, self._RUNNER_STEAL_FEATURES
-        )
-        if f is not None:
-            w *= f
+        if not _STEAL_ABLATE_RUNNER:
+            f = self._steal_actor_factor(
+                "baserunner", runner_key, meta["runner_rows"], rows, self._RUNNER_STEAL_FEATURES
+            )
+            if f is not None:
+                w *= f
         f = self._steal_actor_factor(
             "pitcher_steal",
             pitcher_key,
@@ -628,7 +650,7 @@ class FullPoolSampler:
         )
         if f is not None:
             w *= f
-        if catcher_key:
+        if catcher_key and not _STEAL_ABLATE_CATCHER:
             f = self._steal_actor_factor(
                 "catcher", catcher_key, meta["catcher_rows"], rows, self._CATCHER_STEAL_FEATURES
             )

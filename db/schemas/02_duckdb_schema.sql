@@ -519,6 +519,12 @@ CREATE TABLE IF NOT EXISTS derived.pitcher_steal_metrics (
     cs_rate_forced                  FLOAT,      -- CS / attempts against
     steal_attempt_rate_allowed      FLOAT,      -- attempts against / baserunner events
 
+    -- SIM-504 item 3 (migration 0016): hold-runner disengagements from
+    -- raw.play_events, per pitch with a runner on 1B/2B. stepoff_rate is a
+    -- coverage zero before 2023 (the feed starts recording at the pitch clock).
+    pickoff_rate                    DOUBLE,
+    stepoff_rate                    DOUBLE,
+
     below_minimum_sample            BOOLEAN     NOT NULL DEFAULT FALSE,
     updated_at                      TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
 

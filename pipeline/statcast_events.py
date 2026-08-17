@@ -271,6 +271,60 @@ def sql_batter_retired(q: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
+# Steal-attempt labels (SIM-506)
+# ---------------------------------------------------------------------------
+# A steal outcome lives in TWO disjoint places in raw.pitches:
+#
+#   * the ``sb_attempt_*`` / ``sb_success_*`` columns — a MID-plate-appearance
+#     steal (the PA continues after the play);
+#   * the ``events`` column — a steal that ENDS the plate appearance
+#     (``caught_stealing_2b`` etc.; the columns stay FALSE on those rows).
+#
+# Measured on the full swept data (2026-08-17): the overlap is exactly ZERO.
+# The asymmetry is total: a caught stealing ends a PA routinely (2024, 2B:
+# 330 column CS + 249 event-only CS — 43% of caught stealings live only in
+# ``events``), but a successful steal almost never does (2024: 3 event SB
+# against 2,773 column SB). A consumer that reads the columns alone therefore
+# inflates every steal SUCCESS rate by ~5-7 points — that defect shipped in
+# the SIM-468 opportunity pool and every steal-feature builder (SIM-506).
+# Use these two helpers at EVERY site that labels a steal attempt or outcome;
+# do not write a third definition.
+#
+# Known, accepted residual: a caught stealing folded into a
+# ``strikeout_double_play`` names no base, so it is not attributable to a
+# target and stays outside these labels (≤ ~98 events/season, ~2.5% of DPs).
+
+STEAL_BASES = ("2b", "3b", "home")
+
+
+def sql_steal_attempt(base: str, q: str = "") -> str:
+    """Boolean: a steal of ``base`` was attempted on this pitch row.
+
+    NULL-safe: a NULL ``events`` (any mid-PA pitch) must read FALSE, not
+    NULL — ``FALSE OR NULL`` is NULL and poisons NOT NULL label columns.
+    """
+    if base not in STEAL_BASES:
+        raise ValueError(f"base must be one of {STEAL_BASES}, got {base!r}")
+    return (
+        f"(COALESCE({q}sb_attempt_{base}, FALSE) OR COALESCE("
+        f"{q}events IN ('caught_stealing_{base}', 'stolen_base_{base}'), FALSE))"
+    )
+
+
+def sql_steal_success(base: str, q: str = "") -> str:
+    """Boolean: an attempted steal of ``base`` succeeded on this pitch row.
+
+    NULL-safe like :func:`sql_steal_attempt`.
+    """
+    if base not in STEAL_BASES:
+        raise ValueError(f"base must be one of {STEAL_BASES}, got {base!r}")
+    return (
+        f"(COALESCE({q}sb_success_{base}, FALSE) OR "
+        f"COALESCE({q}events = 'stolen_base_{base}', FALSE))"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Python-side helpers for the pandas paths
 # ---------------------------------------------------------------------------
 

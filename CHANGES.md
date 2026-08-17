@@ -1,3 +1,24 @@
+# Data/Sim — SIM-506 + SIM-504 item 3: the steal labels read both homes; hold-runner rates wired — 2026-08-17
+
+**SIM-506 — the certified safe/caught split defect (88.1% vs MLB ~77.6%) was a DATA defect.** The
+ablation chain refuted both kernel suspects (catcher removed → split WORSE 0.869→0.916 at ~4.5σ;
+runner removed → null), and the pool itself read 87.6% safe on its own attempted rows. Root cause:
+a steal outcome lives in TWO disjoint places in `raw.pitches` — the `sb_*` columns (mid-PA) and
+`events` (PA-ending; overlap exactly 0) — and every steal consumer read the columns alone. A caught
+stealing ends a PA routinely (2024 2B: 249 of 579 CS event-only = 43% missing, all failures); a
+successful steal almost never does (3 vs 2,773). Fix: canonical NULL-safe
+`sql_steal_attempt`/`sql_steal_success` in `pipeline/statcast_events.py`, applied at ALL seven
+labeling sites (opportunity pool, runner/pitcher/catcher feature builders, legacy stolen_base_pool,
+manager steal-order rate). The 3-valued-logic trap (`FALSE OR NULL` = NULL) is guarded in the
+helper, caught by the NOT NULL pool constraint in the first test run.
+
+**SIM-504 item 3 — pickoff/stepoff hold-runner rates.** DuckDB migration 0016 (v16):
+`pickoff_rate`/`stepoff_rate` on `derived.pitcher_steal_metrics` from `raw.play_events` (per
+thrower, per pitch with a runner on 1B/2B; probe-guarded like the pickoff-outs CTE; COALESCE 0.0 so
+no NaN reaches the steal-draw kernel). Both auto-enter the pitcher_steal embedding and are named in
+`_PITCHER_STEAL_FEATURES`; a legacy artifact degrades gracefully. The similarity ENGINE's weights
+are untouched (SIM-476's call). Tests: 38 steal-suite + 7 new across both seams; ruff/mypy clean.
+
 # Test — SIM-502 follow-up: the weekly integration lane is green again — 2026-08-17
 
 The 2026-08-17 weekly integration run failed on ONE test: the schema-drift guard

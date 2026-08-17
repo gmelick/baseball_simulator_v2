@@ -74,7 +74,7 @@ def _conn() -> duckdb.DuckDBPyConnection:
         "on_1b INTEGER, on_2b INTEGER, on_3b INTEGER, "
         "sb_attempt_2b BOOLEAN, sb_attempt_3b BOOLEAN, "
         "sb_success_2b BOOLEAN, sb_success_3b BOOLEAN, "
-        "data_quality_flag BOOLEAN)"
+        "data_quality_flag BOOLEAN, events VARCHAR)"
     )
     c.execute("CREATE SCHEMA sim")
     c.execute(
@@ -110,12 +110,13 @@ def _pitch(
     balls=0,
     strikes=0,
     flag=False,
+    ev=None,
 ):
     pid = pk * 10000 + ab * 100 + pn
     c.execute(
         "INSERT INTO pg.raw.pitches VALUES (?,?,?,DATE '2024-06-01',2024,901,902,1,?,?,?,3,1,"
-        "?,?,?,?,?,?,?,?)",
-        [pk, ab, pn, outs, balls, strikes, on_1b, on_2b, on_3b, att2, att3, suc2, suc3, flag],
+        "?,?,?,?,?,?,?,?,?)",
+        [pk, ab, pn, outs, balls, strikes, on_1b, on_2b, on_3b, att2, att3, suc2, suc3, flag, ev],
     )
     c.execute("INSERT INTO sim.pitch_pool VALUES (?,?,?,?)", [pid, pk, ab, pn])
     return pid
@@ -181,6 +182,41 @@ class TestTheComputorBuild:
         _build(c)
         got = c.execute("SELECT pool_name, row_count FROM sim.pool_build_metadata").fetchone()
         assert got == ("steal_opportunity_pool", 1)
+
+    # -- SIM-506: the event-recorded outcomes the columns never carry --------
+
+    def test_a_pa_ending_caught_stealing_is_an_attempted_failure(self):
+        """A caught stealing that ENDS the plate appearance lives only in
+        `events` (measured disjoint from the sb_* columns; 43% of 2B caught
+        stealings). Reading the columns alone labelled this row as a
+        non-attempt and read the pool 87.6% safe against a real ~82.7%."""
+        c = _conn()
+        _pitch(c, 1, 1, 1, on_1b=11, ev="caught_stealing_2b")
+        _pitch(c, 1, 2, 1, on_2b=22, ev="caught_stealing_3b")
+        _build(c)
+        rows = c.execute(
+            "SELECT target_base, runner_id, attempted, success "
+            "FROM sim.steal_opportunity_pool ORDER BY pitch_id"
+        ).fetchall()
+        assert rows == [(2, 11, True, False), (3, 22, True, False)]
+
+    def test_an_event_recorded_stolen_base_is_an_attempted_success(self):
+        c = _conn()
+        _pitch(c, 1, 1, 1, on_1b=11, ev="stolen_base_2b")
+        _build(c)
+        rows = c.execute(
+            "SELECT target_base, attempted, success FROM sim.steal_opportunity_pool"
+        ).fetchall()
+        assert rows == [(2, True, True)]
+
+    def test_an_unrelated_pa_ending_event_is_not_an_attempt(self):
+        """An ordinary PA-ending event on an opportunity pitch stays a
+        non-attempt — the OR must not swallow the whole events vocabulary."""
+        c = _conn()
+        _pitch(c, 1, 1, 1, on_1b=11, ev="strikeout")
+        _build(c)
+        rows = c.execute("SELECT attempted, success FROM sim.steal_opportunity_pool").fetchall()
+        assert rows == [(False, False)]
 
 
 # ---------------------------------------------------------------------------
