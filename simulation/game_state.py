@@ -742,6 +742,11 @@ class PlayResult:
     steal_attempted: bool = False
     #: Steal outcome: None / "safe" / "caught" / "pickoff" (SIM-319).
     steal_outcome: str | None = None
+    #: SIM-483: runs that scored ON THE STEAL itself (a steal of home). MLB
+    #: Rule 9.04(b) awards NO run batted in on a stolen base, so the box-score
+    #: accumulator subtracts this from the batter's RBI credit when the steal
+    #: lands on a terminal pitch (its run is folded into the play's ``runs``).
+    steal_runs_scored: int = 0
 
     # ---- raw sampler payloads (carried verbatim from the sampler) -----------
     #: The raw ``PlayPoolSampler.sample_pitch(...)`` dict (row_id/distance/...).

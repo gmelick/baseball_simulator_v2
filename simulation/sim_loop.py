@@ -2032,6 +2032,10 @@ class StateMachine:
                     runners_scored=1 if moving is not None else 0,
                     runners_retired=0,
                 )
+                # SIM-483: mark the run as a STEAL run so the terminal-pitch
+                # accumulator can withhold the batter's RBI credit (Rule
+                # 9.04(b) awards no RBI on a stolen base).
+                result.steal_runs_scored += 1
                 if rid is not None:
                     result.baserunner_advances[rid] = 0
                     # SIM-365: the runner scored on the steal of home.
@@ -2042,6 +2046,15 @@ class StateMachine:
                 # so crediting here too would double-count.
                 if not result.pa_terminal and state.pitcher_id is not None:
                     self._box_line(int(state.pitcher_id)).r_allowed += 1
+                    # SIM-483: a stolen-base run is EARNED (Rule 9.16(a)), and
+                    # the non-terminal path never reaches ``_accumulate_pa``'s
+                    # ER credit — without this line every non-terminal steal of
+                    # home under-counted the pitcher's ER. Unearned only when
+                    # an earlier error means the inning should already be over
+                    # (the same rule ``_accumulate_pa`` applies).
+                    outs_lost = self._half_inning_error_outs_lost
+                    if int(state.outs) + outs_lost < 3:
+                        self._box_line(int(state.pitcher_id)).er += 1
             elif rid is not None:
                 result.baserunner_advances[rid] = to_base
         else:
@@ -2882,9 +2895,13 @@ class StateMachine:
                     bat.b2 += 1
                 elif canonical == "triple":
                     bat.b3 += 1
-            # RBI: runs the batter drove in (not credited on an error-driven run).
-            if runs and not is_error:
-                bat.rbi += runs
+            # RBI: runs the batter drove in (not credited on an error-driven
+            # run). SIM-483: a run that scored ON A STEAL (a terminal-pitch
+            # steal of home folds its run into ``runs``) earns the batter NO
+            # RBI — MLB Rule 9.04(b) awards none on a stolen base.
+            rbi_runs = max(0, int(runs) - int(result.steal_runs_scored))
+            if rbi_runs and not is_error:
+                bat.rbi += rbi_runs
 
         # ---- runs scored (SIM-365): credit each runner who crossed home on this
         # play.  ``baserunner_advances`` records ``end_base == 0`` for a runner who

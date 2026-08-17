@@ -16,7 +16,9 @@ measured **SB 0.70 + CS 0.09 = 0.79 attempts/team-game against MLB's 0.76 (+4%)*
 | **SIM-505** | The sim349 synthetic RNG machine passes its validity assertions by luck | 🔲 **OPEN.** Found when SIM-474's removal of the per-pitch gate RNG draw shifted the stream: `_RngMachine` overrides `step_pitch` with a crude outcome draw that lets the SAME batter resolve in-play while still standing on base (measured: 200+ such states in one seed-1 game; seeds 1 and 7 end with a runner on two bases, 9 of 11 seeds end legally). The MACHINE is the defect, not the loop — rebuild it to rotate the lineup legally, then remove the seed-dependence note at `test_baseball_analyst_sim349.py::test_aggressive_situational_manager_game_completes_validly`. |
 
 **Remaining for full SIM-474 closure:** the 12×425 certifying lane (SB/CS bands + the safe-split
-read), and SIM-483 goes live (exclude steal runs from RBI/ER credit — filed as latent, now real).
+read) — running as of 2026-08-17.
+
+| **SIM-483** | Steal runs: no RBI (Rule 9.04(b)); earned per Rule 9.16(a) | ✅ **CLOSED 2026-08-17** (went live the hour SIM-474 landed). Two credits fixed on the steal of home: (1) a TERMINAL-pitch steal folds its run into the play's `runs` and the batter was credited an RBI — `PlayResult.steal_runs_scored` now marks steal runs and the accumulator withholds exactly that many (a driven-in run beside the steal run keeps its RBI); (2) a NON-terminal steal charged `r_allowed` but never `er` — a stolen-base run is EARNED (9.16(a)), now charged with the same inning-should-be-over unearned rule the accumulator uses. Five tests in `test_sim483_steal_run_credit.py`. |
 
 # 📋 2026-08-13 — SIM-504 FILED: wire `raw.play_events` into its consumers (next free ID → SIM-505, now → SIM-506)
 
