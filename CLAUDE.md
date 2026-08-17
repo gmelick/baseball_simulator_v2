@@ -160,9 +160,13 @@
   - **SIM-432 — FILED 2026-05-31, CLOSED 2026-06-01 (see the top bullet of this section).**
     Calibration is now live; the cascade is fully resolved.
 
-## 2b. ⚠ IN-FLIGHT WORK — read before touching the ETL or running a recompute (2026-08-11)
+## 2b. ⚠ IN-FLIGHT WORK — read before touching the ETL or running a recompute (updated 2026-08-17)
 
-**`docs/audit/2026-08-11-sim501-502-resumption-state.md` is the handover.** Read it first.
+**`docs/audit/2026-08-17-sim474-resumption-state.md` is the CURRENT handover.** Read it first —
+it carries the running certifying lane (container `b5f6b71c09c0`, how to read it, the decision
+tree on its results), everything SIM-468/474/483/504/505 landed on 2026-08-17, and the open
+queue. The 2026-08-11 handover below it covers the data-foundation rebuild era (SIM-501/502,
+the re-sweep, SIM-459) and stays valid as history.
 
 - **DO NOT run the profile recompute** (`make profile-computor`) — but the reason changed on
   2026-08-13. SIM-501a/c CLOSED: SIM-457 is re-landed on the events-based out label, no profile
