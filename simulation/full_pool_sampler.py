@@ -83,6 +83,18 @@ class FullPoolSampler:
         # resolver can read that pool play's fielder identity/position.
         self._bb_last_i: int | None = None
         self._fld_idx: dict[str, int] | None = None  # fielder feature-name -> col
+        # SIM-474: steal-opportunity-pool per-target precompute (lazy, permanent):
+        # cell index by (outs, balls, strikes), per-row embedding-row gathers for
+        # runner/pitcher/catcher, and the z-scored steal-feature matrices.
+        self._steal_meta_cache: dict[str, dict] = {}
+        self._steal_emb_z: dict[str, np.ndarray] = {}
+        #: SIM-474 kernel bandwidths — the same hyperparameter class as
+        #: ``sit_sigma``/``batter_sigma`` and a SIM-476 temperature-fit target.
+        #: 1.0 conditions HARD on the actor (a maximally-different runner keeps
+        #: ~0.14 weight over the 4 steal features): attempt rates vary more by
+        #: runner than any other factor here, so the runner kernel must bite.
+        self.steal_sigma = 1.0
+        self.steal_score_sigma = 2.0
 
     # ---- per-pool one-time precompute ------------------------------------
     def _pool_meta(self, hand: str) -> dict:
@@ -441,3 +453,195 @@ class FullPoolSampler:
         if self._cat_idx is None:
             self._cat_idx = {f: i for i, f in enumerate(feats)}
         return self._cat_idx
+
+    # ---- SIM-474: the steal draw over the opportunity pool -----------------
+
+    #: The steal-relevant feature subsets. Each actor's similarity is a gaussian
+    #: kernel over THESE z-scored columns only, so a runner is "similar" by how
+    #: he runs, not by how he tags up.
+    _RUNNER_STEAL_FEATURES = ("sprint_speed", "sb_attempt_rate", "sb_success_rate", "cs_rate")
+    _CATCHER_STEAL_FEATURES = (
+        "pop_time_mean",
+        "arm_strength_mean",
+        "cs_rate",
+        "steal_attempt_rate_against",
+    )
+    _PITCHER_STEAL_FEATURES = ("sb_against_per_9", "cs_rate_forced", "steal_attempt_rate_allowed")
+
+    def has_steal_pool(self) -> bool:
+        return bool(self.a.steal_pools)
+
+    def _emb_z(self, actor: str) -> np.ndarray | None:
+        """The z-scored embedding matrix for ``actor`` (memoized)."""
+        z = self._steal_emb_z.get(actor)
+        if z is not None:
+            return z
+        emb = self.a.actor_emb.get(actor)
+        if emb is None:
+            return None
+        vecs, mean, std = emb.get("vecs"), emb.get("mean"), emb.get("std")
+        if vecs is None or mean is None or std is None:
+            return None
+        z = ((vecs - mean) / std).astype(np.float32)
+        self._steal_emb_z[actor] = z
+        return z
+
+    def _steal_meta(self, target: str) -> dict | None:
+        """Per-target one-time precompute: the (outs, balls, strikes) cell index
+        plus per-row embedding-row gathers for the three actors."""
+        meta = self._steal_meta_cache.get(target)
+        if meta is not None:
+            return meta
+        pool = self.a.steal_pools.get(target)
+        if pool is None or pool.n == 0:
+            return None
+        sit = pool.sit  # cols: count_balls, count_strikes, outs, score_diff
+        cells: dict[tuple[int, int, int], np.ndarray] = {}
+        key = (sit[:, 2].astype(np.int64) * 100 + sit[:, 0].astype(np.int64) * 10) + sit[
+            :, 1
+        ].astype(np.int64)
+        order = np.argsort(key, kind="stable")
+        sorted_keys = key[order]
+        bounds = np.searchsorted(sorted_keys, np.unique(sorted_keys))
+        uniq = np.unique(sorted_keys)
+        for i, k in enumerate(uniq):
+            lo = bounds[i]
+            hi = bounds[i + 1] if i + 1 < len(bounds) else len(order)
+            cells[(int(k) // 100, (int(k) % 100) // 10, int(k) % 10)] = order[lo:hi]
+
+        def _rows(actor: str, ids: np.ndarray) -> np.ndarray | None:
+            emb = self.a.actor_emb.get(actor)
+            if emb is None:
+                return None
+            kidx = emb["key_index"]
+            return np.fromiter(
+                (
+                    kidx.get(f"{int(a)}:{int(s)}", -1)
+                    for a, s in zip(ids, pool.season, strict=False)
+                ),
+                dtype=np.int64,
+                count=pool.n,
+            )
+
+        meta = {
+            "cells": cells,
+            "runner_rows": _rows("baserunner", pool.runner_id),
+            "pitcher_rows": _rows("pitcher_steal", pool.pitcher_id),
+            "catcher_rows": _rows("catcher", pool.catcher_id),
+        }
+        self._steal_meta_cache[target] = meta
+        return meta
+
+    def _steal_feat_cols(self, actor: str, names: tuple[str, ...]) -> np.ndarray | None:
+        emb = self.a.actor_emb.get(actor)
+        if emb is None:
+            return None
+        feats = emb.get("features")
+        if feats is None:
+            return None
+        fmap = {f: i for i, f in enumerate(feats)}
+        cols = [fmap[n] for n in names if n in fmap]
+        return np.asarray(cols, dtype=np.int64) if cols else None
+
+    def _steal_actor_factor(
+        self,
+        actor: str,
+        live_key: str,
+        emb_rows_all: np.ndarray | None,
+        rows: np.ndarray,
+        feat_names: tuple[str, ...],
+    ) -> np.ndarray | None:
+        """Gaussian similarity between the LIVE actor and each pool row's actor
+        over the steal-feature subset; 1.0 (neutral) for rows whose actor is
+        absent from the embedding, None when the whole factor is unavailable."""
+        if emb_rows_all is None:
+            return None
+        z = self._emb_z(actor)
+        emb = self.a.actor_emb.get(actor)
+        if z is None or emb is None:
+            return None
+        live_idx = emb["key_index"].get(live_key)
+        cols = self._steal_feat_cols(actor, feat_names)
+        if live_idx is None or cols is None:
+            return None
+        live = z[live_idx][cols]
+        row_idx = emb_rows_all[rows]
+        valid = row_idx >= 0
+        out = np.ones(len(rows), dtype=np.float32)
+        if not valid.any():
+            return out
+        sub = z[row_idx[valid]][:, cols]
+        diff = sub - live
+        d2 = np.einsum("ij,ij->i", diff, diff)
+        out[valid] = np.exp(-d2 / (2.0 * self.steal_sigma**2 * len(cols))).astype(np.float32)
+        return out
+
+    def steal_draw(
+        self,
+        target_base: int,
+        runner_key: str,
+        pitcher_key: str,
+        catcher_key: str | None,
+        *,
+        outs: int,
+        balls: int,
+        strikes: int,
+        score_diff: int,
+        aggression: float = 1.0,
+    ) -> tuple[bool, bool] | None:
+        """Draw ONE steal-opportunity row -> (attempted, success), or None when
+        the pool/cell is absent (the caller then stages nothing).
+
+        The owner's rule (2026-08-10): every sim decision is a similarity-
+        weighted draw from a hard-filtered pool, never a hand-tuned formula.
+        Hard filter: target base + the exact (outs, balls, strikes) cell.
+        Weights: runner similarity (how he runs), pitcher hold similarity,
+        catcher-arm similarity — so a strong arm DETERS the attempt, because
+        rows against similar catchers carry fewer attempts — a soft score-diff
+        kernel (blowout damping emerges from the pool, not a constant), manager
+        aggression as a multiplier on ATTEMPTED rows (a weight, never a gate —
+        SIM-474), and recency. The drawn row answers both questions at once:
+        its `attempted` flag says whether the runner goes, its `success` flag
+        says safe or caught.
+        """
+        pool = self.a.steal_pools.get(str(int(target_base)))
+        meta = self._steal_meta(str(int(target_base)))
+        if pool is None or meta is None:
+            return None
+        rows = meta["cells"].get((int(outs), int(balls), int(strikes)))
+        if rows is None or len(rows) == 0:
+            return None
+        w = pool.recency[rows].astype(np.float32).copy()
+        sd = pool.sit[rows, 3] - np.float32(score_diff)
+        w *= np.exp(-(sd * sd) / (2.0 * self.steal_score_sigma**2)).astype(np.float32)
+        f = self._steal_actor_factor(
+            "baserunner", runner_key, meta["runner_rows"], rows, self._RUNNER_STEAL_FEATURES
+        )
+        if f is not None:
+            w *= f
+        f = self._steal_actor_factor(
+            "pitcher_steal",
+            pitcher_key,
+            meta["pitcher_rows"],
+            rows,
+            self._PITCHER_STEAL_FEATURES,
+        )
+        if f is not None:
+            w *= f
+        if catcher_key:
+            f = self._steal_actor_factor(
+                "catcher", catcher_key, meta["catcher_rows"], rows, self._CATCHER_STEAL_FEATURES
+            )
+            if f is not None:
+                w *= f
+        if aggression != 1.0:
+            att = pool.attempted[rows].astype(bool)
+            w = np.where(att, w * np.float32(aggression), w)
+        total = float(w.sum())
+        if not np.isfinite(total) or total <= 0.0:
+            return None
+        cdf = np.cumsum(w, dtype=np.float64)
+        i = int(np.searchsorted(cdf, self.rng.random() * cdf[-1]))
+        i = min(i, len(rows) - 1)
+        r = rows[i]
+        return (bool(pool.attempted[r]), bool(pool.success[r]))

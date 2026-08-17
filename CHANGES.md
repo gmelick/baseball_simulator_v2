@@ -1,3 +1,21 @@
+# Sim — SIM-468/474: STEALS ARE BACK — the opportunity-pool draw replaces the gate — 2026-08-17
+
+Production attempted zero steals from 2026-06-04 to 2026-08-16. The fix is the owner's standing
+rule made concrete: `sim.steal_opportunity_pool` (migration 0015, ~2.37M rows, one per pitch where
+a steal was POSSIBLE, attempted or not) supplies the denominator, and the decision is ONE
+similarity-weighted draw — hard-filtered to the target base's exact (outs, balls, strikes) cell,
+weighted by runner/pitcher-hold/catcher-arm similarity, a soft score kernel, recency, and manager
+aggression as a multiplier on attempted rows (a weight, never a gate). The drawn row's `attempted`
+flag decides whether the runner goes; `success` decides safe or caught. Deleted: the green-light
+gate, the SIM-426 fallback formula, `_STEAL_ATTEMPT_K`, `scripts/diag_steals.py`. New: the
+`pitcher_steal` embedding, the steal-pool artifact + shared-memory publication, 20 unit tests
+across the three seams, and the SIM-495 strict-xfail guards removed per their own instruction.
+
+**Smoke (600 game-sims, production flags): SB 0.70 + CS 0.09 = 0.79 attempts/team-game vs MLB
+0.76.** The safe split reads high (89% vs ~78%) — a certifying-lane question before any bandwidth
+moves. SIM-505 filed: the sim349 synthetic machine's validity assertions are seed-lucky (exposed
+by the gate-RNG removal; the fixture, not the loop, is the defect).
+
 # CI — ALL 13 JOBS GREEN on master — 2026-08-16
 
 Everything through the rebuild is pushed and CI passes end to end. Two jobs had been red since

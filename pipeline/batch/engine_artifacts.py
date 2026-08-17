@@ -172,6 +172,52 @@ def build_battedball_pool_artifact(
     return counts
 
 
+#: The steal draw's situation columns (SIM-474). `outs` and the count are the
+#: hard-filter cell; `score_diff` is soft-kernelled. `inning` is deliberately
+#: excluded — leverage shaping rides on the manager weight, not the pool.
+_STEAL_SIT_COLS = ["count_balls", "count_strikes", "outs", "score_diff"]
+
+
+def build_steal_pool_artifact(
+    con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]
+) -> dict[str, int]:
+    """Write the per-target-base steal OPPORTUNITY pool for SIM-474.
+
+    One row per pitch where a steal was possible (SIM-468), attempted or not —
+    the `attempted` flag is the denominator the attempts-only pool lacks, so a
+    single draw answers both "does the runner go" and "safe or caught".
+    Sub-pools are split by target base ("2" = 1B->2B, "3" = 2B->3B), mirroring
+    the per-hand split of the other pools.
+    """
+    pool_dir = os.path.join(out_dir, "steal_pool")
+    os.makedirs(pool_dir, exist_ok=True)
+    season_list = ", ".join(str(int(s)) for s in seasons)
+    counts: dict[str, int] = {}
+    for target in ("2", "3"):
+        w = f"target_base = {target} AND season IN ({season_list})"
+        d = con.execute(
+            f"SELECT {', '.join(_STEAL_SIT_COLS)} FROM sim.steal_opportunity_pool WHERE {w}"
+        ).fetchnumpy()
+        n = len(d[_STEAL_SIT_COLS[0]])
+        sit = np.nan_to_num(
+            np.stack(
+                [np.ma.filled(d[c], np.nan).astype(np.float32) for c in _STEAL_SIT_COLS], axis=1
+            )
+        ).astype(np.float32)
+        np.save(os.path.join(pool_dir, f"{target}.sit.npy"), sit)
+        con.execute(
+            "COPY (SELECT runner_id, pitcher_id, catcher_id, season, "
+            "attempted, success, recency_weight "
+            f"FROM sim.steal_opportunity_pool WHERE {w}) "
+            f"TO '{os.path.join(pool_dir, f'{target}.meta.parquet')}' (FORMAT parquet)"
+        )
+        counts[target] = int(n)
+        log.info("steal_pool[%s]: %d rows (seasons %s)", target, n, seasons)
+    with open(os.path.join(pool_dir, "manifest.json"), "w", encoding="utf-8") as fh:
+        json.dump({"seasons": seasons, "counts": counts, "sit_cols": _STEAL_SIT_COLS}, fh, indent=2)
+    return counts
+
+
 def build_pitcher_sim_matrix(
     duckdb_path: str, out_dir: str, seasons: list[int], limit: int | None = None
 ) -> int:
@@ -230,6 +276,10 @@ _ACTOR_TABLES = {
     "fielder": "fielder_season_metrics",
     "baserunner": "baserunner_season_metrics",
     "manager": "manager_season_metrics",
+    # SIM-474: the pitcher's hold-runner outcomes (sb_against_per_9,
+    # cs_rate_forced, steal_attempt_rate_allowed) weight the steal draw. The
+    # id column resolves to pitcher_id via the `endswith("_id")` rule below.
+    "pitcher_steal": "pitcher_steal_metrics",
 }
 _NUMERIC_TYPES = {"DOUBLE", "FLOAT", "REAL", "INTEGER", "BIGINT", "SMALLINT", "DECIMAL"}
 
@@ -353,6 +403,30 @@ class BattedBallPool:
         return int(self.sit.shape[0])
 
 
+@dataclass
+class StealPool:
+    """One target-base's resident steal OPPORTUNITY pool (SIM-468/474).
+
+    One row per pitch where a steal of this base was possible, attempted or
+    not. ``attempted`` is the denominator the attempts-only pool lacks: the
+    SIM-474 draw picks ONE row and reads both flags — `attempted` answers
+    "does the runner go", `success` answers "safe or caught".
+    """
+
+    sit: np.ndarray  # (N, 4) float32 — count_balls, count_strikes, outs, score_diff
+    runner_id: np.ndarray  # (N,) int64
+    pitcher_id: np.ndarray  # (N,) int64
+    catcher_id: np.ndarray  # (N,) int64 (0 when unknown)
+    season: np.ndarray  # (N,) int64
+    attempted: np.ndarray  # (N,) int8 (0/1)
+    success: np.ndarray  # (N,) int8 (0/1)
+    recency: np.ndarray  # (N,) float32
+
+    @property
+    def n(self) -> int:
+        return int(self.sit.shape[0])
+
+
 #: SIM-403b — the shareable subset of numpy arrays inside an EngineArtifacts
 #: bundle, by flat name. Used for zero-copy publication into
 #: ``multiprocessing.shared_memory`` so worker subprocesses don't each copy the
@@ -387,6 +461,17 @@ _BB_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "fielder_id",
 )
 _ACTOR_EMB_SHAREABLE_ATTRS: tuple[str, ...] = ("vecs", "mean", "std")
+#: SIM-474: every StealPool column is numeric, so the whole pool is shareable.
+_STEAL_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
+    "sit",
+    "runner_id",
+    "pitcher_id",
+    "catcher_id",
+    "season",
+    "attempted",
+    "success",
+    "recency",
+)
 
 
 class EngineArtifacts:
@@ -413,9 +498,12 @@ class EngineArtifacts:
         actor_emb=None,
         bb_pools=None,
         pitcher_sim_matrix=None,
+        steal_pools=None,
     ):
         self.pools: dict[str, HandPool] = pools
         self.bb_pools: dict[str, BattedBallPool] = bb_pools or {}
+        #: SIM-474: target base ("2"/"3") -> StealPool; {} on a legacy bundle.
+        self.steal_pools: dict[str, StealPool] = steal_pools or {}
         self.pitcher_sim_index: dict[str, int] = pitcher_sim_index or {}
         self.pitcher_sim: dict[str, dict[str, float]] = pitcher_sim or {}
         #: SIM-430: dense (n_prof x n_prof) float32 same-hand similarity matrix.
@@ -474,6 +562,12 @@ class EngineArtifacts:
                 v = emb.get(attr)
                 if isinstance(v, np.ndarray):
                     out[f"actor_emb.{actor}.{attr}"] = v
+        # SIM-474: the steal opportunity pools.
+        for target, spool in self.steal_pools.items():
+            for attr in _STEAL_POOL_SHAREABLE_ATTRS:
+                arr = getattr(spool, attr, None)
+                if isinstance(arr, np.ndarray):
+                    out[f"steal_pool.{target}.{attr}"] = arr
         # SIM-430: the dense pitcher similarity matrix (replaces the ~2 GB dict).
         if isinstance(self.pitcher_sim_matrix, np.ndarray):
             out["pitcher_sim.matrix"] = self.pitcher_sim_matrix
@@ -516,6 +610,12 @@ class EngineArtifacts:
                 v = views.get(key)
                 if isinstance(v, np.ndarray):
                     emb[attr] = v
+        # SIM-474: attach the shared steal-pool views.
+        for target, spool in self.steal_pools.items():
+            for attr in _STEAL_POOL_SHAREABLE_ATTRS:
+                v = views.get(f"steal_pool.{target}.{attr}")
+                if isinstance(v, np.ndarray):
+                    setattr(spool, attr, v)
         # SIM-430: attach the shared dense pitcher-sim matrix view.
         mv = views.get("pitcher_sim.matrix")
         if isinstance(mv, np.ndarray):
@@ -703,6 +803,49 @@ class EngineArtifacts:
                             hand, m, "fielder_id", "fielder_player_id", np.int64, 0
                         ),
                     )
+            # SIM-474: the steal opportunity pools ("2" = 1B->2B, "3" = 2B->3B).
+            # Presence-gated like the batted-ball pool: {} on a legacy bundle,
+            # and the sampler then stages no steals (the pre-SIM-474 behavior).
+            steal_pools: dict[str, StealPool] = {}
+            sp_dir = os.path.join(art_dir, "steal_pool")
+            if os.path.exists(os.path.join(sp_dir, "manifest.json")):
+                for target in ("2", "3"):
+                    meta_path = os.path.join(sp_dir, f"{target}.meta.parquet")
+                    m = con.execute(
+                        "SELECT runner_id, pitcher_id, catcher_id, season, "
+                        "attempted, success, recency_weight "
+                        f"FROM read_parquet('{meta_path}')"
+                    ).fetchnumpy()
+
+                    def _sp_take(
+                        attr: str, col: str, dtype, fill, *, _t=target, _m=m
+                    ) -> np.ndarray:
+                        # _t/_m bind the loop variables at definition time (B023).
+                        v = views.get(f"steal_pool.{_t}.{attr}")
+                        if isinstance(v, np.ndarray):
+                            return v
+                        return np.asarray(np.ma.filled(_m[col], fill), dtype=dtype)
+
+                    steal_pools[target] = StealPool(
+                        sit=_take(
+                            f"steal_pool.{target}.sit",
+                            os.path.join(sp_dir, f"{target}.sit.npy"),
+                        ),
+                        runner_id=_sp_take("runner_id", "runner_id", np.int64, 0),
+                        pitcher_id=_sp_take("pitcher_id", "pitcher_id", np.int64, 0),
+                        catcher_id=_sp_take("catcher_id", "catcher_id", np.int64, 0),
+                        season=_sp_take("season", "season", np.int64, 0),
+                        attempted=_sp_take("attempted", "attempted", np.int8, 0),
+                        success=_sp_take("success", "success", np.int8, 0),
+                        recency=(
+                            views.get(f"steal_pool.{target}.recency")
+                            if isinstance(views.get(f"steal_pool.{target}.recency"), np.ndarray)
+                            else np.nan_to_num(
+                                np.ma.filled(m["recency_weight"], 1.0).astype(np.float32),
+                                nan=1.0,
+                            )
+                        ),
+                    )
         finally:
             con.close()
         ps_index: dict[str, int] = {}
@@ -764,6 +907,7 @@ class EngineArtifacts:
             actor_emb,
             bb_pools,
             ps_matrix,
+            steal_pools,
         )
 
 
@@ -794,6 +938,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.what in ("pool", "all"):
             build_pitch_pool_artifact(con, args.out_dir, seasons)
             build_battedball_pool_artifact(con, args.out_dir, seasons)
+            build_steal_pool_artifact(con, args.out_dir, seasons)
         if args.what in ("actors", "all"):
             build_actor_embeddings(con, args.out_dir)
         if args.what in ("pitcher_sim", "all"):

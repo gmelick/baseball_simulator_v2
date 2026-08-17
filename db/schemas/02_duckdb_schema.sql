@@ -994,6 +994,47 @@ COMMENT ON TABLE  sim.stolen_base_pool IS 'All pitches with SB attempts. Denorma
 COMMENT ON COLUMN sim.stolen_base_pool.runner_sprint_speed IS 'Denormalized from derived.baserunner_season_metrics at ETL time. Avoids join during simulation.';
 
 -- =============================================================================
+-- SIM.STEAL_OPPORTUNITY_POOL  (SIM-468, DuckDB migration 0015)
+-- One row per pitch where a steal was POSSIBLE (runner on 1B with 2B open, or
+-- on 2B with 3B open), attempted or not. sim.stolen_base_pool holds only
+-- ATTEMPTS — no denominator — so a draw over it attempts 100% of the time.
+-- The `attempted` flag beside `success` lets ONE draw answer both "does the
+-- runner go" and "safe or caught" (SIM-474), and the catcher affects the
+-- DECISION, not only the outcome. Column order is load-bearing: the computor's
+-- INSERT is positional (SELECT order must match; see the 0012 note above).
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS sim.steal_opportunity_pool (
+    pitch_id        BIGINT      NOT NULL,
+    game_pk         INTEGER     NOT NULL,
+    at_bat_number   INTEGER     NOT NULL,
+    pitch_number    INTEGER     NOT NULL,
+    game_date       DATE        NOT NULL,
+    season          SMALLINT    NOT NULL,
+    runner_id       INTEGER     NOT NULL,
+    pitcher_id      INTEGER     NOT NULL,
+    catcher_id      INTEGER,
+    target_base     SMALLINT    NOT NULL CHECK (target_base IN (2, 3)),
+    inning          SMALLINT    NOT NULL,
+    outs            SMALLINT    NOT NULL CHECK (outs BETWEEN 0 AND 2),
+    count_balls     SMALLINT    NOT NULL,
+    count_strikes   SMALLINT    NOT NULL,
+    score_diff      SMALLINT    NOT NULL,
+    attempted       BOOLEAN     NOT NULL,
+    success         BOOLEAN     NOT NULL DEFAULT FALSE,
+    recency_weight  FLOAT       NOT NULL DEFAULT 1.0,
+    PRIMARY KEY (pitch_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sop_season  ON sim.steal_opportunity_pool(season);
+CREATE INDEX IF NOT EXISTS idx_sop_target  ON sim.steal_opportunity_pool(target_base);
+CREATE INDEX IF NOT EXISTS idx_sop_runner  ON sim.steal_opportunity_pool(runner_id);
+CREATE INDEX IF NOT EXISTS idx_sop_attempt ON sim.steal_opportunity_pool(attempted);
+
+COMMENT ON TABLE sim.steal_opportunity_pool IS
+'SIM-468: one row per pitch where a steal was POSSIBLE, attempted or not — the denominator the attempts-only pool lacks. SIM-474 draws attempt AND outcome from it.';
+
+-- =============================================================================
 -- SIM.POOL_BUILD_METADATA  (SIM-076 / SIM-095)
 -- One row per (pool, season) recording the last build. Drives the incremental
 -- pool rebuild (SIM-095): a season is skipped when its source watermark has not
@@ -1001,7 +1042,7 @@ COMMENT ON COLUMN sim.stolen_base_pool.runner_sprint_speed IS 'Denormalized from
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS sim.pool_build_metadata (
-    pool_name             VARCHAR(20) NOT NULL,   -- 'pitch_pool' | 'outcome_pool' | 'stolen_base_pool'
+    pool_name             VARCHAR(20) NOT NULL,   -- 'pitch_pool' | 'outcome_pool' | 'stolen_base_pool' | 'steal_opportunity_pool' (DuckDB does not enforce VARCHAR length)
     season                SMALLINT    NOT NULL,
     row_count             BIGINT      NOT NULL DEFAULT 0,
     source_max_game_date  DATE,                   -- max(game_date) of source rows at build time (watermark)

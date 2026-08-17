@@ -85,11 +85,12 @@
   ~3-5% of MLB-2023.  **Runs run ~7-8% low** (down from ~12% pre-fix) — CLOSED 2026-08-16: after SIM-459 the acceptance lane measured R INSIDE its band (the strict xfail XPASSed and was deleted).
   This figure stays on THIS line as the floor-sizing anchor `tests/acceptance/bands.py` cites as
   CLAUDE.md:85 — the R floor still rejects a 7% shortfall so a REGRESSION to the old gap reds.
-  ⚠ **This bullet used to end "steals match MLB volume". That claim is now wrong.** It was true
-  when it was written, on 2026-05-28. The owner enabled `SIM_MANAGER` on 2026-06-04 and the
-  steal gate closed. The SIM-450 acceptance lane measured the production configuration on
-  2026-08-10 and read **SB = 0.0000 against 0.59 and CS = 0.0000 against 0.17** — exactly zero
-  steals, across 400 game-sims. **SIM-495** holds that measurement; **SIM-474** is the fix.
+  ⚠ **This bullet used to end "steals match MLB volume" — wrong from 2026-06-04 (the manager
+  green-light closed the steal gate; SIM-495 measured SB/CS exactly 0.0000 across 400 game-sims)
+  until 2026-08-17, when SIM-468/474 LANDED:** the steal decision is now a similarity-weighted
+  draw from `sim.steal_opportunity_pool` (~2.37M per-pitch opportunities, attempted or not). The
+  600-sim smoke reads **SB 0.70 + CS 0.09 = 0.79 attempts/team-game vs MLB 0.76**; the safe split
+  (89% vs ~78%) is a certifying-lane question before any kernel bandwidth moves.
   **Next free ticket ID at the time: SIM-433** (now **SIM-438** — see the TL;DR at the top
   of §2; SIM-430 = the full-pool `/simulate` throughput / 2s-30s SLA perf gap, filed 2026-05-30 off the
   SIM-402 live re-measure).
@@ -530,18 +531,17 @@ are small and channel-level: 2B +8.2%, BB +10.8%, ROE +4.9% high** — target th
 ≥400-sim batch before reading R-level moves; per-channel breakouts are the lens, not the global R
 mean.
 
-**⚠ STEALS DO NOT MATCH MLB VOLUME — corrected 2026-08-10.** The paragraph above used to open
-"box rate stats are within ~4% of MLB and steals match MLB volume". The second half is wrong for
-the configuration users get, so it is deleted here and at line 85. The SIM-450 acceptance lane ran
-the production flags on 2026-08-10 and measured **SB = 0.0000 against 0.59, and CS = 0.0000 against
-0.17** — no stolen base is ever attempted, so none is ever caught. `_full_pool_steal_decision`
-(`simulation/sim_loop.py:3091`) was called **0 times** in 400 game-sims, while `_full_pool_outcome`
-was called 123,205 times in the same run. The chain: `SIM_MANAGER=1` wires the default manager
-profile with `steal_order_rate_per_1b_opp=0.08`, so `green > 0` at `sim_loop.py:2909`, so the
-SIM-426 fallback at `:2949` never runs, so control reaches `resolver.resolve_steal` and the base
-stub answers `attempted=False`. Production has attempted no steal since `SIM_MANAGER` was enabled
-on 2026-06-04. **SIM-495** holds the measurement. **SIM-474** is the fix. Do not restore the
-steals-match-MLB claim until the SB and CS bands pass with the production flags on.
+**⚠ STEALS — the zero era (2026-06-04 → 2026-08-16) and the SIM-474 fix (2026-08-17).** From
+2026-06-04 the manager green-light gated the steal decision into a resolver stub and production
+attempted **exactly zero steals** (SIM-495 measured SB/CS 0.0000 across 400 game-sims; the chain
+is preserved in `tests/acceptance/test_production_config_bands_sim450.py`'s history section).
+**SIM-468/474 replaced the whole chain:** `sim.steal_opportunity_pool` (migration 0015, one row
+per pitch where a steal was POSSIBLE, attempted or not — the missing denominator) plus a
+similarity-weighted draw (`_steal_opportunity_draw` → `FullPoolSampler.steal_draw`) whose drawn
+row answers "does he go" AND "safe or caught"; manager aggression is a WEIGHT on attempted rows,
+never a gate. The 600-sim smoke: **SB 0.70 + CS 0.09 = 0.79 attempts/team-game vs MLB 0.76**.
+Do not claim the bands pass until the 12×425 certifying lane runs; the safe split reads high
+(89% vs ~78%) and the kernel bandwidths are SIM-476 fit targets, not knobs to eyeball.
 
 ## 12. Phase roadmap
 

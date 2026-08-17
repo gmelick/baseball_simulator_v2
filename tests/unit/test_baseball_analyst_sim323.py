@@ -199,9 +199,15 @@ class TestStealGreenLight:
         m2._pre_pitch_hook(high)
         assert high.manager.green_light_rate >= low_green
 
-    def test_green_light_gates_the_resolver_steal_stage(self):
-        # A resolver that always attempts a steal: only staged when the
-        # green-light is on (aggressive manager), never when off (passive).
+    def test_the_resolver_steal_is_staged_ungated_sim474(self):
+        # SIM-474 deleted the green-light GATE: from 2026-06-04 to 2026-08-16 it
+        # routed every production pitch to a resolver stub and zero steals were
+        # attempted (SIM-495 measured SB 0.0000 against 0.59). An injected
+        # resolver (the test seam) is now consulted UNGATED — manager
+        # aggression weights the opportunity-pool draw instead of gating the
+        # decision — so a resolver steal stages for an aggressive AND a
+        # passive manager alike. This test used to pin the gate; it now pins
+        # its absence.
 
         class _AlwaysSteal(PlayResolver):
             def resolve_steal(self, state):
@@ -209,23 +215,15 @@ class TestStealGreenLight:
                     attempted=True, runner_id=11, from_base=1, to_base=2, safe=True
                 )
 
-        on = StateMachine(
-            rng=np.random.default_rng(2),
-            manager={"steal_order_rate_per_1b_opp": 1.0},
-            resolver=_AlwaysSteal(),
-        )
-        s_on = _state(inning=7, first=11)
-        on._pre_pitch_hook(s_on)
-        assert on._pending_steal is not None and on._pending_steal.attempted
-
-        off = StateMachine(
-            rng=np.random.default_rng(2),
-            manager={"steal_order_rate_per_1b_opp": 0.0},
-            resolver=_AlwaysSteal(),
-        )
-        s_off = _state(inning=7, first=11)
-        off._pre_pitch_hook(s_off)
-        assert off._pending_steal is None
+        for rate in (1.0, 0.0):
+            m = StateMachine(
+                rng=np.random.default_rng(2),
+                manager={"steal_order_rate_per_1b_opp": rate},
+                resolver=_AlwaysSteal(),
+            )
+            s = _state(inning=7, first=11)
+            m._pre_pitch_hook(s)
+            assert m._pending_steal is not None and m._pending_steal.attempted, rate
 
 
 # ===========================================================================

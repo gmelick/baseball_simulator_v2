@@ -17,7 +17,8 @@ the repo:
   * ``_full_pool_outcome``          (``simulation/sim_loop.py:1332``)
   * ``_full_pool_fielding``         (``simulation/sim_loop.py:1386``)
   * ``_full_pool_out_advancement``  (``simulation/sim_loop.py:1507``)
-  * ``_full_pool_steal_decision``   (``simulation/sim_loop.py:3091``)
+  * the steal decision — ``_steal_opportunity_draw`` since SIM-474
+    (previously the unreachable ``_full_pool_steal_decision``)
 
 That is how four confirmed production defects survived eight weeks. This lane
 calls all four and asserts each one runs.
@@ -137,16 +138,13 @@ TICKET ships as ``@pytest.mark.xfail(strict=True)``:
   * the defect is fixed       -> XPASS(strict) -> the lane goes RED and the
     engineer must delete the marker.
 
-Six band assertions and one call-count assertion carry the marker, each naming
-its ticket::
+Band assertions whose defect is open carry the marker, each naming its
+ticket. The 2026-08-16 state (R deleted after the SIM-459 rebuild measured it
+IN band; SB / CS / the steal call-count deleted when SIM-474 landed)::
 
-    R             SIM-429   CLAUDE.md:85   runs ~7-8% low
     H             SIM-496   BACKLOG.md:20  a retired batter is credited a hit
-    SB            SIM-495   BACKLOG.md:19  measured 0.0000 against 0.59
-    CS            SIM-495   BACKLOG.md:19  measured 0.0000 against 0.17
     DP            SIM-494   BACKLOG.md:18  measured 0.1600 against 0.8160
     ROE_reached   SIM-496   BACKLOG.md:20  nothing reaches base on an error
-    _full_pool_steal_decision  SIM-495     called 0 times in 400 game-sims
 
 **HR, 2B, 3B, BB, K, ROE and home_win_pct carry NO xfail, on purpose.** Their
 day-one numbers put HR, BB and ROE outside the round-3 floors, and BB at +11.5%
@@ -160,23 +158,18 @@ I do not have. If a certifying run reds one of them:
 
 ``home_win_pct`` has its own reason, below.
 
-ROOT CAUSE OF THE ZEROED STEALS — read before you "fix" the SB band
--------------------------------------------------------------------
-``SIM_MANAGER=1`` disables every steal. The chain, verified by reading the code
-and recorded as SIM-495 (``BACKLOG.md:19``):
-
-  1. ``production_factory.py:568`` wires ``_DEFAULT_MANAGER_PROFILE`` when
-     ``SIM_MANAGER`` is on.
-  2. That profile sets ``steal_order_rate_per_1b_opp = 0.08``.
-  3. ``_pre_pitch_hook`` computes ``green = 0.08 * li_scale > 0``
-     (``sim_loop.py:2904-2909``).
-  4. ``sim_loop.py:2946`` ``if green <= 0.0:`` is therefore FALSE, so the SIM-426
-     fallback call to ``_full_pool_steal_decision`` at ``:2949`` never runs.
-  5. Control reaches ``self.resolver.resolve_steal(state)``, and the base
-     ``PlayResolver.resolve_steal`` returns ``StealResolution(attempted=False)``
-     because no ``stolen_base_pool`` is wired.
-
-Net: zero steals whenever the manager is on. SIM-474 is the fix.
+THE ZEROED-STEALS ROOT CAUSE — FIXED BY SIM-474 (2026-08-16), kept for history
+-------------------------------------------------------------------------------
+From 2026-06-04 to 2026-08-16 ``SIM_MANAGER=1`` disabled every steal: the
+default profile set ``steal_order_rate_per_1b_opp = 0.08``, so the green-light
+gate was "on", so control skipped the SIM-426 fallback and reached the base
+``PlayResolver.resolve_steal`` stub, which always answered ``attempted=False``
+(SIM-495 measured SB 0.0000 against 0.59 across 400 game-sims). SIM-474
+deleted the gate, the fallback and its tuned ``_STEAL_ATTEMPT_K``: the steal
+decision is now a similarity-weighted draw from the SIM-468 opportunity pool
+(``_steal_opportunity_draw`` -> ``FullPoolSampler.steal_draw``), where manager
+aggression is a WEIGHT on attempted rows — never a gate — and the drawn row's
+``attempted``/``success`` flags answer both questions at once.
 
 WHY THERE ARE TWO REACH-ON-ERROR CHANNELS
 =========================================
@@ -474,20 +467,14 @@ def test_commit_run_delta_runs_sim450(acceptance_run: AcceptanceRun) -> None:
     _assert_called(acceptance_run, "_commit_run_delta")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "SIM-495 (BACKLOG.md:19). SIM_MANAGER=1 wires _DEFAULT_MANAGER_PROFILE with "
-        "steal_order_rate_per_1b_opp=0.08, so green > 0 at sim_loop.py:2909 and the "
-        "SIM-426 fallback at :2949 never runs. Measured 0 calls across 400 production "
-        "game-sims while _full_pool_outcome ran 123,205 times. _full_pool_steal_decision "
-        "is dead in production and every steal is lost. SIM-474 is the fix. Delete this "
-        "marker when the steal gate is fixed."
-    ),
-)
-def test_full_pool_steal_decision_runs_sim450(acceptance_run: AcceptanceRun) -> None:
-    """``_full_pool_steal_decision`` (sim_loop.py:3091) is never reached today."""
-    _assert_called(acceptance_run, "_full_pool_steal_decision")
+# The SIM-495 expected-red xfail lived here from 2026-08-10 to 2026-08-16:
+# _full_pool_steal_decision was measured at 0 calls across 400 production
+# game-sims because the green-light gate routed control to a resolver stub.
+# SIM-474 deleted the gate and the fallback; the steal decision is now the
+# SIM-468 opportunity-pool draw, reached on every stealable-runner pitch.
+def test_steal_opportunity_draw_runs_sim450(acceptance_run: AcceptanceRun) -> None:
+    """``_steal_opportunity_draw`` is reached in the production configuration."""
+    _assert_called(acceptance_run, "_steal_opportunity_draw")
 
 
 # ---------------------------------------------------------------------------
@@ -589,28 +576,16 @@ def test_strikeouts_band_sim450(acceptance_run: AcceptanceRun) -> None:
     _assert_band(acceptance_run, "K")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "SIM-495 (BACKLOG.md:19). Measured 0.0000 against 0.59 (-100%) in the production "
-        "configuration on 2026-08-10, with _full_pool_steal_decision called 0 times. "
-        "SIM_MANAGER=1 closes the steal gate — see the chain in the module docstring. "
-        "SIM-474 is the fix. Delete this marker when the steal gate is fixed."
-    ),
-)
+# The SIM-495 expected-red xfail (SB measured 0.0000 against 0.59, -100%)
+# lived here from 2026-08-10 to 2026-08-16. SIM-474 replaced the gated stub
+# with the opportunity-pool draw; the band now measures a live channel.
 def test_stolen_bases_band_sim450(acceptance_run: AcceptanceRun) -> None:
     """Stolen bases per team per game."""
     _assert_band(acceptance_run, "SB")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "SIM-495 (BACKLOG.md:19). Measured 0.0000 against 0.17 (-100%). Same root cause "
-        "as SB: no steal is ever attempted, so none is ever caught. SIM-474 is the fix. "
-        "Delete this marker when the steal gate is fixed."
-    ),
-)
+# The SIM-495 expected-red xfail (CS measured 0.0000 against 0.17) lived here
+# from 2026-08-10 to 2026-08-16; same root cause and same SIM-474 fix as SB.
 def test_caught_stealing_band_sim450(acceptance_run: AcceptanceRun) -> None:
     """Caught stealing per team per game."""
     _assert_band(acceptance_run, "CS")

@@ -946,7 +946,7 @@ class _StubMachine:
     def _full_pool_out_advancement(self, state: object, result: object, sig: object) -> None:
         return None
 
-    def _full_pool_steal_decision(self, state: object) -> None:
+    def _steal_opportunity_draw(self, state: object) -> None:
         return None
 
     def _accumulate_pa(self, state: object, result: object) -> None:
@@ -993,7 +993,7 @@ def test_the_roe_reached_probe_counts_only_a_batter_who_reached_sim450() -> None
         "_full_pool_outcome": 0,
         "_full_pool_fielding": 0,
         "_full_pool_out_advancement": 0,
-        "_full_pool_steal_decision": 0,
+        "_steal_opportunity_draw": 0,
         "_commit_run_delta": 0,
     }
     _install_probes(machine, tally, calls)

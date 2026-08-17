@@ -126,7 +126,7 @@ jobs:
           echo "Runner: ${RUNNER_NAME:-unknown}   labels resolved from ACCEPTANCE_RUNNER"
           MISSING=""
           [ -f "${BASEBALL_DUCKDB_PATH}" ] || MISSING="${MISSING} duckdb"
-          for f in pitch_pool/manifest.json battedball_pool/manifest.json pitcher_sim.npz; do
+          for f in pitch_pool/manifest.json battedball_pool/manifest.json steal_pool/manifest.json pitcher_sim.npz; do
             [ -f "${BASEBALL_PLAY_POOL_DIR}/engine_artifacts/${f}" ] \
               || MISSING="${MISSING} artifact:${f}"
           done

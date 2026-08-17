@@ -1311,6 +1311,7 @@ class PlayerProfileComputor:
             self._build_pitch_pool(seasons, incremental=incremental)
             self._build_outcome_pool(seasons, incremental=incremental)
             self._build_stolen_base_pool(seasons, incremental=incremental)
+            self._build_steal_opportunity_pool(seasons, incremental=incremental)
 
             # SIM-408: per-PA situation facts for the Step 2.9 situation KDTree
             # engine (idempotent INSERT OR REPLACE, so no incremental gating).
@@ -5203,6 +5204,112 @@ class PlayerProfileComputor:
         """)
         log.info("  sim.stolen_base_pool done.")
         _record_pool_build(self._conn, "stolen_base_pool", seasons, ref_season)
+
+    def _build_steal_opportunity_pool(self, seasons: list[int], incremental: bool = False) -> None:
+        """SIM-468: rebuild sim.steal_opportunity_pool — one row per pitch where a
+        steal was POSSIBLE, attempted or not.
+
+        `sim.stolen_base_pool` holds only ATTEMPTS, so a draw over it attempts a
+        steal 100% of the time — it has no denominator. This pool keeps the
+        `attempted` flag beside `success`, so ONE draw (SIM-474) answers both
+        "does the runner go" and "safe or caught", and the catcher affects the
+        DECISION, not only the outcome.
+
+        An opportunity is the LEAD open-base pair, matching the live decision:
+          * a runner on 1B with 2B open  -> target_base 2 (the runner on 1B)
+          * a runner on 2B with 3B open  -> target_base 3 (the runner on 2B),
+            including 1B+2B (the lead runner drives a double steal)
+        Steals of home are out of scope (SIM-468 ticket text).
+
+        The pre-pitch situation columns (`outs`, the count, the base state) are
+        trustworthy ONLY after the SIM-488 re-sweep — the pre-sweep `outs`
+        column was stale-by-one-play on 46% of plate appearances.
+
+        ⚠ The INSERT is positional (no column list): the SELECT order MUST match
+        the DDL column order in db/schemas/02_duckdb_schema.sql (migration 0015).
+        """
+        ref_season = _canonical_ref_season(self._conn, seasons)
+        if incremental:
+            seasons = _seasons_needing_rebuild(self._conn, "steal_opportunity_pool", seasons)
+            if not seasons:
+                log.info("Building sim.steal_opportunity_pool … all seasons fresh; skipped.")
+                return
+        log.info("Building sim.steal_opportunity_pool … (seasons=%s)", seasons)
+        season_list = ", ".join(str(s) for s in seasons)
+        recency_expr = _recency_weight_sql("o.season", ref_season)
+
+        self._conn.execute(
+            f"DELETE FROM sim.steal_opportunity_pool WHERE season IN ({season_list})"
+        )
+
+        self._conn.execute(f"""
+            INSERT INTO sim.steal_opportunity_pool
+
+            WITH opportunities AS (
+                SELECT
+                    pp.pitch_id,
+                    rp.game_pk,
+                    rp.at_bat_number,
+                    rp.pitch_number,
+                    rp.game_date,
+                    rp.season,
+                    -- The lead stealable runner: 1B when 2B is open, else the
+                    -- runner on 2B (3B is open by the WHERE below).
+                    CASE
+                        WHEN rp.on_1b IS NOT NULL AND rp.on_2b IS NULL THEN rp.on_1b
+                        ELSE rp.on_2b
+                    END::INTEGER                    AS runner_id,
+                    rp.pitcher::INTEGER             AS pitcher_id,
+                    rp.fielder_2::INTEGER           AS catcher_id,
+                    CASE
+                        WHEN rp.on_1b IS NOT NULL AND rp.on_2b IS NULL THEN 2
+                        ELSE 3
+                    END::SMALLINT                   AS target_base,
+                    rp.inning::SMALLINT             AS inning,
+                    rp.outs::SMALLINT               AS outs,
+                    rp.balls::SMALLINT              AS count_balls,
+                    rp.strikes::SMALLINT            AS count_strikes,
+                    GREATEST(-5, LEAST(5, rp.bat_score - rp.fld_score))::SMALLINT
+                                                    AS score_diff,
+                    -- The flags for THIS pair's target base only: an attempt of
+                    -- another base on the same pitch is a different decision.
+                    CASE
+                        WHEN rp.on_1b IS NOT NULL AND rp.on_2b IS NULL
+                            THEN COALESCE(rp.sb_attempt_2b, FALSE)
+                        ELSE COALESCE(rp.sb_attempt_3b, FALSE)
+                    END                             AS attempted,
+                    CASE
+                        WHEN rp.on_1b IS NOT NULL AND rp.on_2b IS NULL
+                            THEN COALESCE(rp.sb_success_2b, FALSE)
+                        ELSE COALESCE(rp.sb_success_3b, FALSE)
+                    END                             AS success
+                FROM pg.raw.pitches rp
+                JOIN sim.pitch_pool pp
+                    ON pp.game_pk       = rp.game_pk
+                   AND pp.at_bat_number = rp.at_bat_number
+                   AND pp.pitch_number  = rp.pitch_number
+                WHERE rp.data_quality_flag = FALSE
+                  AND rp.season IN ({season_list})
+                  AND rp.outs BETWEEN 0 AND 2
+                  AND (
+                        (rp.on_1b IS NOT NULL AND rp.on_2b IS NULL)
+                     OR (rp.on_2b IS NOT NULL AND rp.on_3b IS NULL)
+                  )
+            )
+            SELECT
+                o.pitch_id, o.game_pk, o.at_bat_number, o.pitch_number,
+                o.game_date, o.season,
+                o.runner_id, o.pitcher_id, o.catcher_id,
+                o.target_base, o.inning, o.outs,
+                o.count_balls, o.count_strikes, o.score_diff,
+                o.attempted, o.success,
+                {recency_expr} AS recency_weight
+            FROM opportunities o
+            WHERE o.runner_id IS NOT NULL
+              AND o.pitcher_id IS NOT NULL
+        """)
+        log.info("  sim.steal_opportunity_pool done.")
+        _record_pool_build(self._conn, "steal_opportunity_pool", seasons, ref_season)
 
     def _build_at_bat_situations(self, seasons: list[int]) -> None:
         """

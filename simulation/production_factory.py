@@ -395,7 +395,12 @@ def _warm_sampler(sampler: Any) -> None:
     partial bundle / missing attr just leaves that part to warm lazily.
     """
     art = getattr(sampler, "a", None)
-    for pools_attr, method_name in (("pools", "_pool_meta"), ("bb_pools", "_bb_pool_bat_idx")):
+    for pools_attr, method_name in (
+        ("pools", "_pool_meta"),
+        ("bb_pools", "_bb_pool_bat_idx"),
+        # SIM-474: the steal-opportunity cell index + embedding-row gathers.
+        ("steal_pools", "_steal_meta"),
+    ):
         warm = getattr(sampler, method_name, None)
         if warm is None:
             continue

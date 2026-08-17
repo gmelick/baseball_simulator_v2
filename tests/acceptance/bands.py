@@ -709,7 +709,8 @@ REFERENCES: dict[str, Reference] = {
         must_detect=0.59,
         detect_source=(
             "BACKLOG.md:19 (SIM-495): SB measured 0.0000 against 0.59 over 400 production "
-            "game-sims, and _full_pool_steal_decision was called 0 times. -100%."
+            "game-sims before SIM-474 replaced the gated stub with the opportunity-pool "
+            "draw (2026-08-16). The floor keeps rejecting a re-zeroed channel."
         ),
     ),
     "CS": Reference(

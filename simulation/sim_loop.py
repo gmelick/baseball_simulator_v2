@@ -1056,11 +1056,6 @@ class StateMachine:
         # one-shot reads above.
         self._home_field_bias_value = self._home_field_bias()  # SIM-412
         self._run_calib_value = self._run_calib()  # SIM-429
-        _env_sk = os.environ.get("SIM_STEAL_K")  # SIM-426
-        try:
-            self._steal_k = float(_env_sk) if _env_sk is not None else self._STEAL_ATTEMPT_K
-        except ValueError:
-            self._steal_k = self._STEAL_ATTEMPT_K
         # The single-pitch helper owns the (SIM-317 real / stub) fingerprint +
         # sampler call.  When no sampler is supplied the machine is "count-machine
         # only": the caller passes a pitch_outcome directly into step_pitch (the
@@ -3239,24 +3234,22 @@ class StateMachine:
                     }
                 )
 
-        # --- steal initiate wiring (SIM-319) -----------------------------------
-        # Only auto-stage from the resolver if a test has not already staged one,
-        # and only when the green-light is on (the manager allowed a steal).
+        # --- steal initiate wiring (SIM-474) -----------------------------------
+        # Only auto-stage if a test has not already staged one. The old chain
+        # GATED the decision on a green-light RNG draw and then consulted a
+        # resolver production never wires — so production attempted ZERO steals
+        # from 2026-06-04 to 2026-08-16 (SIM-495 measured SB 0.0000 vs 0.59).
+        # Now: an injected resolver (the test seam) is consulted first,
+        # UNGATED; otherwise the decision is a similarity-weighted draw from
+        # the SIM-468 opportunity pool, where manager aggression is a WEIGHT
+        # on attempted rows — never a gate in front of the draw.
         if self._pending_steal is not None:
-            return
-        if green <= 0.0:
-            # SIM-426: no manager green-light (the production case — manager is
-            # None).  Fall back to the runner-embedding-driven steal decision so
-            # the full-pool path still attempts steals at ~MLB volume.
-            self._full_pool_steal_decision(state)
-            return
-        # Gate the resolver consult on the green-light draw so the manager
-        # tendency actually governs whether an attempt is even considered.
-        if self._manager_rng() >= green:
             return
         steal = self.resolver.resolve_steal(state)
         if steal is not None and steal.attempted:
             self._pending_steal = steal
+            return
+        self._steal_opportunity_draw(state)
 
     def _should_issue_ibb(self, state: GameState, li: float) -> bool:
         """Decide an intentional walk (§3 item 2).
@@ -3385,59 +3378,73 @@ class StateMachine:
             return False
         return bool(pool.sample(self.rng))
 
-    #: SIM-426: scales a runner's raw ``sb_attempt_rate`` to a per-opportunity
-    #: (first-pitch-of-PA) attempt probability.  Calibrated so the full-pool path
-    #: produces ~MLB attempt volume (~0.7 attempts/game/team).
-    _STEAL_ATTEMPT_K: float = 0.38
+    #: SIM-474: the league-mean ``steal_order_rate_per_1b_opp`` — the SIM-434
+    #: default manager profile's value. The live manager's leverage-scaled
+    #: tendency is divided by this to form the aggression WEIGHT on the pool
+    #: draw's attempted rows (1.0 = league-average running game).
+    _LEAGUE_STEAL_ORDER_RATE: float = 0.08
 
-    def _full_pool_steal_decision(self, state: GameState) -> None:
-        """SIM-426: stage a steal on the full-pool path from the RUNNER's own
-        ``sb_attempt_rate`` / ``sb_success_rate`` (baserunner embedding), with NO
-        dependence on a manager profile (which is absent in production).
+    def _steal_opportunity_draw(self, state: GameState) -> None:
+        """SIM-474: stage a steal by drawing ONE row from the SIM-468 steal
+        OPPORTUNITY pool — a similarity-weighted draw, never a formula.
 
-        Fires at most once per PA (gated to the first pitch) for the lead stealable
-        runner — a runner on 1B with 2B open (steal of 2nd) or on 2B with 3B open
-        (steal of 3rd, at a lower base rate).  Attempts fall off in blowouts and
-        with two outs.  The safe/caught outcome is the runner's ``sb_success_rate``;
-        the existing step-7 :meth:`_resolve_steal_outcome` commits it."""
+        Fires every pitch with a stealable lead runner: on 1B with 2B open
+        (target 2), or on 2B with 3B open (target 3, including 1B+2B — the
+        lead runner drives). The pool is per-pitch and its cell is the exact
+        (outs, balls, strikes), so per-pitch and per-count attempt volume is
+        the pool's own — no tuned constant. The drawn row's ``attempted`` flag
+        decides whether the runner goes; its ``success`` flag decides safe or
+        caught; :meth:`_resolve_steal_outcome` commits it (step 7). Manager
+        aggression enters as a WEIGHT on attempted rows (never a gate); with
+        no manager wired the weight is neutral. No-op when the sampler or the
+        pool is absent — the unit-lane path is byte-identical.
+        """
         fp = self.full_pool_sampler
         if fp is None or self._pending_steal is not None:
             return
-        # One decision per PA: only at the fresh count (the hook fires every pitch).
-        # This is the cheapest gate, so bail here FIRST (before reading k).
-        if int(state.balls) != 0 or int(state.strikes) != 0:
-            return
-        k = self._steal_k  # SIM-426: resolved once in __init__ (was env-read per pitch)
-        if k <= 0.0:
+        if not fp.has_steal_pool():
             return
         b = state.bases
         if b.first is not None and b.second is None:
-            runner_id, from_base, base_scale = b.first, 1, 1.0
+            runner_id, from_base, target = b.first, 1, 2
         elif b.second is not None and b.third is None:
-            runner_id, from_base, base_scale = b.second, 2, 0.35  # steals of 3rd are rarer
+            runner_id, from_base, target = b.second, 2, 3
         else:
             return
         if runner_id is None:
             return
         season = int(getattr(state, "season", 2024) or 2024)
-        attempt = fp.runner_rate(f"{int(runner_id)}:{season}", "sb_attempt_rate")
-        if attempt is None or attempt <= 0.0:
+        pitcher = state.pitcher_id
+        catcher = state.away_catcher_id if state.offense == Team.HOME else state.home_catcher_id
+        # Manager aggression: the leverage-scaled tendency over the league mean,
+        # clamped so even a never-runs manager only DAMPS the draw (a weight,
+        # not a gate — SIM-474). No manager -> neutral.
+        if self.manager is None:
+            aggression = 1.0
+        else:
+            li = self.compute_leverage(state)
+            li_scale = 0.5 + 0.5 * min(li / _HIGH_LEVERAGE, 2.0)
+            rate = self._tendency("steal_order_rate_per_1b_opp", self._LEAGUE_STEAL_ORDER_RATE)
+            aggression = float(
+                min(max((rate * li_scale) / self._LEAGUE_STEAL_ORDER_RATE, 0.05), 4.0)
+            )
+        drawn = fp.steal_draw(
+            target,
+            f"{int(runner_id)}:{season}",
+            f"{int(pitcher)}:{season}" if pitcher is not None else "",
+            f"{int(catcher)}:{season}" if catcher is not None else None,
+            outs=int(state.outs),
+            balls=int(state.balls),
+            strikes=int(state.strikes),
+            score_diff=int(state.score_diff),
+            aggression=aggression,
+        )
+        if drawn is None:
             return
-        # Damp aggression in blowouts (running into outs is pointless when lopsided)
-        # and with two outs (a CS ends the inning).
-        blowout = 0.4 if abs(int(state.score_diff)) >= 5 else 1.0
-        two_out = 0.6 if int(state.outs) >= 2 else 1.0
-        attempt_p = min(0.9, attempt * k * base_scale * blowout * two_out)
-        if float(self.rng.random()) >= attempt_p:
+        attempted, success = drawn
+        if not attempted:
             return
-        raw = fp.runner_rate(f"{int(runner_id)}:{season}", "sb_success_rate")
-        # The embedding success-rate reflects historically chosen (favorable) spots;
-        # haircut to the realized rate against an average-defense in-sim catcher so
-        # the SB/CS split matches MLB (~0.78 SB%).  (A catcher-framing/arm factor is
-        # the SIM-428 follow-on once catcher_id is threaded to the resolver.)
-        success = 0.75 if raw is None else float(min(max(raw * 0.90, 0.0), 0.95))
-        safe = float(self.rng.random()) < success
-        self.stage_steal(runner_id=runner_id, from_base=from_base, safe=safe)
+        self.stage_steal(runner_id=runner_id, from_base=from_base, safe=bool(success))
 
     def _end_of_pa_hook(self, state: GameState) -> None:
         """End-of-PA / half-inning-boundary manager hook (§5.3): substitution +

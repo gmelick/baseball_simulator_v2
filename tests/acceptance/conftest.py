@@ -6,8 +6,9 @@ WHY THIS FILE EXISTS
 39, 45, 51, 52 and 53). Production sets the exact inverse. Every test in this
 repo therefore drives a different simulator from the one that serves users, and
 the four methods that shape every production pitch — ``_full_pool_outcome``,
-``_full_pool_fielding``, ``_full_pool_out_advancement`` and
-``_full_pool_steal_decision`` — have zero test references anywhere. That is how
+``_full_pool_fielding``, ``_full_pool_out_advancement`` and the steal decision
+(``_steal_opportunity_draw`` since SIM-474; previously the unreachable
+``_full_pool_steal_decision``) — had zero test references anywhere. That is how
 four confirmed production defects survived eight weeks.
 
 This conftest is the first real opt-in. It turns the flags back ON for this
@@ -392,7 +393,7 @@ def _install_probes(machine: Any, tally: dict[str, list[int]], calls: dict[str, 
     orig_outcome = machine._full_pool_outcome
     orig_fielding = machine._full_pool_fielding
     orig_advancement = machine._full_pool_out_advancement
-    orig_steal = machine._full_pool_steal_decision
+    orig_steal = machine._steal_opportunity_draw
     orig_accumulate = machine._accumulate_pa
     orig_commit = machine._commit_run_delta
 
@@ -419,7 +420,7 @@ def _install_probes(machine: Any, tally: dict[str, list[int]], calls: dict[str, 
         return _o(state, result, sig)
 
     def steal(state: Any, _o: Any = orig_steal) -> Any:
-        calls["_full_pool_steal_decision"] += 1
+        calls["_steal_opportunity_draw"] += 1
         return _o(state)
 
     def accumulate(state: Any, result: Any, _o: Any = orig_accumulate) -> Any:
@@ -472,7 +473,7 @@ def _install_probes(machine: Any, tally: dict[str, list[int]], calls: dict[str, 
     machine._full_pool_outcome = outcome
     machine._full_pool_fielding = fielding
     machine._full_pool_out_advancement = advancement
-    machine._full_pool_steal_decision = steal
+    machine._steal_opportunity_draw = steal
     machine._accumulate_pa = accumulate
     machine._commit_run_delta = commit
 
@@ -522,7 +523,7 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
         "_full_pool_outcome": 0,
         "_full_pool_fielding": 0,
         "_full_pool_out_advancement": 0,
-        "_full_pool_steal_decision": 0,
+        "_steal_opportunity_draw": 0,
         "_commit_run_delta": 0,
     }
 

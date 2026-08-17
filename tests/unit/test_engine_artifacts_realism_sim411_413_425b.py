@@ -234,6 +234,7 @@ CREATE TABLE derived.catcher_season_metrics   (player_id INTEGER, season SMALLIN
 CREATE TABLE derived.baserunner_season_metrics(player_id INTEGER, season SMALLINT, m DOUBLE);
 CREATE TABLE derived.manager_season_metrics   (player_id INTEGER, season SMALLINT, m DOUBLE);
 CREATE TABLE derived.fielder_season_metrics   (player_id INTEGER, position VARCHAR, season SMALLINT, m DOUBLE);
+CREATE TABLE derived.pitcher_steal_metrics    (pitcher_id INTEGER, season SMALLINT, m DOUBLE);
 """
 
 
@@ -244,6 +245,8 @@ def _seed_actors(con: duckdb.DuckDBPyConnection) -> None:
         "catcher_season_metrics",
         "baserunner_season_metrics",
         "manager_season_metrics",
+        # SIM-474: the pitcher hold-runner embedding (pitcher_id key column).
+        "pitcher_steal_metrics",
     ):
         con.execute(f"INSERT INTO derived.{t} VALUES (123, {_SEASON}, 1.5)")
     # One fielder who played TWO positions in the same season (the collapse case).
