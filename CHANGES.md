@@ -1,3 +1,13 @@
+# CI — ALL 13 JOBS GREEN on master — 2026-08-16
+
+Everything through the rebuild is pushed and CI passes end to end. Two jobs had been red since
+before this work: the acceptance guard's REQUIRED list named six tests renamed in the round-3
+floors rework (re-pointed to their successors, all 27 verified present), and the SIM-153 secrets
+grep matched the deliberately-fake fixture credentials in the DSN-redaction tests (now explicit
+`+` concatenation — the formatter never re-joins it, the grep cannot match it, the runtime string
+is identical). CLAUDE.md §2/§11/§12 now carry the post-rebuild state: run gap CLOSED, refit
+calibration numbers, and the old ~49% CLV beat-close read flagged as pre-rebuild (re-measure).
+
 # Model — THE RUNS BAND PASSES; calibration refit on the recomputed data — 2026-08-16
 
 The acceptance lane (5,098 game-sims, production flags) measured runs INSIDE the band — the

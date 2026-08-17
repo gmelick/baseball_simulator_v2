@@ -21,13 +21,13 @@
 
 ## 2. Current status (read this)
 
-- **▶ STATE AS OF 2026-06-06 (TL;DR — this bullet is authoritative; the rest of §2 is the dated log).**
+- **▶ STATE AS OF 2026-06-06 — SUPERSEDED where §2b (2026-08-16) says otherwise: data foundation rebuilt, the runs band PASSES, CI all-green.**
   - **Phases 1–6 COMPLETE and CI-green** on **Python 3.13 / numpy 2.x** (SIM-431). Frontend shipped as
     **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v13**, Alembic head **0015**.
-  - **Calibration is LIVE** (SIM-432): `/data/calibration.json` fitted + applied at boot; win-prob map =
-    fitted reliability-curve. Post-SIM_MANAGER validation (120 games): win-prob **ECE 0.047**, batter
-    **H/HR/TB ECE 0.02–0.05** (bettable); pitcher **K/BB ECE 0.22/0.21** (improved from 0.52/0.37, not yet
-    bet-grade).
+  - **Calibration is LIVE, REFIT 2026-08-16 on the rebuilt data** (SIM-432/459): `/data/calibration.json`
+    fitted + applied at boot; win-prob map = fitted reliability-curve. 120-game validation: win-prob
+    **ECE 0.0377** (was 0.047); batter **H/HR/TB 0.066/0.024/0.060** (bettable); pitcher **BB 0.044 —
+    now bettable (was 0.21)** and **K 0.109 (halved from 0.22, not yet bet-grade)**.
   - **Production sim path = the full-pool similarity sampler** (`SIM_FULL_POOL=1`); per-tile FAISS k-NN is
     the fallback / unit-test default. **All production realism flags are ON** in the docker-compose `app`
     env and **pinned OFF in `tests/conftest.py`** (so CI + the flag-off baseline stay byte-identical):
@@ -41,9 +41,9 @@
     2024-season historical odds backfilled (**2,378 games**, real BettingPros opening+closing — game
     moneyline/run-line/total + 7 props). **SIM-429**: the CLV backtest scoreboard shipped
     (`scripts/clv_backtest.py`) — sim → model prices → opening/closing → CLV per market/side, trust-labeled.
-    **First result (120 games): ~49% beat-close = NO demonstrable edge yet** (stable across n=65/n=100;
-    the trustworthy markets — moneyline + batter H/HR/TB — all ≤50%). The model isn't beating the sharp
-    close; the remaining **SIM-429** work (close the **~7-8%** run-conversion gap + sharpen the edge
+    **First result (120 games, PRE-rebuild): ~49% beat-close = no edge THEN** (stable n=65/n=100;
+    trustworthy markets all ≤50%). That read predates the 2026-08 data rebuild — RE-MEASURE it; the
+    remaining **SIM-429** work (run-conversion gap CLOSED 2026-08-16 + sharpen the edge
     estimates) is the path to a real edge. The full-season CLV run is executing. *(This bullet said "~10–12%" until 2026-08-10; see the §11 reconciliation note.)*
   - **`/simulate` perf (SIM-430 / SIM-436):** forkserver workers + a 10 GB app `mem_limit` → **n=100 ≈
     38 s at 6 workers, no OOM**. SIM-436 PROFILED the per-game cost: it is the IRREDUCIBLE per-PA
@@ -516,19 +516,19 @@ this platform actually has. *(`tests/acceptance/bands.py` cites `CLAUDE.md:85` b
 the 2026-08-10 edit kept that statement on line 85 on purpose. If you add a line above it, re-point
 that citation in the same commit. Better: cite the section.)*
 
-**Full-pool realism residual (SIM-422→429, the production path):** box rate stats (H/HR/2B/BB/K) are
-within ~4% of MLB, but **runs sit ~7-8% low** — a hits→runs *conversion*
-gap, not a rate-stat or baserunning-aggression problem (advancement rates are already MLB-realistic; a
-global advancement multiplier `SIM_RUN_CALIB` was investigated and rejected as the wrong lever). The
-gap lives in batted-ball-with-RISP / sequencing. One concrete contributor identified + fixed: the
-batted-ball draw conditions only softly on base-out, so ~55% of drawn double-play events landed with no
-runner to double off — `_full_pool_fielding` now records a 2nd out only when a forceable runner exists
-(else a 1-out field_out). The harness for the next calibration pass landed 2026-05-28 as
-`scripts/sim_stats.py` v2 (defaults to 200 iters/game, reports per-channel + per-half home/away
-splits + R standard error so a calibration sweep can target the right channel). Remaining
-conversion gap → granular per-channel calibration on this larger harness (SIM-429 follow-on).
-*Validation caveat:* run a multi-game × ≥400-sim batch before reading R-level moves; the per-channel
-breakouts (RISP, advancement, DP rate) are the right lens, not the global R mean.
+**Full-pool realism residual (SIM-422→429, the production path) — THE RUN GAP IS CLOSED
+(2026-08-16).** This paragraph used to record **runs ~7-8% low**, a hits→runs conversion gap in
+batted-ball-with-RISP / sequencing (a global advancement multiplier `SIM_RUN_CALIB` was
+investigated and rejected as the wrong lever; the phantom-DP contributor — ~55% of drawn DP events
+with no runner to double off — was fixed in `_full_pool_fielding`). The gap's real root turned out
+to be the DATA: after the SIM-501a events-based out label, the SIM-488 re-sweep and the SIM-459
+all-seasons recompute, the SIM-450 acceptance lane (5,098 game-sims, production flags) measured
+**R INSIDE its band** and the strict expected-red marker was deleted (commit b61001d). The R floor
+still rejects a 7% shortfall, so a regression reds immediately. **The remaining SIM-429 residuals
+are small and channel-level: 2B +8.2%, BB +10.8%, ROE +4.9% high** — target them with
+`scripts/sim_stats.py` v2 per-channel breakouts. *Validation caveat unchanged:* run a multi-game ×
+≥400-sim batch before reading R-level moves; per-channel breakouts are the lens, not the global R
+mean.
 
 **⚠ STEALS DO NOT MATCH MLB VOLUME — corrected 2026-08-10.** The paragraph above used to open
 "box rate stats are within ~4% of MLB and steals match MLB volume". The second half is wrong for
@@ -553,7 +553,7 @@ steals-match-MLB claim until the SB and CS bands pass with the production flags 
 | 4 | Core Simulation Loop | ✅ Complete |
 | 5 | Simulation Runner & Backend API | ✅ Complete (CI-green on Python 3.13) |
 | 6 | **Frontend Build + P1 backend prerequisites** | ✅ **Complete** — SIM-378→401 + 415→420 + 414 + 402 + 408 closed; SIM-406 + 407 calibration LIVE (unblocked by SIM-432, 2026-06-01) |
-| 7 | Integration, Testing & Deployment | **Largely COMPLETE.** Closed: SIM-402/408/431/432/430 (calibration live, forkserver perf), SIM-433/434/427/411/413/425b (bullpen ingest · manager-decision + realism models ENABLED + validated, all flags ON in prod / pinned off in tests), SIM-435 (full-2024-season odds backfill — 2,378 games), and the 2026-06-03 comprehensive-audit remediation (backlog.xlsx RETIRED). **CLV is now measured at scale** — SIM-429 scoreboard (`scripts/clv_backtest.py`) shipped; SIM-436 parallelized it across games (~6×); first read = ~49% beat-close (no demonstrable edge yet). **Remaining:** SIM-429 (run-conversion + prop calibration to DEVELOP a CLV edge; the realism magnitude-calibration + real-per-team-manager-profile follow-ons fold in). The single-game <30 s SLA is hardware-bound (core-bound at ~6) and de-prioritized — throughput is solved via across-game parallelism. |
+| 7 | Integration, Testing & Deployment | **Largely COMPLETE; the DATA FOUNDATION was REBUILT 2026-08-13→16.** Closed earlier: SIM-402/408/431/432/430, SIM-433/434/427/411/413/425b, SIM-435, the 2026-06-03 audit remediation. **Closed in the rebuild:** SIM-501a/c (events-based out label; ERA 4.07 vs MLB 4.08), SIM-502a-d + Alembic 0018 (`raw.play_events` live), SIM-503, SIM-457/458 re-landed, SIM-488 re-sweep (22,533 games), SIM-459 all-seasons recompute, calibration refit (win-prob ECE 0.0377; BB prop now bettable), **the runs band PASSES**, CI all-green. **Remaining:** SIM-474 (steals never attempted), SIM-429 (2B/BB/ROE small highs + K-prop to bet-grade + CLV re-measure — the old ~49% beat-close read predates the rebuild), SIM-491 (fielder-RBF re-tune), SIM-504 (play_events consumers), home_win_pct certification (12×2,168). The <30 s single-game SLA stays hardware-bound and de-prioritized. |
 
 **Realism sub-track (interleaved, landed on `master`):** the SIM-422→429 full-pool similarity-wiring
 epic replaced the per-tile k-NN draw with whole-pool engine-weighted sampling and made it the
