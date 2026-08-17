@@ -1,3 +1,18 @@
+# Data/Test — SIM-504 (2 of 3) + SIM-505 closed while the certifying lane ran — 2026-08-17
+
+**SIM-504:** (1) the intent-walk DECISION, documented at all five sites: intentional walks are
+EXCLUDED from similarity walk rates (uBB — they measure the situation and the batter's power;
+the sim issues IBBs through the manager decision, and the pitch pool holds no IBB pitches, so
+the architecture is consistent). (2) Pickoff outs from `raw.play_events` now count toward both
+innings-pitched consumers via a probe-guarded CTE, with the thrower attribution from the third
+review; both queries EXPLAIN-validated live — the validation caught an ambiguous-column bug
+before it shipped. (3) The hold-runner engine feature is deferred to the SIM-476 era with the
+reason stated. **SIM-505:** the sim349 fixture's real defect was deeper than lineup rotation —
+without `_injected_battedball` the loop resolves in-play pitches on an injected-resolver machine
+to a terminal NOTHING, so its resolver was never consulted and games were walk/K marathons with
+parked runners. The resolver now opts into the injection seam; games are legal at any seed,
+asserted across the previously-illegal seeds.
+
 # Sim — SIM-468/474: STEALS ARE BACK — the opportunity-pool draw replaces the gate — 2026-08-17
 
 Production attempted zero steals from 2026-06-04 to 2026-08-16. The fix is the owner's standing

@@ -1201,6 +1201,31 @@ class PlayerProfileComputor:
     # Lifecycle
     # ------------------------------------------------------------------
 
+    def _play_events_outs_cte(self) -> str:
+        """SIM-504: the pickoff-out aggregate from ``raw.play_events``.
+
+        Pickoff outs live in NO ``raw.pitches`` row (the documented ~0.5%
+        innings-pitched residual in ``pipeline/statcast_events.py``), so the
+        two ``outs_recorded`` consumers add them per (pitcher, season) from
+        the play-events table. ``pitcher_id`` there is the THROWER — the
+        third adversarial review fixed mid-PA attribution — so the credit
+        lands on the right arm. Falls back to an empty relation when the
+        table is absent (a pre-0018 database or a unit-test fixture), which
+        keeps the join a no-op.
+        """
+        try:
+            self._conn.execute("SELECT 1 FROM pg.raw.play_events LIMIT 0")
+        except Exception:
+            return (
+                "SELECT NULL::INTEGER AS pitcher_id, NULL::SMALLINT AS season, "
+                "0 AS n_outs WHERE FALSE"
+            )
+        return (
+            "SELECT pitcher_id::INTEGER AS pitcher_id, season::SMALLINT AS season, "
+            "COUNT(*) AS n_outs FROM pg.raw.play_events "
+            "WHERE is_out GROUP BY pitcher_id, season"
+        )
+
     def _connect(self) -> None:
         log.info("Opening DuckDB at %s …", self._duckdb_path)
         self._conn = duckdb.connect(self._duckdb_path)
@@ -1515,7 +1540,15 @@ class PlayerProfileComputor:
                     CASE WHEN p.events = 'single'                                THEN 1 ELSE 0 END AS is_1b,
                     CASE WHEN p.events = 'double'                                THEN 1 ELSE 0 END AS is_2b,
                     CASE WHEN p.events = 'triple'                                THEN 1 ELSE 0 END AS is_3b,
-                    CASE WHEN p.events IN ('walk','intent_walk')                 THEN 1 ELSE 0 END AS is_bb,
+                    -- SIM-504 DECISION: intentional walks are EXCLUDED from every
+                    -- similarity walk rate. They live only in raw.play_events (this
+                    -- branch was dead — raw.pitches has never held an intent_walk
+                    -- row), and they measure the SITUATION and the batter's power,
+                    -- which the power features already carry; the sim issues IBBs
+                    -- through the SIM-434 manager decision, not through profile
+                    -- rates. `= 'walk'` states the decision; do not "fix" it by
+                    -- wiring a play_events union here.
+                    CASE WHEN p.events = 'walk'                                  THEN 1 ELSE 0 END AS is_bb,
                     CASE WHEN p.events IN ('strikeout','strikeout_double_play')  THEN 1 ELSE 0 END AS is_k,
                     CASE WHEN p.bb_type = 'ground_ball'                          THEN 1 ELSE 0 END AS is_gb,
                     CASE WHEN p.bb_type IN ('fly_ball','popup')                  THEN 1 ELSE 0 END AS is_fb,
@@ -1695,6 +1728,7 @@ class PlayerProfileComputor:
         """
         log.info("Computing pitcher profiles …")
         season_list = ", ".join(str(s) for s in seasons)
+        pickoff_outs_cte = self._play_events_outs_cte()  # SIM-504
 
         # Delete child rows first so INSERT OR REPLACE on pitcher_season_metrics
         # can implicitly remove the old parent row without a FK violation.
@@ -1747,7 +1781,8 @@ class PlayerProfileComputor:
                         -- Count PA-level outcomes (use last pitch of each PA)
                         COUNT(DISTINCT CASE WHEN events IS NOT NULL THEN game_pk||'-'||at_bat_number END) AS total_pa,
 
-                        SUM(CASE WHEN events IN ('walk','intent_walk') THEN 1 ELSE 0 END) AS walks,
+                        -- SIM-504: `= 'walk'` by DECISION (uBB — see the is_bb note).
+                        SUM(CASE WHEN events = 'walk' THEN 1 ELSE 0 END) AS walks,
                         SUM(CASE WHEN events IN ('strikeout','strikeout_double_play') THEN 1 ELSE 0 END) AS strikeouts,
                         SUM(CASE WHEN events = 'home_run' THEN 1 ELSE 0 END) AS home_runs,
                         SUM(CASE WHEN events IN ('single','double','triple','home_run') THEN 1 ELSE 0 END) AS hits,
@@ -1779,10 +1814,15 @@ class PlayerProfileComputor:
                     WHERE data_quality_flag = FALSE
                       AND season IN ({season_list})
                     GROUP BY pitcher, season
+                ),
+                -- SIM-504: pickoff outs recorded by this pitcher, from
+                -- raw.play_events (they exist in no raw.pitches row).
+                pickoff_outs AS (
+                    {pickoff_outs_cte}
                 )
                 SELECT
-                    pitcher_id,
-                    season,
+                    pitch_stats.pitcher_id,
+                    pitch_stats.season,
                     p_throws,
                     sample_pitches,
 
@@ -1798,32 +1838,35 @@ class PlayerProfileComputor:
                     whiff_rate,
 
                     -- ERA: (earned_runs / outs_recorded) * 27
-                    (earned_runs * 27.0) / NULLIF(outs_recorded, 0)  AS era,
+                    (earned_runs * 27.0) / NULLIF((outs_recorded + COALESCE(po.n_outs, 0)), 0)  AS era,
 
                     -- FIP = (13*HR + 3*(BB+HBP) - 2*K) / IP + FIP_CONSTANT
                     -- IP = outs_recorded / 3
                     ({FIP_CONSTANT} + (13.0 * home_runs + 3.0 * (walks + hbp) - 2.0 * strikeouts) /
-                        NULLIF(outs_recorded / 3.0, 0)) AS fip,
+                        NULLIF((outs_recorded + COALESCE(po.n_outs, 0)) / 3.0, 0)) AS fip,
 
                     -- xFIP: substitute expected HR (league HR/FB * actual FB) for actual HR
                     -- Uses a fixed league HR/FB rate of ~0.105 (MLB average)
                     ({FIP_CONSTANT} + (13.0 * (fly_balls_total * 0.105) + 3.0 * (walks + hbp) - 2.0 * strikeouts)
-                        / NULLIF(outs_recorded / 3.0, 0)) AS xfip,
+                        / NULLIF((outs_recorded + COALESCE(po.n_outs, 0)) / 3.0, 0)) AS xfip,
 
                     ground_ball_rate,
                     fly_ball_rate,
                     line_drive_rate,
 
                     -- HR/9 = home_runs / IP * 9
-                    (home_runs * 9.0) / NULLIF(outs_recorded / 3.0, 0) AS hr_per_9,
+                    (home_runs * 9.0) / NULLIF((outs_recorded + COALESCE(po.n_outs, 0)) / 3.0, 0) AS hr_per_9,
 
                     -- WHIP = (walks + hits) / IP
-                    ((walks + hits) * 3.0) / NULLIF(outs_recorded, 0)   AS whip,
+                    ((walks + hits) * 3.0) / NULLIF((outs_recorded + COALESCE(po.n_outs, 0)), 0)   AS whip,
 
                     (sample_pitches < {MIN_PITCHER_PITCHES})             AS below_minimum_sample,
                     CURRENT_TIMESTAMP                                    AS updated_at
 
                 FROM pitch_stats
+                LEFT JOIN pickoff_outs po
+                    ON po.pitcher_id = pitch_stats.pitcher_id
+                   AND po.season = pitch_stats.season
             """)
         log.info("  Pitcher command metrics inserted (GMM pending).")
 
@@ -1990,7 +2033,8 @@ class PlayerProfileComputor:
                         ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0) AS contact_rate,
 
                     -- Walk / K rates (per PA)
-                    SUM(CASE WHEN events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) /
+                    -- SIM-504: `= 'walk'` by DECISION (uBB — see the is_bb note).
+                    SUM(CASE WHEN events = 'walk' THEN 1.0 ELSE 0 END) /
                         NULLIF(COUNT(DISTINCT CASE WHEN events IS NOT NULL THEN game_pk || '-' || at_bat_number END), 0)
                         AS walk_rate,
 
@@ -2059,7 +2103,7 @@ class PlayerProfileComputor:
                     SUM(CASE WHEN p_throws='L' AND type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN p_throws='L' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END)
                         , 0) AS contact_rate_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) /
+                    SUM(CASE WHEN p_throws='L' AND events = 'walk' THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN p_throws='L' AND events IS NOT NULL THEN 1 ELSE 0 END), 0)
                         AS walk_rate_vs_l,
                     SUM(CASE WHEN p_throws='L' AND events IN ('strikeout','strikeout_double_play') THEN 1.0 ELSE 0 END)
@@ -2098,7 +2142,7 @@ class PlayerProfileComputor:
                     SUM(CASE WHEN p_throws='R' AND type IN ('D', 'E', 'F', 'X') THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN p_throws='R' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END)
                         , 0) AS contact_rate_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND events IN ('walk','intent_walk') THEN 1.0 ELSE 0 END) /
+                    SUM(CASE WHEN p_throws='R' AND events = 'walk' THEN 1.0 ELSE 0 END) /
                         NULLIF(SUM(CASE WHEN p_throws='R' AND events IS NOT NULL THEN 1 ELSE 0 END), 0)
                         AS walk_rate_vs_r,
                     SUM(CASE WHEN p_throws='R' AND events IN ('strikeout','strikeout_double_play') THEN 1.0 ELSE 0 END)
@@ -2500,6 +2544,7 @@ class PlayerProfileComputor:
         """
         log.info("Building derived.pitcher_steal_metrics …")
         season_list = ", ".join(str(s) for s in seasons)
+        pickoff_outs_cte = self._play_events_outs_cte()  # SIM-504
         min_events = 30  # matches the engine's MIN_BASERUNNER_EVENTS gate
 
         self._conn.execute(f"""
@@ -2551,6 +2596,11 @@ class PlayerProfileComputor:
                 ) pa
                 WHERE has_runner
                 GROUP BY pitcher, season
+            ),
+            -- SIM-504: pickoff outs from raw.play_events count toward the
+            -- innings-pitched denominator of sb_against_per_9.
+            pickoff_outs AS (
+                {pickoff_outs_cte}
             )
             SELECT
                 p.pitcher_id,
@@ -2558,13 +2608,15 @@ class PlayerProfileComputor:
                 p.throws,
                 COALESCE(b.n_br_events, 0)                                   AS sample_baserunner_events,
                 p.sb_attempts_against                                        AS sample_steal_attempts_against,
-                p.sb_allowed * 27.0 / NULLIF(p.outs_recorded, 0)             AS sb_against_per_9,
+                p.sb_allowed * 27.0
+                    / NULLIF(p.outs_recorded + COALESCE(po.n_outs, 0), 0)        AS sb_against_per_9,
                 (p.sb_attempts_against - p.sb_allowed) * 1.0
                     / NULLIF(p.sb_attempts_against, 0)                       AS cs_rate_forced,
                 p.sb_attempts_against * 1.0 / NULLIF(b.n_br_events, 0)       AS steal_attempt_rate_allowed,
                 (COALESCE(b.n_br_events, 0) < {min_events})                  AS below_minimum_sample
             FROM pitch_agg p
             LEFT JOIN br_events b ON b.pitcher_id = p.pitcher_id AND b.season = p.season
+            LEFT JOIN pickoff_outs po ON po.pitcher_id = p.pitcher_id AND po.season = p.season
         """)
         log.info("  derived.pitcher_steal_metrics done.")
 

@@ -249,11 +249,14 @@ def sql_outs_recorded(q: str = "") -> str:
 
 #: SIM-502c — the measured residual of the IP formula, so nobody re-derives it.
 #: Over 357 games / 19,072 outs, 131 out-movements were keyed to a non-pitch
-#: index. 53 pickoffs live in `raw.play_events`; 63 mid-PA caught stealings live
-#: in the `sb_*` columns (the CS term above counts them); 7 displaced batter
-#: strikeouts live in `events` (the terms above count them). The ~8 runner outs
-#: anchored to `other_out`/`wild_pitch` actions that do not end the PA reach no
-#: table: ~0.04% of all outs, accepted. With the ~0.06% uncaught-third-strike
+#: index. 53 pickoffs live in `raw.play_events` — and since SIM-504 the two
+#: profile `outs_recorded` consumers ADD them from that table (the computor's
+#: `_play_events_outs_cte`), closing most of what was a ~0.5% residual at the
+#: next recompute; 63 mid-PA caught stealings live in the `sb_*` columns (the
+#: CS term above counts them); 7 displaced batter strikeouts live in `events`
+#: (the terms above count them). The ~8 runner outs anchored to
+#: `other_out`/`wild_pitch` actions that do not end the PA reach no table:
+#: ~0.04% of all outs, accepted. With the ~0.06% uncaught-third-strike
 #: over-count, the formula reads 3 outs on 98.2% of completed half-innings.
 
 

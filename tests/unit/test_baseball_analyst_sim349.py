@@ -351,6 +351,17 @@ class TestDeterminism:
 
 
 class _CyclingResolver(PlayResolver):
+    # SIM-505: without an injected batted-ball sample the loop's no-sampler
+    # path resolves EVERY in-play pitch to a terminal NOTHING — this resolver
+    # was never consulted, the synthetic games were walk/strikeout marathons
+    # with runners parked for whole innings, and the wrap-around batter
+    # eventually collided with his own parked self (a runner on two bases,
+    # seed-dependent). The class-level sample opts into the loop's injection
+    # seam (`_injected_battedball`, sim_loop.py step 6), so singles and outs
+    # actually resolve through the REAL advancement code and every game is
+    # legal baseball at any seed.
+    _injected_battedball = {"exit_velo": 90.0, "launch_angle": 12.0}
+
     def __init__(self, rng, hit_rate: float = 0.30):
         self.rng = rng
         self.hit_rate = float(hit_rate)
@@ -397,27 +408,25 @@ class TestNoProfileFullGame:
         result.final_state.assert_score_valid()
 
     def test_aggressive_situational_manager_game_completes_validly(self):
-        # ⚠ SIM-505: this fixture's validity is SEED-DEPENDENT. `_RngMachine`
-        # overrides step_pitch with a crude outcome draw that lets the SAME
-        # batter resolve in-play while still standing on base (measured: 200+
-        # such states in one seed-1 game), so the final-state invariant passes
-        # only when the endgame happens to be legal. Seeds 1 and 7 end with a
-        # runner on two bases; seed 2 ends legally. The SIM-474 removal of the
-        # per-pitch green-light RNG draw shifted the stream and exposed this —
-        # the machine, not the loop, is the defect (SIM-505 rebuilds it to
-        # rotate the lineup legally).
-        rng = np.random.default_rng(2)
-        machine = _RngMachine(
-            resolver=_CyclingResolver(rng),
-            rng=rng,
-            manager=_AGGRESSIVE,
-        )
-        result = simulate_game(
-            machine,
-            seed=2,
-            away_lineup=AWAY_LINEUP,
-            home_lineup=HOME_LINEUP,
-        )
-        assert result.innings_played >= 9
-        result.final_state.assert_invariants(in_play=True)
-        result.final_state.assert_score_valid()
+        # SIM-505 CLOSED: the fixture used to pass this assertion by SEED LUCK
+        # (its in-play pitches resolved to nothing, so runners parked for
+        # whole innings and seeds 1 and 7 ended with a runner on two bases).
+        # With the injected batted-ball sample the resolver actually runs, so
+        # the game is legal at ANY seed — asserted across the two previously
+        # ILLEGAL seeds plus one that always passed.
+        for seed in (1, 2, 7):
+            rng = np.random.default_rng(seed)
+            machine = _RngMachine(
+                resolver=_CyclingResolver(rng),
+                rng=rng,
+                manager=_AGGRESSIVE,
+            )
+            result = simulate_game(
+                machine,
+                seed=seed,
+                away_lineup=AWAY_LINEUP,
+                home_lineup=HOME_LINEUP,
+            )
+            assert result.innings_played >= 9, seed
+            result.final_state.assert_invariants(in_play=True)
+            result.final_state.assert_score_valid()
