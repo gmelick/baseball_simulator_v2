@@ -10,9 +10,11 @@
 Steals are back. SIM-468 built the opportunity pool (the denominator), SIM-474 replaced the
 green-light gate + resolver stub with a similarity-weighted draw, SIM-483 fixed the steal-run
 box credits, SIM-504 wired two of three `raw.play_events` consumers, SIM-505 fixed the lucky
-test fixture. All committed and pushed; CI green on every push. **ONE THING IS IN FLIGHT: the
-12×425 certifying acceptance lane, running in Docker container `70ba9224d2a6`.** Everything
-below tells you how to read it and what to do with each outcome.
+test fixture. All committed and pushed; CI green on every push. **The certifying lane COMPLETED
+2026-08-17 07:46Z (container `70ba9224d2a6`, kept for the logs): attempt volume CERTIFIED at
+0.748/team-game vs MLB 0.76 (-1.6%); the safe/caught split CONFIRMED high (88.1% vs ~77.6%,
+SB +11.7% / CS -47.8%) — the SB/CS bands stay open on the split alone. Next work: the
+kernel-bandwidth fit (decision-tree branch three, below). Runs stayed green with steals live.**
 
 ---
 

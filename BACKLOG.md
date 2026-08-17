@@ -15,11 +15,19 @@ measured **SB 0.70 + CS 0.09 = 0.79 attempts/team-game against MLB's 0.76 (+4%)*
 | **SIM-495** | The zero-steals measurement | ✅ **RESOLVED.** The three strict-xfail guards (SB, CS, the call-count) deleted per their own instruction; the bands now measure a live channel and the probe tracks `_steal_opportunity_draw`. |
 | **SIM-505** | The sim349 synthetic RNG machine passes its validity assertions by luck | ✅ **CLOSED 2026-08-17.** The root was deeper than lineup rotation: with no sampler, the loop resolves EVERY in-play pitch on an injected-resolver machine to a terminal NOTHING unless the resolver carries `_injected_battedball` — so `_CyclingResolver` was never consulted, the synthetic games were walk/strikeout marathons with runners parked whole innings, and the wrap-around batter collided with his own parked self. The resolver now opts into the injection seam; every game is legal baseball at any seed, asserted across the two previously-ILLEGAL seeds (1, 7) plus 2. Was: 🔲 **OPEN.** Found when SIM-474's removal of the per-pitch gate RNG draw shifted the stream: `_RngMachine` overrides `step_pitch` with a crude outcome draw that lets the SAME batter resolve in-play while still standing on base (measured: 200+ such states in one seed-1 game; seeds 1 and 7 end with a runner on two bases, 9 of 11 seeds end legally). The MACHINE is the defect, not the loop — rebuild it to rotate the lineup legally, then remove the seed-dependence note at `test_baseball_analyst_sim349.py::test_aggressive_situational_manager_game_completes_validly`. |
 
-**Remaining for full SIM-474 closure:** the 12×425 certifying lane (SB/CS bands + the safe-split
-read) — **RUNNING as of 2026-08-17 ~23:30 in Docker container `70ba9224d2a6`**. A fresh context
-reads it with `docker logs 70ba9224d2a6` once
-`docker inspect -f '{{.State.Status}}' 70ba9224d2a6` says exited; the decision tree for every
-outcome is in `docs/audit/2026-08-17-sim474-resumption-state.md`.
+**THE CERTIFYING LANE RAN 2026-08-17 (12×425, n=10,200 team-games). Verdict, in two parts:**
+* **CERTIFIED — the attempt volume.** SB 0.6589 + CS 0.0887 = **0.748 attempts/team-game vs MLB
+  0.76 (-1.6%)** at full band power. The opportunity-pool denominator is proven; the simulator
+  decides WHETHER to run at MLB frequency. The draw-runs and steal-totals-reconcile probes pass,
+  and the RUNS BAND STAYS GREEN with the running game live (SIM-483's credits hold).
+* **CONFIRMED DEFECT — the safe/caught split: 88.1% vs MLB ~77.6%.** SB reds high (+11.7%), CS
+  reds low (-47.8%) — mirror images of one mis-split, matching the smoke. The SB/CS band rows
+  stay OPEN on this. Fix path per the resumption doc: a measured fit of the steal kernel
+  bandwidths (`steal_sigma`/`steal_score_sigma`, the SIM-476 temperature targets) — the suspect
+  mechanism is the catcher kernel down-weighting caught rows, which over-represent tail
+  strong-arm catchers. Do not hand-tune; fit against held-out data.
+* Unchanged pre-existing reds: 2B +6.1%, BB +12.6% (SIM-429), home_win_pct underpowered at this
+  size (needs 12×2,168).
 
 | **SIM-483** | Steal runs: no RBI (Rule 9.04(b)); earned per Rule 9.16(a) | ✅ **CLOSED 2026-08-17** (went live the hour SIM-474 landed). Two credits fixed on the steal of home: (1) a TERMINAL-pitch steal folds its run into the play's `runs` and the batter was credited an RBI — `PlayResult.steal_runs_scored` now marks steal runs and the accumulator withholds exactly that many (a driven-in run beside the steal run keeps its RBI); (2) a NON-terminal steal charged `r_allowed` but never `er` — a stolen-base run is EARNED (9.16(a)), now charged with the same inning-should-be-over unearned rule the accumulator uses. Five tests in `test_sim483_steal_run_credit.py`. |
 
