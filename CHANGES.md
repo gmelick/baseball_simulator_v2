@@ -1,3 +1,12 @@
+# Test — SIM-502 follow-up: the weekly integration lane is green again — 2026-08-17
+
+The 2026-08-17 weekly integration run failed on ONE test: the schema-drift guard
+(`test_raw_schema_tables_exist`). Migration 0018 (SIM-502) added `raw.play_events` on purpose,
+but the commit did not add the table to the guard's `_RAW_TABLES` list, which the guard's own
+error message requires in the same commit. Fix: one line — `play_events` added to `_RAW_TABLES`.
+No schema, code, or data change. Verified: all 12 schema-migration integration tests pass on the
+host (testcontainers, fresh Postgres, full Alembic chain).
+
 # Data/Test — SIM-504 (2 of 3) + SIM-505 closed while the certifying lane ran — 2026-08-17
 
 **SIM-504:** (1) the intent-walk DECISION, documented at all five sites: intentional walks are

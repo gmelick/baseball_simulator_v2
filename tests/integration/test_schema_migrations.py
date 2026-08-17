@@ -63,6 +63,7 @@ _RAW_TABLES = {
     "etl_errors",  # 0011 (SIM-093)
     "game_bullpen_availability",  # 0015 (SIM-433)
     "etl_game_ingest",  # 0017 (SIM-441)
+    "play_events",  # 0018 (SIM-502) — non-pitch play events
 }
 
 _SIM_TABLES = {
