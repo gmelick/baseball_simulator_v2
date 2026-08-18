@@ -4,6 +4,24 @@
 
 # 🎯 2026-08-17 — SIM-506 FILED+CLOSED: the steal pool MISLABELED caught stealings; SIM-504 item 3 closed with it (next free ID → SIM-507)
 
+**THE POST-FIX CERTIFYING LANE RAN 2026-08-18 02:25Z (12×425, n=10,200, container
+`sim506_certifying_lane`, kept). Verdict:**
+* **The split defect is FIXED in production: 82.1% safe (was 88.1%).** CS 0.0887 → **0.1436**
+  (+62% volume); the draw now tracks the corrected pool (2B 80.9% / 3B 84.1%). **R stayed GREEN.**
+* **The SB/CS band rows stay open, on two NEW, smaller, understood residuals:**
+  (1) **attempt volume drifted +5.3% high** (0.800 vs MLB 0.76; was -1.6% pre-fix — the recovered
+  attempted rows raised attempt propensity). A SIM-476 fit target, now on correct labels.
+  (2) **the CS band centre (0.17) includes ~31% unmodeled classes** — pickoff caught-stealings,
+  steals of home, K+CS double plays ≈ 0.052/team-game of the 2023 reference. The modeled 2B/3B
+  pitch-steal truth is ~0.118/team-game, OUTSIDE the band's [0.1549, 0.1851] by construction:
+  **a perfect pitch-steal model cannot pass this band.** Either model the pickoff channel (the
+  `raw.play_events` data now exists) or decompose the reference per bands.py 'MOVING A BAND'.
+  SB fails +11.3% ≈ the volume drift + ~1% split residual (its reference is ~98% modeled classes).
+* Also read: 2B +6.7% / BB +10.5% (the known SIM-429 reds, unchanged); **K -1.6% newly red by
+  0.02 under a floor-driven edge** (first K red on record — plausibly the added CS outs shaving
+  PAs; watch it, do not tune it yet); home_win_pct UNDERPOWERED (needs 26,015 obs, by design);
+  DP / H / ROE_reached still expected-red xfails (SIM-494/496).
+
 **The certified safe/caught split defect (88.1% vs MLB ~77.6%) was a DATA defect, not a kernel.**
 The ablation chain proved it: catcher factor removed → split WORSE (0.869 → 0.916, ~4.5σ); runner
 factor removed → null (~1σ); then the pool itself read **87.6% safe on its own attempted rows**.
