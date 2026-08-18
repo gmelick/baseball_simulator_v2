@@ -37,7 +37,7 @@ from pipeline.batch.engine_artifacts import (
 )
 from pipeline.batch.player_profile_computor import PlayerProfileComputor
 from simulation.full_pool_sampler import FullPoolSampler
-from simulation.game_state import GameState, Half
+from simulation.game_state import GameState, Half, PlayResult
 from simulation.sim_loop import StateMachine, Team
 
 # ---------------------------------------------------------------------------
@@ -56,9 +56,30 @@ CREATE TABLE sim.steal_opportunity_pool (
     score_diff SMALLINT NOT NULL,
     attempted BOOLEAN NOT NULL, success BOOLEAN NOT NULL DEFAULT FALSE,
     recency_weight FLOAT NOT NULL DEFAULT 1.0,
+    pickoff_out BOOLEAN DEFAULT FALSE,
+    pickoff_advancing BOOLEAN DEFAULT FALSE,
+    pickoff_error BOOLEAN DEFAULT FALSE,
     PRIMARY KEY (pitch_id)
 )
 """
+
+
+def _add_play_events(c) -> None:
+    """SIM-507: the builder probes pg.raw.play_events; absent (the default
+    here) it degrades to all-FALSE pickoff labels. Tests that exercise the
+    pickoff attribution create the table with this."""
+    c.execute(
+        "CREATE TABLE pg.raw.play_events ("
+        "game_pk INTEGER, at_bat_number INTEGER, season SMALLINT, "
+        "event_type VARCHAR, is_out BOOLEAN, base SMALLINT, runners_state SMALLINT)"
+    )
+
+
+def _pickoff(c, pk, ab, *, event_type="pickoff", is_out=True, base=1, runners_state=1):
+    c.execute(
+        "INSERT INTO pg.raw.play_events VALUES (?,?,2024,?,?,?,?)",
+        [pk, ab, event_type, is_out, base, runners_state],
+    )
 
 
 def _conn() -> duckdb.DuckDBPyConnection:
@@ -218,6 +239,83 @@ class TestTheComputorBuild:
         rows = c.execute("SELECT attempted, success FROM sim.steal_opportunity_pool").fetchall()
         assert rows == [(False, False)]
 
+    # -- SIM-507: the K+CS double play and the pickoff labels ----------------
+
+    def test_a_strikeout_double_play_is_an_attempted_failure(self):
+        """K + caught runner: measured 2023, 100 of 100 rows sit in an
+        opportunity shape, so the pair's target is the caught runner's."""
+        c = _conn()
+        _pitch(c, 1, 1, 1, on_1b=11, ev="strikeout_double_play")
+        _build(c)
+        rows = c.execute(
+            "SELECT target_base, attempted, success FROM sim.steal_opportunity_pool"
+        ).fetchall()
+        assert rows == [(2, True, False)]
+
+    def test_a_pickoff_out_lands_on_one_non_attempted_row(self):
+        """A plain pickoff at 1B: attributed to the FIRST non-attempted pitch
+        of the pair; the pool's other rows stay unlabeled so per-pitch rates
+        hold. Not advancing — a plain pickoff is an out, not a CS."""
+        c = _conn()
+        _add_play_events(c)
+        _pitch(c, 1, 1, 1, on_1b=11, att2=True, suc2=True)
+        _pitch(c, 1, 1, 2, on_1b=11)
+        _pitch(c, 1, 1, 3, on_1b=11)
+        _pickoff(c, 1, 1, base=1, runners_state=1)
+        _build(c)
+        rows = c.execute(
+            "SELECT pitch_number, pickoff_out, pickoff_advancing, pickoff_error "
+            "FROM sim.steal_opportunity_pool ORDER BY pitch_number"
+        ).fetchall()
+        assert rows == [
+            (1, False, False, False),
+            (2, True, False, False),
+            (3, False, False, False),
+        ]
+
+    def test_an_advancing_pickoff_out_is_a_caught_stealing(self):
+        """Runner on 1B tagged at 2B (base=2, 1B occupied, 2B open): the
+        picked-off caught stealing — MLB scores a CS."""
+        c = _conn()
+        _add_play_events(c)
+        _pitch(c, 1, 1, 1, on_1b=11)
+        _pickoff(c, 1, 1, base=2, runners_state=1)
+        _build(c)
+        rows = c.execute(
+            "SELECT pickoff_out, pickoff_advancing FROM sim.steal_opportunity_pool"
+        ).fetchall()
+        assert rows == [(True, True)]
+
+    def test_a_pickoff_error_advances_and_an_out_beats_it(self):
+        c = _conn()
+        _add_play_events(c)
+        # AB 1: an errant throw only.
+        _pitch(c, 1, 1, 1, on_1b=11)
+        _pickoff(c, 1, 1, event_type="pickoff_error", is_out=False, base=1, runners_state=1)
+        # AB 2: an error AND an out in the same PA -> the out wins.
+        _pitch(c, 1, 2, 1, on_2b=22)
+        _pickoff(c, 1, 2, event_type="pickoff_error", is_out=False, base=2, runners_state=2)
+        _pickoff(c, 1, 2, base=2, runners_state=2)
+        _build(c)
+        rows = c.execute(
+            "SELECT at_bat_number, pickoff_out, pickoff_advancing, pickoff_error "
+            "FROM sim.steal_opportunity_pool ORDER BY at_bat_number"
+        ).fetchall()
+        assert rows == [(1, False, False, True), (2, True, False, False)]
+
+    def test_a_runner_held_at_3b_is_outside_the_pool_shape(self):
+        """A pickoff of a runner held at 3B maps to no pair — the documented
+        ~26-outs-per-season residual — and must not mislabel target-3 rows."""
+        c = _conn()
+        _add_play_events(c)
+        _pitch(c, 1, 1, 1, on_2b=22)
+        _pickoff(c, 1, 1, base=3, runners_state=4)  # runner ON 3B, not from 2B
+        _build(c)
+        rows = c.execute(
+            "SELECT pickoff_out, pickoff_advancing, pickoff_error FROM sim.steal_opportunity_pool"
+        ).fetchall()
+        assert rows == [(False, False, False)]
+
 
 # ---------------------------------------------------------------------------
 # The artifact round-trip
@@ -288,7 +386,17 @@ class TestTheArtifactRoundTrip:
 # ---------------------------------------------------------------------------
 
 
-def _steal_pool(n, attempted, success=None, *, runner_ids=None, sit=None) -> StealPool:
+def _steal_pool(
+    n,
+    attempted,
+    success=None,
+    *,
+    runner_ids=None,
+    sit=None,
+    pickoff_out=None,
+    pickoff_advancing=None,
+    pickoff_error=None,
+) -> StealPool:
     att = np.asarray(attempted, dtype=np.int8)
     return StealPool(
         sit=(
@@ -307,6 +415,14 @@ def _steal_pool(n, attempted, success=None, *, runner_ids=None, sit=None) -> Ste
         attempted=att,
         success=(np.asarray(success, dtype=np.int8) if success is not None else att.copy()),
         recency=np.ones(n, dtype=np.float32),
+        # SIM-507: None -> __post_init__ zero-fills (the legacy-bundle shape).
+        pickoff_out=(np.asarray(pickoff_out, dtype=np.int8) if pickoff_out is not None else None),
+        pickoff_advancing=(
+            np.asarray(pickoff_advancing, dtype=np.int8) if pickoff_advancing is not None else None
+        ),
+        pickoff_error=(
+            np.asarray(pickoff_error, dtype=np.int8) if pickoff_error is not None else None
+        ),
     )
 
 
@@ -393,9 +509,33 @@ class TestTheSamplerDraw:
         )
 
     def test_the_drawn_row_answers_both_questions(self):
-        # Every row: attempted, caught. The draw must return (True, False).
+        # Every row: attempted, caught, no pickoff. The draw returns the full
+        # SIM-507 quintuple.
         fp = _sampler({"2": _steal_pool(50, [1] * 50, success=[0] * 50)})
         assert fp.steal_draw(2, "11:2024", "", None, outs=0, balls=0, strikes=0, score_diff=0) == (
+            True,
+            False,
+            False,
+            False,
+            False,
+        )
+
+    def test_the_drawn_row_carries_the_pickoff_labels(self):
+        # SIM-507: every row an advancing pickoff out.
+        fp = _sampler(
+            {
+                "2": _steal_pool(
+                    50,
+                    [0] * 50,
+                    pickoff_out=[1] * 50,
+                    pickoff_advancing=[1] * 50,
+                )
+            }
+        )
+        assert fp.steal_draw(2, "11:2024", "", None, outs=0, balls=0, strikes=0, score_diff=0) == (
+            False,
+            False,
+            True,
             True,
             False,
         )
@@ -513,3 +653,58 @@ class TestTheLoopWiring:
         assert s.offense == Team.HOME
         m._steal_opportunity_draw(s)
         assert fp.calls[0]["catcher"] == "903:2024"
+
+
+class TestThePickoffChannel:
+    """SIM-507: the pickoff labels ride the same draw and resolve in step 7."""
+
+    def test_a_pickoff_out_draw_stages_a_pickoff(self):
+        m = _machine_with_fp(_FakeStealFP((False, False, True, False, False)))
+        m._steal_opportunity_draw(_state(first=11))
+        p = m._pending_steal
+        assert p is not None and p.pickoff and not p.safe and not p.pickoff_advancing
+        assert p.runner_id == 11 and p.from_base == 1
+
+    def test_a_plain_pickoff_out_retires_without_a_cs(self):
+        m = _machine_with_fp(_FakeStealFP((False, False, True, False, False)))
+        s = _state(first=11)
+        m._steal_opportunity_draw(s)
+        result = PlayResult(pitch_outcome="ball")
+        m._resolve_steal_outcome(s, result)
+        assert result.pickoff_out and not result.steal_attempted
+        assert result.steal_outcome is None
+        assert s.bases.first is None
+        # An out, NOT a caught stealing: no box credit of any kind was
+        # written, so the lazy boxscore was never even created.
+        assert m.boxscore is None
+
+    def test_an_advancing_pickoff_out_is_charged_as_a_cs(self):
+        m = _machine_with_fp(_FakeStealFP((False, False, True, True, False)))
+        s = _state(first=11)
+        m._steal_opportunity_draw(s)
+        result = PlayResult(pitch_outcome="ball")
+        m._resolve_steal_outcome(s, result)
+        assert result.pickoff_out and not result.steal_attempted
+        assert s.bases.first is None
+        assert m.boxscore.line(11).cs == 1  # Rule 9.07(h)
+        assert m.boxscore.line(11).sb == 0
+
+    def test_a_pickoff_error_advances_the_runner(self):
+        m = _machine_with_fp(_FakeStealFP((False, False, False, False, True)))
+        s = _state(first=11)
+        m._steal_opportunity_draw(s)
+        result = PlayResult(pitch_outcome="ball")
+        m._resolve_steal_outcome(s, result)
+        assert result.pickoff_error and not result.pickoff_out
+        assert not result.steal_attempted
+        assert s.bases.first is None and s.bases.second == 11
+        # An error advance is not a steal: no box credit was written at all.
+        assert m.boxscore is None
+
+    def test_a_legacy_two_tuple_sampler_still_works(self):
+        # A duck-typed test sampler returning the pre-SIM-507 pair stages an
+        # ordinary steal and no pickoff.
+        m = _machine_with_fp(_FakeStealFP((True, True)))
+        m._steal_opportunity_draw(_state(first=11))
+        p = m._pending_steal
+        assert p is not None and p.attempted and p.safe and not p.pickoff

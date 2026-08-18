@@ -747,6 +747,12 @@ class PlayResult:
     #: accumulator subtracts this from the batter's RBI credit when the steal
     #: lands on a terminal pitch (its run is folded into the play's ``runs``).
     steal_runs_scored: int = 0
+    #: SIM-507: a pickoff retired a runner on this pitch. NOT a steal attempt
+    #: (``steal_attempted`` stays False); the runner is charged a CS only when
+    #: he was tagged advancing (Rule 9.07(h)).
+    pickoff_out: bool = False
+    #: SIM-507: an errant pickoff throw advanced a runner on this pitch.
+    pickoff_error: bool = False
 
     # ---- raw sampler payloads (carried verbatim from the sampler) -----------
     #: The raw ``PlayPoolSampler.sample_pitch(...)`` dict (row_id/distance/...).

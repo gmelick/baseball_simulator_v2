@@ -1,3 +1,17 @@
+# Sim — SIM-507: the pickoff channel — the running game is class-complete — 2026-08-18
+
+The 2023 CS ledger closes at 820 of the band's 826: pitch-steal CS 573 + advancing pickoffs 133 +
+K+CS 98 + home 16. SIM-507 models the middle two. Migration 0017 (v17) puts three pickoff labels on
+the steal opportunity pool, attributed from `raw.play_events` per (PA, target) to ONE non-attempted
+opportunity pitch — which pitch carries the label cannot matter to a draw, only the labeled-row
+share does. `strikeout_double_play` becomes an attempted-caught row for the pair's target
+(measured: 100/100 in opportunity shape). The SIM-474 draw now returns five flags; the loop stages
+a pickoff like a steal and `_resolve_pickoff` applies MLB scoring exactly: advancing out = CS
+(Rule 9.07(h)), plain pickoff = an out and NOT a CS, errant throw = a free base and not a steal.
+Rebuilt pool conditional success: 77.4% at 2B (MLB ~77.6%). Unmodeled residue, measured and
+documented at every site: ~0.008 CS/team-game of out-of-shape pickoffs + 0.003 home steals.
+72 steal-suite tests green (10 new); legacy bundles and 2-tuple test samplers degrade cleanly.
+
 # Data/Sim — SIM-506 + SIM-504 item 3: the steal labels read both homes; hold-runner rates wired — 2026-08-17
 
 **SIM-506 — the certified safe/caught split defect (88.1% vs MLB ~77.6%) was a DATA defect.** The

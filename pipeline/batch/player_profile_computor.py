@@ -1254,6 +1254,61 @@ class PlayerProfileComputor:
             "GROUP BY pitcher_id, season"
         )
 
+    def _pickoff_outcomes_cte(self, season_list: str) -> str:
+        """SIM-507: per-event pickoff outcomes mapped to the steal pool's pair.
+
+        Maps each raw.play_events pickoff/pickoff_error row to the opportunity
+        pair its held runner belongs to, using the play-entering runner state:
+
+          * runner on 1B, 2B open  -> the target-2 pair. An out at base 1 is a
+            plain pickoff; an out at base 2 is a picked-off CAUGHT STEALING
+            (the runner broke for the next base — MLB scores a CS).
+          * runner on 2B, 3B open  -> the target-3 pair; out at 2 plain, at 3
+            advancing.
+
+        Out of the pair shapes and therefore dropped, measured 2023: a runner
+        held at 3B or thrown out at home (~26 outs/season) and a 1B pickoff
+        with 1B+2B both occupied (the pool's row for that pitch belongs to the
+        2B runner). Together ~0.006/team-game — documented residual, with
+        steals of home. Falls back to an empty relation when the table is
+        absent (a pre-0018 database or a unit-test fixture).
+        """
+        try:
+            self._conn.execute("SELECT 1 FROM pg.raw.play_events LIMIT 0")
+        except Exception:
+            return (
+                "SELECT NULL::INTEGER AS game_pk, NULL::INTEGER AS at_bat_number, "
+                "NULL::SMALLINT AS target_base, 0 AS is_out_i, 0 AS is_adv_i, "
+                "0 AS is_err_i WHERE FALSE"
+            )
+        return f"""
+                SELECT
+                    game_pk, at_bat_number,
+                    CASE
+                        WHEN base = 1 AND (runners_state & 1) = 1
+                             AND (runners_state & 2) = 0 THEN 2
+                        WHEN base = 2 AND (runners_state & 1) = 1
+                             AND (runners_state & 2) = 0 THEN 2
+                        WHEN base = 2 AND (runners_state & 2) = 2
+                             AND (runners_state & 4) = 0 THEN 3
+                        WHEN base = 3 AND (runners_state & 2) = 2
+                             AND (runners_state & 4) = 0 THEN 3
+                    END::SMALLINT AS target_base,
+                    CASE WHEN event_type = 'pickoff' AND is_out
+                         THEN 1 ELSE 0 END AS is_out_i,
+                    CASE WHEN event_type = 'pickoff' AND is_out AND (
+                              (base = 2 AND (runners_state & 1) = 1
+                                        AND (runners_state & 2) = 0)
+                           OR (base = 3 AND (runners_state & 2) = 2
+                                        AND (runners_state & 4) = 0))
+                         THEN 1 ELSE 0 END AS is_adv_i,
+                    CASE WHEN event_type = 'pickoff_error'
+                         THEN 1 ELSE 0 END AS is_err_i
+                FROM pg.raw.play_events
+                WHERE event_type IN ('pickoff', 'pickoff_error')
+                  AND season IN ({season_list})
+        """
+
     def _connect(self) -> None:
         log.info("Opening DuckDB at %s …", self._duckdb_path)
         self._conn = duckdb.connect(self._duckdb_path)
@@ -5369,7 +5424,8 @@ class PlayerProfileComputor:
                 return
         log.info("Building sim.steal_opportunity_pool … (seasons=%s)", seasons)
         season_list = ", ".join(str(s) for s in seasons)
-        recency_expr = _recency_weight_sql("o.season", ref_season)
+        recency_expr = _recency_weight_sql("f.season", ref_season)
+        pickoff_cte = self._pickoff_outcomes_cte(season_list)  # SIM-507
 
         self._conn.execute(
             f"DELETE FROM sim.steal_opportunity_pool WHERE season IN ({season_list})"
@@ -5410,10 +5466,16 @@ class PlayerProfileComputor:
                     -- caught stealing lives ONLY there (measured disjoint from the
                     -- sb_* columns; 43% of 2B caught stealings). Columns alone
                     -- read the pool 87.6% safe against a real ~82.7%.
+                    -- SIM-507: a strikeout_double_play is a K + a caught runner —
+                    -- measured 2023: 100 of 100 rows sit in an opportunity shape
+                    -- (97 target-2, 3 target-3), so the pair's target is the
+                    -- caught runner's target. Attempted, never successful.
                     CASE
                         WHEN rp.on_1b IS NOT NULL AND rp.on_2b IS NULL
                             THEN {sql_steal_attempt("2b", "rp.")}
+                              OR COALESCE(rp.events = 'strikeout_double_play', FALSE)
                         ELSE {sql_steal_attempt("3b", "rp.")}
+                              OR COALESCE(rp.events = 'strikeout_double_play', FALSE)
                     END                             AS attempted,
                     CASE
                         WHEN rp.on_1b IS NOT NULL AND rp.on_2b IS NULL
@@ -5432,18 +5494,56 @@ class PlayerProfileComputor:
                         (rp.on_1b IS NOT NULL AND rp.on_2b IS NULL)
                      OR (rp.on_2b IS NOT NULL AND rp.on_3b IS NULL)
                   )
+            ),
+            -- SIM-507: pickoff outcomes per (plate appearance, target), from
+            -- raw.play_events. Precedence: an out beats an error in the same
+            -- plate appearance (both in one PA is a couple of rows a season).
+            pickoffs AS (
+                {pickoff_cte}
+            ),
+            po AS (
+                SELECT game_pk, at_bat_number, target_base,
+                       MAX(is_out_i) AS po_out,
+                       MAX(is_adv_i) AS po_adv,
+                       MAX(is_err_i) AS po_err
+                FROM pickoffs
+                WHERE target_base IS NOT NULL
+                GROUP BY game_pk, at_bat_number, target_base
+            ),
+            -- SIM-507: attribute each PA's pickoff outcome to ONE opportunity
+            -- pitch (the first non-attempted pitch of the pair). Which pitch
+            -- carries the label does not matter to the draw — only the count
+            -- of labeled rows over opportunity rows does — but keeping it off
+            -- attempted rows avoids a steal/pickoff collision on one row.
+            f AS (
+                SELECT
+                    o.*,
+                    po.po_out, po.po_adv, po.po_err,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY o.game_pk, o.at_bat_number, o.target_base
+                        ORDER BY o.attempted ASC, o.pitch_number ASC
+                    ) AS rn
+                FROM opportunities o
+                LEFT JOIN po
+                    ON po.game_pk       = o.game_pk
+                   AND po.at_bat_number = o.at_bat_number
+                   AND po.target_base   = o.target_base
+                WHERE o.runner_id IS NOT NULL
+                  AND o.pitcher_id IS NOT NULL
             )
             SELECT
-                o.pitch_id, o.game_pk, o.at_bat_number, o.pitch_number,
-                o.game_date, o.season,
-                o.runner_id, o.pitcher_id, o.catcher_id,
-                o.target_base, o.inning, o.outs,
-                o.count_balls, o.count_strikes, o.score_diff,
-                o.attempted, o.success,
-                {recency_expr} AS recency_weight
-            FROM opportunities o
-            WHERE o.runner_id IS NOT NULL
-              AND o.pitcher_id IS NOT NULL
+                f.pitch_id, f.game_pk, f.at_bat_number, f.pitch_number,
+                f.game_date, f.season,
+                f.runner_id, f.pitcher_id, f.catcher_id,
+                f.target_base, f.inning, f.outs,
+                f.count_balls, f.count_strikes, f.score_diff,
+                f.attempted, f.success,
+                {recency_expr} AS recency_weight,
+                (f.rn = 1 AND COALESCE(f.po_out, 0) = 1)  AS pickoff_out,
+                (f.rn = 1 AND COALESCE(f.po_adv, 0) = 1)  AS pickoff_advancing,
+                (f.rn = 1 AND COALESCE(f.po_err, 0) = 1
+                    AND COALESCE(f.po_out, 0) = 0)        AS pickoff_error
+            FROM f
         """)
         log.info("  sim.steal_opportunity_pool done.")
         _record_pool_build(self._conn, "steal_opportunity_pool", seasons, ref_season)

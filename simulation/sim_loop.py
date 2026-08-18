@@ -604,6 +604,13 @@ class StealResolution:
     from_base: int | None = None
     to_base: int | None = None
     safe: bool = False
+    #: SIM-507: this resolution is a PICKOFF outcome, not a steal attempt.
+    #: ``safe=False`` retires the runner (an out); ``safe=True`` is an errant
+    #: throw — the runner advances one base, no steal credit either way.
+    pickoff: bool = False
+    #: The pickoff out was a picked-off CAUGHT STEALING (the runner was tagged
+    #: at the NEXT base) — MLB Rule 9.07(h) scores it as a CS.
+    pickoff_advancing: bool = False
 
 
 class PlayResolver:
@@ -1989,6 +1996,12 @@ class StateMachine:
         self._pending_steal = None
         if steal is None or not steal.attempted:
             return
+        if steal.pickoff:
+            # SIM-507: a pickoff outcome is not a steal attempt — it never
+            # sets steal_attempted / steal_outcome or the SB/CS-band-visible
+            # box credits except the advancing-out CS (Rule 9.07(h)).
+            self._resolve_pickoff(state, result, steal)
+            return
         result.steal_attempted = True
         from_base = steal.from_base
         to_base = (
@@ -2084,6 +2097,58 @@ class StateMachine:
             )
             if rid is not None:
                 result.baserunner_advances[rid] = 0  # out (off the bases)
+
+    def _resolve_pickoff(
+        self, state: GameState, result: PlayResult, steal: StealResolution
+    ) -> None:
+        """SIM-507: resolve a pickoff outcome staged by the pre-pitch draw.
+
+        Three outcomes, mirroring the labeled pool rows:
+          * out, advancing (``safe=False, pickoff_advancing=True``) — a
+            picked-off CAUGHT STEALING: the runner broke for the next base and
+            was tagged. One out, the runner is charged a CS (Rule 9.07(h)) —
+            the CS band's MLB reference counts this class.
+          * out, plain (``safe=False``) — tagged at his own base. One out,
+            NO caught-stealing credit.
+          * error (``safe=True``) — an errant throw; the runner advances one
+            base. No steal credit and no ledger delta, the same shape as a
+            safe steal to 2B/3B (occupancy moves; no run, no out).
+        """
+        pre_outs = int(state.outs)
+        pre_bases = self._snapshot_bases(state)
+        from_base = steal.from_base
+        to_base = (
+            steal.to_base
+            if steal.to_base is not None
+            else (_NEXT_BASE.get(from_base, 4) if from_base else 4)
+        )
+        rid = steal.runner_id
+        moving = {1: pre_bases.first, 2: pre_bases.second, 3: pre_bases.third}.get(from_base)
+        if steal.safe:
+            result.pickoff_error = True
+            self._move_runner(state, from_base, to_base)
+            if rid is not None:
+                result.baserunner_advances[rid] = to_base
+            return
+        result.pickoff_out = True
+        if steal.pickoff_advancing and rid is not None:
+            self._box_line(int(rid)).cs += 1
+        self._clear_base(state, from_base)
+        self._commit_run_delta(
+            state,
+            result,
+            event="caught_stealing" if steal.pickoff_advancing else "pickoff",
+            result_hits=0,
+            result_outs=1,
+            result_runs=0,
+            pre_outs=pre_outs,
+            pre_bases=pre_bases,
+            batter_reached=False,
+            runners_scored=0,
+            runners_retired=1 if moving is not None else 0,
+        )
+        if rid is not None:
+            result.baserunner_advances[rid] = 0
 
     @staticmethod
     def _move_runner(state: GameState, from_base: int | None, to_base: int) -> None:
@@ -3458,7 +3523,27 @@ class StateMachine:
         )
         if drawn is None:
             return
-        attempted, success = drawn
+        if len(drawn) >= 5:
+            attempted, success, po_out, po_adv, po_err = drawn[:5]
+        else:
+            # A duck-typed test sampler may still return the pre-SIM-507 pair.
+            (attempted, success), po_out, po_adv, po_err = drawn, False, False, False
+        if po_out or po_err:
+            # SIM-507: the drawn row carries a pickoff outcome — it pre-empts
+            # the steal question for this pitch. Staged like a steal (the
+            # pre-pitch decision resolves in step 7) and resolved by
+            # _resolve_pickoff: an out retires the runner (a CS only when he
+            # was advancing), an errant throw advances him.
+            self._pending_steal = StealResolution(
+                attempted=True,
+                runner_id=runner_id,
+                from_base=from_base,
+                to_base=_NEXT_BASE.get(from_base, 4),
+                safe=bool(po_err and not po_out),
+                pickoff=True,
+                pickoff_advancing=bool(po_adv),
+            )
+            return
         if not attempted:
             return
         self.stage_steal(runner_id=runner_id, from_base=from_base, safe=bool(success))

@@ -609,9 +609,10 @@ class FullPoolSampler:
         strikes: int,
         score_diff: int,
         aggression: float = 1.0,
-    ) -> tuple[bool, bool] | None:
-        """Draw ONE steal-opportunity row -> (attempted, success), or None when
-        the pool/cell is absent (the caller then stages nothing).
+    ) -> tuple[bool, bool, bool, bool, bool] | None:
+        """Draw ONE steal-opportunity row -> (attempted, success, pickoff_out,
+        pickoff_advancing, pickoff_error), or None when the pool/cell is
+        absent (the caller then stages nothing).
 
         The owner's rule (2026-08-10): every sim decision is a similarity-
         weighted draw from a hard-filtered pool, never a hand-tuned formula.
@@ -621,9 +622,12 @@ class FullPoolSampler:
         rows against similar catchers carry fewer attempts — a soft score-diff
         kernel (blowout damping emerges from the pool, not a constant), manager
         aggression as a multiplier on ATTEMPTED rows (a weight, never a gate —
-        SIM-474), and recency. The drawn row answers both questions at once:
-        its `attempted` flag says whether the runner goes, its `success` flag
-        says safe or caught.
+        SIM-474), and recency. The drawn row answers the whole pre-pitch
+        running-game question at once: `attempted` says whether the runner
+        goes, `success` says safe or caught, and the SIM-507 pickoff labels
+        say whether a pickoff retired the runner (`pickoff_advancing` marks a
+        picked-off caught stealing) or an errant throw advanced him. On a
+        pre-0017 bundle the pickoff labels are all-zero and nothing changes.
         """
         pool = self.a.steal_pools.get(str(int(target_base)))
         meta = self._steal_meta(str(int(target_base)))
@@ -666,4 +670,10 @@ class FullPoolSampler:
         i = int(np.searchsorted(cdf, self.rng.random() * cdf[-1]))
         i = min(i, len(rows) - 1)
         r = rows[i]
-        return (bool(pool.attempted[r]), bool(pool.success[r]))
+        return (
+            bool(pool.attempted[r]),
+            bool(pool.success[r]),
+            bool(pool.pickoff_out[r]),
+            bool(pool.pickoff_advancing[r]),
+            bool(pool.pickoff_error[r]),
+        )

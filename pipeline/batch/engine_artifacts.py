@@ -207,7 +207,14 @@ def build_steal_pool_artifact(
         np.save(os.path.join(pool_dir, f"{target}.sit.npy"), sit)
         con.execute(
             "COPY (SELECT runner_id, pitcher_id, catcher_id, season, "
-            "attempted, success, recency_weight "
+            "attempted, success, recency_weight, "
+            # SIM-507: COALESCE keeps a pre-0017 DuckDB (NULL columns absent
+            # from an un-migrated table would fail the SELECT outright — the
+            # migration adds them; NULLs only appear on rows an old builder
+            # wrote) reading as plain no-outcome rows.
+            "COALESCE(pickoff_out, FALSE) AS pickoff_out, "
+            "COALESCE(pickoff_advancing, FALSE) AS pickoff_advancing, "
+            "COALESCE(pickoff_error, FALSE) AS pickoff_error "
             f"FROM sim.steal_opportunity_pool WHERE {w}) "
             f"TO '{os.path.join(pool_dir, f'{target}.meta.parquet')}' (FORMAT parquet)"
         )
@@ -421,6 +428,23 @@ class StealPool:
     attempted: np.ndarray  # (N,) int8 (0/1)
     success: np.ndarray  # (N,) int8 (0/1)
     recency: np.ndarray  # (N,) float32
+    #: SIM-507: pickoff outcomes attributed to this opportunity pitch. An
+    #: advancing out is a picked-off caught stealing (MLB scores a CS); a
+    #: plain pickoff is an out only; an error advances the runner. None
+    #: (a pre-0017 bundle or a test fixture) normalizes to all-zero labels —
+    #: no pickoffs staged, the pre-SIM-507 behavior.
+    pickoff_out: np.ndarray | None = None  # (N,) int8 (0/1)
+    pickoff_advancing: np.ndarray | None = None  # (N,) int8 (0/1)
+    pickoff_error: np.ndarray | None = None  # (N,) int8 (0/1)
+
+    def __post_init__(self) -> None:
+        n = int(self.sit.shape[0])
+        if self.pickoff_out is None:
+            self.pickoff_out = np.zeros(n, dtype=np.int8)
+        if self.pickoff_advancing is None:
+            self.pickoff_advancing = np.zeros(n, dtype=np.int8)
+        if self.pickoff_error is None:
+            self.pickoff_error = np.zeros(n, dtype=np.int8)
 
     @property
     def n(self) -> int:
@@ -471,6 +495,9 @@ _STEAL_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "attempted",
     "success",
     "recency",
+    "pickoff_out",  # SIM-507
+    "pickoff_advancing",
+    "pickoff_error",
 )
 
 
@@ -811,11 +838,9 @@ class EngineArtifacts:
             if os.path.exists(os.path.join(sp_dir, "manifest.json")):
                 for target in ("2", "3"):
                     meta_path = os.path.join(sp_dir, f"{target}.meta.parquet")
-                    m = con.execute(
-                        "SELECT runner_id, pitcher_id, catcher_id, season, "
-                        "attempted, success, recency_weight "
-                        f"FROM read_parquet('{meta_path}')"
-                    ).fetchnumpy()
+                    # SELECT * so a pre-SIM-507 parquet (no pickoff columns)
+                    # still loads; the taker fills missing columns below.
+                    m = con.execute(f"SELECT * FROM read_parquet('{meta_path}')").fetchnumpy()
 
                     def _sp_take(
                         attr: str, col: str, dtype, fill, *, _t=target, _m=m
@@ -824,6 +849,12 @@ class EngineArtifacts:
                         v = views.get(f"steal_pool.{_t}.{attr}")
                         if isinstance(v, np.ndarray):
                             return v
+                        if col not in _m:
+                            # SIM-507: a legacy bundle carries no pickoff
+                            # columns — all-zero labels stage no pickoffs,
+                            # the pre-SIM-507 behavior.
+                            n_rows = len(_m["runner_id"])
+                            return np.full(n_rows, fill, dtype=dtype)
                         return np.asarray(np.ma.filled(_m[col], fill), dtype=dtype)
 
                     steal_pools[target] = StealPool(
@@ -845,6 +876,11 @@ class EngineArtifacts:
                                 nan=1.0,
                             )
                         ),
+                        pickoff_out=_sp_take("pickoff_out", "pickoff_out", np.int8, 0),
+                        pickoff_advancing=_sp_take(
+                            "pickoff_advancing", "pickoff_advancing", np.int8, 0
+                        ),
+                        pickoff_error=_sp_take("pickoff_error", "pickoff_error", np.int8, 0),
                     )
         finally:
             con.close()

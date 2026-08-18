@@ -1029,6 +1029,17 @@ CREATE TABLE IF NOT EXISTS sim.steal_opportunity_pool (
     attempted       BOOLEAN     NOT NULL,
     success         BOOLEAN     NOT NULL DEFAULT FALSE,
     recency_weight  FLOAT       NOT NULL DEFAULT 1.0,
+    -- SIM-507 (migration 0017): pickoff outcomes from raw.play_events,
+    -- attributed to ONE opportunity pitch of the plate appearance (the first
+    -- non-attempted pitch of the pair) so per-pitch outcome rates stay exact.
+    -- `pickoff_advancing` marks the out as a picked-off CAUGHT STEALING (the
+    -- runner was tagged at the NEXT base — MLB scores it as a CS); a plain
+    -- pickoff is an out but NOT a CS. `pickoff_error` advances the runner.
+    -- Columns sit AFTER recency_weight on purpose: the live table gains them
+    -- via ALTER, which appends — the positional INSERT must match both.
+    pickoff_out       BOOLEAN   DEFAULT FALSE,
+    pickoff_advancing BOOLEAN   DEFAULT FALSE,
+    pickoff_error     BOOLEAN   DEFAULT FALSE,
     PRIMARY KEY (pitch_id)
 );
 
