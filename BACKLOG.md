@@ -4,6 +4,23 @@
 
 # 🎯 2026-08-18 — SIM-509 FILED+BUILT: hit-by-pitch is its own outcome — the SIM-429 walk surplus is mostly FAKE WALKS (next free ID → SIM-510)
 
+**THE FIRST 2025-BAND CERTIFYING LANE RAN (12×471, n=11,304, container `sim509_certifying_lane`,
+kept). The sharper instrument re-prioritizes SIM-429:**
+* **GREEN: K and H.** DP/ROE_reached stay expected-red xfails (SIM-494/496).
+* **BB +12.8% — still the lead defect.** SIM-509 removed the fake-walk labeling, but total free
+  passes (BB 3.5703 + HBP ~0.40) still run ~+0.40/team-game over 2025's 3.57 — the sim's pitch mix
+  is genuinely ball-heavy. Next diagnosis: per-count outcome rates, sim vs the pool's own.
+* **R +6.0% — newly visible.** The 2023 centre hid it. Decomposes ≈ half from the free-pass
+  surplus (+0.40 passes ≈ +0.12 R), ≈ half from **HR +6.5%** (also newly visible) — the power side
+  (HR, 2B +5.2%) is its own question, possibly batted-ball draw tilt or park/era mix.
+* **SB +5.7% red by 0.3 points over its 5.4% floor**; CS +6.8% / 3B +4.9% / ROE +5.7% UNRESOLVED —
+  inside their bands but the sim's own spread exceeds sd_ref (a real observation: sim variance
+  runs high). **home_win_pct 0.5077 — BELOW even the structural 0.510-0.515 baseline**; the
+  SIM-412 home-field bias needs a re-tune against the 0.5428 centre (it may have eroded through
+  the rebuilds).
+* Reading: one upstream driver (ball-heavy pitch mix) + a power-side high (HR/2B) + the home-field
+  re-tune. The steal machinery itself is sound — SB rides the free-pass traffic.
+
 **SIM-429 diagnosis, measurement-first.** The BB surplus vs 2025 is +0.481/team-game. The pool
 builder's outcome CASE collapsed an HBP pitch (a ball-class Gameday type code, `ELSE 'ball'`) into
 `ball`, so every simulated HBP became ball four and a WALK — worth the whole **0.397/team-game 2025
