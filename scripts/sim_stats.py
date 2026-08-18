@@ -7,7 +7,7 @@ Runs N iterations per game through the PRODUCTION sim (real DuckDB/FAISS sampler
 the wired FingerprintDeriver) and reports the per-game box line + the per-channel
 breakdowns the SIM-429 follow-on calibration needs:
 
-  * per-team R / H / HR / 2B / 3B / BB / K vs MLB-2023 baseline
+  * per-team R / H / HR / 2B / 3B / BB / K vs the MLB-2025 baseline (SIM-508)
   * **home vs away** splits — the SIM-412 home-field-bias validation surface
   * advancement rates per type (second-to-home on a single, first-to-third, etc.)
   * **RISP** performance — hits with runners in scoring position + RISP conversion rate
@@ -76,22 +76,30 @@ from simulation.sim_loop import BoxScore, simulate_game  # noqa: E402
 
 _FACTORY = "simulation.production_factory:production_machine_factory"
 
-# MLB-2023 per-team per-game baseline (the calibration target).
-_MLB_2023 = {
-    "R": 4.62,
-    "H": 8.60,
-    "HR": 1.21,
-    "2B": 1.60,
-    "3B": 0.14,
-    "BB": 3.30,
-    "K": 8.60,
-    "SB": 0.59,
-    "CS": 0.17,
+# MLB-2025 per-team per-game baseline (the calibration target). SIM-508
+# (owner decision 2026-08-18): the reference is THIS PROJECT'S OWN ingested
+# 2025 season — 2,430 regular-season Final games, 4,860 team-games, measured
+# 2026-08-18 — replacing the hand-written 2023 constants. 2025 sits inside
+# the artifact's 2024-2026 recency floor, so the sim is graded against the
+# era it draws from. BB includes intentional walks (595 from raw.play_events
+# — the probe counts both canonical walk classes); CS includes all scored
+# classes: pitch-steal CS, K+CS double plays, and advancing pickoffs (149
+# from raw.play_events, Rule 9.07(h)).
+_MLB_2025 = {
+    "R": 4.4473,
+    "H": 8.2588,
+    "HR": 1.1626,
+    "2B": 1.5936,
+    "3B": 0.1292,
+    "BB": 3.1656,
+    "K": 8.3525,
+    "SB": 0.6251,
+    "CS": 0.1922,
 }
 
-#: Empirical MLB home_win_pct target (Tango/Lichtman ~.535-.540, depending on
-#: era).  The SIM-412 home-field bias is calibrated to land in this band.
-_MLB_HOME_WIN_PCT = 0.535
+#: Measured 2025 home win share, same 2,430 games (SIM-508; was the
+#: Tango/Lichtman ~.535 literature value).
+_MLB_HOME_WIN_PCT = 0.5428
 
 #: SIM-449: every env flag that changes what the sim does.  The harness prints all
 #: of them, so an operator reads a result against the exact configuration that
@@ -243,7 +251,7 @@ def _print_report(agg: dict, *, n_games: int) -> None:
     print("\n--- Per-team (both-teams / 2) vs MLB-2023 ---")
     for k in keys:
         sim = agg[k] / 2.0
-        mlb = _MLB_2023.get(k, 0.0)
+        mlb = _MLB_2025.get(k, 0.0)
         delta_pct = ((sim - mlb) / mlb * 100.0) if mlb else 0.0
         print(f"  {k:3s} sim={sim:6.2f}   mlb={mlb:6.2f}   delta={delta_pct:+6.1f}%")
 

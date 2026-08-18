@@ -50,10 +50,10 @@ from tests.acceptance.conftest import ACCEPTANCE_GAME_PKS
 #: The size at which the twelve box channels resolve under the round-3 floors:
 #: 5,100 game-sims x 2 team-games. ``bands.binding_requirement`` computes it; the
 #: literal is here only so a reader sees the number the fixtures use.
-CERTIFYING_TEAM_GAMES = 10200
+CERTIFYING_TEAM_GAMES = 11295
 
 #: The decisive games ``home_win_pct`` needs. About 16.3 hours serial.
-CERTIFYING_DECISIVE_GAMES = 26015
+CERTIFYING_DECISIVE_GAMES = 13365
 
 #: The size round 2 called "the nightly". Kept as a fixture size so the tests can
 #: show what that run length now reports: UNDERPOWERED on every channel.
@@ -167,7 +167,7 @@ def test_box_channels_and_home_win_pct_partition_the_lane_sim450() -> None:
 #: Printed on every drift failure. ``scripts/`` is baked into the app image and
 #: NOT bind-mounted (CLAUDE.md section 2a), so a container run can read a
 #: months-old copy and blame the wrong file. Measured 2026-08-10: the image held
-#: ``_MLB_2023`` at :69 while the repo held it at :80.
+#: ``_MLB_2025`` at :69 while the repo held it at :80.
 _STALE_IMAGE_HINT = (
     "  If you are in the app container: scripts/ is baked into the image and is NOT\n"
     '  bind-mounted, so this may be a stale image copy. Re-run with -v "$PWD/scripts:\n'
@@ -206,7 +206,7 @@ def _top_level_assignments(path: Path) -> dict[str, tuple[int, object]]:
 def test_restated_mlb_constants_match_sim_stats_sim450() -> None:
     """The restated MLB rates equal ``scripts/sim_stats.py``, at the cited lines.
 
-    ``bands.py`` restates ``_MLB_2023`` and ``_MLB_HOME_WIN_PCT`` instead of
+    ``bands.py`` restates ``_MLB_2025`` and ``_MLB_HOME_WIN_PCT`` instead of
     importing them, for the three reasons its docstring gives. A restatement rots
     in two ways and this test fails on both:
 
@@ -234,18 +234,18 @@ def test_restated_mlb_constants_match_sim_stats_sim450() -> None:
     )
     found = _top_level_assignments(path)
 
-    assert "_MLB_2023" in found, f"_MLB_2023 is no longer a top-level assignment in {path}"
-    line, value = found["_MLB_2023"]
-    assert value == bands.RESTATED_MLB_2023, (
-        "bands.RESTATED_MLB_2023 has drifted from scripts/sim_stats.py::_MLB_2023.\n"
+    assert "_MLB_2025" in found, f"_MLB_2025 is no longer a top-level assignment in {path}"
+    line, value = found["_MLB_2025"]
+    assert value == bands.RESTATED_MLB_2025, (
+        "bands.RESTATED_MLB_2025 has drifted from scripts/sim_stats.py::_MLB_2025.\n"
         f"  read from:  {path}\n"
-        f"  sim_stats:  {value}\n  bands:      {bands.RESTATED_MLB_2023}\n"
+        f"  sim_stats:  {value}\n  bands:      {bands.RESTATED_MLB_2025}\n"
         f"{_STALE_IMAGE_HINT}"
     )
-    assert line == bands.SIM_STATS_MLB_2023_LINE, (
-        f"_MLB_2023 sits at line {line} of {path}, but bands.py cites "
-        f":{bands.SIM_STATS_MLB_2023_LINE}.\n"
-        "  If the repo moved it: update SIM_STATS_MLB_2023_LINE and every citation in "
+    assert line == bands.SIM_STATS_MLB_2025_LINE, (
+        f"_MLB_2025 sits at line {line} of {path}, but bands.py cites "
+        f":{bands.SIM_STATS_MLB_2025_LINE}.\n"
+        "  If the repo moved it: update SIM_STATS_MLB_2025_LINE and every citation in "
         "the bands.py docstring.\n"
         f"{_STALE_IMAGE_HINT}"
     )
@@ -263,13 +263,13 @@ def test_restated_mlb_constants_match_sim_stats_sim450() -> None:
 
 
 def test_the_reference_table_uses_the_restated_constants_sim450() -> None:
-    """Every ``_MLB_2023`` channel's centre IS the restated value, not a copy.
+    """Every ``_MLB_2025`` channel's centre IS the restated value, not a copy.
 
     Without this the drift test above would guard a dictionary nothing reads.
     """
-    for name, centre in bands.RESTATED_MLB_2023.items():
+    for name, centre in bands.RESTATED_MLB_2025.items():
         assert bands.REFERENCES[name].centre == centre, name
-        assert f":{bands.SIM_STATS_MLB_2023_LINE}" in bands.REFERENCES[name].source, name
+        assert f":{bands.SIM_STATS_MLB_2025_LINE}" in bands.REFERENCES[name].source, name
     assert bands.REFERENCES["home_win_pct"].centre == bands.RESTATED_MLB_HOME_WIN_PCT
     assert f":{bands.SIM_STATS_HOME_WIN_PCT_LINE}" in bands.REFERENCES["home_win_pct"].source
 
@@ -309,22 +309,22 @@ def test_the_round3_floors_hold_their_derived_values_sim450() -> None:
     fails if one drifts.
     """
     expected_rel = {
-        "R": 0.0276,
-        "H": 0.0158,
-        "HR": 0.0382,
-        "2B": 0.0333,
-        "3B": 0.1109,
-        "BB": 0.0243,
-        "K": 0.0137,
-        "SB": 0.0611,
-        "CS": 0.0648,
-        "DP": 0.0421,
-        "ROE": 0.0857,
-        "ROE_reached": 0.0857,
+        "R": 0.027478,
+        "H": 0.015725,
+        "HR": 0.038110,
+        "2B": 0.031778,
+        "3B": 0.107115,
+        "BB": 0.022644,
+        "K": 0.013227,
+        "SB": 0.053726,
+        "CS": 0.077155,
+        "DP": 0.042043,
+        "ROE": 0.082248,
+        "ROE_reached": 0.082248,
     }
     actual = {n: bands.REFERENCES[n].rel_floor for n in bands.BOX_CHANNELS}
     assert actual == expected_rel
-    assert bands.REFERENCES["home_win_pct"].abs_floor == 0.0124
+    assert bands.REFERENCES["home_win_pct"].abs_floor == 0.0173
     assert bands.DETECTION_MARGIN == 1.6
     assert bands.Z == 4.0
 
@@ -332,8 +332,8 @@ def test_the_round3_floors_hold_their_derived_values_sim450() -> None:
 def test_every_rule_b_floor_is_the_tightest_the_run_resolves_sim450() -> None:
     """A channel with no documented defect is as sensitive as the run allows.
 
-    Rule B in ``bands.py``: the floor is ``Z * sd_ref / sqrt(10200)`` rounded up
-    to four decimals. Rounding up is what keeps the channel resolvable at the
+    Rule B in ``bands.py``: the floor is ``Z * sd_ref / sqrt(11295)`` rounded up
+    to six decimals. Rounding up is what keeps the channel resolvable at the
     design point; rounding down would make it permanently UNDERPOWERED. This test
     pins both edges — the floor is at or above the minimum, and within one
     rounding step of it.
@@ -347,8 +347,8 @@ def test_every_rule_b_floor_is_the_tightest_the_run_resolves_sim450() -> None:
             f"{name}: floor {ref.floor():.6f} is below the {minimum:.6f} that "
             f"{CERTIFYING_TEAM_GAMES} team-games can resolve, so it can never certify."
         )
-        # One rounding step at four decimals of the RELATIVE floor.
-        assert ref.floor() - minimum < 1e-4 * ref.centre, (
+        # One rounding step at six decimals of the RELATIVE floor.
+        assert ref.floor() - minimum < 1.1e-6 * ref.centre, (
             f"{name}: floor {ref.floor():.6f} sits more than one rounding step above "
             f"the {minimum:.6f} minimum. Rule B says take the tightest resolvable floor."
         )
@@ -375,7 +375,9 @@ def test_the_R_band_reds_on_the_documented_run_conversion_gap_sim450() -> None:
     so this is the verdict a certifying run would actually print.
     """
     for shortfall in (0.070, 0.072, 0.075, 0.078, 0.080, 0.10, 0.12):
-        result = bands.evaluate("R", _certifying_sample("R", 4.62 * (1.0 - shortfall)))
+        result = bands.evaluate(
+            "R", _certifying_sample("R", bands.REFERENCES["R"].centre * (1.0 - shortfall))
+        )
         assert result.verdict == "FAIL", (
             f"a {shortfall:.1%} run shortfall must red the R band. CLAUDE.md:85 records "
             f"the live gap as 7-8% low." + result.explain()
@@ -389,13 +391,13 @@ def test_the_R_band_reds_at_exactly_seven_percent_sim450() -> None:
 
     ``CLAUDE.md:85`` — "Runs run ~7-8% low". 7% is the EASIEST end of that range
     for the band to miss, so it is the one that decides whether the instrument
-    works. Delta 0.3234 against a floor of 0.1275 is a margin of 2.54, which is
+    works. Delta 0.3113 against a floor of 0.1222 is a margin of 2.55, which is
     a detection power above 0.9999 at this sample size.
     """
     ref = bands.REFERENCES["R"]
     documented = 0.07 * ref.centre
-    assert ref.must_detect == pytest.approx(documented, abs=1e-9), (
-        "R.must_detect must be the CLAUDE.md:85 magnitude, 0.07 * 4.62 = 0.3234"
+    assert ref.must_detect == pytest.approx(documented, abs=1e-6), (
+        "R.must_detect must be the CLAUDE.md:85 magnitude, 0.07 * 4.4473 = 0.3113"
     )
     assert ref.floor() < documented / bands.DETECTION_MARGIN, (
         f"R floor {ref.floor():.5f} is not below the CLAUDE.md:85 gap {documented:.5f} "
@@ -419,16 +421,19 @@ def test_the_R_band_does_not_red_a_healthy_model_sim450() -> None:
     lane would cry wolf every night until someone muted it.
     """
     for shortfall in (0.0, 0.005, 0.01, 0.02):
-        result = bands.evaluate("R", _certifying_sample("R", 4.62 * (1.0 - shortfall)))
+        result = bands.evaluate(
+            "R", _certifying_sample("R", bands.REFERENCES["R"].centre * (1.0 - shortfall))
+        )
         assert result.passed, f"a {shortfall:.1%} deviation must stay green" + result.explain()
 
 
 def test_the_R_band_boundary_sits_where_the_floor_says_sim450() -> None:
-    """R flips from PASS to FAIL at its floor, 2.76% — under the documented 7%."""
-    inside = bands.evaluate("R", _certifying_sample("R", 4.62 * (1.0 - 0.027)))
-    outside = bands.evaluate("R", _certifying_sample("R", 4.62 * (1.0 - 0.029)))
-    assert inside.passed and inside.rel_delta > -0.0276
-    assert outside.failed and outside.rel_delta < -0.0276
+    """R flips from PASS to FAIL at its floor, 2.75% — under the documented 7%."""
+    centre = bands.REFERENCES["R"].centre
+    inside = bands.evaluate("R", _certifying_sample("R", centre * (1.0 - 0.027)))
+    outside = bands.evaluate("R", _certifying_sample("R", centre * (1.0 - 0.028)))
+    assert inside.passed and inside.rel_delta > -0.027478
+    assert outside.failed and outside.rel_delta < -0.027478
 
 
 # ---------------------------------------------------------------------------
@@ -449,8 +454,8 @@ def test_home_win_pct_reds_on_the_documented_structural_baseline_sim450() -> Non
     else, so it could not tell "the home-field model works" from "the home-field
     model does nothing".
 
-    The floor is now 0.0124, sized on the HARDEST point of the documented range
-    (0.535 - 0.515 = 0.020) with the 1.6 detection margin.
+    The floor is now 0.0173, sized on the HARDEST point of the documented range
+    (0.5428 - 0.515 = 0.0278) with the 1.6 detection margin.
     """
     ref = bands.REFERENCES["home_win_pct"]
     n = ref.required_observations()
@@ -469,11 +474,11 @@ def test_home_win_pct_reds_at_exactly_0_5125_sim450() -> None:
     ``CLAUDE.md:400`` — home_win_pct "stuck at the structural-only ~.510-.515".
     0.5125 is that baseline's midpoint and the value
     ``test_production_config_bands_sim450.py`` recorded from the first production
-    run of this lane. Delta 0.0225 against a floor of 0.0124 is a margin of 1.81.
+    run of this lane. Delta 0.0303 against a floor of 0.0173 is a margin of 1.75.
     """
     ref = bands.REFERENCES["home_win_pct"]
-    assert ref.must_detect == pytest.approx(0.020, abs=1e-9), (
-        "home_win_pct.must_detect must be the CLAUDE.md:400 magnitude, 0.535 - 0.515"
+    assert ref.must_detect == pytest.approx(0.0278, abs=1e-9), (
+        "home_win_pct.must_detect must be the CLAUDE.md:400 magnitude, 0.5428 - 0.515"
     )
     assert ref.floor() <= ref.must_detect / bands.DETECTION_MARGIN, (
         f"home_win_pct floor {ref.floor():.5f} is not below the CLAUDE.md:400 baseline gap "
@@ -488,14 +493,14 @@ def test_home_win_pct_reds_at_exactly_0_5125_sim450() -> None:
         "structural-only baseline, and this lane's own first production reading" + result.explain()
     )
     assert result.mean == pytest.approx(0.5125, abs=1e-4)
-    assert abs(result.delta) / result.floor > 1.8
+    assert abs(result.delta) / result.floor > 1.7
 
 
 def test_home_win_pct_passes_a_correct_model_at_the_required_sample_sim450() -> None:
     """The channel is not trivially red: MLB's own rate passes, once the run is long."""
     n = bands.REFERENCES["home_win_pct"].required_observations()
-    good = bands.evaluate("home_win_pct", _home_win_sample(0.535, n))
-    assert good.mean == pytest.approx(0.535, abs=2e-4)
+    good = bands.evaluate("home_win_pct", _home_win_sample(0.5428, n))
+    assert good.mean == pytest.approx(0.5428, abs=2e-4)
     assert good.verdict == "PASS"
 
 
@@ -590,7 +595,7 @@ def test_a_short_run_reports_underpowered_rather_than_failing_sim450() -> None:
     UNRESOLVED, and a 1-observation sample reported FAIL. Both claimed more than
     the sample supports. A run below the requirement now says only that.
     """
-    smoke = bands.evaluate("R", _spread_sample(4.62 - 1.5, 3.2188, 20))
+    smoke = bands.evaluate("R", _spread_sample(bands.REFERENCES["R"].centre - 1.5, 3.2468, 20))
     assert smoke.verdict == "UNDERPOWERED"
     assert not smoke.passed and not smoke.failed
 
@@ -598,9 +603,9 @@ def test_a_short_run_reports_underpowered_rather_than_failing_sim450() -> None:
     assert single.verdict == "UNDERPOWERED"
     assert not single.failed, "one observation cannot convict the model either"
 
-    full = bands.evaluate("R", _certifying_sample("R", 4.62 - 1.5))
+    full = bands.evaluate("R", _certifying_sample("R", bands.REFERENCES["R"].centre - 1.5))
     assert full.verdict == "FAIL"
-    assert full.mean == pytest.approx(3.12, abs=1e-9)
+    assert full.mean == pytest.approx(bands.REFERENCES["R"].centre - 1.5, abs=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -697,12 +702,12 @@ def test_the_certifying_run_cost_is_stated_not_hidden_sim450() -> None:
     assert lane_sims == CERTIFYING_DECISIVE_GAMES
 
     seconds_per_sim = 2.25  # measured 2026-08-10: 901.6 s for 400 sims
-    assert box_sims * seconds_per_sim / 3600.0 == pytest.approx(3.19, abs=0.05)
-    assert lane_sims * seconds_per_sim / 3600.0 == pytest.approx(16.26, abs=0.05)
+    assert box_sims * seconds_per_sim / 3600.0 == pytest.approx(3.53, abs=0.05)
+    assert lane_sims * seconds_per_sim / 3600.0 == pytest.approx(8.35, abs=0.05)
 
     # The box lane grew 7.3x against the round-2 floors' 696 game-sims. That is
     # the price of seeing a 7% run gap instead of a 15% one.
-    assert box_sims / 696 == pytest.approx(7.33, abs=0.05)
+    assert box_sims / 696 == pytest.approx(8.11, abs=0.05)
 
 
 def test_required_sample_sizes_match_the_published_table_sim450() -> None:
@@ -712,19 +717,19 @@ def test_required_sample_sizes_match_the_published_table_sim450() -> None:
     not, this test fails and points at the row to update.
     """
     expected = {
-        "R": 5098,
-        "H": 5096,
-        "HR": 5077,
-        "2B": 5089,
-        "3B": 5092,
-        "BB": 5098,
-        "K": 5082,
-        "SB": 5091,
-        "CS": 5092,
-        "DP": 5083,
-        "ROE": 5100,
-        "ROE_reached": 5100,
-        "home_win_pct": 26015,
+        "R": 5648,
+        "H": 5648,
+        "HR": 5648,
+        "2B": 5648,
+        "3B": 5648,
+        "BB": 5648,
+        "K": 5647,
+        "SB": 5648,
+        "CS": 5648,
+        "DP": 5648,
+        "ROE": 5648,
+        "ROE_reached": 5648,
+        "home_win_pct": 13365,
     }
     actual = {name: bands.required_sims(name) for name in bands.CHANNELS}
     assert actual == expected
@@ -757,13 +762,13 @@ def test_home_win_pct_costs_a_weekend_and_the_lane_says_so_sim450() -> None:
     """
     ref = bands.REFERENCES["home_win_pct"]
     assert ref.required_sims() == CERTIFYING_DECISIVE_GAMES
-    assert ref.required_sims() > 5 * bands.BOX_LANE_SIMS
+    assert ref.required_sims() > 2 * bands.BOX_LANE_SIMS
 
     # The floor a 5,100-sim run could resolve, and what it would cost in power.
     nightly_floor = bands.Z * ref.sd_ref / math.sqrt(bands.BOX_LANE_SIMS)
-    assert nightly_floor > (ref.must_detect or 0.0), (
-        "if a box-lane-sized run could resolve a floor under the documented 0.020 "
-        "baseline, this channel would not need its own run and this test should go."
+    assert nightly_floor > (ref.must_detect or 0.0) / bands.DETECTION_MARGIN, (
+        "if a box-lane-sized run could resolve the margin-bound floor, this channel "
+        "would not need its own run and this test should go."
     )
 
 
@@ -822,11 +827,11 @@ def test_verdict_covers_every_case_exactly_once_sim450() -> None:
 def test_half_width_is_the_larger_of_the_two_terms_sim450() -> None:
     """The rule is ``max(Z * sd / sqrt(n), floor)`` — both terms, larger wins."""
     ref = bands.REFERENCES["R"]
-    half, se, floor = bands.half_width(ref, sd=3.2188, n=20)
-    assert se == pytest.approx(4.0 * 3.2188 / math.sqrt(20), rel=1e-9)
+    half, se, floor = bands.half_width(ref, sd=3.2468, n=20)
+    assert se == pytest.approx(4.0 * 3.2468 / math.sqrt(20), rel=1e-9)
     assert half == se > floor
-    half, se, floor = bands.half_width(ref, sd=3.2188, n=CERTIFYING_TEAM_GAMES)
-    assert floor == pytest.approx(0.0276 * 4.62, rel=1e-9)
+    half, se, floor = bands.half_width(ref, sd=3.2468, n=CERTIFYING_TEAM_GAMES)
+    assert floor == pytest.approx(0.027478 * 4.4473, rel=1e-9)
     assert half == floor > se
 
 
@@ -856,7 +861,7 @@ def test_a_band_does_not_fail_on_a_correct_model_sim450() -> None:
     """A model sitting on the MLB centre passes, once the run resolves it."""
     need = bands.REFERENCES["R"].required_observations()
     for n in (need, need * 2, need * 4):
-        result = bands.evaluate("R", [4.62] * n)
+        result = bands.evaluate("R", [bands.REFERENCES["R"].centre] * n)
         assert result.passed
         assert result.delta == pytest.approx(0.0, abs=1e-9)
 
@@ -906,7 +911,7 @@ def test_the_lane_carries_both_reach_on_error_channels_sim450() -> None:
 
     assert drawn.must_detect is None, "the drawn channel cannot detect SIM-496; do not claim it"
     assert "no floor on it can ever red" in drawn.floor_rationale
-    assert reached.must_detect == pytest.approx(0.2193, abs=1e-9)
+    assert reached.must_detect == pytest.approx(0.2078, abs=1e-9)
     assert "SIM-496" in reached.detect_source
     assert drawn.centre == reached.centre, "the same MLB rate underlies both"
     assert drawn.floor() == reached.floor()

@@ -132,7 +132,7 @@ and more at any longer one. ``Reference.must_detect`` carries ``d`` and
 at, so the only non-arbitrary choice is "as sensitive as the run allows". The
 floor is the smallest deviation the lane's certifying run can resolve::
 
-    floor = Z * sd_ref / sqrt(n_lane)      rounded UP to four decimals
+    floor = Z * sd_ref / sqrt(n_lane)      rounded UP to six decimals
 
 A Rule-B floor is a MEASUREMENT LIMIT, not a tolerance. A red Rule-B channel
 means "the model differs from MLB by more than this run can attribute to noise".
@@ -143,43 +143,48 @@ THE DOCUMENTED-DEFECT TABLE — EVERY FLOOR TRACED TO A FILE AND A LINE
 "first fails" is the smallest relative deviation the band rejects once the run
 resolves. It equals the floor as a fraction of the centre::
 
-  channel  documented magnitude          source              old     new   first
-                                                            floor   floor  fails
-  R        runs ~7-8% low                CLAUDE.md:85       0.0750 0.0276  2.8%
-  H        +0.2193/team-game: a drawn    BACKLOG.md:20      0.1000 0.0158  1.6%
+The floors below are the SIM-508 set, recomputed 2026-08-18 against the 2025
+centres and spreads (the "round-3" 2023-era floors are in git history)::
+
+  channel  documented magnitude          source             floor   first
+                                                                    fails
+  R        runs ~7-8% low                CLAUDE.md:85       0.0275  2.7%
+  H        +0.2078/team-game: a drawn    BACKLOG.md:20      0.0157  1.6%
            field_error is aliased to a   (SIM-496) +
            single, so a retired batter   constants.py:177
            is credited a hit
-  HR       none with a magnitude         Rule B             0.1500 0.0382  3.8%
-  2B       none with a magnitude         Rule B             0.1500 0.0333  3.3%
-  3B       none with a magnitude         Rule B             0.3000 0.1109 11.1%
-  BB       none with a magnitude         Rule B             0.1200 0.0243  2.4%
-  K        none with a magnitude         Rule B             0.1000 0.0137  1.4%
-  SB       0.0000 vs 0.59 = -100%        BACKLOG.md:19      0.2500 0.0611  6.1%
+  HR       none with a magnitude         Rule B             0.0381  3.8%
+  2B       none with a magnitude         Rule B             0.0318  3.2%
+  3B       none with a magnitude         Rule B             0.1071 10.7%
+  BB       none with a magnitude         Rule B             0.0226  2.3%
+  K        none with a magnitude         Rule B             0.0132  1.3%
+  SB       0.0000 = -100% (re-zeroed)    BACKLOG.md:19      0.0537  5.4%
                                          (SIM-495)
-  CS       0.0000 vs 0.17 = -100%        BACKLOG.md:19      0.3500 0.0648  6.5%
+  CS       0.0000 = -100% (re-zeroed)    BACKLOG.md:19      0.0772  7.7%
                                          (SIM-495)
-  DP       0.1600 vs 0.8160 = -80.4%     BACKLOG.md:18      0.2000 0.0421  4.2%
+  DP       -80.4% of centre              BACKLOG.md:18      0.0420  4.2%
                                          (SIM-494)
-  ROE      none — see the warning below  Rule B             0.3500 0.0857  8.6%
-  ROE_     nothing reaches base on an    BACKLOG.md:20       (new) 0.0857  8.6%
+  ROE      none — see the warning below  Rule B             0.0822  8.2%
+  ROE_     nothing reaches base on an    BACKLOG.md:20      0.0822  8.2%
   reached  error at all = -100%          (SIM-496)
-  home_    stuck at the structural-only  CLAUDE.md:400      0.0300 0.0124  2.3%
-  win_pct  ~.510-.515 baseline                              (abs)  (abs)
+  home_    stuck at the structural-only  CLAUDE.md:400      0.0173  3.2%
+  win_pct  ~.510-.515 baseline                              (abs)
 
 Two entries need their reasoning written out.
 
 **R.** ``CLAUDE.md:85`` reads "Runs run ~7-8% low (down from ~12% pre-fix)". The
 owner ruled on 2026-08-10 that this line is authoritative and that
 ``CLAUDE.md:465``'s "runs sit ~10-12% low" is STALE. The band is therefore sized
-on the HARDER end of the live range, 7%: ``d = 0.07 * 4.62 = 0.3234``. A floor of
-0.0276 x 4.62 = 0.1275 clears the 1.6 margin with room (``d/floor = 2.54``).
+on the HARDER end of the live range, 7%: ``d = 0.07 * 4.4473 = 0.3113``. A floor
+of 0.027478 x 4.4473 = 0.1222 clears the 1.6 margin with room (``d/floor = 2.55``).
 
 **home_win_pct.** ``CLAUDE.md:400`` records the defect as "stuck at the
 structural-only ~.510-.515". The band is sized on the HARDEST point of that
-range, 0.515, so ``d = 0.535 - 0.515 = 0.020``. A floor of 0.0124 gives
-``d/floor = 1.61``. It also reds 0.5125 — the value this lane's own first
-production run measured — at ``delta/floor = 1.81``.
+range, 0.515, so ``d = 0.5428 - 0.515 = 0.0278`` and the floor is the margin
+bound 0.0278 / 1.6 rounded down to 0.0173 (``d/floor = 1.61``). It also reds
+0.5125 — the value this lane's own first production run measured — at
+``delta/floor = 1.75``. The 2025 centre nearly HALVED this channel's cost:
+13,365 decisive games against the old 26,015.
 
 WARNING — ONE CHANNEL CANNOT SEE ITS OWN DEFECT AT ANY FLOOR
 ============================================================
@@ -209,30 +214,32 @@ Each game-sim yields TWO team-game observations for a box channel and ONE
 decisive game for ``home_win_pct``::
 
     channel        floor    sd_ref   required obs   required game-sims
-    R             0.1275    3.2188         10,196                5,098
-    H             0.1359    3.4294         10,192                5,096
-    HR            0.0462    1.1643         10,153                5,077
-    2B            0.0533    1.3438         10,178                5,089
-    3B            0.0155    0.3917         10,184                5,092
-    BB            0.0802    2.0242         10,195                5,098
-    K             0.1178    2.9693         10,163                5,082
-    SB            0.0361    0.9093         10,181                5,091
-    CS            0.0110    0.2779         10,183                5,092
-    DP            0.0344    0.8659         10,166                5,083
-    ROE           0.0188    0.4745         10,199                5,100
-    ROE_reached   0.0188    0.4745         10,199                5,100
-    home_win_pct  0.0124    0.5000         26,015               26,015
+    R             0.1222    3.2468         11,295                5,648
+    H             0.1299    3.4505         11,295                5,648
+    HR            0.0443    1.1772         11,295                5,648
+    2B            0.0506    1.3455         11,295                5,648
+    3B            0.0138    0.3677         11,295                5,648
+    BB            0.0717    1.9045         11,295                5,648
+    K             0.1105    2.9352         11,294                5,647
+    SB            0.0336    0.8923         11,295                5,648
+    CS            0.0148    0.3940         11,295                5,648
+    DP            0.0314    0.8332         11,295                5,648
+    ROE           0.0171    0.4541         11,295                5,648
+    ROE_reached   0.0171    0.4541         11,295                5,648
+    home_win_pct  0.0173    0.5000         13,365               13,365
 
-The twelve box channels are sized to land together, so **5,100 game-sims certify
-all twelve** — 12 games x 425 iterations, about 3.2 hours at the measured 2.25 s
-per sim. ``home_win_pct`` needs **26,015 decisive games**, about 16.3 hours.
-Call ``required_sims`` / ``binding_requirement`` rather than copying these
-numbers.
+The twelve box channels are sized to land together, so **5,648 game-sims
+certify all twelve** — 12 games x 471 iterations, about 3.5 hours at the
+measured 2.25 s per sim. ``H`` anchors the set: its floor is BOUND by the 1.6x
+detection margin on the SIM-496 magnitude, and every other floor is the
+tightest that resolves beside it. ``home_win_pct`` needs **13,365 decisive
+games**, about 8.4 hours. Call ``required_sims`` / ``binding_requirement``
+rather than copying these numbers.
 
 THE COST, STATED PLAINLY
 ========================
 The old floors certified the box channels in 696 game-sims. The new ones need
-5,100 — **7.3x the run**, about 3.2 hours instead of 26 minutes. That is the
+5,648 — **8.1x the run**, about 3.5 hours instead of 26 minutes. That is the
 price of an instrument that can see a 7% run-conversion gap instead of a 15% one.
 
 ``home_win_pct`` is worse. Certifying it at 26,015 decisive games takes about
@@ -262,10 +269,20 @@ Rule-B channel as "look here", not as "the model is broken".
 
 REFERENCE RATES — WHERE THE NUMBERS COME FROM
 =============================================
-The nine box channels restate ``_MLB_2023`` from ``scripts/sim_stats.py:80``
+SIM-508 (owner decision, 2026-08-18): every reference is THIS PROJECT'S OWN
+ingested 2025 season — 2,430 regular-season Final games, 4,860 team-games,
+measured 2026-08-18 — replacing the hand-written 2023 constants. The artifact's
+recency floor draws from 2024-2026, so 2025 grades the sim against the era it
+actually plays. Definitional notes that keep the reference matching what the
+probes count: BB includes intentional walks (595 in ``raw.play_events`` 2025 —
+the probe counts both canonical walk classes); CS includes every scored class —
+pitch-steal CS, K+CS double plays, and 149 advancing pickoffs (Rule 9.07(h),
+the SIM-507 channel).
+
+The nine box channels restate ``_MLB_2025`` from ``scripts/sim_stats.py:88``
 verbatim, and ``home_win_pct`` restates ``_MLB_HOME_WIN_PCT`` from
-``scripts/sim_stats.py:94``. (Both citations were wrong until 2026-08-10: they
-read :69 and :83, which the file outgrew.
+``scripts/sim_stats.py:102``. (The citations were once wrong for months —
+:69/:83 as the file outgrew them —
 ``test_restated_mlb_constants_match_sim_stats_sim450`` now parses that file and
 fails on BOTH value drift and line drift, so a stale citation cannot survive
 again.)
@@ -279,17 +296,17 @@ repo. The REPO is the source of truth for a citation.
 
 They are RESTATED, not imported, for three reasons. ``scripts/`` has no
 ``__init__.py`` and is not bind-mounted into the app container, so a test that
-imports it binds to an image-baked copy. ``_MLB_2023`` is a private name in a CLI
+imports it binds to an image-baked copy. ``_MLB_2025`` is a private name in a CLI
 script whose module-level imports pull in asyncpg and the whole simulator. The
 lane needs four channels the dict does not carry, so restating gives one table
 with one provenance block instead of two imports and four loose literals.
 
-``DP``, ``ROE`` and ``ROE_reached`` have no entry in ``_MLB_2023``. I derived
-them from this project's own ingested 2023 data. Reproduce with::
+``DP``, ``ROE`` and ``ROE_reached`` have no entry in ``_MLB_2025``. I derived
+them from the same 2025 games. Reproduce with::
 
     WITH g AS (SELECT game_pk FROM raw.games
-               WHERE season=2023 AND game_type='R' AND status='Final'),
-         p AS (SELECT * FROM raw.pitches WHERE season=2023
+               WHERE season=2025 AND game_type='R' AND status='Final'),
+         p AS (SELECT * FROM raw.pitches WHERE season=2025
                AND game_pk IN (SELECT game_pk FROM g))
     SELECT
       SUM((events IN ('grounded_into_double_play','ground_into_double_play',
@@ -298,49 +315,34 @@ them from this project's own ingested 2023 data. Reproduce with::
       SUM((events='field_error')::int)               AS roe
     FROM p;
 
-Measured 2026-08-10 against the live database: 2,430 regular-season Final games
-= 4,860 team-games, dp=3,966, roe=1,066. So DP = 0.8160 and ROE = 0.2193 per team
+Measured 2026-08-18 against the live database: 2,430 regular-season Final games
+= 4,860 team-games, dp=3,625, roe=1,010. So DP = 0.7459 and ROE = 0.2078 per team
 per game. ``ROE_reached`` shares the ROE centre: in MLB every reach on error
 does put the batter on base, so the two rates are the same number.
 
 THE sd_ref COLUMN — MEASURED, NOT ASSUMED
 =========================================
 Every ``sd_ref`` below is the real per-team-game standard deviation, measured
-against the live Postgres on 2026-08-10 over the same 4,860 team-games. The R
-value came from ``raw.games`` final scores; the rest grouped ``raw.pitches`` by
-``(game_pk, inning_topbot)``.
+against the live Postgres on 2026-08-18 over the same 4,860 team-games of 2025.
+The R value came from ``raw.games`` final scores; the rest grouped
+``raw.pitches`` by ``(game_pk, inning_topbot)``. Two sd_ref values are measured
+on the pitch-row classes alone and documented as such at their entries: BB
+(the 0.12/team-game IBB stream) and CS (the 0.03/team-game pickoff stream) —
+both streams are too small and too flat to move a spread.
 
-``sd_ref`` now does two jobs. It sizes the floors and the run length, as before.
+``sd_ref`` does two jobs. It sizes the floors and the run length, as before.
 Since round 3 it ALSO drives the minimum-sample gate, so a run cannot report a
 verdict on a spread it never measured. The lane still takes ``sd`` from its own
 sample for the standard-error term.
 
-KNOWN DISAGREEMENT BETWEEN _MLB_2023 AND THIS PROJECT'S OWN 2023 DATA
-=====================================================================
-I recomputed all nine channels from ``raw.pitches`` on 2026-08-10 (4,860
-team-games). The mean and the standard deviation, against the dict::
-
-    channel  _MLB_2023   raw.pitches-2023 mean   sd       verdict
-    R          4.62        4.6156              3.2188   agrees
-    H          8.60        8.4031              3.4294   dict 2.3% high
-    HR         1.21        1.2074              1.1643   agrees
-    2B         1.60        1.6930              1.3438   dict 5.5% low
-    3B         0.14        0.1465              0.3917   agrees
-    BB         3.30        3.1434              2.0242   dict 5.0% high
-    K          8.60        8.5903              2.9693   agrees
-    SB         0.59        0.6198              0.9093   dict 4.8% low
-    CS         0.17        0.0755              0.2779   the raw flags under-count
-
-The ``sb_attempt_*`` flags in ``raw.pitches`` are incomplete, so the derived CS
-of 0.0755 is a data defect, not a real rate. Keep the dict's 0.17. Reconciling
-``_MLB_2023`` against the ingested data is a SEPARATE ticket; SIM-450 does not
-change ``scripts/sim_stats.py``.
-
-This disagreement matters MORE at the round-3 floors than it did before. H, 2B,
-BB and SB now carry floors of 1.6% to 6.1%, and the centre itself is 2.3% to 5.5%
-off this project's own data on four of them. On those four the band is measuring
-the model AND the centre together. File the reconciliation ticket before treating
-a red H, 2B, BB or SB as proof about the simulator.
+THE OLD DICT-VS-DATA DISAGREEMENT — RESOLVED BY SIM-508
+=======================================================
+Until 2026-08-18 the nine box centres were hand-written 2023 MLB constants that
+disagreed with this project's own 2023 data by 2.3-5.5% on four channels (H,
+2B, BB, SB), and the file carried a standing warning not to treat a red on
+those four as proof about the simulator. SIM-508 ended that: the centre and the
+data are now the SAME measurement (own ingested 2025), so a red channel is
+about the model, full stop. The old comparison table is in git history.
 
 THE GAME SET AND WHY ITS ORDER MATTERS
 ======================================
@@ -434,12 +436,12 @@ The changes:
     game-sims.**
   * **HR 0.15 -> 0.0382, 2B 0.15 -> 0.0333, 3B 0.30 -> 0.1109, BB 0.12 -> 0.0243,
     K 0.10 -> 0.0137, ROE 0.35 -> 0.0857.** No documented magnitude. Rule B: the
-    tightest deviation 10,200 team-games resolves.
+    tightest deviation team-games resolves (11,295).
   * **SB 0.25 -> 0.0611, CS 0.35 -> 0.0648, DP 0.20 -> 0.0421.** Each has a
     documented magnitude (``BACKLOG.md:19`` SIM-495, ``BACKLOG.md:18`` SIM-494)
     that the OLD floor already rejected. Rule A did not force a change here;
     Rule B did, and it applies because these channels share the lane's run.
-    Tightening them costs nothing (they resolve inside the 5,100-sim box run) and
+    Tightening them costs nothing (they resolve inside the 5,648-sim box run) and
     keeps the band meaningful after the defect is fixed.
   * **home_win_pct: abs_floor 0.030 -> 0.0124.** Sized on ``CLAUDE.md:400``,
     hardest point: ``d = 0.535 - 0.515 = 0.020``; margin 1.61; power 0.992. It
@@ -480,10 +482,11 @@ Z: float = 4.0
 #: buys 99.2%. See "HOW EACH FLOOR IS CHOSEN" above.
 DETECTION_MARGIN: float = 1.6
 
-#: The design point behind every Rule-B floor: 5,100 game-sims = 10,200
-#: team-games. It comes from the binding Rule-A box channel (H, 5,096 sims),
-#: rounded up to a whole 425 iterations across the twelve games.
-BOX_LANE_SIMS: int = 5100
+#: The design point behind every floor: 5,648 game-sims = 11,295 team-games
+#: (SIM-508). H is the binding Rule-A channel — its floor sits at the 1.6x
+#: detection margin on the SIM-496 magnitude — and every other floor is the
+#: tightest that resolves beside it. Operationally 12 games x 471 iterations.
+BOX_LANE_SIMS: int = 5648
 
 #: Ordered channel names. The nightly asserts every one of them.
 CHANNELS: tuple[str, ...] = (
@@ -512,39 +515,43 @@ BOX_CHANNELS: tuple[str, ...] = tuple(c for c in CHANNELS if c != "home_win_pct"
 # Provenance — the constants this file restates from scripts/sim_stats.py
 # ---------------------------------------------------------------------------
 
-#: The line ``_MLB_2023`` is assigned on in ``scripts/sim_stats.py``. Asserted by
+#: The line ``_MLB_2025`` is assigned on in ``scripts/sim_stats.py``. Asserted by
 #: ``test_restated_mlb_constants_match_sim_stats_sim450``, which parses that file
 #: rather than importing it. A moved constant fails the test instead of rotting
 #: into a wrong citation, which is what :69 and :83 did before 2026-08-10.
-SIM_STATS_MLB_2023_LINE: int = 80
+SIM_STATS_MLB_2025_LINE: int = 88
 
 #: The line ``_MLB_HOME_WIN_PCT`` is assigned on in ``scripts/sim_stats.py``.
-SIM_STATS_HOME_WIN_PCT_LINE: int = 94
+SIM_STATS_HOME_WIN_PCT_LINE: int = 102
 
-#: ``_MLB_2023`` restated verbatim. ``REFERENCES`` reads its centres from here,
-#: so the drift test compares the numbers the bands actually use.
-RESTATED_MLB_2023: dict[str, float] = {
-    "R": 4.62,
-    "H": 8.60,
-    "HR": 1.21,
-    "2B": 1.60,
-    "3B": 0.14,
-    "BB": 3.30,
-    "K": 8.60,
-    "SB": 0.59,
-    "CS": 0.17,
+#: ``_MLB_2025`` restated verbatim (SIM-508, owner decision 2026-08-18: every
+#: reference is this project's OWN ingested 2025 season — 2,430 regular-season
+#: Final games, 4,860 team-games, measured 2026-08-18 — so the sim is graded
+#: against the era its 2024-2026 artifact floor draws from). ``REFERENCES``
+#: reads its centres from here, so the drift test compares the numbers the
+#: bands actually use.
+RESTATED_MLB_2025: dict[str, float] = {
+    "R": 4.4473,
+    "H": 8.2588,
+    "HR": 1.1626,
+    "2B": 1.5936,
+    "3B": 0.1292,
+    "BB": 3.1656,
+    "K": 8.3525,
+    "SB": 0.6251,
+    "CS": 0.1922,
 }
 
-#: ``_MLB_HOME_WIN_PCT`` restated verbatim.
-RESTATED_MLB_HOME_WIN_PCT: float = 0.535
+#: ``_MLB_HOME_WIN_PCT`` restated verbatim (measured 2025, same games).
+RESTATED_MLB_HOME_WIN_PCT: float = 0.5428
 
-#: Derived from this project's own ingested 2023 data — SQL in the module
+#: Derived from this project's own ingested 2025 data — SQL in the module
 #: docstring. ``ROE_reached`` shares the ROE centre because in MLB every reach on
 #: error does put the batter on base.
-DERIVED_2023: dict[str, float] = {
-    "DP": 0.8160,
-    "ROE": 0.2193,
-    "ROE_reached": 0.2193,
+DERIVED_2025: dict[str, float] = {
+    "DP": 0.7459,
+    "ROE": 0.2078,
+    "ROE_reached": 0.2078,
 }
 
 _SIM_STATS = "scripts/sim_stats.py"
@@ -628,119 +635,128 @@ class Reference:
 #: ``detect_source`` names where each defect magnitude comes from, so a reader
 #: never has to guess whether a number was measured, documented or invented.
 REFERENCES: dict[str, Reference] = {
-    # --- the nine channels restated from scripts/sim_stats.py:80 (_MLB_2023) ---
+    # --- the nine channels restated from scripts/sim_stats.py:88 (_MLB_2025) ---
+    # SIM-508: every sd_ref below re-measured on the same 2025 games
+    # (2026-08-18); every Rule-B floor recomputed as the tightest deviation
+    # team-games resolves (11,295) against the 2025 spread and centre.
     "R": Reference(
-        RESTATED_MLB_2023["R"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2023_LINE} _MLB_2023",
-        sd_ref=3.2188,
-        rel_floor=0.0276,
-        must_detect=0.3234,
-        detect_source="CLAUDE.md:85 'Runs run ~7-8% low' -> harder end 0.07 * 4.62",
+        RESTATED_MLB_2025["R"],
+        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        sd_ref=3.2468,
+        rel_floor=0.027478,
+        must_detect=0.311311,
+        detect_source="CLAUDE.md:85 'Runs run ~7-8% low' -> harder end 0.07 * 4.4473 = 0.311311",
     ),
     "H": Reference(
-        RESTATED_MLB_2023["H"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2023_LINE} _MLB_2023",
-        sd_ref=3.4294,
-        rel_floor=0.0158,
-        must_detect=0.2193,
+        RESTATED_MLB_2025["H"],
+        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        sd_ref=3.4505,
+        rel_floor=0.015725,
+        must_detect=0.2078,
         detect_source=(
             "BACKLOG.md:20 (SIM-496) + simulation/constants.py:177: a drawn field_error "
             "is aliased to a single, so a retired batter is credited a hit. Worth the "
-            "whole 2023 reach-on-error rate, 0.2193 per team-game."
+            "whole 2025 reach-on-error rate, 0.2078 per team-game. The 1.6x detection "
+            "margin BINDS this floor and ANCHORS the box lane: every other floor "
+            "is sized to resolve beside it at 11,295 obs (12x471)."
         ),
     ),
     "HR": Reference(
-        RESTATED_MLB_2023["HR"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2023_LINE} _MLB_2023",
-        sd_ref=1.1643,
-        rel_floor=0.0382,
+        RESTATED_MLB_2025["HR"],
+        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        sd_ref=1.1772,
+        rel_floor=0.038110,
         floor_rationale=(
             "Rule B. No magnitude on record. AUD-PARK-HR "
             "(docs/audit/2026-07-23-MASTER-BUG-REGISTER.md:233) records that HR PMFs are "
-            "park-invariant but sizes nothing. Floor = the tightest deviation 10,200 "
+            "park-invariant but sizes nothing. Floor = the tightest deviation the box lane "
             "team-games resolves."
         ),
     ),
     "2B": Reference(
-        RESTATED_MLB_2023["2B"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2023_LINE} _MLB_2023",
-        sd_ref=1.3438,
-        rel_floor=0.0333,
-        floor_rationale="Rule B. No magnitude on record. Tightest resolvable at 10,200 obs.",
+        RESTATED_MLB_2025["2B"],
+        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        sd_ref=1.3455,
+        rel_floor=0.031778,
+        floor_rationale="Rule B. No magnitude on record. Tightest resolvable at the 11,295-obs box lane.",
     ),
     "3B": Reference(
-        RESTATED_MLB_2023["3B"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2023_LINE} _MLB_2023",
-        sd_ref=0.3917,
-        rel_floor=0.1109,
+        RESTATED_MLB_2025["3B"],
+        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        sd_ref=0.3677,
+        rel_floor=0.107115,
         floor_rationale=(
-            "Rule B. No magnitude on record. Tightest resolvable at 10,200 obs. This is "
-            "the loosest floor in the lane because the channel's spread (0.3917) is 2.8x "
-            "its centre (0.14) — triples are rare, so they cost the most to measure."
+            "Rule B. No magnitude on record. Tightest resolvable at the 11,295-obs box lane. This is "
+            "the loosest floor in the lane because the channel's spread (0.3677) is 2.8x "
+            "its centre (0.1292) — triples are rare, so they cost the most to measure."
         ),
     ),
     "BB": Reference(
-        RESTATED_MLB_2023["BB"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2023_LINE} _MLB_2023",
-        sd_ref=2.0242,
-        rel_floor=0.0243,
+        RESTATED_MLB_2025["BB"],
+        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        sd_ref=1.9045,
+        rel_floor=0.022644,
         floor_rationale=(
             "Rule B. No magnitude on record. BACKLOG.md:66 (SIM-456, whiff_rate measures "
             "called strikes) plausibly moves BB and K, but nobody has sized it. Tightest "
-            "resolvable at 10,200 obs. NOTE the centre 3.30 is itself 5.0% above this "
-            "project's own 2023 data (3.1434), which is larger than this floor."
+            "resolvable at the 11,295-obs box lane. The centre includes intentional walks (595 in "
+            "raw.play_events 2025); sd_ref is measured on the pitch rows alone — the "
+            "0.12/team-game IBB stream adds negligible spread."
         ),
     ),
     "K": Reference(
-        RESTATED_MLB_2023["K"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2023_LINE} _MLB_2023",
-        sd_ref=2.9693,
-        rel_floor=0.0137,
+        RESTATED_MLB_2025["K"],
+        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        sd_ref=2.9352,
+        rel_floor=0.013227,
         floor_rationale=(
             "Rule B. No magnitude on record; BACKLOG.md:66 (SIM-456) is unsized. Tightest "
-            "resolvable at 10,200 obs, and the tightest floor in the lane."
+            "resolvable at the 11,295-obs box lane, and the tightest floor in the lane."
         ),
     ),
     "SB": Reference(
-        RESTATED_MLB_2023["SB"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2023_LINE} _MLB_2023",
-        sd_ref=0.9093,
-        rel_floor=0.0611,
-        must_detect=0.59,
+        RESTATED_MLB_2025["SB"],
+        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        sd_ref=0.8923,
+        rel_floor=0.053726,
+        must_detect=0.6251,
         detect_source=(
-            "BACKLOG.md:19 (SIM-495): SB measured 0.0000 against 0.59 over 400 production "
-            "game-sims before SIM-474 replaced the gated stub with the opportunity-pool "
-            "draw (2026-08-16). The floor keeps rejecting a re-zeroed channel."
+            "BACKLOG.md:19 (SIM-495): SB measured 0.0000 over 400 production game-sims "
+            "before SIM-474 replaced the gated stub with the opportunity-pool draw "
+            "(2026-08-16). The floor keeps rejecting a re-zeroed channel: -centre."
         ),
     ),
     "CS": Reference(
-        RESTATED_MLB_2023["CS"],
-        f"{_SIM_STATS}:{SIM_STATS_MLB_2023_LINE} _MLB_2023",
-        sd_ref=0.2779,
-        rel_floor=0.0648,
-        must_detect=0.17,
+        RESTATED_MLB_2025["CS"],
+        f"{_SIM_STATS}:{SIM_STATS_MLB_2025_LINE} _MLB_2025",
+        sd_ref=0.3940,
+        rel_floor=0.077155,
+        must_detect=0.1922,
         detect_source=(
-            "BACKLOG.md:19 (SIM-495): CS measured 0.0000 against 0.17. Same root cause as "
-            "SB — no steal is attempted, so none is caught. -100%."
+            "BACKLOG.md:19 (SIM-495): CS measured 0.0000. Same root cause as SB — no "
+            "steal is attempted, so none is caught. -100% = -centre. The 2025 centre "
+            "carries all scored classes (pitch-steal + K+CS + advancing pickoffs, "
+            "SIM-507); sd_ref is measured on the pitch-row classes — the 0.03/team-game "
+            "pickoff stream adds negligible spread."
         ),
     ),
-    # --- three channels derived from raw.pitches 2023 (SQL in the docstring) ---
+    # --- three channels derived from raw.pitches 2025 (SQL in the docstring) ---
     "DP": Reference(
-        DERIVED_2023["DP"],
-        "raw.pitches 2023, 4860 team-games",
-        sd_ref=0.8659,
-        rel_floor=0.0421,
-        must_detect=0.6561,
+        DERIVED_2025["DP"],
+        "raw.pitches 2025, 4860 team-games",
+        sd_ref=0.8332,
+        rel_floor=0.042043,
+        must_detect=0.5997,
         detect_source=(
-            "BACKLOG.md:18 (SIM-494): DP measured 0.1600 against 0.8160 at 400 production "
-            "game-sims — 80.4% low, on a FLOOR-driven band. 0.804 * 0.8160."
+            "BACKLOG.md:18 (SIM-494): DP measured 0.1600 against a 0.8160-era centre at "
+            "400 production game-sims — 80.4% low, on a FLOOR-driven band. 0.804 * 0.7459."
         ),
     ),
     "ROE": Reference(
-        DERIVED_2023["ROE"],
-        "raw.pitches 2023, 4860 team-games",
-        sd_ref=0.4745,
-        rel_floor=0.0857,
+        DERIVED_2025["ROE"],
+        "raw.pitches 2025, 4860 team-games",
+        sd_ref=0.4541,
+        rel_floor=0.082248,
         floor_rationale=(
             "Rule B, and READ THE WARNING in the module docstring. This channel counts the "
             "reach-on-error events the pool DRAWS, which is BEFORE the SIM-496 defect "
@@ -750,11 +766,11 @@ REFERENCES: dict[str, Reference] = {
         ),
     ),
     "ROE_reached": Reference(
-        DERIVED_2023["ROE_reached"],
-        "raw.pitches 2023, 4860 team-games (same rate as ROE)",
-        sd_ref=0.4745,
-        rel_floor=0.0857,
-        must_detect=0.2193,
+        DERIVED_2025["ROE_reached"],
+        "raw.pitches 2025, 4860 team-games (same rate as ROE)",
+        sd_ref=0.4541,
+        rel_floor=0.082248,
+        must_detect=0.2078,
         detect_source=(
             "BACKLOG.md:20 (SIM-496): _full_pool_fielding infers outs = 0 if rh > 0 else 1 "
             "(sim_loop.py:1432) and a pool field_error row carries result_hits = 0, so every "
@@ -763,17 +779,18 @@ REFERENCES: dict[str, Reference] = {
             "SIM-484. Nothing reaches base on an error today: -100%."
         ),
     ),
-    # --- the home-field channel, restated from scripts/sim_stats.py:94 ---
+    # --- the home-field channel, restated from scripts/sim_stats.py:102 ---
     "home_win_pct": Reference(
         RESTATED_MLB_HOME_WIN_PCT,
         f"{_SIM_STATS}:{SIM_STATS_HOME_WIN_PCT_LINE} _MLB_HOME_WIN_PCT",
         sd_ref=0.5000,
-        abs_floor=0.0124,
+        abs_floor=0.0173,
         obs_per_sim=1,
-        must_detect=0.020,
+        must_detect=0.0278,
         detect_source=(
-            "CLAUDE.md:400: home_win_pct 'stuck at the structural-only ~.510-.515'. Sized on "
-            "the HARDEST point of that range: 0.535 - 0.515 = 0.020. The band also reds "
+            "CLAUDE.md:400: home_win_pct 'stuck at the structural-only ~.510-.515'. Sized "
+            "on the HARDEST point of that range against the measured 2025 centre: "
+            "0.5428 - 0.515 = 0.0278; floor = 0.0278/1.6 rounded down. The band also reds "
             "0.5125, which this lane's own first production run measured."
         ),
     ),

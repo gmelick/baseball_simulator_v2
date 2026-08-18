@@ -1,3 +1,15 @@
+# Test — SIM-508: every band reference is own-data 2025 — 2026-08-18
+
+Owner decision: grade the simulator against 2025. Every centre and sd_ref in
+`scripts/sim_stats.py` (`_MLB_2025`) and `tests/acceptance/bands.py` is measured from our own
+ingested 2025 season — one source, so the standing dict-vs-data disagreement is retired and a red
+channel is about the model, full stop. BB includes IBB; CS includes every scored class the sim now
+produces. Floors re-derived: H's 1.6× detection margin anchors the box lane (11,295 obs = 5,648
+sims, 12×471); all twelve land together. The 2025 home centre (0.5428) halves that channel's cost
+to 13,365 decisive games, floor 0.0173. 43 arithmetic tests green. Re-scored analytically, the
+SIM-507 lane means read: SB/CS/K INSIDE their 2025 bands; BB +15.2% and 2B +7.7% are the sole
+remaining band defects (SIM-429); home_win_pct needs the SIM-412 re-tune against the higher centre.
+
 # Sim — SIM-507: the pickoff channel — the running game is class-complete — 2026-08-18
 
 The 2023 CS ledger closes at 820 of the band's 826: pitch-steal CS 573 + advancing pickoffs 133 +

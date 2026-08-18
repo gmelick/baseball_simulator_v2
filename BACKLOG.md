@@ -2,6 +2,26 @@
 
 *Owner: Product Manager (Agent 1) · Last updated: 2026-08-13 (SIM-501a/c + SIM-502a..d CLOSED; SIM-503 filed+fixed; SIM-504 filed; next free ID → SIM-505; see the top banners). Older context from the 2026-06-02 stamp follows: (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
 
+# 📏 2026-08-18 — SIM-508 CLOSED: every band reference is now OWN-DATA 2025 (owner decision; next free ID → SIM-509)
+
+**The owner ruled: grade the simulator against 2025 totals for all statistics.** Every centre and
+sd_ref is now measured from THIS PROJECT'S OWN ingested 2025 season (2,430 games / 4,860
+team-games, measured 2026-08-18) — one source, so the old dict-vs-data disagreement section is
+retired. Definitions match the probes: BB includes IBB (595, play_events); CS includes all scored
+classes (pitch-steal + K+CS + 149 advancing pickoffs). Floors re-derived: **H's 1.6× detection
+margin binds and anchors the box lane at 11,295 obs = 5,648 sims (12×471, ~3.5 h)** — all twelve
+box channels land together (min/max 0.9998). The 2025 home_win_pct centre (0.5428 measured)
+nearly halves that channel's certification: 13,365 decisive games (~8.4 h), floor 0.0173.
+All 43 band-arithmetic tests green; the drift test now parses `_MLB_2025` at sim_stats.py:88.
+
+**The SIM-507 lane means re-scored against the 2025 bands (analytic; next lane confirms):**
+* **SB +5.0% (floor 5.4%) → INSIDE. CS +2.1% (floor 7.7%) → INSIDE. K +1.0% (floor 1.3%) →
+  INSIDE.** The running game and strikeouts project GREEN — the steals epic certifies at the
+  next 12×471 lane.
+* **BB +15.2% (6.7× its floor) and 2B +7.7% (2.4×) are the remaining defects** — SIM-429, now
+  the sole band blockers. home_win_pct 0.5156 vs the higher 2025 centre 0.5428 will red once
+  powered — the SIM-412 bias re-tune joins the queue behind SIM-429.
+
 # 🎯 2026-08-18 — SIM-507 FILED+BUILT: the pickoff channel — every steal-attempt mechanic is now modeled or measured (next free ID → SIM-508)
 
 **THE CERTIFYING LANE RAN (12×425, n=10,200) AND THE FACTOR ISOLATION COMPLETED. Verdict:**
