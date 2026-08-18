@@ -31,7 +31,7 @@ import numpy as np
 
 from pipeline.batch.engine_artifacts import EngineArtifacts, HandPool
 
-_OUTCOMES = ("ball", "called_strike", "swinging_strike", "foul", "in_play")
+_OUTCOMES = ("ball", "called_strike", "swinging_strike", "foul", "in_play", "hit_by_pitch")
 
 #: SIM-476 diagnostics (2026-08-17): skip ONE similarity factor in the steal
 #: draw to locate the source of the safe/caught-split inflation (certified

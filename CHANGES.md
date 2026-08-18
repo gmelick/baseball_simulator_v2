@@ -1,3 +1,17 @@
+# Sim — SIM-509: hit-by-pitch is its own outcome — the walk surplus was mostly fake walks — 2026-08-18
+
+The SIM-429 diagnosis, measurement-first: the pool builder collapsed an HBP pitch (ball-class
+Gameday code, `ELSE 'ball'`) into `ball`, so every simulated HBP became ball four and a WALK —
+worth the whole 0.397/team-game 2025 HBP rate, ~82% of the BB band surplus. Fix: the pool CASE
+labels `events='hit_by_pitch'` FIRST; `PITCH_OUTCOMES`/`_OUTCOMES` gain the sixth outcome; the
+count machine terminates on it at any count; `_resolve_walk(event=...)` applies the same force
+mechanics under its own canonical, which the BB probes and the pitcher's `bb` (WHIP) never count.
+`POOL_BUILDER_VERSION` -> sim509.1; all-seasons pitch-pool rebuild (2025 pool: 1,970 HBP rows) +
+artifact export. Smoke (4x150, vs pre-fix): BB -6.8% (+20.5% -> +12.3% against the 2025 centre),
+2B -3.9% (+9.7% -> +5.5% — the fake balls inflated deep counts, where the count-conditioned
+batted-ball draw serves more doubles), steal attempts -4.6% (fake balls also manufactured
+opportunity pitches), K/H/HR flat. 8 new unit tests; suite rc=0; ruff+mypy clean.
+
 # Test — SIM-508: every band reference is own-data 2025 — 2026-08-18
 
 Owner decision: grade the simulator against 2025. Every centre and sd_ref in

@@ -82,8 +82,11 @@ BALLS_FOR_WALK = 4
 STRIKES_FOR_STRIKEOUT = 3
 
 #: The closed pitch-outcome vocabulary the sampler emits (mirrors the SIM-301
-#: ``outcome_type`` set and ``sim_loop.CONTACT_PITCH_OUTCOME``).
-PITCH_OUTCOMES = ("ball", "called_strike", "swinging_strike", "foul", "in_play")
+#: ``outcome_type`` set and ``sim_loop.CONTACT_PITCH_OUTCOME``). SIM-509 added
+#: ``hit_by_pitch``: the pool builder used to collapse an HBP pitch into
+#: ``ball``, so every simulated HBP became ball four and a WALK — worth the
+#: whole 0.397/team-game 2025 HBP rate, ~82% of the measured BB surplus.
+PITCH_OUTCOMES = ("ball", "called_strike", "swinging_strike", "foul", "in_play", "hit_by_pitch")
 #: The single pitch outcome that means the ball was put in play (spec §5.1).
 CONTACT_PITCH_OUTCOME = "in_play"
 

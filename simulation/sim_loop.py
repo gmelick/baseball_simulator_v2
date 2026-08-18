@@ -116,6 +116,10 @@ CONTACT_PITCH_OUTCOME = _GS_CONTACT_PITCH_OUTCOME
 #: PA-event strings the §5.1 count machine produces for non-contact terminals.
 EVENT_WALK = "walk"
 EVENT_STRIKEOUT = "strikeout"
+#: SIM-509: a hit-by-pitch is its own terminal — the same force mechanics as a
+#: walk, but canonically ``hit_by_pitch`` so the box and the BB band never
+#: count it as a walk.
+EVENT_HIT_BY_PITCH = "hit_by_pitch"
 
 #: Marker the count machine emits while a PA is still live (no terminal yet).
 #: Distinct from a real PA event so callers / run-resolution treat it as 0 runs.
@@ -788,6 +792,13 @@ def advance_count(balls: int, strikes: int, pitch_outcome: str) -> CountAdvance:
             "ended before another pitch was classified (spec §5.1)."
         )
 
+    if pitch_outcome == "hit_by_pitch":
+        # SIM-509: terminal at any count — the batter is awarded 1B. Resolved
+        # by the walk force mechanics with its own canonical event.
+        return CountAdvance(
+            balls, strikes, terminal=True, event=EVENT_HIT_BY_PITCH, is_contact=False
+        )
+
     if pitch_outcome == "ball":
         balls += 1
         if balls >= BALLS_FOR_WALK:
@@ -1306,6 +1317,9 @@ class StateMachine:
                 self._resolve_in_play(state, result)
             elif adv.event == EVENT_WALK:
                 self._resolve_walk(state, result)
+            elif adv.event == EVENT_HIT_BY_PITCH:
+                # SIM-509: identical force mechanics, its own canonical event.
+                self._resolve_walk(state, result, event=EVENT_HIT_BY_PITCH)
             elif adv.event == EVENT_STRIKEOUT:
                 self._resolve_strikeout(state, result)
 
@@ -2181,9 +2195,13 @@ class StateMachine:
     # Terminal-PA resolution — fielding (step 6) + baserunning (step 7)
     # ===================================================================
 
-    def _resolve_walk(self, state: GameState, result: PlayResult) -> None:
+    def _resolve_walk(self, state: GameState, result: PlayResult, event: str = EVENT_WALK) -> None:
         """Resolve a ball-4 walk (§5.1 / §7): force the runners + score any
         forced run, routing the run/base-out delta through ``resolve_runs``.
+
+        SIM-509: a HIT BY PITCH awards 1B with the same force mechanics, so it
+        resolves here too — pass ``event=EVENT_HIT_BY_PITCH`` and the play
+        carries its own canonical event (never counted as a BB).
 
         A walk forces the batter to 1B and pushes each runner ahead only when the
         bag behind him is occupied (a true force).  The number of forced runs is
@@ -2195,7 +2213,7 @@ class StateMachine:
         documented under-count that made the boxscore disagree with the
         linescore once shown together).
         """
-        result.event = EVENT_WALK
+        result.event = event
         result.pa_terminal = True
         b = state.bases
         # SIM-499: measure the base-out state BEFORE the force pushes anyone.
@@ -2249,7 +2267,7 @@ class StateMachine:
         self._commit_run_delta(
             state,
             result,
-            event=EVENT_WALK,
+            event=event,
             result_hits=0,
             result_outs=0,
             result_runs=forced_run,
@@ -4359,5 +4377,6 @@ __all__ = [
     # PA-event markers
     "EVENT_WALK",
     "EVENT_STRIKEOUT",
+    "EVENT_HIT_BY_PITCH",
     "EVENT_IN_PROGRESS",
 ]

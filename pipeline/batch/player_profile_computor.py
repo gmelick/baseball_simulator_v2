@@ -995,7 +995,9 @@ def _label_component(mean: list[float], fi: dict[str, int]) -> str | None:
 # Bump on any formula change to the pool SELECTs — the incremental rebuild
 # gate (_seasons_needing_rebuild) treats a season built by another version as
 # stale. sim501.1 = events-derived result_outs (SIM-501a).
-POOL_BUILDER_VERSION = "sim501.1"
+# sim509.1 = hit_by_pitch is its own pitch outcome_type (SIM-509) + the SIM-506
+# steal labels and SIM-507 pickoff labels on the opportunity pool.
+POOL_BUILDER_VERSION = "sim509.1"
 RECENCY_RECENT_SEASONS = 2  # seasons (incl. ref) that get the full peak weight
 RECENCY_DECAY = 0.75  # geometric decay per season beyond the recent window
 RECENCY_FLOOR = 0.25
@@ -5096,7 +5098,13 @@ class PlayerProfileComputor:
                     -- old `type='X'`-only mapping silently dropped ~all hits +
                     -- home runs into 'ball' (the no-balls-in-play defect).  TRIM
                     -- guards the space-padded Gameday codes.
+                    -- SIM-509: an HBP pitch carries a ball-class type code, so
+                    -- the old mapping turned every simulated HBP into ball four
+                    -- — a WALK. Worth the whole 0.397/team-game 2025 HBP rate
+                    -- (~82% of the measured BB surplus). The events branch must
+                    -- come FIRST.
                     CASE
+                        WHEN events = 'hit_by_pitch' THEN 'hit_by_pitch'
                         WHEN TRIM(type) IN ('B', '*B') THEN 'ball'
                         WHEN TRIM(type) = 'C' THEN 'called_strike'
                         WHEN TRIM(type) IN ('S', 'W', 'M') THEN 'swinging_strike'
