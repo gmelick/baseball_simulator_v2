@@ -4,6 +4,24 @@
 
 # 🎯 2026-08-18 — SIM-507 FILED+BUILT: the pickoff channel — every steal-attempt mechanic is now modeled or measured (next free ID → SIM-508)
 
+**THE CERTIFYING LANE RAN (12×425, n=10,200) AND THE FACTOR ISOLATION COMPLETED. Verdict:**
+* **The safe/caught split MATCHES MLB: 77.0% vs ~77.6%** (was 88.1% pre-SIM-506, 82.1% post).
+  CS 0.1963 now carries all three modeled classes. **R stayed GREEN throughout.**
+* **SB/CS band rows: still red, but on VOLUME alone** — SB +11.3%, CS +15.5%, both high TOGETHER
+  (attempts ~+10-12%). Decomposed, owner-checkable: (1) the **era effect ~+8%** — the artifact's
+  2024-2026 recency floor carries real per-pitch attempt rates 2.14-2.23% vs 2.02% in 2023, the
+  band's reference year (pre-registered BEFORE the lane; the sim plays a current-era running game
+  and is graded against 2023); (2) **the BB surplus ~+3-5%** — BB +10.5% (SIM-429) puts extra
+  runners on 1B, multiplying opportunity pitches at the correct per-pitch rate.
+* **The single-factor runs (4×150 each, catcher-only / runner-only / pitcher-only): NO kernel
+  drives the volume** — every arm sits within ±3% of the all-factors attempt rate. On the SPLIT,
+  runner-only reads 80.9% (the runner kernel alone over-selects safe rows) and the catcher+pitcher
+  factors pull it back to 75.5-77.0% — **the ensemble is calibrated; no factor is defective.**
+* **The remaining path to green SB/CS bands is NOT in the steal machinery:** close the SIM-429
+  BB/2B biases (the traffic), and DECIDE the reference era (grade against 2023, or against the
+  2024-26 era the pool draws from — an owner's call on the band's meaning). K deepened slightly to
+  -1.9% (the new bases outs shave PAs — watch under SIM-429).
+
 **The owner's directive: model the pickoff channel so SB/CS match MLB occurrences.** The full 2023
 CS ledger closed at 820 ≈ the band's 826: pitch-steal CS 573 (modeled) + advancing pickoffs 133 +
 K+CS double plays 98 + home 16. SIM-507 models the first three classes end to end.

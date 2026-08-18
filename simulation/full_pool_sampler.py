@@ -42,6 +42,7 @@ _OUTCOMES = ("ball", "called_strike", "swinging_strike", "foul", "in_play")
 #: Default OFF; never set in production.
 _STEAL_ABLATE_CATCHER = os.environ.get("SIM_STEAL_ABLATE_CATCHER", "0") == "1"
 _STEAL_ABLATE_RUNNER = os.environ.get("SIM_STEAL_ABLATE_RUNNER", "0") == "1"
+_STEAL_ABLATE_PITCHER = os.environ.get("SIM_STEAL_ABLATE_PITCHER", "0") == "1"
 
 
 class FullPoolSampler:
@@ -645,15 +646,16 @@ class FullPoolSampler:
             )
             if f is not None:
                 w *= f
-        f = self._steal_actor_factor(
-            "pitcher_steal",
-            pitcher_key,
-            meta["pitcher_rows"],
-            rows,
-            self._PITCHER_STEAL_FEATURES,
-        )
-        if f is not None:
-            w *= f
+        if not _STEAL_ABLATE_PITCHER:
+            f = self._steal_actor_factor(
+                "pitcher_steal",
+                pitcher_key,
+                meta["pitcher_rows"],
+                rows,
+                self._PITCHER_STEAL_FEATURES,
+            )
+            if f is not None:
+                w *= f
         if catcher_key and not _STEAL_ABLATE_CATCHER:
             f = self._steal_actor_factor(
                 "catcher", catcher_key, meta["catcher_rows"], rows, self._CATCHER_STEAL_FEATURES
