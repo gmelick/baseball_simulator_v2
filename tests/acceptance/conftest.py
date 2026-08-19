@@ -541,6 +541,7 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
         "_full_pool_outcome": 0,
         "_full_pool_fielding": 0,
         "_full_pool_out_advancement": 0,
+        "_resolve_in_play_transition": 0,  # SIM-511: the production path
         "_steal_opportunity_draw": 0,
         "_commit_run_delta": 0,
     }
