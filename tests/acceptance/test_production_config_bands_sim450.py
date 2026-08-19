@@ -457,9 +457,14 @@ def test_full_pool_fielding_runs_sim450(acceptance_run: AcceptanceRun) -> None:
     _assert_called(acceptance_run, "_full_pool_fielding")
 
 
-def test_full_pool_out_advancement_runs_sim450(acceptance_run: AcceptanceRun) -> None:
-    """``_full_pool_out_advancement`` (sim_loop.py:1507) moves runners on outs."""
-    _assert_called(acceptance_run, "_full_pool_out_advancement")
+# This probe asserted `_full_pool_out_advancement` from 2026-08-10 to
+# 2026-08-19. The SIM-511 landing replaced that resolution path: on a
+# transition bundle, `_resolve_in_play_transition` applies the drawn row's
+# destinations and the legacy advancement never runs (its call count reads 0
+# by design). The production-path assertion follows the production path.
+def test_transition_resolution_runs_sim450(acceptance_run: AcceptanceRun) -> None:
+    """``_resolve_in_play_transition`` (SIM-511) resolves every ball in play."""
+    _assert_called(acceptance_run, "_resolve_in_play_transition")
 
 
 def test_commit_run_delta_runs_sim450(acceptance_run: AcceptanceRun) -> None:

@@ -932,7 +932,7 @@ def test_the_lane_carries_both_reach_on_error_channels_sim450() -> None:
 
 
 class _StubMachine:
-    """The six methods ``_install_probes`` wraps, and nothing else.
+    """The seven methods ``_install_probes`` wraps, and nothing else.
 
     A real ``StateMachine`` needs an artifact bundle, so the probe would
     otherwise be exercised only by the heavy lane — which has never produced a
@@ -940,7 +940,7 @@ class _StubMachine:
     """
 
     def __init__(self) -> None:
-        self.commits: list[tuple[str | None, int, int, int]] = []
+        self.commits: list[tuple[str | None, int, int, int, bool]] = []
 
     def _full_pool_outcome(self, state: object) -> str:
         return "outcome"
@@ -949,6 +949,11 @@ class _StubMachine:
         return None
 
     def _full_pool_out_advancement(self, state: object, result: object, sig: object) -> None:
+        return None
+
+    def _resolve_in_play_transition(
+        self, state: object, result: object, sig: object, pre_outs: object, pre_bases: object
+    ) -> None:
         return None
 
     def _steal_opportunity_draw(self, state: object) -> None:
@@ -966,8 +971,10 @@ class _StubMachine:
         result_hits: int,
         result_outs: int,
         result_runs: int,
+        batter_reached: bool = False,
+        **kwargs: object,
     ) -> None:
-        self.commits.append((event, result_hits, result_outs, result_runs))
+        self.commits.append((event, result_hits, result_outs, result_runs, batter_reached))
 
 
 class _StubState:
@@ -976,15 +983,16 @@ class _StubState:
 
 
 def test_the_roe_reached_probe_counts_only_a_batter_who_reached_sim450() -> None:
-    """SIM-496's counter: a reach on error is a commit with NO out and a base.
+    """SIM-496's counter: a reach on error is a field_error commit whose
+    batter BECAME A RUNNER (the ``batter_reached`` transition fact).
 
-    ``BACKLOG.md:20`` records the production shape today —
-    ``_full_pool_fielding`` infers ``outs = 0 if int(rh) > 0 else 1``
-    (``sim_loop.py:1432``) and a pool ``field_error`` row carries
-    ``result_hits = 0``, so the commit is ``(field_error, hits=0, outs=1)``: the
-    batter is retired. The probe must count ZERO for that shape and ONE for the
-    corrected shape, or the new channel would report a pass on the defect it was
-    added to catch.
+    ⚠ Re-pinned 2026-08-19 with the SIM-511 landing. The old condition
+    required ``result_hits >= 1`` — the ALIAS world's shape, where
+    field_error masqueraded as a single. A correct post-SIM-511 commit
+    carries ``result_hits = 0`` (a reach is NOT a hit) with
+    ``batter_reached=True``; the old condition read 0.0000 on a lane where
+    batters genuinely reached. The probe must count ZERO for a retired
+    batter and ONE for a reached one, whatever the hit column says.
 
     The wrapper must also forward every argument unchanged. It sits on the single
     run-commit path of the whole simulator, so a probe that altered a commit
@@ -998,6 +1006,7 @@ def test_the_roe_reached_probe_counts_only_a_batter_who_reached_sim450() -> None
         "_full_pool_outcome": 0,
         "_full_pool_fielding": 0,
         "_full_pool_out_advancement": 0,
+        "_resolve_in_play_transition": 0,
         "_steal_opportunity_draw": 0,
         "_commit_run_delta": 0,
     }
@@ -1005,42 +1014,66 @@ def test_the_roe_reached_probe_counts_only_a_batter_who_reached_sim450() -> None
 
     away, home = _StubState(0), _StubState(1)
 
-    # The production shape TODAY (SIM-496): retired on the bases.
+    # The old SIM-496 defect shape: retired on the bases, never a runner.
     machine._commit_run_delta(
-        away, object(), event="field_error", result_hits=0, result_outs=1, result_runs=0
+        away,
+        object(),
+        event="field_error",
+        result_hits=0,
+        result_outs=1,
+        result_runs=0,
+        batter_reached=False,
     )
     assert tally["ROE_reached"] == [0, 0], (
-        "a field_error commit that records an OUT is the SIM-496 defect, not a reach. "
-        "Counting it would make the new channel green on the defect it exists to catch."
+        "a field_error commit whose batter never became a runner is the SIM-496 "
+        "defect, not a reach. Counting it would make the channel green on the "
+        "defect it exists to catch."
     )
 
-    # The CORRECTED shape: batter safe at first, no out. Matches the
-    # dropped-third-strike commit at sim_loop.py:1989.
+    # The corrected SIM-511 shape: the batter reaches, and it is NOT a hit.
     machine._commit_run_delta(
-        away, object(), event="field_error", result_hits=1, result_outs=0, result_runs=0
+        away,
+        object(),
+        event="field_error",
+        result_hits=0,
+        result_outs=0,
+        result_runs=0,
+        batter_reached=True,
     )
     machine._commit_run_delta(
-        home, object(), event="field_error", result_hits=1, result_outs=0, result_runs=1
+        home,
+        object(),
+        event="field_error",
+        result_hits=0,
+        result_outs=0,
+        result_runs=1,
+        batter_reached=True,
     )
     assert tally["ROE_reached"] == [1, 1]
 
     # A non-error commit never counts, whatever its shape.
     for event in ("single", "walk", "strikeout", "field_out", None):
         machine._commit_run_delta(
-            home, object(), event=event, result_hits=1, result_outs=0, result_runs=0
+            home,
+            object(),
+            event=event,
+            result_hits=1,
+            result_outs=0,
+            result_runs=0,
+            batter_reached=True,
         )
     assert tally["ROE_reached"] == [1, 1]
 
     # Every commit reached the real method, unaltered and in order.
     assert machine.commits == [
-        ("field_error", 0, 1, 0),
-        ("field_error", 1, 0, 0),
-        ("field_error", 1, 0, 1),
-        ("single", 1, 0, 0),
-        ("walk", 1, 0, 0),
-        ("strikeout", 1, 0, 0),
-        ("field_out", 1, 0, 0),
-        (None, 1, 0, 0),
+        ("field_error", 0, 1, 0, False),
+        ("field_error", 0, 0, 0, True),
+        ("field_error", 0, 0, 1, True),
+        ("single", 1, 0, 0, True),
+        ("walk", 1, 0, 0, True),
+        ("strikeout", 1, 0, 0, True),
+        ("field_out", 1, 0, 0, True),
+        (None, 1, 0, 0, True),
     ]
     assert calls["_commit_run_delta"] == 8
 

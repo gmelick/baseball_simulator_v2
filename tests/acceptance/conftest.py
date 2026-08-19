@@ -373,17 +373,23 @@ def _install_probes(machine: Any, tally: dict[str, list[int]], calls: dict[str, 
     ``BACKLOG.md:20`` requires it: the ``ROE`` counter above reads the DRAWN
     event at the ``_full_pool_fielding`` boundary, which is before the loop
     decides what the play was, so a green ROE band proves only that the pool
-    supplies errors at about the right rate. ``_commit_run_delta``
-    (``sim_loop.py:1567``) is the single place the loop turns a play into a
-    base-out delta, and both reach-on-error sites pass through it — the in-play
-    commit at ``sim_loop.py:2378`` and the dropped-third-strike commit at
-    ``:1989``. A batter reached on an error when that commit carries the
-    ``field_error`` event, records NO out, and credits at least one base.
+    supplies errors at about the right rate. ``_commit_run_delta`` is the
+    single place the loop turns a play into a base-out delta, and every
+    reach-on-error site passes through it. A batter reached on an error when
+    that commit carries the ``field_error`` event AND ``batter_reached``.
 
-    Today the count is zero by construction: ``_full_pool_fielding`` infers
-    ``outs = 0 if int(rh) > 0 else 1`` (``sim_loop.py:1432``) and a pool
-    ``field_error`` row carries ``result_hits = 0``, so every drawn reach on
-    error commits as a one-out play with the batter retired.
+    ⚠ PROBE HISTORY (2026-08-19): the condition used to require
+    ``result_hits >= 1`` — written for the ALIAS world, where field_error
+    masqueraded as a single. The SIM-511 landing made ``field_error`` its own
+    canonical outcome: a correct commit carries ``result_hits = 0`` (not a
+    hit) with ``batter_reached=True``, so the old condition read 0.0000 on a
+    lane where batters genuinely reached. The probe now reads the
+    ``batter_reached`` transition fact — the loop's own body ledger.
+
+    A seventh wrapper counts calls to ``_resolve_in_play_transition`` — the
+    SIM-511 production resolution path (the legacy
+    ``_full_pool_out_advancement`` is bypassed on a transition bundle and its
+    call count reads 0 by design).
 
     The wrapper pattern matches ``scripts/diag_dp.py:64-78``.
     """
@@ -396,6 +402,7 @@ def _install_probes(machine: Any, tally: dict[str, list[int]], calls: dict[str, 
     orig_steal = machine._steal_opportunity_draw
     orig_accumulate = machine._accumulate_pa
     orig_commit = machine._commit_run_delta
+    orig_transition = machine._resolve_in_play_transition
 
     def outcome(state: Any, _o: Any = orig_outcome) -> Any:
         calls["_full_pool_outcome"] += 1
@@ -418,6 +425,12 @@ def _install_probes(machine: Any, tally: dict[str, list[int]], calls: dict[str, 
     def advancement(state: Any, result: Any, sig: Any, _o: Any = orig_advancement) -> Any:
         calls["_full_pool_out_advancement"] += 1
         return _o(state, result, sig)
+
+    def transition(
+        state: Any, result: Any, sig: Any, pre_outs: Any, pre_bases: Any, _o: Any = orig_transition
+    ) -> Any:
+        calls["_resolve_in_play_transition"] += 1
+        return _o(state, result, sig, pre_outs, pre_bases)
 
     def steal(state: Any, _o: Any = orig_steal) -> Any:
         calls["_steal_opportunity_draw"] += 1
@@ -458,7 +471,11 @@ def _install_probes(machine: Any, tally: dict[str, list[int]], calls: dict[str, 
         # probe only READS the four it tallies; it must never re-state the
         # loop's signature.
         calls["_commit_run_delta"] += 1
-        if event == "field_error" and int(result_outs) == 0 and int(result_hits) >= 1:
+        # SIM-511: field_error is its own canonical outcome — a correct commit
+        # carries result_hits = 0 (a reach is NOT a hit) with batter_reached
+        # truth. The old `result_hits >= 1` condition was the alias world's
+        # and read 0.0000 on a lane where batters genuinely reached.
+        if event == "field_error" and bool(kwargs.get("batter_reached", False)):
             tally["ROE_reached"][int(state.offense)] += 1
         return _o(
             state,
@@ -473,6 +490,7 @@ def _install_probes(machine: Any, tally: dict[str, list[int]], calls: dict[str, 
     machine._full_pool_outcome = outcome
     machine._full_pool_fielding = fielding
     machine._full_pool_out_advancement = advancement
+    machine._resolve_in_play_transition = transition
     machine._steal_opportunity_draw = steal
     machine._accumulate_pa = accumulate
     machine._commit_run_delta = commit
