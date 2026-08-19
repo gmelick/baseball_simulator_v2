@@ -91,7 +91,9 @@ class TestTheBuilderMapping:
         ball = src.index("WHEN TRIM(type) IN ('B', '*B') THEN 'ball'")
         assert hbp < ball
 
-    def test_the_builder_version_carries_sim509(self):
+    def test_the_builder_version_is_current(self):
         """The watermark guard skips unchanged builders — a formula change
-        that forgets the version bump never lands (the SIM-501 lesson)."""
-        assert "sim509" in ppc.POOL_BUILDER_VERSION
+        that forgets the version bump never lands (the SIM-501 lesson).
+        SIM-510 superseded the sim509 stamp when the transition columns
+        landed; bump this assertion with every pool-formula change."""
+        assert "sim510" in ppc.POOL_BUILDER_VERSION

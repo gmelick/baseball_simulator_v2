@@ -1,37 +1,34 @@
-"""tests/unit/test_baseball_analyst_sim202.py — SIM-202
+"""tests/unit/test_baseball_analyst_sim202.py — SIM-202 / SIM-511
 =========================================================
-Unit tests for the centralized run-value constants module
-(``simulation/constants.py``).
+Unit tests for the constants module (``simulation/constants.py``).
 
-The Baseball Analyst owns the run-value methodology for the simulator.
-SIM-202 centralizes the offensive linear weights and defensive run-value
-conversions into one sourced module so the numbers stay consistent and
-auditable across the codebase.
+SIM-202 centralized the run-value methodology into one module. The
+linear-weight NUMBERS were removed 2026-08-19 (owner ruling, the SIM-511+512
+landing): production never read them — the ledger resolves every play by RE24
+over real base-out states — so only the outcome VOCABULARY remains, plus the
+defensive run conversions the fielder/catcher engines are built on.
 
-Canonical 12-outcome partition
-------------------------------
-A plate appearance resolves to exactly one of 12 mutually-exclusive,
-collectively-exhaustive outcomes. This is the standard Retrosheet/Statcast
-PA-outcome partition used for linear-weight run accounting:
+Canonical outcome partition
+---------------------------
+A plate appearance resolves to exactly one of these mutually-exclusive,
+collectively-exhaustive outcomes (the standard Retrosheet/Statcast partition
+plus ``field_error``, its own outcome since SIM-511 — a reach, never a hit):
 
     single, double, triple, home_run,
     walk, intentional_walk, hit_by_pitch,
     strikeout, field_out, ground_into_double_play,
-    sacrifice_fly, sacrifice_hit
-
-The values are anchored to the 2024 MLB run environment (FanGraphs 2024
-guts/constants; Tango/Lichtman/Dolphin, "The Book"). See the module docstring
-in ``simulation/constants.py`` for the full source citation.
+    sacrifice_fly, sacrifice_hit, field_error
 """
 
 from __future__ import annotations
 
 import unittest
 
-from simulation.constants import DEFENSIVE_RUN_VALUES, RUN_VALUES
+from simulation.constants import CANONICAL_OUTCOME_KEYS, DEFENSIVE_RUN_VALUES
 
-# The defensible canonical set of exactly 12 standard PA outcomes.
-EXPECTED_RUN_VALUE_KEYS = {
+# The defensible canonical outcome set: the 12 standard PA outcomes plus
+# field_error (SIM-496/511).
+EXPECTED_CANONICAL_KEYS = {
     "single",
     "double",
     "triple",
@@ -44,49 +41,29 @@ EXPECTED_RUN_VALUE_KEYS = {
     "ground_into_double_play",
     "sacrifice_fly",
     "sacrifice_hit",
+    "field_error",
 }
 
 
-class TestRunValues(unittest.TestCase):
-    """Core acceptance tests for the offensive RUN_VALUES table."""
+class TestCanonicalVocabulary(unittest.TestCase):
+    """Acceptance tests for the canonical outcome vocabulary."""
 
-    def test_run_values_contains_all_twelve_pa_outcomes(self) -> None:
-        """KEY TEST: RUN_VALUES has exactly the 12 standard PA outcomes."""
-        self.assertEqual(set(RUN_VALUES.keys()), EXPECTED_RUN_VALUE_KEYS)
-        self.assertEqual(len(RUN_VALUES), 12)
+    def test_vocabulary_is_exactly_the_thirteen_outcomes(self) -> None:
+        """KEY TEST: the 12 standard PA outcomes + field_error, nothing else."""
+        self.assertEqual(set(CANONICAL_OUTCOME_KEYS), EXPECTED_CANONICAL_KEYS)
+        self.assertEqual(len(CANONICAL_OUTCOME_KEYS), 13)
 
-    def test_all_values_are_floats(self) -> None:
-        for key, value in RUN_VALUES.items():
-            self.assertIsInstance(value, float, msg=f"{key} is not a float")
+    def test_no_run_value_table_exists(self) -> None:
+        """The linear-weight table stays deleted (owner ruling 2026-08-19).
 
-    def test_extra_base_hit_ordering(self) -> None:
-        """HR > triple > double > single > walk > 0."""
-        self.assertGreater(RUN_VALUES["home_run"], RUN_VALUES["triple"])
-        self.assertGreater(RUN_VALUES["triple"], RUN_VALUES["double"])
-        self.assertGreater(RUN_VALUES["double"], RUN_VALUES["single"])
-        self.assertGreater(RUN_VALUES["single"], RUN_VALUES["walk"])
-        self.assertGreater(RUN_VALUES["walk"], 0.0)
+        A play's value comes from the RE24 matrix over real states
+        (``simulation.run_resolution``), never a per-outcome constant. A
+        reintroduced ``RUN_VALUES`` would invite the SIM-312 bug class back.
+        """
+        import simulation.constants as c
 
-    def test_outs_are_negative(self) -> None:
-        """field_out and strikeout carry negative run value."""
-        self.assertLess(RUN_VALUES["field_out"], 0.0)
-        self.assertLess(RUN_VALUES["strikeout"], 0.0)
-
-    def test_double_play_is_worst_out(self) -> None:
-        """GIDP (out + lost runner) is worse than a plain out."""
-        self.assertLess(RUN_VALUES["ground_into_double_play"], RUN_VALUES["field_out"])
-
-    def test_hbp_at_least_walk(self) -> None:
-        """HBP is worth at least an unintentional walk (can't be intentional)."""
-        self.assertGreaterEqual(RUN_VALUES["hit_by_pitch"], RUN_VALUES["walk"])
-
-    def test_intentional_walk_worth_less_than_uintentional(self) -> None:
-        """IBB is worth far less than an uBB."""
-        self.assertLess(RUN_VALUES["intentional_walk"], RUN_VALUES["walk"])
-
-    def test_sacrifice_fly_is_productive(self) -> None:
-        """A sac fly (scores a runner) beats a plain out."""
-        self.assertGreater(RUN_VALUES["sacrifice_fly"], RUN_VALUES["field_out"])
+        self.assertFalse(hasattr(c, "RUN_VALUES"))
+        self.assertFalse(hasattr(c, "run_value_for_event"))
 
 
 class TestDefensiveRunValues(unittest.TestCase):

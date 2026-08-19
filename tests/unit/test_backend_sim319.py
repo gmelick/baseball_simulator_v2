@@ -366,7 +366,7 @@ class TestRunResolutionDiscipline:
         for outcome, sig in cases:
             sm = StateMachine(resolver=_InjectedResolver(sig), rng=np.random.default_rng(0))
             r = sm.step_pitch(_fresh_state(), pitch_outcome=outcome)
-            assert r.run_resolution_method in ("re24_delta", "linear_weight")
+            assert r.run_resolution_method == "re24_delta"
 
         # Walk + K go through resolve_runs too.
         sm = StateMachine(rng=np.random.default_rng(0))

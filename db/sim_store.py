@@ -64,7 +64,7 @@ straight from a ``PlayByPlayEntry`` (e.g. ``dataclasses.asdict(entry)``) or a
     launch_angle    float | None   default None
     spray_angle     float | None   default None
     runs            float          default 0.0   RE24 / linear-weight run value
-    canonical_event str | None     default None   canonical RUN_VALUES key
+    canonical_event str | None     default None   canonical outcome key
 
 ``load_play_stream`` returns dicts with ALL of these keys (defaults filled),
 ordered by ``sequence`` ascending. ``run_id`` / ``game_pk`` are NOT in the entry

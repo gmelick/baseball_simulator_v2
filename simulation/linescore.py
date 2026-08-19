@@ -66,7 +66,7 @@ from simulation.game_state import Half, PlayResult
 # ---------------------------------------------------------------------------
 
 #: The event names that count as a **hit** for the H column.  We accept both the
-#: canonical ``RUN_VALUES`` spellings (``simulation.run_resolution``) and the raw
+#: canonical outcome spellings (``simulation.constants``) and the raw
 #: ``PlayResult.event`` spellings -- which happen to coincide for the four hit
 #: types -- so the derivation is tolerant of either field being populated.
 HIT_EVENTS: frozenset[str] = frozenset({"single", "double", "triple", "home_run"})
@@ -76,11 +76,11 @@ def _is_hit(result: PlayResult) -> bool:
     """True when this play is a base hit (1B/2B/3B/HR).
 
     Tolerant of canonical-vs-raw naming: a play counts as a hit if EITHER its
-    ``canonical_event`` (the resolved ``RUN_VALUES`` key, SIM-312) OR its raw
-    ``event`` is in :data:`HIT_EVENTS`.  ``canonical_event`` is preferred because
-    a reach-on-error maps to ``"single"`` in RUN_VALUES for run-value purposes --
-    but that is NOT a hit, so a play flagged ``is_error`` is never counted as a
-    hit regardless of its canonical mapping.
+    ``canonical_event`` (the resolved canonical outcome key, SIM-312) OR its
+    raw ``event`` is in :data:`HIT_EVENTS`.  A reach-on-error is its own
+    canonical outcome since SIM-511 (it aliased to ``"single"`` before), so it
+    never enters here; the ``is_error`` guard below stays as defense in depth
+    for a legacy path that still labels the event a hit.
     """
     if result.is_error:
         return False

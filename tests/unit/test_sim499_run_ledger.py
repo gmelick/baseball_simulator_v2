@@ -401,10 +401,12 @@ class TestResolveRunsRefusesToGuess:
         assert "post_runners_state" in message
         assert "result_runs" in message
 
-    def test_no_state_at_all_still_gives_the_context_free_weight(self):
-        r = resolve_runs(event="walk")
-        assert r.method == "linear_weight"
-        assert r.re_start is None
+    def test_no_state_at_all_raises(self):
+        # The context-free linear-weight fallback was REMOVED 2026-08-19
+        # (owner ruling, the SIM-511+512 landing): a hand-set per-event
+        # constant never stands in for real states. No state = an error.
+        with pytest.raises(ValueError, match="linear-weight fallback was removed"):
+            resolve_runs(event="walk")
 
     def test_a_play_cannot_remove_outs(self):
         with pytest.raises(ValueError, match="cannot remove outs"):

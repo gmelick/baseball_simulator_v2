@@ -45,6 +45,22 @@ _STEAL_ABLATE_RUNNER = os.environ.get("SIM_STEAL_ABLATE_RUNNER", "0") == "1"
 _STEAL_ABLATE_PITCHER = os.environ.get("SIM_STEAL_ABLATE_PITCHER", "0") == "1"
 
 
+#: SIM-512: positional number -> the fielder-embedding position name. Keep in
+#: sync with ``simulation.sim_loop._POS_NUM_TO_STR`` — the fielder embedding
+#: keys are ``"{player_id}:{position}:{season}"`` with these names.
+_POS_NUM_TO_NAME: dict[int, str] = {
+    1: "P",
+    2: "C",
+    3: "1B",
+    4: "2B",
+    5: "3B",
+    6: "SS",
+    7: "LF",
+    8: "CF",
+    9: "RF",
+}
+
+
 class FullPoolSampler:
     def __init__(
         self,
@@ -101,6 +117,18 @@ class FullPoolSampler:
         # runner/pitcher/catcher, and the z-scored steal-feature matrices.
         self._steal_meta_cache: dict[str, dict] = {}
         self._steal_emb_z: dict[str, np.ndarray] = {}
+        # SIM-511: per-hand transition precompute (the base-out cell index over
+        # consistent rows) + the current PA's cell rows (None = legacy path).
+        self._bb_meta_cache: dict[str, dict] = {}
+        self._bb_rows: np.ndarray | None = None
+        # SIM-512: per-decision advancement-pool precompute.
+        self._adv_meta_cache: dict[str, dict] = {}
+        #: SIM-512 kernel bandwidths — the same hyperparameter class as
+        #: ``steal_sigma`` and SIM-476 fit targets. ``adv_sigma`` conditions on
+        #: the actors (runner legs/decisions, fielder arm); ``adv_feat_sigma``
+        #: on the z-scored throw geometry (EV, LA, spray, distance, outs).
+        self.adv_sigma = 1.0
+        self.adv_feat_sigma = 1.0
         #: SIM-474 kernel bandwidths — the same hyperparameter class as
         #: ``sit_sigma``/``batter_sigma`` and a SIM-476 temperature-fit target.
         #: 1.0 conditions HARD on the actor (a maximally-different runner keeps
@@ -321,6 +349,50 @@ class FullPoolSampler:
             self._bb_throws_r[hand] = tr
         return tr if pitcher_throws == "R" else ~tr
 
+    def has_transition(self, hand: str) -> bool:
+        """SIM-511: True when this hand's batted-ball pool carries the SIM-510
+        transition columns (a sim510.1+ bundle). False = the legacy draw."""
+        pool = self.a.bb_pools.get(hand)
+        return (
+            pool is not None
+            and getattr(pool, "r1_dest", None) is not None
+            and getattr(pool, "dest_ok", None) is not None
+            and getattr(pool, "is_air", None) is not None
+        )
+
+    def _transition_meta(self, hand: str) -> dict | None:
+        """SIM-511 per-hand one-time precompute: the base-out cell index over
+        CONSISTENT transition rows (``dest_ok`` — SIM-510's outs-accounting
+        guard) plus the soft-kernel situation columns.
+
+        The hard filter is the base-out cell ALONE — 8 runner configurations
+        × 3 out states = 24 cells, all common (owner ruling 2026-08-19). The
+        filter is essential, so it never relaxes; the count stays SOFT
+        conditioning; an EMPTY cell raises as a data defect. Never widen.
+        """
+        meta = self._bb_meta_cache.get(hand)
+        if meta is not None:
+            return meta
+        if not self.has_transition(hand):
+            return None
+        pool = self.a.bb_pools[hand]
+        ok = pool.dest_ok.astype(bool)
+        outs = pool.sit[:, 2].astype(np.int64)
+        rs = pool.sit[:, 3].astype(np.int64)
+        cells: dict[tuple[int, int], np.ndarray] = {}
+        for rstate in range(8):
+            for o in range(3):
+                rows = np.nonzero(ok & (rs == rstate) & (outs == o))[0]
+                if len(rows):
+                    cells[(rstate, o)] = rows
+        # An empty cell raises AT DRAW TIME (battedball_new_pa), where the
+        # live state names the hole — the defect surfaces on first contact.
+        # The soft situation kernel runs over the NON-exact dims only:
+        # balls, strikes, inning, score_diff (sit cols 0, 1, 4, 5).
+        meta = {"cells": cells, "soft": np.ascontiguousarray(pool.sit[:, [0, 1, 4, 5]])}
+        self._bb_meta_cache[hand] = meta
+        return meta
+
     def battedball_new_pa(
         self,
         hand: str,
@@ -330,21 +402,63 @@ class FullPoolSampler:
     ) -> None:
         """Assemble the batted-ball weight CDF for the PA (f_batter · f_situation · recency).
 
+        SIM-511: on a transition bundle the draw HARD-filters the exact
+        base-out cell (the drawn row must be legal in the live state — that
+        is what makes "the drawn row is the play" safe), and the situation
+        kernel runs over the remaining soft dims (balls, strikes, inning,
+        score_diff). On a legacy bundle the whole-pool soft draw is unchanged.
+
         SIM-413: when ``pitcher_throws`` ('L'/'R') is supplied AND the pool carries
         per-row ``p_throws``, softly reweight toward same-hand-matchup rows (opposite
         hand rows ×:attr:`platoon_off_weight`) so the drawn batted ball reflects the
         live platoon matchup. Omitted / legacy pool -> the draw is unchanged."""
         self._bb_hand = hand
         pool = self.a.bb_pools[hand]
+        sv = np.asarray(state, dtype=np.float32)
+        meta = self._transition_meta(hand)
         aff = self._batter_aff(batter_key)
-        if aff is not None:
-            pb = self._bb_pool_bat_idx(hand)
+        pb = self._bb_pool_bat_idx(hand) if aff is not None else None
+        if meta is not None:
+            # --- SIM-511: the hard base-out cell ---------------------------
+            rstate = int(sv[3]) & 0b111
+            o = min(max(int(sv[2]), 0), 2)
+            rows = meta["cells"].get((rstate, o))
+            if rows is None:
+                raise RuntimeError(
+                    f"SIM-511: base-out cell (runners_state={rstate}, outs={o}) is "
+                    f"EMPTY in the {hand}-hand batted-ball pool — a data defect. "
+                    "The base-out filter is essential and never widens (owner "
+                    "ruling 2026-08-19); rebuild the pool and investigate."
+                )
+            if aff is not None and pb is not None:
+                pbr = pb[rows]
+                f_bat = np.where(
+                    pbr >= 0, aff[np.clip(pbr, 0, len(aff) - 1)], np.float32(1.0)
+                ).astype(np.float32)
+            else:
+                f_bat = np.ones(len(rows), dtype=np.float32)
+            diff = meta["soft"][rows] - sv[[0, 1, 4, 5]]
+            d2 = np.einsum("ij,ij->i", diff, diff)
+            f_sit = np.exp(-d2 / (2.0 * self.sit_sigma**2 * diff.shape[1])).astype(np.float32)
+            w = f_bat * f_sit * pool.recency[rows]
+            if pitcher_throws and self.platoon_off_weight != 1.0:
+                same = self._bb_same_hand_mask(hand, pitcher_throws)
+                if same is not None:
+                    w = w * np.where(
+                        same[rows], np.float32(1.0), np.float32(self.platoon_off_weight)
+                    )
+            self._bb_rows = rows
+            self._bb_cdf = np.cumsum(w, dtype=np.float64)
+            return
+        # --- legacy bundle: the whole-pool soft draw (unchanged) -----------
+        self._bb_rows = None
+        if aff is not None and pb is not None:
             f_bat = np.where(pb >= 0, aff[np.clip(pb, 0, len(aff) - 1)], np.float32(1.0)).astype(
                 np.float32
             )
         else:
             f_bat = np.ones(pool.n, dtype=np.float32)
-        diff: np.ndarray = pool.sit - np.asarray(state, dtype=np.float32)
+        diff = pool.sit - sv
         d2 = np.einsum("ij,ij->i", diff, diff)
         f_sit = np.exp(-d2 / (2.0 * self.sit_sigma**2 * pool.sit.shape[1])).astype(np.float32)
         w = f_bat * f_sit * pool.recency
@@ -359,14 +473,18 @@ class FullPoolSampler:
 
         SIM-425: launch_angle (geom col 1) is returned so the resolver can tell a
         fly out (tag-up eligible) from a ground out for productive-out advancement.
+        SIM-511: on a transition bundle the drawn index maps through the PA's
+        base-out cell; read the row's transition via :meth:`last_transition`.
         """
         if self._bb_hand is None or self._bb_cdf is None or self._bb_cdf[-1] <= 0:
             self._bb_last_i = None
             return ("field_out", 0, 1, 0.0)
         pool = self.a.bb_pools[self._bb_hand]
-        i = min(
-            int(np.searchsorted(self._bb_cdf, self.rng.random() * self._bb_cdf[-1])), pool.n - 1
-        )
+        i = int(np.searchsorted(self._bb_cdf, self.rng.random() * self._bb_cdf[-1]))
+        if self._bb_rows is not None:
+            i = int(self._bb_rows[min(i, len(self._bb_rows) - 1)])
+        else:
+            i = min(i, pool.n - 1)
         self._bb_last_i = i  # SIM-425b: remember the row for the fielder lookup
         return (
             str(pool.event[i]),
@@ -374,6 +492,38 @@ class FullPoolSampler:
             int(pool.result_outs[i]),
             float(pool.geom[i, 1]),
         )
+
+    def last_transition(self) -> dict | None:
+        """SIM-511: the drawn row's full transition, or None (a legacy bundle,
+        or no draw yet — the caller then runs the legacy resolution).
+
+        Keys: ``r1``/``r2``/``r3`` — the destination of the pre-pitch runner
+        on that base (-1 = no runner; 4 = scored; 3/2/1 = the post base;
+        0 = retired); ``batter`` — the batter-runner's destination (0 = out);
+        ``adv1``/``adv2``/``adv3`` — thrown-out-advancing flags (a
+        discretionary out, never a force or a doubled-off runner);
+        ``is_air`` — a caught-ball row (the tag-up shape); ``ev``/``spray``/
+        ``dist`` — the throw geometry for the SIM-512 advancement kernel.
+        """
+        i = self._bb_last_i
+        if i is None or self._bb_hand is None or not self.has_transition(self._bb_hand):
+            return None
+        pool = self.a.bb_pools[self._bb_hand]
+        if pool.r1_adv_out is None or pool.spray_raw is None or pool.hit_dist is None:
+            return None
+        return {
+            "r1": int(pool.r1_dest[i]),
+            "r2": int(pool.r2_dest[i]),
+            "r3": int(pool.r3_dest[i]),
+            "batter": int(pool.batter_dest[i]),
+            "adv1": bool(pool.r1_adv_out[i]),
+            "adv2": bool(pool.r2_adv_out[i]),
+            "adv3": bool(pool.r3_adv_out[i]),
+            "is_air": bool(pool.is_air[i]),
+            "ev": float(pool.geom[i, 0]),
+            "spray": float(pool.spray_raw[i]),
+            "dist": float(pool.hit_dist[i]),
+        }
 
     def last_battedball_fielder(self) -> tuple[int, int, int] | None:
         """SIM-425b: ``(fielded_by_position, fielder_player_id, season)`` of the row
@@ -572,10 +722,13 @@ class FullPoolSampler:
         emb_rows_all: np.ndarray | None,
         rows: np.ndarray,
         feat_names: tuple[str, ...],
+        sigma: float | None = None,
     ) -> np.ndarray | None:
         """Gaussian similarity between the LIVE actor and each pool row's actor
-        over the steal-feature subset; 1.0 (neutral) for rows whose actor is
-        absent from the embedding, None when the whole factor is unavailable."""
+        over the given feature subset; 1.0 (neutral) for rows whose actor is
+        absent from the embedding, None when the whole factor is unavailable.
+        ``sigma`` overrides the steal bandwidth (the SIM-512 advancement draws
+        pass ``adv_sigma``)."""
         if emb_rows_all is None:
             return None
         z = self._emb_z(actor)
@@ -586,6 +739,7 @@ class FullPoolSampler:
         cols = self._steal_feat_cols(actor, feat_names)
         if live_idx is None or cols is None:
             return None
+        s = float(sigma) if sigma is not None else self.steal_sigma
         live = z[live_idx][cols]
         row_idx = emb_rows_all[rows]
         valid = row_idx >= 0
@@ -595,7 +749,7 @@ class FullPoolSampler:
         sub = z[row_idx[valid]][:, cols]
         diff = sub - live
         d2 = np.einsum("ij,ij->i", diff, diff)
-        out[valid] = np.exp(-d2 / (2.0 * self.steal_sigma**2 * len(cols))).astype(np.float32)
+        out[valid] = np.exp(-d2 / (2.0 * s**2 * len(cols))).astype(np.float32)
         return out
 
     def steal_draw(
@@ -679,3 +833,150 @@ class FullPoolSampler:
             bool(pool.pickoff_advancing[r]),
             bool(pool.pickoff_error[r]),
         )
+
+    # ---- SIM-512: the five-scenario advancement draw -----------------------
+
+    #: The runner kernel: how he runs AND how he decides. All columns of
+    #: derived.baserunner_season_metrics (the baserunner embedding).
+    _RUNNER_ADV_FEATURES = (
+        "sprint_speed",
+        "extra_base_attempt_rate",
+        "extra_base_success_rate",
+        "first_to_third_attempt_rate",
+        "second_to_home_attempt_rate",
+        "first_to_home_attempt_rate",
+        "tag_up_attempt_rate",
+    )
+    #: The fielder-arm kernel: a strong arm DETERS the send, because rows
+    #: against similar arms carry fewer attempts. Columns of
+    #: derived.fielder_season_metrics (the fielder embedding).
+    _FIELDER_ADV_FEATURES = (
+        "arm_strength",
+        "arm_hold_rate",
+        "arm_thrown_out_rate",
+        "arm_advancement_prevention",
+    )
+
+    def has_advancement(self) -> bool:
+        """SIM-512: True when the bundle carries the advancement pools."""
+        return bool(self.a.adv_pools)
+
+    def _adv_meta(self, key: str) -> dict | None:
+        """Per-decision one-time precompute: the z-scored throw-geometry
+        matrix + per-row embedding-row gathers for the runner and fielder."""
+        meta = self._adv_meta_cache.get(key)
+        if meta is not None:
+            return meta
+        pool = self.a.adv_pools.get(key)
+        if pool is None or pool.n == 0:
+            return None
+        feat = pool.feat.astype(np.float32)
+        mean = feat.mean(axis=0)
+        std = feat.std(axis=0)
+        std[std < 1e-6] = 1.0
+        zfeat = (feat - mean) / std
+
+        runner_rows = None
+        bemb = self.a.actor_emb.get("baserunner")
+        if bemb is not None:
+            kidx = bemb["key_index"]
+            runner_rows = np.fromiter(
+                (
+                    kidx.get(f"{int(r)}:{int(s)}", -1)
+                    for r, s in zip(pool.runner_id, pool.season, strict=False)
+                ),
+                dtype=np.int64,
+                count=pool.n,
+            )
+        fielder_rows = None
+        femb = self.a.actor_emb.get("fielder")
+        if femb is not None:
+            kidx = femb["key_index"]
+            fielder_rows = np.fromiter(
+                (
+                    kidx.get(f"{int(f)}:{_POS_NUM_TO_NAME.get(int(p), '?')}:{int(s)}", -1)
+                    for f, p, s in zip(pool.fielder_id, pool.fielder_pos, pool.season, strict=False)
+                ),
+                dtype=np.int64,
+                count=pool.n,
+            )
+        meta = {
+            "zfeat": zfeat,
+            "mean": mean,
+            "std": std,
+            "rows": np.arange(pool.n, dtype=np.int64),
+            "runner_rows": runner_rows,
+            "fielder_rows": fielder_rows,
+        }
+        self._adv_meta_cache[key] = meta
+        return meta
+
+    def advancement_draw(
+        self,
+        scenario: int,
+        from_base: int,
+        target_base: int,
+        runner_key: str,
+        fielder_key: str | None,
+        *,
+        outs: int,
+        exit_velo: float,
+        launch_angle: float,
+        spray_angle: float,
+        hit_distance: float,
+    ) -> tuple[bool, bool, bool] | None:
+        """SIM-512: draw ONE advancement-opportunity row -> (attempted, safe,
+        error_extra), or None when the pool/decision is absent (a legacy
+        bundle — the caller then stages no discretionary advancement).
+
+        The owner's rule (2026-08-10): every sim decision is a similarity-
+        weighted draw from a hard-filtered pool, never a hand-tuned formula.
+        Hard filter: the decision itself — (scenario, from_base, target_base)
+        is its own sub-pool. Weights: runner similarity (his legs AND his
+        decisions), the LIVE fielder's arm against each row fielder's arm
+        (a strong arm deters the send because rows against similar arms carry
+        fewer attempts), a z-scored kernel over the throw geometry (EV, LA,
+        spray, distance, outs), and recency. The drawn row answers the whole
+        question at once: ``attempted`` says whether he goes, ``safe`` says
+        the throw's outcome, ``error_extra`` the extra base on a bad throw.
+        """
+        key = f"{int(scenario)}_{int(from_base)}_{int(target_base)}"
+        pool = self.a.adv_pools.get(key)
+        meta = self._adv_meta(key)
+        if pool is None or meta is None:
+            return None
+        w = pool.recency.astype(np.float32).copy()
+        live = (
+            np.asarray([exit_velo, launch_angle, spray_angle, hit_distance, outs], dtype=np.float32)
+            - meta["mean"]
+        ) / meta["std"]
+        diff = meta["zfeat"] - live
+        d2 = np.einsum("ij,ij->i", diff, diff)
+        w *= np.exp(-d2 / (2.0 * self.adv_feat_sigma**2 * diff.shape[1])).astype(np.float32)
+        f = self._steal_actor_factor(
+            "baserunner",
+            runner_key,
+            meta["runner_rows"],
+            meta["rows"],
+            self._RUNNER_ADV_FEATURES,
+            sigma=self.adv_sigma,
+        )
+        if f is not None:
+            w *= f
+        if fielder_key:
+            f = self._steal_actor_factor(
+                "fielder",
+                fielder_key,
+                meta["fielder_rows"],
+                meta["rows"],
+                self._FIELDER_ADV_FEATURES,
+                sigma=self.adv_sigma,
+            )
+            if f is not None:
+                w *= f
+        total = float(w.sum())
+        if not np.isfinite(total) or total <= 0.0:
+            return None
+        cdf = np.cumsum(w, dtype=np.float64)
+        i = min(int(np.searchsorted(cdf, self.rng.random() * cdf[-1])), pool.n - 1)
+        return (bool(pool.attempted[i]), bool(pool.safe[i]), bool(pool.error_extra[i]))

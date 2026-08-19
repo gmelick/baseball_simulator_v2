@@ -260,6 +260,67 @@ def sql_outs_recorded(q: str = "") -> str:
 #: over-count, the formula reads 3 outs on 98.2% of completed half-innings.
 
 
+# ---------------------------------------------------------------------------
+# Transition destinations (SIM-510)
+# ---------------------------------------------------------------------------
+# The fielding-transition draw (SIM-511) applies a drawn pool row's whole
+# base-state transition, so the pool must encode where each body ended.
+# `raw.pitches` carries the truth: the ETL parser initializes the post-play
+# seats from the pre-play seats, re-seats every runner ``movement.end``,
+# and clears a scored or retired runner. A stranded runner therefore keeps
+# his base — an inning-ending third out never mislabels the survivors.
+#
+# Destination encoding (one SMALLINT per body):
+#   NULL = no runner on that base pre-pitch (runner columns only)
+#   4    = scored
+#   3/2/1 = the post-play base the body ended on
+#   0    = retired on the play
+
+TRANSITION_BASES = ("1b", "2b", "3b")
+
+
+def sql_runner_dest(base: str, q: str = "") -> str:
+    """CASE expression: the destination of the pre-pitch runner on ``base``.
+
+    The scored flag is checked FIRST — it is the official scoring, so run
+    timing (Rule 5.08) rides along for free. A runner found on no post-play
+    base who did not score was retired (the parser clears exactly those).
+    """
+    if base not in TRANSITION_BASES:
+        raise ValueError(f"base must be one of {TRANSITION_BASES}, got {base!r}")
+    r = f"{q}on_{base}"
+    return (
+        f"CASE WHEN {r} IS NULL THEN NULL "
+        f"WHEN COALESCE({q}runner_{base}_scored, FALSE) THEN 4 "
+        f"WHEN {q}post_on_3b = {r} THEN 3 "
+        f"WHEN {q}post_on_2b = {r} THEN 2 "
+        f"WHEN {q}post_on_1b = {r} THEN 1 "
+        f"ELSE 0 END"
+    )
+
+
+def sql_batter_dest(q: str = "", batter_expr: str | None = None) -> str:
+    """CASE expression: the batter-runner's destination (0 = out).
+
+    ``batter_expr`` overrides the batter-id column (e.g. ``"pp.batter_id"``
+    when the batter id lives on a joined table). The non-HR scoring branch
+    is runs accounting: when the play's runs exceed the named runner-scored
+    flags, the extra run is the batter's own trip around the bases.
+    """
+    b = batter_expr if batter_expr is not None else f"{q}batter"
+    return (
+        f"CASE WHEN {q}post_on_1b = {b} THEN 1 "
+        f"WHEN {q}post_on_2b = {b} THEN 2 "
+        f"WHEN {q}post_on_3b = {b} THEN 3 "
+        f"WHEN {q}events = 'home_run' THEN 4 "
+        f"WHEN COALESCE({q}runs_on_pitch, 0) > "
+        f"(COALESCE({q}runner_1b_scored, FALSE)::INT "
+        f"+ COALESCE({q}runner_2b_scored, FALSE)::INT "
+        f"+ COALESCE({q}runner_3b_scored, FALSE)::INT) THEN 4 "
+        f"ELSE 0 END"
+    )
+
+
 def sql_fielding_out(q: str = "") -> str:
     """Boolean: the play recorded at least one out (question 1)."""
     return f"{q}events IN {sql_list(sorted(FIELDING_OUT_EVENTS))}"

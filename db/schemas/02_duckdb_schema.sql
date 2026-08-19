@@ -921,6 +921,31 @@ CREATE TABLE IF NOT EXISTS sim.outcome_pool (
     venue_id                    INTEGER,                -- SIM-411: joins derived.park_factors(venue_id, season)
     fielder_player_id           INTEGER,                -- SIM-425b: raw.pitches.fielded_by (who fielded; NULL when uncredited)
 
+    -- SIM-510 transition facts (migration 0018). Appended LAST for the same
+    -- positional-INSERT reason as the 0012 block above. The drawn row IS the
+    -- play (SIM-511): these columns carry the whole base-state transition.
+    on_1b                       INTEGER,                -- pre-pitch runner identities (raw.pitches.on_*)
+    on_2b                       INTEGER,
+    on_3b                       INTEGER,
+    post_on_1b                  INTEGER,                -- post-play runner identities (raw.pitches.post_on_*)
+    post_on_2b                  INTEGER,
+    post_on_3b                  INTEGER,
+    runner_1b_scored            BOOLEAN     DEFAULT FALSE,  -- official scoring (run timing included)
+    runner_2b_scored            BOOLEAN     DEFAULT FALSE,
+    runner_3b_scored            BOOLEAN     DEFAULT FALSE,
+    runner_1b_out_advancing     BOOLEAN     DEFAULT FALSE,  -- tag out taking an extra base (never a force)
+    runner_2b_out_advancing     BOOLEAN     DEFAULT FALSE,
+    runner_3b_out_advancing     BOOLEAN     DEFAULT FALSE,
+    -- Derived destinations: NULL = no runner on that base pre-pitch;
+    -- 4 = scored; 3/2/1 = the post-play base; 0 = retired on the play.
+    runner_1b_dest              SMALLINT,
+    runner_2b_dest              SMALLINT,
+    runner_3b_dest              SMALLINT,
+    batter_dest                 SMALLINT,
+    -- The derivation guard: retired bodies == result_outs. The artifact
+    -- export excludes inconsistent rows; validation measures their rate.
+    dest_outs_consistent        BOOLEAN,
+
     PRIMARY KEY (pitch_id)
 );
 
@@ -936,6 +961,57 @@ CREATE INDEX IF NOT EXISTS idx_op_season       ON sim.outcome_pool(season);
 CREATE INDEX IF NOT EXISTS idx_op_stand_season ON sim.outcome_pool(stand, season);
 
 COMMENT ON TABLE  sim.outcome_pool IS 'In-play subset of pitch_pool with full batted ball detail. Input to Steps 3b/4/5.';
+
+-- =============================================================================
+-- SIM.ADVANCEMENT_OPPORTUNITY_POOL  (SIM-510, migration 0018)
+-- One row per discretionary runner-advancement decision, attempted or not
+-- (the SIM-468 denominator lesson). (scenario, from_base, target_base) name
+-- the decision:
+--   1 = 1st->3rd on a single      (1, 3)
+--   2 = 2nd->home on a single     (2, 4)
+--   3 = 1st->home on a double     (1, 4)
+--   4 = tag up on a caught ball   (3, 4) / (2, 3) / (1, 2)
+--   5 = the batter stretches      (0, 2) on a single / (0, 3) on a double
+-- The SIM-512 advancement draw picks one row and reads attempted/safe/
+-- error_extra. Built from sim.outcome_pool AFTER the outcome pool rebuild.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS sim.advancement_opportunity_pool (
+    pitch_id        BIGINT      NOT NULL,
+    game_pk         INTEGER     NOT NULL,
+    at_bat_number   INTEGER     NOT NULL,
+    pitch_number    INTEGER     NOT NULL,
+    game_date       DATE        NOT NULL,
+    season          SMALLINT    NOT NULL,
+
+    scenario        SMALLINT    NOT NULL CHECK (scenario BETWEEN 1 AND 5),
+    from_base       SMALLINT    NOT NULL CHECK (from_base BETWEEN 0 AND 3),
+    target_base     SMALLINT    NOT NULL CHECK (target_base BETWEEN 2 AND 4),
+
+    runner_id       INTEGER     NOT NULL,   -- the deciding runner (the batter for scenario 5)
+    fielder_id      INTEGER,                -- whose arm the throw comes from
+    fielder_pos     SMALLINT,
+
+    outs            SMALLINT    NOT NULL CHECK (outs BETWEEN 0 AND 2),
+    exit_velo       FLOAT,
+    launch_angle    FLOAT,
+    spray_angle     FLOAT,
+    hit_distance    FLOAT,
+
+    attempted       BOOLEAN     NOT NULL,
+    safe            BOOLEAN     NOT NULL DEFAULT FALSE,
+    error_extra     BOOLEAN     NOT NULL DEFAULT FALSE,
+
+    recency_weight  FLOAT       NOT NULL DEFAULT 1.0,
+
+    PRIMARY KEY (pitch_id, scenario, from_base)
+);
+
+CREATE INDEX IF NOT EXISTS idx_aop_season   ON sim.advancement_opportunity_pool(season);
+CREATE INDEX IF NOT EXISTS idx_aop_decision ON sim.advancement_opportunity_pool(scenario, from_base, target_base);
+
+COMMENT ON TABLE sim.advancement_opportunity_pool IS
+'SIM-510: one row per discretionary runner-advancement decision (five scenarios), attempted or not. The SIM-512 advancement draw picks one row and reads attempted/safe/error_extra.';
 
 -- =============================================================================
 -- SIM.STOLEN_BASE_POOL

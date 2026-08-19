@@ -710,14 +710,15 @@ class PlayResult:
     event: str | None = None
 
     # ---- step 8: run value + SIM-312 run-resolution provenance --------------
-    #: The resolved run *value* of the play (RE24 or linear-weight). Computed by
+    #: The resolved run *value* of the play (RE24 over real states). Computed by
     #: ``simulation.run_resolution.resolve_runs`` (SIM-312) — the loop must NOT
     #: re-derive this inline (spec §8).
     runs: float = 0.0
-    #: How ``runs`` was resolved: "re24_delta" (primary) / "linear_weight"
-    #: (fallback) — mirrors ``run_resolution.RunResolution.method``.
+    #: How ``runs`` was resolved: always "re24_delta" (the linear-weight
+    #: fallback was removed 2026-08-19) — mirrors
+    #: ``run_resolution.RunResolution.method``.
     run_resolution_method: str | None = None
-    #: The canonical RUN_VALUES key the event resolved to (SIM-312), if any.
+    #: The canonical outcome key the event resolved to (SIM-312), if any.
     canonical_event: str | None = None
     #: Base-out run expectancy before/after the play (SIM-312 RE24 provenance).
     re_start: float | None = None

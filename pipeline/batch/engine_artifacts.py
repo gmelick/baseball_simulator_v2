@@ -129,6 +129,33 @@ def build_battedball_pool_artifact(
         "AND launch_angle IS NOT NULL AND pull_relative_spray_angle IS NOT NULL"
     )
     counts: dict[str, int] = {}
+    # SIM-510: the transition columns exist only on a 0018-migrated DB. Export
+    # them when present; a pre-0018 DB still exports the legacy shape. The
+    # export keeps EVERY row (SIM-510 is behavior-neutral) — the SIM-511
+    # fielding draw's cell index is what excludes ``dest_ok = 0`` rows.
+    op_cols = {str(d[0]) for d in con.execute("SELECT * FROM sim.outcome_pool LIMIT 0").description}
+    has_transition = op_cols >= _BB_TRANSITION_SOURCE_COLS
+    transition_select = (
+        ", runner_1b_dest, runner_2b_dest, runner_3b_dest, batter_dest, "
+        "COALESCE(dest_outs_consistent, FALSE) AS dest_ok, "
+        # SIM-511 normalization facts: the thrown-out-advancing flags tell a
+        # discretionary out from a force/doubled-off out; is_air marks the
+        # tag-up shape (SAME definition as the SIM-510 builder's scenario 4);
+        # raw spray + distance feed the SIM-512 advancement kernel (the bb
+        # geom carries only the PULL-relative spray).
+        "COALESCE(runner_1b_out_advancing, FALSE) AS r1_adv_out, "
+        "COALESCE(runner_2b_out_advancing, FALSE) AS r2_adv_out, "
+        "COALESCE(runner_3b_out_advancing, FALSE) AS r3_adv_out, "
+        "COALESCE(bb_type IN ('fly_ball', 'popup', 'line_drive'), FALSE) AS is_air, "
+        "spray_angle AS spray_raw, hit_distance AS hit_dist"
+        if has_transition
+        else ""
+    )
+    if not has_transition:
+        log.warning(
+            "battedball_pool: sim.outcome_pool has no SIM-510 transition columns "
+            "(pre-0018 DB) — exporting the legacy shape."
+        )
     for hand in ("L", "R"):
         w = where % hand
         d = con.execute(
@@ -151,8 +178,10 @@ def build_battedball_pool_artifact(
             # park multiplier; fielded_by_position + fielder_player_id the SIM-425b
             # relative defensive nudge. The loader is back-compatible when these are
             # absent (a pre-0012 artifact), so writing them is safe to roll out ahead
-            # of the consumers.
-            "p_throws, venue_id, fielded_by_position, fielder_player_id "
+            # of the consumers. SIM-510 appends the transition destinations the same
+            # back-compatible way.
+            "p_throws, venue_id, fielded_by_position, fielder_player_id"
+            f"{transition_select} "
             f"FROM sim.outcome_pool WHERE {w}) "
             f"TO '{os.path.join(pool_dir, f'{hand}.meta.parquet')}' (FORMAT parquet)"
         )
@@ -165,12 +194,28 @@ def build_battedball_pool_artifact(
                 "counts": counts,
                 "geom_cols": _BB_GEOM_COLS,
                 "sit_cols": _SIT_COLS,
+                "transition": has_transition,
             },
             fh,
             indent=2,
         )
     return counts
 
+
+#: SIM-510: the outcome-pool columns the transition export needs. Presence of
+#: ALL of them marks a 0018-migrated, sim510.1-rebuilt DB.
+_BB_TRANSITION_SOURCE_COLS = frozenset(
+    {
+        "runner_1b_dest",
+        "runner_2b_dest",
+        "runner_3b_dest",
+        "batter_dest",
+        "dest_outs_consistent",
+        "runner_1b_out_advancing",
+        "runner_2b_out_advancing",
+        "runner_3b_out_advancing",
+    }
+)
 
 #: The steal draw's situation columns (SIM-474). `outs` and the count are the
 #: hard-filter cell; `score_diff` is soft-kernelled. `inning` is deliberately
@@ -222,6 +267,68 @@ def build_steal_pool_artifact(
         log.info("steal_pool[%s]: %d rows (seasons %s)", target, n, seasons)
     with open(os.path.join(pool_dir, "manifest.json"), "w", encoding="utf-8") as fh:
         json.dump({"seasons": seasons, "counts": counts, "sit_cols": _STEAL_SIT_COLS}, fh, indent=2)
+    return counts
+
+
+#: SIM-510: the eight advancement decisions, keyed "{scenario}_{from_base}_
+#: {target_base}" (see the migration-0018 header for the scenario names).
+_ADV_KEYS = ("1_1_3", "2_2_4", "3_1_4", "4_1_2", "4_2_3", "4_3_4", "5_0_2", "5_0_3")
+
+#: The advancement draw's kernel features: the batted ball's geometry (the
+#: throw context) + the pre-pitch outs (a two-out contact play runs harder).
+_ADV_FEAT_COLS = ["exit_velo", "launch_angle", "spray_angle", "hit_distance", "outs"]
+
+
+def build_advancement_pool_artifact(
+    con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]
+) -> dict[str, int]:
+    """Write the per-decision advancement OPPORTUNITY pools for SIM-512.
+
+    One row per discretionary runner-advancement decision (SIM-510),
+    attempted or not — the non-attempt rows are the denominator, exactly the
+    steal-pool pattern. Sub-pools split by (scenario, from_base, target_base)
+    because each is a different decision with different rates.
+    """
+    exists = con.execute(
+        "SELECT COUNT(*) FROM information_schema.tables "
+        "WHERE table_schema = 'sim' AND table_name = 'advancement_opportunity_pool'"
+    ).fetchone()[0]
+    if not exists:
+        log.warning(
+            "advancement_pool: sim.advancement_opportunity_pool absent "
+            "(pre-0018 DB) — skipping the export."
+        )
+        return {}
+    pool_dir = os.path.join(out_dir, "advancement_pool")
+    os.makedirs(pool_dir, exist_ok=True)
+    season_list = ", ".join(str(int(s)) for s in seasons)
+    counts: dict[str, int] = {}
+    for key in _ADV_KEYS:
+        scen, frm, tgt = (int(x) for x in key.split("_"))
+        w = (
+            f"scenario = {scen} AND from_base = {frm} AND target_base = {tgt} "
+            f"AND season IN ({season_list})"
+        )
+        d = con.execute(
+            f"SELECT {', '.join(_ADV_FEAT_COLS)} FROM sim.advancement_opportunity_pool WHERE {w}"
+        ).fetchnumpy()
+        n = len(d[_ADV_FEAT_COLS[0]])
+        feat = np.nan_to_num(
+            np.stack(
+                [np.ma.filled(d[c], np.nan).astype(np.float32) for c in _ADV_FEAT_COLS], axis=1
+            )
+        ).astype(np.float32)
+        np.save(os.path.join(pool_dir, f"{key}.feat.npy"), feat)
+        con.execute(
+            "COPY (SELECT runner_id, fielder_id, fielder_pos, season, "
+            "attempted, safe, error_extra, recency_weight "
+            f"FROM sim.advancement_opportunity_pool WHERE {w}) "
+            f"TO '{os.path.join(pool_dir, f'{key}.meta.parquet')}' (FORMAT parquet)"
+        )
+        counts[key] = int(n)
+        log.info("advancement_pool[%s]: %d rows (seasons %s)", key, n, seasons)
+    with open(os.path.join(pool_dir, "manifest.json"), "w", encoding="utf-8") as fh:
+        json.dump({"seasons": seasons, "counts": counts, "feat_cols": _ADV_FEAT_COLS}, fh, indent=2)
     return counts
 
 
@@ -404,6 +511,25 @@ class BattedBallPool:
     venue_id: np.ndarray | None = None  # (N,) int64 — SIM-411 park factor
     fielder_pos: np.ndarray | None = None  # (N,) int8 (1–9) — SIM-425b
     fielder_id: np.ndarray | None = None  # (N,) int64 — SIM-425b defensive quality
+    # SIM-510 transition destinations (None on a pre-0018 bundle). Encoding:
+    # -1 = no runner on that base pre-pitch; 4 = scored; 3/2/1 = the post-play
+    # base; 0 = retired on the play. ``dest_ok`` is the outs-accounting guard —
+    # the SIM-511 fielding draw's cell index keeps only dest_ok rows.
+    r1_dest: np.ndarray | None = None  # (N,) int8
+    r2_dest: np.ndarray | None = None  # (N,) int8
+    r3_dest: np.ndarray | None = None  # (N,) int8
+    batter_dest: np.ndarray | None = None  # (N,) int8
+    dest_ok: np.ndarray | None = None  # (N,) int8 (0/1)
+    # SIM-511 normalization facts: the thrown-out-advancing flags (a
+    # discretionary out, never a force or a doubled-off runner), the air-ball
+    # flag (the tag-up shape), and the raw spray/distance the SIM-512
+    # advancement kernel conditions on.
+    r1_adv_out: np.ndarray | None = None  # (N,) int8 (0/1)
+    r2_adv_out: np.ndarray | None = None  # (N,) int8 (0/1)
+    r3_adv_out: np.ndarray | None = None  # (N,) int8 (0/1)
+    is_air: np.ndarray | None = None  # (N,) int8 (0/1)
+    spray_raw: np.ndarray | None = None  # (N,) float32 (field-side spray)
+    hit_dist: np.ndarray | None = None  # (N,) float32
 
     @property
     def n(self) -> int:
@@ -451,6 +577,31 @@ class StealPool:
         return int(self.sit.shape[0])
 
 
+@dataclass
+class AdvancementPool:
+    """One advancement decision's resident opportunity pool (SIM-510/512).
+
+    Keyed ``"{scenario}_{from_base}_{target_base}"`` (see :data:`_ADV_KEYS`).
+    One row per opportunity, attempted or not — ``attempted`` is the
+    denominator, exactly the steal-pool pattern. The SIM-512 draw picks one
+    row and reads ``attempted`` / ``safe`` / ``error_extra`` together.
+    """
+
+    feat: np.ndarray  # (N, 5) float32 — exit_velo, launch_angle, spray, distance, outs
+    runner_id: np.ndarray  # (N,) int64 (the batter for scenario 5)
+    fielder_id: np.ndarray  # (N,) int64 (0 when uncredited)
+    fielder_pos: np.ndarray  # (N,) int8 (1–9; 0 when uncredited)
+    season: np.ndarray  # (N,) int64
+    attempted: np.ndarray  # (N,) int8 (0/1)
+    safe: np.ndarray  # (N,) int8 (0/1)
+    error_extra: np.ndarray  # (N,) int8 (0/1)
+    recency: np.ndarray  # (N,) float32
+
+    @property
+    def n(self) -> int:
+        return int(self.feat.shape[0])
+
+
 #: SIM-403b — the shareable subset of numpy arrays inside an EngineArtifacts
 #: bundle, by flat name. Used for zero-copy publication into
 #: ``multiprocessing.shared_memory`` so worker subprocesses don't each copy the
@@ -483,6 +634,19 @@ _BB_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "venue_id",
     "fielder_pos",
     "fielder_id",
+    # SIM-510: the transition destinations (None on a pre-0018 bundle).
+    "r1_dest",
+    "r2_dest",
+    "r3_dest",
+    "batter_dest",
+    "dest_ok",
+    # SIM-511: the normalization facts + the advancement-kernel geometry.
+    "r1_adv_out",
+    "r2_adv_out",
+    "r3_adv_out",
+    "is_air",
+    "spray_raw",
+    "hit_dist",
 )
 _ACTOR_EMB_SHAREABLE_ATTRS: tuple[str, ...] = ("vecs", "mean", "std")
 #: SIM-474: every StealPool column is numeric, so the whole pool is shareable.
@@ -498,6 +662,18 @@ _STEAL_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "pickoff_out",  # SIM-507
     "pickoff_advancing",
     "pickoff_error",
+)
+#: SIM-510: every AdvancementPool column is numeric, so the whole pool is shareable.
+_ADV_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
+    "feat",
+    "runner_id",
+    "fielder_id",
+    "fielder_pos",
+    "season",
+    "attempted",
+    "safe",
+    "error_extra",
+    "recency",
 )
 
 
@@ -526,11 +702,16 @@ class EngineArtifacts:
         bb_pools=None,
         pitcher_sim_matrix=None,
         steal_pools=None,
+        adv_pools=None,
     ):
         self.pools: dict[str, HandPool] = pools
         self.bb_pools: dict[str, BattedBallPool] = bb_pools or {}
         #: SIM-474: target base ("2"/"3") -> StealPool; {} on a legacy bundle.
         self.steal_pools: dict[str, StealPool] = steal_pools or {}
+        #: SIM-510: decision key ("{scenario}_{from_base}_{target_base}") ->
+        #: AdvancementPool; {} on a legacy bundle (the SIM-512 draw then
+        #: stages no discretionary advancement).
+        self.adv_pools: dict[str, AdvancementPool] = adv_pools or {}
         self.pitcher_sim_index: dict[str, int] = pitcher_sim_index or {}
         self.pitcher_sim: dict[str, dict[str, float]] = pitcher_sim or {}
         #: SIM-430: dense (n_prof x n_prof) float32 same-hand similarity matrix.
@@ -595,6 +776,12 @@ class EngineArtifacts:
                 arr = getattr(spool, attr, None)
                 if isinstance(arr, np.ndarray):
                     out[f"steal_pool.{target}.{attr}"] = arr
+        # SIM-510: the advancement opportunity pools.
+        for key, apool in self.adv_pools.items():
+            for attr in _ADV_POOL_SHAREABLE_ATTRS:
+                arr = getattr(apool, attr, None)
+                if isinstance(arr, np.ndarray):
+                    out[f"adv_pool.{key}.{attr}"] = arr
         # SIM-430: the dense pitcher similarity matrix (replaces the ~2 GB dict).
         if isinstance(self.pitcher_sim_matrix, np.ndarray):
             out["pitcher_sim.matrix"] = self.pitcher_sim_matrix
@@ -643,6 +830,12 @@ class EngineArtifacts:
                 v = views.get(f"steal_pool.{target}.{attr}")
                 if isinstance(v, np.ndarray):
                     setattr(spool, attr, v)
+        # SIM-510: attach the shared advancement-pool views.
+        for key, apool in self.adv_pools.items():
+            for attr in _ADV_POOL_SHAREABLE_ATTRS:
+                v = views.get(f"adv_pool.{key}.{attr}")
+                if isinstance(v, np.ndarray):
+                    setattr(apool, attr, v)
         # SIM-430: attach the shared dense pitcher-sim matrix view.
         mv = views.get("pitcher_sim.matrix")
         if isinstance(mv, np.ndarray):
@@ -770,6 +963,19 @@ class EngineArtifacts:
                             "venue_id",
                             "fielded_by_position",
                             "fielder_player_id",
+                            # SIM-510: the transition destinations.
+                            "runner_1b_dest",
+                            "runner_2b_dest",
+                            "runner_3b_dest",
+                            "batter_dest",
+                            "dest_ok",
+                            # SIM-511: the normalization facts + geometry.
+                            "r1_adv_out",
+                            "r2_adv_out",
+                            "r3_adv_out",
+                            "is_air",
+                            "spray_raw",
+                            "hit_dist",
                         )
                         if c in avail
                     ]
@@ -829,6 +1035,20 @@ class EngineArtifacts:
                         fielder_id=_bb_take(
                             hand, m, "fielder_id", "fielder_player_id", np.int64, 0
                         ),
+                        # SIM-510: the transition destinations (-1 = no runner on
+                        # that base pre-pitch; None on a pre-0018 bundle).
+                        r1_dest=_bb_take(hand, m, "r1_dest", "runner_1b_dest", np.int8, -1),
+                        r2_dest=_bb_take(hand, m, "r2_dest", "runner_2b_dest", np.int8, -1),
+                        r3_dest=_bb_take(hand, m, "r3_dest", "runner_3b_dest", np.int8, -1),
+                        batter_dest=_bb_take(hand, m, "batter_dest", "batter_dest", np.int8, -1),
+                        dest_ok=_bb_take(hand, m, "dest_ok", "dest_ok", np.int8, 0),
+                        # SIM-511: the normalization facts + geometry.
+                        r1_adv_out=_bb_take(hand, m, "r1_adv_out", "r1_adv_out", np.int8, 0),
+                        r2_adv_out=_bb_take(hand, m, "r2_adv_out", "r2_adv_out", np.int8, 0),
+                        r3_adv_out=_bb_take(hand, m, "r3_adv_out", "r3_adv_out", np.int8, 0),
+                        is_air=_bb_take(hand, m, "is_air", "is_air", np.int8, 0),
+                        spray_raw=_bb_take(hand, m, "spray_raw", "spray_raw", np.float32, 0),
+                        hit_dist=_bb_take(hand, m, "hit_dist", "hit_dist", np.float32, 0),
                     )
             # SIM-474: the steal opportunity pools ("2" = 1B->2B, "3" = 2B->3B).
             # Presence-gated like the batted-ball pool: {} on a legacy bundle,
@@ -881,6 +1101,43 @@ class EngineArtifacts:
                             "pickoff_advancing", "pickoff_advancing", np.int8, 0
                         ),
                         pickoff_error=_sp_take("pickoff_error", "pickoff_error", np.int8, 0),
+                    )
+            # SIM-510: the advancement opportunity pools, one per decision key.
+            # Presence-gated like the others: {} on a legacy bundle, and the
+            # SIM-512 draw then stages no discretionary advancement.
+            adv_pools: dict[str, AdvancementPool] = {}
+            ap_dir = os.path.join(art_dir, "advancement_pool")
+            if os.path.exists(os.path.join(ap_dir, "manifest.json")):
+                for key in _ADV_KEYS:
+                    meta_path = os.path.join(ap_dir, f"{key}.meta.parquet")
+                    if not os.path.exists(meta_path):
+                        continue
+                    m = con.execute(f"SELECT * FROM read_parquet('{meta_path}')").fetchnumpy()
+
+                    def _ap_take(attr: str, col: str, dtype, fill, *, _k=key, _m=m) -> np.ndarray:
+                        # _k/_m bind the loop variables at definition time (B023).
+                        v = views.get(f"adv_pool.{_k}.{attr}")
+                        if isinstance(v, np.ndarray):
+                            return v
+                        return np.asarray(np.ma.filled(_m[col], fill), dtype=dtype)
+
+                    adv_pools[key] = AdvancementPool(
+                        feat=_take(f"adv_pool.{key}.feat", os.path.join(ap_dir, f"{key}.feat.npy")),
+                        runner_id=_ap_take("runner_id", "runner_id", np.int64, 0),
+                        fielder_id=_ap_take("fielder_id", "fielder_id", np.int64, 0),
+                        fielder_pos=_ap_take("fielder_pos", "fielder_pos", np.int8, 0),
+                        season=_ap_take("season", "season", np.int64, 0),
+                        attempted=_ap_take("attempted", "attempted", np.int8, 0),
+                        safe=_ap_take("safe", "safe", np.int8, 0),
+                        error_extra=_ap_take("error_extra", "error_extra", np.int8, 0),
+                        recency=(
+                            views.get(f"adv_pool.{key}.recency")
+                            if isinstance(views.get(f"adv_pool.{key}.recency"), np.ndarray)
+                            else np.nan_to_num(
+                                np.ma.filled(m["recency_weight"], 1.0).astype(np.float32),
+                                nan=1.0,
+                            )
+                        ),
                     )
         finally:
             con.close()
@@ -944,6 +1201,7 @@ class EngineArtifacts:
             bb_pools,
             ps_matrix,
             steal_pools,
+            adv_pools,
         )
 
 
@@ -975,6 +1233,7 @@ def main(argv: list[str] | None = None) -> int:
             build_pitch_pool_artifact(con, args.out_dir, seasons)
             build_battedball_pool_artifact(con, args.out_dir, seasons)
             build_steal_pool_artifact(con, args.out_dir, seasons)
+            build_advancement_pool_artifact(con, args.out_dir, seasons)
         if args.what in ("actors", "all"):
             build_actor_embeddings(con, args.out_dir)
         if args.what in ("pitcher_sim", "all"):

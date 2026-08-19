@@ -139,8 +139,13 @@ TICKET ships as ``@pytest.mark.xfail(strict=True)``:
     engineer must delete the marker.
 
 Band assertions whose defect is open carry the marker, each naming its
-ticket. The 2026-08-16 state (R deleted after the SIM-459 rebuild measured it
-IN band; SB / CS / the steal call-count deleted when SIM-474 landed)::
+ticket. The 2026-08-19 state: NO channel carries a marker. The last three
+(H / DP / ROE_reached, all SIM-494/496) were deleted with the SIM-511+512
+transition-draw landing — the drawn row IS the play, so a double play removes
+its runner, a reach-on-error puts the batter on base, and field_error is its
+own canonical outcome (never a hit). Earlier deletions: R after the SIM-459
+rebuild measured it IN band; SB / CS / the steal call-count when SIM-474
+landed. The 2026-08-16 table, kept for history::
 
     H             SIM-496   BACKLOG.md:20  a retired batter is credited a hit
     DP            SIM-494   BACKLOG.md:18  measured 0.1600 against 0.8160
@@ -510,19 +515,13 @@ def test_runs_band_sim450(acceptance_run: AcceptanceRun) -> None:
     _assert_band(acceptance_run, "R")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "SIM-496 (BACKLOG.md:20). simulation/constants.py:177 aliases the Statcast "
-        "field_error event to the canonical single, so a batter the loop just retired is "
-        "credited a hit. That inflates H by the whole reach-on-error rate, 0.2193 per "
-        "team-game, against a round-3 floor of 0.1359. The day-one run measured H at "
-        "+7.7%, which is larger still and unexplained. Delete this marker when H lands "
-        "inside the band."
-    ),
-)
+# The SIM-496 expected-red xfail lived here from 2026-08-10 to 2026-08-19:
+# constants.py aliased field_error to the canonical single, crediting a
+# retired batter a hit. The SIM-511 landing made field_error its own
+# canonical outcome — a reach, never a hit — so the alias and the marker
+# went together.
 def test_hits_band_sim450(acceptance_run: AcceptanceRun) -> None:
-    """Hits per team per game. Includes reaches on error — see SIM-496."""
+    """Hits per team per game. A reach on error is NOT counted (SIM-496/511)."""
     _assert_band(acceptance_run, "H")
 
 
@@ -591,26 +590,18 @@ def test_caught_stealing_band_sim450(acceptance_run: AcceptanceRun) -> None:
     _assert_band(acceptance_run, "CS")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "SIM-494 (BACKLOG.md:18). Measured 0.1600 against 0.8160 (-80.4%) at 400 "
-        "production game-sims on 2026-08-10 — five times too few double plays. Likely "
-        "site: the SIM-429 phantom-DP guard at sim_loop.py:1424-1434, which records a "
-        "second out only when state.bases.first holds a runner AND state.outs < 2, and "
-        "relabels every other drawn double play to a plain field_out. That guard fixed a "
-        "real over-count and may now over-correct — MEASURE before changing it. Too few "
-        "double plays lengthens innings and adds runs, so it works against the R gap and "
-        "may be masking part of it. Delete this marker when DP lands inside the band."
-    ),
-)
+# The SIM-494 expected-red xfail lived here from 2026-08-10 to 2026-08-19:
+# the phantom-DP guard relabeled ~55% of drawn double plays and no runner was
+# ever removed (0.1600 measured against 0.8160). The SIM-511 landing draws a
+# transition row hard-filtered to the live base-out cell, so every drawn DP
+# arrives with a real runner to retire and the guard is bypassed.
 def test_double_play_band_sim450(acceptance_run: AcceptanceRun) -> None:
     """Double plays turned against the batting team, per team per game.
 
     Counted from the ``_full_pool_fielding`` signal: the drawn event is in
-    ``_DOUBLE_PLAY_EVENTS`` AND the play recorded at least two outs. The second
-    condition matters — the phantom-DP guard relabels a runner-less draw, so
-    counting drawn events alone would over-count.
+    ``_DOUBLE_PLAY_EVENTS`` AND the play recorded at least two outs. The
+    second condition kept the phantom-DP-guard era honest and stays as
+    defense in depth on the legacy path.
     """
     _assert_band(acceptance_run, "DP")
 
@@ -630,19 +621,10 @@ def test_reach_on_error_drawn_band_sim450(acceptance_run: AcceptanceRun) -> None
     _assert_band(acceptance_run, "ROE")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "SIM-496 (BACKLOG.md:20). _full_pool_fielding infers outs = 0 if rh > 0 else 1 "
-        "(sim_loop.py:1432) and a pool field_error row carries result_hits = 0, so every "
-        "drawn reach on error becomes a one-out field_out and the batter never reaches "
-        "base. The only site that builds the correct shape (sim_loop.py:1992, the "
-        "dropped third strike) cannot fire in production per SIM-484. So nothing reaches "
-        "base on an error at all: 0.0000 against 0.2193, -100%. BACKLOG.md:20 requires "
-        "this channel in as many words. Delete this marker when batters start reaching "
-        "on errors."
-    ),
-)
+# The SIM-496 expected-red xfail lived here from 2026-08-10 to 2026-08-19:
+# the out-inference turned every drawn reach-on-error into a one-out
+# field_out (ROE_reached 0.0000 against 0.2193). The SIM-511 landing applies
+# the drawn row's batter destination, so the batter actually reaches.
 def test_reach_on_error_reached_band_sim450(acceptance_run: AcceptanceRun) -> None:
     """Batters who ACTUALLY reached on an error, per team per game (SIM-496).
 

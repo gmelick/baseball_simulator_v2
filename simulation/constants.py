@@ -1,69 +1,46 @@
-"""simulation.constants — Centralized run-value constants (SIM-202, SIM-312).
+"""simulation.constants — the canonical outcome vocabulary + defensive run
+values (SIM-202, SIM-312, SIM-511).
 
-This module is the single, sourced home for the run-value constants used
-throughout the simulator. It exposes:
+This module is the single home for:
 
-  * ``RUN_VALUES``          — offensive *linear weights* (Tango / "The Book"
-                              style) for the 12 standard plate-appearance
-                              outcomes, anchored to a 2024 run environment.
+  * ``CANONICAL_OUTCOME_KEYS`` — the canonical plate-appearance outcome
+                              vocabulary every consumer keys on (the ledger's
+                              ``canonical_event``, the linescore, the sim
+                              store, the acceptance bands).
   * ``DEFENSIVE_RUN_VALUES`` — defensive run conversions used by the
                               fielder / catcher engines (runs saved per out,
                               per block, per framing strike).
-  * ``STATCAST_EVENT_ALIASES`` + ``resolve_event_to_canonical`` /
-    ``run_value_for_event`` — SIM-312: map Statcast's raw ``events`` vocabulary
-    onto the canonical ``RUN_VALUES`` keys so the play pool's sampled events
-    never silently score 0.0.
+  * ``STATCAST_EVENT_ALIASES`` + ``resolve_event_to_canonical`` — SIM-312:
+    map Statcast's raw ``events`` vocabulary onto the canonical keys so the
+    play pool's sampled events always resolve.
 
-Why centralize?
----------------
-Before this module these magic numbers lived inline in pipeline and engine
-code. Centralizing them gives one auditable, citeable source so the Baseball
-Analyst methodology stays consistent across the codebase, and so a future
-season re-baseline is a one-file change.
+THE LINEAR-WEIGHT NUMBERS WERE REMOVED (owner ruling 2026-08-19, the
+SIM-511+512 landing). The old ``RUN_VALUES`` table carried a hand-set average
+run value per outcome. Production never read them: the ledger accepts only
+the RE24-delta method (real pre/post base-out states plus the runs that
+scored — ``simulation.run_resolution``), and the context-free fallback was
+consumed by tests alone (verified 2026-08-19). Only the KEYS were load-
+bearing, so the keys are what remains. Do not reintroduce a run-value table;
+a play's value comes from the RE24 matrix and real states, never a constant.
 
 -------------------------------------------------------------------------------
-OFFENSIVE LINEAR WEIGHTS  (``RUN_VALUES``)
+CANONICAL OUTCOME VOCABULARY  (``CANONICAL_OUTCOME_KEYS``)
 -------------------------------------------------------------------------------
-"Linear weights" express the average run value of each plate-appearance
-outcome relative to a generic batting out, in the spirit of Tom Tango,
-Mitchel Lichtman & Andrew Dolphin, *The Book: Playing the Percentages in
-Baseball* (2007), and the FanGraphs wOBA / linear-weights run-value tables.
-
-Anchoring (run environment)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-These values are anchored to the **2024 MLB run environment** (~4.39 R/team/G,
-league wOBA ~ .310, wOBA scale ~ 1.24 per the FanGraphs 2024 guts/constants
-table). The event weights below are the *absolute* run values (runs above a
-zero baseline, with the out carrying its true negative value) consistent with
-that environment, i.e. the canonical Tango linear-weight set lightly tuned to
-2024:
-
-    walk (uBB)            +0.55
-    hit-by-pitch (HBP)    +0.58   (slightly > BB: cannot be intentional)
-    single (1B)           +0.70
-    double (2B)           +1.00
-    triple (3B)           +1.27
-    home run (HR)         +1.65
-    batting out / K       -0.27   (the cost of making an out in 2024)
-
-Derived / situational outcomes (also 2024-anchored, from FanGraphs/Tango):
-    intentional walk      +0.18   (IBB is worth far less than uBB)
-    strikeout             -0.27   (~ the generic batting out)
-    field out (BIP out)   -0.27   (generic out value)
-    GIDP                  -0.79   (the out PLUS the second out / lost runner)
-    sacrifice fly         +0.22   (productive out: scores a runner from 3rd)
-    sacrifice hit (bunt)  -0.10   (gives up an out to advance a runner)
-
-Canonical 12-outcome key set
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 The simulator models a plate appearance as resolving to exactly one of these
-12 mutually-exclusive, collectively-exhaustive outcomes (the standard
-Retrosheet/Statcast PA-outcome partition used for linear-weight accounting):
+mutually-exclusive, collectively-exhaustive outcomes (the standard
+Retrosheet/Statcast PA-outcome partition, plus ``field_error``):
 
     single, double, triple, home_run,
     walk, intentional_walk, hit_by_pitch,
     strikeout, field_out, ground_into_double_play,
-    sacrifice_fly, sacrifice_hit
+    sacrifice_fly, sacrifice_hit,
+    field_error
+
+``field_error`` became its own canonical outcome with the SIM-511 landing
+(the SIM-496 fix). It aliased to ``single`` before — "treat as a single's
+run value" — which credited a drawn reach-on-error as a HIT in the boxscore
+while the loop retired the batter on the bases. The batter reaches on a
+``field_error`` and it is NOT a hit; the linescore keys on this vocabulary.
 
 -------------------------------------------------------------------------------
 DEFENSIVE RUN VALUES  (``DEFENSIVE_RUN_VALUES``)
@@ -84,62 +61,56 @@ definitions in ``pipeline/batch/player_profile_computor.py``.
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
-# Offensive linear weights — 12 standard plate-appearance outcomes.
-# 2024 run environment (FanGraphs 2024 guts; Tango/Lichtman/Dolphin "The Book").
-# Units: runs, relative to a zero baseline (outs carry their true negative
-# value). All values are floats.
+# The canonical plate-appearance outcome vocabulary.
+# The 12 standard outcomes plus ``field_error`` (SIM-496/511 — the batter
+# reaches on an error and it is NOT a hit). Every consumer keys on this set;
+# the play's VALUE comes from simulation.run_resolution (RE24 over real
+# states), never from a per-outcome constant (owner ruling 2026-08-19).
 # ---------------------------------------------------------------------------
-RUN_VALUES: dict[str, float] = {
-    # --- reaching base via a hit ---
-    "single": 0.70,
-    "double": 1.00,
-    "triple": 1.27,
-    "home_run": 1.65,
-    # --- reaching base without a hit ---
-    "walk": 0.55,  # unintentional walk (uBB)
-    "intentional_walk": 0.18,  # IBB — worth far less than an uBB
-    "hit_by_pitch": 0.58,  # slightly above uBB
-    # --- outs ---
-    "strikeout": -0.27,
-    "field_out": -0.27,  # generic ball-in-play out
-    "ground_into_double_play": -0.79,  # out + lost runner/extra out
-    "sacrifice_fly": 0.22,  # productive out (scores runner from 3B)
-    "sacrifice_hit": -0.10,  # sac bunt — gives up an out to advance
-}
+CANONICAL_OUTCOME_KEYS: frozenset[str] = frozenset(
+    {
+        # --- reaching base via a hit ---
+        "single",
+        "double",
+        "triple",
+        "home_run",
+        # --- reaching base without a hit ---
+        "walk",
+        "intentional_walk",
+        "hit_by_pitch",
+        "field_error",  # SIM-511: its own outcome — a reach, never a hit
+        # --- outs ---
+        "strikeout",
+        "field_out",
+        "ground_into_double_play",
+        "sacrifice_fly",
+        "sacrifice_hit",
+    }
+)
 
 # ---------------------------------------------------------------------------
-# SIM-312 — Statcast raw ``events`` vocabulary  ->  canonical RUN_VALUES key.
+# SIM-312 — Statcast raw ``events`` vocabulary  ->  canonical outcome key.
 #
-# THE BUG THIS FIXES
-# ~~~~~~~~~~~~~~~~~~~
-# ``RUN_VALUES`` above is keyed by the *canonical 12-outcome* partition
-# (``intentional_walk``, ``ground_into_double_play``, ``sacrifice_fly`` ...).
-# The play pool, however, stores Statcast's *raw* ``events`` strings
-# (``sim.outcome_pool.events`` / ``sim.pitch_pool.events``) sampled verbatim by
-# the ``PlayPoolSampler``.  Statcast's vocabulary is different and far larger:
+# The play pool stores Statcast's *raw* ``events`` strings
+# (``sim.outcome_pool.events`` / ``sim.pitch_pool.events``) sampled verbatim.
+# Statcast's vocabulary is far larger than the canonical partition:
 # ``field_out``, ``force_out``, ``fielders_choice``, ``sac_fly``,
 # ``grounded_into_double_play``, ``double_play``, ``intent_walk`` ...
 #
-# ``sim_loop.py`` does ``RUN_VALUES.get(event, 0.0)``.  Because the most common
-# Statcast out strings (``field_out``, ``force_out``, ...) are NOT canonical
-# RUN_VALUES keys, they silently resolved to **0.0 runs** -- so the simulated
-# run environment would be badly inflated (outs would cost nothing).
-#
-# THE FIX
-# ~~~~~~~
-# An explicit alias map from EVERY Statcast ``events`` value the pool can emit
-# to its canonical RUN_VALUES key, plus ``resolve_event_to_canonical`` /
-# ``run_value_for_event``, which never silently return 0.0 for a *known* out:
-# an unknown event is detectable (``resolve_event_to_canonical`` returns
-# ``None``; ``run_value_for_event(..., strict=True)`` raises).
+# SIM-312 history: the loop once scored runs by ``RUN_VALUES.get(event, 0.0)``
+# with mismatched spellings, so the most common outs silently scored 0.0 and
+# inflated the run environment. The alias map + ``resolve_event_to_canonical``
+# fixed the vocabulary half; the value half is gone entirely — the ledger
+# resolves every play by RE24 over real states (``simulation.run_resolution``)
+# and rejects anything else.
 #
 # Statcast ``events`` reference vocabulary: pybaseball / Baseball Savant
 # ``events`` field (the ``des`` / ``events`` column of Statcast play-by-play).
 # ---------------------------------------------------------------------------
 
-#: Statcast raw ``events`` string  ->  canonical 12-outcome ``RUN_VALUES`` key.
+#: Statcast raw ``events`` string  ->  canonical outcome key.
 #: Covers the full set of *terminal plate-appearance* events Statcast emits.
-#: Canonical keys all exist in ``RUN_VALUES`` above (asserted at import below).
+#: Alias targets all exist in ``CANONICAL_OUTCOME_KEYS`` (asserted at import).
 STATCAST_EVENT_ALIASES: dict[str, str] = {
     # --- hits ---
     "single": "single",
@@ -173,41 +144,28 @@ STATCAST_EVENT_ALIASES: dict[str, str] = {
     "sac_bunt_double_play": "sacrifice_hit",
     "sacrifice_fly": "sacrifice_fly",  # tolerate canonical spelling
     "sacrifice_hit": "sacrifice_hit",  # tolerate canonical spelling
-    # --- reach-on-error: treat as a single's run value (batter reaches 1B) ---
-    "field_error": "single",
+    # --- reach-on-error: its own canonical outcome (SIM-496/511) ---
+    # This mapped to "single" until 2026-08-19, which credited a drawn
+    # reach-on-error as a HIT. The batter reaches; it is not a hit.
+    "field_error": "field_error",
 }
 
-#: Canonical keys ``resolve_event_to_canonical`` may legitimately return — i.e.
-#: the codomain of ``STATCAST_EVENT_ALIASES`` (a subset of ``RUN_VALUES``).
-CANONICAL_OUTCOME_KEYS: frozenset[str] = frozenset(RUN_VALUES.keys())
-
-# Import-time invariant: every alias target must be a real RUN_VALUES key, so a
-# resolved event can never miss the linear-weight table.
+# Import-time invariant: every alias target must be a canonical outcome key,
+# so a resolved event can never leave the vocabulary.
 assert set(STATCAST_EVENT_ALIASES.values()) <= CANONICAL_OUTCOME_KEYS, (
-    "STATCAST_EVENT_ALIASES maps to a key absent from RUN_VALUES: "
+    "STATCAST_EVENT_ALIASES maps to a key absent from CANONICAL_OUTCOME_KEYS: "
     f"{set(STATCAST_EVENT_ALIASES.values()) - CANONICAL_OUTCOME_KEYS}"
 )
 
 
-class UnknownEventError(KeyError):
-    """Raised by ``run_value_for_event`` (strict mode) for an event string that
-    is neither a canonical RUN_VALUES key nor a known Statcast alias.
-
-    This is the explicit *detectable* failure mode that replaces the old silent
-    ``RUN_VALUES.get(event, 0.0)`` zero -- a known out can never quietly score
-    0.0, and a genuinely-unknown token surfaces loudly instead of corrupting
-    the run environment.
-    """
-
-
 def resolve_event_to_canonical(event: str | None) -> str | None:
     """Map any Statcast ``events`` string (or a canonical key) to its canonical
-    ``RUN_VALUES`` key.
+    outcome key.
 
     Returns ``None`` for ``None``, the empty string, and unknown / non-terminal
     tokens (e.g. the sim-loop's ``"in_progress"`` marker or the sampler's
-    ``"unknown"`` payload).  ``None`` signals that no run value applies (NOT that
-    the value is 0.0) -- this is what lets the resolver avoid the silent-zero bug.
+    ``"unknown"`` payload).  ``None`` signals that the token is outside the
+    vocabulary — a detectable condition, never a silent default.
     """
     if event is None:
         return None
@@ -217,40 +175,6 @@ def resolve_event_to_canonical(event: str | None) -> str | None:
     if key in CANONICAL_OUTCOME_KEYS:  # already canonical
         return key
     return STATCAST_EVENT_ALIASES.get(key)  # raw Statcast -> canonical, else None
-
-
-def run_value_for_event(
-    event: str | None,
-    *,
-    default: float | None = None,
-    strict: bool = False,
-) -> float | None:
-    """Linear-weight run value for a Statcast ``events`` string (or canonical key).
-
-    Resolution order:
-      1. Resolve ``event`` to its canonical key via ``resolve_event_to_canonical``.
-      2. If it resolves, return ``RUN_VALUES[canonical]`` (a known out can NEVER
-         silently return 0.0 -- ``field_out`` etc. now resolve to their true
-         negative value).
-      3. If it does NOT resolve (unknown / non-terminal token):
-           * ``strict=True``  -> raise ``UnknownEventError``;
-           * otherwise        -> return ``default`` (``None`` by default, so the
-                                  caller can tell "no value" from a real 0.0).
-
-    This is the *context-free* linear-weight fallback.  The preferred,
-    context-aware path is ``simulation.run_resolution``, which resolves runs from
-    sampled ``result_*`` deltas + the RE24 matrix and only falls back here.
-    """
-    canonical = resolve_event_to_canonical(event)
-    if canonical is not None:
-        return float(RUN_VALUES[canonical])
-    if strict:
-        raise UnknownEventError(
-            f"Unknown / non-terminal event {event!r}: not a canonical RUN_VALUES "
-            f"key and not in STATCAST_EVENT_ALIASES. Add an alias or pass a "
-            f"terminal PA event."
-        )
-    return default
 
 
 # ---------------------------------------------------------------------------
@@ -265,11 +189,8 @@ DEFENSIVE_RUN_VALUES: dict[str, float] = {
 }
 
 __all__ = [
-    "RUN_VALUES",
     "DEFENSIVE_RUN_VALUES",
     "STATCAST_EVENT_ALIASES",
     "CANONICAL_OUTCOME_KEYS",
-    "UnknownEventError",
     "resolve_event_to_canonical",
-    "run_value_for_event",
 ]

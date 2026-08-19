@@ -77,12 +77,14 @@ from sklearn.preprocessing import StandardScaler
 from pipeline.statcast_events import (
     batter_retired,
     play_outs,
+    sql_batter_dest,
     sql_batter_retired,
     sql_fielding_out,
     sql_in_play,
     sql_list,
     sql_outs_recorded,
     sql_play_outs,
+    sql_runner_dest,
     sql_steal_attempt,
     sql_steal_success,
 )
@@ -997,7 +999,7 @@ def _label_component(mean: list[float], fi: dict[str, int]) -> str | None:
 # stale. sim501.1 = events-derived result_outs (SIM-501a).
 # sim509.1 = hit_by_pitch is its own pitch outcome_type (SIM-509) + the SIM-506
 # steal labels and SIM-507 pickoff labels on the opportunity pool.
-POOL_BUILDER_VERSION = "sim509.1"
+POOL_BUILDER_VERSION = "sim510.1"
 RECENCY_RECENT_SEASONS = 2  # seasons (incl. ref) that get the full peak weight
 RECENCY_DECAY = 0.75  # geometric decay per season beyond the recent window
 RECENCY_FLOOR = 0.25
@@ -1422,6 +1424,8 @@ class PlayerProfileComputor:
             self._build_outcome_pool(seasons, incremental=incremental)
             self._build_stolen_base_pool(seasons, incremental=incremental)
             self._build_steal_opportunity_pool(seasons, incremental=incremental)
+            # SIM-510: reads sim.outcome_pool, so it must follow that rebuild.
+            self._build_advancement_opportunity_pool(seasons, incremental=incremental)
 
             # SIM-408: per-PA situation facts for the Step 2.9 situation KDTree
             # engine (idempotent INSERT OR REPLACE, so no incremental gating).
@@ -5264,7 +5268,29 @@ class PlayerProfileComputor:
                     -- records the position 1–9). p_throws (SIM-413 platoon) is carried
                     -- by the pp.* columns above.
                     rp.venue_id::INTEGER            AS venue_id,
-                    rp.fielded_by::INTEGER          AS fielder_player_id
+                    rp.fielded_by::INTEGER          AS fielder_player_id,
+                    -- SIM-510 transition facts (migration 0018), appended LAST in
+                    -- DDL order (the positional-INSERT trap). Identities + flags
+                    -- are ETL play-truth; the dest columns encode where each body
+                    -- ended (NULL = no runner; 4 = scored; 3/2/1 = post base;
+                    -- 0 = retired). The SIM-511 draw applies them as the play.
+                    rp.on_1b::INTEGER               AS on_1b,
+                    rp.on_2b::INTEGER               AS on_2b,
+                    rp.on_3b::INTEGER               AS on_3b,
+                    rp.post_on_1b::INTEGER          AS post_on_1b,
+                    rp.post_on_2b::INTEGER          AS post_on_2b,
+                    rp.post_on_3b::INTEGER          AS post_on_3b,
+                    COALESCE(rp.runner_1b_scored, FALSE)        AS runner_1b_scored,
+                    COALESCE(rp.runner_2b_scored, FALSE)        AS runner_2b_scored,
+                    COALESCE(rp.runner_3b_scored, FALSE)        AS runner_3b_scored,
+                    COALESCE(rp.runner_1b_out_advancing, FALSE) AS runner_1b_out_advancing,
+                    COALESCE(rp.runner_2b_out_advancing, FALSE) AS runner_2b_out_advancing,
+                    COALESCE(rp.runner_3b_out_advancing, FALSE) AS runner_3b_out_advancing,
+                    ({sql_runner_dest("1b", "rp.")})::SMALLINT  AS runner_1b_dest,
+                    ({sql_runner_dest("2b", "rp.")})::SMALLINT  AS runner_2b_dest,
+                    ({sql_runner_dest("3b", "rp.")})::SMALLINT  AS runner_3b_dest,
+                    ({sql_batter_dest("rp.", batter_expr="pp.batter_id")})::SMALLINT
+                                                    AS batter_dest
                 FROM sim.pitch_pool pp
                 JOIN pg.raw.pitches rp
                     ON rp.game_pk       = pp.game_pk
@@ -5273,7 +5299,18 @@ class PlayerProfileComputor:
                 WHERE pp.outcome_type = 'in_play'
                   AND pp.season IN ({season_list})
             )
-            SELECT * FROM bip
+            -- SIM-510: the guard column LAST — retired bodies must equal the
+            -- events-derived result_outs. The artifact export excludes rows
+            -- where this is FALSE; validation measures their rate.
+            SELECT
+                bip.*,
+                (
+                    (CASE WHEN bip.runner_1b_dest = 0 THEN 1 ELSE 0 END)
+                  + (CASE WHEN bip.runner_2b_dest = 0 THEN 1 ELSE 0 END)
+                  + (CASE WHEN bip.runner_3b_dest = 0 THEN 1 ELSE 0 END)
+                  + (CASE WHEN bip.batter_dest    = 0 THEN 1 ELSE 0 END)
+                ) = bip.result_outs                 AS dest_outs_consistent
+            FROM bip
         """)
         log.info("  sim.outcome_pool done.")
         _record_pool_build(self._conn, "outcome_pool", seasons, ref_season)
@@ -5555,6 +5592,174 @@ class PlayerProfileComputor:
         """)
         log.info("  sim.steal_opportunity_pool done.")
         _record_pool_build(self._conn, "steal_opportunity_pool", seasons, ref_season)
+
+    def _build_advancement_opportunity_pool(
+        self, seasons: list[int], incremental: bool = False
+    ) -> None:
+        """SIM-510: rebuild sim.advancement_opportunity_pool — one row per
+        discretionary runner-advancement decision, attempted or not.
+
+        The five scenarios are the ONLY discretionary movements the SIM-511
+        fielding draw normalizes away (the double-count guard); this pool is
+        where those movements become data. Non-attempt rows are the point:
+        one SIM-512 draw answers "does he go" and "safe or out" together —
+        the SIM-468 denominator lesson.
+
+        Reads the SIM-510 transition columns on sim.outcome_pool, so it must
+        run AFTER ``_build_outcome_pool`` in the same recompute. Rows whose
+        transition failed the outs-accounting guard are excluded.
+
+        ⚠ The INSERT is positional (no column list): the SELECT order MUST
+        match the DDL column order in db/schemas/02_duckdb_schema.sql
+        (migration 0018).
+        """
+        ref_season = _canonical_ref_season(self._conn, seasons)
+        if incremental:
+            seasons = _seasons_needing_rebuild(self._conn, "advancement_opportunity_pool", seasons)
+            if not seasons:
+                log.info("Building sim.advancement_opportunity_pool … all seasons fresh; skipped.")
+                return
+        log.info("Building sim.advancement_opportunity_pool … (seasons=%s)", seasons)
+        season_list = ", ".join(str(s) for s in seasons)
+        recency_expr = _recency_weight_sql("op.season", ref_season)
+
+        # A tag-up decision exists in exactly one shape: a caught ball, the
+        # batter out, and the catch not the inning's third out.
+        s4 = (
+            "op.batter_dest = 0 AND op.result_hits = 0 "
+            "AND op.bb_type IN ('fly_ball', 'popup', 'line_drive') AND op.outs <= 1"
+        )
+        # A runner erased RETURNING to his base (dest 0 without the advancing
+        # flag — a doubled-off runner) never had a tag decision; the fielding
+        # row plays that out, so those rows leave the tag denominators.
+        no_double_off = "NOT (op.runner_{b}_dest = 0 AND NOT op.runner_{b}_out_advancing)"
+
+        # (scenario, from_base, target_base, runner, where, attempted, safe, error_extra)
+        decisions: list[tuple[int, int, int, str, str, str, str, str]] = [
+            (
+                1,
+                1,
+                3,
+                "op.on_1b",
+                "op.events = 'single' AND op.on_1b IS NOT NULL "
+                "AND (op.post_on_3b IS NULL OR op.post_on_3b = op.on_1b)",
+                "op.runner_1b_dest IN (3, 4) "
+                "OR (op.runner_1b_dest = 0 AND op.runner_1b_out_advancing)",
+                "op.runner_1b_dest IN (3, 4)",
+                "op.runner_1b_dest = 4",
+            ),
+            (
+                2,
+                2,
+                4,
+                "op.on_2b",
+                "op.events = 'single' AND op.on_2b IS NOT NULL "
+                "AND (op.on_3b IS NULL OR op.runner_3b_dest IN (0, 4))",
+                "op.runner_2b_dest = 4 OR (op.runner_2b_dest = 0 AND op.runner_2b_out_advancing)",
+                "op.runner_2b_dest = 4",
+                "FALSE",
+            ),
+            (
+                3,
+                1,
+                4,
+                "op.on_1b",
+                "op.events = 'double' AND op.on_1b IS NOT NULL "
+                "AND (op.post_on_3b IS NULL OR op.post_on_3b = op.on_1b)",
+                "op.runner_1b_dest = 4 OR (op.runner_1b_dest = 0 AND op.runner_1b_out_advancing)",
+                "op.runner_1b_dest = 4",
+                "FALSE",
+            ),
+            (
+                4,
+                3,
+                4,
+                "op.on_3b",
+                f"{s4} AND op.on_3b IS NOT NULL AND {no_double_off.format(b='3b')}",
+                "op.runner_3b_dest = 4 OR (op.runner_3b_dest = 0 AND op.runner_3b_out_advancing)",
+                "op.runner_3b_dest = 4",
+                "FALSE",
+            ),
+            (
+                4,
+                2,
+                3,
+                "op.on_2b",
+                f"{s4} AND op.on_2b IS NOT NULL "
+                "AND (op.post_on_3b IS NULL OR op.post_on_3b = op.on_2b) "
+                f"AND {no_double_off.format(b='2b')}",
+                "op.runner_2b_dest IN (3, 4) "
+                "OR (op.runner_2b_dest = 0 AND op.runner_2b_out_advancing)",
+                "op.runner_2b_dest IN (3, 4)",
+                "op.runner_2b_dest = 4",
+            ),
+            (
+                4,
+                1,
+                2,
+                "op.on_1b",
+                f"{s4} AND op.on_1b IS NOT NULL "
+                "AND (op.post_on_2b IS NULL OR op.post_on_2b = op.on_1b) "
+                f"AND {no_double_off.format(b='1b')}",
+                "op.runner_1b_dest IN (2, 3, 4) "
+                "OR (op.runner_1b_dest = 0 AND op.runner_1b_out_advancing)",
+                "op.runner_1b_dest IN (2, 3, 4)",
+                "op.runner_1b_dest IN (3, 4)",
+            ),
+            (
+                5,
+                0,
+                2,
+                "op.batter_id",
+                "op.events = 'single' AND (op.post_on_2b IS NULL OR op.post_on_2b = op.batter_id)",
+                "op.batter_dest >= 2 OR op.batter_dest = 0",
+                "op.batter_dest >= 2",
+                "op.batter_dest >= 3",
+            ),
+            (
+                5,
+                0,
+                3,
+                "op.batter_id",
+                "op.events = 'double' AND (op.post_on_3b IS NULL OR op.post_on_3b = op.batter_id)",
+                "op.batter_dest >= 3 OR op.batter_dest = 0",
+                "op.batter_dest >= 3",
+                "op.batter_dest = 4",
+            ),
+        ]
+
+        selects = []
+        for scen, frm, tgt, runner, where, att, safe, extra in decisions:
+            selects.append(f"""
+            SELECT
+                op.pitch_id, op.game_pk, op.at_bat_number, op.pitch_number,
+                op.game_date, op.season,
+                {scen}::SMALLINT                    AS scenario,
+                {frm}::SMALLINT                     AS from_base,
+                {tgt}::SMALLINT                     AS target_base,
+                {runner}::INTEGER                   AS runner_id,
+                op.fielder_player_id::INTEGER       AS fielder_id,
+                op.fielded_by_position::SMALLINT    AS fielder_pos,
+                op.outs::SMALLINT                   AS outs,
+                op.exit_velo, op.launch_angle, op.spray_angle, op.hit_distance,
+                COALESCE({att}, FALSE)              AS attempted,
+                COALESCE({safe}, FALSE)             AS safe,
+                COALESCE({extra}, FALSE)            AS error_extra,
+                {recency_expr}                      AS recency_weight
+            FROM sim.outcome_pool op
+            WHERE op.season IN ({season_list})
+              AND op.batter_dest IS NOT NULL
+              AND COALESCE(op.dest_outs_consistent, FALSE)
+              AND {where}""")
+
+        self._conn.execute(
+            f"DELETE FROM sim.advancement_opportunity_pool WHERE season IN ({season_list})"
+        )
+        self._conn.execute(
+            "INSERT INTO sim.advancement_opportunity_pool\n" + "\nUNION ALL\n".join(selects)
+        )
+        log.info("  sim.advancement_opportunity_pool done.")
+        _record_pool_build(self._conn, "advancement_opportunity_pool", seasons, ref_season)
 
     def _build_at_bat_situations(self, seasons: list[int]) -> None:
         """
