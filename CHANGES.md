@@ -1,3 +1,38 @@
+# Sim — SIM-510..512 LANDED (one combined change): the drawn row IS the play — 2026-08-19
+
+The loop's ball-in-play resolution now follows the standing architecture rule end to end.
+**SIM-510 (data):** DuckDB migration 0018 (v17→v18) puts the whole base-state transition on
+`sim.outcome_pool` (pre/post runner identities, scored + out-advancing flags, derived per-body
+DESTINATIONS, an outs-accounting guard) and builds `sim.advancement_opportunity_pool` — one row
+per discretionary advancement decision, attempted or not, across eight (scenario, from_base,
+target_base) sub-pools. Artifact export + shared memory clone the steal-pool pattern;
+`POOL_BUILDER_VERSION` → sim510.1. Rebuilt all ten seasons in ~25 s and validated at full scale:
+the guard passes 99.2% of rows every season; all 24 base-out cells are common (min 755 rows);
+100.0% of consistent DP rows name a retired runner; ROE rows carry batter-reached truth at
+99.4-99.9%; the eight decisions read like real baseball (2nd→home on a single 58.9% go / 97.1%
+safe; 1st→3rd 34.9%; tag from 3B 61.8%). **SIM-511 (the fielding draw):** the batted-ball draw
+HARD-filters the exact base-out cell (24 cells, NEVER widened — an empty cell raises; owner
+ruling 2026-08-19) over guard-passing rows, and the drawn row's destinations ARE the play:
+event, outs, WHO is out, all forced movement. The five discretionary movements normalize to
+station-to-station (the double-count guard). The phantom-DP guard, the outs-from-hits inference
+(SIM-494/496 structurally fixed), and the four post-draw event mutators (SIM-349 sac-fly,
+SIM-412 home-field, SIM-411 park, SIM-425b fielder flips) do not run on this path — SIM-491
+owns re-validating the three nudges as draw weights. A legacy bundle keeps the old draw
+byte-identical (the seam CI's pinned-off fixtures exercise). **SIM-512 (the advancement draw):**
+per-runner attempt→outcome draws over the SIM-510 pools, weighted by runner similarity (sprint
+speed + decision rates), the LIVE fielder's arm, the throw geometry, and recency; lead-first
+with can't-pass occupancy; a declined lead blocks trailing draws EXCEPT the batter stretch;
+every advancement out is a tag play (Rule 5.08 free); a tag from 3B that scores relabels the
+play `sacrifice_fly`. **Owner ruling executed:** the `RUN_VALUES` linear weights are REMOVED —
+the ledger is RE24-over-real-states only; the canonical vocabulary remains and `field_error` is
+its own outcome (an AB, never a hit — SIM-496's boxscore half). `runners_retired` is real and
+`Bases.assert_transition` checks out-count-vs-bodies at every commit (the SIM-494 detection
+note's instruction). The H/DP/ROE_reached strict xfails came out per their own instruction.
+Gates: full unit lane green; regression green (no fixture regen — engine fixtures never enter
+the transition path); ruff + mypy clean. Landing smoke (4×200, production flags): R -2.9%,
+H -0.6%, HR +2.5%, 2B +1.2%, 3B +1.1%, K -1.7%; BB +9.3% is the parked SIM-429 surplus;
+home-field inert pending SIM-491. The 12×471 certification lane (SIM-513) is running.
+
 # Plan — SIM-510→513 filed: the fielding transition draw (loop finalization epic) — 2026-08-18
 
 The owner ruled: finalize the loop before tuning statistics, and set the design — one fielding

@@ -61,8 +61,12 @@ scores the runner from second without a draw).
    opportunity, non-attempts included — the SIM-468 denominator lesson).
 2. **The fielding draw's hard filter includes the base-out state** (runner configuration
    × outs, alongside the batted-ball conditioning). This is what makes "the drawn row is
-   the play" safe and is what deletes the phantom-DP guard. Thin cells use the SIM-475
-   widening order. This is the SIM-467 cell framework applied to the outcome pool.
+   the play" safe and is what deletes the phantom-DP guard. This is the SIM-467 cell
+   framework applied to the outcome pool. **AMENDED 2026-08-19 (owner): NO widening.** The
+   base-out filter is essential, so it never relaxes. There are only 24 base-out cells and
+   all are common. The count is soft conditioning, never a hard filter. An empty cell is a
+   data defect — raise, do not widen. The SIM-475 machinery stays out of this epic. *(This
+   decision said "Thin cells use the SIM-475 widening order" until 2026-08-19.)*
 3. **Third-out timing (Rule 5.08).** Every advancement-draw out is a TAG play by
    construction, so lead-first resolution gives run timing almost free: a run that
    crossed before a trailing runner's tag-out counts. Batter-runner force cases live in
@@ -76,8 +80,10 @@ scores the runner from second without a draw).
 7. **Orphaned knobs:** the SIM-349 sac-fly-intent nudge is SUPERSEDED (a tag draw from
    3B produces sac flies naturally — label the play `sacrifice_fly` post-hoc for
    AB/RBI). The SIM-412 home-field, SIM-411 park, and SIM-425b fielder-RBF nudges act
-   upstream (out↔single flips) and MUST be re-validated against the new draws in the
-   certification ticket — do not leave them fighting the transition draw.
+   upstream (out↔single flips) and MUST be re-validated against the new draws — do not
+   leave them fighting the transition draw. **AMENDED 2026-08-19 (owner): the re-validation
+   lives in SIM-491, AFTER SIM-513 lands. SIM-513 contains no validation.** *(This decision
+   said "in the certification ticket" until 2026-08-19.)*
 8. **SIM-496's alias half** (`constants.py:177` field_error → single) is fixed inside
    SIM-511 — the drawn row carries batter-reached truth, so the alias goes.
 
@@ -110,7 +116,9 @@ scores the runner from second without a draw).
 
 SIM-510 (data columns + pools) → SIM-511 (the transition fielding draw) → SIM-512 (the
 five-scenario advancement draw) → SIM-513 (retire the legacy paths + certify). 511 and
-512 are each roughly a SIM-507-sized build. The old SIM-462/472/473 rows in the
+512 are each roughly a SIM-507-sized build. **AMENDED 2026-08-19 (owner): SIM-511 and
+SIM-512 land as ONE combined change — no feature flag. The station-to-station interim
+state never reaches `master`.** The old SIM-462/472/473 rows in the
 2026-08-10 BACKLOG table are SUPERSEDED by these tickets (SIM-472 — pitch-similarity
 into the batted-ball draw — stays open separately; it is not part of this epic).
 
