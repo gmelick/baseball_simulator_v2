@@ -1,3 +1,17 @@
+# Plan — SIM-510→513 filed: the fielding transition draw (loop finalization epic) — 2026-08-18
+
+The owner ruled: finalize the loop before tuning statistics, and set the design — one fielding
+draw over real transition rows (hard-filtered to the live base-out state) IS the play; a runner
+advancement draw fires only in five discretionary scenarios (1st→3rd / 2nd→home on a single,
+1st→home on a double, tag-ups, batter stretches), keyed to runner speed and the specific
+fielder's arm. Design + settled review decisions (double-count guard, base-out hard filter,
+Rule 5.08 tag timing, advance-on-throw folding, orphaned-nudge re-validation):
+`docs/audit/2026-08-18-sim510-513-fielding-transition-design.md`. Four tickets: SIM-510 (pool
+transition columns + advancement opportunity pools, migration 0018/v18), SIM-511 (the transition
+draw — deletes the phantom-DP guard and the field_error alias; fixes SIM-494/496 structurally),
+SIM-512 (the advancement draw — deletes the hand-tuned constants), SIM-513 (retire legacy
+nudges, fixture regen, 12×471 certification). Supersedes the old SIM-462/473 rows.
+
 # Sim — SIM-509: hit-by-pitch is its own outcome — the walk surplus was mostly fake walks — 2026-08-18
 
 The SIM-429 diagnosis, measurement-first: the pool builder collapsed an HBP pitch (ball-class
