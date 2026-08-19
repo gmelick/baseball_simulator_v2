@@ -1780,18 +1780,24 @@ class StateMachine:
 
     @staticmethod
     def _seat(seats: dict[int, int | None], want: int, rid: int) -> int:
-        """Seat a body on ``want`` or the nearest open trailing bag.
+        """Seat a body on ``want``, else the nearest open bag — downward first
+        (can't-pass), then upward — else return 4: the body is forced home.
 
-        Defensive only: the hard base-out filter plus the row's consistency
-        guard make a collision near-impossible; lead-first application keeps
-        trailing bags open. ``_check_bases`` still verifies the final state.
+        A body is NEVER overwritten or dropped. The first lane run of the
+        transition draw crashed the SIM-500 conservation guard here: a rare
+        row whose normalized destinations collide cascaded a trailing runner
+        down to first base, and the old fallback let the batter OVERWRITE
+        him — one body vanished (before=2 + batter_reached=1, after=2 + 0 +
+        0). An impossible normalized row now degrades to a forced-advance
+        chain instead: every body keeps a bag or scores, so the conservation
+        identity always balances. The shape is ~1-in-100k plate appearances;
+        the upward/score branches are that tail, never the common path.
         """
-        for b in (want, want - 1, want - 2):
+        for b in (want, want - 1, want - 2, want + 1, want + 2):
             if 1 <= b <= 3 and seats[b] is None:
                 seats[b] = rid
                 return b
-        seats[want] = rid
-        return want
+        return 4  # every bag taken: the chain forces the body home
 
     def _resolve_in_play_transition(
         self,
@@ -1826,12 +1832,29 @@ class StateMachine:
         if event_label in ("sac_fly", "sacrifice_fly"):
             event_label = "field_out"
         ndest = self._normalized_dests(tr, hit)
-        # --- 1. apply the row to the LIVE runners (lead-first) -------------
+        # --- 1. apply the row to the LIVE runners ---------------------------
+        # The batter seats FIRST: his bag on a hit is law (a single puts him
+        # on first). Runners then seat lead-first; a rare colliding row falls
+        # through _seat's no-body-lost ladder (down, up, home).
         seats: dict[int, int | None] = {1: None, 2: None, 3: None}
         advances: dict[int, int] = {}
         runs = 0
         runners_retired = 0  # bodies removed from BASES (the batter counts
         # here only when he reached first — assert_transition's contract)
+        bid = state.batter_id if state.batter_id is not None else -1
+        bd = ndest[0]
+        batter_reached = bd >= 1
+        plate_out = 1 if bd == 0 else 0
+        if bd == 4:
+            runs += 1
+            advances[bid] = 0
+        elif bd >= 1:
+            placed = self._seat(seats, bd, bid)
+            if placed >= 4:
+                runs += 1
+                advances[bid] = 0
+            else:
+                advances[bid] = placed
         for frm, rid in ((3, pre_bases.third), (2, pre_bases.second), (1, pre_bases.first)):
             if rid is None:
                 continue
@@ -1845,16 +1868,12 @@ class StateMachine:
             elif d == 0:
                 runners_retired += 1
             else:
-                advances[rid] = self._seat(seats, d, rid)
-        bid = state.batter_id if state.batter_id is not None else -1
-        bd = ndest[0]
-        batter_reached = bd >= 1
-        plate_out = 1 if bd == 0 else 0
-        if bd == 4:
-            runs += 1
-            advances[bid] = 0
-        elif bd >= 1:
-            advances[bid] = self._seat(seats, bd, bid)
+                placed = self._seat(seats, d, rid)
+                if placed >= 4:
+                    runs += 1
+                    advances[rid] = 0
+                else:
+                    advances[rid] = placed
         state.bases = Bases(first=seats[1], second=seats[2], third=seats[3])
         self._check_bases(state.bases)
         # --- 2. the five-scenario advancement draws (SIM-512) --------------
@@ -1979,7 +1998,12 @@ class StateMachine:
                 runs += 1
                 advances[rid] = 0
             else:
-                advances[rid] = self._seat(seats, place, rid)
+                placed = self._seat(seats, place, rid)
+                if placed >= 4:
+                    runs += 1
+                    advances[rid] = 0
+                else:
+                    advances[rid] = placed
             return True
 
         if hit == 1:  # a single

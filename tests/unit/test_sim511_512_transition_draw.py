@@ -465,6 +465,32 @@ class TestTheAdvancementWiring:
         assert r.event == "single"  # the hit stands in the box score
         assert s.outs == 1 and s.bases.first is None
 
+    def test_a_colliding_normalized_row_never_loses_a_body(self):
+        """The first certification lane crashed the SIM-500 conservation
+        guard 1h47m in: a rare row's normalized destinations collide (the
+        runner from 2B held at 2B while the runner from 1B's discretionary
+        out clamps back to 2B), the cascade fell the trailing runner to
+        first, and the batter's seating OVERWROTE him — one body vanished.
+        The seat ladder now degrades to a forced-advance chain: every body
+        keeps a bag or scores, and the conservation identity balances.
+        """
+        m = _machine()
+        m._enforce_base_invariants = True
+        s = _state(first=11, second=22)
+        r = _resolve(m, s, tr=_tr(r1=0, adv1=True, r2=2, batter=1))
+        assert {s.bases.first, s.bases.second, s.bases.third} == {900, 11, 22}
+        assert s.outs == 0 and r.outs_recorded == 0
+
+    def test_a_fully_packed_collision_forces_the_last_body_home(self):
+        m = _machine()
+        m._enforce_base_invariants = True
+        s = _state(first=11, second=22, third=33)
+        r = _resolve(m, s, tr=_tr(r1=0, adv1=True, r2=2, r3=3, batter=1))
+        # Three bags, four safe bodies: the ladder scores the overflow body
+        # instead of dropping one (before=3+1 == after=3+scored 1).
+        assert s.away_score == 1 and r.runs_scored == 1
+        assert None not in (s.bases.first, s.bases.second, s.bases.third)
+
     def test_no_advancement_pools_is_station_to_station(self):
         m = StateMachine(rng=np.random.default_rng(5))
         m.full_pool_sampler = _FakeTransitionFP()  # has_advancement() False
