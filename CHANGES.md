@@ -1,3 +1,16 @@
+# Sim — SIM-513 CLOSED: the sac-fly-intent nudge retired; the loop-finalization epic is DONE — 2026-08-19
+
+The last legacy knob is out: `_apply_sac_fly_bias`, `_maybe_sac_fly_intent`, the
+`sac_fly_intent` flag and the intent tests are deleted (-308 lines). The SIM-512 tag draw from
+3B owns sacrifice flies — the runner's legs and the fielder's arm decide, at real data rates.
+The two SIM-499 ledger tests that used the bias as their vehicle are retargeted to the
+transition path (the sac-fly-values-−0.13 pin and the snapshot-placement guard). SIM-349's
+hit-and-run and sac-bunt stay live. On the record: the legacy full-pool resolution survives
+only as the pre-sim510-bundle fallback CI's pinned-off fixtures exercise; production runs none
+of it. **SIM-510→513 are all closed; the loop is finalized per the owner's 2026-08-18 ruling.
+The stat-tuning phase (SIM-429 + SIM-514 + SIM-491) now works against a mechanically-honest
+baseline.** Full unit lane green; ruff + mypy clean.
+
 # Test — SIM-513 certification: the transition draw is CERTIFIED on the 2025 bands — 2026-08-19
 
 The 12×471 lane ran end to end (2h57m, n=11,304). **GREEN: R, H, HR, 2B** — HR and 2B for the
