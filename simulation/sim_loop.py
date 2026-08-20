@@ -1014,9 +1014,15 @@ class StateMachine:
         manager=None,
         bench=None,
         full_pool_sampler=None,
+        ibb_rates: dict[tuple[int, int, bool, bool], float] | None = None,
     ) -> None:
         self.rng = rng if rng is not None else np.random.default_rng()
         self.k = int(k)
+        # SIM-515: the measured IBB rate per (runners_state, outs, is_late,
+        # is_close) cell — sim.ibb_rates, loaded by the factory. None (the
+        # no-DB default) means no IBB ever fires; the hand-tuned formula that
+        # issued 2.64x MLB's volume is retired.
+        self.ibb_rates = ibb_rates
         # SIM-424: opt-in full-pool similarity-weighted pitch sampler. When wired
         # (the engine-artifacts bundle is present + the flag is set) step_pitch
         # draws the pitch outcome from it instead of the per-tile sample_pitch;
@@ -3687,35 +3693,45 @@ class StateMachine:
         self._steal_opportunity_draw(state)
 
     def _should_issue_ibb(self, state: GameState, li: float) -> bool:
-        """Decide an intentional walk (§3 item 2).
+        """Decide an intentional walk (§3 item 2) — SIM-515.
 
-        Fires only in the canonical IBB spot — first base OPEN, a runner in
-        scoring position, fewer than two outs preferred, a close & late game — and
-        only when the manager is the type to manage matchups aggressively (proxy:
-        ``platoon_advantage_exploitation_rate``) AND the leverage is high.  Never
-        loads the bases by IBB unless it sets up a force in a tie/lead spot late
-        (kept conservative: requires first base empty).
+        The decision is a draw at the REAL rate of the PA's hard-filtered cell:
+        ``sim.ibb_rates`` holds, for every (runners_state, outs, late, close)
+        cell, how many real PAs entered it and how many were intentionally
+        walked (built over the pool's season window). One roll of the loop rng
+        against ``issued / opportunities`` — never a hand-tuned formula (the
+        owner's 2026-08-10 architecture rule).
+
+        The draw fires ONCE per plate appearance, on its first pitch (the old
+        formula re-rolled per pitch and compounded to 2.64x MLB's IBB volume —
+        the SIM-429 diagnosis). A cell absent from the table has a measured
+        rate of ~0 and never fires. With no manager wired, or no rate table
+        loaded (a no-DB test machine), no IBB fires — the no-op-safe contract.
+
+        ``li`` is unused since SIM-515: the cell (late x close x base-out) IS
+        the leverage context, measured instead of modeled. Per-manager
+        modulation returns as a similarity WEIGHT when the SIM-427 real
+        profiles land (a weight, never a gate — the SIM-474 pattern).
         """
-        b = state.bases
-        # First base must be OPEN (the defining IBB precondition).
-        if b.first is not None:
+        del li  # SIM-515: the cell replaces the leverage heuristic.
+        if self.manager is None:
             return False
-        # A runner in scoring position to make the IBB worthwhile.
-        if b.second is None and b.third is None:
+        rates = self.ibb_rates
+        if not rates:
             return False
-        # Close game (within 1 run) and late (7th+) — the textbook IBB window.
-        if abs(int(state.score_diff)) > 1 or int(state.inning) < _LATE_INNING:
+        # Once per PA: the first pitch is the only 0-0 pitch.
+        if int(state.balls) != 0 or int(state.strikes) != 0:
             return False
-        # High leverage required.
-        if li < _HIGH_LEVERAGE:
+        cell = (
+            int(state.runners_state),
+            int(state.outs),
+            int(state.inning) >= _LATE_INNING,
+            abs(int(state.home_score) - int(state.away_score)) <= 1,
+        )
+        rate = float(rates.get(cell, 0.0))
+        if rate <= 0.0:
             return False
-        # Manager tendency: how much they manage matchups (0..1-ish).  Combine the
-        # platoon-exploitation tendency with leverage into a fire probability.
-        tend = self._tendency("platoon_advantage_exploitation_rate", 0.0)
-        if tend <= 0.0:
-            return False
-        fire_p = min(1.0, tend * min(li / _HIGH_LEVERAGE, 2.0))
-        return self._manager_rng() < fire_p
+        return self._manager_rng() < rate
 
     def _maybe_hit_and_run(self, state: GameState, li: float) -> None:
         """Signal a hit-and-run for THIS pitch (SIM-349 §3 / aggression).

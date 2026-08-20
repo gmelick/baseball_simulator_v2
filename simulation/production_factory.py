@@ -393,6 +393,45 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
         return None
 
 
+#: SIM-515: the per-worker cached IBB rate table (sim.ibb_rates is ~48 rows;
+#: loaded once, like the venue-factor map). The sentinel False = not yet
+#: attempted; None = attempted and unavailable.
+_CACHED_IBB_RATES: dict[tuple[int, int, bool, bool], float] | None | bool = False
+
+
+def _load_ibb_rates() -> dict[tuple[int, int, bool, bool], float] | None:
+    """SIM-515: load the measured IBB rate per cell from sim.ibb_rates,
+    read-only, cached per worker. Returns None on any failure (no duckdb, a
+    missing file, a pre-0020 DB, an empty table) — no IBB then fires, which is
+    the no-op-safe contract, not a silent formula fallback."""
+    global _CACHED_IBB_RATES
+    if _CACHED_IBB_RATES is not False:
+        return _CACHED_IBB_RATES  # type: ignore[return-value]
+    out: dict[tuple[int, int, bool, bool], float] | None
+    try:
+        from simulation.sim_kwargs import open_sim_duckdb
+
+        con = open_sim_duckdb()
+        if con is None:
+            _CACHED_IBB_RATES = None
+            return None
+        try:
+            rows = con.execute(
+                "SELECT runners_state, outs, is_late, is_close, opportunities, issued "
+                "FROM sim.ibb_rates WHERE opportunities > 0"
+            ).fetchall()
+        finally:
+            con.close()
+        out = {
+            (int(rs), int(o), bool(late), bool(close)): float(iss) / float(opp)
+            for rs, o, late, close, opp, iss in rows
+        } or None
+    except Exception:
+        out = None
+    _CACHED_IBB_RATES = out
+    return out
+
+
 def _load_venue_run_factors() -> dict[tuple[int, int], float] | None:
     """SIM-491 part 2 (SIM-411): load the (venue_id, season) -> regressed run
     park-factor map from the sim DuckDB, read-only. Returns None on any failure
@@ -426,9 +465,10 @@ def reset_caches() -> None:
     cached sampler can't leak into the next; production never needs it (a worker
     builds its cache once and keeps it).
     """
-    global _CACHED_FULL_POOL_SAMPLER, _CACHED_FULL_POOL_ART_DIR
+    global _CACHED_FULL_POOL_SAMPLER, _CACHED_FULL_POOL_ART_DIR, _CACHED_IBB_RATES
     _CACHED_FULL_POOL_SAMPLER = None
     _CACHED_FULL_POOL_ART_DIR = None
+    _CACHED_IBB_RATES = False  # SIM-515: back to "not yet attempted"
 
 
 def _warm_sampler(sampler: Any) -> None:
@@ -629,6 +669,9 @@ def production_machine_factory(seed: int | None, spec: GameSpec) -> StateMachine
         fingerprint_deriver=deriver,
         full_pool_sampler=full_pool,
         manager=manager,
+        # SIM-515: the measured IBB rate table. None with no manager (the hook
+        # is a no-op then anyway) and on a pre-0020 DB (no IBB fires).
+        ibb_rates=_load_ibb_rates() if manager is not None else None,
     )
     if manager is not None:
         # Stage the generic bullpen on the machine so ``simulate_game`` can seed it

@@ -953,6 +953,21 @@ CREATE TABLE IF NOT EXISTS sim.outcome_pool (
     PRIMARY KEY (pitch_id)
 );
 
+-- ---------------------------------------------------------------------------
+-- SIM-515 (migration 0020): the measured IBB rate table. The loop draws ONCE
+-- per PA at the cell's real rate (issued / opportunities) — the hand-tuned
+-- per-pitch formula is retired. Built over the pool's season window.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sim.ibb_rates (
+    runners_state   SMALLINT    NOT NULL CHECK (runners_state BETWEEN 0 AND 7),
+    outs            SMALLINT    NOT NULL CHECK (outs BETWEEN 0 AND 2),
+    is_late         BOOLEAN     NOT NULL,  -- inning >= 7
+    is_close        BOOLEAN     NOT NULL,  -- |bat_score - fld_score| <= 1
+    opportunities   BIGINT      NOT NULL,
+    issued          BIGINT      NOT NULL,
+    PRIMARY KEY (runners_state, outs, is_late, is_close)
+);
+
 -- SIM-337: outcome_pool is read by PK point-lookup (the sampler's payload fetch)
 -- and built pre-filtered on season + stand (batter handedness); the batted-ball
 -- detail columns are read in bulk inside that scoped scan, never via a

@@ -84,8 +84,10 @@ def _state(
     return s
 
 
-def _machine(manager=None, *, seed: int = 7, bench=None) -> StateMachine:
-    return StateMachine(rng=np.random.default_rng(seed), manager=manager, bench=bench)
+def _machine(manager=None, *, seed: int = 7, bench=None, ibb_rates=None) -> StateMachine:
+    return StateMachine(
+        rng=np.random.default_rng(seed), manager=manager, bench=bench, ibb_rates=ibb_rates
+    )
 
 
 _AGGRESSIVE = {
@@ -138,7 +140,8 @@ class TestPitchCountIncrement:
 
     def test_ibb_throws_no_pitch_so_no_increment(self):
         # An IBB short-circuits step_pitch BEFORE the pitch is counted.
-        m = _machine(_AGGRESSIVE, seed=1)
+        # SIM-515: the decision draws at the injected cell rate (1.0 = certain).
+        m = _machine(_AGGRESSIVE, seed=1, ibb_rates={(2, 0, True, True): 1.0})
         s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3, second=55, batter_id=201)
         s.home_lineup = HOME_LINEUP
         s.home_lineup_slot = 0

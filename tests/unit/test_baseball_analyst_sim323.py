@@ -129,32 +129,77 @@ class TestLeverageIndex:
 # ===========================================================================
 
 
+#: SIM-515: the injected rate table — the textbook cell (runner on 2B, 0 outs,
+#: late, close) at certainty, everything else absent (measured rate ~0).
+_IBB_CERTAIN = {(2, 0, True, True): 1.0}
+
+
+def _ibb_machine(manager=_AGGRESSIVE, *, rates=None, seed: int = 1) -> StateMachine:
+    return StateMachine(rng=np.random.default_rng(seed), manager=manager, ibb_rates=rates)
+
+
 class TestIntentionalWalk:
-    def test_ibb_fires_first_base_open_risp_close_and_late(self):
-        # Runner on 2B, 1B open, tie game, bottom of the 9th -> high leverage.
-        m = _machine(_AGGRESSIVE, seed=1)
+    """SIM-515: the IBB decision draws at the REAL rate of the PA's cell
+    (sim.ibb_rates) — the hand-tuned tendency x leverage formula is retired.
+    The tests inject a rate table; a cell at 1.0 fires deterministically."""
+
+    def test_ibb_fires_at_the_cell_rate(self):
+        # Runner on 2B, 1B open, tie game, bottom of the 9th, first pitch —
+        # the injected table holds this cell at certainty.
+        m = _ibb_machine(rates=_IBB_CERTAIN)
         s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3, second=55)
         m._pre_pitch_hook(s)
         assert s.manager.intentional_walk_signalled is True
         assert any(d["kind"] == "intentional_walk" for d in m.manager_decisions)
 
-    def test_ibb_does_not_fire_when_first_base_is_occupied(self):
-        # 1B occupied -> the defining IBB precondition fails.
-        m = _machine(_AGGRESSIVE, seed=1)
+    def test_an_absent_cell_never_fires(self):
+        # 1B occupied -> runners_state 3, a cell the table does not hold
+        # (its measured rate is ~0).
+        m = _ibb_machine(rates=_IBB_CERTAIN)
         s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3, first=44, second=55)
         m._pre_pitch_hook(s)
         assert s.manager.intentional_walk_signalled is False
 
-    def test_ibb_does_not_fire_early_in_a_blowout(self):
-        # 1st inning, 8-run lead -> low leverage, not a close-and-late spot.
-        m = _machine(_AGGRESSIVE, seed=1)
+    def test_an_early_blowout_is_a_different_cell(self):
+        # 1st inning, 8-run margin -> (late=False, close=False): absent.
+        m = _ibb_machine(rates=_IBB_CERTAIN)
         s = _state(inning=1, home_score=0, away_score=8, second=55)
+        m._pre_pitch_hook(s)
+        assert s.manager.intentional_walk_signalled is False
+
+    def test_the_draw_fires_once_per_pa_not_per_pitch(self):
+        # Mid-count (0-1) the PA's decision is already made — no re-roll (the
+        # old per-pitch re-roll compounded to 2.64x MLB's IBB volume).
+        m = _ibb_machine(rates=_IBB_CERTAIN)
+        s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3, second=55)
+        s.strikes = 1
+        m._pre_pitch_hook(s)
+        assert s.manager.intentional_walk_signalled is False
+
+    def test_no_rate_table_never_fires(self):
+        # A no-DB machine (rates None) issues no IBB — the no-op-safe contract;
+        # there is NO formula fallback.
+        m = _ibb_machine(rates=None)
+        s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3, second=55)
+        m._pre_pitch_hook(s)
+        assert s.manager.intentional_walk_signalled is False
+
+    def test_no_manager_never_fires(self):
+        # Manager None keeps every hook a no-op even with a rate table wired.
+        m = _ibb_machine(manager=None, rates=_IBB_CERTAIN)
+        s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3, second=55)
+        m._pre_pitch_hook(s)
+        assert s.manager.intentional_walk_signalled is False
+
+    def test_a_zero_rate_cell_never_fires(self):
+        m = _ibb_machine(rates={(2, 0, True, True): 0.0})
+        s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3, second=55)
         m._pre_pitch_hook(s)
         assert s.manager.intentional_walk_signalled is False
 
     def test_ibb_ends_the_pa_as_a_walk_putting_the_batter_on_first(self):
         # When the IBB signal is set, step_pitch issues the walk without a pitch.
-        m = _machine(_AGGRESSIVE, seed=1)
+        m = _ibb_machine(rates=_IBB_CERTAIN)
         s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3, second=55, batter_id=201)
         s.home_lineup = HOME_LINEUP
         s.home_lineup_slot = 0
@@ -162,12 +207,6 @@ class TestIntentionalWalk:
         assert result.event == "walk"
         # The batter (or the new due-up batter) reached first via the walk force.
         assert s.bases.first is not None
-
-    def test_passive_manager_never_issues_an_ibb(self):
-        m = _machine(_PASSIVE, seed=1)
-        s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3, second=55)
-        m._pre_pitch_hook(s)
-        assert s.manager.intentional_walk_signalled is False
 
 
 # ===========================================================================
