@@ -1,3 +1,21 @@
+# Analysis — the owner's three questions: prev-pitch REFUTED; the grade moves to POOL TOTALS; the window censused — 2026-08-20
+
+Two new instruments answered the owner's questions from data before any code was written.
+(1) `scripts/sim429_prev_chain_probe.py`: the count-machine chain over (count × previous
+pitch class) on MLB-2025's own data reads BB/PA 0.0839 / K/PA 0.2140 — identical to
+count-only, nowhere near observed (0.0813/0.2232). Given the count, the previous pitch adds
+~nothing; the within-PA correlation is whole-PA-scale. **The `prev_pitch_outcome`
+conditioning is NOT built.** (2) **OWNER RULING: the grade is POOL TOTALS.** Against the
+live pool's own centres the diagnosis run grades BB/PA +0.4%, K/PA +0.3%, HBP +1.2%,
+pitches/PA +0.1%, DP/opportunity +1.6%, 3B/BIP −3.1% — the sampler is faithful; the true
+reds are IBB volume (SIM-515) and steal attempts/opportunity −15%. **SIM-516** re-references
+the certification lane (per-opportunity bands + opportunity probes), one commit with the
+window rebuild. (3) `scripts/pool_window_census.py` measured the three window options:
+centres differ <0.5%; W1 (full 2023-2026) has the thickest hard-filter cells (439 vs 323,
++36% BIP rows), is pitch-clock-era homogeneous, and self-heals season boundaries; the
+rolling window buys only the 2023 tail and costs daily-moving artifacts. **W1 recommended,
+pending the owner.** Next free ID → SIM-517.
+
 # Sim — SIM-491 parts 2+3: the park and fielder-quality KERNELS; the bat_home data is LIVE — 2026-08-20
 
 Part 2 (SIM-411): a Gaussian on |park_run_factor(live venue) − park_run_factor(row venue)|

@@ -146,6 +146,67 @@ resolutions** (every resolution used a transition row).
   the batter-stretch draw fires only under `hit == 2` and nothing relabels
   an event to `triple`.
 
+## Addendum (2026-08-20, same day): three owner questions answered by measurement
+
+### 1. prev-pitch conditioning is REFUTED — do not build it
+
+`scripts/sim429_prev_chain_probe.py` solved the count machine over
+(balls, strikes, PREVIOUS pitch class) on MLB-2025's own data:
+
+    chain(count only)    BB/PA 0.0839   K/PA 0.2142   pitches/PA 3.931
+    chain(count x prev)  BB/PA 0.0839   K/PA 0.2140   pitches/PA 3.931
+    observed MLB-2025    BB/PA 0.0813   K/PA 0.2232   pitches/PA 3.883
+
+Given the count, the previous pitch's outcome adds ~nothing. The within-PA
+correlation is whole-PA-scale (the matchup's day: a wild PA is wild
+throughout), which a first-order refinement cannot capture. The structural
+component stays a documented design limit of any (matchup, count)-conditioned
+independent sampler — and under pool-referenced grading (below) it is
+definitionally accepted: the sim faithfully reproduces the pool.
+
+### 2. The grade moves to POOL TOTALS (owner ruling, 2026-08-20)
+
+The owner ruled: grade the sim's frequencies against the play pool's OWN
+totals — the sim should match the data it draws from. Measured by
+`scripts/pool_window_census.py`, the 12x150 diagnosis run against the live
+(2024-2026) pool's centres:
+
+    BB/PA +0.4%   K/PA +0.3%   HBP/PA +1.2%   pitches/PA +0.1%
+    DP/opportunity +1.6%   3B/BIP -3.1%
+
+Every channel sits within ~1.5% (3B slightly LOW — its old +11.9% red vs the
+2025 band was the pool's era, not the draw). The remaining true reds under
+pool grading: **IBB volume** (SIM-515 — the manager formula, not a pool draw)
+and **steal attempts/opportunity −15%** (0.0184 vs 0.0217). The certification
+lane's re-referencing (per-opportunity bands + opportunity-count probes) is
+**SIM-516**, landing in ONE commit with the window rebuild.
+
+### 3. The pool window: measured, and W1 (full seasons 2023-2026) is recommended
+
+All three candidate windows were censused (volumes, per-count chains, per-BIP
+mixes, thinnest hard-filter cells — full tables in the census output):
+
+| | W1 2023-2026 | W2 2024-2026 (live) | W3 rolling 3y |
+|---|---|---|---|
+| pitches | 2.71M | 1.98M | 2.16M |
+| consistent BIP | 467k | 342k | 374k |
+| thinnest hard cell (L, rs=4, 0 out) | **439** | 323 | 351 |
+| 3B-steal thinnest cell (3-0, 0 out) | 1,019 | 741 | 811 |
+| smallest advancement pool (4_3_4) | 8,247 | 6,029 | 6,583 |
+| chain BB/PA | 0.0850 | 0.0847 | 0.0848 |
+| 2B/BIP | 0.0625 | 0.0614 | 0.0616 |
+
+The frequency centres differ by <0.5% across windows — the choice is about
+CELL THICKNESS and operations, not era drift. 2023 is rules-homogeneous with
+today (pitch clock / bigger bases / shift limits all started 2023). W3 is
+just W2 plus the 2023 TAIL (Aug-Oct) — it buys 8% more rows where W1 buys
+36%, and it costs daily-moving artifacts (reproducibility, golden-fixture
+churn, season-based recency weights misaligned, and honest backtests would
+need per-date as-of artifacts). W1's standing rule — "the last three
+COMPLETED seasons plus the current season to date" — also self-heals the
+season boundary (W2's formulation holds only ~2 full seasons every April).
+Recency weighting keeps the draw tilted current either way.
+
 ## Operational notes
 
 * Serial 12×150 instrumented runs take ~75 min per container; two run
