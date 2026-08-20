@@ -101,6 +101,15 @@ class FullPoolSampler:
         self.venue_run_factors: dict[tuple[int, int], float] | None = None
         #: Per-hand cache of the per-row park factor (1.0 for unknown venues).
         self._bb_park: dict[str, np.ndarray] = {}
+        # SIM-491 part 3 (the SIM-425b rebuild): the fielder-quality kernel.
+        # Weight each batted-ball row by the similarity between the LIVE
+        # defender at the row's position and the ROW's own fielder, over the
+        # OAA-centred feature set — a good live shortstop pulls the draw toward
+        # rows where good shortstops made plays. 0.0 (the default) disables
+        # the kernel EXACTLY. The bandwidth is a SIM-476 fit target.
+        self.fielder_sigma = 0.0
+        #: Per-hand cache of each row's fielder-embedding index (-1 = absent).
+        self._bb_fielder_emb: dict[str, np.ndarray] = {}
         # Per-pool precompute: dense candidate->profile indices for O(1) gathers.
         self._pool_cache: dict[str, dict] = {}
         # SIM-430 hot-path caches (all hold CONSTANTS that the original code
@@ -386,6 +395,72 @@ class FullPoolSampler:
         self._bb_park[hand] = out
         return out
 
+    #: SIM-491 part 3: the OAA-centred feature subset of the fielder embedding
+    #: (derived.fielder_season_metrics). v1 is the range-quality core; the
+    #: SIM-476 fit may widen it toward the arm features the advancement draws
+    #: already use.
+    _FIELDER_BB_FEATURES = ("outs_above_average",)
+
+    def _bb_fielder_emb_rows(self, hand: str) -> np.ndarray | None:
+        """SIM-491 part 3: each batted-ball row's fielder-embedding index, keyed
+        ``fielder_id:POS:row_season`` (the row's CONTEMPORANEOUS season — the
+        SIM-425b survivorship lesson); -1 when absent. None when the pool has no
+        fielder columns (a pre-0012 bundle) or no fielder embedding is loaded."""
+        cached = self._bb_fielder_emb.get(hand)
+        if cached is not None:
+            return cached
+        pool = self.a.bb_pools[hand]
+        pos = getattr(pool, "fielder_pos", None)
+        fid = getattr(pool, "fielder_id", None)
+        emb = self.a.actor_emb.get("fielder")
+        if pos is None or fid is None or emb is None:
+            return None
+        ki = emb["key_index"]
+        out = np.fromiter(
+            (
+                ki.get(f"{int(f)}:{_POS_NUM_TO_NAME.get(int(p), '?')}:{int(s)}", -1)
+                for f, p, s in zip(fid, pos, pool.season, strict=False)
+            ),
+            dtype=np.int64,
+            count=pool.n,
+        )
+        self._bb_fielder_emb[hand] = out
+        return out
+
+    def _f_live_fielder(
+        self, hand: str, rows: np.ndarray, defense_map: dict[str, int], season: int
+    ) -> np.ndarray | None:
+        """SIM-491 part 3: per-row Gaussian similarity between the LIVE defender
+        at the row's position and the row's own fielder, over
+        :data:`_FIELDER_BB_FEATURES`. 1.0 (neutral) for rows where either side
+        is absent from the embedding; None when the factor is unavailable."""
+        z = self._emb_z("fielder")
+        emb = self.a.actor_emb.get("fielder")
+        cols = self._steal_feat_cols("fielder", self._FIELDER_BB_FEATURES)
+        row_emb = self._bb_fielder_emb_rows(hand)
+        if z is None or emb is None or cols is None or row_emb is None:
+            return None
+        ki = emb["key_index"]
+        # The live defender's embedding index per position NUMBER (the row's
+        # fielder_pos vocabulary), -1 when the defense map / embedding lacks it.
+        live_by_pos = np.full(10, -1, dtype=np.int64)
+        for p, name in _POS_NUM_TO_NAME.items():
+            pid = defense_map.get(name)
+            if pid:
+                live_by_pos[p] = ki.get(f"{int(pid)}:{name}:{int(season)}", -1)
+        pool = self.a.bb_pools[hand]
+        pos = np.clip(np.asarray(pool.fielder_pos)[rows].astype(np.int64), 0, 9)
+        live_idx = live_by_pos[pos]
+        row_idx = row_emb[rows]
+        valid = (live_idx >= 0) & (row_idx >= 0)
+        out = np.ones(len(rows), dtype=np.float32)
+        if not valid.any():
+            return out
+        diff = z[row_idx[valid]][:, cols] - z[live_idx[valid]][:, cols]
+        d2 = np.einsum("ij,ij->i", diff, diff)
+        out[valid] = np.exp(-d2 / (2.0 * self.fielder_sigma**2 * len(cols))).astype(np.float32)
+        return out
+
     def _bb_same_hand_mask(self, hand: str, pitcher_throws: str) -> np.ndarray | None:
         """SIM-413: boolean mask of batted-ball pool rows whose pitcher threw the
         SAME hand as ``pitcher_throws``. None when the pool carries no per-row
@@ -452,6 +527,8 @@ class FullPoolSampler:
         pitcher_throws: str | None = None,
         bat_home: bool | None = None,
         park_run_factor: float | None = None,
+        defense_map: dict[str, int] | None = None,
+        live_season: int | None = None,
     ) -> None:
         """Assemble the batted-ball weight CDF for the PA (f_batter · f_situation · recency).
 
@@ -476,7 +553,13 @@ class FullPoolSampler:
         :attr:`park_sigma` > 0 AND a venue-factor map is loaded, a Gaussian on
         the |live − row| park-factor delta pulls the draw toward
         run-environment-similar parks. Omitted / sigma 0 / no map -> the draw
-        is unchanged."""
+        is unchanged.
+
+        SIM-491 part 3 (SIM-425b): when ``defense_map`` (position name ->
+        live defender id) is supplied AND :attr:`fielder_sigma` > 0, each row
+        is weighted by the similarity between the LIVE defender at the row's
+        position and the row's own fielder (:data:`_FIELDER_BB_FEATURES`).
+        Omitted / sigma 0 / a pre-0012 bundle -> the draw is unchanged."""
         self._bb_hand = hand
         pool = self.a.bb_pools[hand]
         sv = np.asarray(state, dtype=np.float32)
@@ -522,6 +605,10 @@ class FullPoolSampler:
                 if pf is not None:
                     d = pf[rows] - np.float32(park_run_factor)
                     w = w * np.exp(-(d * d) / (2.0 * self.park_sigma**2)).astype(np.float32)
+            if defense_map and self.fielder_sigma > 0.0:
+                ff = self._f_live_fielder(hand, rows, defense_map, int(live_season or 0))
+                if ff is not None:
+                    w = w * ff
             self._bb_rows = rows
             self._bb_cdf = np.cumsum(w, dtype=np.float64)
             return
@@ -551,6 +638,10 @@ class FullPoolSampler:
             if pf is not None:
                 d = pf - np.float32(park_run_factor)
                 w = w * np.exp(-(d * d) / (2.0 * self.park_sigma**2)).astype(np.float32)
+        if defense_map and self.fielder_sigma > 0.0:
+            ff = self._f_live_fielder(hand, np.arange(pool.n), defense_map, int(live_season or 0))
+            if ff is not None:
+                w = w * ff
         self._bb_cdf = np.cumsum(w, dtype=np.float64)
 
     def battedball_draw(self) -> tuple[str, int, int, float]:

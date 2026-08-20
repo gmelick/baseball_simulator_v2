@@ -255,6 +255,112 @@ class TestParkKernel:
 
 
 # ===========================================================================
+# SIM-491 part 3 — the fielder-quality KERNEL (the SIM-425b rebuild)
+# ===========================================================================
+
+
+def _fk_bb_pool(with_fielders: bool = True) -> BattedBallPool:
+    """8 rows, all fielded at SS: the first 4 by the GOOD shortstop 555 (event
+    'single'), the last 4 by the BAD shortstop 556 (event 'double'), so the
+    drawn EVENT reveals which fielder's rows the kernel kept."""
+    n = 8
+    kw: dict = {}
+    if with_fielders:
+        kw = {
+            "fielder_pos": np.full(n, 6, dtype=np.int8),
+            "fielder_id": np.array([555, 555, 555, 555, 556, 556, 556, 556], dtype=np.int64),
+        }
+    return BattedBallPool(
+        geom=np.zeros((n, 3), dtype=np.float32),
+        sit=np.zeros((n, 6), dtype=np.float32),
+        batter_id=np.full(n, 700, dtype=np.int64),
+        season=np.full(n, _SEASON, dtype=np.int64),
+        event=np.asarray(["single"] * 4 + ["double"] * 4, dtype=object),
+        result_hits=np.array([1, 1, 1, 1, 2, 2, 2, 2], dtype=np.int8),
+        result_outs=np.zeros(n, dtype=np.int8),
+        recency=np.ones(n, dtype=np.float32),
+        **kw,
+    )
+
+
+def _fk_sampler(with_fielders: bool = True) -> FullPoolSampler:
+    """A sampler whose fielder embedding holds the two pool shortstops (555
+    OAA +10, 556 OAA −10) and the live shortstop 666 (OAA +10 — a twin of
+    555)."""
+    femb = {
+        "key_index": {"555:SS:2024": 0, "556:SS:2024": 1, "666:SS:2024": 2},
+        "vecs": np.array([[10.0], [-10.0], [10.0]], dtype=np.float32),
+        "mean": np.zeros(1, dtype=np.float32),
+        "std": np.ones(1, dtype=np.float32),
+        "features": ["outs_above_average"],
+    }
+    art = EngineArtifacts(
+        pools={}, bb_pools={"R": _fk_bb_pool(with_fielders)}, actor_emb={"fielder": femb}
+    )
+    return FullPoolSampler(art, np.random.default_rng(0))
+
+
+_LIVE_DEFENSE = {"SS": 666}
+
+
+class TestFielderQualityKernel:
+    def test_a_tight_kernel_draws_similar_fielders(self):
+        # The live SS (OAA +10) is a twin of 555 and far from 556, so a tight
+        # bandwidth draws ONLY the 'single' (555) rows.
+        fp = _fk_sampler()
+        fp.fielder_sigma = 0.05
+        events = set()
+        for _ in range(40):
+            fp.battedball_new_pa(
+                "R",
+                "700:2024",
+                np.zeros(6, np.float32),
+                defense_map=_LIVE_DEFENSE,
+                live_season=_SEASON,
+            )
+            events.add(fp.battedball_draw()[0])
+        assert events == {"single"}
+
+    def test_neutral_when_no_defense_map(self):
+        fp = _fk_sampler()
+        fp.fielder_sigma = 0.05
+        events = set()
+        for _ in range(60):
+            fp.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32))
+            events.add(fp.battedball_draw()[0])
+        assert events == {"single", "double"}
+
+    def test_neutral_when_pool_has_no_fielder_columns(self):
+        fp = _fk_sampler(with_fielders=False)
+        fp.fielder_sigma = 0.05
+        events = set()
+        for _ in range(60):
+            fp.battedball_new_pa(
+                "R",
+                "700:2024",
+                np.zeros(6, np.float32),
+                defense_map=_LIVE_DEFENSE,
+                live_season=_SEASON,
+            )
+            events.add(fp.battedball_draw()[0])
+        assert events == {"single", "double"}
+
+    def test_sigma_zero_is_byte_identical(self):
+        fp_on = _fk_sampler()
+        fp_off = _fk_sampler()
+        fp_on.battedball_new_pa(
+            "R",
+            "700:2024",
+            np.zeros(6, np.float32),
+            defense_map=_LIVE_DEFENSE,
+            live_season=_SEASON,
+        )
+        fp_off.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32))
+        assert fp_on.fielder_sigma == 0.0
+        np.testing.assert_array_equal(fp_on._bb_cdf, fp_off._bb_cdf)
+
+
+# ===========================================================================
 # SIM-425b — fielder accessors + the OAA nudge
 # ===========================================================================
 

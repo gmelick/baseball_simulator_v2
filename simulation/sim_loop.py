@@ -1529,6 +1529,10 @@ class StateMachine:
         # SIM-491 part 2 (SIM-411): pass the live park run factor for the park
         # kernel. A no-op unless the sampler's park_sigma is set above 0
         # (SIM_PARK_KERNEL_SIGMA) AND the factory loaded a venue-factor map.
+        # SIM-491 part 3 (SIM-425b): pass the FIELDING team's defense map for
+        # the fielder-quality kernel. A no-op unless the sampler's
+        # fielder_sigma is set above 0 (SIM_FIELDER_KERNEL_SIGMA).
+        defense = state.home_defense if state.defense == Team.HOME else state.away_defense
         fp.battedball_new_pa(
             hand,
             f"{state.batter_id}:{season}",
@@ -1536,6 +1540,8 @@ class StateMachine:
             pitcher_throws=pthrows,
             bat_home=(state.offense == Team.HOME),
             park_run_factor=float(getattr(state, "park_run_factor", 1.0) or 1.0),
+            defense_map=defense or None,
+            live_season=season,
         )
         ev, rh, _ro, la = fp.battedball_draw()
         # --- SIM-511: the transition path -----------------------------------

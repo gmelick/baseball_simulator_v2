@@ -62,6 +62,10 @@ os.environ["SIM_HOME_OFF_WEIGHT"] = "1.0"
 # the kernel exactly; the tests set the sampler's park_sigma directly.
 os.environ["SIM_PARK_KERNEL_SIGMA"] = "0"
 
+# SIM-491 part 3: the fielder-quality KERNEL bandwidth (the SIM-425b rebuild).
+# 0 disables it exactly; the tests set the sampler's fielder_sigma directly.
+os.environ["SIM_FIELDER_KERNEL_SIGMA"] = "0"
+
 # ---------------------------------------------------------------------------
 # Shared lightweight fixtures
 # ---------------------------------------------------------------------------

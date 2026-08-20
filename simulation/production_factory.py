@@ -379,6 +379,13 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
             sampler.venue_run_factors = _load_venue_run_factors()
             if sampler.venue_run_factors:
                 sampler.park_sigma = park_sigma
+        # SIM-491 part 3 (the SIM-425b rebuild): the fielder-quality kernel
+        # bandwidth. 0.0 (the default, and any unparsable value) disables it
+        # EXACTLY; the fielder embedding is already in the artifact bundle.
+        try:
+            sampler.fielder_sigma = float(os.environ.get("SIM_FIELDER_KERNEL_SIGMA", "0"))
+        except ValueError:
+            sampler.fielder_sigma = 0.0
         _CACHED_FULL_POOL_SAMPLER = sampler
         _CACHED_FULL_POOL_ART_DIR = art_dir
         return sampler
