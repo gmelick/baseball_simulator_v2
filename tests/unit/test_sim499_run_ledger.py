@@ -145,23 +145,61 @@ class TestTheBeforeStateIsMeasuredBeforeThePlay:
         assert result.runs == pytest.approx(1.0)
 
     def test_a_sac_fly_is_valued_from_before_the_runner_left_third(self):
-        """Runner on 3B, 0 outs, manager sac-fly intent.  PRE-FIX +0.76.  TRUE -0.13.
+        """Runner on 3B, 0 outs.  PRE-FIX +0.76.  TRUE -0.13.
 
-        This is the PLACEMENT TRAP.  ``_apply_sac_fly_bias`` clears 3B, and it
-        runs BEFORE the commit.  A snapshot taken below it reads empty bases and
-        values a productive out as if it had created a run from nothing.  The
-        sac fly is a good out, not a good play: it trades a runner on third and
-        no outs for nobody on and one out.
+        This is the PLACEMENT TRAP, retargeted 2026-08-19: the SIM-349 bias
+        that first caught it is retired, and the SIM-512 tag draw now clears
+        3B before the commit.  A snapshot taken below the transition
+        application reads empty bases and values a productive out as if it
+        had created a run from nothing.  The sac fly is a good out, not a
+        good play: it trades a runner on third and no outs for nobody on and
+        one out.
         """
-        sm = StateMachine(
-            resolver=_InjectedResolver(_sig("field_out", 0, 1, 0, launch_angle=30.0)),
-            rng=np.random.default_rng(0),
-        )
+        from types import SimpleNamespace
+
+        from simulation.game_state import PlayResult
+        from simulation.sim_loop import FieldingSignal
+
+        class _TagFP:
+            a = SimpleNamespace(adv_pools={"4_3_4": object()})
+
+            def has_advancement(self) -> bool:
+                return True
+
+            def advancement_draw(self, *args, **kwargs):
+                return (True, True, False)  # the tag from 3B scores
+
+            def last_battedball_fielder(self):
+                return None
+
+        sm = StateMachine(rng=np.random.default_rng(0))
+        sm.full_pool_sampler = _TagFP()
         state = _fresh_state()
         state.bases = Bases(third=103)
-        state.manager.sac_fly_intent = True
-
-        result = sm.step_pitch(state, pitch_outcome="in_play")
+        result = PlayResult(pitch_outcome="in_play", is_contact=True)
+        sig = FieldingSignal(
+            event="field_out",
+            result_hits=0,
+            result_outs=1,
+            result_runs=0,
+            launch_angle=30.0,
+            transition={
+                "r1": -1,
+                "r2": -1,
+                "r3": 3,  # the row held him; the tag draw sends him
+                "batter": 0,
+                "adv1": False,
+                "adv2": False,
+                "adv3": False,
+                "is_air": True,
+                "ev": 95.0,
+                "spray": 0.0,
+                "dist": 320.0,
+            },
+        )
+        sm._resolve_in_play_transition(
+            state, result, sig, int(state.outs), sm._snapshot_bases(state)
+        )
 
         assert result.event == "sacrifice_fly"
         assert result.runs_scored == 1
@@ -615,9 +653,10 @@ class TestTheSnapshotIsACopy:
         """A structural guard on the placement trap.
 
         Each of the four resolvers that commit must take its snapshot before the
-        first line that can touch the bases.  The sac-fly bias is the one that
-        has caught someone out already, so the in-play snapshot is pinned to the
-        top of the method.
+        first line that can touch the bases.  The retired SIM-349 sac-fly bias
+        was the one that caught someone out first; the SIM-511 transition
+        resolver inherits its pin — it consumes ``pre_bases``, so the snapshot
+        must sit above its call.
         """
         import inspect
 
@@ -626,7 +665,10 @@ class TestTheSnapshotIsACopy:
         # The mutator strings are CALL SITES, precise enough that a prose mention
         # of the same method in a comment cannot match them.
         for method_name, mutator in (
-            ("_resolve_in_play", "= self._apply_sac_fly_bias(state, sig)"),
+            (
+                "_resolve_in_play",
+                "self._resolve_in_play_transition(state, result, sig, pre_outs, pre_bases)",
+            ),
             ("_resolve_walk", "b.third = rid_2"),
             ("_resolve_strikeout", "forced_run = self._force_on_reach(state, result)"),
             ("_resolve_steal_outcome", "self._move_runner(state, from_base, to_base)"),

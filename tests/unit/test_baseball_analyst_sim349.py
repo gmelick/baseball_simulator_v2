@@ -94,15 +94,12 @@ _AGGRESSIVE = {
 _PASSIVE = dict.fromkeys(_AGGRESSIVE, 0.0)
 
 
-class _SacFlyResolver(PlayResolver):
-    """A fielding resolver that always returns a single fly-ball OUT (the sac-fly
-    candidate); the loop's intent bias decides whether it becomes a sac fly."""
-
-    def __init__(self, event="field_out"):
-        self.event = event
-
-    def resolve_fielding(self, state, battedball_sample):
-        return FieldingSignal(event=self.event, result_hits=0, result_outs=1, result_runs=0)
+# (The `_SacFlyResolver` helper and the sac-fly-intent test classes lived
+# here until 2026-08-19 — retired with the SIM-349 nudge by SIM-513. The
+# SIM-512 tag draw from 3B owns sacrifice flies now, pinned by
+# tests/unit/test_sim511_512_transition_draw.py and the retargeted sac-fly
+# ledger test in tests/unit/test_sim499_run_ledger.py. The hit-and-run and
+# sac-bunt halves of SIM-349 stay live and tested below.)
 
 
 # ===========================================================================
@@ -202,125 +199,6 @@ class TestHitAndRunConsolidation:
 
 
 # ===========================================================================
-# Sac-fly intent (PA-boundary trigger + in-play bias)
-# ===========================================================================
-
-
-class TestSacFlyIntent:
-    def test_intent_flagged_runner_on_3rd_under_two_outs_run_needed(self):
-        # Tied game, runner on 3rd, <2 outs -> a run-needed productive-out spot.
-        m = _machine({"squeeze_play_rate_per_3b_opp": 0.95}, seed=5)
-        s = _state(inning=8, third=33, outs=1, home_score=2, away_score=2)
-        m._maybe_sac_fly_intent(s, StateMachine.compute_leverage(s))
-        assert s.manager.sac_fly_intent is True
-        assert any(d["kind"] == "sac_fly_intent" for d in m.manager_decisions)
-
-    def test_no_intent_with_no_runner_on_3rd(self):
-        m = _machine({"squeeze_play_rate_per_3b_opp": 0.95}, seed=5)
-        s = _state(inning=8, second=22, outs=1, home_score=2, away_score=2)
-        m._maybe_sac_fly_intent(s, StateMachine.compute_leverage(s))
-        assert s.manager.sac_fly_intent is False
-
-    def test_no_intent_with_two_outs(self):
-        m = _machine({"squeeze_play_rate_per_3b_opp": 0.95}, seed=5)
-        s = _state(inning=8, third=33, outs=2, home_score=2, away_score=2)
-        m._maybe_sac_fly_intent(s, StateMachine.compute_leverage(s))
-        assert s.manager.sac_fly_intent is False
-
-    def test_no_intent_when_comfortably_ahead(self):
-        # Offense leads -> not a run-needed spot; no sac-fly give-up.
-        m = _machine({"squeeze_play_rate_per_3b_opp": 0.95}, seed=5)
-        s = _state(inning=8, half=Half.BOTTOM, third=33, outs=1, home_score=8, away_score=2)
-        m._maybe_sac_fly_intent(s, StateMachine.compute_leverage(s))
-        assert s.manager.sac_fly_intent is False
-
-    def test_passive_manager_never_flags_intent(self):
-        m = _machine(_PASSIVE, seed=5)
-        s = _state(inning=8, third=33, outs=1, home_score=2, away_score=2)
-        m._maybe_sac_fly_intent(s, StateMachine.compute_leverage(s))
-        assert s.manager.sac_fly_intent is False
-
-    def test_intent_biases_a_fly_out_into_a_credited_sac_fly(self):
-        # With intent set + a runner on 3rd + <2 outs, a sampled fly OUT is
-        # converted to a sacrifice_fly that scores the runner from 3rd.
-        m = StateMachine(rng=np.random.default_rng(0), resolver=_SacFlyResolver())
-        s = _state(inning=8, third=33, outs=0, home_score=2, away_score=2, batter_id=101)
-        s.manager.sac_fly_intent = True
-        from simulation.game_state import PlayResult
-
-        result = PlayResult(pitch_outcome="in_play", is_contact=True, pa_terminal=True)
-        # Drive the in-play resolution directly with the injected fly-out sample.
-        m.resolver._injected_battedball = {"event": "field_out"}
-        s.home_score + s.away_score
-        m._resolve_in_play(s, result)
-        assert result.canonical_event == "sacrifice_fly"
-        assert result.runs_scored == 1  # the runner from 3rd scored
-        assert s.bases.third is None  # 3B cleared (runner came home)
-        assert result.outs_recorded == 1  # still one out on the play
-        assert s.manager.sac_fly_intent is False  # the intent was consumed
-
-    def test_no_intent_leaves_a_fly_out_as_a_plain_out(self):
-        # Same fly-out, no intent -> stays a field_out, no run scores from 3rd.
-        m = StateMachine(rng=np.random.default_rng(0), resolver=_SacFlyResolver())
-        s = _state(inning=8, third=33, outs=0, home_score=2, away_score=2)
-        from simulation.game_state import PlayResult
-
-        result = PlayResult(pitch_outcome="in_play", is_contact=True, pa_terminal=True)
-        m.resolver._injected_battedball = {"event": "field_out"}
-        m._resolve_in_play(s, result)
-        assert result.canonical_event != "sacrifice_fly"
-        assert result.runs_scored == 0
-        assert s.bases.third == 33  # runner held
-
-    def test_intent_does_not_convert_a_base_hit(self):
-        # A single with intent set is NOT turned into a sac fly (bias is out-only).
-        class _SingleResolver(PlayResolver):
-            def resolve_fielding(self, state, battedball_sample):
-                return FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
-
-        m = StateMachine(rng=np.random.default_rng(0), resolver=_SingleResolver())
-        s = _state(inning=8, third=33, outs=0, home_score=2, away_score=2)
-        s.manager.sac_fly_intent = True
-        from simulation.game_state import PlayResult
-
-        result = PlayResult(pitch_outcome="in_play", is_contact=True, pa_terminal=True)
-        m.resolver._injected_battedball = {"event": "single"}
-        m._resolve_in_play(s, result)
-        assert result.canonical_event != "sacrifice_fly"
-
-
-# ===========================================================================
-# Sac-fly intent consolidation with SIM-323's sac-bunt (no double-fire)
-# ===========================================================================
-
-
-class TestSituationalSetConsolidation:
-    def test_end_of_pa_hook_can_set_sac_fly_intent_without_a_sac_bunt(self):
-        # Runner on 3rd ONLY (no force / lead runner to bunt over): the end-of-PA
-        # hook flags sac-fly intent; the sac-bunt is for advancing a non-scoring
-        # runner, so both small-ball calls are present but distinct kinds.
-        m = _machine(_AGGRESSIVE, seed=2)
-        s = _state(inning=8, third=33, outs=1, home_score=2, away_score=2, batter_id=101)
-        m._end_of_pa_hook(s)
-        kinds = [d["kind"] for d in m.manager_decisions]
-        # sac_fly_intent is recorded; it and sac_bunt are distinct decision kinds
-        # (no single PA records the same decision twice).
-        assert "sac_fly_intent" in kinds
-        assert kinds.count("sac_fly_intent") <= 1
-        assert kinds.count("sac_bunt") <= 1
-
-    def test_sac_fly_intent_resets_each_pa_boundary(self):
-        # A spot that would NOT flag (two outs) clears a prior intent flag.
-        m = _machine({"squeeze_play_rate_per_3b_opp": 0.95}, seed=5)
-        s = _state(inning=8, third=33, outs=1, home_score=2, away_score=2)
-        m._end_of_pa_hook(s)
-        assert s.manager.sac_fly_intent is True
-        s.outs = 2
-        m._end_of_pa_hook(s)
-        assert s.manager.sac_fly_intent is False
-
-
-# ===========================================================================
 # Determinism under a fixed seed
 # ===========================================================================
 
@@ -334,15 +212,6 @@ class TestDeterminism:
             m._pre_pitch_hook(s)
             decisions.append(s.manager.hit_and_run_signalled)
         assert len(set(decisions)) == 1  # identical across identical seeds
-
-    def test_sac_fly_intent_is_deterministic_under_a_fixed_seed(self):
-        flags = []
-        for _ in range(3):
-            m = _machine({"squeeze_play_rate_per_3b_opp": 0.5}, seed=42)
-            s = _state(inning=8, third=33, outs=1, home_score=2, away_score=2)
-            m._maybe_sac_fly_intent(s, StateMachine.compute_leverage(s))
-            flags.append(s.manager.sac_fly_intent)
-        assert len(set(flags)) == 1
 
 
 # ===========================================================================

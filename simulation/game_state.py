@@ -385,12 +385,8 @@ class ManagerContext:
     #: pitch and the batter is in a contact-oriented PA (runner-go + contact bias
     #: for THIS pitch).  Reset each pitch in the pre-pitch hook.
     hit_and_run_signalled: bool = False
-    #: SIM-349 sac-fly intent: a PA-level flag (set at the PA boundary) that, with
-    #: a runner on 3rd and <2 outs in a run-needed spot, biases the in-play
-    #: resolution toward the productive-out (sacrifice-fly) behaviour so the
-    #: SIM-312 run-resolution credits the run.  A bias/flag only — never a forced
-    #: outcome.  Consumed (cleared) when the PA resolves.
-    sac_fly_intent: bool = False
+    # (SIM-349's ``sac_fly_intent`` flag lived here until 2026-08-19 — retired
+    # by SIM-513; the SIM-512 tag draw from 3B owns sacrifice flies.)
 
 
 # ---------------------------------------------------------------------------

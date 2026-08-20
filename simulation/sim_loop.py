@@ -2778,21 +2778,11 @@ class StateMachine:
             result.baserunner_advances[state.batter_id] = 1
         return forced_run
 
-    #: Out events that a sac-fly intent may convert into a ``sacrifice_fly``: a
-    #: plain fly/air out (NOT a hit, NOT a strikeout, NOT a grounder/DP, NOT an
-    #: already-productive out).  Kept conservative so the bias only nudges the
-    #: genuinely-ambiguous deep-fly-out into the productive-out it already is.
-    _SAC_FLY_ELIGIBLE_OUTS: frozenset[str] = frozenset(
-        {
-            "field_out",
-            "fly_out",
-            "flyout",
-            "out",
-            "air_out",
-            "sac_fly",
-            "sacrifice_fly",
-        }
-    )
+    # The SIM-349 sac-fly-intent nudge (_SAC_FLY_ELIGIBLE_OUTS +
+    # _apply_sac_fly_bias + _maybe_sac_fly_intent) lived here from 2026-05 to
+    # 2026-08-19. SIM-513 retired it: the SIM-512 tag draw from 3B produces
+    # sacrifice flies naturally from real data, at the runner's and the
+    # fielder's own rates, and relabels the play post-hoc.
 
     #: SIM-412: per-batted-ball-out probability that the HOME team's batted-ball
     #: OUT gets converted into a SINGLE — the model of MLB's empirical home-field
@@ -2954,63 +2944,6 @@ class StateMachine:
                 )
         return sig
 
-    def _apply_sac_fly_bias(
-        self, state: GameState, sig: FieldingSignal
-    ) -> tuple[FieldingSignal, int]:
-        """Bias a sampled fly-ball OUT toward a ``sacrifice_fly`` (SIM-349).
-
-        Returns ``(signal, runners_scored)``.  ``runners_scored`` is 1 when the
-        bias sends the runner on 3rd home and 0 otherwise.  SIM-499 added the
-        second element: this method REMOVES a body from the bases, and the ledger
-        needs a body count that accounts for it.  Without it the runner-
-        conservation check sees a runner vanish with nothing to explain him.
-
-        A no-op unless ALL hold: the manager flagged ``sac_fly_intent`` for this
-        PA; a runner is on 3rd; fewer than 2 outs; and the sampled fielding signal
-        is a single-out fly/air ball (a member of
-        :data:`_SAC_FLY_ELIGIBLE_OUTS`, ``result_hits == 0``,
-        ``result_outs == 1``).  In that case it returns a NEW
-        :class:`FieldingSignal` with the canonical ``sacrifice_fly`` event and
-        ``result_runs == 1`` (the runner from 3rd scores) and removes that runner
-        from 3B so the base state stays legal; the single out is unchanged.  The
-        downstream ``resolve_runs`` then credits the productive out exactly as the
-        SIM-312 sac-fly policy does.
-
-        Returns ``sig`` unchanged on the (default) no-intent path or when the
-        sampled ball is anything other than a plain fly-out, so the run
-        environment is untouched outside the genuine sac-fly opportunity.
-        """
-        if not state.manager.sac_fly_intent:
-            return sig, 0
-        if state.bases.third is None or int(state.outs) >= 2:
-            return sig, 0
-        if int(sig.result_hits) != 0 or int(sig.result_outs) != 1:
-            return sig, 0
-        if str(sig.event) not in self._SAC_FLY_ELIGIBLE_OUTS:
-            return sig, 0
-        # The runner on 3rd scores on the sac fly -> clear 3B so occupancy stays
-        # consistent (the run itself is committed via resolve_runs by the caller).
-        state.bases.third = None
-        self._check_bases(state.bases)
-        # Consume the per-PA intent so it never re-fires on a later pitch/PA.
-        state.manager.sac_fly_intent = False
-        # ``result_runs`` is at least 1 (the runner from 3rd); honour a richer
-        # sample if it already scored more.
-        return (
-            FieldingSignal(
-                event="sacrifice_fly",
-                result_hits=0,
-                result_outs=1,
-                result_runs=max(1, int(sig.result_runs)),
-                fielder_id=sig.fielder_id,
-                is_error=sig.is_error,
-                exit_velo=sig.exit_velo,
-                launch_angle=sig.launch_angle,
-                spray_angle=sig.spray_angle,
-            ),
-            1,
-        )
-
     def _resolve_in_play(self, state: GameState, result: PlayResult) -> None:
         """Resolve an in-play PA: batted-ball sample (step 5) -> fielding (step 6)
         -> baserunning (step 7), routing every run/base-out delta through
@@ -3031,11 +2964,11 @@ class StateMachine:
         """
         result.pa_terminal = True
         # SIM-499: measure the base-out state HERE, at the top, above everything.
-        # Three later steps mutate the bases — _apply_sac_fly_bias clears 3B,
+        # Later steps mutate the bases — _resolve_in_play_transition,
         # _advance_runners and _full_pool_out_advancement rebuild the whole base
         # state — and the ledger needs the state as it was before any of them.
-        # Placing this snapshot below _apply_sac_fly_bias is a trap that has been
-        # walked into once already: that method mutates too.
+        # Placing this snapshot below any mutator is a trap that has been
+        # walked into once already.
         pre_outs = int(state.outs)
         pre_bases = self._snapshot_bases(state)
         # SIM-425: full-pool batted-ball draw (Batter+Situation over the whole
@@ -3075,14 +3008,8 @@ class StateMachine:
         if sig.transition is not None:
             self._resolve_in_play_transition(state, result, sig, pre_outs, pre_bases)
             return
-        # --- SIM-349 sac-fly intent bias (productive-out nudge) ------------
-        # When the manager flagged sac-fly intent for this PA and the sampled
-        # batted ball is a fly-ball OUT with the runner still on 3rd and <2 outs,
-        # nudge the resolved event to the canonical ``sacrifice_fly`` so the
-        # SIM-312 run-resolution credits the runner from 3rd.  A bias on an
-        # already-out fly ball only — it never converts a hit/grounder/K, never
-        # adds an out, and is a no-op when intent is off (the default path).
-        sig, sac_fly_scored = self._apply_sac_fly_bias(state, sig)
+        # (The SIM-349 sac-fly-intent nudge sat here until 2026-08-19 —
+        # retired by SIM-513; the SIM-512 tag draw owns sacrifice flies.)
         # --- SIM-412 home-field run advantage --------------------------------
         # On the bottom of the inning (home team batting) flip a small
         # fraction of plain batted-ball outs into singles.  Aggregates to the
@@ -3139,21 +3066,19 @@ class StateMachine:
         # --- Step 8 hand-off: ONE resolve_runs call for runs + base-out ----
         # SIM-499 transition facts.  ``bodies_scored`` counts runners who
         # physically crossed home on this play: the ones _advance_runners /
-        # _full_pool_out_advancement moved, plus the runner the sac-fly bias sent
-        # home before either of them ran.  It is deliberately NOT ``runs``:
+        # _full_pool_out_advancement moved.  It is deliberately NOT ``runs``:
         # ``runs`` can be a pool-supplied integer that exceeds the bodies the
         # base state actually moved, and the score commits that integer.  Where
         # the two differ the pool row disagrees with the base state, which is a
         # defect in the draw, not in the ledger.
         #
-        # ``runners_retired`` is 0 on every in-play path today.  Nothing in the
-        # loop removes a baserunner on a batted ball — a ground-ball double play
-        # leaves the doubled-off runner standing on his base (BACKLOG.md:87,
-        # SIM-494).  Stating 0 is therefore the truth about what this simulator
-        # does, and the ledger now values the play the simulator actually played.
-        # The day SIM-494 removes that runner, this argument becomes 1 and the
-        # run value follows without another change here.
-        bodies_scored = int(runners_scored) + int(sac_fly_scored)
+        # ``runners_retired`` is 0 on THIS LEGACY PATH only (a legacy bundle /
+        # the per-tile fallback): its advancement model never removes a
+        # baserunner on a batted ball, so 0 states what this path actually
+        # plays.  The PRODUCTION path is ``_resolve_in_play_transition``
+        # (SIM-511), where the drawn row names the retired runners and this
+        # argument is real.
+        bodies_scored = int(runners_scored)
         self._commit_run_delta(
             state,
             result,
@@ -3997,7 +3922,8 @@ class StateMachine:
         self._maybe_pull_starter(state, li)
         self._maybe_pinch_hit(state, li)
         self._maybe_sac_bunt(state, li)
-        self._maybe_sac_fly_intent(state, li)
+        # (SIM-349's _maybe_sac_fly_intent sat here until 2026-08-19 —
+        # retired by SIM-513; the SIM-512 tag draw owns sacrifice flies.)
         return None
 
     def _maybe_pull_starter(self, state: GameState, li: float) -> None:
@@ -4176,59 +4102,6 @@ class StateMachine:
                 "inning": int(state.inning),
                 "leverage": li,
                 "batter_id": state.batter_id,
-            }
-        )
-
-    def _maybe_sac_fly_intent(self, state: GameState, li: float) -> None:
-        """Flag sac-fly intent for the NEXT PA (SIM-349 productive-out bias).
-
-        With a **runner on 3rd** and **fewer than 2 outs** in a **run-needed
-        spot** (tied or trailing — a run materially helps), the manager biases the
-        batter toward the productive-out (a fly ball deep enough to score the
-        runner from 3rd).  Gated by the manager's
-        ``squeeze_play_rate_per_3b_opp`` tendency — the closest available
-        manager-similarity AGGRESSION feature (idx 4, defined as "squeeze attempts
-        / runner-on-3rd-<2-out", i.e. the same runner-on-3rd-<2-out opportunity a
-        sac fly exploits; mapping documented here) — scaled by leverage vs a
-        loop-rng draw.
-
-        Sets ``ManagerContext.sac_fly_intent`` (a PA-level flag): when an in-play
-        fly-ball PA resolves with the runner on 3rd, :meth:`_apply_sac_fly_bias`
-        nudges a would-be deep fly-out toward the canonical ``sacrifice_fly``
-        event so the SIM-312 run-resolution credits the run.  This is a
-        **bias/flag**, not a forced outcome — the count machine and the batted-ball
-        sample still play out; if the batter does something else (a hit, a K, a
-        grounder), the intent simply has no effect.  Never mutates the base-out
-        state here, so it cannot create an illegal state.
-
-        No-op-safe: with no manager profile the tendency reads 0.0 and the flag
-        stays off.
-        """
-        # Reset the prior PA's intent so a stale flag never carries forward.
-        state.manager.sac_fly_intent = False
-        b = state.bases
-        # Runner on 3rd + fewer than 2 outs is the defining sac-fly opportunity.
-        if b.third is None or int(state.outs) >= 2:
-            return
-        # Run-needed spot: tied or trailing (score_diff <= 0 for the offense).  A
-        # team comfortably ahead does not give up an out for one run here.
-        if int(state.score_diff) > 0:
-            return
-        tend = self._tendency("squeeze_play_rate_per_3b_opp", 0.0)
-        if tend <= 0.0:
-            return
-        li_scale = 0.5 + 0.5 * min(li / _HIGH_LEVERAGE, 2.0)
-        fire_p = min(1.0, tend * li_scale)
-        if self._manager_rng() >= fire_p:
-            return
-        state.manager.sac_fly_intent = True
-        self.manager_decisions.append(
-            {
-                "kind": "sac_fly_intent",
-                "inning": int(state.inning),
-                "leverage": li,
-                "batter_id": state.batter_id,
-                "runner_id": b.third,
             }
         )
 
