@@ -173,6 +173,88 @@ class TestHomeFieldReweight:
 
 
 # ===========================================================================
+# SIM-491 part 2 — the park KERNEL in the batted-ball draw (the SIM-411 rebuild)
+# ===========================================================================
+
+
+def _park_bb_pool(with_venues: bool = True) -> BattedBallPool:
+    """8 rows: the first 4 in venue 15 (event 'single'), the last 4 in venue 16
+    (event 'double'), so the drawn EVENT reveals the row's park."""
+    n = 8
+    venue_id = np.array([15, 15, 15, 15, 16, 16, 16, 16], dtype=np.int64) if with_venues else None
+    return BattedBallPool(
+        geom=np.zeros((n, 3), dtype=np.float32),
+        sit=np.zeros((n, 6), dtype=np.float32),
+        batter_id=np.full(n, 700, dtype=np.int64),
+        season=np.full(n, _SEASON, dtype=np.int64),
+        event=np.asarray(["single"] * 4 + ["double"] * 4, dtype=object),
+        result_hits=np.array([1, 1, 1, 1, 2, 2, 2, 2], dtype=np.int8),
+        result_outs=np.zeros(n, dtype=np.int8),
+        recency=np.ones(n, dtype=np.float32),
+        venue_id=venue_id,
+    )
+
+
+_PARK_FACTORS = {(15, _SEASON): 1.15, (16, _SEASON): 0.85}
+
+
+class TestParkKernel:
+    def test_a_tight_kernel_draws_run_similar_parks(self):
+        # A tight bandwidth with a live factor at venue 15's makes venue-16 rows
+        # (0.30 away) vanish under the Gaussian.
+        fp = _sampler(_park_bb_pool())
+        fp.venue_run_factors = dict(_PARK_FACTORS)
+        fp.park_sigma = 0.01
+        events = set()
+        for _ in range(40):
+            fp.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32), park_run_factor=1.15)
+            events.add(fp.battedball_draw()[0])
+        assert events == {"single"}
+
+    def test_neutral_when_no_factor_map(self):
+        fp = _sampler(_park_bb_pool())
+        fp.park_sigma = 0.01  # a map was never loaded -> neutral
+        events = set()
+        for _ in range(60):
+            fp.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32), park_run_factor=1.15)
+            events.add(fp.battedball_draw()[0])
+        assert events == {"single", "double"}
+
+    def test_neutral_when_pool_has_no_venue_id(self):
+        fp = _sampler(_park_bb_pool(with_venues=False))
+        fp.venue_run_factors = dict(_PARK_FACTORS)
+        fp.park_sigma = 0.01
+        events = set()
+        for _ in range(60):
+            fp.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32), park_run_factor=1.15)
+            events.add(fp.battedball_draw()[0])
+        assert events == {"single", "double"}
+
+    def test_sigma_zero_is_byte_identical(self):
+        # park_sigma=0.0 (the default) must not touch the weights at all: the
+        # CDF with a park factor passed equals the CDF without it, bit for bit.
+        fp_on = _sampler(_park_bb_pool())
+        fp_on.venue_run_factors = dict(_PARK_FACTORS)
+        fp_off = _sampler(_park_bb_pool())
+        fp_on.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32), park_run_factor=1.15)
+        fp_off.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32))
+        assert fp_on.park_sigma == 0.0
+        np.testing.assert_array_equal(fp_on._bb_cdf, fp_off._bb_cdf)
+
+    def test_an_unmapped_season_falls_back_to_the_venue_mean(self):
+        # The map holds only season 2023 for venue 15; a 2024 row reads the
+        # venue mean instead of a neutral 1.0.
+        fp = _sampler(_park_bb_pool())
+        fp.venue_run_factors = {(15, 2023): 1.15, (16, _SEASON): 0.85}
+        fp.park_sigma = 0.01
+        events = set()
+        for _ in range(40):
+            fp.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32), park_run_factor=1.15)
+            events.add(fp.battedball_draw()[0])
+        assert events == {"single"}
+
+
+# ===========================================================================
 # SIM-425b — fielder accessors + the OAA nudge
 # ===========================================================================
 

@@ -58,6 +58,10 @@ os.environ["SIM_FIELDER_RBF"] = "0"
 # tests pass home_off_weight to the sampler directly, not via the env.
 os.environ["SIM_HOME_OFF_WEIGHT"] = "1.0"
 
+# SIM-491 part 2: the park KERNEL bandwidth (the SIM-411 rebuild). 0 disables
+# the kernel exactly; the tests set the sampler's park_sigma directly.
+os.environ["SIM_PARK_KERNEL_SIGMA"] = "0"
+
 # ---------------------------------------------------------------------------
 # Shared lightweight fixtures
 # ---------------------------------------------------------------------------

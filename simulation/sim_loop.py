@@ -1526,12 +1526,16 @@ class StateMachine:
         # SIM-491: pass the live batting side for the home-field draw weight.
         # A no-op unless the sampler's home_off_weight is set below 1.0
         # (SIM_HOME_OFF_WEIGHT) AND the pool carries bat_home (migration 0019).
+        # SIM-491 part 2 (SIM-411): pass the live park run factor for the park
+        # kernel. A no-op unless the sampler's park_sigma is set above 0
+        # (SIM_PARK_KERNEL_SIGMA) AND the factory loaded a venue-factor map.
         fp.battedball_new_pa(
             hand,
             f"{state.batter_id}:{season}",
             sit,
             pitcher_throws=pthrows,
             bat_home=(state.offense == Team.HOME),
+            park_run_factor=float(getattr(state, "park_run_factor", 1.0) or 1.0),
         )
         ev, rh, _ro, la = fp.battedball_draw()
         # --- SIM-511: the transition path -----------------------------------

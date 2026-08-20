@@ -89,6 +89,18 @@ class FullPoolSampler:
         # multiplication runs, so the draw is byte-identical to pre-SIM-491.
         # The value is a SIM-476 fit target (calibrate to the +0.13 R/g edge).
         self.home_off_weight = float(home_off_weight)
+        # SIM-491 part 2 (the SIM-411 rebuild): the park kernel. A Gaussian on
+        # |park_run_factor(live venue) − park_run_factor(row venue)| pulls the
+        # batted-ball draw toward rows hit in run-environment-similar parks.
+        # ``venue_run_factors`` maps (venue_id, season) -> regressed run factor
+        # (derived.park_factors, factor_type='R'); the factory loads it when
+        # the kernel is enabled. ``park_sigma`` 0.0 (the default) disables the
+        # kernel EXACTLY — no weight multiplication runs. The bandwidth is a
+        # SIM-476 fit target (the factor range is ~0.87-1.13).
+        self.park_sigma = 0.0
+        self.venue_run_factors: dict[tuple[int, int], float] | None = None
+        #: Per-hand cache of the per-row park factor (1.0 for unknown venues).
+        self._bb_park: dict[str, np.ndarray] = {}
         # Per-pool precompute: dense candidate->profile indices for O(1) gathers.
         self._pool_cache: dict[str, dict] = {}
         # SIM-430 hot-path caches (all hold CONSTANTS that the original code
@@ -344,6 +356,36 @@ class FullPoolSampler:
         self._bb_pool_bat[hand] = pb
         return pb
 
+    def _bb_park_factors(self, hand: str) -> np.ndarray | None:
+        """SIM-491 part 2 (SIM-411): the per-row park run factor for the hand's
+        batted-ball pool, from ``venue_run_factors`` keyed (venue_id, row season)
+        with a venue-only mean fallback; 1.0 for unknown venues. None when the
+        pool carries no per-row ``venue_id`` (a pre-0012 bundle) or no factor
+        map is loaded — the caller then leaves the draw unweighted."""
+        cached = self._bb_park.get(hand)
+        if cached is not None:
+            return cached
+        vf = self.venue_run_factors
+        pool = self.a.bb_pools[hand]
+        vid = getattr(pool, "venue_id", None)
+        if not vf or vid is None:
+            return None
+        # Venue-only mean fallback for (venue, season) pairs the map lacks.
+        by_venue: dict[int, list[float]] = {}
+        for (v, _s), f in vf.items():
+            by_venue.setdefault(int(v), []).append(float(f))
+        venue_mean = {v: sum(fs) / len(fs) for v, fs in by_venue.items()}
+        out = np.fromiter(
+            (
+                vf.get((int(v), int(s)), venue_mean.get(int(v), 1.0))
+                for v, s in zip(vid, pool.season, strict=False)
+            ),
+            dtype=np.float32,
+            count=pool.n,
+        )
+        self._bb_park[hand] = out
+        return out
+
     def _bb_same_hand_mask(self, hand: str, pitcher_throws: str) -> np.ndarray | None:
         """SIM-413: boolean mask of batted-ball pool rows whose pitcher threw the
         SAME hand as ``pitcher_throws``. None when the pool carries no per-row
@@ -409,6 +451,7 @@ class FullPoolSampler:
         state: np.ndarray,
         pitcher_throws: str | None = None,
         bat_home: bool | None = None,
+        park_run_factor: float | None = None,
     ) -> None:
         """Assemble the batted-ball weight CDF for the PA (f_batter · f_situation · recency).
 
@@ -427,7 +470,13 @@ class FullPoolSampler:
         ``bat_home`` (migration 0019), softly reweight toward rows whose batting
         side matches the live one (mismatched rows ×:attr:`home_off_weight`) —
         the SIM-412 home-field advantage as a draw weight. Omitted / weight 1.0 /
-        legacy pool -> the draw is unchanged."""
+        legacy pool -> the draw is unchanged.
+
+        SIM-491 part 2 (SIM-411): when ``park_run_factor`` is supplied,
+        :attr:`park_sigma` > 0 AND a venue-factor map is loaded, a Gaussian on
+        the |live − row| park-factor delta pulls the draw toward
+        run-environment-similar parks. Omitted / sigma 0 / no map -> the draw
+        is unchanged."""
         self._bb_hand = hand
         pool = self.a.bb_pools[hand]
         sv = np.asarray(state, dtype=np.float32)
@@ -468,6 +517,11 @@ class FullPoolSampler:
                 if bh is not None:
                     match = (bh[rows] > 0) == bool(bat_home)
                     w = w * np.where(match, np.float32(1.0), np.float32(self.home_off_weight))
+            if park_run_factor is not None and self.park_sigma > 0.0:
+                pf = self._bb_park_factors(hand)
+                if pf is not None:
+                    d = pf[rows] - np.float32(park_run_factor)
+                    w = w * np.exp(-(d * d) / (2.0 * self.park_sigma**2)).astype(np.float32)
             self._bb_rows = rows
             self._bb_cdf = np.cumsum(w, dtype=np.float64)
             return
@@ -492,6 +546,11 @@ class FullPoolSampler:
             if bh is not None:
                 match = (bh > 0) == bool(bat_home)
                 w = w * np.where(match, np.float32(1.0), np.float32(self.home_off_weight))
+        if park_run_factor is not None and self.park_sigma > 0.0:
+            pf = self._bb_park_factors(hand)
+            if pf is not None:
+                d = pf - np.float32(park_run_factor)
+                w = w * np.exp(-(d * d) / (2.0 * self.park_sigma**2)).astype(np.float32)
         self._bb_cdf = np.cumsum(w, dtype=np.float64)
 
     def battedball_draw(self) -> tuple[str, int, int, float]:

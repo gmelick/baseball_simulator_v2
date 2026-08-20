@@ -367,9 +367,45 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
         except ValueError:
             home_w = 1.0
         sampler = FullPoolSampler(art, np.random.default_rng(seed), home_off_weight=home_w)
+        # SIM-491 part 2 (the SIM-411 rebuild): the park kernel. 0.0 (the
+        # default, and any unparsable value) disables it EXACTLY. When enabled,
+        # load the (venue_id, season) -> regressed run-factor map read-only;
+        # a load failure leaves the map None and the kernel neutral.
+        try:
+            park_sigma = float(os.environ.get("SIM_PARK_KERNEL_SIGMA", "0"))
+        except ValueError:
+            park_sigma = 0.0
+        if park_sigma > 0.0:
+            sampler.venue_run_factors = _load_venue_run_factors()
+            if sampler.venue_run_factors:
+                sampler.park_sigma = park_sigma
         _CACHED_FULL_POOL_SAMPLER = sampler
         _CACHED_FULL_POOL_ART_DIR = art_dir
         return sampler
+    except Exception:
+        return None
+
+
+def _load_venue_run_factors() -> dict[tuple[int, int], float] | None:
+    """SIM-491 part 2 (SIM-411): load the (venue_id, season) -> regressed run
+    park-factor map from the sim DuckDB, read-only. Returns None on any failure
+    (no duckdb, a missing file, an empty table) — the park kernel then stays
+    neutral. Loaded once per worker alongside the cached sampler."""
+    try:
+        from simulation.sim_kwargs import open_sim_duckdb
+
+        con = open_sim_duckdb()
+        if con is None:
+            return None
+        try:
+            rows = con.execute(
+                "SELECT venue_id, season, regressed_factor FROM derived.park_factors "
+                "WHERE factor_type = 'R' AND regressed_factor IS NOT NULL"
+            ).fetchall()
+        finally:
+            con.close()
+        out = {(int(v), int(s)): float(f) for v, s, f in rows if 0.5 <= float(f) <= 2.0}
+        return out or None
     except Exception:
         return None
 
