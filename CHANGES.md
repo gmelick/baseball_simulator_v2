@@ -1,3 +1,22 @@
+# Test — SIM-513 certification: the transition draw is CERTIFIED on the 2025 bands — 2026-08-19
+
+The 12×471 lane ran end to end (2h57m, n=11,304). **GREEN: R, H, HR, 2B** — HR and 2B for the
+first time; H passes without its xfail. **The epic's two targets are closed by measurement: DP
+0.8081 vs 0.7459 (+8.3%, from -77% under the phantom-DP guard) and ROE_reached 0.2165 vs 0.2078
+(+4.2%, INSIDE its band, from 0.0000).** Getting there took three lane cycles that each earned
+their keep: (1) the SIM-500 conservation guard caught a 1-in-100k body-loss collision at play
+~100k that fifty unit tests missed — a colliding normalized row let the batter's seating
+overwrite a runner; the seat ladder now never drops a body (down, up, else forced home);
+(2) two probes stale-pinned to the ALIAS world were re-pinned — ROE_reached demanded
+`result_hits >= 1` (an error "hit"), so it read 0.0000 on a loop where batters genuinely reach;
+it now reads the `batter_reached` transition fact; the production-path call probe follows
+`_resolve_in_play_transition`. Remaining reds, all ticketed: BB +11.7% (SIM-429, parked);
+DP/K/SB/3B → **SIM-514** (one interacting traffic system — decompose per-opportunity before
+tuning); home_win_pct 0.4735 UNDERPOWERED with the bias INERT by design (SIM-491 rebuilds it
+as a draw weight). CS/ROE/ROE_reached sit inside their bands with sim sd > sd_ref — the
+overdispersion question survives the mechanics fix. SIM-455/SIM-484 verified (both hold, both
+stay open). SIM-513 closes after the sac-fly-intent dead-code removal.
+
 # Sim — SIM-510..512 LANDED (one combined change): the drawn row IS the play — 2026-08-19
 
 The loop's ball-in-play resolution now follows the standing architecture rule end to end.
