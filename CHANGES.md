@@ -1,3 +1,36 @@
+# Sim — SIM-491 part 1: the SIM-412 home-field advantage as a fielding-draw weight — 2026-08-20
+
+The old flip is inert on the transition path, so the effect moves INTO the draw. DuckDB
+migration 0019 (v18→v19) adds `bat_home` to `sim.outcome_pool` (from `raw.pitches.
+inning_topbot`; appended LAST — the positional-INSERT trap — via an `EXCLUDE` re-order in
+the builder). The artifact chain exports and loads it back-compatibly (a pre-0019 bundle
+reads None → neutral). `FullPoolSampler.home_off_weight` down-weights batted-ball rows whose
+batting side mismatches the live one — the exact `platoon_off_weight` shape; 1.0 (the
+default) runs NO weight multiplication, so flag-off is byte-identical (a CDF-equality test
+pins it). The factory reads `SIM_HOME_OFF_WEIGHT`; tests/conftest.py pins it to 1.0;
+`sim_stats.py` prints it (the SIM-449 lesson). `POOL_BUILDER_VERSION` → sim491.1.
++6 unit tests; unit lane, regression lane (53/53) and CI-scope mypy green. Pending: the pool
+rebuild + artifact re-export (`scripts/sim491_rebuild_pools.py`), the weight fit vs the
++0.13 R/g edge, the full-power home_win_pct lane. Parts 2 (park kernel) and 3 (fielder
+factor) follow.
+
+# Analysis — SIM-429 + SIM-514 diagnosis: the draw is clean; the walk surplus is IBB + structure — 2026-08-20
+
+Four new instruments ran the 2026-08-19 plan (12 park-balanced games × 150 iters, 539k
+pitches, plus a 12×50 IBB probe; results in
+`docs/audit/2026-08-20-sim429-514-diagnosis-results.md`). The headline: per-count outcome
+rates match the pool within ±0.5pp at EVERY count and visitation matches MLB — branches 1
+and 2 of the decision tree fail. The +11.7% lane surplus decomposes: **IBB 54%** (the sim
+issues 0.3233 IBB/team-game vs MLB 0.1224 — `_should_issue_ibb` is a hand-tuned per-pitch
+formula, → SIM-515), **Markov structure 33%** (a count-conditioned independent-pitch chain
+on MLB's OWN rates over-walks and under-strikes real MLB by exactly the sim's gap — the K
+deficit is the SAME artifact, closing SIM-514(b)), **pool era 12%**, **kernel tilt 1%**.
+SIM-514: DP per-opportunity ratio 1.019 (clean; +10.7% opportunity traffic), 3B drawn rate
+0.973× the pool per cell (clean), SB the one live residual (2B attempts/opportunity −15%).
+The probe reconciles the lane exactly: box BB = pitched BB + IBB, no residual. Instruments:
+`scripts/sim429_count_diagnosis.py` / `sim429_chain_analysis.py` / `sim429_ibb_probe.py` /
+`sim514_decomposition.py`.
+
 # Sim — SIM-513 CLOSED: the sac-fly-intent nudge retired; the loop-finalization epic is DONE — 2026-08-19
 
 The last legacy knob is out: `_apply_sac_fly_bias`, `_maybe_sac_fly_intent`, the
