@@ -1,3 +1,18 @@
+# Sim — SIM-491 parts 2+3: the park and fielder-quality KERNELS; the bat_home data is LIVE — 2026-08-20
+
+Part 2 (SIM-411): a Gaussian on |park_run_factor(live venue) − park_run_factor(row venue)|
+pulls the fielding draw toward run-environment-similar parks — `venue_id` was already on
+every row; the factory loads the `derived.park_factors` map read-only when
+`SIM_PARK_KERNEL_SIGMA` > 0. Part 3 (SIM-425b): each row weighted by the similarity between
+the LIVE defender at the row's position and the row's OWN fielder (OAA-centred embedding
+subset, contemporaneous-season keys; `SIM_FIELDER_KERNEL_SIGMA`). Both kernels are
+byte-identical off at their defaults (CDF-equality tests) and pinned off in the unit
+conftest; the inert post-draw flips stay until each kernel's validated enable deletes them.
+Also: migration 0019 APPLIED to the live DuckDB and the all-seasons outcome-pool rebuild ran
+(zero NULL `bat_home`, home share 0.489-0.492/season, the SIM-510 guard unchanged ~99.2%);
+artifacts re-exported. Remaining: the SIM-476-style bandwidth/weight fits, one flag at a
+time, then the certification lanes.
+
 # Sim — SIM-491 part 1: the SIM-412 home-field advantage as a fielding-draw weight — 2026-08-20
 
 The old flip is inert on the transition path, so the effect moves INTO the draw. DuckDB
