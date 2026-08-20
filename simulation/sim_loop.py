@@ -1523,7 +1523,16 @@ class StateMachine:
         # conditioned on the platoon matchup (no-op when the flag is off or the pool
         # / pitcher hand is unknown).
         pthrows = state.throw_hand if self._bb_platoon else None
-        fp.battedball_new_pa(hand, f"{state.batter_id}:{season}", sit, pitcher_throws=pthrows)
+        # SIM-491: pass the live batting side for the home-field draw weight.
+        # A no-op unless the sampler's home_off_weight is set below 1.0
+        # (SIM_HOME_OFF_WEIGHT) AND the pool carries bat_home (migration 0019).
+        fp.battedball_new_pa(
+            hand,
+            f"{state.batter_id}:{season}",
+            sit,
+            pitcher_throws=pthrows,
+            bat_home=(state.offense == Team.HOME),
+        )
         ev, rh, _ro, la = fp.battedball_draw()
         # --- SIM-511: the transition path -----------------------------------
         # On a sim510.1+ bundle the draw was HARD-filtered to the live

@@ -175,7 +175,7 @@ def _op_conn() -> duckdb.DuckDBPyConnection:
         "post_on_1b INTEGER, post_on_2b INTEGER, post_on_3b INTEGER, "
         "runner_1b_scored BOOLEAN, runner_2b_scored BOOLEAN, runner_3b_scored BOOLEAN, "
         "runner_1b_out_advancing BOOLEAN, runner_2b_out_advancing BOOLEAN, "
-        "runner_3b_out_advancing BOOLEAN)"
+        "runner_3b_out_advancing BOOLEAN, inning_topbot VARCHAR)"
     )
     c.execute("CREATE SCHEMA sim")
     c.execute(
@@ -224,13 +224,14 @@ def _op_pitch(
     runs=0,
     bb_type="ground_ball",
     la=10.0,
+    topbot="Bot",
 ) -> int:
     pid = pk * 10000 + ab * 100 + 1
     c.execute(
         "INSERT INTO pg.raw.pitches VALUES "
         "(?,?,1,DATE '2024-06-01',2024,'R',?,?,95.0,?,10.0,?,150.0,100.0,100.0,"
         "906,NULL,902,903,904,905,906,907,908,909,?,15,FALSE,"
-        "?,?,?,?,?,?,?,?,?,?,?,?)",
+        "?,?,?,?,?,?,?,?,?,?,?,?,?)",
         [
             pk,
             ab,
@@ -251,6 +252,7 @@ def _op_pitch(
             adv_1b,
             adv_2b,
             adv_3b,
+            topbot,
         ],
     )
     c.execute(
@@ -296,7 +298,8 @@ class TestTheOutcomePoolTransitionTail:
             "runner_1b_scored, runner_2b_scored, runner_3b_scored, "
             "runner_1b_out_advancing, runner_2b_out_advancing, runner_3b_out_advancing, "
             "runner_1b_dest, runner_2b_dest, runner_3b_dest, batter_dest, "
-            "dest_outs_consistent, venue_id, fielder_player_id, result_hits, result_outs "
+            "dest_outs_consistent, bat_home, venue_id, fielder_player_id, "
+            "result_hits, result_outs "
             "FROM sim.outcome_pool"
         ).fetchone()
         assert row == (
@@ -317,6 +320,7 @@ class TestTheOutcomePoolTransitionTail:
             4,
             1,
             True,
+            True,  # bat_home: the fixture pitch is a 'Bot'-half row (SIM-491)
             15,
             906,
             1,
@@ -737,6 +741,11 @@ class TestTheArtifactRoundTrip:
         assert pool.r2_dest.tolist() == [-1]  # no runner on 2B pre-pitch
         assert pool.batter_dest.tolist() == [1]
         assert pool.dest_ok.tolist() == [1]
+        # SIM-491: the batting side survives the round trip ('Bot' fixture -> 1)
+        # and is shareable.
+        assert pool.bat_home is not None
+        assert pool.bat_home.tolist() == [1]
         shared = art.extract_shared_arrays()
         assert "bb_pool.R.r1_dest" in shared
         assert "bb_pool.R.dest_ok" in shared
+        assert "bb_pool.R.bat_home" in shared

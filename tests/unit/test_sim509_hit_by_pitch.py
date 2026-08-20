@@ -95,5 +95,6 @@ class TestTheBuilderMapping:
         """The watermark guard skips unchanged builders — a formula change
         that forgets the version bump never lands (the SIM-501 lesson).
         SIM-510 superseded the sim509 stamp when the transition columns
-        landed; bump this assertion with every pool-formula change."""
-        assert "sim510" in ppc.POOL_BUILDER_VERSION
+        landed; SIM-491 superseded sim510 when bat_home landed; bump this
+        assertion with every pool-formula change."""
+        assert "sim491" in ppc.POOL_BUILDER_VERSION

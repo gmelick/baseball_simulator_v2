@@ -945,6 +945,10 @@ CREATE TABLE IF NOT EXISTS sim.outcome_pool (
     -- The derivation guard: retired bodies == result_outs. The artifact
     -- export excludes inconsistent rows; validation measures their rate.
     dest_outs_consistent        BOOLEAN,
+    -- SIM-491 (migration 0019): the batting side ('Bot' half = the home team
+    -- bats). The SIM-412 home-field rebuild weights the fielding draw toward
+    -- rows whose batting side matches the live one.
+    bat_home                    BOOLEAN,
 
     PRIMARY KEY (pitch_id)
 );

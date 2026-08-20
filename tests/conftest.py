@@ -52,6 +52,12 @@ os.environ["SIM_PARK_FACTOR"] = "0"
 os.environ["SIM_BB_PLATOON"] = "0"
 os.environ["SIM_FIELDER_RBF"] = "0"
 
+# SIM-491: the home-field DRAW weight (the SIM-412 rebuild). 1.0 disables the
+# reweight exactly (no weight multiplication runs), so pin it here so a dev
+# shell's env never leaks into `docker compose run app pytest`. The SIM-491
+# tests pass home_off_weight to the sampler directly, not via the env.
+os.environ["SIM_HOME_OFF_WEIGHT"] = "1.0"
+
 # ---------------------------------------------------------------------------
 # Shared lightweight fixtures
 # ---------------------------------------------------------------------------

@@ -112,6 +112,7 @@ _REALISM_FLAGS = (
     "SIM_FIELDER_RBF",
     "SIM_FRAMING",
     "SIM_HOME_FIELD_BIAS",
+    "SIM_HOME_OFF_WEIGHT",  # SIM-491: the home-field DRAW weight (1.0 = off)
     "SIM_RUN_CALIB",
 )
 

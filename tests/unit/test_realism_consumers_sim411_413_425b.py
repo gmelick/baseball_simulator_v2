@@ -103,6 +103,76 @@ class TestPlatoonReweight:
 
 
 # ===========================================================================
+# SIM-491 — home-field reweight in the batted-ball draw (the SIM-412 rebuild)
+# ===========================================================================
+
+
+def _home_bb_pool(with_bat_home: bool = True) -> BattedBallPool:
+    """8 rows: the first 4 hit in the HOME half (event 'single'), the last 4 in
+    the away half (event 'double'), so the drawn EVENT reveals the batting side."""
+    n = 8
+    bat_home = np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=np.int8) if with_bat_home else None
+    return BattedBallPool(
+        geom=np.zeros((n, 3), dtype=np.float32),
+        sit=np.zeros((n, 6), dtype=np.float32),
+        batter_id=np.full(n, 700, dtype=np.int64),
+        season=np.full(n, _SEASON, dtype=np.int64),
+        event=np.asarray(["single"] * 4 + ["double"] * 4, dtype=object),
+        result_hits=np.array([1, 1, 1, 1, 2, 2, 2, 2], dtype=np.int8),
+        result_outs=np.zeros(n, dtype=np.int8),
+        recency=np.ones(n, dtype=np.float32),
+        bat_home=bat_home,
+    )
+
+
+class TestHomeFieldReweight:
+    def test_off_weight_zero_draws_only_matching_side(self):
+        # home_off_weight=0 => mismatched-side rows get zero weight, so the home
+        # offense draws ONLY the 'single' (home-half) rows.
+        fp = _sampler(_home_bb_pool(), home_off_weight=0.0)
+        events = set()
+        for _ in range(40):
+            fp.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32), bat_home=True)
+            events.add(fp.battedball_draw()[0])
+        assert events == {"single"}
+
+    def test_away_offense_draws_only_away_rows(self):
+        fp = _sampler(_home_bb_pool(), home_off_weight=0.0)
+        events = set()
+        for _ in range(40):
+            fp.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32), bat_home=False)
+            events.add(fp.battedball_draw()[0])
+        assert events == {"double"}
+
+    def test_neutral_when_bat_home_not_passed(self):
+        fp = _sampler(_home_bb_pool(), home_off_weight=0.0)
+        events = set()
+        for _ in range(60):
+            fp.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32))
+            events.add(fp.battedball_draw()[0])
+        assert events == {"single", "double"}
+
+    def test_neutral_when_pool_has_no_bat_home(self):
+        # A pre-0019 pool (bat_home None) ignores the reweight even when asked.
+        fp = _sampler(_home_bb_pool(with_bat_home=False), home_off_weight=0.0)
+        events = set()
+        for _ in range(60):
+            fp.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32), bat_home=True)
+            events.add(fp.battedball_draw()[0])
+        assert events == {"single", "double"}
+
+    def test_default_weight_is_byte_identical(self):
+        # home_off_weight=1.0 (the default) must not touch the weights at all:
+        # the CDF with bat_home passed equals the CDF without it, bit for bit.
+        fp_on = _sampler(_home_bb_pool())
+        fp_off = _sampler(_home_bb_pool())
+        fp_on.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32), bat_home=True)
+        fp_off.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32))
+        assert fp_on.home_off_weight == 1.0
+        np.testing.assert_array_equal(fp_on._bb_cdf, fp_off._bb_cdf)
+
+
+# ===========================================================================
 # SIM-425b — fielder accessors + the OAA nudge
 # ===========================================================================
 

@@ -358,7 +358,15 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
         # volume serialize into a ~500 s stall on a 10-iteration request.
         views = _WORKER_SHARED.get("views") or {}
         art = EngineArtifacts.load(art_dir, shared_views=views)
-        sampler = FullPoolSampler(art, np.random.default_rng(seed))
+        # SIM-491 (the SIM-412 rebuild): the home-field draw weight. 1.0 (the
+        # default, and any unparsable value) disables the reweight EXACTLY —
+        # byte-identical to pre-SIM-491. A SIM-476-style fit picks the
+        # production value against the +0.13 R/g home edge.
+        try:
+            home_w = float(os.environ.get("SIM_HOME_OFF_WEIGHT", "1.0"))
+        except ValueError:
+            home_w = 1.0
+        sampler = FullPoolSampler(art, np.random.default_rng(seed), home_off_weight=home_w)
         _CACHED_FULL_POOL_SAMPLER = sampler
         _CACHED_FULL_POOL_ART_DIR = art_dir
         return sampler

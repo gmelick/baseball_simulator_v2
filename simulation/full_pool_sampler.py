@@ -70,6 +70,7 @@ class FullPoolSampler:
         sit_sigma: float = 2.0,
         batter_sigma: float = 3.0,
         platoon_off_weight: float = 0.6,
+        home_off_weight: float = 1.0,
     ) -> None:
         self.a = artifacts
         self.rng = rng if rng is not None else np.random.default_rng()
@@ -80,6 +81,14 @@ class FullPoolSampler:
         # softly conditions the batted-ball draw on the live pitcher hand so the
         # drawn outcome reflects the platoon matchup; 1.0 disables the reweight.
         self.platoon_off_weight = float(platoon_off_weight)
+        # SIM-491 (the SIM-412 rebuild): the relative weight given to batted-ball
+        # rows whose BATTING SIDE mismatches the live one (matched rows keep
+        # 1.0). <1 pulls the draw toward rows hit in the same half (home rows
+        # for the home offense), so home advantage emerges from the pool's real
+        # rates. 1.0 (the default) disables the reweight EXACTLY — no weight
+        # multiplication runs, so the draw is byte-identical to pre-SIM-491.
+        # The value is a SIM-476 fit target (calibrate to the +0.13 R/g edge).
+        self.home_off_weight = float(home_off_weight)
         # Per-pool precompute: dense candidate->profile indices for O(1) gathers.
         self._pool_cache: dict[str, dict] = {}
         # SIM-430 hot-path caches (all hold CONSTANTS that the original code
@@ -399,6 +408,7 @@ class FullPoolSampler:
         batter_key: str,
         state: np.ndarray,
         pitcher_throws: str | None = None,
+        bat_home: bool | None = None,
     ) -> None:
         """Assemble the batted-ball weight CDF for the PA (f_batter · f_situation · recency).
 
@@ -411,7 +421,13 @@ class FullPoolSampler:
         SIM-413: when ``pitcher_throws`` ('L'/'R') is supplied AND the pool carries
         per-row ``p_throws``, softly reweight toward same-hand-matchup rows (opposite
         hand rows ×:attr:`platoon_off_weight`) so the drawn batted ball reflects the
-        live platoon matchup. Omitted / legacy pool -> the draw is unchanged."""
+        live platoon matchup. Omitted / legacy pool -> the draw is unchanged.
+
+        SIM-491: when ``bat_home`` is supplied AND the pool carries per-row
+        ``bat_home`` (migration 0019), softly reweight toward rows whose batting
+        side matches the live one (mismatched rows ×:attr:`home_off_weight`) —
+        the SIM-412 home-field advantage as a draw weight. Omitted / weight 1.0 /
+        legacy pool -> the draw is unchanged."""
         self._bb_hand = hand
         pool = self.a.bb_pools[hand]
         sv = np.asarray(state, dtype=np.float32)
@@ -447,6 +463,11 @@ class FullPoolSampler:
                     w = w * np.where(
                         same[rows], np.float32(1.0), np.float32(self.platoon_off_weight)
                     )
+            if bat_home is not None and self.home_off_weight != 1.0:
+                bh = getattr(pool, "bat_home", None)
+                if bh is not None:
+                    match = (bh[rows] > 0) == bool(bat_home)
+                    w = w * np.where(match, np.float32(1.0), np.float32(self.home_off_weight))
             self._bb_rows = rows
             self._bb_cdf = np.cumsum(w, dtype=np.float64)
             return
@@ -466,6 +487,11 @@ class FullPoolSampler:
             same = self._bb_same_hand_mask(hand, pitcher_throws)
             if same is not None:
                 w = w * np.where(same, np.float32(1.0), np.float32(self.platoon_off_weight))
+        if bat_home is not None and self.home_off_weight != 1.0:
+            bh = getattr(pool, "bat_home", None)
+            if bh is not None:
+                match = (bh > 0) == bool(bat_home)
+                w = w * np.where(match, np.float32(1.0), np.float32(self.home_off_weight))
         self._bb_cdf = np.cumsum(w, dtype=np.float64)
 
     def battedball_draw(self) -> tuple[str, int, int, float]:

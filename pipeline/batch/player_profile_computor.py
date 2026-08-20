@@ -999,7 +999,9 @@ def _label_component(mean: list[float], fi: dict[str, int]) -> str | None:
 # stale. sim501.1 = events-derived result_outs (SIM-501a).
 # sim509.1 = hit_by_pitch is its own pitch outcome_type (SIM-509) + the SIM-506
 # steal labels and SIM-507 pickoff labels on the opportunity pool.
-POOL_BUILDER_VERSION = "sim510.1"
+# sim491.1 = bat_home (the batting side) on sim.outcome_pool (SIM-491 /
+# migration 0019 — the SIM-412 home-field rebuild as a draw weight).
+POOL_BUILDER_VERSION = "sim491.1"
 RECENCY_RECENT_SEASONS = 2  # seasons (incl. ref) that get the full peak weight
 RECENCY_DECAY = 0.75  # geometric decay per season beyond the recent window
 RECENCY_FLOOR = 0.25
@@ -5290,7 +5292,13 @@ class PlayerProfileComputor:
                     ({sql_runner_dest("2b", "rp.")})::SMALLINT  AS runner_2b_dest,
                     ({sql_runner_dest("3b", "rp.")})::SMALLINT  AS runner_3b_dest,
                     ({sql_batter_dest("rp.", batter_expr="pp.batter_id")})::SMALLINT
-                                                    AS batter_dest
+                                                    AS batter_dest,
+                    -- SIM-491 (migration 0019): the batting side. 'Bot' = the
+                    -- home team bats. Selected here (the rp join lives here)
+                    -- but re-ordered LAST by the outer SELECT's EXCLUDE so the
+                    -- positional INSERT matches the DDL (bat_home after
+                    -- dest_outs_consistent).
+                    (rp.inning_topbot = 'Bot')      AS bat_home
                 FROM sim.pitch_pool pp
                 JOIN pg.raw.pitches rp
                     ON rp.game_pk       = pp.game_pk
@@ -5299,17 +5307,21 @@ class PlayerProfileComputor:
                 WHERE pp.outcome_type = 'in_play'
                   AND pp.season IN ({season_list})
             )
-            -- SIM-510: the guard column LAST — retired bodies must equal the
+            -- SIM-510: the guard column — retired bodies must equal the
             -- events-derived result_outs. The artifact export excludes rows
             -- where this is FALSE; validation measures their rate.
+            -- SIM-491: bat_home is EXCLUDEd from the star and re-appended
+            -- LAST so the positional INSERT matches the 0019 DDL order
+            -- (bat_home after dest_outs_consistent).
             SELECT
-                bip.*,
+                bip.* EXCLUDE (bat_home),
                 (
                     (CASE WHEN bip.runner_1b_dest = 0 THEN 1 ELSE 0 END)
                   + (CASE WHEN bip.runner_2b_dest = 0 THEN 1 ELSE 0 END)
                   + (CASE WHEN bip.runner_3b_dest = 0 THEN 1 ELSE 0 END)
                   + (CASE WHEN bip.batter_dest    = 0 THEN 1 ELSE 0 END)
-                ) = bip.result_outs                 AS dest_outs_consistent
+                ) = bip.result_outs                 AS dest_outs_consistent,
+                bip.bat_home
             FROM bip
         """)
         log.info("  sim.outcome_pool done.")

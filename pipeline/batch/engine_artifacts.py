@@ -135,6 +135,9 @@ def build_battedball_pool_artifact(
     # fielding draw's cell index is what excludes ``dest_ok = 0`` rows.
     op_cols = {str(d[0]) for d in con.execute("SELECT * FROM sim.outcome_pool LIMIT 0").description}
     has_transition = op_cols >= _BB_TRANSITION_SOURCE_COLS
+    # SIM-491: the batting side exists only on a 0019-migrated DB. Same
+    # back-compatible pattern as the transition columns.
+    bat_home_select = ", bat_home" if "bat_home" in op_cols else ""
     transition_select = (
         ", runner_1b_dest, runner_2b_dest, runner_3b_dest, batter_dest, "
         "COALESCE(dest_outs_consistent, FALSE) AS dest_ok, "
@@ -181,7 +184,7 @@ def build_battedball_pool_artifact(
             # of the consumers. SIM-510 appends the transition destinations the same
             # back-compatible way.
             "p_throws, venue_id, fielded_by_position, fielder_player_id"
-            f"{transition_select} "
+            f"{transition_select}{bat_home_select} "
             f"FROM sim.outcome_pool WHERE {w}) "
             f"TO '{os.path.join(pool_dir, f'{hand}.meta.parquet')}' (FORMAT parquet)"
         )
@@ -530,6 +533,9 @@ class BattedBallPool:
     is_air: np.ndarray | None = None  # (N,) int8 (0/1)
     spray_raw: np.ndarray | None = None  # (N,) float32 (field-side spray)
     hit_dist: np.ndarray | None = None  # (N,) float32
+    # SIM-491: the batting side (1 = the home half). None on a pre-0019
+    # bundle — the home-field draw weight then stays neutral.
+    bat_home: np.ndarray | None = None  # (N,) int8 (0/1)
 
     @property
     def n(self) -> int:
@@ -647,6 +653,8 @@ _BB_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "is_air",
     "spray_raw",
     "hit_dist",
+    # SIM-491: the batting side (None on a pre-0019 bundle).
+    "bat_home",
 )
 _ACTOR_EMB_SHAREABLE_ATTRS: tuple[str, ...] = ("vecs", "mean", "std")
 #: SIM-474: every StealPool column is numeric, so the whole pool is shareable.
@@ -976,6 +984,8 @@ class EngineArtifacts:
                             "is_air",
                             "spray_raw",
                             "hit_dist",
+                            # SIM-491: the batting side.
+                            "bat_home",
                         )
                         if c in avail
                     ]
@@ -1049,6 +1059,8 @@ class EngineArtifacts:
                         is_air=_bb_take(hand, m, "is_air", "is_air", np.int8, 0),
                         spray_raw=_bb_take(hand, m, "spray_raw", "spray_raw", np.float32, 0),
                         hit_dist=_bb_take(hand, m, "hit_dist", "hit_dist", np.float32, 0),
+                        # SIM-491: the batting side (None on a pre-0019 bundle).
+                        bat_home=_bb_take(hand, m, "bat_home", "bat_home", np.int8, 0),
                     )
             # SIM-474: the steal opportunity pools ("2" = 1B->2B, "3" = 2B->3B).
             # Presence-gated like the batted-ball pool: {} on a legacy bundle,
