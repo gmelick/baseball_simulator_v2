@@ -1137,3 +1137,237 @@ def detection_power(margin: float) -> float:
     from statistics import NormalDist
 
     return float(NormalDist().cdf(Z * (float(margin) - 1.0)))
+
+
+# ===========================================================================
+# SIM-516 — the POOL-REFERENCED frequency bands (owner ruling 2026-08-20)
+# ===========================================================================
+#
+# THE RULING. The sim is a similarity-weighted sampler of the play pool. The
+# owner ruled on 2026-08-20 that its FREQUENCIES are graded against the pool's
+# OWN totals — the data it draws from — not against an external season. A
+# faithful sampler grades green by construction; a red is a real mechanism
+# defect (a kernel tilt, a decision model off its data), never an era gap.
+# The game-level channels the pool cannot state (R — the emergent integration
+# of everything — and home_win_pct) stay game-graded above. The superseded
+# per-team-game box channels stay MEASURED and REPORTED but no longer certify;
+# their per-opportunity replacements below do.
+#
+# THE WINDOW. Full seasons 2023-2026 (the owner's same-day ruling: the last
+# three completed seasons plus the current one; RECENCY_FLOOR_SEASONS = 4).
+# Every centre below was measured on that window by
+# ``scripts/pool_window_census.py`` (run 2026-08-20; the W1 block) and by the
+# SIM-515 ``sim.ibb_rates`` build on the same seasons. Re-run the census and
+# restate these constants whenever the window moves — the derivation is one
+# command, and the source strings say exactly which number came from where.
+#
+# THE ARITHMETIC. Each channel is a RATIO: a numerator counted by the lane's
+# probes over a denominator of real opportunities (plate appearances, balls
+# in play, DP opportunities). The verdict is
+#
+#     |rate - centre|  <=  max(floor, Z * se)
+#
+# with ``se`` the binomial standard error at the lane's own denominator
+# (``sqrt(centre * (1 - centre) / n)``; PITCHES_PA is a mean, not a
+# proportion, so it carries a floor only plus a minimum-denominator gate).
+# UNDERPOWERED when the noise term exceeds the floor — the floor then cannot
+# bind and no verdict is honest. Recency-weighting drift is inside every
+# floor: the census measured weighted-vs-unweighted pool rates within 0.1%.
+
+#: The pool window the centres were measured on. Restate with every window move.
+POOL_WINDOW = "full seasons 2023-2026 (SIM-516, owner ruling 2026-08-20)"
+
+_CENSUS = "scripts/pool_window_census.py (2026-08-20, the W1 block)"
+
+
+@dataclass(frozen=True, slots=True)
+class PoolReference:
+    """One per-opportunity channel's pool centre and the floor under its band."""
+
+    centre: float
+    source: str
+    rel_floor: float
+    is_proportion: bool = True
+    must_detect: float | None = None
+    detect_source: str = ""
+    floor_rationale: str = ""
+
+    def floor(self) -> float:
+        return float(self.rel_floor) * float(self.centre)
+
+
+POOL_REFERENCES: dict[str, PoolReference] = {
+    # --- per plate appearance ---------------------------------------------
+    "BB_PA": PoolReference(
+        0.0850,
+        f"{_CENSUS}: chain(pool per-count rates) BB/PA",
+        rel_floor=0.02,
+        floor_rationale=(
+            "The diagnosis run measured the kernel tilt at +0.4%; 2% passes a "
+            "faithful sampler and reds a SIM-476-scale tilt."
+        ),
+    ),
+    "IBB_PA": PoolReference(
+        0.00288,
+        "sim.ibb_rates 2023-2026 build (SIM-515): 2,008 / 698,053 PAs",
+        rel_floor=0.20,
+        must_detect=0.0056,
+        detect_source=(
+            "docs/audit/2026-08-20-sim429-514-diagnosis-results.md: the retired "
+            "formula issued 0.0085/PA — a +0.0056 deviation, 9.7x this floor."
+        ),
+    ),
+    "K_PA": PoolReference(
+        0.2165,
+        f"{_CENSUS}: chain(pool per-count rates) K/PA",
+        rel_floor=0.02,
+        floor_rationale="Measured tilt +0.3%; same sizing as BB_PA.",
+    ),
+    "HBP_PA": PoolReference(
+        0.0113,
+        f"{_CENSUS}: chain(pool per-count rates) HBP/PA",
+        rel_floor=0.06,
+        floor_rationale=(
+            "A rare channel: binomial noise ~1% of centre at lane volume; 6% "
+            "absorbs count-mix drift while catching a SIM-509-scale mislabel."
+        ),
+    ),
+    "PITCHES_PA": PoolReference(
+        3.938,
+        f"{_CENSUS}: chain(pool per-count rates) pitches/PA",
+        rel_floor=0.015,
+        is_proportion=False,
+        floor_rationale="A mean, not a proportion; measured drift +0.1%.",
+    ),
+    # --- per ball in play --------------------------------------------------
+    "SINGLES_BIP": PoolReference(
+        0.2050,
+        f"{_CENSUS}: singles / consistent BIP",
+        rel_floor=0.025,
+        floor_rationale="Rule-B sizing; base-out cell-mix drift measured <1%.",
+    ),
+    "DOUBLES_BIP": PoolReference(
+        0.0625,
+        f"{_CENSUS}: doubles / consistent BIP",
+        rel_floor=0.03,
+        floor_rationale="Rule-B sizing beside SINGLES_BIP.",
+    ),
+    "TRIPLES_BIP": PoolReference(
+        0.00546,
+        f"{_CENSUS}: triples / consistent BIP",
+        rel_floor=0.10,
+        floor_rationale=(
+            "The rarest hit: the diagnosis measured the draw at 0.973x the "
+            "pool with ~5% cell-mix spread; 10% absorbs that and still reds a "
+            "class defect."
+        ),
+    ),
+    "HR_BIP": PoolReference(
+        0.0459,
+        f"{_CENSUS}: home runs / consistent BIP",
+        rel_floor=0.035,
+        floor_rationale=(
+            "Rule-B sizing: the tightest floor a 12x500 lane's ~300k balls in "
+            "play resolves at Z=4 (3% needed ~370k and could never bind)."
+        ),
+    ),
+    "ROE_BIP": PoolReference(
+        0.00828,
+        f"{_CENSUS}: field_error / consistent BIP",
+        rel_floor=0.10,
+        floor_rationale="Rare-channel sizing, as TRIPLES_BIP.",
+    ),
+    # --- per opportunity ---------------------------------------------------
+    "DP_OPP": PoolReference(
+        0.1424,
+        f"{_CENSUS}: r1-and-batter-retired rows / runner-on-1B <2-out BIP",
+        rel_floor=0.05,
+        must_detect=0.077,
+        detect_source=(
+            "BACKLOG.md (SIM-494 history): the phantom-DP era ran -77% "
+            "per-game; per-opportunity that class of defect dwarfs a 5% floor. "
+            "The diagnosis measured the live draw at +1.9%."
+        ),
+    ),
+}
+
+#: Ordered pool-band channel names. The lane asserts every one of them.
+POOL_CHANNELS: tuple[str, ...] = tuple(POOL_REFERENCES)
+
+#: Box channels SUPERSEDED as certification by the pool bands (the 2026-08-20
+#: ruling). They stay measured and reported — a reader still sees them — but
+#: their per-team-game asserts no longer gate the lane; the per-opportunity
+#: bands above do. R and home_win_pct are NOT here: the pool cannot state
+#: them, so they stay game-graded. SB and CS are NOT here either: their
+#: per-opportunity replacements (attempts per steal opportunity) are the
+#: SIM-514(c)/SIM-476 follow-on, so the game bands keep gating them until
+#: those land.
+SUPERSEDED_BY_POOL: tuple[str, ...] = ("H", "HR", "2B", "3B", "BB", "K", "DP", "ROE", "ROE_reached")
+
+
+@dataclass(frozen=True, slots=True)
+class PoolBandResult:
+    """The full arithmetic behind one pool channel's verdict."""
+
+    channel: str
+    numerator: float
+    denominator: float
+    rate: float
+    centre: float
+    floor: float
+    se_term: float
+    half_width: float
+    delta: float
+    verdict: str  # PASS | RED | UNDERPOWERED
+    source: str
+
+    @property
+    def passed(self) -> bool:
+        return self.verdict == "PASS"
+
+    def explain(self) -> str:
+        rel = (self.delta / self.centre * 100.0) if self.centre else 0.0
+        return (
+            f"{self.channel}: rate {self.rate:.5f} = {self.numerator:.0f}/"
+            f"{self.denominator:.0f} vs pool centre {self.centre:.5f} "
+            f"(delta {self.delta:+.5f} = {rel:+.1f}%), half-width "
+            f"{self.half_width:.5f} (floor {self.floor:.5f}, Z*se "
+            f"{self.se_term:.5f}) -> {self.verdict}   [{self.source}]"
+        )
+
+
+def evaluate_pool(channel: str, numerator: float, denominator: float) -> PoolBandResult:
+    """Score one per-opportunity channel against its pool band (SIM-516)."""
+    ref = POOL_REFERENCES[channel]
+    if denominator <= 0:
+        raise ValueError(f"{channel}: the lane produced no opportunities")
+    rate = float(numerator) / float(denominator)
+    floor = ref.floor()
+    if ref.is_proportion:
+        se = math.sqrt(max(ref.centre * (1.0 - ref.centre), 1e-12) / float(denominator))
+        se_term = Z * se
+    else:
+        # A mean channel carries no binomial term; the floor is the band and a
+        # thin denominator cannot certify it.
+        se_term = 0.0 if denominator >= 10_000 else float("inf")
+    half_width = max(floor, se_term)
+    delta = rate - ref.centre
+    if se_term > floor:
+        verdict = "UNDERPOWERED"
+    elif abs(delta) <= half_width:
+        verdict = "PASS"
+    else:
+        verdict = "RED"
+    return PoolBandResult(
+        channel=channel,
+        numerator=float(numerator),
+        denominator=float(denominator),
+        rate=rate,
+        centre=ref.centre,
+        floor=floor,
+        se_term=se_term,
+        half_width=half_width,
+        delta=delta,
+        verdict=verdict,
+        source=ref.source,
+    )

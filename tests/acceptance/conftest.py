@@ -329,6 +329,12 @@ class AcceptanceRun:
     unattributed_sb: int = 0
     unattributed_cs: int = 0
     ties: int = 0
+    #: SIM-516: whole-lane numerators/denominators for the POOL-REFERENCED
+    #: frequency bands (bands.POOL_REFERENCES). Counted by the probes:
+    #: PA / BB_pitched / IBB / HBP / K_pa (per-PA terminals), BIP / DP_ROW /
+    #: DP_OPP_DEN (per fielding resolution). Pitches come from
+    #: ``calls["_full_pool_outcome"]``.
+    pool_counts: dict[str, int] = field(default_factory=dict)
 
     @property
     def total_sims(self) -> int:
@@ -355,7 +361,12 @@ def _blank_tally() -> dict[str, list[int]]:
     return {name: [0, 0] for name in TALLY_CHANNELS}
 
 
-def _install_probes(machine: Any, tally: dict[str, list[int]], calls: dict[str, int]) -> None:
+def _install_probes(
+    machine: Any,
+    tally: dict[str, list[int]],
+    calls: dict[str, int],
+    pool_counts: dict[str, int] | None = None,
+) -> None:
     """Wrap the four production methods on a built machine (SIM-450).
 
     This is the instrumentation that finally gives those four methods a test
@@ -396,6 +407,11 @@ def _install_probes(machine: Any, tally: dict[str, list[int]], calls: dict[str, 
     from simulation.constants import resolve_event_to_canonical
     from simulation.sim_loop import _DOUBLE_PLAY_EVENTS
 
+    # SIM-516: the pool-band counters (lane-global, never reset per game).
+    pc = pool_counts if pool_counts is not None else {}
+    for key in ("PA", "BB_pitched", "IBB", "HBP", "K_pa", "BIP", "DP_ROW", "DP_OPP_DEN"):
+        pc.setdefault(key, 0)
+
     orig_outcome = machine._full_pool_outcome
     orig_fielding = machine._full_pool_fielding
     orig_advancement = machine._full_pool_out_advancement
@@ -411,8 +427,20 @@ def _install_probes(machine: Any, tally: dict[str, list[int]], calls: dict[str, 
     def fielding(state: Any, _o: Any = orig_fielding) -> Any:
         calls["_full_pool_fielding"] += 1
         side = int(state.offense)
+        # SIM-516: the DP-opportunity denominator reads the PRE-resolution
+        # state — a ball in play with a runner on 1B and fewer than two outs.
+        dp_opportunity = state.bases.first is not None and int(state.outs) < 2
         sig = _o(state)
         if sig is not None:
+            pc["BIP"] += 1
+            if dp_opportunity:
+                pc["DP_OPP_DEN"] += 1
+                # The pool-aligned DP numerator: the drawn transition row
+                # retired BOTH the runner on first and the batter — the same
+                # definition the census measured the pool centre with.
+                tr = getattr(sig, "transition", None)
+                if tr is not None and tr.get("r1") == 0 and tr.get("batter") == 0:
+                    pc["DP_ROW"] += 1
             # A DP is counted only when a second out was actually recorded. The
             # SIM-429 phantom-DP fix relabels a runner-less DP draw to a plain
             # field_out, so the drawn event alone would over-count.
@@ -439,6 +467,10 @@ def _install_probes(machine: Any, tally: dict[str, list[int]], calls: dict[str, 
     def accumulate(state: Any, result: Any, _o: Any = orig_accumulate) -> Any:
         side = int(state.offense)
         canonical = result.canonical_event or resolve_event_to_canonical(result.event)
+        # SIM-516: every accumulated PA terminal feeds the pool-band
+        # denominators; walks split pitched-vs-intentional because their pool
+        # references differ (the count-machine chain vs sim.ibb_rates).
+        pc["PA"] += 1
         if canonical in ("single", "double", "triple", "home_run"):
             tally["H"][side] += 1
             if canonical == "home_run":
@@ -449,8 +481,12 @@ def _install_probes(machine: Any, tally: dict[str, list[int]], calls: dict[str, 
                 tally["3B"][side] += 1
         elif canonical in ("walk", "intentional_walk"):
             tally["BB"][side] += 1
+            pc["BB_pitched" if canonical == "walk" else "IBB"] += 1
         elif canonical == "strikeout":
             tally["K"][side] += 1
+            pc["K_pa"] += 1
+        elif canonical == "hit_by_pitch":
+            pc["HBP"] += 1
         return _o(state, result)
 
     def commit(
@@ -590,7 +626,7 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
             spec = GameSpec(machine_factory=_FACTORY, sim_kwargs=dict(kwargs))
             machine = production_machine_factory(0, spec)
             tally = _blank_tally()
-            _install_probes(machine, tally, run.calls)
+            _install_probes(machine, tally, run.calls, run.pool_counts)
 
             for seed in range(n_iters):
                 for values in tally.values():

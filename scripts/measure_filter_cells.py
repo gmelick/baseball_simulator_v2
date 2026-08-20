@@ -82,8 +82,9 @@ seasons} x {batter hand L, R, both}.
   * ``sim.pitch_pool`` drives the pitch draw. ``sim.outcome_pool`` is the in-play
     subset and drives the batted-ball draw.
   * recent vs all seasons is the evidence SIM-460 needs to decide the recency
-    floor. ``RECENCY_FLOOR_SEASONS`` is 3 today, so the artifact holds 3 of the
-    10 swept seasons.
+    floor. ``RECENCY_FLOOR_SEASONS`` is 4 since SIM-516 (the owner's window
+    ruling: the last three completed seasons plus the current one), so the
+    artifact holds 4 of the 10 swept seasons.
   * hand L / R vs both is the evidence SIM-461 needs to decide whether to keep
     the batter-hand partition. The pools are partitioned by batter hand today
     (``pipeline/batch/engine_artifacts.py`` filters on ``stand``), so PER-HAND

@@ -57,9 +57,16 @@ _SIT_COLS = ["count_balls", "count_strikes", "outs", "runners_state", "inning", 
 DEFAULT_POOL_DIR = os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool")
 DEFAULT_DUCKDB_PATH = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb")
 
-#: SIM-423 perf gate: a hard recency floor keeps the per-hand pool ~1M rows so the
-#: full-pool factorized draw clears the 2 s/game SLA (the 3-season choice).
-RECENCY_FLOOR_SEASONS = 3
+#: The artifact's season window. SIM-516 (owner ruling 2026-08-20): the last
+#: three COMPLETED seasons plus the current one — operationally the 4 newest
+#: seasons in the pool (full 2023-2026 today). Chosen over the old 3-season
+#: floor for cell thickness (the SIM-511 hard base-out filter's thinnest cell
+#: goes 323 -> 439 rows; +36% batted balls) at <0.5% frequency drift — the
+#: window census (`scripts/pool_window_census.py`) is the measurement. The old
+#: 3-season value was a SIM-423 perf gate (~1M rows/hand for the 2 s/game
+#: SLA); 4 seasons costs ~35% more per-PA scoring on a SLA that is already
+#: hardware-bound and de-prioritized (CLAUDE.md §12).
+RECENCY_FLOOR_SEASONS = 4
 
 
 def last_n_seasons(con: duckdb.DuckDBPyConnection, n: int = RECENCY_FLOOR_SEASONS) -> list[int]:

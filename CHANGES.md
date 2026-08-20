@@ -1,3 +1,30 @@
+# Sim — SIM-515 BUILT + VALIDATED: the IBB decision draws at the cell's real rate — 2026-08-20
+
+Migration 0020 (v20) adds `sim.ibb_rates`: for every (runners_state, outs, late, close)
+cell, how many real PAs entered it and how many were intentionally walked — the numerator
+from `raw.play_events` `intent_walk` (which carries the pre-play cell), the denominator the
+pitched PAs plus the no-pitch IBB PAs (which have no `raw.pitches` rows at all).
+`_should_issue_ibb` now rolls ONCE per PA, on its first pitch, at the cell's measured rate;
+the per-pitch tendency×leverage formula that compounded to 2.64× MLB's volume is DELETED
+with no fallback (no table or no manager → no IBB). Built on the 2023-2026 window: 96
+cells, 2,008 events, textbook rates (runner-on-2B two-out late-close 10.6%). **Validated
+live (12×50): IBB/team-game 0.3233 → 0.1117 against the window's own 0.1093; box BB 3.5358
+→ 3.3625; pitched BB untouched.** The lane's new IBB_PA pool band is the standing guard.
+
+# Test/Data — SIM-516 BUILT: the grade is POOL TOTALS on the 2023-2026 window — 2026-08-20
+
+The owner confirmed W1. `RECENCY_FLOOR_SEASONS` 3→4 (the export takes the 4 newest seasons —
+the last three completed plus the current one); the artifacts re-exported on 2023-2026 (467k
+consistent BIP, thinnest hard cell 323→439 rows) and the pitcher-sim matrix re-scored on the
+same window so 2023 pool rows keep real similarity weights. `tests/acceptance/bands.py`
+gains `POOL_REFERENCES` — eleven per-opportunity bands (BB/IBB/K/HBP/pitches per PA,
+1B/2B/3B/HR/ROE per BIP, DP per opportunity) with centres measured by
+`scripts/pool_window_census.py` and verdicts from `evaluate_pool` (floor vs binomial SE,
+UNDERPOWERED when the noise term exceeds the floor). The lane conftest counts the
+opportunity denominators (`pool_counts`); the nine superseded box channels demoted to
+informational per the ruling — R, SB, CS and home_win_pct stay game-graded. The 12×471
+certifying lane on the new window is the remaining step.
+
 # Analysis — the owner's three questions: prev-pitch REFUTED; the grade moves to POOL TOTALS; the window censused — 2026-08-20
 
 Two new instruments answered the owner's questions from data before any code was written.

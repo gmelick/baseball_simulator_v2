@@ -499,6 +499,29 @@ def _assert_band(run: AcceptanceRun, channel: str) -> None:
     assert result.passed, result.explain()
 
 
+def _demoted_band(run: AcceptanceRun, channel: str) -> None:
+    """SIM-516 (owner ruling 2026-08-20): this box channel is SUPERSEDED as
+    certification by its POOL-REFERENCED per-opportunity band — the sim's
+    frequencies are graded against the play pool's own totals, so an era gap
+    between the pool and an external season can no longer red the lane. The
+    game-level verdict is still measured and printed for the reader; only the
+    assert moved to the pool band."""
+    assert channel in bands.SUPERSEDED_BY_POOL, (
+        f"{channel} is not in bands.SUPERSEDED_BY_POOL — either demote it there "
+        "or assert its game band here; a channel must be gated by exactly one."
+    )
+    values = run.observations.get(channel) or []
+    assert values, f"the run produced no observations for {channel}"
+    result = bands.evaluate(channel, values)
+    print(f"[superseded by the pool band — informational] {result.explain()}")
+
+
+def _assert_pool_band(channel: str, numerator: float, denominator: float) -> None:
+    result = bands.evaluate_pool(channel, numerator, denominator)
+    print(result.explain())
+    assert result.passed, result.explain()
+
+
 # The SIM-429 expected-red xfail marker lived here from 2026-08-10 to
 # 2026-08-16. The 2026-08-15 lane (12 x 425 on the SIM-459-recomputed data)
 # measured R INSIDE the band and the strict marker XPASSed, which is the
@@ -527,7 +550,7 @@ def test_runs_band_sim450(acceptance_run: AcceptanceRun) -> None:
 # went together.
 def test_hits_band_sim450(acceptance_run: AcceptanceRun) -> None:
     """Hits per team per game. A reach on error is NOT counted (SIM-496/511)."""
-    _assert_band(acceptance_run, "H")
+    _demoted_band(acceptance_run, "H")
 
 
 def test_home_runs_band_sim450(acceptance_run: AcceptanceRun) -> None:
@@ -538,12 +561,12 @@ def test_home_runs_band_sim450(acceptance_run: AcceptanceRun) -> None:
     known failure. If a certifying run reds this, file a ticket — do not widen
     the floor.
     """
-    _assert_band(acceptance_run, "HR")
+    _demoted_band(acceptance_run, "HR")
 
 
 def test_doubles_band_sim450(acceptance_run: AcceptanceRun) -> None:
     """Doubles per team per game. No documented defect; Rule-B floor."""
-    _assert_band(acceptance_run, "2B")
+    _demoted_band(acceptance_run, "2B")
 
 
 def test_triples_band_sim450(acceptance_run: AcceptanceRun) -> None:
@@ -552,7 +575,7 @@ def test_triples_band_sim450(acceptance_run: AcceptanceRun) -> None:
     The loosest floor in the lane at 11.1%, because triples are rare: the
     channel's spread is 2.8x its centre, so it costs the most to measure.
     """
-    _assert_band(acceptance_run, "3B")
+    _demoted_band(acceptance_run, "3B")
 
 
 def test_walks_band_sim450(acceptance_run: AcceptanceRun) -> None:
@@ -568,7 +591,7 @@ def test_walks_band_sim450(acceptance_run: AcceptanceRun) -> None:
     own 2023 data (3.1434), which is twice this floor. A red BB may be the centre
     rather than the model.
     """
-    _assert_band(acceptance_run, "BB")
+    _demoted_band(acceptance_run, "BB")
 
 
 def test_strikeouts_band_sim450(acceptance_run: AcceptanceRun) -> None:
@@ -577,7 +600,7 @@ def test_strikeouts_band_sim450(acceptance_run: AcceptanceRun) -> None:
     The tightest floor in the lane at 1.4%. SIM-456 plausibly moves this channel;
     nobody has sized it, so there is no xfail.
     """
-    _assert_band(acceptance_run, "K")
+    _demoted_band(acceptance_run, "K")
 
 
 # The SIM-495 expected-red xfail (SB measured 0.0000 against 0.59, -100%)
@@ -608,7 +631,7 @@ def test_double_play_band_sim450(acceptance_run: AcceptanceRun) -> None:
     second condition kept the phantom-DP-guard era honest and stays as
     defense in depth on the legacy path.
     """
-    _assert_band(acceptance_run, "DP")
+    _demoted_band(acceptance_run, "DP")
 
 
 def test_reach_on_error_drawn_band_sim450(acceptance_run: AcceptanceRun) -> None:
@@ -623,7 +646,7 @@ def test_reach_on_error_drawn_band_sim450(acceptance_run: AcceptanceRun) -> None
     The day-one run measured +11.1% against a round-3 floor of 8.6%. No ticket
     sizes a drawn-ROE defect, so a red here is a new finding: file a ticket.
     """
-    _assert_band(acceptance_run, "ROE")
+    _demoted_band(acceptance_run, "ROE")
 
 
 # The SIM-496 expected-red xfail lived here from 2026-08-10 to 2026-08-19:
@@ -642,7 +665,7 @@ def test_reach_on_error_reached_band_sim450(acceptance_run: AcceptanceRun) -> No
     ``test_commit_run_delta_runs_sim450`` asserts the probe fired, so a zero here
     means "nothing reached", never "nothing was measured".
     """
-    _assert_band(acceptance_run, "ROE_reached")
+    _demoted_band(acceptance_run, "ROE_reached")
 
 
 def test_home_win_pct_band_sim450(acceptance_run: AcceptanceRun) -> None:
@@ -666,6 +689,122 @@ def test_home_win_pct_band_sim450(acceptance_run: AcceptanceRun) -> None:
     (docs/audit/2026-07-23-MASTER-BUG-REGISTER.md:232) argues it overshoots.
     """
     _assert_band(acceptance_run, "home_win_pct")
+
+
+# ---------------------------------------------------------------------------
+# SIM-516 — the POOL-REFERENCED frequency bands (owner ruling 2026-08-20)
+#
+# The sim is a similarity-weighted sampler of the play pool; its FREQUENCIES
+# are graded against the pool's OWN totals (bands.POOL_REFERENCES — centres
+# from scripts/pool_window_census.py on the 2023-2026 window). A faithful
+# sampler greens by construction; a red is a mechanism defect, never an era
+# gap. These asserts replace the superseded per-team-game box asserts above.
+# ---------------------------------------------------------------------------
+
+
+def _pool_hits(run: AcceptanceRun) -> dict[str, float]:
+    """Whole-lane hit-class totals from the per-team-game observations."""
+    return {
+        name: float(sum(run.observations.get(name) or []))
+        for name in ("H", "HR", "2B", "3B", "ROE")
+    }
+
+
+def test_pool_band_walks_per_pa_sim450(acceptance_run: AcceptanceRun) -> None:
+    """PITCHED walks per plate appearance vs the pool's count-machine chain.
+
+    Intentional walks are excluded here (they throw no pitch) and graded by
+    their own band below — mixing them hid half the SIM-429 surplus."""
+    pc = acceptance_run.pool_counts
+    _assert_pool_band("BB_PA", pc["BB_pitched"], pc["PA"])
+
+
+def test_pool_band_intentional_walks_per_pa_sim450(acceptance_run: AcceptanceRun) -> None:
+    """Intentional walks per PA vs the sim.ibb_rates league rate (SIM-515).
+
+    The retired formula issued 0.0085/PA against a real 0.00288 — 9.7x this
+    band's floor. This band is the regression guard on that class of defect."""
+    pc = acceptance_run.pool_counts
+    _assert_pool_band("IBB_PA", pc["IBB"], pc["PA"])
+
+
+def test_pool_band_strikeouts_per_pa_sim450(acceptance_run: AcceptanceRun) -> None:
+    pc = acceptance_run.pool_counts
+    _assert_pool_band("K_PA", pc["K_pa"], pc["PA"])
+
+
+def test_pool_band_hbp_per_pa_sim450(acceptance_run: AcceptanceRun) -> None:
+    pc = acceptance_run.pool_counts
+    _assert_pool_band("HBP_PA", pc["HBP"], pc["PA"])
+
+
+def test_pool_band_pitches_per_pa_sim450(acceptance_run: AcceptanceRun) -> None:
+    pc = acceptance_run.pool_counts
+    _assert_pool_band("PITCHES_PA", acceptance_run.calls["_full_pool_outcome"], pc["PA"])
+
+
+def test_pool_band_singles_per_bip_sim450(acceptance_run: AcceptanceRun) -> None:
+    pc = acceptance_run.pool_counts
+    h = _pool_hits(acceptance_run)
+    singles = h["H"] - h["HR"] - h["2B"] - h["3B"]
+    _assert_pool_band("SINGLES_BIP", singles, pc["BIP"])
+
+
+def test_pool_band_doubles_per_bip_sim450(acceptance_run: AcceptanceRun) -> None:
+    pc = acceptance_run.pool_counts
+    _assert_pool_band("DOUBLES_BIP", _pool_hits(acceptance_run)["2B"], pc["BIP"])
+
+
+def test_pool_band_triples_per_bip_sim450(acceptance_run: AcceptanceRun) -> None:
+    pc = acceptance_run.pool_counts
+    _assert_pool_band("TRIPLES_BIP", _pool_hits(acceptance_run)["3B"], pc["BIP"])
+
+
+def test_pool_band_home_runs_per_bip_sim450(acceptance_run: AcceptanceRun) -> None:
+    pc = acceptance_run.pool_counts
+    _assert_pool_band("HR_BIP", _pool_hits(acceptance_run)["HR"], pc["BIP"])
+
+
+def test_pool_band_roe_per_bip_sim450(acceptance_run: AcceptanceRun) -> None:
+    pc = acceptance_run.pool_counts
+    _assert_pool_band("ROE_BIP", _pool_hits(acceptance_run)["ROE"], pc["BIP"])
+
+
+def test_pool_band_dp_per_opportunity_sim450(acceptance_run: AcceptanceRun) -> None:
+    """DP per opportunity (a BIP with a runner on 1B and <2 outs), the strict
+    transition-row definition (r1 AND the batter retired) — the same
+    definition the census measured the pool centre with. Traffic (how OFTEN
+    the cell occurs) is the walk machinery's business, not this band's."""
+    pc = acceptance_run.pool_counts
+    _assert_pool_band("DP_OPP", pc["DP_ROW"], pc["DP_OPP_DEN"])
+
+
+def test_report_pool_bands_sim450(acceptance_run: AcceptanceRun) -> None:
+    """Print the whole pool-band table, pass or fail (SIM-516). Always passes;
+    its job is the log."""
+    pc = acceptance_run.pool_counts
+    h = _pool_hits(acceptance_run)
+    pairs: dict[str, tuple[float, float]] = {
+        "BB_PA": (pc["BB_pitched"], pc["PA"]),
+        "IBB_PA": (pc["IBB"], pc["PA"]),
+        "K_PA": (pc["K_pa"], pc["PA"]),
+        "HBP_PA": (pc["HBP"], pc["PA"]),
+        "PITCHES_PA": (acceptance_run.calls["_full_pool_outcome"], pc["PA"]),
+        "SINGLES_BIP": (h["H"] - h["HR"] - h["2B"] - h["3B"], pc["BIP"]),
+        "DOUBLES_BIP": (h["2B"], pc["BIP"]),
+        "TRIPLES_BIP": (h["3B"], pc["BIP"]),
+        "HR_BIP": (h["HR"], pc["BIP"]),
+        "ROE_BIP": (h["ROE"], pc["BIP"]),
+        "DP_OPP": (pc["DP_ROW"], pc["DP_OPP_DEN"]),
+    }
+    lines = [f"SIM-516 pool-referenced bands — window: {bands.POOL_WINDOW}"]
+    for channel in bands.POOL_CHANNELS:
+        numer, denom = pairs[channel]
+        if denom <= 0:
+            lines.append(f"{channel}: NO OPPORTUNITIES")
+            continue
+        lines.append(bands.evaluate_pool(channel, numer, denom).explain())
+    print("\n".join(lines))
 
 
 # ---------------------------------------------------------------------------
