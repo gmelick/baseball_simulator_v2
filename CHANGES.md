@@ -1,3 +1,18 @@
+# Test — the FIRST pool-band certifying lane ran (12×500, 4h20m) and CAUGHT an IBB label defect — 2026-08-20
+
+The scoreboard on the new grade: **32 of 37 tests green — R passes on the new window; nine
+of the eleven pool frequency bands PASS** (K/HBP/pitches per PA, all five hit classes and
+ROE per BIP, DP per opportunity). The five reds: (1+2) **BB_PA +2.9% / IBB_PA −100% — ONE
+defect, and the new band design caught it**: the IBB's PlayResult carried the event `walk`,
+so all ~1,340 lane IBBs were counted as pitched walks (corrected arithmetic: BB_PA −0.6%,
+IBB_PA +1.8%, both green). Fixed same-day (`intentional_walk` is now the IBB's own canonical
+event through the `_resolve_walk` seam; box accounting unchanged; flag-off byte-identical);
+the lane re-runs. (3+4) **SB −7.4% / CS −9.8%** — the known SIM-514(c) steal residual
+(attempts/opportunity −15% vs the pool), game-graded until its per-opportunity bands land.
+(5) **home_win_pct 0.4848 at 5,990 decisive games** — fails-by-design below its 13,365-game
+requirement; the SIM-491 home_off_weight fit is the open work. The demoted box channels
+printed informational.
+
 # Sim — SIM-515 BUILT + VALIDATED: the IBB decision draws at the cell's real rate — 2026-08-20
 
 Migration 0020 (v20) adds `sim.ibb_rates`: for every (runners_state, outs, late, close)
