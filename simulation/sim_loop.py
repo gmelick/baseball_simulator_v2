@@ -120,6 +120,14 @@ EVENT_STRIKEOUT = "strikeout"
 #: walk, but canonically ``hit_by_pitch`` so the box and the BB band never
 #: count it as a walk.
 EVENT_HIT_BY_PITCH = "hit_by_pitch"
+#: SIM-515/516: the IBB's OWN canonical event. The box counts it as a BB and a
+#: non-AB exactly like a ball-4 walk (``_BB_CANONICAL`` / ``_NON_AB_CANONICAL``
+#: both hold it), but the lane's pool bands grade the two classes against
+#: DIFFERENT references (the count-machine chain vs ``sim.ibb_rates``), so the
+#: label must carry the truth. Emitting ``walk`` here zeroed the IBB_PA band's
+#: numerator and pushed the surplus into BB_PA — the first certifying lane
+#: caught exactly that.
+EVENT_INTENTIONAL_WALK = "intentional_walk"
 
 #: Marker the count machine emits while a PA is still live (no terminal yet).
 #: Distinct from a real PA event so callers / run-resolution treat it as 0 runs.
@@ -2693,18 +2701,23 @@ class StateMachine:
         forced-runner mechanics as a ball-4 walk, the run-resolution provenance is
         attached, and the PA is rolled over (batting order advances, count resets
         / half-inning rolls).  Returns the :class:`PlayResult` (``pitch_outcome``
-        carries the sentinel ``"ball"`` since an IBB is recorded as four balls; the
-        canonical event resolves to a walk via :meth:`_resolve_walk`).
+        carries the sentinel ``"ball"`` since an IBB is recorded as four balls).
+
+        SIM-515/516: the play carries its OWN canonical event
+        (``intentional_walk`` — the SIM-509 HBP pattern), so the box still
+        credits a BB/non-AB while the lane's IBB_PA pool band can see it. The
+        first certifying lane proved the old ``walk`` label unreadable: the
+        IBB numerator read zero and the surplus polluted BB_PA.
         """
         result = PlayResult(
             pitch_outcome="ball",
             is_contact=False,
             pa_terminal=True,
-            event=EVENT_WALK,
+            event=EVENT_INTENTIONAL_WALK,
         )
         # Consume the signal so it never carries to the next pitch / PA.
         state.manager.intentional_walk_signalled = False
-        self._resolve_walk(state, result)
+        self._resolve_walk(state, result, event=EVENT_INTENTIONAL_WALK)
         self._end_of_pa(state, result)
         result.next_state = state
         return result

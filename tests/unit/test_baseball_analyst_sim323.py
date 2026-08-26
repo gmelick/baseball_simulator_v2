@@ -204,7 +204,10 @@ class TestIntentionalWalk:
         s.home_lineup = HOME_LINEUP
         s.home_lineup_slot = 0
         result = m.step_pitch(s)
-        assert result.event == "walk"
+        # SIM-515/516: the IBB carries its OWN canonical event so the lane's
+        # IBB_PA pool band can tell it from a ball-4 walk (the box still
+        # credits a BB/non-AB — _BB_CANONICAL holds both classes).
+        assert result.event == "intentional_walk"
         # The batter (or the new due-up batter) reached first via the walk force.
         assert s.bases.first is not None
 

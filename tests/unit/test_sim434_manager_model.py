@@ -147,7 +147,7 @@ class TestPitchCountIncrement:
         s.home_lineup_slot = 0
         before = s.pitcher_pitch_count
         result = m.step_pitch(s)
-        assert result.event == "walk"
+        assert result.event == "intentional_walk"  # SIM-515/516: its own class
         assert s.pitcher_pitch_count == before  # no pitch thrown on an IBB
 
     def test_pull_resets_the_new_arms_pitch_count(self):
