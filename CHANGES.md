@@ -1,3 +1,17 @@
+# Test — SIM-516 CERTIFIED: lane 2 (12×500, 4h19m) — ALL ELEVEN POOL BANDS PASS; R PASSES — 2026-08-20
+
+The pool-totals grade is live and green. **11/11 frequency bands PASS** on the 2023-2026
+window: BB_PA −0.4%, IBB_PA −3.0% (1,278 intentional walks counted — the SIM-515 draw at
+work), K_PA −0.2%, HBP_PA −0.1%, pitches/PA −0.4%, singles/doubles per BIP −0.0%, triples
++0.9%, HR +1.3%, ROE +3.3%, DP/opportunity +1.3%. **R PASSES at −1.2%** (4.3958 vs 4.4473).
+Box BB fell 3.5358 → 3.3318/tg — the SIM-515 fix delivered its predicted −0.20. The era-vs-
+mechanism separation the ruling wanted is visible in one table: the demoted informational
+channels still show 2025-season gaps (HR +4.4%, 3B +11.3%, BB +5.3%) while their
+per-opportunity pool bands all pass — the pool's era, not the sampler. **The two asserted
+reds are the ticketed steal residual (SB −7.4%, CS −9.8% — SIM-514(c)/SIM-476: attempts per
+opportunity −15% vs the pool)**; home_win_pct reads 0.4848 UNDERPOWERED at 5,990 decisive
+games (needs 13,365 — the SIM-491 home_off_weight fit is the lever, then its own lane).
+
 # Test — the FIRST pool-band certifying lane ran (12×500, 4h20m) and CAUGHT an IBB label defect — 2026-08-20
 
 The scoreboard on the new grade: **32 of 37 tests green — R passes on the new window; nine
