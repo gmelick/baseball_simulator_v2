@@ -77,8 +77,10 @@ def _state(
     return s
 
 
-def _machine(manager=None, *, seed: int = 7, resolver=None) -> StateMachine:
-    return StateMachine(rng=np.random.default_rng(seed), manager=manager, resolver=resolver)
+def _machine(manager=None, *, seed: int = 7, resolver=None, ibb_rates=None) -> StateMachine:
+    return StateMachine(
+        rng=np.random.default_rng(seed), manager=manager, resolver=resolver, ibb_rates=ibb_rates
+    )
 
 
 # A manager who pulls every situational lever (all rates near 1.0).
@@ -190,7 +192,8 @@ class TestHitAndRunConsolidation:
         # The IBB spot (1B open) cannot be a hit-and-run spot (needs 1B occupied),
         # so the two are mutually exclusive by construction; assert the IBB path
         # wins and no hit-and-run is recorded.
-        m = _machine(_AGGRESSIVE, seed=1)
+        # SIM-515: the IBB draws at the injected cell rate (1.0 = certain).
+        m = _machine(_AGGRESSIVE, seed=1, ibb_rates={(2, 0, True, True): 1.0})
         s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3, second=55)
         m._pre_pitch_hook(s)
         assert s.manager.intentional_walk_signalled is True
