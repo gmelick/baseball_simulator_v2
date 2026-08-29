@@ -85,7 +85,10 @@ PRODUCTION_FLAGS: dict[str, str] = {
     "SIM_PARK_FACTOR": "1",  # SIM-411 park run factor
     "SIM_BB_PLATOON": "1",  # SIM-413 batted-ball platoon
     "SIM_FIELDER_RBF": "1",  # SIM-425b fielder RBF nudge
-    "SIM_FRAMING": "1",  # SIM-428 catcher framing (production default)
+    # SIM-517 (owner ruling 2026-08-29): no post-draw adjustments — the
+    # framing FLIP is off in production; the catcher effect returns as a
+    # pitch-draw weight (SIM-517) and this pin flips back with it.
+    "SIM_FRAMING": "0",
 }
 
 #: Production does NOT set ``SIM_HOME_FIELD_BIAS``, so the SIM-412 class default

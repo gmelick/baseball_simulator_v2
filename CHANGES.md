@@ -1,3 +1,16 @@
+# Sim — OWNER RULING: the drawn row IS the play, no post-draw adjustments; framing OFF, SIM-517 filed — 2026-08-29
+
+The 2026-08-10 architecture rule gains its second clause: every factor is a WEIGHT in the
+draw or not at all — once the draw completes, that IS the play. Compliance inventory: the
+platoon, home-field, park, and fielder-quality factors are already draw weights; the ONE
+live violation was the SIM-428 catcher-framing flip (a post-draw ball↔called-strike
+mutation). Its default is now OFF (code default + the certifying lane's production pin);
+**SIM-517** rebuilds framing as a pitch-draw weight — `catcher_id` on the pitch-pool rows
+(migration 0021) + a framing-skill similarity kernel, the SIM-425b contemporaneous pattern —
+and deletes the flip when it lands. Bounded, pre-measured effect of the removal (the
+diagnosis' RAW column): BB/PA +1.5%, K/PA −1.0% vs the pool — inside the pool-band floors;
+the next lane re-reads it.
+
 # Test — SIM-516 CERTIFIED: lane 2 (12×500, 4h19m) — ALL ELEVEN POOL BANDS PASS; R PASSES — 2026-08-20
 
 The pool-totals grade is live and green. **11/11 frequency bands PASS** on the 2023-2026

@@ -1089,7 +1089,13 @@ class StateMachine:
         # aggregate-neutral. SIM_FRAMING=0 restores the pre-fix catcher-inert path
         # (no per-taken-pitch rng draw) for a strict byte-identical-to-prior-prod /
         # seeded-reproducibility mode.
-        self._framing = _env_flag("SIM_FRAMING", default=True)  # SIM-428
+        # SIM-517 (owner ruling 2026-08-29): the drawn row IS the play — no
+        # post-draw adjustments. The SIM-428 framing flip is the last active
+        # one, so its default is now OFF; the catcher's framing effect returns
+        # as a WEIGHT in the pitch draw (SIM-517), and this flip is deleted
+        # when that weight lands. SIM_FRAMING=1 remains an explicit opt-in for
+        # A/B comparison only.
+        self._framing = _env_flag("SIM_FRAMING", default=False)  # SIM-428/517
         # Hot-path env knobs resolved ONCE here (they are constant for the machine's
         # lifetime but were re-read + re-parsed thousands of times per game). Tests
         # set the env BEFORE constructing the machine, so a construct-time read is

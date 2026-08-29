@@ -534,8 +534,11 @@ class TestFramingGate:
             pitcher_id=1, bat_hand="R", season=_SEASON, half=Half.TOP, home_catcher_id=900
         )
 
-    def test_framing_on_by_default(self):
-        assert StateMachine()._framing is True
+    def test_framing_off_by_default(self):
+        # SIM-517 (owner ruling 2026-08-29): the drawn row IS the play — no
+        # post-draw adjustments. The flip defaults OFF; the catcher effect
+        # returns as a pitch-draw weight (SIM-517).
+        assert StateMachine()._framing is False
 
     def test_framing_on_flips_ball_to_called_strike(self):
         sm = StateMachine(full_pool_sampler=_FakeFramingFP())
