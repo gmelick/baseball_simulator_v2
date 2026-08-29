@@ -1,3 +1,17 @@
+# Backlog — the ticket HYGIENE SWEEP (owner decisions): 8 rows closed/merged, SIM-518 epic filed — 2026-08-29
+
+The owner adjudicated the stale and overlapping rows. **Closed with evidence:** SIM-460
+(superseded by the W1 window ruling), SIM-466 (refuted by the prev-chain probe), SIM-470
+(the factorized draw is the framework in practice), SIM-471 (delivered; framing tier →
+SIM-517), SIM-455 (verified landed in the shipped loop), SIM-514 ((a)(b)(d) measured green;
+(c) → SIM-476), SIM-491 (all three weights built + data live; fits → SIM-476). **Merged:**
+SIM-436 → SIM-467 (the 30-s SLA is now 467's exit criterion), SIM-497c → SIM-497a. **Kept
+by owner decision:** SIM-464, re-scoped to its pitch-pool half. **Filed:** SIM-518 — the
+draw-conditioning enrichment epic consolidating 461/463/464(pitch half)/465/472 with 469 as
+the shared rebuild, each part individually closable on the standing column → artifact →
+weight → conditional-verify → lane pattern. SIM-476 is now the single owner of every kernel
+fit → enable → certify chain. Next free ID → SIM-519.
+
 # Sim — OWNER RULING: the drawn row IS the play, no post-draw adjustments; framing OFF, SIM-517 filed — 2026-08-29
 
 The 2026-08-10 architecture rule gains its second clause: every factor is a WEIGHT in the
