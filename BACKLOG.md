@@ -17,16 +17,16 @@ pitch-pool half and tracked under SIM-518.**
 * **SIM-476** — every kernel/weight fit and enable (steals step 0/1 incl. the SIM-514(c)
   transfer; home/park/fielder incl. the SIM-491 transfer + flip deletions + the
   home_win_pct lane; the platoon conditional check).
-* **SIM-517** — framing as a pitch-draw weight.
+* **SIM-517** — the catcher RECEIVING profile as a draw weight (framing + the dropped third strike; absorbs SIM-484 — owner design 2026-08-29: one receiving similarity score serves both).
 * **SIM-429** — the payoff: calibration refit (K prop) + the CLV re-measure.
 * **SIM-427** — real manager profiles + the dead-signal cleanup (pitch_out / sac_bunt /
   the hit-and-run trap / pinch-hit).
 * **SIM-518** — the draw-conditioning enrichment epic (below).
 * **SIM-467** — the 2,880-cell filter index, owning the 30-s SLA exit criterion.
 * **SIM-486** — retire the per-tile fallback (after 467/450).
-* **SIM-456** — the whiff_rate defect (P1, XS). **SIM-484** — dropped third strike via the
-  catcher engine. **SIM-497a/b** — the date-range lane + dual references. **SIM-421** — the
-  book-offered-market projection (P3).
+* **SIM-456** — the whiff_rate defect (P1, XS). **SIM-497a/b** — the date-range lane + dual
+  references. **SIM-421** — the book-offered-market projection (P3). *(SIM-484 merged into
+  SIM-517, 2026-08-29.)*
 
 | ID | Title | Type | Pri | Size | Depends-on | Status |
 |---|---|---|---|---|---|---|
@@ -54,7 +54,7 @@ steal-suppression trap) stay SIM-427-scope as recorded in the SIM-476 plan.
 
 | ID | Title | Type | Pri | Size | Depends-on | Status |
 |---|---|---|---|---|---|---|
-| **SIM-517** | Catcher framing as a PITCH-DRAW weight | Sim/Data | P2 | M | — | 🔲 **OPEN.** Rebuild SIM-428 framing per the ruling: (a) migration 0021 adds `catcher_id` to `sim.pitch_pool` (from `raw.pitches.fielder_2`; columns LAST — the positional-INSERT trap; version file 20→21 + the version tests; `POOL_BUILDER_VERSION` bump) + the all-seasons pitch-pool rebuild + artifact re-export. (b) A `framing_sigma` kernel in the pitch draw (the SIM-425b pattern): weight rows by similarity between the LIVE catcher's framing skill and the ROW's catcher's (contemporaneous season, the catcher framing embedding) — a good live framer then pulls the draw toward rows caught by good framers, which carry more called strikes at the same count. Env-gated, 0 = byte-identical off (CDF-equality test), pinned off in tests/conftest.py, printed by sim_stats.py. (c) DELETE `_apply_framing` + its tests when the weight lands; flip the lane's `SIM_FRAMING` pin back out of existence. (d) The bandwidth is a SIM-476-class fit: verify against the pool's CONDITIONAL taken-pitch mix by catcher-skill tier, then the 12×500 lane. |
+| **SIM-517** | The catcher RECEIVING profile as a DRAW weight (framing + the dropped third strike — absorbs SIM-484) | Sim/Data | P2 | M | — | 🔲 **OPEN.** Rebuild SIM-428 framing per the ruling: (a) migration 0021 adds `catcher_id` to `sim.pitch_pool` (from `raw.pitches.fielder_2`; columns LAST — the positional-INSERT trap; version file 20→21 + the version tests; `POOL_BUILDER_VERSION` bump) + the all-seasons pitch-pool rebuild + artifact re-export. (b) A `framing_sigma` kernel in the pitch draw (the SIM-425b pattern): weight rows by similarity between the LIVE catcher's framing skill and the ROW's catcher's (contemporaneous season, the catcher framing embedding) — a good live framer then pulls the draw toward rows caught by good framers, which carry more called strikes at the same count. Env-gated, 0 = byte-identical off (CDF-equality test), pinned off in tests/conftest.py, printed by sim_stats.py. (c) DELETE `_apply_framing` + its tests when the weight lands; flip the lane's `SIM_FRAMING` pin back out of existence. (d) The bandwidth is a SIM-476-class fit: verify against the pool's CONDITIONAL taken-pitch mix by catcher-skill tier, then the 12×500 lane. **(e) The RECEIVING profile (the SIM-484 merge, owner design 2026-08-29): one catcher-receiving embedding serves BOTH consumers — extend the catcher computor with blocking/passed-ball/D3K-allow rates (the SIM-408 trim left the profile framing-centric), so framing and ball-security read one similarity score. (f) The dropped third strike becomes a DRAW: on a drawn strike three with the legal state (1B open or 2 outs), draw from real strike-3 rows — the row's own did-the-batter-reach fact decides — weighted by the same receiving similarity (+ batter speed); DELETE the dead `_dropped_third_strike` hook, which no production resolver implements.** |
 
 # 🔬 2026-08-20 — SIM-429/514 DIAGNOSIS COMPLETE: the draw is CLEAN — the walk surplus is IBB (54%) + Markov structure (33%) + era (12%); SIM-515/516 filed; SIM-491 built; the grade moves to POOL TOTALS (next free ID → SIM-517)
 
@@ -685,7 +685,7 @@ them. 2017 is the earliest year. Cell occupancy comes from SIM-460/461, never fr
 | **SIM-481** | Delete the hand-tuned nudges (~350–400 lines) | Sim | P1 | M | 471–474, 480 | 🔲 **OPEN.** Incl. the 0.025 home-field bias whose measured 0.017 retune was **never applied** — ~50% too much HFA ever since. |
 | **SIM-482** | Manager small-ball as draw weights | Sim | P3 | S | SIM-470 | 🔲 **OPEN.** Bunts/pitch-outs are signalled, never resolved, and **narrated to users** as if they happened. |
 | **SIM-483** | Exclude steal runs from the RBI + earned-run credit (Rule 9.04(b)) | Sim | P3 | XS | SIM-474 | 🔲 **OPEN.** Latent today; SIM-468 makes it live. |
-| **SIM-484** | Wire the dropped third strike through the catcher engine | Sim | P2 | S | SIM-470 | 🔲 **OPEN.** Gated on a hook **no production resolver implements** — it can never fire. **Verified 2026-08-19 (SIM-513): the claim still holds** (`_dropped_third_strike` requires `resolver.dropped_third_strike`; none exists in production). The ticket stays open as a missing play class (~0.1/team-game). Its SIM-496-era framing — "the only site where a batter reaches on an error" — is obsolete: drawn errors reach base via the SIM-511 transition draw. |
+| **SIM-484** | Wire the dropped third strike through the catcher engine | Sim | P2 | S | SIM-470 | ⤵ **MERGED into SIM-517 (owner decision 2026-08-29): framing and the dropped third strike are ONE catcher RECEIVING profile with one similarity weight in the draw.** Gated on a hook **no production resolver implements** — it can never fire. **Verified 2026-08-19 (SIM-513): the claim still holds** (`_dropped_third_strike` requires `resolver.dropped_third_strike`; none exists in production). The ticket stays open as a missing play class (~0.1/team-game). Its SIM-496-era framing — "the only site where a batter reaches on an error" — is obsolete: drawn errors reach base via the SIM-511 transition draw. |
 | **SIM-485** | Hit-by-pitch channel | Data | P2 | S | — | 🔲 **OPEN.** Ships with **no** re-sweep — `events` already records it. |
 | **SIM-486** | Retire the per-tile fallback path | Sim | P2 | M | 467, 450 | 🔲 **OPEN.** Its being the **test default** is why four critical bugs survived 8 weeks. Removes the divergence at the root. |
 | **SIM-487** | ETL parser batch — split `passed_ball_wild_pitch`; add `balk` + `pickoff` | Data | P2 | M | — | 🔲 **OPEN.** Collect **every** column first; the free window closed 07-30. |

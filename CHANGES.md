@@ -1,3 +1,13 @@
+# Backlog — SIM-484 merged into SIM-517: ONE catcher RECEIVING profile (owner design) — 2026-08-29
+
+Framing and the dropped third strike are the same actor skill read through the same
+mechanism, so they are one ticket. SIM-517 becomes "the catcher RECEIVING profile as a draw
+weight": one receiving embedding (the catcher computor gains blocking/passed-ball/D3K-allow
+rates — the SIM-408 trim left it framing-centric), one similarity score, two consumers — the
+taken-pitch weight in the pitch draw, and the dropped-third-strike reach as a draw over real
+strike-3 rows (replacing the hook no production resolver implements). SIM-484 is closed into
+it. The open board is 10 tickets.
+
 # Backlog — the ticket HYGIENE SWEEP (owner decisions): 8 rows closed/merged, SIM-518 epic filed — 2026-08-29
 
 The owner adjudicated the stale and overlapping rows. **Closed with evidence:** SIM-460
