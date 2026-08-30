@@ -160,13 +160,40 @@
   - **SIM-432 — FILED 2026-05-31, CLOSED 2026-06-01 (see the top bullet of this section).**
     Calibration is now live; the cascade is fully resolved.
 
-## 2b. ⚠ IN-FLIGHT WORK — read before touching the ETL or running a recompute (updated 2026-08-17)
+## 2b. ⚠ IN-FLIGHT WORK — read before touching the ETL or running a recompute (updated 2026-08-29)
 
-**`docs/audit/2026-08-17-sim474-resumption-state.md` is the CURRENT handover.** Read it first —
-it carries the running certifying lane (container `b5f6b71c09c0`, how to read it, the decision
-tree on its results), everything SIM-468/474/483/504/505 landed on 2026-08-17, and the open
-queue. The 2026-08-11 handover below it covers the data-foundation rebuild era (SIM-501/502,
-the re-sweep, SIM-459) and stays valid as history.
+**The CURRENT state authority is `BACKLOG.md`'s top banners (read newest-first) plus two
+docs: `docs/audit/2026-08-20-sim429-514-diagnosis-results.md` (why the model reads the way
+it does) and `docs/audit/2026-08-28-sim476-fit-plan.md` (the active work plan).** The
+standing owner rulings that govern all new work:
+
+- **The architecture rule, both clauses (2026-08-10 + 2026-08-29):** every decision is a
+  similarity-weighted draw from a hard-filtered pool — never a hand-tuned formula — and
+  **the drawn row IS the play**: no post-draw adjustment of any kind; every factor is a
+  draw WEIGHT or OFF until its weight lands.
+- **The grade is POOL TOTALS (2026-08-20):** the sim's frequencies certify against the play
+  pool's own totals (`tests/acceptance/bands.py` `POOL_REFERENCES`, 11 per-opportunity
+  bands); R / SB / CS / home_win_pct stay game-graded. **CERTIFIED 2026-08-20 (12×500):
+  all 11 pool bands PASS, R PASSES −1.2%;** the only asserted reds are the steal residual
+  (SB −7.4 / CS −9.8 → SIM-476) and home_win_pct (underpowered below 13,365 games).
+- **The pool window (2026-08-20):** the last three COMPLETED seasons plus the current one
+  (`RECENCY_FLOOR_SEASONS = 4`; full 2023-2026 today). Schema v20, `POOL_BUILDER_VERSION`
+  sim515.1.
+- **The slate is schedule-driven (2026-08-29):** the frontend day slate reads the MLB Stats
+  API for which games exist (preview / live / final cards); the DB supplies our sims,
+  projections and odds on top (→ SIM-519).
+
+Landed since the old handovers: SIM-510..513 (the transition draw — the drawn row is the
+play, mechanically), SIM-515 (IBB is a per-PA draw at `sim.ibb_rates`' real cell rates; the
+2.64× formula deleted), SIM-516 (the pool-totals grade + the W1 window), the SIM-491
+kernels (home/park/fielder built as draw weights, env-gated off pending SIM-476 fits;
+`SIM_HOME_OFF_WEIGHT` / `SIM_PARK_KERNEL_SIGMA` / `SIM_FIELDER_KERNEL_SIGMA`), and the
+framing flip OFF (its weight rebuild is SIM-517). The 2026-08-29 hygiene sweep closed or
+merged 8 stale rows. The open board (11): SIM-476 (all kernel fits — read the fit plan;
+step 0 pending an owner ruling on the steal-aggression recommendation), 517 (catcher
+receiving profile), 519 (live slate epic), 429-payoff (K-prop refit + CLV re-measure), 427,
+518, 467, 486, 456, 497a/b, 421. The 2026-08-17 and 2026-08-11 handover docs stay valid as
+history only.
 
 - **DO NOT run the profile recompute** (`make profile-computor`) — but the reason changed on
   2026-08-13. SIM-501a/c CLOSED: SIM-457 is re-landed on the events-based out label, no profile

@@ -40,7 +40,7 @@ pitch-pool half and tracked under SIM-518.**
 * **SIM-429** — the payoff: calibration refit (K prop) + the CLV re-measure.
 * **SIM-427** — real manager profiles + the dead-signal cleanup (pitch_out / sac_bunt /
   the hit-and-run trap / pinch-hit).
-* **SIM-518** — the draw-conditioning enrichment epic (below).
+* **SIM-518** — the draw-conditioning enrichment epic (below). *(SIM-519, the live-slate epic, was filed later the same day — see the banner above.)*
 * **SIM-467** — the 2,880-cell filter index, owning the 30-s SLA exit criterion.
 * **SIM-486** — retire the per-tile fallback (after 467/450).
 * **SIM-456** — the whiff_rate defect (P1, XS). **SIM-497a/b** — the date-range lane + dual
