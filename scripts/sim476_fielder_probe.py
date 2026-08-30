@@ -166,13 +166,20 @@ class PoolRef:
         for g, parts in by_group.items():
             v = np.concatenate([p[0] for p in parts])
             w = np.concatenate([p[1] for p in parts])
+            if v.size == 0 or float(w.sum()) <= 0.0:
+                # A group with no OAA-embedded row fielders (the battery:
+                # pitchers/catchers carry no OAA) has no tiers — drop it.
+                print(f"  (group {g}: no OAA rows in the pool — dropped)")
+                continue
             order = np.argsort(v)
             cum = np.cumsum(w[order])
             lo = float(v[order][np.searchsorted(cum, cum[-1] / 3.0)])
             hi = float(v[order][np.searchsorted(cum, 2.0 * cum[-1] / 3.0)])
             self.edges[g] = (lo, hi)
 
-    def tier(self, group: str, oaa_z: float) -> str:
+    def tier(self, group: str, oaa_z: float) -> str | None:
+        if group not in self.edges:
+            return None
         lo, hi = self.edges[group]
         if oaa_z < lo:
             return "low"
@@ -202,6 +209,8 @@ class PoolRef:
             fieldable = np.array([e != "home_run" for e in ev], dtype=bool)
             reach = np.array([e in _REACH_EVENTS for e in ev], dtype=bool)
             for g, nums in _GROUPS.items():
+                if g not in self.edges:
+                    continue
                 base = np.isin(pos, nums) & ~np.isnan(oaa) & fieldable
                 lo, hi = self.edges[g]
                 for t, m in (
