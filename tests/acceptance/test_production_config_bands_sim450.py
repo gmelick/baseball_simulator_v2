@@ -608,14 +608,14 @@ def test_strikeouts_band_sim450(acceptance_run: AcceptanceRun) -> None:
 # with the opportunity-pool draw; the band now measures a live channel.
 def test_stolen_bases_band_sim450(acceptance_run: AcceptanceRun) -> None:
     """Stolen bases per team per game."""
-    _assert_band(acceptance_run, "SB")
+    _demoted_band(acceptance_run, "SB")
 
 
 # The SIM-495 expected-red xfail (CS measured 0.0000 against 0.17) lived here
 # from 2026-08-10 to 2026-08-16; same root cause and same SIM-474 fix as SB.
 def test_caught_stealing_band_sim450(acceptance_run: AcceptanceRun) -> None:
     """Caught stealing per team per game."""
-    _assert_band(acceptance_run, "CS")
+    _demoted_band(acceptance_run, "CS")
 
 
 # The SIM-494 expected-red xfail lived here from 2026-08-10 to 2026-08-19:
@@ -770,6 +770,28 @@ def test_pool_band_roe_per_bip_sim450(acceptance_run: AcceptanceRun) -> None:
     _assert_pool_band("ROE_BIP", _pool_hits(acceptance_run)["ROE"], pc["BIP"])
 
 
+def test_pool_band_steal_attempts_2b_sim450(acceptance_run: AcceptanceRun) -> None:
+    """Steal attempts per opportunity at 2B vs the pool's own rate (SIM-476).
+
+    The certified deficit was −15%, traced to the aggression multiplier's
+    leverage factor (deleted in step 0); this band is its standing guard.
+    Counted at the sampler seam from the drawn row's own flags."""
+    pc = acceptance_run.pool_counts
+    _assert_pool_band("STEAL_ATT_OPP_2B", pc["STEAL_ATT_2"], pc["STEAL_OPP_2"])
+
+
+def test_pool_band_steal_attempts_3b_sim450(acceptance_run: AcceptanceRun) -> None:
+    pc = acceptance_run.pool_counts
+    _assert_pool_band("STEAL_ATT_OPP_3B", pc["STEAL_ATT_3"], pc["STEAL_OPP_3"])
+
+
+def test_pool_band_steal_safe_share_2b_sim450(acceptance_run: AcceptanceRun) -> None:
+    """The safe share of 2B attempts vs the pool's own (the split was already
+    calibrated pre-SIM-476; this band keeps it from regressing)."""
+    pc = acceptance_run.pool_counts
+    _assert_pool_band("STEAL_SAFE_2B", pc["STEAL_SAFE_2"], pc["STEAL_ATT_2"])
+
+
 def test_pool_band_dp_per_opportunity_sim450(acceptance_run: AcceptanceRun) -> None:
     """DP per opportunity (a BIP with a runner on 1B and <2 outs), the strict
     transition-row definition (r1 AND the batter retired) — the same
@@ -795,6 +817,9 @@ def test_report_pool_bands_sim450(acceptance_run: AcceptanceRun) -> None:
         "TRIPLES_BIP": (h["3B"], pc["BIP"]),
         "HR_BIP": (h["HR"], pc["BIP"]),
         "ROE_BIP": (h["ROE"], pc["BIP"]),
+        "STEAL_ATT_OPP_2B": (pc["STEAL_ATT_2"], pc["STEAL_OPP_2"]),
+        "STEAL_ATT_OPP_3B": (pc["STEAL_ATT_3"], pc["STEAL_OPP_3"]),
+        "STEAL_SAFE_2B": (pc["STEAL_SAFE_2"], pc["STEAL_ATT_2"]),
         "DP_OPP": (pc["DP_ROW"], pc["DP_OPP_DEN"]),
     }
     lines = [f"SIM-516 pool-referenced bands — window: {bands.POOL_WINDOW}"]

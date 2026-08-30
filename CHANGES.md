@@ -1,3 +1,19 @@
+# Sim — SIM-476 step 0 CONFIRMED + LANDED: the steal aggression leverage factor is deleted — 2026-08-30
+
+The A/B proved the prime suspect (12×100 per arm, same seeds, ~84k 2B opportunities each).
+With the formula: 2B attempts/opportunity −14.1% vs the pool, carrying the multiplier's own
+leverage fingerprint (low-leverage −28.9%, high +26.9%). With the leverage factor deleted:
++3.3%, flat bands, the biggest cell dead on the pool (−0.2%), the safe share unchanged. The
+kernels were never the problem — no bandwidth grid fit needed. Aggression is now the
+manager's rate-ratio to league alone (≡1.0 under the flat profile; SIM-427's wiring point
+unchanged; a late-game residual, if one ever localizes, becomes an inning KERNEL, never a
+reinstated formula). Landed with it: three steal pool bands (attempts/opportunity at 2B —
+its floor sized so the −15% defect class is 2.5× detectable — and 3B, plus the 2B safe
+share; centres = the artifact steal pools' own recency rates), the lane's wrap-once
+sampler-seam steal probes, and SB/CS demoted to informational (their 2025-era reads now
+show the anticipated era gap). The 12×500 certifying lane closes part 1; the home/park/
+fielder fits (parts 2-3) are next.
+
 # FE/Ops — SIM-519 FILED: the LIVE SLATE epic (owner design ruling) from the live frontend test — 2026-08-29
 
 The owner ruled the frontend design: the day slate is SCHEDULE-DRIVEN from the MLB Stats

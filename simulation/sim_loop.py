@@ -3886,18 +3886,28 @@ class StateMachine:
         season = int(getattr(state, "season", 2024) or 2024)
         pitcher = state.pitcher_id
         catcher = state.away_catcher_id if state.offense == Team.HOME else state.home_catcher_id
-        # Manager aggression: the leverage-scaled tendency over the league mean,
+        # Manager aggression: the manager's tendency over the league mean,
         # clamped so even a never-runs manager only DAMPS the draw (a weight,
         # not a gate — SIM-474). No manager -> neutral.
+        #
+        # SIM-476 step 0 (2026-08-30): the LEVERAGE factor
+        # (0.5 + 0.5*min(LI/1.5, 2)) is DELETED. It double-counted leverage —
+        # the draw's hard cell (outs, balls, strikes) and soft score kernel
+        # already embody how often real runners went at that leverage — and
+        # because it reads 1.0 only at LI >= 1.5, it suppressed ordinary-pitch
+        # attempts ~0.73-0.87x, the measured 2B attempts-per-opportunity -15%
+        # (arm A/B numbers in docs/audit/2026-08-28-sim476-fit-plan.md). With
+        # the league-flat SIM-427 default profile the ratio below is exactly
+        # 1.0, so production aggression is NEUTRAL until real per-manager
+        # rates land — and those must be measured attempt-rate ratios, never
+        # a leverage formula. If localization ever shows a late-game residual,
+        # the fix is an inning/late soft KERNEL on the steal draw (data
+        # conditioning), not a reinstated multiplier.
         if self.manager is None:
             aggression = 1.0
         else:
-            li = self.compute_leverage(state)
-            li_scale = 0.5 + 0.5 * min(li / _HIGH_LEVERAGE, 2.0)
             rate = self._tendency("steal_order_rate_per_1b_opp", self._LEAGUE_STEAL_ORDER_RATE)
-            aggression = float(
-                min(max((rate * li_scale) / self._LEAGUE_STEAL_ORDER_RATE, 0.05), 4.0)
-            )
+            aggression = float(min(max(rate / self._LEAGUE_STEAL_ORDER_RATE, 0.05), 4.0))
         drawn = fp.steal_draw(
             target,
             f"{int(runner_id)}:{season}",

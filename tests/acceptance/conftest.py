@@ -412,8 +412,48 @@ def _install_probes(
 
     # SIM-516: the pool-band counters (lane-global, never reset per game).
     pc = pool_counts if pool_counts is not None else {}
-    for key in ("PA", "BB_pitched", "IBB", "HBP", "K_pa", "BIP", "DP_ROW", "DP_OPP_DEN"):
+    for key in (
+        "PA",
+        "BB_pitched",
+        "IBB",
+        "HBP",
+        "K_pa",
+        "BIP",
+        "DP_ROW",
+        "DP_OPP_DEN",
+        # SIM-476: steal opportunities / attempts / safe, per target base.
+        "STEAL_OPP_2",
+        "STEAL_ATT_2",
+        "STEAL_SAFE_2",
+        "STEAL_OPP_3",
+        "STEAL_ATT_3",
+        "STEAL_SAFE_3",
+    ):
         pc.setdefault(key, 0)
+
+    # SIM-476: count steals at the SAMPLER seam, where the drawn row's own
+    # `attempted`/`success` flags live — the pool's exact semantics. The
+    # sampler is CACHED per process while machines are per-game, so this
+    # wrapper installs ONCE (the sentinel) and closes over the lane-global
+    # counters; wrapping per game would stack k-fold (the recorded SIM-514
+    # instrument trap).
+    fp = getattr(machine, "full_pool_sampler", None)
+    if fp is not None and not getattr(fp.steal_draw, "_sim450_wrapped", False):
+        orig_steal_draw = fp.steal_draw
+
+        def steal_draw(target_base: Any, *a: Any, **kw: Any) -> Any:
+            res = orig_steal_draw(target_base, *a, **kw)
+            if res is not None:
+                t = int(target_base)
+                pc[f"STEAL_OPP_{t}"] += 1
+                if bool(res[0]):
+                    pc[f"STEAL_ATT_{t}"] += 1
+                    if bool(res[1]):
+                        pc[f"STEAL_SAFE_{t}"] += 1
+            return res
+
+        steal_draw._sim450_wrapped = True  # type: ignore[attr-defined]
+        fp.steal_draw = steal_draw
 
     orig_outcome = machine._full_pool_outcome
     orig_fielding = machine._full_pool_fielding

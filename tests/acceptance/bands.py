@@ -1278,6 +1278,40 @@ POOL_REFERENCES: dict[str, PoolReference] = {
         floor_rationale="Rare-channel sizing, as TRIPLES_BIP.",
     ),
     # --- per opportunity ---------------------------------------------------
+    # SIM-476 (step 0): the steal bands. Centres are the artifact steal
+    # pools' OWN recency-weighted rates (printed by
+    # scripts/sim476_steal_probe.py from the loaded bundle — the exact object
+    # the draw samples). The -15% deficit these guard was the aggression
+    # multiplier's leverage factor, deleted 2026-08-30.
+    "STEAL_ATT_OPP_2B": PoolReference(
+        0.0214,
+        "the W1 artifact steal pool [2B], recency-weighted (sim476_steal_probe)",
+        rel_floor=0.06,
+        must_detect=0.0033,
+        detect_source=(
+            "docs/audit/2026-08-28-sim476-fit-plan.md part 1: the certified "
+            "deficit was -15% of the centre — 2.5x this floor."
+        ),
+    ),
+    "STEAL_ATT_OPP_3B": PoolReference(
+        0.0044,
+        "the W1 artifact steal pool [3B], recency-weighted (sim476_steal_probe)",
+        rel_floor=0.15,
+        floor_rationale=(
+            "The rarest decision channel: ~18 opportunities/team-game puts the "
+            "binomial term at ~13% of the centre at the 12x500 lane; 15% is "
+            "the tightest floor that binds there."
+        ),
+    ),
+    "STEAL_SAFE_2B": PoolReference(
+        0.7989,
+        "the W1 artifact steal pool [2B] safe share (sim476_steal_probe)",
+        rel_floor=0.03,
+        floor_rationale=(
+            "The split was calibrated before SIM-476 (0.804 vs 0.795 measured); "
+            "3% keeps it from regressing while the attempt weighting moves."
+        ),
+    ),
     "DP_OPP": PoolReference(
         0.1424,
         f"{_CENSUS}: r1-and-batter-retired rows / runner-on-1B <2-out BIP",
@@ -1298,11 +1332,22 @@ POOL_CHANNELS: tuple[str, ...] = tuple(POOL_REFERENCES)
 #: ruling). They stay measured and reported — a reader still sees them — but
 #: their per-team-game asserts no longer gate the lane; the per-opportunity
 #: bands above do. R and home_win_pct are NOT here: the pool cannot state
-#: them, so they stay game-graded. SB and CS are NOT here either: their
-#: per-opportunity replacements (attempts per steal opportunity) are the
-#: SIM-514(c)/SIM-476 follow-on, so the game bands keep gating them until
-#: those land.
-SUPERSEDED_BY_POOL: tuple[str, ...] = ("H", "HR", "2B", "3B", "BB", "K", "DP", "ROE", "ROE_reached")
+#: them, so they stay game-graded. SB and CS joined on 2026-08-30 (SIM-476
+#: step 0): their per-opportunity replacements (STEAL_ATT_OPP_2B/3B +
+#: STEAL_SAFE_2B) now gate the running game.
+SUPERSEDED_BY_POOL: tuple[str, ...] = (
+    "H",
+    "HR",
+    "2B",
+    "3B",
+    "BB",
+    "K",
+    "DP",
+    "ROE",
+    "ROE_reached",
+    "SB",
+    "CS",
+)
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,6 +2,24 @@
 
 *Owner: Product Manager (Agent 1) · Last updated: 2026-08-29 (OWNER RULING: the drawn row IS the play — no post-draw adjustments, every factor is a DRAW WEIGHT; framing flipped OFF pending its SIM-517 weight; 2026-08-29 HYGIENE SWEEP: 8 rows closed/merged, SIM-518 filed; SIM-519 LIVE SLATE epic filed (owner design ruling: schedule-driven 3-state slate from the MLB Stats API); **next free ID → SIM-520**). Older context from the 2026-08-20 stamp follows: (SIM-429 + SIM-514 diagnosis COMPLETE — the walk surplus decomposes IBB 54% / Markov structure 33% / pool era 12% / kernel tilt 1%, and the per-count draw is CLEAN; prev-pitch conditioning REFUTED by the (count × prev) chain; **OWNER RULING: the grade is POOL TOTALS** — SIM-516 re-references the lane, W1 [full 2023-2026] recommended for the window; SIM-515 filed [replace the hand-tuned IBB formula with a play_events draw]; SIM-491 all three parts BUILT + the bat_home data live; **next free ID → SIM-517**; see the top banner). Older context from the 2026-08-19 stamp follows: (SIM-510..512 LANDED + CERTIFIED; SIM-514 filed; next free ID → SIM-515; owner rulings 2026-08-19: NO widening in the SIM-511 fielding draw; all nudge re-validation lives in SIM-491 — not SIM-513; SIM-511+512 land as ONE combined change, no feature flag; the RUN_VALUES numbers removed; see the top banner). Older context from the 2026-08-13 stamp follows: (SIM-501a/c + SIM-502a..d CLOSED; SIM-503 filed+fixed; SIM-504 filed; next free ID → SIM-505). Older context from the 2026-06-02 stamp follows: (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
 
+# 🎯 2026-08-30 — SIM-476 STEP 0 CONFIRMED + LANDED: the steal deficit WAS the leverage double-count; the running game joins the pool grade
+
+**The A/B (12×100 per arm, ~84k 2B opportunities each, `scripts/sim476_steal_probe.py`)
+confirmed the recommendation on every prediction.** Arm A (the formula): 2B
+attempts/opportunity −14.1% with the multiplier's own leverage fingerprint (low-band
+−28.9%, high-band +26.9%). Arm B (the leverage factor DELETED, the manager ratio kept):
+**+3.3% — the deficit is gone**, the bands flat, the biggest cell −22.6% → −0.2%, the safe
+share untouched. **No kernel fit was needed — `steal_sigma`/`steal_score_sigma` were never
+the problem.** Landed together: the deletion (aggression = the manager's measured-rate
+ratio to league, ≡1.0 under the flat profile; the SIM-427 wiring point unchanged); THREE
+new steal pool bands (`STEAL_ATT_OPP_2B` centre 0.0214 w/ the −15% defect as its detection
+target, `STEAL_ATT_OPP_3B` 0.0044, `STEAL_SAFE_2B` 0.7989 — centres are the artifact
+pools' own recency rates); the lane's sampler-seam steal probes (wrap-once — the SIM-514
+stacking trap guarded); **SB and CS demoted to informational** (their 2025-era reads now
+show the expected era gap: SB/tg 0.692 vs the 2025 centre 0.625 — the pool bands are the
+grade). Step-0 results table: `docs/audit/2026-08-28-sim476-fit-plan.md`. **Part 1 closes
+on the 12×500 certifying lane; parts 2-3 (home/park/fielder fits) are next.**
+
 # 🖥️ 2026-08-29 — SIM-519 FILED: the LIVE SLATE epic (owner design ruling) + the frontend-test findings (next free ID → SIM-520)
 
 **The owner's design ruling (2026-08-29): the day slate is SCHEDULE-DRIVEN from the MLB
