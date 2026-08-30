@@ -459,6 +459,12 @@ class FullPoolSampler:
         diff = z[row_idx[valid]][:, cols] - z[live_idx[valid]][:, cols]
         d2 = np.einsum("ij,ij->i", diff, diff)
         out[valid] = np.exp(-d2 / (2.0 * self.fielder_sigma**2 * len(cols))).astype(np.float32)
+        # SIM-476: a row with no embedded fielder (or a position whose live
+        # defender is unembedded) must be draw-NEUTRAL, not favored. A fixed
+        # 1.0 outranks every penalized valid row, so the draw tilts toward
+        # missing-identity rows (measured: ~25% of drawn balls shifted at
+        # sigma=0.5). The neutral weight is the mean valid weight.
+        out[~valid] = np.float32(out[valid].mean())
         return out
 
     def _bb_same_hand_mask(self, hand: str, pitcher_throws: str) -> np.ndarray | None:

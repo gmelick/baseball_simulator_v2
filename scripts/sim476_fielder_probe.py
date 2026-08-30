@@ -74,10 +74,18 @@ _DEFAULT_GAME_PKS = (
 )
 
 _REACH_EVENTS = {"single", "double", "triple", "field_error"}
+#: One tier group PER POSITION (the pooled IF/OF grouping confounded the
+#: reference: OAA z distributions and reach rates differ by position, so a
+#: cross-position tercile read elite IF as allowing MORE reaches). The battery
+#: carries no OAA and is dropped by the empty-group guard.
 _GROUPS = {
-    "IF": (3, 4, 5, 6),
-    "OF": (7, 8, 9),
-    "battery": (1, 2),
+    "1B": (3,),
+    "2B": (4,),
+    "3B": (5,),
+    "SS": (6,),
+    "LF": (7,),
+    "CF": (8,),
+    "RF": (9,),
 }
 _POS_NUM_TO_NAME = {
     1: "P",
