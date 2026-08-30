@@ -1,3 +1,19 @@
+# FE/Ops — SIM-519 FILED: the LIVE SLATE epic (owner design ruling) from the live frontend test — 2026-08-29
+
+The owner ruled the frontend design: the day slate is SCHEDULE-DRIVEN from the MLB Stats
+API — the API decides which games exist and their status; our database supplies our own
+data on top. Cards render three states: preview (probable pitchers + our projections),
+live (in-progress game state), final (the result). The ruling came out of the first live
+frontend test (real browser, backend up): the shell, slate, game page, Data Lab, SQL
+console and Similarity Explorer all work; the findings — a 16-day-stale database with
+nothing scheduling ingestion (manually backfilled: 181 games, 53,798 pitches, 3 retries
+against the SIM-445 segfault class), a silently-dropped simulation pending state with
+duplicate-run and no-caching behavior (~5 min per identical rerun on the 4-season pool —
+perf evidence logged for SIM-467), raw player ids and synthetic bullpen rows in the
+projections panel, misleading empty-state and replay-store messages, and missing final
+scores + doubleheader labels on cards — are consolidated as SIM-519's parts (a)-(f).
+Next free ID → SIM-520.
+
 # Backlog — SIM-484 merged into SIM-517: ONE catcher RECEIVING profile (owner design) — 2026-08-29
 
 Framing and the dropped third strike are the same actor skill read through the same
