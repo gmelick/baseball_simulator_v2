@@ -299,6 +299,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("game_pks", type=int, nargs="*", default=None)
     ap.add_argument("--iters", type=int, default=200)
+    ap.add_argument("--seed-base", type=int, default=0)
     ap.add_argument("--json-out", type=str, default=None)
     args = ap.parse_args()
     game_pks = args.game_pks or list(_DEFAULT_GAME_PKS)
@@ -322,7 +323,7 @@ def main() -> None:
                 pool_ref = ref.reference()
             _install(machine, rec, ref)
             t0 = time.perf_counter()
-            for seed in range(args.iters):
+            for seed in range(args.seed_base, args.seed_base + args.iters):
                 machine.boxscore = BoxScore()
                 simulate_game(state_machine=machine, seed=seed, **kw)
             print(f"  game {gp}: {args.iters} sims in {time.perf_counter() - t0:.1f}s")
