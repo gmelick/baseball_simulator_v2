@@ -17,8 +17,11 @@ target, `STEAL_ATT_OPP_3B` 0.0044, `STEAL_SAFE_2B` 0.7989 — centres are the ar
 pools' own recency rates); the lane's sampler-seam steal probes (wrap-once — the SIM-514
 stacking trap guarded); **SB and CS demoted to informational** (their 2025-era reads now
 show the expected era gap: SB/tg 0.692 vs the 2025 centre 0.625 — the pool bands are the
-grade). Step-0 results table: `docs/audit/2026-08-28-sim476-fit-plan.md`. **Part 1 closes
-on the 12×500 certifying lane; parts 2-3 (home/park/fielder fits) are next.**
+grade). Step-0 results table: `docs/audit/2026-08-28-sim476-fit-plan.md`. **PART 1 CERTIFIED
+same day: the 12×500 lane (n=5,989, 4h13m) reads all 14 pool bands PASS — the three new
+steal bands at +4.2% / −6.7% / −1.0% — and R passes; the only failure is home_win_pct
+(0.4939), expected until part 2 fits the home kernel. CI green on `1e84a7f`. Parts 2-3
+(home/park/fielder fits) are next.**
 
 # 🖥️ 2026-08-29 — SIM-519 FILED: the LIVE SLATE epic (owner design ruling) + the frontend-test findings (next free ID → SIM-520)
 
