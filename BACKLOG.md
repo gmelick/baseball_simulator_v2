@@ -19,9 +19,12 @@ lane's PRODUCTION_FLAGS; the SIM-411/425b post-draw flips DELETED (inert on the
 transition path; regression golden files untouched). **HOME — measured to a decision:**
 the pool's own home/away differential ≈ +0.107 R/g (the real MLB size), delivered ONLY
 by w=0 (hard bat_home conditioning — (1−w)/(1+w) algebra, verified by the 12×400 A/B);
-no soft weight in [0.7, 1.0] gives more than 18%. **OWNER DECISION PENDING: land w=0
-(then the 13,365-game home_win_pct lane) or keep home OFF.** The 12×500 lane on the new
-env closes part 3.
+no soft weight in [0.7, 1.0] gives more than 18%. **OWNER RULED 2026-08-31: "Land w=0
+for the home kernel" — LANDED: `SIM_HOME_OFF_WEIGHT=0.0` in production + the lane
+flags; the SIM-412 flip (`_apply_home_field_bias`, `SIM_HOME_FIELD_BIAS`, its test
+module) DELETED. All three SIM-491 kernels are now fitted, enabled production
+defaults.** Verify: the 12×500 lane on the full config, then the 13,365-game
+home_win_pct lane (the last SIM-476 deliverable).
 
 # 🎯 2026-08-30 — SIM-476 STEP 0 CONFIRMED + LANDED: the steal deficit WAS the leverage double-count; the running game joins the pool grade
 

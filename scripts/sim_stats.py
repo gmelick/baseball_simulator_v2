@@ -36,9 +36,9 @@ USAGE
     # Machine-readable for downstream analysis
     python scripts/sim_stats.py --iters 500 --json-out stats.json 744795 ...
 
-    # Toggle the SIM-412 home-field bias for an A/B read
-    SIM_HOME_FIELD_BIAS=0    python scripts/sim_stats.py --iters 500 ...   # off
-    SIM_HOME_FIELD_BIAS=0.025 python scripts/sim_stats.py --iters 500 ...  # default
+    # Toggle the SIM-476 home kernel for an A/B read (w=0 hard conditioning)
+    SIM_HOME_OFF_WEIGHT=1.0 python scripts/sim_stats.py --iters 500 ...   # off
+    SIM_HOME_OFF_WEIGHT=0.0 python scripts/sim_stats.py --iters 500 ...   # production
 
     # SIM-449: the run PRINTS the park factor and the defense-map sizes it
     # actually passed, so a neutral no-op can never read as a measured
@@ -107,12 +107,9 @@ _MLB_HOME_WIN_PCT = 0.5428
 _REALISM_FLAGS = (
     "SIM_FULL_POOL",
     "SIM_MANAGER",
-    "SIM_PARK_FACTOR",
     "SIM_BB_PLATOON",
-    "SIM_FIELDER_RBF",
     "SIM_FRAMING",
-    "SIM_HOME_FIELD_BIAS",
-    "SIM_HOME_OFF_WEIGHT",  # SIM-491: the home-field DRAW weight (1.0 = off)
+    "SIM_HOME_OFF_WEIGHT",  # SIM-491/476: the home-field DRAW weight (1.0 = off; prod 0.0)
     "SIM_PARK_KERNEL_SIGMA",  # SIM-491 pt.2: the park KERNEL bandwidth (0 = off)
     "SIM_FIELDER_KERNEL_SIGMA",  # SIM-491 pt.3: the fielder KERNEL bandwidth (0 = off)
     "SIM_RUN_CALIB",

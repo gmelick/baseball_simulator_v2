@@ -1,3 +1,17 @@
+# Sim — SIM-476 part 2 RULED: home w=0 LANDED (owner ruling); the SIM-412 flip deleted — 2026-08-31
+
+The owner ruled: "Land w=0 for the home kernel." `SIM_HOME_OFF_WEIGHT=0.0` is
+now the production default — the batted-ball draw hard-conditions on the
+batting side (the same structure as the base-out hard cell), which the 12×400
+A/B showed is the ONLY setting that delivers the pool's own home/away
+differential (+0.107 R/g, the real MLB home-advantage size). The superseded
+SIM-412 post-draw flip is deleted end to end: `_apply_home_field_bias`, its
+constants and env resolver, the `SIM_HOME_FIELD_BIAS` env, and its test
+module (all inert on the production transition path already). All three
+SIM-491 kernels are now fitted, enabled production defaults. Verify: the
+12×500 pool-band lane on the full config, then the 13,365-decisive-game
+home_win_pct lane.
+
 # Sim — SIM-476 parts 2-3: park σ=0.02 + fielder σ=0.5 fitted and LANDED; the legacy flips deleted; home w=0 to the owner — 2026-08-30
 
 Every SIM-491 kernel is now measured against the pool's own conditional

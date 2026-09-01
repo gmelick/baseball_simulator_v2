@@ -32,11 +32,10 @@ import pytest
 # env — so force the env off here for deterministic, env-independent runs.
 os.environ["SIM_FULL_POOL"] = "0"
 
-# SIM-412: production enables the home-field run-advantage bias via the
-# `_HOME_FIELD_BIAS_DEFAULT` class constant (0.025).  The unit suite asserts
-# symmetric run environments + rate stats on synthetic streams, so force it
-# OFF here and let the SIM-412 tests opt in by monkeypatching the env back on.
-os.environ["SIM_HOME_FIELD_BIAS"] = "0"
+# (SIM-476, owner ruling 2026-08-30: the SIM-412 home-field flip is DELETED —
+# home advantage is the SIM-491 home kernel, pinned off below via
+# SIM_HOME_OFF_WEIGHT=1.0, so the unit suite keeps its symmetric run
+# environment.)
 
 # SIM-434: production enables the manager decision model via SIM_MANAGER=1 (set
 # in the docker-compose `app` env, which `docker compose run app pytest` inherits).

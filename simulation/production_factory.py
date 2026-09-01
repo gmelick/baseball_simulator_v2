@@ -360,8 +360,11 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
         art = EngineArtifacts.load(art_dir, shared_views=views)
         # SIM-491 (the SIM-412 rebuild): the home-field draw weight. 1.0 (the
         # default, and any unparsable value) disables the reweight EXACTLY —
-        # byte-identical to pre-SIM-491. A SIM-476-style fit picks the
-        # production value against the +0.13 R/g home edge.
+        # byte-identical to pre-SIM-491. SIM-476 (owner ruling 2026-08-30):
+        # production runs w=0.0 — the draw hard-conditions on the batting side,
+        # delivering the pool's own home/away differential (+0.107 R/g
+        # measured, the MLB size). Soft weights in (0,1) deliver only
+        # (1-w)/(1+w) of it — the 12x400 A/B in the SIM-476 fit plan.
         try:
             home_w = float(os.environ.get("SIM_HOME_OFF_WEIGHT", "1.0"))
         except ValueError:

@@ -83,20 +83,23 @@ PRODUCTION_FLAGS: dict[str, str] = {
     "SIM_FULL_POOL": "1",  # SIM-429 full-pool similarity sampler
     "SIM_MANAGER": "1",  # SIM-434 manager pull / reliever decisions
     "SIM_BB_PLATOON": "1",  # SIM-413 batted-ball platoon
-    # SIM-476 (2026-08-30): the SIM-411/425b post-draw flips are DELETED;
+    # SIM-476 (2026-08-30): the SIM-411/412/425b post-draw flips are DELETED;
     # production now runs the FITTED SIM-491 draw-weight kernels instead.
     "SIM_PARK_KERNEL_SIGMA": "0.02",  # SIM-476 fitted park kernel
     "SIM_FIELDER_KERNEL_SIGMA": "0.5",  # SIM-476 fitted fielder kernel
+    # SIM-476 owner ruling 2026-08-30: w=0 — the batted-ball draw
+    # hard-conditions on the batting side (the SIM-412 replacement).
+    "SIM_HOME_OFF_WEIGHT": "0.0",
     # SIM-517 (owner ruling 2026-08-29): no post-draw adjustments — the
     # framing FLIP is off in production; the catcher effect returns as a
     # pitch-draw weight (SIM-517) and this pin flips back with it.
     "SIM_FRAMING": "0",
 }
 
-#: Production does NOT set ``SIM_HOME_FIELD_BIAS``, so the SIM-412 class default
-#: of 0.025 applies. ``tests/conftest.py`` sets it to "0". Deleting it — rather
-#: than writing "0.025" — is what proves the default path runs.
-DELETED_FLAGS: tuple[str, ...] = ("SIM_HOME_FIELD_BIAS",)
+#: Env names the lane must ERASE (not set) so a default code path proves
+#: itself. Empty since SIM-476 deleted the SIM-412 flip this once guarded;
+#: the machinery stays for the next default-path flag.
+DELETED_FLAGS: tuple[str, ...] = ()
 
 #: Twelve 2024 regular-season Final games, one per venue, spread evenly across
 #: the 2024 park-factor distribution. Verified against the live database on

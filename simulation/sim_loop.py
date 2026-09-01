@@ -1092,7 +1092,6 @@ class StateMachine:
         # set the env BEFORE constructing the machine, so a construct-time read is
         # correct; the per-call resolver methods are kept (the env-parse unit tests
         # call them directly). Mirrors the _bb_platoon one-shot read above.
-        self._home_field_bias_value = self._home_field_bias()  # SIM-412
         self._run_calib_value = self._run_calib()  # SIM-429
         # The single-pitch helper owns the (SIM-317 real / stub) fingerprint +
         # sampler call.  When no sampler is supplied the machine is "count-machine
@@ -2765,111 +2764,13 @@ class StateMachine:
     # sacrifice flies naturally from real data, at the runner's and the
     # fielder's own rates, and relabels the play post-hoc.
 
-    #: SIM-412: per-batted-ball-out probability that the HOME team's batted-ball
-    #: OUT gets converted into a SINGLE — the model of MLB's empirical home-field
-    #: run advantage.  Default 0.025 calibrated to bridge the structural-only
-    #: ~.510-.515 home_win_pct (walk-off + skipped-bottom-9th rules) toward the
-    #: empirical MLB ~.535-.540 (+~0.13 R per home game, mediated by ~0.32 extra
-    #: hits per game on field-out conversions).  Env override:
-    #: ``SIM_HOME_FIELD_BIAS`` (set to ``0`` to disable, e.g. for unit tests that
-    #: assert a symmetric run environment).
-    #:
-    #: WHY THIS HOOK + WHY THIS MAGNITUDE
-    #: ----------------------------------
-    #: The MLB home-field edge is multi-causal (umpire familiarity, travel, sleep,
-    #: park familiarity, last-AB) — but its NET EFFECT on the run distribution is
-    #: well-characterized: home teams score ~0.13 more R/g than away teams (Tango/
-    #: Lichtman).  Modelling that as a per-batted-ball-out -> single conversion is
-    #: the most surgical hook that (a) preserves the rate-stat shape of HR/BB/K
-    #: (none of those are touched), (b) preserves the per-team K/BB sequencing
-    #: (the home pitcher still throws strikes normally), and (c) is calibratable
-    #: from a single number rather than a per-engine retrain.  A genuinely
-    #: per-park / per-team model would replace this with a richer signal (the
-    #: SIM-411 park-factor path); SIM-412 is the AGGREGATE bias the score
-    #: distribution needs in the meantime.
-    #:
-    #: Excludes errors / DPs (which carry their own run-resolution semantics) and
-    #: applies only to ``result_hits == 0`` AND ``result_outs == 1`` batted-ball
-    #: outs sampled into a "plain" canonical event.
-    _HOME_FIELD_BIAS_DEFAULT: float = 0.025
-
-    #: Eligible batted-ball-out events that can be flipped to a single by the
-    #: SIM-412 home-field bias.  Same conservative set as the sac-fly bias plus
-    #: the canonical ground-out family; excludes strikeout / DP / sac events
-    #: (already-productive outs that carry their own resolution).
-    _HOME_FIELD_ELIGIBLE_OUTS: frozenset[str] = frozenset(
-        {
-            "field_out",
-            "fly_out",
-            "flyout",
-            "ground_out",
-            "groundout",
-            "force_out",
-            "out",
-            "air_out",
-            "other_out",
-        }
-    )
-
-    def _home_field_bias(self) -> float:
-        """Resolve the SIM-412 home-field bias from env override / class default.
-
-        Parsed as a float; out-of-range values clamp to ``[0.0, 0.1]`` so a
-        misconfigured deployment can never (a) disable below 0 or (b) flip an
-        absurd fraction of outs to hits and corrupt the rate stats.
-        """
-        env = os.environ.get("SIM_HOME_FIELD_BIAS")
-        if env is not None:
-            try:
-                v = float(env)
-            except ValueError:
-                v = self._HOME_FIELD_BIAS_DEFAULT
-        else:
-            v = self._HOME_FIELD_BIAS_DEFAULT
-        return max(0.0, min(0.1, v))
-
-    def _apply_home_field_bias(self, state: GameState, sig: FieldingSignal) -> FieldingSignal:
-        """SIM-412: flip a HOME-team batted-ball OUT to a SINGLE with small
-        probability — the model of MLB's empirical home-field run advantage.
-
-        A no-op unless ALL hold: the home team is BATTING (``state.half ==
-        Half.BOTTOM``); the play resolved to a single-out batted-ball event
-        (``result_hits == 0`` AND ``result_outs == 1``); the event is in
-        :data:`_HOME_FIELD_ELIGIBLE_OUTS` (excludes K / DP / sac outs that
-        already carry their own resolution); no error was flagged; and the rng
-        roll falls under :meth:`_home_field_bias`.  In that case it returns a
-        NEW ``FieldingSignal`` with ``event="single"``, ``result_hits=1``, and
-        ``result_outs=0`` — the canonical batted-ball single shape the
-        downstream run-resolution path already handles.
-
-        Returns ``sig`` unchanged on every away-batting PA and on every
-        non-eligible event, so the away half-innings (and rate-stat shape for
-        K/BB/HR) are untouched.
-        """
-        bias = self._home_field_bias_value
-        if bias <= 0.0:
-            return sig
-        if state.half != Half.BOTTOM:
-            return sig  # away batting -> no home-field bonus
-        if int(sig.result_hits) != 0 or int(sig.result_outs) != 1:
-            return sig
-        if sig.is_error:
-            return sig  # error semantics own this play
-        if str(sig.event) not in self._HOME_FIELD_ELIGIBLE_OUTS:
-            return sig
-        if float(self.rng.random()) >= bias:
-            return sig
-        return FieldingSignal(
-            event="single",
-            result_hits=1,
-            result_outs=0,
-            result_runs=int(sig.result_runs),
-            fielder_id=sig.fielder_id,
-            is_error=False,
-            exit_velo=sig.exit_velo,
-            launch_angle=sig.launch_angle,
-            spray_angle=sig.spray_angle,
-        )
+    # SIM-476 (owner ruling 2026-08-30): the SIM-412 home-field flip
+    # (_HOME_FIELD_BIAS_DEFAULT / _home_field_bias / _apply_home_field_bias)
+    # is DELETED. Home advantage is now the SIM-491 home kernel at
+    # SIM_HOME_OFF_WEIGHT=0.0 — the batted-ball draw hard-conditions on the
+    # batting side (bat_home), delivering the pool's own home/away
+    # differential (+0.107 R/g measured, the MLB size). See
+    # docs/audit/2026-08-28-sim476-fit-plan.md part 2.
 
     def _resolve_in_play(self, state: GameState, result: PlayResult) -> None:
         """Resolve an in-play PA: batted-ball sample (step 5) -> fielding (step 6)
@@ -2937,15 +2838,10 @@ class StateMachine:
             return
         # (The SIM-349 sac-fly-intent nudge sat here until 2026-08-19 —
         # retired by SIM-513; the SIM-512 tag draw owns sacrifice flies.)
-        # --- SIM-412 home-field run advantage --------------------------------
-        # On the bottom of the inning (home team batting) flip a small
-        # fraction of plain batted-ball outs into singles.  Aggregates to the
-        # empirical MLB ~0.13 R/g home edge and shifts home_win_pct from the
-        # structural-only ~.510 toward MLB's ~.540.  No-op on the top half so
-        # the away team's run environment is unchanged.
-        sig = self._apply_home_field_bias(state, sig)
-        # SIM-476: the SIM-411 park flip is deleted — the park now shapes the
-        # DRAW itself (the SIM-491 park kernel, SIM_PARK_KERNEL_SIGMA).
+        # SIM-476: the SIM-412 home-field flip and the SIM-411 park flip are
+        # deleted — home advantage and the park now shape the DRAW itself (the
+        # SIM-491 kernels: SIM_HOME_OFF_WEIGHT=0.0 hard bat_home conditioning,
+        # SIM_PARK_KERNEL_SIGMA).
         result.event = sig.event
         result.fielder_id = sig.fielder_id
         result.is_error = sig.is_error

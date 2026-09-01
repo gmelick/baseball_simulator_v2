@@ -8,8 +8,8 @@ only test in this repository that drives the simulator users get.
 
 WHY IT EXISTS
 =============
-``tests/conftest.py`` pins ``SIM_FULL_POOL``, ``SIM_MANAGER``, ``SIM_BB_PLATOON``,
-``SIM_HOME_FIELD_BIAS`` and the SIM-491 kernel sigmas OFF at import time.
+``tests/conftest.py`` pins ``SIM_FULL_POOL``, ``SIM_MANAGER``, ``SIM_BB_PLATOON``
+and the SIM-491 kernels (home weight + the two sigmas) OFF at import time.
 Production sets the exact inverse. The four methods that shape every production
 pitch had ZERO test references anywhere in the repo:
 
@@ -851,8 +851,7 @@ def test_report_every_channel_sim450(acceptance_run: AcceptanceRun) -> None:
         f"SIM-450 acceptance bands — {acceptance_run.n_games} games x "
         f"{acceptance_run.n_iters} iters = {acceptance_run.total_sims} game-sims "
         f"in {acceptance_run.elapsed_s:.1f}s",
-        f"flags: {' '.join(f'{k}={v}' for k, v in PRODUCTION_FLAGS.items())} "
-        f"SIM_HOME_FIELD_BIAS=<unset>",
+        f"flags: {' '.join(f'{k}={v}' for k, v in PRODUCTION_FLAGS.items())}",
         f"calls: {acceptance_run.calls}",
         f"ties (excluded from home_win_pct): {acceptance_run.ties}",
         f"run environment: mean park run factor {park_mean:.5f} "
