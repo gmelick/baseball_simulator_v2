@@ -82,9 +82,11 @@ from tests.acceptance import bands
 PRODUCTION_FLAGS: dict[str, str] = {
     "SIM_FULL_POOL": "1",  # SIM-429 full-pool similarity sampler
     "SIM_MANAGER": "1",  # SIM-434 manager pull / reliever decisions
-    "SIM_PARK_FACTOR": "1",  # SIM-411 park run factor
     "SIM_BB_PLATOON": "1",  # SIM-413 batted-ball platoon
-    "SIM_FIELDER_RBF": "1",  # SIM-425b fielder RBF nudge
+    # SIM-476 (2026-08-30): the SIM-411/425b post-draw flips are DELETED;
+    # production now runs the FITTED SIM-491 draw-weight kernels instead.
+    "SIM_PARK_KERNEL_SIGMA": "0.02",  # SIM-476 fitted park kernel
+    "SIM_FIELDER_KERNEL_SIGMA": "0.5",  # SIM-476 fitted fielder kernel
     # SIM-517 (owner ruling 2026-08-29): no post-draw adjustments — the
     # framing FLIP is off in production; the catcher effect returns as a
     # pitch-draw weight (SIM-517) and this pin flips back with it.

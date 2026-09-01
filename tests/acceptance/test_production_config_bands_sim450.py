@@ -8,11 +8,10 @@ only test in this repository that drives the simulator users get.
 
 WHY IT EXISTS
 =============
-``tests/conftest.py`` pins ``SIM_FULL_POOL``, ``SIM_MANAGER``, ``SIM_PARK_FACTOR``,
-``SIM_BB_PLATOON``, ``SIM_FIELDER_RBF`` and ``SIM_HOME_FIELD_BIAS`` OFF at import
-time (lines 33, 39, 45, 51, 52, 53). Production sets the exact inverse. The four
-methods that shape every production pitch had ZERO test references anywhere in
-the repo:
+``tests/conftest.py`` pins ``SIM_FULL_POOL``, ``SIM_MANAGER``, ``SIM_BB_PLATOON``,
+``SIM_HOME_FIELD_BIAS`` and the SIM-491 kernel sigmas OFF at import time.
+Production sets the exact inverse. The four methods that shape every production
+pitch had ZERO test references anywhere in the repo:
 
   * ``_full_pool_outcome``          (``simulation/sim_loop.py:1332``)
   * ``_full_pool_fielding``         (``simulation/sim_loop.py:1386``)
@@ -385,19 +384,21 @@ def test_sim449_inputs_reach_the_simulator_sim450(acceptance_run: AcceptanceRun)
     """The park factor and the two defense maps are really wired (SIM-449 guard).
 
     The old harness dropped ``home_defense``, ``away_defense`` and
-    ``park_run_factor``, so ``SIM_FIELDER_RBF`` and ``SIM_PARK_FACTOR`` were
-    structurally inert. An A/B test of either flag then compared two identical
-    no-ops and reported "no effect". This lane fails rather than repeat that.
+    ``park_run_factor``, so the fielder and park consumers were structurally
+    inert. An A/B test of either then compared two identical no-ops and
+    reported "no effect". This lane fails rather than repeat that. (SIM-476:
+    the consumers are now the SIM-491 kernels — SIM_FIELDER_KERNEL_SIGMA and
+    SIM_PARK_KERNEL_SIGMA — which read the same two inputs.)
     """
     assert acceptance_run.defense_sizes, "no game was resolved"
     for game_pk, (home_n, away_n) in acceptance_run.defense_sizes.items():
         assert home_n and away_n, (
             f"game {game_pk} passed an EMPTY defense map "
-            f"(home={home_n}, away={away_n}); SIM_FIELDER_RBF cannot act."
+            f"(home={home_n}, away={away_n}); the fielder kernel cannot act."
         )
     non_neutral = [pk for pk, pf in acceptance_run.park_factors.items() if pf != 1.0]
     assert non_neutral, (
-        "every park_run_factor is a neutral 1.0, so SIM_PARK_FACTOR is a no-op across "
+        "every park_run_factor is a neutral 1.0, so the park kernel is a no-op across "
         f"the whole game set: {acceptance_run.park_factors}"
     )
 

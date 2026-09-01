@@ -9,14 +9,14 @@ behaviour that reads those columns, each behind its own env gate:
 
   * **SIM-413** — ``FullPoolSampler.battedball_new_pa(pitcher_throws=...)`` softly
     reweights the batted-ball draw toward the live pitcher-hand matchup.
-  * **SIM-425b** — the ``last_battedball_fielder`` / ``fielder_quality`` accessors
-    and ``StateMachine._fielder_rbf_nudge`` flip a fieldable single<->out by the
-    live defender's OAA vs the pool play's fielder.
-  * **SIM-411** — ``StateMachine._apply_park_factor`` flips outs<->singles by the
-    venue run factor (relative to the league-average park the pool reflects).
+  * **SIM-491/476** — the home / park / fielder DRAW-WEIGHT kernels
+    (``bat_home`` match, run-factor Gaussian, live-defender OAA Gaussian) plus
+    the ``last_battedball_fielder`` / ``fielder_quality`` accessors.
 
-All three are graceful-optional: with the gate off / the data absent they are a
-no-op (covered here + by the unchanged existing suites).
+All are graceful-optional: with the knob at its off value / the data absent
+they are a no-op. The SIM-425b post-draw fielder nudge and the SIM-411 park
+flip were DELETED by SIM-476 (2026-08-30) — the fitted kernels replace them,
+so their flip tests are gone with the code.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import numpy as np
 from pipeline.batch.engine_artifacts import BattedBallPool, EngineArtifacts
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import GameState, Half
-from simulation.sim_loop import FieldingSignal, StateMachine
+from simulation.sim_loop import StateMachine
 
 _SEASON = 2024
 
@@ -406,111 +406,6 @@ class TestFielderAccessors:
         assert fp.fielder_quality(666, "SS", _SEASON) == 10.0
         assert fp.fielder_quality(999, "SS", _SEASON) is None  # unknown
         assert fp.fielder_quality(555, "2B", _SEASON) is None  # wrong position
-
-
-class _FakeFielderFP:
-    def __init__(self, drawn, quality):
-        self._drawn = drawn
-        self._quality = quality
-
-    def last_battedball_fielder(self):
-        return self._drawn
-
-    def fielder_quality(self, fid, pos_str, season):
-        return self._quality.get(int(fid))
-
-
-def _sm(flag_attr: str, rng_v: float = 0.0) -> StateMachine:
-    sm = StateMachine()
-    setattr(sm, flag_attr, True)
-    sm.rng = _FixedRNG(rng_v)  # type: ignore[assignment]
-    return sm
-
-
-class TestFielderRbfNudge:
-    def _state(self, defense):
-        # half=TOP => away batting => the HOME team is in the field.
-        return GameState(
-            pitcher_id=1, bat_hand="R", season=_SEASON, half=Half.TOP, home_defense=defense
-        )
-
-    def test_better_live_fielder_turns_single_into_out(self):
-        sm = _sm("_fielder_rbf", rng_v=0.0)
-        fp = _FakeFielderFP(drawn=(6, 555, _SEASON), quality={555: -5.0, 666: 10.0})
-        state = self._state({"SS": 666})  # drawn pos 6 -> 'SS'
-        ev, rh, is_err, fid = sm._fielder_rbf_nudge(state, fp, "single", 1, _SEASON)
-        assert (ev, rh, is_err, fid) == ("field_out", 0, False, 666)
-
-    def test_worse_live_fielder_turns_out_into_single(self):
-        sm = _sm("_fielder_rbf", rng_v=0.0)
-        fp = _FakeFielderFP(drawn=(6, 666, _SEASON), quality={555: -5.0, 666: 10.0})
-        state = self._state({"SS": 555})  # drawn pos 6 -> 'SS'
-        ev, rh, is_err, fid = sm._fielder_rbf_nudge(state, fp, "field_out", 0, _SEASON)
-        assert (ev, rh, is_err, fid) == ("single", 1, False, 555)
-
-    def test_no_flip_when_rng_above_probability(self):
-        sm = _sm("_fielder_rbf", rng_v=0.99)
-        fp = _FakeFielderFP(drawn=(6, 555, _SEASON), quality={555: -5.0, 666: 10.0})
-        state = self._state({"SS": 666})  # drawn pos 6 -> 'SS'
-        ev, rh, _e, fid = sm._fielder_rbf_nudge(state, fp, "single", 1, _SEASON)
-        assert (ev, rh, fid) == ("single", 1, 666)  # attributed, not flipped
-
-    def test_neutral_without_defense_map(self):
-        sm = _sm("_fielder_rbf", rng_v=0.0)
-        fp = _FakeFielderFP(drawn=(6, 555, _SEASON), quality={555: -5.0, 666: 10.0})
-        state = self._state({})  # no defender at the position
-        assert sm._fielder_rbf_nudge(state, fp, "single", 1, _SEASON) == ("single", 1, False, None)
-
-    def test_neutral_when_quality_unknown(self):
-        sm = _sm("_fielder_rbf", rng_v=0.0)
-        fp = _FakeFielderFP(drawn=(6, 555, _SEASON), quality={})  # no OAA for anyone
-        state = self._state({"SS": 666})  # drawn pos 6 -> 'SS'
-        ev, rh, _e, fid = sm._fielder_rbf_nudge(state, fp, "single", 1, _SEASON)
-        assert (ev, rh, fid) == ("single", 1, 666)
-
-
-# ===========================================================================
-# SIM-411 — park run-factor nudge
-# ===========================================================================
-
-
-def _out_sig() -> FieldingSignal:
-    return FieldingSignal(event="field_out", result_hits=0, result_outs=1, result_runs=0)
-
-
-def _single_sig() -> FieldingSignal:
-    return FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
-
-
-class TestParkFactor:
-    def _state(self, factor: float) -> GameState:
-        return GameState(pitcher_id=1, bat_hand="R", season=_SEASON, park_run_factor=factor)
-
-    def test_hitters_park_flips_out_to_single(self):
-        sm = _sm("_park_factor", rng_v=0.0)
-        out = sm._apply_park_factor(self._state(1.2), _out_sig())
-        assert (out.event, out.result_hits, out.result_outs) == ("single", 1, 0)
-
-    def test_pitchers_park_flips_single_to_out(self):
-        sm = _sm("_park_factor", rng_v=0.0)
-        out = sm._apply_park_factor(self._state(0.8), _single_sig())
-        assert (out.event, out.result_hits, out.result_outs) == ("field_out", 0, 1)
-
-    def test_neutral_factor_is_noop(self):
-        sm = _sm("_park_factor", rng_v=0.0)
-        sig = _out_sig()
-        assert sm._apply_park_factor(self._state(1.0), sig) is sig
-
-    def test_flag_off_is_noop(self):
-        sm = StateMachine()  # _park_factor defaults False
-        sm.rng = _FixedRNG(0.0)  # type: ignore[assignment]
-        sig = _out_sig()
-        assert sm._apply_park_factor(self._state(1.2), sig) is sig
-
-    def test_no_flip_when_rng_above_probability(self):
-        sm = _sm("_park_factor", rng_v=0.99)
-        sig = _out_sig()
-        assert sm._apply_park_factor(self._state(1.2), sig) is sig
 
 
 # ===========================================================================

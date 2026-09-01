@@ -2,6 +2,27 @@
 
 *Owner: Product Manager (Agent 1) · Last updated: 2026-08-29 (OWNER RULING: the drawn row IS the play — no post-draw adjustments, every factor is a DRAW WEIGHT; framing flipped OFF pending its SIM-517 weight; 2026-08-29 HYGIENE SWEEP: 8 rows closed/merged, SIM-518 filed; SIM-519 LIVE SLATE epic filed (owner design ruling: schedule-driven 3-state slate from the MLB Stats API); **next free ID → SIM-520**). Older context from the 2026-08-20 stamp follows: (SIM-429 + SIM-514 diagnosis COMPLETE — the walk surplus decomposes IBB 54% / Markov structure 33% / pool era 12% / kernel tilt 1%, and the per-count draw is CLEAN; prev-pitch conditioning REFUTED by the (count × prev) chain; **OWNER RULING: the grade is POOL TOTALS** — SIM-516 re-references the lane, W1 [full 2023-2026] recommended for the window; SIM-515 filed [replace the hand-tuned IBB formula with a play_events draw]; SIM-491 all three parts BUILT + the bat_home data live; **next free ID → SIM-517**; see the top banner). Older context from the 2026-08-19 stamp follows: (SIM-510..512 LANDED + CERTIFIED; SIM-514 filed; next free ID → SIM-515; owner rulings 2026-08-19: NO widening in the SIM-511 fielding draw; all nudge re-validation lives in SIM-491 — not SIM-513; SIM-511+512 land as ONE combined change, no feature flag; the RUN_VALUES numbers removed; see the top banner). Older context from the 2026-08-13 stamp follows: (SIM-501a/c + SIM-502a..d CLOSED; SIM-503 filed+fixed; SIM-504 filed; next free ID → SIM-505). Older context from the 2026-06-02 stamp follows: (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
 
+# 🏟️ 2026-08-30 — SIM-476 PARTS 2-3 MEASURED; PARK σ=0.02 + FIELDER σ=0.5 FITTED AND LANDED; the HOME w=0 decision goes to the owner
+
+**Every kernel is now measured against the pool's own conditional frequencies
+(`scripts/sim476_home_probe.py` / `sim476_park_probe.py` / `sim476_fielder_probe.py`).**
+**PARK — fitted σ=0.02, seed-split confirmed:** kernel-off, high-run parks read HR −7.5%
+vs the pool's own high-park mix and low parks +9.2%; σ=0.02 closes every
+kernel-responsive channel (HR +2.0/−1.9/+1.6 across classes; fresh seeds reproduce it),
+ESS 7.5k. **FIELDER — fitted σ=0.5 after two defect fixes:** the kernel favored
+missing-OAA rows (neutral weight 1.0 vs penalized valid rows, ~25% of draws shifted —
+now the mean valid weight) and the pooled IF/OF tercile reference was inverted by
+position mix (now per-position). Mean conditional error 1.70pp (off) → 0.81pp (σ=0.5);
+residual = two OF corner cells (~2pp) that tighter sigma does not close → the
+arm-feature widening follow-up. **LANDED:** both sigmas in the docker-compose env + the
+lane's PRODUCTION_FLAGS; the SIM-411/425b post-draw flips DELETED (inert on the
+transition path; regression golden files untouched). **HOME — measured to a decision:**
+the pool's own home/away differential ≈ +0.107 R/g (the real MLB size), delivered ONLY
+by w=0 (hard bat_home conditioning — (1−w)/(1+w) algebra, verified by the 12×400 A/B);
+no soft weight in [0.7, 1.0] gives more than 18%. **OWNER DECISION PENDING: land w=0
+(then the 13,365-game home_win_pct lane) or keep home OFF.** The 12×500 lane on the new
+env closes part 3.
+
 # 🎯 2026-08-30 — SIM-476 STEP 0 CONFIRMED + LANDED: the steal deficit WAS the leverage double-count; the running game joins the pool grade
 
 **The A/B (12×100 per arm, ~84k 2B opportunities each, `scripts/sim476_steal_probe.py`)

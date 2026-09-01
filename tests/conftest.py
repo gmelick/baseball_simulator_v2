@@ -44,13 +44,12 @@ os.environ["SIM_HOME_FIELD_BIAS"] = "0"
 # so force it off here; the SIM-434 tests opt in explicitly via monkeypatch.
 os.environ["SIM_MANAGER"] = "0"
 
-# SIM-411/413/425b: production enables the park-factor / L-R platoon / fielder-RBF
-# realism nudges in the docker-compose `app` env. The unit suite asserts the
-# nudge-OFF baseline (the SIM-411/413/425b tests opt in explicitly), so pin them
-# off here so the env never leaks into `docker compose run app pytest`.
-os.environ["SIM_PARK_FACTOR"] = "0"
+# SIM-413: production enables the L-R platoon batted-ball reweight in the
+# docker-compose `app` env; the unit suite asserts the flag-off baseline, so
+# pin it off here so the env never leaks into `docker compose run app pytest`.
+# (SIM-476 deleted the SIM_PARK_FACTOR / SIM_FIELDER_RBF post-draw flips; the
+# fitted kernel sigmas pinned below replaced them.)
 os.environ["SIM_BB_PLATOON"] = "0"
-os.environ["SIM_FIELDER_RBF"] = "0"
 
 # SIM-491: the home-field DRAW weight (the SIM-412 rebuild). 1.0 disables the
 # reweight exactly (no weight multiplication runs), so pin it here so a dev

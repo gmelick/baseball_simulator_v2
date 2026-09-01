@@ -443,8 +443,8 @@ def build_game_state(
     state.home_pitcher_id = resolved.home.pitcher_id
     state.away_pitcher_id = resolved.away.pitcher_id
     # SIM-428/425b: each team's per-position defense map ('P','C','1B'..'RF' ->
-    # player_id). The catcher feeds the framing nudge; the full map feeds the
-    # fielder-RBF out/hit nudge (SIM_FIELDER_RBF). Computed once per side.
+    # player_id). The catcher feeds the framing gate; the full map feeds the
+    # SIM-491 fielder kernel (SIM_FIELDER_KERNEL_SIGMA). Computed once per side.
     home_def = build_team_defense_map(resolved.home)
     away_def = build_team_defense_map(resolved.away)
     state.home_catcher_id = home_def.get("C")

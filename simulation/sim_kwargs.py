@@ -12,7 +12,8 @@ copy dropped three keys: ``home_defense``, ``away_defense`` and
 ``park_run_factor``.
 
 Those three keys are the ONLY inputs two production features read.
-``SIM_FIELDER_RBF`` reads the two defense maps. ``SIM_PARK_FACTOR`` reads the park
+The fielder consumer (today the SIM-491 fielder kernel) reads the two defense
+maps. The park consumer (today the SIM-491 park kernel) reads the park
 factor. The harness therefore passed an empty defense map and a neutral 1.0 park
 factor on every run. An operator who toggled either flag under the harness
 compared two identical no-ops, and the harness reported "no effect". The team read
@@ -288,12 +289,12 @@ def sim_kwargs_from_state(
                 f"{reason}. Call build_sim_kwargs(state, pool=..., con=..., "
                 "game_pk=...) — or resolve_park_factor_onto_state(...) — before "
                 "building sim kwargs. Building now would send a neutral 1.0 park "
-                "factor and make SIM_PARK_FACTOR a silent no-op for this run. To "
+                "factor and make the park kernel a silent no-op for this run. To "
                 "proceed anyway, pass allow_unavailable_park_factor=True."
             )
         log.warning(
             "SIM-453: building sim kwargs with an UNAVAILABLE park factor (%s). "
-            "This run is park-blind and SIM_PARK_FACTOR is a no-op for it.",
+            "This run is park-blind and the park kernel is a no-op for it.",
             reason,
         )
     return {
@@ -312,9 +313,9 @@ def sim_kwargs_from_state(
         # SIM-428: catchers for the framing nudge.
         "home_catcher_id": getattr(state, "home_catcher_id", None),
         "away_catcher_id": getattr(state, "away_catcher_id", None),
-        # SIM-425b: per-position defense maps for the fielder-RBF nudge
-        # (SIM_FIELDER_RBF). SIM-411: the venue run park-factor for the park nudge
-        # (SIM_PARK_FACTOR) — resolved onto the state by the caller when a sim
+        # SIM-425b/476: per-position defense maps for the fielder kernel
+        # (SIM_FIELDER_KERNEL_SIGMA). SIM-411/476: the venue run park-factor for
+        # the park kernel (SIM_PARK_KERNEL_SIGMA) — resolved onto the state by the caller when a sim
         # DuckDB is available; defaults to 1.0 (neutral) otherwise. Both are no-ops
         # with their gate off, so passing them is always safe.
         "home_defense": dict(getattr(state, "home_defense", {}) or {}),

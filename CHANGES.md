@@ -1,3 +1,25 @@
+# Sim — SIM-476 parts 2-3: park σ=0.02 + fielder σ=0.5 fitted and LANDED; the legacy flips deleted; home w=0 to the owner — 2026-08-30
+
+Every SIM-491 kernel is now measured against the pool's own conditional
+frequencies. The park kernel is fitted at σ=0.02 (four-arm ladder: the
+kernel-off draw under-produces the pool's own high-park mix by HR −7.5% and
+over-produces low-park HR +9.2%; σ=0.02 closes every kernel-responsive channel
+and a fresh-seed arm confirms it — no overfit). The fielder kernel is fitted at
+σ=0.5 after two measured defect fixes: missing-OAA rows kept neutral weight 1.0
+while valid rows were penalized (~25% of draws shifted toward missing-identity
+rows; the neutral weight is now the mean valid weight), and the pooled IF/OF
+tier reference was inverted by position mix (now per-position, monotone at all
+seven positions). Mean conditional error falls 1.70pp → 0.81pp; the residual is
+two OF corner cells (~2pp) that a tighter sigma does not close — the
+arm-feature widening follow-up, not a blocker. Landed in one commit: both
+sigmas in the docker-compose app env and the lane's PRODUCTION_FLAGS, and the
+SIM-411/SIM-425b post-draw flips deleted with their constants, env flags and
+flip tests (both were already inert on the production transition path; the
+regression golden files pass untouched). The home kernel stays OFF: the
+measurement shows the pool's own home/away differential (+0.107 R/g, the real
+MLB size) is delivered only by w=0 — hard bat_home conditioning — which is an
+owner design decision, framed with the full case in the fit plan.
+
 # Sim — SIM-476 step 0 CONFIRMED + LANDED: the steal aggression leverage factor is deleted — 2026-08-30
 
 The A/B proved the prime suspect (12×100 per arm, same seeds, ~84k 2B opportunities each).
