@@ -459,12 +459,29 @@ class FullPoolSampler:
         diff = z[row_idx[valid]][:, cols] - z[live_idx[valid]][:, cols]
         d2 = np.einsum("ij,ij->i", diff, diff)
         out[valid] = np.exp(-d2 / (2.0 * self.fielder_sigma**2 * len(cols))).astype(np.float32)
-        # SIM-476: a row with no embedded fielder (or a position whose live
-        # defender is unembedded) must be draw-NEUTRAL, not favored. A fixed
-        # 1.0 outranks every penalized valid row, so the draw tilts toward
-        # missing-identity rows (measured: ~25% of drawn balls shifted at
-        # sigma=0.5). The neutral weight is the mean valid weight.
-        out[~valid] = np.float32(out[valid].mean())
+        # SIM-476: the factor must not move batted balls BETWEEN positions.
+        # Where a ball goes is batted-ball physics (the batter/situation
+        # kernels); the fielder factor's job is to pick WHICH play at that
+        # position, given the live defender. Raw Gaussian weights break that:
+        # a position whose live defender sits near the middle of the OAA
+        # distribution outweighs a position with an extreme defender, so the
+        # draw redistributes balls toward well-matched positions (measured:
+        # the OF share of drawn balls rose 52.7% -> 57.4% at sigma=0.5, which
+        # alone inflates hits ~+6% — the 2026-09-01 lane red). Normalizing to
+        # a MEAN of 1 within each position keeps the within-position
+        # discrimination and kills the cross-position shift; it also makes
+        # missing-identity rows (weight 1.0) exactly draw-neutral.
+        for p in np.unique(pos[valid]):
+            m = valid & (pos == p)
+            mean_w = float(out[m].mean())
+            if mean_w > 0.0:
+                out[m] = out[m] / np.float32(mean_w)
+            else:
+                # Every weight at this position underflowed (an extreme live
+                # defender in float32): the factor has no usable discrimination
+                # here, so it goes NEUTRAL — never zero, which would starve the
+                # position of batted balls entirely.
+                out[m] = np.float32(1.0)
         return out
 
     def _bb_same_hand_mask(self, hand: str, pitcher_throws: str) -> np.ndarray | None:

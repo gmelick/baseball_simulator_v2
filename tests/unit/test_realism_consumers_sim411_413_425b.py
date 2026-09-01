@@ -22,6 +22,7 @@ so their flip tests are gone with the code.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from pipeline.batch.engine_artifacts import BattedBallPool, EngineArtifacts
 from simulation.full_pool_sampler import FullPoolSampler
@@ -358,6 +359,68 @@ class TestFielderQualityKernel:
         fp_off.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32))
         assert fp_on.fielder_sigma == 0.0
         np.testing.assert_array_equal(fp_on._bb_cdf, fp_off._bb_cdf)
+
+    def test_factor_does_not_move_balls_between_positions(self):
+        """SIM-476: the fielder factor's mean is 1.0 WITHIN every position.
+
+        Raw Gaussian weights let a well-matched position outweigh a position
+        with an extreme live defender, so the draw shifted balls toward
+        well-matched positions (the 2026-09-01 lane red: OF share of drawn
+        balls 52.7% -> 57.4%, hits +6%). Per-position normalization pins the
+        cross-position mass while keeping within-position discrimination."""
+        n = 4
+        pool = BattedBallPool(
+            geom=np.zeros((n, 3), dtype=np.float32),
+            sit=np.zeros((n, 6), dtype=np.float32),
+            batter_id=np.full(n, 700, dtype=np.int64),
+            season=np.full(n, _SEASON, dtype=np.int64),
+            event=np.asarray(["single", "double", "triple", "field_out"], dtype=object),
+            result_hits=np.array([1, 2, 3, 0], dtype=np.int8),
+            result_outs=np.array([0, 0, 0, 1], dtype=np.int8),
+            recency=np.ones(n, dtype=np.float32),
+            # Two SS rows (a twin + a far fielder vs the live SS) and two CF
+            # rows (both FAR from the live CF — the raw-weight failure case:
+            # every CF weight is tiny, so the SS rows would swallow the draw).
+            fielder_pos=np.array([6, 6, 8, 8], dtype=np.int8),
+            fielder_id=np.array([555, 556, 777, 778], dtype=np.int64),
+        )
+        femb = {
+            "key_index": {
+                "555:SS:2024": 0,
+                "556:SS:2024": 1,
+                "666:SS:2024": 2,
+                "777:CF:2024": 3,
+                "778:CF:2024": 4,
+                "888:CF:2024": 5,
+                "999:CF:2024": 6,
+            },
+            "vecs": np.array(
+                [[10.0], [-10.0], [10.0], [8.0], [9.0], [5.0], [-8.0]], dtype=np.float32
+            ),
+            "mean": np.zeros(1, dtype=np.float32),
+            "std": np.ones(1, dtype=np.float32),
+            "features": ["outs_above_average"],
+        }
+        art = EngineArtifacts(pools={}, bb_pools={"R": pool}, actor_emb={"fielder": femb})
+        fp = FullPoolSampler(art, np.random.default_rng(0))
+        fp.fielder_sigma = 0.5
+        out = fp._f_live_fielder("R", np.arange(n), {"SS": 666, "CF": 888}, _SEASON)
+        assert out is not None
+        # Cross-position neutrality: mean factor 1.0 at BOTH positions, even
+        # though every raw CF weight is astronomically smaller than the SS twin's.
+        assert float(out[[0, 1]].mean()) == pytest.approx(1.0, rel=1e-5)
+        assert float(out[[2, 3]].mean()) == pytest.approx(1.0, rel=1e-5)
+        # Within-position discrimination survives: the twin outweighs the far
+        # SS, and the closer CF (777 at 8.0 is nearer 5.0 than 778 at 9.0).
+        assert out[0] > out[1]
+        assert out[2] > out[3]
+        # Full-underflow degenerate case: a live CF so extreme (-8 vs 8/9)
+        # that every CF weight underflows to 0 in float32. The factor must go
+        # NEUTRAL there — never 0, which would starve the position of balls.
+        out2 = fp._f_live_fielder("R", np.arange(n), {"SS": 666, "CF": 999}, _SEASON)
+        assert out2 is not None
+        assert float(out2[2]) == 1.0 and float(out2[3]) == 1.0
+        assert float(out2[[0, 1]].mean()) == pytest.approx(1.0, rel=1e-5)
 
 
 # ===========================================================================
