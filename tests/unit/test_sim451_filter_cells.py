@@ -960,6 +960,7 @@ def _run_script(duckdb_path: str, output: str) -> subprocess.CompletedProcess[st
 
 
 @pytest.mark.slow
+@pytest.mark.timeout(300)
 def test_run_returns_non_zero_when_a_season_is_missing(tmp_path) -> None:
     """The reproduction of the committed false green, end to end.
 
@@ -996,6 +997,7 @@ def test_run_returns_non_zero_when_a_season_is_missing(tmp_path) -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.timeout(300)
 def test_run_returns_zero_when_every_season_is_present(tmp_path) -> None:
     """The control. Without the gap the same script exits 0.
 
