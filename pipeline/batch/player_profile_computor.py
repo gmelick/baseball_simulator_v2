@@ -1420,6 +1420,9 @@ class PlayerProfileComputor:
             # Season-level aggregation: temp tables → derived.fielder/catcher_season_metrics
             self._aggregate_fielder_season_metrics(seasons)
             self._aggregate_catcher_season_metrics(seasons)
+            # SIM-517: the strike-3 slice of the receiving profile (an UPDATE
+            # over the freshly aggregated catcher rows).
+            self._compute_catcher_uncaught_k3(seasons)
 
             # ── Simulation pools (last — denormalize from derived.*) ──────────
             # SIM-095: incremental rebuild unless a full_rebuild was requested.
@@ -5016,6 +5019,72 @@ class PlayerProfileComputor:
             self._conn.execute(f"DROP TABLE IF EXISTS {t}")
 
         log.info("  Catcher season metrics aggregated.")
+
+    #: SIM-517: the EB prior for the uncaught-strike-3 rate, in strike-3s.
+    #: The event runs ~0.2% of K3s (~80 PAs league-wide per season), so a
+    #: per-catcher-season raw rate is Poisson noise; a catcher needs ~2,000
+    #: received strike-3s (~3 full seasons) to move halfway from league.
+    _UNCAUGHT_K3_EB_PRIOR_N = 2000.0
+
+    def _compute_catcher_uncaught_k3(self, seasons: list[int]) -> None:
+        """SIM-517 part A: the strike-3 slice of the receiving profile.
+
+        A strikeout PA whose final-pitch description names a wild pitch or a
+        passed ball is an uncaught third strike. The label is exact for this
+        data: mid-PA get-away pitches never leak into the strikeout text
+        (measured 2026-09-03 — 410 strikeout PAs in 2025 contained a mid-PA
+        `passed_ball_wild_pitch` pitch and ZERO of their descriptions mention
+        it; the 78 that do are all terminal uncaught-K3 plays). The catcher
+        is the final pitch's own ``fielder_2``.
+
+        Updates the freshly aggregated ``derived.catcher_season_metrics``
+        rows: raw counts land in ``sample_``-prefixed columns (excluded from
+        the similarity embedding) and the one embedding-visible column is the
+        EB-shrunk rate toward the SEASON league rate
+        (:data:`_UNCAUGHT_K3_EB_PRIOR_N`).
+        """
+        log.info("Computing catcher uncaught strike-3 rates (SIM-517) …")
+        season_list = ", ".join(str(s) for s in seasons)
+        self._conn.execute(f"""
+            CREATE OR REPLACE TEMP TABLE _tmp_uncaught_k3 AS
+            SELECT
+                fielder_2 AS catcher_id,
+                season,
+                COUNT(*) AS k3_received,
+                COUNT(*) FILTER (
+                    WHERE des ILIKE '%wild pitch%' OR des ILIKE '%passed ball%'
+                ) AS uncaught_k3
+            FROM pg.raw.pitches
+            WHERE season IN ({season_list})
+              AND events IN ('strikeout', 'strikeout_double_play')
+              AND fielder_2 IS NOT NULL
+            GROUP BY 1, 2
+        """)
+        prior_n = float(self._UNCAUGHT_K3_EB_PRIOR_N)
+        self._conn.execute(f"""
+            UPDATE derived.catcher_season_metrics m SET
+                sample_k3_received = k.k3_received,
+                sample_uncaught_k3 = k.uncaught_k3,
+                uncaught_k3_rate_eb =
+                    (k.uncaught_k3 + {prior_n} * lg.league_rate)
+                    / (k.k3_received + {prior_n})
+            FROM _tmp_uncaught_k3 k
+            JOIN (
+                SELECT season,
+                       SUM(uncaught_k3)::DOUBLE / NULLIF(SUM(k3_received), 0)
+                           AS league_rate
+                FROM _tmp_uncaught_k3 GROUP BY season
+            ) lg ON lg.season = k.season
+            WHERE m.player_id = k.catcher_id AND m.season = k.season
+        """)
+        n = self._conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(sample_uncaught_k3), 0) "
+            f"FROM derived.catcher_season_metrics WHERE season IN ({season_list}) "
+            "AND sample_k3_received IS NOT NULL"
+        ).fetchone()
+        self._conn.execute("DROP TABLE IF EXISTS _tmp_uncaught_k3")
+        rows, uncaught = (int(n[0]), int(n[1])) if n and len(n) >= 2 else (0, 0)
+        log.info("  Uncaught K3: %d catcher-seasons updated, %d uncaught K3s.", rows, uncaught)
 
     def _build_pitch_pool(self, seasons: list[int], incremental: bool = False) -> None:
         """

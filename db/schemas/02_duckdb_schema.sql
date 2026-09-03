@@ -611,6 +611,16 @@ CREATE TABLE IF NOT EXISTS derived.catcher_season_metrics (
     pickoff_successes           INTEGER     DEFAULT 0,
     pickoff_rate                FLOAT,
 
+    -- SIM-517 (migration 0021): the strike-3 slice of the receiving profile.
+    -- The raw counts carry the sample_ prefix so the engine-artifact exporter
+    -- keeps them OUT of the similarity embedding (~80 uncaught K3s per season
+    -- league-wide = Poisson noise per catcher-season); the EB-shrunk rate
+    -- (prior n = 2000 strike-3s toward the season league rate) is the one
+    -- embedding-visible column.
+    sample_k3_received          INTEGER,
+    sample_uncaught_k3          INTEGER,
+    uncaught_k3_rate_eb         DOUBLE,
+
     -- =========================================================================
     -- META
     -- =========================================================================
