@@ -1087,6 +1087,13 @@ class StateMachine:
         # when that weight lands. SIM_FRAMING=1 remains an explicit opt-in for
         # A/B comparison only.
         self._framing = _env_flag("SIM_FRAMING", default=False)  # SIM-428/517
+        # SIM-517 part D: honor the drawn pitch row's got-away fact (a passed
+        # ball / wild pitch on THAT pitch, incl. an uncaught third strike).
+        # Default OFF until the part-E fit + certifying lane land it — the
+        # flag-off game is byte-identical (no rng, no reads).
+        self._got_away = _env_flag("SIM_GOT_AWAY")
+        #: The last drawn pitch's got-away fact (False on every other path).
+        self._last_pitch_got_away = False
         # Hot-path env knobs resolved ONCE here (they are constant for the machine's
         # lifetime but were re-read + re-parsed thousands of times per game). Tests
         # set the env BEFORE constructing the machine, so a construct-time read is
@@ -1208,6 +1215,10 @@ class StateMachine:
         """
         # --- Step 1: read + validate the incoming (live) state -------------
         state.assert_invariants(in_play=True, check_bases=self._enforce_base_invariants)
+        # SIM-517: the got-away fact belongs to ONE drawn pitch; clear any
+        # stale carry before this pitch samples (injected-outcome and per-tile
+        # paths never set it).
+        self._last_pitch_got_away = False
 
         # --- Pre-pitch manager hook (§3) — steal initiate + SIM-323 logic --
         # The hook may stage a steal attempt (decision); its outcome (safe /
@@ -1318,6 +1329,18 @@ class StateMachine:
                 self.advance_half_inning(state)
                 result.next_state = state
                 return result
+            # SIM-517 part D: the drawn pitch got away (a passed ball / wild
+            # pitch) — the runners advance one base, the drawn row is the
+            # play. Skipped when a steal or pickoff already resolved this
+            # pitch's baserunning (the pool rows mix the two channels; one
+            # mover per pitch keeps the accounting canonical).
+            if (
+                self._last_pitch_got_away
+                and not result.steal_attempted
+                and not result.pickoff_out
+                and not result.pickoff_error
+            ):
+                self._resolve_got_away_advance(state, result)
             state.balls = adv.balls
             state.strikes = adv.strikes
             state.assert_count_valid(mid_count=True)
@@ -1459,13 +1482,22 @@ class StateMachine:
         hand = state.bat_hand if state.bat_hand in fp.a.pools else "R"
         season = int(getattr(state, "season", 2024) or 2024)
 
-        # --- lifetime 1: f_pitcher, per (pitcher, hand, season) ---------------
-        pitcher_key = (state.pitcher_id, hand, season)
+        # --- lifetime 1: f_pitcher, per (pitcher, hand, season, catcher) ------
+        # SIM-517: the fielding catcher joins the key so the receiving factor
+        # (staged in new_half_inning) follows a catcher change; at
+        # catcher_sigma 0 the extra key member changes nothing (the fielding
+        # side, and so the catcher, only changes with the pitcher).
+        catcher = state.away_catcher_id if state.offense == Team.HOME else state.home_catcher_id
+        pitcher_key = (state.pitcher_id, hand, season, catcher)
         if pitcher_key != self._fp_pitcher_key:
             self._fp_pitcher_key = pitcher_key
             # The new base invalidates the PA weight built on top of the old one.
             self._fp_pa_key = None
-            fp.new_half_inning(hand, f"{state.pitcher_id}:{season}")
+            fp.new_half_inning(
+                hand,
+                f"{state.pitcher_id}:{season}",
+                catcher_key=(f"{int(catcher)}:{season}" if catcher is not None else None),
+            )
 
         # --- lifetimes 2 + 3: f_batter (per batter) x f_situation (per base-out)
         bat = state.home_score if state.offense == Team.HOME else state.away_score
@@ -1480,7 +1512,12 @@ class StateMachine:
                 f"{state.batter_id}:{season}",
                 np.array(base_out, dtype=np.float32),
             )
-        return self._apply_framing(state, fp.draw(state.balls, state.strikes))
+        outcome = self._apply_framing(state, fp.draw(state.balls, state.strikes))
+        # SIM-517 part D: carry the drawn row's got-away fact to the resolvers
+        # (read only when the flag is on — flag-off touches nothing).
+        if self._got_away:
+            self._last_pitch_got_away = fp.last_pitch_got_away()
+        return outcome
 
     def _apply_framing(self, state: GameState, outcome: str) -> str:
         """SIM-428: nudge a TAKEN pitch (ball<->called_strike) by the fielding
@@ -2353,6 +2390,67 @@ class StateMachine:
     # SIM-319 — Step 7 steal outcome (decision in pre-pitch hook, §3)
     # ===================================================================
 
+    def _resolve_got_away_advance(self, state: GameState, result: PlayResult) -> None:
+        """SIM-517 part D: the drawn pitch got away — every runner advances one
+        base (scoring from third). The drawn row IS the play: its got-away
+        fact came from a real passed ball / wild pitch, and those are scored
+        precisely because a runner advanced. No rng, no outs, no batter
+        involvement; a no-op with the bases empty (a got-away row drawn into
+        an empty-bases live state moves nobody — nothing is scored there in
+        real baseball either).
+
+        Run accounting mirrors the steal-of-home commit (the one other
+        mid-pitch scoring path): the delta routes through
+        :meth:`_commit_run_delta`, the run carries no RBI (Rule 9.04 — the
+        ``steal_runs_scored`` field is the no-RBI-on-this-pitch marker), and
+        on a NON-terminal pitch the pitcher is charged here because
+        ``_accumulate_pa`` never runs. The run counts EARNED: ~90% of real
+        got-aways are wild pitches (earned, Rule 9.16); the pool flag merges
+        the passed-ball minority, a box-stat nuance accepted knowingly.
+        """
+        b = state.bases
+        if b.first is None and b.second is None and b.third is None:
+            return
+        pre_outs = int(state.outs)
+        pre_bases = self._snapshot_bases(state)
+        runs = 0
+        scorer = pre_bases.third
+        # Back to front so no move overwrites an occupied bag.
+        if pre_bases.third is not None:
+            self._move_runner(state, 3, 4)
+            runs = 1
+        if pre_bases.second is not None:
+            self._move_runner(state, 2, 3)
+            result.baserunner_advances[int(pre_bases.second)] = 3
+        if pre_bases.first is not None:
+            self._move_runner(state, 1, 2)
+            result.baserunner_advances[int(pre_bases.first)] = 2
+        self._check_bases(b)
+        self._commit_run_delta(
+            state,
+            result,
+            event="wild_pitch",
+            result_hits=0,
+            result_outs=0,
+            result_runs=runs,
+            pre_outs=pre_outs,
+            pre_bases=pre_bases,
+            batter_reached=False,
+            runners_scored=runs,
+            runners_retired=0,
+        )
+        if runs and scorer is not None:
+            result.baserunner_advances[int(scorer)] = 0
+            # No RBI on a got-away run (the same withholding a steal of home
+            # uses — the field is the no-RBI marker, not steal-specific here).
+            result.steal_runs_scored += runs
+            self._box_line(int(scorer)).r += 1
+            if not result.pa_terminal and state.pitcher_id is not None:
+                self._box_line(int(state.pitcher_id)).r_allowed += 1
+                outs_lost = self._half_inning_error_outs_lost
+                if int(state.outs) + outs_lost < 3:
+                    self._box_line(int(state.pitcher_id)).er += 1
+
     def _resolve_steal_outcome(self, state: GameState, result: PlayResult) -> None:
         """Resolve a steal staged by the pre-pitch hook (§3 item 4 / step 7).
 
@@ -2676,11 +2774,20 @@ class StateMachine:
         """
         result.event = EVENT_STRIKEOUT
         result.pa_terminal = True
+        # SIM-517: read the D3K predicate BEFORE any base movement (the
+        # official rule reads the pre-pitch state), then let a got-away
+        # strike-3 that CANNOT award first (1B occupied, under two outs)
+        # still advance the runners — the ball still got away. The advance
+        # commits its own delta; the K's snapshots below then measure the
+        # post-advance state, so the two commits chain like a steal + K.
+        d3k = self._dropped_third_strike(state, result)
+        if not d3k and self._last_pitch_got_away:
+            self._resolve_got_away_advance(state, result)
         # SIM-499: measure the base-out state before _force_on_reach can push
         # anyone.  ``_force_on_reach`` mutates ``state.bases`` in place.
         pre_outs = int(state.outs)
         pre_bases = self._snapshot_bases(state)
-        if self._dropped_third_strike(state, result):
+        if d3k:
             # Uncaught K3: batter reaches 1B (no out recorded), pushing forced
             # runners exactly like a walk does.  resolve_runs scores any force.
             result.event = "strikeout"  # still a K event; batter reached on D3K
@@ -2724,11 +2831,11 @@ class StateMachine:
         """The §5.4 dropped-third-strike predicate + (optional) resolver roll.
 
         The edge is *eligible* only on a swinging strike-3 when first base is
-        OPEN or there are two outs (the official rule).  Whether the catcher
-        actually drops it is a catcher-RBF signal: the injected resolver may
-        expose ``dropped_third_strike(state, result)`` to decide; with no such
-        signal the edge does NOT fire (the conservative default — an ordinary K),
-        keeping the no-DB path deterministic.
+        OPEN or there are two outs (the official rule).  Whether the ball got
+        away is the DRAWN PITCH ROW's own fact (SIM-517: the row was a real
+        uncaught third strike — no roll, no formula); the injected-resolver
+        hook stays as the no-DB test path.  With neither signal the edge does
+        NOT fire (the conservative default — an ordinary K).
         """
         if result.pitch_outcome != "swinging_strike":
             return False
@@ -2736,6 +2843,8 @@ class StateMachine:
         two_outs = state.outs >= OUTS_PER_INNING - 1
         if not (first_base_open or two_outs):
             return False
+        if self._last_pitch_got_away:
+            return True
         hook = getattr(self.resolver, "dropped_third_strike", None)
         if hook is None:
             return False

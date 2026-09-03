@@ -110,6 +110,30 @@ class FullPoolSampler:
         self.fielder_sigma = 0.0
         #: Per-hand cache of each row's fielder-embedding index (-1 = absent).
         self._bb_fielder_emb: dict[str, np.ndarray] = {}
+        # SIM-517: the catcher RECEIVING kernel. Weight each PITCH-pool row by
+        # the similarity between the LIVE catcher and the ROW's own catcher
+        # over the receiving features (framing zone rates, the block rate, the
+        # EB uncaught-K3 rate) — a poor receiver behind the plate pulls the
+        # draw toward pitches caught by poor receivers, so got-away pitches
+        # and borderline calls track the live catcher at the pool's own
+        # conditional rates. 0.0 (the default) disables the kernel EXACTLY.
+        # The bandwidth is the SIM-517 part-E fit target. The factor is
+        # normalized to a MEAN of 1 within each COUNT BUCKET (the SIM-476
+        # per-partition lesson): it may only shift WHICH pitch is drawn at a
+        # count, never the count structure; missing-identity rows are exactly
+        # neutral.
+        self.catcher_sigma = 0.0
+        #: Lazy receiving data: (key_index, z-matrix) or None when unavailable.
+        self._recv_data: tuple[dict[str, int], np.ndarray] | None | bool = False
+        #: Per-hand cache of each pitch row's receiving-matrix index (-1 absent).
+        self._pp_recv_idx: dict[str, np.ndarray] = {}
+        #: (hand, catcher_key) -> the normalized per-row receiving factor.
+        self._recv_factor_cache: dict[tuple[str, str], np.ndarray | None] = {}
+        #: The catcher key new_half_inning staged for the receiving factor.
+        self._catcher_key: str | None = None
+        #: The last drawn pitch-pool row (global index; None before any draw
+        #: or after an empty-bucket fallback) — the got-away accessor reads it.
+        self._pp_last_i: int | None = None
         # Per-pool precompute: dense candidate->profile indices for O(1) gathers.
         self._pool_cache: dict[str, dict] = {}
         # SIM-430 hot-path caches (all hold CONSTANTS that the original code
@@ -304,22 +328,29 @@ class FullPoolSampler:
         return np.exp(-d2 / (2.0 * self.sit_sigma**2 * s.shape[1])).astype(np.float32)
 
     # ---- matchup lifecycle ------------------------------------------------
-    def new_half_inning(self, hand: str, pitcher_key: str) -> None:
-        """Cache the half-inning-constant base (f_pitcher * recency)."""
+    def new_half_inning(self, hand: str, pitcher_key: str, catcher_key: str | None = None) -> None:
+        """Cache the half-inning-constant base (f_pitcher * recency) and stage
+        the fielding catcher for the SIM-517 receiving factor (a no-op at
+        ``catcher_sigma`` 0)."""
         self._hand = hand
+        self._catcher_key = catcher_key
         pool = self.a.pools[hand]
         self._base = (self._f_pitcher(hand, pitcher_key) * pool.recency).astype(np.float32)
 
     def new_plate_appearance(self, batter_key: str, base_out: np.ndarray) -> None:
-        """Assemble the per-PA matchup weight (base · f_batter · f_situation_baseout)
-        and split it into 12 count-bucket CDFs for the per-pitch, count-conditioned
-        draw (SIM-429)."""
+        """Assemble the per-PA matchup weight (base · f_batter · f_situation_baseout
+        [· f_catcher_receiving — SIM-517]) and split it into 12 count-bucket CDFs
+        for the per-pitch, count-conditioned draw (SIM-429)."""
         assert self._hand is not None and self._base is not None, "call new_half_inning first"
         w = (
             self._base
             * self._f_batter(self._hand, batter_key)
             * self._f_situation_baseout(self._hand, base_out)
         )
+        if self.catcher_sigma > 0.0 and self._catcher_key is not None:
+            f_recv = self._f_catcher_receiving(self._hand, self._catcher_key)
+            if f_recv is not None:
+                w = w * f_recv
         rows = self._pool_meta(self._hand)["bucket_rows"]
         self._bucket_cdf = [(np.cumsum(w[r], dtype=np.float64) if r.size else None) for r in rows]
 
@@ -331,9 +362,134 @@ class FullPoolSampler:
         b = min(max(int(balls), 0), 3) * 3 + min(max(int(strikes), 0), 2)
         cdf, rows = self._bucket_cdf[b], meta["bucket_rows"][b]
         if cdf is None or cdf[-1] <= 0:
+            self._pp_last_i = None
             return "ball"
         i = int(np.searchsorted(cdf, self.rng.random() * cdf[-1]))
-        return str(meta["outcome"][rows[min(i, rows.size - 1)]])
+        gi = int(rows[min(i, rows.size - 1)])
+        self._pp_last_i = gi  # SIM-517: remember the row for the got-away read
+        return str(meta["outcome"][gi])
+
+    def last_pitch_got_away(self) -> bool:
+        """SIM-517: did the LAST drawn pitch row get away from its catcher (a
+        passed ball / wild pitch, incl. an uncaught third strike)? The drawn
+        row IS the play — this flag is its got-away fact. False before any
+        draw, after an empty-bucket fallback, or on a pre-0022 bundle."""
+        i = self._pp_last_i
+        if i is None or self._hand is None:
+            return False
+        ga = self.a.pools[self._hand].got_away
+        if ga is None:
+            return False
+        return bool(ga[i])
+
+    # ---- SIM-517: the catcher RECEIVING factor ----------------------------
+    #: The receiving skill, read as rates: the two zone-framing rates, the
+    #: block rate (got-aways per pitch received — derived here because the
+    #: metrics table stores the count), and the EB uncaught-strike-3 rate.
+    _RECV_RATE_FEATURES = ("shadow_zone_strike_rate", "heart_zone_strike_rate")
+
+    def _catcher_receiving_data(self) -> tuple[dict[str, int], np.ndarray] | None:
+        """Lazy (key_index, z-matrix) of the derived receiving features over
+        every catcher-season in the embedding. None when the embedding or any
+        required column is absent (the kernel then stays neutral)."""
+        if self._recv_data is not False:
+            return self._recv_data  # type: ignore[return-value]
+        cemb = self.a.actor_emb.get("catcher")
+        out: tuple[dict[str, int], np.ndarray] | None = None
+        if cemb is not None:
+            feats = list(cemb.get("features") or [])
+            fi = {f: i for i, f in enumerate(feats)}
+            need = (*self._RECV_RATE_FEATURES, "actual_pbwp", "pitches_received_total")
+            if all(f in fi for f in need):
+                vecs = np.asarray(cemb["vecs"], dtype=np.float64)
+                cols = [vecs[:, fi[f]] for f in self._RECV_RATE_FEATURES]
+                # The block rate: got-aways per pitch received.
+                tot = vecs[:, fi["pitches_received_total"]]
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    cols.append(np.where(tot > 0, vecs[:, fi["actual_pbwp"]] / tot, np.nan))
+                # The EB uncaught-K3 rate (part A; optional on an older export).
+                if "uncaught_k3_rate_eb" in fi:
+                    cols.append(vecs[:, fi["uncaught_k3_rate_eb"]])
+                mat = np.stack(cols, axis=1)
+                mean = np.nan_to_num(np.nanmean(mat, axis=0))
+                std = np.nan_to_num(np.nanstd(mat, axis=0))
+                std[std <= 0] = 1.0
+                z = (mat - mean) / std
+                out = (dict(cemb["key_index"]), z)
+        self._recv_data = out
+        return out
+
+    def _pp_catcher_recv_idx(self, hand: str) -> np.ndarray | None:
+        """Each pitch-pool row's receiving-matrix index, keyed
+        ``catcher_id:row_season`` (-1 when absent). None on a pre-0022 bundle
+        or with no receiving data."""
+        cached = self._pp_recv_idx.get(hand)
+        if cached is not None:
+            return cached
+        pool = self.a.pools[hand]
+        if pool.catcher_id is None:
+            return None
+        data = self._catcher_receiving_data()
+        if data is None:
+            return None
+        ki = data[0]
+        idx = np.fromiter(
+            (
+                ki.get(f"{int(c)}:{int(s)}", -1)
+                for c, s in zip(pool.catcher_id, pool.season, strict=False)
+            ),
+            dtype=np.int64,
+            count=pool.n,
+        )
+        self._pp_recv_idx[hand] = idx
+        return idx
+
+    def _f_catcher_receiving(self, hand: str, catcher_key: str) -> np.ndarray | None:
+        """The per-row receiving factor for the LIVE catcher: a Gaussian on
+        the z-distance between the live catcher's receiving vector and each
+        row catcher's, NORMALIZED to a mean of 1 within each COUNT BUCKET.
+
+        The SIM-476 lessons, applied from day one: the factor may shift only
+        WHICH pitch is drawn at a count — never the count-bucket mass (the
+        cross-partition redistribution that redded the lane) — and a row with
+        no embedded catcher (or a NaN receiving row, or a bucket whose every
+        weight underflows) is exactly neutral, never favored or starved.
+        None when the data is unavailable — the draw is then unweighted."""
+        cache_key = (hand, catcher_key)
+        if cache_key in self._recv_factor_cache:
+            return self._recv_factor_cache[cache_key]
+        out: np.ndarray | None = None
+        data = self._catcher_receiving_data()
+        rows_idx = self._pp_catcher_recv_idx(hand)
+        if data is not None and rows_idx is not None:
+            ki, z = data
+            live = ki.get(catcher_key, -1)
+            if live >= 0 and np.isfinite(z[live]).all():
+                row_z = z[np.clip(rows_idx, 0, len(z) - 1)]
+                valid = (rows_idx >= 0) & np.isfinite(row_z).all(axis=1)
+                out = np.ones(len(rows_idx), dtype=np.float32)
+                if valid.any():
+                    diff = row_z[valid] - z[live]
+                    d2 = np.einsum("ij,ij->i", diff, diff)
+                    k = z.shape[1]
+                    out[valid] = np.exp(-d2 / (2.0 * self.catcher_sigma**2 * k)).astype(np.float32)
+                    # Per-COUNT-BUCKET normalization: mean factor 1 among the
+                    # valid rows of each bucket; a fully underflowed bucket
+                    # goes neutral rather than starving of draws.
+                    for r in self._pool_meta(hand)["bucket_rows"]:
+                        if r.size == 0:
+                            continue
+                        m = valid[r]
+                        if not m.any():
+                            continue
+                        sel = r[m]
+                        mean_w = float(out[sel].mean())
+                        if mean_w > 0.0:
+                            out[sel] = out[sel] / np.float32(mean_w)
+                        else:
+                            out[sel] = np.float32(1.0)
+        self._recv_factor_cache[cache_key] = out
+        return out
 
     # ---- SIM-425: batted-ball draw (step 5) -------------------------------
     def _batter_aff(self, batter_key: str) -> np.ndarray | None:

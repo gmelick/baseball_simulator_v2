@@ -64,6 +64,11 @@ os.environ["SIM_PARK_KERNEL_SIGMA"] = "0"
 # 0 disables it exactly; the tests set the sampler's fielder_sigma directly.
 os.environ["SIM_FIELDER_KERNEL_SIGMA"] = "0"
 
+# SIM-517: the catcher RECEIVING kernel bandwidth + the got-away resolution.
+# Both off = byte-identical; the SIM-517 tests opt in explicitly.
+os.environ["SIM_CATCHER_KERNEL_SIGMA"] = "0"
+os.environ["SIM_GOT_AWAY"] = "0"
+
 # ---------------------------------------------------------------------------
 # Shared lightweight fixtures
 # ---------------------------------------------------------------------------
