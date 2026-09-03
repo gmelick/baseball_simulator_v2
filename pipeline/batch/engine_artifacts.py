@@ -93,6 +93,16 @@ def build_pitch_pool_artifact(
             f"SELECT {cols}, pitch_id, pitcher_id, batter_id, season, outcome_type, recency_weight "
             f"FROM sim.pitch_pool WHERE stand='{hand}' AND season IN ({season_list})"
         ).fetchnumpy()
+        # SIM-517: the receiving columns (migration 0022). Selected separately
+        # so a pre-0022 sim DB still exports (the loader treats them as
+        # optional exactly like the batted-ball realism columns).
+        has_catcher = bool(
+            con.execute(
+                "SELECT COUNT(*) FROM information_schema.columns "
+                "WHERE table_schema='sim' AND table_name='pitch_pool' "
+                "AND column_name='catcher_id'"
+            ).fetchone()[0]
+        )
         n = len(d["pitch_id"])
         # fetchnumpy yields masked arrays for nullable cols; fill -> plain float32.
         geom = np.nan_to_num(
@@ -104,8 +114,15 @@ def build_pitch_pool_artifact(
         np.save(os.path.join(pool_dir, f"{hand}.geom.npy"), geom)
         np.save(os.path.join(pool_dir, f"{hand}.sit.npy"), sit)
         # Metadata via DuckDB COPY (no pandas dependency).
+        receiving = (
+            ", COALESCE(catcher_id, 0) AS catcher_id, "
+            "CAST(COALESCE(got_away, FALSE) AS TINYINT) AS got_away"
+            if has_catcher
+            else ""
+        )
         con.execute(
-            f"COPY (SELECT pitch_id, pitcher_id, batter_id, season, outcome_type, recency_weight "
+            f"COPY (SELECT pitch_id, pitcher_id, batter_id, season, outcome_type, recency_weight"
+            f"{receiving} "
             f"FROM sim.pitch_pool WHERE stand='{hand}' AND season IN ({season_list})) "
             f"TO '{os.path.join(pool_dir, f'{hand}.meta.parquet')}' (FORMAT parquet)"
         )
@@ -481,6 +498,10 @@ class HandPool:
     season: np.ndarray  # (N,) int64 — for the (pitcher_id:season) pitcher-sim key
     outcome_type: np.ndarray  # (N,) object — ball/called_strike/swinging_strike/foul/in_play
     recency: np.ndarray  # (N,) float32
+    # SIM-517 (migration 0022): the receiving context — None on a pre-0022
+    # bundle, exactly like the batted-ball realism columns.
+    catcher_id: np.ndarray | None = None  # (N,) int64 (0 when unknown)
+    got_away: np.ndarray | None = None  # (N,) int8 (0/1 — PB/WP incl. uncaught K3)
 
     @property
     def n(self) -> int:
@@ -631,6 +652,10 @@ _HAND_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "batter_id",
     "season",
     "recency",
+    # SIM-517: the receiving context (None on a pre-0022 bundle — the
+    # isinstance(arr, np.ndarray) guard in extract_shared_arrays skips it).
+    "catcher_id",
+    "got_away",
 )
 _BB_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "geom",
@@ -912,9 +937,19 @@ class EngineArtifacts:
                 # The metadata parquet stays disk-loaded — outcome_type is
                 # object-dtype (not shareable) and the ids/recency are small.
                 meta_path = os.path.join(pool_dir, f"{hand}.meta.parquet")
+                # SIM-517: the receiving columns exist only on a post-0022
+                # export — probe the parquet schema and select what is there
+                # (the SIM-411/413 batted-ball pattern).
+                pp_avail = {
+                    r[0]
+                    for r in con.execute(
+                        f"SELECT name FROM parquet_schema('{meta_path}')"
+                    ).fetchall()
+                }
+                receiving_sel = ", catcher_id, got_away" if "catcher_id" in pp_avail else ""
                 m = con.execute(
-                    "SELECT pitcher_id, batter_id, season, outcome_type, recency_weight "
-                    f"FROM read_parquet('{meta_path}')"
+                    "SELECT pitcher_id, batter_id, season, outcome_type, recency_weight"
+                    f"{receiving_sel} FROM read_parquet('{meta_path}')"
                 ).fetchnumpy()
                 # When the shared map has the id/season/recency columns too,
                 # prefer them (they round-trip identically and skip more disk).
@@ -947,6 +982,24 @@ class EngineArtifacts:
                         else np.nan_to_num(
                             np.ma.filled(m["recency_weight"], 1.0).astype(np.float32),
                             nan=1.0,
+                        )
+                    ),
+                    catcher_id=(
+                        views.get(f"pool.{hand}.catcher_id")
+                        if isinstance(views.get(f"pool.{hand}.catcher_id"), np.ndarray)
+                        else (
+                            np.asarray(np.ma.filled(m["catcher_id"], 0), dtype=np.int64)
+                            if "catcher_id" in m
+                            else None
+                        )
+                    ),
+                    got_away=(
+                        views.get(f"pool.{hand}.got_away")
+                        if isinstance(views.get(f"pool.{hand}.got_away"), np.ndarray)
+                        else (
+                            np.asarray(np.ma.filled(m["got_away"], 0), dtype=np.int8)
+                            if "got_away" in m
+                            else None
                         )
                     ),
                 )

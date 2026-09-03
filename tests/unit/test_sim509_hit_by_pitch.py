@@ -96,6 +96,7 @@ class TestTheBuilderMapping:
         that forgets the version bump never lands (the SIM-501 lesson).
         SIM-510 superseded the sim509 stamp when the transition columns
         landed; SIM-491 superseded sim510 when bat_home landed; SIM-515
-        superseded sim491 when the IBB rate table joined the chain; bump this
-        assertion with every pool-formula change."""
-        assert "sim515" in ppc.POOL_BUILDER_VERSION
+        superseded sim491 when the IBB rate table joined the chain; SIM-517
+        superseded sim515 when the pitch pool gained catcher_id + got_away;
+        bump this assertion with every pool-formula change."""
+        assert "sim517" in ppc.POOL_BUILDER_VERSION

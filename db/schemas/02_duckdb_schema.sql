@@ -831,6 +831,14 @@ CREATE TABLE IF NOT EXISTS sim.pitch_pool (
     -- distance-weight by recency_weight so recent form is preferred.
     recency_weight              FLOAT       NOT NULL DEFAULT 1.0,
 
+    -- SIM-517 (migration 0022): the receiving context. catcher_id is the
+    -- pitch's own fielder_2; got_away marks a passed ball / wild pitch on
+    -- THAT pitch (incl. an uncaught third strike, labeled from the strikeout
+    -- PA's final-pitch description). The drawn row is the play: a got-away
+    -- strike-3 reaches when the rule allows; runners on advance.
+    catcher_id                  INTEGER,
+    got_away                    BOOLEAN,
+
     PRIMARY KEY (pitch_id)
 );
 

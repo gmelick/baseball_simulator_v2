@@ -147,6 +147,56 @@ class TestTheShrinkage:
         assert _row(c, 999) == (None, None, None)
 
 
+class TestPitchPoolReceivingColumns:
+    """SIM-517 part B: the pitch pool carries the receiving context."""
+
+    def test_the_builder_selects_catcher_and_got_away(self):
+        import inspect
+
+        src = inspect.getsource(PlayerProfileComputor._build_pitch_pool)
+        assert "fielder_2                           AS catcher_id" in src
+        # got_away = the parser flag OR the uncaught-K3 des label.
+        assert "COALESCE(passed_ball_wild_pitch, FALSE)" in src
+        assert "'strikeout', 'strikeout_double_play'" in src
+        assert "des ILIKE '%wild pitch%' OR des ILIKE '%passed ball%'" in src
+
+    def test_the_real_ddl_carries_the_columns(self):
+        c = duckdb.connect(":memory:")
+        c.execute("CREATE SCHEMA sim")
+        c.execute(_real_ddl("sim.pitch_pool"))
+        names = {
+            r[0]
+            for r in c.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='pitch_pool'"
+            ).fetchall()
+        }
+        assert {"catcher_id", "got_away"} <= names
+
+    def test_hand_pool_defaults_keep_legacy_bundles_loading(self):
+        """A pre-0022 artifact has no receiving columns — HandPool must
+        construct without them (None), the batted-ball realism precedent."""
+        import numpy as np
+
+        from pipeline.batch.engine_artifacts import HandPool
+
+        p = HandPool(
+            geom=np.zeros((2, 10), dtype=np.float32),
+            sit=np.zeros((2, 6), dtype=np.float32),
+            pitcher_id=np.zeros(2, dtype=np.int64),
+            batter_id=np.zeros(2, dtype=np.int64),
+            season=np.zeros(2, dtype=np.int64),
+            outcome_type=np.asarray(["ball", "ball"], dtype=object),
+            recency=np.ones(2, dtype=np.float32),
+        )
+        assert p.catcher_id is None and p.got_away is None
+
+    def test_receiving_attrs_are_shareable(self):
+        from pipeline.batch.engine_artifacts import _HAND_POOL_SHAREABLE_ATTRS
+
+        assert "catcher_id" in _HAND_POOL_SHAREABLE_ATTRS
+        assert "got_away" in _HAND_POOL_SHAREABLE_ATTRS
+
+
 class TestEmbeddingExclusion:
     def test_sample_columns_carry_the_excluded_prefix(self):
         """The artifact exporter drops columns starting with ``sample_`` —

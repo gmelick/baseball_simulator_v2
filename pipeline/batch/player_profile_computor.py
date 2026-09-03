@@ -1003,7 +1003,7 @@ def _label_component(mean: list[float], fi: dict[str, int]) -> str | None:
 # migration 0019 — the SIM-412 home-field rebuild as a draw weight).
 # sim515.1 = sim.ibb_rates (the measured IBB rate table — SIM-515 / migration
 # 0020) joins the pool-build chain.
-POOL_BUILDER_VERSION = "sim515.1"
+POOL_BUILDER_VERSION = "sim517.1"
 RECENCY_RECENT_SEASONS = 2  # seasons (incl. ref) that get the full peak weight
 RECENCY_DECAY = 0.75  # geometric decay per season beyond the recent window
 RECENCY_FLOOR = 0.25
@@ -5194,6 +5194,18 @@ class PlayerProfileComputor:
                     END                                 AS outcome_type,
                     events,
                     {recency_expr} AS recency_weight,
+
+                    -- SIM-517 (migration 0022): the receiving context. The
+                    -- catcher is the pitch's own fielder_2; got_away = the
+                    -- parser's per-pitch passed-ball/wild-pitch flag OR an
+                    -- uncaught third strike (a strikeout-final pitch whose PA
+                    -- description names a wild pitch / passed ball — the
+                    -- exact label, zero mid-PA leakage; see migration 0021).
+                    fielder_2                           AS catcher_id,
+                    (COALESCE(passed_ball_wild_pitch, FALSE)
+                     OR (events IN ('strikeout', 'strikeout_double_play')
+                         AND (des ILIKE '%wild pitch%' OR des ILIKE '%passed ball%')))
+                                                        AS got_away,
 
                 FROM pg.raw.pitches
                 WHERE data_quality_flag = FALSE
