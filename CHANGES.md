@@ -1,3 +1,18 @@
+# Sim — SIM-476 CLOSED: all three kernels certified; home_win_pct passes at full power — 2026-09-03
+
+The certify chains are complete. Lane 5 (12×500, the full fitted config)
+reads all 14 pool bands PASS — after the per-position normalization fix
+(f0426b3) removed the fielder kernel's cross-position ball redistribution
+that lane 4 caught. The full-power lane (12×1,120 = 13,400 decisive games,
+9h56m) reads home_win_pct 0.5259 vs the 0.5428 centre — PASS inside the
+0.0173 floor, up from 0.4939 before the owner's w=0 ruling. Production
+defaults: SIM_HOME_OFF_WEIGHT=0.0, SIM_PARK_KERNEL_SIGMA=0.02,
+SIM_FIELDER_KERNEL_SIGMA=0.5. Residuals filed: SIM-520 (the R band's
+league-average centre vs a defense-aware sim on the lane's elite-defense
+game set — an owner grading decision; the kernel's conditional response
+matches the pool's own numbers) and SIM-521 (fielder arm-feature widening
+for two sigma-inert OF corner cells). Next free ticket ID: SIM-522.
+
 # Sim — SIM-476 part 2 RULED: home w=0 LANDED (owner ruling); the SIM-412 flip deleted — 2026-08-31
 
 The owner ruled: "Land w=0 for the home kernel." `SIM_HOME_OFF_WEIGHT=0.0` is
