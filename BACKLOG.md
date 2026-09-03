@@ -5,11 +5,15 @@
 # 📋 2026-09-03 — SIM-517 PLANNED (`docs/audit/2026-09-03-sim517-plan.md`); SIM-520 RULED: certify R on a broader game sample AFTER SIM-517
 
 **Owner rulings (2026-09-03):** SIM-517 (the catcher receiving profile) builds next —
-the plan is filed: one receiving embedding (framing + blocking + D3K-allow), one
-similarity score, two draw consumers (a count-bucket-normalized taken-pitch weight
-gated `SIM_CATCHER_KERNEL_SIGMA`, and the dropped-third-strike reach as a draw over a
-new strike-3 opportunity pool — the SIM-474 pattern); the `_apply_framing` flip is
-deleted on certification. Prerequisite rebuild: `catcher_id` per pitch-pool row.
+the plan is filed: one receiving embedding (framing + passed-ball + wild-pitch +
+uncaught-strike-3 rates), one similarity score, ONE draw seam (a
+count-bucket-normalized taken-pitch weight gated `SIM_CATCHER_KERNEL_SIGMA`).
+**Owner revision same day: NO separate dropped-third-strike sampling — each pitch-pool
+row carries a `got_away` flag (passed ball / wild pitch), and the drawn row resolves
+the play: strike-3 → batter takes first when the rule allows; runners on → advance.**
+This also lands the missing WP/PB runner-advancement channel. The `_apply_framing`
+flip is deleted on certification. Prerequisite rebuild: `catcher_id` + `got_away` per
+pitch-pool row.
 **SIM-520:** the R band certifies on a broader, defense-diverse game sample — ONCE
 SIM-517 IS COMPLETE (no game-set re-balancing; the 12-game lane keeps R informational
 until then).
