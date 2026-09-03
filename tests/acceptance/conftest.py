@@ -433,6 +433,11 @@ def _install_probes(
         "STEAL_OPP_3",
         "STEAL_ATT_3",
         "STEAL_SAFE_3",
+        # SIM-517: the receiving channels — taken pitches, called strikes,
+        # and drawn got-away rows (the pitch seam counts them below).
+        "TAKEN",
+        "CALLED",
+        "GOT_AWAY",
     ):
         pc.setdefault(key, 0)
 
@@ -470,7 +475,18 @@ def _install_probes(
 
     def outcome(state: Any, _o: Any = orig_outcome) -> Any:
         calls["_full_pool_outcome"] += 1
-        return _o(state)
+        out = _o(state)
+        # SIM-517: the receiving channels, read at the pitch seam. The
+        # got-away fact comes from the SAMPLER's accessor (the drawn row's
+        # own flag) so the count works whether or not SIM_GOT_AWAY resolves
+        # its consequences.
+        if out in ("ball", "called_strike"):
+            pc["TAKEN"] += 1
+            if out == "called_strike":
+                pc["CALLED"] += 1
+        if fp is not None and fp.last_pitch_got_away():
+            pc["GOT_AWAY"] += 1
+        return out
 
     def fielding(state: Any, _o: Any = orig_fielding) -> Any:
         calls["_full_pool_fielding"] += 1

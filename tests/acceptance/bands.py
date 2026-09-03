@@ -1323,6 +1323,31 @@ POOL_REFERENCES: dict[str, PoolReference] = {
             "The diagnosis measured the live draw at +1.9%."
         ),
     ),
+    # ---- SIM-517: the catcher receiving channels (2026-09-03) -------------
+    "CALLED_STRIKE_TAKEN": PoolReference(
+        0.31373,
+        "the W1 artifact pitch pool: called strikes / taken pitches, "
+        "recency-weighted (sim517_catcher_probe)",
+        rel_floor=0.02,
+        floor_rationale=(
+            "~93 taken pitches/team-game puts the binomial term under 1% at "
+            "the 12x500 lane; 2% is the tightest floor the receiving kernel's "
+            "per-bucket normalization must hold (the marginal may not move — "
+            "only the per-catcher conditional may)."
+        ),
+    ),
+    "GOT_AWAY_PITCH": PoolReference(
+        0.002325,
+        "the W1 artifact pitch pool: got-away rows / pitches, "
+        "recency-weighted (sim517_catcher_probe)",
+        rel_floor=0.10,
+        floor_rationale=(
+            "A rare event (~0.34 got-aways/team-game, MLB 0.33-0.35): the "
+            "binomial term is ~7% of the centre at the 12x500 lane, so 10% is "
+            "the tightest floor that binds. The whole channel was MISSING "
+            "before SIM-517 (rate 0), so any read at all beats the old sim."
+        ),
+    ),
 }
 
 #: Ordered pool-band channel names. The lane asserts every one of them.

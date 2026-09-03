@@ -802,6 +802,24 @@ def test_pool_band_dp_per_opportunity_sim450(acceptance_run: AcceptanceRun) -> N
     _assert_pool_band("DP_OPP", pc["DP_ROW"], pc["DP_OPP_DEN"])
 
 
+def test_pool_band_called_strike_taken_sim450(acceptance_run: AcceptanceRun) -> None:
+    """SIM-517: called strikes per TAKEN pitch. The receiving kernel's
+    per-count-bucket normalization guarantees the MARGINAL cannot move —
+    only the per-catcher conditional may — so this band holding is the
+    normalization property measured live."""
+    pc = acceptance_run.pool_counts
+    _assert_pool_band("CALLED_STRIKE_TAKEN", pc["CALLED"], pc["TAKEN"])
+
+
+def test_pool_band_got_away_pitch_sim450(acceptance_run: AcceptanceRun) -> None:
+    """SIM-517: got-away rows drawn per pitch (a passed ball / wild pitch,
+    incl. the uncaught third strike). This channel was MISSING entirely
+    before SIM-517 (the sim threw zero wild pitches); the band pins it to
+    the pool's own rate (~0.34/team-game, MLB 0.33-0.35)."""
+    pc = acceptance_run.pool_counts
+    _assert_pool_band("GOT_AWAY_PITCH", pc["GOT_AWAY"], acceptance_run.calls["_full_pool_outcome"])
+
+
 def test_report_pool_bands_sim450(acceptance_run: AcceptanceRun) -> None:
     """Print the whole pool-band table, pass or fail (SIM-516). Always passes;
     its job is the log."""
@@ -822,6 +840,8 @@ def test_report_pool_bands_sim450(acceptance_run: AcceptanceRun) -> None:
         "STEAL_ATT_OPP_3B": (pc["STEAL_ATT_3"], pc["STEAL_OPP_3"]),
         "STEAL_SAFE_2B": (pc["STEAL_SAFE_2"], pc["STEAL_ATT_2"]),
         "DP_OPP": (pc["DP_ROW"], pc["DP_OPP_DEN"]),
+        "CALLED_STRIKE_TAKEN": (pc["CALLED"], pc["TAKEN"]),
+        "GOT_AWAY_PITCH": (pc["GOT_AWAY"], acceptance_run.calls["_full_pool_outcome"]),
     }
     lines = [f"SIM-516 pool-referenced bands — window: {bands.POOL_WINDOW}"]
     for channel in bands.POOL_CHANNELS:
