@@ -243,12 +243,14 @@ def main() -> None:
     ap.add_argument("--json-out", type=str, default=None)
     args = ap.parse_args()
     game_pks = args.game_pks or list(_DEFAULT_GAME_PKS)
-    sigma = float(os.environ.get("SIM_CATCHER_KERNEL_SIGMA", "0"))
+    sigma_f = float(os.environ.get("SIM_CATCHER_FRAMING_SIGMA", "0"))
+    sigma_b = float(os.environ.get("SIM_CATCHER_BLOCK_SIGMA", "0"))
 
     started = time.perf_counter()
     print(
         f"sim517_catcher_probe: {len(game_pks)} games x {args.iters} sims  "
-        f"catcher_sigma={sigma}  SIM_GOT_AWAY={os.environ.get('SIM_GOT_AWAY', '<unset>')}"
+        f"framing_sigma={sigma_f} block_sigma={sigma_b}  "
+        f"SIM_GOT_AWAY={os.environ.get('SIM_GOT_AWAY', '<unset>')}"
     )
 
     rec = Recorder()
@@ -299,7 +301,8 @@ def main() -> None:
             "iters": args.iters,
             "seed_base": args.seed_base,
             "game_pks": game_pks,
-            "catcher_sigma": sigma,
+            "framing_sigma": sigma_f,
+            "block_sigma": sigma_b,
             "framing": rec.framing,
             "blocking": rec.blocking,
             "pool": pool_ref,

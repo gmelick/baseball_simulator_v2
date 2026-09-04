@@ -389,13 +389,19 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
             sampler.fielder_sigma = float(os.environ.get("SIM_FIELDER_KERNEL_SIGMA", "0"))
         except ValueError:
             sampler.fielder_sigma = 0.0
-        # SIM-517: the catcher RECEIVING kernel bandwidth. 0.0 (the default,
-        # and any unparsable value) disables it EXACTLY; the bandwidth is the
-        # SIM-517 part-E fit target.
-        try:
-            sampler.catcher_sigma = float(os.environ.get("SIM_CATCHER_KERNEL_SIGMA", "0"))
-        except ValueError:
-            sampler.catcher_sigma = 0.0
+        # SIM-517: the catcher RECEIVING kernel bandwidths — an anisotropic
+        # metric with the framing dims and the blocking dims under their own
+        # sigma (the part-E ladder measured they need different ones). 0.0
+        # (the default, and any unparsable value) removes that group; both
+        # 0.0 disables the kernel EXACTLY.
+        for env, attr in (
+            ("SIM_CATCHER_FRAMING_SIGMA", "catcher_framing_sigma"),
+            ("SIM_CATCHER_BLOCK_SIGMA", "catcher_block_sigma"),
+        ):
+            try:
+                setattr(sampler, attr, float(os.environ.get(env, "0")))
+            except ValueError:
+                setattr(sampler, attr, 0.0)
         _CACHED_FULL_POOL_SAMPLER = sampler
         _CACHED_FULL_POOL_ART_DIR = art_dir
         return sampler

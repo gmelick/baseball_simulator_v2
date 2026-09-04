@@ -110,19 +110,23 @@ class FullPoolSampler:
         self.fielder_sigma = 0.0
         #: Per-hand cache of each row's fielder-embedding index (-1 = absent).
         self._bb_fielder_emb: dict[str, np.ndarray] = {}
-        # SIM-517: the catcher RECEIVING kernel. Weight each PITCH-pool row by
-        # the similarity between the LIVE catcher and the ROW's own catcher
-        # over the receiving features (framing zone rates, the block rate, the
-        # EB uncaught-K3 rate) — a poor receiver behind the plate pulls the
-        # draw toward pitches caught by poor receivers, so got-away pitches
-        # and borderline calls track the live catcher at the pool's own
-        # conditional rates. 0.0 (the default) disables the kernel EXACTLY.
-        # The bandwidth is the SIM-517 part-E fit target. The factor is
-        # normalized to a MEAN of 1 within each COUNT BUCKET (the SIM-476
-        # per-partition lesson): it may only shift WHICH pitch is drawn at a
-        # count, never the count structure; missing-identity rows are exactly
-        # neutral.
-        self.catcher_sigma = 0.0
+        # SIM-517: the catcher RECEIVING kernel — ONE multiplicative weight on
+        # the pitch draw, with an ANISOTROPIC metric: the framing dims (the
+        # two zone-strike rates) and the blocking dims (the block rate + the
+        # EB uncaught-K3 rate) each carry their OWN bandwidth, because the
+        # part-E ladder measured they need different ones (framing conditions
+        # correctly at ~0.25 and DEGRADES tighter — twin-selection noise;
+        # blocking closes only at ~0.05 — soft-kernel shrinkage toward the
+        # dense centre). A poor receiver behind the plate pulls the draw
+        # toward pitches caught by poor receivers at the pool's own
+        # conditional rates. A group's sigma 0.0 (the default) removes that
+        # group from the metric; both 0.0 disables the kernel EXACTLY. The
+        # factor is normalized to a MEAN of 1 within each COUNT BUCKET (the
+        # SIM-476 per-partition lesson): it may only shift WHICH pitch is
+        # drawn at a count, never the count structure; missing-identity rows
+        # are exactly neutral.
+        self.catcher_framing_sigma = 0.0
+        self.catcher_block_sigma = 0.0
         #: Lazy receiving data: (key_index, z-matrix) or None when unavailable.
         self._recv_data: tuple[dict[str, int], np.ndarray] | None | bool = False
         #: Per-hand cache of each pitch row's receiving-matrix index (-1 absent).
@@ -331,7 +335,7 @@ class FullPoolSampler:
     def new_half_inning(self, hand: str, pitcher_key: str, catcher_key: str | None = None) -> None:
         """Cache the half-inning-constant base (f_pitcher * recency) and stage
         the fielding catcher for the SIM-517 receiving factor (a no-op at
-        ``catcher_sigma`` 0)."""
+        both receiving sigmas 0)."""
         self._hand = hand
         self._catcher_key = catcher_key
         pool = self.a.pools[hand]
@@ -347,7 +351,9 @@ class FullPoolSampler:
             * self._f_batter(self._hand, batter_key)
             * self._f_situation_baseout(self._hand, base_out)
         )
-        if self.catcher_sigma > 0.0 and self._catcher_key is not None:
+        if (
+            self.catcher_framing_sigma > 0.0 or self.catcher_block_sigma > 0.0
+        ) and self._catcher_key is not None:
             f_recv = self._f_catcher_receiving(self._hand, self._catcher_key)
             if f_recv is not None:
                 w = w * f_recv
@@ -470,9 +476,21 @@ class FullPoolSampler:
                 out = np.ones(len(rows_idx), dtype=np.float32)
                 if valid.any():
                     diff = row_z[valid] - z[live]
-                    d2 = np.einsum("ij,ij->i", diff, diff)
-                    k = z.shape[1]
-                    out[valid] = np.exp(-d2 / (2.0 * self.catcher_sigma**2 * k)).astype(np.float32)
+                    # Anisotropic metric: framing dims (0,1) and blocking dims
+                    # (2..) under their own bandwidths; a group with sigma 0 is
+                    # excluded (OFF), never an accidental hard filter.
+                    expo = np.zeros(diff.shape[0], dtype=np.float64)
+                    if self.catcher_framing_sigma > 0.0:
+                        df = diff[:, :2]
+                        expo += np.einsum("ij,ij->i", df, df) / (
+                            2.0 * self.catcher_framing_sigma**2 * df.shape[1]
+                        )
+                    if self.catcher_block_sigma > 0.0 and diff.shape[1] > 2:
+                        db = diff[:, 2:]
+                        expo += np.einsum("ij,ij->i", db, db) / (
+                            2.0 * self.catcher_block_sigma**2 * db.shape[1]
+                        )
+                    out[valid] = np.exp(-expo).astype(np.float32)
                     # Per-COUNT-BUCKET normalization: mean factor 1 among the
                     # valid rows of each bucket; a fully underflowed bucket
                     # goes neutral rather than starving of draws.

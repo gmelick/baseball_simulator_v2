@@ -8,7 +8,7 @@ Part C (sampler): the receiving factor weights pitch-pool rows by the
 similarity between the LIVE catcher and each row's own catcher, normalized to
 a MEAN of 1 within each COUNT BUCKET — the SIM-476 lessons (no cross-partition
 mass shift; missing identity exactly neutral) are pinned BEFORE any fit arm
-runs. ``catcher_sigma`` 0 (the default) is byte-identical.
+runs. both receiving sigmas 0 (the default) are byte-identical.
 
 Part D (loop): the drawn pitch row's ``got_away`` fact IS the play — runners
 advance one base (scoring from third, no RBI, the run routed through
@@ -103,7 +103,8 @@ _BASE_OUT = np.array([0, 0, 5, 0], dtype=np.float32)
 class TestReceivingKernel:
     def test_a_tight_kernel_draws_the_similar_catchers_rows(self):
         fp = _sampler(_hand_pool(), _catcher_emb())
-        fp.catcher_sigma = 0.05
+        fp.catcher_framing_sigma = 0.05
+        fp.catcher_block_sigma = 0.05
         fp.new_half_inning("R", _PITCHER, catcher_key="702:2024")
         outcomes = set()
         for _ in range(40):
@@ -113,7 +114,8 @@ class TestReceivingKernel:
 
     def test_the_factor_mean_is_one_within_each_count_bucket(self):
         fp = _sampler(_hand_pool(), _catcher_emb())
-        fp.catcher_sigma = 0.05
+        fp.catcher_framing_sigma = 0.05
+        fp.catcher_block_sigma = 0.05
         f = fp._f_catcher_receiving("R", "702:2024")
         assert f is not None
         for r in fp._pool_meta("R")["bucket_rows"]:
@@ -125,7 +127,8 @@ class TestReceivingKernel:
         assert pool.catcher_id is not None
         pool.catcher_id[0] = 999  # not in the embedding
         fp = _sampler(pool, _catcher_emb())
-        fp.catcher_sigma = 0.05
+        fp.catcher_framing_sigma = 0.05
+        fp.catcher_block_sigma = 0.05
         f = fp._f_catcher_receiving("R", "702:2024")
         assert f is not None
         assert float(f[0]) == 1.0
@@ -137,7 +140,7 @@ class TestReceivingKernel:
         fp_off.new_half_inning("R", _PITCHER)
         fp_on.new_plate_appearance("200:2024", _BASE_OUT)
         fp_off.new_plate_appearance("200:2024", _BASE_OUT)
-        assert fp_on.catcher_sigma == 0.0
+        assert fp_on.catcher_framing_sigma == 0.0 and fp_on.catcher_block_sigma == 0.0
         for a, b in zip(fp_on._bucket_cdf, fp_off._bucket_cdf, strict=True):
             if a is None or b is None:
                 assert a is None and b is None
@@ -146,7 +149,8 @@ class TestReceivingKernel:
 
     def test_neutral_when_the_pool_has_no_catcher_column(self):
         fp = _sampler(_hand_pool(with_receiving=False), _catcher_emb())
-        fp.catcher_sigma = 0.05
+        fp.catcher_framing_sigma = 0.05
+        fp.catcher_block_sigma = 0.05
         assert fp._f_catcher_receiving("R", "702:2024") is None
         fp.new_half_inning("R", _PITCHER, catcher_key="702:2024")
         fp.new_plate_appearance("200:2024", _BASE_OUT)
