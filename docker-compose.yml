@@ -137,6 +137,14 @@ services:
       # home/away differential (+0.107 R/g, the MLB size). Replaces the
       # deleted SIM-412 flip. 1.0 disables.
       SIM_HOME_OFF_WEIGHT:      "0.0"
+      # SIM-517 (2026-09-04): the catcher RECEIVING kernel (anisotropic —
+      # framing dims and blocking dims each fitted on their own ladder
+      # against the pool's per-tier conditionals) + the drawn pitch row's
+      # got-away resolution (wild pitch / passed ball / uncaught strike-3).
+      # The SIM-428 framing flip is DELETED. 0 / 0 / 0 disables.
+      SIM_CATCHER_FRAMING_SIGMA: "0.25"
+      SIM_CATCHER_BLOCK_SIGMA:   "0.05"
+      SIM_GOT_AWAY:              "1"
       # SIM-453: WHERE the park factors come from. The park consumer above was on,
       # but the factors were dark: api/routes/games.py read them through
       # app.state.sim_duckdb, and api/main.py only opened that connection under

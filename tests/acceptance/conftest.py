@@ -75,10 +75,8 @@ from tests.acceptance import bands
 # The production configuration
 # ---------------------------------------------------------------------------
 
-#: The exact inverse of the six flags ``tests/conftest.py`` pins off, plus
-#: ``SIM_FRAMING``. Production leaves ``SIM_FRAMING`` unset and the simulator
-#: defaults it ON (``sim_loop.py:978``); the lane states it so a reader of the
-#: log sees the whole configuration.
+#: The exact inverse of the flags ``tests/conftest.py`` pins off — the lane
+#: states the whole production configuration so a reader of the log sees it.
 PRODUCTION_FLAGS: dict[str, str] = {
     "SIM_FULL_POOL": "1",  # SIM-429 full-pool similarity sampler
     "SIM_MANAGER": "1",  # SIM-434 manager pull / reliever decisions
@@ -90,10 +88,11 @@ PRODUCTION_FLAGS: dict[str, str] = {
     # SIM-476 owner ruling 2026-08-30: w=0 — the batted-ball draw
     # hard-conditions on the batting side (the SIM-412 replacement).
     "SIM_HOME_OFF_WEIGHT": "0.0",
-    # SIM-517 (owner ruling 2026-08-29): no post-draw adjustments — the
-    # framing FLIP is off in production; the catcher effect returns as a
-    # pitch-draw weight (SIM-517) and this pin flips back with it.
-    "SIM_FRAMING": "0",
+    # SIM-517 (2026-09-04): the fitted anisotropic receiving kernel (the
+    # SIM-428 framing flip is DELETED) + the drawn row's got-away resolution.
+    "SIM_CATCHER_FRAMING_SIGMA": "0.25",
+    "SIM_CATCHER_BLOCK_SIGMA": "0.05",
+    "SIM_GOT_AWAY": "1",
 }
 
 #: Env names the lane must ERASE (not set) so a default code path proves

@@ -26,21 +26,8 @@ import pytest
 
 from pipeline.batch.engine_artifacts import BattedBallPool, EngineArtifacts
 from simulation.full_pool_sampler import FullPoolSampler
-from simulation.game_state import GameState, Half
-from simulation.sim_loop import StateMachine
 
 _SEASON = 2024
-
-
-class _FixedRNG:
-    """A stand-in rng whose ``random()`` always returns ``v`` — lets a test force a
-    flip (v small) or suppress it (v large) deterministically."""
-
-    def __init__(self, v: float) -> None:
-        self.v = float(v)
-
-    def random(self) -> float:
-        return self.v
 
 
 # ===========================================================================
@@ -469,47 +456,6 @@ class TestFielderAccessors:
         assert fp.fielder_quality(666, "SS", _SEASON) == 10.0
         assert fp.fielder_quality(999, "SS", _SEASON) is None  # unknown
         assert fp.fielder_quality(555, "2B", _SEASON) is None  # wrong position
-
-
-# ===========================================================================
-# SIM-428 — the framing gate (SIM_FRAMING). Framing is ON by default but the
-# defense-map fix activates it in production (catcher now resolves), so it gains
-# an explicit, auditable off switch for byte-identical / reproducibility mode.
-# ===========================================================================
-
-
-class _FakeFramingFP:
-    """A sampler whose catcher framing strongly steals strikes (delta 1.0)."""
-
-    def catcher_framing(self, catcher_key: str) -> float:
-        return 1.0
-
-
-class TestFramingGate:
-    def _state(self):
-        # half=TOP => offense AWAY => _apply_framing reads home_catcher_id.
-        return GameState(
-            pitcher_id=1, bat_hand="R", season=_SEASON, half=Half.TOP, home_catcher_id=900
-        )
-
-    def test_framing_off_by_default(self):
-        # SIM-517 (owner ruling 2026-08-29): the drawn row IS the play — no
-        # post-draw adjustments. The flip defaults OFF; the catcher effect
-        # returns as a pitch-draw weight (SIM-517).
-        assert StateMachine()._framing is False
-
-    def test_framing_on_flips_ball_to_called_strike(self):
-        sm = StateMachine(full_pool_sampler=_FakeFramingFP())
-        sm._framing = True
-        sm.rng = _FixedRNG(0.0)  # type: ignore[assignment]
-        assert sm._apply_framing(self._state(), "ball") == "called_strike"
-
-    def test_framing_gate_off_is_noop(self):
-        # SIM_FRAMING=0 short-circuits before any framing/rng draw.
-        sm = StateMachine(full_pool_sampler=_FakeFramingFP())
-        sm._framing = False
-        sm.rng = _FixedRNG(0.0)  # type: ignore[assignment]
-        assert sm._apply_framing(self._state(), "ball") == "ball"
 
 
 if __name__ == "__main__":  # pragma: no cover

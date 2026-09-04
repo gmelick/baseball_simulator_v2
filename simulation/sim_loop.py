@@ -1073,20 +1073,11 @@ class StateMachine:
         # SIM-491 draw-weight kernels (SIM_FIELDER_KERNEL_SIGMA=0.5 /
         # SIM_PARK_KERNEL_SIGMA=0.02, fitted against the pool's own
         # conditional frequencies; see docs/audit/2026-08-28-sim476-fit-plan.md).
-        # SIM-428 catcher framing is ON by default — it was always meant to be live
-        # (the SIM-363/425b defense-map fix is what finally lets the catcher resolve
-        # in production; before, the catcher was None so framing was silently inert).
-        # It is NOT one of the three default-OFF realism nudges: framing is
-        # aggregate-neutral. SIM_FRAMING=0 restores the pre-fix catcher-inert path
-        # (no per-taken-pitch rng draw) for a strict byte-identical-to-prior-prod /
-        # seeded-reproducibility mode.
-        # SIM-517 (owner ruling 2026-08-29): the drawn row IS the play — no
-        # post-draw adjustments. The SIM-428 framing flip is the last active
-        # one, so its default is now OFF; the catcher's framing effect returns
-        # as a WEIGHT in the pitch draw (SIM-517), and this flip is deleted
-        # when that weight lands. SIM_FRAMING=1 remains an explicit opt-in for
-        # A/B comparison only.
-        self._framing = _env_flag("SIM_FRAMING", default=False)  # SIM-428/517
+        # SIM-517 (2026-09-04): the SIM-428 framing flip (`_apply_framing`,
+        # `SIM_FRAMING`) is DELETED — the catcher's receiving effect is now a
+        # WEIGHT in the pitch draw (the fitted anisotropic receiving kernel:
+        # SIM_CATCHER_FRAMING_SIGMA=0.25 / SIM_CATCHER_BLOCK_SIGMA=0.05), so
+        # the drawn row is the play with no post-draw adjustment anywhere.
         # SIM-517 part D: honor the drawn pitch row's got-away fact (a passed
         # ball / wild pitch on THAT pitch, incl. an uncaught third strike).
         # Default OFF until the part-E fit + certifying lane land it — the
@@ -1512,41 +1503,13 @@ class StateMachine:
                 f"{state.batter_id}:{season}",
                 np.array(base_out, dtype=np.float32),
             )
-        outcome = self._apply_framing(state, fp.draw(state.balls, state.strikes))
+        # SIM-517: the framing flip that wrapped this draw is deleted — the
+        # receiving kernel conditions the draw itself; the drawn row stands.
+        outcome = fp.draw(state.balls, state.strikes)
         # SIM-517 part D: carry the drawn row's got-away fact to the resolvers
         # (read only when the flag is on — flag-off touches nothing).
         if self._got_away:
             self._last_pitch_got_away = fp.last_pitch_got_away()
-        return outcome
-
-    def _apply_framing(self, state: GameState, outcome: str) -> str:
-        """SIM-428: nudge a TAKEN pitch (ball<->called_strike) by the fielding
-        catcher's centred framing delta — a good framer steals a strike, a poor one
-        loses one.  Swings (foul / swinging_strike / in_play) are never frameable.
-        Aggregate-neutral across the league (the delta is ~centred); the effect is
-        per-catcher differentiation.  No-op when no catcher / framing signal.
-
-        SIM_FRAMING=0 disables it entirely (no rng draw) — the pre-fix
-        catcher-inert path, for a strict reproducibility / byte-identical mode."""
-        if not self._framing:
-            return outcome
-        if outcome not in ("ball", "called_strike"):
-            return outcome
-        fp = self.full_pool_sampler
-        if fp is None:
-            return outcome
-        catcher = state.away_catcher_id if state.offense == Team.HOME else state.home_catcher_id
-        if catcher is None:
-            return outcome
-        season = int(getattr(state, "season", 2024) or 2024)
-        d = fp.catcher_framing(f"{int(catcher)}:{season}")
-        if d == 0.0:
-            return outcome
-        r = float(self.rng.random())
-        if outcome == "ball" and d > 0.0 and r < d:
-            return "called_strike"
-        if outcome == "called_strike" and d < 0.0 and r < -d:
-            return "ball"
         return outcome
 
     def _full_pool_fielding(self, state: GameState) -> FieldingSignal | None:
