@@ -173,6 +173,7 @@ def main() -> None:
     tiers: FielderTiers | None = None
     tier_mix = {"low": 0, "mid": 0, "high": 0, "unknown": 0}
     runs: list[int] = []  # per TEAM-game
+    hits: list[int] = []  # per team-game (the fewer-hits vs sequencing split)
     park_factors: list[float] = []
     used: list[int] = []
     try:
@@ -200,6 +201,9 @@ def main() -> None:
                 res = simulate_game(state_machine=machine, seed=seed, **kw)
                 runs.append(int(res.home_score))
                 runs.append(int(res.away_score))
+                if res.boxscore is not None:
+                    h_total = sum(int(ln.h) for ln in res.boxscore.lines.values())
+                    hits.append(h_total)  # both teams; halved in the report
             used.append(gp)
             print(
                 f"  game {gp} ({len(used)}/{args.games}): {args.iters} sims in "
@@ -238,6 +242,11 @@ def main() -> None:
         + "  ".join(f"{t} {tier_mix[t] / known:.3f}" for t in ("low", "mid", "high"))
         + f"  (unknown {tier_mix['unknown']}; the 12-game lane read ~0.42 high)"
     )
+    if hits:
+        h_mean = float(np.mean(hits)) / 2.0
+        print(
+            f" H/team-game: {h_mean:.4f} vs MLB-2025 8.2588 ({(h_mean - 8.2588) / 8.2588 * 100:+.1f}%)"
+        )
     print(f" mean park run factor: {float(np.mean(park_factors)):.4f}")
     print(f" elapsed: {(time.perf_counter() - started) / 3600:.2f}h")
 
@@ -256,6 +265,7 @@ def main() -> None:
                     "verdict": verdict,
                     "tier_mix": tier_mix,
                     "park_factor_mean": float(np.mean(park_factors)),
+                    "h_team_game": (float(np.mean(hits)) / 2.0 if hits else None),
                 },
                 indent=2,
             )
