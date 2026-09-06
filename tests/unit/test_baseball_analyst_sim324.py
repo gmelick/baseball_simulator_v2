@@ -58,15 +58,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from simulation.full_pool_sampler import FullPoolSampler
 from simulation.game_state import GameState, Half
 from simulation.run_resolution import OUTS_PER_INNING, RE24_MATRIX, re24_value
-from simulation.sim_loop import (
-    FieldingSignal,
-    GameSimResult,
-    PlayResolver,
-    StateMachine,
-    simulate_game,
-)
+from simulation.sim_loop import GameSimResult, StateMachine, simulate_game
+from simulation.synthetic_bundle import league_artifacts, synthetic_sampler
 
 SEASON = 2024
 PITCHER = 477132
@@ -113,124 +109,69 @@ LEAGUE_INPLAY_MODEL: dict[str, float] = {
     "double": 0.071,
     "triple": 0.006,
     "field_out": 0.609,
-    "ground_into_double_play": 0.026,
+    "grounded_into_double_play": 0.026,
 }
 
-# The hit value (result_hits) + outs recorded (result_outs) per injected event,
-# in the play-pool vocabulary resolve_runs / advance_state consume.
-_EVENT_HITS = {
-    "single": 1,
-    "double": 2,
-    "triple": 3,
-    "home_run": 4,
-    "field_out": 0,
-    "ground_into_double_play": 0,
-}
-_EVENT_OUTS = {
-    "single": 0,
-    "double": 0,
-    "triple": 0,
-    "home_run": 0,
-    "field_out": 1,
-    "ground_into_double_play": 2,
-}
-
-
-def _normalize(model: dict[str, float]) -> tuple[list, np.ndarray]:
-    keys = list(model.keys())
-    probs = np.asarray([model[k] for k in keys], dtype=np.float64)
-    return keys, probs / probs.sum()
+#: The terminal plate-appearance events the tally machine counts.
+_TALLY_EVENTS = (
+    "walk",
+    "strikeout",
+    "single",
+    "double",
+    "triple",
+    "home_run",
+    "field_out",
+    "grounded_into_double_play",
+)
 
 
 # ===========================================================================
-# Test doubles — a no-DB league outcome machine + in-play resolver
+# Test doubles — the production machine over the synthetic league bundle
 # ===========================================================================
+#
+# SIM-486: the per-pitch and in-play models above become the ROWS of an
+# in-memory engine-artifact bundle, and the production StateMachine draws
+# every pitch and every batted ball from it through the real full-pool
+# sampler and the real SIM-511 transition path.  A platoon skew is a per-hand
+# pitch model (more contact, fewer whiffs for the advantaged hand).
 
 
-class _LeagueOutcomeMachine(StateMachine):
-    """A StateMachine that draws each pitch outcome from the calibrated
-    per-pitch model with its own seeded loop rng (NO sampler).
-
-    A ``hand_skew`` (>0) tilts the per-pitch mix by the batter's hand to model a
-    platoon advantage: a positive skew makes the configured ``platoon_adv_hand``
-    batters put more balls in play / strike out less (the offensive-advantage
-    side).  Used by the platoon-split test; 0.0 (the default) is the neutral
-    league model used everywhere else.
-    """
-
-    def __init__(self, *a, hand_skew: float = 0.0, platoon_adv_hand: str = "L", **kw):
-        super().__init__(*a, **kw)
-        self._base_keys, self._base_probs = _normalize(LEAGUE_PITCH_MODEL)
-        self._hand_skew = float(hand_skew)
-        self._platoon_adv_hand = platoon_adv_hand
-
-    def _draw_for(self, state) -> str:
-        if self._hand_skew == 0.0:
-            idx = int(self.rng.choice(len(self._base_keys), p=self._base_probs))
-            return self._base_keys[idx]
-        probs = dict(zip(self._base_keys, self._base_probs, strict=False))
-        # The advantaged hand: shift mass from whiffs (swinging_strike) into
-        # balls-in-play (more / better contact).  The disadvantaged hand gets the
-        # opposite tilt.  Direction only -- the test asserts the loop PROPAGATES
-        # handedness, not a precise magnitude.
-        sign = 1.0 if state.bat_hand == self._platoon_adv_hand else -1.0
-        delta = sign * self._hand_skew
-        probs["in_play"] = probs["in_play"] + delta
-        probs["swinging_strike"] = probs["swinging_strike"] - delta
-        keys = list(probs.keys())
-        arr = np.asarray([max(1e-9, probs[k]) for k in keys], dtype=np.float64)
-        arr = arr / arr.sum()
-        idx = int(self.rng.choice(len(keys), p=arr))
-        return keys[idx]
-
-    def step_pitch(self, state, **_kw):  # type: ignore[override]
-        return super().step_pitch(state, pitch_outcome=self._draw_for(state))
+def _skewed(model: dict[str, float], delta: float) -> dict[str, float]:
+    out = dict(model)
+    out["in_play"] = max(1e-9, out["in_play"] + delta)
+    out["swinging_strike"] = max(1e-9, out["swinging_strike"] - delta)
+    return out
 
 
-class _LeagueInPlayResolver(PlayResolver):
-    """Resolve an ``in_play`` pitch to a sampled league-average batted-ball event.
-
-    The event is drawn from the calibrated in-play model with a shared seeded rng.
-    We return only the event + its (hits, outs) deltas; we deliberately leave
-    ``result_runs`` to the loop -- its ``_advance_runners`` scores the runs given
-    the live base-out state, so the run environment EMERGES from the loop rather
-    than being injected.  ``_injected_battedball`` carries NO ``result_runs`` for
-    exactly that reason (so ``_resolve_in_play`` falls back to the loop's own
-    ``runners_scored``).
-    """
-
-    def __init__(self, rng: np.random.Generator):
-        self.rng = rng
-        self._keys, self._probs = _normalize(LEAGUE_INPLAY_MODEL)
-        # Present (with NO result_runs) so the no-sampler path reaches step 6/7.
-        self._injected_battedball = {"event": "field_out"}
-
-    def resolve_fielding(self, state, battedball_sample) -> FieldingSignal:
-        idx = int(self.rng.choice(len(self._keys), p=self._probs))
-        event = self._keys[idx]
-        outs = _EVENT_OUTS[event]
-        # Context-filter the sampled event the way a real play pool would: a
-        # double-play out can only be a *double* play when there are <2 outs AND
-        # a runner is on first to be forced.  Otherwise it degrades to a single
-        # ground-ball out (one out).  This keeps the committed base-out state
-        # legal (outs never exceed 3) -- the production sampler is likewise
-        # base-out-state conditioned, so this is calibration, not a loop change.
-        if event == "ground_into_double_play" and (
-            state.outs >= OUTS_PER_INNING - 1 or state.bases.first is None
-        ):
-            event = "field_out"
-            outs = 1
-        return FieldingSignal(
-            event=event,
-            result_hits=_EVENT_HITS[event],
-            result_outs=outs,
-            result_runs=0,  # runs emerge from the loop's baserunning
-        )
+_ARTIFACTS: dict[tuple[float, str], object] = {}
 
 
-class _HandedMachine(_LeagueOutcomeMachine):
-    """A league machine that sets ``bat_hand`` to the batting side's hand before
-    each pitch (so the per-pitch skew sees the right handedness)."""
+def _artifacts(hand_skew: float = 0.0, platoon_adv_hand: str = "L"):
+    key = (float(hand_skew), platoon_adv_hand)
+    art = _ARTIFACTS.get(key)
+    if art is None:
+        if hand_skew == 0.0:
+            art = league_artifacts(pitch_model=LEAGUE_PITCH_MODEL, inplay_model=LEAGUE_INPLAY_MODEL)
+        else:
+            other = "R" if platoon_adv_hand == "L" else "L"
+            art = league_artifacts(
+                pitch_models={
+                    platoon_adv_hand: _skewed(LEAGUE_PITCH_MODEL, hand_skew),
+                    other: _skewed(LEAGUE_PITCH_MODEL, -hand_skew),
+                },
+                inplay_model=LEAGUE_INPLAY_MODEL,
+            )
+        _ARTIFACTS[key] = art
+    return art
+
+
+def _sampler(seed: int, **kw) -> FullPoolSampler:
+    return synthetic_sampler(_artifacts(**kw), seed + 1_000_003)
+
+
+class _HandedMachine(StateMachine):
+    """A machine that sets ``bat_hand`` to the batting side's hand before each
+    pitch, so the per-hand pitch pool sees the right handedness."""
 
     def __init__(self, *a, away_hand: str = "R", home_hand: str = "R", **kw):
         super().__init__(*a, **kw)
@@ -242,8 +183,8 @@ class _HandedMachine(_LeagueOutcomeMachine):
         return super().step_pitch(state)
 
 
-class _PACountingMachine(_LeagueOutcomeMachine):
-    """A league machine that counts terminal plate appearances (for P/PA)."""
+class _PACountingMachine(StateMachine):
+    """A machine that counts terminal plate appearances (for P/PA)."""
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
@@ -256,22 +197,13 @@ class _PACountingMachine(_LeagueOutcomeMachine):
         return result
 
 
-class _EventTallyMachine(_LeagueOutcomeMachine):
-    """A league machine that tallies terminal PA events across many games."""
+class _EventTallyMachine(StateMachine):
+    """A machine that tallies terminal PA events across many games."""
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
         self.pa_count = 0
-        self.events = {
-            "walk": 0,
-            "strikeout": 0,
-            "single": 0,
-            "double": 0,
-            "triple": 0,
-            "home_run": 0,
-            "field_out": 0,
-            "ground_into_double_play": 0,
-        }
+        self.events = dict.fromkeys(_TALLY_EVENTS, 0)
 
     def step_pitch(self, state, **_kw):  # type: ignore[override]
         result = super().step_pitch(state)
@@ -331,18 +263,11 @@ def _run_one(
 ) -> GameSimResult:
     """Simulate one full game under the calibrated model with a fixed seed."""
     rng = np.random.default_rng(seed)
-    resolver = _LeagueInPlayResolver(np.random.default_rng(seed + 1_000_003))
+    fp = _sampler(seed, hand_skew=hand_skew, platoon_adv_hand=platoon_adv_hand)
     if away_hand != home_hand or hand_skew != 0.0:
-        sm = _HandedMachine(
-            resolver=resolver,
-            rng=rng,
-            hand_skew=hand_skew,
-            platoon_adv_hand=platoon_adv_hand,
-            away_hand=away_hand,
-            home_hand=home_hand,
-        )
+        sm = _HandedMachine(fp, rng=rng, away_hand=away_hand, home_hand=home_hand)
     else:
-        sm = _LeagueOutcomeMachine(resolver=resolver, rng=rng)
+        sm = StateMachine(fp, rng=rng)
     state = _fresh_state(seed, away_hand=away_hand)
     return simulate_game(sm, initial_state=state, seed=seed)
 
@@ -406,8 +331,7 @@ class TestPitchesPerPA:
         total_pa = 0
         for s in seeds:
             rng = np.random.default_rng(s)
-            res = _LeagueInPlayResolver(np.random.default_rng(s + 1_000_003))
-            sm = _PACountingMachine(resolver=res, rng=rng)
+            sm = _PACountingMachine(_sampler(s), rng=rng)
             r = simulate_game(sm, initial_state=_fresh_state(s), seed=s)
             total_pitches += r.total_pitches
             total_pa += sm.pa_count
@@ -543,21 +467,11 @@ class TestModelCalibrationSanity:
     one that happens to hit a number)."""
 
     def test_walk_and_strikeout_rates_are_league_average(self):
-        events = {
-            "walk": 0,
-            "strikeout": 0,
-            "single": 0,
-            "double": 0,
-            "triple": 0,
-            "home_run": 0,
-            "field_out": 0,
-            "ground_into_double_play": 0,
-        }
+        events = dict.fromkeys(_TALLY_EVENTS, 0)
         total = 0
         for s in range(80):
             rng = np.random.default_rng(s)
-            res = _LeagueInPlayResolver(np.random.default_rng(s + 7))
-            sm = _EventTallyMachine(resolver=res, rng=rng)
+            sm = _EventTallyMachine(_sampler(s + 7), rng=rng)
             simulate_game(sm, initial_state=_fresh_state(s), seed=s)
             total += sm.pa_count
             for k in events:

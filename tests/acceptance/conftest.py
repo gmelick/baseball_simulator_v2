@@ -78,7 +78,6 @@ from tests.acceptance import bands
 #: The exact inverse of the flags ``tests/conftest.py`` pins off — the lane
 #: states the whole production configuration so a reader of the log sees it.
 PRODUCTION_FLAGS: dict[str, str] = {
-    "SIM_FULL_POOL": "1",  # SIM-429 full-pool similarity sampler
     "SIM_MANAGER": "1",  # SIM-434 manager pull / reliever decisions
     "SIM_BB_PLATOON": "1",  # SIM-413 batted-ball platoon
     # SIM-476 (2026-08-30): the SIM-411/412/425b post-draw flips are DELETED;
@@ -405,9 +404,8 @@ def _install_probes(
     ``batter_reached`` transition fact — the loop's own body ledger.
 
     A seventh wrapper counts calls to ``_resolve_in_play_transition`` — the
-    SIM-511 production resolution path (the legacy
-    ``_full_pool_out_advancement`` is bypassed on a transition bundle and its
-    call count reads 0 by design).
+    SIM-511 production resolution path (SIM-486 deleted the legacy
+    ``_full_pool_out_advancement`` it used to bypass).
 
     The wrapper pattern matches ``scripts/diag_dp.py:64-78``.
     """
@@ -466,7 +464,6 @@ def _install_probes(
 
     orig_outcome = machine._full_pool_outcome
     orig_fielding = machine._full_pool_fielding
-    orig_advancement = machine._full_pool_out_advancement
     orig_steal = machine._steal_opportunity_draw
     orig_accumulate = machine._accumulate_pa
     orig_commit = machine._commit_run_delta
@@ -512,10 +509,6 @@ def _install_probes(
             if bool(sig.is_error) or sig.event == "field_error":
                 tally["ROE"][side] += 1
         return sig
-
-    def advancement(state: Any, result: Any, sig: Any, _o: Any = orig_advancement) -> Any:
-        calls["_full_pool_out_advancement"] += 1
-        return _o(state, result, sig)
 
     def transition(
         state: Any, result: Any, sig: Any, pre_outs: Any, pre_bases: Any, _o: Any = orig_transition
@@ -588,7 +581,6 @@ def _install_probes(
 
     machine._full_pool_outcome = outcome
     machine._full_pool_fielding = fielding
-    machine._full_pool_out_advancement = advancement
     machine._resolve_in_play_transition = transition
     machine._steal_opportunity_draw = steal
     machine._accumulate_pa = accumulate
@@ -639,7 +631,6 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
     run.calls = {
         "_full_pool_outcome": 0,
         "_full_pool_fielding": 0,
-        "_full_pool_out_advancement": 0,
         "_resolve_in_play_transition": 0,  # SIM-511: the production path
         "_steal_opportunity_draw": 0,
         "_commit_run_delta": 0,

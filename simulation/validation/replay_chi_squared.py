@@ -56,13 +56,8 @@ import numpy as np
 from scipy.stats import chisquare
 
 from simulation.game_state import GameState
-from simulation.sim_loop import (
-    FieldingSignal,
-    GameSimResult,
-    PlayResolver,
-    StateMachine,
-    simulate_game,
-)
+from simulation.sim_loop import GameSimResult, StateMachine, simulate_game
+from simulation.synthetic_bundle import league_artifacts, synthetic_sampler
 
 # ---------------------------------------------------------------------------
 # The calibrated league-average outcome model (the SIM-324 idiom, re-used)
@@ -93,24 +88,7 @@ LEAGUE_INPLAY_MODEL: dict[str, float] = {
     "double": 0.071,
     "triple": 0.006,
     "field_out": 0.609,
-    "ground_into_double_play": 0.026,
-}
-
-_EVENT_HITS = {
-    "single": 1,
-    "double": 2,
-    "triple": 3,
-    "home_run": 4,
-    "field_out": 0,
-    "ground_into_double_play": 0,
-}
-_EVENT_OUTS = {
-    "single": 0,
-    "double": 0,
-    "triple": 0,
-    "home_run": 0,
-    "field_out": 1,
-    "ground_into_double_play": 2,
+    "grounded_into_double_play": 0.026,
 }
 
 #: Default matchup keys for the no-DB reference replay (mirror SIM-324).
@@ -118,16 +96,6 @@ _DEFAULT_SEASON = 2024
 _DEFAULT_PITCHER = 477132
 _DEFAULT_AWAY_LINEUP = list(range(101, 110))
 _DEFAULT_HOME_LINEUP = list(range(201, 210))
-
-#: Outs-per-inning constant for the in-play double-play context filter.
-_OUTS_PER_INNING = 3
-
-
-def _normalize(model: dict[str, float]) -> tuple[list, np.ndarray]:
-    keys = list(model.keys())
-    probs = np.asarray([model[k] for k in keys], dtype=np.float64)
-    return keys, probs / probs.sum()
-
 
 # ---------------------------------------------------------------------------
 # The real-data seam: one row per team-game with a KNOWN actual run total
@@ -194,59 +162,32 @@ class ChiSquaredResult:
 
 
 # ---------------------------------------------------------------------------
-# Test doubles — the calibrated no-DB league machine + in-play resolver
-# (the SIM-324 idiom, re-used so the reference replay is realistic)
+# The calibrated no-DB league machine: the production StateMachine over the
+# synthetic league bundle (SIM-486; the SIM-324 idiom, re-used so the
+# reference replay is realistic)
 # ---------------------------------------------------------------------------
 
-
-class _LeagueOutcomeMachine(StateMachine):
-    """A StateMachine that draws each pitch outcome from the calibrated per-pitch
-    league model with its own seeded loop rng (NO sampler) -- the SIM-324 no-DB
-    driver path, re-used so the reference replay is baseball-realistic."""
-
-    def __init__(self, *a, **kw):
-        super().__init__(*a, **kw)
-        self._keys, self._probs = _normalize(LEAGUE_PITCH_MODEL)
-
-    def step_pitch(self, state, **_kw):  # type: ignore[override]
-        idx = int(self.rng.choice(len(self._keys), p=self._probs))
-        return super().step_pitch(state, pitch_outcome=self._keys[idx])
+_LEAGUE_ARTIFACTS = None
 
 
-class _LeagueInPlayResolver(PlayResolver):
-    """Resolve an ``in_play`` pitch to a sampled league-average batted-ball event
-    (the SIM-324 idiom): runs EMERGE from the loop's baserunning, not injected."""
-
-    def __init__(self, rng: np.random.Generator):
-        self.rng = rng
-        self._keys, self._probs = _normalize(LEAGUE_INPLAY_MODEL)
-        self._injected_battedball = {"event": "field_out"}
-
-    def resolve_fielding(self, state, battedball_sample) -> FieldingSignal:
-        idx = int(self.rng.choice(len(self._keys), p=self._probs))
-        event = self._keys[idx]
-        outs = _EVENT_OUTS[event]
-        # Same context filter as SIM-324: a GIDP is only a double play with <2
-        # outs AND a runner on first to force; else it degrades to a 1-out
-        # ground out (keeps the committed base-out state legal).
-        if event == "ground_into_double_play" and (
-            state.outs >= _OUTS_PER_INNING - 1 or state.bases.first is None
-        ):
-            event = "field_out"
-            outs = 1
-        return FieldingSignal(
-            event=event,
-            result_hits=_EVENT_HITS[event],
-            result_outs=outs,
-            result_runs=0,
+def _league_artifacts():
+    """The calibrated league bundle, built once; every replay draws from it."""
+    global _LEAGUE_ARTIFACTS
+    if _LEAGUE_ARTIFACTS is None:
+        _LEAGUE_ARTIFACTS = league_artifacts(
+            pitch_model=LEAGUE_PITCH_MODEL, inplay_model=LEAGUE_INPLAY_MODEL
         )
+    return _LEAGUE_ARTIFACTS
 
 
 def _default_state_machine(seed: int) -> StateMachine:
-    """Build the calibrated no-DB league machine for one seeded replay game."""
-    rng = np.random.default_rng(seed)
-    resolver = _LeagueInPlayResolver(np.random.default_rng(seed + 1_000_003))
-    return _LeagueOutcomeMachine(resolver=resolver, rng=rng)
+    """Build the calibrated no-DB league machine for one seeded replay game: the
+    production machine over the synthetic league bundle, so every pitch and
+    every batted ball is a real full-pool draw."""
+    return StateMachine(
+        synthetic_sampler(_league_artifacts(), seed + 1_000_003),
+        rng=np.random.default_rng(seed),
+    )
 
 
 # ---------------------------------------------------------------------------

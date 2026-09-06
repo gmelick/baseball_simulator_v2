@@ -39,7 +39,7 @@ import copy
 
 import numpy as np
 
-from pipeline.batch.engine_artifacts import BattedBallPool, EngineArtifacts, HandPool
+from pipeline.batch.engine_artifacts import EngineArtifacts
 from simulation.full_pool_sampler import FullPoolSampler
 from simulation.sim_loop import (
     FULL_POOL_STREAM,
@@ -48,6 +48,7 @@ from simulation.sim_loop import (
     simulate_game,
     spawn_rng_streams,
 )
+from simulation.synthetic_bundle import synthetic_artifacts
 
 _SEASON = 2024
 _PITCHER = 900
@@ -63,78 +64,15 @@ _OUTCOMES = ("ball", "called_strike", "swinging_strike", "foul", "in_play")
 # ===========================================================================
 
 
-def _pitch_pool() -> HandPool:
-    """One row per (count bucket x outcome) so every live count can draw.
-
-    ``sit`` is ``(balls, strikes, outs, runners, inning, score_diff)``. The
-    base-out columns are held at zero here: this module cares about WHICH
-    generator drives the draw, not about the situation factor (SIM-455 covers
-    that).
-    """
-    rows = [(b, s, o) for b in range(4) for s in range(3) for o in _OUTCOMES]
-    n = len(rows)
-    sit = np.zeros((n, 6), dtype=np.float32)
-    sit[:, 0] = [r[0] for r in rows]
-    sit[:, 1] = [r[1] for r in rows]
-    return HandPool(
-        geom=np.zeros((n, 10), dtype=np.float32),
-        sit=sit,
-        pitcher_id=np.full(n, _PITCHER, dtype=np.int64),
-        batter_id=np.full(n, _AWAY_LINEUP[0], dtype=np.int64),
-        season=np.full(n, _SEASON, dtype=np.int64),
-        outcome_type=np.asarray([r[2] for r in rows], dtype=object),
-        recency=np.ones(n, dtype=np.float32),
-    )
-
-
-def _bb_pool() -> BattedBallPool:
-    """A batted-ball pool, so the full-pool path resolves contact too and the
-    per-tile sampler is never reached."""
-    event = np.asarray(["field_out", "single", "double", "home_run"], dtype=object)
-    n = event.size
-    return BattedBallPool(
-        geom=np.zeros((n, 3), dtype=np.float32),
-        sit=np.zeros((n, 6), dtype=np.float32),
-        batter_id=np.full(n, _AWAY_LINEUP[0], dtype=np.int64),
-        season=np.full(n, _SEASON, dtype=np.int64),
-        event=event,
-        result_hits=np.array([0, 1, 2, 4], dtype=np.int8),
-        result_outs=np.array([1, 0, 0, 0], dtype=np.int8),
-        recency=np.ones(n, dtype=np.float32),
-    )
-
-
 def _artifacts() -> EngineArtifacts:
-    pool, bb = _pitch_pool(), _bb_pool()
-    return EngineArtifacts(
-        pools={"R": pool, "L": pool},
-        bb_pools={"R": bb, "L": bb},
+    """A small but REAL bundle: every count draws every outcome with equal
+    weight, every base-out cell resolves contact, no advancement pools (this
+    module cares about WHICH generator drives the draw, nothing else)."""
+    return synthetic_artifacts(
+        pitch_model=dict.fromkeys(_OUTCOMES, 1.0),
+        inplay_model={"field_out": 1.0, "single": 1.0, "double": 1.0, "home_run": 1.0},
+        advancement=False,
     )
-
-
-class _DummySampler:
-    """Stands in for the per-tile ``PlayPoolSampler``.
-
-    ``StateMachine`` refuses to build its ``PlateAppearanceSimulator`` without
-    one. On the full-pool tests below it is never called; the per-tile
-    reproducibility test drives it directly, so it draws from its own ``rng`` —
-    the attribute ``simulate_game`` re-seeds.
-    """
-
-    def __init__(self) -> None:
-        self.rng = np.random.default_rng(0)
-
-    def sample_pitch(self, pitcher_id, bat_hand, season, fingerprint, k=25) -> dict:
-        return {"pitch_outcome": _OUTCOMES[int(self.rng.integers(len(_OUTCOMES)))]}
-
-    def sample_batted_ball(self, bat_hand, season, fingerprint, k=25) -> dict:
-        i = int(self.rng.integers(4))
-        return {
-            "event": ["field_out", "single", "double", "home_run"][i],
-            "result_hits": [0, 1, 2, 4][i],
-            "result_outs": [1, 0, 0, 0][i],
-            "result_runs": 0,
-        }
 
 
 # ===========================================================================
@@ -186,7 +124,7 @@ class _SpyPool(FullPoolSampler):
 def _spy_game(seed: int) -> tuple[_SpyMachine, _SpyPool, object]:
     """Run one complete game and return the two spies plus the result."""
     fp = _SpyPool(_artifacts(), np.random.default_rng(0))
-    machine = _SpyMachine(_DummySampler(), full_pool_sampler=fp)
+    machine = _SpyMachine(fp)
     result = simulate_game(
         state_machine=machine,
         seed=seed,
@@ -331,9 +269,9 @@ class TestPerGameSeedReproducibility:
         prints = {_fingerprint(_spy_game(seed=s)[2]) for s in seeds}
         assert len(prints) > 1
 
-    def test_reproducibility_holds_on_a_freshly_built_machine(self):
-        """The other branch of ``simulate_game``: no machine supplied, so the loop
-        rng is passed to the constructor rather than rebound."""
+    def test_reproducibility_holds_on_an_unseeded_machine(self):
+        """A machine built with fresh-entropy generators: ``simulate_game``
+        rebinds BOTH from the per-game seed, so the game is still reproducible."""
         kwargs = {
             "seed": 987,
             "pitcher_id": _PITCHER,
@@ -341,6 +279,10 @@ class TestPerGameSeedReproducibility:
             "away_lineup": list(_AWAY_LINEUP),
             "home_lineup": list(_HOME_LINEUP),
         }
-        first = simulate_game(sampler=_DummySampler(), **kwargs)
-        second = simulate_game(sampler=_DummySampler(), **kwargs)
+
+        def _fresh() -> StateMachine:
+            return StateMachine(_SpyPool(_artifacts(), np.random.default_rng()))
+
+        first = simulate_game(_fresh(), **kwargs)
+        second = simulate_game(_fresh(), **kwargs)
         assert _fingerprint(first) == _fingerprint(second)

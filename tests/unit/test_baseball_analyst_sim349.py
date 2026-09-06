@@ -31,13 +31,8 @@ from __future__ import annotations
 import numpy as np
 
 from simulation.game_state import Bases, GameState, Half
-from simulation.sim_loop import (
-    FieldingSignal,
-    PlayResolver,
-    StateMachine,
-    StealResolution,
-    simulate_game,
-)
+from simulation.sim_loop import StateMachine, simulate_game
+from simulation.synthetic_bundle import league_artifacts, synthetic_sampler
 
 SEASON = 2024
 PITCHER = 477132
@@ -77,10 +72,8 @@ def _state(
     return s
 
 
-def _machine(manager=None, *, seed: int = 7, resolver=None, ibb_rates=None) -> StateMachine:
-    return StateMachine(
-        rng=np.random.default_rng(seed), manager=manager, resolver=resolver, ibb_rates=ibb_rates
-    )
+def _machine(manager=None, *, seed: int = 7, ibb_rates=None) -> StateMachine:
+    return StateMachine(rng=np.random.default_rng(seed), manager=manager, ibb_rates=ibb_rates)
 
 
 # A manager who pulls every situational lever (all rates near 1.0).
@@ -167,18 +160,12 @@ class TestHitAndRun:
 
 class TestHitAndRunConsolidation:
     def test_hit_and_run_preempts_the_steal_initiate(self):
-        # A resolver that always wants to steal: when the hit-and-run fires the
+        # A steal pool whose every row runs: when the hit-and-run fires the
         # steal is NOT also staged (the runner goes WITH the swing, one decision).
-        class _AlwaysSteal(PlayResolver):
-            def resolve_steal(self, state):
-                return StealResolution(
-                    attempted=True, runner_id=11, from_base=1, to_base=2, safe=True
-                )
-
         m = StateMachine(
+            synthetic_sampler(league_artifacts(steal=(1.0, 1.0)), 3),
             rng=np.random.default_rng(3),
             manager={"hit_and_run_rate_per_opportunity": 1.0, "steal_order_rate_per_1b_opp": 1.0},
-            resolver=_AlwaysSteal(),
         )
         s = _state(inning=7, first=11, outs=1, balls=1)
         m._pre_pitch_hook(s)
@@ -222,42 +209,6 @@ class TestDeterminism:
 # ===========================================================================
 
 
-class _CyclingResolver(PlayResolver):
-    # SIM-505: without an injected batted-ball sample the loop's no-sampler
-    # path resolves EVERY in-play pitch to a terminal NOTHING — this resolver
-    # was never consulted, the synthetic games were walk/strikeout marathons
-    # with runners parked for whole innings, and the wrap-around batter
-    # eventually collided with his own parked self (a runner on two bases,
-    # seed-dependent). The class-level sample opts into the loop's injection
-    # seam (`_injected_battedball`, sim_loop.py step 6), so singles and outs
-    # actually resolve through the REAL advancement code and every game is
-    # legal baseball at any seed.
-    _injected_battedball = {"exit_velo": 90.0, "launch_angle": 12.0}
-
-    def __init__(self, rng, hit_rate: float = 0.30):
-        self.rng = rng
-        self.hit_rate = float(hit_rate)
-
-    def resolve_fielding(self, state, battedball_sample):
-        if float(self.rng.random()) < self.hit_rate:
-            return FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
-        return FieldingSignal(event="field_out", result_hits=0, result_outs=1, result_runs=0)
-
-
-class _RngMachine(StateMachine):
-    def step_pitch(self, state, **_kw):  # type: ignore[override]
-        r = float(self.rng.random())
-        if r < 0.55:
-            outcome = "in_play"
-        elif r < 0.75:
-            outcome = "ball"
-        elif r < 0.92:
-            outcome = "called_strike"
-        else:
-            outcome = "foul"
-        return super().step_pitch(state, pitch_outcome=outcome)
-
-
 class TestNoProfileFullGame:
     def test_no_profile_game_completes_with_new_triggers_no_op(self):
         # SIM-498 reseeded the loop and full-pool generators from independent
@@ -266,7 +217,7 @@ class TestNoProfileFullGame:
         # regulation. The seed is incidental — this test asserts the game reaches a
         # decision rather than stalling, and it still does.
         rng = np.random.default_rng(2)
-        machine = _RngMachine(resolver=_CyclingResolver(rng), rng=rng)  # manager=None
+        machine = StateMachine(synthetic_sampler(league_artifacts(), 2), rng=rng)  # manager=None
         result = simulate_game(
             machine,
             seed=2,
@@ -288,8 +239,8 @@ class TestNoProfileFullGame:
         # ILLEGAL seeds plus one that always passed.
         for seed in (1, 2, 7):
             rng = np.random.default_rng(seed)
-            machine = _RngMachine(
-                resolver=_CyclingResolver(rng),
+            machine = StateMachine(
+                synthetic_sampler(league_artifacts(), seed),
                 rng=rng,
                 manager=_AGGRESSIVE,
             )

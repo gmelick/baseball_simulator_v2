@@ -1,0 +1,16 @@
+{
+  "flags": {
+    "SIM_CATCHER_FRAMING_SIGMA": "0.25",
+    "SIM_CATCHER_BLOCK_SIGMA": "0.05",
+    "SIM_GOT_AWAY": "0"
+  },
+  "counts": {
+    "PA": 180417,
+    "BB": 14780,
+    "IBB": 532,
+    "HBP": 1817,
+    "STEAL_OPP_2": 161705,
+    "STEAL_ATT_2": 3715
+  },
+  "iters": 200
+}

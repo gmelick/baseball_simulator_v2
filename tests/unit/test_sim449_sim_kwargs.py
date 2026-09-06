@@ -90,7 +90,7 @@ def test_builder_returns_the_whole_contract():
     assert set(sim_kwargs_from_state(state)) == SIM_KWARG_KEYS
     # The count is pinned too: an added key is a behaviour change and must be a
     # deliberate edit here, not a silent drift.
-    assert len(SIM_KWARG_KEYS) == 16
+    assert len(SIM_KWARG_KEYS) == 15  # SIM-486 deleted the per-tile ``k``
 
 
 def test_builder_carries_defense_maps_and_park_factor():
@@ -115,7 +115,6 @@ def test_builder_defaults_neutral_when_state_bare():
     kw = sim_kwargs_from_state(state)
     assert kw["home_defense"] == {} and kw["away_defense"] == {}
     assert kw["park_run_factor"] == 1.0
-    assert kw["k"] == 25
     assert kw["max_innings"] == 12
 
 

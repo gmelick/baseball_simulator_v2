@@ -28,8 +28,8 @@
     fitted + applied at boot; win-prob map = fitted reliability-curve. 120-game validation: win-prob
     **ECE 0.0377** (was 0.047); batter **H/HR/TB 0.066/0.024/0.060** (bettable); pitcher **BB 0.044 —
     now bettable (was 0.21)** and **K 0.109 (halved from 0.22, not yet bet-grade)**.
-  - **Production sim path = the full-pool similarity sampler** (`SIM_FULL_POOL=1`); per-tile FAISS k-NN is
-    the fallback / unit-test default. **All production realism flags are ON** in the docker-compose `app`
+  - **The sim path = the full-pool similarity sampler**, the ONLY path since SIM-486 (2026-09-06) deleted the per-tile
+    fallback + `SIM_FULL_POOL` (tests use `simulation/synthetic_bundle.py`). **All production realism flags are ON** in the docker-compose `app`
     env and **pinned OFF in `tests/conftest.py`** (so CI + the flag-off baseline stay byte-identical):
     `SIM_MANAGER` (SIM-434 manager pull/reliever decisions), `SIM_PARK_FACTOR` / `SIM_BB_PLATOON` /
     `SIM_FIELDER_RBF` (SIM-411/413/425b realism nudges), `SIM_FRAMING` (default ON). All enabled +
@@ -76,8 +76,8 @@
 - **Similarity-engine-wiring / full-pool realism epic (SIM-422→429) — LANDED on `master`.** The
   simulator scores the **entire same-hand play pool** by the applicable similarity engines (no top-K;
   the batter's hand is the only hard filter — the pitcher hand self-zeroes via the pitcher engine)
-  and is the **production default** (`SIM_FULL_POOL=1` in the docker-compose `app` env; per-tile
-  path is the fallback and unit-test default, pinned off in `tests/conftest.py`).
+  and is the **only path** (SIM-486 deleted the per-tile fallback and the `SIM_FULL_POOL`
+  switch on 2026-09-06; tests draw from a synthetic in-memory bundle).
 - **DP-rate bug fix propagated 2026-05-28:** the player-profile computor's
   `dp_turned = outs_on_pitch >= 2` always-False bug was fixed and the 5.7-hour 2017-2025
   recompute completed.  Per-season DP rates now 42-48% (was 0.0).  Actor embeddings rebuilt
@@ -101,7 +101,7 @@
   - **Cold-worker fix shipped.** `production_machine_factory` passes `fingerprint_deriver=None`
     on the full-pool path (the deriver is unused there but `_default_deriver_builder` did 3 eager
     per-seed disk loads), and a BACKGROUND pre-warm (`BatchRunner.prewarm()` +
-    `production_factory.warm_worker_cache()`, lifespan-gated on `SIM_FULL_POOL`, bounded-concurrency
+    `production_factory.warm_worker_cache()`, bounded-concurrency
     + a `_get_pool` lock) populates each worker's per-process full-pool cache off the request path.
     This eliminated the n=10 ≈ **498-507s** cold-fan-out stall (a fresh n-iteration request used to
     spread games one-per-worker, so the per-worker cache never warmed in time and every worker paid
@@ -171,6 +171,13 @@ standing owner rulings that govern all new work:
   similarity-weighted draw from a hard-filtered pool — never a hand-tuned formula — and
   **the drawn row IS the play**: no post-draw adjustment of any kind; every factor is a
   draw WEIGHT or OFF until its weight lands.
+- **One in-play path (SIM-486, 2026-09-06):** the per-tile FAISS fallback, the injected
+  `PlayResolver`, the legacy advancement code (`_advance_runners` and its constants), the
+  SIM-318 foul re-weight and the `SIM_FULL_POOL` switch are DELETED. Every no-DB test and
+  the batch runner's no-DB factory build the production `StateMachine` over an in-memory
+  `simulation/synthetic_bundle.py` bundle, so the suite runs the code users get. A missing
+  artifact bundle now FAILS the worker loudly (no fallback simulator). The nightly chain
+  rebuilds the bundle (`make engine-artifacts`); it used to rebuild dead FAISS tiles.
 - **The grade is POOL TOTALS (2026-08-20):** the sim's frequencies certify against the play
   pool's own totals (`tests/acceptance/bands.py` `POOL_REFERENCES`, 11 per-opportunity
   bands); R / SB / CS / home_win_pct stay game-graded. **CERTIFIED 2026-08-20 (12×500):
@@ -189,10 +196,13 @@ play, mechanically), SIM-515 (IBB is a per-PA draw at `sim.ibb_rates`' real cell
 kernels (home/park/fielder built as draw weights, env-gated off pending SIM-476 fits;
 `SIM_HOME_OFF_WEIGHT` / `SIM_PARK_KERNEL_SIGMA` / `SIM_FIELDER_KERNEL_SIGMA`), and the
 framing flip OFF (its weight rebuild is SIM-517). The 2026-08-29 hygiene sweep closed or
-merged 8 stale rows. The open board (11): SIM-476 (all kernel fits — read the fit plan;
+merged 8 stale rows. SIM-456 CLOSED 2026-09-04 (the whiff fix was live since the SIM-459
+recompute; the platoon z-swing legs' inversion found in its close is SIM-522, CLOSED the same
+day by owner decision: fixed in code, the data lands with the next recompute; the D-N7
+csw/whiff overlap is parked on SIM-429). The open board (9): SIM-476 (all kernel fits — read the fit plan;
 step 0 pending an owner ruling on the steal-aggression recommendation), 517 (catcher
 receiving profile), 519 (live slate epic), 429-payoff (K-prop refit + CLV re-measure), 427,
-518, 467, 486, 456, 497a/b, 421. The 2026-08-17 and 2026-08-11 handover docs stay valid as
+518, 467, 486, 497a/b, 421. The 2026-08-17 and 2026-08-11 handover docs stay valid as
 history only.
 
 - **DO NOT run the profile recompute** (`make profile-computor`) — but the reason changed on
@@ -302,8 +312,8 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   → Play pool (sim.pitch_pool / sim.outcome_pool + FAISS tiles)  [Phase 3]
   → Full-pool similarity sampler (simulation/full_pool_sampler.py over the SIM-422 engine-artifact
     bundle) : scores the WHOLE same-hand pool by the applicable engines (factorized weights:
-    f_pitcher·f_batter·f_situation·recency; count-bucketed pitch draw) — the PRODUCTION path
-    (SIM_FULL_POOL=1). The per-tile FAISS k-NN sampler is the fallback / unit-test path.  [SIM-422→429]
+    f_pitcher·f_batter·f_situation·recency; count-bucketed pitch draw) — the ONLY path since
+    SIM-486; tests use `simulation/synthetic_bundle.py` (an in-memory bundle).  [SIM-422→429, 486]
   → Core sim loop (simulation/sim_loop.py) : 8-step pitch-by-pitch state machine + manager/situational
     decisions → GameSimResult                                     [Phase 4]
   → Runner + API (simulation/batch_runner.py, api/) : 100-iteration ProcessPool runner (forkserver
@@ -320,14 +330,15 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   advancement/steal/framing live here; also the SIM-434 manager fatigue/rest/TTO + reliever-selection
   helpers, all gated `SIM_MANAGER`), `full_pool_sampler.py` (SIM-423 full-pool similarity sampler:
   count-bucket CDFs, batted-ball draw, `runner_rate`/`catcher_framing`; reads the SIM-430 dense
-  `pitcher_sim_matrix` fast path), `matchup_provider.py` (SIM-421 fork-safe deriver/centroid provider),
+  `pitcher_sim_matrix` fast path), `synthetic_bundle.py` (SIM-486: the in-memory bundle every
+  no-DB test and the batch runner's no-DB factory draw from — the same loop, the same sampler),
   `game_state.py` (carries bat/throw hands + per-team pitcher/catcher ids + the SIM-434 per-pitcher
   rest / pitch-count fields), `results.py`, `batch_runner.py` (ProcessPool runner — `mp_context=forkserver`
-  per SIM-430), `production_factory.py` (builds the full-pool sampler from disk per worker when
-  `SIM_FULL_POOL` is set; `_manager_enabled()` + synthetic-bullpen builder gate SIM-434), `lineup_resolver.py`
+  per SIM-430), `production_factory.py` (builds the full-pool sampler from disk per worker, and
+  RAISES when the bundle is missing — no fallback; `_manager_enabled()` + synthetic-bullpen builder gate SIM-434), `lineup_resolver.py`
   (also resolves the per-team catcher via the SIM-363 defense map), `linescore.py`, `pitcher_decisions.py`
   (W/L/S + the manager pull model), `play_recorder.py`, `prop_distributions.py`, `win_probability.py`,
-  `snapshots.py`, `score_fusion.py`, `fingerprints.py`, `validation/replay_chi_squared.py`.
+  `snapshots.py`, `validation/replay_chi_squared.py`.
 - `similarity/` — `engines/` (the 11 engines), `similarity_calibration.py`, `backtesting/` (backtester +
   walk-forward), `registry.py`.
 - `betting/` — `clv_engine.py`, `bet_signal.py`, `line_movement.py`.
@@ -335,7 +346,7 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   imported by both ETL loaders), `live/live_ingestion_pipeline.py` (MLB WS + REST + odds),
   `live/bullpen_availability_ingest.py` (SIM-433 MLB-API active-roster/IL → `raw.game_bullpen_availability`),
   `batch/player_profile_computor.py` (+ the SIM-433 `_compute_bullpen_workload` from `raw.pitches`) +
-  `play_pool_cache.py` (normalized tiles + persisted norms/centroids) + `engine_artifacts.py` (SIM-422
+  `engine_artifacts.py` (SIM-422
   builder + per-worker loader for the full-pool bundle: hand pools, pitcher×pitcher sim — incl. the
   SIM-430 dense `pitcher_sim_matrix` — batter/catcher/fielder/baserunner/manager embeddings, batted-ball
   pools), `odds_provider.py`, `bettingpros_odds_provider.py` (SIM-435 `closing`-line branch).
@@ -419,7 +430,7 @@ make lint              # ruff check
 make format            # ruff format
 make type-check        # mypy
 make profile-computor  # nightly: rebuild DuckDB profiles + sim pools
-make play-pool-cache   # nightly (after profile-computor): materialize FAISS tiles
+make engine-artifacts  # nightly (after profile-computor): rebuild the engine-artifact bundle (SIM-486)
 make calibrate         # fit /data/calibration.json (arsenal W2 + per-engine sigmas) — SIM-406/432
 make validate-props    # SIM-407 prop-PMF / win-prob validation (add --write-calibration for the curve)
 ```
@@ -588,7 +599,8 @@ Do not claim the bands pass until the 12×425 certifying lane runs; the safe spl
 
 **Realism sub-track (interleaved, landed on `master`):** the SIM-422→429 full-pool similarity-wiring
 epic replaced the per-tile k-NN draw with whole-pool engine-weighted sampling and made it the
-production default — see §2/§11. This is independent of the frontend critical path below.
+production default — see §2/§11; SIM-486 (2026-09-06) then deleted the per-tile path entirely.
+This is independent of the frontend critical path below.
 
 **Phase 6 critical path:** SIM-378 (React-vs-vanilla ADR) → 379/380/381 (scaffold + design system +
 API→UI serving) + 382/383/384/385/387/389 (backfill deps; enriched games list+records; aggregate card +

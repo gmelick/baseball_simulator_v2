@@ -11,7 +11,7 @@ chi-squared GOF test (the spec's "p > 0.05" validation gate).
 
 This is a NEW harness module; it does NOT modify ``simulation/sim_loop.py`` --
 it only *drives* it (the SIM-316/320/324 dependency-injection pattern: an
-injected outcome model + resolver, no live DuckDB / FAISS).
+the synthetic league bundle, no live DuckDB).
 """
 
 from __future__ import annotations

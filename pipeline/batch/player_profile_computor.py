@@ -2193,9 +2193,12 @@ class PlayerProfileComputor:
                     SUM(CASE WHEN p_throws='L' AND zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
                         THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND zone NOT BETWEEN 1 AND 9 THEN 1
                         ELSE 0 END), 0) AS o_swing_rate_vs_l,
-                    SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9 AND type IN ('B', 'C', 'H', 'P', '*B') THEN 1.0
-                        ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
-                        AS z_swing_rate_vs_l,
+                    -- SIM-522: this leg kept the inverted `type IN (...)` predicate after
+                    -- SIM-501 fixed the season-level z_swing_rate, so it held the z-TAKE
+                    -- rate (live 2024: 0.32 vs 0.68). Same fix: a swing is NOT a non-swing.
+                    SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
+                        THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='L' AND zone BETWEEN 1 AND 9 THEN 1
+                        ELSE 0 END), 0) AS z_swing_rate_vs_l,
                     SUM(CASE WHEN p_throws='L' AND {SQL_WHIFF} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE
                         WHEN p_throws='L' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0)
                         AS whiff_rate_vs_l,
@@ -2232,9 +2235,12 @@ class PlayerProfileComputor:
                     SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
                         THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND zone NOT BETWEEN 1 AND 9 THEN 1
                         ELSE 0 END), 0) AS o_swing_rate_vs_r,
-                    SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 AND type IN ('B', 'C', 'H', 'P', '*B') THEN 1.0
-                        ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 THEN 1 ELSE 0 END), 0)
-                        AS z_swing_rate_vs_r,
+                    -- SIM-522: this leg kept the inverted `type IN (...)` predicate after
+                    -- SIM-501 fixed the season-level z_swing_rate, so it held the z-TAKE
+                    -- rate (live 2024: 0.32 vs 0.68). Same fix: a swing is NOT a non-swing.
+                    SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 AND type NOT IN ('B', 'C', 'H', 'P', '*B')
+                        THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE WHEN p_throws='R' AND zone BETWEEN 1 AND 9 THEN 1
+                        ELSE 0 END), 0) AS z_swing_rate_vs_r,
                     SUM(CASE WHEN p_throws='R' AND {SQL_WHIFF} THEN 1.0 ELSE 0 END) / NULLIF(SUM(CASE
                         WHEN p_throws='R' AND type NOT IN ('B', 'C', 'H', 'P', '*B') THEN 1 ELSE 0 END), 0)
                         AS whiff_rate_vs_r,

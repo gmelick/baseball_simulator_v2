@@ -3,11 +3,12 @@
 #
 # WHAT THIS JOB DOES
 # ------------------
-# Runs the simulator with every production flag ON (SIM_FULL_POOL, SIM_MANAGER,
-# SIM_PARK_FACTOR, SIM_BB_PLATOON, SIM_FIELDER_RBF, SIM_FRAMING) and asserts each
-# box-score channel against a band around the real MLB rate. Every other test lane
-# in this repository pins those flags OFF (tests/conftest.py:33-53), so this is the
-# only job that measures the simulator users get.
+# Runs the simulator with every production flag ON (SIM_MANAGER, SIM_BB_PLATOON,
+# the fitted SIM_*_KERNEL_SIGMA / SIM_CATCHER_*_SIGMA bandwidths, SIM_GOT_AWAY)
+# and asserts each box-score channel against a band around the real MLB rate.
+# Every other test lane in this repository pins those flags OFF
+# (tests/conftest.py), so this is the only job that measures the simulator users
+# get.
 #
 # THE BAND ARITHMETIC IS NOT TESTED HERE
 # --------------------------------------

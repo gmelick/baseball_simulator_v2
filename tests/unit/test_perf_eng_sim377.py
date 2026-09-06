@@ -103,17 +103,16 @@ class TestHitRateNoTypeError:
 class TestHitRateActuallyTunes:
     def test_high_hit_rate_tunes_the_factory_resolver(self):
         # The factory reads _hit_rate from the whole spec (even though _run_one
-        # filters it out of the simulate_game splat) and wires it into the no-DB
-        # _CyclingResolver.  Assert the knob bites where it is actually consumed:
-        # a higher _hit_rate yields more hits from resolve_fielding.  (The no-DB
-        # StateMachine's integer run production is driven by its own pitch-outcome
-        # rng, so the knob's effect is verified at the resolver it tunes, not on
-        # downstream runs.)
+        # filters it out of the simulate_game splat) and sets the hit-on-contact
+        # share of the synthetic bundle's batted-ball pool.  Assert the knob bites
+        # where it is actually consumed: a higher _hit_rate yields more hits from
+        # the batted-ball draw.
         from simulation.batch_runner import rng_driven_machine_factory
 
         def hits_over_n(hit_rate: float, n: int = 400) -> int:
-            machine = rng_driven_machine_factory(2024, _spec(_hit_rate=hit_rate))
-            return sum(machine.resolver.resolve_fielding(None, None).result_hits for _ in range(n))
+            fp = rng_driven_machine_factory(2024, _spec(_hit_rate=hit_rate)).full_pool_sampler
+            fp.battedball_new_pa("R", "101:2024", np.zeros(6, dtype=np.float32))
+            return sum(int(fp.battedball_draw()[1] > 0) for _ in range(n))
 
         low_hits = hits_over_n(0.05)
         high_hits = hits_over_n(0.95)
@@ -137,7 +136,7 @@ class TestPassthroughPreserved:
     def test_non_underscore_kwargs_reach_simulate_game(self):
         # season / pitcher_id / bat_hand / lineups are real simulate_game params and
         # must still flow through (mixed with the filtered _hit_rate).
-        spec = _spec(_hit_rate=0.5, k=15, max_innings=9)
+        spec = _spec(_hit_rate=0.5, max_innings=9)
         result = _run_one(spec, seed=99)
         # The game used the wired season + ran to a legal length.
         assert result.final_state.season == 2024

@@ -3,15 +3,13 @@ test_sim402_prewarm.py
 ======================
 Unit tests for SIM-402 -- the cold-worker ``/simulate`` SLA fix.
 
-Two structural changes are covered here (the wall-clock SLA itself is verified
-live in the container; these lock the CONTRACTS the speed-up rests on):
+Two contracts are covered here (the wall-clock SLA itself is verified live in
+the container; these lock the CONTRACTS the speed-up rests on):
 
-  1. **Deriver skip on the full-pool path** -- when the full-pool sampler is
-     active, :func:`simulation.production_factory.production_machine_factory` must
-     NOT build the per-tile :class:`FingerprintDeriver` (it is unused on that path
-     but ``_default_deriver_builder`` does three eager disk loads on EVERY seed).
-     The per-tile fallback path (the unit-test default, ``SIM_FULL_POOL=0``) must
-     STILL build it.
+  1. **The factory has no fallback (SIM-486)** -- with no engine-artifact bundle
+     on disk, :func:`simulation.production_factory.production_machine_factory`
+     raises loudly and :func:`warm_worker_cache` reports ``False``; the per-tile
+     fallback and its fingerprint deriver are gone.
 
   2. **Worker pre-warm** -- :func:`production_factory.warm_worker_cache` populates
      the per-process full-pool cache, and :meth:`BatchRunner.prewarm` runs it on
@@ -21,12 +19,11 @@ live in the container; these lock the CONTRACTS the speed-up rests on):
      does it once per worker at startup instead.
 
 All sandbox-runnable: the full-pool build is monkeypatched (no artifacts/DuckDB),
-and only the one slow-marked test spawns real worker processes.
+and only the slow-marked tests spawn real worker processes.
 """
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 import simulation.production_factory as pf
@@ -37,14 +34,6 @@ from simulation.production_factory import (
     warm_worker_cache,
 )
 from simulation.sim_loop import StateMachine
-
-
-class _MockSampler:
-    """A dependency-light stand-in for :class:`PlayPoolSampler` (holds an ``rng``
-    so the ``simulate_game`` re-seed seam finds it; never touches DuckDB/FAISS)."""
-
-    def __init__(self, rng=None):
-        self.rng = rng if rng is not None else np.random.default_rng()
 
 
 class _FakeArt:
@@ -93,53 +82,34 @@ def _clean_caches_and_builders():
     reset_caches()
     yield
     reset_caches()
-    pf.set_sampler_builder(None)
-    pf.set_deriver_builder(None)
 
 
 # ===========================================================================
-# 1. Deriver skip on the full-pool path
+# 1. No fallback (SIM-486): the factory raises without a bundle
 # ===========================================================================
 
 
-class TestDeriverSkippedOnFullPoolPath:
-    def test_full_pool_active_skips_deriver_build(self, monkeypatch):
-        """When the full-pool sampler builds, the deriver builder is NOT called and
-        the machine carries ``fingerprint_deriver=None`` + the full-pool sampler."""
+class TestNoFallback:
+    def test_dotted_ref_resolves_to_the_production_factory(self):
+        from simulation.batch_runner import _resolve_dotted
+
+        ref = "simulation.production_factory:production_machine_factory"
+        assert _resolve_dotted(ref) is production_machine_factory
+
+    def test_factory_raises_loudly_without_a_bundle(self, tmp_path):
+        spec = _spec(_pool_dir=str(tmp_path))
+        with pytest.raises(RuntimeError, match="SIM-486"):
+            production_machine_factory(1, spec)
+
+    def test_warm_reports_false_without_a_bundle(self, tmp_path):
+        assert warm_worker_cache(str(tmp_path)) is False
+
+    def test_factory_wires_the_built_sampler(self, monkeypatch):
         sentinel = object()
         monkeypatch.setattr(pf, "_build_full_pool_sampler", lambda spec, seed: sentinel)
-        deriver_calls: list[int] = []
-        pf.set_deriver_builder(lambda spec: deriver_calls.append(1) or "DERIVER")
-
-        with pf.use_sampler_builder(lambda spec, seed: _MockSampler()):
-            machine = production_machine_factory(7, _spec())
-
+        machine = production_machine_factory(7, _spec())
         assert isinstance(machine, StateMachine)
         assert machine.full_pool_sampler is sentinel
-        assert machine.fingerprint_deriver is None
-        assert deriver_calls == []  # the 3-disk-load builder was skipped entirely
-
-    def test_per_tile_path_still_builds_deriver(self, monkeypatch):
-        """With no full-pool sampler (the per-tile / unit-test default) the deriver
-        builder is STILL invoked -- that path is unchanged by SIM-402."""
-        monkeypatch.setattr(pf, "_build_full_pool_sampler", lambda spec, seed: None)
-        pf.set_deriver_builder(lambda spec: "DERIVER")
-
-        with pf.use_sampler_builder(lambda spec, seed: _MockSampler()):
-            machine = production_machine_factory(7, _spec())
-
-        assert machine.full_pool_sampler is None
-        assert machine.fingerprint_deriver == "DERIVER"
-
-    def test_full_pool_path_still_wires_a_sampler(self, monkeypatch):
-        """The per-tile sampler is still wired (the StateMachine's ``_pa`` guard
-        needs it) even though the full-pool path never calls it for draws."""
-        monkeypatch.setattr(pf, "_build_full_pool_sampler", lambda spec, seed: object())
-        mock = _MockSampler()
-        with pf.use_sampler_builder(lambda spec, seed: mock):
-            machine = production_machine_factory(7, _spec())
-        assert machine.sampler is mock
-        assert machine._pa is not None
 
 
 # ===========================================================================
@@ -291,7 +261,7 @@ def test_prewarm_pooled_warms_workers_bounded():
 
     We assert the ROBUST contract (``>= 1``), not exactly W: with real per-worker warm
     latency the executor spawns all W (each task holds a worker for seconds), but the
-    no-op test warm (``SIM_FULL_POOL`` unset) returns instantly, so one worker can
+    no-op test warm (no bundle on disk) returns instantly, so one worker can
     service multiple tasks before the others spawn — a test-only coalescing, not a
     production behaviour."""
     runner = BatchRunner(max_workers=2, reuse_pool=True)

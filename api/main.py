@@ -478,45 +478,44 @@ async def lifespan(app: FastAPI):
         sim_runner_workers if sim_runner_workers is not None else default_max_workers()
     )
 
-    # SIM-403b: when the full-pool path is enabled AND the engine-artifact bundle
-    # is on disk, load it ONCE here and extract the big shareable numpy arrays
-    # so BatchRunner can publish them into ``multiprocessing.shared_memory``
-    # zero-copy. The worker-side splice happens in
+    # SIM-403b: when the engine-artifact bundle is on disk, load it ONCE here
+    # and extract the big shareable numpy arrays so BatchRunner can publish
+    # them into ``multiprocessing.shared_memory`` zero-copy. The worker-side
+    # splice happens in
     # :func:`simulation.production_factory._build_full_pool_sampler`. If the
     # bundle isn't present (no-DB tests, sandbox without a built artifact dir),
-    # we silently skip — the per-worker disk load still works for the per-tile
-    # fallback path and the full-pool path runs on the disk-loaded arrays.
+    # we skip the publish; each worker then disk-loads the bundle itself and
+    # fails loudly at the first /simulate if it is absent (SIM-486: there is
+    # no fallback simulator).
     shared_arrays_payload: dict | None = None
-    _full_pool_env = os.environ.get("SIM_FULL_POOL", "").strip().lower()
-    if _full_pool_env not in ("", "0", "false", "no", "off"):
-        try:
-            from pipeline.batch.engine_artifacts import EngineArtifacts
+    try:
+        from pipeline.batch.engine_artifacts import EngineArtifacts
 
-            pool_dir = os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool")
-            art_dir = os.path.join(pool_dir, "engine_artifacts")
-            log.info(
-                "SIM-403b: loading engine artifacts for shared-memory publish (%s) ...",
-                art_dir,
-            )
-            art = await asyncio.to_thread(EngineArtifacts.load, art_dir)
-            shared_arrays_payload = art.extract_shared_arrays()
-            total_mb = sum(a.nbytes for a in shared_arrays_payload.values()) / (1024 * 1024)
-            log.info(
-                "SIM-403b: publishing %d engine-artifact arrays (%.1f MB) into shared memory",
-                len(shared_arrays_payload),
-                total_mb,
-            )
-        except Exception as exc:  # noqa: BLE001
-            # Defensive: a missing/corrupt artifact dir must not prevent the
-            # API from starting (the per-tile fallback still works). Log and
-            # move on without shared arrays.
-            log.warning(
-                "SIM-403b: engine-artifact preload failed (%s: %s); "
-                "workers will disk-load per process.",
-                type(exc).__name__,
-                exc,
-            )
-            shared_arrays_payload = None
+        pool_dir = os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool")
+        art_dir = os.path.join(pool_dir, "engine_artifacts")
+        log.info(
+            "SIM-403b: loading engine artifacts for shared-memory publish (%s) ...",
+            art_dir,
+        )
+        art = await asyncio.to_thread(EngineArtifacts.load, art_dir)
+        shared_arrays_payload = art.extract_shared_arrays()
+        total_mb = sum(a.nbytes for a in shared_arrays_payload.values()) / (1024 * 1024)
+        log.info(
+            "SIM-403b: publishing %d engine-artifact arrays (%.1f MB) into shared memory",
+            len(shared_arrays_payload),
+            total_mb,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Defensive: a missing/corrupt artifact dir must not prevent the
+        # API from starting (the health + data routes still serve). Log and
+        # move on without shared arrays.
+        log.warning(
+            "SIM-403b: engine-artifact preload failed (%s: %s); "
+            "workers will disk-load per process.",
+            type(exc).__name__,
+            exc,
+        )
+        shared_arrays_payload = None
 
     log.info(
         "Building persistent BatchRunner (workers=%s, SIM_RUNNER_WORKERS=%r, shared_arrays=%d) ...",
@@ -540,12 +539,11 @@ async def lifespan(app: FastAPI):
     # yields + serves immediately; workers warm behind it (in bounded-concurrency
     # waves, see BatchRunner.prewarm) and any failure degrades to the lazy per-game
     # warm-up.
-    if _full_pool_env not in ("", "0", "false", "no", "off"):
-        prewarm_pool_dir = os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool")
-        log.info("SIM-402: scheduling background sim-runner pre-warm ...")
-        app.state.prewarm_task = asyncio.create_task(
-            _background_prewarm(app.state.sim_runner, prewarm_pool_dir)
-        )
+    prewarm_pool_dir = os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool")
+    log.info("SIM-402: scheduling background sim-runner pre-warm ...")
+    app.state.prewarm_task = asyncio.create_task(
+        _background_prewarm(app.state.sim_runner, prewarm_pool_dir)
+    )
 
     yield
 

@@ -51,15 +51,15 @@ import os
 import numpy as np
 import pytest
 
+from simulation.batch_runner import _inplay_model_for
 from simulation.game_state import Bases, GameState, Half, Team
 from simulation.sim_loop import (
     REGULATION_INNINGS,
-    FieldingSignal,
     GameSimResult,
-    PlayResolver,
     StateMachine,
     simulate_game,
 )
+from simulation.synthetic_bundle import league_artifacts, synthetic_sampler
 
 # ---------------------------------------------------------------------------
 # Tunables
@@ -185,31 +185,16 @@ def assert_state_valid(
 
 
 # ===========================================================================
-# Test doubles -- a no-DB resolver + an rng-driven, self-checking StateMachine
-# (the SIM-320 injection idiom, reused verbatim, plus a per-transition check)
+# Test doubles -- an rng-driven, self-checking StateMachine over the synthetic
+# bundle (SIM-486: contact resolves through the production transition draw)
 # ===========================================================================
 
 
-class _CyclingResolver(PlayResolver):
-    """Resolve an in-play ball to a league-plausible single (~30%) or an out,
-    governed by a shared rng so games make progress, score, and END. No DB/FAISS
-    -- the batted-ball sample is injected (mirrors the SIM-320 test double)."""
-
-    def __init__(self, rng: np.random.Generator, hit_rate: float = 0.30):
-        self.rng = rng
-        self.hit_rate = float(hit_rate)
-        self._injected_battedball = {"event": "field_out"}
-
-    def resolve_fielding(self, state, battedball_sample) -> FieldingSignal:
-        if float(self.rng.random()) < self.hit_rate:
-            return FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
-        return FieldingSignal(event="field_out", result_hits=0, result_outs=1, result_runs=0)
-
-
 class _CheckingRngStateMachine(StateMachine):
-    """An rng-driven (no-sampler) StateMachine that ALSO validates the committed
-    GameState after every pitch -- so the harness checks invalid states at every
-    committed transition, not just the final state.
+    """A StateMachine that draws its own pitch-outcome mix (the SIM-320 driver
+    profile), resolves contact through the synthetic bundle, and ALSO validates
+    the committed GameState after every pitch -- so the harness checks invalid
+    states at every committed transition, not just the final state.
 
     The pitch-outcome mix matches the SIM-320 driver test (so games look like
     plausible baseball: ~55% in-play, ~20% ball, ~17% called strike, ~8% foul).
@@ -249,11 +234,8 @@ class _CheckingRngStateMachine(StateMachine):
 
 def _make_machine(seed: int, hit_rate: float = 0.30) -> _CheckingRngStateMachine:
     rng = np.random.default_rng(seed)
-    return _CheckingRngStateMachine(
-        resolver=_CyclingResolver(rng, hit_rate=hit_rate),
-        rng=rng,
-        seed=seed,
-    )
+    art = league_artifacts(inplay_model=_inplay_model_for(hit_rate), advancement=False)
+    return _CheckingRngStateMachine(synthetic_sampler(art, seed), rng=rng, seed=seed)
 
 
 def _run_one(seed: int, hit_rate: float = 0.30) -> GameSimResult:
@@ -280,7 +262,7 @@ def run_invalid_state_harness(
     """Run ``n`` complete games with VARIED seeds and assert ZERO invalid states.
 
     Each game is driven by an rng-seeded, self-checking StateMachine (per-pitch
-    validation) + an injected resolver -- no live DuckDB / FAISS. Per-pitch
+    validation) over the synthetic bundle -- no live DuckDB. Per-pitch
     invalid states raise inside ``step_pitch``; the per-game terminal + finish
     invariants are checked here. Raises :class:`InvalidStateError` (descriptive,
     seed-tagged) on the FIRST invalid state, so a failure pinpoints the game.
@@ -435,11 +417,12 @@ class TestInvalidStateHarness:
         assert stats["distinct_scores"] > 1
         assert stats["home_wins"] > 0 and stats["away_wins"] > 0
 
+    @pytest.mark.timeout(120)  # ~7 s locally; headroom under coverage instrumentation
     def test_default_thousand_games_zero_invalid_states(self):
         # THE acceptance criterion: 1,000 complete games via simulate_game() with
         # varied per-game seeds and ZERO invalid states at any committed
-        # transition. Runs in ~1.3s under the no-DB injected path (well within the
-        # sandbox 45s budget), so it is always-on rather than slow-gated.
+        # transition. Runs in ~7 s over the synthetic bundle (every contact goes
+        # through the production transition draw), so it stays always-on.
         n = DEFAULT_GAMES
         stats = run_invalid_state_harness(n)
         assert stats["games"] == n

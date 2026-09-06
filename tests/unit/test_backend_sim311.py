@@ -19,7 +19,6 @@ import pytest
 
 from simulation.game_state import (
     BALLS_FOR_WALK,
-    CONTACT_PITCH_OUTCOME,
     OUTS_PER_INNING,
     STRIKES_FOR_STRIKEOUT,
     Bases,
@@ -193,72 +192,11 @@ def test_assert_invariants_aggregate():
 # ===========================================================================
 
 
-def test_playresult_roundtrip_to_scaffold_dict():
-    """PlayResult generalizes the scaffold dict; as_scaffold_dict() restores it."""
-    pitch_sample = {
-        "row_id": 42,
-        "pitch_outcome": "in_play",
-        "distance": 0.1,
-        "weight": 0.2,
-        "tile": "2024/477132/L",
-        "fellback": False,
-    }
-    bb_sample = {
-        "row_id": 99,
-        "event": "double",
-        "distance": 0.3,
-        "weight": 0.4,
-        "tile": "2024/battedball/L",
-        "fellback": False,
-    }
-    pr = PlayResult(
-        pitch_outcome=CONTACT_PITCH_OUTCOME,
-        is_contact=True,
-        pa_terminal=True,
-        event="double",
-        runs=1.0,
-        run_resolution_method="re24_delta",
-        canonical_event="double",
-        re_start=0.51,
-        re_end=1.16,
-        runs_scored=0,
-        exit_velo=104.2,
-        launch_angle=18.0,
-        spray_angle=-12.0,
-        fielder_id=8,
-        outs_recorded=0,
-        baserunner_advances={101: 3},
-        pitch_sample=pitch_sample,
-        battedball_sample=bb_sample,
-        fellback=False,
-    )
-
-    d = pr.as_scaffold_dict()
-    # Exactly the scaffold dict keys, restored faithfully.
-    assert set(d) == {
-        "pitch_outcome",
-        "is_contact",
-        "event",
-        "runs",
-        "fellback",
-        "pitch_sample",
-        "battedball_sample",
-    }
-    assert d["pitch_outcome"] == CONTACT_PITCH_OUTCOME
-    assert d["is_contact"] is True
-    assert d["event"] == "double"
-    assert d["runs"] == 1.0
-    assert d["fellback"] is False
-    assert d["pitch_sample"] is pitch_sample
-    assert d["battedball_sample"] is bb_sample
-
-
 def test_playresult_defaults_non_contact():
     """A non-contact pitch result has no batted-ball payload + neutral deltas."""
     pr = PlayResult(pitch_outcome="ball")
     assert pr.is_contact is False
     assert pr.event is None
-    assert pr.battedball_sample is None
     assert pr.runs == 0.0
     assert pr.outs_recorded == 0
     assert pr.baserunner_advances == {}
@@ -362,9 +300,6 @@ def test_playresult_exposes_spec_step_deltas():
         "steal_outcome",  # step 7
         "runs",
         "runs_scored",  # step 8 runs
-        "pitch_sample",
-        "battedball_sample",
-        "fellback",  # raw payloads
         "next_state",
     ):  # step 8 state
         assert hasattr(pr, fld), f"PlayResult missing spec field: {fld}"

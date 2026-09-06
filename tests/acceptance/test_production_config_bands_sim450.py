@@ -585,8 +585,11 @@ def test_walks_band_sim450(acceptance_run: AcceptanceRun) -> None:
     The day-one run measured +11.5% against a round-3 floor of 2.4%. No ticket
     sizes it, so there is no xfail. Two things make a red here worth chasing
     rather than dismissing: over-walking feeds the pitcher BB prop that
-    ``CLAUDE.md`` already records as over-predicted (ECE 0.21), and SIM-456
-    (``whiff_rate`` measures called strikes) is an unsized candidate cause.
+    ``CLAUDE.md`` already records as over-predicted (ECE 0.21). SIM-456
+    (``whiff_rate`` measured called strikes) was once the unsized candidate
+    cause; it closed 2026-09-04 with the fix live since the 2026-08-14 recompute,
+    and the 2026-08-20 diagnosis decomposed the surplus (IBB 54% / Markov
+    structure 33% / pool era 12%).
 
     Read ``bands.py`` first: the 3.30 centre is itself 5.0% above this project's
     own 2023 data (3.1434), which is twice this floor. A red BB may be the centre

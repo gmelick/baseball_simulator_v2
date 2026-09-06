@@ -253,7 +253,6 @@ SIM_KWARG_KEYS: frozenset[str] = frozenset(
         "home_defense",
         "away_defense",
         "park_run_factor",
-        "k",
         "max_innings",
     }
 )
@@ -321,7 +320,6 @@ def sim_kwargs_from_state(
         "home_defense": dict(getattr(state, "home_defense", {}) or {}),
         "away_defense": dict(getattr(state, "away_defense", {}) or {}),
         "park_run_factor": float(getattr(state, "park_run_factor", 1.0) or 1.0),
-        "k": int(getattr(state, "k", 25) or 25) if hasattr(state, "k") else 25,
         "max_innings": 12,
     }
 

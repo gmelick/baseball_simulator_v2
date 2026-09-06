@@ -2,11 +2,10 @@
 test_perf_eng_sim333.py
 =======================
 Unit tests for SIM-333 -- the **shared-memory zero-copy ATTACH** of the read-only
-payload (situation KDTree / RBF matrices / FAISS-tile backing arrays) into worker
+payload (the SIM-403b engine-artifact arrays) into worker
 processes (Phase 4, Sprint 4).  Fills the SIM-332 seam:
 :func:`simulation.batch_runner.publish_shared_arrays` (parent) +
-:func:`~simulation.batch_runner._worker_init` (worker attach) +
-:meth:`simulation.play_pool_sampler.PlayPoolSampler.attach_shared_tile`.
+:func:`~simulation.batch_runner._worker_init` (worker attach).
 
 These run with NO live DuckDB/FAISS-on-disk and NO Redis.  The always-on tests use
 an IN-PROCESS attach (deterministic, fast) plus ONE single spawned worker; heavy
@@ -19,9 +18,7 @@ Coverage (SIM-333 acceptance criteria):
   * the ``{name: SharedArrayDescriptor}`` registry round-trips (picklable);
   * the NO-segments fallback leaves the worker global empty (SIM-332 path intact);
   * lifecycle: workers attach + close but NEVER unlink; the parent owns unlink and
-    leaves no ``/dev/shm`` leak;
-  * the sampler attaches a tile zero-copy (rowids share memory) and samples over
-    the shared buffer with no disk read.
+    leaves no ``/dev/shm`` leak.
 """
 
 from __future__ import annotations
@@ -262,54 +259,6 @@ class TestSingleSpawnedWorker:
             got = list(pool.map(_probe_fallback, range(1)))[0]
         assert got["kd"] is True
         assert got["views_empty"] is True
-
-
-# ===========================================================================
-# Sampler shared-tile attach is zero-copy + samples over shared mem (AC #1/#2)
-# ===========================================================================
-
-
-class TestSamplerSharedTileAttach:
-    def test_attach_shared_tile_rowids_zero_copy_and_samples(self):
-        pytest.importorskip("faiss")  # guarded like the sampler itself
-        from simulation.play_pool_sampler import POOL_PITCH, PlayPoolSampler
-
-        rng = np.random.default_rng(7)
-        vecs = rng.standard_normal((40, 10)).astype(np.float32)
-        rowids = (np.arange(40) + 1000).astype(np.int64)
-        registry, owned = publish_shared_arrays({"pv": vecs, "pr": rowids})
-        shm_v = shared_memory.SharedMemory(name=registry["pv"].shm_name)
-        shm_r = shared_memory.SharedMemory(name=registry["pr"].shm_name)
-        try:
-            vview = np.ndarray(registry["pv"].shape, dtype=np.float32, buffer=shm_v.buf)
-            rview = np.ndarray(registry["pr"].shape, dtype=np.int64, buffer=shm_r.buf)
-            samp = PlayPoolSampler(
-                pool_dir="/nonexistent",
-                outcome_fetch=lambda pool, ids: dict.fromkeys(ids, "single"),
-            )
-            handle = samp.attach_shared_tile(
-                POOL_PITCH,
-                2024,
-                "R",
-                vectors=vview,
-                rowids=rview,
-                pitcher_id=12345,
-                meta={"season": 2024},
-            )
-            # rowids on the handle is the SAME shared buffer (zero-copy).
-            assert np.shares_memory(handle.rowids, rview)
-            assert handle.n_vectors == 40
-            # A real k-NN sample resolves with NO disk read (the attached tile is
-            # served from the LRU, fall-back disk probe never fires).
-            res = samp.sample_pitch(12345, "R", 2024, vecs[0], k=5)
-            assert res["row_id"] in rowids.tolist()
-            assert res["pitch_outcome"] == "single"
-            assert res["tile"] == "2024/12345/R"
-            samp.close()
-        finally:
-            shm_v.close()
-            shm_r.close()
-            unlink_shared_segments(owned)
 
 
 # ===========================================================================

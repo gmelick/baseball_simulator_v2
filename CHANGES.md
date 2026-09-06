@@ -1,3 +1,112 @@
+# Sim — SIM-486 CLOSED: the per-tile fallback is deleted; one in-play path — 2026-09-06
+
+The second simulator is gone. `simulation/play_pool_sampler.py`,
+`fingerprints.py`, `score_fusion.py`, `matchup_provider.py` and
+`pipeline/batch/play_pool_cache.py` are deleted (about 3,300 lines), and with
+them `PlayResolver`, `PlateAppearanceSimulator`, `PitchState`, the
+`sampler` / `k` / `fingerprint_deriver` / `resolver` / `sim` constructor seams,
+the per-tile branches of `step_pitch` and `_resolve_in_play`, the legacy
+in-play block (`_advance_runners`, `_extra_advance`, `_advance_rate`,
+`_full_pool_out_advancement`, `_tag_rate`, their constants and `SIM_RUN_CALIB`),
+the SIM-318 count-conditional foul re-weight, the pre-SIM-474 steal-outcome
+seam (`_SampledStealPool`, `sim.stolen_base_pool`), `PlayResult.pitch_sample` /
+`battedball_sample` / `fellback`, `GameSpec.shared_segments` and the
+`SIM_FULL_POOL` switch. `sim_loop.py` drops from 4,557 to about 3,490 lines.
+The base-state guards (`_check_bases`, `assert_transition`) are unconditional
+now that the scaffold that stranded runners is gone.
+
+What replaced the seam: `simulation/synthetic_bundle.py` builds an in-memory
+engine-artifact bundle in the production shape (every count bucket, every
+base-out cell with canonical SIM-510 transitions, optional advancement and
+steal pools, a got-away pitch pool). The twelve resolver-based test modules,
+the chi-squared replay harness, the benches and
+`batch_runner.rng_driven_machine_factory` build the production `StateMachine`
+over it, so every no-DB game runs the SIM-511 transition path. Fixed-play
+bundles make single-play tests deterministic. The DP ledger test now pins the
+truth (-0.78, the trail runner retired) and the reach-on-error test pins +0.38
+with the batter on first.
+
+Contracts that changed: `production_factory` RAISES when the artifact bundle
+cannot load and `FullPoolSampler.battedball_new_pa` RAISES on a pool without
+transition columns — there is no fallback simulator; `stage_steal` takes
+`safe=` as a required argument; `simulate_game` and `StateMachine` take
+`full_pool_sampler` as their only draw source.
+
+Evidence: four production games traced pitch-for-pitch before and after
+(745199 / 746494 at seeds 42 and 7; 306 / 309 / 279 / 342 pitches) are
+byte-identical. The local unit suite is green except the two pre-existing
+SIM-347 30-worker `BrokenProcessPool` failures on this Windows host; the
+no-DB API end-to-end lane (`tests/integration/test_api_e2e_sim371.py`) is
+green; the live `/simulate` on the recreated container answers in ~11 s at n=2.
+
+Two production defects the realistic no-DB games exposed, both fixed here:
+
+* `simulation/play_recorder.py` recorded every play with the LIVE
+  `GameState` as its `next_state`, so after the game every recorded play
+  pointed at the final state. The linescore, the W/L/S decisions and the
+  per-pitch `/state` snapshots were all derived from the final state alone
+  (the replay-card coherence test passed only because the old single-or-out
+  games happened to shut one side out). The recorder now deep-copies the
+  committed state per pitch.
+* `simulation/linescore.py` attributed a play to the half-inning of its
+  committed state, which is the NEXT half for the play that records the
+  third out. A run that scores on that play (a lead runner home before a
+  trailing runner is thrown out — Rule 5.08 timing, which the SIM-512
+  advancement draws play) landed in the wrong column. The linescore now
+  detects the roll and attributes the play to the half it ended.
+
+Ops: `scripts/nightly_ingest.sh` step 3 and the new `make engine-artifacts`
+target rebuild the bundle production reads — the chain used to rebuild dead
+FAISS tiles and never the bundle. Also deleted: `scripts/measure_knn.py`, the
+broken `scripts/sim429_count_diagnosis.py` / `sim429_chain_analysis.py`
+(they wrapped the framing method SIM-517 removed), `docs/data/foul_rate_by_count.csv`,
+and eight per-tile test modules. Docs: BACKLOG banner + row, CLAUDE.md §2/§2b/§4/§5/§8/§12,
+README, WORKFLOW §1.8 (the flag table now lists the kernels that exist).
+
+# Data — SIM-456 CLOSED on evidence; SIM-522 filed, fixed and CLOSED for the platoon z-swing inversion — 2026-09-04
+
+SIM-456 (`whiff_rate` counted called strikes) needed no new code. The fix
+landed 2026-08-11 (`2953684`), the SIM-459 recompute rebuilt the column on
+2026-08-14 (live 2024 mean 0.2332 vs the old 0.165; MLB ≈ 0.24), and the
+pitcher-sim artifact, `sigma_command` (1.0646) and the certifying lanes all
+ran after it. The consumer census is in
+`docs/audit/2026-09-04-sim456-plan.md`: every reader handles the corrected
+value because the pitcher engine z-scores its command features at build.
+
+The census found one live defect from the same review lineage. The batter
+platoon legs `z_swing_rate_vs_l` / `z_swing_rate_vs_r` kept the inverted
+`type IN (NON_SWING)` predicate after SIM-501 fixed the season column, so
+both held the z-TAKE rate (live 2024: 0.32 vs 0.68). Filed, fixed and CLOSED
+as SIM-522 (owner decision: profile SQL closes on landing, the SIM-503/504
+precedent; no recompute started for it): both predicates now read `NOT IN`, and
+`tests/unit/test_sim501_profile_code_sets.py::TestZSwingLegsCountSwings`
+fails on the inverted pattern (it fires twice on the pre-fix source). The
+batter engine's scores do not move — the inversion preserves every pairwise
+difference — and the data stays mislabeled until the next `--full-rebuild`
+recompute; that rebuild's verification battery must read
+`AVG(z_swing_rate_vs_l)` ≈ 0.67. The D-N7 csw/whiff overlap is not exact
+collinearity (corr 0.73–0.79; whiff is per swing) and is parked on SIM-429
+as a `COMMAND_FEATURES` decision (owner decision 2026-09-04). Docs: BACKLOG row + banner, CLAUDE.md §2b board, the stale
+"SIM-456 is an unsized BB cause" text in `bands.py` and the walks test.
+Gates: the code-set module 16/16, ruff + format clean, mypy clean.
+
+# Sim — SIM-523 FILED: the identity-kernel team-context confound; SIM-520 measured — 2026-09-05
+
+The chain of measurements (the SIM-520 broad sample, its fielder-off
+A/B, and the SIM-517 red-band attribution arms) converges on ONE
+defect seen twice: an identity-similarity kernel conditions on more
+than the skill it was built for. The fielder kernel suppresses runs
+globally (−5.5% FAIL with it on, −2.3% PASS with it off, on a
+defense-DIVERSE 60-game sample where hits sit +0.6% from MLB); the
+receiving kernel owns the certifying lane's BB −3.3% / HBP −9.5% /
+steal-attempt +2.5pp shifts (the got-away resolution owns none of
+them). Mechanism: a catcher's similarity neighborhood proxies his
+team's pitching staff; a fielder's proxies team context beyond OAA.
+SIM-523 carries the redesign options (residualize/normalize within
+team-season; outcome-conditional kernels; or off until measured) —
+an owner decision. The got-away channel and the home/park kernels
+are clean and stay.
+
 # Sim — SIM-476 CLOSED: all three kernels certified; home_win_pct passes at full power — 2026-09-03
 
 The certify chains are complete. Lane 5 (12×500, the full fitted config)

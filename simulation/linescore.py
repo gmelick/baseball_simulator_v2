@@ -166,8 +166,16 @@ class Linescore:
 def linescore_from_plays(results: Sequence[PlayResult]) -> Linescore:
     """Derive a :class:`Linescore` from one game's ordered ``PlayResult`` stream.
 
-    Each play is attributed to the ``(inning, half)`` of its ``next_state`` (the
-    committed ``GameState`` after the pitch).  Runs (``runs_scored``) are summed
+    Each play is attributed to the ``(inning, half)`` it was PLAYED in.  The
+    committed ``next_state`` names that half for every play except the one
+    that records the third out: the loop rolls the half-inning before it
+    commits, so ``next_state`` then names the NEXT half.  Such a play can still
+    carry runs (a lead runner scores before a trailing runner is thrown out —
+    Rule 5.08 timing, which the SIM-512 advancement draws play), so the roll
+    is detected (``outs_recorded > 0`` and the committed ``outs`` is back to
+    0) and the play is attributed to the half it ended.  Before SIM-486 the
+    no-DB harness could never produce that play, so the misattribution went
+    unseen.  Runs (``runs_scored``) are summed
     per half-inning into the away (TOP) / home (BOTTOM) columns; hits are counted
     per **batting** team; errors are charged to the **fielding** team.  See the
     module docstring for the full mapping + in-progress conventions.
@@ -199,6 +207,14 @@ def linescore_from_plays(results: Sequence[PlayResult]) -> Linescore:
 
         inning = int(state.inning)
         half = state.half
+        if int(result.outs_recorded) > 0 and int(state.outs) == 0:
+            # This play ended the half-inning; the committed state is the
+            # NEXT half. Attribute the play to the half it was played in.
+            if half == Half.BOTTOM:
+                half = Half.TOP
+            else:
+                half = Half.BOTTOM
+                inning -= 1
         max_inning = max(max_inning, inning)
 
         runs = int(result.runs_scored)

@@ -11,7 +11,7 @@
 # =============================================================================
 
 .PHONY: help dev down build migrate test test-unit test-integration test-regression lint \
-        type-check format shell logs clean nuke profile-computor play-pool-cache calibrate \
+        type-check format shell logs clean nuke profile-computor engine-artifacts calibrate \
         validate-props load-historical-odds
 
 # Default target — show help.
@@ -61,20 +61,20 @@ migrate: _require_env_file
 # Nightly batch jobs
 # ---------------------------------------------------------------------------
 # These run in order each night: the profile computor rebuilds the DuckDB
-# pools (sim.pitch_pool / sim.outcome_pool), then the play-pool cache
-# serializer (SIM-301) materializes FAISS tiles from those pools.  The cache
-# build MUST run AFTER the profile computor.  See the crontab note at the
-# bottom of pipeline/batch/play_pool_cache.py.
+# pools (sim.pitch_pool / sim.outcome_pool), then the engine-artifact builder
+# (SIM-422) materializes the bundle the full-pool sampler reads.  The bundle
+# build MUST run AFTER the profile computor (scripts/nightly_ingest.sh runs
+# the chain).
 
 ## Nightly: rebuild DuckDB player profiles + sim pools from Postgres.
 profile-computor: _require_env_file
 	docker compose run --rm app python -m pipeline.batch.player_profile_computor
 
-## Nightly (SIM-301): materialize play-pool FAISS tiles from the DuckDB pools.
-## Idempotent — only stale or missing tiles are rebuilt.  Runs AFTER
-## profile-computor.  Pass FLAGS="--no-recency-boost --seasons 2024" to tune.
-play-pool-cache:
-	docker compose run --rm app python -m pipeline.batch.play_pool_cache $(FLAGS)
+## Nightly (SIM-422/486): build the engine-artifact bundle the production
+## sampler reads (pools + pitcher similarity + actor embeddings).  Runs AFTER
+## profile-computor.  Pass FLAGS="--what pool" to rebuild the pools only.
+engine-artifacts: _require_env_file
+	docker compose run --rm app python -m pipeline.batch.engine_artifacts --what all $(FLAGS)
 
 ## Nightly (SIM-406): fit + persist the CalibrationReport over the DuckDB profiles.
 ## Runs AFTER profile-computor (it reads the derived.* season-metrics tables) and

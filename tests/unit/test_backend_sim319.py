@@ -2,13 +2,15 @@
 test_backend_sim319.py
 ======================
 Unit tests for SIM-319 -- **step 6 (fielding)** + **step 7 (baserunning + steals)**
-of the Phase-4 simulation loop in ``simulation/sim_loop.py`` (Sprint 2 of the
-loop build), plus the §5.4 dropped-third-strike edge.
+of the simulation loop in ``simulation/sim_loop.py``, plus the §5.4
+dropped-third-strike edge.
 
-These tests run with NO live DuckDB/FAISS: fielding is driven by an injected
-batted-ball sample / a fake :class:`PlayResolver`, steals are resolved against an
-injected ``sim.stolen_base_pool`` accessor with a fixed ``numpy`` rng, mirroring
-the SIM-302/303/316/317/318 "inject the signal" pattern.
+These tests run with NO live DuckDB: every batted ball is drawn through the
+PRODUCTION in-play path (the SIM-511 transition draw) from a fixed-play
+:mod:`simulation.synthetic_bundle` bundle -- one event in every base-out cell,
+so the play is deterministic (SIM-486 deleted the injected ``PlayResolver``).
+Steals are staged through :meth:`StateMachine.stage_steal`; the dropped third
+strike is the drawn pitch row's own got-away fact (SIM-517).
 
 Coverage (the SIM-319 acceptance criteria):
   * fielding: an in-play OUT records the out and an in-play HIT does not, with the
@@ -17,9 +19,9 @@ Coverage (the SIM-319 acceptance criteria):
   * baserunning: a single advances runners + a double scores a runner from 2B,
     both with the run resolved through ``resolve_runs``;
   * steals: a staged attempt resolving SAFE (runner advances) and CAUGHT
-    (runner removed + an out recorded), the steal pool sampled for the outcome;
-  * dropped third strike (§5.4): a swinging K3 with 1B open / two outs lets the
-    batter reach when the resolver/edge fires.
+    (runner removed + an out recorded);
+  * dropped third strike (§5.4): a swinging K3 that got away with 1B open lets
+    the batter reach.
 """
 
 from __future__ import annotations
@@ -33,11 +35,9 @@ from simulation.sim_loop import (
     EVENT_WALK,
     STEAL_CAUGHT,
     STEAL_SAFE,
-    FieldingSignal,
-    PlayResolver,
     StateMachine,
-    _SampledStealPool,
 )
+from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
 
 SEASON = 2024
 PITCHER = 477132
@@ -49,28 +49,18 @@ def _fresh_state(**kw) -> GameState:
     return GameState(**base)
 
 
-class _InjectedResolver(PlayResolver):
-    """A resolver that returns a fixed FieldingSignal (no DB/FAISS).
-
-    Also supports the in-play hand-off via ``_injected_battedball`` so the
-    StateMachine's no-sampler path still reaches step 6/7.
-    """
-
-    def __init__(self, signal: FieldingSignal, *, dropped_k: bool = False):
-        self._signal = signal
-        self._dropped_k = dropped_k
-        # A truthy sentinel so the loop's no-sampler in-play path resolves.
-        self._injected_battedball = {"event": signal.event}
-
-    def resolve_fielding(self, state, battedball_sample) -> FieldingSignal:
-        return self._signal
-
-    def dropped_third_strike(self, state, result) -> bool:
-        return self._dropped_k
-
-
-def _sig(event, hits, outs, runs, **kw) -> FieldingSignal:
-    return FieldingSignal(event=event, result_hits=hits, result_outs=outs, result_runs=runs, **kw)
+def _play_machine(event: str, *, got_away: bool = False, **overrides: int) -> StateMachine:
+    """A machine whose every batted ball is ``event``.  With ``got_away`` every
+    drawn pitch is a swinging strike that got away from the catcher."""
+    art = fixed_play_artifacts(
+        event,
+        pitch_model={"swinging_strike": 1.0} if got_away else None,
+        got_away=got_away,
+        **overrides,
+    )
+    sm = StateMachine(synthetic_sampler(art, 0), rng=np.random.default_rng(0))
+    sm._got_away = got_away
+    return sm
 
 
 # ===========================================================================
@@ -80,15 +70,13 @@ def _sig(event, hits, outs, runs, **kw) -> FieldingSignal:
 
 class TestFieldingResolution:
     def test_in_play_out_records_an_out_via_resolve_runs(self):
-        sig = _sig("field_out", hits=0, outs=1, runs=0, fielder_id=12, is_error=False)
-        sm = StateMachine(resolver=_InjectedResolver(sig), rng=np.random.default_rng(0))
+        sm = _play_machine("field_out")
         state = _fresh_state(balls=1, strikes=1)
         r = sm.step_pitch(state, pitch_outcome="in_play")
         assert r.is_contact is True
         assert r.pa_terminal is True
         assert r.event == "field_out"
         assert r.outs_recorded == 1
-        assert r.fielder_id == 12
         assert r.is_error is False
         assert state.outs == 1
         # The run value was resolved by run_resolution (RE24 delta), NOT inline.
@@ -97,8 +85,7 @@ class TestFieldingResolution:
         assert r.re_start is not None and r.re_end is not None
 
     def test_in_play_hit_records_no_out_and_reaches_base(self):
-        sig = _sig("single", hits=1, outs=0, runs=0, fielder_id=7)
-        sm = StateMachine(resolver=_InjectedResolver(sig), rng=np.random.default_rng(0))
+        sm = _play_machine("single")
         state = _fresh_state()
         r = sm.step_pitch(state, pitch_outcome="in_play")
         assert r.event == "single"
@@ -109,13 +96,13 @@ class TestFieldingResolution:
         assert r.run_resolution_method == "re24_delta"
 
     def test_error_flag_is_recorded(self):
-        sig = _sig("field_error", hits=1, outs=0, runs=0, fielder_id=5, is_error=True)
-        sm = StateMachine(resolver=_InjectedResolver(sig), rng=np.random.default_rng(0))
+        sm = _play_machine("field_error")
         state = _fresh_state()
         r = sm.step_pitch(state, pitch_outcome="in_play")
         assert r.is_error is True
-        assert r.fielder_id == 5
+        assert r.event == "field_error"
         assert state.outs == 0
+        assert state.bases.first == 900  # a reach, not a hit (SIM-511)
 
 
 # ===========================================================================
@@ -125,8 +112,7 @@ class TestFieldingResolution:
 
 class TestBaserunnerAdvancement:
     def test_single_advances_existing_runner(self):
-        sig = _sig("single", hits=1, outs=0, runs=0)
-        sm = StateMachine(resolver=_InjectedResolver(sig), rng=np.random.default_rng(0))
+        sm = _play_machine("single")
         state = _fresh_state(batter_id=900)
         state.bases = Bases(first=101)  # runner on 1B
         r = sm.step_pitch(state, pitch_outcome="in_play")
@@ -138,12 +124,8 @@ class TestBaserunnerAdvancement:
         assert r.run_resolution_method == "re24_delta"
 
     def test_double_scores_a_runner_from_second_via_resolve_runs(self):
-        # The pool carried result_runs=1 (runner from 2B scores on the double).
-        sm = StateMachine(rng=np.random.default_rng(0))
-        resolver = _InjectedResolver(_sig("double", hits=2, outs=0, runs=1))
-        # Carry the sampled result_runs through the injected sample.
-        resolver._injected_battedball = {"event": "double", "result_runs": 1}
-        sm.resolver = resolver
+        # The drawn row scores the runner from 2B on the double.
+        sm = _play_machine("double")
         state = _fresh_state(batter_id=900)
         state.bases = Bases(second=202)  # runner on 2B
         assert state.away_score == 0
@@ -159,10 +141,7 @@ class TestBaserunnerAdvancement:
         assert state.bases.second == 900
 
     def test_home_run_clears_the_bases_and_scores_all(self):
-        sm = StateMachine(rng=np.random.default_rng(0))
-        resolver = _InjectedResolver(_sig("home_run", hits=4, outs=0, runs=2))
-        resolver._injected_battedball = {"event": "home_run", "result_runs": 2}
-        sm.resolver = resolver
+        sm = _play_machine("home_run")
         state = _fresh_state(batter_id=900)
         state.bases = Bases(first=101)  # one on -> 2 runs score (runner + batter)
         r = sm.step_pitch(state, pitch_outcome="in_play")
@@ -249,7 +228,7 @@ class TestWalkForcing:
 
 
 # ===========================================================================
-# Steals — decision (pre-pitch) + outcome (step 7) against the steal pool
+# Steals — a staged decision (pre-pitch) + its outcome (step 7)
 # ===========================================================================
 
 
@@ -281,21 +260,6 @@ class TestSteals:
         assert r.outs_recorded == 1
         assert r.run_resolution_method == "re24_delta"
 
-    def test_steal_outcome_sampled_from_the_stolen_base_pool(self):
-        # An injected sim.stolen_base_pool of all-success rows -> the staged
-        # steal (no explicit safe=) draws SAFE from the pool.
-        class _Sim:
-            stolen_base_pool = _SampledStealPool(rows=[(True, 1.0), (True, 1.0)])
-
-        sm = StateMachine(rng=np.random.default_rng(1), sim=_Sim())
-        state = _fresh_state(batter_id=900)
-        state.bases = Bases(first=101)
-        sm.stage_steal(runner_id=101, from_base=1, to_base=2)  # safe drawn from pool
-        r = sm.step_pitch(state, pitch_outcome="called_strike")
-        assert r.steal_attempted is True
-        assert r.steal_outcome == STEAL_SAFE  # pool was all-success
-        assert state.bases.second == 101
-
     def test_caught_stealing_can_be_the_third_out(self):
         sm = StateMachine(rng=np.random.default_rng(0))
         state = _fresh_state(batter_id=900, outs=2)
@@ -310,26 +274,27 @@ class TestSteals:
 
 
 # ===========================================================================
-# Dropped third strike (§5.4)
+# Dropped third strike (§5.4) — the drawn pitch row's got-away fact
 # ===========================================================================
 
 
 class TestDroppedThirdStrike:
     def test_uncaught_k3_with_first_base_open_lets_batter_reach(self):
-        # Resolver signals the catcher dropped it; 1B is open -> batter reaches.
-        resolver = _InjectedResolver(_sig("field_out", 0, 1, 0), dropped_k=True)
-        sm = StateMachine(resolver=resolver, rng=np.random.default_rng(0))
+        # Every drawn pitch is a swinging strike that got away; 1B is open ->
+        # the batter reaches on strike three.
+        sm = _play_machine("field_out", got_away=True)
         state = _fresh_state(balls=0, strikes=2, batter_id=900)  # 1B open
-        r = sm.step_pitch(state, pitch_outcome="swinging_strike")
+        r = sm.step_pitch(state)
         assert r.pa_terminal is True
         assert r.outs_recorded == 0  # batter reached (no out)
         assert state.outs == 0
         assert state.bases.first == 900  # batter safe at 1B
 
-    def test_ordinary_k3_records_an_out_when_edge_does_not_fire(self):
-        # No dropped-K signal -> an ordinary strikeout (one out).
-        resolver = _InjectedResolver(_sig("field_out", 0, 1, 0), dropped_k=False)
-        sm = StateMachine(resolver=resolver, rng=np.random.default_rng(0))
+    def test_ordinary_k3_records_an_out_when_the_ball_is_held(self):
+        # The same pitch mix, but the rows say the catcher held the ball -> an
+        # ordinary strikeout (one out).
+        sm = _play_machine("field_out", got_away=False)
+        sm._got_away = True
         state = _fresh_state(balls=0, strikes=2, batter_id=900)
         r = sm.step_pitch(state, pitch_outcome="swinging_strike")
         assert r.event == EVENT_STRIKEOUT
@@ -338,13 +303,12 @@ class TestDroppedThirdStrike:
         assert state.bases.first is None  # batter did NOT reach
 
     def test_dropped_k3_not_eligible_with_first_occupied_and_under_two_outs(self):
-        # 1B occupied AND fewer than two outs -> the edge is NOT eligible even if
-        # the resolver would drop it; an ordinary strikeout results.
-        resolver = _InjectedResolver(_sig("field_out", 0, 1, 0), dropped_k=True)
-        sm = StateMachine(resolver=resolver, rng=np.random.default_rng(0))
+        # 1B occupied AND fewer than two outs -> the edge is NOT eligible even
+        # though the pitch got away; an ordinary strikeout results.
+        sm = _play_machine("field_out", got_away=True)
         state = _fresh_state(balls=0, strikes=2, outs=0, batter_id=900)
         state.bases = Bases(first=101)  # 1B occupied, 0 outs
-        r = sm.step_pitch(state, pitch_outcome="swinging_strike")
+        r = sm.step_pitch(state)
         assert r.event == EVENT_STRIKEOUT
         assert r.outs_recorded == 1
         assert state.outs == 1
@@ -359,13 +323,9 @@ class TestRunResolutionDiscipline:
     def test_every_terminal_play_carries_run_resolution_provenance(self):
         # Out, hit, walk, K -> each commits run_resolution_method (proof the loop
         # routed the run/base-out delta through resolve_runs, not inline).
-        cases = [
-            ("in_play", _sig("field_out", 0, 1, 0)),
-            ("in_play", _sig("single", 1, 0, 0)),
-        ]
-        for outcome, sig in cases:
-            sm = StateMachine(resolver=_InjectedResolver(sig), rng=np.random.default_rng(0))
-            r = sm.step_pitch(_fresh_state(), pitch_outcome=outcome)
+        for event in ("field_out", "single"):
+            sm = _play_machine(event)
+            r = sm.step_pitch(_fresh_state(), pitch_outcome="in_play")
             assert r.run_resolution_method == "re24_delta"
 
         # Walk + K go through resolve_runs too.
@@ -380,8 +340,7 @@ class TestRunResolutionDiscipline:
         assert rk.run_resolution_method == "re24_delta"
 
     def test_scores_stay_non_negative_and_outs_bounded(self):
-        sig = _sig("field_out", 0, 1, 0)
-        sm = StateMachine(resolver=_InjectedResolver(sig), rng=np.random.default_rng(0))
+        sm = _play_machine("field_out")
         state = _fresh_state()
         for _ in range(3):
             sm.step_pitch(state, pitch_outcome="in_play")

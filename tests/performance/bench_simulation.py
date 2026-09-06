@@ -93,7 +93,7 @@ GMM_SINGLE_FIT_TARGET_MS = 5_000.0  # one small synthetic fit budget (5s, very l
 #   this bench times the *count machine + outcome determination + fielding/
 #   baserunning + state-update/loop-control* steps (1, 4, 5, 6, 7, 8) of
 #   StateMachine.step_pitch with the sampler call replaced by an injected
-#   resolver (the SIM-319/320 no-DB injection seam).  Those steps' combined
+#   fixed-play bundle (the SIM-486 no-DB seam).  Those steps' combined
 #   SIM-119 allocation is ~233 µs/pitch (everything except step 2/query and
 #   step 3/sampler).  We assert against the FULL ~1.23 ms per-pitch envelope so
 #   the bench is a true budget gate: the in-loop work it measures must stay well
@@ -460,30 +460,9 @@ def test_bench_gmm_fit_single_season(benchmark):
 # ---------------------------------------------------------------------------
 
 
-class _OutFieldingResolver:
-    """A no-DB PlayResolver that resolves every in-play ball to a 1-out field-out.
-
-    Mirrors the SIM-319/320/332 no-DB injection seam (see
-    ``simulation.batch_runner._CyclingResolver``): the loop's step-6/7 fielding /
-    baserunning resolution consumes this bounded signal so the per-pitch step
-    runs without a sampler, FAISS index, or DuckDB — and records outs so the
-    half-inning machine (step 8) actually rolls during the bench.
-    """
-
-    def resolve_fielding(self, state, battedball_sample):
-        from simulation.sim_loop import FieldingSignal
-
-        return FieldingSignal(event="field_out", result_hits=0, result_outs=1, result_runs=0)
-
-    def resolve_steal(self, state):
-        from simulation.sim_loop import StealResolution
-
-        return StealResolution(attempted=False)
-
-
 # A representative single-PA pitch-outcome cycle (no DB).  The mix walks a PA to
 # a variety of terminals — ball/called/swinging strikes, a non-terminal foul,
-# and a contact (in_play) that the injected resolver turns into an out — so the
+# and a contact (in_play) that the fixed-play bundle turns into an out — so the
 # benched step sees every branch of the count machine + the contact path, not a
 # single trivial outcome.  Cycled deterministically across the bench rounds.
 _BENCH4_OUTCOME_CYCLE = (
@@ -493,7 +472,7 @@ _BENCH4_OUTCOME_CYCLE = (
     "swinging_strike",
     "swinging_strike",  # strike 3 -> strikeout terminal (rolls the PA)
     "ball",
-    "in_play",  # contact -> resolver records a field-out (rolls outs)
+    "in_play",  # contact -> the drawn row is a field-out (rolls outs)
 )
 
 
@@ -502,7 +481,7 @@ def test_bench_phase4_simulation_loop(benchmark):
     """Bench 4: time ONE StateMachine.step_pitch (the SIM-119 per-pitch loop body).
 
     Drives the SIM-316 state machine through a representative outcome cycle with
-    NO live DB/FAISS (count-machine-only mode + an injected out-resolver for the
+    NO live DB (count-machine-only pitches + a fixed-play out bundle for the
     contact path), so the benched call is the real per-pitch step (count machine,
     outcome determination, fielding/baserunning via resolve_runs, state update +
     half-inning loop control).  A fresh GameState is recreated whenever the
@@ -522,7 +501,9 @@ def test_bench_phase4_simulation_loop(benchmark):
     def _fresh_state() -> GameState:
         return GameState(pitcher_id=1, bat_hand="R", season=2024)
 
-    machine = StateMachine(rng=rng, resolver=_OutFieldingResolver())
+    from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
+
+    machine = StateMachine(synthetic_sampler(fixed_play_artifacts("field_out"), 335), rng=rng)
     # Mutable cursor over the outcome cycle + the live game state.  The benched
     # closure recreates the state if a prior step drove the game to a finished
     # inning past regulation (a defensive guard; with field-outs the half-inning
@@ -559,7 +540,7 @@ def test_bench_phase4_simulation_loop(benchmark):
 # picklable rng-driven no-DB factory (simulation.batch_runner.
 # rng_driven_machine_factory) builds a sampler-less StateMachine per game that
 # draws each pitch outcome from its own loop rng and resolves contact via a
-# deterministic resolver.  This is the real batch hot path (derive seeds ->
+# the synthetic bundle.  This is the real batch hot path (derive seeds ->
 # simulate_game per iteration -> GameSimSummary.from_results), measured as a
 # per-pitch throughput so the figure is comparable to the SIM-119 per-pitch
 # budget without over-claiming a 300-pitch game the no-DB driver does not model.

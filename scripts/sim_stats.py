@@ -3,8 +3,8 @@ scripts/sim_stats.py — Scaled Monte-Carlo box-score harness (SIM-429 follow-on
 
 WHAT THIS IS
 ============
-Runs N iterations per game through the PRODUCTION sim (real DuckDB/FAISS sampler +
-the wired FingerprintDeriver) and reports the per-game box line + the per-channel
+Runs N iterations per game through the PRODUCTION sim (the full-pool sampler
+over the engine-artifact bundle) and reports the per-game box line + the per-channel
 breakdowns the SIM-429 follow-on calibration needs:
 
   * per-team R / H / HR / 2B / 3B / BB / K vs the MLB-2025 baseline (SIM-508)
@@ -105,7 +105,6 @@ _MLB_HOME_WIN_PCT = 0.5428
 #: of them, so an operator reads a result against the exact configuration that
 #: produced it.
 _REALISM_FLAGS = (
-    "SIM_FULL_POOL",
     "SIM_MANAGER",
     "SIM_BB_PLATOON",
     "SIM_HOME_OFF_WEIGHT",  # SIM-491/476: the home-field DRAW weight (1.0 = off; prod 0.0)
@@ -114,7 +113,6 @@ _REALISM_FLAGS = (
     "SIM_CATCHER_FRAMING_SIGMA",  # SIM-517: the receiving kernel, framing dims
     "SIM_CATCHER_BLOCK_SIGMA",  # SIM-517: the receiving kernel, blocking dims
     "SIM_GOT_AWAY",  # SIM-517: honor the drawn row's got-away fact
-    "SIM_RUN_CALIB",
 )
 
 
@@ -315,7 +313,8 @@ def main() -> None:
     if duck is None:
         print(
             "  sim DuckDB: UNAVAILABLE — every park_run_factor falls back to 1.0. "
-            "SIM_PARK_FACTOR is a NO-OP for this run. Do not read it as 'no effect'."
+            "The park kernel (SIM_PARK_KERNEL_SIGMA) is a NO-OP for this run. Do not "
+            "read it as 'no effect'."
         )
     else:
         print("  sim DuckDB: open (read-only) — the harness resolves a park factor per game.")
@@ -330,9 +329,9 @@ def main() -> None:
             park_factors[int(gp)] = pf
             print(
                 f"  game {gp}: park_run_factor={pf:.4f}"
-                + ("  [NEUTRAL — SIM_PARK_FACTOR cannot act]" if pf == 1.0 else "")
+                + ("  [NEUTRAL — the park kernel cannot act]" if pf == 1.0 else "")
                 + f"   defense home={n_home}/9 away={n_away}/9"
-                + ("  [EMPTY — SIM_FIELDER_RBF cannot act]" if not (n_home and n_away) else "")
+                + ("  [EMPTY — the fielder kernel cannot act]" if not (n_home and n_away) else "")
             )
             home_ids = {int(x) for x in (getattr(state, "home_lineup", []) or [])}
             away_ids = {int(x) for x in (getattr(state, "away_lineup", []) or [])}

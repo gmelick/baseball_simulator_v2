@@ -28,7 +28,7 @@ The frontend presents live game dashboards, pre-game win probability estimates, 
 
 **Primary use case:** Player prop prediction and betting edge validation (pitcher strikeouts, batter hits/HRs, etc.) anchored to Closing Line Value as the gold-standard metric.
 
-**What works today (Phase 7, largely complete):** The production simulation path is the full-pool similarity sampler (`SIM_FULL_POOL=1`), with calibration LIVE — the win-probability map is a fitted reliability curve, validated over 120 games (win-prob ECE 0.047; batter H/HR/TB ECE 0.02–0.05 are bet-grade; pitcher K/BB ECE ~0.22/0.21 are improved but not yet bet-grade). The manager pull/reliever decision model and the park-factor / batter-platoon / fielder-RBF realism nudges are enabled in production. The full Closing Line Value pipeline runs end-to-end: a full 2024 season of real BettingPros opening + closing odds (2,378 games, game line + 7 props) is backfilled, and the CLV scoreboard (`scripts/clv_backtest.py`) measures beat-close rate — the gold-standard harness works (first 120-game result ≈ 49% beat-close, i.e. no demonstrable edge yet; the model still needs further calibration / run-conversion work to develop one).
+**What works today (Phase 7, largely complete):** The simulation path is the full-pool similarity sampler (the only path since SIM-486), with calibration LIVE — the win-probability map is a fitted reliability curve, validated over 120 games (win-prob ECE 0.047; batter H/HR/TB ECE 0.02–0.05 are bet-grade; pitcher K/BB ECE ~0.22/0.21 are improved but not yet bet-grade). The manager pull/reliever decision model and the park-factor / batter-platoon / fielder-RBF realism nudges are enabled in production. The full Closing Line Value pipeline runs end-to-end: a full 2024 season of real BettingPros opening + closing odds (2,378 games, game line + 7 props) is backfilled, and the CLV scoreboard (`scripts/clv_backtest.py`) measures beat-close rate — the gold-standard harness works (first 120-game result ≈ 49% beat-close, i.e. no demonstrable edge yet; the model still needs further calibration / run-conversion work to develop one).
 
 ---
 
@@ -340,11 +340,9 @@ baseball_simulator/
 │   ├── sim_loop.py           # StateMachine + simulate_game() (8-step loop + manager hooks)
 │   ├── game_state.py         # GameState / PlayResult / ManagerContext dataclasses
 │   ├── run_resolution.py     # RE24 + linear-weight run resolution
-│   ├── full_pool_sampler.py  # full-pool similarity sampler — the PRODUCTION path (SIM_FULL_POOL=1)
-│   ├── play_pool_sampler.py  # per-tile play-pool k-NN sampler (fallback / unit-test path)
+│   ├── full_pool_sampler.py  # full-pool similarity sampler — the ONLY path (SIM-486)
+│   ├── synthetic_bundle.py   # in-memory bundle for the no-DB tests + the batch runner's no-DB factory
 │   ├── production_factory.py # builds the full-pool sampler per worker (+ manager / realism gates)
-│   ├── score_fusion.py       # cross-engine score fusion
-│   ├── fingerprints.py       # real query-fingerprint derivation
 │   ├── results.py            # GameSimResult / GameSimSummary / BoxScore
 │   ├── win_probability.py    # calibrated win probability
 │   ├── prop_distributions.py # per-prop PMFs

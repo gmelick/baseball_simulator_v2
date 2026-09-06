@@ -30,6 +30,25 @@ from simulation.full_pool_sampler import FullPoolSampler
 _SEASON = 2024
 
 
+def _with_transition(pool: BattedBallPool) -> BattedBallPool:
+    """SIM-486: every batted-ball draw is the SIM-511 transition draw, so a test
+    pool needs the transition columns. These rows all sit in the empty-bases /
+    no-outs cell: a hit seats the batter at the hit value, an out retires him."""
+    n = pool.n
+    pool.r1_dest = np.full(n, -1, dtype=np.int8)
+    pool.r2_dest = np.full(n, -1, dtype=np.int8)
+    pool.r3_dest = np.full(n, -1, dtype=np.int8)
+    pool.batter_dest = pool.result_hits.astype(np.int8)
+    pool.dest_ok = np.ones(n, dtype=np.int8)
+    pool.r1_adv_out = np.zeros(n, dtype=np.int8)
+    pool.r2_adv_out = np.zeros(n, dtype=np.int8)
+    pool.r3_adv_out = np.zeros(n, dtype=np.int8)
+    pool.is_air = np.zeros(n, dtype=np.int8)
+    pool.spray_raw = np.zeros(n, dtype=np.float32)
+    pool.hit_dist = np.zeros(n, dtype=np.float32)
+    return pool
+
+
 # ===========================================================================
 # SIM-413 — platoon reweight in the batted-ball draw (sampler level)
 # ===========================================================================
@@ -42,16 +61,18 @@ def _platoon_bb_pool(with_throws: bool = True) -> BattedBallPool:
     p_throws = (
         np.asarray(["R", "R", "R", "R", "L", "L", "L", "L"], dtype=object) if with_throws else None
     )
-    return BattedBallPool(
-        geom=np.zeros((n, 3), dtype=np.float32),
-        sit=np.zeros((n, 6), dtype=np.float32),
-        batter_id=np.full(n, 700, dtype=np.int64),
-        season=np.full(n, _SEASON, dtype=np.int64),
-        event=np.asarray(["single"] * 4 + ["double"] * 4, dtype=object),
-        result_hits=np.array([1, 1, 1, 1, 2, 2, 2, 2], dtype=np.int8),
-        result_outs=np.zeros(n, dtype=np.int8),
-        recency=np.ones(n, dtype=np.float32),
-        p_throws=p_throws,
+    return _with_transition(
+        BattedBallPool(
+            geom=np.zeros((n, 3), dtype=np.float32),
+            sit=np.zeros((n, 6), dtype=np.float32),
+            batter_id=np.full(n, 700, dtype=np.int64),
+            season=np.full(n, _SEASON, dtype=np.int64),
+            event=np.asarray(["single"] * 4 + ["double"] * 4, dtype=object),
+            result_hits=np.array([1, 1, 1, 1, 2, 2, 2, 2], dtype=np.int8),
+            result_outs=np.zeros(n, dtype=np.int8),
+            recency=np.ones(n, dtype=np.float32),
+            p_throws=p_throws,
+        )
     )
 
 
@@ -100,16 +121,18 @@ def _home_bb_pool(with_bat_home: bool = True) -> BattedBallPool:
     the away half (event 'double'), so the drawn EVENT reveals the batting side."""
     n = 8
     bat_home = np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=np.int8) if with_bat_home else None
-    return BattedBallPool(
-        geom=np.zeros((n, 3), dtype=np.float32),
-        sit=np.zeros((n, 6), dtype=np.float32),
-        batter_id=np.full(n, 700, dtype=np.int64),
-        season=np.full(n, _SEASON, dtype=np.int64),
-        event=np.asarray(["single"] * 4 + ["double"] * 4, dtype=object),
-        result_hits=np.array([1, 1, 1, 1, 2, 2, 2, 2], dtype=np.int8),
-        result_outs=np.zeros(n, dtype=np.int8),
-        recency=np.ones(n, dtype=np.float32),
-        bat_home=bat_home,
+    return _with_transition(
+        BattedBallPool(
+            geom=np.zeros((n, 3), dtype=np.float32),
+            sit=np.zeros((n, 6), dtype=np.float32),
+            batter_id=np.full(n, 700, dtype=np.int64),
+            season=np.full(n, _SEASON, dtype=np.int64),
+            event=np.asarray(["single"] * 4 + ["double"] * 4, dtype=object),
+            result_hits=np.array([1, 1, 1, 1, 2, 2, 2, 2], dtype=np.int8),
+            result_outs=np.zeros(n, dtype=np.int8),
+            recency=np.ones(n, dtype=np.float32),
+            bat_home=bat_home,
+        )
     )
 
 
@@ -170,16 +193,18 @@ def _park_bb_pool(with_venues: bool = True) -> BattedBallPool:
     (event 'double'), so the drawn EVENT reveals the row's park."""
     n = 8
     venue_id = np.array([15, 15, 15, 15, 16, 16, 16, 16], dtype=np.int64) if with_venues else None
-    return BattedBallPool(
-        geom=np.zeros((n, 3), dtype=np.float32),
-        sit=np.zeros((n, 6), dtype=np.float32),
-        batter_id=np.full(n, 700, dtype=np.int64),
-        season=np.full(n, _SEASON, dtype=np.int64),
-        event=np.asarray(["single"] * 4 + ["double"] * 4, dtype=object),
-        result_hits=np.array([1, 1, 1, 1, 2, 2, 2, 2], dtype=np.int8),
-        result_outs=np.zeros(n, dtype=np.int8),
-        recency=np.ones(n, dtype=np.float32),
-        venue_id=venue_id,
+    return _with_transition(
+        BattedBallPool(
+            geom=np.zeros((n, 3), dtype=np.float32),
+            sit=np.zeros((n, 6), dtype=np.float32),
+            batter_id=np.full(n, 700, dtype=np.int64),
+            season=np.full(n, _SEASON, dtype=np.int64),
+            event=np.asarray(["single"] * 4 + ["double"] * 4, dtype=object),
+            result_hits=np.array([1, 1, 1, 1, 2, 2, 2, 2], dtype=np.int8),
+            result_outs=np.zeros(n, dtype=np.int8),
+            recency=np.ones(n, dtype=np.float32),
+            venue_id=venue_id,
+        )
     )
 
 
@@ -258,16 +283,18 @@ def _fk_bb_pool(with_fielders: bool = True) -> BattedBallPool:
             "fielder_pos": np.full(n, 6, dtype=np.int8),
             "fielder_id": np.array([555, 555, 555, 555, 556, 556, 556, 556], dtype=np.int64),
         }
-    return BattedBallPool(
-        geom=np.zeros((n, 3), dtype=np.float32),
-        sit=np.zeros((n, 6), dtype=np.float32),
-        batter_id=np.full(n, 700, dtype=np.int64),
-        season=np.full(n, _SEASON, dtype=np.int64),
-        event=np.asarray(["single"] * 4 + ["double"] * 4, dtype=object),
-        result_hits=np.array([1, 1, 1, 1, 2, 2, 2, 2], dtype=np.int8),
-        result_outs=np.zeros(n, dtype=np.int8),
-        recency=np.ones(n, dtype=np.float32),
-        **kw,
+    return _with_transition(
+        BattedBallPool(
+            geom=np.zeros((n, 3), dtype=np.float32),
+            sit=np.zeros((n, 6), dtype=np.float32),
+            batter_id=np.full(n, 700, dtype=np.int64),
+            season=np.full(n, _SEASON, dtype=np.int64),
+            event=np.asarray(["single"] * 4 + ["double"] * 4, dtype=object),
+            result_hits=np.array([1, 1, 1, 1, 2, 2, 2, 2], dtype=np.int8),
+            result_outs=np.zeros(n, dtype=np.int8),
+            recency=np.ones(n, dtype=np.float32),
+            **kw,
+        )
     )
 
 
@@ -356,20 +383,22 @@ class TestFielderQualityKernel:
         balls 52.7% -> 57.4%, hits +6%). Per-position normalization pins the
         cross-position mass while keeping within-position discrimination."""
         n = 4
-        pool = BattedBallPool(
-            geom=np.zeros((n, 3), dtype=np.float32),
-            sit=np.zeros((n, 6), dtype=np.float32),
-            batter_id=np.full(n, 700, dtype=np.int64),
-            season=np.full(n, _SEASON, dtype=np.int64),
-            event=np.asarray(["single", "double", "triple", "field_out"], dtype=object),
-            result_hits=np.array([1, 2, 3, 0], dtype=np.int8),
-            result_outs=np.array([0, 0, 0, 1], dtype=np.int8),
-            recency=np.ones(n, dtype=np.float32),
-            # Two SS rows (a twin + a far fielder vs the live SS) and two CF
-            # rows (both FAR from the live CF — the raw-weight failure case:
-            # every CF weight is tiny, so the SS rows would swallow the draw).
-            fielder_pos=np.array([6, 6, 8, 8], dtype=np.int8),
-            fielder_id=np.array([555, 556, 777, 778], dtype=np.int64),
+        pool = _with_transition(
+            BattedBallPool(
+                geom=np.zeros((n, 3), dtype=np.float32),
+                sit=np.zeros((n, 6), dtype=np.float32),
+                batter_id=np.full(n, 700, dtype=np.int64),
+                season=np.full(n, _SEASON, dtype=np.int64),
+                event=np.asarray(["single", "double", "triple", "field_out"], dtype=object),
+                result_hits=np.array([1, 2, 3, 0], dtype=np.int8),
+                result_outs=np.array([0, 0, 0, 1], dtype=np.int8),
+                recency=np.ones(n, dtype=np.float32),
+                # Two SS rows (a twin + a far fielder vs the live SS) and two CF
+                # rows (both FAR from the live CF — the raw-weight failure case:
+                # every CF weight is tiny, so the SS rows would swallow the draw).
+                fielder_pos=np.array([6, 6, 8, 8], dtype=np.int8),
+                fielder_id=np.array([555, 556, 777, 778], dtype=np.int64),
+            )
         )
         femb = {
             "key_index": {
@@ -416,17 +445,19 @@ class TestFielderQualityKernel:
 
 
 def _fielder_bb_pool() -> BattedBallPool:
-    return BattedBallPool(
-        geom=np.zeros((1, 3), dtype=np.float32),
-        sit=np.zeros((1, 6), dtype=np.float32),
-        batter_id=np.array([700], dtype=np.int64),
-        season=np.array([_SEASON], dtype=np.int64),
-        event=np.asarray(["single"], dtype=object),
-        result_hits=np.array([1], dtype=np.int8),
-        result_outs=np.array([0], dtype=np.int8),
-        recency=np.ones(1, dtype=np.float32),
-        fielder_pos=np.array([6], dtype=np.int8),  # SS
-        fielder_id=np.array([555], dtype=np.int64),
+    return _with_transition(
+        BattedBallPool(
+            geom=np.zeros((1, 3), dtype=np.float32),
+            sit=np.zeros((1, 6), dtype=np.float32),
+            batter_id=np.array([700], dtype=np.int64),
+            season=np.array([_SEASON], dtype=np.int64),
+            event=np.asarray(["single"], dtype=object),
+            result_hits=np.array([1], dtype=np.int8),
+            result_outs=np.array([0], dtype=np.int8),
+            recency=np.ones(1, dtype=np.float32),
+            fielder_pos=np.array([6], dtype=np.int8),  # SS
+            fielder_id=np.array([555], dtype=np.int64),
+        )
     )
 
 

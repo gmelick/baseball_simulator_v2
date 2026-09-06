@@ -18,8 +18,7 @@ and a handful of ergonomic mutators the SIM-316 state machine will lean on.  It
 deliberately does NOT implement:
 
   * the count/out/base/inning **state machine** (SIM-316 — §5/§6 of the spec);
-  * the **fingerprint derivation** that reads this state (SIM-317 — §4);
-  * the **outcome determination** / foul re-weight (SIM-318 — §5.1/§5.2);
+  * the **outcome determination** (SIM-318 — §5.1);
   * **fielding / baserunning** resolution (SIM-319 — steps 6/7);
   * **run resolution** (SIM-312 — already landed in
     ``simulation.run_resolution``; ``PlayResult`` carries its provenance);
@@ -39,9 +38,8 @@ sets below are chosen so each step's listed input/output has a home:
   * Step 1 (game-state read) — ``GameState`` exposes count, outs, inning/half,
     base state, ``score_diff`` (offense − defense), ``leverage`` (manager
     context), ``pitcher_pitch_count``, ``batter_pa_count``, ``park`` (venue).
-  * Step 2/3 (pitch selection + sampling) — the sampler **pre-filter keys**
-    ``(pitcher_id, bat_hand, season)`` are first-class on ``GameState`` (spec
-    §4.3: these are tile pre-filter args, NOT fingerprint dims) via
+  * Step 2/3 (pitch selection + sampling) — the matchup keys
+    ``(pitcher_id, bat_hand, season)`` are first-class on ``GameState`` via
     :meth:`GameState.sampler_prefilter`.
   * Step 4 (outcome determination) — ``balls`` / ``strikes`` are the live count
     the §5.1 machine advances.
@@ -65,7 +63,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any
 
 # ---------------------------------------------------------------------------
 # Value types / enums
@@ -399,17 +396,17 @@ class GameState:
     """The mutable game state the simulation loop reads (step 1) and commits to
     (step 8).  Owned by SIM-311; built against the SIM-310 spec §2 step I/O.
 
-    Required identity fields (the sampler pre-filter, spec §4.3):
-      * ``pitcher_id`` — current pitcher (tile pre-filter key).
+    Required identity fields (the matchup keys, spec §4.3):
+      * ``pitcher_id`` — current pitcher.
       * ``bat_hand``   — the batter's hand *for this PA* (switch-hitter's hand vs
         the current pitcher — spec §4.3 / HANDOFF §4 — NOT the roster ``bats``).
-      * ``season``     — tile pre-filter key.
+      * ``season``     — the pool season key.
 
     Everything else defaults so the SIM-316 state machine can construct a fresh
     "top of the 1st, nobody on, 0-0 count, 0 outs" state and mutate from there.
     """
 
-    # ---- sampler pre-filter (spec §4.3 — tile keys, NOT fingerprint dims) ----
+    # ---- the matchup keys (spec §4.3) ----------------------------------------
     pitcher_id: int
     bat_hand: str  # 'L' / 'R' — batter's hand vs the current pitcher
     season: int
@@ -531,8 +528,7 @@ class GameState:
         return self.bases.runners_state
 
     def sampler_prefilter(self) -> tuple[int, str, int]:
-        """The ``(pitcher_id, bat_hand, season)`` tuple the sampler pre-filters
-        on (spec §4.3 / step 3).  These are tile keys, NOT fingerprint dims."""
+        """The ``(pitcher_id, bat_hand, season)`` matchup tuple (spec §4.3)."""
         return (self.pitcher_id, self.bat_hand, self.season)
 
     def bat_hand_for(self, batter_id: int | None) -> str:
@@ -644,7 +640,7 @@ class GameState:
                 f"scores must be non-negative: home={self.home_score} away={self.away_score}"
             )
 
-    def assert_invariants(self, *, in_play: bool = True, check_bases: bool = True) -> None:
+    def assert_invariants(self, *, in_play: bool = True) -> None:
         """Run every committed-state invariant together.
 
         ``in_play`` is threaded to the count/outs guards: a *committed*,
@@ -658,18 +654,11 @@ class GameState:
         due-up batter is already the next player.  A caller that holds the
         batter for THIS plate appearance calls ``bases.assert_consistent(
         batter_id=...)`` itself.
-
-        Set ``check_bases=False`` to skip the base guard alone and keep the count,
-        outs and score guards.  ``sim_loop`` passes its own
-        ``_enforce_base_invariants`` flag here, so the per-tile scaffold — which
-        strands runners on first and therefore reaches states real baseball cannot
-        — keeps the three guards that DO hold for it (SIM-500).
         """
         self.assert_count_valid(mid_count=in_play)
         self.assert_outs_valid(in_play=in_play)
         self.assert_score_valid()
-        if check_bases:
-            self.bases.assert_consistent()
+        self.bases.assert_consistent()
 
 
 # ---------------------------------------------------------------------------
@@ -680,18 +669,11 @@ class GameState:
 @dataclass
 class PlayResult:
     """The structured result of one pitch (and, on contact, the resolved PA
-    event).  Owned by SIM-311; generalizes the scaffold's ``simulate_pitch``
-    return dict (``simulation/sim_loop.py``) into a typed contract.
-
-    The scaffold dict had::
-
-        {"pitch_outcome", "is_contact", "event", "runs", "fellback",
-         "pitch_sample", "battedball_sample"}
-
-    Every one of those has a typed home below, plus the spec §2 step-5/6/7
-    deltas (batted-ball stats, fielding resolution, baserunner movements,
-    runs/outs deltas, next-state pointer) and the SIM-312 run-resolution
-    provenance so the loop never re-derives run values inline (spec §8).
+    event).  Owned by SIM-311: the pitch outcome + count classification, the
+    spec §2 step-5/6/7 deltas (batted-ball stats, fielding resolution,
+    baserunner movements, runs/outs deltas, next-state pointer) and the
+    SIM-312 run-resolution provenance so the loop never re-derives run values
+    inline (spec §8).
     """
 
     # ---- step 3/4: the pitch outcome + count classification -----------------
@@ -754,36 +736,10 @@ class PlayResult:
     #: SIM-507: an errant pickoff throw advanced a runner on this pitch.
     pickoff_error: bool = False
 
-    # ---- raw sampler payloads (carried verbatim from the sampler) -----------
-    #: The raw ``PlayPoolSampler.sample_pitch(...)`` dict (row_id/distance/...).
-    pitch_sample: dict | None = None
-    #: The raw ``sample_batted_ball(...)`` dict, or None on a non-contact pitch.
-    battedball_sample: dict | None = None
-    #: True when any served tile fell back to the pitcher_id=0 league-average
-    #: tile (mirrors the scaffold's ``fellback`` flag).
-    fellback: bool = False
-
     # ---- step 8: next-state pointer (the committed GameState) ----------------
     #: The ``GameState`` after this play is committed (spec step 8 'next state').
     #: Optional so a PlayResult can be constructed before the commit.
     next_state: GameState | None = None
-
-    def as_scaffold_dict(self) -> dict[str, Any]:
-        """Return the legacy scaffold ``simulate_pitch`` dict shape.
-
-        Lets SIM-316 keep the scaffold's dict-shaped callers working while the
-        loop migrates to the typed ``PlayResult`` (the scaffold itself is left
-        untouched per SIM-311 scope).
-        """
-        return {
-            "pitch_outcome": self.pitch_outcome,
-            "is_contact": self.is_contact,
-            "event": self.event,
-            "runs": self.runs,
-            "fellback": self.fellback,
-            "pitch_sample": self.pitch_sample,
-            "battedball_sample": self.battedball_sample,
-        }
 
 
 __all__ = [

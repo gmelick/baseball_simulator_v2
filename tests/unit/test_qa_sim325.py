@@ -270,6 +270,7 @@ class TestChiSquaredGuards:
 
 class TestRealDataSeam:
     @pytest.mark.slow
+    @pytest.mark.timeout(300)  # 1,800 games over the synthetic bundle (~55 s locally)
     def test_replay_and_test_over_historical_games(self):
         # Exercise the real-data seam: replay HistoricalGames through the loop and
         # chi-squared the simulated run distribution against a reference of ACTUAL

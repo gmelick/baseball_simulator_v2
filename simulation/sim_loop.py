@@ -1,62 +1,34 @@
 """
 sim_loop.py
 ===========
-SIM-316 -- GameState-driven plate-appearance STATE MACHINE skeleton.
+The pitch-by-pitch game simulator: the count machine, the half-inning
+control, the manager hooks and the full-game driver.
 
-WHAT THIS IS (and is NOT) -- the SIM-316 deliverable
-----------------------------------------------------
-SIM-303 left a *single-pitch scaffold* here: ``simulate_pitch`` sampled exactly
-one pitch (and, on contact, one batted ball) through the SIM-302
-``PlayPoolSampler`` and stopped -- no count machine, no terminal-PA logic, no
-half-inning control.  SIM-316 turns that scaffold into the **count / out / base /
-inning state machine** the SIM-310 spec
-(``docs/architecture/2026-06-17-phase4-sim-loop-spec.md`` §5.1 / §6.1) requires:
+Every decision in this loop is a similarity-weighted draw from a hard-filtered
+pool, never a hand-tuned formula, and the drawn row IS the play (the owner
+rules of 2026-08-10 and 2026-08-29). The pitch outcome comes from
+:meth:`StateMachine._full_pool_outcome`; the batted ball from
+:meth:`StateMachine._full_pool_fielding`, whose drawn row carries its whole
+base-out transition (SIM-511); the discretionary extra bases from the SIM-512
+advancement draws; the steal from the SIM-474 opportunity draw. All of them
+read one :class:`~simulation.full_pool_sampler.FullPoolSampler` over an
+engine-artifact bundle.
 
-  * the **count machine** (§5.1): ball 4 -> walk (terminal), strike 3 ->
-    strikeout (terminal), and the SIM-056 **two-strike-foul absorbing rule** (a
-    foul with two strikes keeps the PA alive -- the count does NOT advance past
-    strike 2 on a foul);
-  * the **half-inning logic** (§6.1): 3 outs -> clear bases, reset count + outs,
-    flip ``Half`` (TOP<->BOTTOM), advance the inning on BOTTOM->TOP, and carry
-    the per-team batting-order pointer forward;
-  * **invalid-state guards** via the SIM-311 ``GameState.assert_*`` helpers so
-    outs stay 0-2 during play, balls 0-3 / strikes 0-2 mid-count, scores
-    non-negative, and base occupancy stays consistent;
-  * a state machine that **reads/commits the ``GameState`` and emits a
-    ``PlayResult``**, with the per-pitch sampler call still wired (the query
-    "fingerprint" is still the SIM-303 stub -- ``# TODO(SIM-317)``).
+There is ONE in-play path. SIM-486 deleted the per-tile FAISS fallback, the
+injected ``PlayResolver`` and the legacy advancement code that resolved a
+signal without a transition. A test that needs a play hands the machine a
+:mod:`simulation.synthetic_bundle` bundle instead, so the suite runs the code
+users get.
 
-WHAT THIS IS STILL NOT (downstream tickets own these; explicit hooks below)
----------------------------------------------------------------------------
-  * **SIM-317** -- real fingerprint derivation from game state (replacing the
-    stub hash) is now wired in via an optional
-    :class:`simulation.fingerprints.FingerprintDeriver` injected into
-    :class:`PlateAppearanceSimulator`; see
-    :meth:`PlateAppearanceSimulator._pitch_fingerprint`.  When no deriver is
-    supplied (the SIM-316 count-machine-only / no-DB test mode) the legacy stub
-    hash is used so that path stays DB/FAISS-free.
-  * **SIM-318** -- DONE: the step-4 outcome-determination *detail*: the SIM-056
-    count-conditional foul **re-weight** applied in the loop BEFORE the count
-    advance (the sampler stays count-blind), plus the full terminal
-    classification.  See :func:`apply_count_foul_weighting` /
-    :func:`strikes_bucket_foul_factor` and
-    :meth:`StateMachine._draw_reweighted_outcome` /
-    :meth:`StateMachine._accept_or_resample_foul` wired into
-    :meth:`StateMachine.step_pitch` step 4.
-  * **SIM-319** -- fielding + baserunning resolution of a batted ball into outs
-    and base/score deltas, the steal decision/outcome, and the dropped-third-
-    strike edge; see :meth:`StateMachine._resolve_in_play` and the out/baserunner
-    hooks in :meth:`StateMachine.step_pitch`.
-  * **SIM-320** -- the full-game ``simulate_game()`` driver + walk-off / extra-
-    innings control; see :func:`simulate_game` (a guarded stub) and
-    :meth:`StateMachine.advance_half_inning`.
-  * **SIM-321** -- cross-engine score fusion (referenced by SIM-317).
-  * **SIM-323** -- the manager substitution/IBB/steal module behind the §3/§5.3
-    hooks; see :meth:`StateMachine._pre_pitch_hook` / :meth:`StateMachine._end_of_pa_hook`.
+The count machine can still run alone: a caller that passes
+``pitch_outcome=`` to :meth:`StateMachine.step_pitch` drives deterministic
+count sequences with no sampler at all (walks, strikeouts and the base-out
+bookkeeping resolve; an in-play pitch with no sampler is left unresolved).
 
-The legacy SIM-303 surface (``PitchState``, ``pitch_outcome_to_event``,
-``PlateAppearanceSimulator.simulate_pitch`` returning the scaffold dict) is kept
-verbatim so the SIM-303 tests keep passing; the new machine is additive.
+Section owners, for the history: the count machine + half-inning logic
+(SIM-316), fielding / baserunning / steals (SIM-319), the full-game driver
+(SIM-320), the manager hooks (SIM-323 / SIM-434), the run ledger (SIM-499 /
+SIM-500), the transition draw (SIM-511 / SIM-512).
 """
 
 from __future__ import annotations
@@ -65,7 +37,6 @@ import os
 from dataclasses import dataclass, field
 
 import numpy as np
-from numpy.typing import NDArray
 
 from simulation.constants import resolve_event_to_canonical
 from simulation.game_state import (
@@ -82,30 +53,7 @@ from simulation.game_state import (
 from simulation.game_state import (
     CONTACT_PITCH_OUTCOME as _GS_CONTACT_PITCH_OUTCOME,
 )
-from simulation.play_pool_sampler import PlayPoolSampler
 from simulation.run_resolution import resolve_runs
-
-# Dimensions of the two FAISS fingerprints (must match the tiles the sampler
-# reads: 10-dim pitch fingerprint from SIM-041, 3-dim batted-ball from SIM-042;
-# see docs/architecture/2026-05-20-play-pool.md §2).
-_PITCH_FINGERPRINT_DIM = 10
-_BATTEDBALL_FINGERPRINT_DIM = 3
-
-# SIM-421 (L2): when the real FingerprintDeriver is wired the query is the
-# matchup CENTROID; sampling its k-NN alone over-draws the dense centre
-# (well-located called strikes) and under-draws off-centre pitches (balls), so a
-# game collapses to ~all strikeouts.  Per pitch we add zero-mean Gaussian jitter
-# in the normalized tile space (scaled per-dim by the engine FEATURE_SCALE) so
-# the draw SCATTERS like a real pitch sequence and reproduces the pitcher's
-# marginal outcome mix.  The stub-fingerprint path is already stochastic and is
-# left untouched.  Sigma ~ the within-tile normalized spread.
-try:  # numpy-only engine constants (faiss is guarded inside the engine modules)
-    from similarity.engines.batted_ball_similarity import FEATURE_SCALE as _BB_FEATURE_SCALE
-    from similarity.engines.pitch_pitch_similarity import FEATURE_SCALE as _PITCH_FEATURE_SCALE
-except Exception:  # pragma: no cover - defensive; jitter simply disables
-    _PITCH_FEATURE_SCALE = None
-    _BB_FEATURE_SCALE = None
-_QUERY_JITTER_SIGMA = float(os.environ.get("SIM_QUERY_JITTER_SIGMA", "1.25"))
 
 #: The single pitch outcome that means the ball was put in play -> resolve a
 #: batted ball.  Mirrors the ``outcome_type`` vocabulary the SIM-301 builder
@@ -133,79 +81,6 @@ EVENT_INTENTIONAL_WALK = "intentional_walk"
 #: Distinct from a real PA event so callers / run-resolution treat it as 0 runs.
 EVENT_IN_PROGRESS = "in_progress"
 
-#: The single pitch outcome SIM-056 re-weights (the count-conditional one).
-_FOUL_OUTCOME = "foul"
-
-#: SIM-056 count-conditional foul multiplier, keyed by ``count_strikes`` bucket
-#: (0 / 1 / 2 strikes).  These are the illustrative ``strikes_bucket_factor``
-#: values from ``docs/architecture/2026-05-21-foul-ball-weighting.md`` §2.1 /
-#: ``docs/data/foul_rate_by_count.csv``: a foul is ~1.55x as likely per swing at
-#: two strikes (the protect-the-plate / foul-off step-up), and a no-op (1.0 /
-#: 1.05) outside two strikes.  The table is keyed by the strike bucket because
-#: that is the dominant, behaviourally-grounded signal (foul-ball doc §2.1
-#: "granularity decision"); a future calibration can swap in measured league
-#: rates (and refine to all 12 counts) as a *data* change with no logic change.
-STRIKES_BUCKET_FOUL_FACTOR: dict[int, float] = {
-    0: 1.00,  # 0 strikes: a foul can only become strike 1 (bounded) -> no tilt
-    1: 1.05,  # 1 strike : a foul can only become strike 2 (bounded) -> tiny tilt
-    2: 1.55,  # 2 strikes: absorbing, count-neutral foul-off -> the big step-up
-}
-
-
-def strikes_bucket_foul_factor(strikes: int) -> float:
-    """The SIM-056 count-conditional foul multiplier for ``count_strikes``.
-
-    Returns ``STRIKES_BUCKET_FOUL_FACTOR[min(strikes, 2)]`` — the strike count is
-    clamped into the 0/1/2 bucket so a transient ``strikes`` value never raises
-    (the two-strike bucket is the ceiling; the absorbing rule means strikes never
-    truly exceeds 2 mid-PA).  This is the *only* count-conditioning SIM-056
-    injects; everything else stays empirical (the pool's own foul tendency is
-    preserved — foul-ball doc §2.2).
-    """
-    if strikes < 0:
-        raise ValueError(f"count_strikes cannot be negative: {strikes}")
-    return STRIKES_BUCKET_FOUL_FACTOR[min(int(strikes), 2)]
-
-
-def apply_count_foul_weighting(
-    distribution: dict[str, float], balls: int, strikes: int
-) -> dict[str, float]:
-    """SIM-056 Option-A re-weight: tilt a sampled outcome ``distribution`` toward
-    ``foul`` by the count-conditional factor, then renormalize the closed
-    pitch-outcome vocabulary to sum to 1.0 (foul-ball doc §3.2 Option A).
-
-    ``distribution`` is a ``{pitch_outcome: probability}`` map over (a subset of)
-    :data:`PITCH_OUTCOMES` — the neighbourhood mix the sampler drew from.  This
-    multiplies the ``foul`` bucket's mass by
-    :func:`strikes_bucket_foul_factor` for the live count and renormalizes; with
-    the factor > 1 at two strikes that shifts probability **into** ``foul`` and
-    (via renormalization) **out of** the terminal ``swinging_strike`` /
-    ``in_play`` buckets — exactly the real-world more-foul-offs ⇒ fewer
-    strike-threes / balls-in-play effect.
-
-    Pure / side-effect-free: returns a NEW dict and never touches the sampler.
-    The factor is ``1.0`` (a no-op) outside two strikes under the §2.1
-    placeholders, so this only reshapes the mix where the empirical pool is
-    missing the count tilt.  ``balls`` is accepted for the future per-(balls,
-    strikes) calibration (foul-ball doc §2.1) but does not affect the bucketed
-    factor today.
-    """
-    if not distribution:
-        return {}
-    factor = strikes_bucket_foul_factor(strikes)
-    reweighted: dict[str, float] = {}
-    for outcome, mass in distribution.items():
-        m = float(mass)
-        if m < 0.0:
-            raise ValueError(f"outcome mass for {outcome!r} cannot be negative: {mass!r}")
-        reweighted[outcome] = m * factor if outcome == _FOUL_OUTCOME else m
-    total = sum(reweighted.values())
-    if total <= 0.0:
-        # Degenerate (all-zero) distribution: nothing to renormalize; return the
-        # zeroed map unchanged rather than dividing by zero.
-        return reweighted
-    return {outcome: mass / total for outcome, mass in reweighted.items()}
-
 
 # ---------------------------------------------------------------------------
 # SIM-319 — fielding / baserunning / steal resolution (steps 6/7 + §5.4)
@@ -228,28 +103,14 @@ def apply_count_foul_weighting(
 #     The loop hands ``resolve_runs`` the *sampled* ``result_hits/outs/runs``
 #     deltas + the current base-out state and commits exactly what it returns.
 #   * Engines stay distance-/similarity-pure.  The loop NEVER imports an engine
-#     by module path nor turns a distance into a weight -- it consumes a bounded
-#     *signal* (out/error/safe probabilities, an advance count) supplied by an
-#     injected :class:`PlayResolver`.  In production the resolver wraps the
-#     fielder/baserunner/steal/catcher RBF engines (+ the sampler for the
-#     batted-ball / stolen-base draws); in tests it is injected directly so the
-#     loop unit-tests with NO live DuckDB / FAISS (the SIM-302/303/316/317/318
-#     dependency-injection pattern).
-#   * The stolen-base *pool* is reached through ``sim.stolen_base_pool`` -- an
-#     injectable accessor on the StateMachine named to match the spec's access
-#     path (§3 item 4) -- so the steal outcome is a sampled historical result
-#     (safe / caught), not a hardcoded coin flip.
+#     by module path nor turns a distance into a weight -- it consumes the
+#     drawn pool row as a bounded :class:`FieldingSignal` from the full-pool
+#     sampler (SIM-486: the one and only in-play source; a test hands the
+#     machine a synthetic bundle instead of a resolver).
+#   * The steal is a draw from the SIM-468 opportunity pool
+#     (:meth:`StateMachine._steal_opportunity_draw`); a test stages one
+#     explicitly through :meth:`StateMachine.stage_steal`.
 
-
-#: Hit-value of the batter's result, in the ``result_hits`` vocabulary the play
-#: pool stores and ``run_resolution.advance_state`` consumes: 0=out, 1=1B, 2=2B,
-#: 3=3B, 4=HR (``db/schemas/02_duckdb_schema.sql`` sim.outcome_pool).
-_HIT_VALUE_BY_EVENT: dict[str, int] = {
-    "single": 1,
-    "double": 2,
-    "triple": 3,
-    "home_run": 4,
-}
 
 #: Statcast batted-ball event strings that are pure outs (no base reached). The
 #: canonical resolver (constants.resolve_event_to_canonical) maps the long
@@ -410,8 +271,8 @@ def spawn_rng_streams(seed: int | None, n: int = _N_RNG_STREAMS) -> list[np.rand
 
 
 def _env_flag(name: str, *, default: bool = False) -> bool:
-    """Parse an on/off env flag the same way ``SIM_FULL_POOL`` is parsed in
-    :mod:`simulation.production_factory` (SIM-434).
+    """Parse an on/off env flag the same way :mod:`simulation.production_factory`
+    parses ``SIM_MANAGER`` (SIM-434).
 
     Unset -> ``default``; ``"0"``/``"false"``/``"no"``/``"off"`` (any case) ->
     ``False``; anything else -> ``True``.  Centralised so the SIM_MANAGER gate is
@@ -567,18 +428,15 @@ class FieldingSignal:
     error occurred.  The loop turns this into a base-out + run delta ONLY through
     :func:`simulation.run_resolution.resolve_runs`; it never re-derives runs.
 
-    Fields mirror the play pool's ``result_*`` columns + the fielder RBF outputs
-    so a production :class:`PlayResolver` can fill it from the sampler + engines,
-    and a test can inject it verbatim.
+    Fields mirror the play pool's ``result_*`` columns; the full-pool sampler's
+    drawn row fills it (:meth:`StateMachine._full_pool_fielding`).
     """
 
     event: str  # Statcast/canonical batted-ball event
     result_hits: int  # 0=out 1=1B 2=2B 3=3B 4=HR (pool vocab)
-    # Outs recorded on the play. The loop emits 0/1/2 today. ⚠ After the
-    # SIM-501a pool rebuild a raw pool row can carry 3 (triple play) and can
-    # carry result_hits>=1 WITH result_outs>=1 (a runner thrown out on a
-    # hit) — a resolver that forwards pool rows verbatim must handle both
-    # (SIM-473 scope).
+    # Outs recorded on the play. A raw pool row can carry 3 (triple play) and
+    # can carry result_hits>=1 WITH result_outs>=1 (a runner thrown out on a
+    # hit); the transition path reads the outs from the row's destinations.
     result_outs: int
     result_runs: int  # runs that physically scored on the play
     fielder_id: int | None = None  # the fielder who handled the ball (RBF)
@@ -587,10 +445,9 @@ class FieldingSignal:
     launch_angle: float | None = None
     spray_angle: float | None = None
     # SIM-511: the drawn pool row's whole base-state transition (the
-    # ``FullPoolSampler.last_transition`` dict), or None on the legacy /
-    # per-tile path. When present, the drawn row IS the play: the loop
-    # applies these destinations instead of inferring outs or advancing
-    # runners by formula. See ``_resolve_in_play_transition``.
+    # ``FullPoolSampler.last_transition`` dict). The drawn row IS the play:
+    # the loop applies these destinations instead of inferring outs or
+    # advancing runners by formula. See ``_resolve_in_play_transition``.
     transition: dict | None = None
 
 
@@ -617,117 +474,6 @@ class StealResolution:
     #: The pickoff out was a picked-off CAUGHT STEALING (the runner was tagged
     #: at the NEXT base) — MLB Rule 9.07(h) scores it as a CS.
     pickoff_advancing: bool = False
-
-
-class PlayResolver:
-    """Injectable provider of the engine-derived signals SIM-319 consumes.
-
-    This is the seam that keeps the loop engine-/DB-free in tests and keeps the
-    engines distance-pure in production.  The default implementation here wires
-    the **sampler** for the batted-ball draw (step 5) and applies a conservative,
-    engine-signal-shaped resolution; a production subclass overrides the hooks to
-    consult the fielder / baserunner / steal / catcher RBF engines (resolved via
-    the registry) and the ``sim.stolen_base_pool``.  Tests inject a fake.
-
-    The resolver returns *signals/value objects only* -- it NEVER mutates the
-    GameState and NEVER computes a run value (that is the loop's job, via
-    ``resolve_runs``).  Every method is overridable in isolation.
-    """
-
-    def resolve_fielding(self, state: GameState, battedball_sample: dict | None) -> FieldingSignal:
-        """Map a sampled batted-ball event to a :class:`FieldingSignal` (step 6).
-
-        The default reads the play pool's ``result_hits/result_outs/result_runs``
-        if the sampler carried them (the context-aware path :func:`resolve_runs`
-        wants); otherwise it infers a conservative delta from the event string
-        (a hit reaches the batter and scores no runner without runner context; an
-        out records one -- or two for a DP).  A production resolver replaces the
-        inference with the fielder RBF out/error signal.
-        """
-        sample = battedball_sample or {}
-        event = str(sample.get("event", "field_out"))
-        hits = sample.get("result_hits")
-        outs = sample.get("result_outs")
-        runs = sample.get("result_runs")
-        if hits is None:
-            hits = _HIT_VALUE_BY_EVENT.get(event, 0)
-        if outs is None:
-            outs = 2 if event in _DOUBLE_PLAY_EVENTS else (0 if int(hits) > 0 else 1)
-        if runs is None:
-            runs = 0
-        return FieldingSignal(
-            event=event,
-            result_hits=int(hits),
-            result_outs=int(outs),
-            result_runs=int(runs),
-            fielder_id=sample.get("fielder_id"),
-            is_error=bool(sample.get("is_error", False)),
-            exit_velo=sample.get("exit_velo"),
-            launch_angle=sample.get("launch_angle"),
-            spray_angle=sample.get("spray_angle"),
-        )
-
-    def resolve_steal(self, state: GameState) -> StealResolution:
-        """Resolve a steal attempt (the pre-pitch decision is already taken).
-
-        Samples the safe/caught outcome from ``sim.stolen_base_pool`` when an
-        accessor is wired (a runner/catcher/pitcher-matched historical draw);
-        with no pool wired this returns ``attempted=False`` so the loop is a
-        no-op (the count-machine / no-DB path).  A production resolver scores the
-        baserunner-steal / catcher / pitcher-steal RBFs to bias the draw.
-        """
-        return StealResolution(attempted=False)
-
-
-@dataclass(slots=True)
-class _SampledStealPool:
-    """A tiny in-memory ``sim.stolen_base_pool`` stand-in (the injectable seam).
-
-    Holds a list of ``(success: bool, weight: float)`` historical rows for a
-    runner; ``sample(rng)`` draws one weighted by ``recency_weight``.  Production
-    wires the real DuckDB-backed pool; tests inject this (or a fake with a fixed
-    rng) so the steal outcome is a *sampled historical result*, not a hardcoded
-    flip.
-    """
-
-    rows: list[tuple[bool, float]]
-
-    def sample(self, rng) -> bool:
-        if not self.rows:
-            return False
-        weights = np.asarray([max(0.0, float(w)) for _, w in self.rows], dtype=np.float64)
-        total = float(weights.sum())
-        if total <= 0.0:
-            idx = int(rng.integers(len(self.rows)))
-        else:
-            idx = int(rng.choice(len(self.rows), p=weights / total))
-        return bool(self.rows[idx][0])
-
-
-# ---------------------------------------------------------------------------
-# Minimal throwaway input (SIM-303 scaffold — kept for back-compat)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(slots=True)
-class PitchState:
-    """A deliberately tiny stand-in for the SIM-311 GameState.
-
-    Retained verbatim from the SIM-303 scaffold so the existing scaffold tests
-    keep passing.  New SIM-316 code drives the real
-    :class:`simulation.game_state.GameState` through :class:`StateMachine`; this
-    type only feeds the legacy :meth:`PlateAppearanceSimulator.simulate_pitch`
-    single-pitch path.
-    """
-
-    pitcher_id: int
-    bat_hand: str
-    season: int
-    balls: int = 0
-    strikes: int = 0
-    outs: int = 0
-    # bases occupancy as a 3-tuple of bools (1B, 2B, 3B).
-    bases: tuple[bool, bool, bool] = (False, False, False)
 
 
 # ---------------------------------------------------------------------------
@@ -833,148 +579,6 @@ def advance_count(balls: int, strikes: int, pitch_outcome: str) -> CountAdvance:
 
 
 # ---------------------------------------------------------------------------
-# Placeholder pitch-outcome -> PA-event mapping (SIM-303 scaffold — kept)
-# ---------------------------------------------------------------------------
-
-
-def pitch_outcome_to_event(pitch_outcome: str) -> str | None:
-    """Map a *non-contact* terminal pitch outcome to a PA-event string, or
-    ``None`` when the pitch is in-play (contact) and must be resolved by the
-    batted-ball pool instead.
-
-    Retained from the SIM-303 scaffold (the single-pitch path uses it).  The
-    real count-driven terminal logic now lives in :func:`advance_count` /
-    :meth:`StateMachine.step_pitch`; this stays the back-compat marker mapping
-    so the SIM-303 tests keep passing.
-    """
-    if pitch_outcome == CONTACT_PITCH_OUTCOME:
-        return None  # contact -> caller resolves via sample_batted_ball
-    return {
-        "ball": EVENT_IN_PROGRESS,
-        "called_strike": EVENT_IN_PROGRESS,
-        "swinging_strike": EVENT_IN_PROGRESS,
-        "foul": EVENT_IN_PROGRESS,
-    }.get(pitch_outcome, EVENT_IN_PROGRESS)
-
-
-# ---------------------------------------------------------------------------
-# The plate-appearance simulator (SIM-303 single-pitch scaffold — kept)
-# ---------------------------------------------------------------------------
-
-
-class PlateAppearanceSimulator:
-    """SIM-303 scaffold: a sim-loop-shaped single caller of the PlayPoolSampler.
-
-    Kept intact so the SIM-303 tests pass unchanged.  :meth:`simulate_pitch`
-    samples ONE pitch (and, on contact, one batted ball) and returns the legacy
-    ``PlayResult``-shaped dict.  The SIM-316 state machine
-    (:class:`StateMachine`) is the GameState-driven replacement; it reuses this
-    class's stub fingerprints to keep the sampler wiring in one place.
-    """
-
-    def __init__(
-        self,
-        sampler: PlayPoolSampler,
-        *,
-        k: int = 25,
-        rng: np.random.Generator | None = None,
-        fingerprint_deriver=None,
-    ) -> None:
-        if sampler is None:
-            raise ValueError("PlateAppearanceSimulator requires a PlayPoolSampler.")
-        self.sampler = sampler
-        self.k = int(k)
-        # Used ONLY for the synthetic stub fingerprints; the sampler holds its
-        # own rng for the actual k-NN draws.
-        self.rng = rng if rng is not None else np.random.default_rng()
-        # SIM-317: an optional FingerprintDeriver replaces the stub hashes with
-        # the real game-state-derived 10-dim / 3-dim feature vectors.  When None,
-        # the legacy stub hash is used (keeps any caller without the engine-backed
-        # provider working; the count-machine-only no-DB path never reaches here).
-        self.fingerprint_deriver = fingerprint_deriver
-
-    # ---- fingerprints (SIM-317 real derivation, with a stub fall-back) -----
-
-    def _pitch_fingerprint(self, state: PitchState | GameState) -> NDArray[np.float32]:
-        """Build the 10-dim pitch query vector (spec §4.1).
-
-        SIM-317: when a :class:`simulation.fingerprints.FingerprintDeriver` is
-        injected, derive the real vector in ``PITCH_FEATURES`` order from the
-        matchup geometry + SIM-321 fusion (z-score + sqrt-weight normalized into
-        the SIM-041 tile space; pre-filter keys are NOT vector dims, spec §4.3).
-        Otherwise fall back to the legacy deterministic-hash stub so the FAISS
-        search still runs (this only happens on the real sampling path).
-        """
-        if self.fingerprint_deriver is not None:
-            return self.fingerprint_deriver.pitch_fingerprint(state)
-        seed = abs(
-            hash((state.pitcher_id, state.bat_hand, state.balls, state.strikes, state.outs))
-        ) % (2**32)
-        local = np.random.default_rng(seed)
-        return local.standard_normal(_PITCH_FINGERPRINT_DIM).astype(np.float32)
-
-    def _battedball_fingerprint(self, state: PitchState | GameState) -> NDArray[np.float32]:
-        """Build the 3-dim batted-ball query vector (EV / LA / spray; spec §4.2).
-
-        SIM-317: when a deriver is injected, derive the real contact-quality
-        vector in ``BATTED_BALL_FEATURES`` order (z-score + sqrt-weight into the
-        SIM-042 tile space).  Otherwise fall back to the legacy hash stub.
-        """
-        if self.fingerprint_deriver is not None:
-            return self.fingerprint_deriver.battedball_fingerprint(state)
-        seed = abs(hash((state.bat_hand, state.pitcher_id, state.outs))) % (2**32)
-        local = np.random.default_rng(seed)
-        return local.standard_normal(_BATTEDBALL_FINGERPRINT_DIM).astype(np.float32)
-
-    # ---- the SIM-303 single-pitch step (kept verbatim) --------------------
-
-    def simulate_pitch(self, state: PitchState) -> dict:
-        """Simulate ONE pitch via the play-pool sampler and return the legacy
-        ``PlayResult``-shaped dict (the SIM-303 scaffold deliverable).
-
-        SIM-316 leaves this single-pitch path untouched; the GameState-driven
-        loop is :meth:`StateMachine.step_pitch`.
-        """
-        # --- pitch fingerprint -> sampler.sample_pitch ---------------------
-        pitch_fp = self._pitch_fingerprint(state)
-        pitch_sample = self.sampler.sample_pitch(
-            state.pitcher_id, state.bat_hand, state.season, pitch_fp, k=self.k
-        )
-        pitch_outcome = pitch_sample["pitch_outcome"]
-        fellback = bool(pitch_sample.get("fellback", False))
-
-        is_contact = pitch_outcome == CONTACT_PITCH_OUTCOME
-        battedball_sample: dict | None = None
-        event: str | None
-
-        if is_contact:
-            bb_fp = self._battedball_fingerprint(state)
-            battedball_sample = self.sampler.sample_batted_ball(
-                state.bat_hand, state.season, bb_fp, k=self.k
-            )
-            event = battedball_sample["event"]
-            fellback = fellback or bool(battedball_sample.get("fellback", False))
-        else:
-            event = pitch_outcome_to_event(pitch_outcome)
-
-        # The linear-weight RUN_VALUES table was removed 2026-08-19 (owner
-        # ruling): a hand-set per-event constant never stands in for real
-        # states. This legacy SIM-303 scaffold field is dead — the GameState
-        # loop resolves every play by RE24 over real base-out states.
-        runs = 0.0
-
-        return {
-            "pitch_outcome": pitch_outcome,
-            "is_contact": is_contact,
-            "event": event,
-            "runs": runs,
-            "fellback": fellback,
-            "pitch_sample": pitch_sample,
-            "battedball_sample": battedball_sample,
-        }
-
-
-# ---------------------------------------------------------------------------
 # StateMachine — the SIM-316 GameState-driven §5/§6 skeleton
 # ---------------------------------------------------------------------------
 
@@ -984,65 +588,34 @@ class StateMachine:
 
     Reads a mutable SIM-311 :class:`~simulation.game_state.GameState`, drives the
     §5.1 count machine and §6.1 half-inning logic, commits the result, and emits
-    a :class:`~simulation.game_state.PlayResult`.  The per-pitch sampler call is
-    wired through a :class:`PlateAppearanceSimulator` (so the stub fingerprints +
-    sampler plumbing live in one place); a ``sampler`` may be omitted entirely to
-    drive the *count/out/base* machine in isolation (the SIM-316 acceptance tests
-    do this — they classify a supplied pitch outcome without sampling).
-
-    Ownership boundaries this ticket respects (see module docstring):
-
-      * §5.2 foul **re-weight** + the step-4 outcome-determination detail -> SIM-318;
-      * fielding/baserunning resolution, steal, dropped-third-strike -> SIM-319;
-      * walk-off / extra-innings / ``simulate_game()`` -> SIM-320;
-      * fingerprint derivation -> SIM-317; manager hooks -> SIM-323.
+    a :class:`~simulation.game_state.PlayResult`.  Every draw comes from the
+    ``full_pool_sampler`` (a :class:`~simulation.full_pool_sampler.FullPoolSampler`
+    over an engine-artifact bundle — the production bundle on disk, or a
+    :mod:`simulation.synthetic_bundle` bundle in a test).  The sampler may be
+    omitted to drive the *count/out/base* machine in isolation: the caller then
+    supplies each ``pitch_outcome`` and an in-play pitch stays unresolved.
     """
 
     def __init__(
         self,
-        sampler: PlayPoolSampler | None = None,
+        full_pool_sampler=None,
         *,
-        k: int = 25,
         rng: np.random.Generator | None = None,
-        fingerprint_deriver=None,
-        resolver: PlayResolver | None = None,
-        sim=None,
         manager=None,
         bench=None,
-        full_pool_sampler=None,
         ibb_rates: dict[tuple[int, int, bool, bool], float] | None = None,
     ) -> None:
         self.rng = rng if rng is not None else np.random.default_rng()
-        self.k = int(k)
         # SIM-515: the measured IBB rate per (runners_state, outs, is_late,
         # is_close) cell — sim.ibb_rates, loaded by the factory. None (the
         # no-DB default) means no IBB ever fires; the hand-tuned formula that
         # issued 2.64x MLB's volume is retired.
         self.ibb_rates = ibb_rates
-        # SIM-424: opt-in full-pool similarity-weighted pitch sampler. When wired
-        # (the engine-artifacts bundle is present + the flag is set) step_pitch
-        # draws the pitch outcome from it instead of the per-tile sample_pitch;
-        # None keeps the validated default path untouched.
+        # The full-pool similarity-weighted sampler: the pitch draw, the batted-
+        # ball transition draw, the advancement draws and the steal draw all
+        # read it. None = the count-machine-only mode (a caller supplies each
+        # pitch outcome; an in-play pitch stays unresolved).
         self.full_pool_sampler = full_pool_sampler
-        # SIM-500: enforce the base-state invariants on the PRODUCTION path only.
-        #
-        # The per-tile scaffold leaves the bases untouched on an out — its own
-        # comment in `_resolve_in_play` calls that "the conservative case". Over a
-        # nine-man lineup that strands a runner on first for good: eight batters
-        # follow, none forces him along, and the order wraps back to him while he
-        # is still standing there. The same player is then batting AND on base.
-        # Traced directly: batters 101, 102, 103, 104 all bat with runner 105 on
-        # first, then 105 comes up. Real baseball cannot reach that state.
-        #
-        # So the scaffold produces physically impossible games BY DESIGN, and it is
-        # already condemned — SIM-486 deletes it, because its being the unit-test
-        # default is why four production defects survived eight weeks unseen.
-        #
-        # Gating beats softening. The guard keeps RAISING at full strength wherever
-        # legal states are actually a requirement, instead of being weakened
-        # everywhere to accommodate code that is being removed. When SIM-486 lands,
-        # delete this flag and the guard is unconditional again.
-        self._enforce_base_invariants = full_pool_sampler is not None
         # SIM-455: the full-pool weight cache has THREE lifetimes, so it needs THREE
         # keys. One key (`_fp_matchup`, `(pitcher, hand, batter)`) governed both
         # refreshes and got both wrong:
@@ -1062,8 +635,8 @@ class StateMachine:
         self._fp_pitcher_key: tuple | None = None
         self._fp_pa_key: tuple | None = None
         # SIM-411/413/425b realism nudges, each GATED OFF by default so a game is
-        # byte-identical to before unless the operator opts in (mirrors SIM_FULL_POOL
-        # / SIM_MANAGER). All three are ALSO graceful-optional: they no-op when the
+        # byte-identical to before unless the operator opts in (mirrors
+        # SIM_MANAGER). All three are ALSO graceful-optional: they no-op when the
         # data they read (the migration-0012 batted-ball columns / a venue park
         # factor / a per-position defense map) is absent, so turning a flag on
         # without the rebuilt artifact is still a no-op. Read once per machine.
@@ -1085,29 +658,6 @@ class StateMachine:
         self._got_away = _env_flag("SIM_GOT_AWAY")
         #: The last drawn pitch's got-away fact (False on every other path).
         self._last_pitch_got_away = False
-        # Hot-path env knobs resolved ONCE here (they are constant for the machine's
-        # lifetime but were re-read + re-parsed thousands of times per game). Tests
-        # set the env BEFORE constructing the machine, so a construct-time read is
-        # correct; the per-call resolver methods are kept (the env-parse unit tests
-        # call them directly). Mirrors the _bb_platoon one-shot read above.
-        self._run_calib_value = self._run_calib()  # SIM-429
-        # The single-pitch helper owns the (SIM-317 real / stub) fingerprint +
-        # sampler call.  When no sampler is supplied the machine is "count-machine
-        # only": the caller passes a pitch_outcome directly into step_pitch (the
-        # loop body exercised by the SIM-316 unit tests, no live DB/FAISS
-        # required) -- the deriver is NEVER touched on that path.
-        self.sampler = sampler
-        self.fingerprint_deriver = fingerprint_deriver
-        # SIM-319: the fielding/baserunning/steal resolver (the engine-signal
-        # seam).  Defaults to the in-loop :class:`PlayResolver` (sampler-driven,
-        # engine-signal-shaped); a production caller injects an engine-backed
-        # subclass, a test injects a fake.
-        self.resolver = resolver if resolver is not None else PlayResolver()
-        # SIM-319: the simulation context that carries ``stolen_base_pool`` (the
-        # spec's ``sim.stolen_base_pool`` access path, §3 item 4).  Injectable so
-        # the steal outcome is a sampled historical safe/caught result; ``None``
-        # in the no-DB / count-machine path (steals are then a no-op).
-        self.sim = sim
         # SIM-323: the manager tendency source the §3/§5.3 hooks read.  Duck-typed:
         # any object/mapping exposing the manager-similarity tendency rates
         # (``starter_pull_pct_before_100`` / ``closer_entry_leverage_index`` /
@@ -1151,16 +701,6 @@ class StateMachine:
         # implementation only excluded the per-play ``is_error`` case and
         # under-counted unearned runs.  Reset to 0 in :meth:`advance_half_inning`.
         self._half_inning_error_outs_lost: int = 0
-        self._pa: PlateAppearanceSimulator | None = (
-            PlateAppearanceSimulator(
-                sampler,
-                k=k,
-                rng=self.rng,
-                fingerprint_deriver=fingerprint_deriver,
-            )
-            if sampler is not None
-            else None
-        )
 
     # ===================================================================
     # Pitch step: read GameState -> sample/classify -> commit -> PlayResult
@@ -1171,7 +711,6 @@ class StateMachine:
         state: GameState,
         *,
         pitch_outcome: str | None = None,
-        outcome_distribution: dict[str, float] | None = None,
     ) -> PlayResult:
         """Advance the game by exactly ONE pitch (spec §2 step 1 -> step 8).
 
@@ -1179,12 +718,11 @@ class StateMachine:
           1. **Read** the GameState and validate the live (in-play) invariants.
           2. **Pre-pitch hook** (§3): manager decisions — a no-op stub here,
              SIM-323 owns the logic.
-          3. **Sample** the pitch outcome (via the wired sampler) unless the
-             caller supplied ``pitch_outcome`` directly (count-machine-only mode).
-          4. **Outcome determination (SIM-318, §5.1/§5.2)** — apply the SIM-056
-             count-conditional **foul re-weight** to the committed outcome
-             *before* the count advances, then **classify** the count advance /
-             PA-terminal via :func:`advance_count` (§5.1 — incl. the SIM-056
+          3. **Draw** the pitch outcome from the full-pool sampler (the live
+             count is the draw's bucket) unless the caller supplied
+             ``pitch_outcome`` directly (count-machine-only mode).
+          4. **Outcome determination (§5.1)** — classify the count advance /
+             PA-terminal via :func:`advance_count` (incl. the SIM-056
              two-strike-foul absorbing rule).
           5. **Commit** the new count to the GameState; on terminal, resolve the
              PA (walk / strikeout / in-play) and roll the PA over, recording outs
@@ -1193,22 +731,14 @@ class StateMachine:
              GameState.
 
         ``pitch_outcome`` (when given) MUST be one of
-        :data:`simulation.game_state.PITCH_OUTCOMES`; it lets the SIM-316/318 tests
-        drive deterministic count sequences without a live sampler.
-
-        ``outcome_distribution`` (when given) is a ``{pitch_outcome: prob}`` map
-        over the sampled neighbourhood; the SIM-056 Option-A re-weight
-        (:func:`apply_count_foul_weighting`) is applied to it for the live count
-        and the committed outcome is drawn from the re-weighted distribution with
-        the machine's ``rng``.  This is the count-blind-sampler-preserving path
-        the SIM-318 tests use to assert the re-weight without a live DB/FAISS.
-        Supplying both ``pitch_outcome`` and ``outcome_distribution`` is an error.
+        :data:`simulation.game_state.PITCH_OUTCOMES`; it lets the count-machine
+        tests drive deterministic count sequences without a sampler.
         """
         # --- Step 1: read + validate the incoming (live) state -------------
-        state.assert_invariants(in_play=True, check_bases=self._enforce_base_invariants)
+        state.assert_invariants(in_play=True)
         # SIM-517: the got-away fact belongs to ONE drawn pitch; clear any
-        # stale carry before this pitch samples (injected-outcome and per-tile
-        # paths never set it).
+        # stale carry before this pitch samples (an injected outcome never
+        # sets it).
         self._last_pitch_got_away = False
 
         # --- Pre-pitch manager hook (§3) — steal initiate + SIM-323 logic --
@@ -1240,59 +770,23 @@ class StateMachine:
         # SIM_MANAGER off the simulated game is byte-identical to before.
         state.pitcher_pitch_count += 1
 
-        if pitch_outcome is not None and outcome_distribution is not None:
-            raise ValueError(
-                "pass at most one of pitch_outcome / outcome_distribution to "
-                "step_pitch (they are two ways to supply the sampled outcome)."
-            )
-
-        # --- Steps 2/3: pitch selection + sampling -------------------------
-        pitch_sample: dict | None = None
-        fellback = False
-        if outcome_distribution is not None:
-            # SIM-318 Option-A path: the caller supplies the sampled neighbourhood
-            # distribution; the sampler stays count-blind.  The SIM-056 foul
-            # re-weight (step 4) reshapes it for the live count, then we draw.
-            pitch_outcome = self._draw_reweighted_outcome(
-                outcome_distribution, state.balls, state.strikes
-            )
-        elif pitch_outcome is None:
-            if self._pa is None:
+        # --- Steps 2/3: the pitch draw -------------------------------------
+        if pitch_outcome is None:
+            if self.full_pool_sampler is None:
                 raise ValueError(
-                    "step_pitch needs either an injected sampler or an explicit "
+                    "step_pitch needs either a full_pool_sampler or an explicit "
                     "pitch_outcome (count-machine-only mode)."
                 )
-            if self.full_pool_sampler is not None:
-                # SIM-424: full-pool similarity-weighted draw (Situation+Pitcher+
-                # Batter); count still enters via the §5.1 machine downstream.
-                pitch_outcome = self._full_pool_outcome(state)
-                fellback = False
-            else:
-                pitch_fp = self._pa._pitch_fingerprint(state)  # TODO(SIM-317)
-                pitch_fp = self._jitter_query(pitch_fp, _PITCH_FEATURE_SCALE)
-                pitch_sample = self._pa.sampler.sample_pitch(
-                    state.pitcher_id, state.bat_hand, state.season, pitch_fp, k=self.k
-                )
-                pitch_outcome = pitch_sample["pitch_outcome"]
-                fellback = bool(pitch_sample.get("fellback", False))
-                # SIM-318 Option-B path: the count-blind sampler returned a single
-                # draw; bias *whether* a foul is accepted by the count-conditional
-                # factor (re-sample on rejection from the same count-blind sampler).
-                pitch_outcome = self._accept_or_resample_foul(
-                    pitch_outcome,
-                    state,
-                    pitch_fp,
-                )
+            # SIM-424: full-pool similarity-weighted draw (Situation+Pitcher+
+            # Batter); the live count is the draw's bucket (SIM-429).
+            pitch_outcome = self._full_pool_outcome(state)
         elif pitch_outcome not in PITCH_OUTCOMES:
             raise ValueError(f"pitch_outcome {pitch_outcome!r} is not one of {PITCH_OUTCOMES}.")
 
         # --- Step 4: outcome determination (§5.1 count machine) ------------
-        # The SIM-056 count-conditional foul re-weight has already been applied
-        # (above, BEFORE the count advance) on the path that sampled the outcome;
-        # advance_count then applies the §5.1 terminal mechanics incl. the
-        # two-strike-foul absorbing rule.  When the caller injected a fixed
-        # pitch_outcome (count-machine-only mode) no re-weight applies — the
-        # outcome is taken verbatim so deterministic count sequences are exact.
+        # advance_count applies the §5.1 terminal mechanics incl. the
+        # two-strike-foul absorbing rule; the drawn (or injected) outcome is
+        # taken verbatim.
         adv = advance_count(state.balls, state.strikes, pitch_outcome)
 
         result = PlayResult(
@@ -1300,8 +794,6 @@ class StateMachine:
             is_contact=adv.is_contact,
             pa_terminal=adv.terminal,
             event=adv.event if adv.event != EVENT_IN_PROGRESS else None,
-            pitch_sample=pitch_sample,
-            fellback=fellback,
         )
 
         # --- Step 7 (steal outcome) on a NON-terminal pitch ----------------
@@ -1366,90 +858,6 @@ class StateMachine:
     # Step 4 — SIM-056 count-conditional foul re-weight (before count advance)
     # ===================================================================
 
-    def _draw_reweighted_outcome(
-        self, distribution: dict[str, float], balls: int, strikes: int
-    ) -> str:
-        """SIM-318 Option-A: re-weight a sampled outcome ``distribution`` by the
-        count-conditional foul factor (:func:`apply_count_foul_weighting`) and
-        draw one committed ``pitch_outcome`` from it with the machine's ``rng``.
-
-        The re-weight (the foul-mass tilt + renormalization) lives entirely here
-        in the loop's step 4; the sampler that produced ``distribution`` stays
-        count-blind and distance-pure (foul-ball doc §3.1).  Every key in
-        ``distribution`` must be a valid :data:`PITCH_OUTCOMES` member.
-        """
-        for outcome in distribution:
-            if outcome not in PITCH_OUTCOMES:
-                raise ValueError(
-                    f"outcome_distribution key {outcome!r} is not one of {PITCH_OUTCOMES}."
-                )
-        reweighted = apply_count_foul_weighting(distribution, balls, strikes)
-        total = sum(reweighted.values())
-        if total <= 0.0:
-            raise ValueError(
-                "outcome_distribution has zero total mass after the foul "
-                "re-weight; cannot draw an outcome."
-            )
-        outcomes = list(reweighted.keys())
-        probs = np.asarray([reweighted[o] for o in outcomes], dtype=np.float64)
-        probs = probs / probs.sum()  # absorb any residual float drift
-        idx = int(self.rng.choice(len(outcomes), p=probs))
-        return outcomes[idx]
-
-    def _accept_or_resample_foul(self, pitch_outcome: str, state: GameState, pitch_fp) -> str:
-        """SIM-318 Option-B: bias a single count-blind ``sample_pitch`` draw by
-        the SIM-056 count-conditional foul factor (foul-ball doc §3.2 Option B).
-
-        With the factor ``f`` for the live ``count_strikes``:
-
-          * ``f >= 1`` (the placeholder regime: 1.0 / 1.05 / 1.55) — a non-foul
-            draw is accepted as-is; a ``foul`` draw is *always* accepted (a
-            tilt-toward-foul never rejects a foul), and additionally a non-foul
-            draw is *converted* to a foul with probability so that the realized
-            foul rate matches ``f x`` the count-blind foul rate.  Because the
-            count-blind foul rate is unknown to the loop, we approximate the
-            tilt by drawing one extra count-blind pitch and, if it is a foul,
-            accepting that foul with probability ``(f - 1)`` — this injects
-            exactly the *additional* foul mass ``(f - 1)`` * p(foul) the factor
-            calls for while leaving the sampler count-blind.
-          * ``f == 1`` — a strict no-op (the non-two-strike placeholder regime).
-
-        The sampler is queried again only when ``f > 1`` AND the first draw was a
-        non-foul, so the common case (and every non-two-strike count under the
-        placeholders) costs no extra FAISS work.  The sampler itself never sees
-        the count.
-        """
-        factor = strikes_bucket_foul_factor(state.strikes)
-        if factor <= 1.0 or pitch_outcome == _FOUL_OUTCOME or self._pa is None:
-            return pitch_outcome
-        # f > 1 and the first draw was a non-foul: inject the additional foul
-        # mass (f - 1) * p(foul) by drawing one more count-blind pitch and, if it
-        # is a foul, converting to a foul with probability (f - 1).
-        extra = float(factor - 1.0)
-        if extra > 0.0 and float(self.rng.random()) < min(1.0, extra):
-            second = self._pa.sampler.sample_pitch(
-                state.pitcher_id, state.bat_hand, state.season, pitch_fp, k=self.k
-            )
-            if second.get("pitch_outcome") == _FOUL_OUTCOME:
-                return _FOUL_OUTCOME
-        return pitch_outcome
-
-    def _jitter_query(self, fp, scale):
-        """Scatter a deriver CENTROID query per pitch (SIM-421 L2).
-
-        Adds zero-mean Gaussian noise (per-dim ``scale * sigma``, drawn from the
-        loop rng so it stays reproducible from the per-game seed) so the k-NN
-        samples the pre-filtered tile representatively instead of collapsing onto
-        the dense centre.  A no-op on the stub-fingerprint path (already
-        stochastic) and when the engine scale is unavailable.
-        """
-        if self.fingerprint_deriver is None or scale is None or fp is None:
-            return fp
-        noise = self.rng.standard_normal(np.shape(fp)).astype(np.float32)
-        return (np.asarray(fp, dtype=np.float32) + noise * (scale * _QUERY_JITTER_SIGMA)).astype(
-            np.float32
-        )
-
     def _full_pool_outcome(self, state: GameState) -> str:
         """SIM-424: draw a pitch outcome from the full-pool sampler.
 
@@ -1513,9 +921,11 @@ class StateMachine:
         return outcome
 
     def _full_pool_fielding(self, state: GameState) -> FieldingSignal | None:
-        """SIM-425: draw a batted ball from the full bat_hand batted-ball pool
-        (Batter + Situation weighting) -> a FieldingSignal.  None when no full-pool
-        sampler / batted-ball pool is wired (the per-tile path then runs)."""
+        """SIM-425/511: draw a batted ball from the full bat_hand batted-ball
+        pool (Batter + Situation weighting, hard-filtered to the live base-out
+        cell) -> a FieldingSignal carrying the drawn row's whole transition.
+        None when no full-pool sampler / batted-ball pool is wired (the
+        count-machine-only mode then leaves the in-play pitch unresolved)."""
         fp = self.full_pool_sampler
         if fp is None or not fp.has_battedball():
             return None
@@ -1554,68 +964,30 @@ class StateMachine:
         )
         ev, rh, _ro, la = fp.battedball_draw()
         # --- SIM-511: the transition path -----------------------------------
-        # On a sim510.1+ bundle the draw was HARD-filtered to the live
-        # base-out cell and the drawn row carries its whole transition: the
-        # row IS the play (event, outs, WHO is out, all movement). The
-        # phantom-DP guard and the ``outs = 0 if rh else 1`` inference below
-        # exist for the SOFT-conditioned legacy draw and do not run here —
-        # the cell match is what makes trusting the row safe (SIM-494/496
-        # structural fix). The SIM-425b out↔single flip is inert on this
-        # path: a flipped event would contradict the row's transition;
-        # SIM-491 owns re-validating the nudge as a draw weight.
+        # The draw was HARD-filtered to the live base-out cell and the drawn
+        # row carries its whole transition: the row IS the play (event, outs,
+        # WHO is out, all movement). SIM-486 deleted the legacy soft-draw
+        # resolution, so a bundle without transition columns is a data
+        # defect, not a fallback.
         tr = fp.last_transition()
-        if tr is not None:
-            live_fid, _pos = self._live_fielder_at_drawn_position(state, fp)
-            return FieldingSignal(
-                event=ev,
-                result_hits=int(rh),
-                result_outs=int(_ro),
-                result_runs=0,
-                launch_angle=float(la),
-                is_error=(ev == "field_error"),
-                fielder_id=live_fid,
-                exit_velo=float(tr.get("ev", 0.0)),
-                spray_angle=float(tr.get("spray", 0.0)),
-                transition=tr,
+        if tr is None:
+            raise RuntimeError(
+                "SIM-486: the batted-ball draw returned no transition — the bundle "
+                "predates sim510.1 (no r1_dest / dest_ok / is_air columns). Rebuild "
+                "the engine artifacts; there is no legacy resolution path."
             )
-        # SIM-476: the SIM-425b post-draw fielder nudge is deleted; the live
-        # defender now shapes the DRAW itself (the SIM-491 fielder kernel,
-        # SIM_FIELDER_KERNEL_SIGMA), so the drawn row is the play as-is.
-        is_error, fielder_id = False, None
-        # SIM-501a NOTE (2026-08-13): the pool's result_outs column is now
-        # events-derived and CORRECT after the next pool rebuild — the old
-        # rationale here ("outs_on_pitch is unreliable, ~0 for most field
-        # outs") no longer holds once SIM-459 runs. The draw still discards
-        # it (`_ro` above) on purpose: the loop's advancement model cannot
-        # yet retire the specific runner a >0 result_outs implies (that is
-        # the SIM-473 advancement draw), and the SIM-429 phantom-DP guard
-        # below exists for a DIFFERENT reason (the draw conditions only
-        # softly on base-out state). Do not switch to trusting `_ro` without
-        # doing SIM-473/SIM-494 — outs would be charged while the retired
-        # runner stays on base.
-        # SIM-429: a double play needs a runner to double off, but the draw
-        # conditions only softly on base-out, so ~55% of drawn DPs land with NO
-        # forceable runner (audit).  Recording a phantom 2nd out there ends innings
-        # early and suppresses runs, so a DP with no runner to retire is just the
-        # batter out (relabelled to a plain field_out so RE24/the box don't show a
-        # phantom GIDP).
-        if ev in _DOUBLE_PLAY_EVENTS:
-            grounded = ev in ("grounded_into_double_play", "ground_into_double_play")
-            can_dp = (state.bases.first is not None) if grounded else (int(state.runners_state) > 0)
-            if can_dp and int(state.outs) < 2:
-                outs = 2
-            else:
-                outs, ev = 1, ("field_out" if int(rh) == 0 else ev)
-        else:
-            outs = 0 if int(rh) > 0 else 1
+        live_fid, _pos = self._live_fielder_at_drawn_position(state, fp)
         return FieldingSignal(
             event=ev,
             result_hits=int(rh),
-            result_outs=int(outs),
+            result_outs=int(_ro),
             result_runs=0,
             launch_angle=float(la),
-            is_error=is_error,
-            fielder_id=fielder_id,
+            is_error=(ev == "field_error"),
+            fielder_id=live_fid,
+            exit_velo=float(tr.get("ev", 0.0)),
+            spray_angle=float(tr.get("spray", 0.0)),
+            transition=tr,
         )
 
     def _live_fielder_at_drawn_position(
@@ -1638,76 +1010,6 @@ class StateMachine:
         defense = state.home_defense if state.defense == Team.HOME else state.away_defense
         cur = defense.get(pos_str) if defense else None
         return (int(cur) if cur else None), pos_str
-
-    def _tag_rate(self, runner_id: int | None, season: int, event: str) -> float:
-        """SIM-425: probability the runner on 3rd tags & scores on a fly out.  An
-        explicit ``sac_fly`` draw means the ball was deep enough, so score near-
-        certainly; a generic deep fly uses the runner's own ``tag_up_attempt_rate``
-        from the baserunner embedding (league ~0.45 fallback)."""
-        if event in ("sac_fly", "sac_fly_double_play"):
-            return 0.92
-        fp = self.full_pool_sampler
-        if fp is not None and runner_id is not None:
-            r = fp.runner_rate(f"{int(runner_id)}:{int(season)}", "tag_up_attempt_rate")
-            if r is not None:
-                return float(min(max(r * self._run_calib_value, 0.0), 0.95))
-        return float(min(0.45 * self._run_calib_value, 0.95))
-
-    def _full_pool_out_advancement(
-        self, state: GameState, result: PlayResult, sig: FieldingSignal
-    ) -> int:
-        """SIM-425: advance runners on a full-pool OUT and return the runs scored.
-
-        Fly outs tag the runner home from 3rd (sac fly) and push a runner from 2nd
-        to an open 3rd on a deep fly; ground outs push the lead runner one base on a
-        productive grounder.  Double plays erase the trail runner (no productive
-        run), and with 2 outs the inning-ending out scores no one.  Mutates
-        ``state.bases`` consistently — the run VALUE is still committed by the
-        caller via :meth:`_commit_run_delta` -> ``resolve_runs``."""
-        event = sig.event or ""
-        if event in _DOUBLE_PLAY_EVENTS or state.outs >= 2:
-            return 0
-        la = float(sig.launch_angle) if sig.launch_angle is not None else 0.0
-        season = int(getattr(state, "season", 2024) or 2024)
-        old = state.bases
-        new_first, new_second, new_third = old.first, old.second, old.third
-        runs = 0
-        advances: dict[int, int] = {}
-        is_fly = (la >= 24.0) or event in ("sac_fly", "sac_fly_double_play")
-        if is_fly:
-            if old.third is not None and float(self.rng.random()) < self._tag_rate(
-                old.third, season, event
-            ):
-                runs += 1
-                new_third = None
-                advances[old.third] = 0
-            if (
-                old.second is not None
-                and new_third is None
-                and la >= 28.0
-                and (float(self.rng.random()) < 0.30)
-            ):
-                new_third, new_second = old.second, None
-                advances[old.second] = 3
-        else:
-            # Ground out: lead runner advances one base on a productive grounder.
-            calib = self._run_calib_value
-            if old.third is not None and float(self.rng.random()) < 0.28 * calib:
-                runs += 1
-                new_third = None
-                advances[old.third] = 0
-            elif (
-                old.second is not None
-                and old.third is None
-                and (float(self.rng.random()) < 0.35 * calib)
-            ):
-                new_third, new_second = old.second, None
-                advances[old.second] = 3
-        state.bases = Bases(first=new_first, second=new_second, third=new_third)
-        self._check_bases(state.bases)
-        if advances:
-            result.baserunner_advances.update({k: v for k, v in advances.items() if k != -1})
-        return runs
 
     # ===================================================================
     # SIM-511/512 — the transition fielding draw + the advancement draws
@@ -1791,13 +1093,12 @@ class StateMachine:
         (:meth:`_normalized_dests`); the SIM-512 advancement draws below are
         the sole authority on those extra bases.
 
-        Replaces, on this path: the phantom-DP guard, the
-        ``outs = 0 if rh else 1`` inference (SIM-496), ``_advance_runners``'
-        uniform push + ``_extra_advance``, ``_full_pool_out_advancement``'s
-        0.92/0.30/0.28/0.35 constants, and the SIM-349 sac-fly nudge (a tag
-        draw from 3B produces sacrifice flies naturally). ``runners_retired``
-        is REAL here — the SIM-494 out-count-versus-bodies identity is
-        checked at the commit by ``Bases.assert_transition``.
+        This is the ONLY in-play path (SIM-486 deleted the phantom-DP guard,
+        the ``outs = 0 if rh else 1`` inference, the uniform runner push, the
+        hand-set extra-advance and tag-up constants, and the SIM-349 sac-fly
+        nudge — a tag draw from 3B produces sacrifice flies naturally).
+        ``runners_retired`` is REAL here — the SIM-494 out-count-versus-bodies
+        identity is checked at the commit by ``Bases.assert_transition``.
         """
         tr = sig.transition or {}
         hit = int(sig.result_hits)
@@ -2054,14 +1355,9 @@ class StateMachine:
         return Bases(first=b.first, second=b.second, third=b.third)
 
     def _check_bases(self, bases: Bases, *, batter_id: int | None = None) -> None:
-        """Assert the base state is legal, on the production path only (SIM-500).
-
-        A no-op when ``_enforce_base_invariants`` is false — see the reasoning
-        where that flag is set.  Passing ``batter_id`` also asserts the batter is
-        not already standing on a bag.
-        """
-        if self._enforce_base_invariants:
-            bases.assert_consistent(batter_id=batter_id)
+        """Assert the base state is legal (SIM-500).  Passing ``batter_id`` also
+        asserts the batter is not already standing on a bag."""
+        bases.assert_consistent(batter_id=batter_id)
 
     def _commit_run_delta(
         self,
@@ -2141,16 +1437,13 @@ class StateMachine:
         # SIM-500: pass ``batter_id``. Without it, TWO of the guard's four checks
         # are dead at every ledger call site — the invented-runner/identity-swap
         # check and the batter-is-not-a-runner check both need to know who batted.
-        # Gated on the production path for the reason given where
-        # ``_enforce_base_invariants`` is set.
-        if self._enforce_base_invariants:
-            pre_bases.assert_transition(
-                post_bases,
-                batter_reached=batter_reached,
-                runners_scored=int(runners_scored),
-                runners_retired=int(runners_retired),
-                batter_id=state.batter_id,
-            )
+        pre_bases.assert_transition(
+            post_bases,
+            batter_reached=batter_reached,
+            runners_scored=int(runners_scored),
+            runners_retired=int(runners_retired),
+            batter_id=state.batter_id,
+        )
 
         rr = resolve_runs(
             event=event,
@@ -2178,176 +1471,6 @@ class StateMachine:
         if outs_to_record:
             result.outs_recorded += outs_to_record
             self._record_outs(state, outs_to_record)
-
-    # ===================================================================
-    # SIM-319 — Step 7 baserunning (per-runner advancement on the bases)
-    # ===================================================================
-
-    #: Probability a runner takes ONE extra base beyond the batter's hit value,
-    #: keyed by (bases_advanced, from_base) — the Retrosheet-style extra-advance
-    #: rates (e.g. 2nd->home on a single ~55%, 1st->3rd ~28%, 1st->home on a
-    #: double ~45%).  Absent keys = no extra base (SIM-421).
-    _EXTRA_ADVANCE_P: dict[tuple[int, int], float] = {
-        (1, 2): 0.55,  # single, runner on 2nd -> scores
-        (1, 1): 0.28,  # single, runner on 1st -> 3rd
-        (2, 1): 0.45,  # double, runner on 1st -> scores
-    }
-
-    #: SIM-429: optional global multiplier on the full-pool advancement rates
-    #: (extra-base + sac-fly tag-up + productive ground-out).  Env override
-    #: ``SIM_RUN_CALIB``; only the full-pool path is affected.
-    #:
-    #: Default is **neutral (1.0)** on purpose.  Investigation (4-game harness,
-    #: 200-sim sweeps): with the engine attempt-rates at face value the rate stats
-    #: (H/HR/BB/K) land within ~4% of MLB AND baserunning is realistic
-    #: (``second_to_home_attempt_rate`` ~0.59, MLB ~0.60-0.65), yet runs sit ~12%
-    #: low.  Raising this multiplier DOES lift runs (calib 1.45 -> R 4.24 vs 4.05)
-    #: but ONLY by pushing advancement into unrealistic territory (second-to-home
-    #: ~0.86 at 1.45) — so a global multiplier is the WRONG lever: the residual
-    #: run-conversion gap lives in hit sequencing / batted-ball-with-RISP, not in
-    #: baserunning aggression.  Left neutral to preserve baserunning realism; the
-    #: knob stays for a future granular (per-channel) calibration once the
-    #: batted-ball/sequencing cause is addressed with a larger game+sim harness.
-    _RUN_CONV_CALIB: float = 1.0
-
-    def _run_calib(self) -> float:
-        env = os.environ.get("SIM_RUN_CALIB")
-        if env is not None:
-            try:
-                return float(env)
-            except ValueError:
-                pass
-        return self._RUN_CONV_CALIB
-
-    #: SIM-425: which baserunner-embedding rate governs each extra-base advance.
-    _ADVANCE_RATE_FEATURE: dict[tuple[int, int], str] = {
-        (1, 2): "second_to_home_attempt_rate",  # single, runner 2nd -> scores
-        (1, 1): "first_to_third_attempt_rate",  # single, runner 1st -> 3rd
-        (2, 1): "first_to_home_attempt_rate",  # double, runner 1st -> scores
-    }
-
-    def _advance_rate(
-        self, from_base: int, bases_advanced: int, runner_id: int | None, season: int
-    ) -> float:
-        """The probability a runner takes one extra base.  SIM-425: when the
-        full-pool sampler + this runner's baserunner embedding are present, use the
-        runner's OWN attempt-rate (engine-backed); otherwise the Retrosheet league
-        constant.  Keeps the per-tile path (no full_pool_sampler) on the constant."""
-        constant = self._EXTRA_ADVANCE_P.get((int(bases_advanced), int(from_base)), 0.0)
-        fp = self.full_pool_sampler
-        feat = self._ADVANCE_RATE_FEATURE.get((int(bases_advanced), int(from_base)))
-        if fp is not None and feat is not None and runner_id is not None:
-            rate = fp.runner_rate(f"{int(runner_id)}:{int(season)}", feat)
-            if rate is not None:
-                return float(min(max(rate * self._run_calib_value, 0.0), 0.97))
-        return constant
-
-    def _extra_advance(
-        self, from_base: int, bases_advanced: int, runner_id: int | None = None, season: int = 2024
-    ) -> int:
-        """Return 1 if the runner takes an extra base beyond the hit value, else 0
-        (SIM-421/425).  Only hits (bases_advanced 1/2) grant extra bases; the draw
-        comes from the loop rng so a fixed seed reproduces the advance."""
-        p = self._advance_rate(from_base, bases_advanced, runner_id, season)
-        return 1 if p and float(self.rng.random()) < p else 0
-
-    def _advance_runners(
-        self, state: GameState, result: PlayResult, *, batter_reached: int, bases_advanced: int
-    ) -> int:
-        """Advance the runners currently on base + place the batter (step 7).
-
-        ``batter_reached`` is the base the batter ends on (0 == out / not on base,
-        1/2/3 = the bag reached, 4 == home/HR scores).  ``bases_advanced`` is how
-        many bases each existing runner is pushed (1 for a single/walk-force-ish,
-        2 for a double, etc.).  Returns the integer number of runners who SCORED
-        (crossed home) so the caller can hand that to :meth:`_commit_run_delta`
-        as the ``result_runs`` delta — the run VALUE is still resolved there via
-        ``resolve_runs``, never here.
-
-        Mutates ``state.bases`` consistently (no two runners on one bag, no
-        impossible advance) and records each surviving runner's end base in
-        ``result.baserunner_advances``.  This is the only place runner identities
-        move; it owns OCCUPANCY, not run value.
-        """
-        old = state.bases
-        # Collect existing runners as (from_base, runner_id), lead runner first.
-        existing = [
-            (3, old.third),
-            (2, old.second),
-            (1, old.first),
-        ]
-        new_first = new_second = new_third = None
-        runs_scored = 0
-        advances: dict[int, int] = {}
-        for from_base, rid in existing:
-            if rid is None:
-                continue
-            # SIM-421: a baserunner advances the batter's hit value PLUS a
-            # probabilistic extra base (the loop rng keeps it deterministic).  The
-            # old rigid ``from_base + bases_advanced`` stranded the runner from 2nd
-            # on every single (he only reached 3rd), suppressing run-scoring ~26%.
-            # Probabilities track the Retrosheet extra-base-advance rates.
-            dest = (
-                from_base
-                + int(bases_advanced)
-                + self._extra_advance(
-                    from_base,
-                    bases_advanced,
-                    runner_id=rid,
-                    season=int(getattr(state, "season", 2024) or 2024),
-                )
-            )
-            if dest >= 4:
-                runs_scored += 1
-                advances[rid] = 0  # 0 == scored
-                continue
-            # Place on the destination bag.  Under a uniform push runners never
-            # pass each other, so the lead-most bag is always free first; if a
-            # bag is somehow contested, fall the runner to the nearest open
-            # trailing bag so the base state stays consistent (no two on a bag).
-            placed = dest
-            if dest == 3 and new_third is None:
-                new_third = rid
-            elif dest >= 2 and new_second is None:
-                new_second = rid
-                placed = 2
-            elif new_first is None:
-                new_first = rid
-                placed = 1
-            elif new_second is None:
-                new_second = rid
-                placed = 2
-            elif new_third is None:
-                new_third = rid
-                placed = 3
-            advances[rid] = placed
-        # Place the batter.
-        if batter_reached >= 4:
-            runs_scored += 1
-            if result.event == "home_run" or state.batter_id is not None:
-                advances[state.batter_id if state.batter_id is not None else -1] = 0
-        elif batter_reached >= 1:
-            bid = state.batter_id if state.batter_id is not None else -1
-            if batter_reached == 3 and new_third is None:
-                new_third = bid
-            elif batter_reached >= 2 and new_second is None:
-                new_second = bid
-            elif batter_reached >= 1 and new_first is None:
-                new_first = bid
-            else:
-                # Trailing bag fallback so the batter never displaces a runner.
-                if new_first is None:
-                    new_first = bid
-                elif new_second is None:
-                    new_second = bid
-                elif new_third is None:
-                    new_third = bid
-            advances[bid] = batter_reached
-        state.bases = Bases(first=new_first, second=new_second, third=new_third)
-        self._check_bases(state.bases)
-        if advances:
-            result.baserunner_advances.update({k: v for k, v in advances.items() if k != -1})
-        return runs_scored
 
     # ===================================================================
     # SIM-319 — Step 7 steal outcome (decision in pre-pitch hook, §3)
@@ -2732,7 +1855,7 @@ class StateMachine:
         Ordinary K: route a one-out delta through ``resolve_runs``.  Dropped
         third strike (uncaught swinging strike-3 with **1B open OR two outs**):
         the batter may reach first — modelled here as a reach (no out, batter to
-        1B) when the resolver/edge fires; the run/base-out delta still goes
+        1B) when the drawn pitch got away; the run/base-out delta still goes
         through ``resolve_runs``.
         """
         result.event = EVENT_STRIKEOUT
@@ -2791,14 +1914,13 @@ class StateMachine:
         )
 
     def _dropped_third_strike(self, state: GameState, result: PlayResult) -> bool:
-        """The §5.4 dropped-third-strike predicate + (optional) resolver roll.
+        """The §5.4 dropped-third-strike predicate.
 
         The edge is *eligible* only on a swinging strike-3 when first base is
         OPEN or there are two outs (the official rule).  Whether the ball got
         away is the DRAWN PITCH ROW's own fact (SIM-517: the row was a real
-        uncaught third strike — no roll, no formula); the injected-resolver
-        hook stays as the no-DB test path.  With neither signal the edge does
-        NOT fire (the conservative default — an ordinary K).
+        uncaught third strike — no roll, no formula).  Without that fact the
+        edge does NOT fire (an ordinary K).
         """
         if result.pitch_outcome != "swinging_strike":
             return False
@@ -2806,12 +1928,7 @@ class StateMachine:
         two_outs = state.outs >= OUTS_PER_INNING - 1
         if not (first_base_open or two_outs):
             return False
-        if self._last_pitch_got_away:
-            return True
-        hook = getattr(self.resolver, "dropped_third_strike", None)
-        if hook is None:
-            return False
-        return bool(hook(state, result))
+        return bool(self._last_pitch_got_away)
 
     def _force_on_reach(self, state: GameState, result: PlayResult) -> int:
         """Place the batter on 1B and force runners behind him (shared by the
@@ -2845,144 +1962,31 @@ class StateMachine:
     # docs/audit/2026-08-28-sim476-fit-plan.md part 2.
 
     def _resolve_in_play(self, state: GameState, result: PlayResult) -> None:
-        """Resolve an in-play PA: batted-ball sample (step 5) -> fielding (step 6)
-        -> baserunning (step 7), routing every run/base-out delta through
-        ``resolve_runs`` (§8).
+        """Resolve an in-play PA: the batted-ball transition draw (step 5/6) ->
+        the advancement draws (step 7) -> ONE ``resolve_runs`` commit (§8).
 
-        Flow (when a sampler/resolver is wired):
-          1. **Step 5** — sample the batted-ball event via the sampler.
-          2. **Step 6** — the resolver maps it to a :class:`FieldingSignal`
-             (event + sampled ``result_hits/outs/runs`` + fielder/error from the
-             fielder RBF).  HR is the natural ``result_hits == 4`` case.
-          3. **Step 7** — advance the runners on the bases per the hit value
-             (:meth:`_advance_runners`), then commit the run/base-out delta via
-             :meth:`_commit_run_delta` -> ``resolve_runs``.
+        The drawn row IS the play (SIM-511): :meth:`_full_pool_fielding` draws
+        it from the live base-out cell and :meth:`_resolve_in_play_transition`
+        applies its destinations to the live runners, runs the SIM-512
+        advancement draws for the discretionary extra bases, and commits.
 
-        In count-machine-only mode (no sampler AND no resolver-supplied sample)
-        the in-play outcome is left as an unresolved terminal (event=None) so the
-        count machine can still be tested without FAISS.
+        In count-machine-only mode (no sampler, or a bundle with no batted-ball
+        pool) the in-play outcome is left as an unresolved terminal
+        (``event=None``) so the count machine can still be driven alone.
         """
         result.pa_terminal = True
         # SIM-499: measure the base-out state HERE, at the top, above everything.
-        # Later steps mutate the bases — _resolve_in_play_transition,
-        # _advance_runners and _full_pool_out_advancement rebuild the whole base
-        # state — and the ledger needs the state as it was before any of them.
-        # Placing this snapshot below any mutator is a trap that has been
-        # walked into once already.
+        # _resolve_in_play_transition rebuilds the whole base state, and the
+        # ledger needs the state as it was before it. Placing this snapshot
+        # below the mutator is a trap that has been walked into once already.
         pre_outs = int(state.outs)
         pre_bases = self._snapshot_bases(state)
-        # SIM-425: full-pool batted-ball draw (Batter+Situation over the whole
-        # bat_hand batted-ball pool) when wired; else the per-tile sampler path.
-        bb_sample: dict | None = None
         sig = self._full_pool_fielding(state)
-        # SIM-425: did the batted ball come from the full-pool sampler?  Only then
-        # do we model productive-out advancement here (the per-tile path keeps its
-        # validated pool-supplied ``result_runs``).
-        full_pool_sig = sig is not None
         if sig is None:
-            if self._pa is not None:
-                # --- Step 5: batted-ball sampling --------------------------
-                bb_fp = self._pa._battedball_fingerprint(state)  # SIM-317
-                bb_fp = self._jitter_query(bb_fp, _BB_FEATURE_SCALE)
-                bb_sample = self._pa.sampler.sample_batted_ball(
-                    state.bat_hand, state.season, bb_fp, k=self.k
-                )
-                result.battedball_sample = bb_sample
-                result.fellback = result.fellback or bool(bb_sample.get("fellback", False))
-            elif getattr(self.resolver, "_injected_battedball", None) is not None:
-                # A resolver may carry an injected batted-ball sample (no-DB tests).
-                bb_sample = getattr(self.resolver, "_injected_battedball", None)
-
-            if bb_sample is None:
-                # Count-machine-only mode: terminal in-play, resolution handed off.
-                result.event = None
-                return
-
-            # --- Step 6: fielding resolution (fielder/catcher RBF signal) --
-            sig = self.resolver.resolve_fielding(state, bb_sample)
-        # --- SIM-511/512: the transition path -------------------------------
-        # The drawn row IS the play. The SIM-349 sac-fly nudge and the
-        # SIM-412/411/425b out↔single flips below mutate the EVENT after the
-        # draw, which would contradict the row's transition — they do not run
-        # on this path (SIM-491 owns re-validating them as draw weights).
-        if sig.transition is not None:
-            self._resolve_in_play_transition(state, result, sig, pre_outs, pre_bases)
+            # Count-machine-only mode: terminal in-play, resolution handed off.
+            result.event = None
             return
-        # (The SIM-349 sac-fly-intent nudge sat here until 2026-08-19 —
-        # retired by SIM-513; the SIM-512 tag draw owns sacrifice flies.)
-        # SIM-476: the SIM-412 home-field flip and the SIM-411 park flip are
-        # deleted — home advantage and the park now shape the DRAW itself (the
-        # SIM-491 kernels: SIM_HOME_OFF_WEIGHT=0.0 hard bat_home conditioning,
-        # SIM_PARK_KERNEL_SIGMA).
-        result.event = sig.event
-        result.fielder_id = sig.fielder_id
-        result.is_error = sig.is_error
-        result.exit_velo = sig.exit_velo
-        result.launch_angle = sig.launch_angle
-        result.spray_angle = sig.spray_angle
-
-        # --- Step 7: baserunner advancement on the bases -------------------
-        # The batter's hit value sets how far runners advance; a HR scores
-        # everyone, a triple pushes 3, etc.  An out advances no one by default
-        # (sac/productive-out advancement is folded into the sampled result_runs).
-        hit = int(sig.result_hits)
-        if hit >= 1:
-            runners_scored = self._advance_runners(
-                state,
-                result,
-                batter_reached=hit,
-                bases_advanced=hit,
-            )
-        elif full_pool_sig:
-            # SIM-425: productive-out advancement on the full-pool path — a fly out
-            # tags the runner home from 3rd (sac fly), a ground out advances forced
-            # runners.  This is the bulk of the hits-are-right / runs-low gap: outs
-            # previously moved no one.  Scored per the runner's own tag-up/advance
-            # rate from the baserunner embedding.
-            runners_scored = self._full_pool_out_advancement(state, result, sig)
-        else:
-            runners_scored = 0
-            # An out may still record outs (incl. the batter) without moving the
-            # surviving runners; leave the bases as-is for the conservative case.
-
-        # Use the sampled result_runs when the pool carried it (context-aware);
-        # otherwise fall back to the runners our advancement scored.  The SIM-349
-        # sac-fly bias sets ``sig.result_runs`` on the converted productive out
-        # (the runner from 3rd scores) when the sample itself carried none, so the
-        # credited run is honoured without overriding a richer pool sample.
-        sampled_runs = bb_sample.get("result_runs") if bb_sample is not None else None
-        runs = int(sampled_runs) if sampled_runs is not None else int(runners_scored)
-        runs = max(runs, int(sig.result_runs))
-
-        # --- Step 8 hand-off: ONE resolve_runs call for runs + base-out ----
-        # SIM-499 transition facts.  ``bodies_scored`` counts runners who
-        # physically crossed home on this play: the ones _advance_runners /
-        # _full_pool_out_advancement moved.  It is deliberately NOT ``runs``:
-        # ``runs`` can be a pool-supplied integer that exceeds the bodies the
-        # base state actually moved, and the score commits that integer.  Where
-        # the two differ the pool row disagrees with the base state, which is a
-        # defect in the draw, not in the ledger.
-        #
-        # ``runners_retired`` is 0 on THIS LEGACY PATH only (a legacy bundle /
-        # the per-tile fallback): its advancement model never removes a
-        # baserunner on a batted ball, so 0 states what this path actually
-        # plays.  The PRODUCTION path is ``_resolve_in_play_transition``
-        # (SIM-511), where the drawn row names the retired runners and this
-        # argument is real.
-        bodies_scored = int(runners_scored)
-        self._commit_run_delta(
-            state,
-            result,
-            event=sig.event,
-            result_hits=hit,
-            result_outs=int(sig.result_outs),
-            result_runs=runs,
-            pre_outs=pre_outs,
-            pre_bases=pre_bases,
-            batter_reached=hit >= 1,
-            runners_scored=bodies_scored,
-            runners_retired=0,
-        )
+        self._resolve_in_play_transition(state, result, sig, pre_outs, pre_bases)
 
     # ===================================================================
     # End-of-PA + half-inning control (§5.3 / §6.1)
@@ -3010,12 +2014,6 @@ class StateMachine:
         # Advance the batting-order pointer for the team that just batted.
         self._advance_batting_order(state)
 
-        # SIM-317: the matchup is fixed WITHIN a PA but changes at the PA
-        # boundary (new batter / pitcher), so drop the deriver's per-PA matchup
-        # cache here.  No-op when no deriver is wired (count-machine-only mode).
-        if self.fingerprint_deriver is not None:
-            self.fingerprint_deriver.new_plate_appearance()
-
         # End-of-PA manager hook (§5.3) — SIM-323 owns substitution/IBB/bunt.
         self._end_of_pa_hook(state)
 
@@ -3028,7 +2026,7 @@ class StateMachine:
             state.reset_count()
             state.batter_pa_count = 0
             # Re-validate the committed, ready-for-next-pitch state.
-            state.assert_invariants(in_play=True, check_bases=self._enforce_base_invariants)
+            state.assert_invariants(in_play=True)
 
     # ===================================================================
     # SIM-328 — per-player sim-average accumulation (inside the PA loop)
@@ -3104,7 +2102,7 @@ class StateMachine:
         Classification uses the resolved CANONICAL event
         (``result.canonical_event``, set by :meth:`_commit_run_delta` via
         :func:`run_resolution.resolve_runs`); when that is absent (e.g. a
-        count-machine-only in-play terminal with no resolver) we fall back to
+        count-machine-only in-play terminal with no sampler) we fall back to
         :func:`resolve_event_to_canonical` on the raw ``result.event``.  A PA with
         no resolvable event (pure count-machine in-play hand-off, event is None)
         is NOT credited — there is no scored outcome to attribute.
@@ -3195,9 +2193,9 @@ class StateMachine:
 
         # ---- runs scored (SIM-365): credit each runner who crossed home on this
         # play.  ``baserunner_advances`` records ``end_base == 0`` for a runner who
-        # SCORED (set in :meth:`_advance_runners` when dest >= 4, for the HR
-        # batter, and SIM-414 for the runner on 3B forced home by a bases-loaded
-        # walk).  Steals are credited entirely in :meth:`_resolve_steal_outcome`
+        # SCORED (set in :meth:`_resolve_in_play_transition` for a runner or the
+        # batter who crossed home, and SIM-414 for the runner on 3B forced home
+        # by a bases-loaded walk).  Steals are credited entirely in :meth:`_resolve_steal_outcome`
         # (so a steal on a NON-terminal pitch — which never reaches this method —
         # is still counted, and a caught-stealing ``0`` is never mistaken for a
         # scored run); we therefore skip run attribution on a steal PA here to
@@ -3282,7 +2280,7 @@ class StateMachine:
         self._end_of_pa_hook(state)
 
         # The freshly-rolled state must satisfy the live invariants.
-        state.assert_invariants(in_play=True, check_bases=self._enforce_base_invariants)
+        state.assert_invariants(in_play=True)
 
     # ===================================================================
     # Out / batting-order primitives (guarded)
@@ -3471,17 +2469,17 @@ class StateMachine:
              path *may* attempt this pitch: the manager's
              ``steal_order_rate_per_1b_opp`` tendency, scaled DOWN in low leverage
              and UP late-and-close, vs a loop-rng draw, written to
-             ``ManagerContext.green_light_rate``.  The resolver only stages a
-             steal when the green-light is on.
+             ``ManagerContext.green_light_rate``.
 
-        The steal *decision* still lives here (the resolver's
-        :meth:`PlayResolver.resolve_steal` stages the :class:`StealResolution`);
-        the *outcome* is committed in step 7 (:meth:`_resolve_steal_outcome`).  A
-        test may instead call :meth:`stage_steal` directly.
+        The steal *decision* is the SIM-474 opportunity draw
+        (:meth:`_steal_opportunity_draw`, which stages the
+        :class:`StealResolution`); the *outcome* is committed in step 7
+        (:meth:`_resolve_steal_outcome`).  A test may instead call
+        :meth:`stage_steal` directly.
 
         No-op-safe: with no manager profile wired (``self.manager is None``) every
-        tendency reads 0.0, so no IBB / pitch-out fires and the green-light stays
-        off — the resolver default (``attempted=False``) keeps the loop a no-op.
+        tendency reads 0.0, so no IBB / pitch-out fires; with no steal pool the
+        draw stages nothing.
         """
         li = self.compute_leverage(state)
         mgr = state.manager
@@ -3544,17 +2542,12 @@ class StateMachine:
         # --- steal initiate wiring (SIM-474) -----------------------------------
         # Only auto-stage if a test has not already staged one. The old chain
         # GATED the decision on a green-light RNG draw and then consulted a
-        # resolver production never wires — so production attempted ZERO steals
+        # resolver production never wired — so production attempted ZERO steals
         # from 2026-06-04 to 2026-08-16 (SIM-495 measured SB 0.0000 vs 0.59).
-        # Now: an injected resolver (the test seam) is consulted first,
-        # UNGATED; otherwise the decision is a similarity-weighted draw from
-        # the SIM-468 opportunity pool, where manager aggression is a WEIGHT
-        # on attempted rows — never a gate in front of the draw.
+        # Now the decision is a similarity-weighted draw from the SIM-468
+        # opportunity pool, where manager aggression is a WEIGHT on attempted
+        # rows — never a gate in front of the draw.
         if self._pending_steal is not None:
-            return
-        steal = self.resolver.resolve_steal(state)
-        if steal is not None and steal.attempted:
-            self._pending_steal = steal
             return
         self._steal_opportunity_draw(state)
 
@@ -3661,19 +2654,16 @@ class StateMachine:
         runner_id: int | None = None,
         from_base: int = 1,
         to_base: int | None = None,
-        safe: bool | None = None,
+        safe: bool,
     ) -> None:
         """Stage a steal attempt for the NEXT pitch (the §3 decision).
 
-        Resolves the safe/caught outcome from ``sim.stolen_base_pool`` when wired
-        (a sampled historical result) unless ``safe`` is given explicitly (the
-        deterministic test path).  The attempt is consumed + resolved in step 7
-        of the next :meth:`step_pitch`.
+        ``safe`` is the drawn row's own outcome (:meth:`_steal_opportunity_draw`
+        passes it) or a test's explicit choice.  The attempt is consumed +
+        resolved in step 7 of the next :meth:`step_pitch`.
         """
         if to_base is None:
             to_base = _NEXT_BASE.get(from_base, 4)
-        if safe is None:
-            safe = self._sample_steal_success(state=None)
         self._pending_steal = StealResolution(
             attempted=True,
             runner_id=runner_id,
@@ -3681,19 +2671,6 @@ class StateMachine:
             to_base=to_base,
             safe=bool(safe),
         )
-
-    def _sample_steal_success(self, state) -> bool:
-        """Draw a safe/caught outcome from ``sim.stolen_base_pool`` (§3 item 4).
-
-        Uses the injected ``self.sim.stolen_base_pool`` accessor (a
-        :class:`_SampledStealPool` or any object exposing ``sample(rng) -> bool``);
-        with no pool wired the conservative default is ``False`` (caught), so a
-        steal never silently succeeds without a sampled historical basis.
-        """
-        pool = getattr(self.sim, "stolen_base_pool", None) if self.sim is not None else None
-        if pool is None:
-            return False
-        return bool(pool.sample(self.rng))
 
     #: SIM-474: the league-mean ``steal_order_rate_per_1b_opp`` — the SIM-434
     #: default manager profile's value. The live manager's leverage-scaled
@@ -3714,7 +2691,7 @@ class StateMachine:
         caught; :meth:`_resolve_steal_outcome` commits it (step 7). Manager
         aggression enters as a WEIGHT on attempted rows (never a gate); with
         no manager wired the weight is neutral. No-op when the sampler or the
-        pool is absent — the unit-lane path is byte-identical.
+        pool is absent.
         """
         fp = self.full_pool_sampler
         if fp is None or self._pending_steal is not None:
@@ -4243,11 +3220,6 @@ def simulate_game(
     state_machine: StateMachine | None = None,
     *,
     initial_state: GameState | None = None,
-    sampler: PlayPoolSampler | None = None,
-    resolver: PlayResolver | None = None,
-    sim=None,
-    fingerprint_deriver=None,
-    k: int = 25,
     seed: int | None = None,
     pitcher_id: int = 0,
     bat_hand: str = "R",
@@ -4284,14 +3256,15 @@ def simulate_game(
       * **Extra innings (§6.2):** when tied after 9, play additional full innings,
         each half seeded with the **ghost runner on 2B** before its first pitch.
       * **Determinism (§6.3):** the per-game ``seed`` is threaded through BOTH the
-        machine's loop rng (steal / foul / draw decisions) AND the sampler's k-NN
-        rng, so a fixed ``(game, seed)`` reproduces an identical game.
+        machine's loop rng (steal / advancement / manager decisions) AND the
+        full-pool sampler's rng (the pitch + batted-ball draws), so a fixed
+        ``(game, seed)`` reproduces an identical game.
 
-    Wiring: pass a fully-built ``state_machine`` (the production path), or let the
-    driver build one from an injected ``sampler`` / ``resolver`` / ``sim`` (the
-    no-DB unit-test path mirrors the SIM-319 injection pattern).  Likewise pass an
-    ``initial_state`` or let the driver build a fresh "top of the 1st" GameState
-    from ``pitcher_id`` / ``bat_hand`` / ``season`` / the two lineups.
+    Wiring: pass a fully-built ``state_machine`` (the production factory's, or a
+    test's over a :mod:`simulation.synthetic_bundle` bundle), or let the driver
+    build a bare count-machine-only machine.  Likewise pass an ``initial_state``
+    or let the driver build a fresh "top of the 1st" GameState from
+    ``pitcher_id`` / ``bat_hand`` / ``season`` / the two lineups.
 
     SIM-434 manager passthrough (GATED by ``SIM_MANAGER``): ``manager`` /
     ``bench`` / ``bullpen`` / ``pitcher_rest_days`` are wired ONLY when supplied
@@ -4305,14 +3278,13 @@ def simulate_game(
     and ``pitcher_rest_days`` (a ``{pitcher_id: days}`` map, SIM-433 follow-on)
     feeds the fatigue / reliever-scoring model.
 
-    Returns a :class:`GameSimResult`.  ``state_machine`` is driven with a single
-    deterministically-supplied pitch outcome ONLY when the machine has no sampler
-    AND a caller supplies ``_outcome_for`` via a subclass; the normal no-DB test
-    path injects a sampler-or-resolver so the machine samples outcomes itself.
+    Returns a :class:`GameSimResult`.  A machine with no sampler must be a
+    subclass that supplies each pitch outcome itself (the count-machine-only
+    drivers); otherwise ``step_pitch`` raises.
     """
     # --- SIM-498: two INDEPENDENT random streams from the one per-game seed ---
-    # Stream 0 drives the loop rng (advancement, steal outcomes, manager decisions,
-    # the framing nudge); stream 1 drives the full-pool rng (the pitch draw and the
+    # Stream 0 drives the loop rng (advancement, steal outcomes, manager
+    # decisions); stream 1 drives the full-pool rng (the pitch draw and the
     # batted-ball draw). Both used to be ``np.random.default_rng(seed)`` from the
     # SAME integer, so they emitted identical sequences. Spawning keeps the per-game
     # seed reproducible while making the two streams independent.
@@ -4322,14 +3294,7 @@ def simulate_game(
 
     # --- Build the machine (thread the seed through its loop rng) -------------
     if state_machine is None:
-        state_machine = StateMachine(
-            sampler,
-            k=k,
-            rng=loop_rng,
-            resolver=resolver,
-            sim=sim,
-            fingerprint_deriver=fingerprint_deriver,
-        )
+        state_machine = StateMachine(rng=loop_rng)
     elif seed is not None:
         # Re-seed the supplied machine's loop rng so the per-game seed governs the
         # loop-level draws (steal / foul re-weight / outcome choice).
@@ -4346,36 +3311,13 @@ def simulate_game(
         if bench:
             state_machine.bench = dict(bench)
 
-    # --- Thread the seed through the sampler's k-NN rng (§6.3) ---------------
-    # The sampler holds its OWN injected Generator; re-seed it so the FAISS draws
-    # are reproducible from the same per-game seed.  Guarded so a sampler-less
-    # (resolver-driven) machine is untouched.
+    # --- Thread the seed through the full-pool sampler's rng (§6.3) ----------
+    # SIM-402: the full-pool sampler is CACHED per worker process
+    # (`production_factory._build_full_pool_sampler` reuses one instance
+    # across seeds for the SLA win); the per-game rng must be re-seeded here
+    # so the cached sampler still produces reproducible per-seed draws.
+    # SIM-498: it gets stream 1, independent of the loop rng's stream 0.
     if seed is not None:
-        # SIM-498: the two writes below both target the per-tile sampler and they
-        # ALIAS — ``StateMachine`` hands the SAME sampler object to its
-        # ``PlateAppearanceSimulator`` (see the ``self._pa = ...`` construction), so
-        # ``state_machine.sampler`` and ``state_machine._pa.sampler`` are one object
-        # and the second write discards the first. The per-tile path is the fallback
-        # / unit-test path and is unused in production; SIM-486 deletes it, so both
-        # writes are left exactly as they were rather than being reshaped here.
-        # ``_pa.rng`` itself is a DEAD attribute: ``PlateAppearanceSimulator`` assigns
-        # it and never reads it (the stub fingerprints build their own local rng), so
-        # the fact that it is never re-seeded costs nothing.
-        smp = getattr(state_machine, "sampler", None)
-        if smp is not None and hasattr(smp, "rng"):
-            smp.rng = np.random.default_rng(seed)
-        pa = getattr(state_machine, "_pa", None)
-        if (
-            pa is not None
-            and getattr(pa, "sampler", None) is not None
-            and hasattr(pa.sampler, "rng")
-        ):
-            pa.sampler.rng = np.random.default_rng(seed)
-        # SIM-402: the full-pool sampler is now CACHED per worker process
-        # (`production_factory._build_full_pool_sampler` reuses one instance
-        # across seeds for the SLA win); the per-game rng must be re-seeded
-        # here so the cached sampler still produces reproducible per-seed draws.
-        # SIM-498: it gets stream 1, independent of the loop rng's stream 0.
         fp = getattr(state_machine, "full_pool_sampler", None)
         if fp is not None and hasattr(fp, "rng"):
             fp.rng = full_pool_rng
@@ -4473,10 +3415,7 @@ def simulate_game(
         total_pitches += 1
 
         # The committed state is always invariant-valid (guards held in step 8).
-        state.assert_invariants(
-            in_play=True,
-            check_bases=getattr(state_machine, "_enforce_base_invariants", False),
-        )
+        state.assert_invariants(in_play=True)
 
         rolled = (state.inning, state.half) != (prev_inning, prev_half)
         if rolled:
@@ -4523,10 +3462,6 @@ def simulate_game(
 
 
 __all__ = [
-    # SIM-303 scaffold surface (kept for back-compat)
-    "PitchState",
-    "PlateAppearanceSimulator",
-    "pitch_outcome_to_event",
     "CONTACT_PITCH_OUTCOME",
     # SIM-316 count machine + state machine
     "CountAdvance",
@@ -4539,14 +3474,9 @@ __all__ = [
     # SIM-328 per-player sim-average accumulators (the per-game boxscore)
     "PlayerStatLine",
     "BoxScore",
-    # SIM-318 count-conditional foul re-weight (step 4 / SIM-056)
-    "STRIKES_BUCKET_FOUL_FACTOR",
-    "strikes_bucket_foul_factor",
-    "apply_count_foul_weighting",
     # SIM-319 fielding / baserunning / steal resolution (steps 6/7 + §5.4)
     "FieldingSignal",
     "StealResolution",
-    "PlayResolver",
     "STEAL_SAFE",
     "STEAL_CAUGHT",
     # PA-event markers

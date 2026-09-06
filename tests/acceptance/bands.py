@@ -697,8 +697,10 @@ REFERENCES: dict[str, Reference] = {
         sd_ref=1.9045,
         rel_floor=0.022644,
         floor_rationale=(
-            "Rule B. No magnitude on record. BACKLOG.md:66 (SIM-456, whiff_rate measures "
-            "called strikes) plausibly moves BB and K, but nobody has sized it. Tightest "
+            "Rule B. No magnitude on record. SIM-456 (whiff_rate measured called strikes) was "
+            "once the unsized candidate cause; it is CLOSED 2026-09-04 (fix live since the "
+            "2026-08-14 recompute) and the 2026-08-20 diagnosis decomposed the walk surplus "
+            "as IBB 54% / Markov structure 33% / pool era 12% / kernel tilt 1%. Tightest "
             "resolvable at the 11,295-obs box lane. The centre includes intentional walks (595 in "
             "raw.play_events 2025); sd_ref is measured on the pitch rows alone — the "
             "0.12/team-game IBB stream adds negligible spread."
@@ -710,7 +712,8 @@ REFERENCES: dict[str, Reference] = {
         sd_ref=2.9352,
         rel_floor=0.013227,
         floor_rationale=(
-            "Rule B. No magnitude on record; BACKLOG.md:66 (SIM-456) is unsized. Tightest "
+            "Rule B. No magnitude on record; SIM-456 closed 2026-09-04 (fix live since the "
+            "2026-08-14 recompute; K read −2.5% vs the pool, do not tune). Tightest "
             "resolvable at the 11,295-obs box lane, and the tightest floor in the lane."
         ),
     ),

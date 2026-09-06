@@ -114,14 +114,6 @@ class _CountingPool(FullPoolSampler):
         super().new_plate_appearance(batter_key, base_out)
 
 
-class _DummySampler:
-    """``StateMachine`` refuses to build its ``PlateAppearanceSimulator`` without a
-    sampler. The full-pool path never calls this one."""
-
-    def __init__(self) -> None:
-        self.rng = np.random.default_rng(0)
-
-
 def _machine(sit_sigma: float = 0.25) -> tuple[StateMachine, _CountingPool]:
     """A machine wired to a counting full-pool sampler.
 
@@ -132,7 +124,7 @@ def _machine(sit_sigma: float = 0.25) -> tuple[StateMachine, _CountingPool]:
     pool = _situation_pool()
     art = EngineArtifacts(pools={"R": pool, "L": pool})
     fp = _CountingPool(art, np.random.default_rng(7), sit_sigma=sit_sigma)
-    machine = StateMachine(_DummySampler(), full_pool_sampler=fp, rng=np.random.default_rng(7))
+    machine = StateMachine(fp, rng=np.random.default_rng(7))
     return machine, fp
 
 

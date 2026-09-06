@@ -36,13 +36,12 @@ import pytest
 from simulation.game_state import Bases, GameState, Half, Team
 from simulation.sim_loop import (
     BoxScore,
-    FieldingSignal,
     GameSimResult,
     PlayerStatLine,
-    PlayResolver,
     StateMachine,
     simulate_game,
 )
+from simulation.synthetic_bundle import fixed_play_artifacts, league_artifacts, synthetic_sampler
 
 SEASON = 2024
 PITCHER = 477132
@@ -51,27 +50,15 @@ HOME_LINEUP = list(range(201, 210))  # 9 home batters
 
 
 # ===========================================================================
-# Test doubles — injected resolvers that hand back a fixed FieldingSignal
+# Test doubles — a fixed-play bundle (one event in every base-out cell)
 # ===========================================================================
 
 
-class _FixedResolver(PlayResolver):
-    """Resolve every in-play batted ball to one fixed :class:`FieldingSignal`.
-
-    No DB/FAISS — the batted-ball sample is injected so ``_resolve_in_play`` runs
-    the full fielding -> baserunning -> resolve_runs path on the supplied signal.
-    """
-
-    def __init__(self, signal: FieldingSignal):
-        self._signal = signal
-        self._injected_battedball = {"event": signal.event}
-
-    def resolve_fielding(self, state, battedball_sample) -> FieldingSignal:
-        return self._signal
-
-
-def _machine(resolver: PlayResolver | None = None) -> StateMachine:
-    return StateMachine(resolver=resolver, rng=np.random.default_rng(0))
+def _machine(play: str | None = None) -> StateMachine:
+    """A machine whose every batted ball is ``play`` (SIM-486: the production
+    in-play path over a fixed-play bundle), or count-machine-only when None."""
+    fp = synthetic_sampler(fixed_play_artifacts(play), 0) if play else None
+    return StateMachine(fp, rng=np.random.default_rng(0))
 
 
 def _fresh_state(**kw) -> GameState:
@@ -100,7 +87,7 @@ def _drive_strikeout(sm: StateMachine, state: GameState) -> None:
 
 
 def _drive_in_play(sm: StateMachine, state: GameState) -> None:
-    """Drive one in-play PA (the injected resolver fixes the event)."""
+    """Drive one in-play PA (the fixed-play bundle fixes the event)."""
     sm.step_pitch(state, pitch_outcome="in_play")
 
 
@@ -139,11 +126,7 @@ class TestWalkIsNotAnAtBat:
 
 class TestHomeRunCreditsRbi:
     def test_solo_home_run_credits_ab_h_hr_and_one_rbi(self):
-        sm = _machine(
-            _FixedResolver(
-                FieldingSignal(event="home_run", result_hits=4, result_outs=0, result_runs=1)
-            )
-        )
+        sm = _machine("home_run")
         state = _fresh_state()
         batter = state.batter_id
         _drive_in_play(sm, state)
@@ -160,13 +143,9 @@ class TestHomeRunCreditsRbi:
         assert pit.k == 0
 
     def test_three_run_home_run_credits_three_rbi(self):
-        # Bases loaded so a HR clears them: 3 runners + the batter == 4 runs, but
-        # the injected result_runs of 4 is what is committed/attributed.
-        sm = _machine(
-            _FixedResolver(
-                FieldingSignal(event="home_run", result_hits=4, result_outs=0, result_runs=4)
-            )
-        )
+        # Bases loaded so a HR clears them: 3 runners + the batter == 4 runs,
+        # the drawn row's destinations are what is committed/attributed.
+        sm = _machine("home_run")
         state = _fresh_state()
         state.bases = Bases(first=501, second=502, third=503)
         batter = state.batter_id
@@ -208,11 +187,7 @@ class TestStrikeout:
 
 class TestSingle:
     def test_single_is_an_ab_and_a_hit_no_hr(self):
-        sm = _machine(
-            _FixedResolver(
-                FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
-            )
-        )
+        sm = _machine("single")
         state = _fresh_state()
         batter = state.batter_id
         _drive_in_play(sm, state)
@@ -224,11 +199,7 @@ class TestSingle:
         assert bat.rbi == 0
 
     def test_rbi_single_credits_the_run_it_drives_in(self):
-        sm = _machine(
-            _FixedResolver(
-                FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=1)
-            )
-        )
+        sm = _machine("single")
         state = _fresh_state()
         state.bases = Bases(third=505)  # runner on 3B to drive in
         batter = state.batter_id
@@ -280,17 +251,7 @@ class TestUnearnedRunNotChargedAsEr:
     def test_run_on_an_error_is_not_an_earned_run_nor_an_rbi(self):
         # An error-flagged play that scores a run: the run is unearned, so the
         # pitcher is not charged ER and the batter is not credited the RBI.
-        sm = _machine(
-            _FixedResolver(
-                FieldingSignal(
-                    event="field_error",
-                    result_hits=1,
-                    result_outs=0,
-                    result_runs=1,
-                    is_error=True,
-                )
-            )
-        )
+        sm = _machine("field_error")
         state = _fresh_state()
         state.bases = Bases(third=507)
         batter = state.batter_id
@@ -303,11 +264,7 @@ class TestUnearnedRunNotChargedAsEr:
 
     def test_a_clean_run_is_charged_but_an_error_run_is_not(self):
         # Control: the SAME signal without the error flag DOES charge the ER.
-        sm = _machine(
-            _FixedResolver(
-                FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=1)
-            )
-        )
+        sm = _machine("single")
         state = _fresh_state()
         state.bases = Bases(third=508)
         _drive_in_play(sm, state)
@@ -321,11 +278,7 @@ class TestUnearnedRunNotChargedAsEr:
 
 class TestAttribution:
     def test_consecutive_batters_get_their_own_lines(self):
-        sm = _machine(
-            _FixedResolver(
-                FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
-            )
-        )
+        sm = _machine("single")
         state = _fresh_state()
         first_batter = state.batter_id
         _drive_in_play(sm, state)
@@ -372,40 +325,10 @@ class TestAttribution:
 # ===========================================================================
 
 
-class _CyclingResolver(PlayResolver):
-    """Out (default) or single (a fraction) so a full game scores and ends."""
-
-    def __init__(self, rng, hit_rate: float = 0.30):
-        self.rng = rng
-        self.hit_rate = float(hit_rate)
-        self._injected_battedball = {"event": "field_out"}
-
-    def resolve_fielding(self, state, battedball_sample) -> FieldingSignal:
-        if float(self.rng.random()) < self.hit_rate:
-            return FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
-        return FieldingSignal(event="field_out", result_hits=0, result_outs=1, result_runs=0)
-
-
-class _RngStateMachine(StateMachine):
-    """Draw each pitch outcome from the loop rng (no sampler) so a full game runs."""
-
-    def step_pitch(self, state, **_kw):  # type: ignore[override]
-        r = float(self.rng.random())
-        if r < 0.55:
-            outcome = "in_play"
-        elif r < 0.75:
-            outcome = "ball"
-        elif r < 0.92:
-            outcome = "called_strike"
-        else:
-            outcome = "foul"
-        return super().step_pitch(state, pitch_outcome=outcome)
-
-
 class TestBoxscoreExposedOnResult:
     def test_simulate_game_attaches_a_populated_boxscore(self):
         rng = np.random.default_rng(3)
-        sm = _RngStateMachine(resolver=_CyclingResolver(rng), rng=rng)
+        sm = StateMachine(synthetic_sampler(league_artifacts(), 3), rng=rng)
         r = simulate_game(
             sm,
             seed=3,
@@ -425,7 +348,7 @@ class TestBoxscoreExposedOnResult:
     def test_total_hits_in_box_are_internally_consistent(self):
         # Every batter's H <= AB + (BB are not ABs); a hit is always also a PA.
         rng = np.random.default_rng(7)
-        sm = _RngStateMachine(resolver=_CyclingResolver(rng), rng=rng)
+        sm = StateMachine(synthetic_sampler(league_artifacts(), 7), rng=rng)
         r = simulate_game(sm, seed=7, away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP)
         for _pid, line in r.boxscore.batters.items():
             assert line.h <= line.ab  # a hit is always an at-bat here

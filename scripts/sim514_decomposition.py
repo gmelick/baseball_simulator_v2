@@ -417,8 +417,6 @@ def main() -> None:
             kw = sim_kwargs_from_state(state)
             spec = GameSpec(machine_factory=_FACTORY, sim_kwargs=dict(kw))
             machine = production_machine_factory(0, spec)
-            if machine.full_pool_sampler is None:
-                raise RuntimeError("no full_pool_sampler — set SIM_FULL_POOL=1.")
             if pool_rates is None:
                 pool_rates = _pool_cell_rates(machine.full_pool_sampler)
             _instrument(machine, rec)

@@ -14,7 +14,7 @@ with synthetic :class:`PlayResult`s (the cleanest way to exercise the boxscore
 mapping), the steal accumulation is driven through ``_resolve_steal_outcome`` (the
 single steal-commit site, which also catches a steal on a NON-terminal pitch),
 and one end-to-end double is driven through the count-machine path with an
-injected resolver, mirroring the SIM-328/319 "inject the signal" pattern.
+fixed-play bundle (SIM-486), so the production in-play path runs.
 
 Coverage (the SIM-365 acceptance criteria):
   * the new PlayerStatLine fields default to 0 (existing constructions unaffected);
@@ -36,12 +36,11 @@ from simulation.prop_distributions import TB_IS_LOWER_BOUND, _total_bases
 from simulation.sim_loop import (
     STEAL_CAUGHT,
     STEAL_SAFE,
-    FieldingSignal,
     PlayerStatLine,
-    PlayResolver,
     StateMachine,
     StealResolution,
 )
+from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
 
 SEASON = 2024
 PITCHER = 477132
@@ -54,22 +53,11 @@ HOME_LINEUP = list(range(201, 210))
 # ===========================================================================
 
 
-class _FixedResolver(PlayResolver):
-    """Resolve every in-play batted ball to one fixed :class:`FieldingSignal`."""
-
-    def __init__(self, signal: FieldingSignal):
-        self._signal = signal
-        self._injected_battedball = {"event": signal.event}
-
-    def resolve_fielding(self, state, battedball_sample) -> FieldingSignal:
-        return self._signal
-
-    def sample_batted_ball(self, state):
-        return dict(self._injected_battedball)
-
-
-def _machine(resolver: PlayResolver | None = None) -> StateMachine:
-    return StateMachine(resolver=resolver, rng=np.random.default_rng(0))
+def _machine(play: str | None = None) -> StateMachine:
+    """A machine whose every batted ball is ``play`` (SIM-486: the production
+    in-play path over a fixed-play bundle), or count-machine-only when None."""
+    fp = synthetic_sampler(fixed_play_artifacts(play), 0) if play else None
+    return StateMachine(fp, rng=np.random.default_rng(0))
 
 
 def _fresh_state(**kw) -> GameState:
@@ -172,11 +160,7 @@ class TestDoublesAndTriples:
 
     def test_in_play_double_end_to_end_records_b2(self):
         # Drive a real PA through the count machine with an injected double.
-        sm = _machine(
-            _FixedResolver(
-                FieldingSignal(event="double", result_hits=2, result_outs=0, result_runs=0)
-            )
-        )
+        sm = _machine("double")
         state = _fresh_state()
         batter = state.batter_id
         sm.step_pitch(state, pitch_outcome="in_play")

@@ -38,7 +38,6 @@ import simulation.production_factory as pf
 from simulation.batch_runner import GameSpec
 from simulation.game_state import Bases, GameState, Half, Team
 from simulation.sim_loop import (
-    PlayResolver,
     StateMachine,
     pitcher_fatigue,
     platoon_factor,
@@ -47,6 +46,7 @@ from simulation.sim_loop import (
     times_through_order,
     tto_effectiveness,
 )
+from simulation.synthetic_bundle import synthetic_sampler
 
 SEASON = 2024
 PITCHER = 477132
@@ -99,12 +99,6 @@ _AGGRESSIVE = {
     "sac_bunt_rate_low_leverage": 0.95,
 }
 _PASSIVE = dict.fromkeys(_AGGRESSIVE, 0.0)
-
-
-class _OutThenContact(PlayResolver):
-    """A resolver that returns a fixed in-play OUT signal so a no-DB count machine
-    can drive whole half-innings of contact outs deterministically (used to drive
-    real pitches through step_pitch)."""
 
 
 # ===========================================================================
@@ -338,13 +332,6 @@ def _spec() -> GameSpec:
     )
 
 
-class _DummySampler:
-    """A no-op sampler stand-in (the factory only needs an object with an rng)."""
-
-    def __init__(self):
-        self.rng = np.random.default_rng(0)
-
-
 class TestSimManagerGate:
     def teardown_method(self):
         pf.reset_caches()
@@ -352,21 +339,21 @@ class TestSimManagerGate:
 
     def test_flag_off_wires_no_manager(self, monkeypatch):
         monkeypatch.delenv("SIM_MANAGER", raising=False)
-        with pf.use_sampler_builder(lambda spec, seed: _DummySampler()):
-            machine = pf.production_machine_factory(7, _spec())
+        monkeypatch.setattr(pf, "_build_full_pool_sampler", lambda spec, seed: synthetic_sampler())
+        machine = pf.production_machine_factory(7, _spec())
         assert machine.manager is None  # byte-identical: no manager hooks run
         assert getattr(machine, "bullpen", None) is None
 
     def test_flag_off_explicit_zero_wires_no_manager(self, monkeypatch):
         monkeypatch.setenv("SIM_MANAGER", "0")
-        with pf.use_sampler_builder(lambda spec, seed: _DummySampler()):
-            machine = pf.production_machine_factory(7, _spec())
+        monkeypatch.setattr(pf, "_build_full_pool_sampler", lambda spec, seed: synthetic_sampler())
+        machine = pf.production_machine_factory(7, _spec())
         assert machine.manager is None
 
     def test_flag_on_wires_a_manager_and_bullpen(self, monkeypatch):
         monkeypatch.setenv("SIM_MANAGER", "1")
-        with pf.use_sampler_builder(lambda spec, seed: _DummySampler()):
-            machine = pf.production_machine_factory(7, _spec())
+        monkeypatch.setattr(pf, "_build_full_pool_sampler", lambda spec, seed: synthetic_sampler())
+        machine = pf.production_machine_factory(7, _spec())
         assert machine.manager is not None
         assert machine.manager["starter_pull_pct_before_100"] > 0.0
         bullpen = getattr(machine, "bullpen", None)
@@ -377,8 +364,8 @@ class TestSimManagerGate:
     def test_flag_on_uses_the_injected_bullpen_builder(self, monkeypatch):
         monkeypatch.setenv("SIM_MANAGER", "1")
         pf.set_bullpen_builder(lambda spec: {0: [11, 12], 1: [21, 22]})
-        with pf.use_sampler_builder(lambda spec, seed: _DummySampler()):
-            machine = pf.production_machine_factory(7, _spec())
+        monkeypatch.setattr(pf, "_build_full_pool_sampler", lambda spec, seed: synthetic_sampler())
+        machine = pf.production_machine_factory(7, _spec())
         assert machine.bullpen == {0: [11, 12], 1: [21, 22]}
 
 
@@ -387,20 +374,15 @@ class TestSimManagerGate:
 # ===========================================================================
 
 
-class _CyclingResolver(PlayResolver):
-    """A resolver that records a contact out every PA (deterministic, no rng draw
-    on the result) so a no-DB full game completes with real pitch counts."""
-
-
 def _outs_machine(manager=None, *, seed=5):
-    # An in-play-out-only machine: step_pitch is fed "in_play" so each PA ends in a
-    # batted-ball that the default PlayResolver resolves; the count climbs by one
-    # per pitch so the pull gate is reachable.
+    # A one-pitch-per-PA machine: step_pitch is fed "in_play" so each PA ends on
+    # its first pitch (with no sampler the contact stays unresolved, which is
+    # fine here); the count climbs by one per pitch so the pull gate is reachable.
     rng = np.random.default_rng(seed)
 
     class _SM(StateMachine):
         def step_pitch(self, st, **kw):
-            if "pitch_outcome" not in kw and "outcome_distribution" not in kw:
+            if "pitch_outcome" not in kw:
                 kw["pitch_outcome"] = "in_play"
             return super().step_pitch(st, **kw)
 

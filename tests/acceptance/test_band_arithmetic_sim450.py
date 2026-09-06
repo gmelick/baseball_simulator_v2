@@ -932,7 +932,7 @@ def test_the_lane_carries_both_reach_on_error_channels_sim450() -> None:
 
 
 class _StubMachine:
-    """The seven methods ``_install_probes`` wraps, and nothing else.
+    """The six methods ``_install_probes`` wraps, and nothing else.
 
     A real ``StateMachine`` needs an artifact bundle, so the probe would
     otherwise be exercised only by the heavy lane — which has never produced a
@@ -946,9 +946,6 @@ class _StubMachine:
         return "outcome"
 
     def _full_pool_fielding(self, state: object) -> None:
-        return None
-
-    def _full_pool_out_advancement(self, state: object, result: object, sig: object) -> None:
         return None
 
     def _resolve_in_play_transition(
@@ -1005,7 +1002,6 @@ def test_the_roe_reached_probe_counts_only_a_batter_who_reached_sim450() -> None
     calls = {
         "_full_pool_outcome": 0,
         "_full_pool_fielding": 0,
-        "_full_pool_out_advancement": 0,
         "_resolve_in_play_transition": 0,
         "_steal_opportunity_draw": 0,
         "_commit_run_delta": 0,

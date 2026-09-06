@@ -1,8 +1,8 @@
 """
 production_factory.py
 =====================
-SIM-352 -- the **production, DB-backed machine factory** for the SIM-332 batch
-runner (Phase 5, Sprint 1).
+The production, DB-backed machine factory for the batch runner (SIM-352 /
+SIM-424 / SIM-486).
 
 WHAT THIS IS
 ------------
@@ -10,20 +10,13 @@ WHAT THIS IS
 across a ``ProcessPoolExecutor``; each worker rebuilds its own live
 :class:`~simulation.sim_loop.StateMachine` IN-PROCESS from a small, picklable
 :class:`~simulation.batch_runner.GameSpec` via a *dotted-ref* ``machine_factory``
-(never a live sampler across the fork -- SIM-281 D1).  Until now the ONLY factory
-was :func:`simulation.batch_runner.rng_driven_machine_factory`: a no-DB,
-rng-driven machine the always-on tests use.  That factory cannot run a *real*
-game (no PlayPoolSampler / FAISS tiles), so ``/simulate`` could not run a real
-matchup and the SIM-119/280 2 s-game / 30 s-batch SLA stayed unverified.
-
-THIS module fills that gap: :func:`production_machine_factory` mirrors the
-``factory(seed, spec) -> StateMachine`` contract but builds a REAL machine driven
-by a :class:`~simulation.play_pool_sampler.PlayPoolSampler` over the player
-profiles (DuckDB) + the FAISS play-pool tiles, and -- when
-``spec.shared_segments`` is set -- ATTACHES the SIM-333 shared-memory tiles
-zero-copy (:func:`simulation.batch_runner.get_shared_view` ->
-:meth:`PlayPoolSampler.attach_shared_tile`) instead of re-reading them from disk.
-Reference it on a :class:`GameSpec` by dotted path::
+(never a live sampler across the fork -- SIM-281 D1).  This module's
+:func:`production_machine_factory` builds the REAL machine: a
+:class:`~simulation.full_pool_sampler.FullPoolSampler` over the on-disk
+engine-artifact bundle (:class:`~pipeline.batch.engine_artifacts.EngineArtifacts`),
+cached once per worker process (SIM-402), with the SIM-403b shared-memory views
+spliced in when the parent published them.  Reference it on a :class:`GameSpec`
+by dotted path::
 
     GameSpec(
         machine_factory="simulation.production_factory:production_machine_factory",
@@ -31,37 +24,22 @@ Reference it on a :class:`GameSpec` by dotted path::
                     "away_lineup": [...], "home_lineup": [...]},
     )
 
-THE DEPENDENCY-INJECTION SEAM (why this is testable with no live DB)
--------------------------------------------------------------------
-There is no live DuckDB / FAISS in the sandbox, so the SAMPLER construction is
-behind a **module-level builder hook** :data:`_SAMPLER_BUILDER`
-(default :func:`_default_sampler_builder`, which builds the real
-:class:`PlayPoolSampler`).  A test installs an in-memory / mock sampler builder
-via :func:`set_sampler_builder` (or the :func:`use_sampler_builder` context
-manager) and asserts the factory wires that sampler into the StateMachine -- the
-SAME injection seam SIM-319/320 use for the no-DB path, lifted to the factory.
-The fingerprint deriver is behind a second hook :data:`_DERIVER_BUILDER`
-(default :func:`_default_deriver_builder`, which returns ``None`` -> the
-StateMachine's built-in stub-hash fingerprints), so the factory runs end-to-end
-without the full SIM-317 engine stack while still allowing a production caller to
-wire the real :class:`~simulation.fingerprints.FingerprintDeriver`.
+THERE IS NO FALLBACK (SIM-486)
+------------------------------
+Until SIM-486 a missing or corrupt bundle silently degraded to a second,
+per-tile simulator.  Now a missing bundle raises here, at machine build, so a
+worker that cannot serve the production path fails loudly instead of serving a
+different one.  The no-DB seam for tests is
+:func:`simulation.batch_runner.rng_driven_machine_factory`, which builds the SAME
+machine over an in-memory :mod:`simulation.synthetic_bundle` bundle.
 
-FACTORY-ONLY ``sim_kwargs`` KNOBS (SIM-377 convention)
-------------------------------------------------------
-Per SIM-377, ``_``-prefixed ``sim_kwargs`` keys are factory-only and are filtered
-out of the ``simulate_game(**...)`` splat by
-:func:`simulation.batch_runner._run_one`.  This factory reads:
-
-  * ``_pool_dir`` -- play-pool tile root (else ``BASEBALL_PLAY_POOL_DIR`` / the
-    sampler default);
-  * ``_duckdb_path`` -- DuckDB path for outcome / recency payloads (else
-    ``BASEBALL_DUCKDB_PATH`` / the sampler default);
-  * ``_k`` -- k-NN neighbour count (default 25, matching ``simulate_game``);
-  * ``_max_resident_tiles`` -- the sampler LRU cap (default 256).
+FACTORY-ONLY SIM-KWARGS (the ``_``-prefixed keys, SIM-377)
+----------------------------------------------------------
+  * ``_pool_dir`` -- the play-pool root (default ``$BASEBALL_PLAY_POOL_DIR`` /
+    ``/data/play_pool``); the bundle lives in its ``engine_artifacts/`` subdir.
 
 The non-underscore keys (``pitcher_id`` / ``bat_hand`` / ``season`` / the two
-lineups / ``k`` / ``max_innings`` / ...) flow through to ``simulate_game`` and are
-read here only to size the shared-tile attach.
+lineups / ``max_innings`` / ...) flow through to ``simulate_game``.
 """
 
 from __future__ import annotations
@@ -72,33 +50,8 @@ from typing import Any
 
 import numpy as np
 
-from simulation.batch_runner import GameSpec, get_shared_view
-from simulation.play_pool_sampler import (
-    POOL_BATTEDBALL,
-    POOL_PITCH,
-    PlayPoolSampler,
-)
+from simulation.batch_runner import GameSpec
 from simulation.sim_loop import StateMachine
-
-# Default k-NN neighbour count (mirrors ``simulate_game``'s ``k`` default §6.2).
-_DEFAULT_K = 25
-# Default sampler LRU cap (mirrors ``PlayPoolSampler.max_resident_tiles``).
-_DEFAULT_MAX_RESIDENT_TILES = 256
-
-
-# ---------------------------------------------------------------------------
-# Injectable builder hooks (the no-DB test seam) -- SIM-319/320 pattern
-# ---------------------------------------------------------------------------
-#
-# A factory must pickle by dotted reference, so these are MODULE-LEVEL callables a
-# test swaps out (rather than closures passed through the GameSpec, which would not
-# survive the fork).  Production leaves them at their defaults: a real DuckDB-backed
-# PlayPoolSampler + no fingerprint deriver (the StateMachine's stub-hash fall-back).
-
-#: Signature of a sampler builder: ``(spec, seed) -> PlayPoolSampler``.
-SamplerBuilder = Callable[[GameSpec, "int | None"], PlayPoolSampler]
-#: Signature of a deriver builder: ``(spec) -> FingerprintDeriver | None``.
-DeriverBuilder = Callable[[GameSpec], Any]
 
 
 def _kwarg(spec: GameSpec, name: str, default: Any) -> Any:
@@ -108,185 +61,9 @@ def _kwarg(spec: GameSpec, name: str, default: Any) -> Any:
     return default if val is None else val
 
 
-def _default_sampler_builder(spec: GameSpec, seed: int | None) -> PlayPoolSampler:
-    """Build the REAL production :class:`PlayPoolSampler` for this matchup.
-
-    Reads the factory-only ``_pool_dir`` / ``_duckdb_path`` / ``_max_resident_tiles``
-    knobs from ``spec.sim_kwargs`` (each falling back to the sampler's own
-    env-var / default resolution when absent) and seeds the sampler's k-NN
-    Generator from the per-game ``seed`` so the FAISS draws are reproducible
-    (§6.3).  Outcome + recency payloads come from the sampler's lazily-opened
-    read-only DuckDB connection (the production path); a worker that attaches
-    SIM-333 shared tiles never touches disk for the tile bytes themselves.
-    """
-    pool_dir = _kwarg(spec, "_pool_dir", None)
-    duckdb_path = _kwarg(spec, "_duckdb_path", None)
-    max_resident = int(_kwarg(spec, "_max_resident_tiles", _DEFAULT_MAX_RESIDENT_TILES))
-    return PlayPoolSampler(
-        pool_dir=pool_dir,
-        duckdb_path=duckdb_path,
-        max_resident_tiles=max_resident,
-        rng=np.random.default_rng(seed),
-    )
-
-
-def _default_deriver_builder(spec: GameSpec) -> Any:
-    """Build the SIM-421 :class:`~simulation.fingerprints.FingerprintDeriver` from
-    the on-disk play-pool artifacts, or ``None`` when they are absent.
-
-    The deriver normalizes the loop's query into the SAME space the tiles were
-    indexed in (z-score + sqrt-weight, using the mean/std ``play_pool_cache``
-    persisted) and assembles it from per-matchup RAW centroids via a
-    :class:`~simulation.matchup_provider.PrecomputedMatchupProvider`.  Without it
-    the query is a scale-mismatched hash stub and the k-NN collapses to the
-    lowest-norm tile vectors (the "no balls in play" defect).
-
-    Built per-worker from disk so NO live object crosses the ProcessPool boundary
-    -- fork- AND spawn-safe.  Returns ``None`` (-> the StateMachine's stub
-    fingerprints) when the artifacts are missing (tiles built before SIM-421, or
-    an artifact-less test env), so the factory still runs without them.
-    """
-    pool_dir = _kwarg(spec, "_pool_dir", None) or os.environ.get(
-        "BASEBALL_PLAY_POOL_DIR", "/data/play_pool"
-    )
-    try:
-        from simulation.fingerprints import FingerprintDeriver
-        from simulation.matchup_provider import (
-            load_battedball_norm,
-            load_pitch_norm,
-            load_provider,
-        )
-
-        provider = load_provider(pool_dir)
-        pitch_norm = load_pitch_norm(pool_dir)
-        if provider is None or pitch_norm is None:
-            return None
-        return FingerprintDeriver(
-            provider,
-            pitch_norm=pitch_norm,
-            battedball_norm=load_battedball_norm(pool_dir),
-        )
-    except Exception:
-        # The deriver is an enhancement; never let a build hiccup break the sim.
-        return None
-
-
-#: The active sampler builder (swap via :func:`set_sampler_builder`).
-_SAMPLER_BUILDER: SamplerBuilder = _default_sampler_builder
-#: The active deriver builder (swap via :func:`set_deriver_builder`).
-_DERIVER_BUILDER: DeriverBuilder = _default_deriver_builder
-
-
-def set_sampler_builder(builder: SamplerBuilder | None) -> SamplerBuilder:
-    """Install ``builder`` as the active sampler builder; return the previous one.
-
-    ``None`` restores the production default (:func:`_default_sampler_builder`).
-    Tests use this (or :func:`use_sampler_builder`) to inject an in-memory / mock
-    sampler so the factory is exercised with no live DuckDB / FAISS.
-    """
-    global _SAMPLER_BUILDER
-    prev = _SAMPLER_BUILDER
-    _SAMPLER_BUILDER = builder if builder is not None else _default_sampler_builder
-    return prev
-
-
-def set_deriver_builder(builder: DeriverBuilder | None) -> DeriverBuilder:
-    """Install ``builder`` as the active fingerprint-deriver builder; return the
-    previous one.  ``None`` restores the default (:func:`_default_deriver_builder`,
-    i.e. no deriver -> stub fingerprints)."""
-    global _DERIVER_BUILDER
-    prev = _DERIVER_BUILDER
-    _DERIVER_BUILDER = builder if builder is not None else _default_deriver_builder
-    return prev
-
-
-class use_sampler_builder:
-    """Context manager: temporarily install a sampler builder, restoring on exit.
-
-    Sugar over :func:`set_sampler_builder` so a test never leaks a mock builder
-    into the module global::
-
-        with use_sampler_builder(lambda spec, seed: mock_sampler):
-            machine = production_machine_factory(7, spec)
-    """
-
-    def __init__(self, builder: SamplerBuilder | None) -> None:
-        self._builder = builder
-        self._prev: SamplerBuilder | None = None
-
-    def __enter__(self) -> SamplerBuilder:
-        self._prev = set_sampler_builder(self._builder)
-        return _SAMPLER_BUILDER
-
-    def __exit__(self, *_exc) -> None:
-        set_sampler_builder(self._prev)
-
-
 # ---------------------------------------------------------------------------
-# SIM-333 shared-tile attach (zero-copy) over the published segments
+# The per-worker full-pool sampler cache (SIM-402)
 # ---------------------------------------------------------------------------
-
-
-def _attach_shared_tiles(sampler: PlayPoolSampler, spec: GameSpec) -> int:
-    """Attach the SIM-333 shared-memory tiles named in ``spec.shared_segments``.
-
-    ``spec.shared_segments`` is the opaque registry the GameSpec carries to tell a
-    worker WHICH segments its factory should attach.  We expect, per logical tile,
-    a ``vectors`` segment (the float32 ``n×dim`` FAISS-tile block) and a ``rowids``
-    segment (the int64 vector -> ``pitch_id`` map), named by a small convention so a
-    spec can describe one pitch tile and one batted-ball tile:
-
-      * pitch tile:       ``"pitch_vectors"`` + ``"pitch_rowids"``
-      * batted-ball tile: ``"battedball_vectors"`` + ``"battedball_rowids"``
-
-    The actual buffers are NOT in the spec (they are OS-backed shared segments the
-    pool initializer attached); we fetch the zero-copy views with
-    :func:`simulation.batch_runner.get_shared_view` and hand them to
-    :meth:`PlayPoolSampler.attach_shared_tile`, which caches a TileHandle over the
-    shared buffer so a later ``sample_pitch`` / ``sample_batted_ball`` serves it
-    WITHOUT any disk read.  Returns the number of tiles attached.  Missing views ->
-    that tile is simply not attached (the sampler's disk path remains the
-    fall-back), so this is backward-compatible with a spec that names a segment the
-    worker did not publish.
-    """
-    if not spec.shared_segments:
-        return 0
-
-    season = int(_kwarg(spec, "season", 2024))
-    bat_hand = str(_kwarg(spec, "bat_hand", "R"))
-    pitcher_id = int(_kwarg(spec, "pitcher_id", 0))
-
-    attached = 0
-    plan = (
-        (POOL_PITCH, "pitch_vectors", "pitch_rowids", pitcher_id),
-        (POOL_BATTEDBALL, "battedball_vectors", "battedball_rowids", None),
-    )
-    for pool, vec_name, row_name, pid in plan:
-        # Only attach a tile the spec actually named (honour the opaque registry).
-        if vec_name not in spec.shared_segments and row_name not in spec.shared_segments:
-            continue
-        vectors = get_shared_view(vec_name)
-        rowids = get_shared_view(row_name)
-        if rowids is None:
-            # Without rowids there is no vector -> pitch_id map; skip (disk fall-back).
-            continue
-        sampler.attach_shared_tile(
-            pool,
-            season,
-            bat_hand,
-            vectors=vectors,  # may be None -> rowids-only handle (sampler contract)
-            rowids=rowids,
-            pitcher_id=pid,
-            meta={"season": season},
-        )
-        attached += 1
-    return attached
-
-
-# ---------------------------------------------------------------------------
-# The production factory (the picklable, dotted-ref-able entry point)
-# ---------------------------------------------------------------------------
-
 
 #: SIM-402: per-worker cache for the EngineArtifacts + FullPoolSampler the
 #: full-pool path needs.  WITHOUT this cache, :func:`_run_one` calls this
@@ -303,13 +80,17 @@ _CACHED_FULL_POOL_SAMPLER = None
 _CACHED_FULL_POOL_ART_DIR: str | None = None
 
 
-def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
-    """SIM-424: build the full-pool sampler from the on-disk engine-artifact bundle
-    when opted in (``SIM_FULL_POOL`` env or the ``_full_pool`` sim-kwarg).  Returns
-    None otherwise (the validated per-tile path).  Built from disk -> fork-safe.
+def _artifact_dir(spec: GameSpec) -> str:
+    pool_dir = _kwarg(spec, "_pool_dir", None) or os.environ.get(
+        "BASEBALL_PLAY_POOL_DIR", "/data/play_pool"
+    )
+    return os.path.join(pool_dir, "engine_artifacts")
 
-    SIM-429: ``SIM_FULL_POOL`` is parsed as a real boolean so ``=0``/``=false``
-    disables it (production sets ``=1``; the unit-test conftest sets ``=0``).
+
+def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
+    """Build (or reuse) the worker's full-pool sampler from the on-disk
+    engine-artifact bundle.  Raises when the bundle cannot be loaded: SIM-486
+    removed the per-tile fallback, so there is nothing to degrade to.
 
     SIM-403b: when the parent has published the artifact arrays into shared memory
     via ``BatchRunner(shared_arrays=...)``, the worker's :func:`_worker_init` has
@@ -328,85 +109,82 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     the SLA verification revealed was missing — without it, a 100-iteration
     /simulate request paid the ~6-9 s warm-up cost N times.
     """
-    env = os.environ.get("SIM_FULL_POOL", "").strip().lower()
-    env_on = env not in ("", "0", "false", "no", "off")
-    if not (env_on or _kwarg(spec, "_full_pool", None)):
-        return None
-    pool_dir = _kwarg(spec, "_pool_dir", None) or os.environ.get(
-        "BASEBALL_PLAY_POOL_DIR", "/data/play_pool"
-    )
-    art_dir = os.path.join(pool_dir, "engine_artifacts")
+    art_dir = _artifact_dir(spec)
+    global _CACHED_FULL_POOL_SAMPLER, _CACHED_FULL_POOL_ART_DIR
+    # Reuse the cached sampler when the artifact dir matches.  Re-seed its
+    # rng so the per-game seed still governs the weighted draws (the per-game
+    # half-inning / PA state caches inside the sampler are reset at the loop's
+    # natural boundaries — `new_half_inning` / `battedball_new_pa` — so
+    # cross-game leakage is impossible).
+    if _CACHED_FULL_POOL_SAMPLER is not None and art_dir == _CACHED_FULL_POOL_ART_DIR:
+        _CACHED_FULL_POOL_SAMPLER.rng = np.random.default_rng(seed)
+        return _CACHED_FULL_POOL_SAMPLER
+
+    from pipeline.batch.engine_artifacts import EngineArtifacts
+    from simulation.batch_runner import _WORKER_SHARED
+    from simulation.full_pool_sampler import FullPoolSampler
+
+    # SIM-402: pass the shared views to load() so the disk-load path SKIPS
+    # the big .npy reads when the parent has already published them into
+    # shared memory.  This is the meaningful cold-worker speedup — without
+    # it, 9 cold workers each reading ~150 MB from the Windows-Docker
+    # volume serialize into a ~500 s stall on a 10-iteration request.
+    views = _WORKER_SHARED.get("views") or {}
     try:
-        global _CACHED_FULL_POOL_SAMPLER, _CACHED_FULL_POOL_ART_DIR
-        # Reuse the cached sampler when the artifact dir matches.  Re-seed its
-        # rng so the per-game seed still governs the FAISS / weighted draws
-        # (the per-game half-inning / PA state caches inside the sampler are
-        # reset at the loop's natural boundaries — `new_half_inning` /
-        # `battedball_new_pa` — so cross-game leakage is impossible).
-        if _CACHED_FULL_POOL_SAMPLER is not None and art_dir == _CACHED_FULL_POOL_ART_DIR:
-            _CACHED_FULL_POOL_SAMPLER.rng = np.random.default_rng(seed)
-            return _CACHED_FULL_POOL_SAMPLER
-
-        from pipeline.batch.engine_artifacts import EngineArtifacts
-        from simulation.batch_runner import _WORKER_SHARED
-        from simulation.full_pool_sampler import FullPoolSampler
-
-        # SIM-402: pass the shared views to load() so the disk-load path SKIPS
-        # the big .npy reads when the parent has already published them into
-        # shared memory.  This is the meaningful cold-worker speedup — without
-        # it, 9 cold workers each reading ~150 MB from the Windows-Docker
-        # volume serialize into a ~500 s stall on a 10-iteration request.
-        views = _WORKER_SHARED.get("views") or {}
         art = EngineArtifacts.load(art_dir, shared_views=views)
-        # SIM-491 (the SIM-412 rebuild): the home-field draw weight. 1.0 (the
-        # default, and any unparsable value) disables the reweight EXACTLY —
-        # byte-identical to pre-SIM-491. SIM-476 (owner ruling 2026-08-30):
-        # production runs w=0.0 — the draw hard-conditions on the batting side,
-        # delivering the pool's own home/away differential (+0.107 R/g
-        # measured, the MLB size). Soft weights in (0,1) deliver only
-        # (1-w)/(1+w) of it — the 12x400 A/B in the SIM-476 fit plan.
+    except Exception as exc:
+        raise RuntimeError(
+            f"SIM-486: cannot load the engine-artifact bundle from {art_dir!r} "
+            f"({type(exc).__name__}: {exc}). There is no fallback simulator; build "
+            "the bundle (python -m pipeline.batch.engine_artifacts --what all)."
+        ) from exc
+    # SIM-491 (the SIM-412 rebuild): the home-field draw weight. 1.0 (the
+    # default, and any unparsable value) disables the reweight EXACTLY —
+    # byte-identical to pre-SIM-491. SIM-476 (owner ruling 2026-08-30):
+    # production runs w=0.0 — the draw hard-conditions on the batting side,
+    # delivering the pool's own home/away differential (+0.107 R/g
+    # measured, the MLB size). Soft weights in (0,1) deliver only
+    # (1-w)/(1+w) of it — the 12x400 A/B in the SIM-476 fit plan.
+    try:
+        home_w = float(os.environ.get("SIM_HOME_OFF_WEIGHT", "1.0"))
+    except ValueError:
+        home_w = 1.0
+    sampler = FullPoolSampler(art, np.random.default_rng(seed), home_off_weight=home_w)
+    # SIM-491 part 2 (the SIM-411 rebuild): the park kernel. 0.0 (the
+    # default, and any unparsable value) disables it EXACTLY. When enabled,
+    # load the (venue_id, season) -> regressed run-factor map read-only;
+    # a load failure leaves the map None and the kernel neutral.
+    try:
+        park_sigma = float(os.environ.get("SIM_PARK_KERNEL_SIGMA", "0"))
+    except ValueError:
+        park_sigma = 0.0
+    if park_sigma > 0.0:
+        sampler.venue_run_factors = _load_venue_run_factors()
+        if sampler.venue_run_factors:
+            sampler.park_sigma = park_sigma
+    # SIM-491 part 3 (the SIM-425b rebuild): the fielder-quality kernel
+    # bandwidth. 0.0 (the default, and any unparsable value) disables it
+    # EXACTLY; the fielder embedding is already in the artifact bundle.
+    try:
+        sampler.fielder_sigma = float(os.environ.get("SIM_FIELDER_KERNEL_SIGMA", "0"))
+    except ValueError:
+        sampler.fielder_sigma = 0.0
+    # SIM-517: the catcher RECEIVING kernel bandwidths — an anisotropic
+    # metric with the framing dims and the blocking dims under their own
+    # sigma (the part-E ladder measured they need different ones). 0.0
+    # (the default, and any unparsable value) removes that group; both
+    # 0.0 disables the kernel EXACTLY.
+    for env, attr in (
+        ("SIM_CATCHER_FRAMING_SIGMA", "catcher_framing_sigma"),
+        ("SIM_CATCHER_BLOCK_SIGMA", "catcher_block_sigma"),
+    ):
         try:
-            home_w = float(os.environ.get("SIM_HOME_OFF_WEIGHT", "1.0"))
+            setattr(sampler, attr, float(os.environ.get(env, "0")))
         except ValueError:
-            home_w = 1.0
-        sampler = FullPoolSampler(art, np.random.default_rng(seed), home_off_weight=home_w)
-        # SIM-491 part 2 (the SIM-411 rebuild): the park kernel. 0.0 (the
-        # default, and any unparsable value) disables it EXACTLY. When enabled,
-        # load the (venue_id, season) -> regressed run-factor map read-only;
-        # a load failure leaves the map None and the kernel neutral.
-        try:
-            park_sigma = float(os.environ.get("SIM_PARK_KERNEL_SIGMA", "0"))
-        except ValueError:
-            park_sigma = 0.0
-        if park_sigma > 0.0:
-            sampler.venue_run_factors = _load_venue_run_factors()
-            if sampler.venue_run_factors:
-                sampler.park_sigma = park_sigma
-        # SIM-491 part 3 (the SIM-425b rebuild): the fielder-quality kernel
-        # bandwidth. 0.0 (the default, and any unparsable value) disables it
-        # EXACTLY; the fielder embedding is already in the artifact bundle.
-        try:
-            sampler.fielder_sigma = float(os.environ.get("SIM_FIELDER_KERNEL_SIGMA", "0"))
-        except ValueError:
-            sampler.fielder_sigma = 0.0
-        # SIM-517: the catcher RECEIVING kernel bandwidths — an anisotropic
-        # metric with the framing dims and the blocking dims under their own
-        # sigma (the part-E ladder measured they need different ones). 0.0
-        # (the default, and any unparsable value) removes that group; both
-        # 0.0 disables the kernel EXACTLY.
-        for env, attr in (
-            ("SIM_CATCHER_FRAMING_SIGMA", "catcher_framing_sigma"),
-            ("SIM_CATCHER_BLOCK_SIGMA", "catcher_block_sigma"),
-        ):
-            try:
-                setattr(sampler, attr, float(os.environ.get(env, "0")))
-            except ValueError:
-                setattr(sampler, attr, 0.0)
-        _CACHED_FULL_POOL_SAMPLER = sampler
-        _CACHED_FULL_POOL_ART_DIR = art_dir
-        return sampler
-    except Exception:
-        return None
+            setattr(sampler, attr, 0.0)
+    _CACHED_FULL_POOL_SAMPLER = sampler
+    _CACHED_FULL_POOL_ART_DIR = art_dir
+    return sampler
 
 
 #: SIM-515: the per-worker cached IBB rate table (sim.ibb_rates is ~48 rows;
@@ -531,10 +309,9 @@ def warm_worker_cache(pool_dir: str | None = None) -> bool:
     fresh pool gives each worker exactly one game so the per-worker cache (which
     only pays off on the 2nd+ seed) never warms in time.
 
-    Returns ``True`` when a full-pool sampler is now cached (``SIM_FULL_POOL`` on
-    AND the engine-artifact bundle present), else ``False`` (full-pool disabled or
-    a missing/corrupt bundle -> the per-tile fallback warms lazily instead).  Never
-    raises: any build failure is swallowed and reported as ``False``.
+    Returns ``True`` when a full-pool sampler is now cached, else ``False`` (a
+    missing/corrupt bundle -> the request path raises loudly at machine build).
+    Never raises: any build failure is swallowed and reported as ``False``.
     """
     try:
         spec = GameSpec(sim_kwargs={"_pool_dir": pool_dir} if pool_dir else {})
@@ -551,14 +328,13 @@ def warm_worker_cache(pool_dir: str | None = None) -> bool:
 # SIM-434 — manager wiring (GATED by SIM_MANAGER; default OFF == unchanged)
 # ---------------------------------------------------------------------------
 #
-# With SIM_MANAGER off (the production default today + the unit-test default),
-# the factory wires NO manager onto the StateMachine, so every SIM-323 §3/§5.3
-# hook early-returns and the simulated game is byte-identical to before.  With
-# SIM_MANAGER on, the factory attaches a default manager-tendency profile + a
-# generic per-team bullpen so the starter is actually pulled at a realistic
-# workload (the SIM-429 K/BB-distribution unlock).  Populating REAL per-team
-# bullpen rosters + true reliever similarity profiles is the SIM-427 follow-on
-# (blocked on a profile recompute); the generic default here is a valid
+# With SIM_MANAGER off (the unit-test default), the factory wires NO manager onto
+# the StateMachine, so every SIM-323 §3/§5.3 hook early-returns and the simulated
+# game is byte-identical to before.  With SIM_MANAGER on (production), the factory
+# attaches a default manager-tendency profile + a generic per-team bullpen so the
+# starter is actually pulled at a realistic workload (the SIM-429 K/BB-distribution
+# unlock).  Populating REAL per-team bullpen rosters + true reliever similarity
+# profiles is the SIM-427 follow-on; the generic default here is a valid
 # league-flat stand-in until then.
 
 #: A default manager-tendency profile: a plain dict of the SIM-2.8 manager-
@@ -578,9 +354,8 @@ _DEFAULT_MANAGER_PROFILE: dict[str, float] = {
 def _manager_enabled() -> bool:
     """Whether SIM_MANAGER enables the SIM-434 manager wiring (default OFF).
 
-    Parsed identically to ``SIM_FULL_POOL`` (unset / ``0`` / ``false`` / ``no`` /
-    ``off`` -> disabled).  Centralised so the factory and any test read the gate
-    the same way.
+    Unset / ``0`` / ``false`` / ``no`` / ``off`` -> disabled.  Centralised so the
+    factory and any test read the gate the same way.
     """
     env = os.environ.get("SIM_MANAGER", "").strip().lower()
     return env not in ("", "0", "false", "no", "off")
@@ -607,8 +382,8 @@ def _default_bullpen_for_spec(spec: GameSpec) -> dict[int, list[int]]:
     return {0: away_pen, 1: home_pen}
 
 
-#: Injectable bullpen builder (the no-DB test seam, mirroring _SAMPLER_BUILDER).
-#: A test swaps this to assert the factory wires a known bullpen.
+#: Injectable bullpen builder (the no-DB test seam).  A test swaps this to assert
+#: the factory wires a known bullpen.
 _BULLPEN_BUILDER: Callable[[GameSpec], dict[int, list[int]]] = _default_bullpen_for_spec
 
 
@@ -624,66 +399,29 @@ def set_bullpen_builder(
 
 
 def production_machine_factory(seed: int | None, spec: GameSpec) -> StateMachine:
-    """Build a REAL, DuckDB/FAISS-backed :class:`StateMachine` for the worker.
+    """Build the REAL :class:`StateMachine` for the worker: the full-pool sampler
+    over the engine-artifact bundle (cached per process), the SIM-434 manager
+    wiring when ``SIM_MANAGER`` is on, and the SIM-515 IBB rate table.
 
-    The production counterpart of
-    :func:`simulation.batch_runner.rng_driven_machine_factory`, sharing its
-    ``factory(seed, spec) -> StateMachine`` contract so it drops into the same
-    :class:`GameSpec.machine_factory` seam.  Referenced by dotted path
+    Shares the ``factory(seed, spec) -> StateMachine`` contract with
+    :func:`simulation.batch_runner.rng_driven_machine_factory`, so it drops into
+    the same :class:`GameSpec.machine_factory` seam.  Referenced by dotted path
     ``"simulation.production_factory:production_machine_factory"``.
 
-    Steps:
-      1. build a :class:`PlayPoolSampler` via the (injectable) :data:`_SAMPLER_BUILDER`,
-         seeding its k-NN rng from the per-game ``seed`` (§6.3 reproducibility);
-      2. when ``spec.shared_segments`` is set, ATTACH the SIM-333 shared tiles
-         zero-copy (:func:`_attach_shared_tiles`) so the worker samples over the
-         shared buffer instead of re-reading the tiles from disk;
-      3. build the (injectable) fingerprint deriver via :data:`_DERIVER_BUILDER`
-         (default ``None`` -> the StateMachine's stub-hash fingerprints);
-      4. construct the :class:`StateMachine` wired to that sampler + deriver, with a
-         loop rng seeded from the same ``seed`` and ``k`` from the factory-only
-         ``_k`` knob (default 25).
-
-    ``simulate_game`` re-seeds both the machine's loop rng AND the sampler's k-NN
-    rng from the per-game ``seed`` again on its way through, so determinism holds
+    ``simulate_game`` re-seeds both the machine's loop rng AND the sampler's rng
+    from the per-game ``seed`` again on its way through, so determinism holds
     end-to-end regardless of how the factory seeded them here.
     """
-    k = int(_kwarg(spec, "_k", _DEFAULT_K))
-
-    # SIM-402: build the full-pool sampler FIRST so we can short-circuit the
-    # per-seed deriver build below on the production (full-pool) path.
     full_pool = _build_full_pool_sampler(spec, seed)
-
-    sampler = _SAMPLER_BUILDER(spec, seed)
-    if spec.shared_segments:
-        _attach_shared_tiles(sampler, spec)
-
-    # SIM-402: on the full-pool path the per-tile FingerprintDeriver is never
-    # consulted -- ``_full_pool_outcome`` (and the engine-backed batted-ball
-    # draw) read from ``full_pool`` exclusively, and every ``fingerprint_deriver``
-    # call site in the loop is None-guarded -- yet ``_default_deriver_builder``
-    # does THREE eager disk loads (provider + pitch_norm + battedball_norm) on
-    # EVERY seed.  Skipping it when the full-pool sampler is active removes that
-    # per-game waste from the cold-worker path (the SIM-372 SLA).  The per-tile
-    # fallback (``full_pool is None`` -- the unit-test default, ``SIM_FULL_POOL=0``)
-    # is UNCHANGED: it still builds the deriver every call.  The per-tile sampler
-    # itself stays per-seed -- its construction is free (lazy DuckDB connection,
-    # opened only on a ``sample_*`` call that the full-pool path never makes), so
-    # it needs no cache; it exists only to satisfy the StateMachine's ``_pa`` guard.
-    deriver = None if full_pool is not None else _DERIVER_BUILDER(spec)
-
-    # SIM-434: GATED manager wiring.  With SIM_MANAGER off (default) ``manager``
-    # stays None -> the StateMachine makes every §3/§5.3 hook a no-op and the game
-    # is byte-identical to before.  With it on, attach a default tendency profile
-    # and stage a generic per-team bullpen on the machine; ``simulate_game`` seeds
-    # that bullpen onto the GameState (its own ``bullpen=`` param takes priority).
+    # SIM-434: GATED manager wiring.  With SIM_MANAGER off ``manager`` stays None
+    # -> the StateMachine makes every §3/§5.3 hook a no-op.  With it on, attach a
+    # default tendency profile and stage a generic per-team bullpen on the
+    # machine; ``simulate_game`` seeds that bullpen onto the GameState (its own
+    # ``bullpen=`` param takes priority).
     manager = _DEFAULT_MANAGER_PROFILE if _manager_enabled() else None
     machine = StateMachine(
-        sampler=sampler,
-        k=k,
+        full_pool,
         rng=np.random.default_rng(seed),
-        fingerprint_deriver=deriver,
-        full_pool_sampler=full_pool,
         manager=manager,
         # SIM-515: the measured IBB rate table. None with no manager (the hook
         # is a no-op then anyway) and on a pre-0020 DB (no IBB fires).
@@ -699,12 +437,7 @@ def production_machine_factory(seed: int | None, spec: GameSpec) -> StateMachine
 
 __all__ = [
     "production_machine_factory",
-    "set_sampler_builder",
-    "set_deriver_builder",
     "set_bullpen_builder",
-    "use_sampler_builder",
     "warm_worker_cache",
     "reset_caches",
-    "SamplerBuilder",
-    "DeriverBuilder",
 ]

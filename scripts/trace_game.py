@@ -1,7 +1,7 @@
 """
 scripts/trace_game.py — per-pitch sim trace (SIM-408 path-A diagnostic).
 
-Runs ONE game through the PRODUCTION sim loop (real DuckDB/FAISS sampler) and
+Runs ONE game through the PRODUCTION sim loop (the full-pool sampler) and
 emits a CSV with one row per pitch:
 
   * game state BEFORE the pitch (inning/half/outs/count/baserunners/score/batter/pitcher)
@@ -106,7 +106,6 @@ def main() -> None:
         "throw_hands": dict(getattr(state, "throw_hands", {}) or {}),
         "home_pitcher_id": getattr(state, "home_pitcher_id", None),
         "away_pitcher_id": getattr(state, "away_pitcher_id", None),
-        "k": 25,
         "max_innings": 12,
     }
     spec = GameSpec(machine_factory=_FACTORY, sim_kwargs=dict(sim_kwargs))
@@ -122,7 +121,6 @@ def main() -> None:
         b_season = getattr(st, "season", None)
         bab, bh, bhr, brbi = _box_totals(machine.boxscore)
         res = orig_step(st, *a, **k)
-        ps = getattr(res, "pitch_sample", None) or {}
         after = _state_snap(st)
         aab, ah, ahr, arbi = _box_totals(machine.boxscore)
         counter["n"] += 1
@@ -132,8 +130,6 @@ def main() -> None:
                 **{f"b_{kk}": vv for kk, vv in before.items()},
                 "bat_hand": b_hand,
                 "season": b_season,
-                "tile": ps.get("tile"),
-                "fellback": getattr(res, "fellback", None),
                 "pitch_outcome": getattr(res, "pitch_outcome", None),
                 "is_contact": getattr(res, "is_contact", None),
                 "pa_terminal": getattr(res, "pa_terminal", None),

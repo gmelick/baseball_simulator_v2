@@ -56,26 +56,24 @@ SIM-281 D2/D3 publish the ~290 MB read-only payload into named
 rather than copy.  THAT attach is **SIM-333** and is implemented here:
 
   * :func:`publish_shared_arrays` (parent-side) copies each read-only numpy buffer
-    (situation-KDTree data / RBF matrices / FAISS-tile-backing arrays) ONCE into a
-    named ``SharedMemory`` segment and returns a picklable
+    (the SIM-403b engine-artifact arrays) ONCE into a named ``SharedMemory``
+    segment and returns a picklable
     ``{name: SharedArrayDescriptor}`` registry + the owned segment handles;
   * :meth:`BatchRunner._pool_kwargs` fills the pool's
     ``initializer=_worker_init`` / ``initargs=(registry,)`` so each worker attaches
     the shared segments ONCE at startup;
   * :func:`_worker_init` ATTACHES each segment by name and reconstructs a
     zero-copy ``np.ndarray`` *view* over the shared buffer in the
-    :data:`_WORKER_SHARED` process-global; :func:`get_shared_view` is how a
-    per-worker sampler/engine factory reads those views (and rebuilds the thin
-    FAISS/KDTree header over them) instead of re-loading tiles itself;
+    :data:`_WORKER_SHARED` process-global; the per-worker factory
+    (:func:`simulation.production_factory._build_full_pool_sampler`) splices
+    those views over the bundle it disk-loads instead of re-reading the arrays;
   * lifecycle: the PARENT owns create + ``unlink`` (:meth:`BatchRunner.close` /
     :func:`unlink_shared_segments`); workers attach + ``close`` but NEVER
     ``unlink``.
-  * :class:`GameSpec` still carries the opaque ``shared_segments`` field for a spec
-    that wants to name which segments its factory should attach.
 
 BACKWARD-COMPATIBLE: with no ``shared_arrays`` supplied, the registry is empty and
-the runner falls back to the SIM-332 per-process load path, so the always-on tests
-(which use the injected picklable no-DB factory) stay green.
+each worker disk-loads the bundle itself, so the always-on tests (which use the
+picklable no-DB factory over a synthetic bundle) stay green.
 """
 
 from __future__ import annotations
@@ -207,7 +205,8 @@ class GameSpec:
     This is the ONLY thing that crosses the ``ProcessPoolExecutor`` boundary per
     task.  It carries scalars + a *dotted reference* to a module-level factory
     that BUILDS the per-worker :class:`~simulation.sim_loop.StateMachine` (and, in
-    production, its sampler over the SIM-333 shared tiles) -- never a live object.
+    production, its full-pool sampler over the engine-artifact bundle) -- never
+    a live object.
 
     Fields:
       * ``machine_factory`` -- ``"pkg.mod:callable"`` resolving to a module-level
@@ -218,8 +217,7 @@ class GameSpec:
         picklable rng-driven factory.
       * ``sim_kwargs`` -- extra picklable keyword args forwarded to
         :func:`simulate_game` (e.g. ``pitcher_id`` / ``bat_hand`` / ``season`` /
-        the two lineups / ``k`` / ``max_innings``).  MUST be picklable (no live
-        sampler/resolver).
+        the two lineups / ``max_innings``).  MUST be picklable (no live sampler).
 
         **FACTORY-ONLY KEYS (SIM-377 convention).**  A key whose name starts with
         an underscore (e.g. ``_hit_rate``) is read by the ``machine_factory`` to
@@ -228,21 +226,14 @@ class GameSpec:
         out of the splat into ``simulate_game(**...)``, so a factory may stash its
         own knobs here without raising a ``TypeError`` against ``simulate_game``'s
         fixed signature.  Non-underscore keys are passed through verbatim.
-      * ``shared_segments`` -- SIM-333 seam: the ``{name: (shape, dtype)}`` shared
-        ``multiprocessing.shared_memory`` registry the worker factory attaches to
-        build a zero-copy sampler.  ``None`` until SIM-333.
     """
 
     machine_factory: str | None = None
     sim_kwargs: dict[str, Any] = field(default_factory=dict)
-    shared_segments: dict[str, Any] | None = None
 
     def cache_key_fields(self) -> tuple:
-        """The picklable, hashable identity of this spec for the cache key.
-
-        Excludes ``shared_segments`` (an attach detail, NOT a determinant of the
-        result) and sorts ``sim_kwargs`` so the key is stable across dict order.
-        """
+        """The picklable, hashable identity of this spec for the cache key
+        (``sim_kwargs`` sorted so the key is stable across dict order)."""
         kw = tuple(sorted((k, _hashable(v)) for k, v in self.sim_kwargs.items()))
         return (self.machine_factory, kw)
 
@@ -278,11 +269,11 @@ def _resolve_dotted(ref: str) -> Callable:
 # ===========================================================================
 #
 # SIM-430 NOTE: the RAM-budget arithmetic in this block (≤2 GB cap; ``290 MB shared
-# + W × ~165 MB private``) describes the PRE-SIM-430 per-tile COW-from-parent model
-# and no longer governs the live footprint.  Production runs the full-pool sampler
-# under ``mp_context=forkserver`` (workers fork from a lean ~30 MB server, ~373 MB
-# each) inside a 10 GB ``app`` cgroup ``mem_limit``; this shared-memory attach is now
-# the per-tile fallback / unit-test path.  The mechanics below (what is shared, the
+# + W × ~165 MB private``) describes the PRE-SIM-430 COW-from-parent model and no
+# longer governs the live footprint.  Production runs the full-pool sampler under
+# ``mp_context=forkserver`` (workers fork from a lean ~30 MB server, ~373 MB each)
+# inside a 10 GB ``app`` cgroup ``mem_limit``, and the SIM-403b engine-artifact
+# arrays ride this shared-memory seam.  The mechanics below (what is shared, the
 # parent-owns-unlink lifecycle) are still accurate — only the budget conclusion is
 # superseded.
 #
@@ -497,13 +488,13 @@ def _run_one(spec: GameSpec, seed: int | None) -> GameSimResult:
 
       * if ``spec.machine_factory`` is set, resolve it and call
         ``factory(seed, spec)`` to build a fresh :class:`StateMachine` (the
-        production factory builds a sampler over the SIM-333 shared tiles; the
-        test factory builds an rng-driven no-DB machine);
+        production factory builds the full-pool sampler over the engine-artifact
+        bundle; the no-DB factory builds one over a synthetic bundle);
       * otherwise let :func:`simulate_game` build a default machine from
         ``spec.sim_kwargs``.
 
     The ``seed`` is threaded into BOTH the factory AND ``simulate_game(seed=...)``
-    so the machine's loop rng and the sampler's k-NN rng are reproducible from the
+    so the machine's loop rng and the sampler's rng are reproducible from the
     one per-game seed (spec §6.3).
 
     SIM-377: ``sim_kwargs`` keys are split by the underscore-prefix convention
@@ -1102,74 +1093,55 @@ class BatchRunner:
 
 
 # ---------------------------------------------------------------------------
-# A picklable, no-DB machine factory — the always-on (no live sampler) path
+# A picklable, no-DB machine factory — the synthetic-bundle path (SIM-486)
 # ---------------------------------------------------------------------------
 #
-# These are module-level (so they pickle by dotted reference) and build an
-# rng-driven StateMachine with NO sampler -- the same no-DB pattern SIM-320's
-# tests use, lifted to a picklable factory so it works across the process
-# boundary.  A production factory (SIM-333) replaces these with one that builds a
-# PlayPoolSampler over the attached shared tiles.
+# Module-level (so it pickles by dotted reference). It builds the SAME machine
+# production builds — a StateMachine over a FullPoolSampler — but over the
+# in-memory league bundle from :mod:`simulation.synthetic_bundle`, so a whole
+# game runs with NO DuckDB / artifact directory and every play goes through the
+# production in-play path (the SIM-511 transition draw).
+
+
+def _inplay_model_for(hit_rate: float | None) -> dict[str, float] | None:
+    """Scale the league in-play mix to a requested hit-on-contact share
+    (``_hit_rate``), keeping the relative shape of hits and outs."""
+    if hit_rate is None:
+        return None
+    from simulation.synthetic_bundle import LEAGUE_INPLAY_MODEL
+
+    hit_rate = float(min(max(hit_rate, 0.0), 1.0))
+    hits = {"single", "double", "triple", "home_run"}
+    hit_mass = sum(v for k, v in LEAGUE_INPLAY_MODEL.items() if k in hits)
+    out_mass = sum(v for k, v in LEAGUE_INPLAY_MODEL.items() if k not in hits)
+    return {
+        k: v * (hit_rate / hit_mass if k in hits else (1.0 - hit_rate) / out_mass)
+        for k, v in LEAGUE_INPLAY_MODEL.items()
+    }
 
 
 def rng_driven_machine_factory(seed: int | None, spec: GameSpec):
-    """Build a no-sampler, rng-driven :class:`StateMachine` for the worker.
+    """Build a no-DB :class:`StateMachine` over the synthetic league bundle.
 
-    The returned machine draws each pitch outcome from its own loop rng (seeded
-    from the per-game ``seed``) and resolves in-play balls via a deterministic,
-    picklable resolver -- so an entire game runs with NO DuckDB / FAISS, fully
-    reproducible from ``seed``.  Referenced by dotted path
-    ``"simulation.batch_runner:rng_driven_machine_factory"`` on a
-    :class:`GameSpec`.
+    The factory-only ``_hit_rate`` sim-kwarg (SIM-377) sets the hit-on-contact
+    share of the bundle's batted-ball pool; absent, the league mix applies.
+    Referenced by dotted path ``"simulation.batch_runner:rng_driven_machine_factory"``
+    on a :class:`GameSpec`; ``simulate_game`` re-seeds both generators from
+    the per-game ``seed``.
     """
-    rng = np.random.default_rng(seed)
-    hit_rate = (
-        float(spec.sim_kwargs.get("_hit_rate", 0.30)) if isinstance(spec.sim_kwargs, dict) else 0.30
+    from simulation.full_pool_sampler import FullPoolSampler
+    from simulation.sim_loop import StateMachine
+    from simulation.synthetic_bundle import league_artifacts
+
+    kw = spec.sim_kwargs if isinstance(spec.sim_kwargs, dict) else {}
+    hit_rate = kw.get("_hit_rate")
+    art = league_artifacts(
+        inplay_model=_inplay_model_for(float(hit_rate) if hit_rate is not None else None)
     )
-    return _RngOutcomeStateMachine(resolver=_CyclingResolver(rng, hit_rate=hit_rate), rng=rng)
-
-
-# Imported lazily-at-module-load (they live in sim_loop) so the factory above can
-# reference them; defined here as module-level classes so they pickle by name.
-from simulation.sim_loop import FieldingSignal, PlayResolver, StateMachine  # noqa: E402
-
-
-class _CyclingResolver(PlayResolver):
-    """A no-DB resolver: an in-play ball is a single ``hit_rate`` of the time,
-    else an out -- so games make progress, score, and END without a sampler.
-
-    Module-level + holds only an rng + a float, so it pickles cleanly across the
-    process boundary (the whole point of the GameSpec/factory seam).
-    """
-
-    def __init__(self, rng: np.random.Generator, hit_rate: float = 0.30):
-        self.rng = rng
-        self.hit_rate = float(hit_rate)
-
-    def resolve_fielding(self, state, battedball_sample) -> FieldingSignal:
-        if float(self.rng.random()) < self.hit_rate:
-            return FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
-        return FieldingSignal(event="field_out", result_hits=0, result_outs=1, result_runs=0)
-
-
-class _RngOutcomeStateMachine(StateMachine):
-    """A :class:`StateMachine` that draws each pitch outcome from its loop rng (no
-    sampler), so a full game runs deterministically from one seed with no live DB.
-
-    Module-level so it pickles by reference; mirrors SIM-320's no-DB test driver.
-    """
-
-    def step_pitch(self, state, **_kw):  # type: ignore[override]
-        r = float(self.rng.random())
-        if r < 0.55:
-            outcome = "in_play"
-        elif r < 0.75:
-            outcome = "ball"
-        elif r < 0.92:
-            outcome = "called_strike"
-        else:
-            outcome = "foul"
-        return super().step_pitch(state, pitch_outcome=outcome)
+    return StateMachine(
+        FullPoolSampler(art, np.random.default_rng(seed)),
+        rng=np.random.default_rng(seed),
+    )
 
 
 __all__ = [

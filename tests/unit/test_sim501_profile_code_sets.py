@@ -118,3 +118,33 @@ class TestNoDefinitionSurvivesInline:
     def test_no_stray_inline_whiff_set_remains(self):
         src = _SOURCE.read_text(encoding="utf-8")
         assert "type IN ('M', 'O', 'S', 'T')" not in src
+
+
+class TestZSwingLegsCountSwings:
+    """SIM-522: the platoon z-swing legs kept the inverted predicate.
+
+    SIM-501 fixed ``z_swing_rate`` at the season level. ``z_swing_rate_vs_l`` and
+    ``z_swing_rate_vs_r`` still counted ``type IN (NON_SWING)`` — the codes where
+    the bat never moved — so both held the z-TAKE rate (live 2024: 0.32 against
+    the season column's 0.68). A swing is the complement of the non-swing set,
+    so every z-swing column must use ``NOT IN``.
+    """
+
+    _INVERTED = re.compile(r"zone BETWEEN 1 AND 9 AND type IN \('B', 'C', 'H', 'P', '\*B'\)")
+
+    def test_no_z_swing_column_counts_the_non_swing_set(self):
+        src = _SOURCE.read_text(encoding="utf-8")
+        assert not self._INVERTED.search(src), (
+            "a zone-swing predicate counts the NON-swing codes — that column holds a "
+            "TAKE rate under a swing name (the SIM-501 / SIM-522 defect)"
+        )
+
+    @pytest.mark.parametrize("col", ["z_swing_rate", "z_swing_rate_vs_l", "z_swing_rate_vs_r"])
+    def test_each_z_swing_column_is_defined_with_not_in(self, col):
+        src = _SOURCE.read_text(encoding="utf-8")
+        # The text between the previous column's alias and this alias is this
+        # column's whole expression (numerator AND denominator). It must carry
+        # the swing predicate, not the take one.
+        idx = src.index(f"AS {col},")
+        expr = src[src.rfind(" AS ", 0, idx) : idx]
+        assert "type NOT IN ('B', 'C', 'H', 'P', '*B')" in expr, col

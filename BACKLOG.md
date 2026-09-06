@@ -1,6 +1,63 @@
 # Product Backlog
 
-*Owner: Product Manager (Agent 1) · Last updated: 2026-08-29 (OWNER RULING: the drawn row IS the play — no post-draw adjustments, every factor is a DRAW WEIGHT; framing flipped OFF pending its SIM-517 weight; 2026-08-29 HYGIENE SWEEP: 8 rows closed/merged, SIM-518 filed; SIM-519 LIVE SLATE epic filed (owner design ruling: schedule-driven 3-state slate from the MLB Stats API); **next free ID → SIM-520**). Older context from the 2026-08-20 stamp follows: (SIM-429 + SIM-514 diagnosis COMPLETE — the walk surplus decomposes IBB 54% / Markov structure 33% / pool era 12% / kernel tilt 1%, and the per-count draw is CLEAN; prev-pitch conditioning REFUTED by the (count × prev) chain; **OWNER RULING: the grade is POOL TOTALS** — SIM-516 re-references the lane, W1 [full 2023-2026] recommended for the window; SIM-515 filed [replace the hand-tuned IBB formula with a play_events draw]; SIM-491 all three parts BUILT + the bat_home data live; **next free ID → SIM-517**; see the top banner). Older context from the 2026-08-19 stamp follows: (SIM-510..512 LANDED + CERTIFIED; SIM-514 filed; next free ID → SIM-515; owner rulings 2026-08-19: NO widening in the SIM-511 fielding draw; all nudge re-validation lives in SIM-491 — not SIM-513; SIM-511+512 land as ONE combined change, no feature flag; the RUN_VALUES numbers removed; see the top banner). Older context from the 2026-08-13 stamp follows: (SIM-501a/c + SIM-502a..d CLOSED; SIM-503 filed+fixed; SIM-504 filed; next free ID → SIM-505). Older context from the 2026-06-02 stamp follows: (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
+# 🔬 2026-09-05 — SIM-523 FILED: the identity-kernel TEAM-CONTEXT confound (one defect, two sightings); SIM-520's answer is measured (next free ID → SIM-524)
+
+**The measurement chain is complete and the story is one defect, not three.**
+**SIM-520:** on the 60-game defense-DIVERSE sample (tier mix 32/32/35), R reads
+4.2021 (−5.5% FAIL) with the fielder kernel ON and **4.3456 (−2.3% PASS) with it
+OFF — H 8.312 (+0.6%, dead on MLB)**. The kernel suppresses runs GLOBALLY, not
+against elite defenses. **The SIM-517 lane's three new reds attribute the same
+way** (12×200 leave-one-out arms): the receiving kernel owns BB −3.6 / HBP −10.9 /
+steal-att +2.5pp; the got-away resolution owns ~none. **SIM-523 (P1): an
+identity-similarity kernel conditions on more than the skill — a catcher's
+neighborhood proxies his TEAM'S STAFF (HBP-prone/wild pitchers), a fielder's
+proxies team context beyond OAA — so both kernels shift marginals the skill alone
+cannot move.** Candidate designs (owner decision): (a) residualize — weight by the
+skill FEATURE distance but normalize the factor within team-season so staff mix
+cannot shift; (b) outcome-conditional kernels (condition the got-away/reach RATES
+directly, not row identity); (c) keep the kernels off until (a)/(b) is measured.
+Production TODAY: the fielder + receiving kernels remain ON per the certified
+conditionals; the marginal costs are documented (R −3.2%, BB −3.3%, HBP −9.5%).
+The got-away channel + home/park kernels are clean and stay. Full detail:
+`docs/audit/2026-09-03-sim517-plan.md` + `scripts/sim517_ab_probe.py` +
+`scripts/sim520_r_broad_sample.py`.
+
+*Owner: Product Manager (Agent 1) · Last updated: 2026-09-06 (SIM-486 CLOSED — the per-tile fallback is deleted; see the top banner; next free ID still SIM-523). Older context from the 2026-09-04 stamp follows: (SIM-456 CLOSED on evidence — the whiff fix was live since the SIM-459 recompute; SIM-522 filed + CLOSED same day for the platoon z-swing inversion [owner decision: fixed in code, the data lands with the next recompute]; **next free ID → SIM-523**; see the top banner). Older context from the 2026-08-29 stamp follows: (OWNER RULING: the drawn row IS the play — no post-draw adjustments, every factor is a DRAW WEIGHT; framing flipped OFF pending its SIM-517 weight; 2026-08-29 HYGIENE SWEEP: 8 rows closed/merged, SIM-518 filed; SIM-519 LIVE SLATE epic filed (owner design ruling: schedule-driven 3-state slate from the MLB Stats API); **next free ID → SIM-520**). Older context from the 2026-08-20 stamp follows: (SIM-429 + SIM-514 diagnosis COMPLETE — the walk surplus decomposes IBB 54% / Markov structure 33% / pool era 12% / kernel tilt 1%, and the per-count draw is CLEAN; prev-pitch conditioning REFUTED by the (count × prev) chain; **OWNER RULING: the grade is POOL TOTALS** — SIM-516 re-references the lane, W1 [full 2023-2026] recommended for the window; SIM-515 filed [replace the hand-tuned IBB formula with a play_events draw]; SIM-491 all three parts BUILT + the bat_home data live; **next free ID → SIM-517**; see the top banner). Older context from the 2026-08-19 stamp follows: (SIM-510..512 LANDED + CERTIFIED; SIM-514 filed; next free ID → SIM-515; owner rulings 2026-08-19: NO widening in the SIM-511 fielding draw; all nudge re-validation lives in SIM-491 — not SIM-513; SIM-511+512 land as ONE combined change, no feature flag; the RUN_VALUES numbers removed; see the top banner). Older context from the 2026-08-13 stamp follows: (SIM-501a/c + SIM-502a..d CLOSED; SIM-503 filed+fixed; SIM-504 filed; next free ID → SIM-505). Older context from the 2026-06-02 stamp follows: (SIM-432 CLOSED — calibration LIVE. SIM-430 WORKER-SCALING RESOLVED: root cause was workers FORKING from the ~6 GB engine-loaded parent [CPython refcount/GC defeats copy-on-write → ~6 GB/worker → OOM at scale]; fixed by mp_context=forkserver [workers ~6 GB→373 MB] + a 10 GB app mem_limit. n=100 /simulate 215 s→~38 s [5.6×], no OOM, 6 workers. 30 s SLA NOT fully met — throughput plateaus past ~6 workers [serial result-handling/per-game bottleneck = the remaining SIM-430 "per-game cost" work]. Earlier part-2 [densify pitcher_sim → kill the 2 GB dict] also shipped. Remaining open: SIM-430 [per-game cost / fan-out efficiency to reach 30 s]; P2 SIM-411+413+425b [one cheap play-pool rebuild]; SIM-427 [bullpen roster]; SIM-433/434/435 CODE-COMPLETE 2026-06-02 (bullpen-availability migration+ingest / manager decision model gated SIM_MANAGER OFF / historical-odds loader — all unit-tested + regression-green; the live data-runs [MLB-API roster ingest, manager enable+validation, odds backfill] are PENDING); SIM-436 [revisit perf for 30s SLA, P3 low]; SIM-429 [K/BB pull-fix + run-conversion + fuller curve; CLV unblocked once SIM-435 backfill runs]. SIM-402/406/407/408/431/432 closed.)*
+
+# ✅ 2026-09-06 — SIM-486 CLOSED: the per-tile fallback is DELETED; one in-play path; the unit suite runs the production loop
+
+**What landed (plan: `docs/audit/2026-09-04-sim486-plan.md`).** The second simulator is gone:
+`simulation/play_pool_sampler.py`, `fingerprints.py`, `score_fusion.py`, `matchup_provider.py`,
+`pipeline/batch/play_pool_cache.py` (~3,300 lines), plus `PlayResolver`, `PlateAppearanceSimulator`,
+the `sampler` / `k` / `fingerprint_deriver` / `resolver` / `sim` seams, the legacy in-play block
+(`_advance_runners`, `_extra_advance`, `_full_pool_out_advancement`, `_tag_rate`, the 0.55/0.28/0.45
+constants and `SIM_RUN_CALIB`), the SIM-318 foul re-weight, the pre-SIM-474 steal-outcome seam, and
+the `SIM_FULL_POOL` switch (compose, `api/main.py`, both conftests). `sim_loop.py` 4,557 → ~3,490
+lines. **The seam that replaced it:** `simulation/synthetic_bundle.py` builds an in-memory
+engine-artifact bundle (every count bucket, every base-out cell, canonical SIM-510 transitions,
+optional advancement and steal pools); the twelve resolver-based test modules, the chi-squared
+replay harness and `batch_runner.rng_driven_machine_factory` now build the PRODUCTION `StateMachine`
+over it, so every no-DB game runs the SIM-511 transition path. **Evidence:** four production games
+traced pitch-for-pitch before and after (306/309/279/342 pitches) are byte-identical; the unit
+suite is green apart from the two pre-existing SIM-347 30-worker `BrokenProcessPool` failures on
+this Windows host; the no-DB API end-to-end lane is green. **Two production defects the realistic
+no-DB games exposed, fixed here:** the play recorder stored the LIVE state as every play's
+`next_state` (so the linescore, the W/L/S decisions and the per-pitch `/state` snapshots were all
+built from the FINAL state — it now deep-copies per pitch), and the linescore attributed a
+third-out play's runs to the NEXT half-inning (it now detects the roll). **Contract changes:** a missing artifact bundle now RAISES at machine build
+(`production_factory`) and a batted-ball pool without transition columns RAISES at the draw — no
+fallback simulator anywhere; `stage_steal` requires `safe=`. **The nightly chain is fixed:**
+`scripts/nightly_ingest.sh` step 3 and `make engine-artifacts` rebuild the bundle production reads
+(the chain used to rebuild dead FAISS tiles and never the bundle). Also deleted: the broken
+`scripts/sim429_count_diagnosis.py` / `sim429_chain_analysis.py` (they wrapped the framing method
+SIM-517 removed) and `scripts/measure_knn.py`. **Left for their owners:** `green_light_rate` (its only
+reader is the pitch-out gate → SIM-427), the deleted-flag wording in `clv_backtest.py` /
+`validate_props.py` warnings, and the orphaned tile files under `/data/play_pool/<season>/` on the
+volume (safe to remove; `engine_artifacts/` stays).
+
+| ID | Title | Type | Pri | Size | Depends-on | Status |
+|---|---|---|---|---|---|---|
+| **SIM-486** | Retire the per-tile fallback path | Sim | P2 | M | — | ✅ **CLOSED 2026-09-06.** See the banner. |
 
 # 📋 2026-09-03 — SIM-517 PLANNED (`docs/audit/2026-09-03-sim517-plan.md`); SIM-520 RULED: certify R on a broader game sample AFTER SIM-517
 
@@ -17,6 +74,40 @@ pitch-pool row.
 **SIM-520:** the R band certifies on a broader, defense-diverse game sample — ONCE
 SIM-517 IS COMPLETE (no game-set re-balancing; the 12-game lane keeps R informational
 until then).
+
+# ✅ 2026-09-04 — SIM-456 CLOSED (the whiff fix was live all along); SIM-522 filed + CLOSED for the platoon z-swing inversion (next free ID → SIM-523)
+
+**SIM-456 closes on evidence, not new code.** The whiff fix landed 2026-08-11 (`2953684`), the
+SIM-459 recompute rebuilt the column 2026-08-14 (live 2024 mean whiff_rate **0.2332** vs the old
+called-strike 0.165; MLB ≈ 0.24), the pitcher-sim artifact (08-15) and `sigma_command` (08-16,
+1.0646) were rebuilt after it, and the SIM-516/476 lanes certified on that data. The consumer
+census (`docs/audit/2026-09-04-sim456-plan.md`) found every reader handles the corrected value:
+the pitcher engine z-scores its command features at build, the full-pool sampler reads the
+rebuilt matrix, the analytics API and Data Lab compute whiff from `raw.pitches` with the same
+definition, and the regression fixtures are synthetic. Two residuals:
+- **SIM-522 (P2, XS, CLOSED-LANDED 2026-09-04 — inert until the next recompute, like all profile SQL; owner decision: no recompute started for it):** `z_swing_rate_vs_l` /
+  `z_swing_rate_vs_r` kept the inverted `type IN (NON_SWING)` predicate after SIM-501 fixed the
+  season-level column, so both held the z-TAKE rate (live 2024: **0.32 vs 0.68**). Consumers:
+  the batter engine's platoon vectors + the batter sub-calibrator. The engine's scores do NOT
+  move — the inversion is `x → 1 − x`, which preserves every pairwise difference the RBF and
+  the sigma fit see — but the column lies to every direct reader. Both predicates now read
+  `NOT IN`; `test_sim501_profile_code_sets.py::TestZSwingLegsCountSwings` fails on the
+  inverted pattern (verified: it fires twice on the pre-fix source). Rides the next scheduled
+  recompute (SIM-517's pool rebuild or SIM-518's shared rebuild); verify
+  `AVG(z_swing_rate_vs_l) ≈ AVG(z_swing_rate) ≈ 0.67` after it.
+- **D-N7 (csw/whiff overlap) is PARKED ON SIM-429 by owner decision (2026-09-04), not a defect:** the predicted exact
+  collinearity did not happen (whiff is per SWING, csw per PITCH; measured corr 0.73–0.79, and
+  k_rate–whiff 0.74–0.77). Swing-and-miss enters the command sub-score through three
+  correlated features. Any `COMMAND_FEATURES` swap needs a `sigma_command` refit + pitcher-sim
+  re-export + fixture regen and is only measurable on the K prop — test it once, under
+  SIM-429's calibration refit.
+The stale "SIM-456 is an unsized BB cause" text in `tests/acceptance/bands.py` and the walks
+test docstring is replaced with the 2026-08-20 decomposition (text only; no band arithmetic
+moved). Next free ID → **SIM-523**.
+
+| ID | Title | Type | Pri | Size | Depends-on | Status |
+|---|---|---|---|---|---|---|
+| **SIM-522** | The batter platoon z-swing legs hold the z-TAKE rate (`type IN` where SIM-501 needed `NOT IN`) | Data | P2 | XS | — | ✅ **CLOSED-LANDED 2026-09-04 (owner decision: profile SQL closes on landing, the SIM-503/504 precedent; no recompute started for it).** Two predicates flipped + the source-scan guard test `TestZSwingLegsCountSwings`. Engine scores unaffected (the inversion is distance-preserving); the live column stays mislabeled for direct readers until the next `--full-rebuild` recompute (SIM-517's pool rebuild or SIM-518's shared rebuild), whose verification battery must read `AVG(z_swing_rate_vs_l) ≈ AVG(z_swing_rate) ≈ 0.67`. |
 
 # ✅ 2026-09-03 — SIM-476 CLOSED: all three kernels fitted + certified; home_win_pct PASSES AT FULL POWER (next free ID → SIM-522)
 
@@ -124,14 +215,14 @@ pitch-pool half and tracked under SIM-518.**
   the hit-and-run trap / pinch-hit).
 * **SIM-518** — the draw-conditioning enrichment epic (below). *(SIM-519, the live-slate epic, was filed later the same day — see the banner above.)*
 * **SIM-467** — the 2,880-cell filter index, owning the 30-s SLA exit criterion.
-* **SIM-486** — retire the per-tile fallback (after 467/450).
-* **SIM-456** — the whiff_rate defect (P1, XS). **SIM-497a/b** — the date-range lane + dual
+* ~~**SIM-486**~~ — CLOSED 2026-09-06 (the per-tile fallback is deleted; see the top banner).
+* ~~**SIM-456**~~ — CLOSED 2026-09-04 (see the top banner; its residual SIM-522 is also CLOSED). **SIM-497a/b** — the date-range lane + dual
   references. **SIM-421** — the book-offered-market projection (P3). *(SIM-484 merged into
   SIM-517, 2026-08-29.)*
 
 | ID | Title | Type | Pri | Size | Depends-on | Status |
 |---|---|---|---|---|---|---|
-| **SIM-518** | The draw-conditioning enrichment EPIC | Data/ML | P2 | L | — | 🔲 **OPEN — the umbrella for the pre-epic conditioning backlog (owner consolidation 2026-08-29); each part individually closable, one shared rebuild.** Parts: **461** (batter hand as a weight, not a pool partition — ~2× every cell), **463** (ten pitch-feature columns + pitcher_id into the batted-ball artifact), **464 pitch-pool half** (the home/away flag the outcome pool already has), **465** (pitch-count + times-through-order columns → the fatigue weight), **472** (batted-ball draw with pitch similarity primary — needs the pitch draw to expose its drawn row), **469** (the single pool+artifact rebuild once parts land). Every part follows the standing pattern: column → artifact → env-gated draw weight (byte-identical off) → SIM-476-style conditional verification → lane. |
+| **SIM-518** | The draw-conditioning enrichment EPIC | Data/ML | P2 | L | — | 📋 **PLANNED 2026-09-04: `docs/audit/2026-09-04-sim467-518-plan.md` (read it first).** 🔲 **OPEN — the umbrella for the pre-epic conditioning backlog (owner consolidation 2026-08-29); each part individually closable, one shared rebuild.** Parts: **461** (batter hand as a weight, not a pool partition — ~2× every cell), **463** (ten pitch-feature columns + pitcher_id into the batted-ball artifact), **464 pitch-pool half** (the home/away flag the outcome pool already has), **465** (pitch-count + times-through-order columns → the fatigue weight), **472** (batted-ball draw with pitch similarity primary — needs the pitch draw to expose its drawn row), **469** (the single pool+artifact rebuild once parts land). Every part follows the standing pattern: column → artifact → env-gated draw weight (byte-identical off) → SIM-476-style conditional verification → lane. |
 
 # ⚖️ 2026-08-29 — OWNER RULING: the drawn row IS the play — NO post-draw adjustments; every factor is a DRAW WEIGHT (SIM-517 filed; next free ID → SIM-518)
 
@@ -213,7 +304,7 @@ fires only on `hit == 2`, nothing relabels to `triple`).
 | ID | Title | Type | Pri | Size | Depends-on | Status |
 |---|---|---|---|---|---|---|
 | **SIM-515** | Replace the hand-tuned IBB formula with a play_events draw | Sim | P1 | M | — | ✅ **BUILT + VALIDATED 2026-08-20 (commit 4f27dfa); the 12×471 lane's new IBB_PA pool band is the standing regression guard.** Migration 0020 (v20): `sim.ibb_rates` — per (runners_state FULL 0-7, outs, inning≥7, \|diff\|≤1) cell, real PAs entered vs intentionally walked (numerator `raw.play_events` `intent_walk` with its pre-play cell; denominator pitched PAs + the no-pitch IBB PAs, which have no `raw.pitches` rows). `_should_issue_ibb` rolls ONCE per PA at the cell's measured rate — the per-pitch tendency×leverage re-roll (2.64× MLB) is deleted, no formula fallback (no table/manager → no IBB). Built on 2023-2026: 96 cells, 2,008 events, league 0.00288/PA. **Probe (12×50): IBB/tg 0.3233 → 0.1117 (window rate 0.1093); box BB 3.5358 → 3.3625; pitched BB unchanged.** Per-manager modulation returns as a similarity WEIGHT with the SIM-427 real profiles. |
-| **SIM-429** | The walk surplus (pitched half) + K-prop to bet-grade + CLV re-measure | Sim | P1 | M | SIM-515 | 🟡 **DIAGNOSIS COMPLETE 2026-08-20; both owner questions ANSWERED same day (the addendum).** The pitched-BB surplus is structure (33%) + era (12%) + tilt (1%): no per-count defect to fix. (1) the structure question is CLOSED — prev-pitch conditioning refuted by measurement (the (count × prev) chain moves nothing; the correlation is whole-PA-scale) and the pool-totals grading ruling accepts the faithful-sampler limit; (2) the era question is CLOSED by the same ruling (the grade references the pool, not an external season). Remaining work: after SIM-515 (+ SIM-516's re-referencing): `make calibrate` + `make validate-props` (K prop ECE 0.109 → <0.10) then the `scripts/clv_backtest.py` re-measure. Instruments (reusable): `scripts/sim429_count_diagnosis.py`, `scripts/sim429_chain_analysis.py`, `scripts/sim429_ibb_probe.py`. |
+| **SIM-429** | The walk surplus (pitched half) + K-prop to bet-grade + CLV re-measure | Sim | P1 | M | SIM-515 | 🟡 **D-N7 PARKED HERE (owner decision 2026-09-04):** the pitcher command sub-score weights seven z-scored features equally, and three of them mostly measure swing-and-miss (live corr csw–whiff 0.73–0.79, k_rate–whiff 0.74–0.77 — NOT the exact collinearity the July review predicted, because whiff is per swing and csw per pitch). Decide during the K-prop refit, measured on K-prop ECE only: leave it / swap `csw_rate` for a called-strike-only rate / fit reliability weights for the command features (the batter engine's `reliability_weights_*` mechanism). Any change = `sigma_command` refit + pitcher-sim re-export (~1 h) + fixture regen. **DIAGNOSIS COMPLETE 2026-08-20; both owner questions ANSWERED same day (the addendum).** The pitched-BB surplus is structure (33%) + era (12%) + tilt (1%): no per-count defect to fix. (1) the structure question is CLOSED — prev-pitch conditioning refuted by measurement (the (count × prev) chain moves nothing; the correlation is whole-PA-scale) and the pool-totals grading ruling accepts the faithful-sampler limit; (2) the era question is CLOSED by the same ruling (the grade references the pool, not an external season). Remaining work: after SIM-515 (+ SIM-516's re-referencing): `make calibrate` + `make validate-props` (K prop ECE 0.109 → <0.10) then the `scripts/clv_backtest.py` re-measure. Instruments (reusable): `scripts/sim429_count_diagnosis.py`, `scripts/sim429_chain_analysis.py`, `scripts/sim429_ibb_probe.py`. |
 | **SIM-514** | Post-transition scoreboard findings: DP/K/SB/3B | Sim | P1 | M | SIM-515 | ✅ **CLOSED 2026-08-29 (hygiene sweep): (a)(b)(d) resolved by measurement — the certified lane reads DP_OPP +1.3% and 3B/BIP +0.9% GREEN on the pool bands; (c) the steal attempts −15% TRANSFERRED to SIM-476 step 0/1, where the work happens.** Was: 🟡 DECOMPOSED 2026-08-20: (a) DP and (d) 3B machinery CLEAN — traffic/era, close by re-measure after SIM-515; (b) K CLOSED — structural, moves with the SIM-429 structure decision; (c) SB — the one live residual (2B attempts/opportunity −15% vs the pool); re-measure after the walk fix, then SIM-476 temperature-fit the 2B attempt weighting if still red.** Instrument: `scripts/sim514_decomposition.py` (wrapper caveat recorded in the results doc: wrap per-game machines, never the per-process cached sampler). |
 | **SIM-491** | Rebuild the three inert nudges as draw weights | Sim | P1 | L | — | ✅ **CLOSED 2026-08-29 (hygiene sweep): all three weights BUILT and the data LIVE — the fits, enables, legacy-flip deletions and the 13,365-game home_win_pct lane are TRANSFERRED to SIM-476 (one owner per kernel: fit → enable → certify).** Was: 🟡 ALL THREE PARTS BUILT 2026-08-20; the data live; fits remaining. Part 1 (SIM-412 home-field): migration 0019 (`bat_home`, v18→v19) APPLIED and the all-seasons `sim.outcome_pool` REBUILT (zero NULLs, home share 0.489-0.492/season — the bottom-of-9th skip — and the SIM-510 guard unchanged at ~99.2%); artifacts RE-EXPORTED; `home_off_weight` (env `SIM_HOME_OFF_WEIGHT`, 1.0 = byte-identical off). Part 2 (SIM-411 park): a Gaussian kernel on the |live − row| `derived.park_factors` delta (env `SIM_PARK_KERNEL_SIGMA`, 0 = off; the factory loads the venue map read-only). Part 3 (SIM-425b fielder): per-row similarity between the LIVE defender at the row's position and the row's own fielder over the OAA-centred embedding subset (env `SIM_FIELDER_KERNEL_SIGMA`, 0 = off; contemporaneous-season keys). Every kernel is byte-identical off (CDF-equality tests); all pinned off in tests/conftest.py; `sim_stats.py` prints all three (SIM-449). **Pending:** the SIM-476-style fits — home_off_weight vs the +0.13 R/g edge (first A/B smoke ran 12×30 at 0.7), park/fielder sigmas one flag at a time at ≥400×≥20 — then the legacy flip deletions (their enable step's instruction), the 12×471 lane with the fitted values, and the 13,365-obs home_win_pct lane. |
 
@@ -758,7 +849,7 @@ them. 2017 is the earliest year. Cell occupancy comes from SIM-460/461, never fr
 | **SIM-499** | Explicit pre/post states on the run-value ledger; delete the conservation derivation | Sim | P1 | M | — | 🔲 **OPEN.** Dissolves 3 tracked defects at once (state-read-after-mutation, DP desync, ROE at 0.00 run value). |
 | **SIM-500** | Real base-state invariants + a transition assertion | Sim | P2 | S | SIM-499 | 🔲 **OPEN.** `assert_consistent` today rejects only a negative id, yet is called as a correctness guard. |
 | **SIM-455** | Split the weight cache into three lifetimes (pitcher / batter / base-out) | Perf | P2 | S | — | ✅ **CLOSED-VERIFIED-LANDED 2026-08-29.** The shipped loop implements the three-lifetime split (`_fp_pitcher_key` / `_fp_pa_key` with base-out IN the PA key — the SIM-455 block in sim_loop.py), base-out staleness included; both filed claims are addressed in code. ~78 wasted full-pool passes per game **+ an unfiled staleness bug**: base-out is absent from the key. **Verified 2026-08-19 (SIM-513): the claim stands** — the PITCH-pool weight assembly is untouched by the transition epic and still rebuilds per PA. Stays open as a perf item. |
-| **SIM-456** | `whiff_rate` computes the **called-strike** rate — swing-and-miss is absent from the pitcher engine | Data | P1 | XS | — | 🔲 **OPEN.** A correct version already exists 200 lines away for another table. |
+| **SIM-456** | `whiff_rate` computes the **called-strike** rate — swing-and-miss is absent from the pitcher engine | Data | P1 | XS | — | ✅ **CLOSED-VERIFIED-LANDED 2026-09-04.** The fix landed 2026-08-11 (`2953684`: `SQL_WHIFF` over `SQL_SWING`, set = the pool build's `swinging_strike` codes, guarded by `test_sim501_profile_code_sets.py`); the SIM-459 recompute rebuilt the column 2026-08-14 (live 2024 mean 0.2332 vs the old called-strike 0.165; MLB ≈ 0.24); the pitcher-sim artifact (2026-08-15) and `sigma_command` (2026-08-16, 1.0646) were rebuilt after it; the SIM-516/476 lanes certified on that data. Consumer census in `docs/audit/2026-09-04-sim456-plan.md`: every reader handles the corrected value (the engine z-scores command features at build). Residuals: the platoon z-swing legs' inversion → **SIM-522** (CLOSED the same day by owner decision: fixed in code, the data lands with the next recompute); the csw/whiff overlap (D-N7) is NOT exact collinearity (corr 0.73–0.79, whiff is per swing) — a `COMMAND_FEATURES` decision for SIM-429's K-prop refit, not this ticket. |
 | **SIM-457** | GB/FB/LD rates use an **outs-only** denominator — inflate ~1.4×, biased by pitcher quality | Data | P1 | XS | — | 🔲 **OPEN.** Detection: the three rates sum to ~1.4, not ~1.0. |
 | **SIM-458** | The run-expectancy matrix misses last-plate-appearance runs | Data | P1 | S | — | 🔲 **OPEN.** Biased low; worst at (2 outs, runner on 3B). Now load-bearing twice. |
 | **SIM-459** | Profile recompute (~5.7 h) | Data | P1 | M | 456, 457, 458 | 🔲 **OPEN.** One pass for all three. |
@@ -769,7 +860,7 @@ them. 2017 is the earliest year. Cell occupancy comes from SIM-460/461, never fr
 | **SIM-464** | Home-or-away flag on both pools | Data | P1 | XS | — | 🟡 **RE-SCOPED 2026-08-29 (owner): half-delivered** — `bat_home` landed on `sim.outcome_pool` (SIM-491/migration 0019). The PITCH-pool half stays open, tracked under SIM-518. |
 | **SIM-465** | Pitch-count + times-through-the-order columns (window functions) | Data | P2 | S | — | 🔲 **OPEN — tracked under SIM-518 (2026-08-29).** Same pattern the build already uses. |
 | **SIM-466** | Wire the four existing previous-pitch columns into the artifact | Data | P2 | XS | — | ⛔ **CLOSED-REFUTED 2026-08-29.** The prev-chain probe (`scripts/sim429_prev_chain_probe.py`) measured prev-pitch conditioning moving NOTHING on BB/K; no consumer remains. Refile only with a measured case. |
-| **SIM-467** | Extend the bucket index from 12 cells to the full 2,880-cell filter | Perf | P1 | L | — | 🔲 **OPEN — now ALSO owns the 30-s SLA exit criterion (SIM-436 merged in, 2026-08-29): n=100 /simulate under 30 s, or a documented re-scope.** ~1000× less per-draw work. **This is the answer to the open 30-s SLA**, which the notes wrongly call irreducible. |
+| **SIM-467** | Extend the bucket index from 12 cells to the full 2,880-cell filter | Perf | P1 | L | — | 📋 **PLANNED 2026-09-04: `docs/audit/2026-09-04-sim467-518-plan.md` (read it first).** 🔲 **OPEN — now ALSO owns the 30-s SLA exit criterion (SIM-436 merged in, 2026-08-29): n=100 /simulate under 30 s, or a documented re-scope.** ~1000× less per-draw work. **This is the answer to the open 30-s SLA**, which the notes wrongly call irreducible. |
 | **SIM-468** | New table `sim.steal_opportunity_pool` | Data | P1 | M | — | 🔲 **OPEN.** `stolen_base_pool` holds only attempts — no denominator, so a draw over it attempts 100% of the time. |
 | **SIM-469** | Pool + artifact rebuild | Data | P1 | M | 459, 462–468 | 🔲 **OPEN — tracked under SIM-518 (2026-08-29; its shared rebuild step).** One rebuild for everything. |
 | **SIM-470** | Per-decision weight-table framework (the subset rule) | ML | P1 | L | SIM-469 | ⛔ **CLOSED-SUPERSEDED 2026-08-29.** The factorized full-pool draw + per-decision kernels became the framework in practice; the SIM-476 re-scope dissolved the dependency. |
@@ -788,7 +879,7 @@ them. 2017 is the earliest year. Cell occupancy comes from SIM-460/461, never fr
 | **SIM-483** | Exclude steal runs from the RBI + earned-run credit (Rule 9.04(b)) | Sim | P3 | XS | SIM-474 | 🔲 **OPEN.** Latent today; SIM-468 makes it live. |
 | **SIM-484** | Wire the dropped third strike through the catcher engine | Sim | P2 | S | SIM-470 | ⤵ **MERGED into SIM-517 (owner decision 2026-08-29): framing and the dropped third strike are ONE catcher RECEIVING profile with one similarity weight in the draw.** Gated on a hook **no production resolver implements** — it can never fire. **Verified 2026-08-19 (SIM-513): the claim still holds** (`_dropped_third_strike` requires `resolver.dropped_third_strike`; none exists in production). The ticket stays open as a missing play class (~0.1/team-game). Its SIM-496-era framing — "the only site where a batter reaches on an error" — is obsolete: drawn errors reach base via the SIM-511 transition draw. |
 | **SIM-485** | Hit-by-pitch channel | Data | P2 | S | — | 🔲 **OPEN.** Ships with **no** re-sweep — `events` already records it. |
-| **SIM-486** | Retire the per-tile fallback path | Sim | P2 | M | 467, 450 | 🔲 **OPEN.** Its being the **test default** is why four critical bugs survived 8 weeks. Removes the divergence at the root. |
+| **SIM-486** | Retire the per-tile fallback path | Sim | P2 | M | 467, 450 | ✅ **CLOSED 2026-09-06** (see the top banner). Its being the **test default** is why four critical bugs survived 8 weeks; the divergence is removed at the root — one in-play path, the suite runs the production loop over `simulation/synthetic_bundle.py`. |
 | **SIM-487** | ETL parser batch — split `passed_ball_wild_pitch`; add `balk` + `pickoff` | Data | P2 | M | — | 🔲 **OPEN.** Collect **every** column first; the free window closed 07-30. |
 | **SIM-488** | Batched ETL re-sweep (~6 h) | Data | P2 | L | SIM-487 | 🔲 **OPEN.** Run once, for everything. |
 | **SIM-489** | Wild-pitch / passed-ball / balk / pickoff channels | Sim | P2 | M | SIM-488 | 🔲 **OPEN.** ~0.15–0.25 R/team-game with SIM-485. |

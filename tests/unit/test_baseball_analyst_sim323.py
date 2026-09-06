@@ -32,12 +32,8 @@ import numpy as np
 import pytest
 
 from simulation.game_state import Bases, GameState, Half, Team
-from simulation.sim_loop import (
-    PlayResolver,
-    StateMachine,
-    StealResolution,
-    simulate_game,
-)
+from simulation.sim_loop import StateMachine, simulate_game
+from simulation.synthetic_bundle import league_artifacts, synthetic_sampler
 
 SEASON = 2024
 PITCHER = 477132
@@ -241,27 +237,18 @@ class TestStealGreenLight:
         m2._pre_pitch_hook(high)
         assert high.manager.green_light_rate >= low_green
 
-    def test_the_resolver_steal_is_staged_ungated_sim474(self):
+    def test_the_steal_draw_is_staged_ungated_sim474(self):
         # SIM-474 deleted the green-light GATE: from 2026-06-04 to 2026-08-16 it
         # routed every production pitch to a resolver stub and zero steals were
-        # attempted (SIM-495 measured SB 0.0000 against 0.59). An injected
-        # resolver (the test seam) is now consulted UNGATED — manager
-        # aggression weights the opportunity-pool draw instead of gating the
-        # decision — so a resolver steal stages for an aggressive AND a
-        # passive manager alike. This test used to pin the gate; it now pins
-        # its absence.
-
-        class _AlwaysSteal(PlayResolver):
-            def resolve_steal(self, state):
-                return StealResolution(
-                    attempted=True, runner_id=11, from_base=1, to_base=2, safe=True
-                )
-
+        # attempted (SIM-495 measured SB 0.0000 against 0.59). The decision is
+        # now the opportunity-pool draw, UNGATED — manager aggression weights
+        # the draw instead of gating it — so a pool whose every row runs stages
+        # a steal for an aggressive AND a passive manager alike.
         for rate in (1.0, 0.0):
             m = StateMachine(
+                synthetic_sampler(league_artifacts(steal=(1.0, 1.0)), 2),
                 rng=np.random.default_rng(2),
                 manager={"steal_order_rate_per_1b_opp": rate},
-                resolver=_AlwaysSteal(),
             )
             s = _state(inning=7, first=11)
             m._pre_pitch_hook(s)
@@ -362,36 +349,6 @@ class TestSacBunt:
 # ===========================================================================
 
 
-class _CyclingResolver(PlayResolver):
-    """A no-DB resolver: an in-play ball is an out most of the time, a single a
-    fraction (governed by the shared rng) so games progress, score, and END."""
-
-    def __init__(self, rng, hit_rate: float = 0.30):
-        self.rng = rng
-        self.hit_rate = float(hit_rate)
-
-    def resolve_fielding(self, state, battedball_sample):
-        from simulation.sim_loop import FieldingSignal
-
-        if float(self.rng.random()) < self.hit_rate:
-            return FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
-        return FieldingSignal(event="field_out", result_hits=0, result_outs=1, result_runs=0)
-
-
-class _RngMachine(StateMachine):
-    def step_pitch(self, state, **_kw):  # type: ignore[override]
-        r = float(self.rng.random())
-        if r < 0.55:
-            outcome = "in_play"
-        elif r < 0.75:
-            outcome = "ball"
-        elif r < 0.92:
-            outcome = "called_strike"
-        else:
-            outcome = "foul"
-        return super().step_pitch(state, pitch_outcome=outcome)
-
-
 class TestNoManagerProfile:
     def test_a_game_with_no_manager_profile_completes(self):
         # SIM-498 reseeded the loop and full-pool generators from independent
@@ -400,7 +357,7 @@ class TestNoManagerProfile:
         # regulation. The seed is incidental — this test asserts the game reaches a
         # decision rather than stalling, and it still does.
         rng = np.random.default_rng(2)
-        machine = _RngMachine(resolver=_CyclingResolver(rng), rng=rng)  # manager=None
+        machine = StateMachine(synthetic_sampler(league_artifacts(), 2), rng=rng)  # manager=None
         result = simulate_game(
             machine,
             seed=2,
@@ -417,8 +374,8 @@ class TestNoManagerProfile:
         # validly (decisions degrade gracefully, never an illegal state).
         rng = np.random.default_rng(1)
         bench = {Team.HOME: [777, 778], Team.AWAY: [677, 678]}
-        machine = _RngMachine(
-            resolver=_CyclingResolver(rng),
+        machine = StateMachine(
+            synthetic_sampler(league_artifacts(), 1),
             rng=rng,
             manager=_AGGRESSIVE,
             bench=bench,

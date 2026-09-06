@@ -20,15 +20,14 @@ the wiser; the captured list feeds straight into
 DESIGN -- WHY A DELEGATING WRAPPER (not just a subclass)
 ========================================================
 The production / no-DB machines are built by a *factory* (the SIM-332
-``GameSpec.machine_factory`` seam) and are concrete ``StateMachine`` SUBCLASSES
-(e.g. ``simulation.batch_runner._RngOutcomeStateMachine``, which overrides
-``step_pitch`` to draw its own pitch outcome).  A plain ``RecordingStateMachine``
-subclass of the *base* ``StateMachine`` would throw that subclass behaviour away.
-So the primary tool is :class:`RecordingMachine` -- a thin delegating wrapper that
+``GameSpec.machine_factory`` seam) and may be ``StateMachine`` SUBCLASSES that
+override ``step_pitch``.  A plain ``RecordingStateMachine`` subclass of the
+*base* ``StateMachine`` would throw that subclass behaviour away.  So the
+primary tool is :class:`RecordingMachine` -- a thin delegating wrapper that
 keeps the factory's real machine intact and only intercepts ``step_pitch``.
 
 ``simulate_game`` reads a handful of attributes off the machine it is handed
-(``.rng`` -- which it re-seeds; ``.sampler`` / ``._pa`` -- which it re-seeds;
+(``.rng`` -- which it re-seeds; ``.full_pool_sampler`` -- whose rng it re-seeds;
 ``.boxscore`` -- which it harvests onto the result).  The wrapper forwards ALL
 attribute reads/writes to the inner machine via ``__getattr__`` / ``__setattr__``
 so every one of those touchpoints transparently reaches the real machine -- the
@@ -48,6 +47,7 @@ factory so a full game records with NO DuckDB / FAISS / Postgres.
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from simulation.batch_runner import (
@@ -62,6 +62,23 @@ from simulation.sim_loop import GameSimResult, StateMachine, simulate_game
 #: with no live sampler / DuckDB / Postgres.  A caller may pass the production
 #: factory ref instead once it exists.
 DEFAULT_FACTORY_REF = "simulation.batch_runner:rng_driven_machine_factory"
+
+
+def _snapshot_next_state(result: PlayResult) -> None:
+    """Freeze the play's committed state (SIM-486).
+
+    ``step_pitch`` hands back the LIVE ``GameState`` as ``result.next_state`` —
+    the one object the loop keeps mutating — so by the end of the game every
+    recorded play pointed at the final state. The linescore, the W/L/S
+    decisions and the per-pitch ``/state`` snapshots all read ``next_state``
+    after the game and were therefore built from the final state alone. The
+    old no-DB harness (single-or-out games) hid it; the synthetic-bundle games
+    exposed it through the replay-card coherence lane. One deep copy per
+    recorded pitch (a few hundred per replayed game) makes the stream honest.
+    """
+    state = getattr(result, "next_state", None)
+    if state is not None:
+        result.next_state = copy.deepcopy(state)
 
 
 class RecordingMachine:
@@ -97,6 +114,7 @@ class RecordingMachine:
         -- ``simulate_game`` cannot tell it was wrapped.
         """
         result = self._inner.step_pitch(state, **kwargs)
+        _snapshot_next_state(result)
         self.recorded_plays.append(result)
         return result
 
@@ -134,6 +152,7 @@ class RecordingStateMachine(StateMachine):
 
     def step_pitch(self, state: Any, **kwargs: Any) -> PlayResult:  # type: ignore[override]
         result = super().step_pitch(state, **kwargs)
+        _snapshot_next_state(result)
         self.recorded_plays.append(result)
         return result
 

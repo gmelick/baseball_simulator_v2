@@ -157,24 +157,29 @@ batch runs in ~38 s with no OOM.
 
 ### 1.8 Production simulation flags
 
-The production simulation path is the **full-pool similarity sampler**,
-and all realism flags are **ON** in the docker-compose `app` env.  These
-same flags are **pinned OFF in `tests/conftest.py`** so the unit suite
-exercises the validated baseline path (each flag's own tests opt back in
-explicitly).  Do not change them ad hoc — they are a validated set.
+The simulation path is the **full-pool similarity sampler** — the only
+path since SIM-486 deleted the per-tile fallback (2026-09-06) — and every
+realism factor is a DRAW WEIGHT with a fitted bandwidth, **ON** in the
+docker-compose `app` env.  The same knobs are **pinned OFF in
+`tests/conftest.py`** so the unit suite exercises the byte-identical
+baseline (each knob's own tests opt back in explicitly).  Do not change
+them ad hoc — they are a validated set.
 
 | Flag | Ticket | Default in compose | What it does |
 |---|---|---|---|
-| `SIM_FULL_POOL` | SIM-429 | `1` | Use the whole-pool engine-weighted sampler (production path); `0` forces the per-tile FAISS k-NN fallback (the unit-test default). |
 | `SIM_MANAGER` | SIM-434/427 | `1` | Manager starter-pull + reliever-selection decisions (fatigue/leverage/TTO).  Enabled + validated 2026-06-04 (pitchers/game 2→9, runs unchanged). |
-| `SIM_PARK_FACTOR` | SIM-411 | `1` | Capped out↔single nudge by the venue run factor. |
 | `SIM_BB_PLATOON` | SIM-413 | `1` | Batted-ball draw reweight by pitcher hand (L/R platoon). |
-| `SIM_FIELDER_RBF` | SIM-425b | `1` | Out↔single nudge by the live-vs-pool fielder OAA delta. |
-| `SIM_FRAMING` | SIM-428 | ON (default; not pinned in compose) | Catcher pitch-framing activation; `SIM_FRAMING=0` restores the pre-fix catcher-inert path (a strict byte-identical mode). |
+| `SIM_HOME_OFF_WEIGHT` | SIM-491/476 | `0.0` | The home-field draw weight on batted-ball rows whose batting side mismatches the live one (`1.0` = off; `0.0` = hard conditioning, the owner ruling). |
+| `SIM_PARK_KERNEL_SIGMA` | SIM-491/476 | `0.02` | The park kernel bandwidth over the venue run factor (`0` = off). |
+| `SIM_FIELDER_KERNEL_SIGMA` | SIM-491/476 | `0.5` | The fielder-quality kernel bandwidth over the live defender's OAA (`0` = off). |
+| `SIM_CATCHER_FRAMING_SIGMA` | SIM-517 | `0.25` | The catcher receiving kernel, framing dims (`0` = off). |
+| `SIM_CATCHER_BLOCK_SIGMA` | SIM-517 | `0.05` | The catcher receiving kernel, blocking dims (`0` = off). |
+| `SIM_GOT_AWAY` | SIM-517 | `1` | Honor the drawn pitch row's got-away fact (passed ball / wild pitch / uncaught third strike). |
 
-The realism nudges (`SIM_PARK_FACTOR` / `SIM_BB_PLATOON` /
-`SIM_FIELDER_RBF`) were enabled + seed-paired validated 2026-06-04 with
-no run distortion.  Set any flag to `0` to revert just that effect.
+The old post-draw flips (`SIM_PARK_FACTOR`, `SIM_FIELDER_RBF`,
+`SIM_FRAMING`, `SIM_HOME_FIELD_BIAS`) and the `SIM_FULL_POOL` switch no
+longer exist.  Set a kernel to `0` (or the home weight to `1.0`) to turn
+just that effect off.
 
 ### 1.9 Calibration, odds backfill, and the CLV backtest
 

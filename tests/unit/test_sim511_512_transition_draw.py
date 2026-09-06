@@ -162,7 +162,7 @@ class TestTheHardCellFilter:
         with pytest.raises(RuntimeError, match="never widens"):
             fp.battedball_new_pa("R", "9:2024", _sit(rs=7, outs=2))
 
-    def test_a_legacy_bundle_keeps_the_soft_draw(self):
+    def test_a_legacy_bundle_raises_instead_of_soft_drawing(self):
         pool = BattedBallPool(
             geom=np.zeros((50, 3), dtype=np.float32),
             sit=np.zeros((50, 6), dtype=np.float32),
@@ -175,10 +175,10 @@ class TestTheHardCellFilter:
         )
         fp = _fp({"R": pool})
         assert not fp.has_transition("R")
-        fp.battedball_new_pa("R", "9:2024", _sit(rs=7, outs=2))  # no raise
-        ev, *_ = fp.battedball_draw()
-        assert ev == "single"
-        assert fp.last_transition() is None
+        # SIM-486 deleted the legacy whole-pool soft draw: a pool without the
+        # transition columns is a data defect, and the draw says so.
+        with pytest.raises(RuntimeError, match="SIM-486"):
+            fp.battedball_new_pa("R", "9:2024", _sit(rs=7, outs=2))
 
 
 class TestTheAdvancementDraw:
@@ -475,7 +475,6 @@ class TestTheAdvancementWiring:
         keeps a bag or scores, and the conservation identity balances.
         """
         m = _machine()
-        m._enforce_base_invariants = True
         s = _state(first=11, second=22)
         r = _resolve(m, s, tr=_tr(r1=0, adv1=True, r2=2, batter=1))
         assert {s.bases.first, s.bases.second, s.bases.third} == {900, 11, 22}
@@ -483,7 +482,6 @@ class TestTheAdvancementWiring:
 
     def test_a_fully_packed_collision_forces_the_last_body_home(self):
         m = _machine()
-        m._enforce_base_invariants = True
         s = _state(first=11, second=22, third=33)
         r = _resolve(m, s, tr=_tr(r1=0, adv1=True, r2=2, r3=3, batter=1))
         # Three bags, four safe bodies: the ladder scores the overflow body

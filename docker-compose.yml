@@ -108,12 +108,6 @@ services:
       BASEBALL_DB_DSN: postgresql://baseball_user:baseball_pass@db:5432/baseball_sim
       REDIS_URL:       redis://redis:6379/0
       ENVIRONMENT:     ${ENVIRONMENT:-development}
-      # SIM-429: production runs the full-pool similarity sampler (validated within
-      # ~10% of MLB). The factory loads the engine-artifact bundle when present and
-      # falls back to the per-tile path otherwise, so this is safe before the
-      # nightly build has produced the artifacts. Unit tests don't set it -> they
-      # keep the per-tile default. Set SIM_FULL_POOL=0 to force the per-tile path.
-      SIM_FULL_POOL:   "1"
       # SIM-434: enable the manager decision model (starter pull + reliever
       # selection by fatigue/leverage/TTO). Validated 2026-06-04 at 400 sims x 3
       # games: pitchers/game 2.0 -> 9.25, starter IP ~9 -> ~6.4 (realistic), with

@@ -25,15 +25,15 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from simulation.batch_runner import _inplay_model_for
 from simulation.game_state import Bases, GameState, Half, Team
 from simulation.sim_loop import (
     REGULATION_INNINGS,
-    FieldingSignal,
     GameSimResult,
-    PlayResolver,
     StateMachine,
     simulate_game,
 )
+from simulation.synthetic_bundle import fixed_play_artifacts, league_artifacts, synthetic_sampler
 
 SEASON = 2024
 PITCHER = 477132
@@ -42,47 +42,16 @@ HOME_LINEUP = list(range(201, 210))  # 9 batters
 
 
 # ===========================================================================
-# Test doubles — a no-DB resolver + an rng-driven StateMachine
+# Test doubles — the production machine over the synthetic league bundle
 # ===========================================================================
 
 
-class _CyclingResolver(PlayResolver):
-    """Resolve an in-play ball to an out (default) or a single (a fraction of the
-    time, governed by the shared rng) so games make progress, score, and END.
-    No DB/FAISS — the batted-ball sample is injected."""
-
-    def __init__(self, rng: np.random.Generator, hit_rate: float = 0.30):
-        self.rng = rng
-        self.hit_rate = float(hit_rate)
-        self._injected_battedball = {"event": "field_out"}
-
-    def resolve_fielding(self, state, battedball_sample) -> FieldingSignal:
-        if float(self.rng.random()) < self.hit_rate:
-            return FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=0)
-        return FieldingSignal(event="field_out", result_hits=0, result_outs=1, result_runs=0)
-
-
-class _RngStateMachine(StateMachine):
-    """A StateMachine that draws each pitch outcome from its own loop rng (no
-    sampler), so an entire game can be driven deterministically from one seed
-    without a live sampler.  This is the no-DB unit-test driver path."""
-
-    def step_pitch(self, state, **_kw):  # type: ignore[override]
-        r = float(self.rng.random())
-        if r < 0.55:
-            outcome = "in_play"
-        elif r < 0.75:
-            outcome = "ball"
-        elif r < 0.92:
-            outcome = "called_strike"
-        else:
-            outcome = "foul"
-        return super().step_pitch(state, pitch_outcome=outcome)
-
-
-def _make_machine(seed: int, hit_rate: float = 0.30) -> _RngStateMachine:
-    rng = np.random.default_rng(seed)
-    return _RngStateMachine(resolver=_CyclingResolver(rng, hit_rate=hit_rate), rng=rng)
+def _make_machine(seed: int, hit_rate: float = 0.30) -> StateMachine:
+    """The production machine over an in-memory bundle (SIM-486): every pitch
+    and every batted ball is a real full-pool draw, so a whole game runs with
+    no DB.  ``hit_rate`` is the hit-on-contact share of the batted-ball pool."""
+    art = league_artifacts(inplay_model=_inplay_model_for(hit_rate))
+    return StateMachine(synthetic_sampler(art, seed), rng=np.random.default_rng(seed))
 
 
 def _run(seed: int, hit_rate: float = 0.30) -> GameSimResult:
@@ -153,23 +122,13 @@ class TestDeterminism:
         assert len(results) > 1
 
     def test_seed_threads_through_the_sampler_rng(self):
-        # A sampler-less machine is fine; assert the driver re-seeds a sampler rng
-        # when one is present (the §6.3 thread-through).  Use a tiny stub sampler.
-        class _StubSampler:
-            def __init__(self):
-                self.rng = np.random.default_rng(999)
-
-        class _NoSampleSM(_RngStateMachine):
-            pass
-
-        sm = _NoSampleSM(
-            resolver=_CyclingResolver(np.random.default_rng(3)), rng=np.random.default_rng(3)
-        )
-        sm.sampler = _StubSampler()
-        before = sm.sampler.rng
+        # The driver re-seeds the full-pool sampler's rng from the per-game seed
+        # (the §6.3 thread-through), so a cached sampler still replays per seed.
+        sm = _make_machine(3)
+        before = sm.full_pool_sampler.rng
         simulate_game(sm, seed=123, away_lineup=AWAY_LINEUP, home_lineup=HOME_LINEUP)
         # The sampler rng was replaced with a freshly-seeded Generator.
-        assert sm.sampler.rng is not before
+        assert sm.full_pool_sampler.rng is not before
 
 
 # ===========================================================================
@@ -195,23 +154,14 @@ class TestRegulationNoBottomNinth:
             home_score=5,
             away_score=3,
         )
-        # An out-only resolver so the top of the 9th ends immediately.
+        # An out-only bundle so the top of the 9th ends immediately.
         rng = np.random.default_rng(0)
 
         class _OutSM(StateMachine):
             def step_pitch(self, st, **_kw):  # always an in-play out
                 return super().step_pitch(st, pitch_outcome="in_play")
 
-        class _AllOut(PlayResolver):
-            def __init__(self):
-                self._injected_battedball = {"event": "field_out"}
-
-            def resolve_fielding(self, st, bb):
-                return FieldingSignal(
-                    event="field_out", result_hits=0, result_outs=1, result_runs=0
-                )
-
-        sm = _OutSM(resolver=_AllOut(), rng=rng)
+        sm = _OutSM(synthetic_sampler(fixed_play_artifacts("field_out"), 0), rng=rng)
         r = simulate_game(sm, initial_state=state, seed=1)
         assert r.home_score == 5 and r.away_score == 3
         assert r.winner == Team.HOME
@@ -233,8 +183,8 @@ class TestRegulationNoBottomNinth:
 class TestWalkOff:
     def test_walk_off_ends_the_game_mid_inning(self):
         # Bottom of the 9th, tied, a runner on 3B with the batter due; a single
-        # (the resolver scores the runner via result_runs) gives the home team
-        # the lead -> walk-off, the half-inning does NOT complete.
+        # (the drawn row scores the runner from third) gives the home team the
+        # lead -> walk-off, the half-inning does NOT complete.
         state = GameState(
             pitcher_id=PITCHER,
             bat_hand="R",
@@ -255,14 +205,9 @@ class TestWalkOff:
             def step_pitch(self, st, **_kw):
                 return super().step_pitch(st, pitch_outcome="in_play")
 
-        class _ScoringSingle(PlayResolver):
-            def __init__(self):
-                self._injected_battedball = {"event": "single", "result_runs": 1}
-
-            def resolve_fielding(self, st, bb):
-                return FieldingSignal(event="single", result_hits=1, result_outs=0, result_runs=1)
-
-        sm = _WalkoffSM(resolver=_ScoringSingle(), rng=np.random.default_rng(0))
+        sm = _WalkoffSM(
+            synthetic_sampler(fixed_play_artifacts("single"), 0), rng=np.random.default_rng(0)
+        )
         r = simulate_game(sm, initial_state=state, seed=1)
         assert r.walk_off is True
         assert r.home_score == 3 and r.away_score == 2
@@ -321,16 +266,9 @@ class TestExtraInnings:
                 # End the half quickly with outs so the game can settle.
                 return super().step_pitch(st, pitch_outcome="in_play")
 
-        class _AllOut(PlayResolver):
-            def __init__(self):
-                self._injected_battedball = {"event": "field_out"}
-
-            def resolve_fielding(self, st, bb):
-                return FieldingSignal(
-                    event="field_out", result_hits=0, result_outs=1, result_runs=0
-                )
-
-        sm = _CaptureSM(resolver=_AllOut(), rng=np.random.default_rng(0))
+        sm = _CaptureSM(
+            synthetic_sampler(fixed_play_artifacts("field_out"), 0), rng=np.random.default_rng(0)
+        )
         simulate_game(sm, initial_state=state, seed=1)
         # The ghost runner was on 2B (and only 2B) at the first pitch of the 10th.
         assert captured["first"] == (False, True, False)
@@ -405,24 +343,12 @@ class TestGuardsHold:
 
 
 class TestDriverConstruction:
-    def test_driver_builds_a_state_machine_from_an_injected_resolver(self):
-        # No state_machine passed: the driver constructs one from the resolver +
-        # seed.  Use an out-biased resolver so the game ends promptly.
-        class _AllOut(PlayResolver):
-            def __init__(self):
-                self._injected_battedball = {"event": "field_out"}
-
-            def resolve_fielding(self, st, bb):
-                return FieldingSignal(
-                    event="field_out", result_hits=0, result_outs=1, result_runs=0
-                )
-
-        # With a built-from-scratch machine the driver samples nothing (no
-        # sampler) and would need explicit outcomes; instead assert it raises a
-        # clear error rather than hang, proving the no-sampler guard fires.
+    def test_driver_builds_a_bare_machine_that_cannot_draw(self):
+        # No state_machine passed: the driver constructs a count-machine-only
+        # machine (no sampler).  It must raise a clear error on the first pitch
+        # rather than hang, proving the no-sampler guard fires.
         with pytest.raises(ValueError):
             simulate_game(
-                resolver=_AllOut(),
                 seed=1,
                 away_lineup=AWAY_LINEUP,
                 home_lineup=HOME_LINEUP,

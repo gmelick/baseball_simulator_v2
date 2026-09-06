@@ -82,15 +82,33 @@ def _hand_pool(n: int, seed: int) -> HandPool:
 
 def _bb_pool(n: int, seed: int) -> BattedBallPool:
     rng = np.random.default_rng(seed)
+    sit = rng.standard_normal((n, 6)).astype(np.float32)
+    # SIM-486: the batted-ball draw hard-filters the live base-out cell, so
+    # every row sits in the cell ``_draw_sequence`` plays in (one out, a
+    # runner on first) and carries its transition: a single that pushes that
+    # runner to second.
+    sit[:, 2] = 1.0
+    sit[:, 3] = 1.0
     return BattedBallPool(
         geom=rng.standard_normal((n, 3)).astype(np.float32),
-        sit=rng.standard_normal((n, 6)).astype(np.float32),
+        sit=sit,
         batter_id=np.tile([200, 201, 202, 203], n // 4 + 1)[:n].astype(np.int64),
         season=np.full(n, 2024, dtype=np.int64),
         event=np.asarray(["single"] * n, dtype=object),
         result_hits=np.ones(n, dtype=np.int8),
         result_outs=np.zeros(n, dtype=np.int8),
         recency=np.full(n, 1.0, dtype=np.float32),
+        r1_dest=np.full(n, 2, dtype=np.int8),
+        r2_dest=np.full(n, -1, dtype=np.int8),
+        r3_dest=np.full(n, -1, dtype=np.int8),
+        batter_dest=np.ones(n, dtype=np.int8),
+        dest_ok=np.ones(n, dtype=np.int8),
+        r1_adv_out=np.zeros(n, dtype=np.int8),
+        r2_adv_out=np.zeros(n, dtype=np.int8),
+        r3_adv_out=np.zeros(n, dtype=np.int8),
+        is_air=np.zeros(n, dtype=np.int8),
+        spray_raw=np.zeros(n, dtype=np.float32),
+        hit_dist=np.zeros(n, dtype=np.float32),
     )
 
 

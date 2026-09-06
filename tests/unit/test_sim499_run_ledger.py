@@ -48,7 +48,8 @@ import pytest
 
 from simulation.game_state import Bases, GameState, Half, PlayResult
 from simulation.run_resolution import RE24_MATRIX, RunResolution, re24_value, resolve_runs
-from simulation.sim_loop import EVENT_WALK, FieldingSignal, PlayResolver, StateMachine
+from simulation.sim_loop import EVENT_WALK, StateMachine
+from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
 
 SEASON = 2024
 PITCHER = 477132
@@ -69,23 +70,19 @@ def _fresh_state(**kw) -> GameState:
     return GameState(**base)
 
 
-class _InjectedResolver(PlayResolver):
-    """Returns one fixed FieldingSignal, with no DB and no FAISS."""
-
-    def __init__(self, signal: FieldingSignal, *, dropped_k: bool = False):
-        self._signal = signal
-        self._dropped_k = dropped_k
-        self._injected_battedball = {"event": signal.event}
-
-    def resolve_fielding(self, state, battedball_sample) -> FieldingSignal:
-        return self._signal
-
-    def dropped_third_strike(self, state, result) -> bool:
-        return self._dropped_k
-
-
-def _sig(event: str, hits: int, outs: int, runs: int, **kw) -> FieldingSignal:
-    return FieldingSignal(event=event, result_hits=hits, result_outs=outs, result_runs=runs, **kw)
+def _play_machine(event: str, *, got_away: bool = False, **overrides: int) -> StateMachine:
+    """A machine whose every batted ball is ``event`` (SIM-486: the production
+    in-play path over a fixed-play bundle).  With ``got_away`` every drawn pitch
+    is a swinging strike that got away from the catcher."""
+    art = fixed_play_artifacts(
+        event,
+        pitch_model={"swinging_strike": 1.0} if got_away else None,
+        got_away=got_away,
+        **overrides,
+    )
+    sm = StateMachine(synthetic_sampler(art, 0), rng=np.random.default_rng(0))
+    sm._got_away = got_away
+    return sm
 
 
 def _walk(state: GameState, sm: StateMachine) -> PlayResult:
@@ -266,32 +263,24 @@ class TestAPlayThatRetiresARunner:
         and placed it on THIRD, so it valued the after-state at RE(2 outs, 3B) =
         0.37 instead of the real RE(2 outs, 1B) = 0.23.
 
-        The value asserted is the value of the play THIS simulator plays.  It
-        leaves the doubled-off runner standing on first (BACKLOG.md:87, SIM-494
-        — double plays are under-counted and the trail runner is not removed).
-        The ledger's job is to report what happened, so it reports -0.66.  The
-        second assertion pins the number the same play would be worth once
-        SIM-494 removes that runner, so the day it lands this test says so.
+        The drawn transition row (SIM-511) retires the runner from first, so
+        the after-state is empty bases with two outs and the play is worth
+        -0.78.
         """
-        sm = StateMachine(
-            resolver=_InjectedResolver(_sig("grounded_into_double_play", 0, 2, 0)),
-            rng=np.random.default_rng(0),
-        )
+        sm = _play_machine("grounded_into_double_play")
         state = _fresh_state()
         state.bases = Bases(first=101)
 
         result = sm.step_pitch(state, pitch_outcome="in_play")
 
         assert state.outs == 2
-        assert state.bases.first == 101, "SIM-494: this simulator does not remove him yet"
+        assert state.bases.first is None, "the drawn row retired the trail runner"
         assert result.re_start == pytest.approx(_re(0, ON_1B))
-        assert result.re_end == pytest.approx(_re(2, ON_1B))
-        assert result.runs == pytest.approx(-0.66)
+        assert result.re_end == pytest.approx(_re(2, EMPTY))
+        assert result.runs == pytest.approx(-0.78)
         # The old formula's after-state, for the record: it invented a runner on
         # third.  That is a strictly different, and better, number than the truth.
-        assert _re(2, ON_3B) > _re(2, ON_1B)
-        # What the same play is worth once the trail runner is actually removed.
-        assert _re(2, EMPTY) - _re(0, ON_1B) == pytest.approx(-0.78)
+        assert _re(2, ON_3B) > _re(2, EMPTY)
 
     def test_the_deleted_conservation_formula_cannot_express_a_retirement(self):
         """The formula, reconstructed here, against the transition it must model.
@@ -377,15 +366,12 @@ class TestReachOnError:
         bases as the pre-state and then derived a SECOND runner on top, valuing
         an empty-bases single at more than a bases-clearing double.
         """
-        sm = StateMachine(
-            resolver=_InjectedResolver(_sig("field_out", 0, 1, 0), dropped_k=True),
-            rng=np.random.default_rng(0),
-        )
+        sm = _play_machine("field_out", got_away=True)
         state = _fresh_state()
 
         result = None
         for _ in range(3):
-            result = sm.step_pitch(state, pitch_outcome="swinging_strike")
+            result = sm.step_pitch(state)
 
         assert result is not None
         assert state.outs == 0, "a dropped third strike records no out"
@@ -394,30 +380,25 @@ class TestReachOnError:
         assert result.re_end == pytest.approx(_re(0, ON_1B))
         assert result.runs == pytest.approx(0.38)
 
-    def test_a_reach_on_error_the_loop_never_completes_is_honestly_worth_zero(self):
-        """The SIM-496 shape: ``field_error`` with ``result_hits=0``.
+    def test_a_reach_on_error_puts_the_batter_on_first_and_is_worth_plus_038(self):
+        """The SIM-511 shape: a drawn ``field_error`` row reaches the batter.
 
-        Nobody is placed on first, so nothing about the base-out state changed
-        and 0.00 is the truthful value of what this simulator did.  This test
-        pins that, and pins WHY, so nobody reads the 0.00 as an unfixed SIM-499.
-        When SIM-496 lands and the batter reaches, the ledger will read +0.38
-        with no further change here — the test above already proves that.
+        ``result_hits`` is 0 (a reach is not a hit) and ``batter_reached`` is
+        True, so the ledger reads empty bases (0.51) to a runner on first
+        (0.89): +0.38.  Before SIM-511 nobody was placed on first and the play
+        read an honest 0.00 (the SIM-496 defect).
         """
-        sm = StateMachine(
-            resolver=_InjectedResolver(_sig("field_error", 0, 0, 0, is_error=True)),
-            rng=np.random.default_rng(0),
-        )
+        sm = _play_machine("field_error")
         state = _fresh_state()
 
         result = sm.step_pitch(state, pitch_outcome="in_play")
 
         assert result.is_error is True
-        assert state.bases.runner_ids() == (), "SIM-496: the batter never reaches"
+        assert state.bases.first == 900, "the batter reached on the error"
         assert state.outs == 0
-        assert result.runs == pytest.approx(0.0)
-        assert result.re_start == result.re_end
-        # The value the SAME play carries once SIM-496 puts him on first.
-        assert _re(0, ON_1B) - _re(0, EMPTY) == pytest.approx(0.38)
+        assert result.re_start == pytest.approx(_re(0, EMPTY))
+        assert result.re_end == pytest.approx(_re(0, ON_1B))
+        assert result.runs == pytest.approx(0.38)
 
 
 # ===========================================================================
@@ -703,9 +684,7 @@ class TestTheOrdinaryPlaysAreUnchanged:
 
     def test_a_home_run_counts_the_batter_once_on_each_side(self):
         """He reaches AND he scores, so the conservation identity balances."""
-        resolver = _InjectedResolver(_sig("home_run", 4, 0, 2))
-        resolver._injected_battedball = {"event": "home_run", "result_runs": 2}
-        sm = StateMachine(resolver=resolver, rng=np.random.default_rng(0))
+        sm = _play_machine("home_run")
         state = _fresh_state()
         state.bases = Bases(first=101)
 
@@ -719,13 +698,11 @@ class TestTheOrdinaryPlaysAreUnchanged:
     def test_the_score_still_commits_the_pool_supplied_runs(self):
         """SIM-499 changes the run VALUE, not the score.
 
-        ``result_runs`` is what the score commits; the body count goes to the
-        transition check.  This test pins that the fix did not quietly re-route
-        the score through the body count.
+        The runs the drawn row scores are what the score commits; the body
+        count goes to the transition check.  This test pins that the fix did
+        not quietly re-route the score through the body count.
         """
-        resolver = _InjectedResolver(_sig("double", 2, 0, 1))
-        resolver._injected_battedball = {"event": "double", "result_runs": 1}
-        sm = StateMachine(resolver=resolver, rng=np.random.default_rng(0))
+        sm = _play_machine("double")
         state = _fresh_state()
         state.bases = Bases(second=202)
 

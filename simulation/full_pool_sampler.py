@@ -673,7 +673,8 @@ class FullPoolSampler:
 
     def has_transition(self, hand: str) -> bool:
         """SIM-511: True when this hand's batted-ball pool carries the SIM-510
-        transition columns (a sim510.1+ bundle). False = the legacy draw."""
+        transition columns (a sim510.1+ bundle). False = a data defect: SIM-486
+        deleted the legacy soft draw, so the batted-ball draw raises."""
         pool = self.a.bb_pools.get(hand)
         return (
             pool is not None
@@ -728,11 +729,11 @@ class FullPoolSampler:
     ) -> None:
         """Assemble the batted-ball weight CDF for the PA (f_batter · f_situation · recency).
 
-        SIM-511: on a transition bundle the draw HARD-filters the exact
-        base-out cell (the drawn row must be legal in the live state — that
-        is what makes "the drawn row is the play" safe), and the situation
-        kernel runs over the remaining soft dims (balls, strikes, inning,
-        score_diff). On a legacy bundle the whole-pool soft draw is unchanged.
+        SIM-511: the draw HARD-filters the exact base-out cell (the drawn row
+        must be legal in the live state — that is what makes "the drawn row is
+        the play" safe), and the situation kernel runs over the remaining soft
+        dims (balls, strikes, inning, score_diff). A bundle without the
+        transition columns raises (SIM-486 deleted the legacy soft draw).
 
         SIM-413: when ``pitcher_throws`` ('L'/'R') is supplied AND the pool carries
         per-row ``p_throws``, softly reweight toward same-hand-matchup rows (opposite
@@ -760,84 +761,55 @@ class FullPoolSampler:
         pool = self.a.bb_pools[hand]
         sv = np.asarray(state, dtype=np.float32)
         meta = self._transition_meta(hand)
+        if meta is None:
+            raise RuntimeError(
+                f"SIM-486: the {hand}-hand batted-ball pool carries no transition "
+                "columns (r1_dest / dest_ok / is_air) — a pre-sim510.1 bundle. Rebuild "
+                "the engine artifacts; there is no legacy soft-draw path."
+            )
         aff = self._batter_aff(batter_key)
         pb = self._bb_pool_bat_idx(hand) if aff is not None else None
-        if meta is not None:
-            # --- SIM-511: the hard base-out cell ---------------------------
-            rstate = int(sv[3]) & 0b111
-            o = min(max(int(sv[2]), 0), 2)
-            rows = meta["cells"].get((rstate, o))
-            if rows is None:
-                raise RuntimeError(
-                    f"SIM-511: base-out cell (runners_state={rstate}, outs={o}) is "
-                    f"EMPTY in the {hand}-hand batted-ball pool — a data defect. "
-                    "The base-out filter is essential and never widens (owner "
-                    "ruling 2026-08-19); rebuild the pool and investigate."
-                )
-            if aff is not None and pb is not None:
-                pbr = pb[rows]
-                f_bat = np.where(
-                    pbr >= 0, aff[np.clip(pbr, 0, len(aff) - 1)], np.float32(1.0)
-                ).astype(np.float32)
-            else:
-                f_bat = np.ones(len(rows), dtype=np.float32)
-            diff = meta["soft"][rows] - sv[[0, 1, 4, 5]]
-            d2 = np.einsum("ij,ij->i", diff, diff)
-            f_sit = np.exp(-d2 / (2.0 * self.sit_sigma**2 * diff.shape[1])).astype(np.float32)
-            w = f_bat * f_sit * pool.recency[rows]
-            if pitcher_throws and self.platoon_off_weight != 1.0:
-                same = self._bb_same_hand_mask(hand, pitcher_throws)
-                if same is not None:
-                    w = w * np.where(
-                        same[rows], np.float32(1.0), np.float32(self.platoon_off_weight)
-                    )
-            if bat_home is not None and self.home_off_weight != 1.0:
-                bh = getattr(pool, "bat_home", None)
-                if bh is not None:
-                    match = (bh[rows] > 0) == bool(bat_home)
-                    w = w * np.where(match, np.float32(1.0), np.float32(self.home_off_weight))
-            if park_run_factor is not None and self.park_sigma > 0.0:
-                pf = self._bb_park_factors(hand)
-                if pf is not None:
-                    d = pf[rows] - np.float32(park_run_factor)
-                    w = w * np.exp(-(d * d) / (2.0 * self.park_sigma**2)).astype(np.float32)
-            if defense_map and self.fielder_sigma > 0.0:
-                ff = self._f_live_fielder(hand, rows, defense_map, int(live_season or 0))
-                if ff is not None:
-                    w = w * ff
-            self._bb_rows = rows
-            self._bb_cdf = np.cumsum(w, dtype=np.float64)
-            return
-        # --- legacy bundle: the whole-pool soft draw (unchanged) -----------
-        self._bb_rows = None
+        # --- SIM-511: the hard base-out cell ---------------------------
+        rstate = int(sv[3]) & 0b111
+        o = min(max(int(sv[2]), 0), 2)
+        rows = meta["cells"].get((rstate, o))
+        if rows is None:
+            raise RuntimeError(
+                f"SIM-511: base-out cell (runners_state={rstate}, outs={o}) is "
+                f"EMPTY in the {hand}-hand batted-ball pool — a data defect. "
+                "The base-out filter is essential and never widens (owner "
+                "ruling 2026-08-19); rebuild the pool and investigate."
+            )
         if aff is not None and pb is not None:
-            f_bat = np.where(pb >= 0, aff[np.clip(pb, 0, len(aff) - 1)], np.float32(1.0)).astype(
+            pbr = pb[rows]
+            f_bat = np.where(pbr >= 0, aff[np.clip(pbr, 0, len(aff) - 1)], np.float32(1.0)).astype(
                 np.float32
             )
         else:
-            f_bat = np.ones(pool.n, dtype=np.float32)
-        diff = pool.sit - sv
+            f_bat = np.ones(len(rows), dtype=np.float32)
+        diff = meta["soft"][rows] - sv[[0, 1, 4, 5]]
         d2 = np.einsum("ij,ij->i", diff, diff)
-        f_sit = np.exp(-d2 / (2.0 * self.sit_sigma**2 * pool.sit.shape[1])).astype(np.float32)
-        w = f_bat * f_sit * pool.recency
+        f_sit = np.exp(-d2 / (2.0 * self.sit_sigma**2 * diff.shape[1])).astype(np.float32)
+        w = f_bat * f_sit * pool.recency[rows]
         if pitcher_throws and self.platoon_off_weight != 1.0:
             same = self._bb_same_hand_mask(hand, pitcher_throws)
             if same is not None:
-                w = w * np.where(same, np.float32(1.0), np.float32(self.platoon_off_weight))
+                w = w * np.where(same[rows], np.float32(1.0), np.float32(self.platoon_off_weight))
         if bat_home is not None and self.home_off_weight != 1.0:
             bh = getattr(pool, "bat_home", None)
             if bh is not None:
-                match = (bh > 0) == bool(bat_home)
+                match = (bh[rows] > 0) == bool(bat_home)
                 w = w * np.where(match, np.float32(1.0), np.float32(self.home_off_weight))
         if park_run_factor is not None and self.park_sigma > 0.0:
             pf = self._bb_park_factors(hand)
             if pf is not None:
-                d = pf - np.float32(park_run_factor)
+                d = pf[rows] - np.float32(park_run_factor)
                 w = w * np.exp(-(d * d) / (2.0 * self.park_sigma**2)).astype(np.float32)
         if defense_map and self.fielder_sigma > 0.0:
-            ff = self._f_live_fielder(hand, np.arange(pool.n), defense_map, int(live_season or 0))
+            ff = self._f_live_fielder(hand, rows, defense_map, int(live_season or 0))
             if ff is not None:
                 w = w * ff
+        self._bb_rows = rows
         self._bb_cdf = np.cumsum(w, dtype=np.float64)
 
     def battedball_draw(self) -> tuple[str, int, int, float]:
@@ -866,8 +838,8 @@ class FullPoolSampler:
         )
 
     def last_transition(self) -> dict | None:
-        """SIM-511: the drawn row's full transition, or None (a legacy bundle,
-        or no draw yet — the caller then runs the legacy resolution).
+        """SIM-511: the drawn row's full transition, or None when no draw has
+        happened yet.
 
         Keys: ``r1``/``r2``/``r3`` — the destination of the pre-pitch runner
         on that base (-1 = no runner; 4 = scored; 3/2/1 = the post base;
