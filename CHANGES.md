@@ -1,3 +1,17 @@
+# Ops — production flipped at the owner's word: receiving kernel OFF, cell index ON; live n=100 reads 31 s warm (was 81-90 s) — 2026-09-08
+
+`docker-compose.yml`: `SIM_CATCHER_FRAMING_SIGMA=0`, `SIM_CATCHER_BLOCK_SIGMA=0`
+(the got-away resolution stays ON), `SIM_PITCH_CELL_INDEX=1`, `SIM_PITCH_MIN_CELL=20`.
+`tests/acceptance/conftest.py`'s production set matches; `SIM467_LANE_RECEIVING=1` and
+`SIM467_LANE_CELL_INDEX=0` reproduce the old arms. The app was recreated and
+pre-warmed six workers in 39 s. Live `GET /api/games/{pk}/simulate?n_iterations=100`,
+warm: 31.4 s and 30.8 s on two games (55.0 s on the first request after boot);
+81-90 s before the flip. The cell-index ticket's 30-second exit criterion is met
+at the line, not under it; the residue is the parent-side aggregation and the
+fan-out's ~3 effective workers (the next perf item). Lane 2 (12×500) certified
+this configuration: every band passes except strikeouts −2.1% against a 2.0%
+floor, which the redesign's fit (part F) owns.
+
 # Docs — the play-picker REDESIGN ruled (SIM-523): one loop, engine scores, fitted powers; catcher receiving as a ratio, shipped OFF (SIM-526); the fence work unparked — 2026-09-08
 
 Four measurements settled the identity-kernel question (scripts/sim523_pool_tests.py,

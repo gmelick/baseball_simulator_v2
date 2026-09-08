@@ -136,8 +136,12 @@ services:
       # against the pool's per-tier conditionals) + the drawn pitch row's
       # got-away resolution (wild pitch / passed ball / uncaught strike-3).
       # The SIM-428 framing flip is DELETED. 0 / 0 / 0 disables.
-      SIM_CATCHER_FRAMING_SIGMA: "0.25"
-      SIM_CATCHER_BLOCK_SIGMA:   "0.05"
+      # OWNER GO 2026-09-08 (the play-picker redesign): the receiving KERNEL is OFF —
+      # it read the catcher's staff, not his skill (SIM-523; the ratio factor that
+      # replaces it is SIM-526). The got-away resolution stays ON (it owns none of
+      # the reds). Lane 2 (12x500) certified this configuration with the cell index.
+      SIM_CATCHER_FRAMING_SIGMA: "0"
+      SIM_CATCHER_BLOCK_SIGMA:   "0"
       SIM_GOT_AWAY:              "1"
       # SIM-518 (2026-09-07): the draw-conditioning weights — fatigue (pitch
       # count + times through the order) and the batting side on the PITCH
@@ -153,7 +157,9 @@ services:
       # whole pool (decision #19's widening ladder below SIM_PITCH_MIN_CELL
       # rows). OFF until the 12x500 lane certifies it; the certification commit
       # flips it to 1 (docs/audit/2026-09-04-sim467-518-plan.md §5.4).
-      SIM_PITCH_CELL_INDEX:      "0"
+      # OWNER GO 2026-09-08: ON — lane 2 (12x500, receiving kernel OFF) passed every
+      # band but strikeouts (-2.1% vs a 2.0% floor, a fit residual). 3x per iteration.
+      SIM_PITCH_CELL_INDEX:      "1"
       SIM_PITCH_MIN_CELL:        "20"
       # SIM-453: WHERE the park factors come from. The park consumer above was on,
       # but the factors were dark: api/routes/games.py read them through

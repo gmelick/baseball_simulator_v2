@@ -239,9 +239,10 @@ stopped — an owner call; the fits and the lane follow it. **SIM-467 CODE LANDE
 bit-identical in-cell weights. Two 12×500 lanes: with the fitted receiving kernel the index reds
 PITCHES_PA +5.5% / BB_PA −4.6% (the SIM-523 confound amplified by the hard cell); with the
 receiving kernel OFF it passes R, BB, pitches and every other band with K_PA −2.1% (floor 2.0%).
-OWNER CHOICE pending (plan §5.4): the speed with the receiving kernel parked, or the kernel without
-the speed; production stays OFF. The live n=100 `/simulate` reads 81-90 s warm — the five-minute
-figure was not the steady state.
+**FLIPPED 2026-09-08 (owner go): production runs the receiving kernel OFF and the cell index ON
+(`SIM_CATCHER_*_SIGMA=0`, `SIM_GOT_AWAY=1`, `SIM_PITCH_CELL_INDEX=1`); the live n=100 `/simulate`
+reads 31 s warm (81-90 s before; the five-minute figure was never the steady state) — the
+30-second exit criterion at the line; the fan-out's ~3 effective workers are the next perf item.
 
 - **DO NOT run the profile recompute** (`make profile-computor`) — but the reason changed on
   2026-08-13. SIM-501a/c CLOSED: SIM-457 is re-landed on the events-based out label, no profile
