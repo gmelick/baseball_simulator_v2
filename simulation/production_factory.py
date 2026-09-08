@@ -45,7 +45,7 @@ lineups / ``max_innings`` / ...) flow through to ``simulate_game``.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import numpy as np
@@ -86,6 +86,38 @@ def _artifact_dir(spec: GameSpec) -> str:
         "BASEBALL_PLAY_POOL_DIR", "/data/play_pool"
     )
     return os.path.join(pool_dir, "engine_artifacts")
+
+
+def apply_actor_matrix_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
+    """SIM-523 part A: read the actor score-matrix switch and powers.
+
+    OFF (the default) keeps every actor factor on its bell-curve kernel byte
+    for byte. ON reads each engine's composite score from the nightly matrix,
+    raised to the power ``SIM_ACTOR_POWER_<NAME>`` (1.0 until part F fits it;
+    names: batter, catcher_throwing, runner_steal, runner_adv, pitcher_steal,
+    fielder — the last applies to every per-position fielder matrix).
+    """
+    src = os.environ if env is None else env
+    sampler.actor_matrices = src.get("SIM_ACTOR_MATRICES", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    powers: dict[str, float] = {}
+    for key, val in src.items():
+        if key.startswith("SIM_ACTOR_POWER_"):
+            name = key[len("SIM_ACTOR_POWER_") :].lower()
+            if name.startswith("fielder_"):
+                name = "fielder_" + name[len("fielder_") :].upper()  # the position names
+            try:
+                powers[name] = float(val)
+            except ValueError:
+                continue
+    if "fielder" in powers:
+        for pos in ("1B", "2B", "3B", "SS", "LF", "CF", "RF"):
+            powers.setdefault(f"fielder_{pos}", powers["fielder"])
+    sampler.actor_power = powers
 
 
 def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
@@ -212,6 +244,7 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
         sampler.pitch_min_cell = int(os.environ.get("SIM_PITCH_MIN_CELL", str(DEFAULT_MIN_CELL)))
     except ValueError:
         sampler.pitch_min_cell = DEFAULT_MIN_CELL
+    apply_actor_matrix_env(sampler)
     _CACHED_FULL_POOL_SAMPLER = sampler
     _CACHED_FULL_POOL_ART_DIR = art_dir
     return sampler

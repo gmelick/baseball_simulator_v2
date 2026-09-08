@@ -1,3 +1,51 @@
+# Feat — the play-picker redesign, part A: every actor factor as a nightly SCORE MATRIX (SIM-523; switch OFF in production) — 2026-09-08
+
+**What this is.** The redesign's first part generalizes the pitcher pattern to every
+other actor: instead of the sampler's own bell-curve kernels over raw profile numbers,
+each actor factor is now its similarity engine's composite 0-to-1 score, computed once a
+night into a dense matrix and read at draw time by one row lookup and one gather. The
+switch is OFF in production; ON waits for the fitted powers (part F) and a lane.
+
+**The builder** (`pipeline/batch/engine_artifacts.py`, `--what actors_sim`, also in `all`):
+`build_actor_sim_matrices` scores every profile in the pool window against every other
+through each engine's own `query` and writes `actor_sim/<name>.npz` (a JSON index plus a
+float32 matrix, diagonal 1.0, unscored NaN) for batter, catcher, catcher throwing (the
+throwing sub-score, for the steal draw), runner steal, runner advancement, pitcher hold,
+and one matrix per fielder position (seven), with `manifest.json` and the
+**concentration report** `concentration.json`: for every catcher-season and
+fielder-season, the share of the pool's draw weight his matrix row would put on his own
+staff's rows against the unweighted share (the ratio), and the effective sample share of
+his row. `--strict-concentration` fails a build whose p90 ratio exceeds 3.0; a normal
+build warns. The loader reads the matrices into `EngineArtifacts.actor_sim`; the
+shared-memory seam publishes each one (`actor_sim.<name>.matrix`).
+
+**The sampler** (`simulation/full_pool_sampler.py`): `actor_matrices` (env
+`SIM_ACTOR_MATRICES`, default off) routes the batter factor on the pitch draw, the runner /
+pitcher-hold / catcher-throwing factors on the steal draw, the runner and fielder factors
+on the advancement draw and the per-position fielder factor on the batted-ball draw
+through `_matrix_gather`: the live actor's row, gathered onto the pool rows by a cached
+embedding-row-to-matrix-column map, raised to `actor_power[name]` (env
+`SIM_ACTOR_POWER_<NAME>`, 1.0 until part F; `FIELDER` fans out to every position). A live
+actor or pool row the matrix lacks is neutral; a bundle without the matrix falls back to
+the kernel; the fielder factor keeps its per-position mean-of-one rescale; the fielder
+matrix applies with the kernel bandwidth at zero. The receiving kernel is untouched (part
+E replaces it). OFF is byte-identical. `simulation/production_factory.py`
+`apply_actor_matrix_env` reads the env; `tests/conftest.py` and `docker-compose.yml` pin
+the switch off. 30 unit tests in `tests/unit/test_sim523_actor_matrices.py` (stub engines
+through the `_ENGINE_LOADER` hook; loader and shared-view round-trip; gathers, neutrality,
+fallback, powers; the toy concentration arithmetic).
+
+**The live build (2023-2026, read-only DuckDB, alongside the running app): 76 s, 35 MB
+on disk.** Sizes: batter 1,796; catcher 318; runner steal 470; runner advancement 744;
+pitcher hold 2,355; fielders 227-332 per position. The concentration report, p90 of the
+own-staff ratio: catcher 1.45, catcher throwing 1.41, fielders 1.36 (CF) to 2.34 (SS) —
+all under the 3.0 line; the effective sample share of a live actor's row, median: catcher
+0.94, fielders 0.86-0.96. Against the old bell-curve receiving kernel measured on
+2026-09-08 (16× the live catcher's own share, 2.5% of the pool left in play) the score
+matrices are gentle factors, which is the design: the powers, not the kernel widths, set
+their strength. The app was restarted so the loader publishes the matrices; the switch
+stays off.
+
 # Ops — production flipped at the owner's word: receiving kernel OFF, cell index ON; live n=100 reads 31 s warm (was 81-90 s) — 2026-09-08
 
 `docker-compose.yml`: `SIM_CATCHER_FRAMING_SIGMA=0`, `SIM_CATCHER_BLOCK_SIGMA=0`

@@ -1,5 +1,22 @@
 # Product Backlog
 
+# 🧱 2026-09-08 — REDESIGN PART A LANDED: every actor factor as a nightly SCORE MATRIX (SIM-523), built live, switch OFF (next free ID → SIM-527)
+
+**What landed (`CHANGES.md` has the detail).** The artifact build now emits one score matrix
+per actor from its engine's composite 0-to-1 score — batter, catcher, catcher throwing, runner
+steal, runner advancement, pitcher hold and one per fielder position — plus the
+**concentration report** (for every catcher-season and fielder-season, how much of the draw
+his matrix row puts on his own staff against the unweighted share; `--strict-concentration`
+fails a build over a 3.0 ratio at the 90th percentile). The sampler reads them behind
+`SIM_ACTOR_MATRICES` (OFF; ON = one row lookup and one gather per factor, raised to
+`SIM_ACTOR_POWER_<NAME>`), byte-identical off, kernel fallback when a matrix is absent. The
+live build ran alongside the app in 76 s (35 MB): every matrix's 90th-percentile own-staff
+ratio is 1.4-2.3, under the line, and a live actor's row keeps 86-96% of the pool in play
+(the old receiving kernel kept 2.5%). **Still to do on the redesign:** parts B (the pitch /
+pitch-result split), C (the fielding split + the fence work), D (manager order), E (the
+receiving ratio, OFF), F (the fitted powers — the switch flips only after F and a lane), G
+(the data adds); the enable ticket for receiving is SIM-526.
+
 # ⚡ 2026-09-08 — PRODUCTION FLIPPED (owner go): the receiving kernel OFF, the pitch-draw cell index ON — the live 100-iteration simulate reads 31 s warm (was 81-90 s)
 
 **Done at the owner's word.** `docker-compose.yml` now runs `SIM_CATCHER_FRAMING_SIGMA=0`,

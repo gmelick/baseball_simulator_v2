@@ -75,6 +75,10 @@ os.environ["SIM_BB_PITCH_SIGMA"] = "0"
 # byte-identical; the SIM-467 tests set ``pitch_cell_index`` directly.
 os.environ["SIM_PITCH_CELL_INDEX"] = "0"
 
+# SIM-523 part A: the actor score matrices. Off = every actor factor on its
+# kernel, byte-identical; the part-A tests set ``actor_matrices`` directly.
+os.environ["SIM_ACTOR_MATRICES"] = "0"
+
 # ---------------------------------------------------------------------------
 # Shared lightweight fixtures
 # ---------------------------------------------------------------------------

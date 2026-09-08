@@ -243,6 +243,12 @@ receiving kernel OFF it passes R, BB, pitches and every other band with K_PA −
 (`SIM_CATCHER_*_SIGMA=0`, `SIM_GOT_AWAY=1`, `SIM_PITCH_CELL_INDEX=1`); the live n=100 `/simulate`
 reads 31 s warm (81-90 s before; the five-minute figure was never the steady state) — the
 30-second exit criterion at the line; the fan-out's ~3 effective workers are the next perf item.
+**REDESIGN PART A LANDED 2026-09-08 (SIM-523):** every actor factor is available as its
+engine's 0-to-1 score matrix (`--what actors_sim`, in the nightly `all`; `actor_sim/` in the
+bundle; the concentration report gates a strict build at a 3.0 own-staff ratio). The sampler
+switch `SIM_ACTOR_MATRICES` is OFF (byte-identical) until part F fits the powers
+(`SIM_ACTOR_POWER_<NAME>`) and a lane certifies; the live build reads 76 s / 35 MB, own-staff
+ratios 1.4-2.3 at the 90th percentile. Parts B-G of the plan remain.
 
 - **DO NOT run the profile recompute** (`make profile-computor`) — but the reason changed on
   2026-08-13. SIM-501a/c CLOSED: SIM-457 is re-landed on the events-based out label, no profile

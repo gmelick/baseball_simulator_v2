@@ -190,6 +190,20 @@ class FullPoolSampler:
         self._pa_levels: list[int] | None = None
         #: Draws per widening level 0..3 (the lane reports the shares).
         self.widen_counts = np.zeros(4, dtype=np.int64)
+        # SIM-523 part A — the actor SCORE MATRICES. Off (the default) every
+        # actor factor is today's bell-curve kernel over raw profile numbers.
+        # On, each factor is its engine's composite 0-to-1 score, read from the
+        # nightly matrix (``EngineArtifacts.actor_sim``) by one row lookup and
+        # one gather, raised to a fitted POWER (``actor_power[name]``, 1.0 until
+        # part F fits it). A matrix the bundle lacks falls back to the kernel;
+        # a live actor the matrix lacks is neutral (1.0), as is a pool row whose
+        # actor the matrix lacks. The redesign's ordering rule (pitcher first,
+        # catcher receiving last) is enforced by the fitted powers, not here.
+        self.actor_matrices = False
+        self.actor_power: dict[str, float] = {}
+        #: (matrix name) -> int64 array mapping the actor EMBEDDING's rows to
+        #: matrix columns (-1 = unscored); built once per matrix per process.
+        self._emb_to_mat_cache: dict[str, np.ndarray] = {}
         #: Per-hand cache of the batted-ball pool's pitch-geometry z-stats
         #: (mean, std, all-finite row mask) — constant once the bundle loads.
         self._bb_pgeom_stats: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
@@ -361,8 +375,71 @@ class FullPoolSampler:
         self._aff_cache[batter_key] = aff
         return aff
 
+    # ---- SIM-523 part A: the actor score-matrix lookups --------------------
+    #: Which actor embedding each matrix's keys index (fielder matrices are
+    #: per position and share the fielder embedding).
+    _MATRIX_EMBEDDING = {
+        "batter": "batter",
+        "catcher": "catcher",
+        "catcher_throwing": "catcher",
+        "runner_steal": "baserunner",
+        "runner_adv": "baserunner",
+        "pitcher_steal": "pitcher_steal",
+    }
+
+    def _actor_matrix(self, name: str) -> dict | None:
+        """The named score matrix entry ({"index", "matrix"}) or None."""
+        return getattr(self.a, "actor_sim", {}).get(name)
+
+    def _emb_to_mat(self, name: str) -> np.ndarray | None:
+        """Embedding row -> matrix column for ``name`` (-1 = unscored)."""
+        cached = self._emb_to_mat_cache.get(name)
+        if cached is not None:
+            return cached
+        entry = self._actor_matrix(name)
+        actor = self._MATRIX_EMBEDDING.get(name, "fielder" if name.startswith("fielder_") else None)
+        emb = self.a.actor_emb.get(actor) if actor else None
+        if entry is None or emb is None:
+            return None
+        index = entry["index"]
+        keys = emb.get("keys")
+        if keys is None:
+            keys = [k for k, _ in sorted(emb["key_index"].items(), key=lambda kv: kv[1])]
+        out = np.fromiter((index.get(str(k), -1) for k in keys), dtype=np.int64, count=len(keys))
+        self._emb_to_mat_cache[name] = out
+        return out
+
+    def _matrix_gather(self, name: str, live_key: str, emb_rows: np.ndarray) -> np.ndarray | None:
+        """The live actor's matrix row gathered onto ``emb_rows`` (embedding
+        indices per pool row, -1 = absent), raised to the factor's power.
+        Neutral (1.0) where either side is unscored. None when the bundle has
+        no such matrix (the caller falls back to its kernel)."""
+        entry = self._actor_matrix(name)
+        e2m = self._emb_to_mat(name)
+        if entry is None or e2m is None:
+            return None
+        live = entry["index"].get(live_key)
+        out = np.ones(len(emb_rows), dtype=np.float32)
+        if live is None:
+            return out
+        cols = np.where(emb_rows >= 0, e2m[np.clip(emb_rows, 0, len(e2m) - 1)], -1)
+        valid = cols >= 0
+        if not valid.any():
+            return out
+        scores = entry["matrix"][live, cols[valid]].astype(np.float32)
+        scores = np.where(np.isfinite(scores), scores, np.float32(1.0))
+        power = float(self.actor_power.get(name, 1.0))
+        if power != 1.0:
+            scores = np.power(np.clip(scores, 0.0, None), np.float32(power)).astype(np.float32)
+        out[valid] = scores
+        return out
+
     def _f_batter(self, hand: str, batter_key: str) -> np.ndarray:
         meta = self._pool_meta(hand)
+        if self.actor_matrices:
+            f = self._matrix_gather("batter", batter_key, meta["pool_bat"])
+            if f is not None:
+                return f
         aff = self._batter_affinity(batter_key)
         if aff is None:
             return np.ones(meta["pool"].n, dtype=np.float32)
@@ -972,6 +1049,13 @@ class FullPoolSampler:
         self._bb_fielder_emb[hand] = out
         return out
 
+    def _fielder_matrices_on(self) -> bool:
+        """SIM-523 part A: the matrix path applies whenever the switch is on
+        and the bundle carries at least one per-position fielder matrix."""
+        return self.actor_matrices and any(
+            self._actor_matrix(f"fielder_{n}") is not None for n in _POS_NUM_TO_NAME.values()
+        )
+
     def _f_live_fielder(
         self, hand: str, rows: np.ndarray, defense_map: dict[str, int], season: int
     ) -> np.ndarray | None:
@@ -1001,9 +1085,30 @@ class FullPoolSampler:
         out = np.ones(len(rows), dtype=np.float32)
         if not valid.any():
             return out
-        diff = z[row_idx[valid]][:, cols] - z[live_idx[valid]][:, cols]
-        d2 = np.einsum("ij,ij->i", diff, diff)
-        out[valid] = np.exp(-d2 / (2.0 * self.fielder_sigma**2 * len(cols))).astype(np.float32)
+        if self._fielder_matrices_on():
+            # SIM-523 part A: the fielder engine's per-position score matrix,
+            # gathered per position; rows at a position without a matrix or a
+            # live key stay neutral. The per-position mean-1 rescale below still
+            # applies (a factor must never move balls between positions).
+            valid = np.zeros(len(rows), dtype=bool)
+            for p, name in _POS_NUM_TO_NAME.items():
+                at = pos == p
+                if not at.any():
+                    continue
+                pid = defense_map.get(name)
+                if not pid:
+                    continue
+                f = self._matrix_gather(
+                    f"fielder_{name}", f"{int(pid)}:{name}:{int(season)}", row_idx[at]
+                )
+                if f is None:
+                    continue
+                out[at] = f
+                valid |= at & (row_idx >= 0)
+        else:
+            diff = z[row_idx[valid]][:, cols] - z[live_idx[valid]][:, cols]
+            d2 = np.einsum("ij,ij->i", diff, diff)
+            out[valid] = np.exp(-d2 / (2.0 * self.fielder_sigma**2 * len(cols))).astype(np.float32)
         # SIM-476: the factor must not move batted balls BETWEEN positions.
         # Where a ball goes is batted-ball physics (the batter/situation
         # kernels); the fielder factor's job is to pick WHICH play at that
@@ -1185,7 +1290,7 @@ class FullPoolSampler:
             if pf is not None:
                 d = pf[rows] - np.float32(park_run_factor)
                 w = w * np.exp(-(d * d) / (2.0 * self.park_sigma**2)).astype(np.float32)
-        if defense_map and self.fielder_sigma > 0.0:
+        if defense_map and (self.fielder_sigma > 0.0 or self._fielder_matrices_on()):
             ff = self._f_live_fielder(hand, rows, defense_map, int(live_season or 0))
             if ff is not None:
                 w = w * ff
@@ -1471,14 +1576,21 @@ class FullPoolSampler:
         rows: np.ndarray,
         feat_names: tuple[str, ...],
         sigma: float | None = None,
+        matrix: str | None = None,
     ) -> np.ndarray | None:
         """Gaussian similarity between the LIVE actor and each pool row's actor
         over the given feature subset; 1.0 (neutral) for rows whose actor is
         absent from the embedding, None when the whole factor is unavailable.
         ``sigma`` overrides the steal bandwidth (the SIM-512 advancement draws
-        pass ``adv_sigma``)."""
+        pass ``adv_sigma``). SIM-523 part A: with ``actor_matrices`` on and a
+        ``matrix`` name the bundle carries, the factor is that engine's score
+        matrix gathered onto the rows instead (the kernel is the fallback)."""
         if emb_rows_all is None:
             return None
+        if self.actor_matrices and matrix is not None:
+            f = self._matrix_gather(matrix, live_key, emb_rows_all[rows])
+            if f is not None:
+                return f
         z = self._emb_z(actor)
         emb = self.a.actor_emb.get(actor)
         if z is None or emb is None:
@@ -1544,7 +1656,12 @@ class FullPoolSampler:
         w *= np.exp(-(sd * sd) / (2.0 * self.steal_score_sigma**2)).astype(np.float32)
         if not _STEAL_ABLATE_RUNNER:
             f = self._steal_actor_factor(
-                "baserunner", runner_key, meta["runner_rows"], rows, self._RUNNER_STEAL_FEATURES
+                "baserunner",
+                runner_key,
+                meta["runner_rows"],
+                rows,
+                self._RUNNER_STEAL_FEATURES,
+                matrix="runner_steal",
             )
             if f is not None:
                 w *= f
@@ -1555,12 +1672,18 @@ class FullPoolSampler:
                 meta["pitcher_rows"],
                 rows,
                 self._PITCHER_STEAL_FEATURES,
+                matrix="pitcher_steal",
             )
             if f is not None:
                 w *= f
         if catcher_key and not _STEAL_ABLATE_CATCHER:
             f = self._steal_actor_factor(
-                "catcher", catcher_key, meta["catcher_rows"], rows, self._CATCHER_STEAL_FEATURES
+                "catcher",
+                catcher_key,
+                meta["catcher_rows"],
+                rows,
+                self._CATCHER_STEAL_FEATURES,
+                matrix="catcher_throwing",
             )
             if f is not None:
                 w *= f
@@ -1708,10 +1831,14 @@ class FullPoolSampler:
             meta["rows"],
             self._RUNNER_ADV_FEATURES,
             sigma=self.adv_sigma,
+            matrix="runner_adv",
         )
         if f is not None:
             w *= f
         if fielder_key:
+            # The live fielder key is "id:POS:season"; the fielder matrices are
+            # per position, so the matrix name follows the key's position.
+            parts = fielder_key.split(":")
             f = self._steal_actor_factor(
                 "fielder",
                 fielder_key,
@@ -1719,6 +1846,7 @@ class FullPoolSampler:
                 meta["rows"],
                 self._FIELDER_ADV_FEATURES,
                 sigma=self.adv_sigma,
+                matrix=(f"fielder_{parts[1]}" if len(parts) == 3 else None),
             )
             if f is not None:
                 w *= f

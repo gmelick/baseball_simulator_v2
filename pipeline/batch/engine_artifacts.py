@@ -455,6 +455,304 @@ def build_pitcher_sim_matrix(
     return len(rows)
 
 
+# ============================================================================
+# SIM-523 part A — the actor SCORE MATRICES (the pitcher pattern, generalized)
+# ============================================================================
+#
+# The play-picker redesign (docs/audit/2026-09-08-sim523-play-picker-redesign-
+# plan.md, part A): every actor factor in the draw is its ENGINE's composite
+# 0-to-1 score, emitted nightly as a dense matrix and looked up at draw time —
+# no distances, no bell curves on the play path. One matrix per actor role:
+#
+#   batter          the batter engine's composite (pitch draw + fielding draw)
+#   catcher         the catcher engine's composite
+#   catcher_throwing  its throwing sub-score (the steal draw's catcher-arm factor)
+#   fielder_<POS>   the fielder engine's composite, one matrix per position
+#   runner_steal    the steal engine's composite (the steal draw's runner factor)
+#   runner_adv      the baserunner engine's composite (the advancement draws)
+#   pitcher_steal   the pitcher-hold engine's composite (the steal draw)
+#
+# Each matrix is indexed by the same "id:season" (fielders "id:POS:season") key
+# the actor embedding uses, restricted to the artifact's seasons, so the
+# sampler maps its existing per-row embedding indices onto matrix columns with
+# one lookup table. The diagonal is 1.0 (the same profile); a pair the engine
+# did not score is NaN and reads as neutral (1.0) in the sampler.
+#
+# The CONCENTRATION REPORT runs at build time (the redesign's new check): for
+# every catcher-season and fielder-season, the share of the pool's draw weight
+# his row of the matrix would put on his OWN staff's rows against the unweighted
+# share. The 2026-09-08 tests measured 8.9% on the live catcher's own pitches
+# (pool share 0.56%) under the old bell-curve kernel; a matrix whose p90 ratio
+# exceeds CONCENTRATION_MAX_RATIO fails a --strict build.
+
+#: Engine class per matrix role. Local (not api.state's registry) so the
+#: pipeline layer never imports the API layer; a test swaps _ENGINE_LOADER.
+_ACTOR_SIM_ENGINES: dict[str, tuple[str, str]] = {
+    "batter": ("similarity.engines.batter_similarity", "BatterSimilarityEngine"),
+    "catcher": ("similarity.engines.catcher_similarity", "CatcherSimilarityEngine"),
+    "fielder": ("similarity.engines.fielder_similarity", "FielderSimilarityEngine"),
+    "baserunner_steal": (
+        "similarity.engines.baserunner_steal_similarity",
+        "BaserunnerStealSimilarityEngine",
+    ),
+    "baserunner": ("similarity.engines.baserunner_similarity", "BaserunnerSimilarityEngine"),
+    "pitcher_steal": (
+        "similarity.engines.pitcher_steal_similarity",
+        "PitcherStealSimilarityEngine",
+    ),
+}
+
+#: The matrices, each: (engine, the key-tuple -> "a:b[:c]" string, the score
+#: attribute on the engine's SimilarityResult, the result's key attributes).
+_ACTOR_SIM_SPECS: dict[str, dict] = {
+    "batter": {"engine": "batter", "score": "score", "keys": ("batter_id", "season")},
+    "catcher": {"engine": "catcher", "score": "score", "keys": ("catcher_id", "season")},
+    "catcher_throwing": {
+        "engine": "catcher",
+        "score": "throwing_score",
+        "keys": ("catcher_id", "season"),
+    },
+    "runner_steal": {
+        "engine": "baserunner_steal",
+        "score": "score",
+        "keys": ("player_id", "season"),
+    },
+    "runner_adv": {"engine": "baserunner", "score": "score", "keys": ("player_id", "season")},
+    "pitcher_steal": {
+        "engine": "pitcher_steal",
+        "score": "score",
+        "keys": ("pitcher_id", "season"),
+    },
+}
+_FIELDER_POSITIONS = ("1B", "2B", "3B", "SS", "LF", "CF", "RF")
+CONCENTRATION_MAX_RATIO = 3.0
+
+
+def _default_actor_engine_loader(module_path: str, class_name: str):
+    import importlib
+
+    return getattr(importlib.import_module(module_path), class_name)
+
+
+_ENGINE_LOADER = _default_actor_engine_loader
+
+
+def _key_of(result, key_attrs: tuple[str, ...]) -> str:
+    return ":".join(str(getattr(result, a)) for a in key_attrs)
+
+
+def _matrix_from_queries(
+    profile_keys: list[tuple], query_fn, key_attrs: tuple[str, ...], score_attr: str
+) -> tuple[dict[str, int], np.ndarray]:
+    """Score every profile against every other via the engine's own query and
+    pack the results into a dense float32 matrix (diagonal 1.0, unscored NaN)."""
+    index = {":".join(str(x) for x in k): i for i, k in enumerate(profile_keys)}
+    n = len(index)
+    mat = np.full((n, n), np.nan, dtype=np.float32)
+    for i, k in enumerate(profile_keys):
+        mat[i, i] = 1.0
+        for r in query_fn(*k):
+            j = index.get(_key_of(r, key_attrs))
+            if j is not None:
+                mat[i, j] = float(getattr(r, score_attr))
+    return index, mat
+
+
+def _write_actor_sim(out_dir: str, name: str, index: dict[str, int], mat: np.ndarray) -> None:
+    np.savez_compressed(os.path.join(out_dir, f"{name}.npz"), index=json.dumps(index), matrix=mat)
+
+
+def build_actor_sim_matrices(
+    duckdb_path: str,
+    out_dir: str,
+    seasons: list[int],
+    *,
+    limit: int | None = None,
+    strict: bool = False,
+) -> dict[str, int]:
+    """SIM-523 part A: export the actor score matrices for ``seasons`` into
+    ``<out_dir>/actor_sim/`` and write the concentration report. ``limit``
+    scores only the first N profiles per matrix (verification mode). Returns
+    the matrix sizes by name."""
+    sim_dir = os.path.join(out_dir, "actor_sim")
+    os.makedirs(sim_dir, exist_ok=True)
+    season_set = {int(s) for s in seasons}
+    sizes: dict[str, int] = {}
+    engines: dict[str, object] = {}
+
+    def _engine(name: str):
+        eng = engines.get(name)
+        if eng is None:
+            module, cls = _ACTOR_SIM_ENGINES[name]
+            eng = _ENGINE_LOADER(module, cls)(duckdb_path=duckdb_path)
+            eng.build(seasons=sorted(season_set))
+            engines[name] = eng
+        return eng
+
+    for name, spec in _ACTOR_SIM_SPECS.items():
+        eng = _engine(spec["engine"])
+        keys = sorted(k for k in eng._profiles if int(k[-1]) in season_set)
+        if limit is not None:
+            keys = keys[:limit]
+        index, mat = _matrix_from_queries(keys, eng.query, spec["keys"], spec["score"])
+        _write_actor_sim(sim_dir, name, index, mat)
+        sizes[name] = len(index)
+        log.info("actor_sim[%s]: %d x %d", name, len(index), len(index))
+    feng = _engine("fielder")
+    for pos in _FIELDER_POSITIONS:
+        keys = sorted(k for k in feng._profiles if k[1] == pos and int(k[2]) in season_set)
+        if limit is not None:
+            keys = keys[:limit]
+        index, mat = _matrix_from_queries(
+            keys, feng.query, ("player_id", "position", "season"), "score"
+        )
+        _write_actor_sim(sim_dir, f"fielder_{pos}", index, mat)
+        sizes[f"fielder_{pos}"] = len(index)
+        log.info("actor_sim[fielder_%s]: %d x %d", pos, len(index), len(index))
+    with open(os.path.join(sim_dir, "manifest.json"), "w", encoding="utf-8") as fh:
+        json.dump({"seasons": sorted(season_set), "sizes": sizes}, fh, indent=2)
+
+    report = concentration_report(duckdb_path, sim_dir, sorted(season_set))
+    with open(os.path.join(sim_dir, "concentration.json"), "w", encoding="utf-8") as fh:
+        json.dump(report, fh, indent=2)
+    worst = max((v.get("ratio_p90", 0.0) for v in report.values()), default=0.0)
+    if worst > CONCENTRATION_MAX_RATIO:
+        msg = (
+            f"actor_sim concentration: a matrix's p90 own-staff ratio is {worst:.2f} "
+            f"(> {CONCENTRATION_MAX_RATIO}); the draw would lean on the live player's team"
+        )
+        if strict:
+            raise RuntimeError(msg)
+        log.warning(msg)
+    return sizes
+
+
+def concentration_share(
+    matrix: np.ndarray,
+    live_row: int,
+    row_actor_col: np.ndarray,
+    row_pitcher: np.ndarray,
+    staff: set[int],
+) -> tuple[float, float, float]:
+    """For one live profile: (weighted own-staff share, unweighted share, ESS
+    share) over pool rows whose actor has a matrix column (``row_actor_col``
+    >= 0). Pure arithmetic, unit-tested on a toy pool."""
+    valid = row_actor_col >= 0
+    if not valid.any():
+        return float("nan"), float("nan"), float("nan")
+    w = matrix[live_row, row_actor_col[valid]].astype(np.float64)
+    w = np.where(np.isfinite(w), w, 1.0)
+    own = np.isin(row_pitcher[valid], list(staff))
+    total = float(w.sum())
+    if total <= 0.0:
+        return float("nan"), float(own.mean()), float("nan")
+    return float(w[own].sum() / total), float(own.mean()), float(total * total / (w @ w) / w.size)
+
+
+def concentration_report(duckdb_path: str, sim_dir: str, seasons: list[int]) -> dict[str, dict]:
+    """The build-time concentration check for the two actors whose rows carry a
+    staff: catchers (the pitch pool) and fielders (the batted-ball pool). Each
+    entry reports the distribution over live profiles of the ratio (weighted
+    own-staff share / unweighted own-staff share) and of the effective sample
+    share of the actor's matrix row over the pool."""
+    season_list = ", ".join(str(int(s)) for s in seasons)
+    con = duckdb.connect(duckdb_path, read_only=True)
+    try:
+        pp = con.execute(
+            "SELECT season, catcher_id, pitcher_id FROM sim.pitch_pool "
+            f"WHERE season IN ({season_list}) AND catcher_id IS NOT NULL AND catcher_id > 0"
+        ).fetchnumpy()
+        op_cols = {
+            str(d[0]) for d in con.execute("SELECT * FROM sim.outcome_pool LIMIT 0").description
+        }
+        bb = None
+        if {"fielder_player_id", "fielded_by_position", "pitcher_id"} <= op_cols:
+            bb = con.execute(
+                "SELECT season, fielder_player_id, fielded_by_position, pitcher_id "
+                f"FROM sim.outcome_pool WHERE season IN ({season_list}) "
+                "AND fielder_player_id IS NOT NULL AND fielder_player_id > 0"
+            ).fetchnumpy()
+    finally:
+        con.close()
+
+    def _load(name: str):
+        p = os.path.join(sim_dir, f"{name}.npz")
+        if not os.path.exists(p):
+            return None, None
+        z = np.load(p, allow_pickle=True)
+        return json.loads(str(z["index"])), z["matrix"]
+
+    def _summarize(entries: list[tuple[float, float, float]]) -> dict:
+        arr = np.asarray([e for e in entries if all(np.isfinite(e))], dtype=np.float64)
+        if arr.size == 0:
+            return {"profiles": 0}
+        ratio = arr[:, 0] / np.maximum(arr[:, 1], 1e-9)
+        return {
+            "profiles": int(arr.shape[0]),
+            "own_share_weighted_median": float(np.median(arr[:, 0])),
+            "own_share_unweighted_median": float(np.median(arr[:, 1])),
+            "ratio_median": float(np.median(ratio)),
+            "ratio_p90": float(np.percentile(ratio, 90)),
+            "ratio_max": float(ratio.max()),
+            "ess_share_median": float(np.median(arr[:, 2])),
+        }
+
+    report: dict[str, dict] = {}
+    # --- catchers over the pitch pool
+    for name in ("catcher", "catcher_throwing"):
+        index, mat = _load(name)
+        if index is None:
+            continue
+        seasons_arr = np.ma.filled(pp["season"], 0).astype(np.int64)
+        cid = np.ma.filled(pp["catcher_id"], 0).astype(np.int64)
+        pid = np.ma.filled(pp["pitcher_id"], 0).astype(np.int64)
+        col = np.fromiter(
+            (index.get(f"{c}:{s}", -1) for c, s in zip(cid, seasons_arr, strict=False)),
+            dtype=np.int64,
+            count=cid.size,
+        )
+        entries = []
+        for key, row in index.items():
+            c, s = (int(x) for x in key.split(":"))
+            in_season = seasons_arr == s
+            staff = set(pid[in_season & (cid == c)].tolist())
+            if not staff:
+                continue
+            entries.append(concentration_share(mat, row, col[in_season], pid[in_season], staff))
+        report[name] = _summarize(entries)
+    # --- fielders over the batted-ball pool, per position
+    if bb is not None:
+        pos_name = {3: "1B", 4: "2B", 5: "3B", 6: "SS", 7: "LF", 8: "CF", 9: "RF"}
+        seasons_arr = np.ma.filled(bb["season"], 0).astype(np.int64)
+        fid = np.ma.filled(bb["fielder_player_id"], 0).astype(np.int64)
+        fpos = np.ma.filled(bb["fielded_by_position"], 0).astype(np.int64)
+        pid = np.ma.filled(bb["pitcher_id"], 0).astype(np.int64)
+        for pnum, pos in pos_name.items():
+            index, mat = _load(f"fielder_{pos}")
+            if index is None:
+                continue
+            at_pos = fpos == pnum
+            col = np.fromiter(
+                (
+                    index.get(f"{f}:{pos}:{s}", -1) if ok else -1
+                    for f, s, ok in zip(fid, seasons_arr, at_pos, strict=False)
+                ),
+                dtype=np.int64,
+                count=fid.size,
+            )
+            entries = []
+            for key, row in index.items():
+                f, _p, s = key.split(":")
+                f, s = int(f), int(s)
+                in_season = seasons_arr == s
+                staff = set(pid[in_season & at_pos & (fid == f)].tolist())
+                if not staff:
+                    continue
+                entries.append(concentration_share(mat, row, col[in_season], pid[in_season], staff))
+            report[f"fielder_{pos}"] = _summarize(entries)
+    return report
+
+
 #: Actor engines whose per-(id, season) season-metrics vector is exported as a v1
 #: embedding (the worker z-scores + RBFs it for the f_batter / f_catcher / ... factor).
 #: SIM-424/425/426/427 refine these to each engine's exact feature selection/weights.
@@ -810,8 +1108,13 @@ class EngineArtifacts:
         pitcher_sim_matrix=None,
         steal_pools=None,
         adv_pools=None,
+        actor_sim=None,
     ):
         self.pools: dict[str, HandPool] = pools
+        #: SIM-523 part A: matrix role -> {"index": {key: row}, "matrix": (n, n)
+        #: float32}; {} on a bundle built before the actor matrices. The sampler's
+        #: ``actor_matrices`` path looks these up instead of computing kernels.
+        self.actor_sim: dict[str, dict] = actor_sim or {}
         self.bb_pools: dict[str, BattedBallPool] = bb_pools or {}
         #: SIM-474: target base ("2"/"3") -> StealPool; {} on a legacy bundle.
         self.steal_pools: dict[str, StealPool] = steal_pools or {}
@@ -892,6 +1195,11 @@ class EngineArtifacts:
         # SIM-430: the dense pitcher similarity matrix (replaces the ~2 GB dict).
         if isinstance(self.pitcher_sim_matrix, np.ndarray):
             out["pitcher_sim.matrix"] = self.pitcher_sim_matrix
+        # SIM-523 part A: the actor score matrices.
+        for name, entry in self.actor_sim.items():
+            m = entry.get("matrix")
+            if isinstance(m, np.ndarray):
+                out[f"actor_sim.{name}.matrix"] = m
         return out
 
     def attach_shared_views(self, views: dict[str, np.ndarray]) -> None:
@@ -947,6 +1255,11 @@ class EngineArtifacts:
         mv = views.get("pitcher_sim.matrix")
         if isinstance(mv, np.ndarray):
             self.pitcher_sim_matrix = mv
+        # SIM-523 part A: attach the shared actor score matrices.
+        for name, entry in self.actor_sim.items():
+            v = views.get(f"actor_sim.{name}.matrix")
+            if isinstance(v, np.ndarray):
+                entry["matrix"] = v
 
     @classmethod
     def load(
@@ -1337,6 +1650,22 @@ class EngineArtifacts:
                 ps_matrix = z["pitcher_sim_matrix"]
             else:
                 ps_sims = json.loads(str(z["sims"]))
+        # SIM-523 part A: the actor score matrices (absent on an older bundle).
+        actor_sim: dict[str, dict] = {}
+        sim_dir = os.path.join(art_dir, "actor_sim")
+        if os.path.exists(os.path.join(sim_dir, "manifest.json")):
+            with open(os.path.join(sim_dir, "manifest.json"), encoding="utf-8") as fh:
+                sim_manifest = json.load(fh)
+            for name in sim_manifest.get("sizes", {}):
+                p = os.path.join(sim_dir, f"{name}.npz")
+                if not os.path.exists(p):
+                    continue
+                z = np.load(p, allow_pickle=True)
+                mv = views.get(f"actor_sim.{name}.matrix")
+                actor_sim[name] = {
+                    "index": json.loads(str(z["index"])),
+                    "matrix": mv if isinstance(mv, np.ndarray) else z["matrix"],
+                }
         actor_emb: dict[str, dict] = {}
         for actor in _ACTOR_TABLES:
             p = os.path.join(art_dir, f"{actor}_emb.npz")
@@ -1379,6 +1708,7 @@ class EngineArtifacts:
             ps_matrix,
             steal_pools,
             adv_pools,
+            actor_sim=actor_sim,
         )
 
 
@@ -1394,7 +1724,17 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Override the recency-floor seasons (default: last 3).",
     )
-    ap.add_argument("--what", choices=["pool", "pitcher_sim", "actors", "all"], default="pool")
+    ap.add_argument(
+        "--what",
+        choices=["pool", "pitcher_sim", "actors", "actors_sim", "all"],
+        default="pool",
+    )
+    ap.add_argument(
+        "--strict-concentration",
+        action="store_true",
+        help="SIM-523: fail the actor-matrix build when a matrix's p90 own-staff ratio "
+        f"exceeds {CONCENTRATION_MAX_RATIO}.",
+    )
     ap.add_argument(
         "--pitcher-sim-limit",
         type=int,
@@ -1416,6 +1756,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.what in ("pitcher_sim", "all"):
             build_pitcher_sim_matrix(
                 args.duckdb_path, args.out_dir, seasons, limit=args.pitcher_sim_limit
+            )
+        if args.what in ("actors_sim", "all"):
+            # SIM-523 part A: the actor score matrices + the concentration report.
+            build_actor_sim_matrices(
+                args.duckdb_path,
+                args.out_dir,
+                seasons,
+                limit=args.pitcher_sim_limit,
+                strict=args.strict_concentration,
             )
     finally:
         con.close()

@@ -126,6 +126,25 @@ Files: `pipeline/batch/engine_artifacts.py` (builders + loader + shareable lists
 `simulation/full_pool_sampler.py` (gathers replace `_f_batter`,
 `_f_catcher_receiving`, `_f_live_fielder`, `_steal_actor_factor`).
 
+**Part A LANDED 2026-09-08 (code + the live matrices; switch OFF in production).**
+What shipped: `build_actor_sim_matrices` in `pipeline/batch/engine_artifacts.py`
+(`--what actors_sim`, in `all`) writes `actor_sim/{batter, catcher, catcher_throwing,
+runner_steal, runner_adv, pitcher_steal, fielder_<POS>×7}.npz` (a JSON index + a dense
+float32 matrix, diagonal 1.0, unscored NaN), `manifest.json` and `concentration.json`;
+`--strict-concentration` fails the build when any matrix's p90 own-staff ratio exceeds
+3.0. The loader reads them into `EngineArtifacts.actor_sim` and the shared-memory seam
+publishes every matrix (`actor_sim.<name>.matrix`). The sampler's `actor_matrices`
+switch (`SIM_ACTOR_MATRICES`, default off) routes the batter factor, the steal draw's
+runner / pitcher-hold / catcher-throwing factors, the advancement draw's runner and
+fielder factors and the batted-ball draw's per-position fielder factor through one row
+lookup + one gather, raised to `actor_power[name]` (`SIM_ACTOR_POWER_<NAME>`, 1.0 until
+part F). A live actor or pool row the matrix lacks is neutral; a bundle without the
+matrix falls back to the kernel; OFF is byte-identical (30 unit tests,
+`tests/unit/test_sim523_actor_matrices.py`). The receiving kernel is untouched (part E
+replaces it). The live build (2023-2026) and its concentration report are recorded in
+`CHANGES.md` under this date. Not done here: the powers (part F) and the lane
+certification that flips the switch.
+
 ### Part B — the pitch / pitch-result split (steps 3 and 4)
 
 Today one draw does both. Split it: the pitch draw weights by pitcher (arsenal,

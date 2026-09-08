@@ -161,6 +161,11 @@ services:
       # band but strikeouts (-2.1% vs a 2.0% floor, a fit residual). 3x per iteration.
       SIM_PITCH_CELL_INDEX:      "1"
       SIM_PITCH_MIN_CELL:        "20"
+      # SIM-523 part A (2026-09-08): the actor SCORE MATRICES — each actor
+      # factor becomes its engine's composite score, looked up from the nightly
+      # matrix and raised to a fitted power (SIM_ACTOR_POWER_<name>). OFF until
+      # part F fits the powers and the lane certifies them.
+      SIM_ACTOR_MATRICES:        "0"
       # SIM-453: WHERE the park factors come from. The park consumer above was on,
       # but the factors were dark: api/routes/games.py read them through
       # app.state.sim_duckdb, and api/main.py only opened that connection under
