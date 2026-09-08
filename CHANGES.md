@@ -1,3 +1,26 @@
+# Docs — the catcher receiving profile CLOSED-LANDED; hygiene sweep 2 reconciles 34 stale rows; two owner writing rules — 2026-09-08
+
+The catcher receiving profile (SIM-517) closes as landed: the profile, the
+pitch-pool catcher columns, the fitted receiving kernel, the got-away
+resolution, the deleted framing flip and the two pool bands are all in
+production. The closure note states its costs (walks −3.6%, hit-by-pitch
+−10.9%, steal attempts +2.5 pp on the 2026-09-04 lane; it does not survive the
+pitch-draw cell index) and points the residuals at the identity-kernel
+confound (SIM-523) and the cell-index ruling (SIM-467).
+
+Hygiene sweep 2 (owner-authorized) reconciled 34 backlog rows whose older
+tables still read OPEN against the banners of record — closures dated with
+their evidence, two merges into the real-manager-profiles ticket (SIM-427)
+and one into the calibration payoff (SIM-429), the cell-occupancy census
+(SIM-451) re-scoped to a W1 re-run after the conditioning rebuild, thin-cell
+widening (SIM-475) delivered by the cell index, and the three fence-resolution
+design rows (SIM-478/479/480) parked because the fitted park kernel took the
+park effect by another route. The full list is the BACKLOG banner.
+
+CLAUDE.md §14 gains two owner directives: no unexplained jargon (a term of art
+gets a plain-English gloss on first use), and no bare ticket numbers (describe
+the work, then the ID in parentheses). §2b's open board is rewritten that way.
+
 # Perf — SIM-467 CODE LANDED + MEASURED: the pitch-draw cell index, 2.62 → 0.86 s per iteration (3.05×), gated OFF pending the lane — 2026-09-07
 
 The play picker's per-plate-appearance cost was the whole-pool weight assembly:

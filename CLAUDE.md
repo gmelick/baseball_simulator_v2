@@ -199,10 +199,20 @@ framing flip OFF (its weight rebuild is SIM-517). The 2026-08-29 hygiene sweep c
 merged 8 stale rows. SIM-456 CLOSED 2026-09-04 (the whiff fix was live since the SIM-459
 recompute; the platoon z-swing legs' inversion found in its close is SIM-522, CLOSED the same
 day by owner decision: fixed in code, the data lands with the next recompute; the D-N7
-csw/whiff overlap is parked on SIM-429). The open board (9): SIM-476 (all kernel fits — read the fit plan;
-step 0 pending an owner ruling on the steal-aggression recommendation), 517 (catcher
-receiving profile), 519 (live slate epic), 429-payoff (K-prop refit + CLV re-measure), 427,
-518, 467, 486, 497a/b, 421. The 2026-08-17 and 2026-08-11 handover docs stay valid as
+csw/whiff overlap is parked on SIM-429). **The open board after hygiene sweep 2 (2026-09-08),
+deliverable first:** the identity-kernel confound — a catcher's or fielder's similarity
+neighborhood proxies his TEAM, so the receiving and fielder kernels shift marginals the skill
+alone would not (SIM-523, P1; it decides the receiving kernel's fate); the live-slate epic
+(SIM-519, P1); the calibration payoff — the strikeout-prop refit and the CLV re-measure
+(SIM-429, P1); the date-range acceptance lane with paired references (SIM-497a/b, P1); the
+pitch-draw cell index, built and 3× faster, awaiting the speed-vs-receiving-kernel ruling
+(SIM-467); the draw-conditioning epic, built, awaiting its pool rebuild and fits (SIM-518); the
+run-grading question on defense-aware sims (SIM-520); the forkserver's DuckDB lock that blocks
+every rebuild while the app runs (SIM-524); real per-team manager profiles (SIM-427); the
+fielder arm features (SIM-521); the cell-occupancy census re-run (SIM-451); the sim-loop
+decomposition (SIM-493, P3); the book-offered-market projection (SIM-421, P3); three parked
+fence-resolution design rows (SIM-478/479/480). The catcher receiving profile (SIM-517)
+CLOSED-LANDED 2026-09-08 with its residuals on SIM-523 and SIM-467. The 2026-08-17 and 2026-08-11 handover docs stay valid as
 history only. **SIM-518 CODE LANDED 2026-09-07** (plan `docs/audit/2026-09-04-sim467-518-plan.md`):
 migration 0023 (schema v23) + the sim518.1 builder + the artifact columns, and three draw
 weights gated OFF (`SIM_FATIGUE_PC_SIGMA` / `SIM_FATIGUE_TTO_SIGMA` / `SIM_PITCH_HOME_OFF_WEIGHT`
@@ -647,6 +657,14 @@ ticket description, docstring, and inline comment.
 - **Use one term for one thing, every time.** Do not switch between "green-light", "green", and
   "aggression rate" for the same value. Pick one name and keep it.
 - **Define a technical term the first time you use it.** Then reuse the same term.
+- **No unexplained jargon (owner directive 2026-09-08).** A term like "anisotropic kernel" or
+  "Markov structure" gets a plain-English gloss the first time it appears in any summary ("a
+  kernel with a separate bandwidth for each feature group"). If the gloss is longer than the term
+  is useful, use the gloss alone and drop the term.
+- **Describe the work, never a bare ticket number (owner directive 2026-09-08).** The owner does
+  not memorize what each ticket is about. Write "the catcher receiving profile (SIM-517)", never
+  "SIM-517" alone; in a list of open work, lead with the deliverable in plain words and put the
+  ID in parentheses after it.
 - **Say who does what.** Name the actor in every sentence. Avoid "it" and "this" with no clear subject.
 - **Use simple words.** Write "use", not "utilize". Write "start", not "initiate".
 - **Write one instruction per step.** Do not join two actions with "and" in a procedure step.
@@ -668,6 +686,10 @@ ticket description, docstring, and inline comment.
 - Do not hedge to sound careful. Say "I did not verify this" instead of "this may potentially differ".
 - Do not use jargon as a shortcut in a summary for the owner. Explain the term in plain words.
 - Do not pad a list to look complete. A short list of real items beats a long list with filler.
+- Do not name work by its ticket number alone ("close SIM-517"); say what the work is ("close the
+  catcher receiving profile, SIM-517").
+- Do not use a term of art without its gloss ("anisotropic", "RBF", "Markov", "ECE", "CLV" on
+  first use).
 
 ## 15. Working conventions for Claude Code
 
