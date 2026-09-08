@@ -147,6 +147,18 @@ def _draws(fp: FullPoolSampler, bo: np.ndarray, cb: int, n: int = 60, **kw) -> s
 
 
 class TestCellPathEquivalence:
+    def test_an_all_unknown_side_column_has_no_side_dimension(self):
+        # SIM-523 part B found this live: a migration-0023 pool exported before
+        # its rebuild carries bat_home = -1 on EVERY row. With a side
+        # dimension every live side's cell is empty and every draw widens to
+        # level 2 (past the score band). The column must count as absent.
+        pool = _grid_pool(with_side=False)
+        pool.bat_home = np.full(pool.n, -1, dtype=np.int8)
+        fp = _sampler(pool, on=True)
+        assert fp._cell_meta("R")["n_side"] == 1
+        assert _draws(fp, _base_out(3, 1, 1), cb=4, n=60, bat_home=True) == {_label(3, 1, 1, 0, 4)}
+        assert fp.widen_counts.tolist() == [60, 0, 0, 0]
+
     def test_switch_off_builds_no_index_and_uses_the_whole_pool_buckets(self):
         fp = _sampler(_grid_pool(), on=False)
         _draws(fp, _base_out(3, 1, 1), cb=4, n=5, bat_home=True)

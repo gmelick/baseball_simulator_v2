@@ -993,6 +993,15 @@ class StateMachine:
             pg = fp.last_pitch_geom()
             if pg is not None:
                 bb_extra["pitch_geom"] = pg
+        # SIM-523 part B: the batted ball BORN in the pitch-result draw (the
+        # result row's own, through the artifact's pitch-id join). Passed only
+        # when its kernel is on (SIM_BB_BORN_SIGMA > 0) — off, the call is
+        # unchanged.
+        if float(getattr(fp, "bb_born_sigma", 0.0)) > 0.0:
+            reader = getattr(fp, "last_born_batted_ball", None)
+            born = reader() if reader is not None else None
+            if born is not None:
+                bb_extra["born_bb"] = born
         fp.battedball_new_pa(
             hand,
             f"{state.batter_id}:{season}",

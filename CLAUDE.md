@@ -248,7 +248,12 @@ engine's 0-to-1 score matrix (`--what actors_sim`, in the nightly `all`; `actor_
 bundle; the concentration report gates a strict build at a 3.0 own-staff ratio). The sampler
 switch `SIM_ACTOR_MATRICES` is OFF (byte-identical) until part F fits the powers
 (`SIM_ACTOR_POWER_<NAME>`) and a lane certifies; the live build reads 76 s / 35 MB, own-staff
-ratios 1.4-2.3 at the 90th percentile. Parts B-G of the plan remain.
+ratios 1.4-2.3 at the 90th percentile. **PART B LANDED the same day:** the pitch draw and
+the pitch-result draw are two draws behind `SIM_PITCH_RESULT_SPLIT` (OFF); the result row
+carries its own batted ball through the artifact's pitch-id join (`HandPool.bb_row`, live);
+the result draw carries a density correction (`SIM_RESULT_DENSITY_POWER`, 1.0) without which
+the kernel leans toward the strike zone (walks −37% in the probe); with it the split
+reproduces the single draw's pitch mix at neutral powers. Parts C-G of the plan remain.
 
 - **DO NOT run the profile recompute** (`make profile-computor`) — but the reason changed on
   2026-08-13. SIM-501a/c CLOSED: SIM-457 is re-landed on the events-based out label, no profile

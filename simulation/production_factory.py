@@ -120,6 +120,41 @@ def apply_actor_matrix_env(sampler: Any, env: Mapping[str, str] | None = None) -
     sampler.actor_power = powers
 
 
+def apply_result_split_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
+    """SIM-523 part B: read the pitch / pitch-result split switch and its
+    bandwidth and powers, and the born-batted-ball kernel bandwidth.
+
+    OFF (the default) keeps one draw per pitch, byte for byte. ON splits it:
+    the pitch draw, then the result draw conditioned on the pitch through the
+    pitch engine's metric (``SIM_RESULT_PITCH_SIGMA``, 1.0; the density
+    correction's power ``SIM_RESULT_DENSITY_POWER``, 1.0, 0 = off), with the pitcher
+    and batter factors re-raised (``SIM_RESULT_PITCHER_POWER`` /
+    ``SIM_RESULT_BATTER_POWER``, 1.0) and the pitch draw's batter factor
+    re-raised (``SIM_PITCH_BATTER_POWER``, 1.0) — part F fits them.
+    ``SIM_BB_BORN_SIGMA`` (0 = off) weights the fielding draw by similarity
+    to the batted ball the result row was born with.
+    """
+    src = os.environ if env is None else env
+    sampler.pitch_result_split = src.get("SIM_PITCH_RESULT_SPLIT", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    for key, attr, default in (
+        ("SIM_RESULT_PITCH_SIGMA", "result_pitch_sigma", 1.0),
+        ("SIM_RESULT_DENSITY_POWER", "result_density_power", 1.0),
+        ("SIM_RESULT_PITCHER_POWER", "result_pitcher_power", 1.0),
+        ("SIM_RESULT_BATTER_POWER", "result_batter_power", 1.0),
+        ("SIM_PITCH_BATTER_POWER", "pitch_batter_power", 1.0),
+        ("SIM_BB_BORN_SIGMA", "bb_born_sigma", 0.0),
+    ):
+        try:
+            setattr(sampler, attr, float(src.get(key, str(default))))
+        except ValueError:
+            setattr(sampler, attr, default)
+
+
 def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     """Build (or reuse) the worker's full-pool sampler from the on-disk
     engine-artifact bundle.  Raises when the bundle cannot be loaded: SIM-486
@@ -245,6 +280,7 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     except ValueError:
         sampler.pitch_min_cell = DEFAULT_MIN_CELL
     apply_actor_matrix_env(sampler)
+    apply_result_split_env(sampler)
     _CACHED_FULL_POOL_SAMPLER = sampler
     _CACHED_FULL_POOL_ART_DIR = art_dir
     return sampler

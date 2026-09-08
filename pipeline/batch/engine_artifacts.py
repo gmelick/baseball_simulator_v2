@@ -165,6 +165,22 @@ _PP_CONDITIONING_COLS = frozenset({"bat_home", "pitcher_pitch_count", "times_thr
 _BB_GEOM_COLS = ["exit_velo", "launch_angle", "pull_relative_spray_angle"]
 
 
+def join_rows(keys: np.ndarray, targets: np.ndarray) -> np.ndarray:
+    """SIM-523 part B: for every ``keys[i]`` the index j with
+    ``targets[j] == keys[i]`` (the first such j), or -1. int32."""
+    keys = np.asarray(keys, dtype=np.int64)
+    targets = np.asarray(targets, dtype=np.int64)
+    out = np.full(len(keys), -1, dtype=np.int32)
+    if len(targets) == 0 or len(keys) == 0:
+        return out
+    order = np.argsort(targets, kind="stable")
+    st = targets[order]
+    pos = np.clip(np.searchsorted(st, keys), 0, len(st) - 1)
+    hit = (st[pos] == keys) & (keys >= 0)
+    out[hit] = order[pos[hit]].astype(np.int32)
+    return out
+
+
 def build_battedball_pool_artifact(
     con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]
 ) -> dict[str, int]:
@@ -216,13 +232,14 @@ def build_battedball_pool_artifact(
     # stays neutral).
     has_pgeom = set(_GEOM_COLS) <= op_cols
     pitcher_select = ", pitcher_id" if "pitcher_id" in op_cols else ""
+    pitch_join: dict[str, int] = {}
     for hand in ("L", "R"):
         w = where % hand
         # One query for geom + sit + pgeom so the three arrays share one row
         # order (the meta COPY below is a second scan of the same filter).
         pgeom_cols = _GEOM_COLS if has_pgeom else []
         d = con.execute(
-            f"SELECT {', '.join(_BB_GEOM_COLS + _SIT_COLS + pgeom_cols)} "
+            f"SELECT {', '.join(_BB_GEOM_COLS + _SIT_COLS + pgeom_cols)}, pitch_id "
             f"FROM sim.outcome_pool WHERE {w}"
         ).fetchnumpy()
         n = len(d[_BB_GEOM_COLS[0]])
@@ -234,6 +251,33 @@ def build_battedball_pool_artifact(
         ).astype(np.float32)
         np.save(os.path.join(pool_dir, f"{hand}.geom.npy"), geom)
         np.save(os.path.join(pool_dir, f"{hand}.sit.npy"), sit)
+        # SIM-523 part B: the pitch-id JOIN, in reverse of the SIM-518
+        # ``pgeom`` export — for every PITCH-pool row (its meta parquet,
+        # written by build_pitch_pool_artifact just before), the row of
+        # THIS pool that holds its batted ball, or -1. The pitch-result
+        # draw's in-play row reads its own batted ball through it.
+        bb_pid = np.asarray(np.ma.filled(d["pitch_id"], -1), dtype=np.int64)
+        np.save(os.path.join(pool_dir, f"{hand}.pitch_id.npy"), bb_pid)
+        pp_meta = os.path.join(out_dir, "pitch_pool", f"{hand}.meta.parquet")
+        if os.path.exists(pp_meta):
+            pp_pid = np.asarray(
+                np.ma.filled(
+                    con.execute(f"SELECT pitch_id FROM read_parquet('{pp_meta}')").fetchnumpy()[
+                        "pitch_id"
+                    ],
+                    -1,
+                ),
+                dtype=np.int64,
+            )
+            bb_row = join_rows(pp_pid, bb_pid)
+            np.save(os.path.join(out_dir, "pitch_pool", f"{hand}.bb_row.npy"), bb_row)
+            pitch_join[hand] = int((bb_row >= 0).sum())
+            log.info(
+                "battedball_pool[%s]: pitch join %d of %d pitch rows -> a batted ball",
+                hand,
+                pitch_join[hand],
+                len(pp_pid),
+            )
         if has_pgeom:
             # NaN is PRESERVED here (unlike geom/sit): a row whose pitch is
             # missing a value must be exactly neutral under the kernel, and
@@ -243,8 +287,8 @@ def build_battedball_pool_artifact(
             ).astype(np.float32)
             np.save(os.path.join(pool_dir, f"{hand}.pgeom.npy"), pgeom)
         con.execute(
-            "COPY (SELECT batter_id, season, events, result_hits, result_outs, result_runs, "
-            "recency_weight, "
+            "COPY (SELECT pitch_id, batter_id, season, events, result_hits, result_outs, "
+            "result_runs, recency_weight, "
             # SIM-411/413/425b: per-row realism facts (migration 0012). p_throws (the
             # pitcher hand) drives the SIM-413 platoon reweight; venue_id the SIM-411
             # park multiplier; fielded_by_position + fielder_player_id the SIM-425b
@@ -269,6 +313,9 @@ def build_battedball_pool_artifact(
                 "transition": has_transition,
                 # SIM-518 (SIM-463): the pitch-geometry columns of {hand}.pgeom.npy.
                 "pgeom_cols": _GEOM_COLS if has_pgeom else [],
+                # SIM-523 part B: pitch rows joined to a batted ball, per hand
+                # (the join file lives in pitch_pool/{hand}.bb_row.npy).
+                "pitch_join": pitch_join,
             },
             fh,
             indent=2,
@@ -853,6 +900,11 @@ class HandPool:
     bat_home: np.ndarray | None = None  # (N,) int8 (1 = the home team bats)
     pitch_count: np.ndarray | None = None  # (N,) int16 (pitches BEFORE this PA)
     tto: np.ndarray | None = None  # (N,) int8 (times through the order, >= 1)
+    # SIM-523 part B: the pitch-id JOIN to the batted-ball pool — the row
+    # of ``bb_pools[hand]`` that holds this in-play pitch's own batted
+    # ball (-1: not in play, or no batted-ball row). None on a bundle
+    # exported before part B; the born batted ball is then unavailable.
+    bb_row: np.ndarray | None = None  # (N,) int32
 
     @property
     def n(self) -> int:
@@ -1017,6 +1069,8 @@ _HAND_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "bat_home",
     "pitch_count",
     "tto",
+    # SIM-523 part B: the pitch-id join (None on a pre-part-B bundle).
+    "bb_row",
 )
 _BB_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "geom",
@@ -1406,6 +1460,16 @@ class EngineArtifacts:
                         hand, m, "pitch_count", "pitcher_pitch_count", np.int16, -1
                     ),
                     tto=_pp_take(hand, m, "tto", "times_through_order", np.int8, 0),
+                    # SIM-523 part B: the pitch-id join (None before part B).
+                    bb_row=(
+                        views.get(f"pool.{hand}.bb_row")
+                        if isinstance(views.get(f"pool.{hand}.bb_row"), np.ndarray)
+                        else (
+                            np.load(os.path.join(pool_dir, f"{hand}.bb_row.npy"))
+                            if os.path.exists(os.path.join(pool_dir, f"{hand}.bb_row.npy"))
+                            else None
+                        )
+                    ),
                 )
             bb_pools: dict[str, BattedBallPool] = {}
             bb_dir = os.path.join(art_dir, "battedball_pool")

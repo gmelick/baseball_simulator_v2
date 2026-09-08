@@ -109,6 +109,15 @@ PRODUCTION_FLAGS: dict[str, str] = {
     # OWNER GO 2026-09-08: production runs the cell index ON (lane 2 certified it).
     "SIM_PITCH_CELL_INDEX": os.environ.get("SIM467_LANE_CELL_INDEX", "1"),
     "SIM_PITCH_MIN_CELL": os.environ.get("SIM467_LANE_MIN_CELL", "20"),
+    # SIM-523 part B (2026-09-08): the pitch / pitch-result split. Production
+    # is OFF until part F fits the powers; set SIM523_LANE_RESULT_SPLIT=1 (and
+    # the sigma / powers below) on a lane run to measure an arm.
+    "SIM_PITCH_RESULT_SPLIT": os.environ.get("SIM523_LANE_RESULT_SPLIT", "0"),
+    "SIM_RESULT_PITCH_SIGMA": os.environ.get("SIM523_LANE_RESULT_PITCH_SIGMA", "1.0"),
+    "SIM_RESULT_PITCHER_POWER": os.environ.get("SIM523_LANE_RESULT_PITCHER_POWER", "1.0"),
+    "SIM_RESULT_BATTER_POWER": os.environ.get("SIM523_LANE_RESULT_BATTER_POWER", "1.0"),
+    "SIM_PITCH_BATTER_POWER": os.environ.get("SIM523_LANE_PITCH_BATTER_POWER", "1.0"),
+    "SIM_BB_BORN_SIGMA": os.environ.get("SIM523_LANE_BORN_SIGMA", "0"),
 }
 
 #: Env names the lane must ERASE (not set) so a default code path proves

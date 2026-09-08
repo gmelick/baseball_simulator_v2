@@ -157,6 +157,36 @@ join SIM-463 already exports in reverse). Both draws run inside the cell index
 Files: `simulation/full_pool_sampler.py`, `simulation/sim_loop.py`
 (`_full_pool_outcome`), `pipeline/batch/engine_artifacts.py` (the pitch-id join).
 
+**Part B LANDED 2026-09-08 (code + the live pitch-id join; switch OFF in production).**
+What shipped: the sampler's `pitch_result_split` (`SIM_PITCH_RESULT_SPLIT`, default off)
+turns `draw` into two draws over the same count sub-cell: the PITCH draw from the per-PA
+weight (the batter factor re-raised to `pitch_batter_power`), then the RESULT draw from
+that weight times the pitch-to-pitch score to the drawn pitch — a Gaussian on the pitch
+engine's own weighted, z-scored metric (`result_pitch_sigma`, 1.0; the engine's feature
+weights are pinned by a test) — with the pitcher and batter factors re-raised to
+`result_pitcher_power` / `result_batter_power`. Every power is 1.0 until part F. The
+result row is the play: its outcome, its got-away fact, and its own batted ball through
+the new pitch-id join `HandPool.bb_row` (`pitch_pool/<hand>.bb_row.npy`, written by the
+batted-ball export from the pitch pool's meta parquet; shareable; None on an older
+bundle) — `last_born_batted_ball()` returns exit velocity, launch angle, spray, distance
+and the air flag. The thrown pitch stays readable as `last_pitch_geom()`. The born ball
+reaches the fielding draw behind `bb_born_sigma` (`SIM_BB_BORN_SIGMA`, 0 = off): a
+Gaussian on the z-scored batted-ball features over the base-out cell — the seed of part
+C's step 6. A pitch with no complete geometry, or bandwidth 0, makes the result the pitch
+row; an incomplete candidate row draws at the average weight. **The density
+correction:** the live probe measured the kernel's lean toward the dense strike zone at
+neutral powers (walks −37%); every candidate is now divided by its own local density under
+the same kernel (`result_density_power`, 1.0; 0 = off), and the split then reproduces the
+single draw's pitch-result mix within noise — the check that the result draw conditions
+without biasing. 29 unit tests (`tests/unit/test_sim523_result_split.py`). Live: the pools
+re-exported with the join
+(29 s; every batted-ball row found its pitch: 466,179 of 481,905 in-play pitches), the
+app restarted on it. Found and fixed on the way: a migration-0023 pool exported before
+its rebuild carries an all-unknown batting side, which made the cell index widen past
+the score band on every draw; an all-unknown side column now counts as absent. The
+A/B probe at powers 1.0 is recorded in `CHANGES.md` under this date. Not done here: the
+powers and bandwidth (part F) and the lane certification that flips the switch.
+
 ### Part C — the fielding split (steps 5 and 6)
 
 Step 5 unparks the fence work: `derived.park_geometry` (fence distance and height

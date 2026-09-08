@@ -1,3 +1,71 @@
+# Feat — the play-picker redesign, part B: the PITCH draw and the PITCH-RESULT draw are two draws (SIM-523; switch OFF in production) — 2026-09-08
+
+**What this is.** Steps 3 and 4 of the redesign's loop. One draw used to pick the
+pitch and its result together. With `SIM_PITCH_RESULT_SPLIT=1` the sampler first draws
+the PITCH thrown from the plate appearance's weight (pitcher, batter, recency, situation,
+the gated extras), then draws the RESULT among the same count sub-cell's rows, weighted
+by that same weight times the pitch-to-pitch score to the drawn pitch — a Gaussian on the
+pitch engine's own metric (its ten feature weights over z-scored geometry; a unit test
+pins the sampler's copy to the engine's). The result row is the play: its outcome, its
+got-away fact and, when in play, its own batted ball. The switch is OFF in production;
+every power is 1.0 until part F fits them.
+
+**The pieces.**
+
+* `pipeline/batch/engine_artifacts.py`: the batted-ball export now writes the pitch-id
+  JOIN in reverse of the SIM-518 producing-pitch export — `pitch_pool/<hand>.bb_row.npy`
+  (`HandPool.bb_row`, int32, −1 = no batted ball; shareable; None on an older bundle),
+  plus `battedball_pool/<hand>.pitch_id.npy` and `pitch_id` in the batted-ball meta
+  parquet; the manifest records the joined counts. `join_rows` is the helper.
+* `simulation/full_pool_sampler.py`: `pitch_result_split`, `result_pitch_sigma` (1.0),
+  `result_pitcher_power` / `result_batter_power` (the result draw's factors re-raised),
+  `pitch_batter_power` (the pitch draw's batter factor re-raised), `result_density_power`
+  (below), `bb_born_sigma`. `draw` keeps the raw per-count weights and factors only while
+  the split is on; `_result_draw` conditions on the pitch; `last_result_row`,
+  `last_born_batted_ball` (exit velocity, launch angle, spray, distance, air flag, the
+  batted-ball pool row); `last_pitch_geom` now reads the PITCH-draw row (the pitch thrown
+  — the same row while the split is off). A pitch with no complete geometry, or
+  bandwidth 0, makes the result the pitch row; an incomplete candidate row draws at the
+  average weight. The born ball reaches the fielding draw as `born_bb` behind
+  `bb_born_sigma` (0 = off): a Gaussian on the z-scored (exit velocity, launch angle,
+  spray, distance) distance over the base-out cell, normalized to a mean of 1 — the seed
+  of part C's step 6.
+* `simulation/sim_loop.py`: `_full_pool_fielding` passes the born ball only when its
+  kernel is on. `simulation/production_factory.py`: `apply_result_split_env` reads the
+  switch, the bandwidth, the powers and the born kernel. `tests/conftest.py` and
+  `docker-compose.yml` pin the switch off; `tests/acceptance/conftest.py` carries the lane
+  arms (`SIM523_LANE_RESULT_SPLIT` and the sigma / power arms).
+* 29 unit tests, `tests/unit/test_sim523_result_split.py`; the probe is
+  `scripts/sim523_split_probe.py`.
+
+**The density correction (found by the live probe).** A kernel estimate of "the result
+given the pitch" leans toward where the candidate rows are dense — the strike zone. The
+first live probe (4 games × 30 iterations per arm, neutral powers, bandwidth 1.0) measured
+that lean: the ball share fell from 0.3595 to 0.3331 and walks from 7.33 to 4.63 per game.
+The standard correction divides every candidate by its own local density under the same
+kernel (`result_density_power`, 1.0; 0 = off; estimated against a fixed random subset of
+256 candidate rows, cached per sub-cell and bandwidth as a pool fact; floored at 5% of the
+median so an outlier gains at most 20×). With it, the split reproduces the single draw's
+pitch-result mix within noise — ball 0.3611, called strike 0.1588 (0.1573), swinging strike
+0.1104 (0.1098), foul 0.1916 (0.1955), in play 0.1759 (0.1750), pitches per plate appearance
+3.838 (3.831); the per-game runs / hits / walks read 4-7% lower on 120 iterations, inside
+that sample's noise and the lane's question. The power was swept live: 0.5 leaves the ball
+share at 0.3469 and 0.75 at 0.3517 (the raw split 0.3331), so 1.0 — the full correction —
+is the default; a 1-D toy preferred 0.75, which is why it stays a fit target for part F. A
+toy pool with a density gradient pins the
+mechanism in a unit test: the raw split under-draws the sparse side by ~0.018 of share; the
+corrected split matches the single draw within 0.015. Cost: 1.95 → 2.33 s per iteration in
+the single-process probe (the per-pitch kernel over the sub-cell plus the density's first
+touch per sub-cell).
+
+**Live.** The four pools were re-exported with the join (29 s) into a staging directory,
+verified row-identical to the live pools, and swapped in; every batted-ball row found its
+pitch (466,179 of 481,905 in-play pitches). The app restarted on the new bundle (192 shared
+arrays). Found on the way: a migration-0023 pool exported before its rebuild carries the
+batting side as UNKNOWN on every row, which gave the cell index a side dimension whose live
+cells were all empty, so every draw widened past the score band. An all-unknown side column
+now counts as absent (a unit test pins it); the app runs the certified cells again.
+
 # Feat — the play-picker redesign, part A: every actor factor as a nightly SCORE MATRIX (SIM-523; switch OFF in production) — 2026-09-08
 
 **What this is.** The redesign's first part generalizes the pitcher pattern to every

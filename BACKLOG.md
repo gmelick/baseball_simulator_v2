@@ -1,5 +1,20 @@
 # Product Backlog
 
+# 🧱 2026-09-08 — REDESIGN PART B LANDED: the PITCH draw and the PITCH-RESULT draw are two draws (SIM-523), the pitch-id join live, switch OFF (next free ID → SIM-527)
+
+**What landed (`CHANGES.md` has the detail).** Behind `SIM_PITCH_RESULT_SPLIT` (OFF) the sampler
+draws the pitch thrown, then draws what happens to it among the same rows, conditioned on that
+pitch through the pitch engine's own metric; the result row is the play and, in play, carries
+its own batted ball through a new pitch-id join in the artifact (`HandPool.bb_row`, live: every
+batted-ball row found its pitch). The born ball reaches the fielding draw behind
+`SIM_BB_BORN_SIGMA` (OFF) — the seed of part C. The live probe found, and the code now corrects,
+the kernel's lean toward the dense strike zone (a density correction, `SIM_RESULT_DENSITY_POWER`):
+with it the split reproduces the single draw's pitch-result mix within noise at neutral powers.
+Also fixed: a pool exported with an all-unknown batting side made the cell index widen past the
+score band on every draw. **Still to do on the redesign:** parts C (the fielding split + the
+fence work), D (manager order), E (the receiving ratio, OFF), F (the fitted powers and bandwidths
+— the switches flip only after F and a lane), G (the data adds); SIM-526 enables receiving.
+
 # 🧱 2026-09-08 — REDESIGN PART A LANDED: every actor factor as a nightly SCORE MATRIX (SIM-523), built live, switch OFF (next free ID → SIM-527)
 
 **What landed (`CHANGES.md` has the detail).** The artifact build now emits one score matrix

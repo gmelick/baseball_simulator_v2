@@ -42,6 +42,26 @@ from simulation.filter_cells import (
 
 _OUTCOMES = ("ball", "called_strike", "swinging_strike", "foul", "in_play", "hit_by_pitch")
 
+#: SIM-523 part B: the pitch-to-pitch engine's feature weights, in the pitch
+#: pool's ``_GEOM_COLS`` order (velo, ivb, hb, spin_rate, spin_axis, release_x,
+#: release_z, release_ext, plate_x, plate_z). Copied so the sampler never
+#: imports FAISS; a unit test pins them to the engine's ``FEATURE_WEIGHTS``.
+_PITCH_FEATURE_WEIGHTS = np.array(
+    [1.20, 1.10, 1.00, 0.70, 0.50, 0.60, 0.60, 0.40, 0.90, 0.90], dtype=np.float32
+)
+
+
+def _repower(w: np.ndarray, f: np.ndarray, power: float) -> np.ndarray:
+    """SIM-523 part B: ``w`` already carries the factor ``f`` once; return
+    ``w`` with that factor raised to ``power`` instead (× f^(power-1)). A
+    zero factor stays zero at any power (its row has zero weight already);
+    power 1.0 returns ``w`` itself, untouched."""
+    if power == 1.0:
+        return w
+    adj = np.where(f > 0.0, np.power(np.maximum(f, 1e-30), np.float32(power - 1.0)), 0.0)
+    return (w * adj).astype(np.float32)
+
+
 #: SIM-476 diagnostics (2026-08-17): skip ONE similarity factor in the steal
 #: draw to locate the source of the safe/caught-split inflation (certified
 #: 88.1% vs MLB ~77.6%). The catcher arm REFUTED its suspect (ablating it made
@@ -204,6 +224,62 @@ class FullPoolSampler:
         #: (matrix name) -> int64 array mapping the actor EMBEDDING's rows to
         #: matrix columns (-1 = unscored); built once per matrix per process.
         self._emb_to_mat_cache: dict[str, np.ndarray] = {}
+        # SIM-523 part B — the PITCH / PITCH-RESULT split (plan §3, steps 3
+        # and 4). Off (the default) one draw picks the pitch AND its result,
+        # as today. On, ``draw`` first picks the PITCH thrown from the per-PA
+        # weight (pitcher, batter, recency, situation, the gated extras — the
+        # batter factor re-raised to ``pitch_batter_power``), then picks the
+        # RESULT among the same rows: the same per-PA weight TIMES the
+        # pitch-to-pitch score to the drawn pitch (a Gaussian on the pitch
+        # engine's own weighted, z-scored metric, bandwidth
+        # ``result_pitch_sigma``; 0 = the result is the pitch row itself),
+        # the pitcher factor re-raised to ``result_pitcher_power`` and the
+        # batter factor to ``result_batter_power``. Every power is 1.0 until
+        # part F fits it (then the pitch draw is exactly today's draw and the
+        # result draw is the same weight, conditioned on the pitch). The
+        # RESULT row is the play: its outcome, its got-away fact and, when in
+        # play, its own batted ball (``last_born_batted_ball`` through the
+        # artifact's pitch-id join ``HandPool.bb_row``); the thrown pitch's
+        # geometry stays readable as ``last_pitch_geom``.
+        self.pitch_result_split = False
+        self.result_pitch_sigma = 1.0
+        self.result_pitcher_power = 1.0
+        self.result_batter_power = 1.0
+        self.pitch_batter_power = 1.0
+        # The DENSITY CORRECTION on the result draw. A kernel estimate of
+        # "the result given the pitch" leans toward where the candidate rows
+        # are dense — the strike zone — and the 2026-09-08 probe measured that
+        # lean at neutral powers: the ball share fell 7% and walks 37%. The
+        # standard correction divides every candidate by its own local
+        # density under the same kernel (estimated against a fixed random
+        # reference subset of the candidate rows, cached per sub-cell); the
+        # split then reproduces the single draw's marginals at neutral powers
+        # and conditions on the pitch on top. ``result_density_power`` is the
+        # exponent on the inverse density (1.0 = the full correction; 0.0 =
+        # off) — a part-F fit target with the bandwidth.
+        self.result_density_power = 1.0
+        #: The current PA's per-count sub-cell keys (the density cache key).
+        self._pa_keys: list[tuple] | None = None
+        # SIM-523 part B: the BORN batted ball on the fielding draw — a
+        # Gaussian on the z-scored (exit velocity, launch angle, spray,
+        # distance) distance between the result row's batted ball and each
+        # cell row's, normalized to a mean of 1 over the rows with complete
+        # data (part C's step 6 grows from it). 0.0 (the default) = off.
+        self.bb_born_sigma = 0.0
+        #: Per-count raw per-PA weights and the pitcher / batter factors,
+        #: kept only while the split is on (the result draw re-weights them).
+        self._bucket_w: list[np.ndarray | None] | None = None
+        self._bucket_fp: list[np.ndarray | None] | None = None
+        self._bucket_fb: list[np.ndarray | None] | None = None
+        #: The half-inning's pitcher factor (the split re-raises it).
+        self._f_pitcher_vec: np.ndarray | None = None
+        #: The last PITCH-draw row (the pitch thrown); equal to ``_pp_last_i``
+        #: while the split is off.
+        self._pp_pitch_i: int | None = None
+        #: Per-hand z-stats (mean, std, complete-row mask) of the pitch pool's
+        #: geometry and of the batted-ball pool's batted-ball features.
+        self._pp_geom_stats: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+        self._bb_born_stats: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
         #: Per-hand cache of the batted-ball pool's pitch-geometry z-stats
         #: (mean, std, all-finite row mask) — constant once the bundle loads.
         self._bb_pgeom_stats: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
@@ -470,7 +546,9 @@ class FullPoolSampler:
         self._hand = hand
         self._catcher_key = catcher_key
         pool = self.a.pools[hand]
-        self._base = (self._f_pitcher(hand, pitcher_key) * pool.recency).astype(np.float32)
+        f_pitcher = self._f_pitcher(hand, pitcher_key)
+        self._f_pitcher_vec = f_pitcher  # SIM-523 part B: the split re-raises it
+        self._base = (f_pitcher * pool.recency).astype(np.float32)
 
     def new_plate_appearance(
         self,
@@ -499,11 +577,9 @@ class FullPoolSampler:
             return
         self._pa_rows = None
         self._pa_levels = None
-        w = (
-            self._base
-            * self._f_batter(self._hand, batter_key)
-            * self._f_situation_baseout(self._hand, base_out)
-        )
+        self._pa_keys = None
+        f_bat = self._f_batter(self._hand, batter_key)
+        w = self._base * f_bat * self._f_situation_baseout(self._hand, base_out)
         if (
             self.catcher_framing_sigma > 0.0 or self.catcher_block_sigma > 0.0
         ) and self._catcher_key is not None:
@@ -524,6 +600,16 @@ class FullPoolSampler:
                 mismatch = (bh >= 0) & ((bh > 0) != bool(bat_home))
                 w = w * np.where(mismatch, np.float32(self.pitch_home_off_weight), np.float32(1.0))
         rows = self._pool_meta(self._hand)["bucket_rows"]
+        # SIM-523 part B: the split keeps the raw weight per count for the
+        # result draw; off, nothing is kept and ``w`` is untouched.
+        if self.pitch_result_split:
+            fpv = self._f_pitcher_vec
+            self._bucket_w = [(w[r] if r.size else None) for r in rows]
+            self._bucket_fb = [(f_bat[r] if r.size else None) for r in rows]
+            self._bucket_fp = [(fpv[r] if (r.size and fpv is not None) else None) for r in rows]
+            w = _repower(w, f_bat, self.pitch_batter_power)
+        else:
+            self._bucket_w = self._bucket_fb = self._bucket_fp = None
         self._bucket_cdf = [(np.cumsum(w[r], dtype=np.float64) if r.size else None) for r in rows]
 
     # ---- SIM-467: the cell index -------------------------------------------
@@ -547,7 +633,11 @@ class FullPoolSampler:
         )
         band = score_band_array(sit[:, 5])
         bh = getattr(pool, "bat_home", None)
-        if bh is None:
+        # A column that is UNKNOWN on every row (a migration-0023 pool exported
+        # before its rebuild filled it) has no side dimension either: every
+        # live side's cell would be empty and every draw would widen past the
+        # score band. Treat it exactly like an absent column.
+        if bh is None or not bool((bh >= 0).any()):
             n_side = 1
             side = np.zeros(pool.n, dtype=np.int64)
         else:
@@ -659,13 +749,23 @@ class FullPoolSampler:
         home_on = bat_home is not None and self.pitch_home_off_weight != 1.0 and bh is not None
         pa_rows: list[np.ndarray] = []
         pa_levels: list[int] = []
+        pa_keys: list[tuple] = []
         cdfs: list[np.ndarray | None] = []
+        split = self.pitch_result_split
+        fpv = self._f_pitcher_vec
+        b_w: list[np.ndarray | None] = []
+        b_fb: list[np.ndarray | None] = []
+        b_fp: list[np.ndarray | None] = []
         for cb in range(N_COUNT):
             rows, level = self._subcell_rows(hand, rs, outs, band, side, cb)
             pa_rows.append(rows)
             pa_levels.append(level)
+            pa_keys.append((rs, outs, band, -1 if side is None else side, cb))
             if rows.size == 0:
                 cdfs.append(None)
+                b_w.append(None)
+                b_fb.append(None)
+                b_fp.append(None)
                 continue
             if aff is not None:
                 pbr = pb[rows]
@@ -689,10 +789,22 @@ class FullPoolSampler:
                 bhr = bh[rows]
                 mismatch = (bhr >= 0) & ((bhr > 0) != bool(bat_home))
                 w = w * np.where(mismatch, np.float32(self.pitch_home_off_weight), np.float32(1.0))
+            if split:
+                # SIM-523 part B: keep the raw weight + factors for the result
+                # draw; the pitch draw's batter power applies here only.
+                b_w.append(w)
+                b_fb.append(f_bat)
+                b_fp.append(fpv[rows] if fpv is not None else None)
+                w = _repower(w, f_bat, self.pitch_batter_power)
             cdfs.append(np.cumsum(w, dtype=np.float64))
         self._pa_rows = pa_rows
         self._pa_levels = pa_levels
+        self._pa_keys = pa_keys
         self._bucket_cdf = cdfs
+        if split:
+            self._bucket_w, self._bucket_fb, self._bucket_fp = b_w, b_fb, b_fp
+        else:
+            self._bucket_w = self._bucket_fb = self._bucket_fp = None
 
     def _fatigue_rows(
         self, hand: str, pitch_count: int | None, tto: int | None, rows: np.ndarray
@@ -803,11 +915,173 @@ class FullPoolSampler:
             rows = meta["bucket_rows"][b]
         if cdf is None or cdf[-1] <= 0:
             self._pp_last_i = None
+            self._pp_pitch_i = None
             return "ball"
         i = int(np.searchsorted(cdf, self.rng.random() * cdf[-1]))
         gi = int(rows[min(i, rows.size - 1)])
-        self._pp_last_i = gi  # SIM-517: remember the row for the got-away read
+        self._pp_pitch_i = gi  # SIM-523 part B: the pitch thrown
+        if self.pitch_result_split and self._bucket_w is not None:
+            gi = self._result_draw(b, rows, gi)
+        self._pp_last_i = gi  # the RESULT row: the got-away / born-ball reads
         return str(meta["outcome"][gi])
+
+    # ---- SIM-523 part B: the pitch-result draw -----------------------------
+    def _pp_geom_z_stats(self, hand: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Per-column mean / std of the pitch pool's geometry over its
+        complete rows (all finite, a real velocity), plus that row mask.
+        Cached per hand; one pass over the pool."""
+        cached = self._pp_geom_stats.get(hand)
+        if cached is not None:
+            return cached
+        g = self.a.pools[hand].geom
+        valid = np.isfinite(g).all(axis=1) & (g[:, 0] > 0.0)
+        if valid.any():
+            mean = g[valid].mean(axis=0).astype(np.float32)
+            std = g[valid].std(axis=0).astype(np.float32)
+        else:
+            mean = np.zeros(g.shape[1], dtype=np.float32)
+            std = np.ones(g.shape[1], dtype=np.float32)
+        std = np.where(std > 1e-6, std, np.float32(1.0)).astype(np.float32)
+        stats = (mean, std, valid)
+        self._pp_geom_stats[hand] = stats
+        return stats
+
+    def _f_result_pitch(self, hand: str, rows: np.ndarray, pitch_gi: int) -> np.ndarray | None:
+        """The pitch-to-pitch factor of every candidate row against the drawn
+        pitch: a Gaussian on the pitch engine's own metric (z-scored geometry,
+        each dimension weighted by the engine's feature weight), bandwidth
+        ``result_pitch_sigma`` in per-feature standard deviations, normalized
+        to a mean of 1 over the rows with complete geometry (an incomplete row
+        is exactly neutral). None when the drawn pitch itself has no complete
+        geometry or the bandwidth is 0 — the result is then the pitch row."""
+        sigma = float(self.result_pitch_sigma)
+        if sigma <= 0.0:
+            return None
+        mean, std, valid_all = self._pp_geom_z_stats(hand)
+        if not bool(valid_all[pitch_gi]):
+            return None
+        g = self.a.pools[hand].geom
+        live = (g[pitch_gi] - mean) / std
+        valid = valid_all[rows]
+        out = np.ones(len(rows), dtype=np.float32)
+        if valid.any():
+            diff = (g[rows[valid]] - mean) / std - live
+            d2 = np.einsum("ij,ij->i", diff * _PITCH_FEATURE_WEIGHTS, diff)
+            scale = 2.0 * sigma * sigma * float(_PITCH_FEATURE_WEIGHTS.sum())
+            f = np.exp(-d2 / scale).astype(np.float32)
+            mean_w = float(f.mean())
+            out[valid] = f / np.float32(mean_w) if mean_w > 0.0 else np.float32(1.0)
+        return out
+
+    #: Reference rows per candidate set for the density estimate.
+    _RESULT_DENSITY_REFS = 256
+
+    def _result_inv_density(self, hand: str, key: tuple, rows: np.ndarray) -> np.ndarray:
+        """The inverse local density of every candidate row under the result
+        kernel — each row's mean kernel value against a fixed random subset
+        of the candidate rows (a pool fact: cached per candidate set and
+        bandwidth; the subset is drawn from a generator seeded by the key, so
+        the sampler's own stream is untouched), raised to
+        ``result_density_power``. Floored at 5% of the median density so a
+        lone outlier gains at most 20× at power 1, normalized to a mean of 1;
+        a row without complete geometry is exactly neutral."""
+        meta = self._cell_meta(hand) if key[0] >= 0 else self._pool_meta(hand)
+        cache = meta.setdefault("density", {})
+        ckey = (key, float(self.result_pitch_sigma), float(self.result_density_power))
+        hit = cache.get(ckey)
+        if hit is not None:
+            return hit
+        mean, std, valid_all = self._pp_geom_z_stats(hand)
+        valid = valid_all[rows]
+        out = np.ones(len(rows), dtype=np.float32)
+        vr = rows[valid]
+        if vr.size:
+            g = self.a.pools[hand].geom
+            sw = np.sqrt(_PITCH_FEATURE_WEIGHTS)
+            z = ((g[vr] - mean) / std) * sw  # weighted metric: plain squared distance
+            m = int(min(self._RESULT_DENSITY_REFS, vr.size))
+            if m < vr.size:
+                seed = abs(hash((int(key[0]), int(key[1]), *[int(k) for k in key[2:]]))) % (2**32)
+                pick = np.random.default_rng(seed).choice(vr.size, size=m, replace=False)
+                ref = z[pick]
+            else:
+                ref = z
+            scale = 2.0 * float(self.result_pitch_sigma) ** 2 * float(_PITCH_FEATURE_WEIGHTS.sum())
+            ref_sq = np.einsum("ij,ij->i", ref, ref)
+            dens = np.empty(vr.size, dtype=np.float64)
+            for start in range(0, vr.size, 8192):
+                zb = z[start : start + 8192]
+                d2 = np.einsum("ij,ij->i", zb, zb)[:, None] + ref_sq[None, :] - 2.0 * (zb @ ref.T)
+                dens[start : start + 8192] = np.exp(-np.maximum(d2, 0.0) / scale).mean(axis=1)
+            floor = 0.05 * float(np.median(dens))
+            inv = np.power(np.maximum(dens, max(floor, 1e-30)), -float(self.result_density_power))
+            inv = inv / inv.mean()
+            out[valid] = inv.astype(np.float32)
+        cache[ckey] = out
+        return out
+
+    def _result_draw(self, b: int, rows: np.ndarray, pitch_gi: int) -> int:
+        """Step 4: draw the RESULT row among the pitch draw's candidate rows
+        (the same count sub-cell), weighted by the raw per-PA weight × the
+        pitch-to-pitch factor × the re-raised pitcher / batter factors. Falls
+        back to the pitch row itself when nothing can condition the draw."""
+        assert self._bucket_w is not None and self._hand is not None
+        w = self._bucket_w[b]
+        if w is None or w.size == 0:
+            return pitch_gi
+        f = self._f_result_pitch(self._hand, rows, pitch_gi)
+        if f is None:
+            return pitch_gi
+        wr = w * f
+        if self.result_density_power != 0.0:
+            key = self._pa_keys[b] if self._pa_keys is not None else (-1, b)
+            wr = wr * self._result_inv_density(self._hand, key, rows)
+        if self.result_pitcher_power != 1.0 and self._bucket_fp is not None:
+            fp = self._bucket_fp[b]
+            if fp is not None:
+                wr = _repower(wr, fp, self.result_pitcher_power)
+        if self.result_batter_power != 1.0 and self._bucket_fb is not None:
+            fb = self._bucket_fb[b]
+            if fb is not None:
+                wr = _repower(wr, fb, self.result_batter_power)
+        cdf = np.cumsum(wr, dtype=np.float64)
+        total = float(cdf[-1])
+        if not np.isfinite(total) or total <= 0.0:
+            return pitch_gi
+        j = int(np.searchsorted(cdf, self.rng.random() * total))
+        return int(rows[min(j, rows.size - 1)])
+
+    def last_result_row(self) -> int | None:
+        """SIM-523 part B: the global pitch-pool index of the last RESULT row
+        (the play), or None before any draw / after an empty-bucket fallback.
+        Equal to the pitch row while the split is off."""
+        return self._pp_last_i
+
+    def last_born_batted_ball(self) -> dict | None:
+        """SIM-523 part B: the last result row's OWN batted ball, read through
+        the artifact's pitch-id join — ``row`` (the batted-ball pool index),
+        ``ev``, ``la``, ``spray`` (pull-relative), ``spray_raw``, ``dist``,
+        ``is_air``. None when the last result was not in play, the bundle
+        carries no join, or the join has no batted ball for that pitch."""
+        i = self._pp_last_i
+        if i is None or self._hand is None:
+            return None
+        br = getattr(self.a.pools[self._hand], "bb_row", None)
+        if br is None:
+            return None
+        j = int(br[i])
+        pool = self.a.bb_pools.get(self._hand)
+        if j < 0 or pool is None or j >= pool.n:
+            return None
+        return {
+            "row": j,
+            "ev": float(pool.geom[j, 0]),
+            "la": float(pool.geom[j, 1]),
+            "spray": float(pool.geom[j, 2]),
+            "spray_raw": (float(pool.spray_raw[j]) if pool.spray_raw is not None else None),
+            "dist": (float(pool.hit_dist[j]) if pool.hit_dist is not None else None),
+            "is_air": (bool(pool.is_air[j]) if pool.is_air is not None else None),
+        }
 
     def last_pitch_got_away(self) -> bool:
         """SIM-517: did the LAST drawn pitch row get away from its catcher (a
@@ -827,8 +1101,10 @@ class FullPoolSampler:
         pitch-pool columns, ``_GEOM_COLS`` order), so the batted-ball draw can
         condition on the pitch that produced it. None before any draw, after
         an empty-bucket fallback, or when the row's velocity is missing (the
-        export writes a NULL as 0.0, and no real pitch reads 0 mph)."""
-        i = self._pp_last_i
+        export writes a NULL as 0.0, and no real pitch reads 0 mph). SIM-523
+        part B: the PITCH-draw row — the pitch thrown — which is the result
+        row while the split is off."""
+        i = self._pp_pitch_i if self._pp_pitch_i is not None else self._pp_last_i
         if i is None or self._hand is None:
             return None
         g = self.a.pools[self._hand].geom[i]
@@ -1204,8 +1480,16 @@ class FullPoolSampler:
         defense_map: dict[str, int] | None = None,
         live_season: int | None = None,
         pitch_geom: np.ndarray | None = None,
+        born_bb: dict | None = None,
     ) -> None:
         """Assemble the batted-ball weight CDF for the PA (f_batter · f_situation · recency).
+
+        SIM-523 part B: when ``born_bb`` (the result row's own batted ball,
+        :meth:`last_born_batted_ball`) is supplied AND :attr:`bb_born_sigma`
+        > 0, a Gaussian on the z-scored (exit velocity, launch angle, spray,
+        distance) distance between that ball and each cell row's pulls the
+        draw toward plays on similar batted balls — the ball born in the
+        pitch-result draw is what gets fielded. Omitted / sigma 0 -> unchanged.
 
         SIM-518 (SIM-472): when ``pitch_geom`` (the DRAWN pitch's ten geometry
         values, :meth:`last_pitch_geom`) is supplied AND :attr:`bb_pitch_sigma`
@@ -1298,8 +1582,64 @@ class FullPoolSampler:
             fpg = self._f_pitch_similarity(hand, rows, pitch_geom)
             if fpg is not None:
                 w = w * fpg
+        if born_bb is not None and self.bb_born_sigma > 0.0:
+            fbb = self._f_born_similarity(hand, rows, born_bb)
+            if fbb is not None:
+                w = w * fbb
         self._bb_rows = rows
         self._bb_cdf = np.cumsum(w, dtype=np.float64)
+
+    # ---- SIM-523 part B: the born batted ball on the fielding draw ---------
+    def _bb_born_features(self, hand: str) -> np.ndarray:
+        """The batted-ball pool's (exit velocity, launch angle, spray[,
+        distance]) matrix — distance only when the pool carries it."""
+        pool = self.a.bb_pools[hand]
+        if pool.hit_dist is not None:
+            return np.column_stack([pool.geom[:, :3], pool.hit_dist]).astype(np.float32)
+        return np.ascontiguousarray(pool.geom[:, :3], dtype=np.float32)
+
+    def _bb_born_z_stats(self, hand: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        cached = self._bb_born_stats.get(hand)
+        if cached is not None:
+            return cached
+        x = self._bb_born_features(hand)
+        valid = np.isfinite(x).all(axis=1) & (x[:, 0] > 0.0)
+        if valid.any():
+            mean = x[valid].mean(axis=0).astype(np.float32)
+            std = x[valid].std(axis=0).astype(np.float32)
+        else:
+            mean = np.zeros(x.shape[1], dtype=np.float32)
+            std = np.ones(x.shape[1], dtype=np.float32)
+        std = np.where(std > 1e-6, std, np.float32(1.0)).astype(np.float32)
+        stats = (mean, std, valid)
+        self._bb_born_stats[hand] = stats
+        return stats
+
+    def _f_born_similarity(self, hand: str, rows: np.ndarray, born: dict) -> np.ndarray | None:
+        """The batted-ball similarity factor over the cell ``rows`` against the
+        born ball: a Gaussian on the z-scored feature distance, normalized to
+        a mean of 1 over the rows with complete data (an incomplete row is
+        exactly neutral). None when the born ball is incomplete."""
+        mean, std, valid_all = self._bb_born_z_stats(hand)
+        x = self._bb_born_features(hand)
+        live_vals = [born.get("ev"), born.get("la"), born.get("spray")]
+        if x.shape[1] == 4:
+            live_vals.append(born.get("dist"))
+        if any(v is None for v in live_vals):
+            return None
+        live_arr = np.asarray(live_vals, dtype=np.float32)
+        if not bool(np.isfinite(live_arr).all()) or not (float(live_arr[0]) > 0.0):
+            return None
+        live = (live_arr - mean) / std
+        valid = valid_all[rows]
+        out = np.ones(len(rows), dtype=np.float32)
+        if valid.any():
+            diff = (x[rows[valid]] - mean) / std - live
+            d2 = np.einsum("ij,ij->i", diff, diff)
+            f = np.exp(-d2 / (2.0 * self.bb_born_sigma**2 * diff.shape[1])).astype(np.float32)
+            mean_w = float(f.mean())
+            out[valid] = f / np.float32(mean_w) if mean_w > 0.0 else np.float32(1.0)
+        return out
 
     def _bb_pgeom_z_stats(self, hand: str) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
         """SIM-518 (SIM-472): per-column mean/std of the batted-ball pool's

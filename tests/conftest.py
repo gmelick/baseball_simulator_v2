@@ -79,6 +79,12 @@ os.environ["SIM_PITCH_CELL_INDEX"] = "0"
 # kernel, byte-identical; the part-A tests set ``actor_matrices`` directly.
 os.environ["SIM_ACTOR_MATRICES"] = "0"
 
+# SIM-523 part B: the pitch / pitch-result split and the born-batted-ball
+# kernel. Both off = one draw per pitch, byte-identical; the part-B tests
+# set the sampler attributes directly.
+os.environ["SIM_PITCH_RESULT_SPLIT"] = "0"
+os.environ["SIM_BB_BORN_SIGMA"] = "0"
+
 # ---------------------------------------------------------------------------
 # Shared lightweight fixtures
 # ---------------------------------------------------------------------------
