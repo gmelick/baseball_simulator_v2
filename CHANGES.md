@@ -1,3 +1,10 @@
+# Docs — owner ruling: no betting-value measurement until every graded statistic is green — 2026-09-08
+
+The owner ruled that the closing-line-value re-measure, and any edge read built
+on it, waits until every band the certifying lanes grade is inside its range.
+Recorded on the calibration payoff's row (SIM-429), in the backlog banner and
+in CLAUDE.md §2b's standing rulings. The strikeout-prop refit may proceed.
+
 # Docs — the catcher receiving profile CLOSED-LANDED; hygiene sweep 2 reconciles 34 stale rows; two owner writing rules — 2026-09-08
 
 The catcher receiving profile (SIM-517) closes as landed: the profile, the

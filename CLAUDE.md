@@ -171,6 +171,11 @@ standing owner rulings that govern all new work:
   similarity-weighted draw from a hard-filtered pool — never a hand-tuned formula — and
   **the drawn row IS the play**: no post-draw adjustment of any kind; every factor is a
   draw WEIGHT or OFF until its weight lands.
+- **No betting-value measurement until everything is green (owner ruling 2026-09-08):** the
+  closing-line-value re-measure and any edge read built on it wait until every band the lanes
+  grade is inside its range. Today the reds are walks per plate appearance under the receiving
+  kernel, runs on the defense-aware configuration (SIM-520), and the identity-kernel confound
+  behind both (SIM-523). The strikeout-prop refit may proceed.
 - **One in-play path (SIM-486, 2026-09-06):** the per-tile FAISS fallback, the injected
   `PlayResolver`, the legacy advancement code (`_advance_runners` and its constants), the
   SIM-318 foul re-weight and the `SIM_FULL_POOL` switch are DELETED. Every no-DB test and
