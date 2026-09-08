@@ -98,5 +98,7 @@ class TestTheBuilderMapping:
         landed; SIM-491 superseded sim510 when bat_home landed; SIM-515
         superseded sim491 when the IBB rate table joined the chain; SIM-517
         superseded sim515 when the pitch pool gained catcher_id + got_away;
+        SIM-518 superseded sim517 when the pitch pool gained bat_home +
+        pitcher_pitch_count + times_through_order (migration 0023);
         bump this assertion with every pool-formula change."""
-        assert "sim517" in ppc.POOL_BUILDER_VERSION
+        assert "sim518" in ppc.POOL_BUILDER_VERSION

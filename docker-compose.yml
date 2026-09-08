@@ -139,6 +139,22 @@ services:
       SIM_CATCHER_FRAMING_SIGMA: "0.25"
       SIM_CATCHER_BLOCK_SIGMA:   "0.05"
       SIM_GOT_AWAY:              "1"
+      # SIM-518 (2026-09-07): the draw-conditioning weights — fatigue (pitch
+      # count + times through the order) and the batting side on the PITCH
+      # draw, the drawn pitch's similarity on the batted-ball draw. All OFF
+      # until their SIM-476-style fits and the certifying lane land them
+      # (docs/audit/2026-09-04-sim467-518-plan.md §8). 0 / 0 / 1.0 / 0 = off.
+      SIM_FATIGUE_PC_SIGMA:      "0"
+      SIM_FATIGUE_TTO_SIGMA:     "0"
+      SIM_PITCH_HOME_OFF_WEIGHT: "1.0"
+      SIM_BB_PITCH_SIGMA:        "0"
+      # SIM-467 (2026-09-07): the pitch-draw CELL INDEX — each plate appearance
+      # draws from its (runners, outs, score band, side) cell instead of the
+      # whole pool (decision #19's widening ladder below SIM_PITCH_MIN_CELL
+      # rows). OFF until the 12x500 lane certifies it; the certification commit
+      # flips it to 1 (docs/audit/2026-09-04-sim467-518-plan.md §5.4).
+      SIM_PITCH_CELL_INDEX:      "0"
+      SIM_PITCH_MIN_CELL:        "20"
       # SIM-453: WHERE the park factors come from. The park consumer above was on,
       # but the factors were dark: api/routes/games.py read them through
       # app.state.sim_duckdb, and api/main.py only opened that connection under

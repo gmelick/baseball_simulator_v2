@@ -109,9 +109,9 @@ class _CountingPool(FullPoolSampler):
         self.f_pitcher_calls += 1
         return super()._f_pitcher(hand, pitcher_key)
 
-    def new_plate_appearance(self, batter_key: str, base_out: np.ndarray) -> None:
+    def new_plate_appearance(self, batter_key: str, base_out: np.ndarray, **kw) -> None:
         self.pa_calls.append((batter_key, tuple(np.asarray(base_out).tolist())))
-        super().new_plate_appearance(batter_key, base_out)
+        super().new_plate_appearance(batter_key, base_out, **kw)
 
 
 def _machine(sit_sigma: float = 0.25) -> tuple[StateMachine, _CountingPool]:

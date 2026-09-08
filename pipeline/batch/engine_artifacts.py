@@ -93,16 +93,19 @@ def build_pitch_pool_artifact(
             f"SELECT {cols}, pitch_id, pitcher_id, batter_id, season, outcome_type, recency_weight "
             f"FROM sim.pitch_pool WHERE stand='{hand}' AND season IN ({season_list})"
         ).fetchnumpy()
-        # SIM-517: the receiving columns (migration 0022). Selected separately
-        # so a pre-0022 sim DB still exports (the loader treats them as
-        # optional exactly like the batted-ball realism columns).
-        has_catcher = bool(
-            con.execute(
-                "SELECT COUNT(*) FROM information_schema.columns "
-                "WHERE table_schema='sim' AND table_name='pitch_pool' "
-                "AND column_name='catcher_id'"
-            ).fetchone()[0]
-        )
+        # SIM-517 / SIM-518: the optional pool columns (migrations 0022 /
+        # 0023). Probed so a pre-migration sim DB still exports (the loader
+        # treats them as optional exactly like the batted-ball realism
+        # columns).
+        pp_cols = {
+            str(r[0])
+            for r in con.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema='sim' AND table_name='pitch_pool'"
+            ).fetchall()
+        }
+        has_catcher = "catcher_id" in pp_cols
+        has_conditioning = pp_cols >= _PP_CONDITIONING_COLS
         n = len(d["pitch_id"])
         # fetchnumpy yields masked arrays for nullable cols; fill -> plain float32.
         geom = np.nan_to_num(
@@ -120,9 +123,20 @@ def build_pitch_pool_artifact(
             if has_catcher
             else ""
         )
+        # SIM-518 (migration 0023): the draw-conditioning columns. A NULL (a
+        # row the rebuild has not filled) exports as UNKNOWN — bat_home -1,
+        # pitch count -1, times through the order 0 — and every consumer is
+        # exactly neutral on an unknown row.
+        conditioning = (
+            ", CASE WHEN bat_home IS NULL THEN -1 WHEN bat_home THEN 1 ELSE 0 END AS bat_home, "
+            "COALESCE(pitcher_pitch_count, -1) AS pitcher_pitch_count, "
+            "COALESCE(times_through_order, 0) AS times_through_order"
+            if has_conditioning
+            else ""
+        )
         con.execute(
             f"COPY (SELECT pitch_id, pitcher_id, batter_id, season, outcome_type, recency_weight"
-            f"{receiving} "
+            f"{receiving}{conditioning} "
             f"FROM sim.pitch_pool WHERE stand='{hand}' AND season IN ({season_list})) "
             f"TO '{os.path.join(pool_dir, f'{hand}.meta.parquet')}' (FORMAT parquet)"
         )
@@ -130,11 +144,22 @@ def build_pitch_pool_artifact(
         log.info("pitch_pool[%s]: %d rows (seasons %s)", hand, n, seasons)
     with open(os.path.join(pool_dir, "manifest.json"), "w", encoding="utf-8") as fh:
         json.dump(
-            {"seasons": seasons, "counts": counts, "geom_cols": _GEOM_COLS, "sit_cols": _SIT_COLS},
+            {
+                "seasons": seasons,
+                "counts": counts,
+                "geom_cols": _GEOM_COLS,
+                "sit_cols": _SIT_COLS,
+                "conditioning": has_conditioning,
+            },
             fh,
             indent=2,
         )
     return counts
+
+
+#: SIM-518: the pitch-pool conditioning columns (migration 0023). Presence
+#: of ALL of them marks a 0023-migrated DB; the export writes them together.
+_PP_CONDITIONING_COLS = frozenset({"bat_home", "pitcher_pitch_count", "times_through_order"})
 
 
 _BB_GEOM_COLS = ["exit_velo", "launch_angle", "pull_relative_spray_angle"]
@@ -183,10 +208,22 @@ def build_battedball_pool_artifact(
             "battedball_pool: sim.outcome_pool has no SIM-510 transition columns "
             "(pre-0018 DB) — exporting the legacy shape."
         )
+    # SIM-518 (SIM-463): the ten pitch-feature columns of the pitch that
+    # produced each batted ball, plus its pitcher. The pool build selects
+    # them from the pitch pool, so a production outcome pool always has them;
+    # a reduced synthetic pool may not, hence the probe. The loader treats a
+    # missing pgeom file / pitcher column as None (the SIM-472 kernel then
+    # stays neutral).
+    has_pgeom = set(_GEOM_COLS) <= op_cols
+    pitcher_select = ", pitcher_id" if "pitcher_id" in op_cols else ""
     for hand in ("L", "R"):
         w = where % hand
+        # One query for geom + sit + pgeom so the three arrays share one row
+        # order (the meta COPY below is a second scan of the same filter).
+        pgeom_cols = _GEOM_COLS if has_pgeom else []
         d = con.execute(
-            f"SELECT {', '.join(_BB_GEOM_COLS + _SIT_COLS)} FROM sim.outcome_pool WHERE {w}"
+            f"SELECT {', '.join(_BB_GEOM_COLS + _SIT_COLS + pgeom_cols)} "
+            f"FROM sim.outcome_pool WHERE {w}"
         ).fetchnumpy()
         n = len(d[_BB_GEOM_COLS[0]])
         geom = np.nan_to_num(
@@ -197,6 +234,14 @@ def build_battedball_pool_artifact(
         ).astype(np.float32)
         np.save(os.path.join(pool_dir, f"{hand}.geom.npy"), geom)
         np.save(os.path.join(pool_dir, f"{hand}.sit.npy"), sit)
+        if has_pgeom:
+            # NaN is PRESERVED here (unlike geom/sit): a row whose pitch is
+            # missing a value must be exactly neutral under the kernel, and
+            # a 0.0 stand-in would be a wild outlier instead.
+            pgeom = np.stack(
+                [np.ma.filled(d[c], np.nan).astype(np.float32) for c in _GEOM_COLS], axis=1
+            ).astype(np.float32)
+            np.save(os.path.join(pool_dir, f"{hand}.pgeom.npy"), pgeom)
         con.execute(
             "COPY (SELECT batter_id, season, events, result_hits, result_outs, result_runs, "
             "recency_weight, "
@@ -208,7 +253,7 @@ def build_battedball_pool_artifact(
             # of the consumers. SIM-510 appends the transition destinations the same
             # back-compatible way.
             "p_throws, venue_id, fielded_by_position, fielder_player_id"
-            f"{transition_select}{bat_home_select} "
+            f"{transition_select}{bat_home_select}{pitcher_select} "
             f"FROM sim.outcome_pool WHERE {w}) "
             f"TO '{os.path.join(pool_dir, f'{hand}.meta.parquet')}' (FORMAT parquet)"
         )
@@ -222,6 +267,8 @@ def build_battedball_pool_artifact(
                 "geom_cols": _BB_GEOM_COLS,
                 "sit_cols": _SIT_COLS,
                 "transition": has_transition,
+                # SIM-518 (SIM-463): the pitch-geometry columns of {hand}.pgeom.npy.
+                "pgeom_cols": _GEOM_COLS if has_pgeom else [],
             },
             fh,
             indent=2,
@@ -502,6 +549,12 @@ class HandPool:
     # bundle, exactly like the batted-ball realism columns.
     catcher_id: np.ndarray | None = None  # (N,) int64 (0 when unknown)
     got_away: np.ndarray | None = None  # (N,) int8 (0/1 — PB/WP incl. uncaught K3)
+    # SIM-518 (migration 0023): the draw-conditioning columns — None on a
+    # pre-0023 bundle. Unknown rows read bat_home -1, pitch_count -1, tto 0,
+    # and every consumer is exactly neutral on them.
+    bat_home: np.ndarray | None = None  # (N,) int8 (1 = the home team bats)
+    pitch_count: np.ndarray | None = None  # (N,) int16 (pitches BEFORE this PA)
+    tto: np.ndarray | None = None  # (N,) int8 (times through the order, >= 1)
 
     @property
     def n(self) -> int:
@@ -564,6 +617,12 @@ class BattedBallPool:
     # SIM-491: the batting side (1 = the home half). None on a pre-0019
     # bundle — the home-field draw weight then stays neutral.
     bat_home: np.ndarray | None = None  # (N,) int8 (0/1)
+    # SIM-518 (SIM-463): the pitch that produced the batted ball — its ten
+    # geometry columns (the pitch pool's ``_GEOM_COLS`` order, NaN where the
+    # source is missing) and its pitcher. None on a pre-sim518 export; the
+    # SIM-472 pitch-similarity kernel then stays neutral.
+    pgeom: np.ndarray | None = None  # (N, 10) float32, NaN preserved
+    pitcher_id: np.ndarray | None = None  # (N,) int64
 
     @property
     def n(self) -> int:
@@ -656,6 +715,10 @@ _HAND_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     # isinstance(arr, np.ndarray) guard in extract_shared_arrays skips it).
     "catcher_id",
     "got_away",
+    # SIM-518: the draw-conditioning columns (None on a pre-0023 bundle).
+    "bat_home",
+    "pitch_count",
+    "tto",
 )
 _BB_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "geom",
@@ -687,6 +750,10 @@ _BB_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "hit_dist",
     # SIM-491: the batting side (None on a pre-0019 bundle).
     "bat_home",
+    # SIM-518 (SIM-463): the producing pitch's geometry + pitcher (None on a
+    # pre-sim518 export).
+    "pgeom",
+    "pitcher_id",
 )
 _ACTOR_EMB_SHAREABLE_ATTRS: tuple[str, ...] = ("vecs", "mean", "std")
 #: SIM-474: every StealPool column is numeric, so the whole pool is shareable.
@@ -925,6 +992,17 @@ class EngineArtifacts:
                 return np.asarray(np.ma.filled(meta[col], fill), dtype=dtype)
             return None
 
+        def _pp_take(
+            hand: str, meta: dict, attr: str, col: str, dtype: type, fill: int
+        ) -> np.ndarray | None:
+            """SIM-518: the same optional-column rule for the PITCH pool."""
+            v = views.get(f"pool.{hand}.{attr}")
+            if isinstance(v, np.ndarray):
+                return v
+            if col in meta:
+                return np.asarray(np.ma.filled(meta[col], fill), dtype=dtype)
+            return None
+
         pool_dir = os.path.join(art_dir, "pitch_pool")
         with open(os.path.join(pool_dir, "manifest.json"), encoding="utf-8") as fh:
             manifest = json.load(fh)
@@ -947,9 +1025,16 @@ class EngineArtifacts:
                     ).fetchall()
                 }
                 receiving_sel = ", catcher_id, got_away" if "catcher_id" in pp_avail else ""
+                # SIM-518: the conditioning columns exist only on a sim518
+                # export — the same probe-and-select pattern.
+                conditioning_sel = "".join(
+                    f", {c}"
+                    for c in ("bat_home", "pitcher_pitch_count", "times_through_order")
+                    if c in pp_avail
+                )
                 m = con.execute(
                     "SELECT pitcher_id, batter_id, season, outcome_type, recency_weight"
-                    f"{receiving_sel} FROM read_parquet('{meta_path}')"
+                    f"{receiving_sel}{conditioning_sel} FROM read_parquet('{meta_path}')"
                 ).fetchnumpy()
                 # When the shared map has the id/season/recency columns too,
                 # prefer them (they round-trip identically and skip more disk).
@@ -1002,6 +1087,12 @@ class EngineArtifacts:
                             else None
                         )
                     ),
+                    # SIM-518: the draw-conditioning columns (unknown = -1 / -1 / 0).
+                    bat_home=_pp_take(hand, m, "bat_home", "bat_home", np.int8, -1),
+                    pitch_count=_pp_take(
+                        hand, m, "pitch_count", "pitcher_pitch_count", np.int16, -1
+                    ),
+                    tto=_pp_take(hand, m, "tto", "times_through_order", np.int8, 0),
                 )
             bb_pools: dict[str, BattedBallPool] = {}
             bb_dir = os.path.join(art_dir, "battedball_pool")
@@ -1046,9 +1137,15 @@ class EngineArtifacts:
                             "hit_dist",
                             # SIM-491: the batting side.
                             "bat_home",
+                            # SIM-518 (SIM-463): the producing pitch's pitcher.
+                            "pitcher_id",
                         )
                         if c in avail
                     ]
+                    # SIM-518 (SIM-463): the producing pitch's geometry file
+                    # (absent on a pre-sim518 export -> None).
+                    pgeom_path = os.path.join(bb_dir, f"{hand}.pgeom.npy")
+                    pgeom_view = views.get(f"bb_pool.{hand}.pgeom")
                     m = con.execute(
                         f"SELECT {', '.join(base_cols + opt_cols)} FROM read_parquet('{meta_path}')"
                     ).fetchnumpy()
@@ -1121,6 +1218,14 @@ class EngineArtifacts:
                         hit_dist=_bb_take(hand, m, "hit_dist", "hit_dist", np.float32, 0),
                         # SIM-491: the batting side (None on a pre-0019 bundle).
                         bat_home=_bb_take(hand, m, "bat_home", "bat_home", np.int8, 0),
+                        # SIM-518 (SIM-463): the producing pitch (None on a
+                        # pre-sim518 export).
+                        pgeom=(
+                            pgeom_view
+                            if isinstance(pgeom_view, np.ndarray)
+                            else (np.load(pgeom_path) if os.path.exists(pgeom_path) else None)
+                        ),
+                        pitcher_id=_bb_take(hand, m, "pitcher_id", "pitcher_id", np.int64, 0),
                     )
             # SIM-474: the steal opportunity pools ("2" = 1B->2B, "3" = 2B->3B).
             # Presence-gated like the batted-ball pool: {} on a legacy bundle,

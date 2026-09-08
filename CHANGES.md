@@ -1,3 +1,144 @@
+# Perf — SIM-467 CODE LANDED + MEASURED: the pitch-draw cell index, 2.62 → 0.86 s per iteration (3.05×), gated OFF pending the lane — 2026-09-07
+
+The play picker's per-plate-appearance cost was the whole-pool weight assembly:
+the profile (cProfile, 3 warm iterations, production flags) puts
+`_f_situation_baseout` + `new_plate_appearance` + `_f_batter` at 74% of an
+iteration, exactly as the plan estimated. SIM-467 replaces the 12 whole-pool
+count buckets with the SIM-451 cell — (runners, outs, count, score band,
+batting side) — so a plate appearance assembles its weight over ~N/240 rows.
+
+**Design (Backend Developer, ML Engineer review).** `simulation/filter_cells.py`
+now owns the cell algebra (`score_band`, `count_bucket`, `cell_key`, the edges);
+`scripts/measure_filter_cells.py` re-exports the same objects (pinned by a
+test). `FullPoolSampler._cell_meta` sorts each hand's rows by sub-cell once
+(~N int32 + offsets, 0.9 s with the first warm game); `_subcell_rows` returns
+a count sub-cell's rows, widened by decision #19's ladder — level 1 unions the
+five score bands, level 2 the sides, level 3 the counts — below `pitch_min_cell`
+(default 20, `SIM_PITCH_MIN_CELL`), cached per sub-cell, raising on an empty
+base-out cell; `_new_plate_appearance_cell` evaluates the SAME factors on the
+cell rows in the SAME order, so every in-cell weight is bit-identical to the
+whole-pool path's (a test compares the cumulative sums exactly) and the only
+change is a zero weight outside the cell. The side axis has three values when
+the pool carries `bat_home` (away / home / unknown, so an unknown-side row joins
+only the side union) and one when it does not — 1,440 cells on today's bundle,
+2,880 after the SIM-518 rebuild. `draw` keeps the global row index (the
+got-away and geometry reads are unchanged) and counts the draw's widening level
+(`widen_counts`, `cell_index_stats()`). The SIM-518 fatigue factor runs on the
+cell rows on this path (`_fatigue_rows`), as the plan promised. The loop passes
+the live side when the index is on; the SIM-455 base-out key already re-selects
+the cell mid-PA. `SIM_PITCH_CELL_INDEX` is read by the factory, pinned off in the
+unit lane, set off in docker-compose, and set ON in the acceptance lane's
+`PRODUCTION_FLAGS` (the lane certifies the on configuration).
+
+**Measured (`scripts/sim467_speed_probe.py`, game 744795, 20 iterations per arm,
+one warm process).** Whole pool 2.62 s/iteration; cell index 0.86 s/iteration;
+3.05×. On the cell path the top costs become the steal draw (28%) and the
+fielding draw (24%) — the residual ladder in the plan's §9. Every draw of the
+20 games sat at widening level 0. The 4×100 A/B through `scripts/sim_stats.py`
+(400 game-sims per arm, production flags): on vs off R −1.6%, H −1.0%,
+BB +0.8%, K −1.3% — noise — and HR −10%, which moves HR TOWARD the league rate
+(on −1.3% vs MLB-2023, off +10%); 2.67 vs 0.76 s per sim end to end. The
+12×500 lane decides (plan §5.4).
+
+**The lane (12×500, index ON, 1h28m — 3.7× faster than the same lane on
+2026-09-04): 81 passed, 4 failed.** R −4.2% (the open SIM-520 grading question),
+home_win_pct UNDERPOWERED (by design), BB_PA −4.6% (−3.6% before the index —
+the SIM-523 receiving-kernel cost) and PITCHES_PA +5.5% (new). The per-count
+probe (`scripts/sim467_count_probe.py`) attributes the new red to the receiving
+kernel inside the hard cell: fouls up at almost every count and the 3-2 ball
+share 0.240 → 0.219 under production flags; with the receiving kernel off the
+cell path moves neither (pitches/PA 3.847 → 3.826, 3-2 ball 0.255 → 0.253). The
+hard cell shrinks each sample to a few hundred rows and the identity kernel
+concentrates it on a few same-team rows — SIM-523, amplified. Production stays
+OFF; the lane's catcher sigmas and the index are now env-overridable per arm
+(`SIM467_LANE_CELL_INDEX`, `SIM467_LANE_RECEIVING`); lane #2 (index ON,
+receiving OFF) completes the owner's table.
+**Lane #2 (12×500, index ON, receiving OFF, 1h39m): 83 passed, 2 failed —
+home_win_pct UNDERPOWERED (by design) and K_PA −2.1% against a 2.0% floor; R,
+BB_PA, PITCHES_PA and every other band PASS.** The index certifies on its own
+with one marginal K residual; the receiving kernel does not survive the hard
+cell. Owner choice (plan §5.4): the 3× speed with the receiving kernel parked
+until SIM-523's redesign, or the fitted kernel without the speed. Production
+stays OFF until the ruling.
+
+**Phase 0 (the plan's step 0).** The live `/simulate` n=100 reads 81 s and 90 s
+warm at 6 workers (host idle) — the five-minute figure on the SIM-519 row was
+not the steady state; the serial cost is 2.62 s/iteration, so the fan-out
+delivers about three effective workers plus the parent-side aggregation
+SIM-430 named. No fan-out defect to file. One trial returned a 500 because my
+in-flight edit to the bind-mounted `production_factory.py` (a name used before
+its import landed) was imported by a fresh worker — a reminder that edits to
+the mounted packages reach the live app's new workers immediately.
+
+**Gates.** ruff + format clean; mypy clean (57 files);
+`tests/unit/test_sim467_cell_index.py` 24/24 plus the SIM-518 / SIM-455 /
+SIM-517 / SIM-430 / SIM-451 / SIM-402 / SIM-511-512 suites (219 tests); the
+full unit lane shows only the four pre-existing environmental failures
+(`deploy/monitoring/*` absent from the app image; the SIM-449 live park-factor
+pin drifted). Docs: BACKLOG banner + the SIM-467 row; the plan's §4 and §5
+stamped; CLAUDE.md §2b.
+
+# Sim/Data — SIM-518 CODE LANDED: the draw-conditioning columns, artifact and three gated weights; the rebuild is blocked by a DuckDB lock (SIM-524) — 2026-09-07
+
+The SIM-518 epic's code half is built to the plan (`docs/audit/2026-09-04-sim467-518-plan.md`
+§6 + §8). Every consumer is OFF by default and byte-identical off — the owner's
+architecture rule — so the production game is unchanged until each weight is fitted.
+
+**Data (Data Engineer).** Migration `0023_sim518_pitch_pool_conditioning.sql` (schema
+v22 → v23) adds `bat_home`, `pitcher_pitch_count` and `times_through_order` to
+`sim.pitch_pool`, appended LAST (the positional-INSERT trap); `02_duckdb_schema.sql` and
+the version file follow. `_build_pitch_pool` writes them: the side from `inning_topbot`,
+the pitch count as pitches thrown BEFORE the plate appearance (a `RANGE … 1 PRECEDING`
+window), the times through the order as `1 + batters faced before the PA // 9` — the
+live helper `times_through_order`'s own definition. Both window expressions are module
+constants (`SQL_PITCHER_PITCH_COUNT` / `SQL_TIMES_THROUGH_ORDER`) and a unit test runs
+them on a synthetic DuckDB table against the helper. `POOL_BUILDER_VERSION` → sim518.1.
+A read-only dry run of the new SQL against the live Postgres source (one 2026 game:
+busiest arm 86 pitches, count 80 before his last PA, TTO 1-3) binds and reads sanely.
+
+**Artifact (Data Engineer).** `build_pitch_pool_artifact` exports the three columns
+(NULL → -1 / -1 / 0 = unknown); `build_battedball_pool_artifact` exports the ten
+producing-pitch geometry columns as `{hand}.pgeom.npy` (NaN PRESERVED, unlike geom/sit,
+so a missing value is neutral rather than a 0.0 outlier) plus `pitcher_id`, in the same
+query as geom/sit so the row order is shared. `HandPool.bat_home/pitch_count/tto` and
+`BattedBallPool.pgeom/pitcher_id` are optional fields; the loader probes the parquet and
+the file; all five join the SIM-403b shareable lists.
+
+**Consumers (ML Engineer + Backend Developer).** `FullPoolSampler`: `_f_fatigue`
+(Gaussians on |live − row| pitch count and TTO, `fatigue_pc_sigma` /
+`fatigue_tto_sigma`, normalized to a mean of 1 within each count bucket, unknown rows
+exactly neutral); the batting-side weight on the pitch draw (`pitch_home_off_weight`,
+1.0 = off exactly, 0.0 = a hard match, unknown rows neutral); `last_pitch_geom()` +
+`_f_pitch_similarity` (a Gaussian on the z-scored 10-dim distance between the DRAWN
+pitch and each batted-ball row's own pitch, inside the SIM-511 base-out cell, mean 1
+over complete rows). `StateMachine._full_pool_outcome` passes the inputs ONLY when a
+weight is on (the SIM-455 two-argument call is unchanged otherwise), snapshots fatigue
+on the PA's first pitch (`pitcher_pitch_count − 1`, `pitcher_bf` = completed PAs) and
+holds it across mid-PA rebuilds; `_full_pool_fielding` passes the drawn geometry only
+when `SIM_BB_PITCH_SIGMA` > 0. `production_factory` reads the four env knobs;
+`tests/conftest.py` pins them off; `docker-compose.yml` sets them explicitly off.
+
+**Not run — the SIM-469 rebuild.** `scripts/sim518_rebuild_pools.py` (pool-only, ~2 h:
+migration → rebuild 2023-2026 → per-season counts unchanged + an INDEPENDENT
+recomputation of all three columns from `raw.pitches` on 500 random games → export →
+loader round-trip) failed at `duckdb.connect`: "Conflicting lock is held in PID 0".
+Inside the app container only PID 8 — the SIM-430 forkserver — holds the file, a
+descriptor inherited at pool start. Filed as **SIM-524**. The rebuild needs the app
+stopped for its duration and overwrites the artifact bundle every running lane reads,
+so it waits for the owner. **Deferred by design:** SIM-461 (hand as a weight) waits for
+the SIM-467 widening evidence (plan §8.3).
+
+**Gates.** ruff + format clean; mypy clean (54 files); `tests/unit/test_sim518_conditioning.py`
+28/28 plus the SIM-455 / SIM-517 / SIM-511-512 / SIM-430 / artifact realism + shared-memory /
+sim_store / SIM-076-095 / SIM-402 suites green. Note for the next operator: `tests/` and
+`scripts/` are NOT bind-mounted — mount both for a local run — and two full-lane attempts
+hit the SIM-445-class interpreter/assertion-rewriter corruption (a faulthandler dump, then
+106 collection errors with a `TypeError` inside pytest's own rewriter); the retry loop now
+catches both signatures.
+
+Docs: BACKLOG top banner + the 518 / 463 / 464 / 465 / 469 / 472 rows + the SIM-524 row;
+the plan's §6 and §8 stamped; CLAUDE.md §2b board.
+
 # Sim — SIM-486 CLOSED: the per-tile fallback is deleted; one in-play path — 2026-09-06
 
 The second simulator is gone. `simulation/play_pool_sampler.py`,

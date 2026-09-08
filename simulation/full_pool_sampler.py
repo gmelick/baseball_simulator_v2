@@ -30,6 +30,15 @@ import os
 import numpy as np
 
 from pipeline.batch.engine_artifacts import EngineArtifacts, HandPool
+from simulation.filter_cells import (
+    DEFAULT_MIN_CELL,
+    N_BAND,
+    N_BASE,
+    N_COUNT,
+    N_OUTS,
+    score_band,
+    score_band_array,
+)
 
 _OUTCOMES = ("ball", "called_strike", "swinging_strike", "foul", "in_play", "hit_by_pitch")
 
@@ -138,6 +147,52 @@ class FullPoolSampler:
         #: The last drawn pitch-pool row (global index; None before any draw
         #: or after an empty-bucket fallback) — the got-away accessor reads it.
         self._pp_last_i: int | None = None
+        # SIM-518 — the draw-conditioning weights. Every one is OFF by
+        # default (a 0.0 sigma / a 1.0 weight disables it EXACTLY — no
+        # multiplication runs), reads a column that is None on a pre-0023
+        # bundle (then it stays neutral), and is a SIM-476-style fit target.
+        #   * fatigue (SIM-465): Gaussians on |live − row| pitch count and
+        #     times-through-the-order over the PITCH draw, normalized to a
+        #     mean of 1 within each count bucket; a row with an unknown value
+        #     is exactly neutral. Costs one full-pool pass per PA until the
+        #     SIM-467 cell index restricts it to the live cell.
+        #   * the batting side (SIM-464's pitch half): a row whose side
+        #     mismatches the live one × ``pitch_home_off_weight`` (0.0 = a
+        #     hard match, the owner's fielding-draw ruling; 1.0 = off).
+        #   * pitch similarity (SIM-472): a Gaussian on the z-scored 10-dim
+        #     distance between the DRAWN pitch's geometry and each batted-ball
+        #     row's own pitch, inside the SIM-511 base-out cell — the pitch
+        #     and the contact must agree.
+        self.fatigue_pc_sigma = 0.0
+        self.fatigue_tto_sigma = 0.0
+        self.pitch_home_off_weight = 1.0
+        self.bb_pitch_sigma = 0.0
+        # SIM-467 — the pitch-draw CELL INDEX. Off (the default) the per-PA
+        # weight is assembled over the WHOLE pool and split into the 12 count
+        # buckets, exactly as before. On, each plate appearance selects its
+        # hard-filter cell — (runners, outs, score band, batting side), the
+        # SIM-451 definition — and assembles the weight over that cell's 12
+        # count sub-cells only. The weights INSIDE the cell are today's weights
+        # bit for bit (the same 4-dim situation kernel over the same rows), so
+        # the only change is a zero weight outside the cell; per-PA work drops
+        # from ~N rows to ~N/240. Thin sub-cells widen in decision #19's fixed
+        # order (band → side → count) below ``pitch_min_cell`` rows; every
+        # widening is counted per draw in ``widen_counts``. A pre-0023 bundle
+        # (no ``bat_home``) has no side dimension: 1,440 cells instead of 2,880.
+        # Plan: docs/audit/2026-09-04-sim467-518-plan.md §5.
+        self.pitch_cell_index = False
+        self.pitch_min_cell = DEFAULT_MIN_CELL
+        #: Per-hand cell index: the row order sorted by sub-cell + offsets.
+        self._cell_cache: dict[str, dict] = {}
+        #: The current PA's per-count sub-cell rows / widening levels (cell path
+        #: only; None on the whole-pool path — ``draw`` reads them when set).
+        self._pa_rows: list[np.ndarray] | None = None
+        self._pa_levels: list[int] | None = None
+        #: Draws per widening level 0..3 (the lane reports the shares).
+        self.widen_counts = np.zeros(4, dtype=np.int64)
+        #: Per-hand cache of the batted-ball pool's pitch-geometry z-stats
+        #: (mean, std, all-finite row mask) — constant once the bundle loads.
+        self._bb_pgeom_stats: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
         # Per-pool precompute: dense candidate->profile indices for O(1) gathers.
         self._pool_cache: dict[str, dict] = {}
         # SIM-430 hot-path caches (all hold CONSTANTS that the original code
@@ -340,11 +395,33 @@ class FullPoolSampler:
         pool = self.a.pools[hand]
         self._base = (self._f_pitcher(hand, pitcher_key) * pool.recency).astype(np.float32)
 
-    def new_plate_appearance(self, batter_key: str, base_out: np.ndarray) -> None:
+    def new_plate_appearance(
+        self,
+        batter_key: str,
+        base_out: np.ndarray,
+        *,
+        pitch_count: int | None = None,
+        tto: int | None = None,
+        bat_home: bool | None = None,
+    ) -> None:
         """Assemble the per-PA matchup weight (base · f_batter · f_situation_baseout
-        [· f_catcher_receiving — SIM-517]) and split it into 12 count-bucket CDFs
-        for the per-pitch, count-conditioned draw (SIM-429)."""
+        [· f_catcher_receiving — SIM-517] [· f_fatigue · the batting-side weight —
+        SIM-518]) and split it into 12 count-bucket CDFs for the per-pitch,
+        count-conditioned draw (SIM-429).
+
+        SIM-518: ``pitch_count`` (pitches the live pitcher threw BEFORE this
+        PA) and ``tto`` (his times through the order entering it) feed the
+        fatigue kernel; ``bat_home`` feeds the batting-side weight. Each is
+        read only when its sigma / weight is ON and the pool carries the
+        column; omitted or off, the weight is exactly today's."""
         assert self._hand is not None and self._base is not None, "call new_half_inning first"
+        if self.pitch_cell_index:
+            self._new_plate_appearance_cell(
+                batter_key, base_out, pitch_count=pitch_count, tto=tto, bat_home=bat_home
+            )
+            return
+        self._pa_rows = None
+        self._pa_levels = None
         w = (
             self._base
             * self._f_batter(self._hand, batter_key)
@@ -356,8 +433,280 @@ class FullPoolSampler:
             f_recv = self._f_catcher_receiving(self._hand, self._catcher_key)
             if f_recv is not None:
                 w = w * f_recv
+        # --- SIM-518: the conditioning weights (each exactly absent when off)
+        if (self.fatigue_pc_sigma > 0.0 or self.fatigue_tto_sigma > 0.0) and (
+            pitch_count is not None or tto is not None
+        ):
+            f_fat = self._f_fatigue(self._hand, pitch_count, tto)
+            if f_fat is not None:
+                w = w * f_fat
+        if bat_home is not None and self.pitch_home_off_weight != 1.0:
+            bh = getattr(self.a.pools[self._hand], "bat_home", None)
+            if bh is not None:
+                # An unknown-side row (-1) stays neutral; a mismatch × the weight.
+                mismatch = (bh >= 0) & ((bh > 0) != bool(bat_home))
+                w = w * np.where(mismatch, np.float32(self.pitch_home_off_weight), np.float32(1.0))
         rows = self._pool_meta(self._hand)["bucket_rows"]
         self._bucket_cdf = [(np.cumsum(w[r], dtype=np.float64) if r.size else None) for r in rows]
+
+    # ---- SIM-467: the cell index -------------------------------------------
+    def _cell_meta(self, hand: str) -> dict:
+        """Per-hand one-time precompute of the cell index: every row's sub-cell
+        id — ((runners, outs, band, side) × count) — a stable row order sorted
+        by it, and the offsets that make each sub-cell one contiguous slice.
+        The side axis has THREE values when the pool carries ``bat_home``
+        (away / home / unknown, so an unknown-side row joins no live side's
+        cell but every side union) and ONE when it does not (a pre-0023
+        bundle). ~N int32 + a small offsets array; ~0.2 s per hand."""
+        meta = self._cell_cache.get(hand)
+        if meta is not None:
+            return meta
+        pool = self.a.pools[hand]
+        sit = pool.sit
+        rs = sit[:, 3].astype(np.int64) & 0b111
+        outs = np.clip(sit[:, 2].astype(np.int64), 0, N_OUTS - 1)
+        cb = np.clip(sit[:, 0].astype(np.int64), 0, 3) * 3 + np.clip(
+            sit[:, 1].astype(np.int64), 0, 2
+        )
+        band = score_band_array(sit[:, 5])
+        bh = getattr(pool, "bat_home", None)
+        if bh is None:
+            n_side = 1
+            side = np.zeros(pool.n, dtype=np.int64)
+        else:
+            n_side = 3
+            side = np.where(bh > 0, 1, np.where(bh == 0, 0, 2)).astype(np.int64)
+        sub = (((rs * N_OUTS + outs) * N_BAND + band) * n_side + side) * N_COUNT + cb
+        n_sub = N_BASE * N_OUTS * N_BAND * n_side * N_COUNT
+        order = np.argsort(sub, kind="stable").astype(np.int32)
+        offsets = np.zeros(n_sub + 1, dtype=np.int64)
+        offsets[1:] = np.cumsum(np.bincount(sub, minlength=n_sub))
+        meta = {"n_side": n_side, "order": order, "offsets": offsets, "widened": {}}
+        self._cell_cache[hand] = meta
+        return meta
+
+    def _subcell_rows(
+        self, hand: str, rs: int, outs: int, band: int, side: int | None, cb: int
+    ) -> tuple[np.ndarray, int]:
+        """The rows of one count sub-cell of the live PA cell, WIDENED by
+        decision #19's fixed ladder when the sub-cell holds fewer than
+        ``pitch_min_cell`` rows: level 1 unions the five score bands, level 2
+        the batting sides too, level 3 the twelve counts too. ``side`` None
+        means the live side is unknown — level 0 already unions the sides.
+        Returns ``(rows, level)``; cached per sub-cell (occupancy is a pool
+        fact, not a live-state fact). An empty level-3 cell raises: the
+        base-out cell is essential (the SIM-511 wording)."""
+        meta = self._cell_meta(hand)
+        n_side = meta["n_side"]
+        order, off = meta["order"], meta["offsets"]
+        key = (rs, outs, band, side, cb)
+        cached = meta["widened"].get(key)
+        if cached is not None:
+            return cached
+
+        def sl(b: int, s: int, c: int) -> np.ndarray:
+            sub = (((rs * N_OUTS + outs) * N_BAND + b) * n_side + s) * N_COUNT + c
+            return order[off[sub] : off[sub + 1]]
+
+        sides = [side] if side is not None else list(range(n_side))
+        need = max(int(self.pitch_min_cell), 1)
+        parts = [sl(band, s, cb) for s in sides]
+        rows = parts[0] if len(parts) == 1 else np.concatenate(parts)
+        level = 0
+        if rows.size < need:
+            rows = np.concatenate([sl(b, s, cb) for b in range(N_BAND) for s in sides])
+            level = 1
+            if rows.size < need:
+                rows = np.concatenate([sl(b, s, cb) for b in range(N_BAND) for s in range(n_side)])
+                level = 2
+                if rows.size < need:
+                    rows = np.concatenate(
+                        [
+                            sl(b, s, c)
+                            for b in range(N_BAND)
+                            for s in range(n_side)
+                            for c in range(N_COUNT)
+                        ]
+                    )
+                    level = 3
+                    if rows.size == 0:
+                        raise RuntimeError(
+                            f"SIM-467: base-out cell (runners_state={rs}, outs={outs}) is "
+                            f"EMPTY in the {hand}-hand pitch pool — a data defect. The "
+                            "base-out cell is essential and the ladder ends there; rebuild "
+                            "the pool and investigate."
+                        )
+        result = (rows, level)
+        meta["widened"][key] = result
+        return result
+
+    def _new_plate_appearance_cell(
+        self,
+        batter_key: str,
+        base_out: np.ndarray,
+        *,
+        pitch_count: int | None,
+        tto: int | None,
+        bat_home: bool | None,
+    ) -> None:
+        """The SIM-467 cell path of :meth:`new_plate_appearance`: the same
+        factors as the whole-pool path, evaluated on the live cell's rows only
+        and multiplied in the same order, so every in-cell weight is bit-
+        identical to the whole-pool path's weight for that row."""
+        hand = self._hand
+        assert hand is not None and self._base is not None
+        meta = self._pool_meta(hand)
+        cmeta = self._cell_meta(hand)
+        bo = np.asarray(base_out, dtype=np.float32)
+        rs = int(bo[1]) & 0b111
+        outs = min(max(int(bo[0]), 0), N_OUTS - 1)
+        band = score_band(int(bo[3]))
+        side: int | None
+        if cmeta["n_side"] == 1 or bat_home is None:
+            side = None if cmeta["n_side"] > 1 else 0
+        else:
+            side = 1 if bat_home else 0
+        base = self._base
+        aff = self._batter_affinity(batter_key)
+        pb = meta["pool_bat"]
+        sitb = meta["sit_baseout"]
+        recv: np.ndarray | None = None
+        if (
+            self.catcher_framing_sigma > 0.0 or self.catcher_block_sigma > 0.0
+        ) and self._catcher_key is not None:
+            recv = self._f_catcher_receiving(hand, self._catcher_key)
+        fatigue_on = (self.fatigue_pc_sigma > 0.0 or self.fatigue_tto_sigma > 0.0) and (
+            pitch_count is not None or tto is not None
+        )
+        bh = getattr(self.a.pools[hand], "bat_home", None)
+        home_on = bat_home is not None and self.pitch_home_off_weight != 1.0 and bh is not None
+        pa_rows: list[np.ndarray] = []
+        pa_levels: list[int] = []
+        cdfs: list[np.ndarray | None] = []
+        for cb in range(N_COUNT):
+            rows, level = self._subcell_rows(hand, rs, outs, band, side, cb)
+            pa_rows.append(rows)
+            pa_levels.append(level)
+            if rows.size == 0:
+                cdfs.append(None)
+                continue
+            if aff is not None:
+                pbr = pb[rows]
+                f_bat = np.where(
+                    pbr >= 0, aff[np.clip(pbr, 0, len(aff) - 1)], np.float32(1.0)
+                ).astype(np.float32)
+            else:
+                f_bat = np.ones(rows.size, dtype=np.float32)
+            diff: np.ndarray = sitb[rows] - bo
+            d2 = np.einsum("ij,ij->i", diff, diff)
+            f_sit = np.exp(-d2 / (2.0 * self.sit_sigma**2 * sitb.shape[1])).astype(np.float32)
+            w = base[rows] * f_bat * f_sit
+            if recv is not None:
+                w = w * recv[rows]
+            if fatigue_on:
+                f_fat = self._fatigue_rows(hand, pitch_count, tto, rows)
+                if f_fat is not None:
+                    w = w * f_fat
+            if home_on:
+                assert bh is not None and bat_home is not None
+                bhr = bh[rows]
+                mismatch = (bhr >= 0) & ((bhr > 0) != bool(bat_home))
+                w = w * np.where(mismatch, np.float32(self.pitch_home_off_weight), np.float32(1.0))
+            cdfs.append(np.cumsum(w, dtype=np.float64))
+        self._pa_rows = pa_rows
+        self._pa_levels = pa_levels
+        self._bucket_cdf = cdfs
+
+    def _fatigue_rows(
+        self, hand: str, pitch_count: int | None, tto: int | None, rows: np.ndarray
+    ) -> np.ndarray | None:
+        """:meth:`_f_fatigue` restricted to ``rows`` (one count sub-cell of the
+        live cell): the same Gaussians, normalized to a mean of 1 over the
+        sub-cell's valid rows; unknown rows exactly neutral."""
+        pool = self.a.pools[hand]
+        pc_col = getattr(pool, "pitch_count", None)
+        tto_col = getattr(pool, "tto", None)
+        out = np.ones(rows.size, dtype=np.float32)
+        valid = np.zeros(rows.size, dtype=bool)
+        touched = False
+        if self.fatigue_pc_sigma > 0.0 and pitch_count is not None and pc_col is not None:
+            pcr = pc_col[rows]
+            ok = pcr >= 0
+            d = pcr.astype(np.float32) - np.float32(pitch_count)
+            f = np.exp(-(d * d) / (2.0 * self.fatigue_pc_sigma**2)).astype(np.float32)
+            out = np.where(ok, out * f, out).astype(np.float32)
+            valid |= ok
+            touched = True
+        if self.fatigue_tto_sigma > 0.0 and tto is not None and tto_col is not None:
+            ttr = tto_col[rows]
+            ok = ttr > 0
+            d = ttr.astype(np.float32) - np.float32(tto)
+            f = np.exp(-(d * d) / (2.0 * self.fatigue_tto_sigma**2)).astype(np.float32)
+            out = np.where(ok, out * f, out).astype(np.float32)
+            valid |= ok
+            touched = True
+        if not touched:
+            return None
+        if valid.any():
+            mean_w = float(out[valid].mean())
+            out[valid] = out[valid] / np.float32(mean_w) if mean_w > 0.0 else np.float32(1.0)
+        return out
+
+    def cell_index_stats(self) -> dict:
+        """SIM-467: draws per widening level (0 = the exact cell) and the
+        index shape per hand, for the lane's report."""
+        return {
+            "enabled": bool(self.pitch_cell_index),
+            "min_cell": int(self.pitch_min_cell),
+            "draws_by_level": [int(x) for x in self.widen_counts],
+            "n_side": {h: int(m["n_side"]) for h, m in self._cell_cache.items()},
+        }
+
+    def _f_fatigue(self, hand: str, pitch_count: int | None, tto: int | None) -> np.ndarray | None:
+        """SIM-518 (SIM-465): the per-row fatigue factor for the live pitcher's
+        pitch count and times through the order — a Gaussian on each |live −
+        row| distance (a sigma of 0.0 removes that term), NORMALIZED to a mean
+        of 1 within each COUNT BUCKET over the rows that carry a value. A row
+        with an unknown value (pitch count -1 / times-through 0, a pre-rebuild
+        row) is exactly neutral. None when the pool carries neither column."""
+        pool = self.a.pools[hand]
+        pc_col = getattr(pool, "pitch_count", None)
+        tto_col = getattr(pool, "tto", None)
+        out = np.ones(pool.n, dtype=np.float32)
+        valid = np.zeros(pool.n, dtype=bool)
+        touched = False
+        if self.fatigue_pc_sigma > 0.0 and pitch_count is not None and pc_col is not None:
+            ok = pc_col >= 0
+            d = pc_col.astype(np.float32) - np.float32(pitch_count)
+            f = np.exp(-(d * d) / (2.0 * self.fatigue_pc_sigma**2)).astype(np.float32)
+            out = np.where(ok, out * f, out).astype(np.float32)
+            valid |= ok
+            touched = True
+        if self.fatigue_tto_sigma > 0.0 and tto is not None and tto_col is not None:
+            ok = tto_col > 0
+            d = tto_col.astype(np.float32) - np.float32(tto)
+            f = np.exp(-(d * d) / (2.0 * self.fatigue_tto_sigma**2)).astype(np.float32)
+            out = np.where(ok, out * f, out).astype(np.float32)
+            valid |= ok
+            touched = True
+        if not touched:
+            return None
+        # Per-COUNT-BUCKET normalization over the valid rows (the SIM-517
+        # pattern): the factor shifts WHICH pitch is drawn at a count; a
+        # fully underflowed bucket goes neutral rather than starving.
+        for r in self._pool_meta(hand)["bucket_rows"]:
+            if r.size == 0:
+                continue
+            m = valid[r]
+            if not m.any():
+                continue
+            sel = r[m]
+            mean_w = float(out[sel].mean())
+            if mean_w > 0.0:
+                out[sel] = out[sel] / np.float32(mean_w)
+            else:
+                out[sel] = np.float32(1.0)
+        return out
 
     def draw(self, balls: int = 0, strikes: int = 0) -> str:
         """Count-conditioned draw of one pitch outcome (SIM-429): restrict to the
@@ -365,7 +714,16 @@ class FullPoolSampler:
         assert self._bucket_cdf is not None, "call new_plate_appearance first"
         meta = self._pool_cache[self._hand]
         b = min(max(int(balls), 0), 3) * 3 + min(max(int(strikes), 0), 2)
-        cdf, rows = self._bucket_cdf[b], meta["bucket_rows"][b]
+        cdf = self._bucket_cdf[b]
+        # SIM-467: on the cell path the bucket's rows are the live cell's
+        # sub-cell (global indices, so the got-away / geometry reads below
+        # are unchanged); count the draw's widening level.
+        if self._pa_rows is not None:
+            rows = self._pa_rows[b]
+            if self._pa_levels is not None:
+                self.widen_counts[self._pa_levels[b]] += 1
+        else:
+            rows = meta["bucket_rows"][b]
         if cdf is None or cdf[-1] <= 0:
             self._pp_last_i = None
             return "ball"
@@ -386,6 +744,20 @@ class FullPoolSampler:
         if ga is None:
             return False
         return bool(ga[i])
+
+    def last_pitch_geom(self) -> np.ndarray | None:
+        """SIM-518 (SIM-472): the LAST drawn pitch row's raw geometry (the ten
+        pitch-pool columns, ``_GEOM_COLS`` order), so the batted-ball draw can
+        condition on the pitch that produced it. None before any draw, after
+        an empty-bucket fallback, or when the row's velocity is missing (the
+        export writes a NULL as 0.0, and no real pitch reads 0 mph)."""
+        i = self._pp_last_i
+        if i is None or self._hand is None:
+            return None
+        g = self.a.pools[self._hand].geom[i]
+        if not (float(g[0]) > 0.0) or not bool(np.isfinite(g).all()):
+            return None
+        return g
 
     # ---- SIM-517: the catcher RECEIVING factor ----------------------------
     #: The receiving skill, read as rates: the two zone-framing rates, the
@@ -726,8 +1098,16 @@ class FullPoolSampler:
         park_run_factor: float | None = None,
         defense_map: dict[str, int] | None = None,
         live_season: int | None = None,
+        pitch_geom: np.ndarray | None = None,
     ) -> None:
         """Assemble the batted-ball weight CDF for the PA (f_batter · f_situation · recency).
+
+        SIM-518 (SIM-472): when ``pitch_geom`` (the DRAWN pitch's ten geometry
+        values, :meth:`last_pitch_geom`) is supplied AND :attr:`bb_pitch_sigma`
+        > 0 AND the pool carries ``pgeom``, a Gaussian on the z-scored distance
+        between that pitch and each row's own pitch pulls the draw toward
+        batted balls hit off similar pitches — the pitch and the contact
+        agree. Omitted / sigma 0 / a pre-sim518 export -> the draw is unchanged.
 
         SIM-511: the draw HARD-filters the exact base-out cell (the drawn row
         must be legal in the live state — that is what makes "the drawn row is
@@ -809,8 +1189,60 @@ class FullPoolSampler:
             ff = self._f_live_fielder(hand, rows, defense_map, int(live_season or 0))
             if ff is not None:
                 w = w * ff
+        if pitch_geom is not None and self.bb_pitch_sigma > 0.0:
+            fpg = self._f_pitch_similarity(hand, rows, pitch_geom)
+            if fpg is not None:
+                w = w * fpg
         self._bb_rows = rows
         self._bb_cdf = np.cumsum(w, dtype=np.float64)
+
+    def _bb_pgeom_z_stats(self, hand: str) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        """SIM-518 (SIM-472): per-column mean/std of the batted-ball pool's
+        producing-pitch geometry over its all-finite rows, plus that row mask.
+        Cached per hand; None when the pool carries no ``pgeom``."""
+        cached = self._bb_pgeom_stats.get(hand)
+        if cached is not None:
+            return cached
+        pg = getattr(self.a.bb_pools[hand], "pgeom", None)
+        if pg is None:
+            return None
+        valid = np.isfinite(pg).all(axis=1)
+        if valid.any():
+            mean = pg[valid].mean(axis=0).astype(np.float32)
+            std = pg[valid].std(axis=0).astype(np.float32)
+        else:
+            mean = np.zeros(pg.shape[1], dtype=np.float32)
+            std = np.ones(pg.shape[1], dtype=np.float32)
+        std = np.where(std > 1e-6, std, np.float32(1.0)).astype(np.float32)
+        stats = (mean, std, valid)
+        self._bb_pgeom_stats[hand] = stats
+        return stats
+
+    def _f_pitch_similarity(
+        self, hand: str, rows: np.ndarray, pitch_geom: np.ndarray
+    ) -> np.ndarray | None:
+        """SIM-518 (SIM-472): the per-row pitch-similarity factor over the
+        cell ``rows`` — a Gaussian on the z-scored 10-dim distance between
+        the drawn pitch and each row's producing pitch, NORMALIZED to a mean
+        of 1 over the rows with complete geometry; a row missing any value is
+        exactly neutral. None when the pool carries no ``pgeom``."""
+        stats = self._bb_pgeom_z_stats(hand)
+        if stats is None:
+            return None
+        mean, std, valid_all = stats
+        pg = self.a.bb_pools[hand].pgeom
+        assert pg is not None
+        live = (np.asarray(pitch_geom, dtype=np.float32) - mean) / std
+        valid = valid_all[rows]
+        out = np.ones(len(rows), dtype=np.float32)
+        if valid.any():
+            z = (pg[rows[valid]] - mean) / std
+            diff = z - live
+            d2 = np.einsum("ij,ij->i", diff, diff)
+            f = np.exp(-d2 / (2.0 * self.bb_pitch_sigma**2 * diff.shape[1])).astype(np.float32)
+            mean_w = float(f.mean())
+            out[valid] = f / np.float32(mean_w) if mean_w > 0.0 else np.float32(1.0)
+        return out
 
     def battedball_draw(self) -> tuple[str, int, int, float]:
         """Draw one batted ball -> (event, result_hits, result_outs, launch_angle).

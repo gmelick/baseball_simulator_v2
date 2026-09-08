@@ -51,6 +51,7 @@ from typing import Any
 import numpy as np
 
 from simulation.batch_runner import GameSpec
+from simulation.filter_cells import DEFAULT_MIN_CELL
 from simulation.sim_loop import StateMachine
 
 
@@ -177,11 +178,40 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     for env, attr in (
         ("SIM_CATCHER_FRAMING_SIGMA", "catcher_framing_sigma"),
         ("SIM_CATCHER_BLOCK_SIGMA", "catcher_block_sigma"),
+        # SIM-518: the draw-conditioning kernels — fatigue (pitch count /
+        # times through the order) on the pitch draw, the drawn pitch's
+        # similarity on the batted-ball draw. 0.0 = off EXACTLY; each is a
+        # SIM-476-style fit target (docs/audit/2026-09-04-sim467-518-plan.md §8).
+        ("SIM_FATIGUE_PC_SIGMA", "fatigue_pc_sigma"),
+        ("SIM_FATIGUE_TTO_SIGMA", "fatigue_tto_sigma"),
+        ("SIM_BB_PITCH_SIGMA", "bb_pitch_sigma"),
     ):
         try:
             setattr(sampler, attr, float(os.environ.get(env, "0")))
         except ValueError:
             setattr(sampler, attr, 0.0)
+    # SIM-518 (SIM-464's pitch half): the batting-side weight on the PITCH
+    # draw. 1.0 (the default, and any unparsable value) disables it EXACTLY;
+    # 0.0 is a hard match on the side (the owner's fielding-draw ruling).
+    try:
+        sampler.pitch_home_off_weight = float(os.environ.get("SIM_PITCH_HOME_OFF_WEIGHT", "1.0"))
+    except ValueError:
+        sampler.pitch_home_off_weight = 1.0
+    # SIM-467: the pitch-draw cell index. OFF (the default) keeps the whole-pool
+    # weight assembly byte for byte; ON hard-filters each plate appearance to
+    # its (runners, outs, score band, side) cell with decision #19's widening
+    # ladder below SIM_PITCH_MIN_CELL rows. The default flips on in the
+    # certification commit (docs/audit/2026-09-04-sim467-518-plan.md §5.4).
+    sampler.pitch_cell_index = os.environ.get("SIM_PITCH_CELL_INDEX", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    try:
+        sampler.pitch_min_cell = int(os.environ.get("SIM_PITCH_MIN_CELL", str(DEFAULT_MIN_CELL)))
+    except ValueError:
+        sampler.pitch_min_cell = DEFAULT_MIN_CELL
     _CACHED_FULL_POOL_SAMPLER = sampler
     _CACHED_FULL_POOL_ART_DIR = art_dir
     return sampler

@@ -634,6 +634,10 @@ class StateMachine:
         # factor, per base-out).
         self._fp_pitcher_key: tuple | None = None
         self._fp_pa_key: tuple | None = None
+        #: SIM-518 (SIM-465): the live pitcher's (pitches before this PA, times
+        #: through the order) snapshot, taken on the PA's first pitch and held
+        #: across mid-PA rebuilds. None until the fatigue kernel first reads it.
+        self._fp_pa_fatigue: tuple[int, int] | None = None
         # SIM-411/413/425b realism nudges, each GATED OFF by default so a game is
         # byte-identical to before unless the operator opts in (mirrors
         # SIM_MANAGER). All three are ALSO graceful-optional: they no-op when the
@@ -892,6 +896,7 @@ class StateMachine:
             self._fp_pitcher_key = pitcher_key
             # The new base invalidates the PA weight built on top of the old one.
             self._fp_pa_key = None
+            self._fp_pa_fatigue = None  # SIM-518: a new arm, a fresh snapshot
             fp.new_half_inning(
                 hand,
                 f"{state.pitcher_id}:{season}",
@@ -904,12 +909,40 @@ class StateMachine:
         score_diff = max(-5, min(5, int(bat) - int(fld)))
         # base-out only; the count is conditioned per pitch via the draw bucket.
         base_out = (int(state.outs), int(state.runners_state), int(state.inning), score_diff)
-        pa_key = (state.batter_id, season, base_out)
+        # --- SIM-518: the conditioning inputs, passed ONLY when a weight is ON.
+        # Off (the default) the call below is unchanged — two positional
+        # arguments, so a duck-typed sampler with that signature still works
+        # and the flag-off game is byte-identical.
+        extra: dict[str, object] = {}
+        if (
+            float(getattr(fp, "fatigue_pc_sigma", 0.0)) > 0.0
+            or float(getattr(fp, "fatigue_tto_sigma", 0.0)) > 0.0
+        ):
+            # Fatigue is a PLATE-APPEARANCE fact: snapshot it on the PA's first
+            # pitch (the 0-0 count — no later pitch of a PA reads 0-0) and hold
+            # it across mid-PA base-out rebuilds. ``pitcher_pitch_count`` was
+            # already incremented for THIS pitch, so "pitches before the PA" is
+            # one less; ``pitcher_bf`` counts COMPLETED PAs, so it already reads
+            # "batters faced before this PA" — the pool's own definition.
+            if (int(state.balls) == 0 and int(state.strikes) == 0) or self._fp_pa_fatigue is None:
+                self._fp_pa_fatigue = (
+                    max(0, int(state.pitcher_pitch_count) - 1),
+                    times_through_order(state.pitcher_bf.get(state.pitcher_id, 0)),
+                )
+            extra["pitch_count"], extra["tto"] = self._fp_pa_fatigue
+        # SIM-467: the cell index needs the live batting side (its side
+        # dimension); SIM-518's side weight needs it too.
+        if float(getattr(fp, "pitch_home_off_weight", 1.0)) != 1.0 or bool(
+            getattr(fp, "pitch_cell_index", False)
+        ):
+            extra["bat_home"] = state.offense == Team.HOME
+        pa_key = (state.batter_id, season, base_out, tuple(sorted(extra.items())))
         if pa_key != self._fp_pa_key:
             self._fp_pa_key = pa_key
             fp.new_plate_appearance(
                 f"{state.batter_id}:{season}",
                 np.array(base_out, dtype=np.float32),
+                **extra,
             )
         # SIM-517: the framing flip that wrapped this draw is deleted — the
         # receiving kernel conditions the draw itself; the drawn row stands.
@@ -952,6 +985,14 @@ class StateMachine:
         # the fielder-quality kernel. A no-op unless the sampler's
         # fielder_sigma is set above 0 (SIM_FIELDER_KERNEL_SIGMA).
         defense = state.home_defense if state.defense == Team.HOME else state.away_defense
+        # SIM-518 (SIM-472): the DRAWN pitch's geometry, so the batted ball can
+        # agree with the pitch that produced it. Passed only when the kernel is
+        # on (SIM_BB_PITCH_SIGMA > 0) — off, the call is unchanged.
+        bb_extra: dict[str, object] = {}
+        if float(getattr(fp, "bb_pitch_sigma", 0.0)) > 0.0:
+            pg = fp.last_pitch_geom()
+            if pg is not None:
+                bb_extra["pitch_geom"] = pg
         fp.battedball_new_pa(
             hand,
             f"{state.batter_id}:{season}",
@@ -961,6 +1002,7 @@ class StateMachine:
             park_run_factor=float(getattr(state, "park_run_factor", 1.0) or 1.0),
             defense_map=defense or None,
             live_season=season,
+            **bb_extra,
         )
         ev, rh, _ro, la = fp.battedball_draw()
         # --- SIM-511: the transition path -----------------------------------

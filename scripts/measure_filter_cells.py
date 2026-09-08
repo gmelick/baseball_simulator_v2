@@ -183,7 +183,6 @@ import logging
 import os
 import re
 import sys
-from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -238,141 +237,35 @@ def last_n_seasons(con: Any, n: int) -> list[int]:
 # ---------------------------------------------------------------------------
 # The cell definition (2,880 cells)
 # ---------------------------------------------------------------------------
-
-N_BASE = 8  # runners_state bitmask: bit0=1B, bit1=2B, bit2=3B
-N_OUTS = 3
-N_COUNT = 12  # 4 ball states x 3 strike states
-N_BAND = 5
-N_HOME = 2
-N_CELLS = N_BASE * N_OUTS * N_COUNT * N_BAND * N_HOME  # 2880
-
-#: SIM-451 ORIGINATES the score-band split. No definition exists in the code
-#: today. These are the symmetric 5-band split of the +/-5 clamp the sim already
-#: applies. SIM-475 must import this constant instead of redefining the edges.
-#: A cell id computed under different edges is not comparable with this report.
-#: Read it as: band = the number of edges the clamped score difference exceeds.
-SCORE_BAND_EDGES: tuple[int, ...] = (-3, -1, 0, 2)
-SCORE_BAND_LABELS: tuple[str, ...] = ("<=-3", "-2..-1", "0", "+1..+2", ">=+3")
-
-
-def _validate_score_band_edges(edges: tuple[int, ...]) -> None:
-    """Raise when the band edges are not strictly increasing.
-
-    :func:`score_band` counts how many edges the score difference exceeds, which
-    ignores the order of the tuple. Any reader who expects a first-match ladder
-    reads a different band from an unsorted tuple. The guard removes that whole
-    class of silent disagreement by refusing to load an unsorted tuple.
-    """
-    listed = list(edges)
-    if listed != sorted(set(listed)):
-        raise ValueError(f"SCORE_BAND_EDGES must be strictly increasing and unique; got {edges!r}")
-
-
-_validate_score_band_edges(SCORE_BAND_EDGES)
-
-SCORE_CLAMP = 5  # simulation/sim_loop.py:1348
-
-#: The candidate minimum cell sizes SIM-475 chooses between.
-DEFAULT_MIN_CELLS: tuple[int, ...] = (20, 50, 100, 200)
+# SIM-467 moved the algebra into ``simulation/filter_cells.py`` so the sampler's
+# cell index and this measurement share ONE definition (``scripts/`` is not
+# importable from the container's ``simulation`` package). The names below are
+# re-exported unchanged; ``tests/unit/test_sim451_filter_cells.py`` reads them
+# from this module and ``tests/unit/test_sim467_cell_index.py`` pins that they
+# ARE the module's objects.
+from simulation.filter_cells import (  # noqa: E402
+    _BASE_LABELS,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    CELL_KEY_FORMULA,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    DEFAULT_MIN_CELLS,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    N_BAND,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    N_BASE,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    N_CELLS,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    N_COUNT,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    N_HOME,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    N_OUTS,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    SCORE_BAND_EDGES,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    SCORE_BAND_LABELS,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    SCORE_CLAMP,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    CellCoords,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    _validate_score_band_edges,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    cell_key,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    count_bucket,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    decode_cell,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+    score_band,  # noqa: F401 — re-exported for the SIM-451 tests and the JSON report
+)
 
 #: Reported occupancy percentiles. 0 is the minimum, 100 the maximum.
 PERCENTILES: tuple[int, ...] = (0, 1, 5, 10, 25, 50, 75, 90, 99, 100)
-
-#: The human-readable encode formula, carried into the JSON so a later reader can
-#: reproduce a cell id without this file.
-CELL_KEY_FORMULA = (
-    "((((runners_state * 3 + outs) * 12 + count_bucket) * 5 + score_band) * 2 + bat_is_home)"
-)
-
-_BASE_LABELS = ("---", "1--", "-2-", "12-", "--3", "1-3", "-23", "123")
-
-
-def score_band(score_diff: int) -> int:
-    """Return the 0..4 score band of a batting-team run difference.
-
-    The clamp copies ``simulation/sim_loop.py:1348``: the sim compresses every
-    difference beyond five runs onto the +/-5 boundary, so a 9-run deficit and a
-    5-run deficit are the same situation to the sampler. The pool builder already
-    stores the clamped value, so the clamp is a no-op on pool data and a
-    correctness guard on any other caller.
-    """
-    sd = max(-SCORE_CLAMP, min(SCORE_CLAMP, int(score_diff)))
-    return sum(1 for edge in SCORE_BAND_EDGES if sd > edge)
-
-
-def count_bucket(balls: int, strikes: int) -> int:
-    """Return the 0..11 count bucket. Copies ``full_pool_sampler.py:248``.
-
-    The saturating min/max is part of the copied definition. It maps an
-    out-of-range count onto the nearest legal one instead of raising.
-    """
-    return min(max(int(balls), 0), 3) * 3 + min(max(int(strikes), 0), 2)
-
-
-def cell_key(
-    runners_state: int,
-    outs: int,
-    balls: int,
-    strikes: int,
-    score_diff: int,
-    bat_is_home: int,
-) -> int:
-    """Return the 0..2879 cell id for one situation.
-
-    The encode runs most-significant dimension first, so sorting by cell id
-    groups the cells by base state. :func:`decode_cell` is its exact inverse.
-    """
-    rs = int(runners_state) & 0b111
-    o = min(max(int(outs), 0), N_OUTS - 1)
-    cb = count_bucket(balls, strikes)
-    band = score_band(score_diff)
-    home = 1 if int(bat_is_home) else 0
-    return ((((rs * N_OUTS + o) * N_COUNT + cb) * N_BAND + band) * N_HOME) + home
-
-
-@dataclass(frozen=True)
-class CellCoords:
-    """The decoded coordinates of one filter cell."""
-
-    runners_state: int
-    outs: int
-    balls: int
-    strikes: int
-    band: int
-    bat_is_home: int
-
-    @property
-    def label(self) -> str:
-        """Render the cell for a human, e.g. ``bases=123 outs=2 count=3-2 band=<=-3 HOME``."""
-        return (
-            f"bases={_BASE_LABELS[self.runners_state]} outs={self.outs} "
-            f"count={self.balls}-{self.strikes} band={SCORE_BAND_LABELS[self.band]} "
-            f"{'HOME' if self.bat_is_home else 'AWAY'}"
-        )
-
-
-def decode_cell(cell_id: int) -> CellCoords:
-    """Return the coordinates of a cell id. The exact inverse of :func:`cell_key`."""
-    cid = int(cell_id)
-    if not 0 <= cid < N_CELLS:
-        raise ValueError(f"cell_id {cid} out of range 0..{N_CELLS - 1}")
-    home = cid % N_HOME
-    cid //= N_HOME
-    band = cid % N_BAND
-    cid //= N_BAND
-    cb = cid % N_COUNT
-    cid //= N_COUNT
-    outs = cid % N_OUTS
-    rs = cid // N_OUTS
-    return CellCoords(
-        runners_state=rs,
-        outs=outs,
-        balls=cb // 3,
-        strikes=cb % 3,
-        band=band,
-        bat_is_home=home,
-    )
-
 
 # ---------------------------------------------------------------------------
 # SQL forms of the SAME definitions

@@ -89,9 +89,23 @@ PRODUCTION_FLAGS: dict[str, str] = {
     "SIM_HOME_OFF_WEIGHT": "0.0",
     # SIM-517 (2026-09-04): the fitted anisotropic receiving kernel (the
     # SIM-428 framing flip is DELETED) + the drawn row's got-away resolution.
-    "SIM_CATCHER_FRAMING_SIGMA": "0.25",
-    "SIM_CATCHER_BLOCK_SIGMA": "0.05",
+    # SIM-467 lane arms may switch the receiving kernel off (SIM467_LANE_RECEIVING=0)
+    # to measure the cell index without the SIM-523 confound; production stays fitted.
+    "SIM_CATCHER_FRAMING_SIGMA": (
+        "0" if os.environ.get("SIM467_LANE_RECEIVING", "1") == "0" else "0.25"
+    ),
+    "SIM_CATCHER_BLOCK_SIGMA": (
+        "0" if os.environ.get("SIM467_LANE_RECEIVING", "1") == "0" else "0.05"
+    ),
     "SIM_GOT_AWAY": "1",
+    # SIM-467 (2026-09-07): the pitch-draw CELL INDEX — each plate appearance
+    # draws from its (runners, outs, score band, side) cell with decision #19's
+    # widening ladder below MIN_CELL rows. Production is OFF: the first 12×500
+    # lane with it ON read PITCHES_PA +5.5% and BB_PA −4.6% RED (plan §5.4).
+    # Set SIM467_LANE_CELL_INDEX=1 on a lane run to certify the ON arm; the
+    # certification commit flips this default and docker-compose together.
+    "SIM_PITCH_CELL_INDEX": os.environ.get("SIM467_LANE_CELL_INDEX", "0"),
+    "SIM_PITCH_MIN_CELL": os.environ.get("SIM467_LANE_MIN_CELL", "20"),
 }
 
 #: Env names the lane must ERASE (not set) so a default code path proves

@@ -63,6 +63,18 @@ os.environ["SIM_CATCHER_FRAMING_SIGMA"] = "0"
 os.environ["SIM_CATCHER_BLOCK_SIGMA"] = "0"
 os.environ["SIM_GOT_AWAY"] = "0"
 
+# SIM-518: the draw-conditioning weights (fatigue + the batting side on the
+# pitch draw; the drawn pitch's similarity on the batted-ball draw). All off =
+# byte-identical; the SIM-518 tests set the sampler attributes directly.
+os.environ["SIM_FATIGUE_PC_SIGMA"] = "0"
+os.environ["SIM_FATIGUE_TTO_SIGMA"] = "0"
+os.environ["SIM_PITCH_HOME_OFF_WEIGHT"] = "1.0"
+os.environ["SIM_BB_PITCH_SIGMA"] = "0"
+
+# SIM-467: the pitch-draw cell index. Off = the whole-pool weight assembly,
+# byte-identical; the SIM-467 tests set ``pitch_cell_index`` directly.
+os.environ["SIM_PITCH_CELL_INDEX"] = "0"
+
 # ---------------------------------------------------------------------------
 # Shared lightweight fixtures
 # ---------------------------------------------------------------------------

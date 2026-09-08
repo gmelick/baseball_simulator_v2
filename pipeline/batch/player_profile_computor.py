@@ -1003,7 +1003,25 @@ def _label_component(mean: list[float], fi: dict[str, int]) -> str | None:
 # migration 0019 — the SIM-412 home-field rebuild as a draw weight).
 # sim515.1 = sim.ibb_rates (the measured IBB rate table — SIM-515 / migration
 # 0020) joins the pool-build chain.
-POOL_BUILDER_VERSION = "sim517.1"
+# sim517.1 = catcher_id + got_away on sim.pitch_pool (SIM-517 / migration 0022).
+# sim518.1 = bat_home + pitcher_pitch_count + times_through_order on
+# sim.pitch_pool (SIM-518 / migration 0023 — the draw-conditioning columns).
+POOL_BUILDER_VERSION = "sim518.1"
+
+#: SIM-518 (SIM-465): the two fatigue columns, as window expressions over
+#: raw.pitches. Module-level so a unit test can run them on a synthetic table
+#: against the live helper ``simulation.sim_loop.times_through_order`` — ONE
+#: definition on both sides of the draw.
+#:   * pitches this pitcher threw in this game BEFORE this plate appearance
+#:     (an empty frame on his first PA counts 0);
+#:   * 1 + (batters faced before this PA) // 9.
+SQL_PITCHER_PITCH_COUNT = (
+    "COUNT(*) OVER (PARTITION BY game_pk, pitcher ORDER BY at_bat_number "
+    "RANGE BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)"
+)
+SQL_TIMES_THROUGH_ORDER = (
+    "((DENSE_RANK() OVER (PARTITION BY game_pk, pitcher ORDER BY at_bat_number) - 1) // 9 + 1)"
+)
 RECENCY_RECENT_SEASONS = 2  # seasons (incl. ref) that get the full peak weight
 RECENCY_DECAY = 0.75  # geometric decay per season beyond the recent window
 RECENCY_FLOOR = 0.25
@@ -5212,6 +5230,17 @@ class PlayerProfileComputor:
                      OR (events IN ('strikeout', 'strikeout_double_play')
                          AND (des ILIKE '%wild pitch%' OR des ILIKE '%passed ball%')))
                                                         AS got_away,
+
+                    -- SIM-518 (migration 0023): the draw-conditioning
+                    -- columns, appended LAST (the INSERT is positional).
+                    -- bat_home: the home team bats. The two fatigue columns
+                    -- are the module constants SQL_PITCHER_PITCH_COUNT /
+                    -- SQL_TIMES_THROUGH_ORDER, unit-tested against the live
+                    -- helper. Both count quality-passing pitches only (the
+                    -- WHERE below runs first) — a <=0.12% drift.
+                    (inning_topbot = 'Bot')             AS bat_home,
+                    ({SQL_PITCHER_PITCH_COUNT})::SMALLINT AS pitcher_pitch_count,
+                    ({SQL_TIMES_THROUGH_ORDER})::SMALLINT AS times_through_order
 
                 FROM pg.raw.pitches
                 WHERE data_quality_flag = FALSE

@@ -203,7 +203,20 @@ csw/whiff overlap is parked on SIM-429). The open board (9): SIM-476 (all kernel
 step 0 pending an owner ruling on the steal-aggression recommendation), 517 (catcher
 receiving profile), 519 (live slate epic), 429-payoff (K-prop refit + CLV re-measure), 427,
 518, 467, 486, 497a/b, 421. The 2026-08-17 and 2026-08-11 handover docs stay valid as
-history only.
+history only. **SIM-518 CODE LANDED 2026-09-07** (plan `docs/audit/2026-09-04-sim467-518-plan.md`):
+migration 0023 (schema v23) + the sim518.1 builder + the artifact columns, and three draw
+weights gated OFF (`SIM_FATIGUE_PC_SIGMA` / `SIM_FATIGUE_TTO_SIGMA` / `SIM_PITCH_HOME_OFF_WEIGHT`
+/ `SIM_BB_PITCH_SIGMA`). The SIM-469 pool-only rebuild (`scripts/sim518_rebuild_pools.py`) is
+NOT run: the app's forkserver holds the DuckDB writer lock (**SIM-524**), so it needs the app
+stopped — an owner call; the fits and the lane follow it. **SIM-467 CODE LANDED + MEASURED
+2026-09-07:** the pitch-draw cell index (`SIM_PITCH_CELL_INDEX` / `SIM_PITCH_MIN_CELL`,
+`simulation/filter_cells.py`) cuts a game iteration from 2.62 s to 0.86 s (3.05×) with
+bit-identical in-cell weights. Two 12×500 lanes: with the fitted receiving kernel the index reds
+PITCHES_PA +5.5% / BB_PA −4.6% (the SIM-523 confound amplified by the hard cell); with the
+receiving kernel OFF it passes R, BB, pitches and every other band with K_PA −2.1% (floor 2.0%).
+OWNER CHOICE pending (plan §5.4): the speed with the receiving kernel parked, or the kernel without
+the speed; production stays OFF. The live n=100 `/simulate` reads 81-90 s warm — the five-minute
+figure was not the steady state.
 
 - **DO NOT run the profile recompute** (`make profile-computor`) — but the reason changed on
   2026-08-13. SIM-501a/c CLOSED: SIM-457 is re-landed on the events-based out label, no profile

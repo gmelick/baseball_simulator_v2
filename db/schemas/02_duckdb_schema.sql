@@ -839,6 +839,16 @@ CREATE TABLE IF NOT EXISTS sim.pitch_pool (
     catcher_id                  INTEGER,
     got_away                    BOOLEAN,
 
+    -- SIM-518 (migration 0023): the draw-conditioning columns. bat_home =
+    -- the home team bats (inning_topbot = 'Bot'); pitcher_pitch_count =
+    -- pitches this pitcher threw in this game BEFORE this plate appearance;
+    -- times_through_order = 1 + (batters faced before this PA) // 9 — the
+    -- live loop's `times_through_order` definition. Appended LAST: the pool
+    -- INSERT is positional (migration 0019's trap).
+    bat_home                    BOOLEAN,
+    pitcher_pitch_count         SMALLINT,
+    times_through_order         SMALLINT,
+
     PRIMARY KEY (pitch_id)
 );
 
