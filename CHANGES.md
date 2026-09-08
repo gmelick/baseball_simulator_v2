@@ -1,3 +1,27 @@
+# Docs — the play-picker REDESIGN ruled (SIM-523): one loop, engine scores, fitted powers; catcher receiving as a ratio, shipped OFF (SIM-526); the fence work unparked — 2026-09-08
+
+Four measurements settled the identity-kernel question (scripts/sim523_pool_tests.py,
+sim523_sim_tests.py, sim523_factor_strength.py): the catcher receiving factor is
+the strongest thing in the pitch draw by forty times (2.5% of the pool left in play
+vs 91% for the pitcher factor), it puts 8.9% of every draw on the live catcher's own
+pitches (pool share 0.56%), its got-away inputs are a staff-wildness measurement
+(the wildest quarter of catcher-seasons: +6-7% walks and hit-by-pitches), and a
+twin catcher with the same numbers on another staff moves the outcomes. The owner
+ruled the redesign in `docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md`:
+the weight order pitcher > batter > recency > catcher receiving with fitted powers;
+every actor factor its engine's 0-to-1 score, emitted as a nightly matrix and looked
+up at draw time; the loop (manager decisions per plate appearance; per pitch the
+steal draw, the pitch draw, the pitch-result draw where the batted ball is born; on
+a ball in play the park geometry check, the fielding draw on batted-ball similarity
+with the chain fielders, park, the batter's spray profile and sprint speed, then the
+advancement draws); batter hand a hard filter on fielding; the catcher receiving
+factor a mass-preserving ball-strike ratio on taken pitches, shipped OFF with its
+own enable ticket (SIM-526) because it enters the batter result only when the batter
+does not make contact; the fence trio (SIM-478/479/480) unparked as the park
+geometry step; a concentration check added to the grade. The immediate production
+change lane 2 certified — receiving OFF, cell index ON — waits for the owner's
+explicit go. Next free ID SIM-527.
+
 # Docs — owner ruling: no betting-value measurement until every graded statistic is green — 2026-09-08
 
 The owner ruled that the closing-line-value re-measure, and any edge read built

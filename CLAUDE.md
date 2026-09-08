@@ -176,6 +176,16 @@ standing owner rulings that govern all new work:
   grade is inside its range. Today the reds are walks per plate appearance under the receiving
   kernel, runs on the defense-aware configuration (SIM-520), and the identity-kernel confound
   behind both (SIM-523). The strikeout-prop refit may proceed.
+- **The play-picker redesign (owner rulings 2026-09-08; the plan is
+  `docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md`):** the weight order in the
+  pitch draws is pitcher first, batter, recency, catcher receiving last, with powers fitted
+  under that constraint; every actor factor is its engine's 0-to-1 score, emitted nightly as a
+  matrix and looked up at draw time; the loop is manager decisions per plate appearance, then
+  per pitch the steal draw, the pitch draw, the pitch-result draw (the batted ball is born
+  there), then park geometry, the fielding draw and the advancement draws; catcher receiving
+  is a mass-preserving ball-strike ratio on taken pitches that ships OFF (enable = SIM-526);
+  a concentration check (no factor may put more than its natural share of a draw on the live
+  player's own team) joins the grade.
 - **One in-play path (SIM-486, 2026-09-06):** the per-tile FAISS fallback, the injected
   `PlayResolver`, the legacy advancement code (`_advance_runners` and its constants), the
   SIM-318 foul re-weight and the `SIM_FULL_POOL` switch are DELETED. Every no-DB test and

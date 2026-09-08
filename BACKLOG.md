@@ -1,5 +1,39 @@
 # Product Backlog
 
+# 🧭 2026-09-08 — OWNER RULINGS: the play-picker REDESIGN replaces the three options on the identity-kernel confound (SIM-523); catcher receiving rebuilt as a ball-strike ratio, shipped OFF (enable = SIM-526); the fence work UNPARKED (next free ID → SIM-527)
+
+**The plan: `docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md` (read it first).** The
+rulings, deliverable first: (1) the weight ORDER in the pitch draws is pitcher first, batter, then
+recency, catcher receiving last — the powers are fitted under that constraint; (2) every actor
+factor is its engine's 0-to-1 composite score, emitted nightly as a score matrix and looked up at
+draw time (the pitcher pattern) — the sampler's own bell-curve kernels go; (3) the loop: manager
+decisions at each new plate appearance, then per pitch the steal draw, the PITCH draw (which pitch
+is thrown), the PITCH-RESULT draw (ball / strike / in play — the batted ball is born here), then
+on a ball in play the park geometry check, the fielding draw (batted-ball similarity first, the
+fielders on the chain, park, the batter's spray profile, sprint speed) and the runner advancement
+draws; (4) batter hand is a hard filter on the fielding draw; (5) the catcher receiving factor is a
+mass-preserving ball-strike ratio on taken pitches — it ships OFF because, in the owner's words, it
+is one mechanic that does not fit the design as cleanly: it enters the batter result but only when
+the batter does not make contact; fitting and enabling it is **SIM-526**; (6) the park-geometry
+table, the trajectory model and the fence-resolution stage (SIM-478/479/480) are UNPARKED as the
+park geometry step; (7) a concentration check joins the grade: no factor may narrow the effective
+sample below a floor or put more than its natural share of a draw on the live player's own team.
+
+**The evidence (scripts/sim523_*.py, 2026-09-08):** the catcher factor alone keeps 2.5% of the pool
+in play (the pitcher factor 91%, the batter 99.96%) and puts 8.9% of every draw on the live
+catcher's own pitches (pool share 0.56%); its got-away inputs track the STAFF's walks and
+hit-by-pitches (the wildest quarter of catcher-seasons: +6-7%); a twin catcher with the same skill
+numbers on another staff moves walks and hit-by-pitches; holding the pitcher and swapping the
+catcher in real data shows no catcher effect above noise. Lane 2 (cell index ON, receiving OFF)
+passes runs, walks, pitches and every other band with strikeouts −2.1% (floor 2.0%).
+
+**Immediate config (waits for the owner's explicit go):** receiving kernel OFF in production and the
+cell index ON — the configuration lane 2 certified.
+
+| ID | Title | Type | Pri | Size | Depends-on | Status |
+|---|---|---|---|---|---|---|
+| **SIM-526** | Fit and enable the catcher receiving ratio factor (the ball-strike ratio on taken pitches, built OFF under the redesign) | ML | P2 | S | SIM-523 parts E + F | 🔲 **OPEN — FILED 2026-09-08 (owner ruling).** The factor ships OFF with the redesign because it enters the pitch-result draw only when the batter does not make contact. This ticket fits its power under the ordering constraint (last, smallest), verifies the taken group's weight is unchanged (a unit test) and the two receiving bands on the 12×500 lane (called strikes per taken pitch moves; pitches per plate appearance does not), then flips `SIM_CATCHER_RECEIVING` in compose and the lane's production set in one commit. |
+
 # ⚖️ 2026-09-08 — OWNER RULING: NO betting-value measurement until every measured statistic is green
 
 **The owner ruled (2026-09-08): hold every betting-value measurement — the closing-line-value
@@ -980,9 +1014,9 @@ them. 2017 is the earliest year. Cell occupancy comes from SIM-460/461, never fr
 | **SIM-475** | Thin-cell widening (fixed order) + effective-sample-size emission | ML | P2 | S | 451, 470 | ✅ **CLOSED-DELIVERED 2026-09-07 by the pitch-draw cell index (SIM-467)** — the widening ladder (score band → batting side → count) below a minimum cell size and the per-draw level counts are `FullPoolSampler._subcell_rows` / `widen_counts`; the effective-sample-size emission is not built, and the level counts serve its purpose. Was: 🔲 **OPEN.** Report only. Relax score band → home/away → count. |
 | **SIM-476** | The kernel-bandwidth fit (re-scoped 2026-08-28) | ML | P1 | L | — | ✅ **CLOSED 2026-09-03** — every kernel fitted, enabled and certified; home_win_pct passes at full power (see the banner of that date). Was: 🔲 **OPEN — PLANNED: `docs/audit/2026-08-28-sim476-fit-plan.md` (read it first; the SIM-470 dependency is DISSOLVED — the draws landed as factorized kernels, so SIM-476 fits the knobs that exist).** The fit principle: a k… |
 | **SIM-477** | Fit the weight temperatures | ML | P1 | M | 476, 471–474 | ⤵ **MERGED into the kernel-bandwidth fit (SIM-476, closed 2026-09-03)** — the 2026-08-28 re-scope made 'fit the weight temperatures' that ticket's whole content. Was: 🔲 **OPEN.** |
-| **SIM-478** | `derived.park_geometry` (~360 rows, hand-curated) | Data | P2 | M | — | 🟡 **PARKED 2026-09-08 (hygiene sweep 2).** The park effect landed by a different route — the fitted park run-factor kernel on the batted-ball draw (bandwidth 0.02, certified 2026-09-03) — so the fence-resolution design has no measured case today. Reopen only with one (for example home runs per ball in play by venue tier reading red). Was: 🔲 **OPEN.** Fence distance + height by spray sector. |
-| **SIM-479** | Batted-ball trajectory model | ML | P2 | L | SIM-463 | 🟡 **PARKED 2026-09-08 (hygiene sweep 2).** The park effect landed by a different route — the fitted park run-factor kernel on the batted-ball draw (bandwidth 0.02, certified 2026-09-03) — so the fence-resolution design has no measured case today. Reopen only with one (for example home runs per ball in play by venue tier reading red). Was: 🔲 **OPEN.** ⚠ **Largest technical unknown.** Statcast distance = where the ball **stopped**, confirmed by the owner — wrong for wall-scrapers, the park-sensitive case. Validate on home runs. |
-| **SIM-480** | Fence resolution stage | ML | P2 | M | 478, 479 | 🟡 **PARKED 2026-09-08 (hygiene sweep 2).** The park effect landed by a different route — the fitted park run-factor kernel on the batted-ball draw (bandwidth 0.02, certified 2026-09-03) — so the fence-resolution design has no measured case today. Reopen only with one (for example home runs per ball in play by venue tier reading red). Was: 🔲 **OPEN.** Replaces `_apply_park_factor`, which leaves **HR projections perfectly park-invariant**. Neutralize the comp's own park first. |
+| **SIM-478** | `derived.park_geometry` (~360 rows, hand-curated) | Data | P2 | M | — | 🔲 **UNPARKED 2026-09-08 (owner ruling) — the park geometry step of the play-picker redesign** (`docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md`, part C): the ball from the pitch-result draw is checked against the live park's fence at its direction before the fielding draw; a certain outcome supersedes the draw. Was: 🟡 **PARKED 2026-09-08 (hygiene sweep 2).** The park effect landed by a different route — the fitted park run-factor kernel on the batted-ball draw (bandwidth 0.02, certified 2026-09-03) — so the fence… |
+| **SIM-479** | Batted-ball trajectory model | ML | P2 | L | SIM-463 | 🔲 **UNPARKED 2026-09-08 (owner ruling) — the park geometry step of the play-picker redesign** (`docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md`, part C): the ball from the pitch-result draw is checked against the live park's fence at its direction before the fielding draw; a certain outcome supersedes the draw. Was: 🟡 **PARKED 2026-09-08 (hygiene sweep 2).** The park effect landed by a different route — the fitted park run-factor kernel on the batted-ball draw (bandwidth 0.02, certified 2026-09-03) — so the fence… |
+| **SIM-480** | Fence resolution stage | ML | P2 | M | 478, 479 | 🔲 **UNPARKED 2026-09-08 (owner ruling) — the park geometry step of the play-picker redesign** (`docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md`, part C): the ball from the pitch-result draw is checked against the live park's fence at its direction before the fielding draw; a certain outcome supersedes the draw. Was: 🟡 **PARKED 2026-09-08 (hygiene sweep 2).** The park effect landed by a different route — the fitted park run-factor kernel on the batted-ball draw (bandwidth 0.02, certified 2026-09-03) — so the fence… |
 | **SIM-481** | Delete the hand-tuned nudges (~350–400 lines) | Sim | P1 | M | 471–474, 480 | ✅ **CLOSED-DELIVERED 2026-09-06** across three closures: the park / fielder / home-field flips deleted by the kernel fit (2026-08-30), the framing flip by the receiving profile (2026-09-04), the legacy advancement constants and the run multiplier by the per-tile deletion (2026-09-06). Was: 🔲 **OPEN.** Incl. the 0.025 home-field bias whose measured 0.017 retune was **never applied** — ~50% too much HFA ever since. |
 | **SIM-482** | Manager small-ball as draw weights | Sim | P3 | S | SIM-470 | ⤵ **MERGED into the real-manager-profiles ticket (SIM-427) 2026-09-08 (hygiene sweep 2)** — its plan owns the dead-signal cleanup (pitch-outs, sacrifice bunts, the hit-and-run, pinch-hits). Was: 🔲 **OPEN.** Bunts/pitch-outs are signalled, never resolved, and **narrated to users** as if they happened. |
 | **SIM-483** | Exclude steal runs from the RBI + earned-run credit (Rule 9.04(b)) | Sim | P3 | XS | SIM-474 | 🔲 **OPEN.** Latent today; SIM-468 makes it live. |
