@@ -1,4 +1,8 @@
 """
+
+ARCHIVED 2026-09-09: these tests measured the SIM-517 bell-curve receiving
+kernel, which SIM-523 part E deleted (the two sigmas no longer exist on the
+sampler; setting them changes nothing). Kept as the record of that measurement.
 scripts/sim523_sim_tests.py — SIM-523 tests 2 + 4 on the SIMULATOR (production config, index off).
 
 Test 4 — measure the draw directly. For N games, after every plate appearance's
@@ -140,7 +144,10 @@ def test4(states, iters):
         cids = [c for c in (kw.get("home_catcher_id"), kw.get("away_catcher_id")) if c]
         staff, _ = _staffs(cids, season)
         orig = fp.new_plate_appearance
-        sigmas = (fp.catcher_framing_sigma, fp.catcher_block_sigma)
+        sigmas = (
+            getattr(fp, "catcher_framing_sigma", 0.0),
+            getattr(fp, "catcher_block_sigma", 0.0),
+        )
 
         def npa(batter_key, base_out, *, fp=fp, staff=staff, orig=orig, **k):
             orig(batter_key, base_out, **k)
@@ -162,7 +169,7 @@ def test4(states, iters):
                 own_m += float(w[own[rows]].sum())
                 staff_m += float(w[staff_mask[rows]].sum())
             if tot > 0:
-                key = fp.catcher_framing_sigma > 0
+                key = getattr(fp, "catcher_framing_sigma", 0.0) > 0
                 res[key]["own"].append(own_m / tot)
                 res[key]["staff"].append(staff_m / tot)
                 res[key]["pool_own"].append(float(own[meta["bucket_rows"][0]].mean()))
@@ -225,7 +232,10 @@ def test2(states, iters):
         )
         fp = machine.full_pool_sampler
         fp.pitch_cell_index = False
-        sigmas = (fp.catcher_framing_sigma, fp.catcher_block_sigma)
+        sigmas = (
+            getattr(fp, "catcher_framing_sigma", 0.0),
+            getattr(fp, "catcher_block_sigma", 0.0),
+        )
         cids = [c for c in (kw.get("home_catcher_id"), kw.get("away_catcher_id")) if c]
         staff, every = _staffs(cids, season)
         twin_kw = dict(kw)

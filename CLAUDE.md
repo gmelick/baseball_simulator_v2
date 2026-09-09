@@ -261,7 +261,11 @@ venue travels as `venue_id` in the kwargs contract. **PART D BUILT 2026-09-09:**
 decisions run once at a plate appearance's start (before the intentional walk and the steal);
 the pitching change is a draw from a pitching-change opportunity pool in the bundle
 (`--what manager`, `SIM_MANAGER_DRAW` OFF). The probe: the production formula runs 2.4
-pitchers a side vs the majors' ~4.2; the draw reads 4.35 (the pool's own 4.27). Parts E-G remain.
+pitchers a side vs the majors' ~4.2; the draw reads 4.35 (the pool's own 4.27). **PART E BUILT
+2026-09-09:** the catcher receiving factor is a mass-preserving ball-strike ratio on taken
+pitches (`receiving.json`, league rates per season, `--what receiving`; `SIM_CATCHER_RECEIVING`
+OFF, enabling = SIM-526);
+the SIM-517 bell-curve kernel and its two sigmas are DELETED. Parts F and G remain.
 
 - **DO NOT run the profile recompute** (`make profile-computor`) — but the reason changed on
   2026-08-13. SIM-501a/c CLOSED: SIM-457 is re-landed on the events-based out label, no profile

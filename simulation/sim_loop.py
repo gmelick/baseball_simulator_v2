@@ -661,10 +661,11 @@ class StateMachine:
         # SIM_PARK_KERNEL_SIGMA=0.02, fitted against the pool's own
         # conditional frequencies; see docs/audit/2026-08-28-sim476-fit-plan.md).
         # SIM-517 (2026-09-04): the SIM-428 framing flip (`_apply_framing`,
-        # `SIM_FRAMING`) is DELETED — the catcher's receiving effect is now a
-        # WEIGHT in the pitch draw (the fitted anisotropic receiving kernel:
-        # SIM_CATCHER_FRAMING_SIGMA=0.25 / SIM_CATCHER_BLOCK_SIGMA=0.05), so
-        # the drawn row is the play with no post-draw adjustment anywhere.
+        # `SIM_FRAMING`) is DELETED — the catcher's receiving effect is a
+        # WEIGHT in the pitch-result draw (SIM-523 part E: the mass-preserving
+        # ball-strike ratio on taken pitches, SIM_CATCHER_RECEIVING, off until
+        # SIM-526; the SIM-517 bell-curve kernel is deleted), so the drawn row
+        # is the play with no post-draw adjustment anywhere.
         # SIM-517 part D: honor the drawn pitch row's got-away fact (a passed
         # ball / wild pitch on THAT pitch, incl. an uncaught third strike).
         # Default OFF until the part-E fit + certifying lane land it — the

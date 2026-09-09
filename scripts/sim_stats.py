@@ -111,8 +111,7 @@ _REALISM_FLAGS = (
     "SIM_HOME_OFF_WEIGHT",  # SIM-491/476: the home-field DRAW weight (1.0 = off; prod 0.0)
     "SIM_PARK_KERNEL_SIGMA",  # SIM-491 pt.2: the park KERNEL bandwidth (0 = off)
     "SIM_FIELDER_KERNEL_SIGMA",  # SIM-491 pt.3: the fielder KERNEL bandwidth (0 = off)
-    "SIM_CATCHER_FRAMING_SIGMA",  # SIM-517: the receiving kernel, framing dims
-    "SIM_CATCHER_BLOCK_SIGMA",  # SIM-517: the receiving kernel, blocking dims
+    "SIM_CATCHER_RECEIVING",  # SIM-523 part E: the receiving ratio on taken pitches
     "SIM_GOT_AWAY",  # SIM-517: honor the drawn row's got-away fact
 )
 

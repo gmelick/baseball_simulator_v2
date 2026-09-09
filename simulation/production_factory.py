@@ -135,6 +135,13 @@ def apply_result_split_env(sampler: Any, env: Mapping[str, str] | None = None) -
     to the batted ball the result row was born with.
     """
     src = os.environ if env is None else env
+    # SIM-523 part E: the catcher receiving ratio (OFF; enabling is SIM-526).
+    sampler.catcher_receiving = src.get("SIM_CATCHER_RECEIVING", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
     sampler.pitch_result_split = src.get("SIM_PITCH_RESULT_SPLIT", "0").strip().lower() in (
         "1",
         "true",
@@ -273,8 +280,6 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     # (the default, and any unparsable value) removes that group; both
     # 0.0 disables the kernel EXACTLY.
     for env, attr in (
-        ("SIM_CATCHER_FRAMING_SIGMA", "catcher_framing_sigma"),
-        ("SIM_CATCHER_BLOCK_SIGMA", "catcher_block_sigma"),
         # SIM-518: the draw-conditioning kernels — fatigue (pitch count /
         # times through the order) on the pitch draw, the drawn pitch's
         # similarity on the batted-ball draw. 0.0 = off EXACTLY; each is a

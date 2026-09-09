@@ -89,16 +89,10 @@ PRODUCTION_FLAGS: dict[str, str] = {
     "SIM_HOME_OFF_WEIGHT": "0.0",
     # SIM-517 (2026-09-04): the fitted anisotropic receiving kernel (the
     # SIM-428 framing flip is DELETED) + the drawn row's got-away resolution.
-    # SIM-467 lane arms may switch the receiving kernel off (SIM467_LANE_RECEIVING=0)
-    # to measure the cell index without the SIM-523 confound; production stays fitted.
-    # OWNER GO 2026-09-08: production runs the receiving kernel OFF (SIM-523); set
-    # SIM467_LANE_RECEIVING=1 on a lane run to measure the old fitted kernel.
-    "SIM_CATCHER_FRAMING_SIGMA": (
-        "0.25" if os.environ.get("SIM467_LANE_RECEIVING", "0") == "1" else "0"
-    ),
-    "SIM_CATCHER_BLOCK_SIGMA": (
-        "0.05" if os.environ.get("SIM467_LANE_RECEIVING", "0") == "1" else "0"
-    ),
+    # SIM-523 part E (2026-09-09): the catcher receiving RATIO on taken pitches
+    # replaces the SIM-517 kernel (deleted). OFF until SIM-526 fits and enables
+    # it; set SIM523_LANE_RECEIVING=1 on a lane run to measure the ON arm.
+    "SIM_CATCHER_RECEIVING": os.environ.get("SIM523_LANE_RECEIVING", "0"),
     "SIM_GOT_AWAY": "1",
     # SIM-467 (2026-09-07): the pitch-draw CELL INDEX — each plate appearance
     # draws from its (runners, outs, score band, side) cell with decision #19's

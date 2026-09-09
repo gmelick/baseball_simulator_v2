@@ -1,4 +1,8 @@
 """
+
+ARCHIVED 2026-09-09: this probe measured the SIM-517 bell-curve receiving kernel,
+which SIM-523 part E deleted (its method and sigmas no longer exist on the
+sampler). Kept as the record of that measurement; it will not run as is.
 scripts/sim517_catcher_probe.py — the SIM-517 part-E receiving instrument.
 
 WHAT THIS IS

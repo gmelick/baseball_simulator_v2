@@ -29,7 +29,13 @@ import os
 
 import numpy as np
 
-from pipeline.batch.engine_artifacts import EngineArtifacts, HandPool, carry_predict
+from pipeline.batch.engine_artifacts import (
+    EngineArtifacts,
+    HandPool,
+    carry_predict,
+    recv_block_cell,
+    recv_zone_group,
+)
 from simulation.filter_cells import (
     DEFAULT_MIN_CELL,
     N_BAND,
@@ -139,29 +145,22 @@ class FullPoolSampler:
         self.fielder_sigma = 0.0
         #: Per-hand cache of each row's fielder-embedding index (-1 = absent).
         self._bb_fielder_emb: dict[str, np.ndarray] = {}
-        # SIM-517: the catcher RECEIVING kernel — ONE multiplicative weight on
-        # the pitch draw, with an ANISOTROPIC metric: the framing dims (the
-        # two zone-strike rates) and the blocking dims (the block rate + the
-        # EB uncaught-K3 rate) each carry their OWN bandwidth, because the
-        # part-E ladder measured they need different ones (framing conditions
-        # correctly at ~0.25 and DEGRADES tighter — twin-selection noise;
-        # blocking closes only at ~0.05 — soft-kernel shrinkage toward the
-        # dense centre). A poor receiver behind the plate pulls the draw
-        # toward pitches caught by poor receivers at the pool's own
-        # conditional rates. A group's sigma 0.0 (the default) removes that
-        # group from the metric; both 0.0 disables the kernel EXACTLY. The
-        # factor is normalized to a MEAN of 1 within each COUNT BUCKET (the
-        # SIM-476 per-partition lesson): it may only shift WHICH pitch is
-        # drawn at a count, never the count structure; missing-identity rows
-        # are exactly neutral.
-        self.catcher_framing_sigma = 0.0
-        self.catcher_block_sigma = 0.0
-        #: Lazy receiving data: (key_index, z-matrix) or None when unavailable.
-        self._recv_data: tuple[dict[str, int], np.ndarray] | None | bool = False
-        #: Per-hand cache of each pitch row's receiving-matrix index (-1 absent).
-        self._pp_recv_idx: dict[str, np.ndarray] = {}
-        #: (hand, catcher_key) -> the normalized per-row receiving factor.
-        self._recv_factor_cache: dict[tuple[str, str], np.ndarray | None] = {}
+        # SIM-523 part E — the catcher RECEIVING ratio (plan §3, step 4: the
+        # LAST factor of the pitch-result draw, on TAKEN pitches only). A
+        # called-strike row × the live catcher's framing multiplier at its
+        # zone group, a ball row × the mirror, a got-away row × his blocking
+        # ratio (got-aways above expectation) and the other taken rows × its
+        # mirror; then the taken group is rescaled so its total weight is
+        # unchanged — the factor moves ball-or-strike WITHIN the taken
+        # pitches and never the swing-or-take split. With the split on it
+        # weights the result draw only; off, the single draw. OFF by default
+        # (SIM_CATCHER_RECEIVING; fitting and enabling is SIM-526). It replaces
+        # the SIM-517 bell-curve kernel and its two sigmas, deleted here.
+        self.catcher_receiving = False
+        #: (hand, catcher_key) -> the per-row ratio factor, or None.
+        self._recv_cache: dict[tuple[str, str], np.ndarray | None] = {}
+        #: Per-count receiving factors kept for the result draw (the split on).
+        self._bucket_recv: list[np.ndarray | None] | None = None
         #: The catcher key new_half_inning staged for the receiving factor.
         self._catcher_key: str | None = None
         #: The last drawn pitch-pool row (global index; None before any draw
@@ -450,11 +449,14 @@ class FullPoolSampler:
         strikes = np.clip(pool.sit[:, 1].astype(np.int64), 0, 2)
         cbucket = balls * 3 + strikes
         bucket_rows = [np.nonzero(cbucket == b)[0] for b in range(12)]
+        outcome_arr = np.asarray(pool.outcome_type, dtype=object)
         meta = {
             "pool": pool,
             "pool_prof": pool_prof,
             "pool_bat": pool_bat,
             "outcome": np.asarray(pool.outcome_type, dtype=object),
+            # SIM-523 part E: the TAKEN rows (a called strike or a ball).
+            "taken": (outcome_arr == "called_strike") | (outcome_arr == "ball"),
             "bucket_rows": bucket_rows,
             # SIM-430: the base-out columns as a CONTIGUOUS copy. _f_situation_baseout
             # ran ``pool.sit[:, 2:6]`` (a non-contiguous 4-col slice + copy over the
@@ -654,12 +656,13 @@ class FullPoolSampler:
         self._pa_keys = None
         f_bat = self._f_batter(self._hand, batter_key)
         w = self._base * f_bat * self._f_situation_baseout(self._hand, base_out)
-        if (
-            self.catcher_framing_sigma > 0.0 or self.catcher_block_sigma > 0.0
-        ) and self._catcher_key is not None:
-            f_recv = self._f_catcher_receiving(self._hand, self._catcher_key)
-            if f_recv is not None:
-                w = w * f_recv
+        # SIM-523 part E: the receiving ratio, applied per count bucket below
+        # (the single draw) or kept for the result draw (the split).
+        recv = (
+            self._recv_factor(self._hand, self._catcher_key)
+            if self._receiving_on() and self._catcher_key is not None
+            else None
+        )
         # --- SIM-518: the conditioning weights (each exactly absent when off)
         if (self.fatigue_pc_sigma > 0.0 or self.fatigue_tto_sigma > 0.0) and (
             pitch_count is not None or tto is not None
@@ -682,8 +685,17 @@ class FullPoolSampler:
             self._bucket_fb = [(f_bat[r] if r.size else None) for r in rows]
             self._bucket_fp = [(fpv[r] if (r.size and fpv is not None) else None) for r in rows]
             w = _repower(w, f_bat, self.pitch_batter_power)
+            self._bucket_recv = (
+                [(recv[r] if r.size else None) for r in rows] if recv is not None else None
+            )
         else:
             self._bucket_w = self._bucket_fb = self._bucket_fp = None
+            self._bucket_recv = None
+            if recv is not None:
+                taken = self._pool_meta(self._hand)["taken"]
+                for r in rows:
+                    if r.size:
+                        w[r] = self._apply_receiving(w[r], taken[r], recv[r])
         self._bucket_cdf = [(np.cumsum(w[r], dtype=np.float64) if r.size else None) for r in rows]
 
     # ---- SIM-467: the cell index -------------------------------------------
@@ -811,11 +823,14 @@ class FullPoolSampler:
         aff = self._batter_affinity(batter_key)
         pb = meta["pool_bat"]
         sitb = meta["sit_baseout"]
-        recv: np.ndarray | None = None
-        if (
-            self.catcher_framing_sigma > 0.0 or self.catcher_block_sigma > 0.0
-        ) and self._catcher_key is not None:
-            recv = self._f_catcher_receiving(hand, self._catcher_key)
+        # SIM-523 part E: the receiving ratio (the single draw applies it per
+        # sub-cell; the split keeps it for the result draw).
+        recv: np.ndarray | None = (
+            self._recv_factor(hand, self._catcher_key)
+            if self._receiving_on() and self._catcher_key is not None
+            else None
+        )
+        taken_all = meta["taken"]
         fatigue_on = (self.fatigue_pc_sigma > 0.0 or self.fatigue_tto_sigma > 0.0) and (
             pitch_count is not None or tto is not None
         )
@@ -830,6 +845,7 @@ class FullPoolSampler:
         b_w: list[np.ndarray | None] = []
         b_fb: list[np.ndarray | None] = []
         b_fp: list[np.ndarray | None] = []
+        b_recv: list[np.ndarray | None] = []
         for cb in range(N_COUNT):
             rows, level = self._subcell_rows(hand, rs, outs, band, side, cb)
             pa_rows.append(rows)
@@ -840,6 +856,7 @@ class FullPoolSampler:
                 b_w.append(None)
                 b_fb.append(None)
                 b_fp.append(None)
+                b_recv.append(None)
                 continue
             if aff is not None:
                 pbr = pb[rows]
@@ -852,8 +869,6 @@ class FullPoolSampler:
             d2 = np.einsum("ij,ij->i", diff, diff)
             f_sit = np.exp(-d2 / (2.0 * self.sit_sigma**2 * sitb.shape[1])).astype(np.float32)
             w = base[rows] * f_bat * f_sit
-            if recv is not None:
-                w = w * recv[rows]
             if fatigue_on:
                 f_fat = self._fatigue_rows(hand, pitch_count, tto, rows)
                 if f_fat is not None:
@@ -869,7 +884,11 @@ class FullPoolSampler:
                 b_w.append(w)
                 b_fb.append(f_bat)
                 b_fp.append(fpv[rows] if fpv is not None else None)
+                b_recv.append(recv[rows] if recv is not None else None)
                 w = _repower(w, f_bat, self.pitch_batter_power)
+            elif recv is not None:
+                # SIM-523 part E: the receiving ratio, last, mass-preserving.
+                w = self._apply_receiving(w, taken_all[rows], recv[rows])
             cdfs.append(np.cumsum(w, dtype=np.float64))
         self._pa_rows = pa_rows
         self._pa_levels = pa_levels
@@ -877,8 +896,10 @@ class FullPoolSampler:
         self._bucket_cdf = cdfs
         if split:
             self._bucket_w, self._bucket_fb, self._bucket_fp = b_w, b_fb, b_fp
+            self._bucket_recv = b_recv if recv is not None else None
         else:
             self._bucket_w = self._bucket_fb = self._bucket_fp = None
+            self._bucket_recv = None
 
     def _fatigue_rows(
         self, hand: str, pitch_count: int | None, tto: int | None, rows: np.ndarray
@@ -1118,6 +1139,10 @@ class FullPoolSampler:
             fb = self._bucket_fb[b]
             if fb is not None:
                 wr = _repower(wr, fb, self.result_batter_power)
+        # SIM-523 part E: the catcher receiving ratio, last, on taken rows.
+        if self._bucket_recv is not None and self._bucket_recv[b] is not None:
+            taken = self._pool_meta(self._hand)["taken"][rows]
+            wr = self._apply_receiving(wr, taken, self._bucket_recv[b])
         cdf = np.cumsum(wr, dtype=np.float64)
         total = float(cdf[-1])
         if not np.isfinite(total) or total <= 0.0:
@@ -1190,125 +1215,103 @@ class FullPoolSampler:
             return None
         return g
 
-    # ---- SIM-517: the catcher RECEIVING factor ----------------------------
-    #: The receiving skill, read as rates: the two zone-framing rates, the
-    #: block rate (got-aways per pitch received — derived here because the
-    #: metrics table stores the count), and the EB uncaught-strike-3 rate.
-    _RECV_RATE_FEATURES = ("shadow_zone_strike_rate", "heart_zone_strike_rate")
+    # ---- SIM-523 part E: the catcher RECEIVING ratio --------------------------
+    def _receiving_on(self) -> bool:
+        return bool(self.catcher_receiving) and self._catcher_key is not None
 
-    def _catcher_receiving_data(self) -> tuple[dict[str, int], np.ndarray] | None:
-        """Lazy (key_index, z-matrix) of the derived receiving features over
-        every catcher-season in the embedding. None when the embedding or any
-        required column is absent (the kernel then stays neutral)."""
-        if self._recv_data is not False:
-            return self._recv_data  # type: ignore[return-value]
-        cemb = self.a.actor_emb.get("catcher")
-        out: tuple[dict[str, int], np.ndarray] | None = None
-        if cemb is not None:
-            feats = list(cemb.get("features") or [])
-            fi = {f: i for i, f in enumerate(feats)}
-            need = (*self._RECV_RATE_FEATURES, "actual_pbwp", "pitches_received_total")
-            if all(f in fi for f in need):
-                vecs = np.asarray(cemb["vecs"], dtype=np.float64)
-                cols = [vecs[:, fi[f]] for f in self._RECV_RATE_FEATURES]
-                # The block rate: got-aways per pitch received.
-                tot = vecs[:, fi["pitches_received_total"]]
-                with np.errstate(divide="ignore", invalid="ignore"):
-                    cols.append(np.where(tot > 0, vecs[:, fi["actual_pbwp"]] / tot, np.nan))
-                # The EB uncaught-K3 rate (part A; optional on an older export).
-                if "uncaught_k3_rate_eb" in fi:
-                    cols.append(vecs[:, fi["uncaught_k3_rate_eb"]])
-                mat = np.stack(cols, axis=1)
-                mean = np.nan_to_num(np.nanmean(mat, axis=0))
-                std = np.nan_to_num(np.nanstd(mat, axis=0))
-                std[std <= 0] = 1.0
-                z = (mat - mean) / std
-                out = (dict(cemb["key_index"]), z)
-        self._recv_data = out
+    def _recv_factor(self, hand: str, catcher_key: str) -> np.ndarray | None:
+        """The per-row receiving ratio for the LIVE catcher over the hand's
+        pitch pool — 1.0 on every swung-at, hit-by-pitch or unknown-zone row;
+        on a taken row the framing multiplier at its zone group (a called
+        strike) or the mirror (a ball), times the blocking ratio (a got-away)
+        or its mirror (a taken pitch that stayed caught). None when the bundle
+        carries no receiving document, no zones, or no entry for the catcher
+        (the draw is then unweighted — a neutral catcher)."""
+        key = (hand, catcher_key)
+        if key in self._recv_cache:
+            return self._recv_cache[key]
+        out: np.ndarray | None = None
+        table = getattr(self.a, "receiving", None) or {}
+        pool = self.a.pools[hand]
+        entry = (table.get("catchers") or {}).get(catcher_key)
+        zone = getattr(pool, "zone", None)
+        if entry is not None and zone is not None:
+            meta = self._pool_meta(hand)
+            outcome = meta["outcome"]
+            g = recv_zone_group(zone)
+            groups = list(table.get("groups") or [])
+            # The league rates of each ROW's own season (the pooled rates for
+            # a season the document lacks) — a called-strike rate that moved
+            # between seasons must not read as catcher skill.
+            per_season = table.get("league_frame") or {}
+            pooled = table.get("league_frame_all") or {}
+            row_season = np.asarray(pool.season, dtype=np.int64)
+            gi = np.clip(g.astype(np.int64), 0, len(groups))
+            L = np.ones(pool.n, dtype=np.float64)
+            for s in np.unique(row_season):
+                lf = per_season.get(str(int(s)))
+                if not isinstance(lf, dict):
+                    lf = pooled
+                lg = np.array(
+                    [1.0] + [float(lf.get(name, 0.0)) for name in groups], dtype=np.float64
+                )
+                sel_s = row_season == s
+                L[sel_s] = lg[gi[sel_s]]
+            mg = np.array(
+                [1.0] + [float((entry.get("frame") or {}).get(name, 1.0)) for name in groups],
+                dtype=np.float64,
+            )
+            known = (g > 0) & (gi <= len(groups))
+            m = mg[gi]
+            cs = outcome == "called_strike"
+            ball = outcome == "ball"
+            out = np.ones(pool.n, dtype=np.float32)
+            sel = cs & known
+            out[sel] = m[sel].astype(np.float32)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                mirror = np.where(L < 1.0, (1.0 - L * m) / (1.0 - L), 1.0)
+            sel = ball & known
+            out[sel] = np.clip(mirror[sel], 0.0, None).astype(np.float32)
+            b = entry.get("block")
+            gb_season = table.get("league_block") or {}
+            gb_all = list(table.get("league_block_all") or [])
+            if b is not None and (gb_season or gb_all) and pool.got_away is not None:
+                cell = recv_block_cell(zone, pool.geom[:, 9], pool.geom[:, 0] > 0.0)
+                n_cells = len(gb_all) if gb_all else len(next(iter(gb_season.values())))
+                gcell = np.zeros(pool.n, dtype=np.float64)
+                ok = (cs | ball) & (cell >= 0) & (cell < n_cells)
+                for s in np.unique(row_season):
+                    cells = gb_season.get(str(int(s))) if isinstance(gb_season, dict) else None
+                    if not cells:
+                        cells = gb_all
+                    if not cells:
+                        continue
+                    sel_s = ok & (row_season == s)
+                    gcell[sel_s] = np.asarray(cells, dtype=np.float64)[cell[sel_s].astype(np.int64)]
+                if ok.any():
+                    G = gcell[ok]
+                    ga = np.asarray(pool.got_away)[ok] > 0
+                    bf = float(b)
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        fac = np.where(ga, bf, np.where(G < 1.0, (1.0 - G * bf) / (1.0 - G), 1.0))
+                    out[ok] = out[ok] * np.clip(fac, 0.0, None).astype(np.float32)
+        self._recv_cache[key] = out
         return out
 
-    def _pp_catcher_recv_idx(self, hand: str) -> np.ndarray | None:
-        """Each pitch-pool row's receiving-matrix index, keyed
-        ``catcher_id:row_season`` (-1 when absent). None on a pre-0022 bundle
-        or with no receiving data."""
-        cached = self._pp_recv_idx.get(hand)
-        if cached is not None:
-            return cached
-        pool = self.a.pools[hand]
-        if pool.catcher_id is None:
-            return None
-        data = self._catcher_receiving_data()
-        if data is None:
-            return None
-        ki = data[0]
-        idx = np.fromiter(
-            (
-                ki.get(f"{int(c)}:{int(s)}", -1)
-                for c, s in zip(pool.catcher_id, pool.season, strict=False)
-            ),
-            dtype=np.int64,
-            count=pool.n,
-        )
-        self._pp_recv_idx[hand] = idx
-        return idx
-
-    def _f_catcher_receiving(self, hand: str, catcher_key: str) -> np.ndarray | None:
-        """The per-row receiving factor for the LIVE catcher: a Gaussian on
-        the z-distance between the live catcher's receiving vector and each
-        row catcher's, NORMALIZED to a mean of 1 within each COUNT BUCKET.
-
-        The SIM-476 lessons, applied from day one: the factor may shift only
-        WHICH pitch is drawn at a count — never the count-bucket mass (the
-        cross-partition redistribution that redded the lane) — and a row with
-        no embedded catcher (or a NaN receiving row, or a bucket whose every
-        weight underflows) is exactly neutral, never favored or starved.
-        None when the data is unavailable — the draw is then unweighted."""
-        cache_key = (hand, catcher_key)
-        if cache_key in self._recv_factor_cache:
-            return self._recv_factor_cache[cache_key]
-        out: np.ndarray | None = None
-        data = self._catcher_receiving_data()
-        rows_idx = self._pp_catcher_recv_idx(hand)
-        if data is not None and rows_idx is not None:
-            ki, z = data
-            live = ki.get(catcher_key, -1)
-            if live >= 0 and np.isfinite(z[live]).all():
-                row_z = z[np.clip(rows_idx, 0, len(z) - 1)]
-                valid = (rows_idx >= 0) & np.isfinite(row_z).all(axis=1)
-                out = np.ones(len(rows_idx), dtype=np.float32)
-                if valid.any():
-                    diff = row_z[valid] - z[live]
-                    # Anisotropic metric: framing dims (0,1) and blocking dims
-                    # (2..) under their own bandwidths; a group with sigma 0 is
-                    # excluded (OFF), never an accidental hard filter.
-                    expo = np.zeros(diff.shape[0], dtype=np.float64)
-                    if self.catcher_framing_sigma > 0.0:
-                        df = diff[:, :2]
-                        expo += np.einsum("ij,ij->i", df, df) / (
-                            2.0 * self.catcher_framing_sigma**2 * df.shape[1]
-                        )
-                    if self.catcher_block_sigma > 0.0 and diff.shape[1] > 2:
-                        db = diff[:, 2:]
-                        expo += np.einsum("ij,ij->i", db, db) / (
-                            2.0 * self.catcher_block_sigma**2 * db.shape[1]
-                        )
-                    out[valid] = np.exp(-expo).astype(np.float32)
-                    # Per-COUNT-BUCKET normalization: mean factor 1 among the
-                    # valid rows of each bucket; a fully underflowed bucket
-                    # goes neutral rather than starving of draws.
-                    for r in self._pool_meta(hand)["bucket_rows"]:
-                        if r.size == 0:
-                            continue
-                        m = valid[r]
-                        if not m.any():
-                            continue
-                        sel = r[m]
-                        mean_w = float(out[sel].mean())
-                        if mean_w > 0.0:
-                            out[sel] = out[sel] / np.float32(mean_w)
-                        else:
-                            out[sel] = np.float32(1.0)
-        self._recv_factor_cache[cache_key] = out
+    @staticmethod
+    def _apply_receiving(w: np.ndarray, taken: np.ndarray, f: np.ndarray) -> np.ndarray:
+        """Multiply the TAKEN rows' weights by their ratio factors and rescale
+        the taken group so its total weight is unchanged; swung-at rows are
+        untouched. A group with no weight, or one every factor zeroes, stays."""
+        if not taken.any():
+            return w
+        before = float(w[taken].sum())
+        wf = w[taken] * f[taken]
+        after = float(wf.sum())
+        if before <= 0.0 or after <= 0.0 or not np.isfinite(after):
+            return w
+        out = w.copy()
+        out[taken] = wf * np.float32(before / after)
         return out
 
     # ---- SIM-425: batted-ball draw (step 5) -------------------------------

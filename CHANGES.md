@@ -1,3 +1,81 @@
+# Feat — the play-picker redesign, part E: the catcher RECEIVING ratio on taken pitches, built OFF; the bell-curve kernel deleted (SIM-523; enabling is SIM-526) — 2026-09-09
+
+**What this is.** The last factor of the pitch-result draw (step 4), on TAKEN pitches
+only, as the owner ruled: a mass-preserving ball-strike ratio, shipped OFF with its own
+enable ticket because it enters the batter's result only when the batter does not make
+contact. It replaces the SIM-517 bell-curve receiving kernel, which the 2026-09-08 tests
+showed reading the pitching staff rather than the catcher; that kernel, its two
+bandwidths, their env names, pins, lane arms and five tests are deleted. The got-away
+resolution (SIM-517 part D) stays.
+
+**The document.** `build_receiving_profiles` (`--what receiving`, in the nightly `all`)
+writes `receiving.json` from the pool itself, so the rows' zones and the catchers' rates
+share one definition: the league called-strike rate among taken pitches per SEASON and
+zone group — the heart (zone 5), the in-zone edge (zones 1-4 and 6-9), outside (zones
+11-14) — and the league got-away rate per season and blocking cell (the pitch-height
+bucket times in-zone or not), with the pooled rates as the fallback for a row season the
+document lacks. The rates are per season because the league moved: the outside
+called-strike rate fell from 7.1% (2023) and 7.3% (2024) to 4.5% (2025) and 4.1% (2026),
+so a pooled rate called every 2024 catcher a good framer and every 2026 catcher a poor
+one. Per catcher-season: the FRAMING multiplier per group (his called-strike rate over
+his season's league rate, shrunk toward the league with 200 taken pitches of prior weight
+and clamped so the ball rows' mirror stays non-negative) and the BLOCKING ratio (his
+got-aways over the league's expected for the pitches he received — got-aways above
+expectation, never the raw got-away rate — shrunk with five expected got-aways of prior
+weight). The pitch pool now exports the Statcast zone (`HandPool.zone`, shareable; None
+on an older bundle). Live: 422 catcher-seasons; the league calls 99.97% of taken heart
+pitches strikes, 86.0-92.1% of the edge and 4.1-7.3% outside by season; among the 209
+regulars (3,000 or more taken pitches) the outside multiplier centers at 0.98-1.00 every
+season and runs 0.79 to 1.24 (5th to 95th percentile), the edge 0.97 to 1.03, the
+blocking ratio 0.65 to 1.42.
+
+**The factor.** `_recv_factor` (cached per hand and catcher) puts on every taken row: a
+called strike × the multiplier at its group; a ball × the mirror (1 − L·m) / (1 − L), L
+the row's own season's league rate; a got-away × the blocking ratio; the other taken rows × its mirror; swung-at, hit-by-pitch
+and unknown-zone rows read 1. `_apply_receiving` then rescales the taken group of each
+candidate set (a count bucket, a cell's count sub-cell, or the result draw's rows) so its
+total weight is unchanged: the factor moves ball-or-strike WITHIN the taken pitches and
+never the swing-or-take split. With the split on it weights the result draw only, last;
+off, the single draw. `SIM_CATCHER_RECEIVING` (OFF). A catcher the document lacks, a
+bundle without the document or without zones: neutral. 13 tests
+(`tests/unit/test_sim523_receiving_ratio.py`), including the invariant the plan asked
+for — the taken group's total weight and every swung-at weight are unchanged for any
+catcher, on the whole-pool path, the cell path and the result draw.
+
+**The probe (`scripts/sim523_receiving_probe.py`, 4 games × 30 iterations per arm).**
+Four games, one from each season of the pool window (2023-2026), 60 iterations per arm,
+the manager and the cell index on. Six arms: the ratio OFF and ON with the real catchers,
+then the pool's best and worst framer of each game's season behind both plates, each
+with the ratio OFF and ON — the OFF copy isolates the swap's own footprint (the steal draw
+reads the catcher's arm) from the ratio. Per arm, taken share of pitches / called-strike
+share of taken pitches / pitches per plate appearance / walks per game / strikeouts per
+game / runs per game / stolen bases per game: OFF 0.521 / 0.309 / 3.97 / 6.98 / 16.6 /
+9.07 / 1.19; ON real 0.520 / 0.307 / 3.97 / 6.97 / 16.3 / 8.97 / 1.49; OFF best 0.521 /
+0.312 / 3.94 / 6.83 / 16.3 / 8.90 / 1.42; ON best 0.515 / 0.324 / 3.89 / 6.02 / 16.4 /
+9.21 / 1.35; OFF worst 0.522 / 0.311 / 3.96 / 7.04 / 16.7 / 8.91 / 1.37; ON worst 0.517 /
+0.302 / 3.93 / 7.14 / 16.1 / 9.39 / 1.36 (240 games per arm; a difference between two
+arms carries a standard error of about 0.003 on the called-strike share, 0.19 walks,
+0.015 pitches per plate appearance and 0.11 stolen bases). The read at a fixed catcher:
+the best framer's ratio lifts the called-strike share of taken pitches by 0.012 and cuts
+walks by 0.81 a game; the worst framer's ratio lowers the share by 0.009 and adds 0.10
+walks. The real catchers read neutral. The invariant holds where the plan put it: the
+taken weight share of every count bucket is unchanged by the ratio (exact, measured over
+36 real plate-appearance states), while over a game the count path moves the live taken
+share by half a point, because more strikes reach the two-strike counts where batters
+swing. Two lessons the first runs paid for: a catcher key of a season the document lacks
+is neutral by design, so probe games must come from the pool window (the first game set
+held a 2019 and a 2022 game and read half the effect); and a substituted catcher moves
+stolen bases through the steal draw (1.19 to 1.37-1.42 a game), so the ON/OFF pair at a
+fixed catcher is the comparison. The harness is deterministic — two identical OFF arms reproduce every column to the last
+digit — so arm differences are effects plus sampling noise. One read stays open for the
+lane: with the real catchers and the ratio on, stolen bases read 1.49 a game against 1.19
+off (2.7 standard errors) with no direct mechanism — the ratio reaches the steal draw only
+through the count path — so it goes on the enable ticket's list (SIM-526).
+
+**Live.** The pools were re-exported with the zone (row-identical, verified), the
+receiving document built, the app restarted (204 shared arrays). The switch stays off;
+SIM-526 fits and enables it after a lane.
+
 # Feat — the play-picker redesign, part D: the manager decisions at the START of a plate appearance; the pitching change as a DRAW from an opportunity pool (SIM-523; switch OFF) — 2026-09-09
 
 **What this is.** Step 1 of the redesign's loop, in two halves. The ORDER: the manager

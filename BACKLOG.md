@@ -1,5 +1,25 @@
 # Product Backlog
 
+# 🧱 2026-09-09 — REDESIGN PART E BUILT: the catcher RECEIVING ratio on taken pitches (SIM-523), OFF; the bell-curve kernel deleted (next free ID → SIM-527)
+
+**What landed (`CHANGES.md` has the detail).** The receiving factor is now a mass-preserving
+ball-strike RATIO on taken pitches — a called strike × the live catcher's framing multiplier at
+its zone group, a ball × the mirror, a got-away × his blocking ratio (got-aways above
+expectation, never the raw rate) — with the taken group rescaled so its total weight is
+unchanged; it never touches the swing-or-take split. The bundle carries `receiving.json`
+(422 catcher-seasons, derived from the pool itself, the league rates PER SEASON — the outside
+called-strike rate fell from 7.1-7.3% in 2023-24 to 4.1-4.5% in 2025-26, so a pooled rate called
+every 2024 catcher a good framer and every 2026 catcher a poor one) and the pitch pool now exports
+the zone.
+`SIM_CATCHER_RECEIVING` is OFF; **fitting and enabling it is SIM-526.** The SIM-517 bell-curve
+kernel, its two bandwidths, their env names, pins and lane arms are DELETED (the got-away
+resolution stays). The probe (four in-window games × 60 iterations, in `CHANGES.md`): at a
+fixed catcher the best framer's ratio lifts the called-strike share of taken pitches by 0.012
+and cuts walks by 0.81 a game, the worst lowers it by 0.009 and adds 0.10; the real catchers
+read neutral; the taken weight share of every count bucket is unchanged (exact). **Still to do
+on the redesign:** parts F (the fits — every switch flips after it and a lane) and G (the data
+adds).
+
 # 🧱 2026-09-09 — REDESIGN PART D BUILT: the manager decisions at the START of a plate appearance; the pitching change as a DRAW (SIM-523), switch OFF (next free ID → SIM-527)
 
 **What landed (`CHANGES.md` has the detail).** The pitching change, the pinch hit and the bunt

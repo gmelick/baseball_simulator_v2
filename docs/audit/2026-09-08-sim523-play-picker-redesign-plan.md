@@ -321,6 +321,36 @@ the taken group's total weight and every swung-at weight are unchanged for any
 catcher. Ships behind `SIM_CATCHER_RECEIVING` = off; today's bell-curve kernel and
 its two sigmas are deleted when this lands. **Fitting and enabling: SIM-526.**
 
+**Part E BUILT 2026-09-09 (the receiving ratio, switch OFF; the bell-curve kernel deleted).**
+The bundle carries `receiving.json` (`build_receiving_profiles`, `--what receiving`, in
+`all`), derived from the pool itself so the rows' zones and the catchers' rates share one
+definition: the league called-strike rate among taken pitches per SEASON and zone group (the heart,
+zone 5; the in-zone edge, zones 1-4 and 6-9; outside, zones 11-14) and the league got-away
+rate per season and blocking cell (the pitch-height bucket times in-zone or not), with the
+pooled rates as the fallback for a row season the document lacks — per season because the
+outside called-strike rate fell from 7.1-7.3% in 2023-24 to 4.1-4.5% in 2025-26, so a pooled
+rate called every 2024 catcher a good framer and every 2026 catcher a poor one (the per-season
+medians all read 0.98-1.00); per catcher-season
+the framing multiplier per group (his rate over the league's, shrunk toward the league
+with 200 taken pitches of prior weight, clamped so the ball rows' mirror stays
+non-negative) and the blocking ratio (his got-aways over the league's expected for the
+pitches he received — got-aways above expectation, never the raw rate — shrunk with five
+expected got-aways of prior weight). The pitch pool now exports the zone
+(`HandPool.zone`). The sampler's `_recv_factor` (cached per hand and catcher) puts on
+every TAKEN row: a called strike × the multiplier at its group, a ball × the mirror
+(1 − L·m) / (1 − L), a got-away × the blocking ratio, the other taken rows × its mirror;
+swung-at, hit-by-pitch and unknown-zone rows read 1. `_apply_receiving` then rescales the
+taken group of each candidate set so its total weight is unchanged — the factor moves
+ball-or-strike WITHIN the taken pitches and never the swing-or-take split (the unit test
+the plan asked for: the taken group's total weight and every swung-at weight are
+unchanged for any catcher, on the whole-pool path, the cell path and the result draw).
+With the split on it weights the result draw only, last; off, the single draw.
+`SIM_CATCHER_RECEIVING` (OFF; fitting and enabling is SIM-526). Deleted: the SIM-517
+bell-curve kernel (`_f_catcher_receiving` and its data helpers), `catcher_framing_sigma`,
+`catcher_block_sigma`, the two env names, their pins and lane arms, and five kernel
+tests; the got-away resolution stays. 13 tests (`tests/unit/test_sim523_receiving_ratio.py`);
+the probe is `scripts/sim523_receiving_probe.py`, its numbers in `CHANGES.md`.
+
 ### Part F — the fit
 
 Powers per factor, per draw, fitted against the pool's own conditional rates

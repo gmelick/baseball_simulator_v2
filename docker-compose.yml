@@ -140,8 +140,10 @@ services:
       # it read the catcher's staff, not his skill (SIM-523; the ratio factor that
       # replaces it is SIM-526). The got-away resolution stays ON (it owns none of
       # the reds). Lane 2 (12x500) certified this configuration with the cell index.
-      SIM_CATCHER_FRAMING_SIGMA: "0"
-      SIM_CATCHER_BLOCK_SIGMA:   "0"
+      # SIM-523 part E (2026-09-09): the catcher receiving RATIO on taken
+      # pitches (the SIM-517 bell-curve kernel and its two sigmas are
+      # deleted). OFF; fitting and enabling is SIM-526.
+      SIM_CATCHER_RECEIVING:     "0"
       SIM_GOT_AWAY:              "1"
       # SIM-518 (2026-09-07): the draw-conditioning weights — fatigue (pitch
       # count + times through the order) and the batting side on the PITCH

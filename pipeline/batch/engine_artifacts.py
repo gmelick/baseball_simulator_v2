@@ -106,6 +106,8 @@ def build_pitch_pool_artifact(
         }
         has_catcher = "catcher_id" in pp_cols
         has_conditioning = pp_cols >= _PP_CONDITIONING_COLS
+        # SIM-523 part E: the zone, for the receiving ratio's zone groups.
+        zone_select = ", COALESCE(zone, 0) AS zone" if "zone" in pp_cols else ""
         n = len(d["pitch_id"])
         # fetchnumpy yields masked arrays for nullable cols; fill -> plain float32.
         geom = np.nan_to_num(
@@ -136,7 +138,7 @@ def build_pitch_pool_artifact(
         )
         con.execute(
             f"COPY (SELECT pitch_id, pitcher_id, batter_id, season, outcome_type, recency_weight"
-            f"{receiving}{conditioning} "
+            f"{receiving}{conditioning}{zone_select} "
             f"FROM sim.pitch_pool WHERE stand='{hand}' AND season IN ({season_list})) "
             f"TO '{os.path.join(pool_dir, f'{hand}.meta.parquet')}' (FORMAT parquet)"
         )
@@ -646,6 +648,166 @@ def build_pitching_change_pool(
         manifest["rates"]["changed_mid_inning"] or 0.0,
     )
     return manifest
+
+
+# ---------------------------------------------------------------------------
+# SIM-523 part E — the catcher RECEIVING ratio (the ball-strike ratio on taken pitches)
+# ---------------------------------------------------------------------------
+#
+# The receiving factor of the pitch-result draw: on TAKEN pitches (called
+# strikes and balls) only, a called-strike row × the live catcher's framing
+# multiplier at the row's zone group — his called-strike rate over the
+# group's league rate — and a ball row × the mirror, (1 − L·m) / (1 − L), so
+# the taken group's expected mass is unchanged; blocking the same way on the
+# got-away rows among taken pitches with the catcher's got-aways ABOVE
+# EXPECTATION (his actual over the league's expected for the pitches he
+# received, by pitch height and zone — never the raw got-away rate, which the
+# 2026-09-08 tests measured as a staff-wildness reading). Both rates are
+# shrunk toward the league (a prior of RECV_FRAME_PRIOR taken pitches per
+# group; RECV_BLOCK_PRIOR expected got-aways). Built from the pool itself, so
+# the rows' zones and the catchers' rates share one definition.
+
+RECV_FRAME_PRIOR = 200.0
+RECV_BLOCK_PRIOR = 5.0
+RECV_FRAME_GROUPS = ("heart", "edge", "outside")
+RECV_PZ_EDGES = (0.5, 1.0, 1.5)
+RECV_N_BLOCK_CELLS = 8
+
+
+def recv_zone_group(zone: np.ndarray) -> np.ndarray:
+    """The zone group of every pitch: 1 the heart (Statcast zone 5), 2 the
+    in-zone edge (zones 1-4 and 6-9), 3 outside (zones 11-14), 0 unknown."""
+    z = np.asarray(zone, dtype=np.int64)
+    out = np.zeros(len(z), dtype=np.int8)
+    out[z == 5] = 1
+    out[((z >= 1) & (z <= 4)) | ((z >= 6) & (z <= 9))] = 2
+    out[(z >= 11) & (z <= 14)] = 3
+    return out
+
+
+def recv_block_cell(zone: np.ndarray, plate_z: np.ndarray, valid: np.ndarray) -> np.ndarray:
+    """The blocking cell of every pitch — the pitch-height bucket (below 0.5
+    ft, below 1.0, below 1.5, higher) times in-zone or not — 0..7, or -1 when
+    the pitch's geometry is incomplete or its zone unknown."""
+    z = np.asarray(zone, dtype=np.int64)
+    pz = np.asarray(plate_z, dtype=np.float32)
+    bucket = np.digitize(pz, RECV_PZ_EDGES).astype(np.int64)
+    in_zone = ((z >= 1) & (z <= 9)).astype(np.int64)
+    cell = bucket * 2 + in_zone
+    known = np.asarray(valid, dtype=bool) & (z > 0)
+    return np.where(known, cell, -1).astype(np.int8)
+
+
+def build_receiving_profiles(
+    con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]
+) -> dict:
+    """Write ``<out_dir>/receiving.json``: the league called-strike rate per
+    zone group and got-away rate per blocking cell over taken pitches, and
+    every catcher-season's framing multipliers and blocking ratio."""
+    season_list = ", ".join(str(int(s)) for s in seasons)
+    pz_case = (
+        f"(CASE WHEN plate_z < {RECV_PZ_EDGES[0]} THEN 0 WHEN plate_z < {RECV_PZ_EDGES[1]} THEN 1 "
+        f"WHEN plate_z < {RECV_PZ_EDGES[2]} THEN 2 ELSE 3 END) * 2 "
+        "+ CAST(zone BETWEEN 1 AND 9 AS INTEGER)"
+    )
+    con.execute(
+        f"""
+        CREATE OR REPLACE TEMP TABLE _recv AS
+        SELECT COALESCE(catcher_id, 0) AS catcher_id, season,
+               CASE WHEN zone = 5 THEN 1 WHEN zone BETWEEN 1 AND 9 THEN 2
+                    WHEN zone BETWEEN 11 AND 14 THEN 3 ELSE 0 END AS g,
+               CASE WHEN plate_z IS NULL OR velo IS NULL OR velo <= 0 OR zone IS NULL OR zone <= 0
+                    THEN -1 ELSE {pz_case} END AS c,
+               CAST(outcome_type = 'called_strike' AS INTEGER) AS cs,
+               CAST(COALESCE(got_away, FALSE) AS INTEGER) AS ga
+        FROM sim.pitch_pool
+        WHERE season IN ({season_list}) AND outcome_type IN ('called_strike', 'ball')
+        """
+    )
+    # The league rates PER SEASON (the outside called-strike rate fell from
+    # 7.1% in 2023-24 to 4.1-4.5% in 2025-26, so a pooled rate would call every
+    # 2024 catcher a good framer and every 2026 catcher a poor one), plus the
+    # pooled rates as the fallback for a row season the document lacks.
+    league_frame: dict[str, dict[str, float]] = {}
+    league_frame_all: dict[str, float] = {}
+    for season, g, n, cs in con.execute(
+        "SELECT season, g, count(*), sum(cs) FROM _recv WHERE g > 0 GROUP BY 1, 2"
+    ).fetchall():
+        league_frame.setdefault(str(int(season)), {})[RECV_FRAME_GROUPS[int(g) - 1]] = (
+            float(cs) / float(n) if n else 0.0
+        )
+    for g, n, cs in con.execute(
+        "SELECT g, count(*), sum(cs) FROM _recv WHERE g > 0 GROUP BY g"
+    ).fetchall():
+        league_frame_all[RECV_FRAME_GROUPS[int(g) - 1]] = float(cs) / float(n) if n else 0.0
+    league_block: dict[str, list[float]] = {}
+    league_block_all = [0.0] * RECV_N_BLOCK_CELLS
+    for season, c, n, ga in con.execute(
+        "SELECT season, c, count(*), sum(ga) FROM _recv WHERE c >= 0 GROUP BY 1, 2"
+    ).fetchall():
+        league_block.setdefault(str(int(season)), [0.0] * RECV_N_BLOCK_CELLS)[int(c)] = (
+            float(ga) / float(n) if n else 0.0
+        )
+    for c, n, ga in con.execute(
+        "SELECT c, count(*), sum(ga) FROM _recv WHERE c >= 0 GROUP BY c"
+    ).fetchall():
+        league_block_all[int(c)] = float(ga) / float(n) if n else 0.0
+    frame_rows = con.execute(
+        "SELECT catcher_id, season, g, count(*), sum(cs) FROM _recv "
+        "WHERE catcher_id > 0 AND g > 0 GROUP BY 1, 2, 3"
+    ).fetchall()
+    block_rows = con.execute(
+        "SELECT catcher_id, season, c, count(*), sum(ga) FROM _recv "
+        "WHERE catcher_id > 0 AND c >= 0 GROUP BY 1, 2, 3"
+    ).fetchall()
+    con.execute("DROP TABLE _recv")
+    catchers: dict[str, dict] = {}
+    for cid, season, g, n, cs in frame_rows:
+        e = catchers.setdefault(f"{int(cid)}:{int(season)}", {"frame": {}, "taken": 0})
+        name = RECV_FRAME_GROUPS[int(g) - 1]
+        L = league_frame.get(str(int(season)), league_frame_all).get(name, 0.0)
+        rate = (float(cs) + L * RECV_FRAME_PRIOR) / (float(n) + RECV_FRAME_PRIOR)
+        m = rate / L if L > 0.0 else 1.0
+        hi = (1.0 / L) if L > 0.0 else 1.0  # keeps the ball rows' mirror >= 0
+        e["frame"][name] = round(float(min(max(m, 0.0), hi)), 5)
+        e["taken"] += int(n)
+    for cid, season, c, n, ga in block_rows:
+        e = catchers.setdefault(f"{int(cid)}:{int(season)}", {"frame": {}, "taken": 0})
+        e["got_away"] = e.get("got_away", 0) + int(ga)
+        cells = league_block.get(str(int(season)), league_block_all)
+        e["expected"] = e.get("expected", 0.0) + cells[int(c)] * float(n)
+    g_max = max(league_block_all) if league_block_all else 0.0
+    b_hi = (1.0 / g_max) if g_max > 0.0 else 5.0
+    for e in catchers.values():
+        for name in RECV_FRAME_GROUPS:
+            e["frame"].setdefault(name, 1.0)
+        actual = float(e.get("got_away", 0))
+        expected = float(e.get("expected", 0.0))
+        b = (actual + RECV_BLOCK_PRIOR) / (expected + RECV_BLOCK_PRIOR)
+        e["block"] = round(float(min(max(b, 0.0), b_hi)), 5)
+        e["expected"] = round(expected, 3)
+    doc = {
+        "seasons": [int(s) for s in seasons],
+        "frame_prior": RECV_FRAME_PRIOR,
+        "block_prior": RECV_BLOCK_PRIOR,
+        "groups": list(RECV_FRAME_GROUPS),
+        "pz_edges": list(RECV_PZ_EDGES),
+        "league_frame": league_frame,
+        "league_block": league_block,
+        "league_frame_all": league_frame_all,
+        "league_block_all": league_block_all,
+        "catchers": catchers,
+    }
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, "receiving.json"), "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, indent=2)
+    log.info(
+        "receiving: %d catcher-seasons; league called-strike rate per group %s; got-away per cell %s",
+        len(catchers),
+        {s: {k: round(v, 4) for k, v in d.items()} for s, d in league_frame.items()},
+        [round(v, 4) for v in league_block_all],
+    )
+    return doc
 
 
 #: The steal draw's situation columns (SIM-474). `outs` and the count are the
@@ -1215,6 +1377,9 @@ class HandPool:
     # ball (-1: not in play, or no batted-ball row). None on a bundle
     # exported before part B; the born batted ball is then unavailable.
     bb_row: np.ndarray | None = None  # (N,) int32
+    # SIM-523 part E: the Statcast zone (1-9 in the zone, 11-14 outside; 0
+    # unknown) — the receiving ratio's zone group. None on an older bundle.
+    zone: np.ndarray | None = None  # (N,) int8
 
     @property
     def n(self) -> int:
@@ -1407,6 +1572,8 @@ _HAND_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "tto",
     # SIM-523 part B: the pitch-id join (None on a pre-part-B bundle).
     "bb_row",
+    # SIM-523 part E: the zone (None on a pre-part-E bundle).
+    "zone",
 )
 _BB_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     # SIM-523 part C: the batted-ball class (None on a pre-part-C bundle).
@@ -1514,6 +1681,7 @@ class EngineArtifacts:
         actor_sim=None,
         park_geometry: dict | None = None,
         change_pool: ChangePool | None = None,
+        receiving: dict | None = None,
     ):
         self.pools: dict[str, HandPool] = pools
         #: SIM-523 part A: matrix role -> {"index": {key: row}, "matrix": (n, n)
@@ -1526,6 +1694,9 @@ class EngineArtifacts:
         #: SIM-523 part D: the pitching-change opportunity pool, or None on a
         #: bundle without it — the manager draw then falls back to the formula.
         self.change_pool: ChangePool | None = change_pool
+        #: SIM-523 part E: the receiving-ratio document (``build_receiving_profiles``),
+        #: or None on a bundle without it — the factor then stays neutral.
+        self.receiving: dict | None = receiving
         self.bb_pools: dict[str, BattedBallPool] = bb_pools or {}
         #: SIM-474: target base ("2"/"3") -> StealPool; {} on a legacy bundle.
         self.steal_pools: dict[str, StealPool] = steal_pools or {}
@@ -1765,7 +1936,7 @@ class EngineArtifacts:
                 # export — the same probe-and-select pattern.
                 conditioning_sel = "".join(
                     f", {c}"
-                    for c in ("bat_home", "pitcher_pitch_count", "times_through_order")
+                    for c in ("bat_home", "pitcher_pitch_count", "times_through_order", "zone")
                     if c in pp_avail
                 )
                 m = con.execute(
@@ -1829,6 +2000,8 @@ class EngineArtifacts:
                         hand, m, "pitch_count", "pitcher_pitch_count", np.int16, -1
                     ),
                     tto=_pp_take(hand, m, "tto", "times_through_order", np.int8, 0),
+                    # SIM-523 part E: the zone (None before part E).
+                    zone=_pp_take(hand, m, "zone", "zone", np.int8, 0),
                     # SIM-523 part B: the pitch-id join (None before part B).
                     bb_row=(
                         views.get(f"pool.{hand}.bb_row")
@@ -2134,6 +2307,12 @@ class EngineArtifacts:
                     "index": json.loads(str(z["index"])),
                     "matrix": mv if isinstance(mv, np.ndarray) else z["matrix"],
                 }
+        # SIM-523 part E: the receiving ratios (absent on an older bundle).
+        receiving: dict | None = None
+        rv_path = os.path.join(art_dir, "receiving.json")
+        if os.path.exists(rv_path):
+            with open(rv_path, encoding="utf-8") as fh:
+                receiving = json.load(fh)
         # SIM-523 part C: the park geometry (absent on an older bundle).
         park_geometry: dict | None = None
         pg_path = os.path.join(art_dir, "park_geometry.json")
@@ -2185,6 +2364,7 @@ class EngineArtifacts:
             actor_sim=actor_sim,
             park_geometry=park_geometry,
             change_pool=change_pool,
+            receiving=receiving,
         )
 
 
@@ -2202,7 +2382,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument(
         "--what",
-        choices=["pool", "pitcher_sim", "actors", "actors_sim", "park", "manager", "all"],
+        choices=[
+            "pool",
+            "pitcher_sim",
+            "actors",
+            "actors_sim",
+            "park",
+            "manager",
+            "receiving",
+            "all",
+        ],
         default="pool",
     )
     ap.add_argument(
@@ -2235,6 +2424,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.what in ("manager", "all"):
             # SIM-523 part D: the pitching-change opportunity pool.
             build_pitching_change_pool(con, args.out_dir, seasons)
+        if args.what in ("receiving", "all"):
+            # SIM-523 part E: the catcher receiving ratios.
+            build_receiving_profiles(con, args.out_dir, seasons)
         if args.what in ("pitcher_sim", "all"):
             build_pitcher_sim_matrix(
                 args.duckdb_path, args.out_dir, seasons, limit=args.pitcher_sim_limit

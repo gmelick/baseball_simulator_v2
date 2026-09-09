@@ -1,4 +1,8 @@
 """
+
+ARCHIVED 2026-09-09: this probe measured the SIM-517 bell-curve receiving kernel,
+which SIM-523 part E deleted (its method and sigmas no longer exist on the
+sampler). Kept as the record of that measurement; it will not run as is.
 scripts/sim523_factor_strength.py — how much does each similarity factor concentrate the pitch draw?
 
 For every plate appearance of N real games (production config, index off) the
