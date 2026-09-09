@@ -281,7 +281,7 @@ the SIM-507 channel).
 
 The nine box channels restate ``_MLB_2025`` from ``scripts/sim_stats.py:89``
 verbatim, and ``home_win_pct`` restates ``_MLB_HOME_WIN_PCT`` from
-``scripts/sim_stats.py:102``. (The citations were once wrong for months —
+``scripts/sim_stats.py:103``. (The citations were once wrong for months —
 :69/:83 as the file outgrew them —
 ``test_restated_mlb_constants_match_sim_stats_sim450`` now parses that file and
 fails on BOTH value drift and line drift, so a stale citation cannot survive
@@ -522,7 +522,7 @@ BOX_CHANNELS: tuple[str, ...] = tuple(c for c in CHANNELS if c != "home_win_pct"
 SIM_STATS_MLB_2025_LINE: int = 89
 
 #: The line ``_MLB_HOME_WIN_PCT`` is assigned on in ``scripts/sim_stats.py``.
-SIM_STATS_HOME_WIN_PCT_LINE: int = 102
+SIM_STATS_HOME_WIN_PCT_LINE: int = 103
 
 #: ``_MLB_2025`` restated verbatim (SIM-508, owner decision 2026-08-18: every
 #: reference is this project's OWN ingested 2025 season — 2,430 regular-season
@@ -782,7 +782,7 @@ REFERENCES: dict[str, Reference] = {
             "SIM-484. Nothing reaches base on an error today: -100%."
         ),
     ),
-    # --- the home-field channel, restated from scripts/sim_stats.py:102 ---
+    # --- the home-field channel, restated from scripts/sim_stats.py:103 ---
     "home_win_pct": Reference(
         RESTATED_MLB_HOME_WIN_PCT,
         f"{_SIM_STATS}:{SIM_STATS_HOME_WIN_PCT_LINE} _MLB_HOME_WIN_PCT",
