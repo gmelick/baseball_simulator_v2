@@ -271,7 +271,13 @@ every factor's power / bandwidth fitted against the pool's own conditional rates
 nearly flat. The fit: pitcher 16 in both pitch draws, batter 8 in the result draw,
 pitcher-steal 12, catcher-throwing 2, runner kernels 0.25, born-ball 1.0, class filter /
 wall zone / fence ON; the fielder keeps its kernel, the runner matrices stay off, the
-sprint-speed kernel has no data (part G). The lane read reds the probe attributes to composition — the flip waits on the owner's grading ruling (CHANGES.md). Part G remains.
+sprint-speed kernel has no data (part G). The lane read reds the probe attributes to composition — the flip waits on the owner's grading ruling (CHANGES.md). **PART G (THE DATA ADDS) 2026-09-09:** the raw sprint-speed table was
+EMPTY — the loader ran (2023-2026) and both profiles carry the speed (migration 0024, schema
+v24); the fielding CHAIN lands as a join (the outcome pool's alignment `fielder_2..9` +
+putout / assist position masks, builder sim523g.1, `BattedBallPool.fielders` + masks); the
+catcher embedding drops its got-away columns; the SIM-469 rebuild ran (the batting side, the
+pitch count and the times through the order are on the pitch pool). The chain FACTOR (the
+consumer) and the speed kernel's fit are follow-ons. The redesign's seven parts are built.
 
 - **DO NOT run the profile recompute** (`make profile-computor`) — but the reason changed on
   2026-08-13. SIM-501a/c CLOSED: SIM-457 is re-landed on the events-based out label, no profile

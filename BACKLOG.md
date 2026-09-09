@@ -1,5 +1,23 @@
 # Product Backlog
 
+# 🧱 2026-09-09 — REDESIGN PART G BUILT: the data adds (SIM-523) — sprint speed live in the profiles, the fielding CHAIN on the batted-ball pool, the got-away rates out of the catcher's selection surface, the batting side on the pitch pool via the SIM-469 rebuild (next free ID → SIM-527)
+
+**What landed (`CHANGES.md` has the detail).** The raw sprint-speed table was EMPTY (the
+plan's "already ingested" was wrong): the loader ran for 2023-2026, the baserunner and
+fielder profiles carry the speed (migration 0024) and the embeddings are re-exported. The
+fielding credits were never in `raw.play_events` but the loader already writes every
+putout / assist / throwing-error credit onto the pitch row, complete on 99.996% of balls in
+play, so the chain lands as a JOIN: the outcome pool gains the eight-position alignment
+and two credited-position masks (builder sim523g.1), exported to `BattedBallPool.fielders`
++ masks. The catcher embedding drops its got-away-derived columns (`_EMBEDDING_EXCLUDE`).
+The SIM-469 rebuild ran inside the window: `bat_home`, the pitch count and the times
+through the order are on the pitch pool. The window's measurements are in `CHANGES.md`.
+**Follow-ons filed here:** the chain FACTOR in the fielding draw (the consumer of the new
+columns: each credited position's row fielder against the live defender there, mean-1 per
+position like today's single-fielder kernel); the sprint-speed kernel's fit + enable and
+the runner kernels' re-check with the live speed (part F fitted them on a zero column);
+SIM-524 stays (every DuckDB write still needs the app stopped).
+
 # 🧱 2026-09-09 — REDESIGN PART F: THE FIT (SIM-523) — fitted, lane-read, the flip waits on a grading ruling (next free ID → SIM-527)
 
 **What landed (`CHANGES.md` has the detail).** Every new factor's power or bandwidth is fitted

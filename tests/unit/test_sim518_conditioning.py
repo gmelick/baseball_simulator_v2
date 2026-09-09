@@ -507,7 +507,8 @@ class TestBuilderWindowExpressions:
         assert by_ab[(1, 9)] == 1 and by_ab[(1, 10)] == 2 and by_ab[(2, 13)] == 1
 
     def test_the_builder_version_moved_and_the_select_appends_the_columns(self):
-        assert ppc.POOL_BUILDER_VERSION == "sim518.1"
+        # sim518.1 -> sim523g.1 (SIM-523 part G: the fielding chain on the outcome pool)
+        assert ppc.POOL_BUILDER_VERSION == "sim523g.1"
         src = Path(ppc.__file__).read_text(encoding="utf-8")
         i_got = src.index("AS got_away,")
         i_bh = src.index("AS bat_home,", i_got)

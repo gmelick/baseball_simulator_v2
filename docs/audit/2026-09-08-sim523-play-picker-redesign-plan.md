@@ -398,6 +398,23 @@ fit), which the pool-total grade cannot tell from a defect — see `CHANGES.md`.
 - The batting side on the pitch pool: built (migration 0023), lands with the
   conditioning rebuild (SIM-469), which waits on the forkserver lock (SIM-524).
 
+**Part G BUILT 2026-09-09 (the data adds; the SIM-469 rebuild ran).** Checked against
+the data first: the raw sprint-speed table was EMPTY (the "already ingested" premise was
+wrong) — the loader ran for 2023-2026 and both profiles carry the speed (migration 0024;
+the embeddings re-exported); `raw.play_events` does not carry the credits (it holds
+pickoffs, step-offs, balks and intentional walks only) but the loader already writes every
+putout / assist / throwing-error credit onto the pitch row, complete on 99.996% of balls in
+play, so the chain lands as a JOIN, not a re-sweep: the outcome pool's eight-position
+alignment plus putout / assist position masks (`sql_credit_mask`, builder sim523g.1),
+exported to `BattedBallPool.fielders` + masks; the catcher embedding drops its
+got-away-derived columns (`_EMBEDDING_EXCLUDE`) — no draw selected on them, now none can;
+the batting side, the pitch count and the times through the order reached the pitch pool
+through the SIM-469 rebuild inside the same app-stopped window
+(`scripts/sim523_part_g_rebuild.py`). The chain FACTOR in the fielding draw (step 6's
+consumer) and the sprint-speed kernel's fit are the follow-ons; part F fitted the runner
+kernels on a zero speed column, so their bandwidth wants a re-check. Measurements in
+`CHANGES.md`.
+
 ---
 
 ## 5. Sequencing

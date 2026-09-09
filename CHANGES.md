@@ -1,3 +1,96 @@
+# Feat — the play-picker redesign, part G: the DATA additions — sprint speed into the profiles, the fielding chain onto the batted-ball pool, the got-away rates out of the catcher's selection surface, the batting side on the pitch pool (SIM-523; the SIM-469 rebuild ran) — 2026-09-09
+
+**What this is.** The four data items plan part G named, each checked against the data
+before it was built. (1) **Sprint speed.** The plan said "already ingested"; the raw table
+was EMPTY (zero rows), which is why the runner embedding's speed read zero on every one
+of its 6,488 rows and why part C's sprint-speed kernel and the steal kernels' speed
+feature had nothing to read. Part G ran the Savant loader
+(`pipeline/etl/etl_sprint_speed_loader.py`, 2023-2026: 614 / 606 / 617 / 594
+player-seasons), filled the baserunner profile's existing column, added the column to the
+fielder profile (migration 0024; the fielder builder now joins it, appended LAST behind
+the positional insert), and re-exported the embeddings. (2) **The fielding chain.**
+`raw.play_events` carries only pickoffs, step-offs, balks and intentional walks — not the
+credits — but the loader already writes every putout, assist and throwing-error credit
+into slot columns on the pitch row (`field_putout_1..3`, `field_assist_1..5`), and they
+are complete: on 2024's 82,425 balls in play 99.996% carry a putout credit, 43% an assist,
+and every grounded-into-double-play carries two putouts and an assist. So the data add is
+a JOIN, not the six-hour re-sweep the plan budgeted: the outcome pool gains the defensive
+ALIGNMENT (`fielder_2..9`, the player at each position on the play) and the chain as two
+position bitmasks (`putout_pos_mask`, `assist_pos_mask`: bit k set when position k, 1..9,
+credited a putout / an assist; bit 1 the pitcher; 0 on every hit), built by
+`sql_credit_mask` (unit-tested on a 6-4-3, a 3-1, a hit, a fly out and an unmatched
+credit), exported and loaded as `BattedBallPool.fielders` (N, 8) + the two masks (None on
+an older bundle; on the shared-memory seam). The builder version is sim523g.1. The
+CONSUMER — the fielding draw's chain factor, "each credited fielder against the live
+defender at that position" — is NOT built here; the design is on the board. (3) **The
+got-away rates out of any profile used for selection.** The catcher engine's blocking
+sub-score and the catcher embedding carried the got-away-derived columns (expected and
+actual passed balls + wild pitches, blocks above average, blocking runs by direction, the
+uncaught-third-strike rate); no draw selects on them today (the steal draw's catcher
+kernel names its four throwing features; the receiving ratio reads got-aways from the
+pool as a WEIGHT on the got-away row, the intended use), so part G makes the rule
+structural: `_EMBEDDING_EXCLUDE` keeps those columns out of the catcher embedding, the
+only selection surface a kernel can reach. The engine's composite (the `catcher` matrix,
+which no draw uses) is untouched. (4) **The batting side on the pitch pool** landed with
+the SIM-469 rebuild (`scripts/sim518_rebuild_pools.py`, run inside the window with its
+own independent verification): `bat_home`, the pitcher's pitch count before the plate
+appearance and the times through the order are now on the pitch-pool rows of 2023-2026,
+so the SIM-518 draw weights have their data (their fits are SIM-518's, not this part's).
+
+**The window (`scripts/sim523_part_g_rebuild.py`, the app STOPPED for the DuckDB writer
+lock — SIM-524).** Migration 0024 (schema v24) → the two sprint-speed updates → the
+SIM-469 pitch-pool rebuild with its verification and pool export → the outcome-pool
+rebuild for the window seasons, verified (row counts unchanged per season; the putout mask
+set on ~all out plays; grounded-into-double-play rows with two putout positions and an
+assist; hits with no mask) → the batted-ball pool and the embeddings re-exported → the
+loader round-trip. The measurements:
+the sprint-speed loader wrote 2017-2026 (584 / 587 / 601 / 507 / 602 / 628 / 614 / 606 / 617 /
+594 player-seasons); the baserunner profile carries a speed on 97% of its window-season rows
+(2023: 604 of 617; 2024: 601 of 625; 2025: 608 of 636; 2026: 574 of 593; mean 27.3 ft/s) and
+the fielder profile on 97% (1,212 of 1,241; 1,144 of 1,185; 1,189 of 1,239; 1,088 of 1,134;
+mean 27.6-27.7); the embeddings read 90% nonzero over all ten seasons (the window seasons
+96.6%) for runners and 96% for fielders, means 27.2 / 27.5 ft/s. The SIM-469 rebuild ran in
+1.2 minutes (the plan's estimate was two hours): per-season pitch-pool rows unchanged
+(729,006 / 721,565 / 723,055 / 597,596), the batting side 48.9% per season with no nulls,
+the pitch count 0-125 and the times through the order 1-5 (mean 1.48), an independent
+recomputation on 201 games / 58,862 pitches with zero mismatches, the pools exported and
+round-tripped (the batted-ball pools' pitch geometry 100% pitcher coverage). The outcome-pool
+rebuild ran in 0.3 minutes: every season's rows equal the pitch pool's in-play rows (125,779 /
+125,829 / 126,583 / 103,714 — 2026 grew from 92,709, the outcome pool catching up with three
+weeks of games the pitch pool already held, which the first pass's "rows unchanged" rule
+mis-read as a failure), the alignment on 100% of rows, a putout credit on 99.91-99.96% of out
+plays, a putout on 0.43-0.48% of hit rows (a runner retired on a hit), and the full chain
+(two putout positions and an assist) on 99.4-99.6% of grounded-into-double-play rows (3,483 of
+3,497; 3,237 of 3,254; 3,120 of 3,140; 2,575 of 2,589). The loader round-trip: `fielders`
+(208,101 × 8 left-handed, 268,956 × 8 right-handed), the alignment 100%, a putout on 99.95% of
+out rows, an assist on 27-30% of rows; the catcher embedding's 27 features carry no
+got-away-derived column; the batted-ball manifest's chain flag reads true. The whole window
+took 1.5 minutes of DuckDB time; the app was stopped for about ten minutes across the three
+passes.
+
+**The verification reads on the new data.** The runner-kernel bandwidth scan re-run with the
+live speed feature (`scripts/sim523_kernel_scan.py`, 499 runners of 2024): the steal draw's
+runner kernel at the fitted 0.25 now reproduces 80% of the pool's own attempt-rate spread
+(72% on the zero column) at a 13% effective share (was 27% — a fourth live feature tightens
+the neighborhood; 0.35 gives 71% at 26%, the old trade-off), and the advancement kernel 48%
+(was 41%); the recorded fit stays 0.25.
+The sprint-speed kernel read for the first time (`scripts/sim523_fit_probe.py`, the fitted
+configuration plus `SIM_BB_SPEED_SIGMA=1.0`, 12 games × 60): the live batters now spread
+across the three speed tiers (11,900 / 12,392 / 13,832 draws; the tercile edges at z −0.25
+and +0.58 — part F's run had read every batter as "high" on the zero column), and the
+ground-ball reach rate rises with the live batter's speed in the sim, 0.251 / 0.258 / 0.270
+by tier against the pool's own 0.245 / 0.261 / 0.283 — half the pool's spread at the
+unfitted bandwidth 1.0, the kernel's fit being the follow-on. The steal runner tiers with
+the live speed read 0.0039 / 0.0124 / 0.0282 attempts per opportunity against the runners'
+own 0.0025 / 0.0103 / 0.0341.
+
+**Tests.** 11 new (`tests/unit/test_sim523_part_g.py`): the credit masks, the export and
+loader round-trip with and without the chain, the shared seam, the catcher exclusion and
+the fielder embedding's speed; the schema-version test moves to 24; the transition-pool
+fixture carries the credit slots. **Not in part G:** the chain factor in the fielding
+draw (the consumer), the sprint-speed kernel's fit and enable (its data is live now — part
+F's fit read it as flat because the data was zero), and the runner kernels' re-check with
+the live speed feature (the bandwidth 0.25 was fitted with a constant speed column).
 # Feat — the play-picker redesign, part F: the FIT — every new factor's power or bandwidth against the pool's own conditional rates, the ordering ruling, the concentration check, the 12×500 lane; the switches stay OFF pending the owner's grading ruling (SIM-523) — 2026-09-09
 
 **What this is.** Part F fits the powers (the engine's 0-to-1 score raised to a power) and

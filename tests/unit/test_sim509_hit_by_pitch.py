@@ -100,5 +100,7 @@ class TestTheBuilderMapping:
         superseded sim515 when the pitch pool gained catcher_id + got_away;
         SIM-518 superseded sim517 when the pitch pool gained bat_home +
         pitcher_pitch_count + times_through_order (migration 0023);
-        bump this assertion with every pool-formula change."""
-        assert "sim518" in ppc.POOL_BUILDER_VERSION
+        bump this assertion with every pool-formula change. SIM-523 part G
+        superseded sim518 when the outcome pool gained the fielding chain
+        (migration 0024)."""
+        assert "sim523g" in ppc.POOL_BUILDER_VERSION

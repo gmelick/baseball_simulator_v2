@@ -175,7 +175,11 @@ def _op_conn() -> duckdb.DuckDBPyConnection:
         "post_on_1b INTEGER, post_on_2b INTEGER, post_on_3b INTEGER, "
         "runner_1b_scored BOOLEAN, runner_2b_scored BOOLEAN, runner_3b_scored BOOLEAN, "
         "runner_1b_out_advancing BOOLEAN, runner_2b_out_advancing BOOLEAN, "
-        "runner_3b_out_advancing BOOLEAN, inning_topbot VARCHAR)"
+        "runner_3b_out_advancing BOOLEAN, inning_topbot VARCHAR, "
+        # SIM-523 part G: the fielding-credit slots the chain masks read.
+        "field_putout_1 INTEGER, field_putout_2 INTEGER, field_putout_3 INTEGER, "
+        "field_assist_1 INTEGER, field_assist_2 INTEGER, field_assist_3 INTEGER, "
+        "field_assist_4 INTEGER, field_assist_5 INTEGER)"
     )
     c.execute("CREATE SCHEMA sim")
     c.execute(
@@ -231,7 +235,7 @@ def _op_pitch(
         "INSERT INTO pg.raw.pitches VALUES "
         "(?,?,1,DATE '2024-06-01',2024,'R',?,?,95.0,?,10.0,?,150.0,100.0,100.0,"
         "906,NULL,902,903,904,905,906,907,908,909,?,15,FALSE,"
-        "?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)",
         [
             pk,
             ab,

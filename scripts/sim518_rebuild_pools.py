@@ -82,7 +82,7 @@ def main() -> int:
     _log("=== 2. pitch-pool rebuild (sim518.1) ===")
     from pipeline.batch.player_profile_computor import POOL_BUILDER_VERSION, PlayerProfileComputor
 
-    assert POOL_BUILDER_VERSION == "sim518.1", POOL_BUILDER_VERSION
+    assert POOL_BUILDER_VERSION in ("sim518.1", "sim523g.1"), POOL_BUILDER_VERSION
     comp = PlayerProfileComputor.__new__(PlayerProfileComputor)
     comp._conn = con
     comp._build_pitch_pool(SEASONS, incremental=False)
@@ -165,7 +165,9 @@ def main() -> int:
         "SELECT season, builder_version FROM sim.pool_build_metadata "
         f"WHERE pool_name='pitch_pool' AND season IN ({_SEASON_LIST}) ORDER BY 1"
     ).fetchall()
-    versions_ok = all(v == "sim518.1" for _s, v in meta) and len(meta) == len(SEASONS)
+    # SIM-523 part G: the pool builder version moved to sim523g.1 (the chain); the
+    # rebuild records the CURRENT version, so the check reads it from the module.
+    versions_ok = all(v == POOL_BUILDER_VERSION for _s, v in meta) and len(meta) == len(SEASONS)
     ok = ok and versions_ok
     _log(f"  pool_build_metadata: {meta} {'OK' if versions_ok else 'MISMATCH'}")
     con.close()

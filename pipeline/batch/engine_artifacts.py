@@ -254,6 +254,15 @@ def build_battedball_pool_artifact(
     # SIM-523 part C: the batted-ball class (the fielding draw's third
     # hard filter) — from bb_type when the pool carries it.
     class_select = _BB_CLASS_SELECT if "bb_type" in op_cols else ""
+    # SIM-523 part G: the fielding CHAIN — the eight-position alignment and
+    # the positions credited a putout / an assist (migration 0024); absent
+    # on an older pool, and the loader is None without them.
+    has_chain = "putout_pos_mask" in op_cols
+    chain_select = (
+        ", fielder_2, fielder_3, fielder_4, fielder_5, fielder_6, fielder_7, fielder_8, fielder_9, putout_pos_mask, assist_pos_mask"
+        if has_chain
+        else ""
+    )
     pitch_join: dict[str, int] = {}
     for hand in ("L", "R"):
         w = where % hand
@@ -319,7 +328,8 @@ def build_battedball_pool_artifact(
             # of the consumers. SIM-510 appends the transition destinations the same
             # back-compatible way.
             "p_throws, venue_id, fielded_by_position, fielder_player_id"
-            f"{transition_select}{bat_home_select}{pitcher_select}{class_select} "
+            f"{transition_select}{bat_home_select}{pitcher_select}{class_select}"
+            f"{chain_select} "
             f"FROM sim.outcome_pool WHERE {w}) "
             f"TO '{os.path.join(pool_dir, f'{hand}.meta.parquet')}' (FORMAT parquet)"
         )
@@ -338,6 +348,8 @@ def build_battedball_pool_artifact(
                 # SIM-523 part B: pitch rows joined to a batted ball, per hand
                 # (the join file lives in pitch_pool/{hand}.bb_row.npy).
                 "pitch_join": pitch_join,
+                # SIM-523 part G: the fielding chain columns are in the parquet.
+                "chain": has_chain,
             },
             fh,
             indent=2,
@@ -1312,6 +1324,29 @@ _ACTOR_TABLES = {
 _NUMERIC_TYPES = {"DOUBLE", "FLOAT", "REAL", "INTEGER", "BIGINT", "SMALLINT", "DECIMAL"}
 
 
+#: SIM-523 part G (the plan's "got-away rates out of any profile used for
+#: selection"): the catcher's got-away-derived columns never enter a
+#: similarity kernel again. Part E's receiving ratio reads got-aways from the
+#: pool itself as a draw WEIGHT on the got-away row (the intended use); a
+#: catcher's got-away rate as a SELECTION feature proxied his staff's wildness
+#: (the SIM-523 confound).
+_EMBEDDING_EXCLUDE: dict[str, frozenset[str]] = {
+    "catcher": frozenset(
+        {
+            "expected_pbwp",
+            "actual_pbwp",
+            "blocks_above_average",
+            "blocking_runs",
+            "blocks_aa_bounced",
+            "blocks_aa_high",
+            "blocks_aa_lateral",
+            "sample_uncaught_k3",
+            "uncaught_k3_rate_eb",
+        }
+    ),
+}
+
+
 def build_actor_embeddings(con: duckdb.DuckDBPyConnection, out_dir: str) -> dict[str, int]:
     """Export per-(actor_id, season) embeddings + global mean/std for each actor
     engine, so the worker can z-score + RBF-score the actor factor on the fly."""
@@ -1329,6 +1364,7 @@ def build_actor_embeddings(con: duckdb.DuckDBPyConnection, out_dir: str) -> dict
             if dt.upper() in _NUMERIC_TYPES
             and c not in (id_col, "season")
             and not c.startswith("sample_")
+            and c not in _EMBEDDING_EXCLUDE.get(actor, frozenset())
         ]
         # SIM-425b: the fielder engine is POSITION-PARTITIONED — the same player has
         # one row per position they played, so keying the embedding by
@@ -1474,6 +1510,13 @@ class BattedBallPool:
     # SIM-523 part C: the batted-ball class (``BB_CLASS``; 0 = unknown). None
     # on a bundle exported before part C; the class filter then stays off.
     bb_class: np.ndarray | None = None  # (N,) int8
+    # SIM-523 part G (migration 0024): the fielding CHAIN — the defensive
+    # alignment (the player at positions 2..9, column k-2; 0 unknown) and the
+    # positions credited a putout / an assist as bitmasks (bit k = position
+    # k, 1..9; 0 = no credit — every hit). None on a pre-part-G bundle.
+    fielders: np.ndarray | None = None  # (N, 8) int64
+    putout_mask: np.ndarray | None = None  # (N,) int16
+    assist_mask: np.ndarray | None = None  # (N,) int16
 
     @property
     def n(self) -> int:
@@ -1601,6 +1644,10 @@ _HAND_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
 _BB_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     # SIM-523 part C: the batted-ball class (None on a pre-part-C bundle).
     "bb_class",
+    # SIM-523 part G: the fielding chain (None on a pre-part-G bundle).
+    "fielders",
+    "putout_mask",
+    "assist_mask",
     "geom",
     "sit",
     "batter_id",
@@ -1922,6 +1969,21 @@ class EngineArtifacts:
                 return np.asarray(np.ma.filled(meta[col], fill), dtype=dtype)
             return None
 
+        def _bb_fielders(hand: str, meta: dict) -> np.ndarray | None:
+            """SIM-523 part G: the (N, 8) alignment from fielder_2..fielder_9
+            (a published view first; None on a pre-part-G artifact)."""
+            v = views.get(f"bb_pool.{hand}.fielders")
+            if isinstance(v, np.ndarray):
+                return v
+            if "fielder_2" not in meta:
+                return None
+            return np.column_stack(
+                [
+                    np.asarray(np.ma.filled(meta[f"fielder_{k}"], 0), dtype=np.int64)
+                    for k in range(2, 10)
+                ]
+            ).astype(np.int64)
+
         def _pp_take(
             hand: str, meta: dict, attr: str, col: str, dtype: type, fill: int
         ) -> np.ndarray | None:
@@ -2083,6 +2145,17 @@ class EngineArtifacts:
                             "pitcher_id",
                             # SIM-523 part C: the batted-ball class.
                             "bb_class",
+                            # SIM-523 part G: the alignment + the fielding chain.
+                            "fielder_2",
+                            "fielder_3",
+                            "fielder_4",
+                            "fielder_5",
+                            "fielder_6",
+                            "fielder_7",
+                            "fielder_8",
+                            "fielder_9",
+                            "putout_pos_mask",
+                            "assist_pos_mask",
                         )
                         if c in avail
                     ]
@@ -2162,6 +2235,14 @@ class EngineArtifacts:
                         hit_dist=_bb_take(hand, m, "hit_dist", "hit_dist", np.float32, 0),
                         # SIM-491: the batting side (None on a pre-0019 bundle).
                         bat_home=_bb_take(hand, m, "bat_home", "bat_home", np.int8, 0),
+                        # SIM-523 part G: the fielding chain (None on an older bundle).
+                        fielders=_bb_fielders(hand, m),
+                        putout_mask=_bb_take(
+                            hand, m, "putout_mask", "putout_pos_mask", np.int16, 0
+                        ),
+                        assist_mask=_bb_take(
+                            hand, m, "assist_mask", "assist_pos_mask", np.int16, 0
+                        ),
                         # SIM-518 (SIM-463): the producing pitch (None on a
                         # pre-sim518 export).
                         pgeom=(

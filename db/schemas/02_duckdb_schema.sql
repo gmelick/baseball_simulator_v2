@@ -379,6 +379,10 @@ CREATE TABLE IF NOT EXISTS derived.fielder_season_metrics (
     -- =========================================================================
     below_minimum_sample        BOOLEAN     NOT NULL DEFAULT FALSE,
     updated_at                  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- SIM-523 part G (migration 0024): the fielder's sprint speed (ft/s, Savant's
+    -- top-two-run average; one join from raw.sprint_speed). Appended LAST: the
+    -- builder's INSERT carries no column list.
+    sprint_speed                DOUBLE,
 
     PRIMARY KEY (player_id, position, season)
 );
@@ -977,6 +981,22 @@ CREATE TABLE IF NOT EXISTS sim.outcome_pool (
     -- bats). The SIM-412 home-field rebuild weights the fielding draw toward
     -- rows whose batting side matches the live one.
     bat_home                    BOOLEAN,
+    -- SIM-523 part G (migration 0024): the defensive ALIGNMENT on the play (the
+    -- player at positions 2..9, raw.pitches.fielder_2..9) and the fielding
+    -- CHAIN as position bitmasks (bit k = 1 << k, k = 1..9, set when that
+    -- position credited a putout / an assist; bit 1 = the pitcher; 0 = no
+    -- credit, every hit). Appended LAST: the builder's INSERT carries no
+    -- column list.
+    fielder_2                   INTEGER,
+    fielder_3                   INTEGER,
+    fielder_4                   INTEGER,
+    fielder_5                   INTEGER,
+    fielder_6                   INTEGER,
+    fielder_7                   INTEGER,
+    fielder_8                   INTEGER,
+    fielder_9                   INTEGER,
+    putout_pos_mask             SMALLINT,
+    assist_pos_mask             SMALLINT,
 
     PRIMARY KEY (pitch_id)
 );

@@ -1006,7 +1006,35 @@ def _label_component(mean: list[float], fi: dict[str, int]) -> str | None:
 # sim517.1 = catcher_id + got_away on sim.pitch_pool (SIM-517 / migration 0022).
 # sim518.1 = bat_home + pitcher_pitch_count + times_through_order on
 # sim.pitch_pool (SIM-518 / migration 0023 — the draw-conditioning columns).
-POOL_BUILDER_VERSION = "sim518.1"
+POOL_BUILDER_VERSION = "sim523g.1"
+
+#: SIM-523 part G: the loader's fielding-credit slot columns on raw.pitches.
+_PUTOUT_SLOTS: tuple[str, ...] = ("field_putout_1", "field_putout_2", "field_putout_3")
+_ASSIST_SLOTS: tuple[str, ...] = (
+    "field_assist_1",
+    "field_assist_2",
+    "field_assist_3",
+    "field_assist_4",
+    "field_assist_5",
+)
+
+
+def sql_credit_mask(prefix: str, slot_cols: tuple[str, ...], pitcher_expr: str) -> str:
+    """SIM-523 part G: the SQL for a POSITION bitmask of fielding credits.
+
+    Bit k (1 << k, k = 1..9) is set when the player at position k on the
+    play (``fielder_2`` .. ``fielder_9`` on the row; ``pitcher_expr`` for
+    position 1) appears in any of ``slot_cols`` (the loader's
+    ``field_putout_1..3`` / ``field_assist_1..5``). 0 when no slot is filled
+    (every hit) or no slot matches the alignment — the chain the fielding
+    draw reads (plan step 6: every fielder credited on the play)."""
+    terms = []
+    for k in range(1, 10):
+        who = pitcher_expr if k == 1 else f"{prefix}fielder_{k}"
+        match = " OR ".join(f"{prefix}{c} = {who}" for c in slot_cols)
+        terms.append(f"(CASE WHEN {who} IS NOT NULL AND ({match}) THEN {1 << k} ELSE 0 END)")
+    return " + ".join(terms)
+
 
 #: SIM-518 (SIM-465): the two fatigue columns, as window expressions over
 #: raw.pitches. Module-level so a unit test can run them on a synthetic table
@@ -4857,7 +4885,10 @@ class PlayerProfileComputor:
 
                 -- Meta
                 (c.opportunities < {MIN_FIELDER_PLAYS}) AS below_minimum_sample,
-                CURRENT_TIMESTAMP AS updated_at
+                CURRENT_TIMESTAMP AS updated_at,
+                -- SIM-523 part G (migration 0024): the fielder's sprint speed (one join;
+                -- appended LAST — the INSERT carries no column list).
+                ss.sprint_speed AS sprint_speed
 
             FROM combined_oaa c
             LEFT JOIN dp_init_agg dp
@@ -4870,6 +4901,8 @@ class PlayerProfileComputor:
                 ON c.player_id = b.fielder_id AND c.position = b.position AND c.season = b.season
             LEFT JOIN scoop s
                 ON c.player_id = s.fielder_id AND c.position = s.position AND c.season = s.season
+            LEFT JOIN pg.raw.sprint_speed ss
+                ON c.player_id = ss.player_id AND c.season = ss.season
         """)
 
         log.info("  Fielder season metrics aggregated.")
@@ -5419,7 +5452,22 @@ class PlayerProfileComputor:
                     -- but re-ordered LAST by the outer SELECT's EXCLUDE so the
                     -- positional INSERT matches the DDL (bat_home after
                     -- dest_outs_consistent).
-                    (rp.inning_topbot = 'Bot')      AS bat_home
+                    (rp.inning_topbot = 'Bot')      AS bat_home,
+                    -- SIM-523 part G (migration 0024): the defensive ALIGNMENT
+                    -- and the fielding CHAIN (the positions credited a putout /
+                    -- an assist). Appended LAST in the final SELECT below.
+                    rp.fielder_2::INTEGER          AS fielder_2,
+                    rp.fielder_3::INTEGER          AS fielder_3,
+                    rp.fielder_4::INTEGER          AS fielder_4,
+                    rp.fielder_5::INTEGER          AS fielder_5,
+                    rp.fielder_6::INTEGER          AS fielder_6,
+                    rp.fielder_7::INTEGER          AS fielder_7,
+                    rp.fielder_8::INTEGER          AS fielder_8,
+                    rp.fielder_9::INTEGER          AS fielder_9,
+                    ({sql_credit_mask("rp.", _PUTOUT_SLOTS, "pp.pitcher_id")})::SMALLINT
+                                                    AS putout_pos_mask,
+                    ({sql_credit_mask("rp.", _ASSIST_SLOTS, "pp.pitcher_id")})::SMALLINT
+                                                    AS assist_pos_mask
                 FROM sim.pitch_pool pp
                 JOIN pg.raw.pitches rp
                     ON rp.game_pk       = pp.game_pk
@@ -5435,14 +5483,25 @@ class PlayerProfileComputor:
             -- LAST so the positional INSERT matches the 0019 DDL order
             -- (bat_home after dest_outs_consistent).
             SELECT
-                bip.* EXCLUDE (bat_home),
+                bip.* EXCLUDE (bat_home, fielder_2, fielder_3, fielder_4, fielder_5, fielder_6, fielder_7, fielder_8, fielder_9, putout_pos_mask, assist_pos_mask),
                 (
                     (CASE WHEN bip.runner_1b_dest = 0 THEN 1 ELSE 0 END)
                   + (CASE WHEN bip.runner_2b_dest = 0 THEN 1 ELSE 0 END)
                   + (CASE WHEN bip.runner_3b_dest = 0 THEN 1 ELSE 0 END)
                   + (CASE WHEN bip.batter_dest    = 0 THEN 1 ELSE 0 END)
                 ) = bip.result_outs                 AS dest_outs_consistent,
-                bip.bat_home
+                bip.bat_home,
+                -- SIM-523 part G: the alignment + the chain, LAST (migration 0024).
+                bip.fielder_2,
+                bip.fielder_3,
+                bip.fielder_4,
+                bip.fielder_5,
+                bip.fielder_6,
+                bip.fielder_7,
+                bip.fielder_8,
+                bip.fielder_9,
+                bip.putout_pos_mask,
+                bip.assist_pos_mask
             FROM bip
         """)
         log.info("  sim.outcome_pool done.")
