@@ -1102,7 +1102,7 @@ def test_the_probe_tally_covers_every_channel_it_is_asked_for_sim450() -> None:
 def test_balanced_game_order_covers_the_whole_set_sim450() -> None:
     """The balanced order is a permutation of the twelve games, not a subset."""
     assert sorted(bands.BALANCED_GAME_ORDER) == sorted(bands.ACCEPTANCE_PARK_FACTORS)
-    assert len(bands.BALANCED_GAME_ORDER) == 12
+    assert len(bands.BALANCED_GAME_ORDER) == 45  # SIM-523: the balanced 45-game set
     assert sorted(bands.BALANCED_GAME_ORDER) == sorted(ACCEPTANCE_GAME_PKS)
 
 
@@ -1132,9 +1132,9 @@ def test_the_prefix_check_rejects_an_ascending_order_sim450() -> None:
     ascending = tuple(sorted(bands.ACCEPTANCE_PARK_FACTORS, key=bands.ACCEPTANCE_PARK_FACTORS.get))
     k, bias = bands.worst_prefix_park_bias(ascending)
     assert abs(bias) > bands.MAX_PREFIX_PARK_BIAS, "the check must reject the ascending order"
-    assert bands.mean_park_factor(ascending[:8]) == pytest.approx(0.96848, abs=5e-5)
-    assert bands.prefix_park_bias(ascending, 8) == pytest.approx(-0.03027, abs=5e-5)
-    assert bands.mean_park_factor(bands.BALANCED_GAME_ORDER[:8]) == pytest.approx(0.99553, abs=5e-5)
+    assert bands.mean_park_factor(ascending[:8]) == pytest.approx(0.92175, abs=5e-5)
+    assert bands.prefix_park_bias(ascending, 8) == pytest.approx(-0.07219, abs=5e-5)
+    assert bands.mean_park_factor(bands.BALANCED_GAME_ORDER[:8]) == pytest.approx(0.99415, abs=5e-5)
 
 
 def test_conftest_slices_the_balanced_game_order_sim450() -> None:
@@ -1188,9 +1188,10 @@ def test_a_shortened_run_cannot_hide_a_park_shift_in_the_R_band_sim450() -> None
 
     _, worst = bands.worst_prefix_park_bias(bands.BALANCED_GAME_ORDER)
     actual_in_runs = abs(worst) * centre
-    assert actual_in_runs / floor == pytest.approx(0.46, abs=0.02)
+    # SIM-523 (2026-09-09): the 45-game set's greedy prefix order reads 0.0024
+    assert actual_in_runs / floor == pytest.approx(0.09, abs=0.02)
     assert actual_in_runs < floor / 2.0
 
     # The full twelve-game set has no prefix bias at all, which is why a
     # certifying run uses it.
-    assert bands.prefix_park_bias(bands.BALANCED_GAME_ORDER, 12) == pytest.approx(0.0, abs=1e-12)
+    assert bands.prefix_park_bias(bands.BALANCED_GAME_ORDER, len(bands.BALANCED_GAME_ORDER)) == pytest.approx(0.0, abs=1e-12)

@@ -338,6 +338,10 @@ class FullPoolSampler:
         #     fence stage replaces the distance with the live park's fence).
         self.bb_class_filter = False
         self.bb_speed_sigma = 0.0
+        # SIM-523 (the kernel retirement): the fielding draw's batter factor is
+        # the batter engine's score raised to this power when the matrices are
+        # on (1.0 = the raw score); off, the retired kernel, byte-identical.
+        self.bb_batter_power = 1.0
         self.park_wall_zone_only = False
         self.wall_zone_distance = 300.0
         #: Class-filter draws: [0] filtered to the class, [1] empty -> the cell.
@@ -371,6 +375,7 @@ class FullPoolSampler:
         self._bb_hr_cache: dict[str, np.ndarray] = {}
         #: Per-hand z-scored sprint speed per batted-ball row (NaN = unknown).
         self._bb_speed_cache: dict[str, np.ndarray | None] = {}
+        self._bb_bat_cols: dict[str, np.ndarray | None] = {}
         #: Per-count raw per-PA weights and the pitcher / batter factors,
         #: kept only while the split is on (the result draw re-weights them).
         self._bucket_w: list[np.ndarray | None] | None = None
@@ -1580,6 +1585,50 @@ class FullPoolSampler:
         recompute)."""
         return self._batter_affinity(batter_key)
 
+    def _bb_batter_cols(self, hand: str) -> np.ndarray | None:
+        """The batter matrix column per batted-ball row (-1 = unscored); None
+        without the matrix. Cached per hand."""
+        if hand in self._bb_bat_cols:
+            return self._bb_bat_cols[hand]
+        e2m = self._emb_to_mat("batter")
+        pb = self._bb_pool_bat_idx(hand)
+        cols = None if e2m is None else np.where(pb >= 0, e2m[np.clip(pb, 0, len(e2m) - 1)], -1)
+        self._bb_bat_cols[hand] = cols
+        return cols
+
+    def _bb_batter_factor(self, hand: str, batter_key: str, rows: np.ndarray) -> np.ndarray:
+        """SIM-523 (the kernel retirement): the fielding draw's batter factor on
+        ``rows`` — the batter engine's score raised to ``bb_batter_power`` when
+        the matrices are on (at a power other than 1 an unscored row weighs
+        the rows' mean scored weight, draw-neutral); the retired kernel's
+        affinity when they are off (byte-identical)."""
+        if self._batter_matrix_on():
+            entry = self._actor_matrix("batter")
+            live = entry["index"].get(batter_key) if entry is not None else None
+            cols_all = self._bb_batter_cols(hand)
+            out = np.ones(rows.size, dtype=np.float32)
+            if entry is None or live is None or cols_all is None:
+                return out
+            cols = cols_all[rows]
+            valid = cols >= 0
+            if not valid.any():
+                return out
+            sc = entry["matrix"][live, cols[valid]].astype(np.float32)
+            sc = np.where(np.isfinite(sc), sc, np.float32(1.0))
+            p = float(self.bb_batter_power)
+            if p != 1.0:
+                sc = np.power(np.clip(sc, 0.0, None), np.float32(p)).astype(np.float32)
+                out[~valid] = np.float32(sc.mean())
+            out[valid] = sc
+            return out
+        aff = self._batter_aff(batter_key)
+        if aff is None:
+            return np.ones(rows.size, dtype=np.float32)
+        pbr = self._bb_pool_bat_idx(hand)[rows]
+        return np.where(pbr >= 0, aff[np.clip(pbr, 0, len(aff) - 1)], np.float32(1.0)).astype(
+            np.float32
+        )
+
     def _bb_pool_bat_idx(self, hand: str) -> np.ndarray:
         if hand in self._bb_pool_bat:
             return self._bb_pool_bat[hand]
@@ -1888,8 +1937,6 @@ class FullPoolSampler:
                 "columns (r1_dest / dest_ok / is_air) — a pre-sim510.1 bundle. Rebuild "
                 "the engine artifacts; there is no legacy soft-draw path."
             )
-        aff = self._batter_aff(batter_key)
-        pb = self._bb_pool_bat_idx(hand) if aff is not None else None
         # --- SIM-511: the hard base-out cell ---------------------------
         rstate = int(sv[3]) & 0b111
         o = min(max(int(sv[2]), 0), 2)
@@ -1907,13 +1954,9 @@ class FullPoolSampler:
         # --- SIM-523 part C4: the fence stage ------------------------------
         if born_bb is not None and self.fence_stage:
             rows = self._fence_rows(hand, meta, (rstate, o), rows, born_bb, venue_id)
-        if aff is not None and pb is not None:
-            pbr = pb[rows]
-            f_bat = np.where(pbr >= 0, aff[np.clip(pbr, 0, len(aff) - 1)], np.float32(1.0)).astype(
-                np.float32
-            )
-        else:
-            f_bat = np.ones(len(rows), dtype=np.float32)
+        # SIM-523 (the kernel retirement): the batter engine's score when the
+        # matrices are on; the retired kernel's affinity off (byte-identical).
+        f_bat = self._bb_batter_factor(hand, batter_key, rows)
         diff = meta["soft"][rows] - sv[[0, 1, 4, 5]]
         d2 = np.einsum("ij,ij->i", diff, diff)
         f_sit = np.exp(-d2 / (2.0 * self.sit_sigma**2 * diff.shape[1])).astype(np.float32)

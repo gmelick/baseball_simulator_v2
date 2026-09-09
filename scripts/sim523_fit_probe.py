@@ -761,6 +761,11 @@ def main() -> int:
     ap.add_argument("--json-out", default=None)
     args = ap.parse_args()
     game_pks = tuple(args.game_pks) or _DEFAULT_GAME_PKS
+    set_path = _ROOT / "scripts" / "sim523_game_set.json"
+    if not args.game_pks and set_path.exists():
+        # the balanced certifying set (owner ruling 2026-09-09) when it exists
+        with open(set_path, encoding="utf-8") as fh:
+            game_pks = tuple(int(g["game_pk"]) for g in json.load(fh)["order"])
 
     config = {k: v for k, v in sorted(os.environ.items()) if k.startswith("SIM_")}
     print(

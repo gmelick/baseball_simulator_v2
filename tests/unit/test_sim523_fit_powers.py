@@ -467,3 +467,124 @@ class TestRunnerKernelBandwidths:
         assert fp.steal_runner_sigma is None and fp.adv_runner_sigma is None
         apply_actor_matrix_env(fp, {})
         assert fp.steal_runner_sigma is None and fp.adv_runner_sigma is None
+
+
+# ---------------------------------------------------------------------------
+# SIM-523, the kernel retirement: the fielding draw's batter factor is the
+# batter engine's score; the runner engines score their thin profiles.
+# ---------------------------------------------------------------------------
+
+from pipeline.batch import engine_artifacts as _ea  # noqa: E402
+from pipeline.batch.engine_artifacts import BattedBallPool  # noqa: E402
+
+
+def _bb_pool_three_batters() -> BattedBallPool:
+    """Six balls in the empty / no-outs cell: two each for batters 200, 201
+    (both in the batter matrix) and 202 (in the embedding, unscored)."""
+    n = 6
+    batters = np.array([200, 200, 201, 201, 202, 202], dtype=np.int64)
+    return BattedBallPool(
+        geom=np.column_stack([np.full(n, 90.0), np.full(n, 15.0), np.zeros(n)]).astype(np.float32),
+        sit=np.zeros((n, 6), dtype=np.float32),
+        batter_id=batters,
+        season=np.full(n, _SEASON, dtype=np.int64),
+        event=np.asarray(["single"] * n, dtype=object),
+        result_hits=np.ones(n, dtype=np.int8),
+        result_outs=np.zeros(n, dtype=np.int8),
+        recency=np.ones(n, dtype=np.float32),
+        r1_dest=np.full(n, -1, dtype=np.int8),
+        r2_dest=np.full(n, -1, dtype=np.int8),
+        r3_dest=np.full(n, -1, dtype=np.int8),
+        batter_dest=np.ones(n, dtype=np.int8),
+        dest_ok=np.ones(n, dtype=np.int8),
+        r1_adv_out=np.zeros(n, dtype=np.int8),
+        r2_adv_out=np.zeros(n, dtype=np.int8),
+        r3_adv_out=np.zeros(n, dtype=np.int8),
+        is_air=np.zeros(n, dtype=np.int8),
+        spray_raw=np.zeros(n, dtype=np.float32),
+        hit_dist=np.full(n, 150.0, dtype=np.float32),
+    )
+
+
+class TestFieldingDrawBatterMatrix:
+    def _sampler(self) -> FullPoolSampler:
+        art = EngineArtifacts(
+            pools={"R": _pool(_HALF, _SAME_BATTER, _OUTS)},
+            pitcher_sim={_LIVE: {_LIVE: 1.0}},
+            pitcher_sim_index={_LIVE: 0},
+            bb_pools={"R": _bb_pool_three_batters()},
+            actor_emb={
+                "batter": {
+                    "key_index": {"200:2024": 0, "201:2024": 1, "202:2024": 2},
+                    "vecs": np.zeros((3, 2), dtype=np.float32),
+                    "mean": np.zeros(2, dtype=np.float32),
+                    "std": np.ones(2, dtype=np.float32),
+                }
+            },
+            actor_sim={
+                "batter": {
+                    "index": {"200:2024": 0, "201:2024": 1},
+                    "matrix": np.array([[1.0, 0.4], [0.4, 1.0]], dtype=np.float32),
+                }
+            },
+        )
+        return FullPoolSampler(art, np.random.default_rng(0))
+
+    def _weights(self, fp: FullPoolSampler) -> np.ndarray:
+        fp.battedball_new_pa("R", "200:2024", np.zeros(6, dtype=np.float32))
+        w = np.diff(np.concatenate([[0.0], fp._bb_cdf]))
+        out = np.zeros(6)
+        out[fp._bb_rows] = w
+        return out
+
+    def test_off_is_the_kernel(self):
+        fp = self._sampler()
+        fp._batter_affinity = lambda key: np.array([1.0, 0.5, 0.25], dtype=np.float32)
+        w = self._weights(fp)
+        assert w[:2] == pytest.approx(1.0) and w[2:4] == pytest.approx(0.5)
+        assert w[4:] == pytest.approx(0.25)
+
+    def test_on_is_the_matrix_score_at_the_power(self):
+        fp = self._sampler()
+        fp.actor_matrices = True
+        w = self._weights(fp)
+        assert w[:2] == pytest.approx(1.0) and w[2:4] == pytest.approx(0.4)
+        assert w[4:] == pytest.approx(1.0)  # unscored, power 1: as the pitch draw
+        fp.bb_batter_power = 2.0
+        w = self._weights(fp)
+        assert w[2:4] == pytest.approx(0.16)
+        assert w[4:] == pytest.approx((1.0 + 0.16) / 2.0)  # draw-neutral: the mean
+
+    def test_power_zero_keeps_the_kernel(self):
+        fp = self._sampler()
+        fp.actor_matrices = True
+        fp.actor_power = {"batter": 0.0}
+        fp._batter_affinity = lambda key: np.array([1.0, 0.5, 0.25], dtype=np.float32)
+        w = self._weights(fp)
+        assert w[2:4] == pytest.approx(0.5) and w[4:] == pytest.approx(0.25)
+
+
+class TestThinRunnerProfilesReachTheMatrices:
+    def test_the_runner_engines_are_built_with_their_thin_profiles(self, monkeypatch, tmp_path):
+        calls: dict[str, dict] = {}
+
+        class _Stub:
+            def __init__(self, duckdb_path=None):
+                self._profiles = {(1, 2024): object()}
+
+            def build(self, seasons=None, **kw):
+                calls[type(self).__name__] = dict(kw)
+
+            def query(self, *a, **k):
+                return []
+
+        stubs = {cls: type(cls, (_Stub,), {}) for _m, cls in _ea._ACTOR_SIM_ENGINES.values()}
+        monkeypatch.setattr(_ea, "_ENGINE_LOADER", lambda module, cls: stubs[cls])
+        monkeypatch.setattr(_ea, "concentration_report", lambda *a, **k: {})
+        monkeypatch.setattr(
+            _ea, "_matrix_from_queries", lambda keys, q, ka, s: ({}, np.zeros((0, 0)))
+        )
+        _ea.build_actor_sim_matrices("x.duckdb", str(tmp_path), [2024])
+        runner = {_ea._ACTOR_SIM_ENGINES[n][1] for n in _ea._THIN_PROFILE_ENGINES}
+        for cls, kw in calls.items():
+            assert kw.get("include_below_minimum", False) is (cls in runner), (cls, kw)

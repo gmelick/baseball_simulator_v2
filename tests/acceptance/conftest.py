@@ -134,6 +134,7 @@ PRODUCTION_FLAGS: dict[str, str] = {
     # sprint-speed kernel and the park wall-zone rule — OFF until part F.
     "SIM_BB_CLASS_FILTER": os.environ.get("SIM523_LANE_CLASS_FILTER", "0"),
     "SIM_BB_SPEED_SIGMA": os.environ.get("SIM523_LANE_SPEED_SIGMA", "0"),
+    "SIM_BB_BATTER_POWER": os.environ.get("SIM523_LANE_BB_BATTER_POWER", "1.0"),
     "SIM_PARK_WALL_ZONE_ONLY": os.environ.get("SIM523_LANE_WALL_ZONE_ONLY", "0"),
     "SIM_WALL_ZONE_DISTANCE": os.environ.get("SIM523_LANE_WALL_ZONE_DISTANCE", "300"),
     "SIM_FENCE_STAGE": os.environ.get("SIM523_LANE_FENCE_STAGE", "0"),
@@ -187,8 +188,8 @@ ACCEPTANCE_GAME_PKS: tuple[int, ...] = bands.BALANCED_GAME_ORDER
 #: decisive game rather than two per game-sim, and its floor is sized on the
 #: ``CLAUDE.md:400`` baseline, so it needs 26,015 decisive games — about 16.3
 #: hours. Read ``bands.py`` "THE COST, STATED PLAINLY" before you shorten a run.
-DEFAULT_GAMES = 12
-DEFAULT_ITERS = 425
+DEFAULT_GAMES = 45
+DEFAULT_ITERS = 130
 
 #: The lowest size that still says anything, read from the band arithmetic rather
 #: than hard-coded. It was a hand-written 400 until 2026-08-10, which the round-3

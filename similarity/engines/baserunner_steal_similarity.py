@@ -387,13 +387,19 @@ class BaserunnerStealSimilarityEngine:
     # Build
     # ------------------------------------------------------------------
 
-    def build(self, seasons: list[int] | None = None) -> None:
-        """Load all steal profiles, apply shrinkage, build scoring matrices."""
+    def build(
+        self, seasons: list[int] | None = None, *, include_below_minimum: bool = False
+    ) -> None:
+        """Load all steal profiles, apply shrinkage, build scoring matrices.
+
+        SIM-523 (the kernel retirement): ``include_below_minimum`` loads the
+        thin profiles too (their sample confidence shrinks their scores), so
+        the score matrix covers every runner-season in the steal pool."""
         t0 = time.time()
         conn = duckdb.connect(self._duckdb_path, read_only=True)
         try:
             self._load_league_averages(conn, seasons)
-            self._load_profiles(conn, seasons)
+            self._load_profiles(conn, seasons, include_below_minimum)
         finally:
             conn.close()
 
@@ -443,10 +449,12 @@ class BaserunnerStealSimilarityEngine:
         self,
         conn: duckdb.DuckDBPyConnection,
         seasons: list[int] | None,
+        include_below_minimum: bool = False,
     ) -> None:
         sf = ""
         if seasons:
             sf = f"AND bss.season IN ({', '.join(str(s) for s in seasons)})"
+        min_filter = "TRUE" if include_below_minimum else "NOT bss.below_minimum_sample"
 
         rows = conn.execute(f"""
             SELECT
@@ -462,7 +470,7 @@ class BaserunnerStealSimilarityEngine:
                 bss.steal_success_rate_2b,
                 bss.below_minimum_sample
             FROM derived.baserunner_steal_metrics bss
-            WHERE NOT bss.below_minimum_sample
+            WHERE {min_filter}
               {sf}
         """).fetchall()
 

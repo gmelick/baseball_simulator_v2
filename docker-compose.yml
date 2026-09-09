@@ -189,6 +189,9 @@ services:
       # OFF until part F fits them and a lane certifies.
       SIM_BB_CLASS_FILTER:       "0"
       SIM_BB_SPEED_SIGMA:        "0"
+      # SIM-523 (the kernel retirement): the fielding draw's batter factor is
+      # the batter engine's score raised to this power (with the matrices on).
+      SIM_BB_BATTER_POWER:       "1.0"
       SIM_PARK_WALL_ZONE_ONLY:   "0"
       SIM_WALL_ZONE_DISTANCE:    "300"
       # The fence stage (the born ball against the live park's fence) and its

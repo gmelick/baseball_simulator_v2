@@ -1056,6 +1056,10 @@ _ACTOR_SIM_SPECS: dict[str, dict] = {
     },
 }
 _FIELDER_POSITIONS = ("1B", "2B", "3B", "SS", "LF", "CF", "RF")
+#: SIM-523 (the kernel retirement): the engines that score their THIN profiles
+#: too, so the matrices cover every runner-season the pools hold (two thirds
+#: of steal rows and half of advancement rows were unscored before).
+_THIN_PROFILE_ENGINES = frozenset({"baserunner", "baserunner_steal"})
 CONCENTRATION_MAX_RATIO = 3.0
 
 
@@ -1116,7 +1120,13 @@ def build_actor_sim_matrices(
         if eng is None:
             module, cls = _ACTOR_SIM_ENGINES[name]
             eng = _ENGINE_LOADER(module, cls)(duckdb_path=duckdb_path)
-            eng.build(seasons=sorted(season_set))
+            if name in _THIN_PROFILE_ENGINES:
+                try:
+                    eng.build(seasons=sorted(season_set), include_below_minimum=True)
+                except TypeError:  # a stand-in engine without the option
+                    eng.build(seasons=sorted(season_set))
+            else:
+                eng.build(seasons=sorted(season_set))
             engines[name] = eng
         return eng
 

@@ -494,14 +494,21 @@ class BaserunnerSimilarityEngine:
     # Build
     # ------------------------------------------------------------------
 
-    def build(self, seasons: list[int] | None = None) -> None:
-        """Load all baserunner profiles, apply shrinkage, build matrices."""
+    def build(
+        self, seasons: list[int] | None = None, *, include_below_minimum: bool = False
+    ) -> None:
+        """Load all baserunner profiles, apply shrinkage, build matrices.
+
+        SIM-523 (the kernel retirement): ``include_below_minimum`` loads the
+        thin profiles too. Their sample confidence (``eb_alpha``) shrinks
+        their scores, so the score matrix covers every runner-season the
+        pools hold instead of skipping half of them."""
         t0 = time.time()
         conn = duckdb.connect(self._duckdb_path, read_only=True)
 
         try:
             self._load_league_averages(conn, seasons)
-            self._load_profiles(conn, seasons)
+            self._load_profiles(conn, seasons, include_below_minimum)
         finally:
             conn.close()
 
@@ -564,11 +571,13 @@ class BaserunnerSimilarityEngine:
         self,
         conn: duckdb.DuckDBPyConnection,
         seasons: list[int] | None,
+        include_below_minimum: bool = False,
     ) -> None:
         season_filter = ""
         if seasons:
             sl = ", ".join(str(s) for s in seasons)
             season_filter = f"AND brm.season IN ({sl})"
+        min_filter = "TRUE" if include_below_minimum else "NOT brm.below_minimum_sample"
 
         rows = conn.execute(f"""
             SELECT
@@ -599,7 +608,7 @@ class BaserunnerSimilarityEngine:
                 brm.sample_tag_up_opps,
                 brm.below_minimum_sample
             FROM derived.baserunner_season_metrics brm
-            WHERE NOT brm.below_minimum_sample
+            WHERE {min_filter}
               {season_filter}
         """).fetchall()
 

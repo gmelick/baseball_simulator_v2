@@ -196,6 +196,7 @@ def apply_fielding_env(sampler: Any, env: Mapping[str, str] | None = None) -> No
     sampler.fence_stage = flag("SIM_FENCE_STAGE")
     for key, attr, default in (
         ("SIM_BB_SPEED_SIGMA", "bb_speed_sigma", 0.0),
+        ("SIM_BB_BATTER_POWER", "bb_batter_power", 1.0),
         ("SIM_WALL_ZONE_DISTANCE", "wall_zone_distance", 300.0),
         ("SIM_FENCE_MARGIN", "fence_margin", 0.0),
     ):
