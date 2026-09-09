@@ -519,7 +519,7 @@ BOX_CHANNELS: tuple[str, ...] = tuple(c for c in CHANNELS if c != "home_win_pct"
 #: ``test_restated_mlb_constants_match_sim_stats_sim450``, which parses that file
 #: rather than importing it. A moved constant fails the test instead of rotting
 #: into a wrong citation, which is what :69 and :83 did before 2026-08-10.
-SIM_STATS_MLB_2025_LINE: int = 88
+SIM_STATS_MLB_2025_LINE: int = 89
 
 #: The line ``_MLB_HOME_WIN_PCT`` is assigned on in ``scripts/sim_stats.py``.
 SIM_STATS_HOME_WIN_PCT_LINE: int = 102
