@@ -279,7 +279,7 @@ the probe counts both canonical walk classes); CS includes every scored class �
 pitch-steal CS, K+CS double plays, and 149 advancing pickoffs (Rule 9.07(h),
 the SIM-507 channel).
 
-The nine box channels restate ``_MLB_2025`` from ``scripts/sim_stats.py:88``
+The nine box channels restate ``_MLB_2025`` from ``scripts/sim_stats.py:89``
 verbatim, and ``home_win_pct`` restates ``_MLB_HOME_WIN_PCT`` from
 ``scripts/sim_stats.py:102``. (The citations were once wrong for months —
 :69/:83 as the file outgrew them —
@@ -635,7 +635,7 @@ class Reference:
 #: ``detect_source`` names where each defect magnitude comes from, so a reader
 #: never has to guess whether a number was measured, documented or invented.
 REFERENCES: dict[str, Reference] = {
-    # --- the nine channels restated from scripts/sim_stats.py:88 (_MLB_2025) ---
+    # --- the nine channels restated from scripts/sim_stats.py:89 (_MLB_2025) ---
     # SIM-508: every sd_ref below re-measured on the same 2025 games
     # (2026-08-18); every Rule-B floor recomputed as the tightest deviation
     # team-games resolves (11,295) against the 2025 spread and centre.
