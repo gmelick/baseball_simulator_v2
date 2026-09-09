@@ -535,6 +535,119 @@ def build_park_geometry(con: duckdb.DuckDBPyConnection, out_dir: str, seasons: l
     return doc
 
 
+# ---------------------------------------------------------------------------
+# SIM-523 part D — the pitching-change OPPORTUNITY pool (the manager's step 1)
+# ---------------------------------------------------------------------------
+#
+# One row per plate-appearance boundary while a pitcher is on the mound,
+# changed or not — the denominator the old pull formula never had (the
+# SIM-468 steal-pool pattern). The situation table gives the boundary (the
+# half, the outs, the bases, the scores); the pitch pool gives the pitcher of
+# every plate appearance. A boundary's row describes the pitcher who threw the
+# PREVIOUS plate appearance for that side: his pitches and batters faced so
+# far in the game, whether he is the side's starter, whether the boundary is
+# the first plate appearance of a half inning, and whether he was replaced.
+
+_CHANGE_SIT_COLS = ["pitch_count", "batters_faced", "inning", "outs", "runners_state", "score_diff"]
+
+
+def build_pitching_change_pool(
+    con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]
+) -> dict:
+    """Write ``<out_dir>/manager_pool/change.{sit.npy, meta.parquet}`` and the
+    manifest (the counts and the pool's own change rates). Returns the manifest."""
+    pool_dir = os.path.join(out_dir, "manager_pool")
+    os.makedirs(pool_dir, exist_ok=True)
+    season_list = ", ".join(str(int(s)) for s in seasons)
+    con.execute(
+        f"""
+        CREATE OR REPLACE TEMP TABLE _change_pool AS
+        WITH pp AS (
+            SELECT game_pk, at_bat_number, arg_min(pitcher_id, pitch_number) AS pitcher_id,
+                   count(*) AS n_pitches, max(recency_weight) AS recency
+            FROM sim.pitch_pool WHERE season IN ({season_list}) GROUP BY 1, 2
+        ),
+        pa AS (
+            SELECT s.game_pk, s.season, s.at_bat_number, s.inning, s.top_or_bottom,
+                   s.outs_when_up AS outs,
+                   CAST(s.on_1b > 0 AS INTEGER) + 2 * CAST(s.on_2b > 0 AS INTEGER)
+                       + 4 * CAST(s.on_3b > 0 AS INTEGER) AS runners_state,
+                   s.home_score, s.away_score, pp.pitcher_id, pp.n_pitches, pp.recency
+            FROM derived.at_bat_situations s JOIN pp USING (game_pk, at_bat_number)
+            WHERE s.season IN ({season_list})
+        ),
+        seq AS (
+            SELECT *,
+                lag(pitcher_id) OVER side AS prev_pitcher,
+                lag(inning) OVER side AS prev_inning,
+                first_value(pitcher_id) OVER side AS side_starter,
+                sum(n_pitches) OVER (PARTITION BY game_pk, pitcher_id ORDER BY at_bat_number
+                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS pc_after,
+                row_number() OVER (PARTITION BY game_pk, pitcher_id ORDER BY at_bat_number)
+                    AS bf_after
+            FROM pa WINDOW side AS (PARTITION BY game_pk, top_or_bottom ORDER BY at_bat_number)
+        ),
+        b AS (
+            SELECT game_pk, season, at_bat_number, inning, outs, runners_state,
+                CASE WHEN top_or_bottom = 0 THEN home_score - away_score
+                     ELSE away_score - home_score END AS score_diff,
+                prev_pitcher AS pitcher_id, pitcher_id AS incoming_id,
+                CAST(pitcher_id <> prev_pitcher AS TINYINT) AS changed,
+                CAST(inning <> prev_inning AS TINYINT) AS new_half,
+                CAST(prev_pitcher = side_starter AS TINYINT) AS is_starter,
+                lag(pc_after) OVER side AS pitch_count,
+                lag(bf_after) OVER side AS batters_faced,
+                recency
+            FROM seq WINDOW side AS (PARTITION BY game_pk, top_or_bottom ORDER BY at_bat_number)
+        )
+        SELECT * FROM b WHERE pitcher_id IS NOT NULL AND pitch_count IS NOT NULL
+        ORDER BY game_pk, at_bat_number
+        """
+    )
+    d = con.execute(f"SELECT {', '.join(_CHANGE_SIT_COLS)} FROM _change_pool").fetchnumpy()
+    n = len(d[_CHANGE_SIT_COLS[0]])
+    sit = np.nan_to_num(
+        np.stack([np.ma.filled(d[c], np.nan).astype(np.float32) for c in _CHANGE_SIT_COLS], axis=1)
+    ).astype(np.float32)
+    np.save(os.path.join(pool_dir, "change.sit.npy"), sit)
+    con.execute(
+        "COPY (SELECT game_pk, at_bat_number, season, pitcher_id, incoming_id, is_starter, "
+        "new_half, changed, recency AS recency_weight FROM _change_pool) "
+        f"TO '{os.path.join(pool_dir, 'change.meta.parquet')}' (FORMAT parquet)"
+    )
+    rates = con.execute(
+        "SELECT avg(changed), avg(changed) FILTER (WHERE new_half = 1), "
+        "avg(changed) FILTER (WHERE new_half = 0), avg(changed) FILTER (WHERE is_starter = 1), "
+        "avg(changed) FILTER (WHERE is_starter = 0), count(DISTINCT game_pk) FROM _change_pool"
+    ).fetchone()
+    con.execute("DROP TABLE _change_pool")
+    manifest = {
+        "seasons": [int(s) for s in seasons],
+        "count": int(n),
+        "sit_cols": list(_CHANGE_SIT_COLS),
+        "rates": {
+            "changed": (float(rates[0]) if rates[0] is not None else None),
+            "changed_new_half": (float(rates[1]) if rates[1] is not None else None),
+            "changed_mid_inning": (float(rates[2]) if rates[2] is not None else None),
+            "changed_starter": (float(rates[3]) if rates[3] is not None else None),
+            "changed_reliever": (float(rates[4]) if rates[4] is not None else None),
+        },
+        "games": int(rates[5] or 0),
+    }
+    with open(os.path.join(pool_dir, "manifest.json"), "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2)
+    log.info(
+        "manager_pool[change]: %d boundaries over %d games; change rate %.4f "
+        "(new half %.4f, mid-inning %.4f)",
+        n,
+        manifest["games"],
+        manifest["rates"]["changed"] or 0.0,
+        manifest["rates"]["changed_new_half"] or 0.0,
+        manifest["rates"]["changed_mid_inning"] or 0.0,
+    )
+    return manifest
+
+
 #: The steal draw's situation columns (SIM-474). `outs` and the count are the
 #: hard-filter cell; `score_diff` is soft-kernelled. `inning` is deliberately
 #: excluded — leverage shaping rides on the manager weight, not the pool.
@@ -1245,6 +1358,29 @@ class AdvancementPool:
         return int(self.feat.shape[0])
 
 
+@dataclass
+class ChangePool:
+    """SIM-523 part D: the pitching-change OPPORTUNITY pool — one row per
+    plate-appearance boundary while a pitcher is on the mound, changed or not.
+    ``sit`` columns: pitch_count, batters_faced, inning, outs, runners_state,
+    score_diff (the fielding side minus the batting side)."""
+
+    sit: np.ndarray  # (N, 6) float32
+    pitcher_id: np.ndarray  # (N,) int64 — the pitcher on the mound at the boundary
+    incoming_id: (
+        np.ndarray
+    )  # (N,) int64 — the plate appearance's pitcher (the new arm when changed)
+    season: np.ndarray  # (N,) int64
+    is_starter: np.ndarray  # (N,) int8
+    new_half: np.ndarray  # (N,) int8 — the first plate appearance of a half inning
+    changed: np.ndarray  # (N,) int8
+    recency: np.ndarray  # (N,) float32
+
+    @property
+    def n(self) -> int:
+        return int(self.sit.shape[0])
+
+
 #: SIM-403b — the shareable subset of numpy arrays inside an EngineArtifacts
 #: bundle, by flat name. Used for zero-copy publication into
 #: ``multiprocessing.shared_memory`` so worker subprocesses don't each copy the
@@ -1324,6 +1460,17 @@ _STEAL_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "pickoff_advancing",
     "pickoff_error",
 )
+#: SIM-523 part D: every ChangePool column is numeric, so the whole pool is shareable.
+_CHANGE_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
+    "sit",
+    "pitcher_id",
+    "incoming_id",
+    "season",
+    "is_starter",
+    "new_half",
+    "changed",
+    "recency",
+)
 #: SIM-510: every AdvancementPool column is numeric, so the whole pool is shareable.
 _ADV_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "feat",
@@ -1366,6 +1513,7 @@ class EngineArtifacts:
         adv_pools=None,
         actor_sim=None,
         park_geometry: dict | None = None,
+        change_pool: ChangePool | None = None,
     ):
         self.pools: dict[str, HandPool] = pools
         #: SIM-523 part A: matrix role -> {"index": {key: row}, "matrix": (n, n)
@@ -1375,6 +1523,9 @@ class EngineArtifacts:
         #: SIM-523 part C: the park geometry document (``build_park_geometry``),
         #: or None on a bundle without it — the fence stage then stays off.
         self.park_geometry: dict | None = park_geometry
+        #: SIM-523 part D: the pitching-change opportunity pool, or None on a
+        #: bundle without it — the manager draw then falls back to the formula.
+        self.change_pool: ChangePool | None = change_pool
         self.bb_pools: dict[str, BattedBallPool] = bb_pools or {}
         #: SIM-474: target base ("2"/"3") -> StealPool; {} on a legacy bundle.
         self.steal_pools: dict[str, StealPool] = steal_pools or {}
@@ -1452,6 +1603,12 @@ class EngineArtifacts:
                 arr = getattr(apool, attr, None)
                 if isinstance(arr, np.ndarray):
                     out[f"adv_pool.{key}.{attr}"] = arr
+        # SIM-523 part D: the pitching-change opportunity pool.
+        if self.change_pool is not None:
+            for attr in _CHANGE_POOL_SHAREABLE_ATTRS:
+                arr = getattr(self.change_pool, attr, None)
+                if isinstance(arr, np.ndarray):
+                    out[f"change_pool.{attr}"] = arr
         # SIM-430: the dense pitcher similarity matrix (replaces the ~2 GB dict).
         if isinstance(self.pitcher_sim_matrix, np.ndarray):
             out["pitcher_sim.matrix"] = self.pitcher_sim_matrix
@@ -1511,6 +1668,12 @@ class EngineArtifacts:
                 v = views.get(f"adv_pool.{key}.{attr}")
                 if isinstance(v, np.ndarray):
                     setattr(apool, attr, v)
+        # SIM-523 part D: attach the shared change-pool views.
+        if self.change_pool is not None:
+            for attr in _CHANGE_POOL_SHAREABLE_ATTRS:
+                v = views.get(f"change_pool.{attr}")
+                if isinstance(v, np.ndarray):
+                    setattr(self.change_pool, attr, v)
         # SIM-430: attach the shared dense pitcher-sim matrix view.
         mv = views.get("pitcher_sim.matrix")
         if isinstance(mv, np.ndarray):
@@ -1903,6 +2066,37 @@ class EngineArtifacts:
                             )
                         ),
                     )
+            # SIM-523 part D: the pitching-change opportunity pool (None on a
+            # bundle without it).
+            change_pool: ChangePool | None = None
+            mp_dir = os.path.join(art_dir, "manager_pool")
+            if os.path.exists(os.path.join(mp_dir, "manifest.json")):
+                cm = con.execute(
+                    f"SELECT * FROM read_parquet('{os.path.join(mp_dir, 'change.meta.parquet')}')"
+                ).fetchnumpy()
+
+                def _cp_take(attr: str, col: str, dtype, fill, *, _m=cm) -> np.ndarray:
+                    v = views.get(f"change_pool.{attr}")
+                    if isinstance(v, np.ndarray):
+                        return v
+                    return np.asarray(np.ma.filled(_m[col], fill), dtype=dtype)
+
+                change_pool = ChangePool(
+                    sit=_take("change_pool.sit", os.path.join(mp_dir, "change.sit.npy")),
+                    pitcher_id=_cp_take("pitcher_id", "pitcher_id", np.int64, 0),
+                    incoming_id=_cp_take("incoming_id", "incoming_id", np.int64, 0),
+                    season=_cp_take("season", "season", np.int64, 0),
+                    is_starter=_cp_take("is_starter", "is_starter", np.int8, 0),
+                    new_half=_cp_take("new_half", "new_half", np.int8, 0),
+                    changed=_cp_take("changed", "changed", np.int8, 0),
+                    recency=(
+                        views.get("change_pool.recency")
+                        if isinstance(views.get("change_pool.recency"), np.ndarray)
+                        else np.nan_to_num(
+                            np.ma.filled(cm["recency_weight"], 1.0).astype(np.float32), nan=1.0
+                        )
+                    ),
+                )
         finally:
             con.close()
         ps_index: dict[str, int] = {}
@@ -1990,6 +2184,7 @@ class EngineArtifacts:
             adv_pools,
             actor_sim=actor_sim,
             park_geometry=park_geometry,
+            change_pool=change_pool,
         )
 
 
@@ -2007,7 +2202,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument(
         "--what",
-        choices=["pool", "pitcher_sim", "actors", "actors_sim", "park", "all"],
+        choices=["pool", "pitcher_sim", "actors", "actors_sim", "park", "manager", "all"],
         default="pool",
     )
     ap.add_argument(
@@ -2037,6 +2232,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.what in ("park", "all"):
             # SIM-523 part C: the park geometry + the carry model.
             build_park_geometry(con, args.out_dir, seasons)
+        if args.what in ("manager", "all"):
+            # SIM-523 part D: the pitching-change opportunity pool.
+            build_pitching_change_pool(con, args.out_dir, seasons)
         if args.what in ("pitcher_sim", "all"):
             build_pitcher_sim_matrix(
                 args.duckdb_path, args.out_dir, seasons, limit=args.pitcher_sim_limit

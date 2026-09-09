@@ -473,6 +473,13 @@ class GameState:
     # ``park``+season) and threaded here; the worker has no DB, so it is carried
     # as a scalar. 1.0 == neutral -> the park consumer is a no-op (the default).
     park_run_factor: float = 1.0
+    # SIM-523 part D: the two STARTING pitchers (never overwritten by a
+    # pull, unlike ``home_pitcher_id`` / ``away_pitcher_id``) and the number
+    # of plate appearances completed in the current half inning — the
+    # pitching-change draw's ``is_starter`` and ``new_half`` inputs.
+    home_starter_id: int | None = None
+    away_starter_id: int | None = None
+    half_pa_count: int = 0
 
     # SIM-434: per-pitcher fatigue / rest state for the manager pull + reliever-
     # selection model.  ``pitcher_bf`` counts batters-faced PER pitcher id

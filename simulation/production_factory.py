@@ -312,6 +312,7 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     apply_actor_matrix_env(sampler)
     apply_result_split_env(sampler)
     apply_fielding_env(sampler)
+    apply_manager_env(sampler)
     _CACHED_FULL_POOL_SAMPLER = sampler
     _CACHED_FULL_POOL_ART_DIR = art_dir
     return sampler
@@ -491,6 +492,33 @@ def _manager_enabled() -> bool:
     return env not in ("", "0", "false", "no", "off")
 
 
+def _manager_draw_enabled() -> bool:
+    """SIM-523 part D: whether SIM_MANAGER_DRAW makes the pitching change a
+    draw from the opportunity pool (default OFF: the SIM-434 formula)."""
+    env = os.environ.get("SIM_MANAGER_DRAW", "").strip().lower()
+    return env not in ("", "0", "false", "no", "off")
+
+
+def apply_manager_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
+    """SIM-523 part D: the pitching-change draw's bandwidth
+    (``SIM_CHANGE_SIT_SIGMA``, 1.0), the live pitcher's power
+    (``SIM_CHANGE_PITCHER_POWER``, 1.0; 0 = off) and the cell floor
+    (``SIM_CHANGE_MIN_CELL``, 20)."""
+    src = os.environ if env is None else env
+    for key, attr, default in (
+        ("SIM_CHANGE_SIT_SIGMA", "change_sit_sigma", 1.0),
+        ("SIM_CHANGE_PITCHER_POWER", "change_pitcher_power", 1.0),
+    ):
+        try:
+            setattr(sampler, attr, float(src.get(key, str(default))))
+        except ValueError:
+            setattr(sampler, attr, default)
+    try:
+        sampler.change_min_cell = int(src.get("SIM_CHANGE_MIN_CELL", "20"))
+    except ValueError:
+        sampler.change_min_cell = 20
+
+
 def _default_bullpen_for_spec(spec: GameSpec) -> dict[int, list[int]]:
     """Build a generic per-team bullpen (SIM-434), keyed by the ``Team`` int value.
 
@@ -562,6 +590,8 @@ def production_machine_factory(seed: int | None, spec: GameSpec) -> StateMachine
         # onto the GameState (it falls back to ``machine.bullpen`` when no explicit
         # ``bullpen=`` is passed — the production path through ``_run_one``).
         machine.bullpen = _BULLPEN_BUILDER(spec)
+        # SIM-523 part D: the pitching change as a draw (SIM_MANAGER_DRAW).
+        machine.manager_draw = _manager_draw_enabled()
     return machine
 
 

@@ -279,6 +279,36 @@ Align the manager hooks with the loop order: every decision a draw at the pool's
 rate for the situation, the profile a weight. The real per-team profiles are
 SIM-427's plan; this part only fixes the order and the draw form.
 
+**Part D BUILT 2026-09-08 (the order fixed; the pitching change as a draw, switch OFF).**
+
+* **The order.** The manager decisions — the pitching change, the pinch hit, the bunt
+  setup — now run ONCE, on a plate appearance's first pitch (`_start_of_pa_hook`), before
+  the intentional-walk and steal decisions. They used to run at the END of the previous
+  plate appearance and again at the half-inning roll, so a between-innings pull was
+  evaluated twice. `GameState` gains the two starters (kept apart from the current
+  pitchers, which a pull overwrites) and the half's plate-appearance count.
+* **The draw form (SIM-427 §4's design, built here without the DuckDB table).** The
+  pitching-change OPPORTUNITY pool — one row per plate-appearance boundary while a
+  pitcher is on the mound, changed or not — is built at artifact time from the situation
+  table (the half, the outs, the bases, the scores) joined to the pitch pool (the pitcher
+  per plate appearance): `build_pitching_change_pool` (`--what manager`, in `all`),
+  `ChangePool` in the bundle (shareable). Live: 678,014 boundaries over 9,242 games; the
+  pool's own change rate 8.9% per boundary — 28.7% at a half-inning boundary, 3.5%
+  mid-inning; starters 4.5%, relievers 15.4%. `pitching_change_draw` hard-filters the
+  cell (starter or reliever, a half-inning boundary or mid-inning, the pitch-count
+  bucket of ten, times through the order; widened below `change_min_cell` in a fixed
+  order and counted), weights by recency, a Gaussian on the z-scored soft columns
+  (`SIM_CHANGE_SIT_SIGMA`), the live pitcher's similarity to each row's pitcher
+  (`SIM_CHANGE_PITCHER_POWER`) and an optional per-row manager weight (SIM-427's real
+  profiles; flat today); the drawn row's `changed` flag IS the decision — no floor, no
+  ceiling. Behind `SIM_MANAGER_DRAW` (OFF) the pull follows the draw; without a pool the
+  SIM-434 formula stays. The reliever choice stays the positional pick (SIM-427 5b/5c
+  map the drawn row's incoming arm onto a real pen; `last_change_row` exposes it). The
+  intentional walk was already a cell draw (SIM-515); the pinch hit and the bunt setup
+  stay as they are until SIM-427 5d deletes or rebuilds them. 19 tests
+  (`tests/unit/test_sim523_manager_draw.py`); the probe is
+  `scripts/sim523_manager_probe.py` and its numbers are in `CHANGES.md` under this date.
+
 ### Part E — the catcher receiving ratio factor, built OFF
 
 For taken rows in the result draw's cell: called-strike rows × the live catcher's

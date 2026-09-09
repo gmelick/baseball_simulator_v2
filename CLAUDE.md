@@ -257,7 +257,11 @@ reproduces the single draw's pitch mix at neutral powers. **PART C BUILT the sam
 fielding draw's class filter, sprint-speed weight and wall-zone rule (`SIM_BB_CLASS_FILTER`,
 `SIM_BB_SPEED_SIGMA`, `SIM_PARK_WALL_ZONE_ONLY`), the park geometry + carry model in the bundle
 (`park_geometry.json`, `--what park`) and the fence stage (`SIM_FENCE_STAGE`), all OFF; the live
-venue travels as `venue_id` in the kwargs contract. Parts D-G of the plan remain.
+venue travels as `venue_id` in the kwargs contract. **PART D BUILT 2026-09-09:** the manager
+decisions run once at a plate appearance's start (before the intentional walk and the steal);
+the pitching change is a draw from a pitching-change opportunity pool in the bundle
+(`--what manager`, `SIM_MANAGER_DRAW` OFF). The probe: the production formula runs 2.4
+pitchers a side vs the majors' ~4.2; the draw reads 4.35 (the pool's own 4.27). Parts E-G remain.
 
 - **DO NOT run the profile recompute** (`make profile-computor`) — but the reason changed on
   2026-08-13. SIM-501a/c CLOSED: SIM-457 is re-landed on the events-based out label, no profile

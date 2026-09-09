@@ -1,5 +1,21 @@
 # Product Backlog
 
+# 🧱 2026-09-09 — REDESIGN PART D BUILT: the manager decisions at the START of a plate appearance; the pitching change as a DRAW (SIM-523), switch OFF (next free ID → SIM-527)
+
+**What landed (`CHANGES.md` has the detail).** The pitching change, the pinch hit and the bunt
+setup now run once, on a plate appearance's first pitch, before the intentional-walk and steal
+decisions (they used to run at the end of the previous plate appearance and again at the
+half-inning roll). The bundle carries a pitching-change OPPORTUNITY pool — one row per
+plate-appearance boundary, changed or not, built from the situation table and the pitch pool
+(678,014 boundaries; the pool's own change rate 8.9% per boundary) — and behind `SIM_MANAGER_DRAW`
+(OFF) the pull is a draw from it: the cell (role, boundary type, pitch-count bucket, times
+through the order), a situation kernel, the live pitcher's similarity, a manager weight (flat
+until SIM-427). **The finding:** the formula production runs today uses 2.4 pitchers a side
+where the majors use about 4.2; the draw reads 4.35 with 69% of changes at half-inning
+boundaries, the pool's own 4.27 and 69%. **Still to do on the redesign:** parts E (the
+receiving ratio, OFF), F (the fits — every switch flips after it and a lane), G (the data adds);
+SIM-427 (the real per-team profiles, the real pens, the reliever mapping) builds on this pool.
+
 # 🧱 2026-09-08 — REDESIGN PART C BUILT: the FIELDING split and the FENCE work (SIM-523; SIM-478/479/480 built), every switch OFF (next free ID → SIM-527)
 
 **What landed (`CHANGES.md` has the detail).** The fielding draw gains the batted-ball CLASS as a

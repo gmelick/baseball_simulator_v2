@@ -698,6 +698,11 @@ class StateMachine:
         # Each entry is a small dict: {"kind": ..., "inning": ..., "leverage": ...,
         # plus decision-specific ids}.  Lightweight + additive.
         self.manager_decisions: list[dict] = []
+        # SIM-523 part D: the pitching change as a DRAW from the opportunity
+        # pool (``FullPoolSampler.pitching_change_draw``) instead of the
+        # SIM-434 formula. Off by default (SIM_MANAGER_DRAW); with no pool
+        # in the bundle the formula stays.
+        self.manager_draw = False
         # Steal decision made in the pre-pitch hook, resolved in step 7.  Reset
         # each pitch in step_pitch.
         self._pending_steal: StealResolution | None = None
@@ -762,6 +767,14 @@ class StateMachine:
         # ``_pending_steal`` is consumed + cleared in
         # :meth:`_resolve_steal_outcome` so an attempt never carries across
         # pitches.
+        # --- SIM-523 part D: the manager decisions at the START of a plate
+        # appearance (the loop's step 1) — the pitching change, the pinch hit,
+        # the bunt setup — once, on the plate appearance's first pitch, before
+        # the intentional-walk and steal decisions below. They used to run at
+        # the END of the previous plate appearance and again at the half-inning
+        # roll, so a between-innings pull was evaluated twice.
+        if int(state.balls) == 0 and int(state.strikes) == 0:
+            self._start_of_pa_hook(state)
         self._pre_pitch_hook(state)
 
         # --- IBB short-circuit (SIM-323 §3 item 2) -------------------------
@@ -2084,9 +2097,11 @@ class StateMachine:
 
         # Advance the batting-order pointer for the team that just batted.
         self._advance_batting_order(state)
+        # SIM-523 part D: one more plate appearance completed in this half.
+        state.half_pa_count += 1
 
-        # End-of-PA manager hook (§5.3) — SIM-323 owns substitution/IBB/bunt.
-        self._end_of_pa_hook(state)
+        # SIM-523 part D: the manager decisions now run at the START of the
+        # next plate appearance (``_start_of_pa_hook``), not here.
 
         if state.is_half_inning_over():
             # The third out ended the half-inning (§6.1): the half-inning roll
@@ -2331,6 +2346,7 @@ class StateMachine:
         state.bases.clear()
         state.reset_outs()
         state.reset_count()
+        state.half_pa_count = 0  # SIM-523 part D: a fresh half inning
         # SIM-414: errors don't carry across half-innings.
         self._half_inning_error_outs_lost = 0
 
@@ -2347,8 +2363,8 @@ class StateMachine:
         # follows the game instead of freezing at the opening matchup.
         self._set_half_matchup(state)
 
-        # Half-inning-boundary manager hook (§5.3) — SIM-323.
-        self._end_of_pa_hook(state)
+        # SIM-523 part D: the manager decisions for the new half run at its
+        # first plate appearance (``_start_of_pa_hook``), not here.
 
         # The freshly-rolled state must satisfy the live invariants.
         state.assert_invariants(in_play=True)
@@ -2841,8 +2857,16 @@ class StateMachine:
             return
         self.stage_steal(runner_id=runner_id, from_base=from_base, safe=bool(success))
 
+    def _start_of_pa_hook(self, state: GameState) -> None:
+        """SIM-523 part D: the manager decisions at the START of a plate
+        appearance (the loop's step 1) — the pitching change, the pinch hit
+        and the bunt setup — evaluated once, on the first pitch, before the
+        intentional-walk and steal decisions. The body is the former
+        end-of-plate-appearance hook; ``_end_of_pa_hook`` stays as its alias."""
+        return self._end_of_pa_hook(state)
+
     def _end_of_pa_hook(self, state: GameState) -> None:
-        """End-of-PA / half-inning-boundary manager hook (§5.3): substitution +
+        """The manager decisions at a plate-appearance boundary (§5.3): substitution +
         small-ball setup, evaluated ONLY at PA / half-inning boundaries (never
         mid-PA — the loop calls this from :meth:`_end_of_pa` and
         :meth:`advance_half_inning`).  SIM-323.
@@ -2895,6 +2919,15 @@ class StateMachine:
         defending team's bullpen.  No-op when no bullpen is available.
         """
         pc = int(state.pitcher_pitch_count)
+        # SIM-523 part D: the decision as a DRAW from the opportunity pool —
+        # the pool's own change rate for this boundary's cell, no floor and
+        # no ceiling. None (no pool in the bundle) keeps the formula.
+        drawn = self._pitching_change_by_draw(state) if self.manager_draw else None
+        if drawn is not None:
+            if not drawn:
+                return
+            self._change_pitcher(state, li, forced=False, source="draw")
+            return
         if pc < _PULL_PITCH_FLOOR:
             return
         pull_tend = self._tendency("starter_pull_pct_before_100", 0.0)
@@ -2914,10 +2947,47 @@ class StateMachine:
         forced = pc >= _PULL_PITCH_CEILING
         if not forced and self._manager_rng() >= fire_p:
             return
+        self._change_pitcher(state, li, forced=forced, source="formula")
+
+    def _pitching_change_by_draw(self, state: GameState) -> bool | None:
+        """SIM-523 part D: the boundary's inputs for the sampler's draw —
+        the current pitcher's key, whether he is the side's starter, whether
+        this is the first plate appearance of the half, his pitches and
+        batters faced so far, and the situation from the fielding side's
+        view. None when the sampler has no pool."""
+        fp = self.full_pool_sampler
+        draw = getattr(fp, "pitching_change_draw", None)
+        if fp is None or draw is None or state.pitcher_id is None:
+            return None
+        pid = int(state.pitcher_id)
+        defense = state.defense
+        starter = state.home_starter_id if defense == Team.HOME else state.away_starter_id
+        is_starter = starter is None or int(starter) == pid
+        fld = state.home_score if defense == Team.HOME else state.away_score
+        bat = state.away_score if defense == Team.HOME else state.home_score
+        season = int(getattr(state, "season", 2024) or 2024)
+        return draw(
+            f"{pid}:{season}",
+            is_starter=is_starter,
+            new_half=int(state.half_pa_count) == 0,
+            pitch_count=int(state.pitcher_pitch_count),
+            batters_faced=int(state.pitcher_bf.get(pid, 0)),
+            inning=int(state.inning),
+            outs=int(state.outs),
+            runners_state=int(state.runners_state),
+            score_diff=int(fld) - int(bat),
+        )
+
+    def _change_pitcher(self, state: GameState, li: float, *, forced: bool, source: str) -> None:
+        """Bring in the reliever ``_pick_reliever`` selects and record the
+        change (``source``: "draw" or "formula"). No arm: stay with the pitcher."""
         new_arm = self._pick_reliever(state, li)
         if new_arm is None:
             return  # bullpen empty -> degrade gracefully (stay with the starter).
         old = state.pitcher_id
+        out_pitches = int(state.pitcher_pitch_count)
+        out_bf = int(state.pitcher_bf.get(old, 0)) if old is not None else 0
+        new_half = int(state.half_pa_count) == 0
         state.pitcher_id = int(new_arm)
         state.pitcher_pitch_count = 0  # fresh arm
         if state.half == Half.TOP:
@@ -2932,6 +3002,11 @@ class StateMachine:
                 "out_pitcher_id": old,
                 "in_pitcher_id": int(new_arm),
                 "forced": forced,
+                "source": source,
+                # SIM-523 part D: the boundary's facts for the probe and the lane.
+                "pitch_count": out_pitches,
+                "batters_faced": out_bf,
+                "new_half": new_half,
             }
         )
 
@@ -3416,6 +3491,9 @@ def simulate_game(
             initial_state.throw_hands = dict(throw_hands)
         initial_state.home_pitcher_id = home_pitcher_id
         initial_state.away_pitcher_id = away_pitcher_id
+        # SIM-523 part D: the starters, kept apart from the current pitchers.
+        initial_state.home_starter_id = home_pitcher_id
+        initial_state.away_starter_id = away_pitcher_id
         initial_state.home_catcher_id = home_catcher_id
         initial_state.away_catcher_id = away_catcher_id
         # SIM-425b/411: per-team defense maps (position 1-9 -> player_id) for the

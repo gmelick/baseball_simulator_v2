@@ -1,3 +1,60 @@
+# Feat — the play-picker redesign, part D: the manager decisions at the START of a plate appearance; the pitching change as a DRAW from an opportunity pool (SIM-523; switch OFF) — 2026-09-09
+
+**What this is.** Step 1 of the redesign's loop, in two halves. The ORDER: the manager
+decisions — the pitching change, the pinch hit, the bunt setup — now run once, on a plate
+appearance's first pitch (`_start_of_pa_hook`), before the intentional-walk and steal
+decisions. They used to run at the END of the previous plate appearance and again at the
+half-inning roll, so a between-innings pull was evaluated twice. The DRAW FORM: the
+pitching change is a draw from an opportunity pool at the pool's own rate for the
+situation, the manager profile a weight (flat today; SIM-427's real per-team profiles
+plug in as the `manager_weight`), behind `SIM_MANAGER_DRAW` (OFF: the SIM-434 formula).
+
+**The pool.** `build_pitching_change_pool` (`--what manager`, in the nightly `all`) writes
+`manager_pool/change.*` into the bundle: one row per plate-appearance boundary while a
+pitcher is on the mound, changed or not — the denominator the formula never had (the
+SIM-468 pattern) — from the situation table (the half, the outs, the bases, the scores)
+joined to the pitch pool (the pitcher per plate appearance): the pitcher on the mound,
+his pitches and batters faced so far, whether he is the side's starter, whether the
+boundary opens a half inning, the fielding side's score margin, the change flag and the
+incoming arm. `ChangePool` is shareable; the DuckDB writer lock (SIM-524) keeps the
+`sim` table SIM-427 planned for later. Live: 678,014 boundaries over 9,242 games, 6 s;
+the pool's own change rate 8.9% per boundary — 28.7% at a half-inning boundary, 3.5%
+mid-inning; starters 4.5%, relievers 15.4%.
+
+**The draw.** `pitching_change_draw` hard-filters the cell — starter or reliever, a
+half-inning boundary or mid-inning, the pitch-count bucket of ten, times through the
+order — widened below `SIM_CHANGE_MIN_CELL` (20) in a fixed order (drop the
+times-through dimension, then the bucket, then the boundary type) and counted; weights
+by recency, a Gaussian on the z-scored soft columns (`SIM_CHANGE_SIT_SIGMA`, 1.0), the
+live pitcher's similarity to each row's pitcher from the pitcher-sim row
+(`SIM_CHANGE_PITCHER_POWER`, 1.0; a row without a profile is neutral) and the optional
+manager weight. The drawn row's `changed` flag IS the decision: no floor, no ceiling.
+`GameState` gains the two starters (a pull overwrites the current pitchers) and the
+half's plate-appearance count. The reliever choice stays the positional pick; SIM-427
+maps the drawn row's incoming arm onto a real pen (`last_change_row` exposes it). 19
+tests (`tests/unit/test_sim523_manager_draw.py`); every manager, steal and synthetic-
+bundle suite still passes; the no-manager path is untouched.
+
+**The probe (`scripts/sim523_manager_probe.py`, 4 games × 30 iterations per arm, the
+manager on, defaults).**
+
+| Arm | Pitchers per team-game | Starter pitches at the pull | Starter batters faced at the pull | Changes at a half-inning boundary | R/g | H/g | BB/g | K/g | s/iter |
+|---|---|---|---|---|---|---|---|---|---|
+| the SIM-434 formula (production today) | 2.36 | 80.4 | 20.2 | 21% | 9.86 | 17.67 | 7.23 | 16.54 | 1.33 |
+| the draw | 4.35 | 82.9 | 21.0 | 69% | 8.34 | 16.36 | 6.62 | 17.04 | 1.63 |
+| the pool's own | 4.27 (1 + 60,455 changes over 2 × 9,242 games) | league mean 84-85 (SIM-427 §3) | — | 69% (41,842 of 60,455) | | | | | |
+
+The formula runs the game with 2.4 pitchers a side where the majors run about 4.2, and
+puts most changes mid-inning; the draw reproduces the pool's pitchers per game, its
+half-inning share and its starter pitch count with no constant. Nearly every draw came
+from its own cell (9,094 of 9,107; 13 widened one or two levels). The per-game runs and
+hits fall with two more relief arms a game (the synthetic pen draws league-average rows);
+that is the lane's question and the reliever mapping is SIM-427's. The switch stays OFF
+under the rule (part F fits the bandwidth and power; a lane certifies), but the finding
+stands on its own: production's pitcher usage is short by two arms a game. The two lane
+instruments SIM-427 asked for (pitchers per team-game, starter outs per start) are still
+to build.
+
 # Feat — the play-picker redesign, part C: the FIELDING split and the FENCE work (SIM-523, SIM-478/479/480; every switch OFF in production) — 2026-09-08
 
 **What this is.** Steps 5 and 6 of the redesign's loop, built in four slices, each

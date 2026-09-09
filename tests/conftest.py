@@ -93,6 +93,10 @@ os.environ["SIM_BB_SPEED_SIGMA"] = "0"
 os.environ["SIM_PARK_WALL_ZONE_ONLY"] = "0"
 os.environ["SIM_FENCE_STAGE"] = "0"
 
+# SIM-523 part D: the pitching change as a draw from the opportunity pool.
+# Off = the SIM-434 formula (and with SIM_MANAGER off, no manager at all).
+os.environ["SIM_MANAGER_DRAW"] = "0"
+
 # ---------------------------------------------------------------------------
 # Shared lightweight fixtures
 # ---------------------------------------------------------------------------

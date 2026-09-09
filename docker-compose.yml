@@ -187,6 +187,10 @@ services:
       # ~30% of home runs). OFF until part F and a lane.
       SIM_FENCE_STAGE:           "0"
       SIM_FENCE_MARGIN:          "0"
+      # SIM-523 part D (2026-09-08): the pitching change as a DRAW from the
+      # opportunity pool (the pool's own change rate for the boundary's
+      # cell) instead of the SIM-434 formula. OFF until part F and a lane.
+      SIM_MANAGER_DRAW:          "0"
       # SIM-453: WHERE the park factors come from. The park consumer above was on,
       # but the factors were dark: api/routes/games.py read them through
       # app.state.sim_duckdb, and api/main.py only opened that connection under

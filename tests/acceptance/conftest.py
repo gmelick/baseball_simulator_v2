@@ -126,6 +126,8 @@ PRODUCTION_FLAGS: dict[str, str] = {
     "SIM_WALL_ZONE_DISTANCE": os.environ.get("SIM523_LANE_WALL_ZONE_DISTANCE", "300"),
     "SIM_FENCE_STAGE": os.environ.get("SIM523_LANE_FENCE_STAGE", "0"),
     "SIM_FENCE_MARGIN": os.environ.get("SIM523_LANE_FENCE_MARGIN", "0"),
+    # SIM-523 part D (2026-09-08): the pitching change as a draw — OFF until part F.
+    "SIM_MANAGER_DRAW": os.environ.get("SIM523_LANE_MANAGER_DRAW", "0"),
 }
 
 #: Env names the lane must ERASE (not set) so a default code path proves

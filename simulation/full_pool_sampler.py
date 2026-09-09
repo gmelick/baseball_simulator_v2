@@ -376,6 +376,22 @@ class FullPoolSampler:
         # cell index by (outs, balls, strikes), per-row embedding-row gathers for
         # runner/pitcher/catcher, and the z-scored steal-feature matrices.
         self._steal_meta_cache: dict[str, dict] = {}
+        # SIM-523 part D — the PITCHING-CHANGE draw (plan §3, step 1). The
+        # manager's change decision at a plate-appearance boundary is one
+        # draw from the opportunity pool's hard cell (role, half-inning
+        # boundary, pitch-count bucket, times through the order), weighted by
+        # a Gaussian on the z-scored soft columns (``change_sit_sigma``), the
+        # live pitcher's similarity row (``change_pitcher_power``; 0 = off)
+        # and recency; thin cells widen below ``change_min_cell``. The drawn
+        # row's ``changed`` flag IS the decision. The loop uses it behind
+        # SIM_MANAGER_DRAW; the bandwidth and power are part-F fit targets.
+        self.change_sit_sigma = 1.0
+        self.change_pitcher_power = 1.0
+        self.change_min_cell = 20
+        #: Draws per widening level 0..3.
+        self.change_widen_counts = np.zeros(4, dtype=np.int64)
+        self._change_meta_cache: dict | None = None
+        self._change_last_row: int | None = None
         self._steal_emb_z: dict[str, np.ndarray] = {}
         # SIM-511: per-hand transition precompute (the base-out cell index over
         # consistent rows) + the current PA's cell rows (None = legacy path).
@@ -2161,6 +2177,216 @@ class FullPoolSampler:
         "pickoff_rate",
         "stepoff_rate",
     )
+
+    # ---- SIM-523 part D: the pitching-change draw ---------------------------
+    #: The pitch-count bucket width (pitches) of the hard cell.
+    _CHANGE_PC_BUCKET = 10
+
+    def has_change_pool(self) -> bool:
+        """SIM-523 part D: True when the bundle carries the change pool."""
+        pool = getattr(self.a, "change_pool", None)
+        return pool is not None and pool.n > 0
+
+    def _change_meta(self) -> dict | None:
+        """One-time precompute: the hard-cell index — (is_starter, new_half,
+        pitch-count bucket, times through the order) -> rows — the z-stats of
+        the soft columns, and each row's pitcher profile index."""
+        if self._change_meta_cache is not None:
+            return self._change_meta_cache or None
+        pool = getattr(self.a, "change_pool", None)
+        if pool is None or pool.n == 0:
+            self._change_meta_cache = {}
+            return None
+        sit = pool.sit
+        pcb = np.clip(sit[:, 0].astype(np.int64) // self._CHANGE_PC_BUCKET, 0, 15)
+        tto = np.clip(sit[:, 1].astype(np.int64) // 9 + 1, 1, 4)
+        key = (
+            (pool.is_starter.astype(np.int64) * 2 + pool.new_half.astype(np.int64)) * 100 + pcb
+        ) * 10 + tto
+        order = np.argsort(key, kind="stable")
+        sk = key[order]
+        uniq, starts = np.unique(sk, return_index=True)
+        ends = np.append(starts[1:], len(order))
+        cells: dict[tuple[int, int, int, int], np.ndarray] = {}
+        for k, lo, hi in zip(uniq, starts, ends, strict=True):
+            k = int(k)
+            t = k % 10
+            k //= 10
+            b = k % 100
+            k //= 100
+            cells[(k // 2, k % 2, b, t)] = order[lo:hi]
+        mean = sit.mean(axis=0).astype(np.float32)
+        std = sit.std(axis=0).astype(np.float32)
+        std = np.where(std > 1e-6, std, np.float32(1.0)).astype(np.float32)
+        pidx = self.a.pitcher_sim_index
+        prof = np.fromiter(
+            (
+                pidx.get(f"{int(p)}:{int(s)}", -1)
+                for p, s in zip(pool.pitcher_id, pool.season, strict=False)
+            ),
+            dtype=np.int64,
+            count=pool.n,
+        )
+        meta = {"cells": cells, "mean": mean, "std": std, "prof": prof, "widened": {}}
+        self._change_meta_cache = meta
+        return meta
+
+    def _change_rows(self, meta: dict, cell: tuple[int, int, int, int]) -> tuple[np.ndarray, int]:
+        """The cell's rows, widened below ``change_min_cell`` in a fixed order:
+        level 1 drops the times-through-the-order dimension, level 2 the
+        pitch-count bucket too, level 3 the half-inning boundary too (the role
+        alone). Cached per cell."""
+        hit = meta["widened"].get(cell)
+        if hit is not None:
+            return hit
+        cells = meta["cells"]
+        need = max(int(self.change_min_cell), 1)
+        starter, new_half, pcb, tto = cell
+        rows = cells.get(cell, np.zeros(0, dtype=np.int64))
+        level = 0
+        if rows.size < need:
+            rows = np.concatenate(
+                [v for k, v in cells.items() if k[:3] == (starter, new_half, pcb)] or [rows]
+            )
+            level = 1
+            if rows.size < need:
+                rows = np.concatenate(
+                    [v for k, v in cells.items() if k[:2] == (starter, new_half)] or [rows]
+                )
+                level = 2
+                if rows.size < need:
+                    rows = np.concatenate(
+                        [v for k, v in cells.items() if k[0] == starter] or [rows]
+                    )
+                    level = 3
+        out = (rows, level)
+        meta["widened"][cell] = out
+        return out
+
+    def pitching_change_draw(
+        self,
+        pitcher_key: str,
+        *,
+        is_starter: bool,
+        new_half: bool,
+        pitch_count: int,
+        batters_faced: int,
+        inning: int,
+        outs: int,
+        runners_state: int,
+        score_diff: int,
+        manager_weight: np.ndarray | None = None,
+    ) -> bool | None:
+        """Step 1 of the loop: does the manager change pitchers at this
+        plate-appearance boundary? ONE draw from the opportunity pool's hard
+        cell — (starter or reliever, a half-inning boundary or mid-inning, the
+        pitch-count bucket, times through the order), widened below
+        ``change_min_cell`` — weighted by recency, a Gaussian on the z-scored
+        soft columns (pitch count, batters faced, inning, outs, runners, the
+        fielding side's score margin; bandwidth ``change_sit_sigma``), the
+        current pitcher's similarity to each row's pitcher (the pitcher-sim
+        row, raised to ``change_pitcher_power``; a row whose pitcher has no
+        profile is neutral) and, when given, a per-row manager weight (the
+        real per-team profiles of SIM-427; flat today). The drawn row's
+        ``changed`` flag IS the decision. None when the bundle carries no
+        pool — the caller then keeps its formula."""
+        pool = getattr(self.a, "change_pool", None)
+        meta = self._change_meta()
+        if pool is None or meta is None:
+            return None
+        pcb = int(min(max(int(pitch_count) // self._CHANGE_PC_BUCKET, 0), 15))
+        tto = int(min(max(int(batters_faced) // 9 + 1, 1), 4))
+        cell = (1 if is_starter else 0, 1 if new_half else 0, pcb, tto)
+        rows, level = self._change_rows(meta, cell)
+        self.change_widen_counts[level] += 1
+        if rows.size == 0:
+            return None
+        live = (
+            np.array(
+                [pitch_count, batters_faced, inning, outs, runners_state, score_diff],
+                dtype=np.float32,
+            )
+            - meta["mean"]
+        ) / meta["std"]
+        z = (pool.sit[rows] - meta["mean"]) / meta["std"]
+        diff = z - live
+        d2 = np.einsum("ij,ij->i", diff, diff)
+        w = pool.recency[rows].astype(np.float32) * np.exp(
+            -d2 / (2.0 * self.change_sit_sigma**2 * diff.shape[1])
+        ).astype(np.float32)
+        if self.change_pitcher_power != 0.0:
+            f = self._change_pitcher_factor(pitcher_key, meta["prof"][rows])
+            if f is not None:
+                w = w * f
+        if manager_weight is not None:
+            w = w * np.asarray(manager_weight, dtype=np.float32)
+        total = float(w.sum())
+        if not np.isfinite(total) or total <= 0.0:
+            return None
+        cdf = np.cumsum(w, dtype=np.float64)
+        i = int(np.searchsorted(cdf, self.rng.random() * cdf[-1]))
+        r = int(rows[min(i, rows.size - 1)])
+        self._change_last_row = r
+        return bool(pool.changed[r])
+
+    def _change_pitcher_factor(self, pitcher_key: str, prof_rows: np.ndarray) -> np.ndarray | None:
+        """The live pitcher's similarity to each candidate row's pitcher, from
+        the pitcher-sim row, raised to ``change_pitcher_power`` and normalized
+        to a mean of 1 over the rows with a profile (a row without one is
+        neutral). None without a matrix or a live profile."""
+        scores = self._pitcher_prof_scores(pitcher_key)
+        if scores is None:
+            return None
+        valid = prof_rows >= 0
+        out = np.ones(len(prof_rows), dtype=np.float32)
+        if not valid.any():
+            return out
+        s = np.asarray(scores[prof_rows[valid]], dtype=np.float32)
+        s = np.where(np.isfinite(s), s, np.float32(0.0))
+        p = float(self.change_pitcher_power)
+        if p != 1.0:
+            s = np.power(np.clip(s, 0.0, None), np.float32(p)).astype(np.float32)
+        mean_w = float(s.mean())
+        out[valid] = s / np.float32(mean_w) if mean_w > 0.0 else np.float32(1.0)
+        return out
+
+    def _pitcher_prof_scores(self, pitcher_key: str) -> np.ndarray | None:
+        """The live pitcher's similarity to every profile in the pitcher-sim
+        index (the dense matrix row, or the dictionary on a bundle without
+        the matrix); None when the pitcher has no profile."""
+        idx = self.a.pitcher_sim_index
+        n_prof = len(idx)
+        if n_prof == 0:
+            return None
+        matrix = getattr(self.a, "pitcher_sim_matrix", None)
+        if matrix is not None:
+            i = idx.get(pitcher_key)
+            if i is None:
+                return None
+            return np.asarray(matrix[i], dtype=np.float32)
+        sims = (self.a.pitcher_sim or {}).get(pitcher_key)
+        if not sims:
+            return None
+        scores = np.zeros(n_prof, dtype=np.float32)
+        for k, v in sims.items():
+            j = idx.get(k)
+            if j is not None:
+                scores[j] = float(v)
+        return scores
+
+    def last_change_row(self) -> dict | None:
+        """SIM-523 part D: the last drawn boundary — ``changed`` and the
+        incoming pitcher's id (a mapping onto the live pen is SIM-427's)."""
+        r = self._change_last_row
+        pool = getattr(self.a, "change_pool", None)
+        if r is None or pool is None:
+            return None
+        return {
+            "row": r,
+            "changed": bool(pool.changed[r]),
+            "incoming_id": int(pool.incoming_id[r]),
+            "pitcher_id": int(pool.pitcher_id[r]),
+        }
 
     def has_steal_pool(self) -> bool:
         return bool(self.a.steal_pools)
