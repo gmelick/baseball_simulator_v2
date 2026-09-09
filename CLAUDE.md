@@ -265,7 +265,13 @@ pitchers a side vs the majors' ~4.2; the draw reads 4.35 (the pool's own 4.27). 
 2026-09-09:** the catcher receiving factor is a mass-preserving ball-strike ratio on taken
 pitches (`receiving.json`, league rates per season, `--what receiving`; `SIM_CATCHER_RECEIVING`
 OFF, enabling = SIM-526);
-the SIM-517 bell-curve kernel and its two sigmas are DELETED. Parts F and G remain.
+the SIM-517 bell-curve kernel and its two sigmas are DELETED. **PART F (THE FIT) 2026-09-09:**
+every factor's power / bandwidth fitted against the pool's own conditional rates
+(`scripts/sim523_fit_probe.py` + the offline scans); at power 1 every identity factor was
+nearly flat. The fit: pitcher 16 in both pitch draws, batter 8 in the result draw,
+pitcher-steal 12, catcher-throwing 2, runner kernels 0.25, born-ball 1.0, class filter /
+wall zone / fence ON; the fielder keeps its kernel, the runner matrices stay off, the
+sprint-speed kernel has no data (part G). The lane read reds the probe attributes to composition — the flip waits on the owner's grading ruling (CHANGES.md). Part G remains.
 
 - **DO NOT run the profile recompute** (`make profile-computor`) — but the reason changed on
   2026-08-13. SIM-501a/c CLOSED: SIM-457 is re-landed on the events-based out label, no profile

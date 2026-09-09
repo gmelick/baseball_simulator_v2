@@ -361,6 +361,34 @@ strikeout, walk and contact rates conditioned on the live pitcher's profile matc
 the pool's own. Then the 12×500 lane; then the compose flags and the lane's
 production set change in one commit.
 
+**Part F FITTED 2026-09-09 (lane-read, the flip waits on a grading ruling).** The instruments: `scripts/sim523_fit_probe.py` (the loop instrumented — per
+live actor, the outcome mix by quintile against his OWN rows, standardized to his count
+mix; the steal / advancement draws by tier; the fielding draw's event mix per born class;
+the factor strengths; the candidate set's effective rows), `scripts/sim523_power_scan.py`
+and `scripts/sim523_kernel_scan.py` (the same conditionals computed offline from the pool
+for a ladder of powers / bandwidths), `scripts/sim523_fit_compare.py`,
+`scripts/sim523_concentration.py`. The finding: at power 1 every identity factor was nearly
+flat (the sim's quintile spread over the pool's own: pitcher whiff 6%, batter 3%, the steal
+runner kernel 18%). The ceilings: the pitcher engine's arsenal-only score (SIM-067) reaches
+~70% of a pitcher's whiff spread and ~43% of his ball spread at power 20; the batter's
+composite ~87%; the runner matrices are unusable (two thirds of steal rows unscored) so the
+runner factors keep their kernels with the bandwidth fitted; the fielder matrix is flat at
+power 1 and breaches the 3.0 own-staff limit at 2, so the fielder factor keeps its σ=0.5
+kernel; the sprint-speed kernel has no data (the runner embedding's speed is zero on every
+row — part G). The fit: the pitcher factor at 16 in the pitch draw AND the result draw (the
+"smaller in the result draw" idea backfires — the result draw carries the pitcher's outcome
+identity), the batter at 8 in the result draw and 1 in the pitch draw (the ordering ruling
+holds: effective shares 16% / 21% / 95%), the pitch-to-pitch bandwidth 1.0 with the density
+correction 1.0, pitcher-steal 12, catcher-throwing 2, the runner kernels 0.25 (steal and
+advancement), the born-ball kernel 1.0 (density 1.0), the class filter, the wall-zone rule
+and the fence stage ON; the concentration check passes (worst p90 2.34). Code: the pitch
+draw's pitcher power (the result power absolute), the batter power on the single-draw
+path, per-runner bandwidths, the draw-neutral rule for unscored rows at a power (a 3%
+unscored share would otherwise dominate at power 12), the batter matrix reaching the cell
+path (part A's omission), power 0 = the kernel. The composition read: an identity-faithful
+sim of the fixed 12-game set moves its walks toward its own actors (−5% per game at the
+fit), which the pool-total grade cannot tell from a defect — see `CHANGES.md`.
+
 ### Part G — data additions
 
 - Fielding credits (the chain): check whether `raw.play_events` carries every

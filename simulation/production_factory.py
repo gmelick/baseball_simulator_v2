@@ -118,6 +118,16 @@ def apply_actor_matrix_env(sampler: Any, env: Mapping[str, str] | None = None) -
         for pos in ("1B", "2B", "3B", "SS", "LF", "CF", "RF"):
             powers.setdefault(f"fielder_{pos}", powers["fielder"])
     sampler.actor_power = powers
+    # SIM-523 part F: the runner kernels' own bandwidths (empty = the shared sigma).
+    for key, attr in (
+        ("SIM_STEAL_RUNNER_SIGMA", "steal_runner_sigma"),
+        ("SIM_ADV_RUNNER_SIGMA", "adv_runner_sigma"),
+    ):
+        raw = str(src.get(key, "")).strip()
+        try:
+            setattr(sampler, attr, float(raw) if raw else None)
+        except ValueError:
+            setattr(sampler, attr, None)
 
 
 def apply_result_split_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
@@ -130,7 +140,9 @@ def apply_result_split_env(sampler: Any, env: Mapping[str, str] | None = None) -
     correction's power ``SIM_RESULT_DENSITY_POWER``, 1.0, 0 = off), with the pitcher
     and batter factors re-raised (``SIM_RESULT_PITCHER_POWER`` /
     ``SIM_RESULT_BATTER_POWER``, 1.0) and the pitch draw's batter factor
-    re-raised (``SIM_PITCH_BATTER_POWER``, 1.0) — part F fits them.
+    re-raised (``SIM_PITCH_BATTER_POWER``, 1.0, on both paths) and the pitch
+    draw's pitcher factor raised to ``SIM_PITCH_PITCHER_POWER`` (1.0; the
+    result power is absolute) — part F fits them.
     ``SIM_BB_BORN_SIGMA`` (0 = off) weights the fielding draw by similarity
     to the batted ball the result row was born with.
     """
@@ -151,6 +163,7 @@ def apply_result_split_env(sampler: Any, env: Mapping[str, str] | None = None) -
     for key, attr, default in (
         ("SIM_RESULT_PITCH_SIGMA", "result_pitch_sigma", 1.0),
         ("SIM_RESULT_DENSITY_POWER", "result_density_power", 1.0),
+        ("SIM_PITCH_PITCHER_POWER", "pitch_pitcher_power", 1.0),
         ("SIM_RESULT_PITCHER_POWER", "result_pitcher_power", 1.0),
         ("SIM_RESULT_BATTER_POWER", "result_batter_power", 1.0),
         ("SIM_PITCH_BATTER_POWER", "pitch_batter_power", 1.0),

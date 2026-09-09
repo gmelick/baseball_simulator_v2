@@ -1152,15 +1152,19 @@ def concentration_share(
     row_actor_col: np.ndarray,
     row_pitcher: np.ndarray,
     staff: set[int],
+    power: float = 1.0,
 ) -> tuple[float, float, float]:
     """For one live profile: (weighted own-staff share, unweighted share, ESS
     share) over pool rows whose actor has a matrix column (``row_actor_col``
-    >= 0). Pure arithmetic, unit-tested on a toy pool."""
+    >= 0), the matrix row raised to ``power`` (SIM-523 part F: the fitted
+    power; 1.0 = the raw score). Pure arithmetic, unit-tested on a toy pool."""
     valid = row_actor_col >= 0
     if not valid.any():
         return float("nan"), float("nan"), float("nan")
     w = matrix[live_row, row_actor_col[valid]].astype(np.float64)
     w = np.where(np.isfinite(w), w, 1.0)
+    if power != 1.0:
+        w = np.power(np.clip(w, 0.0, None), float(power))
     own = np.isin(row_pitcher[valid], list(staff))
     total = float(w.sum())
     if total <= 0.0:
@@ -1168,12 +1172,18 @@ def concentration_share(
     return float(w[own].sum() / total), float(own.mean()), float(total * total / (w @ w) / w.size)
 
 
-def concentration_report(duckdb_path: str, sim_dir: str, seasons: list[int]) -> dict[str, dict]:
+def concentration_report(
+    duckdb_path: str,
+    sim_dir: str,
+    seasons: list[int],
+    powers: dict[str, float] | None = None,
+) -> dict[str, dict]:
     """The build-time concentration check for the two actors whose rows carry a
     staff: catchers (the pitch pool) and fielders (the batted-ball pool). Each
     entry reports the distribution over live profiles of the ratio (weighted
     own-staff share / unweighted own-staff share) and of the effective sample
     share of the actor's matrix row over the pool."""
+    pw = powers or {}  # SIM-523 part F: the fitted powers (1.0 = the raw score)
     season_list = ", ".join(str(int(s)) for s in seasons)
     con = duckdb.connect(duckdb_path, read_only=True)
     try:
@@ -1237,7 +1247,11 @@ def concentration_report(duckdb_path: str, sim_dir: str, seasons: list[int]) -> 
             staff = set(pid[in_season & (cid == c)].tolist())
             if not staff:
                 continue
-            entries.append(concentration_share(mat, row, col[in_season], pid[in_season], staff))
+            entries.append(
+                concentration_share(
+                    mat, row, col[in_season], pid[in_season], staff, pw.get(name, 1.0)
+                )
+            )
         report[name] = _summarize(entries)
     # --- fielders over the batted-ball pool, per position
     if bb is not None:
@@ -1267,7 +1281,16 @@ def concentration_report(duckdb_path: str, sim_dir: str, seasons: list[int]) -> 
                 staff = set(pid[in_season & at_pos & (fid == f)].tolist())
                 if not staff:
                     continue
-                entries.append(concentration_share(mat, row, col[in_season], pid[in_season], staff))
+                entries.append(
+                    concentration_share(
+                        mat,
+                        row,
+                        col[in_season],
+                        pid[in_season],
+                        staff,
+                        pw.get(f"fielder_{pos}", pw.get("fielder", 1.0)),
+                    )
+                )
             report[f"fielder_{pos}"] = _summarize(entries)
     return report
 

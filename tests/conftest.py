@@ -83,6 +83,7 @@ os.environ["SIM_ACTOR_MATRICES"] = "0"
 # kernel. Both off = one draw per pitch, byte-identical; the part-B tests
 # set the sampler attributes directly.
 os.environ["SIM_PITCH_RESULT_SPLIT"] = "0"
+os.environ["SIM_PITCH_PITCHER_POWER"] = "1.0"  # SIM-523 part F: the raw score
 os.environ["SIM_BB_BORN_SIGMA"] = "0"
 
 # SIM-523 part C: the fielding draw's class filter, sprint-speed kernel and

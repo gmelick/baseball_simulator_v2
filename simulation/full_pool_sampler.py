@@ -68,6 +68,42 @@ def _repower(w: np.ndarray, f: np.ndarray, power: float) -> np.ndarray:
     return (w * adj).astype(np.float32)
 
 
+def _repower_neutral(
+    w: np.ndarray,
+    f: np.ndarray,
+    unscored: np.ndarray | None,
+    power: float,
+    neutral: float,
+) -> np.ndarray:
+    """SIM-523 part F: :func:`_repower` with the draw-NEUTRAL rule. ``w``
+    carries ``f`` once, and ``f`` reads 1.0 on the rows whose actor has no
+    score; a scored row is re-raised by f^(power-1), an unscored row is
+    multiplied by ``neutral`` — the mean scored f^power — so at any power it
+    keeps the MEAN scored weight instead of the maximum (at power 12 a 3%
+    unscored share would otherwise outweigh the whole scored pool). power
+    1.0 returns ``w`` itself (byte-identical)."""
+    if power == 1.0:
+        return w
+    adj = np.where(f > 0.0, np.power(np.maximum(f, 1e-30), np.float32(power - 1.0)), 0.0)
+    if unscored is not None and unscored.any():
+        adj = np.where(unscored, np.float32(neutral), adj)
+    return (w * adj).astype(np.float32)
+
+
+def _raise_neutral(
+    f: np.ndarray, unscored: np.ndarray | None, power: float, neutral: float
+) -> np.ndarray:
+    """SIM-523 part F: f^power with the unscored rows (``f`` reads 1.0 there)
+    set to ``neutral`` — the mean scored f^power — so they stay draw-neutral.
+    power 1.0 returns ``f`` itself (byte-identical)."""
+    if power == 1.0:
+        return f
+    out = np.power(np.clip(f, 0.0, None), np.float32(power)).astype(np.float32)
+    if unscored is not None and unscored.any():
+        out[unscored] = np.float32(neutral)
+    return out
+
+
 #: SIM-476 diagnostics (2026-08-17): skip ONE similarity factor in the steal
 #: draw to locate the source of the safe/caught-split inflation (certified
 #: 88.1% vs MLB ~77.6%). The catcher arm REFUTED its suspect (ablating it made
@@ -223,6 +259,14 @@ class FullPoolSampler:
         #: (matrix name) -> int64 array mapping the actor EMBEDDING's rows to
         #: matrix columns (-1 = unscored); built once per matrix per process.
         self._emb_to_mat_cache: dict[str, np.ndarray] = {}
+        # SIM-523 part F: the draw-neutral rule's caches — the live
+        # pitcher's profile-score vector, the neutral means per (hand,
+        # actor, key, power), and the two per-matchup neutral values the
+        # result draw re-raises an unscored row by.
+        self._prof_score_cache: dict[str, np.ndarray] = {}
+        self._neutral_cache: dict[tuple, float] = {}
+        self._pitcher_neutral_adj = 1.0
+        self._bat_neutral_rb = 1.0
         # SIM-523 part B — the PITCH / PITCH-RESULT split (plan §3, steps 3
         # and 4). Off (the default) one draw picks the pitch AND its result,
         # as today. On, ``draw`` first picks the PITCH thrown from the per-PA
@@ -245,6 +289,11 @@ class FullPoolSampler:
         self.result_pitcher_power = 1.0
         self.result_batter_power = 1.0
         self.pitch_batter_power = 1.0
+        # SIM-523 part F: the PITCH draw's pitcher power — the pitcher
+        # factor (the engine's 0-to-1 score) raised to it in the base weight
+        # (1.0 = the raw score, byte-identical). ``result_pitcher_power`` is
+        # ABSOLUTE: the result draw re-raises from this power to that one.
+        self.pitch_pitcher_power = 1.0
         # The DENSITY CORRECTION on the result draw. A kernel estimate of
         # "the result given the pitch" leans toward where the candidate rows
         # are dense — the strike zone — and the 2026-09-08 probe measured that
@@ -411,6 +460,12 @@ class FullPoolSampler:
         #: runner than any other factor here, so the runner kernel must bite.
         self.steal_sigma = 1.0
         self.steal_score_sigma = 2.0
+        # SIM-523 part F: the RUNNER kernels' own bandwidths (None = the shared
+        # ``steal_sigma`` / ``adv_sigma``, byte-identical). The fit found the
+        # runner kernel at 1.0 reproducing 18% of the pool's own runner spread
+        # in steal attempts (7% in advancement); 0.25 reaches 72% (41%).
+        self.steal_runner_sigma: float | None = None
+        self.adv_runner_sigma: float | None = None
 
     # ---- per-pool one-time precompute ------------------------------------
     def _pool_meta(self, hand: str) -> dict:
@@ -464,6 +519,15 @@ class FullPoolSampler:
             # (~0.67 s/game). Materialising it once here makes the per-PA RBF a plain
             # contiguous subtract.
             "sit_baseout": np.ascontiguousarray(pool.sit[:, 2:6]),
+            # SIM-523 part F: the rows whose pitcher has no profile (the
+            # draw-neutral rule at a power) and the row counts per pitcher
+            # profile / batter-embedding row (the neutral means).
+            "prof_unscored": pool_prof < 0,
+            "prof_counts": np.bincount(pool_prof[pool_prof >= 0], minlength=max(1, len(pidx))),
+            "bat_emb_counts": np.bincount(
+                pool_bat[pool_bat >= 0],
+                minlength=max(1, len(bemb["key_index"]) if bemb is not None else 1),
+            ),
         }
         self._pool_cache[hand] = meta
         return meta
@@ -471,32 +535,10 @@ class FullPoolSampler:
     # ---- factor builders --------------------------------------------------
     def _f_pitcher(self, hand: str, pitcher_key: str) -> np.ndarray:
         meta = self._pool_meta(hand)
-        n_prof = len(self.a.pitcher_sim_index)
-        if n_prof == 0:
+        prof_score = self._pitcher_prof_score(pitcher_key)
+        if prof_score is None:
             return np.ones(meta["pool"].n, dtype=np.float32)
-        matrix = getattr(self.a, "pitcher_sim_matrix", None)
-        if matrix is not None:
-            # SIM-430: dense fast path — one contiguous (shared) row instead of
-            # scattering the ~2 GB pitcher_sim dict. Byte-identical to the dict
-            # path: a key absent from the index, or an unscored/empty query (an
-            # all-zero row — a populated query always has >0 same-hand scores),
-            # both fall back to the flat-ones weighting exactly as ``if not sims``.
-            i = self.a.pitcher_sim_index.get(pitcher_key)
-            if i is None:
-                return np.ones(meta["pool"].n, dtype=np.float32)
-            prof_score = matrix[i]
-            if not prof_score.any():
-                return np.ones(meta["pool"].n, dtype=np.float32)
-        else:
-            sims = self.a.pitcher_sim.get(pitcher_key)
-            if not sims:
-                return np.ones(meta["pool"].n, dtype=np.float32)
-            prof_score = np.full(n_prof, 0.0, dtype=np.float32)
-            idx = self.a.pitcher_sim_index
-            for k, v in sims.items():
-                j = idx.get(k)
-                if j is not None:
-                    prof_score[j] = v
+        n_prof = len(prof_score)
         pp = meta["pool_prof"]
         out = np.where(pp >= 0, prof_score[np.clip(pp, 0, n_prof - 1)], np.float32(1.0))
         return out.astype(np.float32)
@@ -526,6 +568,179 @@ class FullPoolSampler:
         aff = np.exp(-d2 / (2.0 * self.batter_sigma**2 * vecs_z.shape[1])).astype(np.float32)
         self._aff_cache[batter_key] = aff
         return aff
+
+    # ---- SIM-523 part F: the draw-neutral rule for unscored rows ----------
+    # A pool row whose pitcher / batter has no score reads 1.0 in the raw
+    # factor — the MAXIMUM — which is harmless at power 1 (the certified
+    # weight, kept byte for byte) and fatal at a fitted power: at power 12 a
+    # 3% unscored share outweighs the whole scored pool. At any other power
+    # such a row weighs the mean scored weight instead. The means come from
+    # the live actor's matrix row and the row counts per column — no pool pass.
+    def _pitcher_prof_score(self, pitcher_key: str) -> np.ndarray | None:
+        """The live pitcher's score over the pitcher-sim profiles — the vector
+        :meth:`_f_pitcher` gathers onto the rows; None when he has no profile
+        or an empty query (the factor is then flat). Cached per key."""
+        cached = self._prof_score_cache.get(pitcher_key)
+        if cached is not None:
+            return cached
+        n_prof = len(self.a.pitcher_sim_index)
+        if n_prof == 0:
+            return None
+        out: np.ndarray | None = None
+        matrix = getattr(self.a, "pitcher_sim_matrix", None)
+        if matrix is not None:
+            # SIM-430: dense fast path — one contiguous (shared) row instead of
+            # scattering the ~2 GB pitcher_sim dict. Byte-identical to the dict
+            # path: a key absent from the index, or an unscored/empty query (an
+            # all-zero row — a populated query always has >0 same-hand scores),
+            # both fall back to the flat-ones weighting exactly as ``if not sims``.
+            i = self.a.pitcher_sim_index.get(pitcher_key)
+            if i is not None and matrix[i].any():
+                out = matrix[i]
+        else:
+            sims = self.a.pitcher_sim.get(pitcher_key)
+            if sims:
+                out = np.full(n_prof, 0.0, dtype=np.float32)
+                idx = self.a.pitcher_sim_index
+                for k, v in sims.items():
+                    j = idx.get(k)
+                    if j is not None:
+                        out[j] = v
+        if out is not None:
+            self._prof_score_cache[pitcher_key] = out
+        return out
+
+    def _neutral_mean_pitcher(self, hand: str, pitcher_key: str, power: float) -> float:
+        """The mean of f_pitcher^power over the hand pool's SCORED rows — what an
+        unscored row weighs to stay draw-neutral at that power (1.0 at power 1)."""
+        if power == 1.0:
+            return 1.0
+        key = (hand, "pitcher", pitcher_key, float(power))
+        cached = self._neutral_cache.get(key)
+        if cached is not None:
+            return cached
+        prof_score = self._pitcher_prof_score(pitcher_key)
+        counts = self._pool_meta(hand)["prof_counts"]
+        mean = 1.0
+        if prof_score is not None and counts.sum() > 0:
+            n = min(len(prof_score), len(counts))
+            sc = np.power(np.clip(np.asarray(prof_score[:n], dtype=np.float64), 0.0, None), power)
+            mean = float(counts[:n] @ sc / counts[:n].sum())
+        self._neutral_cache[key] = mean
+        return mean
+
+    def _batter_matrix_on(self) -> bool:
+        """The batter matrix reaches the pitch draws: the switch on, a power
+        above 0 (0 keeps the kernel) and the bundle carrying the matrix."""
+        return (
+            self.actor_matrices
+            and float(self.actor_power.get("batter", 1.0)) > 0.0
+            and self._actor_matrix("batter") is not None
+            and self._emb_to_mat("batter") is not None
+        )
+
+    def _batter_cols(self, hand: str) -> np.ndarray | None:
+        """The batter matrix column per pool row (-1 = unscored), with the
+        row counts per column; None when the bundle has no batter matrix."""
+        meta = self._pool_meta(hand)
+        if "bat_cols" not in meta:
+            e2m = self._emb_to_mat("batter")
+            pb = meta["pool_bat"]
+            if e2m is None or len(e2m) == 0:
+                meta["bat_cols"] = None
+                meta["bat_col_counts"] = None
+            else:
+                cols = np.where(pb >= 0, e2m[np.clip(pb, 0, len(e2m) - 1)], -1)
+                meta["bat_cols"] = cols
+                n_cols = int(cols.max()) + 1 if cols.size else 0
+                meta["bat_col_counts"] = np.bincount(cols[cols >= 0], minlength=max(1, n_cols))
+        return meta["bat_cols"]
+
+    def _batter_unscored(self, hand: str) -> np.ndarray:
+        """The rows whose batter has no score on the live path (the matrix
+        column, or the embedding row on the kernel path)."""
+        meta = self._pool_meta(hand)
+        if self._batter_matrix_on():
+            cols = self._batter_cols(hand)
+            if cols is not None:
+                return cols < 0
+        return meta["pool_bat"] < 0
+
+    def _batter_live_scores(
+        self, hand: str, batter_key: str
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        """(the live batter's score per matrix column / embedding row, the
+        pool-row counts per column / row) — the neutral mean's ingredients;
+        None when he has no scores (the factor is flat)."""
+        meta = self._pool_meta(hand)
+        if self._batter_matrix_on():
+            entry = self._actor_matrix("batter")
+            assert entry is not None
+            live = entry["index"].get(batter_key)
+            self._batter_cols(hand)
+            counts = meta["bat_col_counts"]
+            if live is None or counts is None:
+                return None
+            row = np.asarray(entry["matrix"][live], dtype=np.float64)
+            row = np.where(np.isfinite(row), row, 1.0)
+            a = float(self.actor_power.get("batter", 1.0))
+            if a != 1.0:
+                row = np.power(np.clip(row, 0.0, None), a)
+            return row, counts
+        aff = self._batter_affinity(batter_key)
+        if aff is None:
+            return None
+        return np.asarray(aff, dtype=np.float64), meta["bat_emb_counts"]
+
+    def _neutral_mean_batter(self, hand: str, batter_key: str, power: float) -> float:
+        """The mean of f_batter^power over the hand pool's SCORED rows (1.0 at
+        power 1, or when the batter has no scores)."""
+        if power == 1.0:
+            return 1.0
+        key = (hand, "batter", batter_key, float(power), bool(self._batter_matrix_on()))
+        cached = self._neutral_cache.get(key)
+        if cached is not None:
+            return cached
+        ls = self._batter_live_scores(hand, batter_key)
+        mean = 1.0
+        if ls is not None:
+            row, counts = ls
+            n = min(len(row), len(counts))
+            if n and counts[:n].sum() > 0:
+                sc = np.power(np.clip(row[:n], 0.0, None), power)
+                mean = float(counts[:n] @ sc / counts[:n].sum())
+        self._neutral_cache[key] = mean
+        return mean
+
+    def _batter_factor_rows(self, hand: str, batter_key: str, rows: np.ndarray) -> np.ndarray:
+        """The RAW batter factor on ``rows`` (the matrix score to the actor
+        power when the matrices are on — SIM-523 part F: the matrix reaches
+        the cell path too — else the kernel affinity; 1.0 on an unscored row)."""
+        if self._batter_matrix_on():
+            entry = self._actor_matrix("batter")
+            assert entry is not None
+            live = entry["index"].get(batter_key)
+            out = np.ones(rows.size, dtype=np.float32)
+            cols_all = self._batter_cols(hand)
+            if live is None or cols_all is None:
+                return out
+            cols = cols_all[rows]
+            valid = cols >= 0
+            if valid.any():
+                sc = entry["matrix"][live, cols[valid]].astype(np.float32)
+                sc = np.where(np.isfinite(sc), sc, np.float32(1.0))
+                a = float(self.actor_power.get("batter", 1.0))
+                if a != 1.0:
+                    sc = np.power(np.clip(sc, 0.0, None), np.float32(a)).astype(np.float32)
+                out[valid] = sc
+            return out
+        aff = self._batter_affinity(batter_key)
+        if aff is None:
+            return np.ones(rows.size, dtype=np.float32)
+        pbr = self._pool_meta(hand)["pool_bat"][rows]
+        return np.where(pbr >= 0, aff[np.clip(pbr, 0, len(aff) - 1)], np.float32(1.0)).astype(
+            np.float32
+        )
 
     # ---- SIM-523 part A: the actor score-matrix lookups --------------------
     #: Which actor embedding each matrix's keys index (fielder matrices are
@@ -566,6 +781,9 @@ class FullPoolSampler:
         indices per pool row, -1 = absent), raised to the factor's power.
         Neutral (1.0) where either side is unscored. None when the bundle has
         no such matrix (the caller falls back to its kernel)."""
+        power = float(self.actor_power.get(name, 1.0))
+        if power <= 0.0:
+            return None  # SIM-523 part F: power 0 keeps this actor's kernel
         entry = self._actor_matrix(name)
         e2m = self._emb_to_mat(name)
         if entry is None or e2m is None:
@@ -580,10 +798,12 @@ class FullPoolSampler:
             return out
         scores = entry["matrix"][live, cols[valid]].astype(np.float32)
         scores = np.where(np.isfinite(scores), scores, np.float32(1.0))
-        power = float(self.actor_power.get(name, 1.0))
         if power != 1.0:
             scores = np.power(np.clip(scores, 0.0, None), np.float32(power)).astype(np.float32)
         out[valid] = scores
+        if power != 1.0 and not valid.all():
+            # SIM-523 part F: an unscored row is draw-neutral at a power.
+            out[~valid] = np.float32(scores.mean())
         return out
 
     def _f_batter(self, hand: str, batter_key: str) -> np.ndarray:
@@ -624,6 +844,23 @@ class FullPoolSampler:
         pool = self.a.pools[hand]
         f_pitcher = self._f_pitcher(hand, pitcher_key)
         self._f_pitcher_vec = f_pitcher  # SIM-523 part B: the split re-raises it
+        # SIM-523 part F: the pitch draw's pitcher POWER (1.0 = the raw score);
+        # at any other power an unscored row weighs the mean scored weight
+        # (draw-neutral), and the result draw re-raises such a row by the
+        # ratio of the two neutral means.
+        p = float(self.pitch_pitcher_power)
+        q = float(self.result_pitcher_power)
+        self._pitcher_neutral_adj = 1.0
+        if p != 1.0:
+            uns = self._pool_meta(hand)["prof_unscored"]
+            mean_p = self._neutral_mean_pitcher(hand, pitcher_key, p)
+            f_pitcher = _raise_neutral(f_pitcher, uns, p, mean_p)
+            if q != p and mean_p > 0.0:
+                self._pitcher_neutral_adj = (
+                    self._neutral_mean_pitcher(hand, pitcher_key, q) / mean_p
+                )
+        elif q != 1.0:
+            self._pitcher_neutral_adj = self._neutral_mean_pitcher(hand, pitcher_key, q)
         self._base = (f_pitcher * pool.recency).astype(np.float32)
 
     def new_plate_appearance(
@@ -655,6 +892,13 @@ class FullPoolSampler:
         self._pa_levels = None
         self._pa_keys = None
         f_bat = self._f_batter(self._hand, batter_key)
+        # SIM-523 part F: the batter powers with the draw-neutral rule.
+        uns_b = self._batter_unscored(self._hand)
+        pb_power = float(self.pitch_batter_power)
+        mean_pb = self._neutral_mean_batter(self._hand, batter_key, pb_power)
+        self._bat_neutral_rb = self._neutral_mean_batter(
+            self._hand, batter_key, float(self.result_batter_power)
+        )
         w = self._base * f_bat * self._f_situation_baseout(self._hand, base_out)
         # SIM-523 part E: the receiving ratio, applied per count bucket below
         # (the single draw) or kept for the result draw (the split).
@@ -684,13 +928,15 @@ class FullPoolSampler:
             self._bucket_w = [(w[r] if r.size else None) for r in rows]
             self._bucket_fb = [(f_bat[r] if r.size else None) for r in rows]
             self._bucket_fp = [(fpv[r] if (r.size and fpv is not None) else None) for r in rows]
-            w = _repower(w, f_bat, self.pitch_batter_power)
+            w = _repower_neutral(w, f_bat, uns_b, pb_power, mean_pb)
             self._bucket_recv = (
                 [(recv[r] if r.size else None) for r in rows] if recv is not None else None
             )
         else:
             self._bucket_w = self._bucket_fb = self._bucket_fp = None
             self._bucket_recv = None
+            # SIM-523 part F: the single draw's batter power (1.0 = as is).
+            w = _repower_neutral(w, f_bat, uns_b, pb_power, mean_pb)
             if recv is not None:
                 taken = self._pool_meta(self._hand)["taken"]
                 for r in rows:
@@ -820,9 +1066,15 @@ class FullPoolSampler:
         else:
             side = 1 if bat_home else 0
         base = self._base
-        aff = self._batter_affinity(batter_key)
-        pb = meta["pool_bat"]
         sitb = meta["sit_baseout"]
+        # SIM-523 part F: the batter factor per sub-cell (the matrix when on),
+        # its powers and the draw-neutral rule's ingredients.
+        uns_b = self._batter_unscored(hand)
+        pb_power = float(self.pitch_batter_power)
+        mean_pb = self._neutral_mean_batter(hand, batter_key, pb_power)
+        self._bat_neutral_rb = self._neutral_mean_batter(
+            hand, batter_key, float(self.result_batter_power)
+        )
         # SIM-523 part E: the receiving ratio (the single draw applies it per
         # sub-cell; the split keeps it for the result draw).
         recv: np.ndarray | None = (
@@ -858,13 +1110,7 @@ class FullPoolSampler:
                 b_fp.append(None)
                 b_recv.append(None)
                 continue
-            if aff is not None:
-                pbr = pb[rows]
-                f_bat = np.where(
-                    pbr >= 0, aff[np.clip(pbr, 0, len(aff) - 1)], np.float32(1.0)
-                ).astype(np.float32)
-            else:
-                f_bat = np.ones(rows.size, dtype=np.float32)
+            f_bat = self._batter_factor_rows(hand, batter_key, rows)
             diff: np.ndarray = sitb[rows] - bo
             d2 = np.einsum("ij,ij->i", diff, diff)
             f_sit = np.exp(-d2 / (2.0 * self.sit_sigma**2 * sitb.shape[1])).astype(np.float32)
@@ -885,10 +1131,13 @@ class FullPoolSampler:
                 b_fb.append(f_bat)
                 b_fp.append(fpv[rows] if fpv is not None else None)
                 b_recv.append(recv[rows] if recv is not None else None)
-                w = _repower(w, f_bat, self.pitch_batter_power)
-            elif recv is not None:
-                # SIM-523 part E: the receiving ratio, last, mass-preserving.
-                w = self._apply_receiving(w, taken_all[rows], recv[rows])
+                w = _repower_neutral(w, f_bat, uns_b[rows], pb_power, mean_pb)
+            else:
+                # SIM-523 part F: the single draw's batter power (1.0 = as is).
+                w = _repower_neutral(w, f_bat, uns_b[rows], pb_power, mean_pb)
+                if recv is not None:
+                    # SIM-523 part E: the receiving ratio, last, mass-preserving.
+                    w = self._apply_receiving(w, taken_all[rows], recv[rows])
             cdfs.append(np.cumsum(w, dtype=np.float64))
         self._pa_rows = pa_rows
         self._pa_levels = pa_levels
@@ -1131,14 +1380,21 @@ class FullPoolSampler:
         if self.result_density_power != 0.0:
             key = self._pa_keys[b] if self._pa_keys is not None else (-1, b)
             wr = wr * self._result_inv_density(self._hand, key, rows)
-        if self.result_pitcher_power != 1.0 and self._bucket_fp is not None:
+        # SIM-523 part F: ``result_pitcher_power`` is ABSOLUTE. The raw weight
+        # carries the pitcher factor at the PITCH draw's power, so the result
+        # draw re-raises by the difference (1.0 here = no change).
+        q = float(self.result_pitcher_power) - float(self.pitch_pitcher_power) + 1.0
+        if q != 1.0 and self._bucket_fp is not None:
             fp = self._bucket_fp[b]
             if fp is not None:
-                wr = _repower(wr, fp, self.result_pitcher_power)
-        if self.result_batter_power != 1.0 and self._bucket_fb is not None:
+                uns = self._pool_meta(self._hand)["prof_unscored"][rows]
+                wr = _repower_neutral(wr, fp, uns, q, self._pitcher_neutral_adj)
+        rb = float(self.result_batter_power)
+        if rb != 1.0 and self._bucket_fb is not None:
             fb = self._bucket_fb[b]
             if fb is not None:
-                wr = _repower(wr, fb, self.result_batter_power)
+                uns = self._batter_unscored(self._hand)[rows]
+                wr = _repower_neutral(wr, fb, uns, rb, self._bat_neutral_rb)
         # SIM-523 part E: the catcher receiving ratio, last, on taken rows.
         if self._bucket_recv is not None and self._bucket_recv[b] is not None:
             taken = self._pool_meta(self._hand)["taken"][rows]
@@ -1409,8 +1665,12 @@ class FullPoolSampler:
     def _fielder_matrices_on(self) -> bool:
         """SIM-523 part A: the matrix path applies whenever the switch is on
         and the bundle carries at least one per-position fielder matrix."""
-        return self.actor_matrices and any(
-            self._actor_matrix(f"fielder_{n}") is not None for n in _POS_NUM_TO_NAME.values()
+        return (
+            self.actor_matrices
+            and float(self.actor_power.get("fielder", 1.0)) > 0.0
+            and any(
+                self._actor_matrix(f"fielder_{n}") is not None for n in _POS_NUM_TO_NAME.values()
+            )
         )
 
     def _f_live_fielder(
@@ -2559,6 +2819,7 @@ class FullPoolSampler:
                 meta["runner_rows"],
                 rows,
                 self._RUNNER_STEAL_FEATURES,
+                sigma=self.steal_runner_sigma,
                 matrix="runner_steal",
             )
             if f is not None:
@@ -2728,7 +2989,7 @@ class FullPoolSampler:
             meta["runner_rows"],
             meta["rows"],
             self._RUNNER_ADV_FEATURES,
-            sigma=self.adv_sigma,
+            sigma=(self.adv_runner_sigma if self.adv_runner_sigma is not None else self.adv_sigma),
             matrix="runner_adv",
         )
         if f is not None:

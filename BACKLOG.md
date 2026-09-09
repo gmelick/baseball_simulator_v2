@@ -1,5 +1,28 @@
 # Product Backlog
 
+# 🧱 2026-09-09 — REDESIGN PART F: THE FIT (SIM-523) — fitted, lane-read, the flip waits on a grading ruling (next free ID → SIM-527)
+
+**What landed (`CHANGES.md` has the detail).** Every new factor's power or bandwidth is fitted
+against the pool's own conditional rates with the loop instrumented and an offline scan
+(`scripts/sim523_fit_probe.py`, `sim523_power_scan.py`, `sim523_kernel_scan.py`,
+`sim523_fit_compare.py`, `sim523_concentration.py`). The finding: at power 1 every identity
+factor was nearly flat — the sim drew league-average outcomes for whoever was pitching (6% of
+a pitcher's own whiff spread), hitting (3%) or running (the slowest runners attempted five
+times their own rate). The FIT: the pitcher factor at power 16 in both pitch draws, the
+batter at 8 in the result draw (the ordering ruling holds: effective shares 16% / 21% /
+95%), the pitcher-steal matrix at 12, catcher-throwing at 2, the runner kernels at
+bandwidth 0.25, the born-ball kernel 1.0, the class filter, wall-zone rule and fence stage
+ON; the fielder factor keeps its certified kernel (the matrix is flat at 1 and breaches the
+own-staff limit at 2) and the runner matrices stay off (two thirds of steal rows carry no
+runner score). Ceilings: the pitcher engine's arsenal-only score reproduces at most ~50-70%
+of a pitcher's whiff spread and ~25-45% of his walk spread; the batter's composite ~60-87%.
+Two defects fixed on the way: the batter matrix never reached the cell path (production's
+draw), and unscored rows carried the maximum weight at any power (now draw-neutral). The
+sprint-speed kernel has no data (the runner embedding's speed is zero on every row → part
+G). **The lane:** see `CHANGES.md` — reds on the pool-total grade that the probe attributes to composition (an identity-faithful sim of a 2024 game set against the pool's 2025-26-leaning totals); **OWNER DECISION: the grade for an identity-faithful sim.** **Still to do on the redesign:** part G (the data adds: the sprint-speed join, fielding
+credits, the got-away rates out of the profiles); SIM-526 (receiving); SIM-427 (the manager
+draw's real profiles); a results-aware pitcher score (new).
+
 # 🧱 2026-09-09 — REDESIGN PART E BUILT: the catcher RECEIVING ratio on taken pitches (SIM-523), OFF; the bell-curve kernel deleted (next free ID → SIM-527)
 
 **What landed (`CHANGES.md` has the detail).** The receiving factor is now a mass-preserving

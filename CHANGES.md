@@ -1,3 +1,145 @@
+# Feat — the play-picker redesign, part F: the FIT — every new factor's power or bandwidth against the pool's own conditional rates, the ordering ruling, the concentration check, the 12×500 lane; the switches stay OFF pending the owner's grading ruling (SIM-523) — 2026-09-09
+
+**What this is.** Part F fits the powers (the engine's 0-to-1 score raised to a power) and
+the bandwidths of the factors parts A-E built, against the pool's OWN conditional rates —
+the SIM-476 principle: a factor is right when the sim, conditioned on what the factor
+reads, matches the pool's own conditional for that actor — under the ordering ruling
+(pitcher strongest, then batter, then recency, the catcher last), with the concentration
+check as the second pass/fail, then the 12×500 lane, then the flags. Five instruments:
+`scripts/sim523_fit_probe.py` runs the loop instrumented and reports, per live actor
+against his own rows, the outcome mix by quintile (pitchers and batters, standardized to
+the actor's own count mix), the steal and advancement draws by runner / catcher / pitcher
+tier, the fielding draw's event mix per BORN batted-ball class, the factor strengths
+(effective sample share) and the candidate set's effective rows (the starvation read);
+`scripts/sim523_power_scan.py` and `scripts/sim523_kernel_scan.py` compute the same
+conditionals OFFLINE from the pool under score^p and under the kernels for a ladder (the
+sim-free first read, a minute instead of forty per point); `scripts/sim523_fit_compare.py`
+lays arms side by side; `scripts/sim523_concentration.py` re-runs the own-staff check at
+fitted powers. Three code additions the fit needed: the pitch draw's pitcher power
+(`SIM_PITCH_PITCHER_POWER`; the result draw's power is absolute — the re-raise is the
+difference), the batter power on the single-draw path, and per-runner bandwidths for the
+steal and advancement kernels (`SIM_STEAL_RUNNER_SIGMA`, `SIM_ADV_RUNNER_SIGMA`; empty = the
+shared 1.0). Two defects the fit exposed and fixed: (1) the cell path — production's pitch
+draw since the cell index went live — still used the σ=3.0 batter KERNEL when the
+matrices were on, so the batter matrix never reached production's draw (part A's
+omission); (2) a pool row whose actor has no score read 1.0, the MAXIMUM, which is
+harmless at power 1 and fatal at a fitted power (at 12 a 3% unscored share outweighs the
+whole scored pool) — at any other power such a row now weighs the MEAN scored weight (the
+draw-neutral rule; the means come from the actor's matrix row and the row counts per
+column, no pool pass). A power of 0 keeps that actor's kernel. 33 tests
+(`tests/unit/test_sim523_fit_powers.py`).
+
+**The finding that shaped the fit: at power 1 every identity factor is nearly flat.**
+Across quintiles of pitchers by their own whiff rate the pool's own spread is 6.3 points
+per pitch; the sim's at power 1 was 0.4 (6% of it); by their own ball rate, 7.5 vs −0.9
+(none); batters, 9.3 vs 0.3 (3%). The steal draw at the certified runner bandwidth 1.0
+let the slowest quintile attempt 1.2% of chances (their own rows: 0.25%) and the elite
+1.9% (own 3.5%); the advancement draws 18% for everyone (own 13% to 24%). This is the
+"91% of the pool in play" flatness the plan named, measured on every factor: the sim of
+a game drew league-average outcomes for whoever was pitching, hitting or running.
+
+**The ceilings, from the offline scan (300 pitchers, 324 batters, 499 runners of 2024,
+powers 1 to 20).** The pitcher engine's score is arsenal-only (SIM-067 removed its
+results sub-score), so even at power 20 (effective share 2%) it reproduces 70% of a
+pitcher's own whiff spread and 43% of his ball spread. The batter engine's composite
+reaches 75% at 12 and 87% at 20 (effective share 0.6%). The pitcher-steal matrix 82% at
+20. The runner matrices cannot work at any power: two thirds of steal rows and half of
+advancement rows carry no runner score (the matrices cover 470 and 744 runner-seasons; the
+embedding covers all but 0.1% of rows), so the runner factors keep their kernels, whose
+bandwidth was the knob: at 1.0 the steal kernel reproduces 18% of the runner spread, at
+0.25 72% (effective share 27%), at 0.15 79%; the advancement kernel 7% → 41% → 50%. The
+fielder matrix at power 1 is as flat as no factor (mean gap 1.65 points per position-tier
+cell, `scripts/sim476_fielder_probe.py`; the kernel off reads 1.70, the certified σ=0.5
+kernel 0.81) and at power 2 the four infield matrices breach the 3.0 own-staff limit (p90
+ratios 4.1 to 5.1; 2.1 to 2.3 at 1) — the fielder factor keeps its certified kernel. The
+sprint-speed kernel has no data: the runner embedding's sprint speed is zero on all 6,488
+rows (the join is part G's item); it stays off, and the steal kernels' speed feature
+contributes nothing until then.
+
+**The sim arms (12 lane games × 60 iterations each, the loop instrumented; ratio = the
+sim's quintile spread over the pool's own).** Pitcher whiff / ball / contact / called
+strike, batter the same: power 1 → 0.06 / −0.12 / 0.07 / −0.01 and 0.03 / −0.01 / −0.01 /
+−0.03; 5-5-8 (pitch, result, batter) → 0.23 / 0.07 / 0.02 / 0.21 and 0.61 / 0.48 / 0.47 /
+0.45; 12-12-12 → 0.42 / 0.24 / 0.42 / 0.43 and 0.68 / 0.65 / 0.62 / 0.56, but the batter
+factor stronger than the pitcher's (effective shares 6% vs 27%) against the ordering
+ruling; 16-16-8 → 0.54 / 0.24 / 0.40 / 0.45 and 0.62 / 0.52 / 0.48 / 0.40 with the order
+right (15% vs 21%, recency 95%) and 1,163 effective rows per candidate set; 20-12-8 (the
+plan's "pitcher smaller in the result draw") → 0.43 / 0.16 / 0.28 / 0.25: the result draw
+is what carries the pitcher's outcome identity, so its power stays equal to the pitch
+draw's. The FIT: pitch 16, result 16, batter 8 (pitch-draw batter 1), the pitch-to-pitch
+bandwidth 1.0 with the density correction 1.0; pitcher-steal 12 (tiers 0.0108 / 0.0122 /
+0.0224 vs own 0.0075 / 0.0125 / 0.0259); catcher-throwing 2; runner kernels 0.25 (the
+final arm's steal tiers 0.0044 / 0.0125 / 0.0288 vs own 0.0023 / 0.0101 / 0.0342, the
+marginal 0.0153 vs 0.0157, the safe share by tier 0.60 / 0.81 / 0.83 vs 0.66 / 0.79 /
+0.84; advancement 0.167 / 0.189 / 0.202 vs 0.130 / 0.177 / 0.237). The fielding switches
+together (class filter, born-ball kernel 1.0 with its density correction, wall-zone
+rule, fence stage at margin 0): the drawn event mix per born class matches the pool's own
+class mix — ground balls out 0.752 / single 0.210 / error 0.016 vs 0.736 / 0.223 / 0.018,
+line drives out 0.373 / single 0.423 / double 0.171 / home run 0.020 vs 0.374 / 0.425 /
+0.172 / 0.016, fly balls out 0.758 / home run 0.151 vs 0.744 / 0.156, popups out 0.979 vs
+0.982 — where without the class filter every class drew the marginal (a popup reached
+base 33% of the time). The final arm: pitcher 0.51 / 0.35 / 0.54 / 0.43, batter 0.59 /
+0.48 / 0.47 / 0.40, effective shares 16% / 21% / 95%, 1,176 effective rows per candidate
+set (the widening ladder engaged on 83 of 214,010 draws), per game 6.52 walks, 15.8
+strikeouts, 16.8 hits, 2.37 home runs, 8.75 runs, 1.36 stolen bases (power 1: 6.86,
+16.0, 16.6, 2.36, 9.0, 1.4). The concentration check at the fitted powers passes (worst
+p90 own-staff ratio 2.34; the catcher-throwing matrix at 2 reads 1.78).
+
+**The composition read the owner must know.** An identity-faithful sim of a fixed game
+set moves that set's marginals toward its own actors: at power 1 the sim gave the twelve
+games' pitchers 1.4 points more balls per pitch than their own rows carry (and their
+batters 0.6 more), at the fit 1.0 more, so walks per game fell from 6.86 to 6.52 (−5%) as
+the sim stopped drawing league-average walks for strike-throwers. Part of it is the
+season: the pool's recency weighting leans on 2025-26, whose called-strike rate fell,
+while the lane's games are 2024. The pool-total grade (a fixed 12-game set against the
+pool's recency-weighted totals) cannot tell this composition from a defect, and its walk
+and strikeout floors are 2%.
+
+**The lane (12×500 on the fitted configuration).**
+12×500 on the fitted configuration (the `SIM523_LANE_*` arms below), 6,000 game-sims in
+2 h 36 m: **81 of 85 pass.** Walks per plate appearance, pitches per plate appearance,
+hit-by-pitches, singles, doubles, triples and home runs per ball in play, the three steal
+bands, double plays per opportunity, called strikes on taken pitches and the game-graded hit
+channels PASS. Four reds: strikeouts per plate appearance 0.2087 vs the pool centre 0.2165
+(−3.6%; the floor 2%; it read −2.1% at power 1 in lane 2, the plan's "per-count residual");
+runs 4.593 vs 4.447 per team-game (+3.3%; the floor 2.7%); reach on error per ball in play
+0.00745 vs 0.00828 (−10.0%, exactly the 10% floor); the home-win rate UNDERPOWERED by design
+at this size (5,992 decisive games of the 13,365 the band needs — a missing measurement, not
+a red). The actor-matched read, from the same twelve games with the probe extended to
+strikeouts and walks per plate appearance (arm L): the sim's strikeouts per plate appearance
+0.2083 against the live pitchers' own rows 0.2110 (−1.3%) and the live batters' own rows
+0.2097 (+1.0%) — the sim reproduces these actors within a point, and the 3.6% is the gap
+between these twelve games' actors and the pool's recency-weighted total. Walks 0.0831 vs
+the pitchers' own 0.0787 (+5.6%: the pitcher's walk conditional is the weak one, a quarter
+to a third of his own spread) and the batters' own 0.0837 (+0.8%). Reach on error: the
+deficit sits within ground balls (0.016 vs the pool's 0.018 for the class) and does not move
+with the born-ball kernel off (arm L; line drives get worse without it: singles 0.407 vs
+0.425), so it is the within-class kernels reading this set's defenders — the fielder kernel
+SIM-520 measured cutting runs 3% on these games — once the class filter stops the marginal
+from diluting them. Runs +3.3% follow the strikeouts: fewer strikeouts at in-band
+per-ball-in-play rates put more balls in play. The lane command:
+`docker compose run --rm -v "$PWD/tests:/app/tests" -v "$PWD/scripts:/app/scripts" -e
+SIM_ACCEPTANCE=1 -e SIM_ACCEPTANCE_ITERS=500 -e SIM_ACCEPTANCE_TIMEOUT=21600 -e
+SIM523_LANE_RESULT_SPLIT=1 -e SIM523_LANE_PITCH_PITCHER_POWER=16 -e
+SIM523_LANE_RESULT_PITCHER_POWER=16 -e SIM523_LANE_RESULT_BATTER_POWER=8 -e
+SIM523_LANE_ACTOR_MATRICES=1 -e SIM523_LANE_ACTOR_POWER_FIELDER=0 -e
+SIM523_LANE_ACTOR_POWER_RUNNER_STEAL=0 -e SIM523_LANE_ACTOR_POWER_RUNNER_ADV=0 -e
+SIM523_LANE_ACTOR_POWER_CATCHER_THROWING=2 -e SIM523_LANE_ACTOR_POWER_PITCHER_STEAL=12 -e
+SIM523_LANE_STEAL_RUNNER_SIGMA=0.25 -e SIM523_LANE_ADV_RUNNER_SIGMA=0.25 -e
+SIM523_LANE_BORN_SIGMA=1.0 -e SIM523_LANE_CLASS_FILTER=1 -e SIM523_LANE_WALL_ZONE_ONLY=1 -e
+SIM523_LANE_FENCE_STAGE=1 app pytest tests/acceptance -v -rxX`.
+**No flip yet.** The lane did not certify the fitted configuration on the pool-total
+grade, and the standing rule is that a switch flips only after a lane certifies. The
+fitted values are recorded here and in the lane's arms (`SIM523_LANE_*`); the compose
+defaults stay OFF. What the owner decides: whether the grade for an identity-faithful sim
+stays the pool's recency-weighted totals over the fixed 12-game set (then the fit cannot
+land as measured) or becomes the actors' own rates for the games in the set (then the reds
+above are composition, not defects). The measurement that separates the two is in the
+probe: at power 1 the sim gives these games' pitchers 1.4 points more balls per pitch than
+their own rows carry; at the fit 1.0 points more; a fully faithful sim would give 0.
+
+**Follow-ons filed here, not fixed:** a results-aware pitcher score (the arsenal-only
+score caps the pitcher fit); the sprint-speed join (part G); the grading question above.
 # Feat — the play-picker redesign, part E: the catcher RECEIVING ratio on taken pitches, built OFF; the bell-curve kernel deleted (SIM-523; enabling is SIM-526) — 2026-09-09
 
 **What this is.** The last factor of the pitch-result draw (step 4), on TAKEN pitches

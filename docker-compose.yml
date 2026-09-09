@@ -175,6 +175,13 @@ services:
       # fits the powers (SIM_RESULT_PITCH_SIGMA / SIM_RESULT_PITCHER_POWER /
       # SIM_RESULT_BATTER_POWER / SIM_PITCH_BATTER_POWER) and a lane certifies.
       SIM_PITCH_RESULT_SPLIT:    "0"
+      # SIM-523 part F: the pitch draw's pitcher power (the engine's score
+      # raised to it; 1.0 = today's weight) — the first fit target.
+      SIM_PITCH_PITCHER_POWER:   "1.0"
+      # SIM-523 part F: the runner kernels' bandwidths in the steal and the
+      # advancement draws (empty = the shared sigma 1.0).
+      SIM_STEAL_RUNNER_SIGMA:    ""
+      SIM_ADV_RUNNER_SIGMA:      ""
       # The born batted ball's kernel on the fielding draw (0 = off).
       SIM_BB_BORN_SIGMA:         "0"
       # SIM-523 part C (2026-09-08): the fielding draw's batted-ball CLASS

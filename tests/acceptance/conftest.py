@@ -103,15 +103,33 @@ PRODUCTION_FLAGS: dict[str, str] = {
     # OWNER GO 2026-09-08: production runs the cell index ON (lane 2 certified it).
     "SIM_PITCH_CELL_INDEX": os.environ.get("SIM467_LANE_CELL_INDEX", "1"),
     "SIM_PITCH_MIN_CELL": os.environ.get("SIM467_LANE_MIN_CELL", "20"),
+    # SIM-523 part A (2026-09-08): the actor SCORE MATRICES — OFF until part F
+    # fits the powers; set SIM523_LANE_ACTOR_MATRICES=1 and the powers below on a
+    # lane run to measure an arm (a power of 0 keeps that actor's kernel).
+    "SIM_ACTOR_MATRICES": os.environ.get("SIM523_LANE_ACTOR_MATRICES", "0"),
+    "SIM_ACTOR_POWER_BATTER": os.environ.get("SIM523_LANE_ACTOR_POWER_BATTER", "1.0"),
+    "SIM_ACTOR_POWER_FIELDER": os.environ.get("SIM523_LANE_ACTOR_POWER_FIELDER", "1.0"),
+    "SIM_ACTOR_POWER_RUNNER_STEAL": os.environ.get("SIM523_LANE_ACTOR_POWER_RUNNER_STEAL", "1.0"),
+    "SIM_ACTOR_POWER_RUNNER_ADV": os.environ.get("SIM523_LANE_ACTOR_POWER_RUNNER_ADV", "1.0"),
+    "SIM_ACTOR_POWER_CATCHER_THROWING": os.environ.get(
+        "SIM523_LANE_ACTOR_POWER_CATCHER_THROWING", "1.0"
+    ),
+    "SIM_ACTOR_POWER_PITCHER_STEAL": os.environ.get("SIM523_LANE_ACTOR_POWER_PITCHER_STEAL", "1.0"),
+    # SIM-523 part F: the runner kernels' bandwidths (empty = the shared sigma 1.0).
+    "SIM_STEAL_RUNNER_SIGMA": os.environ.get("SIM523_LANE_STEAL_RUNNER_SIGMA", ""),
+    "SIM_ADV_RUNNER_SIGMA": os.environ.get("SIM523_LANE_ADV_RUNNER_SIGMA", ""),
     # SIM-523 part B (2026-09-08): the pitch / pitch-result split. Production
     # is OFF until part F fits the powers; set SIM523_LANE_RESULT_SPLIT=1 (and
     # the sigma / powers below) on a lane run to measure an arm.
     "SIM_PITCH_RESULT_SPLIT": os.environ.get("SIM523_LANE_RESULT_SPLIT", "0"),
+    "SIM_PITCH_PITCHER_POWER": os.environ.get("SIM523_LANE_PITCH_PITCHER_POWER", "1.0"),
     "SIM_RESULT_PITCH_SIGMA": os.environ.get("SIM523_LANE_RESULT_PITCH_SIGMA", "1.0"),
     "SIM_RESULT_PITCHER_POWER": os.environ.get("SIM523_LANE_RESULT_PITCHER_POWER", "1.0"),
     "SIM_RESULT_BATTER_POWER": os.environ.get("SIM523_LANE_RESULT_BATTER_POWER", "1.0"),
     "SIM_PITCH_BATTER_POWER": os.environ.get("SIM523_LANE_PITCH_BATTER_POWER", "1.0"),
+    "SIM_RESULT_DENSITY_POWER": os.environ.get("SIM523_LANE_RESULT_DENSITY_POWER", "1.0"),
     "SIM_BB_BORN_SIGMA": os.environ.get("SIM523_LANE_BORN_SIGMA", "0"),
+    "SIM_BB_BORN_DENSITY_POWER": os.environ.get("SIM523_LANE_BORN_DENSITY_POWER", "1.0"),
     # SIM-523 part C (2026-09-08): the fielding draw's class filter, the batter
     # sprint-speed kernel and the park wall-zone rule — OFF until part F.
     "SIM_BB_CLASS_FILTER": os.environ.get("SIM523_LANE_CLASS_FILTER", "0"),
