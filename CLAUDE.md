@@ -253,7 +253,11 @@ the pitch-result draw are two draws behind `SIM_PITCH_RESULT_SPLIT` (OFF); the r
 carries its own batted ball through the artifact's pitch-id join (`HandPool.bb_row`, live);
 the result draw carries a density correction (`SIM_RESULT_DENSITY_POWER`, 1.0) without which
 the kernel leans toward the strike zone (walks −37% in the probe); with it the split
-reproduces the single draw's pitch mix at neutral powers. Parts C-G of the plan remain.
+reproduces the single draw's pitch mix at neutral powers. **PART C BUILT the same day:** the
+fielding draw's class filter, sprint-speed weight and wall-zone rule (`SIM_BB_CLASS_FILTER`,
+`SIM_BB_SPEED_SIGMA`, `SIM_PARK_WALL_ZONE_ONLY`), the park geometry + carry model in the bundle
+(`park_geometry.json`, `--what park`) and the fence stage (`SIM_FENCE_STAGE`), all OFF; the live
+venue travels as `venue_id` in the kwargs contract. Parts D-G of the plan remain.
 
 - **DO NOT run the profile recompute** (`make profile-computor`) — but the reason changed on
   2026-08-13. SIM-501a/c CLOSED: SIM-457 is re-landed on the events-based out label, no profile

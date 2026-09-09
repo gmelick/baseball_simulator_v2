@@ -1,5 +1,20 @@
 # Product Backlog
 
+# 🧱 2026-09-08 — REDESIGN PART C BUILT: the FIELDING split and the FENCE work (SIM-523; SIM-478/479/480 built), every switch OFF (next free ID → SIM-527)
+
+**What landed (`CHANGES.md` has the detail).** The fielding draw gains the batted-ball CLASS as a
+third hard filter (`SIM_BB_CLASS_FILTER`), a batter sprint-speed weight (`SIM_BB_SPEED_SIGMA`) and
+a wall-zone rule for the park kernel (`SIM_PARK_WALL_ZONE_ONLY`). The bundle carries the PARK
+GEOMETRY — every park's effective fence per spray sector as the pool's own home runs and kept
+balls reveal it, with a hand-curated overrides file — and a carry model fitted on the home runs
+(mean absolute error 13.6 ft). The FENCE STAGE (`SIM_FENCE_STAGE`) checks the born ball against
+the live park's fence before the draw: over it, a certain home run; short of it, no home run;
+in the band, the draw decides. The live venue now travels through the kwargs contract. The
+probe's ablation arms are in `CHANGES.md`; the switches flip only after part F fits the
+bandwidths and powers and a lane certifies. **Still to do on the redesign:** parts D (manager
+order), E (the receiving ratio, OFF), F (the fits), G (the data adds: the fielding credits
+for the chain fielders, the got-away rates out of the profiles); SIM-526 enables receiving.
+
 # 🧱 2026-09-08 — REDESIGN PART B LANDED: the PITCH draw and the PITCH-RESULT draw are two draws (SIM-523), the pitch-id join live, switch OFF (next free ID → SIM-527)
 
 **What landed (`CHANGES.md` has the detail).** Behind `SIM_PITCH_RESULT_SPLIT` (OFF) the sampler

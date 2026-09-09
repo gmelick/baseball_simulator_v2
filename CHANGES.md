@@ -1,3 +1,107 @@
+# Feat — the play-picker redesign, part C: the FIELDING split and the FENCE work (SIM-523, SIM-478/479/480; every switch OFF in production) — 2026-09-08
+
+**What this is.** Steps 5 and 6 of the redesign's loop, built in four slices, each
+behind its own switch, all OFF until part F fits them and a lane certifies.
+
+**C1 — the fielding draw's filters and weights (step 6).** The batted-ball CLASS
+(ground ball / line drive / fly ball / popup / bunt) joins the base-out cell and the
+batter hand as the third hard filter: `BattedBallPool.bb_class` is exported from the
+pool's `bb_type` (shareable; None on an older bundle); with `SIM_BB_CLASS_FILTER` the
+cell is filtered to the born ball's class, falling back to the whole cell when that
+class is empty there (counted in `bb_class_counts`). The batter's SPRINT SPEED is a new
+weight (`SIM_BB_SPEED_SIGMA`): a Gaussian on the z-scored speed of the live batter
+against each row's batter, read from the baserunner embedding, mean-1 normalized,
+neutral where a batter has no speed. The park kernel can be restricted to a ball in
+the WALL ZONE (`SIM_PARK_WALL_ZONE_ONLY`, `SIM_WALL_ZONE_DISTANCE`: an air ball carrying
+at least that far). The credited fielder's factor and the batter's profile factor stay
+as they were; the fielders on the CHAIN wait for part G's fielding credits (the events
+table lives in Postgres, not the sim database). `apply_fielding_env` reads the env. The
+BORN-BALL kernel (part B's `SIM_BB_BORN_SIGMA`, the first weight of step 6) now carries
+the same density correction part B put on the result draw
+(`SIM_BB_BORN_DENSITY_POWER`, 1.0): the ablation arm with that kernel alone measured
+its lean toward the ordinary, weakly hit ball — hits −7%, doubles −23%, home runs
+−17% at bandwidth 0.5 — the same estimator lean, with the same fix, pinned by a toy
+pool in a unit test (the raw kernel under-draws the sparse side by ~0.03 of share; the
+corrected kernel lands within 0.02).
+
+**C2 — the park geometry (SIM-478).** `build_park_geometry` (`--what park`, in the
+nightly `all`) writes `park_geometry.json` into the bundle: per venue and 10-degree spray
+sector (nine over the fair field), the EFFECTIVE fence — the carry a ball needs to leave
+the park — as the pool's own balls reveal it: the midpoint of the home runs'
+10th-percentile carry and the kept air balls' 99th-percentile carry, the league sector
+line where a venue sector lacks ten of either, and `park_geometry_overrides.json`
+merged on top for hand-curated corrections. A tall wall shows as a longer required
+carry, so one number per sector carries the height. The DuckDB writer lock (SIM-524)
+keeps the `derived` table for later. Live: 40 venues; the two estimates agree within a
+few feet in almost every sector; Fenway's left-field line reads 346 ft (the Green
+Monster) and its right-field line 363; Yankee Stadium's right-field line 338 (the short
+porch); Coors' center 421-423; Minute Maid's lines 341-344 and its center 418.
+
+**C3 — the carry model (SIM-479).** A quadratic in exit velocity and launch angle
+fitted on the pool's 21,424 home runs (mean absolute error 13.6 ft, root-mean-square
+17.3), stored with the geometry and validated on the home runs first, as the plan asked.
+Finding: the pool's kept air balls carry right up to the home-run line in every sector,
+so the reported distance IS the ball's carry (a projected landing), not where it was
+fielded. The model is therefore the fallback for a ball with no distance, not the
+primary carry.
+
+**C4 — the fence stage (SIM-480).** Before the fielding draw, with `SIM_FENCE_STAGE` on
+and the live venue known, the born ball's carry meets the live park's fence at its
+direction (`fence_at`, `carry_of`, `fence_decision`): over it by `SIM_FENCE_MARGIN`
+(0 ft — a decisive fence, see the probe), the draw runs among the cell's home-run rows only — a certain home run that
+supersedes the draw; short of it by the margin, or not an air ball at all, the home-run
+rows leave the candidate set; inside the band every row stays and the weights decide;
+without geometry, venue or direction the stage passes (`fence_counts`). The live venue
+now travels: `simulate_game(venue_id=)` writes `GameState.park`, the kwargs contract
+carries `venue_id` (`SIM_KWARG_KEYS` is 16), the park-factor resolver writes the venue
+onto the state, and the harness resolves it too.
+
+**Tests.** 20 (`tests/unit/test_sim523_fielding_split.py`) + 20
+(`tests/unit/test_sim523_fence_stage.py`).
+
+**The probe (4 games × 30 iterations per arm, the split on with its density correction,
+born-ball bandwidth 0.5, speed bandwidth 0.5), one switch added per arm.**
+| Arm (the split ON, density-corrected; OFF = the single draw) | R/g | H/g | 2B/g | HR/g | BB/g | K/g |
+|---|---|---|---|---|---|---|
+| OFF, the single draw | 10.00 | 17.85 | 3.53 | 2.33 | 7.33 | 16.32 |
+| + born kernel 0.5, RAW (no density correction) | 8.42 | 16.62 | 2.73 | 1.93 | 6.80 | 15.97 |
+| + born kernel 0.5, corrected | 8.88 | 16.67 | 3.13 | 2.53 | 6.29 | 16.24 |
+| + class filter + fence stage (margin 10) + wall-zone rule + speed 0.5, corrected | 8.05 | 16.42 | 3.27 | 1.70 | 6.67 | 15.84 |
+| the same with a DECISIVE fence (margin 0) — the default | 8.77 | 16.80 | 3.29 | 2.17 | 6.53 | 15.90 |
+
+The per-game counts move with the game's length (fewer hits, fewer batters, fewer walks per
+game), so the bias check reads rates per ball in play instead: for every ball in play the
+born row's OWN outcome against the outcome the fielding draw returned. With the born kernel
+alone and corrected, the drawn plays' hit share is 0.3172 against the born rows' own 0.3213
+and the home-run share 0.0492 against 0.0425 (6,022 balls; a share's standard error is
+~0.006) — the corrected kernel is unbiased on live data, where the raw kernel had cut
+doubles 23% and home runs 17%. The lower hits per game against the single draw are then
+not an estimator lean: the born ball is the pitch-result draw's, so the pitcher's quality
+now shapes contact where the old fielding draw ignored the pitcher; whether the size is
+right is part F's fit and the lane's question.
+
+The fence stage at a 10-foot band is biased low on home runs: the drawn home-run share
+0.0322 against the born rows' 0.0458, and every one of the four parks below its pool rate
+(0.031 / 0.035 / 0.039 / 0.024 against 0.044 / 0.051 / 0.051 / 0.040). Of 6,025 balls in
+play, 158 were over the live fence by the margin, 175 inside the band and 5,692 short (or
+not air balls). A born home run inside the band drew a home run only 21% of the time,
+because the born kernel's distance bandwidth (0.5 of a standard deviation, ~50 ft) pulls
+in shorter plays that are mostly outs. Two fixes to fit in part F: a decisive fence
+(margin 0, measured below) and a tighter distance bandwidth for the born kernel; the
+class filter applied to every ball (6,025 filtered, no empty class), and one draw fell
+back to uniform weights (the zero-weight guard).
+
+With a DECISIVE fence (margin 0): 253 balls over the live fence, 5,779 short, no band;
+the drawn home-run share 0.0419 against the born rows' 0.0456 and the drawn hit share
+0.3219 against 0.3306 — both inside two standard errors — and the four parks read 0.037 /
+0.046 / 0.051 / 0.033 against the pool's 0.044 / 0.051 / 0.051 / 0.040. Per game: runs
+8.77, hits 16.80, doubles 3.29, home runs 2.17, walks 6.53, strikeouts 15.90. The margin's
+default is therefore 0; the band stays available (`SIM_FENCE_MARGIN`). The remaining
+shortfall against the single draw is the pitcher-linked contact above, part F's question.
+
+**Live.** The park geometry was built into the bundle and the app restarted on it (the
+loader reads it; the fence stage stays off).
+
 # Feat — the play-picker redesign, part B: the PITCH draw and the PITCH-RESULT draw are two draws (SIM-523; switch OFF in production) — 2026-09-08
 
 **What this is.** Steps 3 and 4 of the redesign's loop. One draw used to pick the

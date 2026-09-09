@@ -418,6 +418,16 @@ def _safe_float(val, default: float = 0.0) -> float:
     return f
 
 
+def _venue_of(state: object) -> int | None:
+    """SIM-523 part C4: the live venue id ``GameState.park`` carries (a
+    digit string), or None."""
+    park = getattr(state, "park", None)
+    if park is None:
+        return None
+    text = str(park).strip()
+    return int(text) if text.isdigit() else None
+
+
 @dataclass(frozen=True, slots=True)
 class FieldingSignal:
     """The engine-derived fielding signal for one in-play batted ball (step 6).
@@ -997,11 +1007,21 @@ class StateMachine:
         # result row's own, through the artifact's pitch-id join). Passed only
         # when its kernel is on (SIM_BB_BORN_SIGMA > 0) — off, the call is
         # unchanged.
-        if float(getattr(fp, "bb_born_sigma", 0.0)) > 0.0:
+        if (
+            float(getattr(fp, "bb_born_sigma", 0.0)) > 0.0
+            # SIM-523 part C: the class filter and the wall-zone rule read it too.
+            or bool(getattr(fp, "bb_class_filter", False))
+            or bool(getattr(fp, "park_wall_zone_only", False))
+            or bool(getattr(fp, "fence_stage", False))
+        ):
             reader = getattr(fp, "last_born_batted_ball", None)
             born = reader() if reader is not None else None
             if born is not None:
                 bb_extra["born_bb"] = born
+        # SIM-523 part C4: the live park for the fence stage (``state.park``
+        # holds the venue id; passed only when the stage is on).
+        if bool(getattr(fp, "fence_stage", False)):
+            bb_extra["venue_id"] = _venue_of(state)
         fp.battedball_new_pa(
             hand,
             f"{state.batter_id}:{season}",
@@ -3286,6 +3306,7 @@ def simulate_game(
     home_defense: dict[str, int] | None = None,
     away_defense: dict[str, int] | None = None,
     park_run_factor: float = 1.0,
+    venue_id: int | None = None,
     manager=None,
     bench=None,
     bullpen=None,
@@ -3406,6 +3427,9 @@ def simulate_game(
         if away_defense:
             initial_state.away_defense = dict(away_defense)
         initial_state.park_run_factor = float(park_run_factor)
+        # SIM-523 part C4: the live park for the fence stage.
+        if venue_id is not None:
+            initial_state.park = str(int(venue_id))
         initial_state.bat_hand = initial_state.bat_hand_for(initial_state.batter_id)
     state = initial_state
     if seed is not None and state.seed is None:

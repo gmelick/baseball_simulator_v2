@@ -29,7 +29,7 @@ import os
 
 import numpy as np
 
-from pipeline.batch.engine_artifacts import EngineArtifacts, HandPool
+from pipeline.batch.engine_artifacts import EngineArtifacts, HandPool, carry_predict
 from simulation.filter_cells import (
     DEFAULT_MIN_CELL,
     N_BAND,
@@ -266,6 +266,63 @@ class FullPoolSampler:
         # cell row's, normalized to a mean of 1 over the rows with complete
         # data (part C's step 6 grows from it). 0.0 (the default) = off.
         self.bb_born_sigma = 0.0
+        # The born kernel's DENSITY CORRECTION — the same estimator lean part B
+        # measured on the result draw: a kernel over the batted-ball features
+        # leans toward where the pool is dense (the ordinary, weakly hit ball),
+        # which alone under-draws hits. Every candidate row is divided by its
+        # own local density under the born kernel (a pool fact per candidate
+        # set and bandwidth), raised to ``bb_born_density_power`` (1.0 = the
+        # full correction; 0 = off) — a part-F fit target with the bandwidth.
+        self.bb_born_density_power = 1.0
+        # SIM-523 part C — the FIELDING draw's filters and weights (plan §3,
+        # step 6), each off by default:
+        #   * ``bb_class_filter``: the born ball's CLASS (ground / line / fly /
+        #     popup / bunt) is a hard filter on the base-out cell — the third
+        #     filter after the cell and the batter hand. An empty (cell,
+        #     class) falls back to the whole cell and is counted.
+        #   * ``bb_speed_sigma``: a Gaussian on the z-scored sprint-speed
+        #     distance between the live batter and each row's batter (the
+        #     baserunner embedding), normalized to a mean of 1 — a slow batter
+        #     draws plays hit by slow batters.
+        #   * ``park_wall_zone_only``: the park kernel applies only when the
+        #     born ball is in the WALL ZONE — an air ball (line drive / fly
+        #     ball) carrying at least ``wall_zone_distance`` feet (part C's
+        #     fence stage replaces the distance with the live park's fence).
+        self.bb_class_filter = False
+        self.bb_speed_sigma = 0.0
+        self.park_wall_zone_only = False
+        self.wall_zone_distance = 300.0
+        #: Class-filter draws: [0] filtered to the class, [1] empty -> the cell.
+        self.bb_class_counts = np.zeros(2, dtype=np.int64)
+        # SIM-523 part C4 — the FENCE STAGE (plan §3, step 5; SIM-480). Before
+        # the fielding draw, the born ball's carry (its own distance; the
+        # bundle's carry model when that is missing) meets the LIVE park's
+        # fence at its direction (``EngineArtifacts.park_geometry``, per venue
+        # and spray sector). Over it by ``fence_margin`` feet: a certain home
+        # run — the draw runs among the cell's home-run rows only. Short of it
+        # by the margin, or not an air ball at all: no home run — the home-run
+        # rows leave the candidate set. Inside the band: every row stays and
+        # the weights decide (the park kernel's wall zone). No geometry, no
+        # direction or no venue: the stage passes. Off by default. The band is
+        # 0 by default — a DECISIVE fence: the probe measured a 10-foot band
+        # losing ~30% of home runs, because a born home run inside the band
+        # drew a home run only 21% of the time under a born kernel whose
+        # distance bandwidth (~50 ft) pulls in shorter plays.
+        self.fence_stage = False
+        self.fence_margin = 0.0
+        #: Draws whose every candidate weight underflowed to zero (the hard
+        #: filters left a handful of rows the kernels could not all keep): the
+        #: draw then runs uniform over those rows — the filters are the facts,
+        #: the weights only a preference — and the case is counted here.
+        self.bb_zero_weight_count = 0
+        #: Fence-stage decisions: [0] over (a home run), [1] short (no home
+        #: run), [2] the band, [3] passed (no geometry / venue / direction),
+        #: [4] a decision with no matching rows in the cell (left as is).
+        self.fence_counts = np.zeros(5, dtype=np.int64)
+        #: Per-hand home-run mask over the batted-ball pool.
+        self._bb_hr_cache: dict[str, np.ndarray] = {}
+        #: Per-hand z-scored sprint speed per batted-ball row (NaN = unknown).
+        self._bb_speed_cache: dict[str, np.ndarray | None] = {}
         #: Per-count raw per-PA weights and the pitcher / batter factors,
         #: kept only while the split is on (the result draw re-weights them).
         self._bucket_w: list[np.ndarray | None] | None = None
@@ -280,6 +337,7 @@ class FullPoolSampler:
         #: geometry and of the batted-ball pool's batted-ball features.
         self._pp_geom_stats: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
         self._bb_born_stats: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+        self._bb_born_x: dict[str, np.ndarray] = {}
         #: Per-hand cache of the batted-ball pool's pitch-geometry z-stats
         #: (mean, std, all-finite row mask) — constant once the bundle loads.
         self._bb_pgeom_stats: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
@@ -1081,6 +1139,10 @@ class FullPoolSampler:
             "spray_raw": (float(pool.spray_raw[j]) if pool.spray_raw is not None else None),
             "dist": (float(pool.hit_dist[j]) if pool.hit_dist is not None else None),
             "is_air": (bool(pool.is_air[j]) if pool.is_air is not None else None),
+            # SIM-523 part C: the class (BB_CLASS; None before part C) and the
+            # park the ball was hit in.
+            "cls": (int(pool.bb_class[j]) if pool.bb_class is not None else None),
+            "venue": (int(pool.venue_id[j]) if pool.venue_id is not None else None),
         }
 
     def last_pitch_got_away(self) -> bool:
@@ -1481,6 +1543,7 @@ class FullPoolSampler:
         live_season: int | None = None,
         pitch_geom: np.ndarray | None = None,
         born_bb: dict | None = None,
+        venue_id: int | None = None,
     ) -> None:
         """Assemble the batted-ball weight CDF for the PA (f_batter · f_situation · recency).
 
@@ -1490,6 +1553,16 @@ class FullPoolSampler:
         distance) distance between that ball and each cell row's pulls the
         draw toward plays on similar batted balls — the ball born in the
         pitch-result draw is what gets fielded. Omitted / sigma 0 -> unchanged.
+
+        SIM-523 part C: with :attr:`bb_class_filter` on and a born ball whose
+        class is known, the cell is hard-filtered to that class (an empty
+        class falls back to the cell); :attr:`bb_speed_sigma` > 0 weights
+        rows by the batter's sprint-speed similarity; with
+        :attr:`park_wall_zone_only` on the park kernel applies only when the
+        born ball is in the wall zone. With :attr:`fence_stage` on and
+        ``venue_id`` (the live park) given, the born ball's carry against
+        that park's fence decides home run / no home run / the band before
+        the draw (:meth:`fence_decision`).
 
         SIM-518 (SIM-472): when ``pitch_geom`` (the DRAWN pitch's ten geometry
         values, :meth:`last_pitch_geom`) is supplied AND :attr:`bb_pitch_sigma`
@@ -1549,6 +1622,12 @@ class FullPoolSampler:
                 "The base-out filter is essential and never widens (owner "
                 "ruling 2026-08-19); rebuild the pool and investigate."
             )
+        # --- SIM-523 part C: the batted-ball CLASS, the third hard filter --
+        if born_bb is not None and self.bb_class_filter:
+            rows = self._bb_class_rows(hand, meta, (rstate, o), rows, born_bb.get("cls"))
+        # --- SIM-523 part C4: the fence stage ------------------------------
+        if born_bb is not None and self.fence_stage:
+            rows = self._fence_rows(hand, meta, (rstate, o), rows, born_bb, venue_id)
         if aff is not None and pb is not None:
             pbr = pb[rows]
             f_bat = np.where(pbr >= 0, aff[np.clip(pbr, 0, len(aff) - 1)], np.float32(1.0)).astype(
@@ -1569,7 +1648,13 @@ class FullPoolSampler:
             if bh is not None:
                 match = (bh[rows] > 0) == bool(bat_home)
                 w = w * np.where(match, np.float32(1.0), np.float32(self.home_off_weight))
-        if park_run_factor is not None and self.park_sigma > 0.0:
+        if (
+            park_run_factor is not None
+            and self.park_sigma > 0.0
+            # SIM-523 part C: the park matters only to a ball that can reach
+            # its wall — when the zone rule is on and the ball is known.
+            and (born_bb is None or not self.park_wall_zone_only or self.in_wall_zone(born_bb))
+        ):
             pf = self._bb_park_factors(hand)
             if pf is not None:
                 d = pf[rows] - np.float32(park_run_factor)
@@ -1586,17 +1671,210 @@ class FullPoolSampler:
             fbb = self._f_born_similarity(hand, rows, born_bb)
             if fbb is not None:
                 w = w * fbb
+                if self.bb_born_density_power != 0.0:
+                    w = w * self._born_inv_density(hand, meta, rows)
+        if self.bb_speed_sigma > 0.0:
+            fsp = self._f_batter_speed(hand, rows, batter_key)
+            if fsp is not None:
+                w = w * fsp
+        cdf = np.cumsum(w, dtype=np.float64)
+        if not (cdf[-1] > 0.0) or not np.isfinite(cdf[-1]):
+            # Every weight underflowed (a narrow candidate set under tight
+            # kernels): keep the filtered rows, drop the preference.
+            self.bb_zero_weight_count += 1
+            cdf = np.cumsum(np.ones(len(rows), dtype=np.float64))
         self._bb_rows = rows
-        self._bb_cdf = np.cumsum(w, dtype=np.float64)
+        self._bb_cdf = cdf
+
+    # ---- SIM-523 part C: the fielding draw's class filter, speed, wall zone
+    def _bb_class_rows(
+        self, hand: str, meta: dict, cell: tuple[int, int], rows: np.ndarray, cls: int | None
+    ) -> np.ndarray:
+        """The cell's rows of the born ball's class (cached per cell and
+        class); the whole cell when the class is unknown, the pool carries
+        no class, or the class is empty in this cell (counted)."""
+        bc = getattr(self.a.bb_pools[hand], "bb_class", None)
+        if bc is None or cls is None or int(cls) <= 0:
+            return rows
+        cache = meta.setdefault("class_cells", {})
+        key = (cell, int(cls))
+        sub = cache.get(key)
+        if sub is None:
+            sub = rows[bc[rows] == int(cls)]
+            cache[key] = sub
+        if sub.size == 0:
+            self.bb_class_counts[1] += 1
+            return rows
+        self.bb_class_counts[0] += 1
+        return sub
+
+    def in_wall_zone(self, born: dict) -> bool:
+        """Is the born ball a wall-zone ball — an air ball (line drive or
+        fly ball) carrying at least ``wall_zone_distance`` feet?"""
+        cls = born.get("cls")
+        dist = born.get("dist")
+        if cls is None or dist is None:
+            return False
+        return int(cls) in (2, 3) and float(dist) >= float(self.wall_zone_distance)
+
+    # ---- SIM-523 part C4: the fence stage -----------------------------------
+    def fence_at(self, venue_id: int | None, spray: float | None) -> float | None:
+        """The live park's effective fence (feet of carry) at a field-side
+        spray angle: the venue's line, the league line for a venue or sector
+        the geometry lacks, None without geometry or direction."""
+        pg = getattr(self.a, "park_geometry", None)
+        if not pg or spray is None or not np.isfinite(float(spray)):
+            return None
+        n = int(pg.get("n_sectors", 0))
+        if n <= 0:
+            return None
+        s = (float(spray) - float(pg.get("spray_min", -45.0))) / float(pg.get("sector_deg", 10))
+        sec = int(min(max(int(np.floor(s)), 0), n - 1))
+        league = pg.get("league") or []
+        line = (pg.get("venues") or {}).get(str(int(venue_id))) if venue_id is not None else None
+        f = line[sec] if line is not None and sec < len(line) else None
+        if f is None and sec < len(league):
+            f = league[sec]
+        return float(f) if f is not None else None
+
+    def carry_of(self, born: dict) -> float | None:
+        """The born ball's carry: its own reported distance, else the bundle's
+        carry model on its exit velocity and launch angle, else None."""
+        d = born.get("dist")
+        if d is not None and np.isfinite(float(d)) and float(d) > 0.0:
+            return float(d)
+        pg = getattr(self.a, "park_geometry", None) or {}
+        coef = (pg.get("carry") or {}).get("coef")
+        ev, la = born.get("ev"), born.get("la")
+        if coef and ev is not None and la is not None and float(ev) > 0.0:
+            return carry_predict(coef, float(ev), float(la))
+        return None
+
+    def fence_decision(self, born: dict, venue_id: int | None) -> int:
+        """0 = over the fence (a home run), 1 = short of it (no home run),
+        2 = inside the band (the draw decides), 3 = the stage passes."""
+        cls = born.get("cls")
+        if cls is None or int(cls) <= 0:
+            return 3
+        if int(cls) not in (2, 3):
+            return 1  # a ground ball, popup or bunt never leaves the park
+        if venue_id is None:
+            return 3
+        fence = self.fence_at(venue_id, born.get("spray_raw"))
+        carry = self.carry_of(born)
+        if fence is None or carry is None:
+            return 3
+        if carry >= fence + float(self.fence_margin):
+            return 0
+        if carry <= fence - float(self.fence_margin):
+            return 1
+        return 2
+
+    def _bb_hr_mask(self, hand: str) -> np.ndarray:
+        m = self._bb_hr_cache.get(hand)
+        if m is None:
+            m = np.asarray(self.a.bb_pools[hand].result_hits) == 4
+            self._bb_hr_cache[hand] = m
+        return m
+
+    def _fence_rows(
+        self,
+        hand: str,
+        meta: dict,
+        cell: tuple[int, int],
+        rows: np.ndarray,
+        born: dict,
+        venue_id: int | None,
+    ) -> np.ndarray:
+        """Apply the fence decision to the candidate rows: home-run rows only
+        (the whole cell's when the class-filtered rows hold none), the rows
+        without a home run, or the rows as they are."""
+        dec = self.fence_decision(born, venue_id)
+        self.fence_counts[dec] += 1
+        if dec not in (0, 1):
+            return rows
+        hr = self._bb_hr_mask(hand)
+        if dec == 0:
+            sub = rows[hr[rows]]
+            if sub.size == 0:
+                cell_rows = meta["cells"][cell]
+                sub = cell_rows[hr[cell_rows]]
+        else:
+            sub = rows[~hr[rows]]
+        if sub.size == 0:
+            self.fence_counts[4] += 1
+            return rows
+        return sub
+
+    def _bb_speed_z(self, hand: str) -> np.ndarray | None:
+        """Per batted-ball row, the batter's z-scored sprint speed from the
+        baserunner embedding (NaN = unknown); None when the embedding or its
+        sprint-speed feature is absent."""
+        if hand in self._bb_speed_cache:
+            return self._bb_speed_cache[hand]
+        emb = self.a.actor_emb.get("baserunner")
+        out: np.ndarray | None = None
+        if emb is not None and "sprint_speed" in list(emb.get("features", [])):
+            col = list(emb["features"]).index("sprint_speed")
+            pool = self.a.bb_pools[hand]
+            ki = emb["key_index"]
+            idx = np.fromiter(
+                (
+                    ki.get(f"{int(b)}:{int(s)}", -1)
+                    for b, s in zip(pool.batter_id, pool.season, strict=False)
+                ),
+                dtype=np.int64,
+                count=pool.n,
+            )
+            z = self._emb_z("baserunner")
+            if z is not None:
+                out = np.full(pool.n, np.nan, dtype=np.float32)
+                ok = idx >= 0
+                out[ok] = z[idx[ok], col]
+        self._bb_speed_cache[hand] = out
+        return out
+
+    def _f_batter_speed(self, hand: str, rows: np.ndarray, batter_key: str) -> np.ndarray | None:
+        """The sprint-speed factor over the cell ``rows``: a Gaussian on the
+        z-scored speed distance between the live batter and each row's
+        batter, normalized to a mean of 1 over the rows whose batter has a
+        speed (an unknown row is exactly neutral). None when the live batter
+        or the embedding has no speed."""
+        zs = self._bb_speed_z(hand)
+        emb = self.a.actor_emb.get("baserunner")
+        if zs is None or emb is None:
+            return None
+        li = emb["key_index"].get(batter_key)
+        z = self._emb_z("baserunner")
+        if li is None or z is None:
+            return None
+        col = list(emb["features"]).index("sprint_speed")
+        live = float(z[li, col])
+        if not np.isfinite(live):
+            return None
+        zr = zs[rows]
+        valid = np.isfinite(zr)
+        out = np.ones(len(rows), dtype=np.float32)
+        if valid.any():
+            d = zr[valid] - np.float32(live)
+            f = np.exp(-(d * d) / (2.0 * self.bb_speed_sigma**2)).astype(np.float32)
+            mean_w = float(f.mean())
+            out[valid] = f / np.float32(mean_w) if mean_w > 0.0 else np.float32(1.0)
+        return out
 
     # ---- SIM-523 part B: the born batted ball on the fielding draw ---------
     def _bb_born_features(self, hand: str) -> np.ndarray:
         """The batted-ball pool's (exit velocity, launch angle, spray[,
         distance]) matrix — distance only when the pool carries it."""
-        pool = self.a.bb_pools[hand]
-        if pool.hit_dist is not None:
-            return np.column_stack([pool.geom[:, :3], pool.hit_dist]).astype(np.float32)
-        return np.ascontiguousarray(pool.geom[:, :3], dtype=np.float32)
+        x = self._bb_born_x.get(hand)
+        if x is None:
+            pool = self.a.bb_pools[hand]
+            if pool.hit_dist is not None:
+                x = np.column_stack([pool.geom[:, :3], pool.hit_dist]).astype(np.float32)
+            else:
+                x = np.ascontiguousarray(pool.geom[:, :3], dtype=np.float32)
+            self._bb_born_x[hand] = x
+        return x
 
     def _bb_born_z_stats(self, hand: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         cached = self._bb_born_stats.get(hand)
@@ -1614,6 +1892,57 @@ class FullPoolSampler:
         stats = (mean, std, valid)
         self._bb_born_stats[hand] = stats
         return stats
+
+    #: Reference rows per candidate set for the born kernel's density estimate.
+    _BORN_DENSITY_REFS = 256
+
+    def _born_inv_density(self, hand: str, meta: dict, rows: np.ndarray) -> np.ndarray:
+        """The inverse local density of every candidate row under the born
+        kernel — each row's mean kernel value against a fixed random subset of
+        the candidate rows (cached per candidate set, bandwidth and power; the
+        subset comes from a generator seeded by the set, so the sampler's own
+        stream is untouched), floored at 5% of the median, raised to
+        ``bb_born_density_power`` and normalized to a mean of 1; a row with
+        incomplete features is exactly neutral. The candidate set is keyed by
+        its first and last row and its size (the cell, class-filtered or not,
+        fence-filtered or not)."""
+        cache = meta.setdefault("born_density", {})
+        key = (
+            int(rows[0]) if rows.size else -1,
+            int(rows[-1]) if rows.size else -1,
+            int(rows.size),
+            float(self.bb_born_sigma),
+            float(self.bb_born_density_power),
+        )
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
+        mean, std, valid_all = self._bb_born_z_stats(hand)
+        x = self._bb_born_features(hand)
+        valid = valid_all[rows]
+        out = np.ones(len(rows), dtype=np.float32)
+        vr = rows[valid]
+        if vr.size:
+            z = (x[vr] - mean) / std
+            m = int(min(self._BORN_DENSITY_REFS, vr.size))
+            if m < vr.size:
+                seed = abs(hash(key[:3])) % (2**32)
+                ref = z[np.random.default_rng(seed).choice(vr.size, size=m, replace=False)]
+            else:
+                ref = z
+            scale = 2.0 * float(self.bb_born_sigma) ** 2 * z.shape[1]
+            ref_sq = np.einsum("ij,ij->i", ref, ref)
+            dens = np.empty(vr.size, dtype=np.float64)
+            for start in range(0, vr.size, 8192):
+                zb = z[start : start + 8192]
+                d2 = np.einsum("ij,ij->i", zb, zb)[:, None] + ref_sq[None, :] - 2.0 * (zb @ ref.T)
+                dens[start : start + 8192] = np.exp(-np.maximum(d2, 0.0) / scale).mean(axis=1)
+            floor = 0.05 * float(np.median(dens))
+            inv = np.power(np.maximum(dens, max(floor, 1e-30)), -float(self.bb_born_density_power))
+            inv = inv / inv.mean()
+            out[valid] = inv.astype(np.float32)
+        cache[key] = out
+        return out
 
     def _f_born_similarity(self, hand: str, rows: np.ndarray, born: dict) -> np.ndarray | None:
         """The batted-ball similarity factor over the cell ``rows`` against the

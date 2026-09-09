@@ -148,6 +148,36 @@ def apply_result_split_env(sampler: Any, env: Mapping[str, str] | None = None) -
         ("SIM_RESULT_BATTER_POWER", "result_batter_power", 1.0),
         ("SIM_PITCH_BATTER_POWER", "pitch_batter_power", 1.0),
         ("SIM_BB_BORN_SIGMA", "bb_born_sigma", 0.0),
+        ("SIM_BB_BORN_DENSITY_POWER", "bb_born_density_power", 1.0),
+    ):
+        try:
+            setattr(sampler, attr, float(src.get(key, str(default))))
+        except ValueError:
+            setattr(sampler, attr, default)
+
+
+def apply_fielding_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
+    """SIM-523 part C: read the fielding draw's class filter, the batter
+    sprint-speed kernel and the park wall-zone rule.
+
+    Every one is OFF by default (byte-identical): ``SIM_BB_CLASS_FILTER``
+    (0/1), ``SIM_BB_SPEED_SIGMA`` (0 = off), ``SIM_PARK_WALL_ZONE_ONLY`` (0/1)
+    with ``SIM_WALL_ZONE_DISTANCE`` (feet, 300), and the fence stage
+    ``SIM_FENCE_STAGE`` (0/1) with ``SIM_FENCE_MARGIN`` (feet, 0 = decisive).
+    """
+    src = os.environ if env is None else env
+
+    def flag(name: str) -> bool:
+        return src.get(name, "0").strip().lower() in ("1", "true", "yes", "on")
+
+    sampler.bb_class_filter = flag("SIM_BB_CLASS_FILTER")
+    sampler.park_wall_zone_only = flag("SIM_PARK_WALL_ZONE_ONLY")
+    # SIM-523 part C4: the fence stage (0/1) and its band (feet, 10).
+    sampler.fence_stage = flag("SIM_FENCE_STAGE")
+    for key, attr, default in (
+        ("SIM_BB_SPEED_SIGMA", "bb_speed_sigma", 0.0),
+        ("SIM_WALL_ZONE_DISTANCE", "wall_zone_distance", 300.0),
+        ("SIM_FENCE_MARGIN", "fence_margin", 0.0),
     ):
         try:
             setattr(sampler, attr, float(src.get(key, str(default))))
@@ -281,6 +311,7 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
         sampler.pitch_min_cell = DEFAULT_MIN_CELL
     apply_actor_matrix_env(sampler)
     apply_result_split_env(sampler)
+    apply_fielding_env(sampler)
     _CACHED_FULL_POOL_SAMPLER = sampler
     _CACHED_FULL_POOL_ART_DIR = art_dir
     return sampler

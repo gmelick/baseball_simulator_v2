@@ -70,6 +70,7 @@ from simulation.production_factory import production_machine_factory  # noqa: E4
 from simulation.sim_kwargs import (  # noqa: E402
     open_sim_duckdb,
     resolve_park_run_factor,
+    resolve_venue_id,
     sim_kwargs_from_state,
 )
 from simulation.sim_loop import BoxScore, simulate_game  # noqa: E402
@@ -137,6 +138,10 @@ async def _resolve(game_pk: int, duck: Any):
         state.park_run_factor = await resolve_park_run_factor(
             conn, duck, int(game_pk), int(getattr(state, "season", 2024) or 2024)
         )
+        # SIM-523 part C4: the venue itself, for the fence stage.
+        venue = await resolve_venue_id(conn, int(game_pk))
+        if venue is not None:
+            state.park = str(venue)
         return state
     finally:
         await conn.close()

@@ -203,6 +203,76 @@ Files: `simulation/full_pool_sampler.py` (`battedball_new_pa` → two stages),
 migration, `pipeline/batch/player_profile_computor.py` (sprint speed into the
 fielder profile).
 
+**Part C, how it is cut (2026-09-08).** Four closable slices, in order:
+
+* **C1 — the fielding draw's filters and weights (step 6).** The batted-ball CLASS
+  (ground ball / line drive / fly ball / popup / bunt; `BattedBallPool.bb_class`,
+  exported from `bb_type`) joins the base-out cell and the batter hand as the third
+  hard filter (`SIM_BB_CLASS_FILTER`; an empty class falls back to the cell and is
+  counted). The born ball's similarity (part B's `SIM_BB_BORN_SIGMA`) is the first
+  weight; the credited fielder against the live defender at that position stays as
+  today (the CHAIN needs the fielding credits of part G); the park kernel applies only
+  to a ball in the wall zone (`SIM_PARK_WALL_ZONE_ONLY`, `SIM_WALL_ZONE_DISTANCE`);
+  the batter's profile weight stays; batter sprint speed is a new kernel on the
+  baserunner embedding's speed (`SIM_BB_SPEED_SIGMA`); recency stays. Everything off
+  by default.
+* **C2 — the park geometry from the pool (SIM-478).** Per venue and spray sector,
+  the fence distance the pool's own home runs and wall balls reveal, written into
+  the artifact bundle (the DuckDB writer lock, SIM-524, keeps the table for later),
+  with the hand-curated corrections as an overlay file.
+* **C3 — the carry model (SIM-479).** The ball's carry from exit velocity and
+  launch angle, fitted on the pool's home runs and fly balls, validated on home runs
+  first (the reported distance of a home run is its landing point).
+* **C4 — the fence stage (SIM-480).** Before the fielding draw: the born ball's
+  carry and direction against the live park's fence at that sector — over it, a
+  certain home run that supersedes the draw; short of it, the draw without the pool's
+  home-run rows; at it, the draw among wall-zone rows. `SIM_FENCE_STAGE`, off.
+
+**Part C BUILT 2026-09-08 (all four slices; every switch OFF in production).**
+
+* C1 — `BattedBallPool.bb_class` (exported from `bb_type`; shareable; None on an older
+  bundle); `bb_class_filter` (`SIM_BB_CLASS_FILTER`) hard-filters the base-out cell to
+  the born ball's class, falling back to the cell when the class is empty there
+  (`bb_class_counts`); `bb_speed_sigma` (`SIM_BB_SPEED_SIGMA`) is a Gaussian on the
+  z-scored sprint speed of the live batter against each row's batter, read from the
+  baserunner embedding, mean-1 normalized, neutral where a batter has no speed;
+  `park_wall_zone_only` (`SIM_PARK_WALL_ZONE_ONLY`, `SIM_WALL_ZONE_DISTANCE`) restricts the
+  park kernel to a born ball that is an air ball carrying at least the wall-zone
+  distance. The credited fielder's factor and the batter's profile factor stay as they
+  were; the chain fielders wait for part G's credits. The born kernel carries the same
+  DENSITY CORRECTION part B put on the result draw (`bb_born_density_power`,
+  `SIM_BB_BORN_DENSITY_POWER`, 1.0): the probe measured the raw kernel's lean toward the
+  ordinary, weakly hit ball (hits −7%, doubles −23%, home runs −17% at bandwidth 0.5).
+  20 tests (`tests/unit/test_sim523_fielding_split.py`).
+* C2 — `build_park_geometry` (`--what park`, in `all`) writes `park_geometry.json`: per
+  venue and 10-degree spray sector (nine over the fair field), the effective fence as
+  the pool reveals it — the midpoint of the home runs' 10th-percentile carry and the
+  kept air balls' 99th-percentile carry, with the league sector line where a venue
+  sector lacks ten of either, and `park_geometry_overrides.json` merged on top for
+  hand-curated corrections. A tall wall shows as a longer required carry, so one
+  number per sector is the effective fence. Live: 40 venues; Fenway's left-field line
+  reads 346 ft and its right-field line 363, Yankee Stadium's right-field line 338,
+  Coors' center 421-423, Minute Maid's lines 341-344 and its center 418.
+* C3 — the carry model: a quadratic in exit velocity and launch angle fitted on the
+  pool's 21,424 home runs (mean absolute error 13.6 ft, root-mean-square 17.3), the
+  fallback when a born ball has no distance. Finding: the pool's kept air balls carry
+  right up to the home-run line in every sector, so the reported distance IS the ball's
+  carry (a projected landing), not where it was fielded; the model is a fallback, not
+  the primary carry.
+* C4 — the fence stage: `fence_stage` (`SIM_FENCE_STAGE`, `SIM_FENCE_MARGIN` 0 ft — a
+  DECISIVE fence: the probe measured a 10-foot band losing ~30% of home runs, because a
+  born home run inside the band drew a home run only 21% of the time under a born kernel
+  whose distance bandwidth pulls in shorter plays; at margin 0 the drawn home-run share
+  sits within noise of the born balls' own). With
+  the live venue (`GameState.park`, now carried by `simulate_game(venue_id=)`, the kwargs
+  contract's new `venue_id`, and the park-factor resolver), the born ball's carry meets
+  the live fence at its direction: over by the margin, the draw runs among the cell's
+  home-run rows only (a certain home run); short by the margin, or not an air ball, the
+  home-run rows leave; inside the band every row stays; no geometry, venue or
+  direction, the stage passes (`fence_counts`). 20 tests
+  (`tests/unit/test_sim523_fence_stage.py`). The probe and its ablation arms are
+  recorded in `CHANGES.md` under this date.
+
 ### Part D — manager decisions at plate-appearance start (step 1)
 
 Align the manager hooks with the loop order: every decision a draw at the pool's

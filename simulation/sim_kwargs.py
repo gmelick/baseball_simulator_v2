@@ -253,6 +253,8 @@ SIM_KWARG_KEYS: frozenset[str] = frozenset(
         "home_defense",
         "away_defense",
         "park_run_factor",
+        # SIM-523 part C4: the live park for the fence stage (None = unknown).
+        "venue_id",
         "max_innings",
     }
 )
@@ -320,8 +322,47 @@ def sim_kwargs_from_state(
         "home_defense": dict(getattr(state, "home_defense", {}) or {}),
         "away_defense": dict(getattr(state, "away_defense", {}) or {}),
         "park_run_factor": float(getattr(state, "park_run_factor", 1.0) or 1.0),
+        # SIM-523 part C4: the venue id ``state.park`` carries (a digit string).
+        "venue_id": venue_id_of_state(state),
         "max_innings": 12,
     }
+
+
+def venue_id_of_state(state: Any) -> int | None:
+    """SIM-523 part C4: the venue id a GameState's ``park`` field carries, or None."""
+    park = getattr(state, "park", None)
+    if park is None:
+        return None
+    text = str(park).strip()
+    return int(text) if text.isdigit() else None
+
+
+async def resolve_venue_id(pool: Any, game_pk: int) -> int | None:
+    """SIM-523 part C4: the game's venue id from ``raw.games`` (Postgres), or
+    None when the pool is absent, the game is unknown or the query fails."""
+    if pool is None:
+        return None
+    try:
+        acquire = getattr(pool, "acquire", None)
+        if acquire is not None:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT venue_id FROM raw.games WHERE game_pk = $1", int(game_pk)
+                )
+        else:
+            row = await pool.fetchrow(
+                "SELECT venue_id FROM raw.games WHERE game_pk = $1", int(game_pk)
+            )
+        venue = None if row is None else row["venue_id"]
+    except Exception as exc:  # noqa: BLE001 — a venue is optional context
+        log.warning("SIM-523: venue lookup failed for game_pk=%s: %s", int(game_pk), exc)
+        return None
+    if venue is None:
+        return None
+    try:
+        return int(venue)
+    except (TypeError, ValueError):
+        return None
 
 
 async def resolve_park_run_factor(pool: Any, con: Any, game_pk: int, season: int) -> float:
@@ -425,6 +466,11 @@ async def resolve_park_factor_onto_state(
         season = int(getattr(state, "season", 2024) or 2024)
     factor = await resolve_park_run_factor(pool, con, int(game_pk), int(season))
     state.park_run_factor = factor
+    # SIM-523 part C4: the venue itself, for the fence stage (optional).
+    if venue_id_of_state(state) is None:
+        venue = await resolve_venue_id(pool, int(game_pk))
+        if venue is not None:
+            state.park = str(venue)
     return factor
 
 

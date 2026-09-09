@@ -164,6 +164,23 @@ _PP_CONDITIONING_COLS = frozenset({"bat_home", "pitcher_pitch_count", "times_thr
 
 _BB_GEOM_COLS = ["exit_velo", "launch_angle", "pull_relative_spray_angle"]
 
+#: SIM-523 part C: the batted-ball CLASS vocabulary (``BattedBallPool.bb_class``).
+#: 0 = unknown. The three bunt types share one class.
+BB_CLASS: dict[str, int] = {
+    "ground_ball": 1,
+    "line_drive": 2,
+    "fly_ball": 3,
+    "popup": 4,
+    "bunt_grounder": 5,
+    "bunt_popup": 5,
+    "bunt_line_drive": 5,
+}
+_BB_CLASS_SELECT = (
+    ", CASE bb_type "
+    + " ".join(f"WHEN '{k}' THEN {v}" for k, v in BB_CLASS.items())
+    + " ELSE 0 END AS bb_class"
+)
+
 
 def join_rows(keys: np.ndarray, targets: np.ndarray) -> np.ndarray:
     """SIM-523 part B: for every ``keys[i]`` the index j with
@@ -232,6 +249,9 @@ def build_battedball_pool_artifact(
     # stays neutral).
     has_pgeom = set(_GEOM_COLS) <= op_cols
     pitcher_select = ", pitcher_id" if "pitcher_id" in op_cols else ""
+    # SIM-523 part C: the batted-ball class (the fielding draw's third
+    # hard filter) — from bb_type when the pool carries it.
+    class_select = _BB_CLASS_SELECT if "bb_type" in op_cols else ""
     pitch_join: dict[str, int] = {}
     for hand in ("L", "R"):
         w = where % hand
@@ -297,7 +317,7 @@ def build_battedball_pool_artifact(
             # of the consumers. SIM-510 appends the transition destinations the same
             # back-compatible way.
             "p_throws, venue_id, fielded_by_position, fielder_player_id"
-            f"{transition_select}{bat_home_select}{pitcher_select} "
+            f"{transition_select}{bat_home_select}{pitcher_select}{class_select} "
             f"FROM sim.outcome_pool WHERE {w}) "
             f"TO '{os.path.join(pool_dir, f'{hand}.meta.parquet')}' (FORMAT parquet)"
         )
@@ -337,6 +357,183 @@ _BB_TRANSITION_SOURCE_COLS = frozenset(
         "runner_3b_out_advancing",
     }
 )
+
+# ---------------------------------------------------------------------------
+# SIM-523 part C — the park geometry (SIM-478) and the carry model (SIM-479)
+# ---------------------------------------------------------------------------
+#
+# The fence line of every park, as the pool's own batted balls reveal it: per
+# venue and spray SECTOR (``PARK_SECTOR_DEG``-wide bands of the field-side
+# spray angle over the fair field, -45 = the left-field line, +45 = the
+# right-field line), the carry a ball needs to leave the park — the meeting
+# point of the lowest home-run carries (their 10th percentile) and the longest
+# carries that stayed in (the 99th percentile of the other air balls). A tall
+# wall shows up as a longer required carry, so one number per sector is the
+# EFFECTIVE fence. A sector without enough of either falls back to the league
+# sector line. The DuckDB writer lock (SIM-524) keeps the ``derived``
+# table for later; the bundle carries ``park_geometry.json`` and merges an
+# optional hand-curated ``park_geometry_overrides.json`` ({venue: {sector:
+# feet}}) over it at build time.
+#
+# The CARRY model: a home run's reported distance is its landing point, so
+# the pool's home runs fit a quadratic in exit velocity and launch angle
+# (validated on them: mean absolute error ~14 ft) that stands in for a ball
+# whose own distance is missing.
+
+PARK_SECTOR_DEG = 10
+PARK_SPRAY_MIN = -45.0
+PARK_SPRAY_MAX = 45.0
+PARK_N_SECTORS = int(round((PARK_SPRAY_MAX - PARK_SPRAY_MIN) / PARK_SECTOR_DEG))
+#: Minimum support for a venue sector's own line (home runs / balls kept in).
+PARK_MIN_HR = 10
+PARK_MIN_KEPT = 10
+CARRY_FEATURES = ("1", "ev", "la", "la^2", "ev*la", "ev^2")
+
+
+def park_sector(spray: float) -> int:
+    """The sector index (0 .. PARK_N_SECTORS-1) of a field-side spray angle."""
+    s = (float(spray) - PARK_SPRAY_MIN) / PARK_SECTOR_DEG
+    return int(min(max(int(np.floor(s)), 0), PARK_N_SECTORS - 1))
+
+
+def carry_design(ev: np.ndarray, la: np.ndarray) -> np.ndarray:
+    """The carry model's design matrix (``CARRY_FEATURES`` order)."""
+    ev = np.asarray(ev, dtype=np.float64)
+    la = np.asarray(la, dtype=np.float64)
+    return np.column_stack([np.ones_like(ev), ev, la, la * la, ev * la, ev * ev])
+
+
+def carry_predict(coef: list[float] | np.ndarray, ev: float, la: float) -> float:
+    """The modelled carry (feet) of a ball hit at ``ev`` mph and ``la`` degrees."""
+    out = carry_design(np.array([ev]), np.array([la])) @ np.asarray(coef, dtype=np.float64)
+    return float(out[0])
+
+
+def build_park_geometry(con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]) -> dict:
+    """Write ``<out_dir>/park_geometry.json`` from the pool window: the fence
+    line per venue and sector, the league line, the support counts, the carry
+    model and its home-run validation. Returns the document."""
+    season_list = ", ".join(str(int(s)) for s in seasons)
+    rows = con.execute(
+        f"""
+        WITH air AS (
+            SELECT venue_id,
+                   CAST(floor((spray_angle - {PARK_SPRAY_MIN}) / {PARK_SECTOR_DEG}) AS INTEGER) AS sec,
+                   events, hit_distance
+            FROM sim.outcome_pool
+            WHERE season IN ({season_list})
+              AND bb_type IN ('fly_ball', 'line_drive')
+              AND spray_angle >= {PARK_SPRAY_MIN} AND spray_angle < {PARK_SPRAY_MAX}
+              AND hit_distance IS NOT NULL AND hit_distance > 0 AND venue_id IS NOT NULL
+        )
+        SELECT venue_id, sec,
+               count(*) FILTER (WHERE events = 'home_run') AS hr,
+               quantile_cont(hit_distance, 0.10) FILTER (WHERE events = 'home_run') AS hr_q10,
+               count(*) FILTER (WHERE events <> 'home_run' AND hit_distance >= 300) AS kept,
+               quantile_cont(hit_distance, 0.99) FILTER (WHERE events <> 'home_run') AS kept_q99
+        FROM air GROUP BY 1, 2
+        """
+    ).fetchall()
+    league_hr: dict[int, list[float]] = {s: [] for s in range(PARK_N_SECTORS)}
+    league_kept: dict[int, list[float]] = {s: [] for s in range(PARK_N_SECTORS)}
+    per_venue: dict[int, dict[int, tuple]] = {}
+    for venue, sec, hr, hr_q10, kept, kept_q99 in rows:
+        sec = int(sec)
+        if not (0 <= sec < PARK_N_SECTORS):
+            continue
+        per_venue.setdefault(int(venue), {})[sec] = (int(hr), hr_q10, int(kept), kept_q99)
+        if hr_q10 is not None and hr >= PARK_MIN_HR:
+            league_hr[sec].append(float(hr_q10))
+        if kept_q99 is not None and kept >= PARK_MIN_KEPT:
+            league_kept[sec].append(float(kept_q99))
+
+    def _line(hr, hr_q10, kept, kept_q99, fallback):
+        a = float(hr_q10) if (hr_q10 is not None and hr >= PARK_MIN_HR) else None
+        b = float(kept_q99) if (kept_q99 is not None and kept >= PARK_MIN_KEPT) else None
+        if a is not None and b is not None:
+            return round((a + b) / 2.0, 1), "both"
+        if a is not None:
+            return round(a, 1), "hr"
+        if b is not None:
+            return round(b, 1), "kept"
+        return fallback, "league"
+
+    league: list[float | None] = []
+    for s in range(PARK_N_SECTORS):
+        vals = league_hr[s] + league_kept[s]
+        league.append(round(float(np.median(vals)), 1) if vals else None)
+    venues: dict[str, list[float | None]] = {}
+    source: dict[str, list[str]] = {}
+    support: dict[str, list[int]] = {}
+    for venue, secs in sorted(per_venue.items()):
+        line, src, sup = [], [], []
+        for s in range(PARK_N_SECTORS):
+            hr, hr_q10, kept, kept_q99 = secs.get(s, (0, None, 0, None))
+            f, how = _line(hr, hr_q10, kept, kept_q99, league[s])
+            line.append(f)
+            src.append(how)
+            sup.append(int(hr))
+        venues[str(venue)] = line
+        source[str(venue)] = src
+        support[str(venue)] = sup
+
+    # The carry model, fitted and validated on home runs.
+    d = con.execute(
+        f"SELECT exit_velo, launch_angle, hit_distance FROM sim.outcome_pool "
+        f"WHERE season IN ({season_list}) AND events = 'home_run' AND hit_distance > 0 "
+        "AND exit_velo IS NOT NULL AND launch_angle IS NOT NULL"
+    ).fetchnumpy()
+    ev = np.asarray(np.ma.filled(d["exit_velo"], np.nan), dtype=np.float64)
+    la = np.asarray(np.ma.filled(d["launch_angle"], np.nan), dtype=np.float64)
+    hd = np.asarray(np.ma.filled(d["hit_distance"], np.nan), dtype=np.float64)
+    ok = np.isfinite(ev) & np.isfinite(la) & np.isfinite(hd)
+    carry: dict = {"features": list(CARRY_FEATURES), "coef": None, "n_hr": int(ok.sum())}
+    if ok.sum() >= 50:
+        x = carry_design(ev[ok], la[ok])
+        coef, *_ = np.linalg.lstsq(x, hd[ok], rcond=None)
+        pred = x @ coef
+        carry["coef"] = [float(c) for c in coef]
+        carry["hr_mae_ft"] = round(float(np.abs(pred - hd[ok]).mean()), 2)
+        carry["hr_rmse_ft"] = round(float(np.sqrt(((pred - hd[ok]) ** 2).mean())), 2)
+
+    doc = {
+        "seasons": [int(s) for s in seasons],
+        "sector_deg": PARK_SECTOR_DEG,
+        "spray_min": PARK_SPRAY_MIN,
+        "spray_max": PARK_SPRAY_MAX,
+        "n_sectors": PARK_N_SECTORS,
+        "league": league,
+        "venues": venues,
+        "source": source,
+        "support_hr": support,
+        "carry": carry,
+        "overrides": {},
+    }
+    # Hand-curated corrections: {venue_id: {sector_index: feet}}.
+    ov_path = os.path.join(out_dir, "park_geometry_overrides.json")
+    if os.path.exists(ov_path):
+        with open(ov_path, encoding="utf-8") as fh:
+            overrides = json.load(fh)
+        for venue, secs in overrides.items():
+            line = venues.setdefault(str(venue), list(league))
+            for sec, feet in secs.items():
+                s = int(sec)
+                if 0 <= s < PARK_N_SECTORS:
+                    line[s] = float(feet)
+                    source.setdefault(str(venue), ["league"] * PARK_N_SECTORS)[s] = "override"
+        doc["overrides"] = overrides
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, "park_geometry.json"), "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, indent=2)
+    log.info(
+        "park_geometry: %d venues x %d sectors; carry model on %d home runs (MAE %s ft)",
+        len(venues),
+        PARK_N_SECTORS,
+        carry["n_hr"],
+        carry.get("hr_mae_ft"),
+    )
+    return doc
+
 
 #: The steal draw's situation columns (SIM-474). `outs` and the count are the
 #: hard-filter cell; `score_diff` is soft-kernelled. `inning` is deliberately
@@ -973,6 +1170,9 @@ class BattedBallPool:
     # SIM-472 pitch-similarity kernel then stays neutral.
     pgeom: np.ndarray | None = None  # (N, 10) float32, NaN preserved
     pitcher_id: np.ndarray | None = None  # (N,) int64
+    # SIM-523 part C: the batted-ball class (``BB_CLASS``; 0 = unknown). None
+    # on a bundle exported before part C; the class filter then stays off.
+    bb_class: np.ndarray | None = None  # (N,) int8
 
     @property
     def n(self) -> int:
@@ -1073,6 +1273,8 @@ _HAND_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "bb_row",
 )
 _BB_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
+    # SIM-523 part C: the batted-ball class (None on a pre-part-C bundle).
+    "bb_class",
     "geom",
     "sit",
     "batter_id",
@@ -1163,12 +1365,16 @@ class EngineArtifacts:
         steal_pools=None,
         adv_pools=None,
         actor_sim=None,
+        park_geometry: dict | None = None,
     ):
         self.pools: dict[str, HandPool] = pools
         #: SIM-523 part A: matrix role -> {"index": {key: row}, "matrix": (n, n)
         #: float32}; {} on a bundle built before the actor matrices. The sampler's
         #: ``actor_matrices`` path looks these up instead of computing kernels.
         self.actor_sim: dict[str, dict] = actor_sim or {}
+        #: SIM-523 part C: the park geometry document (``build_park_geometry``),
+        #: or None on a bundle without it — the fence stage then stays off.
+        self.park_geometry: dict | None = park_geometry
         self.bb_pools: dict[str, BattedBallPool] = bb_pools or {}
         #: SIM-474: target base ("2"/"3") -> StealPool; {} on a legacy bundle.
         self.steal_pools: dict[str, StealPool] = steal_pools or {}
@@ -1516,6 +1722,8 @@ class EngineArtifacts:
                             "bat_home",
                             # SIM-518 (SIM-463): the producing pitch's pitcher.
                             "pitcher_id",
+                            # SIM-523 part C: the batted-ball class.
+                            "bb_class",
                         )
                         if c in avail
                     ]
@@ -1603,6 +1811,8 @@ class EngineArtifacts:
                             else (np.load(pgeom_path) if os.path.exists(pgeom_path) else None)
                         ),
                         pitcher_id=_bb_take(hand, m, "pitcher_id", "pitcher_id", np.int64, 0),
+                        # SIM-523 part C: the batted-ball class (None before part C).
+                        bb_class=_bb_take(hand, m, "bb_class", "bb_class", np.int8, 0),
                     )
             # SIM-474: the steal opportunity pools ("2" = 1B->2B, "3" = 2B->3B).
             # Presence-gated like the batted-ball pool: {} on a legacy bundle,
@@ -1730,6 +1940,12 @@ class EngineArtifacts:
                     "index": json.loads(str(z["index"])),
                     "matrix": mv if isinstance(mv, np.ndarray) else z["matrix"],
                 }
+        # SIM-523 part C: the park geometry (absent on an older bundle).
+        park_geometry: dict | None = None
+        pg_path = os.path.join(art_dir, "park_geometry.json")
+        if os.path.exists(pg_path):
+            with open(pg_path, encoding="utf-8") as fh:
+                park_geometry = json.load(fh)
         actor_emb: dict[str, dict] = {}
         for actor in _ACTOR_TABLES:
             p = os.path.join(art_dir, f"{actor}_emb.npz")
@@ -1773,6 +1989,7 @@ class EngineArtifacts:
             steal_pools,
             adv_pools,
             actor_sim=actor_sim,
+            park_geometry=park_geometry,
         )
 
 
@@ -1790,7 +2007,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument(
         "--what",
-        choices=["pool", "pitcher_sim", "actors", "actors_sim", "all"],
+        choices=["pool", "pitcher_sim", "actors", "actors_sim", "park", "all"],
         default="pool",
     )
     ap.add_argument(
@@ -1817,6 +2034,9 @@ def main(argv: list[str] | None = None) -> int:
             build_advancement_pool_artifact(con, args.out_dir, seasons)
         if args.what in ("actors", "all"):
             build_actor_embeddings(con, args.out_dir)
+        if args.what in ("park", "all"):
+            # SIM-523 part C: the park geometry + the carry model.
+            build_park_geometry(con, args.out_dir, seasons)
         if args.what in ("pitcher_sim", "all"):
             build_pitcher_sim_matrix(
                 args.duckdb_path, args.out_dir, seasons, limit=args.pitcher_sim_limit

@@ -118,6 +118,14 @@ PRODUCTION_FLAGS: dict[str, str] = {
     "SIM_RESULT_BATTER_POWER": os.environ.get("SIM523_LANE_RESULT_BATTER_POWER", "1.0"),
     "SIM_PITCH_BATTER_POWER": os.environ.get("SIM523_LANE_PITCH_BATTER_POWER", "1.0"),
     "SIM_BB_BORN_SIGMA": os.environ.get("SIM523_LANE_BORN_SIGMA", "0"),
+    # SIM-523 part C (2026-09-08): the fielding draw's class filter, the batter
+    # sprint-speed kernel and the park wall-zone rule — OFF until part F.
+    "SIM_BB_CLASS_FILTER": os.environ.get("SIM523_LANE_CLASS_FILTER", "0"),
+    "SIM_BB_SPEED_SIGMA": os.environ.get("SIM523_LANE_SPEED_SIGMA", "0"),
+    "SIM_PARK_WALL_ZONE_ONLY": os.environ.get("SIM523_LANE_WALL_ZONE_ONLY", "0"),
+    "SIM_WALL_ZONE_DISTANCE": os.environ.get("SIM523_LANE_WALL_ZONE_DISTANCE", "300"),
+    "SIM_FENCE_STAGE": os.environ.get("SIM523_LANE_FENCE_STAGE", "0"),
+    "SIM_FENCE_MARGIN": os.environ.get("SIM523_LANE_FENCE_MARGIN", "0"),
 }
 
 #: Env names the lane must ERASE (not set) so a default code path proves
