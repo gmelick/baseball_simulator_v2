@@ -272,6 +272,12 @@ def pitch_pool(
         season=np.full(n, int(season), dtype=np.int64),
         outcome_type=np.asarray([r[2] for r in rows], dtype=object),
         recency=np.asarray([r[3] for r in rows], dtype=np.float32),
+        # SIM-535: a date per row so a test can exercise the point-in-time
+        # cutoff. Alternating months keeps half the pool either side of a
+        # mid-season date.
+        game_ymd=np.asarray(
+            [int(f"{int(season)}{4 + (i % 6):02d}15") for i in range(n)], dtype=np.int32
+        ),
         got_away=np.full(n, 1 if got_away else 0, dtype=np.int8),
     )
 

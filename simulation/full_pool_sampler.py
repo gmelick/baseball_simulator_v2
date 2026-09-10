@@ -371,6 +371,12 @@ class FullPoolSampler:
         self._bb_pgeom_stats: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
         # Per-pool precompute: dense candidate->profile indices for O(1) gathers.
         self._pool_cache: dict[str, dict] = {}
+        # SIM-535: the point-in-time cutoff, as a plain YYYYMMDD integer. None
+        # (the default) means "draw from the whole pool", which is what a live
+        # simulation wants and is byte-identical to the behaviour before this
+        # existed. Set it and every draw refuses plays from after that date.
+        self.asof_ymd: int | None = None
+        self._asof_masks: dict[int, np.ndarray] = {}
         # SIM-430 hot-path caches hold CONSTANTS the original code recomputed
         # every PA. SIM-523 (the kernel retirement): the batter-embedding z-scores
         # and the affinity memo went with the batter kernel; the batter factor is
@@ -490,6 +496,56 @@ class FullPoolSampler:
         }
         self._pool_cache[hand] = meta
         return meta
+
+    # ---- SIM-535: the point-in-time cutoff --------------------------------
+    def set_asof(self, ymd: int | None) -> None:
+        """Refuse pool rows from after ``ymd`` (a YYYYMMDD integer).
+
+        The pools hold four seasons and the sampler draws from all of them.
+        Simulating a game played in April 2025 while the pool still offers plays
+        from that September is look-ahead — and a larger one than the batter
+        profiles carried, because it is the plays themselves. The cutoff is set
+        per game, so a backtest walking a season needs no rebuild.
+
+        Sparsity is not the worry it first looks like: the pool window keeps the
+        three completed seasons before the current one, so a cutoff anywhere in
+        the newest season still leaves roughly three quarters of the pool.
+        """
+        if ymd != self.asof_ymd:
+            self._asof_masks.clear()
+        self.asof_ymd = None if ymd is None else int(ymd)
+
+    def _asof_mask(self, pool) -> np.ndarray | None:
+        """A 0/1 float over ``pool``'s rows — 1 where the play is admissible.
+
+        None when no cutoff is set, which keeps the live path free of any extra
+        multiply. Raises when a cutoff IS set and the pool carries no dates: a
+        bundle exported before SIM-535 cannot be filtered, and drawing from it
+        anyway would be exactly the silent leak this guards against.
+        """
+        if self.asof_ymd is None:
+            return None
+        key = id(pool)
+        cached = self._asof_masks.get(key)
+        if cached is not None:
+            return cached
+        ymd = getattr(pool, "game_ymd", None)
+        if ymd is None:
+            raise RuntimeError(
+                f"{type(pool).__name__} carries no game dates, so the "
+                f"{self.asof_ymd} cutoff cannot be applied. Rebuild the "
+                "engine-artifact bundle (SIM-535)."
+            )
+        mask = (np.asarray(ymd) <= self.asof_ymd).astype(np.float32)
+        self._asof_masks[key] = mask
+        return mask
+
+    def _apply_asof(self, w: np.ndarray, pool, rows: np.ndarray | None = None) -> np.ndarray:
+        """Zero the weight of every play that had not happened yet."""
+        m = self._asof_mask(pool)
+        if m is None:
+            return w
+        return w * (m if rows is None else m[rows])
 
     # ---- factor builders --------------------------------------------------
     def _f_pitcher(self, hand: str, pitcher_key: str) -> np.ndarray:
@@ -779,7 +835,10 @@ class FullPoolSampler:
                 )
         elif q != 1.0:
             self._pitcher_neutral_adj = self._neutral_mean_pitcher(hand, pitcher_key, q)
-        self._base = (f_pitcher * pool.recency).astype(np.float32)
+        # SIM-535: the cutoff rides on the half-inning base, so BOTH pitch
+        # paths — the cell index and the plain bucket draw — inherit it from the
+        # one place they share.
+        self._base = self._apply_asof((f_pitcher * pool.recency).astype(np.float32), pool)
 
     def new_plate_appearance(
         self,
@@ -1846,7 +1905,7 @@ class FullPoolSampler:
         diff = meta["soft"][rows] - sv[[0, 1, 4, 5]]
         d2 = np.einsum("ij,ij->i", diff, diff)
         f_sit = np.exp(-d2 / (2.0 * self.sit_sigma**2 * diff.shape[1])).astype(np.float32)
-        w = f_bat * f_sit * pool.recency[rows]
+        w = self._apply_asof(f_bat * f_sit * pool.recency[rows], pool, rows)
         if pitcher_throws and self.platoon_off_weight != 1.0:
             same = self._bb_same_hand_mask(hand, pitcher_throws)
             if same is not None:
@@ -2452,6 +2511,7 @@ class FullPoolSampler:
                 w = w * f
         if manager_weight is not None:
             w = w * np.asarray(manager_weight, dtype=np.float32)
+        w = self._apply_asof(w, pool, rows)
         total = float(w.sum())
         if not np.isfinite(total) or total <= 0.0:
             return None
@@ -2691,6 +2751,7 @@ class FullPoolSampler:
         if aggression != 1.0:
             att = pool.attempted[rows].astype(bool)
             w = np.where(att, w * np.float32(aggression), w)
+        w = self._apply_asof(w, pool, rows)
         total = float(w.sum())
         if not np.isfinite(total) or total <= 0.0:
             return None
@@ -2849,6 +2910,7 @@ class FullPoolSampler:
             )
             if f is not None:
                 w *= f
+        w = self._apply_asof(w, pool)
         total = float(w.sum())
         if not np.isfinite(total) or total <= 0.0:
             return None

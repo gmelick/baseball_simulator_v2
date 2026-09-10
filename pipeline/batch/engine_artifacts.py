@@ -69,6 +69,38 @@ DEFAULT_DUCKDB_PATH = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim
 RECENCY_FLOOR_SEASONS = 4
 
 
+def ymd_select(con, table: str) -> str:
+    """The SIM-535 date column for ``table``, or nothing when it has none.
+
+    Probed rather than assumed, matching how every other optional pool column
+    is exported: a minimal or older ``sim.*`` table still builds, and the
+    loader already treats the column as optional on the way back in.
+    """
+    schema, _, name = table.partition(".")
+    have = {
+        r[0]
+        for r in con.execute(
+            "SELECT column_name FROM information_schema.columns "
+            f"WHERE table_schema='{schema}' AND table_name='{name}'"
+        ).fetchall()
+    }
+    return f", {GAME_YMD_SQL} " if "game_date" in have else " "
+
+
+#: SIM-535: every pool row's game date as a plain YYYYMMDD integer.
+#:
+#: The pools hold four seasons of plays and the simulator draws from all of
+#: them. Simulating a game played in April 2025 while the pool still offers
+#: plays from that September is look-ahead — the same defect SIM-534 fixed in
+#: the batter profiles, and a larger one, because it is the plays themselves.
+#: Carrying the date per row lets the sampler exclude the future at draw time,
+#: which costs one comparison per game instead of one bundle rebuild per date.
+#:
+#: An integer rather than a date: it shares cleanly across worker processes,
+#: compares in one instruction, and sorts the same way the calendar does.
+GAME_YMD_SQL = "CAST(strftime(game_date, '%Y%m%d') AS INTEGER) AS game_ymd"
+
+
 def last_n_seasons(con: duckdb.DuckDBPyConnection, n: int = RECENCY_FLOOR_SEASONS) -> list[int]:
     seasons = [
         int(r[0])
@@ -139,6 +171,7 @@ def build_pitch_pool_artifact(
         con.execute(
             f"COPY (SELECT pitch_id, pitcher_id, batter_id, season, outcome_type, recency_weight"
             f"{receiving}{conditioning}{zone_select} "
+            f"{ymd_select(con, 'sim.pitch_pool')}"
             f"FROM sim.pitch_pool WHERE stand='{hand}' AND season IN ({season_list})) "
             f"TO '{os.path.join(pool_dir, f'{hand}.meta.parquet')}' (FORMAT parquet)"
         )
@@ -330,6 +363,7 @@ def build_battedball_pool_artifact(
             "p_throws, venue_id, fielded_by_position, fielder_player_id"
             f"{transition_select}{bat_home_select}{pitcher_select}{class_select}"
             f"{chain_select} "
+            f"{ymd_select(con, 'sim.outcome_pool')}"
             f"FROM sim.outcome_pool WHERE {w}) "
             f"TO '{os.path.join(pool_dir, f'{hand}.meta.parquet')}' (FORMAT parquet)"
         )
@@ -865,6 +899,7 @@ def build_steal_pool_artifact(
             "COALESCE(pickoff_out, FALSE) AS pickoff_out, "
             "COALESCE(pickoff_advancing, FALSE) AS pickoff_advancing, "
             "COALESCE(pickoff_error, FALSE) AS pickoff_error "
+            f"{ymd_select(con, 'sim.steal_opportunity_pool')}"
             f"FROM sim.steal_opportunity_pool WHERE {w}) "
             f"TO '{os.path.join(pool_dir, f'{target}.meta.parquet')}' (FORMAT parquet)"
         )
@@ -927,6 +962,7 @@ def build_advancement_pool_artifact(
         con.execute(
             "COPY (SELECT runner_id, fielder_id, fielder_pos, season, "
             "attempted, safe, error_extra, recency_weight "
+            f"{ymd_select(con, 'sim.advancement_opportunity_pool')}"
             f"FROM sim.advancement_opportunity_pool WHERE {w}) "
             f"TO '{os.path.join(pool_dir, f'{key}.meta.parquet')}' (FORMAT parquet)"
         )
@@ -1454,6 +1490,11 @@ class HandPool:
     def n(self) -> int:
         return int(self.geom.shape[0])
 
+    #: SIM-535: the row's game date as YYYYMMDD. None on a bundle exported
+    #: before this existed, in which case the sampler cannot apply a cutoff and
+    #: says so rather than silently drawing from the future.
+    game_ymd: np.ndarray | None = None  # (N,) int32
+
 
 @dataclass
 class BattedBallPool:
@@ -1532,6 +1573,11 @@ class BattedBallPool:
     def n(self) -> int:
         return int(self.sit.shape[0])
 
+    #: SIM-535: the row's game date as YYYYMMDD. None on a bundle exported
+    #: before this existed, in which case the sampler cannot apply a cutoff and
+    #: says so rather than silently drawing from the future.
+    game_ymd: np.ndarray | None = None  # (N,) int32
+
 
 @dataclass
 class StealPool:
@@ -1573,6 +1619,11 @@ class StealPool:
     def n(self) -> int:
         return int(self.sit.shape[0])
 
+    #: SIM-535: the row's game date as YYYYMMDD. None on a bundle exported
+    #: before this existed, in which case the sampler cannot apply a cutoff and
+    #: says so rather than silently drawing from the future.
+    game_ymd: np.ndarray | None = None  # (N,) int32
+
 
 @dataclass
 class AdvancementPool:
@@ -1597,6 +1648,11 @@ class AdvancementPool:
     @property
     def n(self) -> int:
         return int(self.feat.shape[0])
+
+    #: SIM-535: the row's game date as YYYYMMDD. None on a bundle exported
+    #: before this existed, in which case the sampler cannot apply a cutoff and
+    #: says so rather than silently drawing from the future.
+    game_ymd: np.ndarray | None = None  # (N,) int32
 
 
 @dataclass
@@ -2034,9 +2090,12 @@ class EngineArtifacts:
                     for c in ("bat_home", "pitcher_pitch_count", "times_through_order", "zone")
                     if c in pp_avail
                 )
+                # SIM-535: the game date, on a bundle exported after it existed.
+                ymd_sel = ", game_ymd" if "game_ymd" in pp_avail else ""
                 m = con.execute(
                     "SELECT pitcher_id, batter_id, season, outcome_type, recency_weight"
-                    f"{receiving_sel}{conditioning_sel} FROM read_parquet('{meta_path}')"
+                    f"{receiving_sel}{conditioning_sel}{ymd_sel} "
+                    f"FROM read_parquet('{meta_path}')"
                 ).fetchnumpy()
                 # When the shared map has the id/season/recency columns too,
                 # prefer them (they round-trip identically and skip more disk).
@@ -2063,6 +2122,11 @@ class EngineArtifacts:
                         else np.asarray(np.ma.filled(m["season"], 0), dtype=np.int64)
                     ),
                     outcome_type=np.asarray(m["outcome_type"], dtype=object),
+                    game_ymd=(
+                        np.asarray(np.ma.filled(m["game_ymd"], 0), dtype=np.int32)
+                        if "game_ymd" in m
+                        else None
+                    ),
                     recency=(
                         rec_view
                         if isinstance(rec_view, np.ndarray)
@@ -2166,6 +2230,8 @@ class EngineArtifacts:
                             "fielder_9",
                             "putout_pos_mask",
                             "assist_pos_mask",
+                            # SIM-535: the game date, for the draw-time cutoff.
+                            "game_ymd",
                         )
                         if c in avail
                     ]
@@ -2182,6 +2248,11 @@ class EngineArtifacts:
                     bb_ro_view = views.get(f"bb_pool.{hand}.result_outs")
                     bb_rec_view = views.get(f"bb_pool.{hand}.recency")
                     bb_pools[hand] = BattedBallPool(
+                        game_ymd=(
+                            np.asarray(np.ma.filled(m["game_ymd"], 0), dtype=np.int32)
+                            if "game_ymd" in m
+                            else None
+                        ),
                         geom=_take(
                             f"bb_pool.{hand}.geom", os.path.join(bb_dir, f"{hand}.geom.npy")
                         ),
@@ -2292,6 +2363,12 @@ class EngineArtifacts:
                         return np.asarray(np.ma.filled(_m[col], fill), dtype=dtype)
 
                     steal_pools[target] = StealPool(
+                        # SIM-535: the game date, for the draw-time cutoff.
+                        game_ymd=(
+                            np.asarray(np.ma.filled(m["game_ymd"], 0), dtype=np.int32)
+                            if "game_ymd" in m
+                            else None
+                        ),
                         sit=_take(
                             f"steal_pool.{target}.sit",
                             os.path.join(sp_dir, f"{target}.sit.npy"),
@@ -2336,6 +2413,14 @@ class EngineArtifacts:
                         return np.asarray(np.ma.filled(_m[col], fill), dtype=dtype)
 
                     adv_pools[key] = AdvancementPool(
+                        # SIM-535: None on a bundle exported before the date
+                        # existed, which the sampler reports rather than
+                        # silently drawing from the future.
+                        game_ymd=(
+                            np.asarray(np.ma.filled(m["game_ymd"], 0), dtype=np.int32)
+                            if "game_ymd" in m
+                            else None
+                        ),
                         feat=_take(f"adv_pool.{key}.feat", os.path.join(ap_dir, f"{key}.feat.npy")),
                         runner_id=_ap_take("runner_id", "runner_id", np.int64, 0),
                         fielder_id=_ap_take("fielder_id", "fielder_id", np.int64, 0),
