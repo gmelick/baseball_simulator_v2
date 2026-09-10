@@ -1765,8 +1765,8 @@ class EngineArtifacts:
     ):
         self.pools: dict[str, HandPool] = pools
         #: SIM-523 part A: matrix role -> {"index": {key: row}, "matrix": (n, n)
-        #: float32}; {} on a bundle built before the actor matrices. The sampler's
-        #: ``actor_matrices`` path looks these up instead of computing kernels.
+        #: float32}; {} on a bundle built before the actor matrices (then every
+        #: actor factor is neutral — the kernels are retired, SIM-523).
         self.actor_sim: dict[str, dict] = actor_sim or {}
         #: SIM-523 part C: the park geometry document (``build_park_geometry``),
         #: or None on a bundle without it — the fence stage then stays off.

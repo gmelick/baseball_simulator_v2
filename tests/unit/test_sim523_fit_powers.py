@@ -157,19 +157,18 @@ class TestResultPitcherPowerIsAbsolute:
 class TestSingleDrawBatterPower:
     @pytest.mark.parametrize("cell", [False, True])
     def test_the_batter_power_applies_with_the_split_off(self, cell):
+        # The batter MATRIX: batter 200 (the live one) reads 1.0, 201 reads 0.4.
         pool = _pool([100] * 8, [200] * 4 + [201] * 4, _OUTS)
-        fp = _sampler(pool, cell=cell)
-        # batter 200 (the live one) reads 1.0, batter 201 reads 0.5
-        fp._batter_affinity = lambda key: np.array([1.0, 0.5], dtype=np.float32)
+        fp = _matrix_sampler(pool, cell=cell)
         fp.pitch_result_split = False
         fp.new_half_inning("R", _LIVE)
         fp.new_plate_appearance(_BATTER, _BASE_OUT)
-        assert _weights(fp)[4:] == pytest.approx(0.5)  # power 1.0: as is
+        assert _weights(fp)[4:] == pytest.approx(0.4)  # power 1.0: as is
         fp.pitch_batter_power = 3.0
         fp._fp_pa_key = None
         fp.new_plate_appearance(_BATTER, _BASE_OUT)
         w = _weights(fp)
-        assert w[:4] == pytest.approx(1.0) and w[4:] == pytest.approx(0.125)
+        assert w[:4] == pytest.approx(1.0) and w[4:] == pytest.approx(0.4**3)
 
 
 class TestFactoryAndConcentration:
@@ -278,7 +277,6 @@ def _matrix_sampler(pool: HandPool, *, cell: bool, batter_power: float = 1.0) ->
         },
     )
     fp = FullPoolSampler(art, np.random.default_rng(0))
-    fp.actor_matrices = True
     fp.actor_power = {"batter": batter_power}
     if cell:
         fp.pitch_cell_index = True
@@ -311,13 +309,11 @@ class TestBatterMatrixOnBothPaths:
         assert w[6:] == pytest.approx(0.72)
 
     @pytest.mark.parametrize("cell", [False, True])
-    def test_power_zero_keeps_the_kernel(self, cell):
+    def test_power_zero_turns_the_batter_factor_off(self, cell):
         fp = _matrix_sampler(_pool([100] * 8, _BATTERS3, _THREE_OUTS), cell=cell, batter_power=0.0)
-        fp._batter_affinity = lambda key: np.array([1.0, 0.5, 0.25], dtype=np.float32)
         fp.new_half_inning("R", _LIVE)
         fp.new_plate_appearance(_BATTER, _BASE_OUT)
-        w = _weights(fp)
-        assert w[4:6] == pytest.approx(0.5) and w[6:] == pytest.approx(0.25)
+        assert _weights(fp) == pytest.approx(1.0)
         assert not fp._batter_matrix_on()
 
     def test_the_fielder_matrices_honour_power_zero(self):
@@ -336,137 +332,6 @@ class TestBatterMatrixOnBothPaths:
         assert f[2] == pytest.approx(0.58) and f[3] == pytest.approx(0.58)  # the mean scored
         fp.actor_power = {"batter": 0.0}
         assert fp._matrix_gather("batter", "200:2024", rows) is None
-
-
-# ---------------------------------------------------------------------------
-# SIM-523 part F, batch 3: the runner kernels' own bandwidths.
-# ---------------------------------------------------------------------------
-
-from pipeline.batch.engine_artifacts import AdvancementPool, StealPool  # noqa: E402
-
-
-def _steal_pool() -> StealPool:
-    n = 2
-    return StealPool(
-        sit=np.zeros((n, 4), dtype=np.float32),
-        runner_id=np.array([1, 1], dtype=np.int64),
-        pitcher_id=np.array([2, 2], dtype=np.int64),
-        catcher_id=np.array([3, 3], dtype=np.int64),
-        season=np.full(n, _SEASON, dtype=np.int64),
-        attempted=np.array([0, 1], dtype=np.int8),
-        success=np.array([0, 1], dtype=np.int8),
-        recency=np.ones(n, dtype=np.float32),
-        pickoff_out=np.zeros(n, dtype=np.int8),
-        pickoff_advancing=np.zeros(n, dtype=np.int8),
-        pickoff_error=np.zeros(n, dtype=np.int8),
-    )
-
-
-def _adv_pool() -> AdvancementPool:
-    n = 2
-    return AdvancementPool(
-        feat=np.array(
-            [[90.0, 10.0, 0.0, 200.0, 0.0], [80.0, 5.0, 0.0, 150.0, 1.0]], dtype=np.float32
-        ),
-        runner_id=np.array([1, 1], dtype=np.int64),
-        fielder_id=np.zeros(n, dtype=np.int64),
-        fielder_pos=np.zeros(n, dtype=np.int8),
-        season=np.full(n, _SEASON, dtype=np.int64),
-        attempted=np.array([0, 1], dtype=np.int8),
-        safe=np.array([0, 1], dtype=np.int8),
-        error_extra=np.zeros(n, dtype=np.int8),
-        recency=np.ones(n, dtype=np.float32),
-    )
-
-
-class _SigmaRecorder:
-    """Stands in for ``_steal_actor_factor``: records the bandwidth each actor
-    call carries and returns a neutral factor."""
-
-    def __init__(self) -> None:
-        self.calls: dict[str, object] = {}
-
-    def __call__(self, actor, live_key, emb_rows_all, rows, feat_names, sigma=None, matrix=None):
-        self.calls[actor] = sigma
-        return np.ones(len(rows), dtype=np.float32)
-
-
-class TestRunnerKernelBandwidths:
-    def _sampler(self) -> FullPoolSampler:
-        art = EngineArtifacts(
-            pools={"R": _pool(_HALF, _SAME_BATTER, _OUTS)},
-            pitcher_sim={_LIVE: {_LIVE: 1.0}},
-            pitcher_sim_index={_LIVE: 0},
-            bb_pools={},
-            actor_emb={},
-            steal_pools={"2": _steal_pool()},
-            adv_pools={"1_1_3": _adv_pool()},
-        )
-        return FullPoolSampler(art, np.random.default_rng(0))
-
-    def test_the_defaults_leave_the_shared_bandwidths(self):
-        fp = self._sampler()
-        assert fp.steal_runner_sigma is None and fp.adv_runner_sigma is None
-        rec = _SigmaRecorder()
-        fp._steal_actor_factor = rec
-        assert fp.steal_draw(
-            2, "1:2024", "2:2024", "3:2024", outs=0, balls=0, strikes=0, score_diff=0
-        )
-        assert rec.calls["baserunner"] is None  # None -> steal_sigma inside the factor
-        rec = _SigmaRecorder()
-        fp._steal_actor_factor = rec
-        out = fp.advancement_draw(
-            1,
-            1,
-            3,
-            "1:2024",
-            None,
-            outs=0,
-            exit_velo=90.0,
-            launch_angle=10.0,
-            spray_angle=0.0,
-            hit_distance=200.0,
-        )
-        assert out is not None
-        assert rec.calls["baserunner"] == fp.adv_sigma
-
-    def test_the_runner_bandwidths_reach_their_draws(self):
-        fp = self._sampler()
-        fp.steal_runner_sigma = 0.25
-        fp.adv_runner_sigma = 0.35
-        rec = _SigmaRecorder()
-        fp._steal_actor_factor = rec
-        fp.steal_draw(2, "1:2024", "2:2024", "3:2024", outs=0, balls=0, strikes=0, score_diff=0)
-        assert rec.calls["baserunner"] == 0.25
-        assert rec.calls.get("pitcher_steal") is None and rec.calls.get("catcher") is None
-        rec = _SigmaRecorder()
-        fp._steal_actor_factor = rec
-        fp.advancement_draw(
-            1,
-            1,
-            3,
-            "1:2024",
-            None,
-            outs=0,
-            exit_velo=90.0,
-            launch_angle=10.0,
-            spray_angle=0.0,
-            hit_distance=200.0,
-        )
-        assert rec.calls["baserunner"] == 0.35
-
-    def test_the_factory_reads_the_runner_bandwidths(self):
-        from simulation.production_factory import apply_actor_matrix_env
-
-        fp = self._sampler()
-        apply_actor_matrix_env(
-            fp, {"SIM_STEAL_RUNNER_SIGMA": "0.25", "SIM_ADV_RUNNER_SIGMA": "0.3"}
-        )
-        assert fp.steal_runner_sigma == 0.25 and fp.adv_runner_sigma == 0.3
-        apply_actor_matrix_env(fp, {"SIM_STEAL_RUNNER_SIGMA": "", "SIM_ADV_RUNNER_SIGMA": "junk"})
-        assert fp.steal_runner_sigma is None and fp.adv_runner_sigma is None
-        apply_actor_matrix_env(fp, {})
-        assert fp.steal_runner_sigma is None and fp.adv_runner_sigma is None
 
 
 # ---------------------------------------------------------------------------
@@ -537,16 +402,8 @@ class TestFieldingDrawBatterMatrix:
         out[fp._bb_rows] = w
         return out
 
-    def test_off_is_the_kernel(self):
+    def test_the_matrix_score_at_the_power(self):
         fp = self._sampler()
-        fp._batter_affinity = lambda key: np.array([1.0, 0.5, 0.25], dtype=np.float32)
-        w = self._weights(fp)
-        assert w[:2] == pytest.approx(1.0) and w[2:4] == pytest.approx(0.5)
-        assert w[4:] == pytest.approx(0.25)
-
-    def test_on_is_the_matrix_score_at_the_power(self):
-        fp = self._sampler()
-        fp.actor_matrices = True
         w = self._weights(fp)
         assert w[:2] == pytest.approx(1.0) and w[2:4] == pytest.approx(0.4)
         assert w[4:] == pytest.approx(1.0)  # unscored, power 1: as the pitch draw
@@ -555,13 +412,10 @@ class TestFieldingDrawBatterMatrix:
         assert w[2:4] == pytest.approx(0.16)
         assert w[4:] == pytest.approx((1.0 + 0.16) / 2.0)  # draw-neutral: the mean
 
-    def test_power_zero_keeps_the_kernel(self):
+    def test_power_zero_turns_the_batter_factor_off(self):
         fp = self._sampler()
-        fp.actor_matrices = True
         fp.actor_power = {"batter": 0.0}
-        fp._batter_affinity = lambda key: np.array([1.0, 0.5, 0.25], dtype=np.float32)
-        w = self._weights(fp)
-        assert w[2:4] == pytest.approx(0.5) and w[4:] == pytest.approx(0.25)
+        assert self._weights(fp) == pytest.approx(1.0)
 
 
 class TestThinRunnerProfilesReachTheMatrices:

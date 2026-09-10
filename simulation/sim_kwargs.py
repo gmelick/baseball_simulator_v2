@@ -314,8 +314,8 @@ def sim_kwargs_from_state(
         # SIM-428: catchers for the framing nudge.
         "home_catcher_id": getattr(state, "home_catcher_id", None),
         "away_catcher_id": getattr(state, "away_catcher_id", None),
-        # SIM-425b/476: per-position defense maps for the fielder kernel
-        # (SIM_FIELDER_KERNEL_SIGMA). SIM-411/476: the venue run park-factor for
+        # SIM-425b/523: per-position defense maps for the fielder score
+        # matrices. SIM-411/476: the venue run park-factor for
         # the park kernel (SIM_PARK_KERNEL_SIGMA) — resolved onto the state by the caller when a sim
         # DuckDB is available; defaults to 1.0 (neutral) otherwise. Both are no-ops
         # with their gate off, so passing them is always safe.

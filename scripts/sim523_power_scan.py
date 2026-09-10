@@ -278,7 +278,6 @@ def main() -> int:
     kw = sim_kwargs_from_state(state)
     machine = production_machine_factory(0, GameSpec(machine_factory=_FACTORY, sim_kwargs=dict(kw)))
     fp = machine.full_pool_sampler
-    fp.actor_matrices = True
 
     report: dict[str, Any] = {"powers": powers, "season": args.season}
     print("=== the offline power scan ===")

@@ -53,10 +53,6 @@ os.environ["SIM_HOME_OFF_WEIGHT"] = "1.0"
 # the kernel exactly; the tests set the sampler's park_sigma directly.
 os.environ["SIM_PARK_KERNEL_SIGMA"] = "0"
 
-# SIM-491 part 3: the fielder-quality KERNEL bandwidth (the SIM-425b rebuild).
-# 0 disables it exactly; the tests set the sampler's fielder_sigma directly.
-os.environ["SIM_FIELDER_KERNEL_SIGMA"] = "0"
-
 # SIM-523 part E: the catcher RECEIVING ratio (the SIM-517 kernel is deleted)
 # + SIM-517's got-away resolution. Both off = byte-identical; the tests
 # opt in explicitly.
@@ -75,9 +71,9 @@ os.environ["SIM_BB_PITCH_SIGMA"] = "0"
 # byte-identical; the SIM-467 tests set ``pitch_cell_index`` directly.
 os.environ["SIM_PITCH_CELL_INDEX"] = "0"
 
-# SIM-523 part A: the actor score matrices. Off = every actor factor on its
-# kernel, byte-identical; the part-A tests set ``actor_matrices`` directly.
-os.environ["SIM_ACTOR_MATRICES"] = "0"
+# SIM-523: the actor score matrices are the only actor factors (the kernels
+# are retired, 2026-09-09); a synthetic bundle without a matrix leaves that
+# actor neutral, and the tests set ``actor_power`` directly.
 
 # SIM-523 part B: the pitch / pitch-result split and the born-batted-ball
 # kernel. Both off = one draw per pitch, byte-identical; the part-B tests
@@ -90,7 +86,6 @@ os.environ["SIM_BB_BORN_SIGMA"] = "0"
 # park wall-zone rule. All off = byte-identical; the part-C tests set the
 # sampler attributes directly.
 os.environ["SIM_BB_CLASS_FILTER"] = "0"
-os.environ["SIM_BB_SPEED_SIGMA"] = "0"
 os.environ["SIM_PARK_WALL_ZONE_ONLY"] = "0"
 os.environ["SIM_FENCE_STAGE"] = "0"
 

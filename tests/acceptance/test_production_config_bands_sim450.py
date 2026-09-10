@@ -386,9 +386,10 @@ def test_sim449_inputs_reach_the_simulator_sim450(acceptance_run: AcceptanceRun)
     The old harness dropped ``home_defense``, ``away_defense`` and
     ``park_run_factor``, so the fielder and park consumers were structurally
     inert. An A/B test of either then compared two identical no-ops and
-    reported "no effect". This lane fails rather than repeat that. (SIM-476:
-    the consumers are now the SIM-491 kernels — SIM_FIELDER_KERNEL_SIGMA and
-    SIM_PARK_KERNEL_SIGMA — which read the same two inputs.)
+    reported "no effect". This lane fails rather than repeat that. (SIM-523:
+    the consumers are now the fielder score matrices and the park kernel —
+    SIM_ACTOR_POWER_FIELDER and SIM_PARK_KERNEL_SIGMA — which read the same
+    two inputs.)
     """
     assert acceptance_run.defense_sizes, "no game was resolved"
     for game_pk, (home_n, away_n) in acceptance_run.defense_sizes.items():

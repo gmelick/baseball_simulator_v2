@@ -1,0 +1,43 @@
+SIM-523 — the redesign's certifying lanes, 2026-09-09: 45 games × 130 iterations each
+(scripts/sim523_game_set.json; tests/acceptance/test_production_config_bands_sim450.py).
+
+LANE 1 — the FULL fitted configuration (the split ON: pitcher 16 / 16, batter 8; the matrices batter 1.0 / fielder 1.2 / steal-runner 12 / advancement-runner 20 / catcher-throwing 2 / pitcher-steal 12; born-ball 1.0, class filter, batter power 4, wall zone, fence stage). 2 failed, 83 passed in 2:09:25. Not certified: K_PA RED.
+
+  K_PA: rate 0.21139 = 94381/446468 vs pool centre 0.21650 (delta -0.00511 = -2.4%), half-width 0.00433 (floor 0.00433, Z*se 0.00247) -> RED
+  (captured stdout: only the failing channels print)
+
+LANE 2 — the CERTIFIED arm (the same matrices and fielding fits; the split OFF, pitcher power 1). 1 failed (home_win_pct UNDERPOWERED — not a red), 84 passed in 1:06:28. CERTIFIED.
+
+  FBB_PA: rate 0.08444 = 37547/444659 vs pool centre 0.08500 (delta -0.00056 = -0.7%), half-width 0.00170 (floor 0.00170, Z*se 0.00167) -> PASS
+  IBB_PA: rate 0.00266 = 1182/444659 vs pool centre 0.00288 (delta -0.00022 = -7.7%), half-width 0.00058 (floor 0.00058, Z*se 0.00032) -> PASS
+  K_PA: rate 0.21439 = 95330/444659 vs pool centre 0.21650 (delta -0.00211 = -1.0%), half-width 0.00433 (floor 0.00433, Z*se 0.00247) -> PASS
+  HBP_PA: rate 0.01149 = 5111/444659 vs pool centre 0.01130 (delta +0.00019 = +1.7%), half-width 0.00068 (floor 0.00068, Z*se 0.00063) -> PASS
+  PITCHES_PA: rate 3.92458 = 1745099/444659 vs pool centre 3.93800 (delta -0.01342 = -0.3%), half-width 0.05907 (floor 0.05907, Z*se 0.00000) -> PASS
+  SINGLES_BIP: rate 0.20635 = 62988/305243 vs pool centre 0.20500 (delta +0.00135 = +0.7%), half-width 0.00513 (floor 0.00513, Z*se 0.00292) -> PASS
+  DOUBLES_BIP: rate 0.06251 = 19080/305243 vs pool centre 0.06250 (delta +0.00001 = +0.0%), half-width 0.00187 (floor 0.00187, Z*se 0.00175) -> PASS
+  TRIPLES_BIP: rate 0.00530 = 1617/305243 vs pool centre 0.00546 (delta -0.00016 = -3.0%), half-width 0.00055 (floor 0.00055, Z*se 0.00053) -> PASS
+  HR_BIP: rate 0.04522 = 13803/305243 vs pool centre 0.04590 (delta -0.00068 = -1.5%), half-width 0.00161 (floor 0.00161, Z*se 0.00152) -> PASS
+  ROE_BIP: rate 0.00789 = 2407/305243 vs pool centre 0.00828 (delta -0.00039 = -4.8%), half-width 0.00083 (floor 0.00083, Z*se 0.00066) -> PASS
+  STEAL_ATT_OPP_2B: rate 0.02148 = 8430/392408 vs pool centre 0.02140 (delta +0.00008 = +0.4%), half-width 0.00128 (floor 0.00128, Z*se 0.00092) -> PASS
+  STEAL_ATT_OPP_3B: rate 0.00386 = 998/258639 vs pool centre 0.00440 (delta -0.00054 = -12.3%), half-width 0.00066 (floor 0.00066, Z*se 0.00052) -> PASS
+  STEAL_SAFE_2B: rate 0.81163 = 6842/8430 vs pool centre 0.79890 (delta +0.01273 = +1.6%), half-width 0.02397 (floor 0.02397, Z*se 0.01746) -> PASS
+  DP_OPP: rate 0.14216 = 8499/59784 vs pool centre 0.14240 (delta -0.00024 = -0.2%), half-width 0.00712 (floor 0.00712, Z*se 0.00572) -> PASS
+  CALLED_STRIKE_TAKEN: rate 0.31150 = 281477/903604 vs pool centre 0.31373 (delta -0.00223 = -0.7%), half-width 0.00627 (floor 0.00627, Z*se 0.00195) -> PASS
+  GOT_AWAY_PITCH: rate 0.00242 = 4225/1745099 vs pool centre 0.00232 (delta +0.00010 = +4.1%), half-width 0.00023 (floor 0.00023, Z*se 0.00015) -> PASS
+  BB_PA: rate 0.08444 = 37547/444659 vs pool centre 0.08500 (delta -0.00056 = -0.7%), half-width 0.00170 (floor 0.00170, Z*se 0.00167) -> PASS
+
+  game-graded (the pool bands supersede BB / K / CS / DP — informational):
+  channel             sim      MLB     delta     half  driver       n   needs  verdict
+  R                4.4503   4.4473    +0.1%    0.1222   FLOOR   11700    5648  PASS
+  H                8.3323   8.2588    +0.9%    0.1299   FLOOR   11700    5648  PASS
+  HR               1.1797   1.1626    +1.5%    0.0443   FLOOR   11700    5648  PASS
+  2B               1.6308   1.5936    +2.3%    0.0506   FLOOR   11700    5648  PASS
+  3B               0.1382   0.1292    +7.0%    0.0138   FLOOR   11700    5648  PASS
+  BB               3.3102   3.1656    +4.6%    0.0717   FLOOR   11700    5648  FAIL
+  K                8.1479   8.3525    -2.5%    0.1105   FLOOR   11700    5647  FAIL
+  SB               0.6584   0.6251    +5.3%    0.0336   FLOOR   11700    5648  PASS
+  CS               0.1697   0.1922   -11.7%    0.0155      SE   11700    5648  FAIL
+  DP               0.7838   0.7459    +5.1%    0.0318      SE   11700    5648  FAIL
+  ROE              0.2057   0.2078    -1.0%    0.0171   FLOOR   11700    5648  PASS
+  ROE_reached      0.2150   0.2078    +3.5%    0.0171   FLOOR   11700    5648  PASS
+  home_win_pct     0.5129   0.5428    -5.5%    0.0262      SE    5833   13365  UNDERPOWERED

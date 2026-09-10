@@ -8,15 +8,13 @@ step 6).
 The fielding draw filters on the base-out cell, the batter hand and — new —
 the born ball's batted-ball CLASS, and weights by the born ball's similarity,
 the fielder at the ball's position, the park (only for a ball in the wall
-zone), the batter's profile, the batter's sprint speed and recency. What these
+zone), the batter's profile (sprint speed included) and recency. What these
 tests pin:
 
   * the artifact exports the class from ``bb_type`` and the loader reads it
     (shared-view included); an older bundle reads None and the filter is off;
   * the class filter keeps the cell's rows of the born ball's class, falls back
     to the whole cell when that class is empty there, and counts both;
-  * the sprint-speed kernel draws plays hit by batters of similar speed, is
-    neutral on rows whose batter has no speed, and is off at sigma 0;
   * the park kernel applies only to a wall-zone ball under the zone rule;
   * every switch off is byte-identical;
   * the loop passes the born ball whenever any consumer is on;
@@ -203,52 +201,6 @@ class TestTheClassFilter:
         cache = fp._transition_meta("R")["class_cells"]
         assert set(cache) == {((0, 0), _FLY), ((0, 0), _GROUND)}
         assert cache[((0, 0), _FLY)].tolist() == [0, 1, 2, 3]
-
-
-# ===========================================================================
-# The sprint-speed kernel
-# ===========================================================================
-
-
-class TestTheSpeedKernel:
-    def test_a_fast_batter_draws_plays_hit_by_fast_batters(self):
-        # Batter 300 (fast) beat out four singles; batter 301 (slow) grounded
-        # into four outs. The live batter 200 is as fast as 300.
-        bb = _bb_pool(["single"] * 4 + ["field_out"] * 4, batters=[300] * 4 + [301] * 4)
-        emb = _runner_emb({"200:2024": 30.0, "300:2024": 30.0, "301:2024": 24.0})
-        fp = _sampler(bb, actor_emb={"baserunner": emb})
-        assert _draws(fp) == {"single", "field_out"}
-        fp.bb_speed_sigma = 0.05
-        assert _draws(fp) == {"single"}
-        # A slow live batter draws the slow batter's plays.
-        assert _draws(fp, n=40) == {"single"}
-        fp2 = _sampler(
-            bb,
-            actor_emb={
-                "baserunner": _runner_emb({"200:2024": 24.0, "300:2024": 30.0, "301:2024": 24.0})
-            },
-        )
-        fp2.bb_speed_sigma = 0.05
-        assert _draws(fp2) == {"field_out"}
-
-    def test_rows_without_a_speed_are_neutral_and_an_unknown_live_batter_is_off(self):
-        bb = _bb_pool(["single"] * 4 + ["field_out"] * 4, batters=[300] * 4 + [999] * 4)
-        emb = _runner_emb({"200:2024": 30.0, "300:2024": 30.0, "301:2024": 24.0})
-        fp = _sampler(bb, actor_emb={"baserunner": emb})
-        fp.bb_speed_sigma = 0.05
-        # 999 has no speed: its rows stay at the average weight, so both draw.
-        assert _draws(fp, n=80) == {"single", "field_out"}
-        f = fp._f_batter_speed("R", np.arange(8), _BATTER)
-        assert f is not None and f[4:].tolist() == [1.0] * 4
-        # A live batter the embedding lacks: no factor at all.
-        assert fp._f_batter_speed("R", np.arange(8), "777:2024") is None
-
-    def test_sigma_zero_is_byte_identical(self):
-        bb = _bb_pool(["single"] * 4 + ["field_out"] * 4, batters=[300] * 4 + [301] * 4)
-        emb = _runner_emb({"200:2024": 30.0, "300:2024": 30.0, "301:2024": 24.0})
-        a = _seq(_sampler(bb, actor_emb={"baserunner": emb}, seed=5))
-        b = _seq(_sampler(bb, seed=5))
-        assert a == b
 
 
 # ===========================================================================
@@ -572,7 +524,7 @@ class TestTheFactoryEnv:
         s = SimpleNamespace()
         apply_fielding_env(s, env={})
         assert s.bb_class_filter is False and s.park_wall_zone_only is False
-        assert s.bb_speed_sigma == 0.0 and s.wall_zone_distance == 300.0
+        assert s.wall_zone_distance == 300.0
 
     def test_values_and_junk(self):
         s = SimpleNamespace()
@@ -580,17 +532,15 @@ class TestTheFactoryEnv:
             s,
             env={
                 "SIM_BB_CLASS_FILTER": "1",
-                "SIM_BB_SPEED_SIGMA": "0.4",
                 "SIM_PARK_WALL_ZONE_ONLY": "yes",
                 "SIM_WALL_ZONE_DISTANCE": "junk",
             },
         )
         assert s.bb_class_filter is True and s.park_wall_zone_only is True
-        assert s.bb_speed_sigma == 0.4 and s.wall_zone_distance == 300.0
+        assert s.wall_zone_distance == 300.0
 
     def test_the_unit_suite_pins_everything_off(self):
         assert os.environ.get("SIM_BB_CLASS_FILTER") == "0"
-        assert os.environ.get("SIM_BB_SPEED_SIGMA") == "0"
         assert os.environ.get("SIM_PARK_WALL_ZONE_ONLY") == "0"
 
 

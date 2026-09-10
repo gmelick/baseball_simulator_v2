@@ -236,16 +236,13 @@ class TestBatterFactorLifetime:
         assert len(fp.pa_calls) == 1
         assert fp.f_pitcher_calls == 1
 
-    def test_the_batter_affinity_is_memoized_downstream(self):
-        """The ticket says ``f_batter`` is already memoized in the sampler. Verify
-        it rather than trust it: the same batter key reuses one affinity vector."""
+    def test_the_per_hand_precompute_runs_once(self):
+        """The batter factor is the matrix row (SIM-523; no batter matrix is
+        wired here, so the factor is ones). The pool's `_pool_meta` cache is
+        what proves the per-hand precompute ran once per hand."""
         machine, fp = _machine()
-        assert fp._aff_cache == {}
         state = _state()
         machine._full_pool_outcome(state)
-        # No batter embedding is wired here, so the affinity is absent and the
-        # factor degrades to ones. The memo therefore stays empty, and the pool's
-        # `_pool_meta` cache is what proves the per-hand precompute ran once.
         assert set(fp._pool_cache) == {"R"}
         state.bat_hand = "L"
         machine._full_pool_outcome(state)

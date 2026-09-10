@@ -32,9 +32,9 @@ def main(paths: list[str]) -> int:
         tag = (
             f"pP{cfg.get('SIM_PITCH_PITCHER_POWER', '1')}/rP{cfg.get('SIM_RESULT_PITCHER_POWER', '1')}"
             f"/rB{cfg.get('SIM_RESULT_BATTER_POWER', '1')}/F{cfg.get('SIM_ACTOR_POWER_FIELDER', '1')}"
-            f"/born{cfg.get('SIM_BB_BORN_SIGMA', '0')}/spd{cfg.get('SIM_BB_SPEED_SIGMA', '0')}"
+            f"/born{cfg.get('SIM_BB_BORN_SIGMA', '0')}/bB{cfg.get('SIM_BB_BATTER_POWER', '1')}"
             f"/cls{cfg.get('SIM_BB_CLASS_FILTER', '0')}/fence{cfg.get('SIM_FENCE_STAGE', '0')}"
-            f"/rs{cfg.get('SIM_STEAL_RUNNER_SIGMA', '') or '-'}"
+            f"/rS{cfg.get('SIM_ACTOR_POWER_RUNNER_STEAL', '1')}/rA{cfg.get('SIM_ACTOR_POWER_RUNNER_ADV', '1')}"
         )
         arms.append((tag, d))
     print(f"{'arm':>48} | " + " | ".join(f"{t:>44}" for t, _ in arms))

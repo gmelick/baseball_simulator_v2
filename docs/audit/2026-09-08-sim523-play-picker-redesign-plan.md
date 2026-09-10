@@ -389,6 +389,66 @@ path (part A's omission), power 0 = the kernel. The composition read: an identit
 sim of the fixed 12-game set moves its walks toward its own actors (−5% per game at the
 fit), which the pool-total grade cannot tell from a defect — see `CHANGES.md`.
 
+**The redesign COMPLETES 2026-09-09 — lane-certified on the balanced set, flipped to the
+certified arm, the kernels deleted; the split's strikeout shortfall is SIM-527.** Two
+rulings closed the gap part F left: the certifying set is 45 games (three full-day slates,
+every team three times, chosen so every graded channel's actor-matched expectation sits
+within 0.6% of the pool's totals — `scripts/sim523_game_set.py`) and the four actor factors
+still on bell curves (the fielding draw's batter factor, the fielder factor, the steal and
+advancement runner factors) plus the sprint-speed kernel are retired for their score
+matrices. The runner matrices' coverage was the engines skipping thin profiles; they score
+them now. The fits on the set: steal-runner 12, advancement-runner 20, the fielding batter
+power 4, the fielder matrix 1.2 (bounded by the own-staff limit).
+**The fielder read at 1.2** (`scripts/sim523_fielder_m12.json`, the 45 games × 20
+iterations, the fieldable-ball reach rate by the live defender's tier against the pool's
+own rate by the row fielder's tier): the matrix carries about half of the pool's outfield
+spread — left field's best-third defenders let 3.0 points fewer balls reach than its
+worst third (the pool's own gap 6.7), right field 3.3 against 7.4 — and little of the
+infield's (center field 0.1 against 6.2, third base 0.6 against 3.5; shortstop and first
+base read the wrong sign by 1.3 and 0.8 points, within their cells' noise). The mean
+deviation per tier cell is 1.5 points (1.7 on the retired kernel's 12-game read). The
+own-staff limit caps the power at 1.2, so the fielder factor stays weaker than the pool's
+conditional; the residual is the identity confound the concentration check exists to
+bound, not a fit left on the table.
+Two lanes, 45 games × 130 iterations each (5,850 game-sims a lane; the record is
+`scripts/sim523_lane_h.txt`). **The full fitted configuration** (the pitch / pitch-result
+split ON at pitcher 16 in both draws and batter 8 in the result draw, with the matrices and
+the fielding fits): 83 of 85 checks pass; strikeouts per plate appearance read 0.2114
+against the pool's own 0.2165, −2.4% against a 2.0% floor — RED; the home-win channel is
+underpowered below 13,365 game-sims (a missing measurement, not a red). **The diagnostic
+arm** — the same matrices and fielding fits, the pitch draws as production ran them (one
+draw per pitch, pitcher power 1): 84 of 85 pass, the one non-pass the same underpowered
+home-win channel. Its readings against the pool's own rates: strikeouts −1.0%, walks −0.7%,
+hit-by-pitch +1.7%, intentional walks −7.7% (inside its band), pitches per plate appearance
+−0.3%, singles +0.7%, doubles +0.0%, triples −3.0%, home runs −1.5%, reach on error −4.8%,
+double plays −0.2%, steal attempts at second +0.4% and at third −12.3% (inside), the safe
+share +1.6%, called strikes on taken pitches −0.7%, got-away pitches +4.1%; runs per
+team-game 4.450 against 4.447 (+0.1%), hits +0.9%. The strikeout red therefore belongs to
+the split at pitcher power 16: the arsenal-only pitcher score compresses the strikeout
+spread across pitchers (the fit records on the set: the best fifth of starters strikes out
+0.239 per plate appearance against their own rows' 0.275, the worst fifth 0.180 against
+0.150) and, through the split, pulls the total down. The split also doubles the per-pitch
+cost (2 h 09 m against 1 h 06 m for the same 5,850 game-sims). The lane certifies the
+diagnostic arm.
+**The flip and the deletion.** Production runs the certified arm. The docker-compose `app`
+env and the lane's `PRODUCTION_FLAGS` carry the score matrices (batter 1.0, fielder 1.2,
+steal-runner 12, advancement-runner 20, catcher-throwing 2, pitcher-steal 12), the fielding
+draw's batter power 4, the born-ball kernel 1.0, the class filter, the wall-zone rule and
+the fence stage. The pitch / pitch-result split and its fitted powers (16 / 16 / 8) stay
+OFF — built, fitted, red on strikeouts (SIM-527); the pitch draw runs one draw per pitch
+at pitcher power 1, so part F's finding stands: the pitcher identity factor in the pitch
+draw is nearly flat until the pitcher score learns results. The retired kernels are DELETED
+with their bandwidths, env names, pins, lane arms and tests: the batter bell curve
+(`_batter_affinity`, `batter_sigma`), the fielder bell curve (`SIM_FIELDER_KERNEL_SIGMA`,
+the SIM-491 branch), the steal and advancement actor bell curves (`steal_sigma`,
+`adv_sigma`, the part F runner bandwidths, the SIM-476 ablation switches), the sprint-speed
+bell curve (`SIM_BB_SPEED_SIGMA`) and the `SIM_ACTOR_MATRICES` switch. The matrices are the
+only actor path: a bundle without a matrix leaves that actor neutral, and a power of 0
+turns a factor off. The situation, park, pitch-to-pitch, born-ball and throw-geometry
+kernels stay: they weight the ball and the situation, not an actor. Still OFF by their own
+tickets: the receiving ratio (SIM-526) and the manager draw (SIM-427). The app was
+recreated on the new environment.
+
 ### Part G — data additions
 
 - Fielding credits (the chain): check whether `raw.play_events` carries every

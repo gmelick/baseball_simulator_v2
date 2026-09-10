@@ -426,8 +426,10 @@ def _steal_pool(
     )
 
 
-def _sampler(steal_pools, actor_emb=None, seed=7) -> FullPoolSampler:
-    art = EngineArtifacts({}, steal_pools=steal_pools, actor_emb=actor_emb or {})
+def _sampler(steal_pools, actor_emb=None, seed=7, actor_sim=None) -> FullPoolSampler:
+    art = EngineArtifacts(
+        {}, steal_pools=steal_pools, actor_emb=actor_emb or {}, actor_sim=actor_sim
+    )
     return FullPoolSampler(art, np.random.default_rng(seed))
 
 
@@ -485,9 +487,17 @@ class TestTheSamplerDraw:
             "std": vecs.std(axis=0) + 1e-6,
             "features": feats,
         }
+        # SIM-523 (the kernel retirement): the runner factor is the steal
+        # engine's score matrix — the burner scores 1.0 on his own rows and
+        # 0.0 on the plodder's.
+        matrix = {
+            "index": {"11:2024": 0, "12:2024": 1},
+            "matrix": np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        }
         fp = _sampler(
             {"2": _steal_pool(n, attempted, runner_ids=runner_ids)},
             actor_emb={"baserunner": emb},
+            actor_sim={"runner_steal": matrix},
         )
         burner = 0
         plodder = 0

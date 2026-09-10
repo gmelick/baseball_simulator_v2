@@ -125,7 +125,6 @@ services:
       # the pool's own conditional frequencies (12x200 arms, seed-split
       # confirmed; docs/audit/2026-08-28-sim476-fit-plan.md). 0 disables.
       SIM_PARK_KERNEL_SIGMA:    "0.02"
-      SIM_FIELDER_KERNEL_SIGMA: "0.5"
       # SIM-476 owner ruling 2026-08-30: w=0 — the batted-ball draw
       # hard-conditions on the batting side, delivering the pool's own
       # home/away differential (+0.107 R/g, the MLB size). Replaces the
@@ -167,37 +166,41 @@ services:
       # factor becomes its engine's composite score, looked up from the nightly
       # matrix and raised to a fitted power (SIM_ACTOR_POWER_<name>). OFF until
       # part F fits the powers and the lane certifies them.
-      SIM_ACTOR_MATRICES:        "0"
+      SIM_ACTOR_POWER_BATTER:    "1.0"
+      SIM_ACTOR_POWER_FIELDER:   "1.2"
+      SIM_ACTOR_POWER_RUNNER_STEAL: "12"
+      SIM_ACTOR_POWER_RUNNER_ADV: "20"
+      SIM_ACTOR_POWER_CATCHER_THROWING: "2"
+      SIM_ACTOR_POWER_PITCHER_STEAL: "12"
       # SIM-523 part B (2026-09-08): the PITCH / PITCH-RESULT split — the
       # pitch draw picks the pitch thrown, the result draw picks what happens
       # to it (conditioned on the pitch through the pitch engine's metric;
-      # the in-play result carries its own batted ball). OFF until part F
-      # fits the powers (SIM_RESULT_PITCH_SIGMA / SIM_RESULT_PITCHER_POWER /
-      # SIM_RESULT_BATTER_POWER / SIM_PITCH_BATTER_POWER) and a lane certifies.
+      # the in-play result carries its own batted ball). Built and fitted
+      # (pitcher 16 in both draws, batter 8 in the result draw) but OFF: on
+      # the balanced 45 × 130 lane the split at those powers reds strikeouts
+      # per plate appearance −2.4% (OFF: −1.0%, PASS) — SIM-527. The certified
+      # configuration (2026-09-09) runs one draw per pitch at pitcher power 1.
       SIM_PITCH_RESULT_SPLIT:    "0"
-      # SIM-523 part F: the pitch draw's pitcher power (the engine's score
-      # raised to it; 1.0 = today's weight) — the first fit target.
       SIM_PITCH_PITCHER_POWER:   "1.0"
+      SIM_RESULT_PITCHER_POWER:  "1.0"
+      SIM_RESULT_BATTER_POWER:   "1.0"
       # SIM-523 part F: the runner kernels' bandwidths in the steal and the
       # advancement draws (empty = the shared sigma 1.0).
-      SIM_STEAL_RUNNER_SIGMA:    ""
-      SIM_ADV_RUNNER_SIGMA:      ""
       # The born batted ball's kernel on the fielding draw (0 = off).
-      SIM_BB_BORN_SIGMA:         "0"
+      SIM_BB_BORN_SIGMA:         "1.0"
       # SIM-523 part C (2026-09-08): the fielding draw's batted-ball CLASS
       # filter, the batter sprint-speed kernel and the park wall-zone rule.
       # OFF until part F fits them and a lane certifies.
-      SIM_BB_CLASS_FILTER:       "0"
-      SIM_BB_SPEED_SIGMA:        "0"
+      SIM_BB_CLASS_FILTER:       "1"
       # SIM-523 (the kernel retirement): the fielding draw's batter factor is
       # the batter engine's score raised to this power (with the matrices on).
-      SIM_BB_BATTER_POWER:       "1.0"
-      SIM_PARK_WALL_ZONE_ONLY:   "0"
+      SIM_BB_BATTER_POWER:       "4"
+      SIM_PARK_WALL_ZONE_ONLY:   "1"
       SIM_WALL_ZONE_DISTANCE:    "300"
       # The fence stage (the born ball against the live park's fence) and its
       # band in feet (0 = decisive; the probe measured a 10-foot band losing
       # ~30% of home runs). OFF until part F and a lane.
-      SIM_FENCE_STAGE:           "0"
+      SIM_FENCE_STAGE:           "1"
       SIM_FENCE_MARGIN:          "0"
       # SIM-523 part D (2026-09-08): the pitching change as a DRAW from the
       # opportunity pool (the pool's own change rate for the boundary's

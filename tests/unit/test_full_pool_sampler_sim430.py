@@ -157,28 +157,6 @@ class TestCachingEquivalence:
 
 
 class TestCachesPopulate:
-    def test_vecs_z_cached_once(self):
-        art = _toy_artifacts()
-        s = FullPoolSampler(art, np.random.default_rng(0))
-        assert s._vecs_z is None
-        s.new_half_inning("R", _PITCHER)
-        s.new_plate_appearance("200:2024", np.array([1, 1, 5, 0], dtype=np.float32))
-        assert s._vecs_z is not None
-        first = s._vecs_z
-        # A second PA must REUSE the same cached object, not rebuild it.
-        s.new_plate_appearance("201:2024", np.array([0, 0, 5, 0], dtype=np.float32))
-        assert s._vecs_z is first
-
-    def test_affinity_memoized_and_shared_pitch_and_battedball(self):
-        art = _toy_artifacts()
-        s = FullPoolSampler(art, np.random.default_rng(0))
-        s.new_half_inning("R", _PITCHER)
-        s.new_plate_appearance("202:2024", np.array([1, 1, 5, 0], dtype=np.float32))
-        assert "202:2024" in s._aff_cache
-        cached = s._aff_cache["202:2024"]
-        # The batted-ball factor reuses the SAME affinity array (no recompute).
-        assert s._batter_aff("202:2024") is cached
-
     def test_sit_baseout_is_contiguous_and_cached(self):
         art = _toy_artifacts()
         s = FullPoolSampler(art, np.random.default_rng(0))

@@ -16,13 +16,12 @@ power. What these tests pin:
     normal build only warns;
   * the loader reads the matrices back and the shared-view seam publishes
     them (the SIM-403b zero-copy path);
-  * switch OFF: every factor is byte-identical to the kernel path even when
-    the bundle carries the matrices;
-  * switch ON: the batter, runner, catcher-throwing and fielder factors are
-    the live actor's matrix row gathered onto the pool rows; a missing live
-    actor or pool actor is neutral; a bundle without a matrix falls back to
-    the kernel; the power reshapes the score;
-  * the factory reads the switch and the per-name powers from the env;
+  * the batter, runner, catcher-throwing and fielder factors are the live
+    actor's matrix row gathered onto the pool rows; a missing live actor or
+    pool actor is neutral; a bundle without a matrix leaves the actor neutral
+    (the bell-curve kernels are retired, 2026-09-09); the power reshapes the
+    score;
+  * the factory reads the per-name powers from the env;
   * the concentration arithmetic on a toy pool.
 """
 
@@ -304,7 +303,7 @@ def _matrix(index: dict[str, int], rows: list[list[float]]) -> dict:
     return {"index": index, "matrix": np.asarray(rows, dtype=np.float32)}
 
 
-def _pitch_sampler(*, actor_sim=None, on: bool, emb_keys=(_LIVE_BAT, _OTHER_BAT), seed=0):
+def _pitch_sampler(*, actor_sim=None, emb_keys=(_LIVE_BAT, _OTHER_BAT), seed=0):
     art = EngineArtifacts(
         pools={"R": _pitch_pool()},
         pitcher_sim={_PITCHER: {_PITCHER: 1.0}},
@@ -313,7 +312,6 @@ def _pitch_sampler(*, actor_sim=None, on: bool, emb_keys=(_LIVE_BAT, _OTHER_BAT)
         actor_sim=actor_sim,
     )
     fp = FullPoolSampler(art, np.random.default_rng(seed))
-    fp.actor_matrices = on
     return fp
 
 
@@ -332,53 +330,44 @@ def _pitch_draws(fp: FullPoolSampler, n: int = 80) -> set[str]:
 
 
 class TestTheBatterFactor:
-    def test_off_is_the_kernel_even_with_a_matrix_present(self):
-        with_m = _pitch_sampler(actor_sim={"batter": _BAT_MATRIX}, on=False)
-        without = _pitch_sampler(on=False)
-        np.testing.assert_array_equal(
-            with_m._f_batter("R", _LIVE_BAT), without._f_batter("R", _LIVE_BAT)
-        )
-        # The kernel keeps both batters in play.
-        assert _pitch_draws(with_m) == {"bat200", "bat201"}
-
     def test_on_gathers_the_live_row(self):
-        fp = _pitch_sampler(actor_sim={"batter": _BAT_MATRIX}, on=True)
+        fp = _pitch_sampler(actor_sim={"batter": _BAT_MATRIX})
         f = fp._f_batter("R", _LIVE_BAT)
         assert f.dtype == np.float32
         assert f[::2].tolist() == [1.0] * 20 and f[1::2].tolist() == [0.0] * 20
         assert _pitch_draws(fp) == {"bat200"}
 
     def test_a_missing_live_batter_is_neutral(self):
-        fp = _pitch_sampler(actor_sim={"batter": _BAT_MATRIX}, on=True)
+        fp = _pitch_sampler(actor_sim={"batter": _BAT_MATRIX})
         assert fp._f_batter("R", "999:2024").tolist() == [1.0] * 40
 
     def test_a_pool_batter_the_matrix_lacks_is_neutral(self):
         m = _matrix({_LIVE_BAT: 0}, [[1.0]])
-        fp = _pitch_sampler(actor_sim={"batter": m}, on=True)
+        fp = _pitch_sampler(actor_sim={"batter": m})
         f = fp._f_batter("R", _LIVE_BAT)
         assert f.tolist() == [1.0] * 40
 
     def test_a_nan_score_is_neutral(self):
         m = _matrix({_LIVE_BAT: 0, _OTHER_BAT: 1}, [[1.0, np.nan], [np.nan, 1.0]])
-        fp = _pitch_sampler(actor_sim={"batter": m}, on=True)
+        fp = _pitch_sampler(actor_sim={"batter": m})
         assert fp._f_batter("R", _LIVE_BAT)[1::2].tolist() == [1.0] * 20
 
     def test_the_power_reshapes_the_score(self):
         m = _matrix({_LIVE_BAT: 0, _OTHER_BAT: 1}, [[1.0, 0.5], [0.5, 1.0]])
-        fp = _pitch_sampler(actor_sim={"batter": m}, on=True)
+        fp = _pitch_sampler(actor_sim={"batter": m})
         fp.actor_power = {"batter": 2.0}
         assert fp._f_batter("R", _LIVE_BAT)[1] == pytest.approx(0.25)
         fp.actor_power = {"batter": 0.5}
         fp._emb_to_mat_cache.clear()
         assert fp._f_batter("R", _LIVE_BAT)[1] == pytest.approx(0.5**0.5)
 
-    def test_no_matrix_in_the_bundle_falls_back_to_the_kernel(self):
-        on = _pitch_sampler(on=True)
-        off = _pitch_sampler(on=False)
-        np.testing.assert_array_equal(on._f_batter("R", _LIVE_BAT), off._f_batter("R", _LIVE_BAT))
+    def test_no_matrix_in_the_bundle_leaves_the_batter_neutral(self):
+        fp = _pitch_sampler()
+        assert fp._f_batter("R", _LIVE_BAT).tolist() == [1.0] * 40
+        assert _pitch_draws(fp) == {"bat200", "bat201"}
 
     def test_the_embedding_to_matrix_map_is_cached(self):
-        fp = _pitch_sampler(actor_sim={"batter": _BAT_MATRIX}, on=True)
+        fp = _pitch_sampler(actor_sim={"batter": _BAT_MATRIX})
         fp._f_batter("R", _LIVE_BAT)
         assert fp._emb_to_mat_cache["batter"].tolist() == [0, 1]
         assert fp._emb_to_mat("batter") is fp._emb_to_mat_cache["batter"]
@@ -415,14 +404,13 @@ def _runner_emb() -> dict:
     }
 
 
-def _steal_sampler(*, on: bool, actor_sim=None) -> FullPoolSampler:
+def _steal_sampler(*, actor_sim=None) -> FullPoolSampler:
     # Burner 11: all attempts; plodder 12: none.
     pool = _steal_pool(400, [1] * 200 + [0] * 200, runner_ids=[11] * 200 + [12] * 200)
     art = EngineArtifacts(
         {}, steal_pools={"2": pool}, actor_emb={"baserunner": _runner_emb()}, actor_sim=actor_sim
     )
     fp = FullPoolSampler(art, np.random.default_rng(7))
-    fp.actor_matrices = on
     return fp
 
 
@@ -439,40 +427,17 @@ class TestTheRunnerFactor:
         # The live runner 11 scores 1.0 vs his own rows and 0.0 vs 12's, so
         # every draw is an attempt; the plodder draws none.
         m = _matrix({"11:2024": 0, "12:2024": 1}, [[1.0, 0.0], [0.0, 1.0]])
-        fp = _steal_sampler(on=True, actor_sim={"runner_steal": m})
+        fp = _steal_sampler(actor_sim={"runner_steal": m})
         assert _attempt_rate(fp, "11:2024") == 1.0
         assert _attempt_rate(fp, "12:2024") == 0.0
 
-    def test_off_is_the_kernel(self):
+    def test_the_wrong_matrix_name_leaves_the_runner_neutral(self):
+        # The advancement matrix does not serve the steal draw: with no steal
+        # matrix the runner factor is off and the burner draws the pool's half.
         m = _matrix({"11:2024": 0, "12:2024": 1}, [[1.0, 0.0], [0.0, 1.0]])
-        with_m = _steal_sampler(on=False, actor_sim={"runner_steal": m})
-        without = _steal_sampler(on=False)
-        rows = np.arange(400)
-        factors = []
-        for fp in (with_m, without):
-            meta = fp._steal_meta("2")
-            assert meta is not None
-            factors.append(
-                fp._steal_actor_factor(
-                    "baserunner",
-                    "11:2024",
-                    meta["runner_rows"],
-                    rows,
-                    fp._RUNNER_STEAL_FEATURES,
-                    matrix="runner_steal",
-                )
-            )
-        np.testing.assert_array_equal(factors[0], factors[1])
-        # And the kernel path keeps an intermediate attempt rate for the burner.
-        r = _attempt_rate(with_m, "11:2024")
-        assert 0.5 < r < 1.0
-
-    def test_the_wrong_matrix_name_falls_back_to_the_kernel(self):
-        # The advancement matrix does not serve the steal draw.
-        m = _matrix({"11:2024": 0, "12:2024": 1}, [[1.0, 0.0], [0.0, 1.0]])
-        fp = _steal_sampler(on=True, actor_sim={"runner_adv": m})
+        fp = _steal_sampler(actor_sim={"runner_adv": m})
         r = _attempt_rate(fp, "11:2024")
-        assert 0.5 < r < 1.0
+        assert 0.35 < r < 0.65
 
 
 # ===========================================================================
@@ -525,7 +490,7 @@ def _fielder_emb() -> dict:
     }
 
 
-def _bb_sampler(*, on: bool, actor_sim=None, sigma: float = 0.0) -> FullPoolSampler:
+def _bb_sampler(*, actor_sim=None) -> FullPoolSampler:
     art = EngineArtifacts(
         pools={},
         bb_pools={"R": _bb_pool()},
@@ -533,8 +498,6 @@ def _bb_sampler(*, on: bool, actor_sim=None, sigma: float = 0.0) -> FullPoolSamp
         actor_sim=actor_sim,
     )
     fp = FullPoolSampler(art, np.random.default_rng(0))
-    fp.actor_matrices = on
-    fp.fielder_sigma = sigma
     return fp
 
 
@@ -557,34 +520,22 @@ _SS_MATRIX = _matrix(
 
 class TestTheFielderFactor:
     def test_the_position_matrix_picks_the_play(self):
-        fp = _bb_sampler(on=True, actor_sim={"fielder_SS": _SS_MATRIX})
+        fp = _bb_sampler(actor_sim={"fielder_SS": _SS_MATRIX})
         assert _bb_events(fp) == {"single"}
 
-    def test_the_matrix_applies_with_the_kernel_bandwidth_at_zero(self):
-        # The old gate was ``fielder_sigma > 0``; the matrix path needs no bandwidth.
-        fp = _bb_sampler(on=True, actor_sim={"fielder_SS": _SS_MATRIX}, sigma=0.0)
-        assert fp._fielder_matrices_on()
-        assert _bb_events(fp) == {"single"}
-
-    def test_off_is_the_kernel(self):
-        # Live 666 sits exactly between 555 and 556 in OAA, so the kernel is
-        # symmetric and both plays draw.
-        fp = _bb_sampler(on=False, actor_sim={"fielder_SS": _SS_MATRIX}, sigma=0.5)
+    def test_no_matrix_in_the_bundle_leaves_the_fielder_neutral(self):
+        fp = _bb_sampler()
         assert _bb_events(fp) == {"single", "double"}
-        rows = np.arange(8)
-        a = fp._f_live_fielder("R", rows, {"SS": 666}, _SEASON)
-        b = _bb_sampler(on=False, sigma=0.5)._f_live_fielder("R", rows, {"SS": 666}, _SEASON)
-        np.testing.assert_array_equal(a, b)
 
     def test_the_factor_is_mean_one_within_the_position(self):
-        fp = _bb_sampler(on=True, actor_sim={"fielder_SS": _SS_MATRIX})
+        fp = _bb_sampler(actor_sim={"fielder_SS": _SS_MATRIX})
         f = fp._f_live_fielder("R", np.arange(8), {"SS": 666}, _SEASON)
         assert f is not None
         assert float(f.mean()) == pytest.approx(1.0)
         assert f[:4].tolist() == [2.0] * 4 and f[4:].tolist() == [0.0] * 4
 
     def test_another_positions_matrix_leaves_shortstop_neutral(self):
-        fp = _bb_sampler(on=True, actor_sim={"fielder_CF": _SS_MATRIX})
+        fp = _bb_sampler(actor_sim={"fielder_CF": _SS_MATRIX})
         f = fp._f_live_fielder("R", np.arange(8), {"SS": 666}, _SEASON)
         assert f is not None and f.tolist() == [1.0] * 8
         assert _bb_events(fp) == {"single", "double"}
@@ -594,7 +545,7 @@ class TestTheFielderFactor:
             {"555:SS:2024": 0, "556:SS:2024": 1, "666:SS:2024": 2},
             [[1.0, 0.5, 1.0], [0.5, 1.0, 0.25], [1.0, 0.25, 1.0]],
         )
-        fp = _bb_sampler(on=True, actor_sim={"fielder_SS": m})
+        fp = _bb_sampler(actor_sim={"fielder_SS": m})
         fp.actor_power = {"fielder_SS": 2.0}
         f = fp._f_live_fielder("R", np.arange(8), {"SS": 666}, _SEASON)
         # Raw 1.0 vs 0.0625, rescaled to mean 1 within the position.
@@ -608,31 +559,27 @@ class TestTheFielderFactor:
 
 
 class TestTheFactoryEnv:
-    def test_default_off_with_no_powers(self):
+    def test_no_powers_reads_empty(self):
         s = SimpleNamespace()
         apply_actor_matrix_env(s, env={})
-        assert s.actor_matrices is False and s.actor_power == {}
+        assert s.actor_power == {}
+        assert not hasattr(s, "actor_matrices")  # the switch is retired
 
-    def test_switch_and_powers(self):
+    def test_the_powers(self):
         s = SimpleNamespace()
         apply_actor_matrix_env(
             s,
             env={
-                "SIM_ACTOR_MATRICES": "1",
                 "SIM_ACTOR_POWER_BATTER": "0.5",
                 "SIM_ACTOR_POWER_FIELDER": "2",
                 "SIM_ACTOR_POWER_FIELDER_SS": "3",
                 "SIM_ACTOR_POWER_RUNNER_STEAL": "junk",
             },
         )
-        assert s.actor_matrices is True
         assert s.actor_power["batter"] == 0.5
         assert s.actor_power["fielder_SS"] == 3.0  # the explicit one wins
         assert s.actor_power["fielder_CF"] == 2.0  # the fielder default fans out
         assert "runner_steal" not in s.actor_power
-
-    def test_the_unit_suite_pins_the_switch_off(self):
-        assert os.environ.get("SIM_ACTOR_MATRICES") == "0"
 
 
 # ===========================================================================

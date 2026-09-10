@@ -171,9 +171,11 @@ them ad hoc — they are a validated set.
 | `SIM_BB_PLATOON` | SIM-413 | `1` | Batted-ball draw reweight by pitcher hand (L/R platoon). |
 | `SIM_HOME_OFF_WEIGHT` | SIM-491/476 | `0.0` | The home-field draw weight on batted-ball rows whose batting side mismatches the live one (`1.0` = off; `0.0` = hard conditioning, the owner ruling). |
 | `SIM_PARK_KERNEL_SIGMA` | SIM-491/476 | `0.02` | The park kernel bandwidth over the venue run factor (`0` = off). |
-| `SIM_FIELDER_KERNEL_SIGMA` | SIM-491/476 | `0.5` | The fielder-quality kernel bandwidth over the live defender's OAA (`0` = off). |
-| `SIM_CATCHER_FRAMING_SIGMA` | SIM-517 | `0.25` | The catcher receiving kernel, framing dims (`0` = off). |
-| `SIM_CATCHER_BLOCK_SIGMA` | SIM-517 | `0.05` | The catcher receiving kernel, blocking dims (`0` = off). |
+| `SIM_ACTOR_POWER_FIELDER` | SIM-523 | `1.2` | The fielder factor: the live defender's engine score against the row's own fielder, raised to this power (`0` = off). The bell-curve kernels are retired (2026-09-09). |
+| `SIM_ACTOR_POWER_BATTER` / `_RUNNER_STEAL` / `_RUNNER_ADV` / `_CATCHER_THROWING` / `_PITCHER_STEAL` | SIM-523 | `1.0` / `12` / `20` / `2` / `12` | The other actor factors: each engine's 0-to-1 score matrix at its fitted power (`0` = off). |
+| `SIM_BB_BATTER_POWER` | SIM-523 | `4` | The fielding draw's batter factor: the batter engine's score raised to this power. |
+| `SIM_PITCH_RESULT_SPLIT` + `SIM_PITCH_PITCHER_POWER` / `SIM_RESULT_PITCHER_POWER` / `SIM_RESULT_BATTER_POWER` | SIM-523 | `0` + `1.0` / `1.0` / `1.0` | The pitch draw and the pitch-result draw as two draws with the pitcher and batter powers. Built and fitted (16 / 16 / 8) but OFF: at those powers the balanced lane reds strikeouts −2.4% (SIM-527). |
+| `SIM_CATCHER_RECEIVING` | SIM-523 | `0` | The catcher receiving ratio on taken pitches (enable = SIM-526). |
 | `SIM_GOT_AWAY` | SIM-517 | `1` | Honor the drawn pitch row's got-away fact (passed ball / wild pitch / uncaught third strike). |
 
 The old post-draw flips (`SIM_PARK_FACTOR`, `SIM_FIELDER_RBF`,

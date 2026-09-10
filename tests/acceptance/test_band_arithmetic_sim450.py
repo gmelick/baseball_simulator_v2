@@ -1194,4 +1194,6 @@ def test_a_shortened_run_cannot_hide_a_park_shift_in_the_R_band_sim450() -> None
 
     # The full twelve-game set has no prefix bias at all, which is why a
     # certifying run uses it.
-    assert bands.prefix_park_bias(bands.BALANCED_GAME_ORDER, len(bands.BALANCED_GAME_ORDER)) == pytest.approx(0.0, abs=1e-12)
+    assert bands.prefix_park_bias(
+        bands.BALANCED_GAME_ORDER, len(bands.BALANCED_GAME_ORDER)
+    ) == pytest.approx(0.0, abs=1e-12)

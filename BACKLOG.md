@@ -1,5 +1,38 @@
 # Product Backlog
 
+# 🏁 2026-09-09 — THE PLAY-PICKER REDESIGN COMPLETES (SIM-523): the actor kernels RETIRED for the score matrices, the balanced 45-game certifying set, the fits on it, two 45×130 lanes — FLIPPED to the certified arm; the split's strikeout shortfall filed as SIM-527 (next free ID → SIM-528)
+
+**What landed (`CHANGES.md` has the detail).** Two owner rulings: the certifying lane grades on
+a larger set with every team at least once and every statistic expected near league average
+(now 45 games from three full-day slates, every channel within 0.6% of the pool's totals,
+built by `scripts/sim523_game_set.py`); and the four actor factors part F had left on bell
+curves — the fielding draw's batter factor, the fielder factor, the steal and advancement
+runner factors — plus the sprint-speed kernel are retired for their engines' score matrices.
+The runner matrices' coverage defect is fixed at the source (the engines score thin profiles;
+the steal-runner matrix covers 87% of rows, was 33%). The fits on the new set: steal-runner
+12, advancement-runner 20, the fielding batter power 4, the fielder matrix 1.2 (the own-staff
+limit binds at 1.4). **Two lanes.** The full fitted configuration (the pitch / pitch-result
+split ON at pitcher 16 / 16, batter 8) reds strikeouts per plate appearance −2.4% against a
+2.0% floor and passes everything else. The same matrices and fielding fits with the split
+OFF pass every band (strikeouts −1.0%, walks −0.7%, runs +0.1%; the home-win channel stays
+underpowered by design). **Production runs the certified arm; the kernels are DELETED** (the
+batter, fielder, steal, advancement and sprint-speed bell curves, their bandwidths, env
+names, pins, lane arms and tests); the split stays OFF with its fitted powers on record.
+
+**SIM-527 (P1, filed 2026-09-09) — the pitch / pitch-result split's strikeout shortfall.**
+With the split ON at its fitted powers the balanced 45 × 130 lane reads strikeouts per plate
+appearance −2.4% (floor 2.0%); with it OFF, −1.0%. The arsenal-only pitcher score compresses
+the strikeout spread across pitchers (the best fifth of starters 0.239 per plate appearance
+against their own 0.275, the worst 0.180 against 0.150); through the split that pulls the
+total down. The fix: a results-aware pitcher score, a refit of the split's powers on the
+set, a lane. Until it certifies the split stays OFF and the pitch draw runs at pitcher power
+1 (the pitcher identity factor nearly flat — part F's finding). The split also doubles the
+per-pitch cost (2 h 09 m against 1 h 06 m per lane).
+
+**Still open:** the chain factor in the fielding draw; the receiving ratio's enable
+(SIM-526); the manager draw's real profiles (SIM-427); the DuckDB lock (SIM-524); backups
+(SIM-525).
+
 # 🧱 2026-09-09 — REDESIGN PART G BUILT: the data adds (SIM-523) — sprint speed live in the profiles, the fielding CHAIN on the batted-ball pool, the got-away rates out of the catcher's selection surface, the batting side on the pitch pool via the SIM-469 rebuild (next free ID → SIM-527)
 
 **What landed (`CHANGES.md` has the detail).** The raw sprint-speed table was EMPTY (the

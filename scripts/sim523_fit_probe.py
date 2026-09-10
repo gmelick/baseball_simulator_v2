@@ -234,6 +234,28 @@ class AdvRef:
                 self.by[kl[i]] = acc[i] + self.by.get(kl[i], np.zeros(3))
 
 
+def _pool_speed_z(fp: Any, pool: Any) -> np.ndarray | None:
+    """The z-scored sprint speed of each pool row's batter, read from the
+    baserunner embedding (NaN where the batter has no speed); None when the
+    bundle has no speed feature. The sampler's speed kernel is retired
+    (SIM-523), so the probe reads the speed itself for its tier reference."""
+    emb = fp.a.actor_emb.get("baserunner")
+    z = fp._emb_z("baserunner")
+    if emb is None or z is None:
+        return None
+    feats = list(emb.get("features") or [])
+    if "sprint_speed" not in feats:
+        return None
+    col = feats.index("sprint_speed")
+    ki = emb["key_index"]
+    out = np.full(pool.n, np.nan, dtype=np.float64)
+    for i, (b, s) in enumerate(zip(pool.batter_id.tolist(), pool.season.tolist(), strict=True)):
+        j = ki.get(f"{int(b)}:{int(s)}")
+        if j is not None:
+            out[i] = float(z[j, col])
+    return out
+
+
 class BBRef:
     """The pool's per-class event mix and the ground-ball reach rate by the
     row batter's sprint-speed tercile."""
@@ -243,7 +265,7 @@ class BBRef:
         self.speed_edges: tuple[float, float] | None = None
         self.speed_ref: dict[str, list[float]] = {}
         gb_z, gb_w, gb_r = [], [], []
-        for hand, pool in fp.a.bb_pools.items():
+        for pool in fp.a.bb_pools.values():
             rcy = pool.recency.astype(np.float64)
             evc = np.fromiter(
                 (_EVENT_CLASSES.index(_event_class(str(e))) for e in pool.event),
@@ -260,7 +282,7 @@ class BBRef:
                 acc = np.zeros(len(_EVENT_CLASSES))
                 np.add.at(acc, evc[m], rcy[m])
                 self.cls_mix[int(c)] = acc + self.cls_mix.get(int(c), 0.0)
-            zs = fp._bb_speed_z(hand)
+            zs = _pool_speed_z(fp, pool)
             if zs is not None:
                 m = (cls == 1) & np.isfinite(zs)
                 gb_z.append(zs[m].astype(np.float64))

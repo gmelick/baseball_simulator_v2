@@ -639,9 +639,8 @@ class StateMachine:
         #     an out) and nothing refreshed, so the situation factor went STALE for
         #     the rest of the plate appearance.
         # `_fp_pitcher_key` gates `new_half_inning` (f_pitcher, per pitcher+hand);
-        # `_fp_pa_key` gates `new_plate_appearance` (f_batter, per batter — memoized
-        # downstream in `FullPoolSampler._batter_affinity` — times the situation
-        # factor, per base-out).
+        # `_fp_pa_key` gates `new_plate_appearance` (f_batter, per batter — the
+        # batter matrix row, SIM-523 — times the situation factor, per base-out).
         self._fp_pitcher_key: tuple | None = None
         self._fp_pa_key: tuple | None = None
         #: SIM-518 (SIM-465): the live pitcher's (pitches before this PA, times
@@ -656,10 +655,11 @@ class StateMachine:
         # without the rebuilt artifact is still a no-op. Read once per machine.
         self._bb_platoon = _env_flag("SIM_BB_PLATOON")  # SIM-413
         # SIM-476 (2026-08-30): the SIM-425b fielder nudge and the SIM-411 park
-        # flip are DELETED — both post-draw flips are superseded by the fitted
-        # SIM-491 draw-weight kernels (SIM_FIELDER_KERNEL_SIGMA=0.5 /
-        # SIM_PARK_KERNEL_SIGMA=0.02, fitted against the pool's own
-        # conditional frequencies; see docs/audit/2026-08-28-sim476-fit-plan.md).
+        # flip are DELETED — both post-draw flips are superseded by draw weights:
+        # the park kernel (SIM_PARK_KERNEL_SIGMA=0.02, fitted against the pool's
+        # own conditional frequencies; docs/audit/2026-08-28-sim476-fit-plan.md)
+        # and, since the SIM-523 kernel retirement (2026-09-09), the fielder
+        # score matrices (SIM_ACTOR_POWER_FIELDER).
         # SIM-517 (2026-09-04): the SIM-428 framing flip (`_apply_framing`,
         # `SIM_FRAMING`) is DELETED — the catcher's receiving effect is a
         # WEIGHT in the pitch-result draw (SIM-523 part E: the mass-preserving
@@ -1005,9 +1005,8 @@ class StateMachine:
         # SIM-491 part 2 (SIM-411): pass the live park run factor for the park
         # kernel. A no-op unless the sampler's park_sigma is set above 0
         # (SIM_PARK_KERNEL_SIGMA) AND the factory loaded a venue-factor map.
-        # SIM-491 part 3 (SIM-425b): pass the FIELDING team's defense map for
-        # the fielder-quality kernel. A no-op unless the sampler's
-        # fielder_sigma is set above 0 (SIM_FIELDER_KERNEL_SIGMA).
+        # SIM-523: pass the FIELDING team's defense map for the fielder factor
+        # (the per-position score matrices). A no-op on a bundle without them.
         defense = state.home_defense if state.defense == Team.HOME else state.away_defense
         # SIM-518 (SIM-472): the DRAWN pitch's geometry, so the batted ball can
         # agree with the pitch that produced it. Passed only when the kernel is

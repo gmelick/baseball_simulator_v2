@@ -855,9 +855,11 @@ def test_clv_worker_still_swallows_an_ordinary_bad_game(monkeypatch):
 #     con.execute(\"SELECT venue_id, regressed_factor FROM derived.park_factors
 #                   WHERE season=2024 AND factor_type='R' ORDER BY venue_id\").fetchall()"
 #   -> 35 rows (2,952 across all seasons). Deviation from 1.0:
-#        smallest 0.0025 (venue 2, factor 1.0025)
-#        median   0.0273
-#        largest  0.1339 (venue 19, factor 1.1339); venue 680 is 0.8724
+#        smallest 0.0032 (venue 2, factor 1.0032)
+#        largest  0.1358 (venue 15, factor 1.1358); venue 680 is 0.8726
+#   (Re-read 2026-09-09 after the part-G profile recompute moved every 2024
+#   factor, the largest move 2.2% at venue 3949; the 2026-08-10 read had the
+#   smallest deviation 0.0025 and the largest 0.1339 at venue 19.)
 #
 # MAGNITUDE 2 — the run-conversion gap this project is chasing.
 #   CLAUDE.md line 85: "Runs run ~7-8% low (down from ~12% pre-fix)".
@@ -876,45 +878,45 @@ def test_clv_worker_still_swallows_an_ordinary_bad_game(monkeypatch):
 # ===========================================================================
 
 #: Every ``derived.park_factors`` row for season 2024, factor_type='R', read from
-#: the DuckDB in the app container on 2026-08-10 by the query quoted above.
+#: the DuckDB in the app container on 2026-09-09 by the query quoted above.
 #: (venue_id, regressed_factor). These are DATA, not fixtures: the instrument is
 #: calibrated against them, so an invented value would decalibrate it.
 _PARK_FACTORS_2024_R: tuple[tuple[int, float], ...] = (
-    (1, 1.0054770708),
-    (2, 1.0025453568),
-    (3, 1.0288580656),
-    (4, 0.9180047512),
-    (5, 1.0030550957),
-    (7, 1.0227950811),
-    (10, 0.9726824164),
-    (12, 0.9179406762),
-    (14, 1.0230077505),
-    (15, 1.1319301128),
-    (17, 0.8880457878),
-    (19, 1.1339268684),
-    (22, 1.0235017538),
-    (31, 1.0083988905),
-    (32, 0.9916363955),
-    (680, 0.8723846078),
-    (2392, 1.0033223629),
-    (2394, 0.9621656537),
-    (2395, 0.9582160115),
-    (2602, 1.0380501747),
-    (2680, 1.0091216564),
-    (2681, 1.0181443691),
-    (2735, 0.9858149290),
-    (2889, 0.9759855866),
-    (3289, 1.0054286718),
-    (3309, 0.9931995273),
-    (3312, 1.0519319773),
-    (3313, 1.0345611572),
-    (3949, 1.0125206709),
-    (4169, 1.0925092697),
-    (4705, 0.9140601754),
-    (5150, 1.0522121191),
-    (5325, 0.9535119534),
-    (5340, 1.0371358395),
-    (5381, 1.0055409670),
+    (1, 1.0036938190),
+    (2, 1.0031722784),
+    (3, 1.0334856510),
+    (4, 0.9173843861),
+    (5, 1.0034406185),
+    (7, 1.0205500126),
+    (10, 0.9733816981),
+    (12, 0.9182780385),
+    (14, 1.0226335526),
+    (15, 1.1357744932),
+    (17, 0.8887906075),
+    (19, 1.1340031624),
+    (22, 1.0243179798),
+    (31, 1.0091828108),
+    (32, 0.9913802147),
+    (680, 0.8725842237),
+    (2392, 1.0038282871),
+    (2394, 0.9607157707),
+    (2395, 0.9596605301),
+    (2602, 1.0375019312),
+    (2680, 1.0095077753),
+    (2681, 1.0169060230),
+    (2735, 0.9867796302),
+    (2889, 0.9764741659),
+    (3289, 1.0050219297),
+    (3309, 0.9908323884),
+    (3312, 1.0510094166),
+    (3313, 1.0328891277),
+    (3949, 0.9906229973),
+    (4169, 1.0930708647),
+    (4705, 0.9194267392),
+    (5150, 1.0431689024),
+    (5325, 0.9538660645),
+    (5340, 1.0355546474),
+    (5381, 1.0055797100),
 )
 
 #: The run-conversion gap on record. Source: CLAUDE.md line 85, "Runs run ~7-8%
@@ -967,8 +969,8 @@ def test_the_measured_park_factors_match_what_the_calibration_claims():
     """Guard the calibration constants themselves against a typo or a quiet edit."""
     devs = sorted(abs(f - 1.0) for _v, f in _PARK_FACTORS_2024_R)
     assert len(_PARK_FACTORS_2024_R) == 35
-    assert devs[0] == pytest.approx(0.0025, abs=5e-4)  # the most neutral real park
-    assert devs[-1] == pytest.approx(0.1339, abs=5e-4)  # the most extreme real park
+    assert devs[0] == pytest.approx(0.0032, abs=5e-4)  # the most neutral real park
+    assert devs[-1] == pytest.approx(0.1358, abs=5e-4)  # the most extreme real park
     # The stake, in the repository's own units: the worst venue's silent-neutral
     # error is bigger than the ENTIRE documented run-conversion gap.
     assert devs[-1] > _DOCUMENTED_RUN_GAP
@@ -981,7 +983,7 @@ def test_the_measured_park_factors_match_what_the_calibration_claims():
 )
 async def test_the_instrument_reds_at_EVERY_real_2024_venue(venue_id, factor):
     """CALIBRATION. Not one of the 35 real parks may pass as "resolved" when the
-    source is dark — including the most neutral one, whose factor is 1.0025.
+    source is dark — including the most neutral one, whose factor is 1.0032.
 
     An instrument that only reds on the extreme venues reports health for 27 of the
     35 parks. Sizing the failure is a separate job (below); telling "looked" from
@@ -1002,7 +1004,7 @@ async def test_the_instrument_reds_at_EVERY_real_2024_venue(venue_id, factor):
 async def test_the_silent_neutral_error_exceeds_the_documented_run_gap():
     """SIZE THE DEFECT in the repository's own units.
 
-    Venue 680 measures 0.8724 in 2024. A dark source sends 1.0 instead. That is a
+    Venue 680 measures 0.8726 in 2024. A dark source sends 1.0 instead. That is a
     12.8% error in the run environment of every game played there — larger than the
     ~7-8% run-conversion residual CLAUDE.md:85 records as the open modelling gap.
     A dark park factor is therefore not a rounding concern. It is bigger than the
@@ -1164,7 +1166,7 @@ async def test_the_REAL_route_on_a_stack_with_no_sim_duckdb(monkeypatch, caplog)
     """
     g = _stub_resolve_game_state(monkeypatch)
     caplog.set_level("WARNING", logger="simulation.sim_kwargs")
-    pool = _FakePool(680)  # a real 2024 venue: its factor is 0.8724, not 1.0
+    pool = _FakePool(680)  # a real 2024 venue: its factor is 0.8726, not 1.0
     request = _StubRequest(None)  # REPLAY_PERSISTENCE_ENABLED unset -> no connection
 
     state = await g._resolve_state_or_error(pool, 777)

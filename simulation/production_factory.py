@@ -89,21 +89,15 @@ def _artifact_dir(spec: GameSpec) -> str:
 
 
 def apply_actor_matrix_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
-    """SIM-523 part A: read the actor score-matrix switch and powers.
+    """SIM-523: read the actor score-matrix powers.
 
-    OFF (the default) keeps every actor factor on its bell-curve kernel byte
-    for byte. ON reads each engine's composite score from the nightly matrix,
-    raised to the power ``SIM_ACTOR_POWER_<NAME>`` (1.0 until part F fits it;
-    names: batter, catcher_throwing, runner_steal, runner_adv, pitcher_steal,
-    fielder — the last applies to every per-position fielder matrix).
+    Every actor factor is its engine's composite score from the nightly matrix,
+    raised to the power ``SIM_ACTOR_POWER_<NAME>`` (1.0 when unset; 0 turns the
+    factor off; names: batter, catcher_throwing, runner_steal, runner_adv,
+    pitcher_steal, fielder — the last applies to every per-position fielder
+    matrix). The bell-curve kernels are retired (2026-09-09).
     """
     src = os.environ if env is None else env
-    sampler.actor_matrices = src.get("SIM_ACTOR_MATRICES", "0").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
     powers: dict[str, float] = {}
     for key, val in src.items():
         if key.startswith("SIM_ACTOR_POWER_"):
@@ -118,16 +112,6 @@ def apply_actor_matrix_env(sampler: Any, env: Mapping[str, str] | None = None) -
         for pos in ("1B", "2B", "3B", "SS", "LF", "CF", "RF"):
             powers.setdefault(f"fielder_{pos}", powers["fielder"])
     sampler.actor_power = powers
-    # SIM-523 part F: the runner kernels' own bandwidths (empty = the shared sigma).
-    for key, attr in (
-        ("SIM_STEAL_RUNNER_SIGMA", "steal_runner_sigma"),
-        ("SIM_ADV_RUNNER_SIGMA", "adv_runner_sigma"),
-    ):
-        raw = str(src.get(key, "")).strip()
-        try:
-            setattr(sampler, attr, float(raw) if raw else None)
-        except ValueError:
-            setattr(sampler, attr, None)
 
 
 def apply_result_split_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
@@ -177,11 +161,11 @@ def apply_result_split_env(sampler: Any, env: Mapping[str, str] | None = None) -
 
 
 def apply_fielding_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
-    """SIM-523 part C: read the fielding draw's class filter, the batter
-    sprint-speed kernel and the park wall-zone rule.
+    """SIM-523 part C: read the fielding draw's class filter, the batter power
+    and the park wall-zone rule.
 
     Every one is OFF by default (byte-identical): ``SIM_BB_CLASS_FILTER``
-    (0/1), ``SIM_BB_SPEED_SIGMA`` (0 = off), ``SIM_PARK_WALL_ZONE_ONLY`` (0/1)
+    (0/1), ``SIM_BB_BATTER_POWER`` (1.0), ``SIM_PARK_WALL_ZONE_ONLY`` (0/1)
     with ``SIM_WALL_ZONE_DISTANCE`` (feet, 300), and the fence stage
     ``SIM_FENCE_STAGE`` (0/1) with ``SIM_FENCE_MARGIN`` (feet, 0 = decisive).
     """
@@ -195,7 +179,6 @@ def apply_fielding_env(sampler: Any, env: Mapping[str, str] | None = None) -> No
     # SIM-523 part C4: the fence stage (0/1) and its band (feet, 10).
     sampler.fence_stage = flag("SIM_FENCE_STAGE")
     for key, attr, default in (
-        ("SIM_BB_SPEED_SIGMA", "bb_speed_sigma", 0.0),
         ("SIM_BB_BATTER_POWER", "bb_batter_power", 1.0),
         ("SIM_WALL_ZONE_DISTANCE", "wall_zone_distance", 300.0),
         ("SIM_FENCE_MARGIN", "fence_margin", 0.0),
@@ -281,13 +264,6 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
         sampler.venue_run_factors = _load_venue_run_factors()
         if sampler.venue_run_factors:
             sampler.park_sigma = park_sigma
-    # SIM-491 part 3 (the SIM-425b rebuild): the fielder-quality kernel
-    # bandwidth. 0.0 (the default, and any unparsable value) disables it
-    # EXACTLY; the fielder embedding is already in the artifact bundle.
-    try:
-        sampler.fielder_sigma = float(os.environ.get("SIM_FIELDER_KERNEL_SIGMA", "0"))
-    except ValueError:
-        sampler.fielder_sigma = 0.0
     # SIM-517: the catcher RECEIVING kernel bandwidths — an anisotropic
     # metric with the framing dims and the blocking dims under their own
     # sigma (the part-E ladder measured they need different ones). 0.0

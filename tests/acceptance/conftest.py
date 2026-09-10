@@ -83,7 +83,6 @@ PRODUCTION_FLAGS: dict[str, str] = {
     # SIM-476 (2026-08-30): the SIM-411/412/425b post-draw flips are DELETED;
     # production now runs the FITTED SIM-491 draw-weight kernels instead.
     "SIM_PARK_KERNEL_SIGMA": "0.02",  # SIM-476 fitted park kernel
-    "SIM_FIELDER_KERNEL_SIGMA": "0.5",  # SIM-476 fitted fielder kernel
     # SIM-476 owner ruling 2026-08-30: w=0 — the batted-ball draw
     # hard-conditions on the batting side (the SIM-412 replacement).
     "SIM_HOME_OFF_WEIGHT": "0.0",
@@ -103,24 +102,22 @@ PRODUCTION_FLAGS: dict[str, str] = {
     # OWNER GO 2026-09-08: production runs the cell index ON (lane 2 certified it).
     "SIM_PITCH_CELL_INDEX": os.environ.get("SIM467_LANE_CELL_INDEX", "1"),
     "SIM_PITCH_MIN_CELL": os.environ.get("SIM467_LANE_MIN_CELL", "20"),
-    # SIM-523 part A (2026-09-08): the actor SCORE MATRICES — OFF until part F
-    # fits the powers; set SIM523_LANE_ACTOR_MATRICES=1 and the powers below on a
-    # lane run to measure an arm (a power of 0 keeps that actor's kernel).
-    "SIM_ACTOR_MATRICES": os.environ.get("SIM523_LANE_ACTOR_MATRICES", "0"),
+    # SIM-523 (2026-09-09, the kernel retirement): the actor SCORE MATRICES are
+    # the only actor factors, at the fitted powers below (a power of 0 turns
+    # that actor's factor off). The 45 × 130 lane certified them 2026-09-09.
     "SIM_ACTOR_POWER_BATTER": os.environ.get("SIM523_LANE_ACTOR_POWER_BATTER", "1.0"),
-    "SIM_ACTOR_POWER_FIELDER": os.environ.get("SIM523_LANE_ACTOR_POWER_FIELDER", "1.0"),
-    "SIM_ACTOR_POWER_RUNNER_STEAL": os.environ.get("SIM523_LANE_ACTOR_POWER_RUNNER_STEAL", "1.0"),
-    "SIM_ACTOR_POWER_RUNNER_ADV": os.environ.get("SIM523_LANE_ACTOR_POWER_RUNNER_ADV", "1.0"),
+    "SIM_ACTOR_POWER_FIELDER": os.environ.get("SIM523_LANE_ACTOR_POWER_FIELDER", "1.2"),
+    "SIM_ACTOR_POWER_RUNNER_STEAL": os.environ.get("SIM523_LANE_ACTOR_POWER_RUNNER_STEAL", "12"),
+    "SIM_ACTOR_POWER_RUNNER_ADV": os.environ.get("SIM523_LANE_ACTOR_POWER_RUNNER_ADV", "20"),
     "SIM_ACTOR_POWER_CATCHER_THROWING": os.environ.get(
-        "SIM523_LANE_ACTOR_POWER_CATCHER_THROWING", "1.0"
+        "SIM523_LANE_ACTOR_POWER_CATCHER_THROWING", "2"
     ),
-    "SIM_ACTOR_POWER_PITCHER_STEAL": os.environ.get("SIM523_LANE_ACTOR_POWER_PITCHER_STEAL", "1.0"),
-    # SIM-523 part F: the runner kernels' bandwidths (empty = the shared sigma 1.0).
-    "SIM_STEAL_RUNNER_SIGMA": os.environ.get("SIM523_LANE_STEAL_RUNNER_SIGMA", ""),
-    "SIM_ADV_RUNNER_SIGMA": os.environ.get("SIM523_LANE_ADV_RUNNER_SIGMA", ""),
-    # SIM-523 part B (2026-09-08): the pitch / pitch-result split. Production
-    # is OFF until part F fits the powers; set SIM523_LANE_RESULT_SPLIT=1 (and
-    # the sigma / powers below) on a lane run to measure an arm.
+    "SIM_ACTOR_POWER_PITCHER_STEAL": os.environ.get("SIM523_LANE_ACTOR_POWER_PITCHER_STEAL", "12"),
+    # SIM-523 part B (2026-09-08): the pitch / pitch-result split. Built and
+    # fitted (pitcher 16 / 16, batter 8) but OFF: the balanced 45 × 130 lane
+    # reds strikeouts per plate appearance −2.4% with it ON at those powers
+    # and passes (−1.0%) with it OFF (SIM-527). Set SIM523_LANE_RESULT_SPLIT=1
+    # and the powers below on a lane run to measure the ON arm.
     "SIM_PITCH_RESULT_SPLIT": os.environ.get("SIM523_LANE_RESULT_SPLIT", "0"),
     "SIM_PITCH_PITCHER_POWER": os.environ.get("SIM523_LANE_PITCH_PITCHER_POWER", "1.0"),
     "SIM_RESULT_PITCH_SIGMA": os.environ.get("SIM523_LANE_RESULT_PITCH_SIGMA", "1.0"),
@@ -128,16 +125,15 @@ PRODUCTION_FLAGS: dict[str, str] = {
     "SIM_RESULT_BATTER_POWER": os.environ.get("SIM523_LANE_RESULT_BATTER_POWER", "1.0"),
     "SIM_PITCH_BATTER_POWER": os.environ.get("SIM523_LANE_PITCH_BATTER_POWER", "1.0"),
     "SIM_RESULT_DENSITY_POWER": os.environ.get("SIM523_LANE_RESULT_DENSITY_POWER", "1.0"),
-    "SIM_BB_BORN_SIGMA": os.environ.get("SIM523_LANE_BORN_SIGMA", "0"),
+    "SIM_BB_BORN_SIGMA": os.environ.get("SIM523_LANE_BORN_SIGMA", "1.0"),
     "SIM_BB_BORN_DENSITY_POWER": os.environ.get("SIM523_LANE_BORN_DENSITY_POWER", "1.0"),
     # SIM-523 part C (2026-09-08): the fielding draw's class filter, the batter
-    # sprint-speed kernel and the park wall-zone rule — OFF until part F.
-    "SIM_BB_CLASS_FILTER": os.environ.get("SIM523_LANE_CLASS_FILTER", "0"),
-    "SIM_BB_SPEED_SIGMA": os.environ.get("SIM523_LANE_SPEED_SIGMA", "0"),
-    "SIM_BB_BATTER_POWER": os.environ.get("SIM523_LANE_BB_BATTER_POWER", "1.0"),
-    "SIM_PARK_WALL_ZONE_ONLY": os.environ.get("SIM523_LANE_WALL_ZONE_ONLY", "0"),
+    # power and the park wall-zone rule — fitted and certified 2026-09-09.
+    "SIM_BB_CLASS_FILTER": os.environ.get("SIM523_LANE_CLASS_FILTER", "1"),
+    "SIM_BB_BATTER_POWER": os.environ.get("SIM523_LANE_BB_BATTER_POWER", "4"),
+    "SIM_PARK_WALL_ZONE_ONLY": os.environ.get("SIM523_LANE_WALL_ZONE_ONLY", "1"),
     "SIM_WALL_ZONE_DISTANCE": os.environ.get("SIM523_LANE_WALL_ZONE_DISTANCE", "300"),
-    "SIM_FENCE_STAGE": os.environ.get("SIM523_LANE_FENCE_STAGE", "0"),
+    "SIM_FENCE_STAGE": os.environ.get("SIM523_LANE_FENCE_STAGE", "1"),
     "SIM_FENCE_MARGIN": os.environ.get("SIM523_LANE_FENCE_MARGIN", "0"),
     # SIM-523 part D (2026-09-08): the pitching change as a draw — OFF until part F.
     "SIM_MANAGER_DRAW": os.environ.get("SIM523_LANE_MANAGER_DRAW", "0"),

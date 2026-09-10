@@ -277,7 +277,18 @@ v24); the fielding CHAIN lands as a join (the outcome pool's alignment `fielder_
 putout / assist position masks, builder sim523g.1, `BattedBallPool.fielders` + masks); the
 catcher embedding drops its got-away columns; the SIM-469 rebuild ran (the batting side, the
 pitch count and the times through the order are on the pitch pool). The chain FACTOR (the
-consumer) and the speed kernel's fit are follow-ons. The redesign's seven parts are built.
+consumer) and the speed kernel's fit are follow-ons. **THE REDESIGN COMPLETES 2026-09-09:**
+the actor bell curves are RETIRED for the score matrices (the runner engines score thin
+profiles, so the matrices cover the pools; the fielding draw's batter factor is the batter
+matrix; the sprint-speed kernel is gone; `SIM_ACTOR_MATRICES` is gone as a name), the
+certifying set is 45 games (three full-day slates, every team three times, every channel
+expected within 0.6% of the pool's totals — `scripts/sim523_game_set.py`, owner ruling) at
+45 × 130, and **PRODUCTION RUNS THE CERTIFIED ARM**: the matrices at their fitted powers
+(batter 1.0, fielder 1.2, steal-runner 12, advancement-runner 20, catcher-throwing 2,
+pitcher-steal 12) plus the fielding draw's fits (born-ball 1.0, class filter, batter power
+4, wall zone, fence stage) — every pool band green, runs +0.1%. The pitch / pitch-result
+split stays OFF: at its fitted powers (16 / 16 / 8) it reds strikeouts −2.4% on the set
+(SIM-527, the results-aware pitcher score). Next free ID SIM-528.
 
 - **DO NOT run the profile recompute** (`make profile-computor`) — but the reason changed on
   2026-08-13. SIM-501a/c CLOSED: SIM-457 is re-landed on the events-based out label, no profile

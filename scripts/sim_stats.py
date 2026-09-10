@@ -110,17 +110,13 @@ _REALISM_FLAGS = (
     "SIM_BB_PLATOON",
     "SIM_HOME_OFF_WEIGHT",  # SIM-491/476: the home-field DRAW weight (1.0 = off; prod 0.0)
     "SIM_PARK_KERNEL_SIGMA",  # SIM-491 pt.2: the park KERNEL bandwidth (0 = off)
-    "SIM_FIELDER_KERNEL_SIGMA",  # SIM-491 pt.3: the fielder KERNEL bandwidth (0 = off)
     "SIM_CATCHER_RECEIVING",  # SIM-523 part E: the receiving ratio on taken pitches
     "SIM_GOT_AWAY",  # SIM-517: honor the drawn row's got-away fact
     # SIM-523 (the play-picker redesign, parts A-F): the switches and the fitted powers.
-    "SIM_ACTOR_MATRICES",
     "SIM_PITCH_RESULT_SPLIT",
     "SIM_PITCH_PITCHER_POWER",
     "SIM_RESULT_PITCHER_POWER",
     "SIM_RESULT_BATTER_POWER",
-    "SIM_STEAL_RUNNER_SIGMA",
-    "SIM_ADV_RUNNER_SIGMA",
     "SIM_BB_BORN_SIGMA",
     "SIM_BB_CLASS_FILTER",
     "SIM_PARK_WALL_ZONE_ONLY",

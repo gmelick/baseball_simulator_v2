@@ -25,8 +25,6 @@ the sampler runs with a partial bundle (e.g. before the pitcher-sim nightly buil
 
 from __future__ import annotations
 
-import os
-
 import numpy as np
 
 from pipeline.batch.engine_artifacts import (
@@ -111,9 +109,6 @@ def _raise_neutral(
 #: composition theory (the runner kernel may concentrate attempted-row weight
 #: on elite-stealer-like rows more sharply than real attempt composition).
 #: Default OFF; never set in production.
-_STEAL_ABLATE_CATCHER = os.environ.get("SIM_STEAL_ABLATE_CATCHER", "0") == "1"
-_STEAL_ABLATE_RUNNER = os.environ.get("SIM_STEAL_ABLATE_RUNNER", "0") == "1"
-_STEAL_ABLATE_PITCHER = os.environ.get("SIM_STEAL_ABLATE_PITCHER", "0") == "1"
 
 
 #: SIM-512: positional number -> the fielder-embedding position name. Keep in
@@ -139,14 +134,12 @@ class FullPoolSampler:
         rng: np.random.Generator | None = None,
         *,
         sit_sigma: float = 2.0,
-        batter_sigma: float = 3.0,
         platoon_off_weight: float = 0.6,
         home_off_weight: float = 1.0,
     ) -> None:
         self.a = artifacts
         self.rng = rng if rng is not None else np.random.default_rng()
         self.sit_sigma = float(sit_sigma)
-        self.batter_sigma = float(batter_sigma)
         # SIM-413: the relative weight given to OPPOSITE-hand batted-ball pool rows
         # when the platoon reweight is active (same-hand rows keep weight 1.0). <1
         # softly conditions the batted-ball draw on the live pitcher hand so the
@@ -173,12 +166,9 @@ class FullPoolSampler:
         #: Per-hand cache of the per-row park factor (1.0 for unknown venues).
         self._bb_park: dict[str, np.ndarray] = {}
         # SIM-491 part 3 (the SIM-425b rebuild): the fielder-quality kernel.
-        # Weight each batted-ball row by the similarity between the LIVE
-        # defender at the row's position and the ROW's own fielder, over the
-        # OAA-centred feature set — a good live shortstop pulls the draw toward
-        # rows where good shortstops made plays. 0.0 (the default) disables
-        # the kernel EXACTLY. The bandwidth is a SIM-476 fit target.
-        self.fielder_sigma = 0.0
+        # SIM-523 (the kernel retirement, 2026-09-09): the fielder factor is the
+        # fielder engine's per-position score matrix (``actor_power['fielder']``);
+        # the SIM-491 OAA bell curve and its bandwidth are deleted.
         #: Per-hand cache of each row's fielder-embedding index (-1 = absent).
         self._bb_fielder_emb: dict[str, np.ndarray] = {}
         # SIM-523 part E — the catcher RECEIVING ratio (plan §3, step 4: the
@@ -254,7 +244,8 @@ class FullPoolSampler:
         # a live actor the matrix lacks is neutral (1.0), as is a pool row whose
         # actor the matrix lacks. The redesign's ordering rule (pitcher first,
         # catcher receiving last) is enforced by the fitted powers, not here.
-        self.actor_matrices = False
+        # SIM-523 (the kernel retirement, 2026-09-09): the score matrices are the
+        # ONLY actor factors; a bundle without a matrix leaves that actor neutral.
         self.actor_power: dict[str, float] = {}
         #: (matrix name) -> int64 array mapping the actor EMBEDDING's rows to
         #: matrix columns (-1 = unscored); built once per matrix per process.
@@ -328,16 +319,11 @@ class FullPoolSampler:
         #     popup / bunt) is a hard filter on the base-out cell — the third
         #     filter after the cell and the batter hand. An empty (cell,
         #     class) falls back to the whole cell and is counted.
-        #   * ``bb_speed_sigma``: a Gaussian on the z-scored sprint-speed
-        #     distance between the live batter and each row's batter (the
-        #     baserunner embedding), normalized to a mean of 1 — a slow batter
-        #     draws plays hit by slow batters.
         #   * ``park_wall_zone_only``: the park kernel applies only when the
         #     born ball is in the WALL ZONE — an air ball (line drive / fly
         #     ball) carrying at least ``wall_zone_distance`` feet (part C's
         #     fence stage replaces the distance with the live park's fence).
         self.bb_class_filter = False
-        self.bb_speed_sigma = 0.0
         # SIM-523 (the kernel retirement): the fielding draw's batter factor is
         # the batter engine's score raised to this power when the matrices are
         # on (1.0 = the raw score); off, the retired kernel, byte-identical.
@@ -374,7 +360,6 @@ class FullPoolSampler:
         #: Per-hand home-run mask over the batted-ball pool.
         self._bb_hr_cache: dict[str, np.ndarray] = {}
         #: Per-hand z-scored sprint speed per batted-ball row (NaN = unknown).
-        self._bb_speed_cache: dict[str, np.ndarray | None] = {}
         self._bb_bat_cols: dict[str, np.ndarray | None] = {}
         #: Per-count raw per-PA weights and the pitcher / batter factors,
         #: kept only while the split is on (the result draw re-weights them).
@@ -396,18 +381,10 @@ class FullPoolSampler:
         self._bb_pgeom_stats: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
         # Per-pool precompute: dense candidate->profile indices for O(1) gathers.
         self._pool_cache: dict[str, dict] = {}
-        # SIM-430 hot-path caches (all hold CONSTANTS that the original code
-        # recomputed every PA — the per-game profiler's top costs):
-        #   * _vecs_z: the z-scored batter-embedding matrix, recomputed in both
-        #     _f_batter and _batter_aff every PA (~0.5 s/game) though it never
-        #     changes once the artifacts are loaded.
-        #   * _aff_cache: the per-batter RBF affinity vector keyed by batter_key,
-        #     so the pitch-pool draw and the batted-ball draw in the SAME PA (and
-        #     the same batter across PAs) reuse one einsum+exp pass.
-        # Both are pure memoization — identical numeric output, just hoisted out
-        # of the per-PA loop.
-        self._vecs_z: np.ndarray | None = None
-        self._aff_cache: dict[str, np.ndarray] = {}
+        # SIM-430 hot-path caches hold CONSTANTS the original code recomputed
+        # every PA. SIM-523 (the kernel retirement): the batter-embedding z-scores
+        # and the affinity memo went with the batter kernel; the batter factor is
+        # the matrix row, gathered per pool row through ``_emb_to_mat_cache``.
         # State across the matchup.
         self._hand: str | None = None
         self._base: np.ndarray | None = None  # f_pitcher * recency  (half-inning)
@@ -452,25 +429,15 @@ class FullPoolSampler:
         self._bb_rows: np.ndarray | None = None
         # SIM-512: per-decision advancement-pool precompute.
         self._adv_meta_cache: dict[str, dict] = {}
-        #: SIM-512 kernel bandwidths — the same hyperparameter class as
-        #: ``steal_sigma`` and SIM-476 fit targets. ``adv_sigma`` conditions on
-        #: the actors (runner legs/decisions, fielder arm); ``adv_feat_sigma``
-        #: on the z-scored throw geometry (EV, LA, spray, distance, outs).
-        self.adv_sigma = 1.0
+        #: SIM-512: the advancement draws' throw-geometry bandwidth (EV, LA,
+        #: spray, distance, outs — the ball, not an actor).
         self.adv_feat_sigma = 1.0
-        #: SIM-474 kernel bandwidths — the same hyperparameter class as
-        #: ``sit_sigma``/``batter_sigma`` and a SIM-476 temperature-fit target.
-        #: 1.0 conditions HARD on the actor (a maximally-different runner keeps
-        #: ~0.14 weight over the 4 steal features): attempt rates vary more by
-        #: runner than any other factor here, so the runner kernel must bite.
-        self.steal_sigma = 1.0
+        #: SIM-474: the steal draw's score-difference bandwidth (the situation,
+        #: not an actor). SIM-523 (the kernel retirement, 2026-09-09): the actor
+        #: bell curves of the steal and advancement draws are deleted — the
+        #: runner, pitcher, catcher and fielder factors are their engines' score
+        #: matrices at fitted powers.
         self.steal_score_sigma = 2.0
-        # SIM-523 part F: the RUNNER kernels' own bandwidths (None = the shared
-        # ``steal_sigma`` / ``adv_sigma``, byte-identical). The fit found the
-        # runner kernel at 1.0 reproducing 18% of the pool's own runner spread
-        # in steal attempts (7% in advancement); 0.25 reaches 72% (41%).
-        self.steal_runner_sigma: float | None = None
-        self.adv_runner_sigma: float | None = None
 
     # ---- per-pool one-time precompute ------------------------------------
     def _pool_meta(self, hand: str) -> dict:
@@ -526,13 +493,10 @@ class FullPoolSampler:
             "sit_baseout": np.ascontiguousarray(pool.sit[:, 2:6]),
             # SIM-523 part F: the rows whose pitcher has no profile (the
             # draw-neutral rule at a power) and the row counts per pitcher
-            # profile / batter-embedding row (the neutral means).
+            # profile (the neutral mean; the batter's counts are per matrix
+            # column, ``bat_col_counts``).
             "prof_unscored": pool_prof < 0,
             "prof_counts": np.bincount(pool_prof[pool_prof >= 0], minlength=max(1, len(pidx))),
-            "bat_emb_counts": np.bincount(
-                pool_bat[pool_bat >= 0],
-                minlength=max(1, len(bemb["key_index"]) if bemb is not None else 1),
-            ),
         }
         self._pool_cache[hand] = meta
         return meta
@@ -547,32 +511,6 @@ class FullPoolSampler:
         pp = meta["pool_prof"]
         out = np.where(pp >= 0, prof_score[np.clip(pp, 0, n_prof - 1)], np.float32(1.0))
         return out.astype(np.float32)
-
-    def _batter_vecs_z(self, bemb: dict) -> np.ndarray:
-        """The z-scored batter-embedding matrix (SIM-430: cached — constant across
-        the whole sampler life, but the original recomputed it per PA)."""
-        if self._vecs_z is None:
-            self._vecs_z = ((bemb["vecs"] - bemb["mean"]) / bemb["std"]).astype(np.float32)
-        return self._vecs_z
-
-    def _batter_affinity(self, batter_key: str) -> np.ndarray | None:
-        """Per-embedding-row RBF affinity to ``batter_key`` (None if absent),
-        memoized by batter_key (SIM-430). Shared by the pitch-pool factor
-        (:meth:`_f_batter`) and the batted-ball factor (:meth:`_batter_aff`), so a
-        batter's affinity is computed at most once — not twice per PA, every PA."""
-        cached = self._aff_cache.get(batter_key)
-        if cached is not None:
-            return cached
-        bemb = self.a.actor_emb.get("batter")
-        if bemb is None or batter_key not in bemb["key_index"]:
-            return None
-        vecs_z = self._batter_vecs_z(bemb)
-        q = vecs_z[bemb["key_index"][batter_key]]
-        diff = vecs_z - q
-        d2 = np.einsum("ij,ij->i", diff, diff)
-        aff = np.exp(-d2 / (2.0 * self.batter_sigma**2 * vecs_z.shape[1])).astype(np.float32)
-        self._aff_cache[batter_key] = aff
-        return aff
 
     # ---- SIM-523 part F: the draw-neutral rule for unscored rows ----------
     # A pool row whose pitcher / batter has no score reads 1.0 in the raw
@@ -635,11 +573,10 @@ class FullPoolSampler:
         return mean
 
     def _batter_matrix_on(self) -> bool:
-        """The batter matrix reaches the pitch draws: the switch on, a power
-        above 0 (0 keeps the kernel) and the bundle carrying the matrix."""
+        """The batter matrix reaches the pitch draws: a power above 0 (0 turns
+        the factor off) and the bundle carrying the matrix."""
         return (
-            self.actor_matrices
-            and float(self.actor_power.get("batter", 1.0)) > 0.0
+            float(self.actor_power.get("batter", 1.0)) > 0.0
             and self._actor_matrix("batter") is not None
             and self._emb_to_mat("batter") is not None
         )
@@ -692,10 +629,7 @@ class FullPoolSampler:
             if a != 1.0:
                 row = np.power(np.clip(row, 0.0, None), a)
             return row, counts
-        aff = self._batter_affinity(batter_key)
-        if aff is None:
-            return None
-        return np.asarray(aff, dtype=np.float64), meta["bat_emb_counts"]
+        return None
 
     def _neutral_mean_batter(self, hand: str, batter_key: str, power: float) -> float:
         """The mean of f_batter^power over the hand pool's SCORED rows (1.0 at
@@ -739,13 +673,7 @@ class FullPoolSampler:
                     sc = np.power(np.clip(sc, 0.0, None), np.float32(a)).astype(np.float32)
                 out[valid] = sc
             return out
-        aff = self._batter_affinity(batter_key)
-        if aff is None:
-            return np.ones(rows.size, dtype=np.float32)
-        pbr = self._pool_meta(hand)["pool_bat"][rows]
-        return np.where(pbr >= 0, aff[np.clip(pbr, 0, len(aff) - 1)], np.float32(1.0)).astype(
-            np.float32
-        )
+        return np.ones(rows.size, dtype=np.float32)
 
     # ---- SIM-523 part A: the actor score-matrix lookups --------------------
     #: Which actor embedding each matrix's keys index (fielder matrices are
@@ -785,10 +713,10 @@ class FullPoolSampler:
         """The live actor's matrix row gathered onto ``emb_rows`` (embedding
         indices per pool row, -1 = absent), raised to the factor's power.
         Neutral (1.0) where either side is unscored. None when the bundle has
-        no such matrix (the caller falls back to its kernel)."""
+        no such matrix or the power is 0 (the caller leaves the actor neutral)."""
         power = float(self.actor_power.get(name, 1.0))
         if power <= 0.0:
-            return None  # SIM-523 part F: power 0 keeps this actor's kernel
+            return None  # SIM-523: power 0 turns this actor's factor off
         entry = self._actor_matrix(name)
         e2m = self._emb_to_mat(name)
         if entry is None or e2m is None:
@@ -813,17 +741,12 @@ class FullPoolSampler:
 
     def _f_batter(self, hand: str, batter_key: str) -> np.ndarray:
         meta = self._pool_meta(hand)
-        if self.actor_matrices:
-            f = self._matrix_gather("batter", batter_key, meta["pool_bat"])
-            if f is not None:
-                return f
-        aff = self._batter_affinity(batter_key)
-        if aff is None:
-            return np.ones(meta["pool"].n, dtype=np.float32)
-        pb = meta["pool_bat"]
-        return np.where(pb >= 0, aff[np.clip(pb, 0, len(aff) - 1)], np.float32(1.0)).astype(
-            np.float32
-        )
+        # SIM-523 (the kernel retirement): the batter engine's score matrix is
+        # the factor; a bundle without it leaves the batter neutral.
+        f = self._matrix_gather("batter", batter_key, meta["pool_bat"])
+        if f is not None:
+            return f
+        return np.ones(meta["pool"].n, dtype=np.float32)
 
     def _f_situation(self, hand: str, state: np.ndarray) -> np.ndarray:
         pool = self.a.pools[hand]
@@ -1576,15 +1499,6 @@ class FullPoolSampler:
         return out
 
     # ---- SIM-425: batted-ball draw (step 5) -------------------------------
-    def _batter_aff(self, batter_key: str) -> np.ndarray | None:
-        """Per-batter-embedding RBF affinity to the current batter (None if absent).
-
-        SIM-430: delegates to the memoized :meth:`_batter_affinity` so the
-        batted-ball draw reuses the affinity the pitch-pool factor already computed
-        for this batter (was a duplicate full einsum+exp + a per-call vecs_z
-        recompute)."""
-        return self._batter_affinity(batter_key)
-
     def _bb_batter_cols(self, hand: str) -> np.ndarray | None:
         """The batter matrix column per batted-ball row (-1 = unscored); None
         without the matrix. Cached per hand."""
@@ -1598,10 +1512,9 @@ class FullPoolSampler:
 
     def _bb_batter_factor(self, hand: str, batter_key: str, rows: np.ndarray) -> np.ndarray:
         """SIM-523 (the kernel retirement): the fielding draw's batter factor on
-        ``rows`` — the batter engine's score raised to ``bb_batter_power`` when
-        the matrices are on (at a power other than 1 an unscored row weighs
-        the rows' mean scored weight, draw-neutral); the retired kernel's
-        affinity when they are off (byte-identical)."""
+        ``rows`` — the batter engine's score raised to ``bb_batter_power`` (at a
+        power other than 1 an unscored row weighs the rows' mean scored weight,
+        draw-neutral); ones on a bundle without the batter matrix."""
         if self._batter_matrix_on():
             entry = self._actor_matrix("batter")
             live = entry["index"].get(batter_key) if entry is not None else None
@@ -1621,13 +1534,7 @@ class FullPoolSampler:
                 out[~valid] = np.float32(sc.mean())
             out[valid] = sc
             return out
-        aff = self._batter_aff(batter_key)
-        if aff is None:
-            return np.ones(rows.size, dtype=np.float32)
-        pbr = self._bb_pool_bat_idx(hand)[rows]
-        return np.where(pbr >= 0, aff[np.clip(pbr, 0, len(aff) - 1)], np.float32(1.0)).astype(
-            np.float32
-        )
+        return np.ones(rows.size, dtype=np.float32)
 
     def _bb_pool_bat_idx(self, hand: str) -> np.ndarray:
         if hand in self._bb_pool_bat:
@@ -1712,28 +1619,24 @@ class FullPoolSampler:
         return out
 
     def _fielder_matrices_on(self) -> bool:
-        """SIM-523 part A: the matrix path applies whenever the switch is on
-        and the bundle carries at least one per-position fielder matrix."""
-        return (
-            self.actor_matrices
-            and float(self.actor_power.get("fielder", 1.0)) > 0.0
-            and any(
-                self._actor_matrix(f"fielder_{n}") is not None for n in _POS_NUM_TO_NAME.values()
-            )
+        """SIM-523 part A: the fielder factor applies whenever the fielder power
+        is above 0 and the bundle carries at least one per-position matrix."""
+        return float(self.actor_power.get("fielder", 1.0)) > 0.0 and any(
+            self._actor_matrix(f"fielder_{n}") is not None for n in _POS_NUM_TO_NAME.values()
         )
 
     def _f_live_fielder(
         self, hand: str, rows: np.ndarray, defense_map: dict[str, int], season: int
     ) -> np.ndarray | None:
-        """SIM-491 part 3: per-row Gaussian similarity between the LIVE defender
-        at the row's position and the row's own fielder, over
-        :data:`_FIELDER_BB_FEATURES`. 1.0 (neutral) for rows where either side
-        is absent from the embedding; None when the factor is unavailable."""
-        z = self._emb_z("fielder")
+        """SIM-523 (the kernel retirement): per row, the LIVE defender at the
+        row's position scored against the row's own fielder by the fielder
+        engine's per-position matrix, raised to the fielder power and rescaled
+        to a mean of 1 within each position. 1.0 (neutral) for rows where
+        either side is unscored; None when the bundle has no fielder
+        embedding (the pool rows cannot be keyed)."""
         emb = self.a.actor_emb.get("fielder")
-        cols = self._steal_feat_cols("fielder", self._FIELDER_BB_FEATURES)
         row_emb = self._bb_fielder_emb_rows(hand)
-        if z is None or emb is None or cols is None or row_emb is None:
+        if emb is None or row_emb is None:
             return None
         ki = emb["key_index"]
         # The live defender's embedding index per position NUMBER (the row's
@@ -1747,41 +1650,35 @@ class FullPoolSampler:
         pos = np.clip(np.asarray(pool.fielder_pos)[rows].astype(np.int64), 0, 9)
         live_idx = live_by_pos[pos]
         row_idx = row_emb[rows]
-        valid = (live_idx >= 0) & (row_idx >= 0)
         out = np.ones(len(rows), dtype=np.float32)
-        if not valid.any():
+        if not ((live_idx >= 0) & (row_idx >= 0)).any():
             return out
-        if self._fielder_matrices_on():
-            # SIM-523 part A: the fielder engine's per-position score matrix,
-            # gathered per position; rows at a position without a matrix or a
-            # live key stay neutral. The per-position mean-1 rescale below still
-            # applies (a factor must never move balls between positions).
-            valid = np.zeros(len(rows), dtype=bool)
-            for p, name in _POS_NUM_TO_NAME.items():
-                at = pos == p
-                if not at.any():
-                    continue
-                pid = defense_map.get(name)
-                if not pid:
-                    continue
-                f = self._matrix_gather(
-                    f"fielder_{name}", f"{int(pid)}:{name}:{int(season)}", row_idx[at]
-                )
-                if f is None:
-                    continue
-                out[at] = f
-                valid |= at & (row_idx >= 0)
-        else:
-            diff = z[row_idx[valid]][:, cols] - z[live_idx[valid]][:, cols]
-            d2 = np.einsum("ij,ij->i", diff, diff)
-            out[valid] = np.exp(-d2 / (2.0 * self.fielder_sigma**2 * len(cols))).astype(np.float32)
+        # The fielder engine's per-position score matrix, gathered per
+        # position; rows at a position without a matrix or a live key stay
+        # neutral. The per-position mean-1 rescale below still applies (a
+        # factor must never move balls between positions).
+        valid = np.zeros(len(rows), dtype=bool)
+        for p, name in _POS_NUM_TO_NAME.items():
+            at = pos == p
+            if not at.any():
+                continue
+            pid = defense_map.get(name)
+            if not pid:
+                continue
+            f = self._matrix_gather(
+                f"fielder_{name}", f"{int(pid)}:{name}:{int(season)}", row_idx[at]
+            )
+            if f is None:
+                continue
+            out[at] = f
+            valid |= at & (row_idx >= 0)
         # SIM-476: the factor must not move batted balls BETWEEN positions.
         # Where a ball goes is batted-ball physics (the batter/situation
         # kernels); the fielder factor's job is to pick WHICH play at that
-        # position, given the live defender. Raw Gaussian weights break that:
-        # a position whose live defender sits near the middle of the OAA
-        # distribution outweighs a position with an extreme defender, so the
-        # draw redistributes balls toward well-matched positions (measured:
+        # position, given the live defender. Raw weights break that: a
+        # position whose live defender scores well against the pool outweighs
+        # a position with a poorly scored defender, so the draw redistributes
+        # balls toward well-matched positions (measured on the retired kernel:
         # the OF share of drawn balls rose 52.7% -> 57.4% at sigma=0.5, which
         # alone inflates hits ~+6% — the 2026-09-01 lane red). Normalizing to
         # a MEAN of 1 within each position keeps the within-position
@@ -1793,8 +1690,8 @@ class FullPoolSampler:
             if mean_w > 0.0:
                 out[m] = out[m] / np.float32(mean_w)
             else:
-                # Every weight at this position underflowed (an extreme live
-                # defender in float32): the factor has no usable discrimination
+                # Every weight at this position is zero (a live defender scored
+                # 0 against every row): the factor has no usable discrimination
                 # here, so it goes NEUTRAL — never zero, which would starve the
                 # position of batted balls entirely.
                 out[m] = np.float32(1.0)
@@ -1884,8 +1781,7 @@ class FullPoolSampler:
 
         SIM-523 part C: with :attr:`bb_class_filter` on and a born ball whose
         class is known, the cell is hard-filtered to that class (an empty
-        class falls back to the cell); :attr:`bb_speed_sigma` > 0 weights
-        rows by the batter's sprint-speed similarity; with
+        class falls back to the cell); with
         :attr:`park_wall_zone_only` on the park kernel applies only when the
         born ball is in the wall zone. With :attr:`fence_stage` on and
         ``venue_id`` (the live park) given, the born ball's carry against
@@ -1922,11 +1818,11 @@ class FullPoolSampler:
         run-environment-similar parks. Omitted / sigma 0 / no map -> the draw
         is unchanged.
 
-        SIM-491 part 3 (SIM-425b): when ``defense_map`` (position name ->
-        live defender id) is supplied AND :attr:`fielder_sigma` > 0, each row
-        is weighted by the similarity between the LIVE defender at the row's
-        position and the row's own fielder (:data:`_FIELDER_BB_FEATURES`).
-        Omitted / sigma 0 / a pre-0012 bundle -> the draw is unchanged."""
+        SIM-523 (the kernel retirement): when ``defense_map`` (position name
+        -> live defender id) is supplied and the bundle carries the per-position
+        fielder matrices, each row is weighted by the LIVE defender's engine
+        score against the row's own fielder, raised to the fielder power.
+        Omitted / no matrices / a pre-0012 bundle -> the draw is unchanged."""
         self._bb_hand = hand
         pool = self.a.bb_pools[hand]
         sv = np.asarray(state, dtype=np.float32)
@@ -1981,7 +1877,7 @@ class FullPoolSampler:
             if pf is not None:
                 d = pf[rows] - np.float32(park_run_factor)
                 w = w * np.exp(-(d * d) / (2.0 * self.park_sigma**2)).astype(np.float32)
-        if defense_map and (self.fielder_sigma > 0.0 or self._fielder_matrices_on()):
+        if defense_map and self._fielder_matrices_on():
             ff = self._f_live_fielder(hand, rows, defense_map, int(live_season or 0))
             if ff is not None:
                 w = w * ff
@@ -1995,10 +1891,6 @@ class FullPoolSampler:
                 w = w * fbb
                 if self.bb_born_density_power != 0.0:
                     w = w * self._born_inv_density(hand, meta, rows)
-        if self.bb_speed_sigma > 0.0:
-            fsp = self._f_batter_speed(hand, rows, batter_key)
-            if fsp is not None:
-                w = w * fsp
         cdf = np.cumsum(w, dtype=np.float64)
         if not (cdf[-1] > 0.0) or not np.isfinite(cdf[-1]):
             # Every weight underflowed (a narrow candidate set under tight
@@ -2127,62 +2019,6 @@ class FullPoolSampler:
             self.fence_counts[4] += 1
             return rows
         return sub
-
-    def _bb_speed_z(self, hand: str) -> np.ndarray | None:
-        """Per batted-ball row, the batter's z-scored sprint speed from the
-        baserunner embedding (NaN = unknown); None when the embedding or its
-        sprint-speed feature is absent."""
-        if hand in self._bb_speed_cache:
-            return self._bb_speed_cache[hand]
-        emb = self.a.actor_emb.get("baserunner")
-        out: np.ndarray | None = None
-        if emb is not None and "sprint_speed" in list(emb.get("features", [])):
-            col = list(emb["features"]).index("sprint_speed")
-            pool = self.a.bb_pools[hand]
-            ki = emb["key_index"]
-            idx = np.fromiter(
-                (
-                    ki.get(f"{int(b)}:{int(s)}", -1)
-                    for b, s in zip(pool.batter_id, pool.season, strict=False)
-                ),
-                dtype=np.int64,
-                count=pool.n,
-            )
-            z = self._emb_z("baserunner")
-            if z is not None:
-                out = np.full(pool.n, np.nan, dtype=np.float32)
-                ok = idx >= 0
-                out[ok] = z[idx[ok], col]
-        self._bb_speed_cache[hand] = out
-        return out
-
-    def _f_batter_speed(self, hand: str, rows: np.ndarray, batter_key: str) -> np.ndarray | None:
-        """The sprint-speed factor over the cell ``rows``: a Gaussian on the
-        z-scored speed distance between the live batter and each row's
-        batter, normalized to a mean of 1 over the rows whose batter has a
-        speed (an unknown row is exactly neutral). None when the live batter
-        or the embedding has no speed."""
-        zs = self._bb_speed_z(hand)
-        emb = self.a.actor_emb.get("baserunner")
-        if zs is None or emb is None:
-            return None
-        li = emb["key_index"].get(batter_key)
-        z = self._emb_z("baserunner")
-        if li is None or z is None:
-            return None
-        col = list(emb["features"]).index("sprint_speed")
-        live = float(z[li, col])
-        if not np.isfinite(live):
-            return None
-        zr = zs[rows]
-        valid = np.isfinite(zr)
-        out = np.ones(len(rows), dtype=np.float32)
-        if valid.any():
-            d = zr[valid] - np.float32(live)
-            f = np.exp(-(d * d) / (2.0 * self.bb_speed_sigma**2)).astype(np.float32)
-            mean_w = float(f.mean())
-            out[valid] = f / np.float32(mean_w) if mean_w > 0.0 else np.float32(1.0)
-        return out
 
     # ---- SIM-523 part B: the born batted ball on the fielding draw ---------
     def _bb_born_features(self, hand: str) -> np.ndarray:
@@ -2776,42 +2612,16 @@ class FullPoolSampler:
         emb_rows_all: np.ndarray | None,
         rows: np.ndarray,
         feat_names: tuple[str, ...],
-        sigma: float | None = None,
         matrix: str | None = None,
     ) -> np.ndarray | None:
-        """Gaussian similarity between the LIVE actor and each pool row's actor
-        over the given feature subset; 1.0 (neutral) for rows whose actor is
-        absent from the embedding, None when the whole factor is unavailable.
-        ``sigma`` overrides the steal bandwidth (the SIM-512 advancement draws
-        pass ``adv_sigma``). SIM-523 part A: with ``actor_matrices`` on and a
-        ``matrix`` name the bundle carries, the factor is that engine's score
-        matrix gathered onto the rows instead (the kernel is the fallback)."""
-        if emb_rows_all is None:
+        """The LIVE actor's engine score against each pool row's actor, read
+        from the ``matrix`` the bundle carries and raised to its power; 1.0
+        (neutral) for rows whose actor is unscored, None when the bundle has no
+        such matrix (the actor stays neutral). ``feat_names`` named the retired
+        kernel's features; the call sites still pass it (SIM-523)."""
+        if emb_rows_all is None or matrix is None:
             return None
-        if self.actor_matrices and matrix is not None:
-            f = self._matrix_gather(matrix, live_key, emb_rows_all[rows])
-            if f is not None:
-                return f
-        z = self._emb_z(actor)
-        emb = self.a.actor_emb.get(actor)
-        if z is None or emb is None:
-            return None
-        live_idx = emb["key_index"].get(live_key)
-        cols = self._steal_feat_cols(actor, feat_names)
-        if live_idx is None or cols is None:
-            return None
-        s = float(sigma) if sigma is not None else self.steal_sigma
-        live = z[live_idx][cols]
-        row_idx = emb_rows_all[rows]
-        valid = row_idx >= 0
-        out = np.ones(len(rows), dtype=np.float32)
-        if not valid.any():
-            return out
-        sub = z[row_idx[valid]][:, cols]
-        diff = sub - live
-        d2 = np.einsum("ij,ij->i", diff, diff)
-        out[valid] = np.exp(-d2 / (2.0 * s**2 * len(cols))).astype(np.float32)
-        return out
+        return self._matrix_gather(matrix, live_key, emb_rows_all[rows])
 
     def steal_draw(
         self,
@@ -2855,19 +2665,18 @@ class FullPoolSampler:
         w = pool.recency[rows].astype(np.float32).copy()
         sd = pool.sit[rows, 3] - np.float32(score_diff)
         w *= np.exp(-(sd * sd) / (2.0 * self.steal_score_sigma**2)).astype(np.float32)
-        if not _STEAL_ABLATE_RUNNER:
+        if True:
             f = self._steal_actor_factor(
                 "baserunner",
                 runner_key,
                 meta["runner_rows"],
                 rows,
                 self._RUNNER_STEAL_FEATURES,
-                sigma=self.steal_runner_sigma,
                 matrix="runner_steal",
             )
             if f is not None:
                 w *= f
-        if not _STEAL_ABLATE_PITCHER:
+        if True:
             f = self._steal_actor_factor(
                 "pitcher_steal",
                 pitcher_key,
@@ -2878,7 +2687,7 @@ class FullPoolSampler:
             )
             if f is not None:
                 w *= f
-        if catcher_key and not _STEAL_ABLATE_CATCHER:
+        if catcher_key:
             f = self._steal_actor_factor(
                 "catcher",
                 catcher_key,
@@ -3032,7 +2841,6 @@ class FullPoolSampler:
             meta["runner_rows"],
             meta["rows"],
             self._RUNNER_ADV_FEATURES,
-            sigma=(self.adv_runner_sigma if self.adv_runner_sigma is not None else self.adv_sigma),
             matrix="runner_adv",
         )
         if f is not None:
@@ -3047,7 +2855,6 @@ class FullPoolSampler:
                 meta["fielder_rows"],
                 meta["rows"],
                 self._FIELDER_ADV_FEATURES,
-                sigma=self.adv_sigma,
                 matrix=(f"fielder_{parts[1]}" if len(parts) == 3 else None),
             )
             if f is not None:

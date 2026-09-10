@@ -136,7 +136,6 @@ def main() -> int:
     ap.add_argument("--born-sigma", type=float, default=0.0)
     # SIM-523 part C: the fielding draw's filters and the fence stage (ON arm only).
     ap.add_argument("--class-filter", action="store_true")
-    ap.add_argument("--speed-sigma", type=float, default=0.0)
     ap.add_argument("--wall-zone-only", action="store_true")
     ap.add_argument("--fence-stage", action="store_true")
     ap.add_argument("--fence-margin", type=float, default=10.0)
@@ -171,7 +170,6 @@ def main() -> int:
             fp.pitch_batter_power = args.pitch_batter_power
             fp.bb_born_sigma = args.born_sigma if on else 0.0
             fp.bb_class_filter = bool(args.class_filter and on)
-            fp.bb_speed_sigma = args.speed_sigma if on else 0.0
             fp.park_wall_zone_only = bool(args.wall_zone_only and on)
             fp.fence_stage = bool(args.fence_stage and on)
             fp.fence_margin = args.fence_margin
@@ -206,7 +204,7 @@ def main() -> int:
         f"\n=== the pitch / pitch-result split: {len(states)} games x {args.iters} iterations per arm "
         f"(sigma {args.sigma}, density power {args.density_power}, powers pitcher {args.result_pitcher_power} / batter "
         f"{args.result_batter_power} / pitch-batter {args.pitch_batter_power}, born sigma {args.born_sigma}; "
-        f"class filter {args.class_filter}, speed sigma {args.speed_sigma}, wall-zone-only "
+        f"class filter {args.class_filter}, wall-zone-only "
         f"{args.wall_zone_only}, fence stage {args.fence_stage} margin {args.fence_margin}) ==="
     )
     cols = ("ball", "called_strike", "swinging_strike", "foul", "in_play", "hit_by_pitch")

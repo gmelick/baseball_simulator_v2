@@ -149,8 +149,6 @@ def _sampler(
     fp = FullPoolSampler(art, np.random.default_rng(seed))
     fp.pitch_result_split = on
     fp.result_pitch_sigma = sigma
-    if actor_sim:
-        fp.actor_matrices = True
     if cell:
         fp.pitch_cell_index = True
         fp.pitch_min_cell = 0
