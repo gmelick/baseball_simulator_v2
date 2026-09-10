@@ -88,7 +88,7 @@ GMM_SINGLE_FIT_TARGET_MS = 5_000.0  # one small synthetic fit budget (5s, very l
 
 # Bench 4 — Phase 4 sim-loop per-pitch step (SIM-119 §3 per-pitch budget).
 #   The SIM-119 budget allocates ~1.233 ms across the 8 per-pitch loop steps
-#   (docs/perf/2026-06-03-sim-loop-time-budget.md §3).  ~81% of that is the
+#   (docs/archive/perf/2026-06-03-sim-loop-time-budget.md §3).  ~81% of that is the
 #   pitcher query() (Bench 1), which is DB/FAISS-backed and NOT exercised here:
 #   this bench times the *count machine + outcome determination + fielding/
 #   baserunning + state-update/loop-control* steps (1, 4, 5, 6, 7, 8) of

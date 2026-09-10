@@ -1,4 +1,10 @@
-# Product Backlog
+# Product Backlog — frozen history
+
+> **This file is archived and frozen as of 2026-09-10.** It is no longer updated. The current
+> list of open tickets lives in `BACKLOG.xlsx` at the repo root (one tab, ranked by priority,
+> with a plain-English description, definition of done, and proposed solution per ticket).
+> This file is kept only as the narrative record of every ticket closed before the switch —
+> see CLAUDE.md §2b for why the format changed.
 
 # 🏁 2026-09-09 — THE PLAY-PICKER REDESIGN COMPLETES (SIM-523): the actor kernels RETIRED for the score matrices, the balanced 45-game certifying set, the fits on it, two 45×130 lanes — FLIPPED to the certified arm; the split's strikeout shortfall filed as SIM-527 (next free ID → SIM-528)
 

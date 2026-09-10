@@ -865,7 +865,7 @@ CREATE TABLE IF NOT EXISTS sim.pitch_pool (
 -- the pre-filter is fully index-served, and the outcome_type/count indexes (which
 -- SIM-115 wrongly kept) are dropped. DuckDB's columnar zone maps cover the
 -- bulk-scan columns. See db/migrations/duckdb/0006_sim337_reconcile_pool_indexes.sql
--- and docs/architecture/2026-05-21-play-pool-query-contracts.md §6.2.
+-- and docs/archive/architecture/2026-05-21-play-pool-query-contracts.md §6.2.
 CREATE INDEX IF NOT EXISTS idx_pp_pitcher_season       ON sim.pitch_pool(pitcher_id, season);
 CREATE INDEX IF NOT EXISTS idx_pp_pitcher              ON sim.pitch_pool(pitcher_id);
 CREATE INDEX IF NOT EXISTS idx_pp_season               ON sim.pitch_pool(season);

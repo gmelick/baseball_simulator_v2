@@ -11,7 +11,7 @@ behaviour that reads those columns, each behind its own env gate:
     reweights the batted-ball draw toward the live pitcher-hand matchup.
   * **SIM-491/476** — the home / park / fielder DRAW-WEIGHT kernels
     (``bat_home`` match, run-factor Gaussian, live-defender OAA Gaussian) plus
-    the ``last_battedball_fielder`` / ``fielder_quality`` accessors.
+    the ``last_battedball_fielder`` accessor.
 
 All are graceful-optional: with the knob at its off value / the data absent
 they are a no-op. The SIM-425b post-draw fielder nudge and the SIM-411 park
@@ -308,13 +308,6 @@ class TestFielderAccessors:
         fp.battedball_new_pa("R", "700:2024", np.zeros(6, np.float32))
         fp.battedball_draw()
         assert fp.last_battedball_fielder() == (6, 555, _SEASON)  # (pos, fid, pool season)
-
-    def test_fielder_quality_reads_oaa_by_position_key(self):
-        fp = FullPoolSampler(_fielder_artifacts(), np.random.default_rng(0))
-        assert fp.fielder_quality(555, "SS", _SEASON) == -5.0
-        assert fp.fielder_quality(666, "SS", _SEASON) == 10.0
-        assert fp.fielder_quality(999, "SS", _SEASON) is None  # unknown
-        assert fp.fielder_quality(555, "2B", _SEASON) is None  # wrong position
 
 
 if __name__ == "__main__":  # pragma: no cover

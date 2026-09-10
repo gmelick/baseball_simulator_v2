@@ -51,7 +51,7 @@
     at ~6**, so a single game can't go <30 s on this hardware without fewer iters or a smaller pool. The
     throughput fix: **the CLV backtest is parallelized ACROSS games** (`--workers`, forkserver,
     byte-identical, ~373 MB/worker) → ~6× → **~20–32 s effective/game**; n=65 gives the same CLV as n=100.
-  - **Next free ticket ID: read it in `BACKLOG.md` (SIM-528 as of 2026-09-10).** Open work then: **SIM-429** (granular run-conversion + K/BB prop
+  - **Next free ticket ID: read it in `BACKLOG.xlsx` (SIM-528 as of 2026-09-10).** Open work then: **SIM-429** (granular run-conversion + K/BB prop
     calibration to DEVELOP a CLV edge — the now-measurable gold-standard says there is none yet); the
     realism follow-ons fold into it (≥400×≥20 magnitude calibration of the SIM-411/413/425b nudges; wiring
     the real per-team SIM-427 profiles into the SIM-434 decision model, which currently uses a league-flat
@@ -91,9 +91,9 @@
   draw from `sim.steal_opportunity_pool` (~2.37M per-pitch opportunities, attempted or not). The
   600-sim smoke reads **SB 0.70 + CS 0.09 = 0.79 attempts/team-game vs MLB 0.76**; the safe split
   (89% vs ~78%) is a certifying-lane question before any kernel bandwidth moves.
-  **Next free ticket ID at the time: SIM-433** (SIM-528 as of 2026-09-10 — `BACKLOG.md` is the
-  authority; SIM-430 = the full-pool `/simulate` throughput / 2s-30s SLA perf gap, filed 2026-05-30 off the
-  SIM-402 live re-measure).
+  **Next free ticket ID at the time: SIM-433** (SIM-528 as of 2026-09-10 — `BACKLOG.xlsx` is now
+  the authority, see §2b; SIM-430 = the full-pool `/simulate` throughput / 2s-30s SLA perf gap,
+  filed 2026-05-30 off the SIM-402 live re-measure).
 
 - **SIM-402 — CLOSED 2026-05-30 (code complete + re-measured live); the residual throughput
   gap is spun off to SIM-430.** Live API probed at
@@ -162,9 +162,19 @@
 
 ## 2b. ⚠ IN-FLIGHT WORK — read before touching the ETL or running a recompute (updated 2026-08-29)
 
-**The CURRENT state authority is `BACKLOG.md`'s top banners (read newest-first) plus two
-docs: `docs/audit/2026-08-20-sim429-514-diagnosis-results.md` (why the model reads the way
-it does) and `docs/audit/2026-08-28-sim476-fit-plan.md` (the active work plan).** The
+**⚠ BACKLOG FORMAT REVERSED 2026-09-10 (owner decision).** The single source of truth for
+open tickets is now `BACKLOG.xlsx`, not `BACKLOG.md`: one tab, one row per open ticket,
+ranked by priority, with a plain-English description, a definition of done, and a proposed
+solution for each. `BACKLOG.md`'s closed-ticket narrative and sprint history is preserved at
+`docs/archive/BACKLOG-history.md` for reference, but it is frozen — nothing new is appended
+there. Every "`BACKLOG.md` is the single source of truth" statement elsewhere in this file
+(several appear below, plus the 2026-06-04 note that `backlog.xlsx` was retired) is a
+historical record of an earlier decision and is superseded by this one. Read `BACKLOG.xlsx`
+for the current ticket list; read `docs/archive/BACKLOG-history.md` only for history.
+
+**The CURRENT state authority is `BACKLOG.xlsx`'s open tickets, plus two docs:
+`docs/audit/2026-08-20-sim429-514-diagnosis-results.md` (why the model reads the way it
+does) and `docs/audit/2026-08-28-sim476-fit-plan.md` (the active work plan).** The
 standing owner rulings that govern all new work:
 
 - **The architecture rule, both clauses (2026-08-10 + 2026-08-29):** every decision is a
@@ -439,8 +449,13 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   `performance/` (pytest-benchmark). `conftest.py` has shared fixtures + the event-loop guard.
 - `deploy/` — nginx + Prometheus/Grafana. `frontend/` — **React 18 + Vite + TypeScript** app
   (`src/`, `components/`, `pages/`, `graphics/`, `e2e/` Playwright, `vite.config.ts`, `openapi.json`).
-- `docs/` — `HANDOFF_PHASE*.md`, `SPRINT_*.md`, `audit/`, `architecture/`. Root: `BACKLOG.md`,
-  `CHANGES.md`, `agent_team.md`, `README.md`, `WORKFLOW.md`, `PRODUCT_GUIDE.md`.
+- `docs/` — `HANDOFF_PHASE6.md` (current onboarding), `audit/` (active investigation docs),
+  `architecture/` (active design records), `technical/` (the per-subsystem code reference —
+  see §13), `archive/` (superseded audit/architecture/perf/sprint/handoff docs, kept for
+  history, mirrored under `audit/`, `architecture/`, `perf/`, `sprints/`; plus
+  `BACKLOG-history.md`, the frozen narrative BACKLOG.md used to be — see §2b). Root:
+  `BACKLOG.xlsx` (the open-ticket source of truth — see §2b), `CHANGES.md`, `agent_team.md`,
+  `README.md`, `WORKFLOW.md`, `PRODUCT_GUIDE.md`.
 
 ## 6. The 9-agent team (see `agent_team.md` for full scopes)
 
@@ -461,12 +476,12 @@ consolidates; QA cross-validates and never self-certifies its own work.
 
 - **Sprint workflow:** for each sprint, role agents implement their owned tickets (partition by file
   ownership to avoid concurrent edits to the same file), then an **independent QA cross-validation pass**
-  runs the full suite. Document in `CHANGES.md` (grows, per-agent detail), trim `BACKLOG.md` to one-line
-  rows under a sprint banner, and add `docs/SPRINT_<date>_<name>.md`. (`backlog.xlsx` was RETIRED
-  2026-06-04 — it had no generator and drifted badly; **`BACKLOG.md` is the single source of truth**.)
+  runs the full suite. Document in `CHANGES.md` (grows, per-agent detail); mark closed tickets done and
+  add any newly-filed ones in `BACKLOG.xlsx` (see §2b — this replaced `BACKLOG.md` on 2026-09-10); add
+  `docs/SPRINT_<date>_<name>.md` for the sprint narrative as before.
 - **TDD:** tests first, then implementation (Backend Developer convention). Unit tests use the `__new__`
   constructor-bypass + in-memory mock pattern (no live DB) — see `tests/conftest.py`.
-- **Ticketing:** every change maps to a `SIM-NNN` ticket. Next free ID is tracked in `BACKLOG.md`
+- **Ticketing:** every change maps to a `SIM-NNN` ticket. Next free ID is tracked in `BACKLOG.xlsx`
   — read it there; do not trust a number copied into this file (this line once said SIM-438 while
   the true next ID was SIM-504). Recent IDs: SIM-437 = consolidate the two ETL loaders' duplicate type-coercion
   helpers into `pipeline/etl/coercion.py` [CLOSED 2026-06-22], SIM-430 = full-pool `/simulate` throughput / 2s-30s SLA
@@ -693,11 +708,17 @@ status enum; typed WebSocket schema; calibration-wiring fix; auth enforcement) �
 - `docs/HANDOFF_PHASE6.md` — Phase 6 onboarding (what Phase 5 leaves you, scope, risks, how to start).
 - `docs/audit/2026-09-02-phase6-prioritized-tickets.md` — the full tiered 43-ticket list + sprint plan.
 - `docs/audit/2026-09-02-phase5-close-program-audit.md` — the audit narrative + findings.
-- `BACKLOG.md` — the authoritative ticket status, single source of truth (verify before acting on any
-  ticket). `backlog.xlsx` was RETIRED 2026-06-04 (drifted, hand-maintained, no generator script).
+- `BACKLOG.xlsx` — the authoritative open-ticket list (one tab, ranked by priority, with a
+  plain-English description, definition of done, and proposed solution per ticket); verify a
+  ticket's status here before acting on it. Reinstated 2026-09-10, replacing `BACKLOG.md` (see
+  §2b) — `docs/archive/BACKLOG-history.md` holds the frozen narrative history `BACKLOG.md` used
+  to carry.
 - `CHANGES.md` — the running changelog (**newest entries prepended at the top**; per-agent detail).
 - `agent_team.md` — full agent scopes + the cross-agent collaboration map.
 - `WORKFLOW.md` — the operator's manual (clean-checkout bring-up, health checks).
+- `docs/technical/README.md` — the technical code reference: per-subsystem module maps (purpose,
+  key functions, callers, dependencies) for api/, simulation/, similarity/, pipeline/, betting/,
+  and the operational scripts — start here to find where any piece of logic lives.
 
 ## 14. Writing standard (applies to ALL prose: chat replies, docs, commit messages, code comments)
 
@@ -749,8 +770,8 @@ ticket description, docstring, and inline comment.
 
 ## 15. Working conventions for Claude Code
 
-- Confirm a ticket's status in `BACKLOG.md` before acting — it changes (it is the single source of truth;
-  `backlog.xlsx` was retired 2026-06-04).
+- Confirm a ticket's status in `BACKLOG.xlsx` before acting — it changes, and it is the single
+  source of truth (see §2b; this replaced `BACKLOG.md` on 2026-09-10).
 - Keep the agent-team rhythm: implement → independent QA cross-validation → run the full suite → document
   (CHANGES/BACKLOG/SPRINT).
 - Run `make test-unit` + `make lint` + `make type-check` before committing; run `make test-regression`
