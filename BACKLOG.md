@@ -18,6 +18,8 @@ OFF pass every band (strikeouts −1.0%, walks −0.7%, runs +0.1%; the home-win
 underpowered by design). **Production runs the certified arm; the kernels are DELETED** (the
 batter, fielder, steal, advancement and sprint-speed bell curves, their bandwidths, env
 names, pins, lane arms and tests); the split stays OFF with its fitted powers on record.
+**Closed by the completion:** SIM-523 itself; SIM-520 (runs +0.1% with the fielder factor ON on
+the balanced set); SIM-497a/b (absorbed by the balanced-set ruling).
 
 **SIM-527 (P1, filed 2026-09-09) — the pitch / pitch-result split's strikeout shortfall.**
 With the split ON at its fitted powers the balanced 45 × 130 lane reads strikeouts per plate
@@ -204,6 +206,7 @@ cell index ON — the configuration lane 2 certified.
 
 | ID | Title | Type | Pri | Size | Depends-on | Status |
 |---|---|---|---|---|---|---|
+| **SIM-527** | The pitch / pitch-result split's strikeout shortfall — a results-aware pitcher score, a refit of the split's powers on the balanced set, a lane | ML | P1 | M | SIM-523 | 🔲 **OPEN — FILED 2026-09-09.** With the split ON at its fitted powers (pitcher 16 / 16, batter 8) the balanced 45 × 130 lane reads strikeouts per plate appearance −2.4% (floor 2.0%); OFF, −1.0%. The arsenal-only pitcher score compresses the strikeout spread across pitchers (the best fifth of starters 0.239 per plate appearance against their own 0.275, the worst 0.180 against 0.150); through the split that pulls the total down. Until it certifies the split stays OFF and the pitch draw runs at pitcher power 1. The split also doubles the per-pitch cost (2 h 09 m against 1 h 06 m per lane). Record: `scripts/sim523_lane_h.txt`. |
 | **SIM-526** | Fit and enable the catcher receiving ratio factor (the ball-strike ratio on taken pitches, built OFF under the redesign) | ML | P2 | S | SIM-523 parts E + F | 🔲 **OPEN — FILED 2026-09-08 (owner ruling).** The factor ships OFF with the redesign because it enters the pitch-result draw only when the batter does not make contact. This ticket fits its power under the ordering constraint (last, smallest), verifies the taken group's weight is unchanged (a unit test) and the two receiving bands on the 12×500 lane (called strikes per taken pitch moves; pitches per plate appearance does not), then flips `SIM_CATCHER_RECEIVING` in compose and the lane's production set in one commit. |
 
 # ⚖️ 2026-09-08 — OWNER RULING: NO betting-value measurement until every measured statistic is green
@@ -436,14 +439,17 @@ BANDS PASS** on the full config, and the **full-power lane (12×1,120 = 13,400 d
 games) read home_win_pct 0.5259 vs 0.5428 — PASS inside the 0.0173 floor** (0.4939
 pre-ruling). Production: `SIM_HOME_OFF_WEIGHT=0.0` + `SIM_PARK_KERNEL_SIGMA=0.02` +
 `SIM_FIELDER_KERNEL_SIGMA=0.5`. Two residuals filed onward:
-- **SIM-520 (P2, OWNER DECISION):** the game-graded R band reds (−4.6%) on the lane's
+- **SIM-520 — ✅ CLOSED 2026-09-09** (the balanced 45 × 130 lane reads R +0.1% with the fielder
+  factor ON — the fielder score matrix at 1.2; the diverse set was the fix). Was (P2, OWNER
+  DECISION): the game-graded R band reds (−4.6%) on the lane's
   12-game set because its defenders skew elite (~42% high-tier vs 33%) and a
   defense-aware sim CORRECTLY scores fewer runs there (pool conditionals predict H
   −0.86% for that mix; measured −1.2%, green). Options: defense-balance the lane game
   set (the park-balance precedent) or certify R on a defense-diverse sample. No kernel
   is tuned against R.
 - **SIM-521 (P3):** widen `_FIELDER_BB_FEATURES` toward the arm features — two OF
-  corner cells (~2pp) are sigma-inert under the OAA-only kernel.
+  corner cells (~2pp) are sigma-inert under the OAA-only kernel (retired 2026-09-09; the
+  fielder engine's own features now score the factor — re-scope against the matrix).
 
 # 🏟️ 2026-08-30 — SIM-476 PARTS 2-3 MEASURED; PARK σ=0.02 + FIELDER σ=0.5 FITTED AND LANDED; the HOME w=0 decision goes to the owner
 
@@ -537,7 +543,7 @@ pitch-pool half and tracked under SIM-518.**
 
 | ID | Title | Type | Pri | Size | Depends-on | Status |
 |---|---|---|---|---|---|---|
-| **SIM-518** | The draw-conditioning enrichment EPIC | Data/ML | P2 | L | — | 🟡 **CODE LANDED 2026-09-07 (see the top banner): 463 / 464-pitch / 465 / 472 built + gated OFF; migration 0023; `scripts/sim518_rebuild_pools.py` ready — the SIM-469 rebuild is BLOCKED by the SIM-524 DuckDB lock (needs the app stopped); the fits + lane follow it; 461 evidence-gated.** 📋 **PLANNED 2026-09-04: `docs/audit/2026-09-04-sim467-518-plan.md` (read it first).** 🔲 **OPEN — the umbrella for the pre-epic conditioning backlog (owner consolidation 2026-08-29); each part individually closable, one shared rebuild.** Parts: **461** (batter hand as a weight, not a pool partition — ~2× every cell), **463** (ten pitch-feature columns + pitcher_id into the batted-ball artifact), **464 pitch-pool half** (the home/away flag the outcome pool already has), **465** (pitch-count + times-through-order columns → the fatigue weight), **472** (batted-ball draw with pitch similarity primary — needs the pitch draw to expose its drawn row), **469** (the single pool+artifact rebuild once parts land). Every part follows the standing pattern: column → artifact → env-gated draw weight (byte-identical off) → SIM-476-style conditional verification → lane. |
+| **SIM-518** | The draw-conditioning enrichment EPIC | Data/ML | P2 | L | — | 🟡 **CODE LANDED 2026-09-07 (see the top banner): 463 / 464-pitch / 465 / 472 built + gated OFF; migration 0023; `scripts/sim518_rebuild_pools.py` ran 2026-09-09 (the SIM-469 rebuild, with the redesign's part G, the app stopped for it); the three draw weights stay OFF until their fits + a lane; 461 evidence-gated.** 📋 **PLANNED 2026-09-04: `docs/audit/2026-09-04-sim467-518-plan.md` (read it first).** 🔲 **OPEN — the umbrella for the pre-epic conditioning backlog (owner consolidation 2026-08-29); each part individually closable, one shared rebuild.** Parts: **461** (batter hand as a weight, not a pool partition — ~2× every cell), **463** (ten pitch-feature columns + pitcher_id into the batted-ball artifact), **464 pitch-pool half** (the home/away flag the outcome pool already has), **465** (pitch-count + times-through-order columns → the fatigue weight), **472** (batted-ball draw with pitch similarity primary — needs the pitch draw to expose its drawn row), **469** (the single pool+artifact rebuild once parts land). Every part follows the standing pattern: column → artifact → env-gated draw weight (byte-identical off) → SIM-476-style conditional verification → lane. |
 
 # ⚖️ 2026-08-29 — OWNER RULING: the drawn row IS the play — NO post-draw adjustments; every factor is a DRAW WEIGHT (SIM-517 filed; next free ID → SIM-518)
 
@@ -1089,8 +1095,8 @@ ruled that robustness beats cadence.
 
 | ID | Title | Type | Pri | Size | Depends-on | Status |
 |---|---|---|---|---|---|---|
-| **SIM-497a** | Date-range backtest function — replace the 12-game fixture | Test/CI | P1 | L | SIM-450 | 🔲 **OPEN — absorbs SIM-497c (2026-08-29): labeling the 12-game lane as matchup-biased is this ticket's interim first step.** Runs every game in a given date range. Delete `ACCEPTANCE_GAME_PKS`, `BALANCED_GAME_ORDER`, the prefix slice and the park-balance machinery — all of it exists only to compensate for a sample too small to be representative. |
-| **SIM-497b** | Dual reference: paired actuals + league averages | Test/CI | P1 | M | SIM-497a | 🔲 **OPEN.** Report both per channel, side by side. Where they disagree, print both rather than choosing. |
+| **SIM-497a** | Date-range backtest function — replace the 12-game fixture | Test/CI | P1 | L | SIM-450 | ✅ **CLOSED-SUPERSEDED 2026-09-09 (the balanced certifying set, owner ruling — see the 2026-09-09 banner): 45 games from three full-day slates replace the 12-game fixture; the park-balance machinery stays (per-season factors, a prefix order).** Was: **OPEN — absorbs SIM-497c (2026-08-29): labeling the 12-game lane as matchup-biased is this ticket's interim first step.** Runs every game in a given date range. Delete `ACCEPTANCE_GAME_PKS`, `BALANCED_GAME_ORDER`, the prefix slice and the park-balance machinery — all of it exists only to compensate for a sample too small to be representative. |
+| **SIM-497b** | Dual reference: paired actuals + league averages | Test/CI | P1 | M | SIM-497a | ✅ **CLOSED-SUPERSEDED 2026-09-09: the balanced set's actor-matched expectations are the paired reference (`scripts/sim523_game_set.json` records the expectation and the pool totals per channel).** Was: Report both per channel, side by side. Where they disagree, print both rather than choosing. |
 | **SIM-497c** | Mark the 12-game lane as known-biased until 497a lands | Doc | P1 | XS | — | ⤵ **MERGED into SIM-497a (2026-08-29).** A biased instrument left unlabelled is exactly the failure mode this programme exists to end. |
 
 **What SURVIVES from SIM-450 — do not rebuild it.** `tests/acceptance/bands.py` is sound and reusable:

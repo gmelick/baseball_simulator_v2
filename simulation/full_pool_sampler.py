@@ -102,15 +102,6 @@ def _raise_neutral(
     return out
 
 
-#: SIM-476 diagnostics (2026-08-17): skip ONE similarity factor in the steal
-#: draw to locate the source of the safe/caught-split inflation (certified
-#: 88.1% vs MLB ~77.6%). The catcher arm REFUTED its suspect (ablating it made
-#: the split WORSE, 0.869 -> 0.916); the runner arm tests the attempt-
-#: composition theory (the runner kernel may concentrate attempted-row weight
-#: on elite-stealer-like rows more sharply than real attempt composition).
-#: Default OFF; never set in production.
-
-
 #: SIM-512: positional number -> the fielder-embedding position name. Keep in
 #: sync with ``simulation.sim_loop._POS_NUM_TO_STR`` — the fielder embedding
 #: keys are ``"{player_id}:{position}:{season}"`` with these names.
@@ -165,7 +156,6 @@ class FullPoolSampler:
         self.venue_run_factors: dict[tuple[int, int], float] | None = None
         #: Per-hand cache of the per-row park factor (1.0 for unknown venues).
         self._bb_park: dict[str, np.ndarray] = {}
-        # SIM-491 part 3 (the SIM-425b rebuild): the fielder-quality kernel.
         # SIM-523 (the kernel retirement, 2026-09-09): the fielder factor is the
         # fielder engine's per-position score matrix (``actor_power['fielder']``);
         # the SIM-491 OAA bell curve and its bandwidth are deleted.
@@ -2718,7 +2708,7 @@ class FullPoolSampler:
 
     # ---- SIM-512: the five-scenario advancement draw -----------------------
 
-    #: The runner kernel: how he runs AND how he decides. All columns of
+    #: The runner engine's features: how he runs AND how he decides. All columns of
     #: derived.baserunner_season_metrics (the baserunner embedding).
     _RUNNER_ADV_FEATURES = (
         "sprint_speed",

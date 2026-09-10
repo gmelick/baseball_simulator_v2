@@ -12,7 +12,7 @@ copy dropped three keys: ``home_defense``, ``away_defense`` and
 ``park_run_factor``.
 
 Those three keys are the ONLY inputs two production features read.
-The fielder consumer (today the SIM-491 fielder kernel) reads the two defense
+The fielder consumer (the SIM-523 fielder score matrices) reads the two defense
 maps. The park consumer (today the SIM-491 park kernel) reads the park
 factor. The harness therefore passed an empty defense map and a neutral 1.0 park
 factor on every run. An operator who toggled either flag under the harness

@@ -344,7 +344,7 @@ def main() -> None:
                 f"  game {gp}: park_run_factor={pf:.4f}"
                 + ("  [NEUTRAL — the park kernel cannot act]" if pf == 1.0 else "")
                 + f"   defense home={n_home}/9 away={n_away}/9"
-                + ("  [EMPTY — the fielder kernel cannot act]" if not (n_home and n_away) else "")
+                + ("  [EMPTY — the fielder factor cannot act]" if not (n_home and n_away) else "")
             )
             home_ids = {int(x) for x in (getattr(state, "home_lineup", []) or [])}
             away_ids = {int(x) for x in (getattr(state, "away_lineup", []) or [])}

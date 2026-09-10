@@ -82,8 +82,7 @@ os.environ["SIM_PITCH_RESULT_SPLIT"] = "0"
 os.environ["SIM_PITCH_PITCHER_POWER"] = "1.0"  # SIM-523 part F: the raw score
 os.environ["SIM_BB_BORN_SIGMA"] = "0"
 
-# SIM-523 part C: the fielding draw's class filter, sprint-speed kernel and
-# park wall-zone rule. All off = byte-identical; the part-C tests set the
+# SIM-523 part C: the fielding draw's class filter and park wall-zone rule. All off = byte-identical; the part-C tests set the
 # sampler attributes directly.
 os.environ["SIM_BB_CLASS_FILTER"] = "0"
 os.environ["SIM_PARK_WALL_ZONE_ONLY"] = "0"

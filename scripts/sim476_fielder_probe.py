@@ -1,6 +1,11 @@
 """
 scripts/sim476_fielder_probe.py — the SIM-476 part-3 fielder-kernel instrument.
 
+SUPERSEDED 2026-09-09: the fielder kernel is retired (SIM-523); the fielder factor
+is the fielder engine's per-position score matrix, and the fit probe
+(``scripts/sim523_fit_probe.py``) carries the fielder read
+(``scripts/sim523_fielder_m12.json``). This script's env read is a label only.
+
 WHAT THIS IS
 ============
 Measures the sim's out-vs-reach rate on FIELDABLE batted balls (home runs

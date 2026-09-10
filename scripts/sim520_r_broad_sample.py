@@ -2,6 +2,10 @@
 scripts/sim520_r_broad_sample.py — the SIM-520 runs certification on a broad
 game sample.
 
+CLOSED 2026-09-09: the balanced certifying set (SIM-523; every team three times)
+answered the question — runs read +0.1% with the fielder factor ON. Kept as the
+record of the diverse-sample method; the fielder kernel it names is retired.
+
 WHY
 ---
 The 12-game acceptance lane reds R (−4.6%) because its game set's defenders

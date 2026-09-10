@@ -51,7 +51,7 @@
     at ~6**, so a single game can't go <30 s on this hardware without fewer iters or a smaller pool. The
     throughput fix: **the CLV backtest is parallelized ACROSS games** (`--workers`, forkserver,
     byte-identical, ~373 MB/worker) → ~6× → **~20–32 s effective/game**; n=65 gives the same CLV as n=100.
-  - **Next free ticket ID: SIM-438.** Open work: **SIM-429** (granular run-conversion + K/BB prop
+  - **Next free ticket ID: read it in `BACKLOG.md` (SIM-528 as of 2026-09-10).** Open work then: **SIM-429** (granular run-conversion + K/BB prop
     calibration to DEVELOP a CLV edge — the now-measurable gold-standard says there is none yet); the
     realism follow-ons fold into it (≥400×≥20 magnitude calibration of the SIM-411/413/425b nudges; wiring
     the real per-team SIM-427 profiles into the SIM-434 decision model, which currently uses a league-flat
@@ -91,8 +91,8 @@
   draw from `sim.steal_opportunity_pool` (~2.37M per-pitch opportunities, attempted or not). The
   600-sim smoke reads **SB 0.70 + CS 0.09 = 0.79 attempts/team-game vs MLB 0.76**; the safe split
   (89% vs ~78%) is a certifying-lane question before any kernel bandwidth moves.
-  **Next free ticket ID at the time: SIM-433** (now **SIM-438** — see the TL;DR at the top
-  of §2; SIM-430 = the full-pool `/simulate` throughput / 2s-30s SLA perf gap, filed 2026-05-30 off the
+  **Next free ticket ID at the time: SIM-433** (SIM-528 as of 2026-09-10 — `BACKLOG.md` is the
+  authority; SIM-430 = the full-pool `/simulate` throughput / 2s-30s SLA perf gap, filed 2026-05-30 off the
   SIM-402 live re-measure).
 
 - **SIM-402 — CLOSED 2026-05-30 (code complete + re-measured live); the residual throughput
@@ -173,9 +173,10 @@ standing owner rulings that govern all new work:
   draw WEIGHT or OFF until its weight lands.
 - **No betting-value measurement until everything is green (owner ruling 2026-09-08):** the
   closing-line-value re-measure and any edge read built on it wait until every band the lanes
-  grade is inside its range. Today the reds are walks per plate appearance under the receiving
-  kernel, runs on the defense-aware configuration (SIM-520), and the identity-kernel confound
-  behind both (SIM-523). The strikeout-prop refit may proceed.
+  grade is inside its range. As of 2026-09-10 the certified production arm is green on every
+  pool band and on runs (the balanced 45 × 130 lane); the one open red is the pitch /
+  pitch-result split's strikeout shortfall (SIM-527), which stays OFF; the home-win channel
+  is underpowered below 13,365 game-sims. The strikeout-prop refit may proceed.
 - **The play-picker redesign (owner rulings 2026-09-08; the plan is
   `docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md`):** the weight order in the
   pitch draws is pitcher first, batter, recency, catcher receiving last, with powers fitted
@@ -185,7 +186,15 @@ standing owner rulings that govern all new work:
   there), then park geometry, the fielding draw and the advancement draws; catcher receiving
   is a mass-preserving ball-strike ratio on taken pitches that ships OFF (enable = SIM-526);
   a concentration check (no factor may put more than its natural share of a draw on the live
-  player's own team) joins the grade.
+  player's own team) joins the grade. **COMPLETE 2026-09-09:** production runs the certified
+  arm (the actor score matrices at their fitted powers, the fielding draw's fits); the actor
+  bell-curve kernels are deleted; the split stays OFF (SIM-527).
+- **The balanced certifying set (owner ruling 2026-09-09):** the lane grades on 45 games
+  from three full-day slates (every team three times), chosen so every graded channel's
+  actor-matched expectation sits within 0.6% of the pool's totals
+  (`scripts/sim523_game_set.py`; the park factors and the prefix order in
+  `tests/acceptance/bands.py`); the default lane is 45 × 130 = 5,850 game-sims. It replaces
+  the fixed 12-game set and absorbs the date-range lane (SIM-497a/b).
 - **One in-play path (SIM-486, 2026-09-06):** the per-tile FAISS fallback, the injected
   `PlayResolver`, the legacy advancement code (`_advance_runners` and its constants), the
   SIM-318 foul re-weight and the `SIM_FULL_POOL` switch are DELETED. Every no-DB test and
@@ -194,10 +203,10 @@ standing owner rulings that govern all new work:
   artifact bundle now FAILS the worker loudly (no fallback simulator). The nightly chain
   rebuilds the bundle (`make engine-artifacts`); it used to rebuild dead FAISS tiles.
 - **The grade is POOL TOTALS (2026-08-20):** the sim's frequencies certify against the play
-  pool's own totals (`tests/acceptance/bands.py` `POOL_REFERENCES`, 11 per-opportunity
-  bands); R / SB / CS / home_win_pct stay game-graded. **CERTIFIED 2026-08-20 (12×500):
-  all 11 pool bands PASS, R PASSES −1.2%;** the only asserted reds are the steal residual
-  (SB −7.4 / CS −9.8 → SIM-476) and home_win_pct (underpowered below 13,365 games).
+  pool's own totals (`tests/acceptance/bands.py` `POOL_REFERENCES`, 16 per-opportunity
+  bands); R / home_win_pct stay game-graded. **CERTIFIED 2026-09-09 (45 × 130 on the
+  balanced set): all 16 pool bands PASS, R +0.1%;** the only non-pass is home_win_pct
+  (underpowered below 13,365 game-sims).
 - **The pool window (2026-08-20):** the last three COMPLETED seasons plus the current one
   (`RECENCY_FLOOR_SEASONS = 4`; full 2023-2026 today). Schema v20, `POOL_BUILDER_VERSION`
   sim515.1.
@@ -208,32 +217,36 @@ standing owner rulings that govern all new work:
 Landed since the old handovers: SIM-510..513 (the transition draw — the drawn row is the
 play, mechanically), SIM-515 (IBB is a per-PA draw at `sim.ibb_rates`' real cell rates; the
 2.64× formula deleted), SIM-516 (the pool-totals grade + the W1 window), the SIM-491
-kernels (home/park/fielder built as draw weights, env-gated off pending SIM-476 fits;
-`SIM_HOME_OFF_WEIGHT` / `SIM_PARK_KERNEL_SIGMA` / `SIM_FIELDER_KERNEL_SIGMA`), and the
-framing flip OFF (its weight rebuild is SIM-517). The 2026-08-29 hygiene sweep closed or
+draw weights (the home weight `SIM_HOME_OFF_WEIGHT` and the park kernel
+`SIM_PARK_KERNEL_SIGMA`, fitted by SIM-476; the fielder kernel was retired 2026-09-09 for
+the fielder score matrix), and the framing flip OFF (its weight rebuild is SIM-517). The 2026-08-29 hygiene sweep closed or
 merged 8 stale rows. SIM-456 CLOSED 2026-09-04 (the whiff fix was live since the SIM-459
 recompute; the platoon z-swing legs' inversion found in its close is SIM-522, CLOSED the same
 day by owner decision: fixed in code, the data lands with the next recompute; the D-N7
-csw/whiff overlap is parked on SIM-429). **The open board after hygiene sweep 2 (2026-09-08),
-deliverable first:** the identity-kernel confound — a catcher's or fielder's similarity
-neighborhood proxies his TEAM, so the receiving and fielder kernels shift marginals the skill
-alone would not (SIM-523, P1; it decides the receiving kernel's fate); the live-slate epic
-(SIM-519, P1); the calibration payoff — the strikeout-prop refit and the CLV re-measure
-(SIM-429, P1); the date-range acceptance lane with paired references (SIM-497a/b, P1); the
-pitch-draw cell index, built and 3× faster, awaiting the speed-vs-receiving-kernel ruling
-(SIM-467); the draw-conditioning epic, built, awaiting its pool rebuild and fits (SIM-518); the
-run-grading question on defense-aware sims (SIM-520); the forkserver's DuckDB lock that blocks
-every rebuild while the app runs (SIM-524); real per-team manager profiles (SIM-427); the
-fielder arm features (SIM-521); the cell-occupancy census re-run (SIM-451); the sim-loop
-decomposition (SIM-493, P3); the book-offered-market projection (SIM-421, P3); three parked
-fence-resolution design rows (SIM-478/479/480). The catcher receiving profile (SIM-517)
+csw/whiff overlap is parked on SIM-429). **The open board after the redesign's completion (2026-09-10),
+deliverable first:** the pitch / pitch-result split's strikeout shortfall — a results-aware
+pitcher score, a refit of the split's powers on the balanced set, a lane (SIM-527, P1); the
+live-slate epic (SIM-519, P1); the calibration payoff — the strikeout-prop refit and the CLV
+re-measure, the latter waiting on every band green (SIM-429, P1); the draw-conditioning
+weights' fits and lane — the rebuild ran with the redesign's part G, the three weights stay
+OFF (SIM-518); the forkserver's DuckDB lock that blocks every rebuild while the app runs
+(SIM-524); backups (SIM-525); the receiving ratio's enable (SIM-526); real per-team manager
+profiles for the pitching-change draw (SIM-427); the fielding chain factor (the credits are
+on the pool, the consumer is not built); the fielder arm features (SIM-521); the
+cell-occupancy census re-run (SIM-451); the sim-loop decomposition (SIM-493, P3); the
+book-offered-market projection (SIM-421, P3); three parked fence-resolution design rows
+(SIM-478/479/480). **Closed by the redesign's completion:** SIM-523 itself; the run-grading
+question on defense-aware sims (SIM-520 — runs +0.1% with the fielder factor ON on the
+balanced set); the date-range lane (SIM-497a/b — absorbed by the balanced-set ruling); the
+cell index's ruling (SIM-467 — flipped 2026-09-08). The catcher receiving profile (SIM-517)
 CLOSED-LANDED 2026-09-08 with its residuals on SIM-523 and SIM-467. The 2026-08-17 and 2026-08-11 handover docs stay valid as
 history only. **SIM-518 CODE LANDED 2026-09-07** (plan `docs/audit/2026-09-04-sim467-518-plan.md`):
 migration 0023 (schema v23) + the sim518.1 builder + the artifact columns, and three draw
 weights gated OFF (`SIM_FATIGUE_PC_SIGMA` / `SIM_FATIGUE_TTO_SIGMA` / `SIM_PITCH_HOME_OFF_WEIGHT`
-/ `SIM_BB_PITCH_SIGMA`). The SIM-469 pool-only rebuild (`scripts/sim518_rebuild_pools.py`) is
-NOT run: the app's forkserver holds the DuckDB writer lock (**SIM-524**), so it needs the app
-stopped — an owner call; the fits and the lane follow it. **SIM-467 CODE LANDED + MEASURED
+/ `SIM_BB_PITCH_SIGMA`). The SIM-469 pool-only rebuild (`scripts/sim518_rebuild_pools.py`)
+RAN 2026-09-09 with the redesign's part G (the app stopped for it — the forkserver's DuckDB
+writer lock, **SIM-524**, stays the operational blocker); the three weights' fits and the
+lane still follow. **SIM-467 CODE LANDED + MEASURED
 2026-09-07:** the pitch-draw cell index (`SIM_PITCH_CELL_INDEX` / `SIM_PITCH_MIN_CELL`,
 `simulation/filter_cells.py`) cuts a game iteration from 2.62 s to 0.86 s (3.05×) with
 bit-identical in-cell weights. Two 12×500 lanes: with the fitted receiving kernel the index reds
@@ -243,52 +256,30 @@ receiving kernel OFF it passes R, BB, pitches and every other band with K_PA −
 (`SIM_CATCHER_*_SIGMA=0`, `SIM_GOT_AWAY=1`, `SIM_PITCH_CELL_INDEX=1`); the live n=100 `/simulate`
 reads 31 s warm (81-90 s before; the five-minute figure was never the steady state) — the
 30-second exit criterion at the line; the fan-out's ~3 effective workers are the next perf item.
-**REDESIGN PART A LANDED 2026-09-08 (SIM-523):** every actor factor is available as its
-engine's 0-to-1 score matrix (`--what actors_sim`, in the nightly `all`; `actor_sim/` in the
-bundle; the concentration report gates a strict build at a 3.0 own-staff ratio). The sampler
-switch `SIM_ACTOR_MATRICES` is OFF (byte-identical) until part F fits the powers
-(`SIM_ACTOR_POWER_<NAME>`) and a lane certifies; the live build reads 76 s / 35 MB, own-staff
-ratios 1.4-2.3 at the 90th percentile. **PART B LANDED the same day:** the pitch draw and
-the pitch-result draw are two draws behind `SIM_PITCH_RESULT_SPLIT` (OFF); the result row
-carries its own batted ball through the artifact's pitch-id join (`HandPool.bb_row`, live);
-the result draw carries a density correction (`SIM_RESULT_DENSITY_POWER`, 1.0) without which
-the kernel leans toward the strike zone (walks −37% in the probe); with it the split
-reproduces the single draw's pitch mix at neutral powers. **PART C BUILT the same day:** the
-fielding draw's class filter, sprint-speed weight and wall-zone rule (`SIM_BB_CLASS_FILTER`,
-`SIM_BB_SPEED_SIGMA`, `SIM_PARK_WALL_ZONE_ONLY`), the park geometry + carry model in the bundle
-(`park_geometry.json`, `--what park`) and the fence stage (`SIM_FENCE_STAGE`), all OFF; the live
-venue travels as `venue_id` in the kwargs contract. **PART D BUILT 2026-09-09:** the manager
-decisions run once at a plate appearance's start (before the intentional walk and the steal);
-the pitching change is a draw from a pitching-change opportunity pool in the bundle
-(`--what manager`, `SIM_MANAGER_DRAW` OFF). The probe: the production formula runs 2.4
-pitchers a side vs the majors' ~4.2; the draw reads 4.35 (the pool's own 4.27). **PART E BUILT
-2026-09-09:** the catcher receiving factor is a mass-preserving ball-strike ratio on taken
-pitches (`receiving.json`, league rates per season, `--what receiving`; `SIM_CATCHER_RECEIVING`
-OFF, enabling = SIM-526);
-the SIM-517 bell-curve kernel and its two sigmas are DELETED. **PART F (THE FIT) 2026-09-09:**
-every factor's power / bandwidth fitted against the pool's own conditional rates
-(`scripts/sim523_fit_probe.py` + the offline scans); at power 1 every identity factor was
-nearly flat. The fit: pitcher 16 in both pitch draws, batter 8 in the result draw,
-pitcher-steal 12, catcher-throwing 2, runner kernels 0.25, born-ball 1.0, class filter /
-wall zone / fence ON; the fielder keeps its kernel, the runner matrices stay off, the
-sprint-speed kernel has no data (part G). The lane read reds the probe attributes to composition — the flip waits on the owner's grading ruling (CHANGES.md). **PART G (THE DATA ADDS) 2026-09-09:** the raw sprint-speed table was
-EMPTY — the loader ran (2023-2026) and both profiles carry the speed (migration 0024, schema
-v24); the fielding CHAIN lands as a join (the outcome pool's alignment `fielder_2..9` +
-putout / assist position masks, builder sim523g.1, `BattedBallPool.fielders` + masks); the
-catcher embedding drops its got-away columns; the SIM-469 rebuild ran (the batting side, the
-pitch count and the times through the order are on the pitch pool). The chain FACTOR (the
-consumer) and the speed kernel's fit are follow-ons. **THE REDESIGN COMPLETES 2026-09-09:**
-the actor bell curves are RETIRED for the score matrices (the runner engines score thin
-profiles, so the matrices cover the pools; the fielding draw's batter factor is the batter
-matrix; the sprint-speed kernel is gone; `SIM_ACTOR_MATRICES` is gone as a name), the
-certifying set is 45 games (three full-day slates, every team three times, every channel
-expected within 0.6% of the pool's totals — `scripts/sim523_game_set.py`, owner ruling) at
-45 × 130, and **PRODUCTION RUNS THE CERTIFIED ARM**: the matrices at their fitted powers
-(batter 1.0, fielder 1.2, steal-runner 12, advancement-runner 20, catcher-throwing 2,
-pitcher-steal 12) plus the fielding draw's fits (born-ball 1.0, class filter, batter power
-4, wall zone, fence stage) — every pool band green, runs +0.1%. The pitch / pitch-result
-split stays OFF: at its fitted powers (16 / 16 / 8) it reds strikeouts −2.4% on the set
-(SIM-527, the results-aware pitcher score). Next free ID SIM-528.
+**THE PLAY-PICKER REDESIGN (SIM-523) — BUILT 2026-09-08/09, COMPLETE 2026-09-09.** The
+plan with its part stamps is `docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md`; the
+detail is `CHANGES.md`. What production runs today: every actor factor is its engine's
+0-to-1 score matrix (`actor_sim/` in the bundle, `--what actors_sim` in the nightly `all`;
+the concentration report gates a strict build at a 3.0 own-staff ratio) raised to its fitted
+power — batter 1.0, fielder 1.2, steal-runner 12, advancement-runner 20, catcher-throwing 2,
+pitcher-steal 12 (`SIM_ACTOR_POWER_<NAME>`; 0 = off); the runner engines score thin profiles
+so the matrices cover the pools; the actor bell-curve kernels and their bandwidths are
+DELETED. The fielding draw filters the cell by the born ball's class (`SIM_BB_CLASS_FILTER`),
+weights by the born ball's kernel (`SIM_BB_BORN_SIGMA` 1.0), the batter matrix
+(`SIM_BB_BATTER_POWER` 4), the fielder matrix and the park only in the wall zone
+(`SIM_PARK_WALL_ZONE_ONLY`), then runs the fence stage (`SIM_FENCE_STAGE`;
+`park_geometry.json`, `--what park`). The pitch draw runs one draw per pitch at pitcher
+power 1 through the cell index (`SIM_PITCH_CELL_INDEX`). Built and OFF: the pitch /
+pitch-result split (`SIM_PITCH_RESULT_SPLIT`; fitted at pitcher 16 / 16, batter 8; it reds
+strikeouts −2.4% on the balanced set — SIM-527), the catcher receiving ratio
+(`SIM_CATCHER_RECEIVING`, `receiving.json`, `--what receiving`; enable = SIM-526) and the
+pitching change as a draw (`SIM_MANAGER_DRAW`, `--what manager`; the formula runs 2.4
+pitchers a side against the majors' ~4.2, the draw 4.35; real profiles = SIM-427). The data
+adds: sprint speed in both profiles (migration 0024, schema v24), the fielding chain on the
+batted-ball pool (builder sim523g.1; the chain FACTOR is a follow-on), the catcher embedding
+without its got-away columns, the SIM-469 rebuild. The grade: the balanced 45-game set at
+45 × 130 (two lanes 2026-09-09, `scripts/sim523_lane_h.txt`) — the certified arm is green on
+every pool band, runs +0.1%. Next free ID SIM-528.
 
 - **DO NOT run the profile recompute** (`make profile-computor`) — but the reason changed on
   2026-08-13. SIM-501a/c CLOSED: SIM-457 is re-landed on the events-based out label, no profile
@@ -414,7 +405,8 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
 - `simulation/` — `sim_loop.py` (the simulator, biggest file; full-pool draw + engine-backed
   advancement/steal/framing live here; also the SIM-434 manager fatigue/rest/TTO + reliever-selection
   helpers, all gated `SIM_MANAGER`), `full_pool_sampler.py` (SIM-423 full-pool similarity sampler:
-  count-bucket CDFs, batted-ball draw, `runner_rate`/`catcher_framing`; reads the SIM-430 dense
+  count-bucket CDFs over the pitch-draw cell index, the actor score-matrix factors, the
+  fielding draw with the fence stage, the steal and advancement draws; reads the SIM-430 dense
   `pitcher_sim_matrix` fast path), `synthetic_bundle.py` (SIM-486: the in-memory bundle every
   no-DB test and the batch runner's no-DB factory draw from — the same loop, the same sampler),
   `game_state.py` (carries bat/throw hands + per-team pitcher/catcher ids + the SIM-434 per-pitcher
@@ -667,8 +659,10 @@ per pitch where a steal was POSSIBLE, attempted or not — the missing denominat
 similarity-weighted draw (`_steal_opportunity_draw` → `FullPoolSampler.steal_draw`) whose drawn
 row answers "does he go" AND "safe or caught"; manager aggression is a WEIGHT on attempted rows,
 never a gate. The 600-sim smoke: **SB 0.70 + CS 0.09 = 0.79 attempts/team-game vs MLB 0.76**.
-Do not claim the bands pass until the 12×425 certifying lane runs; the safe split reads high
-(89% vs ~78%) and the kernel bandwidths are SIM-476 fit targets, not knobs to eyeball.
+The certifying lane has since run (2026-09-09, 45 × 130 on the balanced set): steal attempts
+at second +0.4% against the pool's own rate, the safe share 0.812 against 0.799, every steal
+band green; the runner factors are the steal and advancement engines' score matrices at
+their fitted powers (12 / 20), not bandwidths.
 
 ## 12. Phase roadmap
 
@@ -680,7 +674,7 @@ Do not claim the bands pass until the 12×425 certifying lane runs; the safe spl
 | 4 | Core Simulation Loop | ✅ Complete |
 | 5 | Simulation Runner & Backend API | ✅ Complete (CI-green on Python 3.13) |
 | 6 | **Frontend Build + P1 backend prerequisites** | ✅ **Complete** — SIM-378→401 + 415→420 + 414 + 402 + 408 closed; SIM-406 + 407 calibration LIVE (unblocked by SIM-432, 2026-06-01) |
-| 7 | Integration, Testing & Deployment | **Largely COMPLETE; the DATA FOUNDATION was REBUILT 2026-08-13→16.** Closed earlier: SIM-402/408/431/432/430, SIM-433/434/427/411/413/425b, SIM-435, the 2026-06-03 audit remediation. **Closed in the rebuild:** SIM-501a/c (events-based out label; ERA 4.07 vs MLB 4.08), SIM-502a-d + Alembic 0018 (`raw.play_events` live), SIM-503, SIM-457/458 re-landed, SIM-488 re-sweep (22,533 games), SIM-459 all-seasons recompute, calibration refit (win-prob ECE 0.0377; BB prop now bettable), **the runs band PASSES**, CI all-green. **Remaining:** SIM-474 (steals never attempted), SIM-429 (2B/BB/ROE small highs + K-prop to bet-grade + CLV re-measure — the old ~49% beat-close read predates the rebuild), SIM-491 (fielder-RBF re-tune), SIM-504 (play_events consumers), home_win_pct certification (12×2,168). The <30 s single-game SLA stays hardware-bound and de-prioritized. |
+| 7 | Integration, Testing & Deployment | **Largely COMPLETE; the DATA FOUNDATION was REBUILT 2026-08-13→16.** Closed earlier: SIM-402/408/431/432/430, SIM-433/434/427/411/413/425b, SIM-435, the 2026-06-03 audit remediation. **Closed in the rebuild:** SIM-501a/c (events-based out label; ERA 4.07 vs MLB 4.08), SIM-502a-d + Alembic 0018 (`raw.play_events` live), SIM-503, SIM-457/458 re-landed, SIM-488 re-sweep (22,533 games), SIM-459 all-seasons recompute, calibration refit (win-prob ECE 0.0377; BB prop now bettable), **the runs band PASSES**, CI all-green. **Remaining (2026-09-10):** SIM-527 (the pitch / pitch-result split's strikeout shortfall), SIM-429 (the K-prop to bet-grade + the CLV re-measure, which waits on every band green), SIM-519 (the live slate), SIM-518 (the draw-conditioning fits), home_win_pct certification (13,365 game-sims). SIM-474 / 491 / 504 / 523 closed. The <30 s single-game SLA stays hardware-bound and de-prioritized. |
 
 **Realism sub-track (interleaved, landed on `master`):** the SIM-422→429 full-pool similarity-wiring
 epic replaced the per-tile k-NN draw with whole-pool engine-weighted sampling and made it the

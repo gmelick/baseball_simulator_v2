@@ -61,7 +61,7 @@ def _sampler(pool: HandPool, *, cell: bool = False, seed: int = 0) -> FullPoolSa
         actor_emb={
             "batter": {
                 "key_index": {"200:2024": 0, "201:2024": 1},
-                # two identical batters: the affinity kernel reads 1.0 everywhere
+                # no batter matrix here: the batter factor is neutral (1.0) everywhere
                 "vecs": np.zeros((2, 2), dtype=np.float32),
                 "mean": np.zeros(2, dtype=np.float32),
                 "std": np.ones(2, dtype=np.float32),

@@ -1,5 +1,8 @@
 """
 scripts/sim523_kernel_scan.py — SIM-523 part F: the offline BANDWIDTH scan of the
+(SUPERSEDED 2026-09-09: the runner kernels are retired; the runner engines score
+thin profiles and the power scan, scripts/sim523_power_scan.py, covers the runner
+matrices. Kept as the record of part F's bandwidth fit.)
 runner kernels (the steal draw's runner factor, the advancement draws' runner
 factor), the companion of scripts/sim523_power_scan.py for the two factors
 whose score matrices cannot work (two thirds of steal rows and half of

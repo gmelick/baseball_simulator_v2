@@ -395,7 +395,7 @@ def test_sim449_inputs_reach_the_simulator_sim450(acceptance_run: AcceptanceRun)
     for game_pk, (home_n, away_n) in acceptance_run.defense_sizes.items():
         assert home_n and away_n, (
             f"game {game_pk} passed an EMPTY defense map "
-            f"(home={home_n}, away={away_n}); the fielder kernel cannot act."
+            f"(home={home_n}, away={away_n}); the fielder factor cannot act."
         )
     non_neutral = [pk for pk, pf in acceptance_run.park_factors.items() if pf != 1.0]
     assert non_neutral, (
