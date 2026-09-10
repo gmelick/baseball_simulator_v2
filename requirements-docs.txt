@@ -1,0 +1,5 @@
+# Optional tooling to build the technical-reference website from docs/technical/*.md.
+# Not needed to read the docs (they are plain Markdown, readable directly on GitHub or in
+# any editor) — only needed to build the searchable site with `mkdocs serve` / `mkdocs build`.
+mkdocs==1.6.1
+mkdocs-material==9.5.49

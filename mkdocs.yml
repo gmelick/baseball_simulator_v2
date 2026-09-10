@@ -1,0 +1,50 @@
+site_name: Baseball Simulator — Technical Reference
+site_description: >-
+  Per-subsystem code map for the MLB baseball simulation platform: what each
+  file does, what calls it, and what it depends on.
+docs_dir: docs/technical
+site_dir: site
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+
+markdown_extensions:
+  - tables
+  - toc:
+      permalink: true
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+
+nav:
+  - Home: README.md
+  - API Layer: api.md
+  - Simulation Engine: simulation.md
+  - Similarity Engines: similarity.md
+  - Data Pipeline, Betting, and Database: pipeline-betting-db.md
+  - Operational Scripts and Frontend: scripts-frontend.md
+
+extra:
+  generator: false

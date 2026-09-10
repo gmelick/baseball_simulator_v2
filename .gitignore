@@ -83,6 +83,9 @@ dmypy.json
 # Build artifacts
 # ---------------------------------------------------------------------------
 *.docx
+# Exception: the official executive guide (docs/technical/README.md and CLAUDE.md §13
+# reference it) — 2026-09-10, tracked on purpose, not a build artifact.
+!/Baseball Simulator - Executive Guide.docx
 *.log
 *.pid
 
@@ -99,10 +102,12 @@ dmypy.json
 scripts/sim_stats*.json
 # Excel lock files (the ~$ shadow file Excel opens alongside any .xlsx)
 ~$*
-# backlog.xlsx RETIRED 2026-06-04 (comprehensive audit): hand-maintained, drifted
-# badly from BACKLOG.md, no generator script — BACKLOG.md is now the single source
-# of truth. Ignored so a stray local copy is never re-tracked.
+# backlog.xlsx was RETIRED 2026-06-04 (comprehensive audit): hand-maintained, drifted
+# badly, no generator script. REINSTATED 2026-09-10 (owner decision, CLAUDE.md §2b) as
+# BACKLOG.xlsx, the single source of truth for open tickets — tracked on purpose; the
+# ignore + negation pair below still catches any other stray lowercase local copy.
 backlog.xlsx
+!/BACKLOG.xlsx
 backlog_v2.xlsx
 # Audit scratch dumps (xlsx/sheets extraction — not source)
 sheets_dump.json
@@ -146,3 +151,6 @@ models/
 .sweep_progress/
 # archived per-sweep progress snapshots (e.g. .sweep_progress_pre_sim501_20260813/)
 .sweep_progress_*/
+
+# MkDocs build output for docs/technical/ (see requirements-docs.txt) — generated, not committed.
+site/
