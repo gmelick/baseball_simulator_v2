@@ -95,12 +95,14 @@ def test_every_profile_ends_up_stamped() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_source_that_saw_more_swings_wins() -> None:
+def test_the_per_pitch_source_wins_once_it_is_substantially_complete() -> None:
     """While the per-pitch table is backfilling it may hold a few April games
-    against a full-season leaderboard row. Preferring it blindly would replace a
-    600-swing average with a 50-swing one."""
+    against a full-season leaderboard row, and preferring it blindly would
+    replace a 600-swing average with a 50-swing one. An exact count comparison
+    over-corrected — it split the population between two sources — so the
+    point-in-time source wins at 80% of the board's swings."""
     sql = _sql_swing_select()
-    assert "competitive_swings_all, 0) >= COALESCE(sw.competitive_swings_all, 0)" in sql
+    assert "0.8 * COALESCE(sw.competitive_swings_all, 0)" in sql
     for line in sql.splitlines():
         assert line.strip().startswith("COALESCE(CASE WHEN"), line
 

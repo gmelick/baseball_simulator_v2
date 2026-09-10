@@ -221,12 +221,27 @@ PHYSICAL_COLUMN_ORDER: tuple[str, ...] = tuple(
 #: (migration 0026). Same positional-insert warning as above.
 PROFILE_TAIL_COLUMNS: tuple[str, ...] = (*PHYSICAL_COLUMN_ORDER, "asof_date")
 
-#: SIM-534: a tracked swing. Savant's leaderboards count "competitive" swings,
-#: which excludes bunts and checked swings; the per-pitch export simply leaves
-#: the tracking columns empty on anything it did not measure, and the few very
-#: slow readings that survive are not swings anyone took at a pitch. Anything at
-#: or above this bat speed is a real swing.
-COMPETITIVE_BAT_SPEED_MIN = 50.0
+#: SIM-534: what counts as a competitive swing, FITTED against Savant's own
+#: published numbers rather than guessed.
+#:
+#: Savant's leaderboards average "competitive" swings — excluding bunts and
+#: checked swings — but do not publish the cut. The per-pitch export just leaves
+#: the tracking columns empty on anything it did not measure, so the cut has to
+#: be reconstructed. Comparing our per-pitch average against the 2024
+#: leaderboard for the 372 batters with 300 or more swings:
+#:
+#:     threshold   bat-speed error   swing-count error
+#:        50 mph      -0.791 mph          +47.1
+#:        55 mph      -0.608 mph          +39.3
+#:        58 mph      -0.428 mph          +29.2
+#:        60 mph      -0.253 mph          +17.7
+#:        62 mph      +0.005 mph           -1.6   <-- fitted
+#:        65 mph      +0.618 mph          -55.4
+#:
+#: At 62 the two agree to five thousandths of a mile per hour and to under two
+#: swings in roughly 470. Anything lower drags slow swings into the average;
+#: anything higher throws real ones away.
+COMPETITIVE_BAT_SPEED_MIN = 62.0
 
 
 def _sql_swing_pivot() -> str:
@@ -283,7 +298,14 @@ def _sql_swing_select() -> str:
     left-handed pitching" and needs no crossing over.
     """
     lines = []
-    better = "COALESCE(swp.competitive_swings_all, 0) >= COALESCE(sw.competitive_swings_all, 0)"
+    # Prefer the per-pitch source once it holds most of the season's swings. An
+    # exact ">=" was tried first and split the population roughly in half —
+    # per-pitch runs a swing or two under the board for about half of batters —
+    # which left the profile drawing from two sources at once for no benefit.
+    # The point-in-time source should win whenever it is substantially complete.
+    better = (
+        "COALESCE(swp.competitive_swings_all, 0) >= 0.8 * COALESCE(sw.competitive_swings_all, 0)"
+    )
     for stem, src, _pitch_src in _SWING_FEATURES:
         for suffix, split in (("", "all"), ("_vs_l", "vs_l"), ("_vs_r", "vs_r")):
             lines.append(
