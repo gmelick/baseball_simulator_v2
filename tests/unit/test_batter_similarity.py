@@ -19,6 +19,7 @@ from similarity.engines.batter_similarity import (
     BATS_PENALTY_SWITCH,
     BATTED_BALL_FEATURES,
     DISCIPLINE_FEATURES,
+    PHYSICAL_FEATURES,
     PLATOON_FEATURES,
     POWER_FEATURES,
     BatterPartition,
@@ -111,6 +112,11 @@ def _build_synthetic_engine():
     engine._power_rbf = WeightedRBFSimilarity(
         sigma=1.1,
         reliability_weights=np.array([w for _, w in POWER_FEATURES]),
+    )
+    # SIM-529
+    engine._physical_rbf = WeightedRBFSimilarity(
+        sigma=1.0,
+        reliability_weights=np.array([w for _, w in PHYSICAL_FEATURES]),
     )
 
     # A: Contact RHB 2024 (high contact, moderate power)

@@ -245,6 +245,149 @@ CREATE TABLE raw.sprint_speed (
 CREATE INDEX idx_sprint_speed_season ON raw.sprint_speed(season);
 
 -- =============================================================================
+-- RAW.SAVANT_* — SIM-528
+-- The Baseball Savant leaderboard landing tables. One table per CSV endpoint,
+-- loaded by pipeline/etl/savant_loader.py from the registry in
+-- pipeline/etl/savant_boards.py. Season-level summaries per player: they can
+-- only sharpen an actor's similarity score, never add a per-pitch pool column.
+--
+-- Two tables carry a third key column because one player-season has more than
+-- one row. savant_batting_stance.bat_side is Savant's own (it publishes a row
+-- per batting side). savant_bat_tracking.split and savant_swing_path.split hold
+-- all / vs_l / vs_r — the PITCHER's hand the swings were taken against, which
+-- is how a switch hitter's two batting sides are kept apart (owner ruling
+-- 2026-09-10).
+-- =============================================================================
+
+CREATE TABLE raw.savant_bat_tracking (
+    player_id           INTEGER     NOT NULL REFERENCES raw.players(player_id),
+    season              INTEGER     NOT NULL,
+    split               VARCHAR(8)  NOT NULL,   -- all | vs_l | vs_r (pitcher hand)
+    avg_bat_speed       FLOAT,                  -- mph
+    swing_length        FLOAT,                  -- feet of bat head travel
+    competitive_swings  INTEGER,
+    scraped_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (player_id, season, split)
+);
+
+CREATE TABLE raw.savant_swing_path (
+    player_id               INTEGER     NOT NULL REFERENCES raw.players(player_id),
+    season                  INTEGER     NOT NULL,
+    split                   VARCHAR(8)  NOT NULL,
+    bat_side                VARCHAR(1),
+    swing_tilt              FLOAT,               -- degrees; swing-plane incline
+    attack_angle            FLOAT,               -- degrees; up/down at contact
+    attack_direction        FLOAT,               -- degrees; pull/oppo at contact
+    ideal_attack_angle_rate FLOAT,
+    intercept_y_vs_plate    FLOAT,               -- inches in front of the plate
+    intercept_y_vs_batter   FLOAT,
+    competitive_swings      INTEGER,
+    scraped_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (player_id, season, split)
+);
+
+CREATE TABLE raw.savant_batting_stance (
+    player_id               INTEGER     NOT NULL REFERENCES raw.players(player_id),
+    season                  INTEGER     NOT NULL,
+    bat_side                VARCHAR(1)  NOT NULL,  -- L or R; a switch hitter has both
+    foot_sep                FLOAT,                 -- inches between the feet
+    stance_angle            FLOAT,                 -- degrees; open (+) or closed (-)
+    batter_y_position       FLOAT,                 -- depth in the box
+    batter_x_position       FLOAT,                 -- distance off the plate
+    intercept_y_vs_plate    FLOAT,
+    intercept_y_vs_batter   FLOAT,
+    scraped_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (player_id, season, bat_side)
+);
+
+CREATE TABLE raw.savant_arm_strength (
+    player_id           INTEGER     NOT NULL REFERENCES raw.players(player_id),
+    season              INTEGER     NOT NULL,
+    total_throws        INTEGER,
+    max_arm_strength    FLOAT,      -- mph, best throw
+    arm_overall         FLOAT,      -- mph, all positions
+    arm_inf             FLOAT,
+    arm_of              FLOAT,
+    arm_1b              FLOAT,
+    arm_2b              FLOAT,
+    arm_3b              FLOAT,
+    arm_ss              FLOAT,
+    arm_lf              FLOAT,
+    arm_cf              FLOAT,
+    arm_rf              FLOAT,
+    scraped_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (player_id, season)
+);
+
+CREATE TABLE raw.savant_baserunning (
+    player_id                       INTEGER     NOT NULL REFERENCES raw.players(player_id),
+    season                          INTEGER     NOT NULL,
+    fielder_runs                    FLOAT,      -- total arm run value
+    fielder_runs_advances           FLOAT,
+    fielder_runs_thrown_out         FLOAT,
+    fielder_runs_hold               FLOAT,
+    runner_runs                     FLOAT,
+    n_opp_xb                        INTEGER,    -- chances to take an extra base
+    n_att_xb                        INTEGER,    -- attempts
+    rate_att_xb                     FLOAT,      -- attempts / chances
+    est_rate_att_generic_fielder    FLOAT,      -- the baseline our data lacks
+    est_rate_att_generic_runner     FLOAT,
+    n_out                           INTEGER,
+    n_safe                          INTEGER,
+    scraped_at                      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (player_id, season)
+);
+
+CREATE TABLE raw.savant_poptime (
+    player_id           INTEGER     NOT NULL REFERENCES raw.players(player_id),
+    season              INTEGER     NOT NULL,
+    arm_strength        FLOAT,      -- mph on steal attempts
+    exchange_time       FLOAT,      -- seconds, glove to release
+    pop_time_2b         FLOAT,      -- seconds, release to the bag
+    pop_time_2b_count   INTEGER,
+    pop_time_3b         FLOAT,
+    scraped_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (player_id, season)
+);
+
+CREATE TABLE raw.savant_catcher_throwing (
+    player_id           INTEGER     NOT NULL REFERENCES raw.players(player_id),
+    season              INTEGER     NOT NULL,
+    arm_strength        FLOAT,
+    pop_time            FLOAT,
+    exchange_time       FLOAT,
+    est_cs_pct          FLOAT,
+    cs_aa_per_throw     FLOAT,
+    sb_attempts         INTEGER,
+    n_cs                INTEGER,
+    scraped_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (player_id, season)
+);
+
+CREATE TABLE raw.savant_first_base_receiving (
+    player_id           INTEGER     NOT NULL REFERENCES raw.players(player_id),
+    season              INTEGER     NOT NULL,
+    height_in_inches    INTEGER,
+    n_plays             INTEGER,
+    n_outs              INTEGER,
+    total_oaa           FLOAT,
+    n_scoop             INTEGER,
+    outs_scoop          INTEGER,
+    oaa_scoop           FLOAT,
+    scraped_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (player_id, season)
+);
+
+CREATE INDEX idx_savant_bat_tracking_season         ON raw.savant_bat_tracking(season);
+CREATE INDEX idx_savant_swing_path_season           ON raw.savant_swing_path(season);
+CREATE INDEX idx_savant_batting_stance_season       ON raw.savant_batting_stance(season);
+CREATE INDEX idx_savant_arm_strength_season         ON raw.savant_arm_strength(season);
+CREATE INDEX idx_savant_baserunning_season          ON raw.savant_baserunning(season);
+CREATE INDEX idx_savant_poptime_season              ON raw.savant_poptime(season);
+CREATE INDEX idx_savant_catcher_throwing_season     ON raw.savant_catcher_throwing(season);
+CREATE INDEX idx_savant_first_base_receiving_season ON raw.savant_first_base_receiving(season);
+
+-- =============================================================================
 -- RAW.PITCHES
 -- Direct 1:1 ingestion target for Statcast data. Never modified after write.
 -- ~700K rows/season. pitch_type stored for reference only — similarity engine

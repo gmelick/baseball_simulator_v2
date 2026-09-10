@@ -5,26 +5,35 @@ Step 2.2 — Batter-to-Batter Similarity
 MLB Baseball Simulation Platform
 
 Computes a composite similarity score [0, 1] between any two MLB
-batter-season profiles by combining four sub-score dimensions:
+batter-season profiles by combining five sub-score dimensions:
 
-  1. Plate Discipline (40%)  — process-driven approach metrics that
+  1. Plate Discipline (32%)  — process-driven approach metrics that
      stabilize fastest and most reliably signal batter identity:
      first-pitch take rate, O-swing%, Z-swing%, whiff%, contact%,
      walk rate, strikeout rate.
 
-  2. Batted Ball Profile (35%) — contact quality and direction metrics
+  2. Batted Ball Profile (28%) — contact quality and direction metrics
      that characterize what happens when a batter makes contact:
      GB%, FB%, LD%, IFFB%, pull%, center%, oppo%, avg exit velo,
      avg launch angle, hard-hit%, barrel%.
 
-  3. Platoon Profile (15%) — vs-LHP and vs-RHP splits compared
+  3. Platoon Profile (12%) — vs-LHP and vs-RHP splits compared
      separately, critical for matchup-dependent simulation. The
      simulation often queries "find batters like X when facing a RHP"
      which shifts weight toward the relevant platoon split.
 
-  4. Power / Results (10%) — outcome-based metrics that are noisier
+  4. Power / Results (8%) — outcome-based metrics that are noisier
      but add discrimination for power profiles: HR rate, xBA, xSLG,
      max exit velo.
+
+  5. Physical swing and stance (20%, SIM-529) — how the batter SWINGS
+     and STANDS rather than what his swings produced: bat speed, swing
+     length, swing tilt, attack angle and direction, contact depth,
+     foot separation, stance angle, and where he stands in the box.
+     Measured by Statcast and published by Baseball Savant for 2023
+     onward. Five of these ten repeat season to season more reliably
+     than any other feature in this engine. Held per platoon context,
+     so a switch hitter's two sides stay apart.
 
 Research-Informed Design
 ------------------------
@@ -88,8 +97,8 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, cast
 
 import duckdb
 import numpy as np
@@ -165,27 +174,125 @@ PLATOON_FEATURES = [
     ("barrel_rate", 0.239),
 ]
 
+# --- Physical swing and stance features (SIM-529) ---
+# How the batter SWINGS and STANDS, rather than what his swings produced. Every
+# other group in this engine is a rate of outcomes; this one is measurement.
+#
+# The reliability weight of each feature IS its measured year-to-year
+# correlation, averaged over 2023->2024 and 2024->2025 (owner ruling 2026-09-10:
+# fit these reliability-proportionally). For comparison, the most stable feature
+# anywhere else in this engine is whiff rate at 0.825 — five of the ten below
+# beat it. Evidence:
+# docs/audit/2026-09-10-savant-leaderboard-data-audit.md
+#
+# Each feature is stored three times: overall, against left-handed pitching and
+# against right-handed pitching. A switch hitter genuinely swings and stands
+# differently from each side, and collapsing him to one row loses that.
+PHYSICAL_FEATURES = [
+    # feature_name,        reliability weight = measured year-to-year r
+    ("swing_tilt", 0.896),  # steepness of the swing plane
+    ("bat_speed", 0.897),
+    ("stance_depth", 0.879),  # how deep in the box he stands
+    ("swing_length", 0.885),
+    ("stance_off_plate", 0.857),  # how far off the plate he stands
+    ("stance_foot_sep", 0.843),
+    ("stance_angle", 0.809),  # open or closed
+    ("contact_depth", 0.802),  # how far in front of the plate he meets the ball
+    ("attack_angle", 0.737),  # up or down at contact
+    ("attack_direction", 0.643),  # pull-side or oppo at contact
+]
+
 # --- Sub-score weights (sum to 1.0) ---
-WEIGHT_DISCIPLINE = 0.40
-WEIGHT_BATTED_BALL = 0.35
-WEIGHT_PLATOON = 0.15
-WEIGHT_POWER = 0.10
-_TOTAL = WEIGHT_DISCIPLINE + WEIGHT_BATTED_BALL + WEIGHT_PLATOON + WEIGHT_POWER
+# SIM-529 rebalanced these. The physical group takes 0.20 and the four existing
+# groups give it up in proportion, so every judgement already encoded in their
+# RELATIVE sizes survives untouched (0.40 : 0.35 : 0.15 : 0.10 is still
+# 0.32 : 0.28 : 0.12 : 0.08).
+#
+# Why 0.20 and not more. Averaging each group's measured year-to-year
+# correlation makes the physical group the most reliable of the five — 0.824
+# against 0.779 for discipline, the next best — so a strictly proportional
+# split would hand it roughly 0.28. It is also the newest and least tested
+# group in this simulator, so it starts at a fifth of the score rather than at
+# what reliability alone would buy. This is the single number to move if the
+# certifying lane says the physical group is pulling too hard or too little.
+WEIGHT_DISCIPLINE = 0.32
+WEIGHT_BATTED_BALL = 0.28
+WEIGHT_PLATOON = 0.12
+WEIGHT_POWER = 0.08
+WEIGHT_PHYSICAL = 0.20
+_TOTAL = WEIGHT_DISCIPLINE + WEIGHT_BATTED_BALL + WEIGHT_PLATOON + WEIGHT_POWER + WEIGHT_PHYSICAL
 assert abs(_TOTAL - 1.0) < 1e-9, "Sub-score weights must sum to 1.0"
 
 # When vs_hand is specified, platoon weight is boosted and discipline/BB
 # weights are partially shifted to reflect that the matchup context matters
 # more than the overall profile.
-WEIGHT_DISCIPLINE_PLATOON = 0.30
-WEIGHT_BATTED_BALL_PLATOON = 0.25
-WEIGHT_PLATOON_PLATOON = 0.35  # platoon becomes the dominant signal
-WEIGHT_POWER_PLATOON = 0.10
+# SIM-529: scaled by 0.8 to make room for the same 0.20 physical share, so the
+# platoon context still shifts weight in exactly the proportions it used to.
+WEIGHT_DISCIPLINE_PLATOON = 0.24
+WEIGHT_BATTED_BALL_PLATOON = 0.20
+WEIGHT_PLATOON_PLATOON = 0.28  # platoon becomes the dominant signal
+WEIGHT_POWER_PLATOON = 0.08
+WEIGHT_PHYSICAL_PLATOON = 0.20
+_TOTAL_PLATOON = (
+    WEIGHT_DISCIPLINE_PLATOON
+    + WEIGHT_BATTED_BALL_PLATOON
+    + WEIGHT_PLATOON_PLATOON
+    + WEIGHT_POWER_PLATOON
+    + WEIGHT_PHYSICAL_PLATOON
+)
+assert abs(_TOTAL_PLATOON - 1.0) < 1e-9, "Platoon-context weights must sum to 1.0"
 
 # RBF bandwidth parameters (gamma = 1 / (2σ²))
 RBF_SIGMA_DISCIPLINE = 1.0389
 RBF_SIGMA_BATTED_BALL = 1.0828
 RBF_SIGMA_PLATOON = 1.0866
 RBF_SIGMA_POWER = 0.9591
+#: SIM-529. A starting value in line with the other four; `make calibrate` fits
+#: it against the same median-similarity target as the rest.
+RBF_SIGMA_PHYSICAL = 1.0000
+
+#: The pre-SIM-529 four-way split, kept so the physical group can be INERT.
+#:
+#: Why this exists. If the code ships before the batter profiles are rebuilt,
+#: every batter's physical vector is NaN, every physical sub-score is a perfect
+#: 1.0, and the composite becomes 0.8 * (the old score) + 0.20. That is not
+#: harmless: the score is a DRAW WEIGHT, and compressing its spread makes every
+#: batter look more alike, quietly weakening the batter factor in the pitch and
+#: fielding draws. Falling back to these weights makes the composite identical
+#: to the pre-SIM-529 value until the data actually lands.
+_LEGACY_WEIGHTS = (0.40, 0.35, 0.15, 0.10)
+_LEGACY_WEIGHTS_PLATOON = (0.30, 0.25, 0.35, 0.10)
+
+
+def sub_score_weights(
+    *, platoon_context: bool, physical_available: bool
+) -> tuple[float, float, float, float, float]:
+    """(discipline, batted ball, platoon, power, physical), summing to 1.0.
+
+    ``physical_available`` is False when NO batter in the population has physical
+    data — before the profiles are rebuilt, or on a database that predates
+    migration 0025. The physical weight is then 0.0 and the other four revert to
+    their pre-SIM-529 values.
+    """
+    if not physical_available:
+        legacy = _LEGACY_WEIGHTS_PLATOON if platoon_context else _LEGACY_WEIGHTS
+        return (*legacy, 0.0)
+    if platoon_context:
+        return (
+            WEIGHT_DISCIPLINE_PLATOON,
+            WEIGHT_BATTED_BALL_PLATOON,
+            WEIGHT_PLATOON_PLATOON,
+            WEIGHT_POWER_PLATOON,
+            WEIGHT_PHYSICAL_PLATOON,
+        )
+    return (
+        WEIGHT_DISCIPLINE,
+        WEIGHT_BATTED_BALL,
+        WEIGHT_PLATOON,
+        WEIGHT_POWER,
+        WEIGHT_PHYSICAL,
+    )
+
 
 # Bats-mismatch penalty: when comparing L-to-R or R-to-L batters,
 # spray angle distributions are mirrored. This multiplicative penalty
@@ -201,10 +308,37 @@ EB_N_PRIOR = 5
 # Minimum sample for inclusion (matches schema: below_minimum_sample when PA < 100)
 MIN_BATTER_PA = 100
 
+#: SIM-529: how many columns the profile query returns BEFORE the physical
+#: block. Computed, not typed, so adding a feature to any group above moves the
+#: boundary instead of silently shifting the physical tail by one.
+#: 5 identity columns + the four feature groups + a sample count per platoon
+#: side + below_minimum_sample.
+_N_BASE_COLUMNS = (
+    5
+    + len(DISCIPLINE_FEATURES)
+    + len(BATTED_BALL_FEATURES)
+    + len(POWER_FEATURES)
+    + 2 * (len(PLATOON_FEATURES) + 1)
+    + 1
+)
+
 
 # ============================================================================
 # Data Structures
 # ============================================================================
+
+
+def _no_physical() -> NDArray[np.float64]:
+    """A physical vector meaning "Savant has no row for this batter-season".
+
+    Typed as the vector rather than as ``Field`` because that is what every
+    reader of the attribute gets; ``dataclasses`` swaps the descriptor out at
+    class-construction time.
+    """
+    return cast(
+        "NDArray[np.float64]",
+        field(default_factory=lambda: np.full(len(PHYSICAL_FEATURES), np.nan)),
+    )
 
 
 @dataclass(slots=True)
@@ -225,6 +359,18 @@ class BatterProfile:
     # Platoon split vectors
     platoon_vs_l_vec: NDArray[np.float64]  # shape (len(PLATOON_FEATURES),)
     platoon_vs_r_vec: NDArray[np.float64]  # shape (len(PLATOON_FEATURES),)
+
+    # SIM-529: physical swing and stance, held per platoon context so a switch
+    # hitter's two sides stay apart. The overall vector is used when no pitcher
+    # hand is given; otherwise the matching side is.
+    #
+    # The default is all-NaN, not all-zero, and it is load-bearing: a batter with
+    # no Savant row must score NEUTRALLY (the kernel maps NaN to zero distance).
+    # Zeros would read as the slowest swing and the flattest stance in the league.
+    physical_vec: NDArray[np.float64] = _no_physical()  # (len(PHYSICAL_FEATURES),)
+    physical_vs_l_vec: NDArray[np.float64] = _no_physical()
+    physical_vs_r_vec: NDArray[np.float64] = _no_physical()
+
     sample_pa_vs_l: int = 0
     sample_pa_vs_r: int = 0
 
@@ -245,6 +391,7 @@ class SimilarityResult:
     batted_ball_score: float
     platoon_score: float
     power_score: float
+    physical_score: float  # SIM-529
     sample_pa: int
 
 
@@ -363,6 +510,12 @@ class FeatureNormalizer:
     platoon_l_std: NDArray | None = None
     platoon_r_mean: NDArray | None = None
     platoon_r_std: NDArray | None = None
+    # SIM-529. One set of parameters for all three physical vectors: the overall
+    # and the two platoon sides measure the SAME quantities in the same units, so
+    # normalising them separately would make a switch hitter's left-side stance
+    # incomparable to a left-handed batter's stance.
+    physical_mean: NDArray | None = None
+    physical_std: NDArray | None = None
 
     def fit(self, profiles: list[BatterProfile]) -> None:
         if not profiles:
@@ -387,6 +540,14 @@ class FeatureNormalizer:
             self.platoon_l_mean, self.platoon_l_std = _fit_group(vs_l_vecs)
         if vs_r_vecs:
             self.platoon_r_mean, self.platoon_r_std = _fit_group(vs_r_vecs)
+        # SIM-529: fit on the overall vectors, then reuse for both sides.
+        # Only when some batter actually HAS physical data. Fitting an all-NaN
+        # population yields a NaN mean and a numpy warning, and leaving the
+        # parameters unset is the same thing said cleanly: _normalize returns the
+        # vector untouched, so an absent group stays NaN and scores neutrally.
+        phys_vecs = [p.physical_vec for p in profiles]
+        if phys_vecs and np.isfinite(np.asarray(phys_vecs, dtype=np.float64)).any():
+            self.physical_mean, self.physical_std = _fit_group(phys_vecs)
 
     def _normalize(self, vec: NDArray, mean: NDArray | None, std: NDArray | None) -> NDArray:
         if mean is None:
@@ -402,6 +563,9 @@ class FeatureNormalizer:
 
     def normalize_power(self, vec: NDArray) -> NDArray:
         return self._normalize(vec, self.power_mean, self.power_std)
+
+    def normalize_physical(self, vec: NDArray) -> NDArray:
+        return self._normalize(vec, self.physical_mean, self.physical_std)
 
     def normalize_platoon_l(self, vec: NDArray) -> NDArray:
         return self._normalize(vec, self.platoon_l_mean, self.platoon_l_std)
@@ -465,6 +629,11 @@ class BatterPartition:
         self._power_matrix: NDArray | None = None
         self._platoon_l_matrix: NDArray | None = None
         self._platoon_r_matrix: NDArray | None = None
+        # SIM-529: one matrix per platoon context, all three normalised with the
+        # same parameters so they stay comparable to each other.
+        self._physical_matrix: NDArray | None = None
+        self._physical_l_matrix: NDArray | None = None
+        self._physical_r_matrix: NDArray | None = None
 
         self._eb_alphas: NDArray | None = None
         self._platoon_l_valid: NDArray | None = None  # bool mask: has sufficient vs-L data
@@ -484,6 +653,7 @@ class BatterPartition:
 
         disc_rows, bb_rows, power_rows = [], [], []
         pl_rows, pr_rows = [], []
+        phys_rows, phys_l_rows, phys_r_rows = [], [], []
         alphas = []
         pl_valid, pr_valid = [], []
 
@@ -493,6 +663,9 @@ class BatterPartition:
             power_rows.append(normalizer.normalize_power(p.power_vec))
             pl_rows.append(normalizer.normalize_platoon_l(p.platoon_vs_l_vec))
             pr_rows.append(normalizer.normalize_platoon_r(p.platoon_vs_r_vec))
+            phys_rows.append(normalizer.normalize_physical(p.physical_vec))
+            phys_l_rows.append(normalizer.normalize_physical(p.physical_vs_l_vec))
+            phys_r_rows.append(normalizer.normalize_physical(p.physical_vs_r_vec))
             alphas.append(p.eb_alpha)
             pl_valid.append(p.sample_pa_vs_l >= 30)
             pr_valid.append(p.sample_pa_vs_r >= 30)
@@ -502,6 +675,9 @@ class BatterPartition:
         self._power_matrix = np.array(power_rows, dtype=np.float64)
         self._platoon_l_matrix = np.array(pl_rows, dtype=np.float64)
         self._platoon_r_matrix = np.array(pr_rows, dtype=np.float64)
+        self._physical_matrix = np.array(phys_rows, dtype=np.float64)
+        self._physical_l_matrix = np.array(phys_l_rows, dtype=np.float64)
+        self._physical_r_matrix = np.array(phys_r_rows, dtype=np.float64)
         self._eb_alphas = np.array(alphas, dtype=np.float64)
         self._platoon_l_valid = np.array(pl_valid, dtype=bool)
         self._platoon_r_valid = np.array(pr_valid, dtype=bool)
@@ -514,6 +690,7 @@ class BatterPartition:
         bb_rbf: WeightedRBFSimilarity,
         platoon_rbf: WeightedRBFSimilarity,
         power_rbf: WeightedRBFSimilarity,
+        physical_rbf: WeightedRBFSimilarity,
         vs_hand: str | None = None,
     ) -> list[SimilarityResult]:
         """
@@ -540,6 +717,16 @@ class BatterPartition:
         disc_scores = disc_rbf.score_batch(disc_q, self._disc_matrix)
         bb_scores = bb_rbf.score_batch(bb_q, self._bb_matrix)
         power_scores = power_rbf.score_batch(power_q, self._power_matrix)
+
+        # --- SIM-529: physical swing and stance, per platoon context ---
+        # With a pitcher hand in play, compare the side the batter would
+        # actually use against it. Without one, compare the overall swing.
+        phys_query_vec, phys_matrix = {
+            "L": (query.physical_vs_l_vec, self._physical_l_matrix),
+            "R": (query.physical_vs_r_vec, self._physical_r_matrix),
+        }.get(vs_hand, (query.physical_vec, self._physical_matrix))
+        phys_q = normalizer.normalize_physical(phys_query_vec)
+        physical_scores = physical_rbf.score_batch(phys_q, phys_matrix)
 
         # --- Platoon sub-scores ---
         # When vs_hand is specified, compare only the relevant split.
@@ -576,20 +763,18 @@ class BatterPartition:
             query_platoon_valid = query.sample_pa_vs_l >= 30 or query.sample_pa_vs_r >= 30
 
         # --- Select weights based on vs_hand context ---
-        if vs_hand is not None and query_platoon_valid:
-            w_disc = WEIGHT_DISCIPLINE_PLATOON
-            w_bb = WEIGHT_BATTED_BALL_PLATOON
-            w_plat = WEIGHT_PLATOON_PLATOON
-            w_pow = WEIGHT_POWER_PLATOON
-        else:
-            w_disc = WEIGHT_DISCIPLINE
-            w_bb = WEIGHT_BATTED_BALL
-            w_plat = WEIGHT_PLATOON
-            w_pow = WEIGHT_POWER
+        w_disc, w_bb, w_plat, w_pow, w_phys = sub_score_weights(
+            platoon_context=vs_hand is not None and query_platoon_valid,
+            physical_available=normalizer.physical_mean is not None,
+        )
 
         # --- Composite score ---
         composite = (
-            w_disc * disc_scores + w_bb * bb_scores + w_plat * platoon_scores + w_pow * power_scores
+            w_disc * disc_scores
+            + w_bb * bb_scores
+            + w_plat * platoon_scores
+            + w_pow * power_scores
+            + w_phys * physical_scores
         )
 
         # Bats-mismatch penalty
@@ -617,6 +802,7 @@ class BatterPartition:
                     batted_ball_score=float(bb_scores[i]),
                     platoon_score=float(platoon_scores[i]),
                     power_score=float(power_scores[i]),
+                    physical_score=float(physical_scores[i]),
                     sample_pa=cand.sample_pa,
                 )
             )
@@ -680,13 +866,17 @@ class BatterSimilarityEngine:
             sigma=RBF_SIGMA_POWER,
             reliability_weights=np.array([w for _, w in POWER_FEATURES]),
         )
+        self._physical_rbf = WeightedRBFSimilarity(
+            sigma=RBF_SIGMA_PHYSICAL,
+            reliability_weights=np.array([w for _, w in PHYSICAL_FEATURES]),
+        )
 
     # ------------------------------------------------------------------
     # Calibration wiring (SIM-406)
     # ------------------------------------------------------------------
 
     def apply_calibration(self, report: CalibrationReport) -> None:
-        """SIM-406: rebuild the four RBF sub-score scorers from a fitted report.
+        """SIM-406: rebuild the five RBF sub-score scorers from a fitted report.
 
         Each sub-score's sigma — and its reliability weights, when the report
         carries them — replaces the module default so the engine scores on the
@@ -727,13 +917,21 @@ class BatterSimilarityEngine:
             sigma=_sig("sigma_power", self._power_rbf.sigma),
             reliability_weights=_wts("reliability_weights_power", [w for _, w in POWER_FEATURES]),
         )
+        self._physical_rbf = WeightedRBFSimilarity(
+            sigma=_sig("sigma_physical", self._physical_rbf.sigma),
+            reliability_weights=_wts(
+                "reliability_weights_physical", [w for _, w in PHYSICAL_FEATURES]
+            ),
+        )
         log.info(
             "SIM-406: applied calibration to BatterSimilarityEngine "
-            "(sigma_disc=%.4f, sigma_bb=%.4f, sigma_plat=%.4f, sigma_pow=%.4f).",
+            "(sigma_disc=%.4f, sigma_bb=%.4f, sigma_plat=%.4f, sigma_pow=%.4f, "
+            "sigma_phys=%.4f).",
             self._disc_rbf.sigma,
             self._bb_rbf.sigma,
             self._platoon_rbf.sigma,
             self._power_rbf.sigma,
+            self._physical_rbf.sigma,
         )
 
     # ------------------------------------------------------------------
@@ -838,6 +1036,9 @@ class BatterSimilarityEngine:
         def _opt(name: str) -> str:
             return f"bsm.{name}" if name in _present else f"NULL AS {name}"
 
+        def _phys_cols(suffix: str) -> str:
+            return ", ".join(_opt(f"{name}{suffix}") for name, _ in PHYSICAL_FEATURES)
+
         rows = conn.execute(f"""
             SELECT
                 bsm.batter_id, bsm.season, bsm.bats,
@@ -862,7 +1063,14 @@ class BatterSimilarityEngine:
                 bsm.whiff_rate_vs_r, bsm.walk_rate_vs_r, bsm.k_rate_vs_r,
                 bsm.gb_rate_vs_r, bsm.barrel_rate_vs_r,
                 bsm.sample_pa_vs_r,
-                bsm.below_minimum_sample
+                bsm.below_minimum_sample,
+                -- SIM-529: physical swing and stance, 10 features x 3 contexts.
+                -- Every one goes through _opt, so this engine still builds
+                -- against a database that has not run migration 0025 yet — the
+                -- columns come back NULL and the group scores neutrally.
+                {_phys_cols("")},
+                {_phys_cols("_vs_l")},
+                {_phys_cols("_vs_r")}
             FROM derived.batter_season_metrics bsm
             WHERE NOT bsm.below_minimum_sample
               {season_filter}
@@ -918,10 +1126,27 @@ class BatterSimilarityEngine:
                 barrel_r,
                 pa_r,
                 below_min,
-            ) = row
+            ) = row[:_N_BASE_COLUMNS]
+
+            # SIM-529: the physical block is a fixed-width tail rather than 30
+            # more names in the unpack above. _N_BASE_COLUMNS is computed from
+            # the feature lists, so adding a feature to any group moves the
+            # boundary automatically instead of silently shifting the tail.
+            phys = row[_N_BASE_COLUMNS:]
+            n_phys = len(PHYSICAL_FEATURES)
+            if len(phys) != 3 * n_phys:
+                raise RuntimeError(
+                    f"batter profile row has {len(phys)} physical columns, expected {3 * n_phys}"
+                )
 
             def _v(vals):
                 return np.array([v or 0.0 for v in vals], dtype=np.float64)
+
+            def _phys_v(vals):
+                # NaN, not 0.0: a batter Savant has no row for must score
+                # NEUTRALLY, and the kernel maps NaN to zero distance. A zero bat
+                # speed would read as the slowest swing in the league.
+                return np.array([np.nan if v is None else float(v) for v in vals], dtype=np.float64)
 
             self._profiles[(batter_id, season)] = BatterProfile(
                 batter_id=batter_id,
@@ -934,6 +1159,9 @@ class BatterSimilarityEngine:
                 power_vec=_v([hr_rate, xba, xslg, max_ev]),
                 platoon_vs_l_vec=_v([o_sw_l, z_sw_l, whiff_l, walk_l, k_l, gb_l, barrel_l]),
                 platoon_vs_r_vec=_v([o_sw_r, z_sw_r, whiff_r, walk_r, k_r, gb_r, barrel_r]),
+                physical_vec=_phys_v(phys[:n_phys]),
+                physical_vs_l_vec=_phys_v(phys[n_phys : 2 * n_phys]),
+                physical_vs_r_vec=_phys_v(phys[2 * n_phys :]),
                 sample_pa_vs_l=pa_l or 0,
                 sample_pa_vs_r=pa_r or 0,
                 eb_alpha=self._shrinkage.alpha(sample_pa),
@@ -1025,6 +1253,7 @@ class BatterSimilarityEngine:
             bb_rbf=self._bb_rbf,
             platoon_rbf=self._platoon_rbf,
             power_rbf=self._power_rbf,
+            physical_rbf=self._physical_rbf,
             vs_hand=vs_hand,
         )
 
@@ -1053,6 +1282,7 @@ class BatterSimilarityEngine:
             batted_ball_score=scores[2],
             platoon_score=scores[3],
             power_score=scores[4],
+            physical_score=scores[5],
             sample_pa=pb.sample_pa,
         )
 
@@ -1061,8 +1291,14 @@ class BatterSimilarityEngine:
         query: BatterProfile,
         candidate: BatterProfile,
         vs_hand: str | None = None,
-    ) -> tuple[float, float, float, float, float]:
-        """Compute sub-scores and composite between two profiles."""
+    ) -> tuple[float, float, float, float, float, float]:
+        """Compute sub-scores and composite between two profiles.
+
+        ⚠ This must agree with ``BatterPartition.score_all`` on every pair.
+        ``score_all`` is the vectorized path the nightly actor matrix uses;
+        this one serves ``query_pair``. ``test_sim529_batter_physical.py``
+        compares them, because the two drifting apart is silent.
+        """
         disc_q = self._normalizer.normalize_discipline(query.discipline_vec)
         disc_c = self._normalizer.normalize_discipline(candidate.discipline_vec)
         disc_s = self._disc_rbf.score(disc_q, disc_c)
@@ -1074,6 +1310,16 @@ class BatterSimilarityEngine:
         power_q = self._normalizer.normalize_power(query.power_vec)
         power_c = self._normalizer.normalize_power(candidate.power_vec)
         power_s = self._power_rbf.score(power_q, power_c)
+
+        # SIM-529: physical swing and stance, from the side the batter would use
+        # against this pitcher hand.
+        phys_attr = {
+            "L": "physical_vs_l_vec",
+            "R": "physical_vs_r_vec",
+        }.get(vs_hand, "physical_vec")
+        phys_q = self._normalizer.normalize_physical(getattr(query, phys_attr))
+        phys_c = self._normalizer.normalize_physical(getattr(candidate, phys_attr))
+        physical_s = self._physical_rbf.score(phys_q, phys_c)
 
         # Platoon
         if vs_hand == "L":
@@ -1099,22 +1345,12 @@ class BatterSimilarityEngine:
             or (vs_hand == "R" and query.sample_pa_vs_r >= 30)
             or (vs_hand is not None and (query.sample_pa_vs_l >= 30 or query.sample_pa_vs_r >= 30))
         )
-        if vs_hand is not None and query_platoon_valid:
-            w_d, w_b, w_p, w_pw = (
-                WEIGHT_DISCIPLINE_PLATOON,
-                WEIGHT_BATTED_BALL_PLATOON,
-                WEIGHT_PLATOON_PLATOON,
-                WEIGHT_POWER_PLATOON,
-            )
-        else:
-            w_d, w_b, w_p, w_pw = (
-                WEIGHT_DISCIPLINE,
-                WEIGHT_BATTED_BALL,
-                WEIGHT_PLATOON,
-                WEIGHT_POWER,
-            )
+        w_d, w_b, w_p, w_pw, w_ph = sub_score_weights(
+            platoon_context=vs_hand is not None and query_platoon_valid,
+            physical_available=self._normalizer.physical_mean is not None,
+        )
 
-        composite = w_d * disc_s + w_b * bb_s + w_p * platoon_s + w_pw * power_s
+        composite = w_d * disc_s + w_b * bb_s + w_p * platoon_s + w_pw * power_s + w_ph * physical_s
         composite *= bats_penalty(query.bats, candidate.bats)
 
         confidence = min(query.eb_alpha, candidate.eb_alpha)
@@ -1126,6 +1362,7 @@ class BatterSimilarityEngine:
             float(bb_s),
             float(platoon_s),
             float(power_s),
+            float(physical_s),
         )
 
     # ------------------------------------------------------------------

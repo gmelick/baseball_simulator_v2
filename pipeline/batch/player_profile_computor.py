@@ -155,6 +155,132 @@ def sql_in(types: tuple[str, ...]) -> str:
 
 
 SQL_WHIFF = f"type IN {sql_in(WHIFF_TYPES)}"
+
+#: SIM-530: the outfield positions, as the fielder aggregation labels them.
+#: The arm advancement block is outfield-only — Savant's baserunning board
+#: measures runners taking an extra base on a hit, which is an outfield arm's
+#: job — so every column in that block guards on this.
+_SQL_IS_OF = "c.position IN ('LF', 'CF', 'RF')"
+
+
+# ===========================================================================
+# SIM-529 — the physical swing and stance columns
+# ===========================================================================
+# (profile column stem, source column on the Savant raw table)
+#
+# The swing features come from the bat-tracking and swing-path boards, which are
+# pulled three times: every swing, then filtered to left-handed and to
+# right-handed pitchers.
+_SWING_FEATURES: tuple[tuple[str, str], ...] = (
+    ("bat_speed", "avg_bat_speed"),
+    ("swing_length", "swing_length"),
+    ("swing_tilt", "swing_tilt"),
+    ("attack_angle", "attack_angle"),
+    ("attack_direction", "attack_direction"),
+    ("contact_depth", "intercept_y_vs_plate"),
+)
+# The stance features come from the stance board, which Savant publishes with
+# one row per BATTING side.
+_STANCE_FEATURES: tuple[tuple[str, str], ...] = (
+    ("stance_foot_sep", "foot_sep"),
+    ("stance_angle", "stance_angle"),
+    ("stance_depth", "batter_y_position"),
+    ("stance_off_plate", "batter_x_position"),
+)
+
+#: The exact order the SIM-529 columns are appended to
+#: ``derived.batter_season_metrics``.
+#:
+#: ⚠ POSITIONAL-INSERT TRAP. ``_compute_batter_profiles`` runs
+#: ``INSERT OR REPLACE`` with NO column list, so DuckDB matches the final
+#: SELECT to the table by POSITION. ``ALTER TABLE ... ADD COLUMN`` appends to
+#: the end of the table, so these must come last in the SELECT and in exactly
+#: this order. Migration 0025 adds them in this order, the SELECT tail is
+#: generated from this tuple, and ``test_sim529_batter_physical.py`` asserts the
+#: live table's trailing columns match it. Do not hand-edit one side.
+PHYSICAL_COLUMN_ORDER: tuple[str, ...] = tuple(
+    f"{stem}{suffix}"
+    for stem, _ in (*_SWING_FEATURES, *_STANCE_FEATURES)
+    for suffix in ("", "_vs_l", "_vs_r")
+) + ("physical_swings", "physical_swings_vs_l", "physical_swings_vs_r")
+
+
+def _sql_swing_pivot() -> str:
+    """Turn the three split ROWS per batter-season into one row of columns."""
+    lines = []
+    for _, src in _SWING_FEATURES:
+        for split in ("all", "vs_l", "vs_r"):
+            lines.append(
+                f"                    MAX(CASE WHEN split = '{split}' THEN {src} END)"
+                f" AS {src}_{split},"
+            )
+    for split in ("all", "vs_l", "vs_r"):
+        trail = "," if split != "vs_r" else ""
+        lines.append(
+            f"                    MAX(CASE WHEN split = '{split}' THEN competitive_swings END)"
+            f" AS competitive_swings_{split}{trail}"
+        )
+    return "\n".join(lines)
+
+
+def _sql_stance_pivot() -> str:
+    """Turn the per-batting-side stance ROWS into one row of columns.
+
+    A switch hitter has two rows here and keeps both (owner ruling 2026-09-10).
+    """
+    lines = []
+    for i, (_, src) in enumerate(_STANCE_FEATURES):
+        trail = "," if i < len(_STANCE_FEATURES) - 1 else ""
+        lines.append(
+            f"                    MAX(CASE WHEN bat_side = 'L' THEN {src} END) AS {src}_l,\n"
+            f"                    MAX(CASE WHEN bat_side = 'R' THEN {src} END) AS {src}_r{trail}"
+        )
+    return "\n".join(lines)
+
+
+def _sql_swing_select() -> str:
+    """The swing columns, one line per (feature, split).
+
+    ``split`` is the PITCHER's hand, so ``vs_l`` already means "against
+    left-handed pitching" and needs no crossing over.
+    """
+    lines = []
+    for stem, src in _SWING_FEATURES:
+        for suffix, split in (("", "all"), ("_vs_l", "vs_l"), ("_vs_r", "vs_r")):
+            lines.append(f"                sw.{src}_{split} AS {stem}{suffix},")
+    return "\n".join(lines)
+
+
+def _sql_stance_select() -> str:
+    """The stance columns, one line per (feature, split).
+
+    Savant keys this board by the BATTING side, and a batter's side is decided
+    by the pitcher's hand — so the two cross over. Facing a left-handed pitcher a
+    switch hitter bats RIGHT, so ``_vs_l`` reads the ``R`` stance row. A batter
+    with only one side uses it for both.
+
+    The overall column blends a switch hitter's two stances by how often he
+    actually faced each hand: his left-side stance is the one he used against
+    right-handed pitchers, so it carries the vs-right plate appearances.
+    """
+    lines = []
+    for stem, src in _STANCE_FEATURES:
+        left, right = f"st.{src}_l", f"st.{src}_r"
+        lines.append(
+            f"                CASE WHEN {left} IS NOT NULL AND {right} IS NOT NULL\n"
+            f"                          AND COALESCE(bp.sample_pa_vs_l, 0)"
+            f" + COALESCE(bp.sample_pa_vs_r, 0) > 0\n"
+            f"                     THEN ({left} * COALESCE(bp.sample_pa_vs_r, 0)\n"
+            f"                         + {right} * COALESCE(bp.sample_pa_vs_l, 0))\n"
+            f"                        / (COALESCE(bp.sample_pa_vs_l, 0)"
+            f" + COALESCE(bp.sample_pa_vs_r, 0))\n"
+            f"                     ELSE COALESCE({left}, {right}) END AS {stem},"
+        )
+        lines.append(f"                COALESCE({right}, {left}) AS {stem}_vs_l,")
+        lines.append(f"                COALESCE({left}, {right}) AS {stem}_vs_r,")
+    return "\n".join(lines)
+
+
 SQL_SWING = f"type NOT IN {sql_in(NON_SWING_TYPES)}"
 
 # ---------------------------------------------------------------------------
@@ -2317,7 +2443,52 @@ class PlayerProfileComputor:
                 WHERE data_quality_flag = FALSE
                   AND season IN ({season_list})
                 GROUP BY batter, season
+            ),
+
+            -- SIM-529: the physical swing boards. Both are pulled three times —
+            -- every swing, then filtered to left-handed and to right-handed
+            -- pitchers — so a switch hitter's two sides stay apart. The FULL
+            -- OUTER JOIN keeps a batter who appears on one board but not the
+            -- other; the two return almost the same 650 batters, but "almost"
+            -- is not "exactly".
+            savant_swing_raw AS (
+                SELECT
+                    COALESCE(bt.player_id, sp.player_id) AS player_id,
+                    COALESCE(bt.season, sp.season)       AS season,
+                    COALESCE(bt.split, sp.split)         AS split,
+                    bt.avg_bat_speed,
+                    bt.swing_length,
+                    sp.swing_tilt,
+                    sp.attack_angle,
+                    sp.attack_direction,
+                    sp.intercept_y_vs_plate,
+                    COALESCE(bt.competitive_swings, sp.competitive_swings)
+                        AS competitive_swings
+                FROM pg.raw.savant_bat_tracking bt
+                FULL OUTER JOIN pg.raw.savant_swing_path sp
+                    ON  sp.player_id = bt.player_id
+                    AND sp.season    = bt.season
+                    AND sp.split     = bt.split
+                WHERE COALESCE(bt.season, sp.season) IN ({season_list})
+            ),
+            savant_swing AS (
+                SELECT
+                    player_id AS sw_batter_id,
+                    season    AS sw_season,
+{_sql_swing_pivot()}
+                FROM savant_swing_raw
+                GROUP BY 1, 2
+            ),
+            savant_stance AS (
+                SELECT
+                    player_id AS st_batter_id,
+                    season    AS st_season,
+{_sql_stance_pivot()}
+                FROM pg.raw.savant_batting_stance
+                WHERE season IN ({season_list})
+                GROUP BY 1, 2
             )
+
             SELECT
                 batter_id,
                 season,
@@ -2370,8 +2541,23 @@ class PlayerProfileComputor:
                 barrel_rate_vs_r,
                 sample_pa_vs_r,
                 (sample_pa < {MIN_BATTER_PA}) AS below_minimum_sample,
-                CURRENT_TIMESTAMP                                        AS updated_at
-            FROM batter_pitches
+                CURRENT_TIMESTAMP                                        AS updated_at,
+
+                -- SIM-529 (migration 0025): the physical swing and stance
+                -- columns. ⚠ APPENDED LAST, in PHYSICAL_COLUMN_ORDER, because
+                -- this INSERT carries no column list and DuckDB matches by
+                -- position. The generators below and migration 0025 both read
+                -- that tuple; a unit test asserts the live table agrees.
+{_sql_swing_select()}
+{_sql_stance_select()}
+                sw.competitive_swings_all  AS physical_swings,
+                sw.competitive_swings_vs_l AS physical_swings_vs_l,
+                sw.competitive_swings_vs_r AS physical_swings_vs_r
+            FROM batter_pitches bp
+            LEFT JOIN savant_swing sw
+                ON sw.sw_batter_id = bp.batter_id AND sw.sw_season = bp.season
+            LEFT JOIN savant_stance st
+                ON st.st_batter_id = bp.batter_id AND st.st_season = bp.season
         """)
         log.info("  Batter profiles done.")
 
@@ -4847,15 +5033,69 @@ class PlayerProfileComputor:
                 COALESCE(e.throwing_error_rate, 0)  AS throwing_error_rate,
                 NULL::FLOAT                          AS error_oaa_cost,
 
-                -- OF Arm (NULL for infielders)
-                NULL::FLOAT AS arm_strength,
-                NULL::INTEGER AS arm_opportunities,
-                NULL::INTEGER AS arm_holds,
-                NULL::FLOAT AS arm_hold_rate,
-                NULL::INTEGER AS arm_assists,
-                NULL::FLOAT AS arm_thrown_out_rate,
-                NULL::FLOAT AS arm_advancement_prevention,
-                NULL::FLOAT AS of_arm_runs,
+                -- OF Arm — SIM-530 (2026-09-10). Every one of these eight was a
+                -- literal NULL on all 4,799 fielder-seasons in the pool window,
+                -- while the fielder engine weights the group at 0.30 of an
+                -- outfielder's score. The engine's kernel treats a missing
+                -- feature as zero distance, so until now EVERY pair of
+                -- outfielders scored a perfect match on the arm. Two Savant
+                -- boards fill it.
+                --
+                -- Throw velocity is per position on Savant's board, so the CASE
+                -- takes the column for THIS row's position and falls back to the
+                -- player's overall figure. This one is filled for infielders
+                -- too: it is a physical fact, and the infield feature groups do
+                -- not read it, so it stays inert there until SIM-532.
+                COALESCE(
+                    CASE c.position
+                        WHEN '1B' THEN sas.arm_1b
+                        WHEN '2B' THEN sas.arm_2b
+                        WHEN '3B' THEN sas.arm_3b
+                        WHEN 'SS' THEN sas.arm_ss
+                        WHEN 'LF' THEN sas.arm_lf
+                        WHEN 'CF' THEN sas.arm_cf
+                        WHEN 'RF' THEN sas.arm_rf
+                    END,
+                    sas.arm_overall
+                )                                       AS arm_strength,
+                -- The advancement block stays outfield-only, as the column
+                -- comments have always promised. Savant's baserunning board
+                -- measures runners taking an extra base on a hit, which is an
+                -- outfield arm's job.
+                --
+                -- ⚠ That board is per PLAYER-SEASON, not per position. A player
+                -- who works both corners carries the same advancement figures on
+                -- his left-field row and his right-field row. That is right for
+                -- an arm, which does not change between corners, but it is not
+                -- a per-position measurement and must not be read as one.
+                CASE WHEN {_SQL_IS_OF} THEN sbr.n_opp_xb END
+                                                        AS arm_opportunities,
+                CASE WHEN {_SQL_IS_OF} AND sbr.n_opp_xb IS NOT NULL
+                          AND sbr.n_att_xb IS NOT NULL
+                     THEN sbr.n_opp_xb - sbr.n_att_xb END
+                                                        AS arm_holds,
+                CASE WHEN {_SQL_IS_OF} AND sbr.rate_att_xb IS NOT NULL
+                     THEN 1.0 - sbr.rate_att_xb END     AS arm_hold_rate,
+                CASE WHEN {_SQL_IS_OF} THEN sbr.n_out END
+                                                        AS arm_assists,
+                CASE WHEN {_SQL_IS_OF} AND sbr.n_att_xb > 0
+                     THEN sbr.n_out * 1.0 / sbr.n_att_xb END
+                                                        AS arm_thrown_out_rate,
+                -- Positive means runners challenge this fielder LESS often than
+                -- they would a generic one. Savant supplies the generic
+                -- baseline; our own data has no way to compute it.
+                CASE WHEN {_SQL_IS_OF}
+                          AND sbr.est_rate_att_generic_fielder IS NOT NULL
+                          AND sbr.rate_att_xb IS NOT NULL
+                     THEN sbr.est_rate_att_generic_fielder - sbr.rate_att_xb END
+                                                        AS arm_advancement_prevention,
+                -- NULL when the player has no Savant row at all. Summing three
+                -- COALESCEd nulls would write a confident 0.0 instead.
+                CASE WHEN {_SQL_IS_OF} AND sbr.player_id IS NOT NULL
+                     THEN COALESCE(sbr.fielder_runs_hold, 0)
+                        + COALESCE(sbr.fielder_runs_advances, 0)
+                        + COALESCE(sbr.fielder_runs_thrown_out, 0) END
+                                                        AS of_arm_runs,
 
                 -- DP (NULL for outfielders)
                 dp.dp_opportunities,
@@ -4903,6 +5143,11 @@ class PlayerProfileComputor:
                 ON c.player_id = s.fielder_id AND c.position = s.position AND c.season = s.season
             LEFT JOIN pg.raw.sprint_speed ss
                 ON c.player_id = ss.player_id AND c.season = ss.season
+            -- SIM-530: the two boards that fill the outfield arm block.
+            LEFT JOIN pg.raw.savant_arm_strength sas
+                ON c.player_id = sas.player_id AND c.season = sas.season
+            LEFT JOIN pg.raw.savant_baserunning sbr
+                ON c.player_id = sbr.player_id AND c.season = sbr.season
         """)
 
         log.info("  Fielder season metrics aggregated.")
@@ -5022,12 +5267,32 @@ class PlayerProfileComputor:
                 b.blocks_aa_lateral,
 
                 -- Throwing
-                -- Pop time proxy from cs_rate
-                CASE WHEN t.cs_rate IS NOT NULL
-                     THEN 2.0 + (0.25 - t.cs_rate) * 2.0
-                     ELSE NULL END              AS pop_time_mean,
+                -- SIM-530: pop time is now MEASURED, not inferred.
+                --
+                -- What stood here was a proxy: 2.0 + (0.25 - cs_rate) * 2.0.
+                -- That is a deterministic function of the caught-stealing rate,
+                -- and the catcher engine weights BOTH pop time (0.900) and
+                -- cs_rate (0.600) inside the same throwing sub-score. So the
+                -- heaviest feature in that sub-score carried no information the
+                -- second one did not already carry — it was cs_rate wearing a
+                -- different name and a seconds unit. Savant measures the real
+                -- thing. The proxy survives only as the last fallback, so a
+                -- catcher Savant has no row for still gets a value rather than
+                -- dropping out of the sub-score.
+                COALESCE(
+                    spt.pop_time_2b,
+                    sct.pop_time,
+                    CASE WHEN t.cs_rate IS NOT NULL
+                         THEN 2.0 + (0.25 - t.cs_rate) * 2.0 END
+                )                               AS pop_time_mean,
                 0.08                            AS pop_time_std,
-                NULL::FLOAT                     AS arm_strength_mean,
+                -- SIM-530: NULL on all 420 catcher-seasons in the pool window,
+                -- while the engine weights it at 0.800 inside the throwing
+                -- sub-score. Pop time is the primary source (it covers 99 of
+                -- our 100 catchers for 2024 at no minimum); the catcher-throwing
+                -- board is the fallback for the rest.
+                COALESCE(spt.arm_strength, sct.arm_strength)
+                                                AS arm_strength_mean,
                 CAST(t.sb_attempts_faced AS INTEGER),
                 CAST(t.cs_total AS INTEGER),
                 t.cs_rate,
@@ -5058,6 +5323,15 @@ class PlayerProfileComputor:
             FULL OUTER JOIN _tmp_catcher_throwing t
                 ON COALESCE(f.catcher_id, b.catcher_id) = t.catcher_id
                 AND COALESCE(f.season, b.season) = t.season
+            -- SIM-530: the measured arm. The key is a FULL OUTER JOIN coalesce,
+            -- and a join condition cannot reference a SELECT alias, so the
+            -- coalesce is repeated here on purpose.
+            LEFT JOIN pg.raw.savant_poptime spt
+                ON spt.player_id = COALESCE(f.catcher_id, b.catcher_id, t.catcher_id)
+               AND spt.season    = COALESCE(f.season, b.season, t.season)
+            LEFT JOIN pg.raw.savant_catcher_throwing sct
+                ON sct.player_id = COALESCE(f.catcher_id, b.catcher_id, t.catcher_id)
+               AND sct.season    = COALESCE(f.season, b.season, t.season)
         """)
 
         # Clean up temp tables

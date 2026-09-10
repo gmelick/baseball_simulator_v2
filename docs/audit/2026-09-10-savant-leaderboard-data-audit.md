@@ -31,10 +31,15 @@ Two facts make this unusually clean to adopt:
   (`RECENCY_FLOOR_SEASONS = 4`). Every pool row and every live player sits inside the window
   where the data exists.
 
-There is a second, separate finding I did not go looking for. **Three feature blocks the
-engines already weight are 100% empty in our database**, and Savant fills all three. The
-outfield arm block is the worst: it is 30% of an outfielder's similarity score, and every
-column in it is NULL. That is a correctness bug, not an enhancement.
+There is a second, separate finding I did not go looking for. **Two feature blocks the
+engines already weight are 100% empty in our database**, and Savant fills both. The
+outfield arm block is the worse of them: it is 30% of an outfielder's similarity score, and
+every column in it is NULL. That is a correctness bug, not an enhancement.
+
+*Corrected 2026-09-10 during the build:* this said **three** blocks and counted first-base
+scoop rate as the third, on a table-wide null rate of 87%. That was my error. Split by
+position, the scoop rate is present on 610 of 628 first-baseman rows — the 87% is simply
+every fielder who is not a first baseman, which is correct. See §4.3.
 
 ---
 
@@ -272,7 +277,7 @@ it as zero, and the fitting pass must confirm that a missing row stays draw-neut
 
 ---
 
-## 4. Three feature blocks that are empty today, and Savant fills them
+## 4. Two feature blocks that are empty today, and Savant fills both
 
 I checked every column in our derived profile tables for the 2023-2026 window. Three blocks
 that the engines actively weight contain **no data at all**.
@@ -308,6 +313,14 @@ catcher-seasons** in the window.
 Separately, the 2026-05-29 schema reconciliation *removed* the exchange-time sub-score
 because the column did not exist. It exists on Savant.
 
+**A third problem in the same sub-score, found during the build.** `pop_time_mean` is not
+measured. It is computed as `2.0 + (0.25 - cs_rate) * 2.0` — a straight function of the
+caught-stealing rate. The catcher model weights pop time at 0.900 and the caught-stealing
+rate at 0.600 **inside the same throwing sub-score**, so its heaviest feature carried no
+information the second one did not already carry. It was the caught-stealing rate wearing a
+seconds unit. Savant measures the real thing, and the build now uses it, keeping the old
+formula only as a last-resort fallback.
+
 **The fix, from two boards:**
 
 - **Catcher Pop Time** (`/leaderboard/poptime`) — `maxeff_arm_2b_3b_sba` is arm strength on
@@ -321,12 +334,17 @@ because the column did not exist. It exists on Savant.
 The catcher throwing score weights the steal draw at power 2. Filling it makes that draw
 respond to a catcher's actual arm.
 
-### 4.3 First-base receiving — 87% empty
+### 4.3 First-base receiving — NOT a gap. I got this one wrong.
 
-`scoop_success_rate` and `scoop_opportunities` are NULL on 87% of fielder-seasons.
-**First Base Receiving** (`/leaderboard/first-base-scoops-receiving`) supplies
-`oaa_scoop`, `oaa_bounce`, `oaa_on_target`, the counts behind each, and the first baseman's
-height and throwing hand.
+I originally listed the first baseman's scoop rate as a third empty block, on the strength of
+`scoop_success_rate` being NULL on 87% of fielder-seasons. Splitting that figure by position
+during the build shows the opposite: the column is present on **610 of 628** first-baseman
+rows. The 87% is every second baseman, shortstop and outfielder in the table, for whom a
+scoop rate is meaningless and NULL is the right value.
+
+**First Base Receiving** still carries something we do not have — scoop outs *above
+expectation* rather than a raw rate, plus the first baseman's height and throwing hand. That
+is a possible feature, not a repair. It is loaded and staged, and no model reads it.
 
 ---
 

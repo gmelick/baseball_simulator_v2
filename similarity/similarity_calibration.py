@@ -387,6 +387,7 @@ class CalibrationReport:
     sigma_batted_ball: float = 0.0
     sigma_platoon: float = 0.0
     sigma_power: float = 0.0
+    sigma_physical: float = 0.0  # SIM-529: batter swing and stance
     sigma_command: float = 0.0  # pitcher
     sigma_results: float = 0.0  # pitcher
     arsenal_gamma: float = 0.0
@@ -400,6 +401,7 @@ class CalibrationReport:
     reliability_weights_batted_ball: NDArray | None = None
     reliability_weights_power: NDArray | None = None
     reliability_weights_platoon: NDArray | None = None
+    reliability_weights_physical: NDArray | None = None  # SIM-529
     sigma_if_range: float = 0.0
     sigma_if_dp: float = 0.0
     sigma_if_errors: float = 0.0
@@ -495,6 +497,7 @@ class CalibrationReport:
             f"    Batted Ball: {self.sigma_batted_ball:.4f}",
             f"    Platoon:     {self.sigma_platoon:.4f}",
             f"    Power:       {self.sigma_power:.4f}",
+            f"    Physical:    {self.sigma_physical:.4f}",
             "",
             "  RBF Sigma (pitcher):",
             f"    Command:     {self.sigma_command:.4f}",
@@ -826,6 +829,8 @@ class SimilarityCalibrator:
         # Override constants before calling build():
         batter_similarity.RBF_SIGMA_DISCIPLINE = report.sigma_discipline
         batter_similarity.RBF_SIGMA_BATTED_BALL = report.sigma_batted_ball
+        if report.sigma_physical > 0.0:
+            batter_similarity.RBF_SIGMA_PHYSICAL = report.sigma_physical
         ...
     """
 
@@ -898,6 +903,7 @@ class SimilarityCalibrator:
         from similarity.engines.batter_similarity import (
             BATTED_BALL_FEATURES,
             DISCIPLINE_FEATURES,
+            PHYSICAL_FEATURES,
             PLATOON_FEATURES,
             POWER_FEATURES,
         )
@@ -937,7 +943,10 @@ class SimilarityCalibrator:
                 -- Platoon vs R (7) — larger split, better for calibration
                 o_swing_rate_vs_r, z_swing_rate_vs_r, whiff_rate_vs_r,
                 walk_rate_vs_r, k_rate_vs_r, gb_rate_vs_r, barrel_rate_vs_r,
-                sample_pa_vs_r
+                sample_pa_vs_r,
+                -- SIM-529 physical (10). Guarded, so this fit still runs against
+                -- a database that has not applied migration 0025.
+                {", ".join(_opt(name) for name, _ in PHYSICAL_FEATURES)}
             FROM derived.batter_season_metrics
             WHERE season IN ({sl}) AND below_minimum_sample = FALSE
         """).fetchall()
@@ -968,6 +977,19 @@ class SimilarityCalibrator:
         plat_raw = np.array([[r[col + i] or 0.0 for i in range(n_plat)] for r in rows])
         col += n_plat
         sample_pa_vs_r = np.array([r[col] or 0 for r in rows])
+        col += 1
+        # SIM-529: keep NULL as NaN rather than 0.0. A batter Savant has no row
+        # for must not be scored as the slowest swing in the league; the
+        # z-scoring below is nan-aware and _fit_sigma returns the keep-default
+        # sentinel when the whole block is missing.
+        n_phys = len(PHYSICAL_FEATURES)
+        phys_raw = np.array(
+            [
+                [np.nan if r[col + i] is None else float(r[col + i]) for i in range(n_phys)]
+                for r in rows
+            ],
+            dtype=np.float64,
+        )
 
         # Filter platoon data to profiles with sufficient split sample
         plat_mask = sample_pa_vs_r >= 30
@@ -987,6 +1009,14 @@ class SimilarityCalibrator:
         report.sigma_discipline = self._fit_sigma(disc_z, target)
         report.sigma_batted_ball = self._fit_sigma(bb_z, target)
         report.sigma_power = self._fit_sigma(pow_z, target)
+        if np.isfinite(phys_raw).any():
+            report.sigma_physical = self._fit_sigma(self._zscore_matrix(phys_raw), target)
+        else:
+            log.warning(
+                "No physical swing data found; keeping the engine's default "
+                "physical sigma. Run the Savant loader (SIM-528) and rebuild "
+                "the batter profiles."
+            )
 
         if len(plat_filtered) >= 20:
             plat_z = self._zscore_matrix(plat_filtered)
@@ -1012,6 +1042,11 @@ class SimilarityCalibrator:
             pow_raw,
             ids,
         )
+        if np.isfinite(phys_raw).any():
+            report.reliability_weights_physical = calibrate_reliability_weights(
+                np.nan_to_num(phys_raw, nan=0.0),
+                ids,
+            )
         if len(plat_filtered) >= 20:
             report.reliability_weights_platoon = calibrate_reliability_weights(
                 plat_filtered,
@@ -1022,12 +1057,14 @@ class SimilarityCalibrator:
 
         log.info(
             "Batter calibration complete: %d profiles, sigma_disc=%.3f, "
-            "sigma_bb=%.3f, sigma_plat=%.3f, sigma_pow=%.3f, eb_prior=%.1f",
+            "sigma_bb=%.3f, sigma_plat=%.3f, sigma_pow=%.3f, sigma_phys=%.3f, "
+            "eb_prior=%.1f",
             len(rows),
             report.sigma_discipline,
             report.sigma_batted_ball,
             report.sigma_platoon,
             report.sigma_power,
+            report.sigma_physical,
             report.eb_n_prior_batter,
         )
         return report

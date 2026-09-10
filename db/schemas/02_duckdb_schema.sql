@@ -266,6 +266,46 @@ CREATE TABLE IF NOT EXISTS derived.batter_season_metrics (
     below_minimum_sample        BOOLEAN     NOT NULL DEFAULT FALSE,
     updated_at                  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
+    -- SIM-529 (migration 0025): the physical swing and stance measurements.
+    -- Three columns per feature — overall, vs left-handed pitching, vs right-handed
+    -- pitching — so a switch hitter's two sides stay apart (owner ruling 2026-09-10).
+    -- ⚠ Appended LAST and in this exact order: the batter INSERT carries no column
+    -- list, so DuckDB matches by position. Generated from PHYSICAL_COLUMN_ORDER.
+
+    bat_speed                   FLOAT,
+    bat_speed_vs_l              FLOAT,
+    bat_speed_vs_r              FLOAT,
+    swing_length                FLOAT,
+    swing_length_vs_l           FLOAT,
+    swing_length_vs_r           FLOAT,
+    swing_tilt                  FLOAT,
+    swing_tilt_vs_l             FLOAT,
+    swing_tilt_vs_r             FLOAT,
+    attack_angle                FLOAT,
+    attack_angle_vs_l           FLOAT,
+    attack_angle_vs_r           FLOAT,
+    attack_direction            FLOAT,
+    attack_direction_vs_l       FLOAT,
+    attack_direction_vs_r       FLOAT,
+    contact_depth               FLOAT,
+    contact_depth_vs_l          FLOAT,
+    contact_depth_vs_r          FLOAT,
+    stance_foot_sep             FLOAT,
+    stance_foot_sep_vs_l        FLOAT,
+    stance_foot_sep_vs_r        FLOAT,
+    stance_angle                FLOAT,
+    stance_angle_vs_l           FLOAT,
+    stance_angle_vs_r           FLOAT,
+    stance_depth                FLOAT,
+    stance_depth_vs_l           FLOAT,
+    stance_depth_vs_r           FLOAT,
+    stance_off_plate            FLOAT,
+    stance_off_plate_vs_l       FLOAT,
+    stance_off_plate_vs_r       FLOAT,
+    physical_swings             INTEGER,
+    physical_swings_vs_l        INTEGER,
+    physical_swings_vs_r        INTEGER,
+
     PRIMARY KEY (batter_id, season)
 );
 

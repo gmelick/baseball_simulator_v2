@@ -359,7 +359,7 @@ class TestMigrationSanity:
         assert "def downgrade()" in text
         assert "sim.sim_runs" in text
 
-    def test_duckdb_schema_version_is_24(self):
+    def test_duckdb_schema_version_is_25(self):
         # SIM-357 bumped 8 -> 9 (0009); SIM-362/364 -> 10 (0010);
         # SIM-408 -> 11 (0011 engine ↔ schema reconciliation);
         # SIM-411/413/425b -> 12 (0012 batted-ball realism columns);
@@ -378,7 +378,9 @@ class TestMigrationSanity:
         # times_through_order — the draw-conditioning columns).
         # SIM-523 part G -> 24 (0024 fielder sprint_speed + the outcome pool's
         # alignment fielder_2..9 + the putout / assist position masks).
-        assert DUCKDB_VERSION_FILE.read_text().strip() == "24"
+        # SIM-529 -> 25 (0025 the batter's physical swing and stance columns,
+        # three per feature so a switch hitter's two sides stay apart).
+        assert DUCKDB_VERSION_FILE.read_text().strip() == "25"
 
     def test_duckdb_version_matches_latest_migration(self):
         """The version file must equal the highest-numbered DuckDB migration.
