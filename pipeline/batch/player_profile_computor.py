@@ -171,13 +171,25 @@ _SQL_IS_OF = "c.position IN ('LF', 'CF', 'RF')"
 # The swing features come from the bat-tracking and swing-path boards, which are
 # pulled three times: every swing, then filtered to left-handed and to
 # right-handed pitchers.
-_SWING_FEATURES: tuple[tuple[str, str], ...] = (
-    ("bat_speed", "avg_bat_speed"),
-    ("swing_length", "swing_length"),
-    ("swing_tilt", "swing_tilt"),
-    ("attack_angle", "attack_angle"),
-    ("attack_direction", "attack_direction"),
-    ("contact_depth", "intercept_y_vs_plate"),
+# (profile stem, column on the leaderboard table, column on the per-pitch table)
+#
+# SIM-534: the per-pitch table is the preferred source, because it can be
+# aggregated to any cutoff date. The leaderboard column is the fallback, and it
+# is not dead weight — the per-pitch export carries no bat tracking before 2024,
+# so 2023 has no other source.
+#
+# ``contact_depth`` measures contact relative to the BATTER, not to the plate.
+# SIM-529 used the vs-plate figure; the per-pitch export publishes only the
+# vs-batter one, and vs-batter is the better feature anyway: it describes the
+# batter's own swing geometry, and where he stands in the box is already carried
+# separately as ``stance_depth``.
+_SWING_FEATURES: tuple[tuple[str, str, str], ...] = (
+    ("bat_speed", "avg_bat_speed", "bat_speed"),
+    ("swing_length", "swing_length", "swing_length"),
+    ("swing_tilt", "swing_tilt", "swing_path_tilt"),
+    ("attack_angle", "attack_angle", "attack_angle"),
+    ("attack_direction", "attack_direction", "attack_direction"),
+    ("contact_depth", "intercept_y_vs_batter", "intercept_y"),
 )
 # The stance features come from the stance board, which Savant publishes with
 # one row per BATTING side.
@@ -200,15 +212,27 @@ _STANCE_FEATURES: tuple[tuple[str, str], ...] = (
 #: live table's trailing columns match it. Do not hand-edit one side.
 PHYSICAL_COLUMN_ORDER: tuple[str, ...] = tuple(
     f"{stem}{suffix}"
-    for stem, _ in (*_SWING_FEATURES, *_STANCE_FEATURES)
+    for stem in (*(f[0] for f in _SWING_FEATURES), *(f[0] for f in _STANCE_FEATURES))
     for suffix in ("", "_vs_l", "_vs_r")
 ) + ("physical_swings", "physical_swings_vs_l", "physical_swings_vs_r")
+
+#: Everything appended to ``derived.batter_season_metrics`` after ``updated_at``,
+#: in order. The physical block (migration 0025) then the cutoff stamp
+#: (migration 0026). Same positional-insert warning as above.
+PROFILE_TAIL_COLUMNS: tuple[str, ...] = (*PHYSICAL_COLUMN_ORDER, "asof_date")
+
+#: SIM-534: a tracked swing. Savant's leaderboards count "competitive" swings,
+#: which excludes bunts and checked swings; the per-pitch export simply leaves
+#: the tracking columns empty on anything it did not measure, and the few very
+#: slow readings that survive are not swings anyone took at a pitch. Anything at
+#: or above this bat speed is a real swing.
+COMPETITIVE_BAT_SPEED_MIN = 50.0
 
 
 def _sql_swing_pivot() -> str:
     """Turn the three split ROWS per batter-season into one row of columns."""
     lines = []
-    for _, src in _SWING_FEATURES:
+    for _, src, _pitch_src in _SWING_FEATURES:
         for split in ("all", "vs_l", "vs_r"):
             lines.append(
                 f"                    MAX(CASE WHEN split = '{split}' THEN {src} END)"
@@ -241,13 +265,57 @@ def _sql_stance_pivot() -> str:
 def _sql_swing_select() -> str:
     """The swing columns, one line per (feature, split).
 
+    SIM-534: two sources, and the one that saw MORE swings wins.
+
+    The per-pitch aggregate is the point-in-time source and is normally the one
+    to use. But "normally" is not "always": while the per-pitch table is still
+    being backfilled it may hold a few April games against a leaderboard row
+    covering the whole season, and preferring it blindly would replace a
+    600-swing average with a 50-swing one. Comparing the swing counts picks the
+    better source in both directions and needs no flag to say which state we are
+    in.
+
+    For a cutoff build the question does not arise: a leaderboard row for the
+    cutoff's own season is dated after the cutoff and never reaches this join,
+    so the per-pitch value stands alone.
+
     ``split`` is the PITCHER's hand, so ``vs_l`` already means "against
     left-handed pitching" and needs no crossing over.
     """
     lines = []
-    for stem, src in _SWING_FEATURES:
+    better = "COALESCE(swp.competitive_swings_all, 0) >= COALESCE(sw.competitive_swings_all, 0)"
+    for stem, src, _pitch_src in _SWING_FEATURES:
         for suffix, split in (("", "all"), ("_vs_l", "vs_l"), ("_vs_r", "vs_r")):
-            lines.append(f"                sw.{src}_{split} AS {stem}{suffix},")
+            lines.append(
+                f"                COALESCE("
+                f"CASE WHEN {better} THEN swp.{stem}_{split} END,"
+                f" sw.{src}_{split}, swp.{stem}_{split}) AS {stem}{suffix},"
+            )
+    return "\n".join(lines)
+
+
+def _sql_pitch_swing_agg() -> str:
+    """The per-pitch swing aggregate, one line per (feature, split).
+
+    Each column averages the tracked swings of that split. The split is the
+    PITCHER's hand, read from ``raw.pitches``, so a switch hitter's two sides
+    separate exactly as they do on the leaderboard.
+    """
+    splits = (("all", "TRUE"), ("vs_l", "p.p_throws = 'L'"), ("vs_r", "p.p_throws = 'R'"))
+    lines = []
+    for _stem, _src, pitch_src in _SWING_FEATURES:
+        stem = _stem
+        for split, cond in splits:
+            lines.append(
+                f"                    AVG(CASE WHEN {cond} THEN t.{pitch_src} END)"
+                f" AS {stem}_{split},"
+            )
+    for i, (split, cond) in enumerate(splits):
+        trail = "," if i < len(splits) - 1 else ""
+        lines.append(
+            f"                    COUNT(CASE WHEN {cond} THEN 1 END)"
+            f" AS competitive_swings_{split}{trail}"
+        )
     return "\n".join(lines)
 
 
@@ -1533,6 +1601,7 @@ class PlayerProfileComputor:
         self,
         seasons: list[int] | None = None,
         full_rebuild: bool = False,
+        asof: date | None = None,
     ) -> None:
         """
         Run the full nightly pre-computation job.
@@ -1559,7 +1628,7 @@ class PlayerProfileComputor:
             # ── Non-defensive profiles (ordered for dependency satisfaction) ──
             self._compute_park_factors(seasons)  # 1. no dependencies
             self._compute_pitcher_profiles(seasons)  # 2. GMM — most expensive
-            self._compute_batter_profiles(seasons)  # 3.
+            self._compute_batter_profiles(seasons, asof=asof)  # 3.
             self._compute_baserunner_profiles(seasons)  # 4. infield/DP need sprint speeds
             self._build_baserunner_steal_metrics(seasons)  # 4b. SIM-408 steal-engine table
             self._build_pitcher_steal_metrics(seasons)  # 4c. SIM-408 pitcher-steal table
@@ -2256,9 +2325,40 @@ class PlayerProfileComputor:
             gmm_fallback,
         )
 
-    def _compute_batter_profiles(self, seasons: list[int]) -> None:
-        log.info("Computing batter profiles …")
+    def _compute_batter_profiles(self, seasons: list[int], asof: date | None = None) -> None:
+        """Rebuild ``derived.batter_season_metrics`` for ``seasons``.
+
+        ``asof`` is the date the profile's data runs through. Every source in
+        this query is filtered by it, so a profile built for a backtest cannot
+        contain a pitch, a swing or a stance measurement recorded after the
+        date being simulated. Left unset it means "everything known today",
+        which is what a live simulation wants.
+
+        The cutoff is not a per-season idea. A season that ENDED before the
+        cutoff is admissible whole — a 2023 aggregate holds nothing that
+        postdates a 2025 date. Only the season containing the cutoff is
+        truncated, and the date arithmetic does that without special cases.
+        """
+        asof_date = asof or date.today()
+        asof_sql = asof_date.isoformat()
+        log.info("Computing batter profiles (as of %s) …", asof_sql)
         season_list = ", ".join(str(s) for s in seasons)
+
+        if asof is not None:
+            # SIM-534: a point-in-time build has to REMOVE as well as write.
+            # INSERT OR REPLACE only overwrites rows the query produces, so two
+            # kinds of stale row would otherwise survive a backtest rebuild and
+            # leak the future:
+            #   * a season that had not started at the cutoff (there is no 2025
+            #     batter on 15 April 2024), and
+            #   * a batter inside the cutoff season with no plate appearances
+            #     yet, whose full-season row from an earlier build would remain.
+            # Only the cutoff path deletes; the live nightly run keeps its
+            # existing insert-or-replace behaviour untouched.
+            self._conn.execute(f"""
+                DELETE FROM derived.batter_season_metrics
+                WHERE season IN ({season_list}) OR season > {asof_date.year}
+            """)
 
         self._conn.execute(f"""
             INSERT OR REPLACE INTO derived.batter_season_metrics
@@ -2442,7 +2542,33 @@ class PlayerProfileComputor:
                 FROM pg.raw.pitches
                 WHERE data_quality_flag = FALSE
                   AND season IN ({season_list})
+                  -- SIM-534: the cutoff. Every other source in this query
+                  -- carries the same restriction.
+                  AND game_date <= DATE '{asof_sql}'
                 GROUP BY batter, season
+            ),
+
+            -- SIM-534: the PER-PITCH swing measurements, truncated at the
+            -- cutoff. This is the point-in-time source and it wins wherever it
+            -- has data: aggregating individual pitches up to a date is the same
+            -- thing the rest of this query already does for every other batter
+            -- feature. The leaderboard CTEs below are the fallback for 2023,
+            -- which the per-pitch export does not cover.
+            savant_swing_pitch AS (
+                SELECT
+                    p.batter AS swp_batter_id,
+                    p.season AS swp_season,
+{_sql_pitch_swing_agg()}
+                FROM pg.raw.savant_pitch_tracking t
+                JOIN pg.raw.pitches p
+                    ON  p.game_pk       = t.game_pk
+                    AND p.at_bat_number = t.at_bat_number
+                    AND p.pitch_number  = t.pitch_number
+                WHERE p.season IN ({season_list})
+                  AND p.data_quality_flag = FALSE
+                  AND t.bat_speed >= {COMPETITIVE_BAT_SPEED_MIN}
+                  AND p.game_date <= DATE '{asof_sql}'
+                GROUP BY 1, 2
             ),
 
             -- SIM-529: the physical swing boards. Both are pulled three times —
@@ -2451,6 +2577,12 @@ class PlayerProfileComputor:
             -- OUTER JOIN keeps a batter who appears on one board but not the
             -- other; the two return almost the same 650 batters, but "almost"
             -- is not "exactly".
+            --
+            -- SIM-534: only rows whose data ENDS at or before the cutoff, most
+            -- recent first. A 2023 full-season row is stamped 31 December 2023
+            -- and so is admissible for any cutoff after that; a 2025
+            -- full-season row is stamped 31 December 2025 and is not admissible
+            -- for a mid-2025 cutoff. The arithmetic enforces the rule.
             savant_swing_raw AS (
                 SELECT
                     COALESCE(bt.player_id, sp.player_id) AS player_id,
@@ -2461,15 +2593,32 @@ class PlayerProfileComputor:
                     sp.swing_tilt,
                     sp.attack_angle,
                     sp.attack_direction,
-                    sp.intercept_y_vs_plate,
+                    -- SIM-534: vs BATTER, matching the per-pitch export, which
+                    -- publishes only that one. See _SWING_FEATURES.
+                    sp.intercept_y_vs_batter,
                     COALESCE(bt.competitive_swings, sp.competitive_swings)
                         AS competitive_swings
-                FROM pg.raw.savant_bat_tracking bt
-                FULL OUTER JOIN pg.raw.savant_swing_path sp
+                FROM (
+                    SELECT * FROM (
+                        SELECT *, ROW_NUMBER() OVER (
+                            PARTITION BY player_id, season, split ORDER BY asof_date DESC
+                        ) AS rn
+                        FROM pg.raw.savant_bat_tracking
+                        WHERE season IN ({season_list}) AND asof_date <= DATE '{asof_sql}'
+                    ) WHERE rn = 1
+                ) bt
+                FULL OUTER JOIN (
+                    SELECT * FROM (
+                        SELECT *, ROW_NUMBER() OVER (
+                            PARTITION BY player_id, season, split ORDER BY asof_date DESC
+                        ) AS rn
+                        FROM pg.raw.savant_swing_path
+                        WHERE season IN ({season_list}) AND asof_date <= DATE '{asof_sql}'
+                    ) WHERE rn = 1
+                ) sp
                     ON  sp.player_id = bt.player_id
                     AND sp.season    = bt.season
                     AND sp.split     = bt.split
-                WHERE COALESCE(bt.season, sp.season) IN ({season_list})
             ),
             savant_swing AS (
                 SELECT
@@ -2484,8 +2633,15 @@ class PlayerProfileComputor:
                     player_id AS st_batter_id,
                     season    AS st_season,
 {_sql_stance_pivot()}
-                FROM pg.raw.savant_batting_stance
-                WHERE season IN ({season_list})
+                FROM (
+                    SELECT * FROM (
+                        SELECT *, ROW_NUMBER() OVER (
+                            PARTITION BY player_id, season, bat_side ORDER BY asof_date DESC
+                        ) AS rn
+                        FROM pg.raw.savant_batting_stance
+                        WHERE season IN ({season_list}) AND asof_date <= DATE '{asof_sql}'
+                    ) WHERE rn = 1
+                )
                 GROUP BY 1, 2
             )
 
@@ -2550,16 +2706,103 @@ class PlayerProfileComputor:
                 -- that tuple; a unit test asserts the live table agrees.
 {_sql_swing_select()}
 {_sql_stance_select()}
-                sw.competitive_swings_all  AS physical_swings,
-                sw.competitive_swings_vs_l AS physical_swings_vs_l,
-                sw.competitive_swings_vs_r AS physical_swings_vs_r
+                GREATEST(
+                    COALESCE(swp.competitive_swings_all, 0),
+                    COALESCE(sw.competitive_swings_all, 0)
+                ) AS physical_swings,
+                GREATEST(
+                    COALESCE(swp.competitive_swings_vs_l, 0),
+                    COALESCE(sw.competitive_swings_vs_l, 0)
+                ) AS physical_swings_vs_l,
+                GREATEST(
+                    COALESCE(swp.competitive_swings_vs_r, 0),
+                    COALESCE(sw.competitive_swings_vs_r, 0)
+                ) AS physical_swings_vs_r,
+                -- SIM-534: the date this row's data runs through. Written on
+                -- every profile so a later reader never has to guess, and so the
+                -- engine can refuse a set of profiles built at different cutoffs.
+                DATE '{asof_sql}' AS asof_date
             FROM batter_pitches bp
+            LEFT JOIN savant_swing_pitch swp
+                ON swp.swp_batter_id = bp.batter_id AND swp.swp_season = bp.season
             LEFT JOIN savant_swing sw
                 ON sw.sw_batter_id = bp.batter_id AND sw.sw_season = bp.season
             LEFT JOIN savant_stance st
                 ON st.st_batter_id = bp.batter_id AND st.st_season = bp.season
         """)
-        log.info("  Batter profiles done.")
+        # SIM-534: leave the whole table coherent at ONE cutoff. Seasons this
+        # run did not touch still hold valid data — a 2019 profile contains
+        # nothing recorded after 2024 — but an unstamped row is indistinguishable
+        # from a row built at some other cutoff, and the engine refuses a mixed
+        # set. Stamping them says the true thing: this is what we know as of the
+        # cutoff. The cutoff path has already deleted anything that could not
+        # exist yet, so every survivor here is genuinely admissible.
+        self._conn.execute(f"""
+            UPDATE derived.batter_season_metrics
+            SET asof_date = DATE '{asof_sql}'
+            WHERE asof_date IS NULL
+        """)
+
+        self._assert_batter_profiles_have_no_leakage(seasons, asof_date)
+        log.info("  Batter profiles done (as of %s).", asof_sql)
+
+    def _assert_batter_profiles_have_no_leakage(self, seasons: list[int], asof: date) -> None:
+        """Prove no source that fed the batter profiles postdates the cutoff.
+
+        The filters are in the query above, so in principle this can only pass.
+        That is exactly why it is here: the query is long, it has four sources,
+        and the next person to add a fifth will not remember. A missing cutoff
+        produces no error and no visibly wrong number — it produces a backtest
+        that quietly knows the future. This turns that into a crash.
+        """
+        season_list = ", ".join(str(s) for s in seasons)
+        checks = (
+            (
+                "raw.pitches",
+                f"SELECT MAX(game_date) FROM pg.raw.pitches "
+                f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
+            ),
+            (
+                "raw.savant_pitch_tracking",
+                f"SELECT MAX(t.game_date) FROM pg.raw.savant_pitch_tracking t "
+                f"JOIN pg.raw.pitches p ON p.game_pk = t.game_pk "
+                f"AND p.at_bat_number = t.at_bat_number "
+                f"AND p.pitch_number = t.pitch_number "
+                f"WHERE p.season IN ({season_list}) AND p.game_date <= DATE '{asof}'",
+            ),
+            (
+                "raw.savant_bat_tracking",
+                f"SELECT MAX(asof_date) FROM pg.raw.savant_bat_tracking "
+                f"WHERE season IN ({season_list}) AND asof_date <= DATE '{asof}'",
+            ),
+            (
+                "raw.savant_swing_path",
+                f"SELECT MAX(asof_date) FROM pg.raw.savant_swing_path "
+                f"WHERE season IN ({season_list}) AND asof_date <= DATE '{asof}'",
+            ),
+            (
+                "raw.savant_batting_stance",
+                f"SELECT MAX(asof_date) FROM pg.raw.savant_batting_stance "
+                f"WHERE season IN ({season_list}) AND asof_date <= DATE '{asof}'",
+            ),
+        )
+        for source, sql in checks:
+            newest = self._conn.execute(sql).fetchone()[0]
+            if newest is None:
+                log.info("    no leakage from %-28s (no rows)", source)
+                continue
+            if not isinstance(newest, date):
+                # A stubbed connection in a unit test, not a real result. Say so
+                # rather than crashing on the comparison — and rather than
+                # passing silently, which would let the check rot unnoticed.
+                log.warning("    leakage check SKIPPED for %s: got %r, not a date", source, newest)
+                continue
+            if newest > asof:
+                raise RuntimeError(
+                    f"data leakage: {source} contributed a row dated {newest}, "
+                    f"after the {asof} cutoff."
+                )
+            log.info("    no leakage from %-28s newest = %s", source, newest)
 
     def _compute_baserunner_profiles(self, seasons: list[int]) -> None:
         """
@@ -6580,6 +6823,15 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip the LeagueAverageProfiles.compute() pass.",
     )
+    parser.add_argument(
+        "--asof",
+        type=date.fromisoformat,
+        help=(
+            "SIM-534: build the batter profiles as of this date. Every source is "
+            "cut off there, so a backtest cannot use data recorded after the day "
+            "it simulates. Unset means everything known today."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.dsn:
@@ -6598,7 +6850,7 @@ if __name__ == "__main__":
         pg_dsn=args.dsn,
         duckdb_path=args.duckdb_path,
     )
-    computor.run(seasons=args.seasons, full_rebuild=args.full_rebuild)
+    computor.run(seasons=args.seasons, full_rebuild=args.full_rebuild, asof=args.asof)
     log.info("Player profile compute complete.")
 
     if not args.skip_league_averages:

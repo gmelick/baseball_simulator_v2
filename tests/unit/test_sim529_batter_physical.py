@@ -81,7 +81,8 @@ def test_the_canonical_schema_carries_the_same_columns_in_the_same_order() -> No
 
 
 def test_the_schema_version_was_bumped_with_the_migration() -> None:
-    assert VERSION_FILE.read_text(encoding="utf-8").strip() == "25"
+    # 25 was this ticket; SIM-534 then added the cutoff stamp as 26.
+    assert int(VERSION_FILE.read_text(encoding="utf-8").strip()) >= 25
 
 
 def test_every_feature_lands_three_times() -> None:
@@ -118,15 +119,29 @@ def test_the_stance_side_crosses_over_to_the_pitcher_hand() -> None:
 
 
 def test_the_swing_split_does_not_cross_over() -> None:
-    """The swing boards are filtered by the PITCHER's hand already, so ``vs_l``
-    maps straight to ``vs_l``. Only the stance board needs the crossover."""
+    """The swing sources are already filtered by the PITCHER's hand, so ``vs_l``
+    maps straight to ``vs_l``. Only the stance board needs the crossover, and a
+    crossover here would be invisible: every column populated, just mirrored."""
     from pipeline.batch.player_profile_computor import _sql_swing_select
 
+    checked = 0
     for line in _sql_swing_select().splitlines():
-        if line.strip().endswith("_vs_l,"):
-            assert "_vs_l AS" in line, line
-        if line.strip().endswith("_vs_r,"):
-            assert "_vs_r AS" in line, line
+        target = line.strip().rsplit(" AS ", 1)[-1].rstrip(",")
+        if not target.endswith(("_vs_l", "_vs_r")):
+            continue
+        side = target[-5:]
+        sources = [
+            tok.split(".", 1)[1].split(")")[0].split(",")[0].strip()
+            for tok in line.replace("(", " ").replace(",", " , ").split()
+            if tok.startswith(("swp.", "sw."))
+        ]
+        assert sources, line
+        for src in sources:
+            if src.startswith("competitive_swings"):
+                continue  # the tie-breaker count, deliberately overall
+            assert src.endswith(side), f"{src} feeds {target}"
+        checked += 1
+    assert checked == 12, f"expected 6 features x 2 sides, saw {checked}"
 
 
 # ---------------------------------------------------------------------------

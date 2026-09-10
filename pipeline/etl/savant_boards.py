@@ -93,6 +93,12 @@ class SavantBoard:
     #: splits (SIM-529: a switch hitter is two batters, not one).
     hand_splits: tuple[tuple[str, str], ...] = ()
     probe_season: int = PROBE_SEASON
+    #: SIM-534: the board accepts ``dateStart`` / ``dateEnd``, so it can be
+    #: pulled "as of" a date instead of as a whole season. Only the bat-tracking
+    #: family does; the fielding and running boards have no date control at all.
+    supports_date_range: bool = False
+    #: Target column holding the cutoff, when the board is pulled as of a date.
+    asof_column: str | None = None
 
     def season_params(self, season: int) -> dict[str, str]:
         s = str(season)
@@ -109,6 +115,8 @@ class SavantBoard:
     @property
     def target_columns(self) -> tuple[str, ...]:
         cols = ["player_id", "season"]
+        if self.asof_column:
+            cols.append(self.asof_column)
         if self.split_column:
             cols.append(self.split_column)
         cols += [t for _, t in self.columns]
@@ -186,6 +194,11 @@ BOARDS: dict[str, SavantBoard] = {
         table="raw.savant_batting_stance",
         player_column="id",
         split_column="bat_side",
+        # SIM-534: stance is the ONE batter measurement absent from the
+        # pitch-level export — it comes from pose tracking. The board does take a
+        # date range, so a point-in-time stance means one row per cutoff.
+        supports_date_range=True,
+        asof_column="asof_date",
         extra={
             "type": "batter",
             "minSwings": "0",

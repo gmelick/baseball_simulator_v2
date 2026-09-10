@@ -17,7 +17,6 @@ import pytest
 from pipeline.etl import savant_loader as sl
 from pipeline.etl.savant_boards import BOARDS, PROBE_SEASON, SavantBoard
 
-
 # ---------------------------------------------------------------------------
 # The season parameter
 # ---------------------------------------------------------------------------
@@ -115,7 +114,12 @@ def test_a_board_without_a_season_column_skips_the_row_check() -> None:
 
 
 def test_numeric_and_integer_columns_are_coerced_by_target() -> None:
-    row = {"id": "665742", "avg_bat_speed": "74.3", "swing_length": "7.1", "swings_competitive": "412"}
+    row = {
+        "id": "665742",
+        "avg_bat_speed": "74.3",
+        "swing_length": "7.1",
+        "swings_competitive": "412",
+    }
     out = sl.coerce_row(BOARDS["bat_tracking"], row, 2024, "all")
     assert out == {
         "player_id": 665742,
@@ -164,8 +168,11 @@ def test_a_hand_split_board_takes_its_label_from_the_query() -> None:
 
 def test_the_upsert_keys_on_the_split_when_the_board_has_one() -> None:
     sql = sl.upsert_sql(BOARDS["batting_stance"])
-    assert "ON CONFLICT (player_id, season, bat_side)" in sql
+    # SIM-534 added the cutoff to the key: two cutoffs for one player-season are
+    # two rows, not an overwrite.
+    assert "ON CONFLICT (player_id, season, bat_side, asof_date)" in sql
     assert "bat_side = EXCLUDED.bat_side" not in sql  # a key is not an update target
+    assert "asof_date = EXCLUDED.asof_date" not in sql
     assert "scraped_at = EXCLUDED.scraped_at" in sql
 
 

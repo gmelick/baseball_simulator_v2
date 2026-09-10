@@ -1,0 +1,27 @@
+-- 0026 — SIM-534: the cutoff stamp on the batter profile (schema v25 -> v26)
+--
+-- WHY
+-- ---
+-- A similarity profile is only meaningful alongside the date its data runs
+-- through. Without that stamp, a profile built for a June 2025 backtest and a
+-- profile built live today are indistinguishable rows, and mixing them is
+-- silent: the engine would happily score a batter's truncated 2025 season
+-- against another batter's complete one and report a number.
+--
+-- Every profile now declares its cutoff. The builder writes it, the engine reads
+-- it, and the engine refuses to load a set of profiles that disagree.
+--
+-- A profile built with no explicit cutoff is stamped with the date it was built,
+-- which is factually what it is: everything known as of that day.
+--
+-- ⚠ POSITIONAL-INSERT TRAP: the batter INSERT carries no column list, so this
+-- column must be LAST in both the table and the SELECT. It is appended after
+-- the SIM-529 physical block, and PROFILE_TAIL_COLUMNS in
+-- pipeline/batch/player_profile_computor.py is the single definition of that
+-- order. A unit test asserts the table agrees with it.
+--
+-- Non-destructive: ADD COLUMN IF NOT EXISTS only. Existing rows hold NULL, which
+-- reads as "built before this was tracked" and is refused by the engine's guard
+-- until the profiles are rebuilt.
+
+ALTER TABLE derived.batter_season_metrics ADD COLUMN IF NOT EXISTS asof_date DATE;

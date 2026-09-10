@@ -42,6 +42,7 @@ import logging
 import os
 import sys
 import time
+from datetime import date
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -106,12 +107,20 @@ class SavantFetchError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
-def build_url(board: SavantBoard, season: int, hand: str = "") -> str:
+def build_url(board: SavantBoard, season: int, hand: str = "", asof: date | None = None) -> str:
     params: dict[str, str] = {}
     params.update(board.extra)
     params.update(board.season_params(season))
     if hand:
         params["pitchHand"] = hand
+    if asof is not None:
+        # SIM-534: a point-in-time pull. dateStart is 1 January so the window is
+        # "this season up to and including the cutoff" — the same span a
+        # simulator standing on that date would have seen.
+        if not board.supports_date_range:
+            raise ValueError(f"{board.name} has no date control; it cannot be pulled as of a date")
+        params["dateStart"] = f"{season}-01-01"
+        params["dateEnd"] = asof.isoformat()
     params["csv"] = "true"
     return f"{board.url}?{urlencode(params)}"
 
@@ -190,13 +199,27 @@ def check_row_seasons(board: SavantBoard, rows: list[dict[str, str]], season: in
 
 
 def coerce_row(
-    board: SavantBoard, row: dict[str, str], season: int, split: str | None
+    board: SavantBoard,
+    row: dict[str, str],
+    season: int,
+    split: str | None,
+    asof: date | None = None,
 ) -> dict[str, object] | None:
     """One CSV row -> one upsert payload, or None when it has no player id."""
     player_id = to_int(row.get(board.player_column))
     if player_id is None:
         return None
     out: dict[str, object] = {"player_id": player_id, "season": season}
+    if board.asof_column:
+        # A full-season pull of a COMPLETED season is data as of the last day of
+        # that season: nothing more will ever be added. A full-season pull of the
+        # season in progress is data as of TODAY — stamping it 31 December would
+        # date it in the future, and the profile builder admits only rows dated
+        # at or before its cutoff, so the current season would be silently
+        # excluded from every live build.
+        out[board.asof_column] = (
+            asof if asof is not None else min(date(season, 12, 31), date.today())
+        )
     if board.split_column:
         # A hand-split board carries its label from the query; the stance board
         # carries it in the CSV itself.
@@ -221,7 +244,11 @@ def coerce_row(
 
 def upsert_sql(board: SavantBoard) -> str:
     cols = board.target_columns
-    key = ["player_id", "season"] + ([board.split_column] if board.split_column else [])
+    key = ["player_id", "season"]
+    if board.split_column:
+        key.append(board.split_column)
+    if board.asof_column:
+        key.append(board.asof_column)
     updates = [c for c in cols if c not in key]
     placeholders = ", ".join(f"%({c})s" for c in cols)
     set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in [*updates, "scraped_at"])
@@ -259,6 +286,7 @@ def load_board_season(
     *,
     dry_run: bool = False,
     fetcher=fetch_csv,
+    asof: date | None = None,
 ) -> int:
     """Fetch and upsert one board for one season. Returns rows written."""
     pulls: list[tuple[str | None, str]] = (
@@ -267,7 +295,7 @@ def load_board_season(
 
     payload: list[dict] = []
     for label, hand in pulls:
-        body = fetcher(build_url(board, season, hand))
+        body = fetcher(build_url(board, season, hand, asof))
         rows = parse_rows(body)
         check_row_seasons(board, rows, season)
         log.info(
@@ -278,7 +306,7 @@ def load_board_season(
             len(rows),
         )
         for row in rows:
-            coerced = coerce_row(board, row, season, label)
+            coerced = coerce_row(board, row, season, label, asof)
             if coerced is not None:
                 payload.append(coerced)
         if len(pulls) > 1:
@@ -336,6 +364,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--seasons", nargs="+", type=int, required=True)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument(
+        "--asof",
+        type=date.fromisoformat,
+        help="point-in-time pull: keep only games up to this date (date-capable boards only)",
+    )
     ap.add_argument("--skip-probe", action="store_true", help="skip the season-parameter probe")
     args = ap.parse_args(argv)
 
@@ -352,7 +385,9 @@ def main(argv: list[str] | None = None) -> int:
                 probe_season_param(board)
                 time.sleep(PAUSE_BETWEEN_FETCHES_S)
             for season in args.seasons:
-                total += load_board_season(conn, board, season, dry_run=args.dry_run)
+                total += load_board_season(
+                    conn, board, season, dry_run=args.dry_run, asof=args.asof
+                )
                 time.sleep(PAUSE_BETWEEN_FETCHES_S)
         if conn is not None:
             conn.commit()

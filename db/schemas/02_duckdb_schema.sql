@@ -306,6 +306,10 @@ CREATE TABLE IF NOT EXISTS derived.batter_season_metrics (
     physical_swings_vs_l        INTEGER,
     physical_swings_vs_r        INTEGER,
 
+    -- SIM-534 (migration 0026): the date this row's data runs through. Appended
+    -- LAST, after the physical block — same positional-insert rule.
+    asof_date                   DATE,
+
     PRIMARY KEY (batter_id, season)
 );
 

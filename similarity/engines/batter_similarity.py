@@ -848,6 +848,9 @@ class BatterSimilarityEngine:
         self._normalizer = FeatureNormalizer()
         self._shrinkage = EmpiricalBayesShrinkage()
         self._partition = BatterPartition()
+        #: SIM-534: the date every loaded profile's data runs through. None on a
+        #: database built before the stamp existed.
+        self._asof_date = None
 
         # Build weighted RBF scorers
         self._disc_rbf = WeightedRBFSimilarity(
@@ -1070,13 +1073,17 @@ class BatterSimilarityEngine:
                 -- columns come back NULL and the group scores neutrally.
                 {_phys_cols("")},
                 {_phys_cols("_vs_l")},
-                {_phys_cols("_vs_r")}
+                {_phys_cols("_vs_r")},
+                {_opt("asof_date")}
             FROM derived.batter_season_metrics bsm
             WHERE NOT bsm.below_minimum_sample
               {season_filter}
         """).fetchall()
 
         log.info("Loading %d batter profiles from DuckDB …", len(rows))
+
+        # SIM-534: every profile must declare the same cutoff.
+        asof_values: set = set()
 
         for row in rows:
             (
@@ -1132,7 +1139,8 @@ class BatterSimilarityEngine:
             # more names in the unpack above. _N_BASE_COLUMNS is computed from
             # the feature lists, so adding a feature to any group moves the
             # boundary automatically instead of silently shifting the tail.
-            phys = row[_N_BASE_COLUMNS:]
+            phys = row[_N_BASE_COLUMNS:-1]
+            asof_values.add(row[-1])
             n_phys = len(PHYSICAL_FEATURES)
             if len(phys) != 3 * n_phys:
                 raise RuntimeError(
@@ -1167,6 +1175,20 @@ class BatterSimilarityEngine:
                 eb_alpha=self._shrinkage.alpha(sample_pa),
                 below_minimum=bool(below_min),
             )
+
+        # SIM-534: refuse a mixed set. Profiles built at two different cutoffs
+        # are not comparable — one batter's season truncated, another's complete
+        # — and nothing downstream would show it. This is the cheapest place to
+        # catch a half-finished rebuild.
+        if len(asof_values) > 1:
+            raise RuntimeError(
+                "batter profiles were built at different cutoffs "
+                f"({sorted(str(v) for v in asof_values)}). Rebuild them all at one "
+                "date before scoring."
+            )
+        self._asof_date = next(iter(asof_values), None)
+        if self._asof_date is not None:
+            log.info("Batter profiles are as of %s.", self._asof_date)
 
     def _apply_shrinkage(self) -> None:
         """Apply EB shrinkage to all feature vectors."""
@@ -1371,6 +1393,11 @@ class BatterSimilarityEngine:
 
     def get_profile(self, batter_id: int, season: int) -> BatterProfile | None:
         return self._profiles.get((batter_id, season))
+
+    @property
+    def asof_date(self):
+        """The date every loaded profile's data runs through, or None."""
+        return self._asof_date
 
     @property
     def profile_count(self) -> int:
