@@ -2,28 +2,77 @@
 """
 scripts/clv_backtest.py
 =======================
-SIM-429 — the **CLV (Closing Line Value) backtest scoreboard**: the gold-standard
-validation that the simulator's +EV picks systematically BEAT THE CLOSE.
+SIM-538 — the **sim-vs-closing-line accuracy comparison**: for every completed
+game with a closing betting price, compare the simulator's own probability and
+the market's (de-vigged) closing probability against what actually happened,
+scored with a PROPER SCORING RULE (Brier score, log loss). This is the
+platform's gold-standard validation now — see the reasoning below.
 
-WHAT THIS IS
-------------
-A "hedge fund scoreboard": for a slate of COMPLETED games that already have
-ingested odds, it (1) runs N-iteration sims to derive the model's prices, (2)
-identifies the bets the model would PLACE — the side with positive model edge at
-the OPENING line — and (3) measures whether those placed bets beat the CLOSING
-line. Closing Line Value (CLV) is the canonical edge metric: a bet beats the close
-when the de-vigged probability of the side you took ROSE from the opening line to
-the closing line (you locked a better price than the final market consensus).
+Also still produced, as a SECONDARY, clearly-labeled diagnostic: the SIM-429
+Closing Line Value (CLV) scoreboard this script used to lead with (entry price
+vs. closing price, no real outcome involved at all).
 
-  * ``CLV > 0`` (``beat_close``) == you beat the close on that bet.
-  * The HEADLINE metric is ``beat_close_rate`` — the fraction of the model's
-    PLACED bets that beat the close. ~50% means no edge; a real edge shows as
-    52–55%+ systematically.
+WHY THE HEADLINE METRIC CHANGED (owner decision, 2026-09-10)
+--------------------------------------------------------------
+CLV compares the price you would have ENTERED at to the price at CLOSE — never
+touching the real outcome or the simulator's own probability. Two problems: the
+simulator cannot produce a probability before both starting lineups are
+announced, which is AFTER betting lines first open, so "entry vs. close" was
+never comparing the model against a moment it could have acted at; and the odds
+data collected here has a closing line for most games but not always a matched
+opening line, so a method needing only the closing line uses far more of what
+is already collected. The replacement, precisely:
 
-This is the SIM-429 CLV backtest — the sub-ticket the SIM-435 historical-odds
-backfill unblocks (you need both an opening AND a closing line per market to score
-CLV). It is an OFFLINE validation job: it replays real sims, so it is slow — use
-``--max-games`` for a smoke run. It never serves a request.
+  1. take the simulator's own probability for an outcome (already produced; no
+     new math);
+  2. take the closing line's probability for the SAME outcome, with the
+     bookmaker's margin removed (de-vig — the math already exists, see below);
+  3. score BOTH against what actually happened, with a PROPER SCORING RULE — one
+     where a forecaster cannot improve their score by hedging toward a "safe"
+     prediction, only by being more accurate (Brier score, log loss);
+  4. because both scores come from the SAME game and the SAME real outcome,
+     compare them PAIRED (sim's score minus the market's score, per game/bet),
+     which needs a smaller sample to detect a real difference than comparing two
+     unrelated averages would.
+
+A model that beats the market under this test cannot get there by being bland —
+unlike a "does the sim's overall rate look realistic" band, mirroring the pool
+average scores no better than the market's own price under a proper scoring
+rule. See docs/audit/2026-09-10-sim536-541-market-accuracy-plan.md for the full
+plan (SIM-536 through SIM-541).
+
+WHAT THIS DELIBERATELY DOES NOT CLAIM
+--------------------------------------
+That an edge was CAPTURABLE — that there was a real moment to transact at a
+worse price than the model implied. Beating the closing line's accuracy is
+NECESSARY for a real edge to exist, but proving it was bankable needs a live
+price snapshot at the moment the model can actually act (right after lineups
+post), which this platform does not collect today. SIM-540 (a companion
+hypothetical-return report) and SIM-539 (real statistical confidence) build on
+this without needing that snapshot.
+
+That the point-in-time cutoff (see below) makes a backtest game fully
+untouched by later data. The cutoff bounds which PLAY-POOL ROWS the sampler
+can draw — it does not rebuild the pitcher/batter/fielder/catcher/manager
+skill profiles that WEIGHT those draws as of the game's own date. Those
+profiles come from one engine-artifact bundle built as of a single date for
+the whole backtest run, so a January game can still be weighted by a
+player's full-season (or later) form even though the literal plays it can
+draw are correctly date-bounded. Building a fresh profile bundle per game
+date is not feasible at backtest scale (SIM-537 shows what ONE such rebuild
+costs); closing this residual needs either date-bucketed profile snapshots
+or accepting it as a documented, softer form of look-ahead. An adversarial
+review of SIM-538 confirmed this gap; it is not closed by this ticket.
+
+That the confidence interval on a bucket mixing several markets or players
+from the SAME game (the "overall" row; a prop bucket like K or H, which can
+carry several players from one start) describes as many independent trials
+as it has rows. Those rows share one game's park, bullpen, and script, so
+:func:`_bootstrap_paired_diff_ci` resamples GAMES, not individual rows (see
+its docstring) — the interval is honest about the real number of
+independent games behind it, but a bucket built mostly from a few busy
+games still carries less information than the same row count spread across
+that many separate games would.
 
 HOW IT REUSES THE EXISTING SEAMS (no re-invention)
 --------------------------------------------------
@@ -34,22 +83,58 @@ HOW IT REUSES THE EXISTING SEAMS (no re-invention)
     factory ref, collecting one ``GameSimResult`` per iteration; those build a
     ``GameSimSummary`` (carrying the per-iteration ``home_scores`` /
     ``away_scores`` / ``total_scores`` arrays) and, via
-    ``simulation.win_probability.win_probability``, a calibrated ``WinProbability``.
+    ``simulation.win_probability.win_probability``, a ``WinProbability``.
   * **Per-player prop PMFs** — ``PropDistributionSet.from_results`` over the
     per-iteration boxscores (exactly the ``validate_props`` path); each
     ``PropDistribution`` answers ``p_over(line)`` / ``p_under(line)``.
-  * **CLV math** — ``betting.clv_engine``: ``moneyline_edge_report`` /
+  * **De-vig + edge math** — ``betting.clv_engine``: ``moneyline_edge_report`` /
     ``total_over_under_edge_report`` / ``run_line_edge_report`` / ``prop_edge_report``
-    build the model edge + EV and let us PICK the +EV side; ``clv_from_odds``
-    computes the entry→close CLV for the placed side (``CLV.clv_prob > 0`` ==
-    beat the close).
+    already de-vig a two-way market and expose the resulting fair probability
+    (``EdgeReport.market_fair_prob``) alongside the sim's own
+    (``EdgeReport.sim_prob``). SIM-538 calls these with the CLOSING quote fed in
+    as the market (see :func:`score_game_accuracy` / :func:`score_prop_accuracy`)
+    and a FIXED reference side per market (home / over), so the comparison never
+    depends on which side the model would have bet — that selection is what the
+    legacy CLV step still does, and mixing it into the accuracy read would bias
+    it toward games the model disagreed with the market on.
+  * **Proper scoring rules** — ``simulation.prop_validation``: ``binary_brier`` /
+    ``binary_log_loss`` take a probability array and a 0/1 outcome array; SIM-538
+    calls them twice per market — once with the sim's probabilities, once with
+    the market's — over the SAME paired outcomes.
+  * **Real outcomes** — game markets read ``raw.games.home_score_final`` /
+    ``away_score_final`` (already read elsewhere in this file). Props reuse
+    ``simulation.prop_validation.real_props_from_pa_events`` — the SAME
+    ``raw.pitches.events``-derived ground truth ``validate_props.py`` uses,
+    covering H/HR/TB (batter) and K/BB (pitcher) only; RBI/ER have no reliable
+    per-PA-event ground truth and are not scored here for the same reason
+    ``validate_props.py`` excludes them.
   * **Odds I/O** — read directly from Postgres (``raw.game_odds`` /
-    ``raw.prop_odds``), pulling the OPENING and CLOSING two-way prices per market.
-  * **Park factor (SIM-452)** — ``simulation.sim_kwargs.build_sim_kwargs`` resolves
-    the venue run park factor onto the GameState before the replay. This script used
-    to skip that step, so every CLV number it ever produced came from a park-blind
-    simulator. The run now REFUSES to start when the sim DuckDB will not open (exit
-    code 2), because a neutral 1.0 is indistinguishable from a real neutral park.
+    ``raw.prop_odds``). The accuracy comparison reads ONLY the closing row
+    (:func:`_closing_prices`) — a game needs no matched opening line to be
+    scored, unlike the legacy CLV step.
+  * **Park factor (SIM-452)** — ``simulation.sim_kwargs.resolve_park_factor_onto_state``
+    resolves the venue run park factor onto the GameState before the replay. The
+    run REFUSES to start when the sim DuckDB will not open (exit code 2), because
+    a neutral 1.0 is indistinguishable from a real neutral park.
+  * **Point-in-time cutoff (SIM-538 fix)** — every replay here now also resolves
+    ``simulation.sim_kwargs.resolve_asof_ymd`` onto the GameState
+    (``state.asof_ymd``), which ``sim_kwargs_from_state`` carries into the
+    simulator as ``_asof_ymd``. Before this fix, this script built sim kwargs
+    from the state directly and never resolved a cutoff at all — despite an
+    OLDER version of this docstring claiming it used
+    ``simulation.sim_kwargs.build_sim_kwargs`` (which does resolve one). A
+    backtest of a past game was free to draw on pool rows and player profiles
+    dated AFTER that game, the most direct leak available and one that makes a
+    backtest look better than the simulator anyone will ever bet on. SIM-534/535/537
+    (landed 2026-09-10/11) built the cutoff mechanism end to end; this was the
+    one caller that never asked for it.
+  * **Calibration (SIM-538 fix)** — win probability is now scored through the
+    SAME fitted reliability curve the live API applies
+    (``api.state.load_calibration_report`` + ``CalibrationMap.from_report``,
+    falling back to the identity map when no report is configured — the exact
+    pattern ``api/main.py``'s boot lifespan uses). The moneyline accuracy
+    comparison would otherwise score a probability production never actually
+    serves.
 
 THE MARKETS
 -----------
@@ -57,15 +142,20 @@ THE MARKETS
     (home/away at ``home_spread``).
   * Props (the SIM-134 7-market vocab; odds ``prop_stat`` → model
     ``PropDistribution`` stat): strikeouts→K, walks→BB, earned_runs→ER, hits→H,
-    home_runs→HR, total_bases→TB, rbis→RBI.
+    home_runs→HR, total_bases→TB, rbis→RBI. The accuracy comparison scores only
+    the five with a real-outcome source (K, BB, H, HR, TB); the legacy CLV step
+    still scores all seven, since it never needed a real outcome.
 
 PURE vs. IMPACTFUL
 ------------------
-The per-bet CLV decision (:func:`evaluate_two_way_market`) and the scoreboard
-aggregation (:func:`aggregate_scoreboard`) are PURE — no DB, no sim, no RNG — so
-they are unit-testable on synthetic prices. Everything DB/sim-touching lives in
-the ``_fetch_*`` readers and :func:`run`. The trust labels
-(:data:`MARKET_TRUST`) and the prop vocab (:data:`PROP_VOCAB_MAP`) are plain data.
+The per-bet CLV decision (:func:`evaluate_two_way_market`), the accuracy-record
+builders (:func:`score_game_accuracy` / :func:`score_prop_accuracy`), and both
+aggregations (:func:`aggregate_scoreboard` / :func:`aggregate_accuracy_comparison`)
+are PURE — no DB, no sim; the accuracy aggregation's confidence interval uses a
+SEEDED bootstrap (deterministic given the seed, still unit-testable on synthetic
+inputs). Everything DB/sim-touching lives in the ``_fetch_*`` readers and
+:func:`run`. The trust labels (:data:`MARKET_TRUST`) and the prop vocab
+(:data:`PROP_VOCAB_MAP`) are plain data.
 
 ACROSS-GAMES PARALLELISM
 ------------------------
@@ -74,13 +164,14 @@ over a single game's iterations: per-game cost is the irreducible per-PA full-po
 scoring (~1.5 s/iter) and the host is core-bound (~6 cores), so one game can't go
 below ~30 s — but ~6 GAMES AT ONCE gives ~6× throughput. ``--workers N`` (default 6)
 maps each WHOLE game onto a ``forkserver`` ``ProcessPoolExecutor`` worker that runs
-it serially (resolve → N sims → prop dists → read odds → CLV bet records); each
-worker holds only its own ~373 MB full-pool sampler cache (SIM-430), so 6 workers fit
-in ~2.2 GB and the parent stays lean (loads NO engine artifacts). ``--workers 1`` is
-the SERIAL in-process fallback (the no-pool debug mode + the byte-identical-verify
-reference). The run is byte-identical to serial for the same (game set, base_seed,
-iterations): each game is independent + deterministic from its per-iteration seed, so
-the only thing parallelism changes — completion order — never affects any bet record.
+it serially (resolve → N sims → prop dists → read odds → bet + accuracy records);
+each worker holds only its own ~373 MB full-pool sampler cache (SIM-430), so 6
+workers fit in ~2.2 GB and the parent stays lean (loads NO engine artifacts).
+``--workers 1`` is the SERIAL in-process fallback (the no-pool debug mode + the
+byte-identical-verify reference). The run is byte-identical to serial for the same
+(game set, base_seed, iterations): each game is independent + deterministic from
+its per-iteration seed, so the only thing parallelism changes — completion order —
+never affects any record.
 
 USAGE
 -----
@@ -92,6 +183,8 @@ USAGE
     python scripts/clv_backtest.py --seasons 2024 --workers 6 --iterations 100
     # serial fallback (no pool — debug / byte-identical verify reference):
     python scripts/clv_backtest.py --seasons 2024 --max-games 2 --workers 1
+    # legacy CLV report only, skip the new accuracy comparison (faster smoke run):
+    python scripts/clv_backtest.py --seasons 2024 --max-games 2 --no-accuracy-comparison
 """
 
 from __future__ import annotations
@@ -106,6 +199,8 @@ import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any
+
+import numpy as np
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -122,6 +217,13 @@ from betting.clv_engine import (  # noqa: E402
     run_line_edge_report,
     total_over_under_edge_report,
 )
+from simulation.prop_validation import (  # noqa: E402
+    OUTCOME_PROB_EPS,
+    binary_brier,
+    binary_log_loss,
+    real_props_from_pa_events,
+)
+from simulation.win_probability import IDENTITY_CALIBRATION, CalibrationMap  # noqa: E402
 
 log = logging.getLogger("clv_backtest")
 
@@ -131,6 +233,13 @@ DEFAULT_DSN = os.environ.get(
 )
 DEFAULT_DUCKDB_PATH = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb")
 DEFAULT_OUTPUT = os.environ.get("CLV_BACKTEST_PATH", "/data/clv_backtest.json")
+#: SIM-538: mirrors validate_props.py's DEFAULT_CALIBRATION_PATH — the SAME
+#: fitted reliability curve the live API applies at boot.
+DEFAULT_CALIBRATION_PATH = os.environ.get("CALIBRATION_REPORT_PATH", "/data/calibration.json")
+#: SIM-538: bootstrap resamples for the paired-difference confidence interval
+#: (see aggregate_accuracy_comparison). 2000 is the conventional floor for a
+#: percentile bootstrap; the CLI can raise it for a slower, tighter interval.
+DEFAULT_BOOTSTRAP_SAMPLES = 2000
 
 #: The production machine factory (dotted ref) — the SAME one the API serves with.
 _FACTORY_REF = "simulation.production_factory:production_machine_factory"
@@ -291,6 +400,46 @@ class BetRecord:
         plain dicts (the picklable across-process payload), so the aggregation runs
         on the SAME :class:`BetRecord`s either execution mode produces.
         """
+        return cls(**d)
+
+
+@dataclass(frozen=True, slots=True)
+class AccuracyRecord:
+    """SIM-538: one paired (sim probability, market probability, real outcome)
+    observation for one market/prop of one game.
+
+    Unlike :class:`BetRecord`, there is no "placed" concept here — every market
+    with a usable closing price and a real outcome contributes exactly one
+    record, scored on a FIXED reference side (home / over), never the side the
+    model would have bet. That fixed side is what keeps the comparison honest:
+    picking whichever side the model liked best would only ever measure
+    accuracy on the games the model disagreed with the market on, which is a
+    biased sample.
+    """
+
+    game_pk: int
+    #: Market key: 'moneyline'/'total'/'runline' OR a model prop stat (K/H/...).
+    market: str
+    #: Coarse group for aggregation: 'moneyline'/'total'/'runline'/'prop'.
+    market_type: str
+    #: The simulator's own probability of the reference event.
+    sim_prob: float
+    #: The closing line's probability of the SAME event, margin removed.
+    market_prob: float
+    #: 1 if the reference event happened, else 0. A push (the actual value
+    #: landed exactly on the line) never becomes a record — see
+    #: :func:`score_game_accuracy` / :func:`score_prop_accuracy`.
+    outcome: int
+    #: Optional player id (props only) for provenance.
+    player_id: int | None = None
+
+    def to_jsonable(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_jsonable(cls, d: dict[str, Any]) -> AccuracyRecord:
+        """Mirrors :meth:`BetRecord.from_jsonable` — rebuilds one record from
+        the picklable dict a parallel worker returns."""
         return cls(**d)
 
 
@@ -510,7 +659,9 @@ def format_scoreboard(scoreboard: dict[str, Any], *, params: dict[str, Any]) -> 
     """Render the aggregated scoreboard as a readable, trust-grouped text table."""
     lines = [
         "=" * 84,
-        "SIM-429 CLV BACKTEST SCOREBOARD  (beat_close_rate = % of placed bets that beat the close)",
+        "SECONDARY DIAGNOSTIC — SIM-429 CLV SCOREBOARD (entry vs. close price; no real",
+        "outcome involved). beat_close_rate = % of placed bets that beat the close.",
+        "The headline metric is the accuracy comparison below — see SIM-538.",
         "=" * 84,
         f"seasons={params.get('seasons')}  iterations={params.get('iterations')}  "
         f"markets={params.get('markets')}  min_edge={params.get('min_edge')}  "
@@ -545,6 +696,280 @@ def format_scoreboard(scoreboard: dict[str, Any], *, params: dict[str, Any]) -> 
             last_trust = r["trust"]
         lines.append(_fmt_row(r))
     lines.append("=" * 84)
+    return "\n".join(lines)
+
+
+# ===========================================================================
+# SIM-538: the sim-vs-closing-line accuracy comparison (PURE — the headline)
+# ===========================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class AccuracyComparisonRow:
+    """SIM-538: the paired sim-vs-market accuracy comparison for one group.
+
+    A NEGATIVE ``*_diff_mean`` means the simulator's score was LOWER — better,
+    since both Brier score and log loss are lower-is-better proper scoring
+    rules — than the market's, on average: the simulator beat the market's
+    accuracy. The ``*_ci_low`` / ``*_ci_high`` fields are a 95% bootstrap
+    interval on that mean paired difference (see
+    :func:`aggregate_accuracy_comparison`); an interval that does not cross
+    zero is the "likely real, not chance" read SIM-538's own definition of
+    done asks for.
+    """
+
+    group: str
+    trust: str
+    n: int
+    sim_brier: float
+    market_brier: float
+    brier_diff_mean: float
+    brier_diff_ci_low: float
+    brier_diff_ci_high: float
+    sim_log_loss: float
+    market_log_loss: float
+    log_loss_diff_mean: float
+    log_loss_diff_ci_low: float
+    log_loss_diff_ci_high: float
+
+    def to_jsonable(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _bootstrap_paired_diff_ci(
+    diffs: np.ndarray, game_pks: np.ndarray, *, n_bootstrap: int, seed: int
+) -> tuple[float, float]:
+    """95% percentile CLUSTER-bootstrap CI on the MEAN of ``diffs`` (paired
+    per-observation score differences — sim's score minus the market's, so
+    negative means the sim was more accurate on that observation).
+
+    Resamples GAMES, not individual observations. A single game can
+    contribute more than one observation here — up to 3 game markets
+    (moneyline/total/runline, all read off the SAME final score) and, for a
+    prop bucket, one record per player who has that stat (several batters'
+    hits in one game, say). Those records are not independent trials: they
+    share one game's park, bullpen, and final score. Resampling them one at
+    a time (as an ordinary bootstrap would) treats a busy game as if it
+    were several independent games and REPORTS A NARROWER INTERVAL THAN THE
+    DATA SUPPORTS — an adversarial review of SIM-538 confirmed this would
+    make "the interval does not cross zero" too easy to satisfy from one
+    correlated game rather than many independent ones.
+
+    The fix: draw ``n_bootstrap`` samples of GAME IDENTITIES with
+    replacement (the real unit of independence), and for each draw, pool
+    every observation from the resampled games before taking the mean —
+    exactly what resampling the underlying games and keeping all of each
+    game's records would give, computed via each game's precomputed
+    (sum, count) rather than by concatenating arrays per draw. When every
+    game contributes at most one observation to ``diffs`` (true for
+    single-player markets like moneyline), each game's count is always 1,
+    so this reduces exactly to the ordinary per-observation bootstrap.
+
+    Deterministic given ``seed``: the SAME games at the SAME seed always
+    resample the SAME way, so a re-run reproduces the SAME interval — this
+    file's existing determinism guarantee (SIM-430's byte-identical-replay
+    property), extended to the one place this module now uses an RNG.
+
+    Fewer than 2 observations, or fewer than 2 distinct games, means
+    nothing to resample; the caller gets a degenerate ``(mean, mean)`` back
+    rather than a false-precision interval.
+    """
+    n = diffs.size
+    if n < 2:
+        m = float(diffs.mean()) if n else float("nan")
+        return m, m
+    unique_games, inverse = np.unique(game_pks, return_inverse=True)
+    g = unique_games.size
+    if g < 2:
+        m = float(diffs.mean())
+        return m, m
+    # One (sum, count) per distinct game, computed once — a bootstrap draw's
+    # mean over its resampled games is then sum(picked sums) / sum(picked
+    # counts), so no per-draw array concatenation is needed.
+    sums = np.zeros(g, dtype=np.float64)
+    counts = np.zeros(g, dtype=np.float64)
+    np.add.at(sums, inverse, diffs)
+    np.add.at(counts, inverse, 1.0)
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, g, size=(int(n_bootstrap), g))
+    means = sums[idx].sum(axis=1) / counts[idx].sum(axis=1)
+    lo, hi = np.percentile(means, [2.5, 97.5])
+    return float(lo), float(hi)
+
+
+def _accuracy_row_for(
+    group: str,
+    trust: str,
+    records: Sequence[AccuracyRecord],
+    *,
+    n_bootstrap: int,
+    seed: int,
+) -> AccuracyComparisonRow:
+    """PURE: aggregate one bucket of :class:`AccuracyRecord`s into one row.
+
+    The per-observation Brier/log-loss DIFFERENCES are computed here (not
+    inside :func:`binary_brier` / :func:`binary_log_loss`, which only return
+    the aggregate) so the paired bootstrap has something to resample — each
+    difference is one game/prop's own (sim error) minus (market error). The
+    log-loss difference clips both probabilities with the SAME
+    :data:`OUTCOME_PROB_EPS` :func:`binary_log_loss` itself uses, so the
+    per-observation differences sum to the SAME aggregate figure reported
+    alongside them.
+    """
+    n = len(records)
+    sim_p = np.array([r.sim_prob for r in records], dtype=np.float64)
+    mkt_p = np.array([r.market_prob for r in records], dtype=np.float64)
+    y = np.array([r.outcome for r in records], dtype=np.int64)
+    game_pks = np.array([r.game_pk for r in records], dtype=np.int64)
+
+    sim_brier = binary_brier(sim_p, y)
+    market_brier = binary_brier(mkt_p, y)
+    sim_ll = binary_log_loss(sim_p, y)
+    market_ll = binary_log_loss(mkt_p, y)
+
+    if n:
+        # Defensive [0, 1] clip -- the SAME one binary_brier's own
+        # _as_prob_outcome applies before scoring sim_brier/market_brier
+        # above. Every current producer of sim_prob/market_prob already
+        # stays inside [0, 1] (win-prob calibration clamps it; the total/
+        # run-line sim probabilities are empirical count/n ratios;
+        # devig_two_way's fair probability is a strict (0, 1) normalization),
+        # so this clip changes nothing today. It exists so a future producer
+        # that is NOT already bounded cannot silently make these
+        # per-observation differences sum to something other than the
+        # reported aggregate brier_mean below -- an adversarial review of
+        # SIM-538 flagged the two code paths as duplicating the same bound
+        # rather than sharing one clipped source of truth.
+        sim_p_b = np.clip(sim_p, 0.0, 1.0)
+        mkt_p_b = np.clip(mkt_p, 0.0, 1.0)
+        brier_diffs = (sim_p_b - y) ** 2 - (mkt_p_b - y) ** 2
+        eps = OUTCOME_PROB_EPS
+        sim_pc = np.clip(sim_p, eps, 1.0 - eps)
+        mkt_pc = np.clip(mkt_p, eps, 1.0 - eps)
+        sim_ll_i = -(y * np.log(sim_pc) + (1 - y) * np.log(1.0 - sim_pc))
+        mkt_ll_i = -(y * np.log(mkt_pc) + (1 - y) * np.log(1.0 - mkt_pc))
+        log_loss_diffs = sim_ll_i - mkt_ll_i
+    else:
+        brier_diffs = np.array([], dtype=np.float64)
+        log_loss_diffs = np.array([], dtype=np.float64)
+
+    brier_mean = float(brier_diffs.mean()) if n else float("nan")
+    ll_mean = float(log_loss_diffs.mean()) if n else float("nan")
+    brier_lo, brier_hi = _bootstrap_paired_diff_ci(
+        brier_diffs, game_pks, n_bootstrap=n_bootstrap, seed=seed
+    )
+    # SIM-538 fix: offset the log-loss seed by a large constant, not +1. The
+    # caller assigns each ROW its own seed a small step apart (the 'overall'
+    # row gets `seed`, by-market row i gets `seed + i`), so a bare +1 here
+    # made row i's log-loss draw and row i+1's Brier draw collide on the
+    # EXACT SAME seed -- two conceptually unrelated statistics resampling
+    # bit-identically. An adversarial review of SIM-538 confirmed this. The
+    # offset below is far larger than any plausible row count, so it cannot
+    # collide with another row's seed in practice.
+    ll_lo, ll_hi = _bootstrap_paired_diff_ci(
+        log_loss_diffs, game_pks, n_bootstrap=n_bootstrap, seed=seed + 1_000_003
+    )
+
+    return AccuracyComparisonRow(
+        group=group,
+        trust=trust,
+        n=n,
+        sim_brier=sim_brier,
+        market_brier=market_brier,
+        brier_diff_mean=brier_mean,
+        brier_diff_ci_low=brier_lo,
+        brier_diff_ci_high=brier_hi,
+        sim_log_loss=sim_ll,
+        market_log_loss=market_ll,
+        log_loss_diff_mean=ll_mean,
+        log_loss_diff_ci_low=ll_lo,
+        log_loss_diff_ci_high=ll_hi,
+    )
+
+
+def aggregate_accuracy_comparison(
+    records: Sequence[AccuracyRecord],
+    *,
+    n_bootstrap: int = DEFAULT_BOOTSTRAP_SAMPLES,
+    seed: int = 538,
+) -> dict[str, Any]:
+    """PURE: roll a list of :class:`AccuracyRecord`s into the accuracy report.
+
+    Mirrors :func:`aggregate_scoreboard`'s shape: an ``overall`` row over every
+    record, plus ``by_market`` rows (one per distinct market/prop key), sorted
+    by trust tier then market key. Every row carries a bootstrap 95% CI on the
+    paired Brier/log-loss difference.
+
+    This is a bounded, single-run confidence read, not the full statistical
+    program SIM-539 adds (a documented per-market minimum sample size,
+    published once and applied consistently across runs) — see the module
+    docstring's "WHAT THIS DELIBERATELY DOES NOT CLAIM" section.
+    """
+    records = list(records)
+    overall = _accuracy_row_for("overall", "—", records, n_bootstrap=n_bootstrap, seed=seed)
+
+    by_market_key: dict[str, list[AccuracyRecord]] = {}
+    for r in records:
+        by_market_key.setdefault(r.market, []).append(r)
+
+    _trust_order = {"trustworthy": 0, "loose": 1, "caution": 2, "untrustworthy": 3, "unknown": 4}
+    rows = [
+        _accuracy_row_for(
+            market, trust_label(market), bucket, n_bootstrap=n_bootstrap, seed=seed + i
+        )
+        for i, (market, bucket) in enumerate(sorted(by_market_key.items()), start=1)
+    ]
+    rows.sort(key=lambda r: (_trust_order.get(r.trust, 9), r.group))
+
+    return {
+        "overall": overall.to_jsonable(),
+        "by_market": [r.to_jsonable() for r in rows],
+    }
+
+
+def format_accuracy_comparison(comparison: dict[str, Any], *, params: dict[str, Any]) -> str:
+    """Render the sim-vs-close accuracy comparison as a readable, trust-grouped table."""
+    lines = [
+        "=" * 92,
+        "SIM-538 SIM-VS-CLOSING-LINE ACCURACY COMPARISON  (the headline metric)",
+        "Brier / log-loss are lower-is-better. A NEGATIVE diff means the simulator was",
+        "MORE ACCURATE than the de-vigged closing line, on average, over these games.",
+        "The 95% range is a paired bootstrap interval on that mean difference — a range",
+        "that does not cross zero is a real read; one that does may be chance (SIM-539",
+        "adds a documented minimum sample size per market; treat a narrow range here",
+        "as a hint, not yet a certified threshold).",
+        "=" * 92,
+        f"seasons={params.get('seasons')}  iterations={params.get('iterations')}  "
+        f"markets={params.get('markets')}  base_seed={params.get('base_seed')}  "
+        f"calibrated={params.get('calibration_applied')}",
+        "",
+    ]
+    header = f"{'market':<14}{'trust':<14}{'n':>7}{'simBrier':>10}{'mktBrier':>10}{'brierDiff':>11}{'95% range':>22}"
+
+    def _fmt_row(r: dict[str, Any]) -> str:
+        rng = f"[{r['brier_diff_ci_low']:.4f}, {r['brier_diff_ci_high']:.4f}]"
+        return (
+            f"{r['group']:<14}{r['trust']:<14}{r['n']:>7}"
+            f"{r['sim_brier']:>10.4f}{r['market_brier']:>10.4f}"
+            f"{r['brier_diff_mean']:>11.4f}{rng:>22}"
+        )
+
+    o = comparison["overall"]
+    lines += [
+        "--- OVERALL ---",
+        header,
+        _fmt_row(o),
+        "",
+        "--- BY MARKET (grouped by trust tier; log-loss in the JSON report) ---",
+        header,
+    ]
+    last_trust = None
+    for r in comparison["by_market"]:
+        if r["trust"] != last_trust:
+            lines.append(f"  [{r['trust']}]")
+            last_trust = r["trust"]
+        lines.append(_fmt_row(r))
+    lines.append("=" * 92)
     return "\n".join(lines)
 
 
@@ -631,6 +1056,37 @@ async def _fetch_prop_odds(pool, game_pk: int) -> dict[tuple[int, str], dict[str
     return out
 
 
+async def _fetch_final_score(pool: Any, game_pk: int) -> tuple[int, int] | None:
+    """SIM-538: the real final score for one game, or None when unavailable.
+
+    Reads the same columns :func:`_fetch_final_games` already gates the game
+    list on (``home_score_final`` / ``away_score_final``); fetched again here,
+    per game, rather than carried from the parent through ``worker_params`` —
+    that dict is pickled once per submitted game in the parallel path, so
+    carrying every game's score in it would copy a growing whole-season dict
+    on every submission instead of one small indexed lookup.
+    """
+    row = await pool.fetchrow(
+        "SELECT home_score_final, away_score_final FROM raw.games WHERE game_pk = $1",
+        int(game_pk),
+    )
+    if row is None or row["home_score_final"] is None or row["away_score_final"] is None:
+        return None
+    return int(row["home_score_final"]), int(row["away_score_final"])
+
+
+async def _fetch_pa_events(pool: Any, game_pk: int) -> list[tuple]:
+    """SIM-538: one ``(batter, pitcher, events)`` tuple per completed plate
+    appearance — the SAME reader ``scripts/validate_props.py`` uses, feeding
+    :func:`simulation.prop_validation.real_props_from_pa_events`."""
+    rows = await pool.fetch(
+        "SELECT batter, pitcher, events FROM raw.pitches "
+        "WHERE game_pk = $1 AND events IS NOT NULL AND events <> ''",
+        int(game_pk),
+    )
+    return [(r["batter"], r["pitcher"], r["events"]) for r in rows]
+
+
 # ===========================================================================
 # Per-game scoring (wires the sim output into the pure evaluation)
 # ===========================================================================
@@ -667,6 +1123,57 @@ def _game_prices(
         open_other=float(open_other),
         close_side=float(close_side),
         close_other=float(close_other),
+        line=None if line is None else float(line),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ClosingPrices:
+    """SIM-538: the CLOSING two-way price for one market, with the CLOSING
+    row's OWN line — needs no opening row at all.
+
+    This is what fixes the "cross-line" gap the legacy CLV step still has
+    (:func:`_game_prices` reads the market's line from the OPENING row only,
+    so a total/runline/prop whose LINE moved is scored against a stale line).
+    The accuracy comparison has no entry side to speak of, so there is nothing
+    to keep consistent WITH — only the closing quote and the closing line ever
+    enter the calculation.
+    """
+
+    side: float
+    other: float
+    line: float | None = None
+
+
+def _closing_prices(
+    odds: dict[str, dict[str, dict[str, Any]]],
+    market_type: str,
+    side_col: str,
+    other_col: str,
+    line_col: str | None,
+) -> ClosingPrices | None:
+    """Build :class:`ClosingPrices` for a game market from its CLOSING row only.
+
+    Returns None when there is no closing row, or either two-way price is NULL.
+    Unlike :func:`_game_prices`, an opening row is never required — this is the
+    SIM-541 spirit (the closing line is nearly always collected; a matched
+    opening line is not) already realized for the one consumer that only ever
+    needed the close.
+    """
+    by_lt = odds.get(market_type)
+    if not by_lt:
+        return None
+    cl = by_lt.get("closing")
+    if cl is None:
+        return None
+    side = cl.get(side_col)
+    other = cl.get(other_col)
+    if None in (side, other):
+        return None
+    line = cl.get(line_col) if line_col else None
+    return ClosingPrices(
+        side=float(side),
+        other=float(other),
         line=None if line is None else float(line),
     )
 
@@ -750,6 +1257,105 @@ def score_game_markets(
     return records
 
 
+def score_game_accuracy(
+    game_pk: int,
+    win_prob: Any,
+    summary: Any,
+    odds: dict[str, dict[str, dict[str, Any]]],
+    home_score: int,
+    away_score: int,
+) -> list[AccuracyRecord]:
+    """SIM-538: score the three GAME markets on a FIXED reference side against
+    the CLOSING line and the real final score.
+
+    Reference side per market — HOME for moneyline and the run line, OVER for
+    the total — chosen once and never by model preference (see
+    :class:`AccuracyRecord`). A market with no closing price is skipped. A
+    total/run-line observation that landed EXACTLY on the closing line (a push)
+    contributes no record: the probability being scored is a STRICT
+    over/cover probability (mirrors :func:`betting.clv_engine.total_over_under_edge_report`
+    / :func:`betting.clv_engine.spread_cover_prob`'s own push handling), so a
+    push outcome has no well-defined 0/1 label to score it against.
+    """
+    records: list[AccuracyRecord] = []
+
+    # --- moneyline (HOME at home_ml, vs away_ml) ---
+    cp = _closing_prices(odds, "moneyline", "home_ml", "away_ml", None)
+    if cp is not None:
+        try:
+            market = TwoWayMarket(
+                side=MarketSide.HOME,
+                entry=OddsQuote(side=cp.side, other=cp.other, line=None),
+            )
+            er = moneyline_edge_report(win_prob, market, side=MarketSide.HOME)
+            outcome = 1 if home_score > away_score else 0
+            records.append(
+                AccuracyRecord(
+                    game_pk=int(game_pk),
+                    market="moneyline",
+                    market_type="moneyline",
+                    sim_prob=float(er.sim_prob),
+                    market_prob=float(er.market_fair_prob),
+                    outcome=outcome,
+                )
+            )
+        except ValueError as exc:
+            log.info("game %s moneyline accuracy skipped (degenerate): %s", game_pk, exc)
+
+    # --- total (OVER at total_line) ---
+    cp = _closing_prices(odds, "total", "over_ml", "under_ml", "total_line")
+    if cp is not None and cp.line is not None:
+        actual_total = float(home_score + away_score)
+        if actual_total != cp.line:
+            try:
+                market = TwoWayMarket(
+                    side=MarketSide.OVER,
+                    entry=OddsQuote(side=cp.side, other=cp.other, line=cp.line),
+                )
+                er = total_over_under_edge_report(summary, market, side=MarketSide.OVER)
+                outcome = 1 if actual_total > cp.line else 0
+                records.append(
+                    AccuracyRecord(
+                        game_pk=int(game_pk),
+                        market="total",
+                        market_type="total",
+                        sim_prob=float(er.sim_prob),
+                        market_prob=float(er.market_fair_prob),
+                        outcome=outcome,
+                    )
+                )
+            except ValueError as exc:
+                log.info("game %s total accuracy skipped (degenerate): %s", game_pk, exc)
+
+    # --- runline (HOME covers at home_spread) ---
+    cp = _closing_prices(odds, "runline", "home_spread_ml", "away_spread_ml", "home_spread")
+    if cp is not None and cp.line is not None:
+        margin = float(home_score - away_score)
+        threshold = -cp.line  # mirrors betting.clv_engine.spread_cover_prob
+        if margin != threshold:
+            try:
+                market = TwoWayMarket(
+                    side=MarketSide.HOME,
+                    entry=OddsQuote(side=cp.side, other=cp.other, line=cp.line),
+                )
+                er = run_line_edge_report(summary, market, side=MarketSide.HOME, line=cp.line)
+                outcome = 1 if margin > threshold else 0
+                records.append(
+                    AccuracyRecord(
+                        game_pk=int(game_pk),
+                        market="runline",
+                        market_type="runline",
+                        sim_prob=float(er.sim_prob),
+                        market_prob=float(er.market_fair_prob),
+                        outcome=outcome,
+                    )
+                )
+            except ValueError as exc:
+                log.info("game %s runline accuracy skipped (degenerate): %s", game_pk, exc)
+
+    return records
+
+
 def score_prop_markets(
     game_pk: int,
     pset: Any,
@@ -812,6 +1418,89 @@ def score_prop_markets(
     return records
 
 
+#: SIM-538: derivable straight from an event LABEL (see
+#: simulation.prop_validation.real_props_from_pa_events) — RBI/ER are omitted
+#: for the same reason validate_props.py omits them: no reliable per-PA-event
+#: ground truth exists for either.
+_ACCURACY_SCORED_PROPS = frozenset({"K", "BB", "H", "HR", "TB"})
+
+
+def score_prop_accuracy(
+    game_pk: int,
+    pset: Any,
+    prop_odds: dict[tuple[int, str], dict[str, dict[str, Any]]],
+    batter_actuals: dict[int, dict[str, int]],
+    pitcher_actuals: dict[int, dict[str, int]],
+) -> list[AccuracyRecord]:
+    """SIM-538: score player-prop markets on the OVER side against the CLOSING
+    line and the real per-player total.
+
+    ``batter_actuals`` / ``pitcher_actuals`` come from
+    ``simulation.prop_validation.real_props_from_pa_events`` — covers H/HR/TB
+    (batter) and K/BB (pitcher) only (see :data:`_ACCURACY_SCORED_PROPS`); a
+    player/prop outside that set (RBI, ER) or with no real-outcome entry at all
+    (no plate appearance this game) is skipped, not scored with a guessed
+    ground truth. A push (the real total lands exactly on the closing line) is
+    also skipped, mirroring :func:`score_game_accuracy`.
+    """
+    records: list[AccuracyRecord] = []
+    for (player_id, odds_stat), by_lt in prop_odds.items():
+        model_stat = PROP_VOCAB_MAP.get(odds_stat)
+        if model_stat is None or model_stat not in _ACCURACY_SCORED_PROPS:
+            continue
+        cl = by_lt.get("closing")
+        if cl is None:
+            continue
+        close_over, close_under, line = cl.get("over_ml"), cl.get("under_ml"), cl.get("line")
+        if None in (close_over, close_under, line):
+            continue
+
+        dist = pset.get(int(player_id), model_stat) if pset is not None else None
+        if dist is None:
+            continue
+
+        pid = int(player_id)
+        actual = batter_actuals.get(pid, {}).get(model_stat)
+        if actual is None:
+            actual = pitcher_actuals.get(pid, {}).get(model_stat)
+        if actual is None:
+            continue  # no plate appearance recorded for this player this game
+
+        line_f = float(line)
+        if float(actual) == line_f:
+            continue  # push
+
+        try:
+            market = TwoWayMarket(
+                side=MarketSide.OVER,
+                entry=OddsQuote(side=float(close_over), other=float(close_under), line=line_f),
+            )
+            er = prop_edge_report(dist, market, side=MarketSide.OVER)
+        except ValueError as exc:
+            log.info(
+                "game %s prop-accuracy %s/%s skipped (degenerate): %s",
+                game_pk,
+                player_id,
+                model_stat,
+                exc,
+            )
+            continue
+
+        outcome = 1 if float(actual) > line_f else 0
+        records.append(
+            AccuracyRecord(
+                game_pk=int(game_pk),
+                market=model_stat,
+                market_type="prop",
+                sim_prob=float(er.sim_prob),
+                market_prob=float(er.market_fair_prob),
+                outcome=outcome,
+                player_id=pid,
+            )
+        )
+    return records
+
+
 # ===========================================================================
 # Sim replay (reuses the validate_props / betting.py seam)
 # ===========================================================================
@@ -866,30 +1555,38 @@ async def _score_one_game(
     duck: Any,
     do_game: bool,
     do_props: bool,
+    score_accuracy: bool,
     iterations: int,
     base_seed: int,
     min_edge: float,
-) -> tuple[list[BetRecord], str, float]:
-    """Resolve, replay, and score ONE game; return ``(bet_records, status, park_factor)``.
+    calibration_map: Any = IDENTITY_CALIBRATION,
+) -> tuple[list[BetRecord], list[AccuracyRecord], str, float]:
+    """Resolve, replay, and score ONE game; return ``(bet_records,
+    accuracy_records, status, park_factor)``.
 
     This is the ENTIRE per-game pipeline, factored out of :func:`run`'s old loop so
     BOTH the serial in-process path and a parallel worker call the exact same code:
 
       1. read the game's opening+closing odds (``raw.game_odds`` / ``raw.prop_odds``);
       2. resolve the :class:`GameState` (lineup → state);
-      3. resolve the venue park factor onto that state and build the sim kwargs
-         (SIM-452 — the step this script skipped, which made every CLV number a
-         park-blind measurement);
+      3. resolve the venue park factor AND the point-in-time cutoff onto that
+         state (SIM-452 / SIM-538 — the two steps this script used to skip,
+         which made every number it ever produced a park-blind, leak-prone
+         measurement);
       4. replay ``iterations`` sims via the SAME :func:`_collect_game_results` seam
          (per-iteration seed = ``derive_seed(base_seed, i)`` — deterministic per game);
-      5. build the :class:`GameSimSummary` + calibrated :class:`WinProbability`
-         (+ the :class:`PropDistributionSet` for props);
+      5. build the :class:`GameSimSummary` + a :class:`WinProbability` scored
+         through ``calibration_map`` (+ the :class:`PropDistributionSet` for props);
       6. produce the per-bet records via the pure ``score_game_markets`` /
-         ``score_prop_markets``.
+         ``score_prop_markets`` (SIM-429, secondary diagnostic) AND, when
+         ``score_accuracy`` is set, the accuracy records via
+         ``score_game_accuracy`` / ``score_prop_accuracy`` (SIM-538, the
+         headline metric) for whichever of ``do_game`` / ``do_props`` is set —
+         the SAME market scope governs both steps.
 
     ``status`` is one of ``"scored"`` / ``"no_odds"`` / ``"unresolved"`` / ``"empty"``
     so the caller can keep the SAME run counters. A degenerate/failed game yields no
-    bets and a non-``"scored"`` status; it NEVER raises out of here — EXCEPT for
+    records and a non-``"scored"`` status; it NEVER raises out of here — EXCEPT for
     :class:`UnresolvedParkFactorError`, which means the code itself regressed and
     must not be tallied as one skipped game.
 
@@ -903,14 +1600,14 @@ async def _score_one_game(
     from api.routes.games import _resolve_state_or_error
     from simulation.prop_distributions import PropDistributionSet
     from simulation.results import GameSimSummary
-    from simulation.sim_kwargs import resolve_park_factor_onto_state
+    from simulation.sim_kwargs import resolve_asof_ymd, resolve_park_factor_onto_state
     from simulation.win_probability import win_probability
 
     # Read odds first — a game with NO odds rows is skipped (counts as 'no_odds').
     game_odds = await _fetch_game_odds(pool, game_pk) if do_game else {}
     prop_odds = await _fetch_prop_odds(pool, game_pk) if do_props else {}
     if not game_odds and not prop_odds:
-        return [], "no_odds", 1.0
+        return [], [], "no_odds", 1.0
 
     try:
         state = await _resolve_state_or_error(pool, game_pk)
@@ -921,28 +1618,65 @@ async def _score_one_game(
             log.error("game %s: process-level failure while resolving state", game_pk)
             raise
         log.info("skip game %s (state unresolved: %s)", game_pk, type(exc).__name__)
-        return [], "unresolved", 1.0
+        return [], [], "unresolved", 1.0
 
     # SIM-452: resolve the park factor HERE, where the connections live. The replay
     # below runs in a worker thread with no event loop, and the builder rejects an
     # unresolved state, so an edit that drops this line fails loudly instead of
     # replaying park-blind.
     park_factor = await resolve_park_factor_onto_state(state, pool, duck, int(game_pk))
+    # SIM-538: resolve the point-in-time cutoff the SAME way — the day before this
+    # game, so the replay below can never draw on a pool row or a player profile
+    # dated after the game it is predicting. sim_kwargs_from_state (called inside
+    # _collect_game_results) reads state.asof_ymd and, when set, carries it into
+    # the simulator as "_asof_ymd" — see simulation/sim_kwargs.py.
+    #
+    # resolve_asof_ymd returns None in two DIFFERENT situations: a live game,
+    # where no cutoff is needed (not this script — every game here is a past,
+    # completed game), and a lookup failure (a DB hiccup, or a game_pk this
+    # script was told to score that is not in raw.games). This script only
+    # ever replays the second kind of None, so treat it as an unresolved
+    # game and skip the replay — the same refusal SIM-452's park-factor
+    # resolution already applies above, and for the same reason: replaying
+    # anyway would let the sampler draw from the WHOLE pool, including this
+    # game's own real plays, which is the exact leak this cutoff exists to
+    # close.
+    asof_ymd = await resolve_asof_ymd(pool, int(game_pk))
+    if asof_ymd is None:
+        log.info("skip game %s (point-in-time cutoff unresolved)", game_pk)
+        return [], [], "unresolved", park_factor
+    state.asof_ymd = asof_ymd
 
     results = await asyncio.to_thread(_collect_game_results, state, iterations, base_seed)
     if not results:
-        return [], "empty", park_factor
+        return [], [], "empty", park_factor
 
     summary = GameSimSummary.from_results(results)
-    wp = win_probability(summary)
+    wp = win_probability(summary, calibration_map=calibration_map)
 
     bets: list[BetRecord] = []
+    accuracy: list[AccuracyRecord] = []
+    pset = PropDistributionSet.from_results(results) if (do_props and prop_odds) else None
+
     if do_game and game_odds:
         bets.extend(score_game_markets(game_pk, wp, summary, game_odds, min_edge=min_edge))
-    if do_props and prop_odds:
-        pset = PropDistributionSet.from_results(results)
+        if score_accuracy:
+            final_score = await _fetch_final_score(pool, game_pk)
+            if final_score is not None:
+                home_score, away_score = final_score
+                accuracy.extend(
+                    score_game_accuracy(game_pk, wp, summary, game_odds, home_score, away_score)
+                )
+    if do_props and prop_odds and pset is not None:
         bets.extend(score_prop_markets(game_pk, pset, prop_odds, min_edge=min_edge))
-    return bets, "scored", park_factor
+        if score_accuracy:
+            pa_events = await _fetch_pa_events(pool, game_pk)
+            batter_actuals, pitcher_actuals = real_props_from_pa_events(pa_events)
+            accuracy.extend(
+                score_prop_accuracy(game_pk, pset, prop_odds, batter_actuals, pitcher_actuals)
+            )
+
+    return bets, accuracy, "scored", park_factor
 
 
 # ===========================================================================
@@ -1016,6 +1750,11 @@ _WORKER_DSN: str = DEFAULT_DSN
 #: SIM-452: this worker's OWN read-only sim-DuckDB connection. A DuckDB connection
 #: is not fork-safe, so each worker opens its own instead of inheriting the parent's.
 _WORKER_DUCK: Any = None
+#: SIM-538: this worker's OWN loaded win-probability calibration map — mirrors the
+#: DuckDB connection above (loaded once per worker, best-effort, never fatal;
+#: falls back to IDENTITY_CALIBRATION so a missing/corrupt report degrades the
+#: SAME way it does at API boot rather than crashing the worker).
+_WORKER_CALIBRATION_MAP: Any = IDENTITY_CALIBRATION
 #: SIM-454: the LATCHED init failure. Once init fails, this worker is broken for
 #: good, so the next call re-raises this instead of building the loop and the pool
 #: again. Without the latch every game retried the init and leaked one event loop
@@ -1048,10 +1787,16 @@ def _close_worker_resources(loop: Any, pool: Any, duck: Any) -> None:
             log.debug("worker init cleanup: loop.close() failed", exc_info=True)
 
 
-def _worker_lazy_init(dsn: str, duckdb_path: str, *, allow_neutral_parks: bool = False) -> None:
+def _worker_lazy_init(
+    dsn: str,
+    duckdb_path: str,
+    *,
+    allow_neutral_parks: bool = False,
+    calibration_path: str | None = DEFAULT_CALIBRATION_PATH,
+) -> None:
     """One-time per-worker setup (first call only; cheap no-op thereafter).
 
-    Amortizes the two big per-worker costs across all the games this worker
+    Amortizes the big per-worker costs across all the games this worker
     handles:
 
       * ``(a)`` warm THIS worker's ~373 MB full-pool sampler cache ONCE via
@@ -1060,7 +1805,11 @@ def _worker_lazy_init(dsn: str, duckdb_path: str, *, allow_neutral_parks: bool =
       * ``(b)`` open ONE dedicated asyncio loop + ONE asyncpg pool for this worker
         (each worker reads odds / resolves state on its own connection);
       * ``(c)`` open ONE read-only sim-DuckDB connection for this worker (SIM-452),
-        which the park-factor lookup reads.
+        which the park-factor lookup reads;
+      * ``(d)`` load THIS worker's own win-probability calibration map once
+        (SIM-538) — best-effort, like ``(a)``: a missing or corrupt report
+        degrades to :data:`IDENTITY_CALIBRATION`, the same graceful fallback
+        ``api/main.py``'s boot lifespan uses, never a worker failure.
 
     Guarded by the ``_WORKER_INITED`` module global so it runs exactly once per
     forkserver worker. The warm step is best-effort (full-pool off / missing
@@ -1087,7 +1836,7 @@ def _worker_lazy_init(dsn: str, duckdb_path: str, *, allow_neutral_parks: bool =
     the next call re-raises immediately and builds nothing.
     """
     global _WORKER_INITED, _WORKER_LOOP, _WORKER_POOL, _WORKER_DSN, _WORKER_DUCK
-    global _WORKER_INIT_ERROR
+    global _WORKER_INIT_ERROR, _WORKER_CALIBRATION_MAP
     if _WORKER_INITED:
         return
     if _WORKER_INIT_ERROR is not None:
@@ -1097,6 +1846,7 @@ def _worker_lazy_init(dsn: str, duckdb_path: str, *, allow_neutral_parks: bool =
     loop: Any = None
     pool: Any = None
     duck: Any = None
+    calib_map: Any = IDENTITY_CALIBRATION
     try:
         # (a) warm the full-pool sampler cache ONCE for this worker (best-effort).
         try:
@@ -1123,6 +1873,22 @@ def _worker_lazy_init(dsn: str, duckdb_path: str, *, allow_neutral_parks: bool =
                 "park factor would silently fall back to a neutral 1.0. Fix --duckdb, or "
                 "pass --allow-neutral-parks to accept a park-neutral run."
             )
+
+        # (d) SIM-538: this worker's own calibration map (best-effort — never fatal).
+        try:
+            from api.state import load_calibration_report
+
+            report = load_calibration_report(calibration_path)
+            calib_map = (
+                CalibrationMap.from_report(report) if report is not None else (IDENTITY_CALIBRATION)
+            )
+        except Exception as exc:  # noqa: BLE001 — a bad report must not sink the worker
+            log.warning(
+                "SIM-538: worker could not load calibration from %r (%s) — using identity.",
+                calibration_path,
+                exc,
+            )
+            calib_map = IDENTITY_CALIBRATION
     except BaseException as exc:
         # Release EVERYTHING this attempt built, whatever went wrong. This is the
         # whole point of building into locals: there is exactly one place that owns
@@ -1142,6 +1908,7 @@ def _worker_lazy_init(dsn: str, duckdb_path: str, *, allow_neutral_parks: bool =
     _WORKER_LOOP = loop
     _WORKER_POOL = pool
     _WORKER_DUCK = duck
+    _WORKER_CALIBRATION_MAP = calib_map
     _WORKER_INITED = True
     atexit.register(_worker_shutdown)
 
@@ -1169,11 +1936,13 @@ def _process_one_game(game_pk: int, params: dict[str, Any]) -> dict[str, Any]:
     sampler cache + open the asyncpg pool); every call then drives the SAME
     :func:`_score_one_game` pipeline on this worker's dedicated loop + pool.
 
-    Returns a fully-picklable payload ``{"status": str, "bets": list[dict]}`` where
-    each bet dict is ``BetRecord.to_jsonable()`` — the parent turns those back into
-    :class:`BetRecord`s and folds ``status`` into the SAME run counters the serial
-    path keeps. Returning plain dicts (not the dataclass) keeps the cross-process
-    boundary robust to how this script module is named in the worker.
+    Returns a fully-picklable payload ``{"status": str, "bets": list[dict],
+    "accuracy_records": list[dict]}`` where each dict is
+    ``BetRecord.to_jsonable()`` / ``AccuracyRecord.to_jsonable()`` — the parent
+    turns those back into their dataclasses and folds ``status`` into the SAME
+    run counters the serial path keeps. Returning plain dicts (not the
+    dataclasses) keeps the cross-process boundary robust to how this script
+    module is named in the worker.
 
     A game with BAD DATA logs and contributes NO bets (status ``"unresolved"``) — it
     NEVER raises out, so one bad game can never sink the parallel run.
@@ -1196,23 +1965,32 @@ def _process_one_game(game_pk: int, params: dict[str, Any]) -> dict[str, Any]:
     dsn = str(params.get("dsn", DEFAULT_DSN))
     duckdb_path = str(params.get("duckdb", DEFAULT_DUCKDB_PATH))
     allow_neutral = bool(params.get("allow_neutral_parks", False))
+    calibration_path = params.get("calibration_path", DEFAULT_CALIBRATION_PATH)
     try:
-        _worker_lazy_init(dsn, duckdb_path, allow_neutral_parks=allow_neutral)
-        bets, status, park_factor = _WORKER_LOOP.run_until_complete(
+        _worker_lazy_init(
+            dsn,
+            duckdb_path,
+            allow_neutral_parks=allow_neutral,
+            calibration_path=calibration_path,
+        )
+        bets, accuracy_records, status, park_factor = _WORKER_LOOP.run_until_complete(
             _score_one_game(
                 _WORKER_POOL,
                 int(game_pk),
                 duck=_WORKER_DUCK,
                 do_game=bool(params["do_game"]),
                 do_props=bool(params["do_props"]),
+                score_accuracy=bool(params.get("score_accuracy", True)),
                 iterations=int(params["iterations"]),
                 base_seed=int(params["base_seed"]),
                 min_edge=float(params["min_edge"]),
+                calibration_map=_WORKER_CALIBRATION_MAP,
             )
         )
         return {
             "status": status,
             "bets": [b.to_jsonable() for b in bets],
+            "accuracy_records": [a.to_jsonable() for a in accuracy_records],
             "park_run_factor": float(park_factor),
         }
     except UnresolvedParkFactorError:
@@ -1224,7 +2002,7 @@ def _process_one_game(game_pk: int, params: dict[str, Any]) -> dict[str, Any]:
             log.error("worker: process-level failure on game %s — stopping the run", game_pk)
             raise
         log.warning("worker: game %s failed (%s) — no bets", game_pk, type(exc).__name__)
-        return {"status": "unresolved", "bets": [], "park_run_factor": 1.0}
+        return {"status": "unresolved", "bets": [], "accuracy_records": [], "park_run_factor": 1.0}
 
 
 @dataclass
@@ -1236,6 +2014,8 @@ class _Counters:
     games_no_odds: int = 0
     games_unresolved: int = 0
     bets: list[BetRecord] = field(default_factory=list)
+    #: SIM-538: the sim-vs-closing-line accuracy comparison's raw observations.
+    accuracy_records: list[AccuracyRecord] = field(default_factory=list)
     #: SIM-452: games that ran with a park factor the lookup actually moved off 1.0.
     #: A scored run with zero of these means the park nudge did nothing all run, and
     #: the operator gets to see that instead of guessing.
@@ -1262,6 +2042,8 @@ async def _run_serial(
     duck: Any,
     do_game: bool,
     do_props: bool,
+    score_accuracy: bool,
+    calibration_map: Any,
     args: argparse.Namespace,
 ) -> _Counters:
     """SERIAL fallback (``--workers 1``): the original in-process path.
@@ -1271,7 +2053,10 @@ async def _run_serial(
     no-pool debug mode AND the reference the verify step compares against.
 
     ``duck`` is the parent's read-only sim-DuckDB connection (SIM-452); the park
-    factor comes from it.
+    factor comes from it. ``calibration_map`` is the ONE calibration map this
+    whole serial run scores every game's win probability through (SIM-538) —
+    loaded once by :func:`run`, unlike the parallel path where each worker
+    loads its own copy.
     """
     import asyncpg
 
@@ -1281,18 +2066,21 @@ async def _run_serial(
         if game_pks:
             pool = await asyncpg.create_pool(args.dsn, min_size=1, max_size=4)
         for game_pk in game_pks:
-            bets, status, park_factor = await _score_one_game(
+            bets, accuracy_records, status, park_factor = await _score_one_game(
                 pool,
                 game_pk,
                 duck=duck,
                 do_game=do_game,
                 do_props=do_props,
+                score_accuracy=score_accuracy,
                 iterations=args.iterations,
                 base_seed=args.base_seed,
                 min_edge=args.min_edge,
+                calibration_map=calibration_map,
             )
             _tally(counters, status, park_factor)
             counters.bets.extend(bets)
+            counters.accuracy_records.extend(accuracy_records)
             if counters.games_scored and counters.games_scored % 25 == 0:
                 log.info(
                     "  scored %d/%d games (%d bet rows) ...",
@@ -1312,6 +2100,8 @@ def _run_parallel(
     workers: int,
     do_game: bool,
     do_props: bool,
+    score_accuracy: bool,
+    calibration_path: str,
     args: argparse.Namespace,
 ) -> _Counters:
     """ACROSS-GAMES parallel path (``--workers > 1``).
@@ -1336,6 +2126,7 @@ def _run_parallel(
     worker_params: dict[str, Any] = {
         "do_game": do_game,
         "do_props": do_props,
+        "score_accuracy": score_accuracy,
         "iterations": int(args.iterations),
         "base_seed": int(args.base_seed),
         "min_edge": float(args.min_edge),
@@ -1347,6 +2138,10 @@ def _run_parallel(
         # worker still raised on the missing DuckDB, so the whole run booked
         # "unresolved" and exited 0.
         "allow_neutral_parks": bool(getattr(args, "allow_neutral_parks", False)),
+        # SIM-538: a path, not a loaded map — trivially picklable. Each worker
+        # loads its OWN calibration map once (_worker_lazy_init step (d)) rather
+        # than the parent pickling one shared object into every submitted game.
+        "calibration_path": calibration_path,
     }
     counters = _Counters()
     if not game_pks:
@@ -1403,6 +2198,9 @@ def _run_parallel(
                 float(payload.get("park_run_factor", 1.0)),
             )
             counters.bets.extend(BetRecord.from_jsonable(d) for d in payload.get("bets", []))
+            counters.accuracy_records.extend(
+                AccuracyRecord.from_jsonable(d) for d in payload.get("accuracy_records", [])
+            )
             done += 1
             if done % 25 == 0:
                 log.info(
@@ -1430,19 +2228,41 @@ def _open_parent_duckdb(args: argparse.Namespace) -> Any:
 
 
 async def run(args: argparse.Namespace) -> int:
+    from api.state import load_calibration_report
     from simulation.sim_kwargs import UnresolvedParkFactorError as _UnresolvedParkFactorError
 
     seasons = sorted({int(s) for s in args.seasons})
     do_game = args.markets in ("game", "all")
     do_props = args.markets in ("props", "all")
     workers = max(1, int(args.workers))
+    score_accuracy = not args.no_accuracy_comparison
     log.info(
-        "SIM-429 CLV backtest — seasons=%s iterations=%d markets=%s min_edge=%s workers=%d",
+        "SIM-538 sim-vs-closing-line accuracy comparison — seasons=%s iterations=%d "
+        "markets=%s workers=%d (secondary SIM-429 CLV report: min_edge=%s)",
         seasons,
         args.iterations,
         args.markets,
-        args.min_edge,
         workers,
+        args.min_edge,
+    )
+
+    # SIM-538: load the SAME fitted calibration the live API applies at boot, ONCE,
+    # in the parent. The serial path passes this map directly; the parallel path
+    # passes only the PATH (worker_params must stay picklable) and each worker
+    # loads its own copy (_worker_lazy_init step (d)) — best-effort either way, so
+    # a missing/corrupt report degrades to IDENTITY_CALIBRATION rather than
+    # aborting the run.
+    calibration_report = await asyncio.to_thread(load_calibration_report, args.calibration_path)
+    calibration_map = (
+        CalibrationMap.from_report(calibration_report)
+        if calibration_report is not None
+        else IDENTITY_CALIBRATION
+    )
+    log.info(
+        "SIM-538: win probability scored through %s.",
+        calibration_map.name
+        if calibration_report is not None
+        else "IDENTITY_CALIBRATION (no report found)",
     )
 
     # SIM-452 PRECONDITION. Check the park-factor source BEFORE any sim runs. A
@@ -1488,6 +2308,8 @@ async def run(args: argparse.Namespace) -> int:
                 duck=duck,
                 do_game=do_game,
                 do_props=do_props,
+                score_accuracy=score_accuracy,
+                calibration_map=calibration_map,
                 args=args,
             )
         else:
@@ -1498,6 +2320,8 @@ async def run(args: argparse.Namespace) -> int:
                 workers=workers,
                 do_game=do_game,
                 do_props=do_props,
+                score_accuracy=score_accuracy,
+                calibration_path=args.calibration_path,
                 args=args,
             )
     except WorkerInitError:
@@ -1543,10 +2367,34 @@ async def run(args: argparse.Namespace) -> int:
         "duckdb": args.duckdb,
         "park_factors_available": duck is not None,
         "factory_ref": _FACTORY_REF,
+        # SIM-538. "calibration_applied" reports whether the WIN-PROBABILITY MAP
+        # actually used is calibrated -- not merely whether a report file
+        # loaded. A report can load fine but carry no fitted reliability curve
+        # (make calibrate ran; make validate-props --write-calibration has
+        # not), in which case CalibrationMap.from_report falls back to the
+        # IDENTITY_CALIBRATION singleton and every game is scored uncalibrated
+        # even though the file exists. `calibration_report is not None` missed
+        # that case (an adversarial review of SIM-538 confirmed it); comparing
+        # the resolved map against the singleton is the honest check.
+        "calibration_path": args.calibration_path,
+        "calibration_applied": calibration_map is not IDENTITY_CALIBRATION,
+        "score_accuracy": score_accuracy,
+        "bootstrap_samples": int(args.bootstrap_samples),
+        "bootstrap_seed": int(args.bootstrap_seed),
     }
+
+    accuracy_comparison: dict[str, Any] | None = None
+    if score_accuracy:
+        accuracy_comparison = aggregate_accuracy_comparison(
+            counters.accuracy_records,
+            n_bootstrap=int(args.bootstrap_samples),
+            seed=int(args.bootstrap_seed),
+        )
+        print(format_accuracy_comparison(accuracy_comparison, params=params))
+        print()
     print(format_scoreboard(scoreboard, params=params))
 
-    report = {
+    report: dict[str, Any] = {
         "params": params,
         "counters": {
             "games_attempted": counters.games_attempted,
@@ -1555,10 +2403,14 @@ async def run(args: argparse.Namespace) -> int:
             "games_unresolved": counters.games_unresolved,
             "games_park_nonneutral": counters.games_park_nonneutral,
             "n_bets": len(counters.bets),
+            "n_accuracy_records": len(counters.accuracy_records),
         },
         "scoreboard": scoreboard,
         "bets": [b.to_jsonable() for b in counters.bets],
     }
+    if accuracy_comparison is not None:
+        report["accuracy_comparison"] = accuracy_comparison
+        report["accuracy_records"] = [a.to_jsonable() for a in counters.accuracy_records]
     out_dir = os.path.dirname(os.path.abspath(args.output))
     os.makedirs(out_dir, exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as fh:
@@ -1596,7 +2448,10 @@ async def run(args: argparse.Namespace) -> int:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="CLV (Closing Line Value) backtest scoreboard (SIM-429)."
+        description=(
+            "Sim-vs-closing-line accuracy comparison (SIM-538), plus the secondary "
+            "SIM-429 CLV scoreboard."
+        )
     )
     p.add_argument("--seasons", type=int, nargs="+", required=True, help="Seasons to backtest.")
     p.add_argument("--max-games", type=int, default=None, help="Cap games (smoke run).")
@@ -1635,6 +2490,39 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "every park factor at a neutral 1.0. The run then measures a simulator "
             "production does not serve, so use it only for a plumbing smoke test."
         ),
+    )
+    p.add_argument(
+        "--calibration-path",
+        default=DEFAULT_CALIBRATION_PATH,
+        help=(
+            f"SIM-538: CalibrationReport JSON to score win probability through — "
+            f"the SAME one the live API applies at boot (default: "
+            f"{DEFAULT_CALIBRATION_PATH}). Missing/corrupt degrades to the identity "
+            "map, same as the API's own boot fallback."
+        ),
+    )
+    p.add_argument(
+        "--no-accuracy-comparison",
+        action="store_true",
+        help=(
+            "SIM-538: skip the sim-vs-closing-line accuracy comparison and produce "
+            "only the secondary SIM-429 CLV scoreboard (faster smoke run)."
+        ),
+    )
+    p.add_argument(
+        "--bootstrap-samples",
+        type=int,
+        default=DEFAULT_BOOTSTRAP_SAMPLES,
+        help=(
+            "SIM-538: resamples for the paired-difference confidence interval "
+            f"(default {DEFAULT_BOOTSTRAP_SAMPLES})."
+        ),
+    )
+    p.add_argument(
+        "--bootstrap-seed",
+        type=int,
+        default=538,
+        help="SIM-538: seed for the paired bootstrap (deterministic re-runs).",
     )
     return p.parse_args(argv)
 

@@ -105,7 +105,18 @@ class TestNoFallback:
         assert warm_worker_cache(str(tmp_path)) is False
 
     def test_factory_wires_the_built_sampler(self, monkeypatch):
-        sentinel = object()
+        # SIM-538: production_machine_factory now unconditionally calls
+        # full_pool.set_asof(...) (even with None) instead of skipping the
+        # call when the request carries no cutoff -- see its docstring for
+        # why (a cross-game leak this fix closes). A bare `object()` sentinel
+        # can no longer stand in for the built sampler here; it needs a
+        # set_asof method, same as every real FullPoolSampler has. Identity
+        # (`is sentinel`) is still what this test is proving, unaffected.
+        class _SentinelSampler:
+            def set_asof(self, ymd: int | None) -> None:
+                pass
+
+        sentinel = _SentinelSampler()
         monkeypatch.setattr(pf, "_build_full_pool_sampler", lambda spec, seed: sentinel)
         machine = production_machine_factory(7, _spec())
         assert isinstance(machine, StateMachine)

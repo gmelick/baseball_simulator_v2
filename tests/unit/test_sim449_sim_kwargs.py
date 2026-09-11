@@ -837,6 +837,9 @@ def test_clv_worker_still_swallows_an_ordinary_bad_game(monkeypatch):
     assert clv._process_one_game(777, params) == {
         "status": "unresolved",
         "bets": [],
+        # SIM-538: the accuracy-comparison payload grew alongside "bets" — an
+        # ordinary skipped game contributes neither kind of record.
+        "accuracy_records": [],
         "park_run_factor": 1.0,
     }
 

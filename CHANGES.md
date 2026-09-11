@@ -1,3 +1,95 @@
+# Feat — SIM-538 closes: the sim-vs-closing-line accuracy comparison, the platform's new
+gold-standard metric — 2026-09-11
+
+**What this ticket builds.** For every game or player prop with a closing betting price,
+`scripts/clv_backtest.py` now compares two things against what actually happened: the
+simulator's own probability, and the closing line's probability with the bookmaker's
+margin removed. Both get scored with a proper scoring rule (Brier score, log loss) —
+a rule where a forecaster cannot improve its score by playing it safe, only by being
+more accurate. The comparison pairs each game's two scores together (same game, same
+real outcome), which needs far fewer games to show a real difference than comparing two
+separate averages would. This replaces Closing Line Value (how much a price moved
+before close) as the headline metric, because the simulator cannot make a prediction
+until both lineups post — after betting lines already open — so CLV was never really
+measuring the model against a moment it could act on. The old CLV report still runs, now
+labeled a secondary diagnostic. The full plan is
+`docs/audit/2026-09-10-sim536-541-market-accuracy-plan.md`.
+
+**Two real bugs surfaced while building this, both fixed.** First: `clv_backtest.py`
+never applied SIM-535's point-in-time cutoff to its own replay, despite an old comment
+in the file claiming it did. Every backtest game before this fix could draw on data
+recorded after that game — a real leak of the game's own future into its own score.
+Second: the backtest's win probability had never been threaded through the platform's
+fitted calibration, the same live fit the API applies at boot — so the accuracy read was
+scoring a probability production never actually serves.
+
+**A second, independent review found three more real defects — the most serious ones
+this session shipped.** Five reviewers checked the new code from different angles
+(data leakage, statistical soundness, the odds math, push handling and bias, and the
+calibration wiring), and every finding was checked again by a separate reviewer before
+being trusted. What they found and what I fixed:
+
+  - **The point-in-time cutoff could leak across games, not just within one.** The
+    component that reads the cutoff (`simulation/production_factory.py`) is a
+    per-worker cache reused across every game that worker scores. It only reset the
+    cutoff when a game supplied one — so a game whose OWN cutoff lookup failed (a
+    database hiccup, say) silently inherited whichever cutoff the PREVIOUS game on
+    that worker left behind, or none at all. Fixed two ways: the cache now always
+    resets the cutoff, even to "none," instead of skipping the reset; and
+    `clv_backtest.py` now refuses to replay a game at all when its own cutoff cannot
+    be resolved, rather than replaying it unprotected. Two new tests reuse one cached
+    sampler across two simulated games, exactly like the real cache, and prove the
+    leak is closed.
+  - **The confidence range treated correlated observations as independent.** A
+    single game can contribute several records — three game markets from one final
+    score, or several players' props from one start — and the range on the combined
+    read was resampling those individual records as if each came from its own game.
+    That understates uncertainty: a few busy games can manufacture a narrow, confident-
+    looking range that a proper accounting of "how many independent games is this
+    really" would not support. Fixed by resampling GAMES, not records — a game with
+    many records now counts once, the way it should. Five new tests prove this,
+    including one built to show the range must get wider, not narrower, once the
+    real per-game grouping is respected.
+  - **The report could claim the probability was calibrated when it was not.** A
+    calibration file can load successfully but carry no fitted curve — one setup
+    step ran, the next has not — in which case the platform quietly falls back to
+    an uncalibrated probability. The report's `calibration_applied` flag checked only
+    whether the file loaded, not whether the fallback happened, so it could read
+    `true` while every game was actually scored uncalibrated. Fixed to check the
+    probability map that was actually used, not just whether a file existed.
+
+  Two smaller, lower-risk fixes from the same review: two unrelated parts of the
+  report's confidence range could accidentally draw the exact same random resample
+  (a seed collision, fixed by spacing the seeds far apart); and the per-observation
+  math that feeds the confidence range now defensively clips probabilities to
+  [0, 1], matching the guard the headline score already has, closing a latent gap
+  that is not reachable today but was pointed out as fragile.
+
+**What is honestly still open, not fixed by this ticket.** The point-in-time cutoff
+bounds which individual PLAYS the simulator can draw, but not the player-skill
+profiles that weigh those draws — those come from one bundle built as of a single
+date for the whole backtest, so a January game can still be weighted by a player's
+later-season form. Rebuilding a fresh profile bundle for every game date is not
+feasible at backtest scale; this is now documented in the script's own comments as a
+known, accepted gap rather than a claim the fix does not back up. The confidence
+range built here is a bounded, single-run read, not the full statistical program
+SIM-539 is scoped to build (a documented minimum sample size per market, published
+once and applied every run). Two smaller, low-priority items from the review were
+left as-is: a run-line formula duplicated by hand instead of shared with the odds
+engine (a maintenance risk, not a live bug), and a narrow case where running the
+script outside its normal Docker environment could pick up a stale calibration file
+the live API would not have used — both documented, neither affects the live
+deployment.
+
+**Verification.** The full unit suite runs clean apart from three pre-existing,
+unrelated failures (a monitoring-config check that needs a directory this test run
+does not mount) and one already-known point-in-time infrastructure test file's
+sibling. 33 new tests cover the new scoring and statistics functions directly; 3 more
+were added or strengthened for the two adversarially-found leakage bugs. `ruff
+format`, `ruff check`, and `mypy` are all clean on every changed file.
+
+---
+
 # Fix — SIM-542 closes: two fielder placeholder tables named the wrong columns — 2026-09-11
 
 **The bug.** When the fielder metrics builder skips a measurement for lack of data — say, too

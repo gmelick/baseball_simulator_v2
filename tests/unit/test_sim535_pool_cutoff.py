@@ -226,6 +226,55 @@ def test_the_factory_reads_the_cutoff_as_a_factory_only_key() -> None:
     assert "full_pool.set_asof(" in src
 
 
+def test_a_cutoff_less_request_clears_a_prior_games_cutoff(monkeypatch) -> None:
+    """SIM-538 fix: ``production_machine_factory``'s sampler is a per-worker
+    SINGLETON, cached across every game a worker builds (see
+    ``_build_full_pool_sampler``). Before this fix, the factory only called
+    ``full_pool.set_asof(...)`` when a request carried ``"_asof_ymd"`` and
+    skipped the call otherwise -- so a game with no cutoff of its own (an
+    adversarial review of SIM-538 confirmed this happens for real: a
+    backtest game whose own point-in-time lookup fails) silently INHERITED
+    whichever cutoff the PREVIOUS game on this worker left behind, instead
+    of correctly drawing from the whole pool. This test reuses the SAME
+    sampler across two factory calls -- exactly like the real per-worker
+    cache -- and proves the second call's missing cutoff actually clears
+    the first call's cutoff rather than leaving it in place."""
+    import simulation.production_factory as pf
+    from simulation.batch_runner import GameSpec
+    from simulation.synthetic_bundle import synthetic_sampler
+
+    shared_sampler = synthetic_sampler()
+    monkeypatch.setattr(pf, "_build_full_pool_sampler", lambda spec, seed: shared_sampler)
+
+    # Game 1: carries a real cutoff.
+    pf.production_machine_factory(1, GameSpec(sim_kwargs={"_asof_ymd": 20240601}))
+    assert shared_sampler.asof_ymd == 20240601
+
+    # Game 2: no cutoff at all (e.g. its own resolve_asof_ymd() failed, or a
+    # caller that never sets one). The cached sampler must NOT still be
+    # carrying game 1's cutoff.
+    pf.production_machine_factory(1, GameSpec(sim_kwargs={}))
+    assert shared_sampler.asof_ymd is None
+
+
+def test_a_new_cutoff_replaces_a_prior_games_cutoff(monkeypatch) -> None:
+    """The companion case: two BACKTEST games in a row, each with its own real
+    cutoff. The second game's cutoff must fully replace the first's, never
+    merge or stack with it."""
+    import simulation.production_factory as pf
+    from simulation.batch_runner import GameSpec
+    from simulation.synthetic_bundle import synthetic_sampler
+
+    shared_sampler = synthetic_sampler()
+    monkeypatch.setattr(pf, "_build_full_pool_sampler", lambda spec, seed: shared_sampler)
+
+    pf.production_machine_factory(1, GameSpec(sim_kwargs={"_asof_ymd": 20240415}))
+    assert shared_sampler.asof_ymd == 20240415
+
+    pf.production_machine_factory(1, GameSpec(sim_kwargs={"_asof_ymd": 20240901}))
+    assert shared_sampler.asof_ymd == 20240901
+
+
 def test_build_sim_kwargs_passes_the_cutoff_through() -> None:
     from pathlib import Path
 

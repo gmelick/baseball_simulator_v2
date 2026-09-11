@@ -473,6 +473,15 @@ class GameState:
     # ``park``+season) and threaded here; the worker has no DB, so it is carried
     # as a scalar. 1.0 == neutral -> the park consumer is a no-op (the default).
     park_run_factor: float = 1.0
+    # SIM-538: the point-in-time cutoff for a BACKTEST replay of this game (a date
+    # as YYYYMMDD, or None for a live game — the default, unchanged behaviour).
+    # SIM-535's resolve_asof_ymd() computes it (the day BEFORE this game, so the
+    # simulator can never copy the very plays it is predicting) and the caller
+    # writes it here, the same way resolve_park_factor_onto_state() writes
+    # park_run_factor above — the worker has no DB, so it is carried as a scalar.
+    # sim_kwargs_from_state() reads it and, when set, adds it to the built kwargs
+    # as "_asof_ymd" (a factory-only key, not a simulate_game parameter).
+    asof_ymd: int | None = None
     # SIM-523 part D: the two STARTING pitchers (never overwritten by a
     # pull, unlike ``home_pitcher_id`` / ``away_pitcher_id``) and the number
     # of plate appearances completed in the current half inning — the

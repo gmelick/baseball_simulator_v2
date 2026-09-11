@@ -570,9 +570,21 @@ def production_machine_factory(seed: int | None, spec: GameSpec) -> StateMachine
     # day before the game being simulated and passes it as a factory-only key.
     # Absent (a live request, a test, any caller that does not set it) the
     # sampler draws from the whole pool exactly as before.
-    asof = (spec.sim_kwargs or {}).get("_asof_ymd")
-    if asof is not None and full_pool is not None:
-        full_pool.set_asof(int(asof))
+    #
+    # SIM-538 fix: ``full_pool`` is a per-worker singleton CACHED across every
+    # game this worker ever builds (see ``_build_full_pool_sampler`` above) —
+    # so this call must always run, passing ``None`` when this request carries
+    # no cutoff, rather than skipping the call. Skipping it left a PRIOR
+    # game's cutoff in place on the next game that carried no cutoff of its
+    # own — a cross-game leak (an adversarial review of SIM-538 confirmed a
+    # backtest game whose own cutoff failed to resolve could silently inherit
+    # an unrelated, later-dated game's cutoff, or no cutoff at all, from
+    # whatever this same worker scored right before it). ``set_asof`` already
+    # accepts ``None`` and correctly clears the cutoff, so always calling it
+    # is the whole fix.
+    if full_pool is not None:
+        asof = (spec.sim_kwargs or {}).get("_asof_ymd")
+        full_pool.set_asof(int(asof) if asof is not None else None)
     # SIM-434: GATED manager wiring.  With SIM_MANAGER off ``manager`` stays None
     # -> the StateMachine makes every §3/§5.3 hook a no-op.  With it on, attach a
     # default tendency profile and stage a generic per-team bullpen on the

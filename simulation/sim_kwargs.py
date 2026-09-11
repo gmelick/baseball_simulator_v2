@@ -282,6 +282,12 @@ def sim_kwargs_from_state(
     (SIM-453). It builds anyway, logs at WARNING, and sends a plain neutral 1.0.
     It does not touch ``state``, so the state still reports the truth afterwards.
     Nothing takes this path by accident: the caller has to name it.
+
+    SIM-538: when ``state.asof_ymd`` is set (a caller resolved and wrote it —
+    see :func:`resolve_asof_ymd`), the returned dict carries it forward as
+    ``"_asof_ymd"``, the SAME factory-only key :func:`build_sim_kwargs` adds.
+    Absent (the default, ``None``), nothing is added — a live game's kwargs are
+    unchanged from before this existed.
     """
     if not park_factor_is_resolved(state):
         reason = park_factor_reason(getattr(state, "park_run_factor", None)) or "unknown cause"
@@ -299,7 +305,7 @@ def sim_kwargs_from_state(
             "This run is park-blind and the park kernel is a no-op for it.",
             reason,
         )
-    return {
+    kwargs: dict[str, Any] = {
         "away_lineup": list(getattr(state, "away_lineup", []) or []),
         "home_lineup": list(getattr(state, "home_lineup", []) or []),
         "season": int(getattr(state, "season", 2024)),
@@ -327,6 +333,12 @@ def sim_kwargs_from_state(
         "venue_id": venue_id_of_state(state),
         "max_innings": 12,
     }
+    # SIM-538: see the docstring above — a factory-only key, added only when a
+    # caller resolved and wrote a cutoff onto the state.
+    asof_ymd = getattr(state, "asof_ymd", None)
+    if asof_ymd is not None:
+        kwargs["_asof_ymd"] = asof_ymd
+    return kwargs
 
 
 def venue_id_of_state(state: Any) -> int | None:
