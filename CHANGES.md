@@ -1,3 +1,59 @@
+# Feat — the batter's physical swing features and the empty arm blocks CLOSE (SIM-529, SIM-530); the run sequence, what it found, and the lane waiver — 2026-09-11
+
+**Both tickets are closed.** The owner ruled on 2026-09-10 that neither needs a certifying
+lane, because the metrics the model is graded by are themselves changing; the ordinary gates
+(lint, types, the unit suite, the invariant suite) are green. The data ran overnight.
+
+**The sequence that landed the work,** and why it had one more step than asked for:
+`engine-artifacts --what actors_sim` → `calibrate` → the profile rebuild (four pool seasons,
+five hours) → `calibrate` → **`engine-artifacts --what actors_sim` again.** The last step is
+the one the request left out. The actor score matrices are what the draws consume, and they
+are built FROM the profiles; a profile rebuild that fills a column changes nothing downstream
+until the matrices are rebuilt after it. SIM-529 had been in exactly that state — its ten
+columns stored, its matrix predating the engine change, the features reaching no draw — and
+the same trap was waiting for SIM-530.
+
+**SIM-529.** Ten physical swing and stance columns, each stored three times (overall,
+against left-handed pitching, against right-handed pitching) so a switch hitter is two
+batters rather than one average. The batter model's fifth sub-score at weight 0.20; each
+feature's weight is its measured year-to-year correlation. The matrix rebuilt at 1807 × 1807
+with mean similarity 0.471 against the 0.50 design target, worst own-staff concentration
+2.34 against the 3.0 gate. `sigma_physical` fitted at 1.119 over the 1,790 measured
+batter-seasons.
+
+**SIM-530.** Two empty blocks filled, not three — first-base scoop rate was present on 610 of
+628 first-baseman rows all along; the 87% null was every fielder who is not a first baseman.
+The outfield arm block now holds arm strength on roughly three quarters of fielder-seasons
+and the hold / thrown-out / advancement figures on about half of outfielder-seasons (Savant's
+baserunning board publishes the regulars). The catcher's arm strength is present on 93% of
+catcher-seasons, and every catcher the engine scores for 2024 has one — it was none of them.
+Pop time is now Savant's measurement (league average 1.97 s) instead of a formula on the
+caught-stealing rate that had been producing 2.13–2.21 s. Catcher `sigma_throwing` moved
+from 0.624 to 1.111 on the real data; `sigma_of_arm` fitted at 1.007.
+
+**Two calibration defects found by running it.** Both bandwidths came back as the
+keep-the-default sentinel on the first fit and said nothing about why. The physical block:
+no swing tracking exists before 2023, so two thirds of batter-seasons carry an all-NaN block
+and the pairwise distances degenerate. The outfield arm: the fielder calibrator wrote `or
+0.0` for a NULL, so the half of outfielders with no Savant row read as a zero arm and the
+population collapsed onto one point. Both now fit over the rows that were measured, the way
+the platoon block always did. Also learned: `--no-arsenal` on the fitter zeroes the arsenal
+anchor in the written report rather than carrying it forward — run the full fit, it takes
+26 seconds.
+
+**What the fitted bandwidths do and do not reach.** The API applies the calibration report
+at boot to its own engine objects, so the `/similarity` routes and the win-probability map
+use the fitted values. The actor matrix builder does not apply it — the word does not appear
+in `engine_artifacts.py` — so the draws run on module-default bandwidths. Making calibration
+reach the draws is a small change, deliberately not made here because it moves draw weights.
+
+**Also in this stretch:** the golden-file snapshot tests and the weight-constant assertions
+were deleted (owner ruling 2026-09-10) — a score moving is the normal case on a model under
+continuous change, not a signal. 53 regression tests became 33, all invariants that hold for
+any weights and any data.
+
+---
+
 # Feat — SIM-537 closes: baserunner, catcher, and fielder profiles get point-in-time cutoffs — 2026-09-11
 
 **SIM-537 is now fully closed.** Every player-measurement group the simulator reads can now be
