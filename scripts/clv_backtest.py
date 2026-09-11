@@ -74,6 +74,106 @@ independent games behind it, but a bucket built mostly from a few busy
 games still carries less information than the same row count spread across
 that many separate games would.
 
+MINIMUM SAMPLE SIZE (SIM-539)
+------------------------------
+A small sample can look like real skill by pure chance. This section adds a
+STATED floor: the smallest number of observations a market needs before its
+result should be trusted at all — for BOTH reports in this file, the new
+accuracy comparison above and the legacy CLV scoreboard below.
+
+THE METHOD, IN PLAIN WORDS
+  1. Pick the smallest edge worth caring about. This platform already has
+     one: ``betting.bet_signal.DEFAULT_MIN_EDGE`` (0.02) — the existing
+     floor the platform already uses to decide "is this edge big enough to
+     act on." The legacy scoreboard's beat-close rate is a probability, the
+     SAME scale ``DEFAULT_MIN_EDGE`` is on, so no conversion is needed
+     there. The accuracy comparison's Brier/log-loss paired difference is
+     NOT on a probability scale, so this file uses a first-order
+     approximation instead: near a coin-flip market (the common case for a
+     moneyline), a probability shift of size ``e`` changes one
+     observation's Brier score by ABOUT ``e`` — so the SAME 0.02 floor is
+     reused there too, clearly flagged as approximate (see "WHAT THIS DOES
+     NOT CLAIM" below).
+  2. Shrink that floor by ``tests/acceptance/bands.py``'s own
+     ``DETECTION_MARGIN`` (1.6) — the SAME constant that file already uses.
+     Reusing the CONSTANT is not the same as reusing its power guarantee:
+     bands.py's own "99.2% power" figure for this margin holds only at that
+     file's fixed Z = 4.0 (chosen for a 13-channel NIGHTLY gate's own
+     false-alarm budget), and this file's z varies per row instead (step 3
+     below) — see :data:`DETECTION_MARGIN`'s own comment for the corrected
+     power figures. What is shared is the CONSTANT and the reasoning
+     ("shrink the floor so a real edge clears the minimum with room to
+     spare"), not a borrowed number.
+  3. Pick a significance level: 0.05 two-sided, Bonferroni-corrected by
+     however many market rows appear in THIS report — the standard fix for
+     scanning many rows and mistaking one lucky one for a real signal.
+     ``tests/acceptance/bands.py`` corrects the same way for its own 13
+     channels; this file corrects for however many rows a given run
+     actually produces, since ``--markets`` can narrow that count. The
+     "overall" row uses the UNCORRECTED level instead — it is one top-line
+     figure, not one of several rows a reader scans for "which one looks
+     good" (see :func:`aggregate_scoreboard` / :func:`aggregate_accuracy_comparison`).
+  4. Solve for the observation count that makes THIS market's OWN measured
+     spread small enough to clear the shrunk floor at that confidence
+     level — :func:`_minimum_paired_observations` is the plain formula;
+     :func:`_minimum_observations_clustered` is the version BOTH reports
+     actually call, which first groups observations by ``game_pk`` and
+     backs out a GAME-CLUSTERED spread (:func:`_clustered_se`) instead of a
+     naive per-row one. A noisier market needs more games. A market whose
+     observations cluster inside a few games (several props from one
+     start; three game markets off one score) needs MORE observations than
+     the same count spread across separate games, and a market backed by
+     FEWER THAN :data:`MIN_CLUSTERS_FOR_INFERENCE` distinct games is
+     treated as undetermined, not resolved — see that constant's own
+     comment for why 2 clusters (the bare minimum the formula can compute
+     a nonzero spread from at all) is not the same as enough clusters to
+     TRUST it.
+
+WHAT THIS DOES NOT CLAIM
+  That 0.02 is the right edge to care about for Brier score. It is a
+  provisional, honestly-approximate stand-in, chosen because no measured
+  real Brier-difference magnitude exists yet for this platform to anchor
+  on — unlike ``tests/acceptance/bands.py``'s box-score floors, which ARE
+  anchored in real, measured MLB defect magnitudes (SIM-494/495/496).
+  Once enough real backtests accumulate, replace this floor with one
+  measured the same way — the maturing path every other floor on this
+  platform has already taken.
+
+  That the "near a coin-flip market" approximation holds equally well for
+  every market. A probability shift of size ``e`` changes one
+  observation's Brier score by close to ``e`` only near p = 0.5; at a
+  probability far from a coin flip (a home-run prop, typically well under
+  0.5) the true change is smaller, by a factor of roughly ``4 * p * (1-p)``
+  — at ``p`` = 0.15 that is about half of ``e``, not all of it. This file
+  applies the SAME 0.02 floor to every market rather than a per-market
+  correction, so the power this floor buys is weaker than stated for a
+  market whose typical probability sits far from 0.5. An adversarial
+  review of SIM-539 confirmed this; it is not fixed here.
+
+  That :data:`MIN_CLUSTERS_FOR_INFERENCE` clusters certifies a row as
+  reliable. It is the floor below which a read is refused outright, not a
+  claim that clearing it makes the cluster-robust estimate fully trustworthy
+  — see that constant's own comment. A row can also read as fully resolved
+  (zero remaining uncertainty) from a SMALL sample whose observed spread
+  happens to be exactly zero by chance, since the formula trusts the
+  observed spread at face value rather than an uncertainty-adjusted upper
+  bound on it; this is a known, unfixed limitation an adversarial review of
+  SIM-539 surfaced, most likely at low observation counts just above the
+  cluster floor.
+
+  That the Bonferroni correction (step 3) protects a reader who reruns this
+  backtest across many seasons or slates and checks the "overall" row each
+  time for significance. It corrects only for the rows scanned WITHIN one
+  run; repeated runs are a form of repeated testing this correction does
+  not address.
+
+  That the reported minimum is in GAMES. The accuracy comparison's
+  ``brier_min_n`` / ``log_loss_min_n`` / ``min_n_recommended`` count paired
+  OBSERVATIONS (a prop bucket can carry several players' records from one
+  game), not distinct games — see :class:`AccuracyComparisonRow`'s own
+  ``n_games`` field for the actual game count backing a row, and read the
+  two together rather than assuming the minimum is a game count.
+
 HOW IT REUSES THE EXISTING SEAMS (no re-invention)
 --------------------------------------------------
   * **Sim run + game summary + win prob** — the SAME machinery the API / batch
@@ -201,11 +301,13 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import numpy as np
+from scipy.stats import norm
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+from betting.bet_signal import DEFAULT_MIN_EDGE  # noqa: E402
 from betting.clv_engine import (  # noqa: E402
     EdgeReport,
     MarketSide,
@@ -240,6 +342,60 @@ DEFAULT_CALIBRATION_PATH = os.environ.get("CALIBRATION_REPORT_PATH", "/data/cali
 #: (see aggregate_accuracy_comparison). 2000 is the conventional floor for a
 #: percentile bootstrap; the CLI can raise it for a slower, tighter interval.
 DEFAULT_BOOTSTRAP_SAMPLES = 2000
+
+#: SIM-539: the smallest edge worth caring about, for BOTH the beat-close-rate
+#: test (an exact match — both live on a probability scale) and the Brier/
+#: log-loss paired-difference test (an honest approximation — see the module
+#: docstring's "MINIMUM SAMPLE SIZE" section). Reuses the platform's OWN
+#: existing "is this edge big enough to act on" floor rather than inventing a
+#: second one.
+MIN_DETECTABLE_EDGE: float = DEFAULT_MIN_EDGE
+
+#: SIM-539: the SAME detection-margin CONSTANT tests/acceptance/bands.py
+#: already uses (its own "HOW EACH FLOOR IS CHOSEN" section) — shrinking the
+#: floor by this factor gives a real edge of exactly MIN_DETECTABLE_EDGE
+#: better odds of clearing the minimum than an un-shrunk floor would.
+#:
+#: An adversarial review of SIM-539 confirmed a claim once made here was
+#: WRONG: bands.py's own "99.2% power" figure for this exact margin holds
+#: ONLY at bands.py's own fixed Z = 4.0 (chosen there for a 13-channel
+#: NIGHTLY gate's false-alarm budget — see that file's "WHY Z = 4.0"). This
+#: file's z varies per row (_z_two_sided(alpha), alpha either the
+#: uncorrected DEFAULT_ALPHA or a Bonferroni correction — see
+#: _bonferroni_alpha), so the power this margin actually buys HERE is
+#: smaller and ROW-DEPENDENT: about 88% for an uncorrected row (alpha=0.05)
+#: rising toward (but not reaching) bands.py's 99.2% as more markets are
+#: Bonferroni-corrected. Only the CONSTANT is shared, not the power
+#: guarantee — do not requote "99.2%" for this file's own procedure.
+DETECTION_MARGIN: float = 1.6
+
+#: SIM-539: the two-sided significance level BEFORE the Bonferroni correction
+#: (see _bonferroni_alpha) — the conventional default.
+DEFAULT_ALPHA: float = 0.05
+
+#: SIM-539: the fewest DISTINCT GAMES a bucket must have before its
+#: game-clustered standard error / confidence interval / minimum sample
+#: size is trusted at all. Below this, treat the read as undetermined —
+#: see _clustered_se and _minimum_observations_clustered.
+#:
+#: Two clusters is the bare minimum the CR0 sandwich formula can even
+#: compute a nonzero spread from (one cluster is mathematically degenerate
+#: — always exactly 0.0). It is NOT, by itself, enough to TRUST that
+#: formula: the cluster-robust-inference literature (e.g. Cameron & Miller's
+#: practitioner's guide) documents that CR0 understates true uncertainty
+#: with few clusters, and commonly wants dozens before treating it as
+#: reliable. An adversarial review of SIM-539 confirmed this: with only 2-3
+#: distinct games, an unlucky (or simply small) sample can read as a
+#: perfectly resolved, zero-spread rate — the observed spread really is
+#: zero, but a zero ESTIMATED from 2-3 points is weak evidence that the
+#: TRUE spread is zero. 10 is a documented, round floor on the low end of
+#: common guidance — chosen so the read stays USABLE at the slate sizes
+#: this platform actually runs (a single day is a few dozen games), not a
+#: claim that 10 clusters makes the sandwich estimator fully reliable. More
+#: games is always better; a reader who wants that guarantee should look
+#: for well into the dozens before treating a row as certified, not just
+#: "not flagged."
+MIN_CLUSTERS_FOR_INFERENCE: int = 10
 
 #: The production machine factory (dotted ref) — the SAME one the API serves with.
 _FACTORY_REF = "simulation.production_factory:production_machine_factory"
@@ -562,6 +718,145 @@ def evaluate_two_way_market(
 
 
 # ===========================================================================
+# SIM-539: minimum sample size (PURE — shared by both reports below)
+# ===========================================================================
+
+
+def _json_safe(d: dict[str, Any]) -> dict[str, Any]:
+    """Replace every non-finite float (``nan``, ``inf``, ``-inf``) in a
+    flat dict with ``None`` (valid JSON ``null``) (SIM-539).
+
+    ``nan`` / ``inf`` are legal Python floats but NOT legal JSON (RFC 8259);
+    ``json.dumps`` still emits the bare tokens ``NaN`` / ``Infinity`` for
+    them rather than raising, so a report built from an un-sanitized dict
+    LOOKS fine until a strict downstream parser (a browser's
+    ``JSON.parse``, most non-Python JSON libraries) rejects it. An
+    adversarial review of SIM-539 confirmed this would break the JSON
+    report on exactly the low-sample rows this ticket exists to flag
+    (a degenerate ``clustered_se`` / an unresolved ``min_n``). Used by
+    :meth:`ScoreboardRow.to_jsonable` and
+    :meth:`AccuracyComparisonRow.to_jsonable`.
+    """
+    return {
+        k: (None if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))) else v)
+        for k, v in d.items()
+    }
+
+
+def _bonferroni_alpha(base_alpha: float, n_hypotheses: int) -> float:
+    """Bonferroni-corrected two-sided significance level (SIM-539).
+
+    Scanning ``n_hypotheses`` market rows for "which one looks good" inflates
+    the chance ANY one of them reads significant by pure luck. Dividing the
+    per-row significance level by the row count is the standard, conservative
+    fix — the SAME correction tests/acceptance/bands.py applies for its own
+    13 channels ("WHY Z = 4.0"), sized here to however many rows a given run
+    actually produces. ``n_hypotheses < 1`` is treated as 1 (no correction).
+    """
+    n = max(1, int(n_hypotheses))
+    return float(base_alpha) / n
+
+
+def _z_two_sided(alpha: float) -> float:
+    """The two-sided critical z-value for significance level ``alpha`` (SIM-539)."""
+    return float(norm.ppf(1.0 - float(alpha) / 2.0))
+
+
+def _minimum_paired_observations(sd: float, *, floor: float, alpha: float) -> float:
+    """SIM-539: minimum paired observations to detect a mean difference of at
+    least ``floor`` at two-sided significance ``alpha``, given this sample's
+    OWN observed per-observation standard deviation ``sd``.
+
+    The standard one-sample paired-difference sample-size formula —
+    ``n = (z_alpha/2 * sd / floor) ** 2`` — the SAME shape
+    ``tests/acceptance/bands.py``'s own "required observations = (Z * sd_ref
+    / floor) ** 2" already uses for its box-score channels. This function is
+    the plain formula, unaware of any margin; a caller that wants the SAME
+    99.2%-power margin that file's Rule A applies passes an ALREADY-shrunk
+    ``floor`` (``target_edge / DETECTION_MARGIN``).
+
+    Returns ``math.inf`` when ``floor`` is non-positive (nothing could ever
+    resolve an edge of zero or less); ``0.0`` when ``sd`` is exactly zero (a
+    perfectly resolved population needs no more observations).
+    """
+    if float(floor) <= 0.0:
+        return float("inf")
+    if sd <= 0.0:
+        return 0.0
+    z = _z_two_sided(alpha)
+    return float((z * float(sd) / float(floor)) ** 2)
+
+
+def _clustered_se(values_by_game: dict[int, list[float]]) -> float:
+    """Cluster-robust (by game_pk) standard error of the MEAN of arbitrary
+    real-valued per-observation values (SIM-539) — 0/1 beat indicators for
+    the legacy scoreboard, or Brier/log-loss paired differences for the
+    accuracy comparison.
+
+    Observations within one game share the same simulated score arrays /
+    player PMFs, so they are CORRELATED — the naive i.i.d. standard error
+    understates the true uncertainty of a pooled mean. This is the standard
+    CR0 cluster-robust sandwich SE::
+
+        SE = sqrt( sum_g ( sum_{i in g} (x_i - xbar) )^2 )  /  N
+
+    For singleton clusters (one observation per game) it reduces to the
+    ordinary i.i.d. SE; when many observations fall in the same game it
+    widens, reflecting the real design effect. Returns 0.0 for an empty
+    input.
+
+    Mathematically DEGENERATE (always exactly 0.0) with FEWER THAN 2
+    distinct clusters — a single game's own deviations from the overall
+    mean sum to zero BY CONSTRUCTION, which would misreport "no
+    uncertainty" for the LEAST resolved case there is (one independent
+    trial backing the whole rate). This function does not guard that case
+    itself (it is a plain, reusable formula); :func:`_minimum_observations_clustered`
+    is the guarded caller-facing version, and :func:`_row_for` /
+    :func:`_accuracy_row_for` apply the SAME guard before trusting this
+    value for a confidence interval.
+    """
+    all_x = [float(x) for xs in values_by_game.values() for x in xs]
+    n = len(all_x)
+    if n == 0:
+        return 0.0
+    xbar = sum(all_x) / n
+    total = 0.0
+    for xs in values_by_game.values():
+        g = sum((float(x) - xbar) for x in xs)
+        total += g * g
+    return float(total**0.5 / n)
+
+
+def _minimum_observations_clustered(
+    values_by_game: dict[int, list[float]], *, floor: float, alpha: float
+) -> float | None:
+    """SIM-539: minimum total observations to trust a mean that differs from
+    its reference by ``floor``, at significance ``alpha`` — accounting for
+    THIS market's own observed game-level clustering.
+
+    Backs out the implied per-observation standard deviation
+    (``_clustered_se(values_by_game) * sqrt(n)``) and feeds it through
+    :func:`_minimum_paired_observations` — the SAME shared formula both
+    reports use. A market whose observations cluster inside a few games
+    (several props from one start, several game markets off one score) has
+    a LARGER implied per-observation spread than one observation per game
+    would, so it correctly needs MORE observations — not the same count a
+    naive (uncorrelated) formula would ask for.
+
+    Returns ``None`` when there are fewer than 2 total observations, OR
+    fewer than :data:`MIN_CLUSTERS_FOR_INFERENCE` DISTINCT games — see that
+    constant's own comment for why. Both are an honest "not enough data to
+    even estimate this" rather than a number built on noise or a zero built
+    on an algebraic accident (or, at just 2-3 games, one that got lucky).
+    """
+    n = sum(len(xs) for xs in values_by_game.values())
+    if n < 2 or len(values_by_game) < MIN_CLUSTERS_FOR_INFERENCE:
+        return None
+    implied_sd = _clustered_se(values_by_game) * float(n) ** 0.5
+    return _minimum_paired_observations(implied_sd, floor=floor, alpha=alpha)
+
+
+# ===========================================================================
 # Scoreboard aggregation (PURE)
 # ===========================================================================
 
@@ -573,65 +868,159 @@ class ScoreboardRow:
     The HEADLINE metric is :attr:`beat_close_rate` — the fraction of PLACED bets
     that beat the close (clv_prob > 0). ``mean_clv_prob`` / ``mean_model_edge`` are
     means over the placed bets only (0.0 when none were placed).
+
+    SIM-539 adds the honest error bars:
+
+      * ``n_games_placed`` — the distinct game count behind the PLACED bets
+        specifically (unlike ``n_games``, which counts every game this
+        market was PRICED in, placed or not) — the number to actually check
+        against :data:`MIN_CLUSTERS_FOR_INFERENCE`, since it is what the
+        fields below are built from. An adversarial review of SIM-539
+        confirmed a reader could otherwise mistake ``n_games`` for that
+        count.
+      * ``clustered_se`` — the game-clustered (CR0) standard error of the
+        beat-close indicator (bets in one game are correlated — several
+        props from the same start, say — so this is the trustworthy
+        uncertainty for a pooled rate, not the naive i.i.d. one). ``nan``
+        when fewer than :data:`MIN_CLUSTERS_FOR_INFERENCE` distinct games
+        back the rate — the formula is mathematically degenerate (exactly
+        0.0) at 1 game, which would misreport "no uncertainty" for the
+        LEAST resolved case there is.
+      * ``beat_close_ci_low`` / ``beat_close_ci_high`` — a 95%-equivalent
+        Wald interval on ``beat_close_rate`` built from ``clustered_se`` (see
+        :func:`_row_for`), clamped to [0, 1]; the widest honest interval
+        ([0, 1]) when ``clustered_se`` cannot be trusted (see above), or
+        when there are no placed bets at all.
+      * ``min_bets_recommended`` — the smallest number of placed bets this
+        market needs before its rate should be trusted at all (``None`` when
+        there is too little data — too few bets or too few distinct games —
+        to even estimate it — see :func:`_minimum_observations_clustered`);
+        ``underpowered`` is True when ``n_bets_placed`` has not yet reached
+        it (or the minimum is ``None``). This can still read 0 (fully
+        resolved) from a SMALL sample whose observed spread happens to be
+        exactly zero — see the module docstring's "WHAT THIS DOES NOT
+        CLAIM" section; clearing :data:`MIN_CLUSTERS_FOR_INFERENCE` makes
+        that far less likely, not impossible.
+      * ``alpha_used`` — the (Bonferroni-corrected) two-sided significance
+        level this row's interval and minimum were built at — see the module
+        docstring's "MINIMUM SAMPLE SIZE" section.
     """
 
     group: str
     trust: str
     n_games: int
+    n_games_placed: int
     n_markets_priced: int
     n_bets_placed: int
     beat_close_rate: float
     mean_clv_prob: float
     mean_model_edge: float
+    # --- SIM-539 error bars ----------------------------------------------------
+    clustered_se: float = 0.0
+    beat_close_ci_low: float = 0.0
+    beat_close_ci_high: float = 0.0
+    min_bets_recommended: float | None = None
+    underpowered: bool = True
+    alpha_used: float = DEFAULT_ALPHA
 
     def to_jsonable(self) -> dict[str, Any]:
-        return asdict(self)
+        """A JSON-safe dict of this row — see :func:`_json_safe` (SIM-539:
+        ``clustered_se`` can be ``nan``, which is not legal JSON)."""
+        return _json_safe(asdict(self))
 
 
-def _row_for(group: str, trust: str, bets: Sequence[BetRecord]) -> ScoreboardRow:
+def _row_for(group: str, trust: str, bets: Sequence[BetRecord], *, alpha: float) -> ScoreboardRow:
     """Aggregate one bucket of :class:`BetRecord`s into a :class:`ScoreboardRow`.
 
     ``n_markets_priced`` counts every record (placed or no-bet — the market WAS
     priced); ``n_bets_placed`` counts only placed bets; ``beat_close_rate`` /
     ``mean_clv_prob`` / ``mean_model_edge`` are over the placed bets only.
-    ``n_games`` is the distinct game count in the bucket.
+    ``n_games`` is the distinct game count over EVERY record in the bucket;
+    ``n_games_placed`` (SIM-539) is the distinct game count over the PLACED
+    bets specifically — the two can differ when a market is priced more
+    often than it is bet, and it is ``n_games_placed`` the error bars below
+    are actually built from. ``alpha`` is the (already Bonferroni-corrected
+    — see :func:`aggregate_scoreboard`) two-sided significance level this
+    row's confidence interval and minimum sample size are built at (SIM-539).
     """
     placed = [b for b in bets if b.placed]
     n_placed = len(placed)
+    outcomes_by_game: dict[int, list[float]] = {}
     if n_placed:
         beat = sum(1 for b in placed if b.beat_close)
         beat_close_rate = beat / n_placed
         mean_clv = sum(float(b.clv_prob or 0.0) for b in placed) / n_placed
         mean_edge = sum(float(b.model_edge or 0.0) for b in placed) / n_placed
+        for b in placed:
+            outcomes_by_game.setdefault(int(b.game_pk), []).append(1 if b.beat_close else 0)
     else:
         beat_close_rate = 0.0
         mean_clv = 0.0
         mean_edge = 0.0
+
+    # SIM-539: the game-clustered SE, a Wald CI built from it, and the
+    # minimum placed-bet count this market needs before its rate is trusted.
+    # _clustered_se is mathematically degenerate (always exactly 0.0) with
+    # fewer than MIN_CLUSTERS_FOR_INFERENCE distinct games -- see that
+    # constant's own comment. Below that threshold (n_placed == 0 included:
+    # zero placed bets is zero distinct games) report the widest honest
+    # interval ([0, 1] -- nothing was measured, not "measured a confident
+    # 0%") instead of a falsely narrow or falsely confident one, and refuse
+    # to state a minimum.
+    shrunk_floor = MIN_DETECTABLE_EDGE / DETECTION_MARGIN
+    if len(outcomes_by_game) < MIN_CLUSTERS_FOR_INFERENCE:
+        clustered_se = float("nan")
+        ci_low, ci_high = 0.0, 1.0
+        min_bets = None
+    else:
+        clustered_se = _clustered_se(outcomes_by_game)
+        z = _z_two_sided(alpha)
+        ci_low = max(0.0, beat_close_rate - z * clustered_se)
+        ci_high = min(1.0, beat_close_rate + z * clustered_se)
+        min_bets = _minimum_observations_clustered(
+            outcomes_by_game, floor=shrunk_floor, alpha=alpha
+        )
+    underpowered = min_bets is None or n_placed < min_bets
+
     return ScoreboardRow(
         group=group,
         trust=trust,
         n_games=len({b.game_pk for b in bets}),
+        n_games_placed=len(outcomes_by_game),
         n_markets_priced=len(bets),
         n_bets_placed=n_placed,
         beat_close_rate=beat_close_rate,
         mean_clv_prob=mean_clv,
         mean_model_edge=mean_edge,
+        clustered_se=clustered_se,
+        beat_close_ci_low=ci_low,
+        beat_close_ci_high=ci_high,
+        min_bets_recommended=min_bets,
+        underpowered=underpowered,
+        alpha_used=alpha,
     )
 
 
-def aggregate_scoreboard(bets: Sequence[BetRecord]) -> dict[str, Any]:
+def aggregate_scoreboard(
+    bets: Sequence[BetRecord], *, base_alpha: float = DEFAULT_ALPHA
+) -> dict[str, Any]:
     """PURE: roll a list of :class:`BetRecord`s into the full scoreboard.
 
     Returns a dict with:
-      * ``overall`` — one :class:`ScoreboardRow` over every bet;
+      * ``overall`` — one :class:`ScoreboardRow` over every bet, at the
+        UNCORRECTED ``base_alpha`` (it is one top-line figure, not one of
+        several rows a reader might scan for "which one looks good" — see
+        the module docstring's "MINIMUM SAMPLE SIZE" section);
       * ``by_market`` — one row per distinct ``market`` key (the per-market_type
         game markets + each prop stat), each tagged with its trust label, sorted
-        by trust tier then market key for a readable table.
+        by trust tier then market key for a readable table, at a
+        Bonferroni-corrected ``base_alpha`` (SIM-539 — correcting for
+        however many rows THIS run actually produces).
 
     The HEADLINE per row is ``beat_close_rate``. Deterministic; no DB/sim.
     """
     bets = list(bets)
-    overall = _row_for("overall", "—", bets)
+    overall = _row_for("overall", "—", bets, alpha=base_alpha)
 
     by_market_key: dict[str, list[BetRecord]] = {}
     for b in bets:
@@ -639,8 +1028,10 @@ def aggregate_scoreboard(bets: Sequence[BetRecord]) -> dict[str, Any]:
 
     # Sort by trust tier (best first) then market key for a stable, readable table.
     _trust_order = {"trustworthy": 0, "loose": 1, "caution": 2, "untrustworthy": 3, "unknown": 4}
+    by_market_alpha = _bonferroni_alpha(base_alpha, len(by_market_key))
     rows = [
-        _row_for(market, trust_label(market), bucket) for market, bucket in by_market_key.items()
+        _row_for(market, trust_label(market), bucket, alpha=by_market_alpha)
+        for market, bucket in by_market_key.items()
     ]
     rows.sort(key=lambda r: (_trust_order.get(r.trust, 9), r.group))
 
@@ -658,11 +1049,13 @@ def aggregate_scoreboard(bets: Sequence[BetRecord]) -> dict[str, Any]:
 def format_scoreboard(scoreboard: dict[str, Any], *, params: dict[str, Any]) -> str:
     """Render the aggregated scoreboard as a readable, trust-grouped text table."""
     lines = [
-        "=" * 84,
+        "=" * 100,
         "SECONDARY DIAGNOSTIC — SIM-429 CLV SCOREBOARD (entry vs. close price; no real",
         "outcome involved). beat_close_rate = % of placed bets that beat the close.",
-        "The headline metric is the accuracy comparison below — see SIM-538.",
-        "=" * 84,
+        "The headline metric is the accuracy comparison below — see SIM-538. The 95%",
+        "range and minBets are SIM-539's game-clustered confidence read; UNDERPWR means",
+        "this row has not yet reached its own minimum placed-bet count.",
+        "=" * 100,
         f"seasons={params.get('seasons')}  iterations={params.get('iterations')}  "
         f"markets={params.get('markets')}  min_edge={params.get('min_edge')}  "
         f"base_seed={params.get('base_seed')}",
@@ -670,14 +1063,18 @@ def format_scoreboard(scoreboard: dict[str, Any], *, params: dict[str, Any]) -> 
     ]
     header = (
         f"{'market':<14}{'trust':<14}{'games':>6}{'priced':>8}"
-        f"{'placed':>8}{'beat%':>9}{'meanCLV':>10}{'meanEdge':>10}"
+        f"{'placed':>8}{'beat%':>9}{'meanCLV':>10}{'95% range':>18}{'minBets':>9}{'pwr':>9}"
     )
 
     def _fmt_row(r: dict[str, Any]) -> str:
+        rng = f"[{r['beat_close_ci_low'] * 100:.1f},{r['beat_close_ci_high'] * 100:.1f}]"
+        min_bets = r.get("min_bets_recommended")
+        min_bets_s = "n/a" if min_bets is None else f"{min_bets:.0f}"
+        pwr = "UNDERPWR" if r.get("underpowered") else "ok"
         return (
             f"{r['group']:<14}{r['trust']:<14}{r['n_games']:>6}{r['n_markets_priced']:>8}"
             f"{r['n_bets_placed']:>8}{r['beat_close_rate'] * 100:>8.1f}%"
-            f"{r['mean_clv_prob']:>10.4f}{r['mean_model_edge']:>10.4f}"
+            f"{r['mean_clv_prob']:>10.4f}{rng:>18}{min_bets_s:>9}{pwr:>9}"
         )
 
     o = scoreboard["overall"]
@@ -695,7 +1092,7 @@ def format_scoreboard(scoreboard: dict[str, Any], *, params: dict[str, Any]) -> 
             lines.append(f"  [{r['trust']}]")
             last_trust = r["trust"]
         lines.append(_fmt_row(r))
-    lines.append("=" * 84)
+    lines.append("=" * 100)
     return "\n".join(lines)
 
 
@@ -716,11 +1113,28 @@ class AccuracyComparisonRow:
     :func:`aggregate_accuracy_comparison`); an interval that does not cross
     zero is the "likely real, not chance" read SIM-538's own definition of
     done asks for.
+
+    SIM-539 adds a STATED minimum: ``brier_min_n`` / ``log_loss_min_n`` are
+    the smallest paired-OBSERVATION count this market needs before ITS OWN
+    GAME-CLUSTERED measured spread (the same clustering the bootstrap CI
+    above already accounts for) clears the platform's minimum-detectable-
+    edge floor at ``alpha_used`` (see the module docstring's "MINIMUM SAMPLE
+    SIZE" section); ``min_n_recommended`` is the larger (more binding) of
+    the two — the number to actually check ``n`` against. ``inf`` when there
+    are too few observations OR too few distinct games to measure a spread
+    from at all. ``underpowered`` is True when ``n`` has not yet reached it.
+
+    ``n_games`` (SIM-539) is the distinct game count behind this row — read
+    it alongside ``min_n_recommended`` rather than assuming that number is
+    itself a game count: a prop bucket (several players' records can come
+    from ONE game) can reach its observation minimum from far fewer games
+    than the raw number suggests.
     """
 
     group: str
     trust: str
     n: int
+    n_games: int
     sim_brier: float
     market_brier: float
     brier_diff_mean: float
@@ -731,9 +1145,18 @@ class AccuracyComparisonRow:
     log_loss_diff_mean: float
     log_loss_diff_ci_low: float
     log_loss_diff_ci_high: float
+    # --- SIM-539 minimum sample size --------------------------------------------
+    brier_min_n: float = float("inf")
+    log_loss_min_n: float = float("inf")
+    min_n_recommended: float = float("inf")
+    underpowered: bool = True
+    alpha_used: float = DEFAULT_ALPHA
 
     def to_jsonable(self) -> dict[str, Any]:
-        return asdict(self)
+        """A JSON-safe dict of this row — see :func:`_json_safe` (SIM-539:
+        several fields here can be ``nan`` at n=0 or ``inf`` when
+        underpowered, neither legal JSON)."""
+        return _json_safe(asdict(self))
 
 
 def _bootstrap_paired_diff_ci(
@@ -804,6 +1227,7 @@ def _accuracy_row_for(
     *,
     n_bootstrap: int,
     seed: int,
+    alpha: float,
 ) -> AccuracyComparisonRow:
     """PURE: aggregate one bucket of :class:`AccuracyRecord`s into one row.
 
@@ -815,6 +1239,12 @@ def _accuracy_row_for(
     :data:`OUTCOME_PROB_EPS` :func:`binary_log_loss` itself uses, so the
     per-observation differences sum to the SAME aggregate figure reported
     alongside them.
+
+    ``alpha`` (already Bonferroni-corrected for by-market rows — see
+    :func:`aggregate_accuracy_comparison`) sizes the SIM-539 minimum sample
+    size: :data:`MIN_DETECTABLE_EDGE` shrunk by :data:`DETECTION_MARGIN`,
+    fed through :func:`_minimum_observations_clustered` at THIS bucket's own
+    observed, GAME-CLUSTERED Brier/log-loss-difference spread.
     """
     n = len(records)
     sim_p = np.array([r.sim_prob for r in records], dtype=np.float64)
@@ -870,10 +1300,38 @@ def _accuracy_row_for(
         log_loss_diffs, game_pks, n_bootstrap=n_bootstrap, seed=seed + 1_000_003
     )
 
+    # SIM-539: minimum sample size, from THIS bucket's own observed spread —
+    # GAME-CLUSTERED, the SAME way the bootstrap CI above already resamples
+    # games rather than rows. A bucket where several observations share one
+    # game (three game markets off one score; several players' props from
+    # one start) has fewer independent trials than its row count suggests;
+    # feeding a naive per-row std into the formula would understate that,
+    # exactly the class of bug an adversarial review found and fixed for
+    # the bootstrap CI itself. _minimum_observations_clustered returns None
+    # (treated as inf here) when there are too few observations OR too few
+    # distinct games to measure a spread from at all.
+    shrunk_floor = MIN_DETECTABLE_EDGE / DETECTION_MARGIN
+    brier_by_game: dict[int, list[float]] = {}
+    ll_by_game: dict[int, list[float]] = {}
+    for gp, bd, ld in zip(
+        game_pks.tolist(), brier_diffs.tolist(), log_loss_diffs.tolist(), strict=True
+    ):
+        brier_by_game.setdefault(int(gp), []).append(float(bd))
+        ll_by_game.setdefault(int(gp), []).append(float(ld))
+    brier_min_n_or_none = _minimum_observations_clustered(
+        brier_by_game, floor=shrunk_floor, alpha=alpha
+    )
+    ll_min_n_or_none = _minimum_observations_clustered(ll_by_game, floor=shrunk_floor, alpha=alpha)
+    brier_min_n = float("inf") if brier_min_n_or_none is None else brier_min_n_or_none
+    log_loss_min_n = float("inf") if ll_min_n_or_none is None else ll_min_n_or_none
+    min_n_recommended = max(brier_min_n, log_loss_min_n)
+    underpowered = n < min_n_recommended
+
     return AccuracyComparisonRow(
         group=group,
         trust=trust,
         n=n,
+        n_games=len(set(game_pks.tolist())),
         sim_brier=sim_brier,
         market_brier=market_brier,
         brier_diff_mean=brier_mean,
@@ -884,6 +1342,11 @@ def _accuracy_row_for(
         log_loss_diff_mean=ll_mean,
         log_loss_diff_ci_low=ll_lo,
         log_loss_diff_ci_high=ll_hi,
+        brier_min_n=brier_min_n,
+        log_loss_min_n=log_loss_min_n,
+        min_n_recommended=min_n_recommended,
+        underpowered=underpowered,
+        alpha_used=alpha,
     )
 
 
@@ -892,30 +1355,42 @@ def aggregate_accuracy_comparison(
     *,
     n_bootstrap: int = DEFAULT_BOOTSTRAP_SAMPLES,
     seed: int = 538,
+    base_alpha: float = DEFAULT_ALPHA,
 ) -> dict[str, Any]:
     """PURE: roll a list of :class:`AccuracyRecord`s into the accuracy report.
 
     Mirrors :func:`aggregate_scoreboard`'s shape: an ``overall`` row over every
-    record, plus ``by_market`` rows (one per distinct market/prop key), sorted
-    by trust tier then market key. Every row carries a bootstrap 95% CI on the
-    paired Brier/log-loss difference.
+    record (at the UNCORRECTED ``base_alpha`` — see :func:`aggregate_scoreboard`
+    for why), plus ``by_market`` rows (one per distinct market/prop key,
+    Bonferroni-corrected by however many rows this run produces — SIM-539),
+    sorted by trust tier then market key. Every row carries a bootstrap 95%
+    CI on the paired Brier/log-loss difference AND a stated minimum sample
+    size (:attr:`AccuracyComparisonRow.min_n_recommended`).
 
-    This is a bounded, single-run confidence read, not the full statistical
-    program SIM-539 adds (a documented per-market minimum sample size,
-    published once and applied consistently across runs) — see the module
-    docstring's "WHAT THIS DELIBERATELY DOES NOT CLAIM" section.
+    The bootstrap CI is a bounded, single-run confidence read; the minimum
+    sample size is the documented floor SIM-539 adds on top of it — see the
+    module docstring's "MINIMUM SAMPLE SIZE" and "WHAT THIS DELIBERATELY
+    DOES NOT CLAIM" sections for what it does and does not claim.
     """
     records = list(records)
-    overall = _accuracy_row_for("overall", "—", records, n_bootstrap=n_bootstrap, seed=seed)
+    overall = _accuracy_row_for(
+        "overall", "—", records, n_bootstrap=n_bootstrap, seed=seed, alpha=base_alpha
+    )
 
     by_market_key: dict[str, list[AccuracyRecord]] = {}
     for r in records:
         by_market_key.setdefault(r.market, []).append(r)
 
     _trust_order = {"trustworthy": 0, "loose": 1, "caution": 2, "untrustworthy": 3, "unknown": 4}
+    by_market_alpha = _bonferroni_alpha(base_alpha, len(by_market_key))
     rows = [
         _accuracy_row_for(
-            market, trust_label(market), bucket, n_bootstrap=n_bootstrap, seed=seed + i
+            market,
+            trust_label(market),
+            bucket,
+            n_bootstrap=n_bootstrap,
+            seed=seed + i,
+            alpha=by_market_alpha,
         )
         for i, (market, bucket) in enumerate(sorted(by_market_key.items()), start=1)
     ]
@@ -927,31 +1402,71 @@ def aggregate_accuracy_comparison(
     }
 
 
+def _fmt_min_n(min_n: float | None) -> str:
+    """Render a SIM-539 minimum sample size for a text table.
+
+    ``inf`` (fewer than 2 observations — nothing to even estimate a spread
+    from) prints as ``"inf"`` rather than a misleadingly huge integer.
+    ``None`` — what an ``inf`` becomes after :func:`_json_safe` (``inf`` is
+    not legal JSON), so this is what a row rebuilt FROM the JSON report
+    actually carries — prints the SAME ``"inf"`` text.
+    """
+    if min_n is None or min_n == float("inf"):
+        return "inf"
+    return f"{min_n:.0f}"
+
+
+def _fmt_or_na(x: float | None, spec: str) -> str:
+    """Render a float that may be ``None`` for a text table (SIM-539).
+
+    ``None`` is what :func:`_json_safe` substitutes for a ``nan`` — e.g.
+    ``sim_brier`` / ``brier_diff_ci_low`` at ``n == 0`` ("no completed games
+    found") — so any row rebuilt from the JSON report can carry it here.
+    Renders as ``"n/a"`` rather than crashing the whole table on one empty
+    row; this exact case reached production only because a run with zero
+    scoreable games prints the row before ever checking ``n``.
+    """
+    return "n/a" if x is None else format(x, spec)
+
+
 def format_accuracy_comparison(comparison: dict[str, Any], *, params: dict[str, Any]) -> str:
     """Render the sim-vs-close accuracy comparison as a readable, trust-grouped table."""
     lines = [
-        "=" * 92,
+        "=" * 100,
         "SIM-538 SIM-VS-CLOSING-LINE ACCURACY COMPARISON  (the headline metric)",
         "Brier / log-loss are lower-is-better. A NEGATIVE diff means the simulator was",
         "MORE ACCURATE than the de-vigged closing line, on average, over these games.",
-        "The 95% range is a paired bootstrap interval on that mean difference — a range",
-        "that does not cross zero is a real read; one that does may be chance (SIM-539",
-        "adds a documented minimum sample size per market; treat a narrow range here",
-        "as a hint, not yet a certified threshold).",
-        "=" * 92,
+        "The 95% range is a paired bootstrap interval on that mean difference. minN is",
+        "SIM-539's stated minimum sample size for THIS market (a Bonferroni-corrected,",
+        "game-clustering-aware read — see the module docstring), counted in OBSERVATIONS",
+        "(n), not games — several props can share one game, so compare minN against n,",
+        "not against games. UNDERPWR means n has not yet reached minN, so a range that",
+        "does not cross zero here may still be chance, not signal.",
+        "=" * 100,
         f"seasons={params.get('seasons')}  iterations={params.get('iterations')}  "
         f"markets={params.get('markets')}  base_seed={params.get('base_seed')}  "
         f"calibrated={params.get('calibration_applied')}",
         "",
     ]
-    header = f"{'market':<14}{'trust':<14}{'n':>7}{'simBrier':>10}{'mktBrier':>10}{'brierDiff':>11}{'95% range':>22}"
+    header = (
+        f"{'market':<14}{'trust':<14}{'n':>7}{'games':>7}{'simBrier':>10}{'mktBrier':>10}"
+        f"{'brierDiff':>11}{'95% range':>18}{'minN':>7}{'pwr':>10}"
+    )
 
     def _fmt_row(r: dict[str, Any]) -> str:
-        rng = f"[{r['brier_diff_ci_low']:.4f}, {r['brier_diff_ci_high']:.4f}]"
+        # sim_brier / brier_diff_mean / the CI bounds are all nan at n == 0
+        # ("no completed games found" -- a real run outcome, not a
+        # hypothetical), and _json_safe (applied before this dict ever
+        # reaches here — see aggregate_accuracy_comparison) turns that nan
+        # into None; format every one of them through _fmt_or_na so a
+        # single empty row can never crash the whole table.
+        rng = f"[{_fmt_or_na(r['brier_diff_ci_low'], '.4f')},{_fmt_or_na(r['brier_diff_ci_high'], '.4f')}]"
+        pwr = "UNDERPWR" if r.get("underpowered") else "ok"
         return (
-            f"{r['group']:<14}{r['trust']:<14}{r['n']:>7}"
-            f"{r['sim_brier']:>10.4f}{r['market_brier']:>10.4f}"
-            f"{r['brier_diff_mean']:>11.4f}{rng:>22}"
+            f"{r['group']:<14}{r['trust']:<14}{r['n']:>7}{r['n_games']:>7}"
+            f"{_fmt_or_na(r['sim_brier'], '.4f'):>10}{_fmt_or_na(r['market_brier'], '.4f'):>10}"
+            f"{_fmt_or_na(r['brier_diff_mean'], '.4f'):>11}{rng:>18}"
+            f"{_fmt_min_n(r['min_n_recommended']):>7}{pwr:>10}"
         )
 
     o = comparison["overall"]
@@ -969,7 +1484,7 @@ def format_accuracy_comparison(comparison: dict[str, Any], *, params: dict[str, 
             lines.append(f"  [{r['trust']}]")
             last_trust = r["trust"]
         lines.append(_fmt_row(r))
-    lines.append("=" * 92)
+    lines.append("=" * 100)
     return "\n".join(lines)
 
 
@@ -2381,6 +2896,12 @@ async def run(args: argparse.Namespace) -> int:
         "score_accuracy": score_accuracy,
         "bootstrap_samples": int(args.bootstrap_samples),
         "bootstrap_seed": int(args.bootstrap_seed),
+        # SIM-539: the minimum-sample-size methodology, recorded so a reader
+        # of the JSON report knows exactly what "underpowered" was measured
+        # against — see the module docstring's "MINIMUM SAMPLE SIZE" section.
+        "min_detectable_edge": MIN_DETECTABLE_EDGE,
+        "detection_margin": DETECTION_MARGIN,
+        "base_alpha": DEFAULT_ALPHA,
     }
 
     accuracy_comparison: dict[str, Any] | None = None

@@ -552,7 +552,7 @@ def _rec(
 
 
 def test_accuracy_row_for_empty_is_safe_nan():
-    row = _accuracy_row_for("overall", "—", [], n_bootstrap=100, seed=1)
+    row = _accuracy_row_for("overall", "—", [], n_bootstrap=100, seed=1, alpha=0.05)
     assert row.n == 0
     assert np.isnan(row.sim_brier)
     assert np.isnan(row.market_brier)
@@ -563,7 +563,7 @@ def test_accuracy_row_for_sim_more_accurate_gives_negative_diff():
     market is much less sure (0.5) -- the sim's Brier/log-loss score must be
     LOWER (better), so the diff is negative and the CI does not cross zero."""
     records = [_rec("moneyline", "moneyline", 0.9, 0.5, 1, game_pk=i) for i in range(20)]
-    row = _accuracy_row_for("moneyline", "loose", records, n_bootstrap=1000, seed=5)
+    row = _accuracy_row_for("moneyline", "loose", records, n_bootstrap=1000, seed=5, alpha=0.05)
     assert row.n == 20
     assert row.sim_brier < row.market_brier
     assert row.brier_diff_mean < 0.0
@@ -574,7 +574,7 @@ def test_accuracy_row_for_sim_more_accurate_gives_negative_diff():
 
 def test_accuracy_row_for_market_more_accurate_gives_positive_diff():
     records = [_rec("moneyline", "moneyline", 0.5, 0.9, 1, game_pk=i) for i in range(20)]
-    row = _accuracy_row_for("moneyline", "loose", records, n_bootstrap=1000, seed=5)
+    row = _accuracy_row_for("moneyline", "loose", records, n_bootstrap=1000, seed=5, alpha=0.05)
     assert row.brier_diff_mean > 0.0
     assert row.brier_diff_ci_low > 0.0
 
