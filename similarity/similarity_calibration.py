@@ -1009,13 +1009,25 @@ class SimilarityCalibrator:
         report.sigma_discipline = self._fit_sigma(disc_z, target)
         report.sigma_batted_ball = self._fit_sigma(bb_z, target)
         report.sigma_power = self._fit_sigma(pow_z, target)
-        if np.isfinite(phys_raw).any():
-            report.sigma_physical = self._fit_sigma(self._zscore_matrix(phys_raw), target)
+        # SIM-529: fit over the rows that HAVE the measurements, exactly as the
+        # platoon block fits only over batters with a real split sample.
+        #
+        # Fitting over every row returned 0.0 — the keep-the-default sentinel —
+        # and said nothing about why. Savant publishes no swing tracking before
+        # 2023, so two thirds of the batter-seasons in this query carry an
+        # all-NaN physical block; the pairwise distances a sigma is fitted from
+        # come back NaN and the fit degenerates. The population is the batters
+        # who were measured, not every batter who ever hit.
+        phys_mask = np.isfinite(phys_raw).all(axis=1)
+        phys_filtered = phys_raw[phys_mask]
+        if len(phys_filtered) >= 20:
+            report.sigma_physical = self._fit_sigma(self._zscore_matrix(phys_filtered), target)
         else:
             log.warning(
-                "No physical swing data found; keeping the engine's default "
-                "physical sigma. Run the Savant loader (SIM-528) and rebuild "
-                "the batter profiles."
+                "Only %d batter-seasons carry the physical block; keeping the "
+                "engine's default physical sigma. Run the Savant loader "
+                "(SIM-528) and rebuild the batter profiles.",
+                len(phys_filtered),
             )
 
         if len(plat_filtered) >= 20:
@@ -1042,10 +1054,10 @@ class SimilarityCalibrator:
             pow_raw,
             ids,
         )
-        if np.isfinite(phys_raw).any():
+        if len(phys_filtered) >= 20:
             report.reliability_weights_physical = calibrate_reliability_weights(
-                np.nan_to_num(phys_raw, nan=0.0),
-                ids,
+                phys_filtered,
+                ids[phys_mask],
             )
         if len(plat_filtered) >= 20:
             report.reliability_weights_platoon = calibrate_reliability_weights(
@@ -1057,7 +1069,8 @@ class SimilarityCalibrator:
 
         log.info(
             "Batter calibration complete: %d profiles, sigma_disc=%.3f, "
-            "sigma_bb=%.3f, sigma_plat=%.3f, sigma_pow=%.3f, sigma_phys=%.3f, "
+            "sigma_bb=%.3f, sigma_plat=%.3f, sigma_pow=%.3f, sigma_phys=%.3f "
+            "(over %d measured batter-seasons), "
             "eb_prior=%.1f",
             len(rows),
             report.sigma_discipline,
@@ -1065,6 +1078,7 @@ class SimilarityCalibrator:
             report.sigma_platoon,
             report.sigma_power,
             report.sigma_physical,
+            len(phys_filtered),
             report.eb_n_prior_batter,
         )
         return report
@@ -1314,9 +1328,27 @@ class SimilarityCalibrator:
 
             range_raw = np.array([[r[4 + i] or 0.0 for i in range(n_range)] for r in of_rows])
             err_raw = np.array([[r[4 + n_range + i] or 0.0 for i in range(n_err)] for r in of_rows])
+            # SIM-530: the arm block is MEASURED for roughly half of
+            # outfielder-seasons (Savant's baserunning board publishes the
+            # regulars). A missing measurement is not a zero arm — `or 0.0`
+            # would plant half the population on one point and the fit would
+            # degenerate to the keep-default sentinel, which is exactly what it
+            # did. NaN for absent, then fit over the rows that were measured,
+            # as the physical and platoon blocks already do.
             arm_raw = np.array(
-                [[r[4 + n_range + n_err + i] or 0.0 for i in range(n_arm)] for r in of_rows]
+                [
+                    [
+                        np.nan
+                        if r[4 + n_range + n_err + i] is None
+                        else float(r[4 + n_range + n_err + i])
+                        for i in range(n_arm)
+                    ]
+                    for r in of_rows
+                ],
+                dtype=np.float64,
             )
+            arm_mask = np.isfinite(arm_raw).all(axis=1)
+            arm_measured = arm_raw[arm_mask]
 
             # Star rates
             star_raw = []
@@ -1339,7 +1371,16 @@ class SimilarityCalibrator:
             report.sigma_of_range = self._fit_sigma(
                 self._zscore_matrix(range_raw), target_median_score
             )
-            report.sigma_of_arm = self._fit_sigma(self._zscore_matrix(arm_raw), target_median_score)
+            if len(arm_measured) >= 20:
+                report.sigma_of_arm = self._fit_sigma(
+                    self._zscore_matrix(arm_measured), target_median_score
+                )
+            else:
+                log.warning(
+                    "Only %d outfielder-seasons carry the arm block; keeping the "
+                    "engine's default arm sigma.",
+                    len(arm_measured),
+                )
             report.sigma_of_stars = self._fit_sigma(
                 self._zscore_matrix(star_raw), target_median_score
             )
@@ -1348,7 +1389,10 @@ class SimilarityCalibrator:
             )
 
             report.reliability_weights_of_range = calibrate_reliability_weights(range_raw, ids)
-            report.reliability_weights_of_arm = calibrate_reliability_weights(arm_raw, ids)
+            if len(arm_measured) >= 20:
+                report.reliability_weights_of_arm = calibrate_reliability_weights(
+                    arm_measured, ids[arm_mask]
+                )
             report.reliability_weights_of_star = calibrate_reliability_weights(star_raw, ids)
             report.reliability_weights_of_error = calibrate_reliability_weights(err_raw, ids)
 
