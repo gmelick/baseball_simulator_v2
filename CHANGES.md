@@ -1,3 +1,31 @@
+# Feat — SIM-537 pitcher and manager profiles get point-in-time cutoffs — 2026-09-11
+
+**What this closes off.** A profile built "as of" a date must hold no data recorded after that
+date — the same rule SIM-534 set for batter profiles. This change extends it to two more
+groups: pitcher (`derived.pitcher_season_metrics`, `derived.pitcher_gmm_components`) and manager
+(`derived.manager_season_metrics`). Both groups read only our own data (`raw.pitches`,
+`raw.play_events`, `raw.game_bullpen_availability`), so a plain `game_date <= cutoff` filter is
+enough — no outside data source needed a fallback.
+
+**What changed.** Every dated source each builder reads now takes the cutoff: both SQL passes
+in the pitcher build, both CTEs in the manager build, and the shared pickoff-outs helper
+(`_play_events_outs_cte`), which now takes an optional cutoff. A season that had not started by
+the cutoff is deleted outright, not just skipped by the insert. Every row gets stamped with the
+date it was built as of, and a new check runs after each build and fails loudly if any row's
+data is dated after the cutoff. Both similarity engines (pitcher, manager) now refuse to build
+from a set of profiles stamped with more than one cutoff, and a database that has not yet run
+the new migration still builds, falling back the same way the batter engine already does for a
+couple of its own optional columns.
+
+**What's still open.** Baserunner, fielder, and catcher are not part of this change. Baserunner
+and catcher mix our own data with season-only outside measurements (sprint speed, throwing
+strength) that need a fallback to the most recent full season when a mid-season cutoff is
+requested. Fielder needs the same treatment applied separately across its seven measurement
+types, since they draw from different sources. All three stay scoped under SIM-537
+(`docs/audit/2026-09-10-savant-point-in-time-data.md`).
+
+---
+
 # Fix — SIM-536's code fix lands: odds now match the game's official date, not a UTC-rolled one — 2026-09-11
 
 **The bug.** Two loaders (`pipeline/bettingpros_odds_provider.py`,
