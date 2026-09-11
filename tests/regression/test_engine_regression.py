@@ -28,11 +28,16 @@ WHAT SURVIVES
   * Scoring is symmetric: score(A->B) == score(B->A)
   * Results are sorted descending, and a profile never matches itself
   * Every sub-score is present and finite — no NaN, no Inf
-  * Published sub-score weights still sum to 1.0
 
 Every one of these holds for ANY weights and ANY data, so a deliberate model
 change never trips them, and a genuine defect — a sign error, a NaN leaking out
-of a kernel, a renormalisation that stopped summing to one — still does.
+of a kernel — still does.
+
+The weight-constant checks went the same way as the snapshots (owner ruling
+2026-09-10). Asserting a published split of 45/20/12/8 locks a modelling
+DECISION rather than a property, and every engine here is reweighted on
+purpose; each sub-score module already asserts its own weights sum to 1.0 at
+import time, which is the part that is genuinely an invariant.
 
 FIXTURE ENGINES
 ---------------
@@ -439,110 +444,3 @@ class TestSituationEngineProperties:
                     f"Batch/individual distance mismatch at query {i}: "
                     f"{r_ind.distance} vs {r_bat.distance}"
                 )
-
-
-# ============================================================================
-# Weight Constants
-# ============================================================================
-
-
-class TestWeightConstants:
-    """
-    Sanity-check published weight constants across all engines.
-
-    These tests guard against accidental weight changes that would silently
-    shift similarity scores without failing a numerical test.
-    Weights must sum to 1.0 to within floating-point tolerance.
-    """
-
-    def test_steal_weights_sum_to_one(self):
-        # SIM-408: the JUMP sub-score was removed (biomech features Statcast
-        # can't supply); the two surviving sub-scores renormalize to 1.0.
-        from similarity.engines.baserunner_steal_similarity import (
-            WEIGHT_SUCCESS,
-            WEIGHT_TENDENCY,
-        )
-
-        total = WEIGHT_TENDENCY + WEIGHT_SUCCESS
-        assert abs(total - 1.0) < 1e-9, f"steal weights sum to {total}"
-
-    def test_catcher_weights_sum_to_one(self):
-        """SIM-408: 4-sub-score defensive composite must sum to 1.0 (Offense
-        TRIMmed; the 45/20/12/8 split renormalizes over 0.85)."""
-        from similarity.engines.catcher_similarity import (
-            WEIGHT_BLOCKING,
-            WEIGHT_DETERRENCE,
-            WEIGHT_FRAMING,
-            WEIGHT_THROWING,
-        )
-
-        total = WEIGHT_FRAMING + WEIGHT_BLOCKING + WEIGHT_THROWING + WEIGHT_DETERRENCE
-        assert abs(total - 1.0) < 1e-9, f"catcher weights sum to {total}"
-
-    def test_catcher_v2_split_weights(self):
-        """SIM-408: Offense (15%) TRIMmed; the 45/20/12/8 defensive split
-        renormalizes over 0.85. Throwing stays split 12% execution + 8%
-        deterrence (combined 0.20/0.85)."""
-        from similarity.engines.catcher_similarity import (
-            WEIGHT_BLOCKING,
-            WEIGHT_DETERRENCE,
-            WEIGHT_FRAMING,
-            WEIGHT_THROWING,
-        )
-
-        assert abs(WEIGHT_FRAMING - 0.45 / 0.85) < 1e-9
-        assert abs(WEIGHT_BLOCKING - 0.20 / 0.85) < 1e-9
-        assert abs(WEIGHT_THROWING - 0.12 / 0.85) < 1e-9
-        assert abs(WEIGHT_DETERRENCE - 0.08 / 0.85) < 1e-9
-        # The two throwing-derived sub-scores still combine to 0.20/0.85.
-        assert abs((WEIGHT_THROWING + WEIGHT_DETERRENCE) - 0.20 / 0.85) < 1e-9
-
-    def test_pitcher_steal_weights_sum_to_one(self):
-        # SIM-408: Delivery + Pickoff sub-scores removed (not in Statcast);
-        # outcome is now the sole sub-score with weight 1.0.
-        from similarity.engines.pitcher_steal_similarity import WEIGHT_OUTCOME
-
-        assert abs(WEIGHT_OUTCOME - 1.0) < 1e-9, f"pitcher_steal weight is {WEIGHT_OUTCOME}"
-
-    def test_manager_weights_sum_to_one(self):
-        from similarity.engines.manager_similarity import (
-            WEIGHT_AGGRESSION,
-            WEIGHT_PLATOON,
-            WEIGHT_USAGE,
-        )
-
-        total = WEIGHT_USAGE + WEIGHT_AGGRESSION + WEIGHT_PLATOON
-        assert abs(total - 1.0) < 1e-9, f"manager weights sum to {total}"
-
-    def test_catcher_framing_dominates(self):
-        """Framing is the highest-weight sub-score per spec."""
-        from similarity.engines.catcher_similarity import (
-            WEIGHT_BLOCKING,
-            WEIGHT_DETERRENCE,
-            WEIGHT_FRAMING,
-            WEIGHT_THROWING,
-        )
-
-        assert WEIGHT_FRAMING > WEIGHT_BLOCKING
-        assert WEIGHT_FRAMING > WEIGHT_THROWING
-        assert WEIGHT_FRAMING > WEIGHT_DETERRENCE
-
-    def test_manager_eb_prior(self):
-        from similarity.engines.manager_similarity import EB_N_PRIOR
-
-        assert EB_N_PRIOR == 30
-
-    def test_steal_eb_prior(self):
-        from similarity.engines.baserunner_steal_similarity import EB_N_PRIOR
-
-        assert EB_N_PRIOR == 20
-
-    def test_pitcher_steal_eb_prior(self):
-        from similarity.engines.pitcher_steal_similarity import EB_N_PRIOR
-
-        assert EB_N_PRIOR == 25
-
-    def test_catcher_eb_prior(self):
-        from similarity.engines.catcher_similarity import EB_N_PRIOR
-
-        assert EB_N_PRIOR == 15
