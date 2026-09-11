@@ -1523,6 +1523,11 @@ class PitcherSimilarityEngine:
         # instead of a hardcoded literal.
         self._arsenal_scale: float = DEFAULT_ARSENAL_SCALE
 
+        # SIM-537: the cutoff every loaded profile declared, or None when the
+        # source has no asof_date column yet (a pre-migration-0027 database)
+        # or every row's column is NULL (built before the cutoff was tracked).
+        self._asof_date = None
+
     # ------------------------------------------------------------------
     # Calibration wiring (SIM-346)
     # ------------------------------------------------------------------
@@ -1749,6 +1754,18 @@ class PitcherSimilarityEngine:
             season_list = ", ".join(str(s) for s in seasons)
             season_filter = f"AND psm.season IN ({season_list})"
 
+        # SIM-537: graceful-optional column, same pattern SIM-534 uses for the
+        # batter engine — a database that has not run migration 0027 yet still
+        # builds; asof_date just comes back NULL for every row.
+        _present = {
+            r[0]
+            for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'derived' AND table_name = 'pitcher_season_metrics'"
+            ).fetchall()
+        }
+        _asof_col = "psm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
+
         rows = conn.execute(f"""
             SELECT
                 psm.pitcher_id,
@@ -1768,13 +1785,17 @@ class PitcherSimilarityEngine:
                 psm.line_drive_rate,
                 psm.whip,
                 psm.hr_per_9,
-                psm.below_minimum_sample
+                psm.below_minimum_sample,
+                {_asof_col}
             FROM derived.pitcher_season_metrics psm
             WHERE psm.below_minimum_sample = FALSE
               {season_filter}
         """).fetchall()
 
         log.info("Loading %d pitcher profiles from DuckDB …", len(rows))
+
+        # SIM-537: every profile must declare the same cutoff.
+        asof_values: set = set()
 
         for row in rows:
             (
@@ -1796,7 +1817,9 @@ class PitcherSimilarityEngine:
                 whip,
                 hr_per_9,
                 below_min,
+                asof_val,
             ) = row
+            asof_values.add(asof_val)
 
             gmm = None
             if gmm_model_raw:
@@ -1830,6 +1853,19 @@ class PitcherSimilarityEngine:
                 eb_alpha=self._shrinkage.alpha(sample_pitches),
                 below_minimum=bool(below_min),
             )
+
+        # SIM-537: refuse a mixed set — same reasoning as the batter engine.
+        # Profiles built at two different cutoffs (or one stamped, one not)
+        # are not comparable, and nothing downstream would show it.
+        if len(asof_values) > 1:
+            raise RuntimeError(
+                "pitcher profiles were built at different cutoffs "
+                f"({sorted(str(v) for v in asof_values)}). Rebuild them all at one "
+                "date before scoring."
+            )
+        self._asof_date = next(iter(asof_values), None)
+        if self._asof_date is not None:
+            log.info("Pitcher profiles are as of %s.", self._asof_date)
 
     def _apply_shrinkage(self) -> None:
         """Apply Empirical Bayes shrinkage to command and result vectors."""
@@ -2061,6 +2097,11 @@ class PitcherSimilarityEngine:
     def profile_ids(self) -> list[tuple[int, int]]:
         """List all (pitcher_id, season) pairs in the engine."""
         return list(self._profiles.keys())
+
+    @property
+    def asof_date(self):
+        """The cutoff every loaded profile declared, or ``None`` (SIM-537)."""
+        return self._asof_date
 
     @property
     def arsenal_cache_size(self) -> int:

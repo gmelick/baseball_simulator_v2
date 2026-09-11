@@ -124,6 +124,9 @@ CREATE TABLE IF NOT EXISTS derived.pitcher_season_metrics (
 
     updated_at                  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
+    -- SIM-537 (migration 0027): the date this row's data runs through.
+    asof_date                   DATE,
+
     PRIMARY KEY (pitcher_id, season)
 );
 
@@ -730,6 +733,9 @@ CREATE TABLE IF NOT EXISTS derived.manager_season_metrics (
 
     below_minimum_sample                    BOOLEAN     NOT NULL DEFAULT FALSE,
     updated_at                              TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    -- SIM-537 (migration 0027): the date this row's data runs through.
+    asof_date                               DATE,
 
     PRIMARY KEY (manager_id, season)
 );

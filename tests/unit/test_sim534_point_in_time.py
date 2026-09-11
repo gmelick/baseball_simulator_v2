@@ -237,4 +237,8 @@ def test_migration_0026_adds_only_the_stamp() -> None:
 
 
 def test_the_schema_version_was_bumped() -> None:
-    assert VERSION_FILE.read_text(encoding="utf-8").strip() == "26"
+    # >= rather than == 26: this proves migration 0026 landed, not that no
+    # later migration may bump the version further (SIM-537's migration 0027
+    # already has). A hardcoded == here would need editing every time a new
+    # migration ships, which is exactly the maintenance trap this avoids.
+    assert int(VERSION_FILE.read_text(encoding="utf-8").strip()) >= 26
