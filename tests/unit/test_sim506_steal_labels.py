@@ -93,6 +93,9 @@ def _conn(with_play_events: bool = True) -> duckdb.DuckDBPyConnection:
         "steal_attempt_rate_allowed DOUBLE, "
         "pickoff_rate DOUBLE, stepoff_rate DOUBLE, "
         "below_minimum_sample BOOLEAN, "
+        # SIM-537: the cutoff stamp (migration 0028) — _build_pitcher_steal_metrics
+        # names it in its INSERT's explicit column list.
+        "asof_date DATE, "
         "PRIMARY KEY (pitcher_id, season))"
     )
     return c

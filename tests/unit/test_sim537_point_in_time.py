@@ -69,17 +69,16 @@ def test_pitcher_profiles_pass_their_own_cutoff_to_the_pickoff_helper() -> None:
     assert "self._play_events_outs_cte(asof_sql if asof is not None else None)" in body
 
 
-def test_pitcher_steal_metrics_still_calls_the_helper_with_no_cutoff() -> None:
-    """SIM-537 must not change _build_pitcher_steal_metrics's behaviour — that
-    grouping has not had its own point-in-time pass yet."""
+def test_pitcher_steal_metrics_now_passes_its_own_cutoff_to_the_helper() -> None:
+    """The baserunner/catcher/fielder follow-on (still tracked as SIM-537)
+    gave _build_pitcher_steal_metrics its own point-in-time pass, so it now
+    threads its own cutoff into the pickoff-outs helper instead of calling
+    it with none."""
     src = COMPUTOR.read_text(encoding="utf-8")
     start = src.index("def _build_pitcher_steal_metrics")
-    end_candidates = [
-        src.index("\n    def ", start + 1),
-    ]
-    end = min(e for e in end_candidates if e > start)
-    body = src[start:end]
-    assert "self._play_events_outs_cte()" in body
+    end = src.index("def _assert_pitcher_steal_profiles_have_no_leakage")
+    body = re.sub(r"\s+", "", src[start:end])
+    assert "self._play_events_outs_cte(asof_sqlifasofisnotNoneelseNone)" in body
 
 
 def test_the_pitcher_leakage_assertion_covers_both_sources() -> None:
@@ -196,8 +195,12 @@ def test_migration_0027_adds_only_the_two_stamps() -> None:
     ]
 
 
-def test_the_schema_version_was_bumped_to_27() -> None:
-    assert VERSION_FILE.read_text(encoding="utf-8").strip() == "27"
+def test_the_schema_version_was_bumped_to_27_or_later() -> None:
+    # >= rather than == 27: this proves migration 0027 landed, not that no
+    # later migration may bump the version further (the baserunner/catcher/
+    # fielder follow-on's migration 0028 already has, same reasoning as
+    # test_sim534_point_in_time.py's version test).
+    assert int(VERSION_FILE.read_text(encoding="utf-8").strip()) >= 27
 
 
 def test_the_fresh_install_schema_carries_both_columns() -> None:

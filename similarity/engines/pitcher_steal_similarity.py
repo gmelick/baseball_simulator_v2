@@ -283,6 +283,11 @@ class PitcherStealSimilarityEngine:
         self._shrinkage = EmpiricalBayesShrinkage()
         self._partition = PitcherStealPartition()
 
+        # SIM-537: the cutoff every loaded profile declared, or None when the
+        # source has no asof_date column yet (a pre-migration-0028 database)
+        # or every row's column is NULL (built before the cutoff was tracked).
+        self._asof_date = None
+
         self._out_rbf = WeightedRBFSimilarity(
             RBF_SIGMA_OUTCOME, np.array([w for _, w in OUTCOME_FEATURES])
         )
@@ -339,6 +344,18 @@ class PitcherStealSimilarityEngine:
 
     def _load_profiles(self, conn, seasons):
         sf = f"AND psm.season IN ({', '.join(str(s) for s in seasons)})" if seasons else ""
+
+        # SIM-537: graceful-optional column — a database that has not run
+        # migration 0028 yet still builds; asof_date comes back NULL.
+        _present = {
+            r[0]
+            for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'derived' AND table_name = 'pitcher_steal_metrics'"
+            ).fetchall()
+        }
+        _asof_col = "psm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
+
         rows = conn.execute(f"""
             SELECT
                 psm.pitcher_id, psm.season, psm.throws,
@@ -348,13 +365,17 @@ class PitcherStealSimilarityEngine:
                 psm.sb_against_per_9,
                 psm.cs_rate_forced,
                 psm.steal_attempt_rate_allowed,
-                psm.below_minimum_sample
+                psm.below_minimum_sample,
+                {_asof_col}
             FROM derived.pitcher_steal_metrics psm
             WHERE NOT psm.below_minimum_sample
               {sf}
         """).fetchall()
 
         log.info("Loading %d pitcher-steal profiles from DuckDB …", len(rows))
+
+        # SIM-537: every profile must declare the same cutoff.
+        asof_values: set = set()
 
         for row in rows:
             (
@@ -367,7 +388,9 @@ class PitcherStealSimilarityEngine:
                 cs_rate,
                 steal_rate,
                 below_min,
+                asof_val,
             ) = row
+            asof_values.add(asof_val)
 
             def _v(*vals):
                 return np.array([v or 0.0 for v in vals], dtype=np.float64)
@@ -382,6 +405,17 @@ class PitcherStealSimilarityEngine:
                 eb_alpha=self._shrinkage.alpha(n_br_events or 0),
                 below_minimum=bool(below_min),
             )
+
+        # SIM-537: refuse a mixed set.
+        if len(asof_values) > 1:
+            raise RuntimeError(
+                "pitcher-steal profiles were built at different cutoffs "
+                f"({sorted(str(v) for v in asof_values)}). Rebuild them all at one "
+                "date before scoring."
+            )
+        self._asof_date = next(iter(asof_values), None)
+        if self._asof_date is not None:
+            log.info("Pitcher-steal profiles are as of %s.", self._asof_date)
 
     def _apply_shrinkage(self) -> None:
         for p in self._profiles.values():
@@ -443,6 +477,11 @@ class PitcherStealSimilarityEngine:
     @property
     def profile_count(self) -> int:
         return len(self._profiles)
+
+    @property
+    def asof_date(self):
+        """The cutoff every loaded profile declared, or ``None`` (SIM-537)."""
+        return self._asof_date
 
     def profile_ids(self) -> list[tuple[int, int]]:
         return list(self._profiles.keys())

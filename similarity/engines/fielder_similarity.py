@@ -691,6 +691,11 @@ class FielderSimilarityEngine:
         self._normalizer = FeatureNormalizer()
         self._shrinkage = EmpiricalBayesShrinkage()
 
+        # SIM-537: the cutoff every loaded profile declared, or None when the
+        # source has no asof_date column yet (a pre-migration-0028 database)
+        # or every row's column is NULL (built before the cutoff was tracked).
+        self._asof_date = None
+
         # Per-position partitions
         self._partitions: dict[str, PositionPartition] = {
             pos: PositionPartition(pos) for pos in ALL_POSITIONS
@@ -950,6 +955,17 @@ class FielderSimilarityEngine:
             sl = ", ".join(str(s) for s in seasons)
             season_filter = f"AND fsm.season IN ({sl})"
 
+        # SIM-537: graceful-optional column — a database that has not run
+        # migration 0028 yet still builds; asof_date comes back NULL.
+        _present = {
+            r[0]
+            for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'derived' AND table_name = 'fielder_season_metrics'"
+            ).fetchall()
+        }
+        _asof_col = "fsm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
+
         rows = conn.execute(f"""
             SELECT
                 fsm.player_id, fsm.position, fsm.season,
@@ -973,7 +989,8 @@ class FielderSimilarityEngine:
                 fsm.four_star_opps, fsm.four_star_catches,
                 fsm.routine_opps, fsm.routine_catches,
                 -- Meta
-                fsm.below_minimum_sample
+                fsm.below_minimum_sample,
+                {_asof_col}
             FROM derived.fielder_season_metrics fsm
             WHERE NOT fsm.below_minimum_sample
               AND fsm.position IN ('1B','2B','3B','SS','LF','CF','RF')
@@ -981,6 +998,9 @@ class FielderSimilarityEngine:
         """).fetchall()
 
         log.info("Loading %d fielder profiles from DuckDB …", len(rows))
+
+        # SIM-537: every profile must declare the same cutoff.
+        asof_values: set = set()
 
         for row in rows:
             (
@@ -1020,7 +1040,9 @@ class FielderSimilarityEngine:
                 routine_catches,
                 # Meta
                 below_min,
+                asof_val,
             ) = row
+            asof_values.add(asof_val)
 
             def _v(vals):
                 return np.array([v if v is not None else np.nan for v in vals], dtype=np.float64)
@@ -1068,6 +1090,17 @@ class FielderSimilarityEngine:
                 eb_alpha=self._shrinkage.alpha(sample_bb or 0),
                 below_minimum=bool(below_min),
             )
+
+        # SIM-537: refuse a mixed set.
+        if len(asof_values) > 1:
+            raise RuntimeError(
+                "fielder profiles were built at different cutoffs "
+                f"({sorted(str(v) for v in asof_values)}). Rebuild them all at one "
+                "date before scoring."
+            )
+        self._asof_date = next(iter(asof_values), None)
+        if self._asof_date is not None:
+            log.info("Fielder profiles are as of %s.", self._asof_date)
 
     def _apply_shrinkage(self) -> None:
         """Apply EB shrinkage to all feature vectors using positional averages."""
@@ -1335,6 +1368,11 @@ class FielderSimilarityEngine:
     @property
     def profile_count(self) -> int:
         return len(self._profiles)
+
+    @property
+    def asof_date(self):
+        """The cutoff every loaded profile declared, or ``None`` (SIM-537)."""
+        return self._asof_date
 
     def profile_ids(self) -> list[tuple[int, str, int]]:
         """List all (player_id, position, season) triples in the engine."""

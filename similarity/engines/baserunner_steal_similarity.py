@@ -344,6 +344,11 @@ class BaserunnerStealSimilarityEngine:
         self._shrinkage = EmpiricalBayesShrinkage()
         self._partition = StealPartition()
 
+        # SIM-537: the cutoff every loaded profile declared, or None when the
+        # source has no asof_date column yet (a pre-migration-0028 database)
+        # or every row's column is NULL (built before the cutoff was tracked).
+        self._asof_date = None
+
         self._tend_rbf = WeightedRBFSimilarity(
             RBF_SIGMA_TENDENCY,
             np.array([w for _, w in TENDENCY_FEATURES]),
@@ -456,6 +461,17 @@ class BaserunnerStealSimilarityEngine:
             sf = f"AND bss.season IN ({', '.join(str(s) for s in seasons)})"
         min_filter = "TRUE" if include_below_minimum else "NOT bss.below_minimum_sample"
 
+        # SIM-537: graceful-optional column — a database that has not run
+        # migration 0028 yet still builds; asof_date comes back NULL.
+        _present = {
+            r[0]
+            for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'derived' AND table_name = 'baserunner_steal_metrics'"
+            ).fetchall()
+        }
+        _asof_col = "bss.asof_date" if "asof_date" in _present else "NULL AS asof_date"
+
         rows = conn.execute(f"""
             SELECT
                 bss.player_id,
@@ -468,13 +484,17 @@ class BaserunnerStealSimilarityEngine:
                 -- Success
                 bss.steal_success_rate,
                 bss.steal_success_rate_2b,
-                bss.below_minimum_sample
+                bss.below_minimum_sample,
+                {_asof_col}
             FROM derived.baserunner_steal_metrics bss
             WHERE {min_filter}
               {sf}
         """).fetchall()
 
         log.info("Loading %d steal profiles from DuckDB …", len(rows))
+
+        # SIM-537: every profile must declare the same cutoff.
+        asof_values: set = set()
 
         for row in rows:
             (
@@ -487,7 +507,9 @@ class BaserunnerStealSimilarityEngine:
                 suc,
                 suc2,
                 below_min,
+                asof_val,
             ) = row
+            asof_values.add(asof_val)
 
             def _v(*vals):
                 return np.array([v or 0.0 for v in vals], dtype=np.float64)
@@ -502,6 +524,17 @@ class BaserunnerStealSimilarityEngine:
                 eb_alpha=self._shrinkage.alpha(n_attempts or 0),
                 below_minimum=bool(below_min),
             )
+
+        # SIM-537: refuse a mixed set.
+        if len(asof_values) > 1:
+            raise RuntimeError(
+                "baserunner-steal profiles were built at different cutoffs "
+                f"({sorted(str(v) for v in asof_values)}). Rebuild them all at one "
+                "date before scoring."
+            )
+        self._asof_date = next(iter(asof_values), None)
+        if self._asof_date is not None:
+            log.info("Baserunner-steal profiles are as of %s.", self._asof_date)
 
     def _apply_shrinkage(self) -> None:
         for p in self._profiles.values():
@@ -601,6 +634,11 @@ class BaserunnerStealSimilarityEngine:
     @property
     def profile_count(self) -> int:
         return len(self._profiles)
+
+    @property
+    def asof_date(self):
+        """The cutoff every loaded profile declared, or ``None`` (SIM-537)."""
+        return self._asof_date
 
     def profile_ids(self) -> list[tuple[int, int]]:
         return list(self._profiles.keys())

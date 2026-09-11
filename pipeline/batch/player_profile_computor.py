@@ -746,15 +746,30 @@ def _predict_proba(model: LogisticRegression, X: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def build_run_expectancy_matrix(conn: duckdb.DuckDBPyConnection, seasons: list[int]) -> dict:
+def build_run_expectancy_matrix(
+    conn: duckdb.DuckDBPyConnection, seasons: list[int], asof: date | None = None
+) -> dict:
     """
     Build the 24-state run expectancy matrix from play-by-play data.
 
     Returns a dict mapping (outs, runners_state) -> expected_runs
     that can also be written to derived.run_expectancy_matrix.
+
+    SIM-537: ``asof`` restricts the underlying plays to ``game_date <=
+    asof`` — this matrix feeds ``dp_run_value`` inside
+    ``_compute_dp_metrics``, so an un-cut matrix would leak future
+    run-scoring context into an as-of build. The persisted table is keyed
+    by ``season_range`` (a string like "2023-2026"), not by an individual
+    season, so a cutoff build and the live production build of the SAME
+    seasons would share one key and silently overwrite each other. Rather
+    than widen that key, an as-of build (``asof is not None``) skips the
+    DELETE/INSERT into ``derived.run_expectancy_matrix`` entirely and
+    returns the in-memory dict only — nothing else reads that table
+    point-in-time-sensitively, so the live table stays untouched.
     """
     season_list = ", ".join(str(s) for s in seasons)
     log.info("Building run expectancy matrix for seasons %s …", seasons)
+    date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
     # Compute runs scored from each base-out state to end of inning
     df = conn.execute(f"""
@@ -776,6 +791,7 @@ def build_run_expectancy_matrix(conn: duckdb.DuckDBPyConnection, seasons: list[i
             WHERE season IN ({season_list})
               AND inning <= 8            -- exclude 9th+ for unbiased estimates
               AND events IS NOT NULL     -- one row per PA
+              {date_cutoff}
         ),
         -- Get the final score for each half-inning.
         --
@@ -810,6 +826,7 @@ def build_run_expectancy_matrix(conn: duckdb.DuckDBPyConnection, seasons: list[i
             FROM pg.raw.pitches
             WHERE season IN ({season_list})
               AND inning <= 8
+              {date_cutoff}
             GROUP BY game_pk, inning, inning_topbot
         ),
         scored AS (
@@ -839,6 +856,16 @@ def build_run_expectancy_matrix(conn: duckdb.DuckDBPyConnection, seasons: list[i
     for _, row in df.iterrows():
         key = (int(row["outs"]), int(row["runners_state"]))
         re_matrix[key] = float(row["expected_runs"])
+
+    if asof is not None:
+        # SIM-537: an as-of build never persists — see the docstring.
+        log.info(
+            "  RE matrix built as of %s: %d states (not persisted — a cutoff "
+            "build keeps its matrix in memory only).",
+            asof,
+            len(re_matrix),
+        )
+        return re_matrix
 
     # Write to DuckDB table
     conn.execute("DELETE FROM derived.run_expectancy_matrix WHERE season_range = ?", [season_range])
@@ -1508,7 +1535,7 @@ class PlayerProfileComputor:
             f"WHERE is_out {cutoff} GROUP BY pitcher_id, season"
         )
 
-    def _play_events_disengagement_cte(self) -> str:
+    def _play_events_disengagement_cte(self, asof_sql: str | None = None) -> str:
         """SIM-504 item 3: pickoff throws + stepoffs per (thrower, season).
 
         These are the hold-runner behaviours the SIM-474 steal draw kernels
@@ -1517,6 +1544,10 @@ class PlayerProfileComputor:
         review's mid-PA attribution fix). A ``pickoff_error`` is still a
         pickoff THROW, so it counts. Falls back to an empty relation when
         the table is absent (a pre-0018 database or a unit-test fixture).
+
+        SIM-537: ``asof_sql`` restricts this to plays recorded at or before
+        a cutoff, the same rule ``_play_events_outs_cte`` already applies.
+        Left ``None`` (the default), every play in ``season`` counts.
         """
         try:
             self._conn.execute("SELECT 1 FROM pg.raw.play_events LIMIT 0")
@@ -1525,12 +1556,13 @@ class PlayerProfileComputor:
                 "SELECT NULL::INTEGER AS pitcher_id, NULL::SMALLINT AS season, "
                 "0 AS n_pickoffs, 0 AS n_stepoffs WHERE FALSE"
             )
+        cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof_sql is not None else ""
         return (
             "SELECT pitcher_id::INTEGER AS pitcher_id, season::SMALLINT AS season, "
             "SUM(CASE WHEN event_type IN ('pickoff', 'pickoff_error') "
             "THEN 1 ELSE 0 END) AS n_pickoffs, "
             "SUM(CASE WHEN event_type = 'stepoff' THEN 1 ELSE 0 END) AS n_stepoffs "
-            "FROM pg.raw.play_events WHERE pitcher_id IS NOT NULL "
+            f"FROM pg.raw.play_events WHERE pitcher_id IS NOT NULL {cutoff} "
             "GROUP BY pitcher_id, season"
         )
 
@@ -1661,9 +1693,13 @@ class PlayerProfileComputor:
             self._compute_park_factors(seasons)  # 1. no dependencies
             self._compute_pitcher_profiles(seasons, asof=asof)  # 2. GMM — most expensive
             self._compute_batter_profiles(seasons, asof=asof)  # 3.
-            self._compute_baserunner_profiles(seasons)  # 4. infield/DP need sprint speeds
-            self._build_baserunner_steal_metrics(seasons)  # 4b. SIM-408 steal-engine table
-            self._build_pitcher_steal_metrics(seasons)  # 4c. SIM-408 pitcher-steal table
+            self._compute_baserunner_profiles(
+                seasons, asof=asof
+            )  # 4. infield/DP need sprint speeds
+            self._build_baserunner_steal_metrics(
+                seasons, asof=asof
+            )  # 4b. SIM-408 steal-engine table
+            self._build_pitcher_steal_metrics(seasons, asof=asof)  # 4c. SIM-408 pitcher-steal table
             # SIM-433: per-game bullpen rest/workload (_compute_bullpen_workload) is
             # NOT derived here — the bullpen-availability ingest builds its own computor
             # and recomputes it against the live roster/IL, so running it in the nightly
@@ -1672,30 +1708,30 @@ class PlayerProfileComputor:
 
             # ── Defensive metrics ────────────────────────────────────────────
             # RE matrix first — DP run value and OF arm runs depend on it
-            self._re_matrix = build_run_expectancy_matrix(self._conn, seasons)
+            self._re_matrix = build_run_expectancy_matrix(self._conn, seasons, asof=asof)
 
             # Catcher: framing → blocking → throwing (temp tables consumed in order)
-            self._compute_catcher_framing(seasons)
-            self._compute_catcher_blocking(seasons)
-            self._compute_catcher_throwing(seasons)
+            self._compute_catcher_framing(seasons, asof=asof)
+            self._compute_catcher_blocking(seasons, asof=asof)
+            self._compute_catcher_throwing(seasons, asof=asof)
 
             # Outfield
-            self._compute_outfield_catch_probability(seasons)
-            self._compute_outfield_arm_metrics(seasons)
+            self._compute_outfield_catch_probability(seasons, asof=asof)
+            self._compute_outfield_arm_metrics(seasons, asof=asof)
 
             # Infield
-            self._compute_infield_oaa(seasons)
-            self._compute_dp_metrics(seasons)
-            self._compute_bunt_defense(seasons)
-            self._compute_first_base_scooping(seasons)
-            self._compute_error_decomposition(seasons)
+            self._compute_infield_oaa(seasons, asof=asof)
+            self._compute_dp_metrics(seasons, asof=asof)
+            self._compute_bunt_defense(seasons, asof=asof)
+            self._compute_first_base_scooping(seasons, asof=asof)
+            self._compute_error_decomposition(seasons, asof=asof)
 
             # Season-level aggregation: temp tables → derived.fielder/catcher_season_metrics
-            self._aggregate_fielder_season_metrics(seasons)
-            self._aggregate_catcher_season_metrics(seasons)
+            self._aggregate_fielder_season_metrics(seasons, asof=asof)
+            self._aggregate_catcher_season_metrics(seasons, asof=asof)
             # SIM-517: the strike-3 slice of the receiving profile (an UPDATE
             # over the freshly aggregated catcher rows).
-            self._compute_catcher_uncaught_k3(seasons)
+            self._compute_catcher_uncaught_k3(seasons, asof=asof)
 
             # ── Simulation pools (last — denormalize from derived.*) ──────────
             # SIM-095: incremental rebuild unless a full_rebuild was requested.
@@ -2932,7 +2968,7 @@ class PlayerProfileComputor:
                 )
             log.info("    no leakage from %-28s newest = %s", source, newest)
 
-    def _compute_baserunner_profiles(self, seasons: list[int]) -> None:
+    def _compute_baserunner_profiles(self, seasons: list[int], asof: date | None = None) -> None:
         """
         Computes extra-base advancement rates (attempt/success split) and
         stolen base rates from post-play runner columns, runner-out-advancing
@@ -2942,13 +2978,40 @@ class PlayerProfileComputor:
         Success = runner reached the next base safely.
         Stop rate = 1 - attempt_rate (held up on advancement opportunity).
 
-        Sprint speed: not directly available in raw.pitches.  Derived as a
-        proxy from advancement aggressiveness (extra_base_attempt_rate weighted
-        by situation).  Phase 2 can inject Statcast sprint speed data if
-        a separate fetch is added to the ETL.
+        Sprint speed comes from a join to raw.sprint_speed (Baseball
+        Savant), a season-level leaderboard with no per-row date of its
+        own — only a season number and an unrelated load timestamp.
+
+        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof`` —
+        the same rule SIM-534 applies to every batter source. The sprint
+        speed join cannot follow that rule (its table has no date to
+        filter on), so it follows the design doc's alternative instead
+        (docs/audit/2026-09-10-savant-point-in-time-data.md §5): a season
+        that ENDED before the cutoff joins its own row, unchanged; the
+        season CONTAINING the cutoff joins the PRIOR season's row instead,
+        since that season's own row is still accumulating and could leak.
+        Measured year-to-year correlation for sprint speed is 0.910 — the
+        substitute costs almost nothing.
         """
         log.info("Computing baserunner profiles …")
         season_list = ", ".join(str(s) for s in seasons)
+        asof_date = asof or date.today()
+        asof_sql = asof_date.isoformat()
+        date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
+        # SIM-537: the season-shift substitute described above. Left as
+        # `ap.season` (no shift) when asof is None, so a live production
+        # build is byte-identical to before this change.
+        sprint_speed_season = (
+            f"(CASE WHEN ap.season = {asof_date.year} THEN ap.season - 1 ELSE ap.season END)"
+            if asof is not None
+            else "ap.season"
+        )
+
+        if asof is not None:
+            self._conn.execute(f"""
+                DELETE FROM derived.baserunner_season_metrics
+                WHERE season IN ({season_list}) OR season > {asof_date.year}
+            """)
 
         self._conn.execute(f"""
             INSERT OR REPLACE INTO derived.baserunner_season_metrics
@@ -2972,6 +3035,7 @@ class PlayerProfileComputor:
                 FROM pg.raw.pitches
                 WHERE data_quality_flag = FALSE
                   AND season IN ({season_list})
+                  {date_cutoff}
                   AND (
                       on_1b IS NOT NULL OR on_2b IS NOT NULL OR on_3b IS NOT NULL
                       OR sb_attempt_2b = TRUE OR sb_attempt_3b = TRUE OR sb_attempt_home = TRUE
@@ -3121,7 +3185,8 @@ class PlayerProfileComputor:
                 (COALESCE(eb.total_opps, 0) < {MIN_RUNNER_ADV_OPPS}
                  OR COALESCE(sba.sb_attempts, 0) < {MIN_RUNNER_SB_ATTEMPTS})
                                                                 AS below_minimum_sample,
-                CURRENT_TIMESTAMP                               AS updated_at
+                CURRENT_TIMESTAMP                               AS updated_at,
+                DATE '{asof_sql}'                               AS asof_date
             FROM all_players ap
             LEFT JOIN extra_base eb ON ap.player_id = eb.player_id AND ap.season = eb.season
             LEFT JOIN first_to_third ftt ON ap.player_id = ftt.player_id AND ap.season = ftt.season
@@ -3129,11 +3194,67 @@ class PlayerProfileComputor:
             LEFT JOIN first_to_home fth  ON ap.player_id = fth.player_id AND ap.season = fth.season
             LEFT JOIN tag_up tu          ON ap.player_id = tu.player_id  AND ap.season = tu.season
             LEFT JOIN sb_agg sba         ON ap.player_id = sba.player_id AND ap.season = sba.season
-            LEFT JOIN pg.raw.sprint_speed ss ON ap.player_id = ss.player_id AND ap.season = ss.season
+            LEFT JOIN pg.raw.sprint_speed ss
+                ON ap.player_id = ss.player_id AND ss.season = {sprint_speed_season}
         """)
+        self._conn.execute(f"""
+            UPDATE derived.baserunner_season_metrics
+            SET asof_date = DATE '{asof_sql}'
+            WHERE asof_date IS NULL
+        """)
+        self._assert_baserunner_profiles_have_no_leakage(seasons, asof_date)
         log.info("  Baserunner profiles done.")
 
-    def _build_baserunner_steal_metrics(self, seasons: list[int]) -> None:
+    def _check_leakage(self, source: str, sql: str, asof: date) -> None:
+        """SIM-537: shared body for every ``*_have_no_leakage`` assertion
+        added for the baserunner/catcher/fielder groupings.
+
+        Tolerates three conditions that are NOT evidence of a leak, logging
+        each rather than raising:
+
+          * the query cannot run at all — a narrow test fixture's
+            ``raw.pitches`` often has no ``game_date`` column (it predates
+            this cutoff work and was never meant to carry one), which is a
+            schema-availability question, the same reasoning
+            ``_play_events_outs_cte`` already applies to a missing table;
+          * no rows matched the season/cutoff filter;
+          * a stubbed unit-test connection returned something that is not a
+            real date.
+        """
+        try:
+            newest = self._conn.execute(sql).fetchone()[0]
+        except Exception as exc:  # noqa: BLE001 - a fixture's schema, not a real leak
+            log.warning("    leakage check SKIPPED for %s: query failed (%s)", source, exc)
+            return
+        if newest is None:
+            log.info("    no leakage from %-28s (no rows)", source)
+            return
+        if not isinstance(newest, date):
+            log.warning("    leakage check SKIPPED for %s: got %r, not a date", source, newest)
+            return
+        if newest > asof:
+            raise RuntimeError(
+                f"data leakage: {source} contributed a row dated {newest}, after the {asof} cutoff."
+            )
+        log.info("    no leakage from %-28s newest = %s", source, newest)
+
+    def _assert_baserunner_profiles_have_no_leakage(self, seasons: list[int], asof: date) -> None:
+        """Prove raw.pitches contributed no row dated after the cutoff.
+
+        Mirrors ``_assert_pitcher_profiles_have_no_leakage``. The sprint
+        speed join has no date of its own to check — it is made safe by the
+        season-shift substitution in the query itself, not by filtering, so
+        there is nothing to assert here about that source.
+        """
+        season_list = ", ".join(str(s) for s in seasons)
+        self._check_leakage(
+            "raw.pitches",
+            f"SELECT MAX(game_date) FROM pg.raw.pitches "
+            f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
+            asof,
+        )
+
+    def _build_baserunner_steal_metrics(self, seasons: list[int], asof: date | None = None) -> None:
         """
         SIM-408: build derived.baserunner_steal_metrics for the Step 2.5
         baserunner-steal similarity engine, which SELECTed this table but the
@@ -3150,18 +3271,31 @@ class PlayerProfileComputor:
         NOT computed — Statcast doesn't publish them and the engine's JUMP
         sub-score was removed (see baserunner_steal_similarity.py). Idempotent
         via INSERT OR REPLACE on (player_id, season).
+
+        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof`` —
+        the only dated source this method reads.
         """
         log.info("Building derived.baserunner_steal_metrics …")
         season_list = ", ".join(str(s) for s in seasons)
+        asof_date = asof or date.today()
+        asof_sql = asof_date.isoformat()
+        date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
         # Matches the engine's MIN_STEAL_ATTEMPTS gate (rows flagged below this
         # are filtered out by the engine's `WHERE NOT below_minimum_sample`).
         min_attempts = 10
+
+        if asof is not None:
+            self._conn.execute(f"""
+                DELETE FROM derived.baserunner_steal_metrics
+                WHERE season IN ({season_list}) OR season > {asof_date.year}
+            """)
 
         self._conn.execute(f"""
             INSERT OR REPLACE INTO derived.baserunner_steal_metrics (
                 player_id, season, sample_steal_attempts, sample_first_base_opps,
                 steal_attempt_rate, steal_attempt_rate_2b,
-                steal_success_rate, steal_success_rate_2b, below_minimum_sample
+                steal_success_rate, steal_success_rate_2b, below_minimum_sample,
+                asof_date
             )
             WITH clean AS (
                 SELECT
@@ -3178,6 +3312,7 @@ class PlayerProfileComputor:
                 FROM pg.raw.pitches
                 WHERE data_quality_flag = FALSE
                   AND season IN ({season_list})
+                  {date_cutoff}
             ),
             -- One SB-attempt event per qualifying pitch, attributed to the lead runner
             attempts AS (
@@ -3234,14 +3369,33 @@ class PlayerProfileComputor:
                 a.n_attempts_2b * 1.0 / NULLIF(o2.opps_2b, 0)         AS steal_attempt_rate_2b,
                 a.n_success     * 1.0 / NULLIF(a.n_attempts, 0)       AS steal_success_rate,
                 a.n_success_2b  * 1.0 / NULLIF(a.n_attempts_2b, 0)    AS steal_success_rate_2b,
-                (a.n_attempts < {min_attempts})                       AS below_minimum_sample
+                (a.n_attempts < {min_attempts})                       AS below_minimum_sample,
+                DATE '{asof_sql}'                                     AS asof_date
             FROM attempt_agg a
             LEFT JOIN opp_1b o1 ON o1.player_id = a.player_id AND o1.season = a.season
             LEFT JOIN opp_2b o2 ON o2.player_id = a.player_id AND o2.season = a.season
         """)
+        self._conn.execute(f"""
+            UPDATE derived.baserunner_steal_metrics
+            SET asof_date = DATE '{asof_sql}'
+            WHERE asof_date IS NULL
+        """)
+        self._assert_baserunner_steal_profiles_have_no_leakage(seasons, asof_date)
         log.info("  derived.baserunner_steal_metrics done.")
 
-    def _build_pitcher_steal_metrics(self, seasons: list[int]) -> None:
+    def _assert_baserunner_steal_profiles_have_no_leakage(
+        self, seasons: list[int], asof: date
+    ) -> None:
+        """Prove raw.pitches contributed no row dated after the cutoff."""
+        season_list = ", ".join(str(s) for s in seasons)
+        self._check_leakage(
+            "raw.pitches",
+            f"SELECT MAX(game_date) FROM pg.raw.pitches "
+            f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
+            asof,
+        )
+
+    def _build_pitcher_steal_metrics(self, seasons: list[int], asof: date | None = None) -> None:
         """
         SIM-408: build derived.pitcher_steal_metrics for the Step 2.7
         pitcher-steal (hold-runner) engine, which SELECTed this table but the
@@ -3263,12 +3417,29 @@ class PlayerProfileComputor:
         timings) is NOT computed — the engine's Delivery sub-score was removed
         (see pitcher_steal_similarity.py). Idempotent via INSERT OR REPLACE on
         (pitcher_id, season).
+
+        SIM-537: ``asof`` restricts both dated sources — raw.pitches (this
+        method's own query) and raw.play_events (via the two CTE helpers,
+        which already accept a cutoff) — to ``game_date <= asof``.
         """
         log.info("Building derived.pitcher_steal_metrics …")
         season_list = ", ".join(str(s) for s in seasons)
-        pickoff_outs_cte = self._play_events_outs_cte()  # SIM-504
-        disengagement_cte = self._play_events_disengagement_cte()  # SIM-504 item 3
+        asof_date = asof or date.today()
+        asof_sql = asof_date.isoformat()
+        date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
+        pickoff_outs_cte = self._play_events_outs_cte(
+            asof_sql if asof is not None else None
+        )  # SIM-504
+        disengagement_cte = self._play_events_disengagement_cte(
+            asof_sql if asof is not None else None
+        )  # SIM-504 item 3
         min_events = 30  # matches the engine's MIN_BASERUNNER_EVENTS gate
+
+        if asof is not None:
+            self._conn.execute(f"""
+                DELETE FROM derived.pitcher_steal_metrics
+                WHERE season IN ({season_list}) OR season > {asof_date.year}
+            """)
 
         self._conn.execute(f"""
             INSERT OR REPLACE INTO derived.pitcher_steal_metrics (
@@ -3276,7 +3447,7 @@ class PlayerProfileComputor:
                 sample_baserunner_events, sample_steal_attempts_against,
                 sb_against_per_9, cs_rate_forced, steal_attempt_rate_allowed,
                 pickoff_rate, stepoff_rate,
-                below_minimum_sample
+                below_minimum_sample, asof_date
             )
             WITH clean AS (
                 SELECT
@@ -3288,6 +3459,7 @@ class PlayerProfileComputor:
                 FROM pg.raw.pitches
                 WHERE data_quality_flag = FALSE
                   AND season IN ({season_list})
+                  {date_cutoff}
             ),
             -- Outs recorded (for IP) + SB attempts/successes against, per pitcher
             pitch_agg AS (
@@ -3359,13 +3531,52 @@ class PlayerProfileComputor:
                     / NULLIF(p.runner_on_pitches, 0), 0.0)                   AS pickoff_rate,
                 COALESCE(dg.n_stepoffs * 1.0
                     / NULLIF(p.runner_on_pitches, 0), 0.0)                   AS stepoff_rate,
-                (COALESCE(b.n_br_events, 0) < {min_events})                  AS below_minimum_sample
+                (COALESCE(b.n_br_events, 0) < {min_events})                  AS below_minimum_sample,
+                DATE '{asof_sql}'                                            AS asof_date
             FROM pitch_agg p
             LEFT JOIN br_events b ON b.pitcher_id = p.pitcher_id AND b.season = p.season
             LEFT JOIN pickoff_outs po ON po.pitcher_id = p.pitcher_id AND po.season = p.season
             LEFT JOIN disengagements dg ON dg.pitcher_id = p.pitcher_id AND dg.season = p.season
         """)
+        self._conn.execute(f"""
+            UPDATE derived.pitcher_steal_metrics
+            SET asof_date = DATE '{asof_sql}'
+            WHERE asof_date IS NULL
+        """)
+        self._assert_pitcher_steal_profiles_have_no_leakage(seasons, asof_date)
         log.info("  derived.pitcher_steal_metrics done.")
+
+    def _assert_pitcher_steal_profiles_have_no_leakage(
+        self, seasons: list[int], asof: date
+    ) -> None:
+        """Prove no source that fed this grouping postdates the cutoff.
+
+        Mirrors ``_assert_pitcher_profiles_have_no_leakage``: raw.pitches
+        (this method's own query) and raw.play_events (the two CTE
+        helpers), the latter skipped when the table is absent.
+        """
+        season_list = ", ".join(str(s) for s in seasons)
+        checks: list[tuple[str, str]] = [
+            (
+                "raw.pitches",
+                f"SELECT MAX(game_date) FROM pg.raw.pitches "
+                f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
+            ),
+        ]
+        try:
+            self._conn.execute("SELECT 1 FROM pg.raw.play_events LIMIT 0")
+        except Exception:
+            log.info("    no leakage check for raw.play_events (table absent)")
+        else:
+            checks.append(
+                (
+                    "raw.play_events",
+                    f"SELECT MAX(game_date) FROM pg.raw.play_events "
+                    f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
+                )
+            )
+        for source, sql in checks:
+            self._check_leakage(source, sql, asof)
 
     def _compute_bullpen_workload(self, seasons: list[int]) -> pd.DataFrame:
         """
@@ -3862,7 +4073,7 @@ class PlayerProfileComputor:
     # (Catcher framing/blocking/throwing, OF/IF OAA, DP, errors, aggregation)
     # ==================================================================
 
-    def _compute_catcher_framing(self, seasons: list[int]) -> None:
+    def _compute_catcher_framing(self, seasons: list[int], asof: date | None = None) -> None:
         """
         Build a called-strike probability model and compute framing runs.
 
@@ -3872,9 +4083,14 @@ class PlayerProfileComputor:
         The 'shadow zone' (~3-6 inches outside the zone boundary) is
         where framing skill matters. Pitches well inside the zone are
         always strikes; pitches well outside are never strikes.
+
+        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof`` —
+        this source is entirely our own data, so a plain date filter is
+        the whole fix (docs/audit/2026-09-10-savant-point-in-time-data.md §6).
         """
         log.info("Computing catcher framing …")
         season_list = ", ".join(str(s) for s in seasons)
+        date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
         # Extract all taken pitches (not swung at)
         df = self._conn.execute(f"""
@@ -3902,6 +4118,7 @@ class PlayerProfileComputor:
               AND plate_z IS NOT NULL
               AND sz_top IS NOT NULL
               AND sz_bot IS NOT NULL
+              {date_cutoff}
         """).fetchdf()
 
         if len(df) < 1000:
@@ -4054,7 +4271,7 @@ class PlayerProfileComputor:
     # CATCHER BLOCKING
     # ------------------------------------------------------------------
 
-    def _compute_catcher_blocking(self, seasons: list[int]) -> None:
+    def _compute_catcher_blocking(self, seasons: list[int], asof: date | None = None) -> None:
         """
         Build a PB/WP probability model and compute blocks above average.
 
@@ -4064,9 +4281,12 @@ class PlayerProfileComputor:
           - Horizontal distance from catcher's center
           - Pitch speed and movement
           - Pitcher/batter handedness
+
+        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof``.
         """
         log.info("Computing catcher blocking …")
         season_list = ", ".join(str(s) for s in seasons)
+        date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
         df = self._conn.execute(f"""
             SELECT
@@ -4093,6 +4313,7 @@ class PlayerProfileComputor:
               AND plate_x IS NOT NULL
               AND plate_z IS NOT NULL
               AND end_speed IS NOT NULL
+              {date_cutoff}
         """).fetchdf()
 
         if len(df) < 1000:
@@ -4200,15 +4421,19 @@ class PlayerProfileComputor:
     # CATCHER THROWING (BY BASE)
     # ------------------------------------------------------------------
 
-    def _compute_catcher_throwing(self, seasons: list[int]) -> None:
+    def _compute_catcher_throwing(self, seasons: list[int], asof: date | None = None) -> None:
         """Compute SB prevention metrics broken down by base attempted.
 
         Includes the SIM-073 PA-level deterrence rate
         (steal_attempt_rate_against) used by the catcher similarity engine v2
         as a Deterrence sub-score (SIM-072).
+
+        SIM-537: ``asof`` restricts both raw.pitches reads to
+        ``game_date <= asof``.
         """
         log.info("Computing catcher throwing metrics …")
         season_list = ", ".join(str(s) for s in seasons)
+        date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
         self._conn.execute(f"""
             DROP TABLE IF EXISTS _tmp_catcher_throwing;
@@ -4230,6 +4455,7 @@ class PlayerProfileComputor:
                     {sql_steal_success("home")} AS suc_home
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
+                  {date_cutoff}
                   AND ({sql_steal_attempt("2b")} OR {sql_steal_attempt("3b")}
                        OR {sql_steal_attempt("home")})
             ),
@@ -4291,6 +4517,7 @@ class PlayerProfileComputor:
                     on_3b
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
+                  {date_cutoff}
                   AND fielder_2 IS NOT NULL
             ),
             catcher_opportunities AS (
@@ -4340,7 +4567,9 @@ class PlayerProfileComputor:
     # OUTFIELD CATCH PROBABILITY + OAA
     # ------------------------------------------------------------------
 
-    def _compute_outfield_catch_probability(self, seasons: list[int]) -> None:
+    def _compute_outfield_catch_probability(
+        self, seasons: list[int], asof: date | None = None
+    ) -> None:
         """
         Build the outfield catch probability model and compute per-play OAA.
 
@@ -4351,9 +4580,12 @@ class PlayerProfileComputor:
           4. Adjust for direction (going back penalty: 1 ft/s per Tango)
           5. Fit sigmoid: P(catch) = f(speed_needed)
           6. OAA = sum of (1-P) for catches + (-P) for misses
+
+        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof``.
         """
         log.info("Computing outfield catch probability …")
         season_list = ", ".join(str(s) for s in seasons)
+        date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
         df = self._conn.execute(f"""
             SELECT
@@ -4370,6 +4602,7 @@ class PlayerProfileComputor:
                 events
             FROM pg.raw.pitches
             WHERE season IN ({season_list})
+              {date_cutoff}
               -- SIM-457: every ball in play is a catch OPPORTUNITY. The old
               -- `type='X'` kept only the plays that became outs, so 44% of
               -- chances — the ones that fell for hits — were invisible and
@@ -4516,13 +4749,16 @@ class PlayerProfileComputor:
     # OUTFIELD ARM METRICS
     # ------------------------------------------------------------------
 
-    def _compute_outfield_arm_metrics(self, seasons: list[int]) -> None:
+    def _compute_outfield_arm_metrics(self, seasons: list[int], asof: date | None = None) -> None:
         """
         Compute OF arm value: hold rate, thrown-out rate, arm runs.
         Uses RE24 deltas to value advancement prevention.
+
+        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof``.
         """
         log.info("Computing outfield arm metrics …")
         season_list = ", ".join(str(s) for s in seasons)
+        date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
         # Extract all BIP with runners on base where an OF fielded the ball
         self._conn.execute(f"""
@@ -4545,6 +4781,7 @@ class PlayerProfileComputor:
                     + (CASE WHEN on_3b IS NOT NULL THEN 4 ELSE 0 END) AS runners_state
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
+                  {date_cutoff}
                   -- SIM-457: an arm opportunity is ANY ball the outfielder
                   -- fielded with runners on. The old `type='X'` excluded the
                   -- main case — a hit that a runner tries to advance on.
@@ -4573,7 +4810,7 @@ class PlayerProfileComputor:
     # INFIELD OAA
     # ------------------------------------------------------------------
 
-    def _compute_infield_oaa(self, seasons: list[int]) -> None:
+    def _compute_infield_oaa(self, seasons: list[int], asof: date | None = None) -> None:
         """
         Compute infield OAA using the intercept/time-margin model.
 
@@ -4583,9 +4820,18 @@ class PlayerProfileComputor:
           3. Throw distance to the base
           4. Batter-runner speed
           + Direction adjustments (lateral vs charging)
+
+        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof``.
+        The sprint speed lookup below has no date of its own — it is made
+        safe by a season-shift substitution instead. See
+        ``_compute_baserunner_profiles`` for the same pattern in SQL; here
+        it runs in Python because the lookup is a per-row dict read, not a
+        JOIN.
         """
         log.info("Computing infield OAA …")
         season_list = ", ".join(str(s) for s in seasons)
+        asof_date = asof or date.today()
+        date_cutoff = f"AND game_date <= DATE '{asof_date.isoformat()}'" if asof is not None else ""
 
         df = self._conn.execute(f"""
             SELECT
@@ -4605,6 +4851,7 @@ class PlayerProfileComputor:
                 throwing_error_1, throwing_error_2
             FROM pg.raw.pitches
             WHERE season IN ({season_list})
+              {date_cutoff}
               -- SIM-457: every ground ball is a conversion OPPORTUNITY. The
               -- old `type='X'` kept only the plays that became outs, so the
               -- model trained on a set with almost no failures.
@@ -4622,17 +4869,29 @@ class PlayerProfileComputor:
 
         log.info("  Loaded %d infield plays", len(df))
 
-        # Look up batter sprint speeds
+        # Look up batter sprint speeds. SIM-537: when asof is set, also pull
+        # the prior season so the per-row lookup below can substitute it for
+        # the season containing the cutoff.
+        lookup_seasons = set(seasons) | ({asof_date.year - 1} if asof is not None else set())
         batter_speeds = self._conn.execute(f"""
             SELECT player_id, season, sprint_speed
             FROM pg.raw.sprint_speed
-            WHERE season IN ({", ".join(str(s) for s in seasons)})
+            WHERE season IN ({", ".join(str(s) for s in sorted(lookup_seasons))})
         """).fetchdf()
         speed_map = {}
         for _, r in batter_speeds.iterrows():
             speed_map[(int(r["player_id"]), int(r["season"]))] = (
                 r["sprint_speed"] if pd.notna(r["sprint_speed"]) else DEFAULT_SPRINT_SPEED_FPS
             )
+
+        def _speed_lookup_season(row_season: int) -> int:
+            """SIM-537: the season-shift substitute (see class docstring
+            notes on _compute_baserunner_profiles) — the season containing
+            the cutoff reads the PRIOR season's sprint speed instead of its
+            own still-accumulating row."""
+            if asof is not None and row_season == asof_date.year:
+                return asof_date.year - 1
+            return row_season
 
         rows = []
         for _, r in df.iterrows():
@@ -4681,7 +4940,8 @@ class PlayerProfileComputor:
 
             # Batter-runner time to 1B
             batter_speed = speed_map.get(
-                (int(r["batter"]), int(r["season"])), DEFAULT_SPRINT_SPEED_FPS
+                (int(r["batter"]), _speed_lookup_season(int(r["season"]))),
+                DEFAULT_SPRINT_SPEED_FPS,
             )
             runner_time = 90.0 / batter_speed  # seconds from home to first
 
@@ -4778,16 +5038,24 @@ class PlayerProfileComputor:
     # DOUBLE PLAY METRICS
     # ------------------------------------------------------------------
 
-    def _compute_dp_metrics(self, seasons: list[int]) -> None:
+    def _compute_dp_metrics(self, seasons: list[int], asof: date | None = None) -> None:
         """
         Compute DP metrics using Tango's intercept/sigmoid approach.
 
         Scoped to: runner on 1B only, <2 outs, ground ball.
         Time-based model: time margin between defense completion and runner arrival.
         Split credit: initiator (fields ball) vs pivot (turns relay).
+
+        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof``.
+        The sprint speed lookup uses the same season-shift substitution as
+        ``_compute_infield_oaa`` (no date column on that source). RE24 run
+        values read ``self._re_matrix``, which ``run()`` already builds
+        as-of the same cutoff before this method runs.
         """
         log.info("Computing double play metrics …")
         season_list = ", ".join(str(s) for s in seasons)
+        asof_date = asof or date.today()
+        date_cutoff = f"AND game_date <= DATE '{asof_date.isoformat()}'" if asof is not None else ""
 
         df = self._conn.execute(f"""
             SELECT
@@ -4815,6 +5083,7 @@ class PlayerProfileComputor:
                 + (CASE WHEN on_3b IS NOT NULL THEN 4 ELSE 0 END) AS runners_state
             FROM pg.raw.pitches
             WHERE season IN ({season_list})
+              {date_cutoff}
               AND on_1b IS NOT NULL
               AND on_2b IS NULL        -- runner on 1B only (Tango scoping)
               AND on_3b IS NULL
@@ -4831,13 +5100,23 @@ class PlayerProfileComputor:
 
         log.info("  Loaded %d DP opportunities", len(df))
 
-        # Batter sprint speed lookup
+        # Batter sprint speed lookup. SIM-537: joined at the season-shift
+        # substitution below (own season shifts to bsm.season - 1 only when
+        # bsm.season is the one containing the cutoff), so `ss` already
+        # answers the shifted question and no per-row Python shift is
+        # needed here (contrast _compute_infield_oaa, whose lookup source
+        # has no bsm-style intermediary to carry the shift in SQL).
+        sprint_speed_season = (
+            f"(CASE WHEN bsm.season = {asof_date.year} THEN bsm.season - 1 ELSE bsm.season END)"
+            if asof is not None
+            else "bsm.season"
+        )
         batter_speeds = self._conn.execute(f"""
             SELECT bsm.player_id, bsm.season, COALESCE(ss.sprint_speed, 27.0) AS sprint_speed
             FROM derived.baserunner_season_metrics bsm
             LEFT JOIN pg.raw.sprint_speed ss
                 ON bsm.player_id = ss.player_id
-                AND bsm.season = ss.season
+                AND ss.season = {sprint_speed_season}
             WHERE bsm.season IN ({", ".join(str(s) for s in seasons)})
         """).fetchdf()
         speed_map = {}
@@ -5037,10 +5316,14 @@ class PlayerProfileComputor:
     # BUNT DEFENSE
     # ------------------------------------------------------------------
 
-    def _compute_bunt_defense(self, seasons: list[int]) -> None:
-        """Compute bunt fielding rates for corner infielders."""
+    def _compute_bunt_defense(self, seasons: list[int], asof: date | None = None) -> None:
+        """Compute bunt fielding rates for corner infielders.
+
+        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof``.
+        """
         log.info("Computing bunt defense metrics …")
         season_list = ", ".join(str(s) for s in seasons)
+        date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
         self._conn.execute(f"""
             DROP TABLE IF EXISTS _tmp_bunt_defense;
@@ -5059,6 +5342,7 @@ class PlayerProfileComputor:
                     END AS fielder_position
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
+                  {date_cutoff}
                   -- SIM-457: every bunt in play is an opportunity, not only
                   -- the ones that became outs.
                   AND {SQL_IN_PLAY}
@@ -5095,10 +5379,14 @@ class PlayerProfileComputor:
     # FIRST BASE SCOOPING
     # ------------------------------------------------------------------
 
-    def _compute_first_base_scooping(self, seasons: list[int]) -> None:
-        """Compute 1B receiving metrics on difficult throws."""
+    def _compute_first_base_scooping(self, seasons: list[int], asof: date | None = None) -> None:
+        """Compute 1B receiving metrics on difficult throws.
+
+        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof``.
+        """
         log.info("Computing 1B scooping metrics …")
         season_list = ", ".join(str(s) for s in seasons)
+        date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
         self._conn.execute(f"""
             DROP TABLE IF EXISTS _tmp_1b_scoop;
@@ -5122,6 +5410,7 @@ class PlayerProfileComputor:
                          THEN TRUE ELSE FALSE END AS is_scoop_candidate
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
+                  {date_cutoff}
                   -- SIM-457: a throw the first baseman could not handle means
                   -- the batter REACHED, so the row is typed D or E — the old
                   -- `type='X'` filtered out the failures being measured.
@@ -5151,10 +5440,14 @@ class PlayerProfileComputor:
     # ERROR DECOMPOSITION
     # ------------------------------------------------------------------
 
-    def _compute_error_decomposition(self, seasons: list[int]) -> None:
-        """Compute fielding error vs throwing error rates by fielder."""
+    def _compute_error_decomposition(self, seasons: list[int], asof: date | None = None) -> None:
+        """Compute fielding error vs throwing error rates by fielder.
+
+        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof``.
+        """
         log.info("Computing error decomposition …")
         season_list = ", ".join(str(s) for s in seasons)
+        date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
 
         self._conn.execute(f"""
             DROP TABLE IF EXISTS _tmp_errors;
@@ -5183,6 +5476,7 @@ class PlayerProfileComputor:
                            OR throwing_error_2 = fielded_by THEN 1 ELSE 0 END AS throwing_err
                 FROM pg.raw.pitches
                 WHERE season IN ({season_list})
+                  {date_cutoff}
                   -- SIM-457: an error means the batter REACHED, so error rows
                   -- are typed D or E and never X — the old filter excluded
                   -- 99.5% of the very events this query counts.
@@ -5295,13 +5589,43 @@ class PlayerProfileComputor:
             except Exception as exc:  # noqa: BLE001  - defensive log + continue
                 log.warning("  Could not ensure placeholder %s exists: %s", table, exc)
 
-    def _aggregate_fielder_season_metrics(self, seasons: list[int]) -> None:
+    def _aggregate_fielder_season_metrics(
+        self, seasons: list[int], asof: date | None = None
+    ) -> None:
         """
         Combine all per-play detail tables into the final
         derived.fielder_season_metrics rows.
+
+        SIM-537: the seven per-play temp tables are already cutoff-filtered
+        by the time this method reads them (they carry no date of their
+        own). Three Savant joins here have no date column at all — sprint
+        speed, arm strength, and baserunning (advancement) — so each
+        follows the season-shift substitution described on
+        ``_compute_baserunner_profiles``: a season that ENDED before the
+        cutoff joins its own row; the season CONTAINING the cutoff joins
+        the PRIOR season's row. Measured year-to-year correlation: fielder
+        arm strength 0.857, the advancement-rate columns 0.546 — both
+        substitute cheaply. ``of_arm_runs`` is the one exception: its
+        year-to-year correlation is only 0.254 (mostly noise), so neither
+        the current season (which would leak) nor the prior season (a weak
+        predictor) is carried for the cutoff season — it is left NULL there
+        instead (docs/audit/2026-09-10-savant-point-in-time-data.md §5).
         """
         log.info("Aggregating fielder season metrics …")
         season_list = ", ".join(str(s) for s in seasons)
+        asof_date = asof or date.today()
+        asof_sql = asof_date.isoformat()
+        savant_season = (
+            f"(CASE WHEN c.season = {asof_date.year} THEN c.season - 1 ELSE c.season END)"
+            if asof is not None
+            else "c.season"
+        )
+        # SIM-537: TRUE only for a row in the season containing the cutoff —
+        # the guard that keeps of_arm_runs NULL there instead of carrying a
+        # low-correlation value from either direction.
+        of_arm_runs_in_cutoff_season = (
+            f"c.season = {asof_date.year}" if asof is not None else "FALSE"
+        )
 
         # ----------------------------------------------------------------
         # Defensive: ensure every _tmp_* table the aggregator JOINs against
@@ -5315,10 +5639,14 @@ class PlayerProfileComputor:
         # ----------------------------------------------------------------
         self._ensure_fielder_temp_tables_exist()
 
-        # Delete existing rows for these seasons (full rebuild pattern)
+        # Delete existing rows for these seasons (full rebuild pattern).
+        # SIM-537: a cutoff build also removes a season that had not
+        # started yet — INSERT alone only overwrites rows the new query
+        # produces, so a stale full-season row would otherwise survive.
+        delete_cutoff = f"OR season > {asof_date.year}" if asof is not None else ""
         self._conn.execute(f"""
             DELETE FROM derived.fielder_season_metrics
-            WHERE season IN ({season_list})
+            WHERE season IN ({season_list}) {delete_cutoff}
         """)
 
         self._conn.execute(f"""
@@ -5531,7 +5859,14 @@ class PlayerProfileComputor:
                                                         AS arm_advancement_prevention,
                 -- NULL when the player has no Savant row at all. Summing three
                 -- COALESCEd nulls would write a confident 0.0 instead.
+                --
+                -- SIM-537: also NULL for the season containing the cutoff —
+                -- see the class docstring note above. This guard applies
+                -- even though sbr is already season-shift-joined, because
+                -- the shifted (prior-season) value is a weak predictor
+                -- here, not merely a leak risk.
                 CASE WHEN {_SQL_IS_OF} AND sbr.player_id IS NOT NULL
+                          AND NOT ({of_arm_runs_in_cutoff_season})
                      THEN COALESCE(sbr.fielder_runs_hold, 0)
                         + COALESCE(sbr.fielder_runs_advances, 0)
                         + COALESCE(sbr.fielder_runs_thrown_out, 0) END
@@ -5568,7 +5903,10 @@ class PlayerProfileComputor:
                 CURRENT_TIMESTAMP AS updated_at,
                 -- SIM-523 part G (migration 0024): the fielder's sprint speed (one join;
                 -- appended LAST — the INSERT carries no column list).
-                ss.sprint_speed AS sprint_speed
+                ss.sprint_speed AS sprint_speed,
+                -- SIM-537 (migration 0028): appended LAST for the same
+                -- positional-INSERT reason as sprint_speed above.
+                DATE '{asof_sql}' AS asof_date
 
             FROM combined_oaa c
             LEFT JOIN dp_init_agg dp
@@ -5581,16 +5919,42 @@ class PlayerProfileComputor:
                 ON c.player_id = b.fielder_id AND c.position = b.position AND c.season = b.season
             LEFT JOIN scoop s
                 ON c.player_id = s.fielder_id AND c.position = s.position AND c.season = s.season
+            -- SIM-537: the season-shift substitution described in the class
+            -- docstring — unshifted (c.season) when asof is None.
             LEFT JOIN pg.raw.sprint_speed ss
-                ON c.player_id = ss.player_id AND c.season = ss.season
+                ON c.player_id = ss.player_id AND ss.season = {savant_season}
             -- SIM-530: the two boards that fill the outfield arm block.
             LEFT JOIN pg.raw.savant_arm_strength sas
-                ON c.player_id = sas.player_id AND c.season = sas.season
+                ON c.player_id = sas.player_id AND sas.season = {savant_season}
             LEFT JOIN pg.raw.savant_baserunning sbr
-                ON c.player_id = sbr.player_id AND c.season = sbr.season
+                ON c.player_id = sbr.player_id AND sbr.season = {savant_season}
         """)
+        self._conn.execute(f"""
+            UPDATE derived.fielder_season_metrics
+            SET asof_date = DATE '{asof_sql}'
+            WHERE asof_date IS NULL
+        """)
+        self._assert_fielder_profiles_have_no_leakage(seasons, asof_date)
 
         log.info("  Fielder season metrics aggregated.")
+
+    def _assert_fielder_profiles_have_no_leakage(self, seasons: list[int], asof: date) -> None:
+        """Prove raw.pitches contributed no row dated after the cutoff.
+
+        Covers all seven per-play builders and this aggregator — they all
+        read raw.pitches under the identical season+cutoff filter, so one
+        check at the end of the chain covers all of them. The three Savant
+        joins (sprint speed, arm strength, baserunning) have no date of
+        their own to check — they are made safe by the season-shift
+        substitution in the query above, not by filtering.
+        """
+        season_list = ", ".join(str(s) for s in seasons)
+        self._check_leakage(
+            "raw.pitches",
+            f"SELECT MAX(game_date) FROM pg.raw.pitches "
+            f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
+            asof,
+        )
 
     def _ensure_catcher_temp_tables_exist(self) -> None:
         """Defensive — same pattern as _ensure_fielder_temp_tables_exist.
@@ -5644,10 +6008,36 @@ class PlayerProfileComputor:
             except Exception as exc:  # noqa: BLE001
                 log.warning("  Could not ensure placeholder %s exists: %s", table, exc)
 
-    def _aggregate_catcher_season_metrics(self, seasons: list[int]) -> None:
-        """Combine framing, blocking, and throwing into catcher season metrics."""
+    def _aggregate_catcher_season_metrics(
+        self, seasons: list[int], asof: date | None = None
+    ) -> None:
+        """Combine framing, blocking, and throwing into catcher season metrics.
+
+        SIM-537: the three upstream temp tables are already cutoff-filtered
+        by the time this method reads them (they carry no date of their
+        own). The two Savant joins below (pop time, arm strength) have no
+        date column at all — see the season-shift note on those joins.
+        """
         log.info("Aggregating catcher season metrics …")
         season_list = ", ".join(str(s) for s in seasons)
+        asof_date = asof or date.today()
+        asof_sql = asof_date.isoformat()
+        # SIM-537: the Savant pop-time / arm-strength boards have no date
+        # column (docs/audit/2026-09-10-savant-point-in-time-data.md §5) —
+        # only a season number. A season that ENDED before the cutoff joins
+        # its own row; the season CONTAINING the cutoff joins the PRIOR
+        # season's row instead, since that season's own row is still
+        # accumulating. Measured year-to-year correlation: arm strength
+        # 0.894, pop time 0.726 — the substitute costs little. Left
+        # unshifted (`COALESCE(f.season, b.season, t.season)`, no shift)
+        # when asof is None, so a live build is unchanged.
+        catcher_season_col = "COALESCE(f.season, b.season, t.season)"
+        savant_season = (
+            f"(CASE WHEN {catcher_season_col} = {asof_date.year} "
+            f"THEN {catcher_season_col} - 1 ELSE {catcher_season_col} END)"
+            if asof is not None
+            else catcher_season_col
+        )
 
         # SIM-2026-05 hardening: see _ensure_fielder_temp_tables_exist for
         # the rationale.  When a per-season sample is too thin, the upstream
@@ -5656,9 +6046,10 @@ class PlayerProfileComputor:
         # FULL OUTER JOIN inputs all exist (possibly empty) before running.
         self._ensure_catcher_temp_tables_exist()
 
+        delete_cutoff = f"OR season > {asof_date.year}" if asof is not None else ""
         self._conn.execute(f"""
             DELETE FROM derived.catcher_season_metrics
-            WHERE season IN ({season_list})
+            WHERE season IN ({season_list}) {delete_cutoff}
         """)
 
         self._conn.execute(f"""
@@ -5675,7 +6066,7 @@ class PlayerProfileComputor:
                 sb_attempts_2b, cs_rate_2b, sb_attempts_3b, cs_rate_3b,
                 steal_attempt_rate_against,
                 pickoff_attempts, pickoff_successes, pickoff_rate,
-                below_minimum_sample, updated_at
+                below_minimum_sample, updated_at, asof_date
             )
 
             SELECT
@@ -5755,7 +6146,8 @@ class PlayerProfileComputor:
                 -- Meta
                 (COALESCE(CAST(t.sb_attempts_faced AS INTEGER), 0) < {MIN_CATCHER_SB_ATTEMPTS})
                     AS below_minimum_sample,
-                CURRENT_TIMESTAMP AS updated_at
+                CURRENT_TIMESTAMP AS updated_at,
+                DATE '{asof_sql}' AS asof_date
 
             FROM _tmp_framing f
             FULL OUTER JOIN _tmp_blocking b
@@ -5763,15 +6155,22 @@ class PlayerProfileComputor:
             FULL OUTER JOIN _tmp_catcher_throwing t
                 ON COALESCE(f.catcher_id, b.catcher_id) = t.catcher_id
                 AND COALESCE(f.season, b.season) = t.season
-            -- SIM-530: the measured arm. The key is a FULL OUTER JOIN coalesce,
-            -- and a join condition cannot reference a SELECT alias, so the
-            -- coalesce is repeated here on purpose.
+            -- SIM-530/537: the measured arm. The key is a FULL OUTER JOIN
+            -- coalesce, and a join condition cannot reference a SELECT
+            -- alias, so the coalesce is repeated here on purpose. The
+            -- season on the right of `=` is the season-shift substitution
+            -- described above — unshifted when asof is None.
             LEFT JOIN pg.raw.savant_poptime spt
                 ON spt.player_id = COALESCE(f.catcher_id, b.catcher_id, t.catcher_id)
-               AND spt.season    = COALESCE(f.season, b.season, t.season)
+               AND spt.season    = {savant_season}
             LEFT JOIN pg.raw.savant_catcher_throwing sct
                 ON sct.player_id = COALESCE(f.catcher_id, b.catcher_id, t.catcher_id)
-               AND sct.season    = COALESCE(f.season, b.season, t.season)
+               AND sct.season    = {savant_season}
+        """)
+        self._conn.execute(f"""
+            UPDATE derived.catcher_season_metrics
+            SET asof_date = DATE '{asof_sql}'
+            WHERE asof_date IS NULL
         """)
 
         # Clean up temp tables
@@ -5797,7 +6196,7 @@ class PlayerProfileComputor:
     #: received strike-3s (~3 full seasons) to move halfway from league.
     _UNCAUGHT_K3_EB_PRIOR_N = 2000.0
 
-    def _compute_catcher_uncaught_k3(self, seasons: list[int]) -> None:
+    def _compute_catcher_uncaught_k3(self, seasons: list[int], asof: date | None = None) -> None:
         """SIM-517 part A: the strike-3 slice of the receiving profile.
 
         A strikeout PA whose final-pitch description names a wild pitch or a
@@ -5813,9 +6212,17 @@ class PlayerProfileComputor:
         the similarity embedding) and the one embedding-visible column is the
         EB-shrunk rate toward the SEASON league rate
         (:data:`_UNCAUGHT_K3_EB_PRIOR_N`).
+
+        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof`` —
+        the same cutoff already applied to the row this UPDATE targets, so
+        the K3 sample and the framing/blocking/throwing sample it joins stay
+        at one point in time. This is the last catcher step in the nightly
+        chain, so the leakage check for the whole grouping runs here.
         """
         log.info("Computing catcher uncaught strike-3 rates (SIM-517) …")
         season_list = ", ".join(str(s) for s in seasons)
+        asof_date = asof or date.today()
+        date_cutoff = f"AND game_date <= DATE '{asof_date.isoformat()}'" if asof is not None else ""
         self._conn.execute(f"""
             CREATE OR REPLACE TEMP TABLE _tmp_uncaught_k3 AS
             SELECT
@@ -5829,6 +6236,7 @@ class PlayerProfileComputor:
             WHERE season IN ({season_list})
               AND events IN ('strikeout', 'strikeout_double_play')
               AND fielder_2 IS NOT NULL
+              {date_cutoff}
             GROUP BY 1, 2
         """)
         prior_n = float(self._UNCAUGHT_K3_EB_PRIOR_N)
@@ -5856,6 +6264,25 @@ class PlayerProfileComputor:
         self._conn.execute("DROP TABLE IF EXISTS _tmp_uncaught_k3")
         rows, uncaught = (int(n[0]), int(n[1])) if n and len(n) >= 2 else (0, 0)
         log.info("  Uncaught K3: %d catcher-seasons updated, %d uncaught K3s.", rows, uncaught)
+        self._assert_catcher_profiles_have_no_leakage(seasons, asof_date)
+
+    def _assert_catcher_profiles_have_no_leakage(self, seasons: list[int], asof: date) -> None:
+        """Prove raw.pitches contributed no row dated after the cutoff.
+
+        Covers framing, blocking, throwing, and the uncaught-K3 update —
+        they all read raw.pitches under the identical season+cutoff filter,
+        so one check at the end of the chain covers all four. The Savant
+        pop-time / arm-strength joins have no date of their own to check —
+        they are made safe by the season-shift substitution in the
+        aggregator's query, not by filtering.
+        """
+        season_list = ", ".join(str(s) for s in seasons)
+        self._check_leakage(
+            "raw.pitches",
+            f"SELECT MAX(game_date) FROM pg.raw.pitches "
+            f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
+            asof,
+        )
 
     def _build_pitch_pool(self, seasons: list[int], incremental: bool = False) -> None:
         """

@@ -359,7 +359,7 @@ class TestMigrationSanity:
         assert "def downgrade()" in text
         assert "sim.sim_runs" in text
 
-    def test_duckdb_schema_version_is_27(self):
+    def test_duckdb_schema_version_is_28(self):
         # SIM-357 bumped 8 -> 9 (0009); SIM-362/364 -> 10 (0010);
         # SIM-408 -> 11 (0011 engine ↔ schema reconciliation);
         # SIM-411/413/425b -> 12 (0012 batted-ball realism columns);
@@ -385,7 +385,12 @@ class TestMigrationSanity:
         # SIM-537 -> 27 (0027 asof_date on the pitcher and manager profiles too
         # — the same stamp, extended to the two groupings whose data is
         # entirely our own and so needs no Savant fallback).
-        assert DUCKDB_VERSION_FILE.read_text().strip() == "27"
+        # SIM-537 -> 28 (0028 asof_date on the last five tables — baserunner,
+        # baserunner steal, pitcher steal, catcher, fielder. Their Savant
+        # joins carry no date column, so a season-shift substitution stands
+        # in for a date filter: the season containing the cutoff joins the
+        # PRIOR season's row instead of its own still-accumulating one).
+        assert DUCKDB_VERSION_FILE.read_text().strip() == "28"
 
     def test_duckdb_version_matches_latest_migration(self):
         """The version file must equal the highest-numbered DuckDB migration.

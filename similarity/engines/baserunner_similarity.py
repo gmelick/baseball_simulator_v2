@@ -430,6 +430,11 @@ class BaserunnerSimilarityEngine:
         self._shrinkage = EmpiricalBayesShrinkage()
         self._partition = BaserunnerPartition()
 
+        # SIM-537: the cutoff every loaded profile declared, or None when the
+        # source has no asof_date column yet (a pre-migration-0028 database)
+        # or every row's column is NULL (built before the cutoff was tracked).
+        self._asof_date = None
+
         # Build weighted RBF scorers
         self._speed_rbf = WeightedRBFSimilarity(
             sigma=RBF_SIGMA_SPEED,
@@ -579,6 +584,18 @@ class BaserunnerSimilarityEngine:
             season_filter = f"AND brm.season IN ({sl})"
         min_filter = "TRUE" if include_below_minimum else "NOT brm.below_minimum_sample"
 
+        # SIM-537: graceful-optional column, same pattern the pitcher and
+        # manager engines use — a database that has not run migration 0028
+        # yet still builds; asof_date just comes back NULL for every row.
+        _present = {
+            r[0]
+            for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'derived' AND table_name = 'baserunner_season_metrics'"
+            ).fetchall()
+        }
+        _asof_col = "brm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
+
         rows = conn.execute(f"""
             SELECT
                 brm.player_id, brm.season,
@@ -606,13 +623,17 @@ class BaserunnerSimilarityEngine:
                 brm.sample_second_to_home_opps,
                 brm.sample_first_to_home_opps,
                 brm.sample_tag_up_opps,
-                brm.below_minimum_sample
+                brm.below_minimum_sample,
+                {_asof_col}
             FROM derived.baserunner_season_metrics brm
             WHERE {min_filter}
               {season_filter}
         """).fetchall()
 
         log.info("Loading %d baserunner profiles from DuckDB …", len(rows))
+
+        # SIM-537: every profile must declare the same cutoff.
+        asof_values: set = set()
 
         for row in rows:
             (
@@ -636,7 +657,9 @@ class BaserunnerSimilarityEngine:
                 fth_opps,
                 tu_opps,
                 below_min,
+                asof_val,
             ) = row
+            asof_values.add(asof_val)
 
             def _v(vals):
                 return np.array([v or 0.0 for v in vals], dtype=np.float64)
@@ -657,6 +680,20 @@ class BaserunnerSimilarityEngine:
                 eb_alpha=self._shrinkage.alpha(sample_adv or 0),
                 below_minimum=bool(below_min),
             )
+
+        # SIM-537: refuse a mixed set — same reasoning as the pitcher and
+        # manager engines. Profiles built at two different cutoffs (or one
+        # stamped, one not) are not comparable, and nothing downstream
+        # would show it.
+        if len(asof_values) > 1:
+            raise RuntimeError(
+                "baserunner profiles were built at different cutoffs "
+                f"({sorted(str(v) for v in asof_values)}). Rebuild them all at one "
+                "date before scoring."
+            )
+        self._asof_date = next(iter(asof_values), None)
+        if self._asof_date is not None:
+            log.info("Baserunner profiles are as of %s.", self._asof_date)
 
     def _apply_shrinkage(self) -> None:
         """Apply EB shrinkage to all feature vectors."""
@@ -783,6 +820,11 @@ class BaserunnerSimilarityEngine:
     @property
     def profile_count(self) -> int:
         return len(self._profiles)
+
+    @property
+    def asof_date(self):
+        """The cutoff every loaded profile declared, or ``None`` (SIM-537)."""
+        return self._asof_date
 
     def profile_ids(self) -> list[tuple[int, int]]:
         return list(self._profiles.keys())

@@ -429,6 +429,11 @@ class CatcherSimilarityEngine:
         self._shrinkage = EmpiricalBayesShrinkage()
         self._partition = CatcherPartition()
 
+        # SIM-537: the cutoff every loaded profile declared, or None when the
+        # source has no asof_date column yet (a pre-migration-0028 database)
+        # or every row's column is NULL (built before the cutoff was tracked).
+        self._asof_date = None
+
         self._framing_rbf = WeightedRBFSimilarity(
             RBF_SIGMA_FRAMING, np.array([w for _, w in FRAMING_FEATURES])
         )
@@ -525,6 +530,18 @@ class CatcherSimilarityEngine:
 
     def _load_profiles(self, conn, seasons):
         sf = f"AND csm.season IN ({', '.join(str(s) for s in seasons)})" if seasons else ""
+
+        # SIM-537: graceful-optional column — a database that has not run
+        # migration 0028 yet still builds; asof_date comes back NULL.
+        _present = {
+            r[0]
+            for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'derived' AND table_name = 'catcher_season_metrics'"
+            ).fetchall()
+        }
+        _asof_col = "csm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
+
         # SIM-408: the engine's rate features are DERIVED here from the counts the
         # computor produces (catcher_season_metrics), except shadow/heart zone
         # strike rates which the framing pass now emits directly. Offense + the
@@ -556,13 +573,17 @@ class CatcherSimilarityEngine:
                 csm.arm_strength_mean                                         AS arm_strength_mph,
                 -- Throwing — Deterrence (1, SIM-073)
                 csm.steal_attempt_rate_against,
-                csm.below_minimum_sample
+                csm.below_minimum_sample,
+                {_asof_col}
             FROM derived.catcher_season_metrics csm
             WHERE NOT csm.below_minimum_sample
               {sf}
         """).fetchall()
 
         log.info("Loading %d catcher profiles from DuckDB …", len(rows))
+
+        # SIM-537: every profile must declare the same cutoff.
+        asof_values: set = set()
 
         for row in rows:
             (
@@ -583,7 +604,9 @@ class CatcherSimilarityEngine:
                 arm_mph,
                 steal_attempt_rate_against,
                 below_min,
+                asof_val,
             ) = row
+            asof_values.add(asof_val)
 
             def _v(*vals):
                 return np.array([v or 0.0 for v in vals], dtype=np.float64)
@@ -608,6 +631,17 @@ class CatcherSimilarityEngine:
                 eb_alpha=self._shrinkage.alpha(n_pitches or 0),
                 below_minimum=bool(below_min),
             )
+
+        # SIM-537: refuse a mixed set.
+        if len(asof_values) > 1:
+            raise RuntimeError(
+                "catcher profiles were built at different cutoffs "
+                f"({sorted(str(v) for v in asof_values)}). Rebuild them all at one "
+                "date before scoring."
+            )
+        self._asof_date = next(iter(asof_values), None)
+        if self._asof_date is not None:
+            log.info("Catcher profiles are as of %s.", self._asof_date)
 
     def _apply_shrinkage(self) -> None:
         for p in self._profiles.values():
@@ -723,6 +757,11 @@ class CatcherSimilarityEngine:
     @property
     def profile_count(self) -> int:
         return len(self._profiles)
+
+    @property
+    def asof_date(self):
+        """The cutoff every loaded profile declared, or ``None`` (SIM-537)."""
+        return self._asof_date
 
     def profile_ids(self) -> list[tuple[int, int]]:
         return list(self._profiles.keys())

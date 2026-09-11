@@ -430,6 +430,9 @@ CREATE TABLE IF NOT EXISTS derived.fielder_season_metrics (
     -- top-two-run average; one join from raw.sprint_speed). Appended LAST: the
     -- builder's INSERT carries no column list.
     sprint_speed                DOUBLE,
+    -- SIM-537 (migration 0028): the date this row's data runs through.
+    -- Appended LAST for the same positional-INSERT reason as sprint_speed.
+    asof_date                   DATE,
 
     PRIMARY KEY (player_id, position, season)
 );
@@ -502,6 +505,9 @@ CREATE TABLE IF NOT EXISTS derived.baserunner_season_metrics (
 
     below_minimum_sample        BOOLEAN     NOT NULL DEFAULT FALSE,
     updated_at                  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- SIM-537 (migration 0028): the date this row's data runs through.
+    -- Appended LAST: the builder's INSERT carries no column list.
+    asof_date                   DATE,
 
     PRIMARY KEY (player_id, season)
 );
@@ -539,6 +545,8 @@ CREATE TABLE IF NOT EXISTS derived.baserunner_steal_metrics (
 
     below_minimum_sample        BOOLEAN     NOT NULL DEFAULT FALSE,
     updated_at                  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- SIM-537 (migration 0028): the date this row's data runs through.
+    asof_date                   DATE,
 
     PRIMARY KEY (player_id, season)
 );
@@ -578,6 +586,8 @@ CREATE TABLE IF NOT EXISTS derived.pitcher_steal_metrics (
 
     below_minimum_sample            BOOLEAN     NOT NULL DEFAULT FALSE,
     updated_at                      TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- SIM-537 (migration 0028): the date this row's data runs through.
+    asof_date                       DATE,
 
     PRIMARY KEY (pitcher_id, season)
 );
@@ -677,6 +687,8 @@ CREATE TABLE IF NOT EXISTS derived.catcher_season_metrics (
     -- =========================================================================
     below_minimum_sample        BOOLEAN     NOT NULL DEFAULT FALSE,
     updated_at                  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- SIM-537 (migration 0028): the date this row's data runs through.
+    asof_date                   DATE,
 
     PRIMARY KEY (player_id, season)
 );
