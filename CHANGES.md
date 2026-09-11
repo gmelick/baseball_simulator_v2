@@ -1,3 +1,39 @@
+# Feat — SIM-537 closes: baserunner, catcher, and fielder profiles get point-in-time cutoffs — 2026-09-11
+
+**SIM-537 is now fully closed.** Every player-measurement group the simulator reads can now be
+built "as of" a specific date — batter, pitcher, manager (landed earlier today), and now
+baserunner, catcher, and fielder. A profile built this way holds no data recorded after that
+date, so a backtest of a past game cannot be quietly informed by what a player did later in the
+season.
+
+**What was different about these three groups.** Batter, pitcher, and manager read only our own
+recorded data, so a plain date cutoff was enough. Baserunner, catcher, and fielder mix that same
+kind of data with five outside measurements that Baseball Savant publishes once per season, with
+no way to ask for the data through a specific date: sprint speed, catcher pop time and arm
+strength, fielder arm strength, and how often runners test a fielder's arm. For these, the fix
+is different: a season that already ended before the cutoff uses its own number, unchanged; a
+season still in progress at the cutoff uses the PREVIOUS season's number instead of its own
+still-growing one, which could otherwise leak the future. This works because these traits barely
+change year to year — measured correlations of 0.91 for sprint speed, 0.89 for catcher arm
+strength, 0.86 for fielder arm strength, and 0.73 for pop time — so last season's number costs
+almost nothing to substitute. One measurement is the exception: how much a fielder's arm is
+worth in runs saved barely repeats from year to year (0.25 correlation), so instead of
+substituting a number that would mislead, the platform leaves it blank for the season in
+progress.
+
+**What backs this up.** 77 new automated tests, all passing, plus five similarity engines
+(baserunner, baserunner-steal, pitcher-steal, catcher, fielder) that now refuse to run if their
+inputs were built at two different dates by mistake.
+
+**A bug found and fixed along the way.** The very first version of this change assumed every
+one of our own game records always carries a play date. Two older, narrow test setups built a
+stripped-down copy of that data without one, and broke. The fix makes the safety check tolerant
+of a data source that cannot answer the question at all — treating "I cannot check this" as a
+reason to skip the check, not a reason to crash — the same tolerant handling already used
+elsewhere in this pipeline for a table that does not exist yet.
+
+---
+
 # Feat — SIM-537 pitcher and manager profiles get point-in-time cutoffs — 2026-09-11
 
 **What this closes off.** A profile built "as of" a date must hold no data recorded after that
