@@ -1,3 +1,36 @@
+# Feat — the Baseball Savant loader CLOSES (SIM-528); the batter and arm tickets stay open on their data runs (SIM-529, SIM-530) — 2026-09-10
+
+**SIM-528 is closed.** One declarative registry (`pipeline/etl/savant_boards.py`) and one
+loader over it (`pipeline/etl/savant_loader.py`) replace what would have been eight
+near-identical scripts. Eight typed raw tables land in Alembic 0019; 21,454 rows are loaded
+for 2023-2026. The sprint-speed loader's shape is preserved — browser-like user agent,
+backoff, and the guard that drops a player Savant publishes before our pitch feed has seen
+him rather than failing the batch.
+
+**The correction to its own definition of done.** That definition said Savant names the
+season "three different ways". There are **four**. The fourth is `season[]=`, used only by
+first-base receiving, and it was not found by reading anything — the loader's probe found it.
+Asked for a season with no possible Statcast data, an honoured parameter returns nothing; that
+board returned 34 rows, which is how we learned it accepts `year`, `seasonStart` and `season`
+without complaint and silently serves the current season for all three. Two guards now stand
+against that class of failure: the probe, once per board per run, and a per-row season check
+wherever the board returns a season column.
+
+**Still open, and neither is close.** SIM-529 stores its ten physical measurements and the
+batter model reads them, but the nightly actor score matrix predates the engine change
+(`actor_sim/batter.npz`, 2026-09-09 23:06), so the features reach no draw — the work is
+inert until `--what actors_sim` runs. Calibration is from 2026-08-16 and carries no
+`sigma_physical`. SIM-530's joins are written and reviewed but its data has never been
+written: the fielder arm block is still 0 of 4,799 rows and the catcher arm 0 of 420, because
+both aggregators depend on temp tables only a full `make profile-computor` builds. Its
+wording also still says "three empty blocks"; it is two, first-base scoop having turned out
+to be present on 610 of 628 first-baseman rows.
+
+Neither ticket's certifying lane has run, and they cannot share one: both change similarity
+scores, similarity scores are draw weights, and a band that moves could not be attributed.
+
+---
+
 # Feat — the play-picker redesign COMPLETES: the actor kernels retired for the score matrices, the balanced certifying set (45 games, every team three times), the fits on it, two 45×130 lanes and the FLIP to the certified arm (SIM-523; SIM-527 filed) — 2026-09-09
 
 **The rulings (owner, 2026-09-09).** (1) The certifying lane grades on a larger game set in
