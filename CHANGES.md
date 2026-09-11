@@ -1,3 +1,28 @@
+# Fix — SIM-536's code fix lands: odds now match the game's official date, not a UTC-rolled one — 2026-09-11
+
+**The bug.** Two loaders (`pipeline/bettingpros_odds_provider.py`,
+`pipeline/live/bullpen_availability_ingest.py`) derived a game's local calendar date by
+truncating the MLB schedule's `gameDate` field — a UTC timestamp — instead of reading the
+schedule's own `officialDate` field. For a West-/Mountain-time night game, the UTC clock has
+already rolled into the next calendar day while the game is still being played on
+`officialDate`. Verified live (2026-09-08): 5 of 15 real games rolled over this way, all West
+Coast — exactly the predicted failure mode.
+
+**A second bug found alongside it.** When a double-header produced two BettingPros matches by
+team name, the code always picked the earliest-scheduled one, regardless of which game was
+actually requested — silently returning game 1's odds for a game 2 lookup. It now picks
+whichever match is closest to the real game's own start time, and applies that same check to
+every match (not just double-headers): one more than 2 hours from the real first pitch is
+treated as unmatched.
+
+**What's still open.** The bug is fixed for every future load. The 2,378 games already loaded
+for the 2024 season have not been re-checked — up to 1,169 of them (any game with a
+non-Eastern home team) could be affected, though only late-evening starts among those
+actually would be. The owner is running that re-check personally once fewer other processes
+are competing for the database and the live odds API. `SIM-536` stays open until then.
+
+---
+
 # Docs — SIM-527 and SIM-429 CLOSE: the strikeout shortfall was measured against a metric the platform no longer trusts (owner decision) — 2026-09-10
 
 **The reasoning.** SIM-527 said the pitch/pitch-result split undercounts strikeouts by 2.4%
