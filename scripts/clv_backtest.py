@@ -174,6 +174,103 @@ WHAT THIS DOES NOT CLAIM
   ``n_games`` field for the actual game count backing a row, and read the
   two together rather than assuming the minimum is a game count.
 
+HYPOTHETICAL DOLLAR RETURN (SIM-540)
+--------------------------------------
+An accuracy score (Brier, log loss) is the right instrument for the team but
+a hard one for a non-technical reader to judge. This adds a companion,
+OPT-IN report (``--report-hypothetical-return``): for every accuracy
+observation where the simulator's probability disagreed with the market's
+by at least a chosen amount (``--edge-threshold``, default
+:data:`MIN_DETECTABLE_EDGE` — the SAME platform edge floor SIM-539 reuses),
+price a hypothetical 1-unit bet on the side the simulator favored, AT THE
+CLOSING price, and report two numbers per market:
+
+  * ``mean_model_ev`` / ``total_model_ev`` — :func:`betting.clv_engine.
+    expected_value` on the simulator's OWN probability, i.e. what the model
+    itself claims that bet is worth in theory. This never touches the real
+    outcome; it is the model grading its own confidence in dollar terms.
+  * ``mean_realized_return`` / ``total_realized_return`` — what that SAME
+    bet actually would have paid, grading it against the REAL outcome SIM-
+    538 already reads (win: profit = decimal odds − 1 per unit staked;
+    loss: −1 unit). This is the number a skeptical, non-technical reader
+    should look at — it is the only one of the two that ever checks itself
+    against reality.
+
+Both numbers are reported side by side deliberately: a model whose claimed
+EV and realized return roughly agree is behaving as it says it does; a
+large, persistent gap between them means the model's own confidence is not
+translating into real outcomes, which the accuracy score alone would not
+show as plainly. ``realized_return``'s confidence interval and minimum
+sample size reuse the EXACT SAME game-clustered machinery SIM-539 built
+(:func:`_bootstrap_mean_ci`, :func:`_minimum_observations_clustered`) —
+several qualifying bets from one game are one independent trial for this
+report too, not several. ``report["hypothetical_return"]["certified"]`` is
+always ``False`` — a MACHINE-READABLE marker, not only text in the printed
+table, since a script or dashboard reading the JSON report directly never
+sees the console output's disclaimer.
+
+WHAT THIS DELIBERATELY DOES NOT CLAIM
+  That this is a certified, trustworthy betting edge. CLAUDE.md's own
+  ruling is that no betting-value measurement is trustworthy until every
+  pool-realism band is green — a real-money claim needs more evidence than
+  one number. ``docs/audit/2026-09-10-sim536-541-market-accuracy-plan.md``'s
+  own section 6 goes further: it argues that gate may not be ENOUGH for a
+  report like this one, and proposes ALSO requiring the SIM-536 odds-
+  matching fix (shipped and re-checked) and the SIM-537 point-in-time gaps
+  (closed or accepted as a documented caveat) — a stronger gate the owner
+  has not yet adopted. This report is a DIAGNOSTIC companion to the
+  accuracy score, built to make a probability disagreement legible in
+  dollars, not a declaration that the platform should be bet with. Read it
+  the way you would read ``mean_model_ev`` on its own: as what the model
+  believes, not as proof of anything.
+
+  That flat 1-unit staking, the closing price, and zero transaction costs
+  describe how anyone would actually bet. Real staking is sized to a
+  bankroll (Kelly or otherwise, see ``betting/bet_signal.py``), a real bet
+  transacts at whatever price is available at the moment the model can act
+  (see the "WHAT THIS DELIBERATELY DOES NOT CLAIM" note above about SIM-538
+  not collecting that snapshot), and a real book charges more than the
+  quoted price implies once size and limits are considered. This report
+  isolates ONE variable — was the disagreement itself worth anything — by
+  holding every other variable at the simplest possible assumption. "1
+  unit" is NOT a dollar amount; multiply by your own stake size to read it
+  as one.
+
+  That the disagreement threshold (0.02 by default) is the right one to
+  select on. It is the SAME approximate, not-yet-empirically-anchored floor
+  the module docstring's "MINIMUM SAMPLE SIZE" section already flags for
+  SIM-539 — reused here for the SAME reason (no measured real edge
+  magnitude exists yet to anchor it to), not because 0.02 is independently
+  validated as the disagreement size that matters for a return. The SAME
+  0.02 (shrunk by :data:`DETECTION_MARGIN`) is reused a SECOND time, as the
+  minimum-detectable-effect floor for ``realized_return``'s own confidence
+  read (:func:`_return_row_for`) — a probability-scale constant applied to
+  a return-scale quantity (roughly −1 to several units, not bounded like a
+  probability) with no separate scale check. An adversarial review of
+  SIM-540 confirmed neither reuse is independently validated for its
+  quantity; both ride on the SAME unexamined number.
+
+  That the fade side's priced probability is exact at a market whose line
+  can PUSH (an integer total/runline/prop line). The simulator's own
+  ``sim_prob`` already excludes push mass from BOTH sides (the same
+  convention :func:`betting.clv_engine.total_over_under_edge_report` /
+  :func:`spread_cover_prob` / ``PropDistribution.p_over`` use), so
+  ``1 - sim_prob`` — this report's fade probability — silently INCLUDES
+  that push mass rather than the true fade-side probability, overstating
+  ``model_ev`` for a fade bet by roughly the push probability. An
+  adversarial review of SIM-540 confirmed this; fixing it needs the push
+  probability threaded onto :class:`AccuracyRecord` alongside the two
+  closing prices, which this ticket does not do.
+
+  That the Bonferroni correction on ``by_market`` rows protects against the
+  full multiple-comparisons exposure. It corrects by however many markets
+  have AT LEAST ONE bet clearing ``edge_threshold`` in this run — a count
+  the threshold filter itself chooses from the data, not a count fixed in
+  advance the way :func:`aggregate_accuracy_comparison`'s own correction is
+  (every market with ANY accuracy record, filtered or not). An adversarial
+  review of SIM-540 confirmed this is a real, unexamined gap in the
+  guarantee, not just a stylistic difference from its sibling report.
+
 HOW IT REUSES THE EXISTING SEAMS (no re-invention)
 --------------------------------------------------
   * **Sim run + game summary + win prob** — the SAME machinery the API / batch
@@ -235,6 +332,11 @@ HOW IT REUSES THE EXISTING SEAMS (no re-invention)
     pattern ``api/main.py``'s boot lifespan uses). The moneyline accuracy
     comparison would otherwise score a probability production never actually
     serves.
+  * **Dollar pricing (SIM-540)** — ``betting.clv_engine.expected_value`` /
+    ``american_to_decimal`` price the hypothetical bet; :class:`AccuracyRecord`
+    now also carries the RAW closing prices :func:`score_game_accuracy` /
+    :func:`score_prop_accuracy` already read (alongside the de-vigged
+    ``market_prob`` they always computed), so no odds are re-fetched.
 
 THE MARKETS
 -----------
@@ -285,6 +387,10 @@ USAGE
     python scripts/clv_backtest.py --seasons 2024 --max-games 2 --workers 1
     # legacy CLV report only, skip the new accuracy comparison (faster smoke run):
     python scripts/clv_backtest.py --seasons 2024 --max-games 2 --no-accuracy-comparison
+    # ALSO print the SIM-540 hypothetical dollar return (opt-in; needs the
+    # accuracy comparison, so this cannot be combined with --no-accuracy-comparison):
+    python scripts/clv_backtest.py --seasons 2024 --report-hypothetical-return
+    python scripts/clv_backtest.py --seasons 2024 --report-hypothetical-return --edge-threshold 0.05
 """
 
 from __future__ import annotations
@@ -313,7 +419,9 @@ from betting.clv_engine import (  # noqa: E402
     MarketSide,
     OddsQuote,
     TwoWayMarket,
+    american_to_decimal,
     clv_from_odds,
+    expected_value,
     moneyline_edge_report,
     prop_edge_report,
     run_line_edge_report,
@@ -372,6 +480,15 @@ DETECTION_MARGIN: float = 1.6
 #: SIM-539: the two-sided significance level BEFORE the Bonferroni correction
 #: (see _bonferroni_alpha) — the conventional default.
 DEFAULT_ALPHA: float = 0.05
+
+#: SIM-540: the default minimum probability disagreement a bet must clear to
+#: enter the hypothetical-return report (``--edge-threshold``). A SEPARATE
+#: named constant from MIN_DETECTABLE_EDGE even though it starts at the SAME
+#: value — one is a target for a STATISTICAL power calculation (SIM-539), the
+#: other a SELECTION filter (SIM-540); tying them to the same platform "edge
+#: floor" convention today does not mean a future change to one should move
+#: the other.
+DEFAULT_RETURN_EDGE_THRESHOLD: float = DEFAULT_MIN_EDGE
 
 #: SIM-539: the fewest DISTINCT GAMES a bucket must have before its
 #: game-clustered standard error / confidence interval / minimum sample
@@ -588,6 +705,14 @@ class AccuracyRecord:
     outcome: int
     #: Optional player id (props only) for provenance.
     player_id: int | None = None
+    #: SIM-540: the CLOSING American odds for the reference side / the other
+    #: side, RAW (still carrying the bookmaker's margin) — needed to price a
+    #: hypothetical bet, which unlike ``market_prob`` above must transact at
+    #: the OFFERED price, not the de-vigged fair one. ``None`` for a record
+    #: built without them (e.g. an older test fixture) — SIM-540 skips any
+    #: record missing either price rather than guessing.
+    market_side_price: float | None = None
+    market_other_price: float | None = None
 
     def to_jsonable(self) -> dict[str, Any]:
         return asdict(self)
@@ -734,8 +859,10 @@ def _json_safe(d: dict[str, Any]) -> dict[str, Any]:
     adversarial review of SIM-539 confirmed this would break the JSON
     report on exactly the low-sample rows this ticket exists to flag
     (a degenerate ``clustered_se`` / an unresolved ``min_n``). Used by
-    :meth:`ScoreboardRow.to_jsonable` and
-    :meth:`AccuracyComparisonRow.to_jsonable`.
+    :meth:`ScoreboardRow.to_jsonable`, :meth:`AccuracyComparisonRow.to_jsonable`,
+    and (SIM-540, an adversarial review of THAT ticket confirmed the same
+    defect had been reintroduced) :meth:`ReturnRecord.to_jsonable` /
+    :meth:`ReturnComparisonRow.to_jsonable`.
     """
     return {
         k: (None if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))) else v)
@@ -1489,6 +1616,337 @@ def format_accuracy_comparison(comparison: dict[str, Any], *, params: dict[str, 
 
 
 # ===========================================================================
+# SIM-540: the hypothetical dollar return (PURE — an opt-in companion report)
+# ===========================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnRecord:
+    """SIM-540: one hypothetical 1-unit bet, priced and graded.
+
+    Built ONLY for an :class:`AccuracyRecord` whose disagreement
+    (``|sim_prob - market_prob|``) cleared the caller's edge threshold AND
+    which carries both raw closing prices (see :func:`score_hypothetical_return`).
+    ``favored_side`` is ``"reference"`` when the simulator's probability
+    EXCEEDED the market's (it favors the SAME side :class:`AccuracyRecord`
+    scores), or ``"fade"`` when the simulator's probability was LOWER (it
+    favors the OTHER side of the same two-way market — the model
+    disagreeing downward is still a disagreement, and still priceable).
+    """
+
+    game_pk: int
+    market: str
+    market_type: str
+    disagreement: float
+    favored_side: str  # "reference" | "fade"
+    #: EV per unit stake at the favored side's closing price, under the
+    #: SIMULATOR's own probability (betting.clv_engine.expected_value) — the
+    #: model grading its own confidence. Never touches the real outcome.
+    model_ev: float
+    #: Profit per unit stake from actually placing that bet and grading it
+    #: against the REAL outcome: win = decimal odds − 1, loss = −1.
+    realized_return: float
+    player_id: int | None = None
+
+    def to_jsonable(self) -> dict[str, Any]:
+        return _json_safe(asdict(self))
+
+
+def _favored_side_prob_and_price(record: AccuracyRecord) -> tuple[float, float, str] | None:
+    """PURE: which side the simulator favors, its sim probability, and its
+    closing price (SIM-540).
+
+    Returns ``None`` when either raw closing price is missing (the record
+    was built without them — see :class:`AccuracyRecord`), or the two
+    probabilities are EXACTLY equal (no favored side to price at all — this
+    should already be excluded by any positive edge threshold upstream, but
+    is handled here too so this function stays correct standalone).
+
+    The FADE probability (``1.0 - record.sim_prob``) is an approximation at
+    a market whose line can PUSH (an integer total/runline/prop line):
+    ``record.sim_prob`` already excludes push mass from BOTH sides (see
+    ``betting.clv_engine.total_over_under_edge_report`` /
+    ``spread_cover_prob`` / ``PropDistribution.p_over``), so its complement
+    INCLUDES that push mass rather than being the true fade-side
+    probability — overstating a fade bet's ``model_ev`` by roughly the push
+    probability. See the module docstring's "WHAT THIS DELIBERATELY DOES
+    NOT CLAIM" section; fixing this needs the push probability threaded
+    onto :class:`AccuracyRecord`, which this ticket does not do.
+    """
+    if record.market_side_price is None or record.market_other_price is None:
+        return None
+    if record.sim_prob > record.market_prob:
+        return record.sim_prob, record.market_side_price, "reference"
+    if record.sim_prob < record.market_prob:
+        return 1.0 - record.sim_prob, record.market_other_price, "fade"
+    return None
+
+
+def score_hypothetical_return(
+    records: Sequence[AccuracyRecord], *, edge_threshold: float
+) -> list[ReturnRecord]:
+    """PURE: turn qualifying :class:`AccuracyRecord`s into priced, graded bets.
+
+    A record qualifies when its disagreement (``|sim_prob - market_prob|``)
+    is at least ``edge_threshold`` AND it carries both raw closing prices.
+    Every qualifying record contributes EXACTLY one :class:`ReturnRecord`,
+    priced on whichever side the simulator favors (see
+    :func:`_favored_side_prob_and_price`) and graded against the SAME
+    ``outcome`` :class:`AccuracyRecord` already carries — a favored
+    "reference" bet wins iff ``outcome == 1``; a favored "fade" bet wins iff
+    ``outcome == 0``.
+    """
+    out: list[ReturnRecord] = []
+    for r in records:
+        disagreement = abs(r.sim_prob - r.market_prob)
+        if disagreement < float(edge_threshold):
+            continue
+        favored = _favored_side_prob_and_price(r)
+        if favored is None:
+            continue
+        favored_prob, favored_price, favored_side = favored
+        model_ev = expected_value(favored_prob, favored_price)
+        won = (favored_side == "reference" and r.outcome == 1) or (
+            favored_side == "fade" and r.outcome == 0
+        )
+        realized_return = (american_to_decimal(favored_price) - 1.0) if won else -1.0
+        out.append(
+            ReturnRecord(
+                game_pk=r.game_pk,
+                market=r.market,
+                market_type=r.market_type,
+                disagreement=disagreement,
+                favored_side=favored_side,
+                model_ev=model_ev,
+                realized_return=realized_return,
+                player_id=r.player_id,
+            )
+        )
+    return out
+
+
+def _bootstrap_mean_ci(
+    values: np.ndarray, game_pks: np.ndarray, *, n_bootstrap: int, seed: int
+) -> tuple[float, float]:
+    """95% percentile CLUSTER-bootstrap CI on the MEAN of ``values`` (SIM-540).
+
+    Identical resampling mechanics to :func:`_bootstrap_paired_diff_ci` —
+    draw games with replacement, pool every value from the resampled games,
+    take the mean — just for a SINGLE-SAMPLE mean (a per-bet realized
+    return) rather than a paired sim-vs-market difference. Delegates to that
+    function directly rather than re-implementing the same resampling twice;
+    the "diff" in its name is not load-bearing — it works on any real-valued
+    per-observation array.
+    """
+    return _bootstrap_paired_diff_ci(values, game_pks, n_bootstrap=n_bootstrap, seed=seed)
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnComparisonRow:
+    """SIM-540: the aggregated hypothetical-return read for one group.
+
+    ``mean_model_ev`` / ``total_model_ev`` never touch the real outcome (see
+    :class:`ReturnRecord`); ``mean_realized_return`` / ``total_realized_return``
+    do, and are the number this report's own module-docstring section says a
+    reader should look at. ``realized_return_ci_low`` / ``_ci_high`` and
+    ``min_n_recommended`` / ``underpowered`` reuse the EXACT SAME
+    game-clustered machinery SIM-539 built (:func:`_bootstrap_mean_ci`,
+    :func:`_minimum_observations_clustered`) — several qualifying bets from
+    one game are one independent trial here too, not several.
+    """
+
+    group: str
+    trust: str
+    n: int
+    n_games: int
+    mean_model_ev: float
+    total_model_ev: float
+    mean_realized_return: float
+    total_realized_return: float
+    realized_return_ci_low: float
+    realized_return_ci_high: float
+    min_n_recommended: float
+    underpowered: bool
+    alpha_used: float
+
+    def to_jsonable(self) -> dict[str, Any]:
+        return _json_safe(asdict(self))
+
+
+def _return_row_for(
+    group: str,
+    trust: str,
+    records: Sequence[ReturnRecord],
+    *,
+    n_bootstrap: int,
+    seed: int,
+    alpha: float,
+) -> ReturnComparisonRow:
+    """PURE: aggregate one bucket of :class:`ReturnRecord`s into one row.
+
+    ``min_n_recommended`` reuses :data:`MIN_DETECTABLE_EDGE` /
+    :data:`DETECTION_MARGIN` as ``realized_return``'s own minimum-
+    detectable-effect floor — the SAME probability-scale constant SIM-539
+    uses for a Brier/log-loss difference or a beat-close rate, applied here
+    to a very DIFFERENT-scale quantity (a per-unit return, not a bounded
+    probability). See the module docstring's "WHAT THIS DELIBERATELY DOES
+    NOT CLAIM" section for why this reuse is unexamined, not validated.
+    """
+    n = len(records)
+    game_pks = np.array([r.game_pk for r in records], dtype=np.int64)
+    evs = np.array([r.model_ev for r in records], dtype=np.float64)
+    returns = np.array([r.realized_return for r in records], dtype=np.float64)
+
+    mean_ev = float(evs.mean()) if n else float("nan")
+    total_ev = float(evs.sum()) if n else 0.0
+    mean_return = float(returns.mean()) if n else float("nan")
+    total_return = float(returns.sum()) if n else 0.0
+
+    returns_by_game: dict[int, list[float]] = {}
+    for gp, ret in zip(game_pks.tolist(), returns.tolist(), strict=True):
+        returns_by_game.setdefault(int(gp), []).append(float(ret))
+
+    ci_lo, ci_hi = _bootstrap_mean_ci(returns, game_pks, n_bootstrap=n_bootstrap, seed=seed)
+
+    shrunk_floor = MIN_DETECTABLE_EDGE / DETECTION_MARGIN
+    min_n_or_none = _minimum_observations_clustered(
+        returns_by_game, floor=shrunk_floor, alpha=alpha
+    )
+    min_n = float("inf") if min_n_or_none is None else min_n_or_none
+    underpowered = n < min_n
+
+    return ReturnComparisonRow(
+        group=group,
+        trust=trust,
+        n=n,
+        n_games=len({r.game_pk for r in records}),
+        mean_model_ev=mean_ev,
+        total_model_ev=total_ev,
+        mean_realized_return=mean_return,
+        total_realized_return=total_return,
+        realized_return_ci_low=ci_lo,
+        realized_return_ci_high=ci_hi,
+        min_n_recommended=min_n,
+        underpowered=underpowered,
+        alpha_used=alpha,
+    )
+
+
+def aggregate_hypothetical_return(
+    accuracy_records: Sequence[AccuracyRecord],
+    *,
+    edge_threshold: float = DEFAULT_RETURN_EDGE_THRESHOLD,
+    n_bootstrap: int = DEFAULT_BOOTSTRAP_SAMPLES,
+    seed: int = 540,
+    base_alpha: float = DEFAULT_ALPHA,
+) -> dict[str, Any]:
+    """PURE: roll the SIM-538 accuracy records into the SIM-540 return report.
+
+    First filters to the bets that clear ``edge_threshold`` (see
+    :func:`score_hypothetical_return`), then aggregates them the SAME shape
+    :func:`aggregate_accuracy_comparison` uses: an ``overall`` row over every
+    qualifying bet at the UNCORRECTED ``base_alpha``, plus ``by_market`` rows
+    Bonferroni-corrected by however many markets qualify in THIS run — a
+    DATA-DEPENDENT count (which markets have any qualifying bet is itself
+    chosen by the ``edge_threshold`` filter), unlike
+    :func:`aggregate_accuracy_comparison`'s own correction, which counts
+    every market with ANY accuracy record regardless of filtering. See the
+    module docstring's "WHAT THIS DELIBERATELY DOES NOT CLAIM" section.
+    ``n_accuracy_records`` / ``n_qualifying`` are reported alongside so a
+    reader can see how much of the accuracy comparison this report actually
+    covers — a narrow ``edge_threshold`` can leave very little.
+    """
+    return_records = score_hypothetical_return(accuracy_records, edge_threshold=edge_threshold)
+    overall = _return_row_for(
+        "overall", "—", return_records, n_bootstrap=n_bootstrap, seed=seed, alpha=base_alpha
+    )
+
+    by_market_key: dict[str, list[ReturnRecord]] = {}
+    for r in return_records:
+        by_market_key.setdefault(r.market, []).append(r)
+
+    _trust_order = {"trustworthy": 0, "loose": 1, "caution": 2, "untrustworthy": 3, "unknown": 4}
+    by_market_alpha = _bonferroni_alpha(base_alpha, len(by_market_key))
+    rows = [
+        _return_row_for(
+            market,
+            trust_label(market),
+            bucket,
+            n_bootstrap=n_bootstrap,
+            seed=seed + i,
+            alpha=by_market_alpha,
+        )
+        for i, (market, bucket) in enumerate(sorted(by_market_key.items()), start=1)
+    ]
+    rows.sort(key=lambda r: (_trust_order.get(r.trust, 9), r.group))
+
+    return {
+        # SIM-540: a MACHINE-READABLE "do not trust this as a betting edge"
+        # marker, not just the console text's disclaimer — an adversarial
+        # review confirmed a script or dashboard reading this JSON block
+        # directly (never seeing format_hypothetical_return's printed
+        # caveat) would otherwise have no way to tell this apart from a
+        # certified metric. Always False; this report is never certified —
+        # see the module docstring's "HYPOTHETICAL DOLLAR RETURN" section.
+        "certified": False,
+        "edge_threshold": float(edge_threshold),
+        "n_accuracy_records": len(accuracy_records),
+        "n_qualifying": len(return_records),
+        "overall": overall.to_jsonable(),
+        "by_market": [r.to_jsonable() for r in rows],
+    }
+
+
+def format_hypothetical_return(comparison: dict[str, Any], *, params: dict[str, Any]) -> str:
+    """Render the SIM-540 hypothetical-return report as a readable table."""
+    lines = [
+        "=" * 100,
+        "SIM-540 HYPOTHETICAL DOLLAR RETURN  (a diagnostic, NOT a certified betting edge)",
+        f"Bets where the sim/market probability disagreed by >= {comparison['edge_threshold']:.4f}",
+        f"({comparison['n_qualifying']} of {comparison['n_accuracy_records']} accuracy records",
+        "qualify), priced at the CLOSING price, 1 unit flat stake. modelEV never checks the",
+        "real outcome (the model grading its own confidence); realizedReturn does -- read",
+        'THAT one. See the module docstring\'s "HYPOTHETICAL DOLLAR RETURN" section for the',
+        "full scope and the reasons this is not a betting-value certification.",
+        "=" * 100,
+        f"seasons={params.get('seasons')}  iterations={params.get('iterations')}  "
+        f"markets={params.get('markets')}  base_seed={params.get('base_seed')}",
+        "",
+    ]
+    header = (
+        f"{'market':<14}{'trust':<14}{'n':>6}{'games':>7}{'modelEV':>10}{'realzdROI':>11}"
+        f"{'95% range':>18}{'minN':>7}{'pwr':>10}"
+    )
+
+    def _fmt_row(r: dict[str, Any]) -> str:
+        rng = f"[{r['realized_return_ci_low']:.4f},{r['realized_return_ci_high']:.4f}]"
+        pwr = "UNDERPWR" if r.get("underpowered") else "ok"
+        return (
+            f"{r['group']:<14}{r['trust']:<14}{r['n']:>6}{r['n_games']:>7}"
+            f"{r['mean_model_ev']:>10.4f}{r['mean_realized_return'] * 100:>10.1f}%"
+            f"{rng:>18}{_fmt_min_n(r['min_n_recommended']):>7}{pwr:>10}"
+        )
+
+    o = comparison["overall"]
+    lines += [
+        "--- OVERALL ---",
+        header,
+        _fmt_row(o),
+        "",
+        "--- BY MARKET (grouped by trust tier) ---",
+        header,
+    ]
+    last_trust = None
+    for r in comparison["by_market"]:
+        if r["trust"] != last_trust:
+            lines.append(f"  [{r['trust']}]")
+            last_trust = r["trust"]
+        lines.append(_fmt_row(r))
+    lines.append("=" * 100)
+    return "\n".join(lines)
+
+
+# ===========================================================================
 # DB readers (lazy asyncpg import — the unit test never reaches these)
 # ===========================================================================
 
@@ -1812,6 +2270,8 @@ def score_game_accuracy(
                     sim_prob=float(er.sim_prob),
                     market_prob=float(er.market_fair_prob),
                     outcome=outcome,
+                    market_side_price=float(cp.side),
+                    market_other_price=float(cp.other),
                 )
             )
         except ValueError as exc:
@@ -1837,6 +2297,8 @@ def score_game_accuracy(
                         sim_prob=float(er.sim_prob),
                         market_prob=float(er.market_fair_prob),
                         outcome=outcome,
+                        market_side_price=float(cp.side),
+                        market_other_price=float(cp.other),
                     )
                 )
             except ValueError as exc:
@@ -1863,6 +2325,8 @@ def score_game_accuracy(
                         sim_prob=float(er.sim_prob),
                         market_prob=float(er.market_fair_prob),
                         outcome=outcome,
+                        market_side_price=float(cp.side),
+                        market_other_price=float(cp.other),
                     )
                 )
             except ValueError as exc:
@@ -2011,6 +2475,8 @@ def score_prop_accuracy(
                 market_prob=float(er.market_fair_prob),
                 outcome=outcome,
                 player_id=pid,
+                market_side_price=float(close_over),
+                market_other_price=float(close_under),
             )
         )
     return records
@@ -2902,6 +3368,9 @@ async def run(args: argparse.Namespace) -> int:
         "min_detectable_edge": MIN_DETECTABLE_EDGE,
         "detection_margin": DETECTION_MARGIN,
         "base_alpha": DEFAULT_ALPHA,
+        # SIM-540
+        "report_hypothetical_return": bool(args.report_hypothetical_return),
+        "edge_threshold": float(args.edge_threshold),
     }
 
     accuracy_comparison: dict[str, Any] | None = None
@@ -2913,6 +3382,32 @@ async def run(args: argparse.Namespace) -> int:
         )
         print(format_accuracy_comparison(accuracy_comparison, params=params))
         print()
+
+    # SIM-540: opt-in, and only meaningful once the accuracy records it reads
+    # exist at all (score_accuracy off means counters.accuracy_records is
+    # always empty). An adversarial review found the run() comment ONCE HERE
+    # claimed --no-accuracy-comparison "already logs why elsewhere" — it did
+    # not; nothing in the file explained a silently-skipped
+    # --report-hypothetical-return, and the params dict would still read
+    # report_hypothetical_return=true with no matching report in sight. The
+    # warning below closes that gap.
+    hypothetical_return: dict[str, Any] | None = None
+    if args.report_hypothetical_return and not score_accuracy:
+        log.warning(
+            "SIM-540: --report-hypothetical-return has no effect with "
+            "--no-accuracy-comparison — it needs the accuracy records that "
+            "flag disables. No hypothetical-return report was produced."
+        )
+    if score_accuracy and args.report_hypothetical_return:
+        hypothetical_return = aggregate_hypothetical_return(
+            counters.accuracy_records,
+            edge_threshold=float(args.edge_threshold),
+            n_bootstrap=int(args.bootstrap_samples),
+            seed=int(args.bootstrap_seed),
+        )
+        print(format_hypothetical_return(hypothetical_return, params=params))
+        print()
+
     print(format_scoreboard(scoreboard, params=params))
 
     report: dict[str, Any] = {
@@ -2932,6 +3427,8 @@ async def run(args: argparse.Namespace) -> int:
     if accuracy_comparison is not None:
         report["accuracy_comparison"] = accuracy_comparison
         report["accuracy_records"] = [a.to_jsonable() for a in counters.accuracy_records]
+    if hypothetical_return is not None:
+        report["hypothetical_return"] = hypothetical_return
     out_dir = os.path.dirname(os.path.abspath(args.output))
     os.makedirs(out_dir, exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as fh:
@@ -3044,6 +3541,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=538,
         help="SIM-538: seed for the paired bootstrap (deterministic re-runs).",
+    )
+    p.add_argument(
+        "--report-hypothetical-return",
+        action="store_true",
+        help=(
+            "SIM-540: also print the hypothetical dollar return — a diagnostic, "
+            "NOT a certified betting edge (see the module docstring). Opt-in; "
+            "needs the accuracy comparison (--no-accuracy-comparison disables it)."
+        ),
+    )
+    p.add_argument(
+        "--edge-threshold",
+        type=float,
+        default=DEFAULT_RETURN_EDGE_THRESHOLD,
+        help=(
+            "SIM-540: minimum |sim_prob - market_prob| disagreement a bet must "
+            f"clear to enter the hypothetical-return report (default "
+            f"{DEFAULT_RETURN_EDGE_THRESHOLD})."
+        ),
     )
     return p.parse_args(argv)
 

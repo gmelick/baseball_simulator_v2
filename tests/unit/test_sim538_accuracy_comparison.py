@@ -211,7 +211,33 @@ def test_accuracy_record_to_from_jsonable_roundtrip():
         "market_prob": 0.55,
         "outcome": 1,
         "player_id": 42,
+        # SIM-540: the raw closing prices, absent here since this record was
+        # built without them (the same "None means not priced" contract
+        # score_hypothetical_return relies on).
+        "market_side_price": None,
+        "market_other_price": None,
     }
+    assert AccuracyRecord.from_jsonable(d) == rec
+
+
+def test_accuracy_record_carries_the_raw_closing_prices_when_given():
+    """SIM-540 needs the RAW (vigged) closing prices, not just the de-vigged
+    market_prob, to price a hypothetical bet -- confirm the roundtrip holds
+    with them populated too."""
+    rec = AccuracyRecord(
+        game_pk=12345,
+        market="K",
+        market_type="prop",
+        sim_prob=0.62,
+        market_prob=0.55,
+        outcome=1,
+        player_id=42,
+        market_side_price=-115.0,
+        market_other_price=-105.0,
+    )
+    d = rec.to_jsonable()
+    assert d["market_side_price"] == -115.0
+    assert d["market_other_price"] == -105.0
     assert AccuracyRecord.from_jsonable(d) == rec
 
 
@@ -234,6 +260,13 @@ def test_score_game_accuracy_moneyline_home_win():
     assert rec.sim_prob == pytest.approx(0.65)
     assert rec.outcome == 1
     assert 0.0 < rec.market_prob < 1.0
+    # SIM-540: the RAW closing prices must be threaded through, and threaded
+    # to the RIGHT leg -- side and other are asymmetric here (-140 vs 120)
+    # specifically so a future edit that swapped cp.side/cp.other would fail
+    # this assertion (an adversarial review of SIM-540 flagged this wiring
+    # as previously untested end-to-end).
+    assert rec.market_side_price == pytest.approx(-140.0)
+    assert rec.market_other_price == pytest.approx(120.0)
 
 
 def test_score_game_accuracy_moneyline_home_loss():
@@ -255,13 +288,18 @@ def test_score_game_accuracy_moneyline_skipped_without_closing_price():
 def test_score_game_accuracy_total_over_and_under():
     wp = _win_prob(0.5)
     summary = _summary_from_totals_and_margins(totals=_VARIED_TOTALS, margins=_VARIED_MARGINS)
+    # SIM-540: asymmetric (not -110/-110) so market_side_price/other_price
+    # assertions below would fail on a swapped side/other -- a symmetric
+    # price pair could not have caught that class of bug.
     odds = _odds_closing_only(
-        "total", "over_ml", "under_ml", "total_line", side=-110.0, other=-110.0, line=8.5
+        "total", "over_ml", "under_ml", "total_line", side=-105.0, other=-115.0, line=8.5
     )
     over_recs = score_game_accuracy(1, wp, summary, odds, home_score=6, away_score=4)  # 10 > 8.5
     assert len(over_recs) == 1
     total_rec = [r for r in over_recs if r.market == "total"][0]
     assert total_rec.outcome == 1
+    assert total_rec.market_side_price == pytest.approx(-105.0)
+    assert total_rec.market_other_price == pytest.approx(-115.0)
 
     under_recs = score_game_accuracy(1, wp, summary, odds, home_score=4, away_score=3)  # 7 < 8.5
     total_rec2 = [r for r in under_recs if r.market == "total"][0]
@@ -296,6 +334,11 @@ def test_score_game_accuracy_runline_cover_and_push():
     cover_recs = score_game_accuracy(1, wp, summary, odds, home_score=5, away_score=2)
     rl = [r for r in cover_recs if r.market == "runline"][0]
     assert rl.outcome == 1
+    # SIM-540: the raw closing prices, threaded to the RIGHT leg (side=130
+    # is home_spread_ml, other=-150 is away_spread_ml -- asymmetric enough
+    # that a swap would fail this assertion).
+    assert rl.market_side_price == pytest.approx(130.0)
+    assert rl.market_other_price == pytest.approx(-150.0)
 
     # margin=1 == threshold=1.0 -> push, excluded.
     push_recs = score_game_accuracy(1, wp, summary, odds, home_score=4, away_score=3)
@@ -348,6 +391,11 @@ def test_score_prop_accuracy_batter_hits_over_and_under():
     assert over_recs[0].market_type == "prop"
     assert over_recs[0].player_id == 7
     assert over_recs[0].outcome == 1  # actual 2 > line 1.5
+    # SIM-540: the raw closing prices, threaded to the RIGHT leg (110 is
+    # close_over, -130 is close_under -- asymmetric enough that a swap
+    # would fail this assertion).
+    assert over_recs[0].market_side_price == pytest.approx(110.0)
+    assert over_recs[0].market_other_price == pytest.approx(-130.0)
 
     under_recs = score_prop_accuracy(1, pset, prop_odds, {7: {"H": 1}}, {})
     assert under_recs[0].outcome == 0  # actual 1 < line 1.5
@@ -361,6 +409,9 @@ def test_score_prop_accuracy_pitcher_strikeouts():
     assert len(recs) == 1
     assert recs[0].market == "K"
     assert recs[0].outcome == 1  # 6 > 5.5
+    # SIM-540: the raw closing prices, threaded to the RIGHT leg.
+    assert recs[0].market_side_price == pytest.approx(-115.0)
+    assert recs[0].market_other_price == pytest.approx(-105.0)
 
 
 def test_score_prop_accuracy_excludes_rbi_and_er():

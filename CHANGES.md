@@ -1,3 +1,79 @@
+# Feat — SIM-540 closes: the hypothetical dollar return, an opt-in companion to the accuracy
+comparison — 2026-09-11
+
+**What this ticket adds.** A Brier score is the right instrument for the team but a hard
+one for a non-technical reader to judge. `scripts/clv_backtest.py` now has an opt-in flag,
+`--report-hypothetical-return`, that turns a probability disagreement into dollars: for
+every SIM-538 accuracy observation where the simulator's own probability differed from the
+market's by at least a chosen amount (`--edge-threshold`, 0.02 by default — the platform's
+existing "is this edge worth acting on" floor), it prices a hypothetical 1-unit bet on the
+side the simulator favored, at the closing price, and reports two numbers side by side: what
+the model itself claims that bet is worth (never checking the real outcome), and what the
+SAME bet actually would have paid, graded against the real outcome SIM-538 already reads.
+The second number is the one a skeptical reader should look at — it is the only one that
+ever checks itself against reality. Both carry the same game-clustered confidence range and
+minimum-sample-size read SIM-539 already built.
+
+**This is a diagnostic, not a certified betting edge, and the code says so twice.** The
+console table opens with that sentence in plain words, and the JSON report itself carries a
+machine-readable `"certified": false` marker — not just text a script reading the file would
+never see. CLAUDE.md's own rule is that no betting-value number is trustworthy until every
+pool-realism band is green; the platform's own plan for this work goes further and suggests
+(without yet adopting) an even stronger bar specific to a report like this one. The code
+documents both rulings rather than picking one to quote.
+
+**A second, independent review found three real defects before this shipped, matching the
+same rigor already applied to SIM-538 and SIM-539.** Five reviewers checked the new code
+from different angles — the pricing math, whether reusing SIM-539's statistics was actually
+valid for a dollar-return metric, whether the report could be misread as certified, the
+wiring into the command line and the JSON output, and test coverage — and every finding was
+checked again by a separate reviewer before being trusted. What they found and what was
+fixed:
+
+  - **The exact same JSON bug SIM-539 already paid to fix once was reintroduced here.**
+    A market with too little data reports its uncertainty as "unresolved" using Python's
+    `nan` / `inf` values internally — legal Python, not legal JSON. SIM-539's two report
+    rows already route through a sanitizer that turns those into `null` before writing the
+    file; this ticket's new row type did not, so the exact smoke-test command this ticket's
+    own instructions recommend would have written a broken JSON file. Fixed by routing the
+    new row type through the same sanitizer.
+  - **A bet on the side the model disagrees with the market on ("fading" the market) was
+    priced slightly too generously at a market whose line can push** — an integer total, run
+    line, or prop line where the actual value can land exactly on it. The simulator's own
+    probability already excludes that push chance from both sides; the fade side's priced
+    probability was computed as a plain complement, which silently folds the push chance
+    back in and overstates the model's claimed edge by roughly that amount. The underlying
+    fix needs the push probability threaded through data this ticket does not carry yet;
+    documented honestly as a known, unfixed approximation instead of pretending it is exact.
+  - **The exact wiring that reads real closing prices into this report's dollar math had no
+    regression test at all.** Every existing test either built its own price values by hand
+    or never checked them, so a future edit that swapped which side's price goes where would
+    have silently priced every bet on the wrong side at the wrong number, with nothing in the
+    test suite catching it. Fixed by asserting the real closing prices on the existing
+    game-market and player-prop tests, which already use different prices for each side —
+    exactly the kind of test that would have caught a swap.
+
+  Four smaller, lower-risk items from the same review, all fixed: a silent no-op when the
+  new flag is combined with the flag that turns off the accuracy comparison it depends on
+  (now logs a clear warning instead of a comment that claimed, incorrectly, that this was
+  already logged elsewhere); the console header's word "DOLLAR" sitting next to numbers that
+  are actually a per-unit ratio (now spelled out as "1 unit is NOT a dollar amount"); the
+  confidence-range floor being reused a second time on a different-scale number without
+  saying so (now documented); and the report's per-market statistical correction being sized
+  by a count the report's own filter chooses, not a count fixed in advance (now documented
+  as an unexamined limitation, matching how this file already flags its other approximations
+  rather than hiding them).
+
+**Verification.** 65 new and updated tests across the accuracy-comparison and new
+hypothetical-return test files, all passing, including exact-value checks on every one of
+the four bet-grading outcomes (a bet on the model's own side winning or losing; a bet
+against the market's side winning or losing) computed independently, not by calling the
+same code twice. The full unit suite runs clean apart from the same three pre-existing,
+unrelated failures a monitoring-config test has had all along. `ruff format`, `ruff check`,
+and `mypy` are all clean on every changed file.
+
+---
+
 # Feat — SIM-539 closes: a stated minimum sample size for both CLV reports — 2026-09-11
 
 **What this ticket adds.** For every market row in the SIM-538 accuracy comparison and
