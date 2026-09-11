@@ -1,3 +1,70 @@
+# Feat — SIM-539 closes: a stated minimum sample size for both CLV reports — 2026-09-11
+
+**What this ticket adds.** For every market row in the SIM-538 accuracy comparison and
+the legacy SIM-429 CLV scoreboard, state the smallest number of observations that market
+needs before its result should be trusted at all. A small sample can look like real skill
+by pure chance. The method: a standard power-analysis formula, the platform's own
+existing "is this edge big enough to act on" floor (`betting.bet_signal.DEFAULT_MIN_EDGE`),
+the same detection-margin constant `tests/acceptance/bands.py` already uses, and a
+Bonferroni correction for scanning several market rows at once (the standard fix for
+mistaking one lucky row for a real signal). The legacy scoreboard also gains a
+game-clustered confidence interval and standard error on its beat-close rate — bets from
+the same game (several props from one start, say) are correlated, not independent
+trials, mirroring the cluster-aware bootstrap SIM-538 already built for the accuracy
+comparison.
+
+**A second, independent review found real defects, the most serious ones this ticket
+shipped.** Five reviewers checked the new code from different angles (the power formula
+and its constants, the clustering math, wiring into both reports' printed tables,
+honesty of every claim against what the code actually does, and test coverage), and
+every finding was checked again by a separate reviewer before being trusted. What they
+found and what I fixed:
+
+  - **A documentation claim was wrong.** Reusing `tests/acceptance/bands.py`'s
+    detection-margin constant does not carry over that file's own "99.2% power" figure —
+    that number only holds at bands.py's fixed significance level, chosen for its own
+    13-channel nightly gate. This report's significance level varies per row (uncorrected
+    for the one top-line "overall" row, Bonferroni-corrected for every other row), so the
+    real power is lower and depends on the row. Fixed by removing the borrowed number and
+    stating the real relationship instead.
+  - **The most serious one: a tiny, lucky sample could read as fully resolved.** A market
+    backed by just 2–3 games whose observed spread happened to land at exactly zero read
+    as "zero uncertainty, no more data needed" — purely by chance. The formula was doing
+    exactly what it should given the input; the problem was trusting a spread ESTIMATED
+    from 2–3 points at all. Fixed by raising the minimum number of distinct games required
+    before any clustered read is attempted, from a bare "at least 2" (the least the math
+    can compute a nonzero spread from) to a documented, more conservative floor — and by
+    saying plainly, in the code itself, that clearing this floor does not by itself
+    certify the estimate as fully reliable.
+  - **The scoreboard's own "games" column was misleading.** It counted every game a
+    market was PRICED in, not the placed-bet games the new confidence read is actually
+    built from — a reader could see a big number next to a read built from a much smaller,
+    real sample. Fixed by adding the correct count as its own field.
+  - **A run with zero scoreable games crashed the report.** This is a real, common
+    outcome (an empty date range, a slate with no completed games yet), not a
+    hypothetical — two existing integration tests caught it. Every score in that "no
+    games found" row is undefined, and the printed table crashed trying to format it.
+    Fixed by rendering every such field honestly ("n/a") instead of crashing, and reusing
+    the same fix to make the JSON report itself valid JSON (a bare "not a number" or
+    "infinity" value is not legal JSON and fails to parse in a non-Python consumer) — both
+    problems traced to the same root cause and fixed together.
+  - Smaller fixes: a printed column header did not line up with its own data column; a
+    claim that the Brier-score approximation holds equally well for every market was not
+    true for a market whose typical probability sits far from a coin flip (documented as
+    a known limitation, not fixed — a per-market correction is a larger change); and
+    several test gaps that could have hidden a real regression (a wrong divisor that
+    would have matched a coincidentally-identical test fixture; a rendering path for a
+    genuinely underpowered row that no test exercised).
+
+**Verification.** Running the full existing test suite after these fixes caught one more
+real problem: the JSON-safety fix changed what an "unresolved" value looks like (a Python
+"infinity" became "null"), and two spots in the table-rendering code had not been updated
+to expect that. Fixed the same way. 67 new/updated tests. Full unit suite green apart
+from the same 3 pre-existing, unrelated failures noted below. `ruff format`, `ruff
+check`, and `mypy` are all clean on every changed file.
+
+---
+
 # Feat — SIM-538 closes: the sim-vs-closing-line accuracy comparison, the platform's new
 gold-standard metric — 2026-09-11
 
