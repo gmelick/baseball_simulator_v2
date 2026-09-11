@@ -1,3 +1,32 @@
+# Fix — SIM-542 closes: two fielder placeholder tables named the wrong columns — 2026-09-11
+
+**The bug.** When the fielder metrics builder skips a measurement for lack of data — say, too
+few bunt plays that season — it still needs an empty stand-in table so the step that combines
+every measurement into one row has something to join against. Two of those stand-ins named
+their columns wrong: the error-rate one used `fielding_errors` where the real builder writes
+`fielding_error_count` (and was missing two columns outright), and the bunt-defense one used
+`bunt_outs`/`bunt_success_rate` where the real builder writes `bunt_outs_recorded`/
+`bunt_fielding_rate`.
+
+**Why it never showed up before.** Both real builders always run before the combining step, and
+neither skips for a small sample, so the real table — with the right names — is already there
+by the time the stand-in would be created. The stand-in's "create if missing" never fires in
+practice. It would fire, and crash the combining step, the moment someone runs that step by
+itself, reorders the pipeline, or a future change gives either builder a skip condition it
+doesn't have today.
+
+**The fix.** Both stand-ins now name their columns exactly as the real builders do. Eight new
+tests run the combining step against nothing but the stand-ins (proving it can no longer crash
+that way) and check every stand-in's column names directly against what the combining step
+reads from each one.
+
+**Found while verifying SIM-537.** Closing out the point-in-time work for baserunner, catcher,
+and fielder profiles meant running the fielder combining step directly against a real database
+to prove the point-in-time changes bind correctly — which is exactly the situation that exposes
+this bug. Filed and closed the same day.
+
+---
+
 # Feat — the batter's physical swing features and the empty arm blocks CLOSE (SIM-529, SIM-530); the run sequence, what it found, and the lane waiver — 2026-09-11
 
 **Both tickets are closed.** The owner ruled on 2026-09-10 that neither needs a certifying

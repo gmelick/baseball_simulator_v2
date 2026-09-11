@@ -5550,19 +5550,37 @@ class PlayerProfileComputor:
             # Schema follows the SELECT shape inside the aggregator's `err` CTE
             # (SELECT * FROM _tmp_errors).  Keep the column set minimal but
             # include the foreign-key columns the outer SELECT joins on.
+            #
+            # SIM-542: these five names (fielding_error_count, throwing_error_count,
+            # fielding_error_rate, throwing_error_rate — plus the unused
+            # total_plays_fielded) must match _compute_error_decomposition's REAL
+            # output columns exactly. This placeholder named them
+            # fielding_errors/throwing_errors/total_plays instead, and was missing
+            # fielding_error_rate/throwing_error_rate outright — silently correct
+            # in production only because that builder has no sample-size guard and
+            # always creates the real table first, so this placeholder's
+            # IF NOT EXISTS never actually fires there. A caller that runs the
+            # aggregator standalone hits `Binder Error: Values list "e" does not
+            # have a column named "fielding_error_count"` the moment this
+            # placeholder is the only table in play.
             "_tmp_errors": """
                 CREATE TABLE IF NOT EXISTS _tmp_errors (
-                    season SMALLINT, fielder_id INTEGER, position VARCHAR,
-                    total_plays INTEGER, fielding_errors INTEGER,
-                    throwing_errors INTEGER, error_rate FLOAT
+                    fielder_id INTEGER, position VARCHAR, season SMALLINT,
+                    total_plays_fielded INTEGER, fielding_error_count INTEGER,
+                    throwing_error_count INTEGER, fielding_error_rate FLOAT,
+                    throwing_error_rate FLOAT, error_rate FLOAT
                 )
             """,
             # Bunt defense — _compute_bunt_defense
+            # SIM-542: same class of bug as _tmp_errors above — bunt_outs and
+            # bunt_success_rate must be named bunt_outs_recorded and
+            # bunt_fielding_rate to match what _compute_bunt_defense really
+            # produces and what the aggregator's outer SELECT reads from `b`.
             "_tmp_bunt_defense": """
                 CREATE TABLE IF NOT EXISTS _tmp_bunt_defense (
-                    season SMALLINT, fielder_id INTEGER, position VARCHAR,
-                    bunt_opportunities INTEGER, bunt_outs INTEGER,
-                    bunt_success_rate FLOAT
+                    fielder_id INTEGER, position VARCHAR, season SMALLINT,
+                    bunt_opportunities INTEGER, bunt_outs_recorded INTEGER,
+                    bunt_fielding_rate FLOAT
                 )
             """,
             # 1B scooping — _compute_first_base_scooping
