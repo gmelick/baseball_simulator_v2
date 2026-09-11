@@ -213,6 +213,7 @@ def _load_roster_schedule() -> dict:
                     {
                         "gamePk": 746437,
                         "gameDate": "2024-08-15T17:10:00Z",
+                        "officialDate": "2024-08-15",
                         "teams": {
                             "home": {"team": {"id": 116, "name": "Detroit Tigers"}},
                             "away": {"team": {"id": 136, "name": "Seattle Mariners"}},
@@ -447,6 +448,41 @@ class TestIngestGame:
         ingest = _FixtureIngest()
         assert ingest.ingest_game(746437, []) == []
         assert ingest.persisted == []
+
+    def test_resolve_game_meta_uses_official_date_not_utc_rollover_date(self):
+        """SIM-536: a West-Coast night game's UTC `gameDate` has already rolled
+        into the next day while `officialDate` correctly stays put — the
+        roster-lookup date (and the persisted record's game_date) must come
+        from `officialDate`, or the wrong day's roster gets fetched."""
+        ingest = _FixtureIngest()
+
+        def _rollover_schedule(path, params):
+            if path == "schedule":
+                return {
+                    "dates": [
+                        {
+                            "games": [
+                                {
+                                    "gamePk": 999005,
+                                    "gameDate": "2026-09-09T01:40:00Z",  # UTC: the 9th
+                                    "officialDate": "2026-09-08",  # played: the 8th
+                                    "teams": {
+                                        "home": {"team": {"id": 135, "name": "San Diego Padres"}},
+                                        "away": {
+                                            "team": {"id": 120, "name": "Washington Nationals"}
+                                        },
+                                    },
+                                }
+                            ]
+                        }
+                    ]
+                }
+            raise AssertionError(f"unexpected MLB path {path}")
+
+        ingest._mlb_get = _rollover_schedule  # type: ignore[assignment]
+        meta = ingest._resolve_game_meta(999005)
+        assert meta is not None
+        assert meta.date == "2026-09-08"  # NOT "2026-09-09"
 
     def test_ingest_unresolvable_game_skipped(self):
         ingest = _FixtureIngest()

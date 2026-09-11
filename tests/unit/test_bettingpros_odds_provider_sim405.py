@@ -144,3 +144,180 @@ def test_registry_resolves_bettingpros_and_real():
     for name in ("bettingpros", "real"):
         prov = get_odds_provider(name)
         assert isinstance(prov, BettingProsOddsProvider)
+
+
+# --------------------------------------------------------------------------- SIM-536
+# Wrong-game odds: the schedule date used to query BettingPros must come from
+# `officialDate` (the local calendar date), never from truncating `gameDate` (a
+# UTC timestamp) -- a West-/Mountain-time night game has already rolled its UTC
+# clock into the next day while `officialDate` correctly stays put. A live check
+# (2026-09-08) found this wrong on 5 of 15 real games that day.
+
+
+class _DateRecordingProvider(BettingProsOddsProvider):
+    """Records which `date` param `_bp_get('events', ...)` was queried with."""
+
+    def __init__(self, schedule: dict, events_by_date: dict[str, dict], **kw):
+        super().__init__(api_key="test-key", **kw)
+        self._schedule = schedule
+        self._events_by_date = events_by_date
+        self.queried_dates: list[str] = []
+
+    def _mlb_get(self, path, params):  # type: ignore[override]
+        if path == "schedule":
+            return self._schedule
+        raise AssertionError(f"unexpected MLB path {path}")
+
+    def _bp_get(self, path, params):  # type: ignore[override]
+        if path == "events":
+            self.queried_dates.append(params["date"])
+            return self._events_by_date.get(params["date"], {"events": []})
+        raise AssertionError(f"unexpected BP path {path}")
+
+
+def _schedule_for(game_pk: int, game_date_utc: str, official_date: str, home: str, away: str):
+    return {
+        "dates": [
+            {
+                "games": [
+                    {
+                        "gamePk": game_pk,
+                        "gameDate": game_date_utc,
+                        "officialDate": official_date,
+                        "teams": {
+                            "home": {"team": {"name": home}},
+                            "away": {"team": {"name": away}},
+                        },
+                    }
+                ]
+            }
+        ]
+    }
+
+
+def test_resolve_event_queries_official_date_not_utc_rollover_date():
+    """A late West-Coast start (UTC rolls to the next day) must still query
+    BettingPros for the day the game is actually played on."""
+    schedule = _schedule_for(
+        999001,
+        game_date_utc="2026-09-09T01:40:00Z",  # UTC already the next day...
+        official_date="2026-09-08",  # ...but the game is played on the 8th.
+        home="San Diego Padres",
+        away="Washington Nationals",
+    )
+    events_by_date = {
+        "2026-09-08": {
+            "events": [
+                {
+                    "id": 1,
+                    "home": "SD",
+                    "visitor": "WSH",
+                    "scheduled": "2026-09-09 01:40:00",
+                    "participants": [
+                        {"id": "SD", "name": "Padres"},
+                        {"id": "WSH", "name": "Nationals"},
+                    ],
+                }
+            ]
+        },
+        # The WRONG day the pre-fix bug would have queried: a different game
+        # between the same two teams the following day, if one existed. Left
+        # non-empty so a regression that queries this date instead is caught by
+        # `queried_dates`, not by an accidental empty-result pass.
+        "2026-09-09": {
+            "events": [
+                {
+                    "id": 2,
+                    "home": "SD",
+                    "visitor": "WSH",
+                    "scheduled": "2026-09-10 01:40:00",
+                    "participants": [
+                        {"id": "SD", "name": "Padres"},
+                        {"id": "WSH", "name": "Nationals"},
+                    ],
+                }
+            ]
+        },
+    }
+    provider = _DateRecordingProvider(schedule, events_by_date)
+    event = provider._resolve_event(999001)
+    assert provider.queried_dates == ["2026-09-08"]
+    assert event is not None and event["id"] == 1
+
+
+def test_resolve_event_picks_the_doubleheader_game_actually_requested():
+    """Two BettingPros events match by team name (a double-header); the one
+    picked must be whichever is closest to THIS game's own start time, not
+    always the earlier of the two (the pre-SIM-536 behaviour)."""
+    # game_pk here is game 2 of the doubleheader (the later start).
+    schedule = _schedule_for(
+        999002,
+        game_date_utc="2024-08-15T23:40:00Z",
+        official_date="2024-08-15",
+        home="Detroit Tigers",
+        away="Seattle Mariners",
+    )
+    game_1 = {
+        "id": 111,
+        "home": "DET",
+        "visitor": "SEA",
+        "scheduled": "2024-08-15 17:10:00",
+        "participants": [{"id": "DET", "name": "Tigers"}, {"id": "SEA", "name": "Mariners"}],
+    }
+    game_2 = {
+        "id": 222,
+        "home": "DET",
+        "visitor": "SEA",
+        "scheduled": "2024-08-15 23:40:00",
+        "participants": [{"id": "DET", "name": "Tigers"}, {"id": "SEA", "name": "Mariners"}],
+    }
+    events_by_date = {"2024-08-15": {"events": [game_1, game_2]}}
+    provider = _DateRecordingProvider(schedule, events_by_date)
+    event = provider._resolve_event(999002)
+    assert event is not None
+    assert event["id"] == 222  # game 2 — NOT the earliest-scheduled (111)
+
+
+def test_resolve_event_rejects_a_match_far_from_the_real_start_time():
+    """The single team-name match exists, but its scheduled time is hours away
+    from the real game's start -- that must not be silently accepted."""
+    schedule = _schedule_for(
+        999003,
+        game_date_utc="2024-08-15T17:10:00Z",
+        official_date="2024-08-15",
+        home="Detroit Tigers",
+        away="Seattle Mariners",
+    )
+    far_off_event = {
+        "id": 333,
+        "home": "DET",
+        "visitor": "SEA",
+        "scheduled": "2024-08-15 23:40:00",  # 6.5 hours from the real 17:10 start
+        "participants": [{"id": "DET", "name": "Tigers"}, {"id": "SEA", "name": "Mariners"}],
+    }
+    events_by_date = {"2024-08-15": {"events": [far_off_event]}}
+    provider = _DateRecordingProvider(schedule, events_by_date)
+    assert provider._resolve_event(999003) is None
+
+
+def test_resolve_event_accepts_a_close_match_within_the_sanity_window():
+    """A match within the 2-hour sanity window is accepted normally — the
+    check should not reject legitimate small scheduling variance."""
+    schedule = _schedule_for(
+        999004,
+        game_date_utc="2024-08-15T17:10:00Z",
+        official_date="2024-08-15",
+        home="Detroit Tigers",
+        away="Seattle Mariners",
+    )
+    close_event = {
+        "id": 444,
+        "home": "DET",
+        "visitor": "SEA",
+        "scheduled": "2024-08-15 18:00:00",  # 50 minutes off — inside the window
+        "participants": [{"id": "DET", "name": "Tigers"}, {"id": "SEA", "name": "Mariners"}],
+    }
+    events_by_date = {"2024-08-15": {"events": [close_event]}}
+    provider = _DateRecordingProvider(schedule, events_by_date)
+    event = provider._resolve_event(999004)
+    assert event is not None and event["id"] == 444

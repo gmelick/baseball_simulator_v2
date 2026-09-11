@@ -185,7 +185,22 @@ class BullpenAvailabilityIngest:
 
     # ----------------------------------------------------- identifier bridges
     def _resolve_game_meta(self, game_pk: int) -> _GameMeta | None:
-        """``game_pk`` → (date, home_team_id, away_team_id) via the MLB schedule."""
+        """``game_pk`` → (date, home_team_id, away_team_id) via the MLB schedule.
+
+        SIM-536: ``date`` MUST come from the schedule's ``officialDate`` field
+        (the local calendar date the game is actually played on), never from
+        truncating ``gameDate`` (a UTC timestamp). For a West-/Mountain-time
+        night game the UTC clock has already rolled into the next calendar
+        day while the game is still being played on ``officialDate`` — this
+        `date` is used below to fetch each team's active roster AS OF this
+        game, so a day off by one silently pulls the wrong day's roster
+        snapshot and mis-stamps the persisted availability record's
+        ``game_date``. Same bug as SIM-536's fix in
+        ``pipeline/bettingpros_odds_provider.py``; unlike that file, resolving
+        a roster date never involves matching against a second, third-party
+        schedule, so there is no doubleheader/event-matching risk here to fix
+        alongside it.
+        """
         if game_pk in self._meta_cache:
             return self._meta_cache[game_pk]
         meta: _GameMeta | None = None
@@ -193,7 +208,7 @@ class BullpenAvailabilityIngest:
             data = self._mlb_get("schedule", {"sportId": 1, "gamePk": game_pk})
             game = data["dates"][0]["games"][0]
             meta = _GameMeta(
-                date=str(game["gameDate"])[:10],
+                date=str(game["officialDate"]),
                 home_team_id=int(game["teams"]["home"]["team"]["id"]),
                 away_team_id=int(game["teams"]["away"]["team"]["id"]),
             )

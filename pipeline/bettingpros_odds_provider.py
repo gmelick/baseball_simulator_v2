@@ -47,12 +47,37 @@ import os
 import unicodedata
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta
 from typing import Any
 
 log = logging.getLogger("pipeline.bettingpros_odds_provider")
 
 _BP_BASE = "https://api.bettingpros.com/v3"
 _MLB_BASE = "https://statsapi.mlb.com/api/v1"
+
+#: SIM-536: the largest gap allowed between the actual game's start time and the
+#: BettingPros event we matched it to. A match beyond this is treated as no
+#: match at all, rather than silently priced against the wrong game.
+_MAX_EVENT_TIME_DELTA = timedelta(hours=2)
+
+
+def _parse_utc(value: str) -> datetime | None:
+    """Parse a UTC timestamp from either source, or ``None`` if unparseable.
+
+    The MLB schedule's ``gameDate`` is ISO-8601 (``"2026-09-08T22:35:00Z"``);
+    BettingPros' ``scheduled`` is space-separated with no zone marker
+    (``"2026-09-08 22:35:00"``) but represents the same UTC instant (verified
+    against a live game: both read the identical wall-clock value). Naive
+    ``datetime`` objects from both are therefore directly comparable.
+    """
+    v = value.strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(v, fmt)
+        except ValueError:
+            continue
+    return None
+
 
 #: BettingPros game-odds market ids.
 _GAME_MARKET_IDS: dict[str, int] = {
@@ -99,7 +124,7 @@ class BettingProsOddsProvider:
         self._timeout = timeout
         # Per-instance caches (cleared by constructing a new provider).
         self._event_cache: dict[int, dict[str, Any] | None] = {}
-        self._game_meta_cache: dict[int, tuple[str, str, str] | None] = {}
+        self._game_meta_cache: dict[int, tuple[str, str, str, datetime | None] | None] = {}
         self._player_name_cache: dict[int, str | None] = {}
 
     # ----------------------------------------------------------------- HTTP
@@ -127,31 +152,60 @@ class BettingProsOddsProvider:
         return self._http_get_json(url)
 
     # ------------------------------------------------------ identifier bridges
-    def _resolve_game_meta(self, game_pk: int) -> tuple[str, str, str] | None:
-        """``game_pk`` → (date 'YYYY-MM-DD', home_team_name, away_team_name)."""
+    def _resolve_game_meta(self, game_pk: int) -> tuple[str, str, str, datetime | None] | None:
+        """``game_pk`` → (official local date, home name, away name, UTC start time).
+
+        SIM-536: the date MUST come from ``officialDate`` (the schedule's own
+        local-calendar-date field), never from truncating ``gameDate`` (a UTC
+        timestamp). For any West-/Mountain-time night game, the UTC clock has
+        already rolled past midnight into the next calendar day while the game
+        is still being played on ``officialDate`` — truncating ``gameDate``
+        then queries BettingPros for the WRONG day's slate, which most often
+        pairs the game with a different one between the same two teams the
+        following day. A live check (2026-09-08) found this on 5 of 15 games
+        that day — every West-Coast game, exactly the affected set.
+
+        The UTC start time (from ``gameDate``, unlike ``officialDate`` this one
+        legitimately needs to stay in UTC) is returned too, so
+        :meth:`_resolve_event` can pick the right BettingPros event by actual
+        start time instead of guessing.
+        """
         if game_pk in self._game_meta_cache:
             return self._game_meta_cache[game_pk]
-        meta: tuple[str, str, str] | None = None
+        meta: tuple[str, str, str, datetime | None] | None = None
         try:
             data = self._mlb_get("schedule", {"sportId": 1, "gamePk": game_pk})
             game = data["dates"][0]["games"][0]
-            date_str = str(game["gameDate"])[:10]
+            date_str = str(game["officialDate"])
             home = str(game["teams"]["home"]["team"]["name"])
             away = str(game["teams"]["away"]["team"]["name"])
-            meta = (date_str, home, away)
+            game_dt = _parse_utc(str(game.get("gameDate", "")))
+            meta = (date_str, home, away, game_dt)
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: could not resolve game_pk %s: %s", game_pk, exc)
         self._game_meta_cache[game_pk] = meta
         return meta
 
     def _resolve_event(self, game_pk: int) -> dict[str, Any] | None:
-        """``game_pk`` → the matching BettingPros event dict (or None)."""
+        """``game_pk`` → the matching BettingPros event dict (or None).
+
+        SIM-536: when more than one event matches by team name (a
+        double-header), the earlier code always picked the earliest-scheduled
+        one — silently returning game 1's odds even when ``game_pk`` was game
+        2. It now picks whichever candidate's ``scheduled`` time is CLOSEST to
+        the actual game's own start time (from :meth:`_resolve_game_meta`),
+        which is what genuinely tells the two games apart. That same
+        start-time check also acts as a sanity gate on every match, not only
+        double-headers: a match more than :data:`_MAX_EVENT_TIME_DELTA` away
+        from the real first pitch is treated as no match, rather than priced
+        against whatever the closest name match happened to be.
+        """
         if game_pk in self._event_cache:
             return self._event_cache[game_pk]
         event: dict[str, Any] | None = None
         meta = self._resolve_game_meta(game_pk)
         if meta is not None:
-            date_str, home_name, away_name = meta
+            date_str, home_name, away_name, game_dt = meta
             home_n, away_n = _normalize_name(home_name), _normalize_name(away_name)
             try:
                 data = self._bp_get("events", {"sport": "MLB", "date": date_str})
@@ -163,17 +217,48 @@ class BettingProsOddsProvider:
                     # Nickname suffix-matches the MLB full name ("Tigers" ⊂ "Detroit Tigers").
                     if home_n.endswith(home_nick) and away_n.endswith(away_nick) and home_nick:
                         candidates.append(e)
-                if len(candidates) == 1:
+                if candidates and game_dt is not None:
+
+                    def _delta(candidate: dict[str, Any]) -> timedelta:
+                        c_dt = _parse_utc(str(candidate.get("scheduled", "")))
+                        return timedelta.max if c_dt is None else abs(c_dt - game_dt)
+
+                    best = min(candidates, key=_delta)
+                    best_delta = _delta(best)
+                    if best_delta > _MAX_EVENT_TIME_DELTA:
+                        log.warning(
+                            "BettingPros: closest event (scheduled=%s) for game_pk %s is "
+                            "%s from the real start time — over the %s sanity limit, "
+                            "treating as unmatched rather than risk the wrong game",
+                            best.get("scheduled"),
+                            game_pk,
+                            best_delta,
+                            _MAX_EVENT_TIME_DELTA,
+                        )
+                    else:
+                        event = best
+                        if len(candidates) > 1:
+                            log.info(
+                                "BettingPros: %d events matched game_pk %s (double-header); "
+                                "picked scheduled=%s (%s from the real start time)",
+                                len(candidates),
+                                game_pk,
+                                event.get("scheduled"),
+                                best_delta,
+                            )
+                elif len(candidates) == 1:
+                    # No usable start time to sanity-check against (gameDate was
+                    # missing/unparseable) but only one name match anyway — accept it,
+                    # matching the pre-SIM-536 behaviour for the common case.
                     event = candidates[0]
                 elif len(candidates) > 1:
-                    # Double-header: pick the earliest scheduled (game 1) by default.
-                    event = sorted(candidates, key=lambda e: str(e.get("scheduled", "")))[0]
-                    log.info(
-                        "BettingPros: %d events matched game_pk %s (double-header); "
-                        "picked scheduled=%s",
+                    # Multiple candidates and no start time to tell them apart by —
+                    # guessing "game 1" is exactly the bug this fix removes, so refuse.
+                    log.warning(
+                        "BettingPros: %d events matched game_pk %s (double-header) but "
+                        "the game's own start time is unknown — refusing to guess which",
                         len(candidates),
                         game_pk,
-                        event.get("scheduled"),
                     )
             except Exception as exc:  # noqa: BLE001
                 log.warning("BettingPros: event lookup failed for game_pk %s: %s", game_pk, exc)
