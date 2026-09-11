@@ -1,3 +1,30 @@
+# Docs — SIM-527 and SIM-429 CLOSE: the strikeout shortfall was measured against a metric the platform no longer trusts (owner decision) — 2026-09-10
+
+**The reasoning.** SIM-527 said the pitch/pitch-result split undercounts strikeouts by 2.4%
+against a 2.0% floor, measured by comparing the simulator's own total against the play pool's
+own total — a pool-totals band. The owner has since ruled that pool-totals bands are the wrong
+way to judge accuracy: a model that always predicted the pool average would pass them
+perfectly, so they cannot tell a genuinely accurate model from a bland one. The plan is now to
+judge accuracy by comparing the simulator's probability, and the closing betting line's
+probability, against what actually happened in real games (`docs/audit/2026-09-10-sim536-541-market-accuracy-plan.md`).
+
+**What that means for these two tickets.** Under the old metric, the strikeout shortfall was a
+confirmed 2.4% miss. Under the new one, it has never been measured — the finding was real
+evidence for a metric the platform no longer uses, and no evidence at all for the one it is
+adopting. There is nothing currently confirmed to refit, so:
+
+- **SIM-527** (the split's strikeout shortfall) is closed. The split itself stays off, as it
+  already was; it can be re-measured under the new accuracy comparison (SIM-538) once that
+  exists, and re-opened under a new ticket if it still misses.
+- **SIM-429** (the strikeout-prop betting calibration, narrowed earlier today to drop its
+  stale re-measure-CLV framing) is closed for the same reason — refitting a model against a
+  shortfall figure that is no longer trusted evidence would not be real work.
+
+Neither closure is a claim that the strikeout model is fine. It is a claim that the platform
+does not yet know, and will find out from SIM-538 rather than from the pool-totals bands.
+
+---
+
 # Feat — the Baseball Savant loader CLOSES (SIM-528); the batter and arm tickets stay open on their data runs (SIM-529, SIM-530) — 2026-09-10
 
 **SIM-528 is closed.** One declarative registry (`pipeline/etl/savant_boards.py`) and one

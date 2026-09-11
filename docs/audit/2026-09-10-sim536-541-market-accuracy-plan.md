@@ -261,6 +261,15 @@ the existing `SIM-429` row to drop everything about re-measuring closing-line va
 old entry-vs-close sense (owned by the tickets above now) and keep only the strikeout/walk
 prop-calibration refit, which is unrelated, still valid work.
 
+**⚠ CORRECTED same day (owner decision).** `SIM-429` was narrowed as above, then closed
+entirely — along with `SIM-527`, the strikeout-shortfall ticket the refit depended on. Both
+were measured against a pool-totals band, and the owner has ruled that metric untrustworthy
+for exactly the reason this whole plan exists: it cannot tell an accurate model from a bland
+one. The strikeout shortfall is real evidence for a metric this plan retires, and no evidence
+at all for the one it adopts. Neither ticket is reopened by this plan; a genuine strikeout
+accuracy problem, if one exists, will show up in `SIM-538`'s results once it runs, as its own
+new ticket. See `CHANGES.md`, 2026-09-10.
+
 ## 5. Suggested order
 
 1. **SIM-536** first, alone — nothing else is trustworthy until odds are matched to the right
