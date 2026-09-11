@@ -111,6 +111,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -441,6 +442,50 @@ async def resolve_park_run_factor(pool: Any, con: Any, game_pk: int, season: int
         return park_factor_unavailable(reason)
 
 
+async def resolve_asof_ymd(pool: Any, game_pk: int) -> int | None:
+    """SIM-535: the last date whose plays a simulator of ``game_pk`` may copy.
+
+    That is the day BEFORE the game, not the game's own date, and the reason is
+    the game itself. The play pools hold every play of every game in the window,
+    including this one. A cutoff on the game's own date would leave the
+    simulator free to copy the very plays it is trying to predict — the most
+    direct leak available, and one that would make a backtest look superb.
+
+    Cutting at the previous day also drops the other games played earlier that
+    day, which is a real if small loss. Taking those back needs first-pitch
+    times, which we do not carry; a day is the finest cut the data supports.
+
+    Returns None when the pool is absent, the game is unknown or the query
+    fails — the caller then simulates without a cutoff, which is correct for a
+    live game and is what happened before this existed.
+    """
+    if pool is None:
+        return None
+    try:
+        acquire = getattr(pool, "acquire", None)
+        if acquire is not None:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT game_date FROM raw.games WHERE game_pk = $1", int(game_pk)
+                )
+        else:
+            row = await pool.fetchrow(
+                "SELECT game_date FROM raw.games WHERE game_pk = $1", int(game_pk)
+            )
+        game_date = None if row is None else row["game_date"]
+    except Exception as exc:  # noqa: BLE001 — a missing cutoff is not fatal
+        log.warning("SIM-535: game-date lookup failed for game_pk=%s: %s", int(game_pk), exc)
+        return None
+    if game_date is None:
+        return None
+    try:
+        cutoff = game_date - timedelta(days=1)
+        return int(cutoff.strftime("%Y%m%d"))
+    except (AttributeError, TypeError, ValueError):
+        log.warning("SIM-535: unusable game_date %r for game_pk=%s", game_date, int(game_pk))
+        return None
+
+
 async def resolve_park_factor_onto_state(
     state: Any,
     pool: Any,
@@ -525,10 +570,19 @@ async def build_sim_kwargs(
             int(game_pk),
             park_factor_reason(getattr(state, "park_run_factor", None)),
         )
-    return sim_kwargs_from_state(
+    kwargs = sim_kwargs_from_state(
         state,
         allow_unavailable_park_factor=(on_unavailable_park_factor == "proceed"),
     )
+    # SIM-535: the point-in-time cutoff, as a FACTORY-ONLY key (the leading
+    # underscore — it tunes the machine the factory builds and is not a
+    # ``simulate_game`` parameter). Absent or None, the sampler draws from the
+    # whole pool, which is right for a live game and is the behaviour that
+    # predates this.
+    asof = await resolve_asof_ymd(pool, int(game_pk))
+    if asof is not None:
+        kwargs["_asof_ymd"] = asof
+    return kwargs
 
 
 def open_sim_duckdb(path: str | None = None) -> Any:

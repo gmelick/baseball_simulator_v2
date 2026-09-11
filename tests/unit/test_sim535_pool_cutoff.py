@@ -174,3 +174,63 @@ def test_a_drawn_pitch_never_postdates_the_cutoff() -> None:
     assert drawn.size, "the cutoff left no admissible rows — widen the fixture"
     assert (pool.game_ymd[drawn] <= cutoff).all()
     assert (base[pool.game_ymd > cutoff] == 0).all()
+
+
+# ---------------------------------------------------------------------------
+# The cutoff reaches the sampler from the game being simulated
+# ---------------------------------------------------------------------------
+
+
+class _FakePool:
+    """A connection pool with one game on a known date."""
+
+    def __init__(self, game_date):
+        self._game_date = game_date
+
+    async def fetchrow(self, _sql, _game_pk):
+        return {"game_date": self._game_date} if self._game_date is not None else None
+
+
+@pytest.mark.asyncio
+async def test_the_cutoff_is_the_day_BEFORE_the_game() -> None:
+    """The pools hold every play of every game in the window, this one
+    included. A cutoff on the game's own date would let the simulator copy the
+    very plays it is predicting."""
+    import datetime as dt
+
+    from simulation.sim_kwargs import resolve_asof_ymd
+
+    got = await resolve_asof_ymd(_FakePool(dt.date(2025, 4, 15)), 777001)
+    assert got == 20250414
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_game_yields_no_cutoff() -> None:
+    """No cutoff means "draw from everything", which is right for a live game
+    and is what happened before any of this existed."""
+    from simulation.sim_kwargs import resolve_asof_ymd
+
+    assert await resolve_asof_ymd(_FakePool(None), 777001) is None
+    assert await resolve_asof_ymd(None, 777001) is None
+
+
+def test_the_factory_reads_the_cutoff_as_a_factory_only_key() -> None:
+    """A leading underscore marks a key the machine factory consumes and
+    ``simulate_game`` never sees (the SIM-377 convention)."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2] / "simulation" / "production_factory.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"_asof_ymd"' in src
+    assert "full_pool.set_asof(" in src
+
+
+def test_build_sim_kwargs_passes_the_cutoff_through() -> None:
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2] / "simulation" / "sim_kwargs.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'kwargs["_asof_ymd"] = asof' in src
+    assert "resolve_asof_ymd" in src

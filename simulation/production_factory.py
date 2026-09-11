@@ -566,6 +566,13 @@ def production_machine_factory(seed: int | None, spec: GameSpec) -> StateMachine
     end-to-end regardless of how the factory seeded them here.
     """
     full_pool = _build_full_pool_sampler(spec, seed)
+    # SIM-535: the point-in-time cutoff. ``build_sim_kwargs`` resolves it to the
+    # day before the game being simulated and passes it as a factory-only key.
+    # Absent (a live request, a test, any caller that does not set it) the
+    # sampler draws from the whole pool exactly as before.
+    asof = (spec.sim_kwargs or {}).get("_asof_ymd")
+    if asof is not None and full_pool is not None:
+        full_pool.set_asof(int(asof))
     # SIM-434: GATED manager wiring.  With SIM_MANAGER off ``manager`` stays None
     # -> the StateMachine makes every §3/§5.3 hook a no-op.  With it on, attach a
     # default tendency profile and stage a generic per-team bullpen on the

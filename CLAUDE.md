@@ -51,7 +51,7 @@
     at ~6**, so a single game can't go <30 s on this hardware without fewer iters or a smaller pool. The
     throughput fix: **the CLV backtest is parallelized ACROSS games** (`--workers`, forkserver,
     byte-identical, ~373 MB/worker) → ~6× → **~20–32 s effective/game**; n=65 gives the same CLV as n=100.
-  - **Next free ticket ID: read it in `BACKLOG.xlsx` (SIM-528 as of 2026-09-10).** Open work then: **SIM-429** (granular run-conversion + K/BB prop
+  - **Next free ticket ID: read it in `BACKLOG.xlsx` — its subtitle row carries it (SIM-536 as of 2026-09-10).** Open work then: **SIM-429** (granular run-conversion + K/BB prop
     calibration to DEVELOP a CLV edge — the now-measurable gold-standard says there is none yet); the
     realism follow-ons fold into it (≥400×≥20 magnitude calibration of the SIM-411/413/425b nudges; wiring
     the real per-team SIM-427 profiles into the SIM-434 decision model, which currently uses a league-flat
@@ -91,7 +91,7 @@
   draw from `sim.steal_opportunity_pool` (~2.37M per-pitch opportunities, attempted or not). The
   600-sim smoke reads **SB 0.70 + CS 0.09 = 0.79 attempts/team-game vs MLB 0.76**; the safe split
   (89% vs ~78%) is a certifying-lane question before any kernel bandwidth moves.
-  **Next free ticket ID at the time: SIM-433** (SIM-528 as of 2026-09-10 — `BACKLOG.xlsx` is now
+  **Next free ticket ID at the time: SIM-433** (SIM-536 as of 2026-09-10 — `BACKLOG.xlsx` is now
   the authority, see §2b; SIM-430 = the full-pool `/simulate` throughput / 2s-30s SLA perf gap,
   filed 2026-05-30 off the SIM-402 live re-measure).
 
@@ -481,9 +481,10 @@ consolidates; QA cross-validates and never self-certifies its own work.
   `docs/SPRINT_<date>_<name>.md` for the sprint narrative as before.
 - **TDD:** tests first, then implementation (Backend Developer convention). Unit tests use the `__new__`
   constructor-bypass + in-memory mock pattern (no live DB) — see `tests/conftest.py`.
-- **Ticketing:** every change maps to a `SIM-NNN` ticket. Next free ID is tracked in `BACKLOG.xlsx`
-  — read it there; do not trust a number copied into this file (this line once said SIM-438 while
-  the true next ID was SIM-504). Recent IDs: SIM-437 = consolidate the two ETL loaders' duplicate type-coercion
+- **Ticketing:** every change maps to a `SIM-NNN` ticket. The next free ID lives in the SUBTITLE
+  ROW of `BACKLOG.xlsx` (row 2) — read it there; do not trust a number copied into this file (this
+  line once said SIM-438 while the true next ID was SIM-504, and SIM-534/535 were used in commits
+  and code before either was ever filed). File the ticket when you use the number, not after. Recent IDs: SIM-437 = consolidate the two ETL loaders' duplicate type-coercion
   helpers into `pipeline/etl/coercion.py` [CLOSED 2026-06-22], SIM-430 = full-pool `/simulate` throughput / 2s-30s SLA
   (worker-scaling CLOSED, per-game cost → SIM-436), SIM-431 = the Python-3.13 migration [CLOSED],
   SIM-432 = the calibrator/validate_props ↔ live-schema reconciliation [CLOSED 2026-06-01, the
