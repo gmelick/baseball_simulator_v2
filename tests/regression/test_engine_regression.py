@@ -1,34 +1,38 @@
 """
-tests/regression/test_engine_regression.py — SIM-147
-======================================================
-Similarity engine regression gate.
+tests/regression/test_engine_regression.py — SIM-147, narrowed by SIM-542
+=========================================================================
+Similarity engine INVARIANT gate.
 
-PURPOSE
--------
-Detect unintended drift in engine scoring between commits.  These tests do NOT
-check whether the scores are good (that's unit test territory) — they check
-that the scores haven't CHANGED.
+WHAT THIS CHECKS, AND WHAT IT DELIBERATELY DOES NOT
+---------------------------------------------------
+It checks the properties an engine's scores must satisfy no matter how the
+model is tuned. It does NOT check that the scores are the same as last week.
 
-There are two complementary test layers:
+The suite used to do both. The second half was a set of committed snapshots —
+the top five comparables and their exact scores for a handful of queries — and
+any change to any weight, feature or bandwidth failed them. That is the wrong
+alarm for this platform: the model is under continuous deliberate change, so a
+score moving is the normal case rather than the signal. In practice the failure
+meant "regenerate the snapshot", which is a ritual that teaches people to
+regenerate without reading, and a tripwire nobody reads is not a tripwire.
+Owner ruling 2026-09-10: the snapshots are gone.
 
-1. Mathematical property tests (always correct regardless of weights/data)
-   -----------------------------------------------------------------------
-   Run on all engines every CI push.  No golden files needed.  Verify:
-     - Identical profiles score 1.0 (or max possible given EB discount)
-     - Scores are bounded [0, 1]
-     - Scoring is symmetric:  score(A→B) == score(B→A)
-     - Sorted order is monotone:  results[i].score >= results[i+1].score
-     - All sub-scores are finite (no NaN / Inf)
+What replaces them is nothing, on purpose. The behaviour that actually matters
+is graded downstream, by the acceptance lane, against the play pool's own
+totals — an outcome test rather than a memory of last week's numbers.
 
-2. Golden-file snapshot tests (detect exact numeric drift)
-   ---------------------------------------------------------------
-   Run on all engines every CI push.  Golden files live at
-   tests/regression/fixtures/<engine>.json.
-   Regenerate with:  python tests/regression/generate_fixtures.py
+WHAT SURVIVES
+-------------
+  * Identical profiles score 1.0 (or the max the shrinkage allows)
+  * Scores are bounded [0, 1]
+  * Scoring is symmetric: score(A->B) == score(B->A)
+  * Results are sorted descending, and a profile never matches itself
+  * Every sub-score is present and finite — no NaN, no Inf
+  * Published sub-score weights still sum to 1.0
 
-   A golden-file test fails if any of these change:
-     - Top-5 result keys for any fixture query
-     - Composite score for any fixture query (within SCORE_ABS_TOLERANCE)
+Every one of these holds for ANY weights and ANY data, so a deliberate model
+change never trips them, and a genuine defect — a sign error, a NaN leaking out
+of a kernel, a renormalisation that stopped summing to one — still does.
 
 FIXTURE ENGINES
 ---------------
@@ -36,26 +40,20 @@ All engines are constructed via __new__ + direct profile injection (no DuckDB)
 using deterministic synthetic data (seed=2026).  See conftest.py for details.
 
 Profile key conventions:
-  BaserunnerSteal  → (player_id, season)
-  Catcher          → (catcher_id, season)
-  PitcherSteal     → (pitcher_id, season)
-  Manager          → (manager_id, season)
-  Situation        → SituationVector dataclass (not dict-keyed)
+  BaserunnerSteal  -> (player_id, season)
+  Catcher          -> (catcher_id, season)
+  PitcherSteal     -> (pitcher_id, season)
+  Manager          -> (manager_id, season)
+  Situation        -> SituationVector dataclass (not dict-keyed)
 """
 
 from __future__ import annotations
 
-import json
 import math
 
 import pytest
 
-from tests.regression.regression_config import (
-    FIXTURES_DIR,
-    SCORE_ABS_TOLERANCE,
-    SYMMETRY_TOLERANCE,
-    TOP_K_STABLE,
-)
+from tests.regression.regression_config import SYMMETRY_TOLERANCE
 
 pytestmark = pytest.mark.regression
 
@@ -63,17 +61,6 @@ pytestmark = pytest.mark.regression
 # ============================================================================
 # Helpers
 # ============================================================================
-
-
-def _load_fixture(name: str) -> dict:
-    path = FIXTURES_DIR / f"{name}.json"
-    if not path.exists():
-        pytest.skip(
-            f"Golden file not found: {path}. "
-            "Run `python tests/regression/generate_fixtures.py` to generate it."
-        )
-    with path.open() as f:
-        return json.load(f)
 
 
 def _assert_scores_finite(results, engine_name: str) -> None:
@@ -455,143 +442,7 @@ class TestSituationEngineProperties:
 
 
 # ============================================================================
-# Golden-file Snapshot Tests
-# ============================================================================
-
-
-class TestStealEngineGoldenFile:
-    """Detect numeric drift in steal engine outputs vs committed snapshot."""
-
-    def test_top_k_keys_stable(self, steal_engine):
-        fixture = _load_fixture("baserunner_steal")
-        for q in fixture["queries"]:
-            qk = tuple(q["query_key"])
-            results = steal_engine.query(qk[0], qk[1])
-            actual_keys = [(r.player_id, r.season) for r in results[:TOP_K_STABLE]]
-            expected_keys = [tuple(k) for k in q["top5_keys"]]
-            assert actual_keys == expected_keys, (
-                f"Top-{TOP_K_STABLE} drift for query {qk}: "
-                f"got {actual_keys}, expected {expected_keys}"
-            )
-
-    def test_composite_scores_stable(self, steal_engine):
-        fixture = _load_fixture("baserunner_steal")
-        for q in fixture["queries"]:
-            qk = tuple(q["query_key"])
-            results = steal_engine.query(qk[0], qk[1])
-            for i, (actual, expected) in enumerate(
-                zip(results[:TOP_K_STABLE], q["top5_scores"], strict=False)
-            ):
-                assert abs(actual.score - expected) <= SCORE_ABS_TOLERANCE, (
-                    f"Score drift at query {qk} result[{i}]: "
-                    f"got {actual.score:.12f}, expected {expected:.12f}, "
-                    f"delta={abs(actual.score - expected):.2e}"
-                )
-
-
-class TestCatcherEngineGoldenFile:
-    def test_top_k_keys_stable(self, catcher_engine):
-        fixture = _load_fixture("catcher")
-        for q in fixture["queries"]:
-            qk = tuple(q["query_key"])
-            results = catcher_engine.query(qk[0], qk[1])
-            actual_keys = [(r.catcher_id, r.season) for r in results[:TOP_K_STABLE]]
-            expected_keys = [tuple(k) for k in q["top5_keys"]]
-            assert actual_keys == expected_keys, f"Top-{TOP_K_STABLE} drift for query {qk}"
-
-    def test_composite_scores_stable(self, catcher_engine):
-        fixture = _load_fixture("catcher")
-        for q in fixture["queries"]:
-            qk = tuple(q["query_key"])
-            results = catcher_engine.query(qk[0], qk[1])
-            for i, (actual, expected) in enumerate(
-                zip(results[:TOP_K_STABLE], q["top5_scores"], strict=False)
-            ):
-                assert abs(actual.score - expected) <= SCORE_ABS_TOLERANCE, (
-                    f"Score drift at query {qk} result[{i}]: "
-                    f"delta={abs(actual.score - expected):.2e}"
-                )
-
-
-class TestPitcherStealEngineGoldenFile:
-    def test_top_k_keys_stable(self, pitcher_steal_engine):
-        fixture = _load_fixture("pitcher_steal")
-        for q in fixture["queries"]:
-            qk = tuple(q["query_key"])
-            results = pitcher_steal_engine.query(qk[0], qk[1])
-            actual_keys = [(r.pitcher_id, r.season) for r in results[:TOP_K_STABLE]]
-            expected_keys = [tuple(k) for k in q["top5_keys"]]
-            assert actual_keys == expected_keys
-
-    def test_composite_scores_stable(self, pitcher_steal_engine):
-        fixture = _load_fixture("pitcher_steal")
-        for q in fixture["queries"]:
-            qk = tuple(q["query_key"])
-            results = pitcher_steal_engine.query(qk[0], qk[1])
-            for _i, (actual, expected) in enumerate(
-                zip(results[:TOP_K_STABLE], q["top5_scores"], strict=False)
-            ):
-                assert abs(actual.score - expected) <= SCORE_ABS_TOLERANCE, (
-                    f"Score drift delta={abs(actual.score - expected):.2e}"
-                )
-
-
-class TestManagerEngineGoldenFile:
-    def test_top_k_keys_stable(self, manager_engine):
-        fixture = _load_fixture("manager")
-        for q in fixture["queries"]:
-            qk = tuple(q["query_key"])
-            results = manager_engine.query(qk[0], qk[1])
-            actual_keys = [(r.manager_id, r.season) for r in results[:TOP_K_STABLE]]
-            expected_keys = [tuple(k) for k in q["top5_keys"]]
-            assert actual_keys == expected_keys
-
-    def test_composite_scores_stable(self, manager_engine):
-        fixture = _load_fixture("manager")
-        for q in fixture["queries"]:
-            qk = tuple(q["query_key"])
-            results = manager_engine.query(qk[0], qk[1])
-            for _i, (actual, expected) in enumerate(
-                zip(results[:TOP_K_STABLE], q["top5_scores"], strict=False)
-            ):
-                assert abs(actual.score - expected) <= SCORE_ABS_TOLERANCE, (
-                    f"Score drift delta={abs(actual.score - expected):.2e}"
-                )
-
-
-class TestSituationEngineGoldenFile:
-    def test_nearest_play_ids_stable(self, situation_engine):
-        fixture = _load_fixture("situation")
-        from similarity.engines.situation_similarity import SituationVector
-
-        for q_data in fixture["queries"]:
-            sv = SituationVector(**q_data["situation_vector"])
-            results = situation_engine.query(sv, k=TOP_K_STABLE)
-            actual_ids = [r.play_id for r in results]
-            expected_ids = q_data["top5_play_ids"]
-            assert actual_ids == expected_ids, (
-                f"Situation top-{TOP_K_STABLE} play_id drift: "
-                f"got {actual_ids}, expected {expected_ids}"
-            )
-
-    def test_nearest_distances_stable(self, situation_engine):
-        fixture = _load_fixture("situation")
-        from similarity.engines.situation_similarity import SituationVector
-
-        for q_data in fixture["queries"]:
-            sv = SituationVector(**q_data["situation_vector"])
-            results = situation_engine.query(sv, k=TOP_K_STABLE)
-            for i, (actual, expected) in enumerate(
-                zip(results, q_data["top5_distances"], strict=False)
-            ):
-                assert abs(actual.distance - expected) <= SCORE_ABS_TOLERANCE, (
-                    f"Situation distance drift at result[{i}]: "
-                    f"delta={abs(actual.distance - expected):.2e}"
-                )
-
-
-# ============================================================================
-# Cross-engine weight constants regression
+# Weight Constants
 # ============================================================================
 
 

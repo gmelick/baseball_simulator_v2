@@ -32,7 +32,6 @@ and has the shape::
 
 Tolerance rationale
 -------------------
-SCORE_ABS_TOLERANCE = 1e-9
     RBF / KDTree scoring is deterministic float64 arithmetic; across
     Python 3.11 + NumPy releases the difference is within float64 ULP.
     1e-9 gives one full order of magnitude slack above typical ULP errors.
@@ -40,7 +39,6 @@ SCORE_ABS_TOLERANCE = 1e-9
 SYMMETRY_TOLERANCE = 1e-9
     score(A→B) == score(B→A) by the RBF kernel definition.
 
-TOP_K_STABLE = 5
     We only lock in the top-5 comps.  Ties beyond rank 5 may reorder
     legally when numeric precision changes; locking the full list would
     produce brittle snapshots.
@@ -55,7 +53,6 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 REGRESSION_DIR = Path(__file__).parent
-FIXTURES_DIR = REGRESSION_DIR / "fixtures"
 
 # ---------------------------------------------------------------------------
 # Tolerance constants
@@ -85,39 +82,3 @@ REGRESSION_SEED: int = 2026
 # ---------------------------------------------------------------------------
 # Engine registry — metadata used by both the generator and the test suite
 # ---------------------------------------------------------------------------
-
-ENGINE_REGISTRY: list[dict] = [
-    {
-        "name": "baserunner_steal",
-        "module": "similarity.engines.baserunner_steal_similarity",
-        "class": "BaserunnerStealSimilarityEngine",
-        "sub_score_names": ["tendency_score", "success_score"],
-        "query_signature": ("player_id", "season"),  # positional arg names
-    },
-    {
-        "name": "catcher",
-        "module": "similarity.engines.catcher_similarity",
-        "class": "CatcherSimilarityEngine",
-        "sub_score_names": [
-            "framing_score",
-            "blocking_score",
-            "throwing_score",
-            "deterrence_score",
-        ],
-        "query_signature": ("player_id", "season"),
-    },
-    {
-        "name": "pitcher_steal",
-        "module": "similarity.engines.pitcher_steal_similarity",
-        "class": "PitcherStealSimilarityEngine",
-        "sub_score_names": ["outcome_score"],
-        "query_signature": ("player_id", "season"),
-    },
-    {
-        "name": "manager",
-        "module": "similarity.engines.manager_similarity",
-        "class": "ManagerSimilarityEngine",
-        "sub_score_names": ["usage_score", "aggression_score", "platoon_score"],
-        "query_signature": ("manager_id", "season"),
-    },
-]

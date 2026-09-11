@@ -445,7 +445,7 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   `docker compose run --rm -v "$PWD/scripts:/app/scripts" app python scripts/<x>.py`.)*
 - `db/` — `migrations/` (Alembic, head **0015**) + `migrations/duckdb/` (numbered SQL, schema **v13**) +
   `schemas/duckdb_schema_version.txt`.
-- `tests/` — `unit/`, `regression/` (golden-file engine-drift gate), `integration/` (E2E TestClient),
+- `tests/` — `unit/`, `regression/` (engine invariant gate), `integration/` (E2E TestClient),
   `performance/` (pytest-benchmark). `conftest.py` has shared fixtures + the event-loop guard.
 - `deploy/` — nginx + Prometheus/Grafana. `frontend/` — **React 18 + Vite + TypeScript** app
   (`src/`, `components/`, `pages/`, `graphics/`, `e2e/` Playwright, `vite.config.ts`, `openapi.json`).
@@ -499,10 +499,15 @@ consolidates; QA cross-validates and never self-certifies its own work.
   `db/migrations/duckdb/` AND increments `db/schemas/duckdb_schema_version.txt`. *Gotcha:* a past sprint
   bumped a DuckDB migration but forgot the version file + its sanity test — always verify
   version-file == latest-migration-number after a DuckDB schema ticket.
-- **Regression gate:** `tests/regression/` holds golden-file + property tests detecting engine drift.
-  Regenerate fixtures with `python tests/regression/generate_fixtures.py --force` (only when a model
-  change is intentional). After any engine refactor, run the regression suite — a past columnarization
-  silently broke the situation-engine golden files.
+- **Regression gate:** `tests/regression/` holds INVARIANT tests — properties an engine's scores must
+  satisfy whatever the weights and data are: bounded [0, 1], symmetric, sorted, self-excluded, finite
+  sub-scores, weights summing to 1.0. Run it after any engine refactor.
+  **There are no golden-file snapshots, and do not add any (owner ruling 2026-09-10).** They were
+  removed with the fixtures and their generator. The model is under continuous deliberate change, so
+  a score moving is the normal case rather than a signal; the snapshots failed on every intentional
+  tune, and "regenerate the fixture" became a ritual that teaches people to regenerate without
+  reading. Behaviour is graded downstream by the acceptance lane against the play pool's own totals —
+  an outcome test, not a memory of last week's numbers.
 - **Secrets:** never commit credentials; the DSN is read from `BASEBALL_DB_DSN`. There is a CI
   `secrets-check` job and a `file-integrity` guard (`scripts/check_file_integrity.py`, ast.parse +
   null-byte scan).
@@ -517,7 +522,7 @@ make down              # stop + remove containers/networks
 make migrate           # apply all Alembic migrations (db must be healthy)
 make test              # full suite (unit + integration)
 make test-unit         # unit tests only (no Docker)
-make test-regression   # golden-file engine-drift gate
+make test-regression   # engine invariant gate (no snapshots — see §7)
 make test-integration  # testcontainers (Postgres + Redis)
 make lint              # ruff check
 make format            # ruff format

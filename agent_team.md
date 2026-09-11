@@ -302,8 +302,9 @@ This document defines the 9-agent team for the MLB Baseball Simulation Platform.
 - `.github/workflows/integration-weekly.yml` — testcontainers suite Monday 03:00 UTC
 
 **Regression gate (SIM-147):**
-- `tests/regression/` — 54 tests across 5 engines; golden-file snapshots + mathematical property tests
-- Regenerate fixtures: `python tests/regression/generate_fixtures.py --force`
+- `tests/regression/` — 43 tests across 5 engines; mathematical property tests only
+- No golden-file snapshots (owner ruling 2026-09-10): the model changes deliberately and constantly,
+  so a score moving is not a signal. Nothing to regenerate.
 **Established test patterns:**
 - In-memory profile assembly using `__new__` to bypass constructors — avoids live DB dependencies in unit tests
 - All similarity engine unit tests confirmed against this pattern (96 tests for fielder engine, 163 tests for pipeline)
