@@ -89,17 +89,12 @@ def upgrade() -> None:
 
     # -- 2. the stance cutoff -----------------------------------------------
     # A full-season pull is data "as of" the last day of that season.
-    op.execute(
-        "ALTER TABLE raw.savant_batting_stance "
-        "ADD COLUMN IF NOT EXISTS asof_date DATE;"
-    )
+    op.execute("ALTER TABLE raw.savant_batting_stance ADD COLUMN IF NOT EXISTS asof_date DATE;")
     op.execute(
         "UPDATE raw.savant_batting_stance "
         "SET asof_date = make_date(season, 12, 31) WHERE asof_date IS NULL;"
     )
-    op.execute(
-        "ALTER TABLE raw.savant_batting_stance ALTER COLUMN asof_date SET NOT NULL;"
-    )
+    op.execute("ALTER TABLE raw.savant_batting_stance ALTER COLUMN asof_date SET NOT NULL;")
     op.execute(
         "ALTER TABLE raw.savant_batting_stance DROP CONSTRAINT IF EXISTS savant_batting_stance_pkey;"
     )

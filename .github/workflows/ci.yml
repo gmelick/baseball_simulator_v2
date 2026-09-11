@@ -64,12 +64,24 @@ jobs:
           cache: pip
 
       - name: Install ruff
-        # Pinned to the validated line. The old `>=0.4,<1` floor let a fresh CI
-        # install pick up any future ruff, and 0.16 duly changed SCOPE (it began
-        # formatting Python inside .md), turning a green lint job red with zero
-        # code changes. Same failure class as the FastAPI/Starlette drift — a
-        # floor-only spec silently upgrades a tool across a behavior change.
-        run: pip install "ruff>=0.15,<0.17"
+        # Pinned to an EXACT version, not a range. The old `>=0.4,<1` floor let
+        # a fresh CI install pick up any future ruff, and 0.16 duly changed
+        # SCOPE (it began formatting Python inside .md), turning a green lint
+        # job red with zero code changes.
+        #
+        # The range that replaced it (`>=0.15,<0.17`) fixed that incident but
+        # is still a range: a fresh CI run can resolve a different PATCH
+        # release than whatever a contributor's own machine has installed
+        # (requirements-dev.txt's `ruff>=0.4,<1.0` floor was even looser). A
+        # 2026-09-11 lint failure traced to three migration files nobody had
+        # run `ruff format` on before committing — not a real cross-version
+        # disagreement here — but a range still cannot GUARANTEE "clean on my
+        # machine" means "clean in CI". requirements-dev.txt now pins this
+        # SAME exact version, so local dev and CI install the identical ruff
+        # and neither can drift from the other silently. Same failure class
+        # as the FastAPI/Starlette drift — a floor-only (or too-wide) spec
+        # silently upgrades a tool across a behavior change.
+        run: pip install "ruff==0.16.7"
 
       - name: Ruff — lint check
         run: ruff check . --output-format=github

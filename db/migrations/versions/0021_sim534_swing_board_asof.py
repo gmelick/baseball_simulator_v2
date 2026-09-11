@@ -41,8 +41,7 @@ def upgrade() -> None:
     for table in _TABLES:
         op.execute(f"ALTER TABLE raw.{table} ADD COLUMN IF NOT EXISTS asof_date DATE;")
         op.execute(
-            f"UPDATE raw.{table} SET asof_date = make_date(season, 12, 31) "
-            f"WHERE asof_date IS NULL;"
+            f"UPDATE raw.{table} SET asof_date = make_date(season, 12, 31) WHERE asof_date IS NULL;"
         )
         op.execute(f"ALTER TABLE raw.{table} ALTER COLUMN asof_date SET NOT NULL;")
         op.execute(f"ALTER TABLE raw.{table} DROP CONSTRAINT IF EXISTS {table}_pkey;")

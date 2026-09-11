@@ -152,11 +152,14 @@ COPY pyproject.toml /app/pyproject.toml
 # asserts ship with the image (SIM-153 secrets-baseline acceptance gates).
 # These were previously stripped by `.dockerignore` (`.env.*`, `*.md`) or
 # never COPY'd by this stage — now restored so `make test` is self-contained.
+# BACKLOG.md is NOT among them (that test class never reads it) and this
+# COPY broke `docker compose build` outright once the 2026-09-10 repo
+# cleanup retired BACKLOG.md for BACKLOG.xlsx — removed rather than pointed
+# at the new file, since nothing here actually needs a backlog copy.
 COPY .env.example      /app/.env.example
 COPY .gitignore        /app/.gitignore
 COPY requirements.txt  /app/requirements.txt
 COPY README.md         /app/README.md
-COPY BACKLOG.md        /app/BACKLOG.md
 
 # CI workflows — SIM-153 test asserts the secrets-check job lives here.
 COPY .github/  /app/.github/

@@ -206,9 +206,7 @@ def upgrade() -> None:
     """)
 
     for table in _TABLES:
-        op.execute(
-            f"CREATE INDEX IF NOT EXISTS idx_{table}_season ON raw.{table}(season);"
-        )
+        op.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_season ON raw.{table}(season);")
 
 
 def downgrade() -> None:
