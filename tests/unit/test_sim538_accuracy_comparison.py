@@ -724,18 +724,15 @@ async def test_score_one_game_skips_when_the_cutoff_cannot_be_resolved(monkeypat
     monkeypatch.setattr(clv_backtest, "_fetch_game_odds", fake_fetch_game_odds)
     monkeypatch.setattr(clv_backtest, "_collect_game_results", replay_must_not_run)
 
-    bets, accuracy, status, park_factor = await clv_backtest._score_one_game(
+    accuracy, status, park_factor = await clv_backtest._score_one_game(
         pool=object(),
         game_pk=12345,
         duck=object(),
         do_game=True,
         do_props=False,
-        score_accuracy=True,
         iterations=5,
         base_seed=1,
-        min_edge=0.0,
     )
     assert status == "unresolved"
-    assert bets == []
     assert accuracy == []
     assert park_factor == pytest.approx(1.05)

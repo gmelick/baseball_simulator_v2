@@ -1,9 +1,9 @@
 """
 tests/unit/test_sim539_minimum_sample_size.py
 ================================================
-Unit tests for SIM-539 — the stated MINIMUM SAMPLE SIZE for both reports in
-``scripts/clv_backtest.py``: the new sim-vs-closing-line accuracy comparison
-(SIM-538) and the legacy CLV scoreboard (SIM-429).
+Unit tests for SIM-539 — the stated MINIMUM SAMPLE SIZE for the reports in
+``scripts/clv_backtest.py`` that need one: the sim-vs-closing-line accuracy
+comparison (SIM-538) and the hypothetical dollar return (SIM-540).
 
 What SIM-539 adds, in plain words: a small sample can look like real skill
 by pure chance. This ticket states, per market row, the smallest number of
@@ -12,21 +12,26 @@ using a standard power-analysis formula, the platform's own existing
 "is this edge big enough to act on" floor (``betting.bet_signal.
 DEFAULT_MIN_EDGE``), the SAME detection-margin CONSTANT ``tests/acceptance/
 bands.py`` already uses, and a Bonferroni correction for scanning several
-market rows at once. Both reports ALSO get an honest, GAME-CLUSTERED spread:
-several observations from one game (several props from one start; three
-game markets off one score) are correlated, not independent trials, and a
-cluster-robust standard error is mathematically degenerate (always exactly
-zero) with a single distinct game. An adversarial review of the first
-version of this ticket found that a bare "at least 2 games" guard was not
-enough — a small sample can still read as PERFECTLY resolved (zero
+market rows at once. Every report ALSO gets an honest, GAME-CLUSTERED
+spread: several observations from one game (several props from one start;
+three game markets off one score) are correlated, not independent trials,
+and a cluster-robust standard error is mathematically degenerate (always
+exactly zero) with a single distinct game. An adversarial review of the
+first version of this ticket found that a bare "at least 2 games" guard was
+not enough — a small sample can still read as PERFECTLY resolved (zero
 uncertainty) purely by chance — so this file also proves the raised
 ``MIN_CLUSTERS_FOR_INFERENCE`` floor and documents, rather than hides, the
 limitation that remains even above it.
 
+SIM-541 (2026-09-11): this file used to also test SIM-539's wiring into the
+SIM-429 CLV scoreboard (``_row_for`` / ``aggregate_scoreboard`` /
+``format_scoreboard``). The owner retired that report — the platform no
+longer measures the entry-to-close line move at all — and its code was
+deleted from ``scripts/clv_backtest.py``; those tests are deleted with it.
+
 These tests run with NO DB and NO real sim: every function under test here
-is PURE. See ``tests/unit/test_sim538_accuracy_comparison.py`` and
-``tests/unit/test_clv_backtest.py`` for the surrounding scoring/aggregation
-tests this ticket builds on.
+is PURE. See ``tests/unit/test_sim538_accuracy_comparison.py`` for the
+surrounding scoring/aggregation tests this ticket builds on.
 """
 
 from __future__ import annotations
@@ -52,7 +57,6 @@ clv_backtest = importlib.util.module_from_spec(_spec)
 sys.modules["clv_backtest"] = clv_backtest
 _spec.loader.exec_module(clv_backtest)
 
-BetRecord = clv_backtest.BetRecord
 AccuracyRecord = clv_backtest.AccuracyRecord
 _bonferroni_alpha = clv_backtest._bonferroni_alpha
 _z_two_sided = clv_backtest._z_two_sided
@@ -60,9 +64,6 @@ _minimum_paired_observations = clv_backtest._minimum_paired_observations
 _minimum_observations_clustered = clv_backtest._minimum_observations_clustered
 _clustered_se = clv_backtest._clustered_se
 _json_safe = clv_backtest._json_safe
-_row_for = clv_backtest._row_for
-aggregate_scoreboard = clv_backtest.aggregate_scoreboard
-format_scoreboard = clv_backtest.format_scoreboard
 _accuracy_row_for = clv_backtest._accuracy_row_for
 aggregate_accuracy_comparison = clv_backtest.aggregate_accuracy_comparison
 format_accuracy_comparison = clv_backtest.format_accuracy_comparison
@@ -214,8 +215,8 @@ def test_clustered_se_is_degenerate_zero_with_a_single_cluster():
     reduces the CR0 formula to exactly zero -- its own deviations from the
     overall mean (which IS its own mean, with only one cluster) sum to
     zero by construction. This is the exact degeneracy
-    _minimum_observations_clustered / _row_for / _accuracy_row_for must all
-    guard against rather than trust at face value."""
+    _minimum_observations_clustered / _accuracy_row_for must both guard
+    against rather than trust at face value."""
     values_by_game = {777: [1, 0, 1, 1, 0, 0, 1, 0, 1, 1]}
     assert _clustered_se(values_by_game) == pytest.approx(0.0)
 
@@ -307,244 +308,8 @@ def test_minimum_observations_clustered_zero_se_needs_no_more_data():
 
 
 # ---------------------------------------------------------------------------
-# (f) Wiring into the legacy CLV scoreboard (_row_for / aggregate_scoreboard)
+# (f) _json_safe -- the shared NaN/Infinity-to-null JSON sanitizer
 # ---------------------------------------------------------------------------
-
-
-def _bet(
-    market: str,
-    market_type: str,
-    *,
-    placed: bool,
-    beat: bool | None,
-    clv: float | None,
-    edge: float | None,
-    game_pk: int,
-) -> BetRecord:
-    return BetRecord(
-        game_pk=game_pk,
-        market=market,
-        market_type=market_type,
-        placed=placed,
-        side="over" if placed else None,
-        line=5.5,
-        model_edge=edge,
-        model_ev=edge,
-        clv_prob=clv,
-        beat_close=beat,
-    )
-
-
-def test_row_for_empty_bucket_is_safe():
-    row = _row_for("overall", "—", [], alpha=0.05)
-    assert math.isnan(row.clustered_se)
-    assert row.n_games_placed == 0
-    assert row.beat_close_ci_low == pytest.approx(0.0)
-    assert row.beat_close_ci_high == pytest.approx(1.0)  # widest honest interval, not [0,0]
-    assert row.min_bets_recommended is None
-    assert row.underpowered is True
-    assert row.alpha_used == pytest.approx(0.05)
-
-
-def test_row_for_single_game_is_the_widest_honest_interval():
-    """Every placed bet comes from the SAME game -- one independent trial.
-    The row must report the widest possible ([0, 1]) interval and refuse a
-    minimum, not a falsely narrow CI built on a degenerate zero SE."""
-    bets = [
-        _bet("K", "prop", placed=True, beat=(i % 2 == 0), clv=0.03, edge=0.02, game_pk=1)
-        for i in range(10)
-    ]
-    row = _row_for("K", "untrustworthy", bets, alpha=0.05)
-    assert math.isnan(row.clustered_se)
-    assert row.n_games_placed == 1
-    assert row.beat_close_ci_low == pytest.approx(0.0)
-    assert row.beat_close_ci_high == pytest.approx(1.0)
-    assert row.min_bets_recommended is None
-    assert row.underpowered is True
-
-
-def test_row_for_below_the_cluster_floor_is_still_the_widest_interval():
-    """One game short of MIN_CLUSTERS_FOR_INFERENCE: still undetermined,
-    not just barely resolved."""
-    n_games = MIN_CLUSTERS_FOR_INFERENCE - 1
-    bets = [
-        _bet("K", "prop", placed=True, beat=(i % 2 == 0), clv=0.03, edge=0.02, game_pk=i)
-        for i in range(n_games)
-    ]
-    row = _row_for("K", "untrustworthy", bets, alpha=0.05)
-    assert math.isnan(row.clustered_se)
-    assert row.min_bets_recommended is None
-    assert row.underpowered is True
-
-
-def test_row_for_ci_is_clamped_to_zero_one():
-    """A near-certain rate, with enough distinct games to clear the cluster
-    floor, must not push the interval outside [0, 1]."""
-    bets = [
-        _bet("H", "prop", placed=True, beat=True, clv=0.5, edge=0.1, game_pk=i)
-        for i in range(MIN_CLUSTERS_FOR_INFERENCE)
-    ]
-    row = _row_for("H", "trustworthy", bets, alpha=0.05)
-    assert row.beat_close_rate == pytest.approx(1.0)
-    assert 0.0 <= row.beat_close_ci_low <= row.beat_close_ci_high <= 1.0
-    assert row.beat_close_ci_high == pytest.approx(1.0)
-
-
-def test_row_for_ci_widens_as_alpha_is_bonferroni_corrected():
-    """A stricter (Bonferroni-corrected) alpha must widen the interval, not
-    narrow it -- correcting for more markets is more conservative."""
-    bets = [
-        _bet(
-            "moneyline", "moneyline", placed=True, beat=(i % 2 == 0), clv=0.05, edge=0.02, game_pk=i
-        )
-        for i in range(20)
-    ]
-    loose = _row_for("moneyline", "loose", bets, alpha=0.05)
-    strict = _row_for("moneyline", "loose", bets, alpha=0.005)
-    loose_width = loose.beat_close_ci_high - loose.beat_close_ci_low
-    strict_width = strict.beat_close_ci_high - strict.beat_close_ci_low
-    assert strict_width > loose_width
-
-
-def test_row_for_clustered_bets_need_more_than_the_naive_count():
-    """The SAME overall beat-close rate (0.5), but crammed into exactly
-    MIN_CLUSTERS_FOR_INFERENCE heavily-correlated games instead of many more
-    separate ones, must report a WORSE (larger) minimum-bets figure --
-    clustering must never make a market look MORE resolved than it is. Both
-    sides clear the cluster-count floor, isolating the clustering effect."""
-    n_clustered_games = MIN_CLUSTERS_FOR_INFERENCE
-    clustered_bets = []
-    for i in range(n_clustered_games):
-        beat_value = i % 2 == 0
-        clustered_bets.extend(
-            _bet("K", "prop", placed=True, beat=beat_value, clv=0.03, edge=0.02, game_pk=i)
-            for _ in range(5)
-        )
-    unclustered_bets = [
-        _bet("K", "prop", placed=True, beat=(i % 2 == 0), clv=0.03, edge=0.02, game_pk=i)
-        for i in range(50)
-    ]
-    clustered_row = _row_for("K", "untrustworthy", clustered_bets, alpha=0.05)
-    unclustered_row = _row_for("K", "untrustworthy", unclustered_bets, alpha=0.05)
-    assert clustered_row.clustered_se > unclustered_row.clustered_se
-    assert clustered_row.min_bets_recommended is not None
-    assert unclustered_row.min_bets_recommended is not None
-    assert clustered_row.min_bets_recommended > unclustered_row.min_bets_recommended
-
-
-def test_aggregate_scoreboard_bonferroni_corrects_by_market_rows_only():
-    """`overall` uses the UNCORRECTED base alpha (it is one top-line figure,
-    not one of several rows a reader scans); `by_market` rows are corrected
-    by however many distinct markets this run actually produced."""
-    bets = [
-        _bet("moneyline", "moneyline", placed=True, beat=True, clv=0.1, edge=0.02, game_pk=1),
-        _bet("total", "total", placed=True, beat=False, clv=-0.1, edge=0.02, game_pk=1),
-        _bet("H", "prop", placed=True, beat=True, clv=0.05, edge=0.02, game_pk=1),
-        _bet("K", "prop", placed=True, beat=False, clv=-0.05, edge=0.02, game_pk=1),
-    ]
-    sb = aggregate_scoreboard(bets, base_alpha=0.05)
-    assert sb["overall"]["alpha_used"] == pytest.approx(0.05)
-    for r in sb["by_market"]:
-        assert r["alpha_used"] == pytest.approx(0.05 / 4)
-
-
-def test_aggregate_scoreboard_bonferroni_denominator_is_markets_not_records():
-    """Distinguishes the CORRECT denominator (distinct market rows) from a
-    plausible bug (total record/bet count): 2 markets, each carrying MANY
-    bets, must still correct by 2, not by the total bet count. An
-    adversarial review of SIM-539 confirmed the earlier version of this
-    test used a 1-bet-per-market fixture that could not tell the two
-    denominators apart."""
-    bets = []
-    for market in ("moneyline", "H"):
-        bets.extend(
-            _bet(
-                market,
-                "moneyline" if market == "moneyline" else "prop",
-                placed=True,
-                beat=True,
-                clv=0.05,
-                edge=0.02,
-                game_pk=i,
-            )
-            for i in range(6)
-        )
-    assert len(bets) == 12  # 2 markets x 6 bets each -- a wrong denominator would be 12
-    sb = aggregate_scoreboard(bets, base_alpha=0.05)
-    for r in sb["by_market"]:
-        assert r["alpha_used"] == pytest.approx(0.05 / 2)
-
-
-def test_format_scoreboard_renders_an_underpowered_row():
-    """Too few distinct games: minBets must render 'n/a' and pwr 'UNDERPWR',
-    not crash and not a misleading finite number."""
-    bets = [
-        _bet(
-            "moneyline", "moneyline", placed=True, beat=(i % 2 == 0), clv=0.1, edge=0.02, game_pk=i
-        )
-        for i in range(3)
-    ]
-    sb = aggregate_scoreboard(bets)
-    text = format_scoreboard(
-        sb,
-        params={
-            "seasons": [2024],
-            "iterations": 100,
-            "markets": "game",
-            "min_edge": 0.0,
-            "base_seed": 0,
-        },
-    )
-    assert "95% range" in text
-    assert "minBets" in text
-    assert "SIM-539" in text
-    assert "n/a" in text
-    assert "UNDERPWR" in text
-
-
-def test_format_scoreboard_renders_a_resolved_row():
-    """Enough distinct games with an exactly-constant rate: minBets must
-    render a real (finite) number and pwr 'ok'."""
-    bets = [
-        _bet("moneyline", "moneyline", placed=True, beat=True, clv=0.1, edge=0.02, game_pk=i)
-        for i in range(MIN_CLUSTERS_FOR_INFERENCE)
-    ]
-    sb = aggregate_scoreboard(bets)
-    text = format_scoreboard(
-        sb,
-        params={
-            "seasons": [2024],
-            "iterations": 100,
-            "markets": "game",
-            "min_edge": 0.0,
-            "base_seed": 0,
-        },
-    )
-    assert "ok" in text
-    # minBets rendered as a plain integer-looking token, not "n/a", for this row.
-    by_market_lines = text.splitlines()[-3:]
-    assert any("n/a" not in line and "moneyline" in line for line in by_market_lines)
-
-
-def test_format_scoreboard_renders_the_zero_bets_row_without_crashing():
-    """The scoreboard's own analog of the zero-games crash found in
-    format_accuracy_comparison: confirms beat_close_rate / mean_clv_prob /
-    mean_model_edge are genuinely always real floats (never nan) even at
-    zero bets, so this table never needed the same None-guard -- proven,
-    not just assumed."""
-    sb = aggregate_scoreboard([])
-    text = format_scoreboard(
-        sb,
-        params={
-            "seasons": [2024],
-            "iterations": 100,
-            "markets": "game",
-            "min_edge": 0.0,
-            "base_seed": 0,
-        },
-    )
-    assert "n/a" in text
-    assert "UNDERPWR" in text
 
 
 def test_json_safe_replaces_nan_and_infinite_with_none():
@@ -565,24 +330,6 @@ def test_json_safe_replaces_nan_and_infinite_with_none():
     assert safe["e"] is None
     assert safe["f"] == "text"
     assert safe["g"] == 0
-
-
-def test_row_for_to_jsonable_is_valid_json_even_when_underpowered():
-    """The exact case an adversarial review flagged: a degenerate
-    (too-few-games) row's clustered_se is nan, which json.dumps would
-    otherwise emit as the illegal bare token NaN."""
-    import json
-
-    bets = [
-        _bet("K", "prop", placed=True, beat=True, clv=0.03, edge=0.02, game_pk=1) for _ in range(5)
-    ]
-    row = _row_for("K", "untrustworthy", bets, alpha=0.05)
-    d = row.to_jsonable()
-    assert d["clustered_se"] is None
-    encoded = json.dumps(d)
-    assert "NaN" not in encoded
-    assert "Infinity" not in encoded
-    json.loads(encoded)  # round-trips through a strict parser
 
 
 # ---------------------------------------------------------------------------

@@ -399,9 +399,9 @@ def test_return_comparison_row_to_jsonable_is_json_safe_on_a_degenerate_row():
     """A bucket with zero qualifying bets (nan means/CI) or too few distinct
     games (inf min_n) must serialize to valid JSON -- None, never the raw
     Python nan/inf a naive asdict() would produce. An adversarial review of
-    SIM-540 confirmed this exact regression: the platform already fixed it
-    once for ScoreboardRow/AccuracyComparisonRow (SIM-539) and it was not
-    carried forward to ReturnComparisonRow."""
+    SIM-540 confirmed this exact regression: the platform already fixed the
+    same bug once for AccuracyComparisonRow (SIM-539) and it was not carried
+    forward to ReturnComparisonRow."""
     empty_row = _return_row_for("overall", "—", [], n_bootstrap=100, seed=1, alpha=0.05)
     d = empty_row.to_jsonable()
     assert d["mean_model_ev"] is None  # was nan
@@ -421,25 +421,3 @@ def test_return_record_to_jsonable_round_trips_through_real_json():
     reloaded = json.loads(json.dumps(rec.to_jsonable()))
     assert reloaded["model_ev"] == pytest.approx(0.10)
     assert reloaded["realized_return"] == pytest.approx(0.83)
-
-
-# ---------------------------------------------------------------------------
-# (g) the --report-hypothetical-return + --no-accuracy-comparison warning
-# ---------------------------------------------------------------------------
-
-
-def test_run_source_warns_on_the_silently_ineffective_flag_combination():
-    """SIM-540's run() cannot be unit-tested directly (it is async and needs
-    a live DB/sim, like the rest of this file's run()-level wiring) — so,
-    matching this repo's own established pattern for such checks (see
-    tests/unit/test_sim535_pool_cutoff.py's source-text assertions), read
-    the actual source and confirm the log.warning an adversarial review of
-    SIM-540 asked for is really there, guarding the combination its own
-    docs call invalid. This is a structural check, not a behavioral one --
-    it would not catch a warning that fires under the wrong condition, only
-    a warning that silently vanished."""
-    import inspect
-
-    src = inspect.getsource(clv_backtest.run)
-    assert "args.report_hypothetical_return and not score_accuracy" in src
-    assert "log.warning" in src

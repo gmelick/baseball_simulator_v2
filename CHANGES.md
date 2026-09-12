@@ -1,3 +1,53 @@
+# Chore — SIM-544 closes: trim the legacy Closing Line Value scoreboard's code out of
+the CLV backtest script — 2026-09-11
+
+**What this removes.** A direct follow-on to closing SIM-541: the platform no longer
+measures the entry-to-close line move at all, so the code that measured it —
+`scripts/clv_backtest.py`'s original report, the SIM-429 CLV scoreboard — had no
+remaining purpose. Deleted: the per-bet CLV decision (`evaluate_two_way_market` and its
+`_pick_side` helper), the `BetRecord` row it built, the beat-close aggregation
+(`aggregate_scoreboard` / `_row_for`) and its printed table (`format_scoreboard`), the
+two-way opening+closing price reader (`_game_prices`, `TwoWayPrices`), and the two
+functions that wired the sim output into all of that (`score_game_markets`,
+`score_prop_markets`). About 640 net lines came out of a 3,578-line file.
+
+**What stays, and why it was safe to remove the rest.** The sim-vs-closing-line accuracy
+comparison (SIM-538) and the hypothetical dollar return (SIM-540) never needed the
+deleted code — they read the CLOSING line only, never an opening price, and never pick a
+side to bet; they score a FIXED reference side against the real outcome. Every piece of
+shared machinery those two reports depend on is untouched: the minimum-sample-size
+statistics (SIM-539), the market trust labels, the point-in-time cutoff, the park-factor
+resolution, and both the serial and across-games-parallel execution paths. The live
+API's own separate closing-line-value display (`/api/betting/games/{game_pk}/clv`) is a
+different feature entirely, backed by `betting/clv_engine.py`, and this trim does not
+touch that file or that endpoint.
+
+**Two command-line flags are removed, not just documented as unused.** `--min-edge` had
+no reader left once the per-bet CLV decision was deleted. `--no-accuracy-comparison`'s
+entire purpose was "skip the new report and fall back to the old one" — with the old one
+gone, that flag's only remaining effect would have been to run the full, expensive game
+replay and then throw the results away, producing an empty report. Both are deleted
+rather than left in place with stale help text.
+
+**What the JSON report and worker payload shape changed.** The report no longer carries
+a `"scoreboard"` or `"bets"` key; the accuracy comparison is now unconditional (it is the
+only report, so there is nothing left to opt out of). The per-game worker payload
+(`_process_one_game`) no longer carries a `"bets"` key either — a pinned test in
+`tests/unit/test_sim449_sim_kwargs.py` asserting its exact shape was updated
+deliberately, the same way SIM-538's own pinned-test update was handled.
+
+**Verification.** Five test files needed updates alongside the trim: two had the
+legacy-only tests deleted (`test_clv_backtest.py`, keeping its still-relevant
+prop-vocab-map and trust-label tests; `test_sim539_minimum_sample_size.py`, keeping its
+still-relevant statistics tests), two needed a stale call site or source-text assertion
+fixed to match the new function signatures (`test_sim538_accuracy_comparison.py`,
+`test_sim540_hypothetical_return.py`), and one got its pinned worker-payload assertion
+updated on purpose (`test_sim449_sim_kwargs.py`). The full unit suite passes: 3,440
+tests, apart from the same three pre-existing, unrelated failures a monitoring-config
+test has had all along. `ruff format` and `ruff check` are clean on every changed file.
+
+---
+
 # Docs/Data — SIM-541 closes: the closing-only odds gap turned out not to exist,
 and no longer matters either way — 2026-09-11
 

@@ -806,7 +806,6 @@ def test_clv_worker_reraises_the_unresolved_error(monkeypatch):
         "do_props": False,
         "iterations": 1,
         "base_seed": 0,
-        "min_edge": 0.0,
         "dsn": "postgresql://x/y",
         "duckdb": "/nope.duckdb",
     }
@@ -830,15 +829,16 @@ def test_clv_worker_still_swallows_an_ordinary_bad_game(monkeypatch):
         "do_props": False,
         "iterations": 1,
         "base_seed": 0,
-        "min_edge": 0.0,
         "dsn": "postgresql://x/y",
         "duckdb": "/nope.duckdb",
     }
+    # SIM-541: the payload used to also carry a "bets" key (the SIM-429 CLV
+    # scoreboard's per-bet records). The owner retired that report — the
+    # platform no longer measures the entry-to-close line move at all — and
+    # its code was deleted from scripts/clv_backtest.py, so an ordinary
+    # skipped game's payload no longer has anything to put there.
     assert clv._process_one_game(777, params) == {
         "status": "unresolved",
-        "bets": [],
-        # SIM-538: the accuracy-comparison payload grew alongside "bets" — an
-        # ordinary skipped game contributes neither kind of record.
         "accuracy_records": [],
         "park_run_factor": 1.0,
     }
