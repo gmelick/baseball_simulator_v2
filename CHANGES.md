@@ -1,3 +1,35 @@
+# Docs/Data — SIM-541 closes: the closing-only odds gap turned out not to exist,
+and no longer matters either way — 2026-09-11
+
+**The question this ticket asked.** The old belief was that the odds collector captures a
+CLOSING price on many more games than it captures a matching OPENING price for. Since the
+old headline metric (Closing Line Value) needed both prices, an unmatched closing price was
+wasted — collected but never used. This ticket asked for two things: a real count of how big
+that waste was, and the new accuracy-comparison tool (SIM-538) changed to use every game with
+a closing price, whether or not it has a matched opening price.
+
+**The code change turned out to already be done.** Reading the accuracy-comparison tool's
+game-selection and odds-reading code found it never required a matched pair in the first
+place: it selects every completed game regardless of odds coverage, and its price reader
+only ever asks for the closing row. This was a side effect of how SIM-538 was built, not
+separate work for this ticket.
+
+**The count.** Checked the real database. Of the one season of odds currently loaded (2024,
+2,378 games): every one of the 7,134 game-market rows (moneyline, total, run line) with a
+closing price also has a matched opening price — zero closing-only rows. Player props are
+the same story, missing an opening price on only 5 of 85,950 rows. The gap this ticket was
+filed to find and close does not exist in the data checked.
+
+**Closed without waiting to check the other nine seasons.** Nine more seasons of odds
+(2017–2023, 2025–2026) are still being loaded and were not part of this count. The owner
+ruled the ticket closed anyway, for a reason bigger than any one season's numbers: the
+platform no longer measures the opening-to-closing line move at all — SIM-538 replaced that
+metric — so whether a game's opening price is missing no longer matters, this season or any
+other. The count above is recorded as the answer for the data checked; it is not expected to
+change what the platform does going forward.
+
+---
+
 # Feat — SIM-540 closes: the hypothetical dollar return, an opt-in companion to the accuracy
 comparison — 2026-09-11
 
