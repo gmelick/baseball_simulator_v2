@@ -21,8 +21,9 @@ What these tests pin:
     of the previous plate appearance nor at the half-inning roll — and the
     half's plate-appearance count and the starters are tracked;
   * the switch: with the draw on, the pull follows the drawn row (no floor, no
-    ceiling); without a pool the formula stays; with the manager off nothing
-    runs;
+    ceiling) and without a pool no change is drawn; with the draw off nobody is
+    ever changed (the SIM-434 formula was deleted at the SIM-427 flip,
+    2026-09-13); with the manager off nothing runs;
   * the factory env reads.
 """
 
@@ -64,7 +65,8 @@ CREATE TABLE derived.at_bat_situations (
 );
 CREATE TABLE sim.pitch_pool (
     pitch_id BIGINT, game_pk INTEGER, at_bat_number INTEGER, pitch_number SMALLINT,
-    season SMALLINT, pitcher_id INTEGER, batter_id INTEGER, recency_weight FLOAT
+    season SMALLINT, pitcher_id INTEGER, batter_id INTEGER, recency_weight FLOAT,
+    game_date DATE
 );
 """
 
@@ -110,7 +112,7 @@ def _seed(con: duckdb.DuckDBPyConnection) -> None:
         for p in range(1, n_p + 1):
             pid += 1
             con.execute(
-                "INSERT INTO sim.pitch_pool VALUES (?, 1, ?, ?, ?, ?, 300, 1.0)",
+                "INSERT INTO sim.pitch_pool VALUES (?, 1, ?, ?, ?, ?, 300, 1.0, DATE '2024-06-01')",
                 [pid, ab_no, p, _SEASON, pitcher],
             )
 
@@ -168,6 +170,36 @@ class TestTheBuilder:
         assert manifest["rates"]["changed_new_half"] == 0.0
         assert manifest["rates"]["changed_reliever"] == 0.0
         del order
+        # SIM-535 (2026-09-13): every row carries its game date, so a backtest's
+        # point-in-time cutoff applies to this draw too.
+        assert manifest["game_ymd"] is True
+        assert cp.game_ymd is not None and set(cp.game_ymd.tolist()) == {20240601}
+
+    def test_the_cutoff_refuses_the_rows_after_it(self, tmp_path):
+        con = duckdb.connect(":memory:")
+        try:
+            _seed(con)
+            build_pitching_change_pool(con, str(tmp_path), [_SEASON])
+        finally:
+            con.close()
+        (tmp_path / "pitch_pool").mkdir()
+        _minimal_pitch_pool(tmp_path)
+        fp = FullPoolSampler(EngineArtifacts.load(str(tmp_path)), np.random.default_rng(0))
+        fp.change_min_cell = 1
+        kw = {
+            "is_starter": True,
+            "new_half": False,
+            "pitch_count": 21,
+            "batters_faced": 7,
+            "inning": 3,
+            "outs": 1,
+            "runners_state": 1,
+            "score_diff": 2,
+        }
+        fp.set_asof(20240601)  # the game's own date is admissible
+        assert fp.pitching_change_draw("100:2024", **kw) is not None
+        fp.set_asof(20240531)  # the day before: every row is in the future -> no draw
+        assert fp.pitching_change_draw("100:2024", **kw) is None
 
     def test_the_pool_is_shareable(self, tmp_path):
         con = duckdb.connect(":memory:")
@@ -189,6 +221,55 @@ class TestTheBuilder:
     def test_an_older_bundle_has_no_pool(self, tmp_path):
         _minimal_pitch_pool(tmp_path)
         assert EngineArtifacts.load(str(tmp_path)).change_pool is None
+
+    # --- SIM-427: the fielding manager, the incoming arm's rest, the roles ---
+    def test_without_a_game_context_every_row_is_unknown(self, tmp_path):
+        con = duckdb.connect(":memory:")
+        try:
+            _seed(con)
+            manifest = build_pitching_change_pool(con, str(tmp_path), [_SEASON], game_context=None)
+        finally:
+            con.close()
+        _minimal_pitch_pool(tmp_path)
+        cp = EngineArtifacts.load(str(tmp_path)).change_pool
+        assert cp is not None and cp.manager_id is not None
+        assert (cp.manager_id == -1).all() and (cp.in_days_rest == -1).all()
+        assert manifest["manager_coverage"] == 0.0 and manifest["rest_coverage"] == 0.0
+
+    def test_the_game_context_lands_on_the_right_rows(self, tmp_path):
+        # game 1: home manager 7, away manager 8; the reliever 101 entered on
+        # two days' rest, having pitched in the last two days, 15 pitches in 3.
+        ctx = ({1: (7, 8)}, {(1, 101): (2, 1, 15)})
+        con = duckdb.connect(":memory:")
+        try:
+            _seed(con)
+            manifest = build_pitching_change_pool(con, str(tmp_path), [_SEASON], game_context=ctx)
+        finally:
+            con.close()
+        _minimal_pitch_pool(tmp_path)
+        art = EngineArtifacts.load(str(tmp_path))
+        cp = art.change_pool
+        assert cp is not None and cp.manager_id is not None
+        # the top halves are the HOME side fielding (manager 7): pitchers 100/101
+        top = (cp.pitcher_id == 100) | (cp.pitcher_id == 101)
+        assert (cp.manager_id[top] == 7).all() and (cp.manager_id[~top] == 8).all()
+        assert manifest["manager_coverage"] == 1.0
+        # every row whose incoming arm is 101 carries HIS rest as of the game
+        # (the change row and the one after it); every other row is unknown
+        has = cp.incoming_id == 101
+        assert has.sum() == 2 and (cp.changed[has] == 1).sum() == 1
+        assert set(cp.in_days_rest[has].tolist()) == {2}
+        assert set(cp.in_pitched_2d[has].tolist()) == {1}
+        assert set(cp.in_pitches_3d[has].tolist()) == {15}
+        assert (cp.in_days_rest[~has] == -1).all()
+        assert manifest["rest_coverage"] == pytest.approx(2 / 16)
+        # the role sidecar: 101 entered once, in the 3rd inning (not high leverage)
+        assert manifest["roles"] == 1
+        assert art.change_roles == {f"101:{_SEASON}": (1, 0.0, 3.0)}
+        # the four columns ride the shared-memory seam
+        shared = art.extract_shared_arrays()
+        assert shared["change_pool.manager_id"] is cp.manager_id
+        assert shared["change_pool.in_pitches_3d"] is cp.in_pitches_3d
 
 
 def _minimal_pitch_pool(tmp_path) -> None:
@@ -487,9 +568,7 @@ def _state_for_pull(pitch_count: int) -> GameState:
 
 class TestTheSwitch:
     def _machine(self, sampler, draw=True):
-        m = StateMachine(
-            sampler, rng=np.random.default_rng(1), manager={"starter_pull_pct_before_100": 0.9}
-        )
+        m = StateMachine(sampler, rng=np.random.default_rng(1), manager={})
         m.manager_draw = draw
         return m
 
@@ -527,13 +606,25 @@ class TestTheSwitch:
         assert fp.calls[0]["is_starter"] is False and fp.calls[0]["new_half"] is False
         assert fp.calls[0]["batters_faced"] == 3
 
-    def test_no_pool_keeps_the_formula(self):
+    def test_no_pool_draws_no_change(self):
+        # SIM-427 (2026-09-13): with the draw ON, a bundle without a change
+        # pool (the draw answers None) changes nothing — 120 pitches or not.
+        # The formula's forced ceiling belongs to the OFF arm alone.
         fp = _DrawSampler([None])
         m = self._machine(fp)
-        s = _state_for_pull(120)  # the formula's ceiling forces the pull
+        s = _state_for_pull(120)
         m._maybe_pull_starter(s, 1.0)
-        assert s.pitcher_id in (901, 902) and m.manager_decisions[-1]["source"] == "formula"
-        assert m.manager_decisions[-1]["forced"] is True
+        assert s.pitcher_id == 100 and not m.manager_decisions
+
+    def test_the_switch_off_changes_nobody_since_the_flip(self):
+        # The SIM-434 formula and its forced ceiling were deleted at the SIM-427
+        # flip (2026-09-13): with the draw switch off, 120 pitches or not, the
+        # starter stays and the sampler is never asked.
+        fp = _DrawSampler([True])
+        m = self._machine(fp, draw=False)
+        s = _state_for_pull(120)
+        m._maybe_pull_starter(s, 1.0)
+        assert not fp.calls and s.pitcher_id == 100 and not m.manager_decisions
 
     def test_the_switch_off_never_asks_the_sampler(self):
         fp = _DrawSampler([True])
@@ -576,6 +667,8 @@ class TestTheFactoryEnv:
         )
 
     def test_the_unit_suite_pins_the_draw_off(self):
+        # The unit lane's byte-identical state: no manager, no draw (production
+        # runs the draw since the SIM-427 flip; the compose file carries it).
         assert os.environ.get("SIM_MANAGER_DRAW") == "0"
 
 

@@ -1,0 +1,334 @@
+{
+ "offers": [
+  {
+   "id": "6eaac18a3389700e74cff87d6d8a0e8a",
+   "market_id": 407,
+   "event_id": 99026,
+   "player_id": null,
+   "team_id": "TB",
+   "opponent_id": null,
+   "link": "",
+   "active": true,
+   "participants": [
+    {
+     "id": "TB",
+     "name": "Rays",
+     "link": "/mlb/teams/tampa-bay-rays/",
+     "team": {
+      "city": "Tampa Bay",
+      "abbreviation": "TB",
+      "conference": "AL",
+      "division": "East",
+      "slug": "tampa-bay-rays",
+      "stadium_deg_offset": "45"
+     }
+    }
+   ],
+   "selections": [
+    {
+     "participant": null,
+     "selection": "over",
+     "active": true,
+     "opening_line": {
+      "line": 1.5,
+      "cost": -150,
+      "book_id": 13,
+      "created": "2026-09-09 17:41:08"
+     },
+     "label": "Over",
+     "short_label": "Over",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:46",
+         "cost": -160,
+         "line": 2,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com"
+        }
+       ]
+      },
+      {
+       "id": 13,
+       "lines": [
+        {
+         "id": "13_ff636b6073212aa561beda26b5a346ea",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:46",
+         "cost": 130,
+         "line": 2.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://sportsbook.caesars.com/us/nj/bet/betslip?selectionIds=45dc6ba7-9d22-3618-9357-d24dbc59a018"
+        }
+       ]
+      },
+      {
+       "id": 33,
+       "lines": [
+        {
+         "id": "33_ff636b6073212aa561beda26b5a346ea",
+         "from_scout": true,
+         "main": true,
+         "best": true,
+         "updated": "2026-09-10 16:15:46",
+         "cost": -160,
+         "line": 1.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://thescore.bet/sport/baseball/organization/united-states/competition/mlb/event/142621b6-66b6-4f66-a428-f3be154ce57d"
+        }
+       ]
+      }
+     ],
+     "id": "ff636b6073212aa561beda26b5a346ea"
+    },
+    {
+     "participant": null,
+     "selection": "under",
+     "active": true,
+     "opening_line": {
+      "line": 1.5,
+      "cost": 120,
+      "book_id": 13,
+      "created": "2026-09-09 17:41:08"
+     },
+     "label": "Under",
+     "short_label": "Under",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:46",
+         "cost": -160,
+         "line": 2,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com"
+        }
+       ]
+      },
+      {
+       "id": 13,
+       "lines": [
+        {
+         "id": "13_1d138ac911f6728f49f74a9e09dc357b",
+         "from_scout": true,
+         "main": true,
+         "best": true,
+         "updated": "2026-09-10 16:15:46",
+         "cost": -160,
+         "line": 2.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://sportsbook.caesars.com/us/nj/bet/betslip?selectionIds=918ccc1c-9c29-30e5-b9bc-bc4319a6752d"
+        }
+       ]
+      },
+      {
+       "id": 33,
+       "lines": [
+        {
+         "id": "33_1d138ac911f6728f49f74a9e09dc357b",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:46",
+         "cost": 125,
+         "line": 1.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://thescore.bet/sport/baseball/organization/united-states/competition/mlb/event/142621b6-66b6-4f66-a428-f3be154ce57d"
+        }
+       ]
+      }
+     ],
+     "id": "1d138ac911f6728f49f74a9e09dc357b"
+    }
+   ]
+  },
+  {
+   "id": "ada90d1be346b7d4ea4d7e6a42a9c3ff",
+   "market_id": 407,
+   "event_id": 99026,
+   "player_id": null,
+   "team_id": "ATL",
+   "opponent_id": null,
+   "link": "",
+   "active": true,
+   "participants": [
+    {
+     "id": "ATL",
+     "name": "Braves",
+     "link": "/mlb/teams/atlanta-braves/",
+     "team": {
+      "city": "Atlanta",
+      "abbreviation": "ATL",
+      "conference": "NL",
+      "division": "East",
+      "slug": "atlanta-braves",
+      "stadium_deg_offset": "160"
+     }
+    }
+   ],
+   "selections": [
+    {
+     "participant": null,
+     "selection": "over",
+     "active": true,
+     "opening_line": {
+      "line": 2.5,
+      "cost": 120,
+      "book_id": 13,
+      "created": "2026-09-09 17:41:08"
+     },
+     "label": "Over",
+     "short_label": "Over",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:55",
+         "cost": 120,
+         "line": 2.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com"
+        }
+       ]
+      },
+      {
+       "id": 12,
+       "lines": [
+        {
+         "id": "12_10bf6641695696ce3b76721c670e47d8",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:55",
+         "cost": 114,
+         "line": 2.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://btng.pro/FMwkO6"
+        }
+       ]
+      },
+      {
+       "id": 13,
+       "lines": [
+        {
+         "id": "13_10bf6641695696ce3b76721c670e47d8",
+         "from_scout": true,
+         "main": true,
+         "best": true,
+         "updated": "2026-09-10 16:15:55",
+         "cost": 130,
+         "line": 2.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://sportsbook.caesars.com/us/nj/bet/betslip?selectionIds=0c9dc142-2510-3cf9-b71b-7079f3865ec5"
+        }
+       ]
+      }
+     ],
+     "id": "10bf6641695696ce3b76721c670e47d8"
+    },
+    {
+     "participant": null,
+     "selection": "under",
+     "active": true,
+     "opening_line": {
+      "line": 2.5,
+      "cost": -150,
+      "book_id": 13,
+      "created": "2026-09-09 17:41:08"
+     },
+     "label": "Under",
+     "short_label": "Under",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:55",
+         "cost": -155,
+         "line": 2.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com"
+        }
+       ]
+      },
+      {
+       "id": 12,
+       "lines": [
+        {
+         "id": "12_f894a502e2f41227d6c8e481bbd2b677",
+         "from_scout": true,
+         "main": true,
+         "best": true,
+         "updated": "2026-09-10 16:15:55",
+         "cost": -145,
+         "line": 2.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://btng.pro/FMwkO6"
+        }
+       ]
+      },
+      {
+       "id": 13,
+       "lines": [
+        {
+         "id": "13_f894a502e2f41227d6c8e481bbd2b677",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:55",
+         "cost": -160,
+         "line": 2.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://sportsbook.caesars.com/us/nj/bet/betslip?selectionIds=48e654e5-d5df-3aae-a5d5-0f6fc0076ece"
+        }
+       ]
+      }
+     ],
+     "id": "f894a502e2f41227d6c8e481bbd2b677"
+    }
+   ]
+  }
+ ],
+ "_pagination": {
+  "page": 1,
+  "limit": 10,
+  "total_pages": 1,
+  "total_items": 2,
+  "paginated_array": "offers",
+  "self": "/v3/offers?event_id=99026&market_id=407&sport=MLB&event_id=99026&market_id=407&sport=MLB"
+ }
+}

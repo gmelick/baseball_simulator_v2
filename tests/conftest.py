@@ -89,8 +89,23 @@ os.environ["SIM_PARK_WALL_ZONE_ONLY"] = "0"
 os.environ["SIM_FENCE_STAGE"] = "0"
 
 # SIM-523 part D: the pitching change as a draw from the opportunity pool.
-# Off = the SIM-434 formula (and with SIM_MANAGER off, no manager at all).
+# Off = the SIM-434 formula, production today and the OFF arm of the SIM-427
+# paired accuracy run (the flip deletes the formula; with SIM_MANAGER off there
+# is no manager at all). A test that wants the draw sets ``machine.manager_draw``.
 os.environ["SIM_MANAGER_DRAW"] = "0"
+# SIM-427: the live manager's usage weight on the change draw and the six
+# reliever-draw weights — every one at its OFF value, so a unit game keeps the
+# pool's own change rate and the positional reliever pick.
+os.environ["SIM_ACTOR_POWER_MANAGER_USAGE"] = "0"
+# The pen source: 'synthetic' = the no-DB seam's pen (production today);
+# 'box' = the MLB box's per-game listing (the flip).
+os.environ["SIM_BULLPEN_SOURCE"] = "synthetic"
+os.environ["SIM_RELIEF_ROLE_SIGMA"] = "0"
+os.environ["SIM_RELIEF_PITCHER_POWER"] = "0"
+os.environ["SIM_RELIEF_REST_SIGMA"] = "0"
+os.environ["SIM_RELIEF_PITCHED2D_OFF_WEIGHT"] = "1.0"
+os.environ["SIM_RELIEF_PITCHES3D_SIGMA"] = "0"
+os.environ["SIM_RELIEF_HAND_OFF_WEIGHT"] = "1.0"
 
 # ---------------------------------------------------------------------------
 # Shared lightweight fixtures

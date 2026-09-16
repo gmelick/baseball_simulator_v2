@@ -133,8 +133,10 @@ def test_get_prop_odds_no_player_match_returns_nulls():
 
 
 def test_get_prop_odds_unknown_stat_raises():
+    # SIM-421 made "doubles" (the old probe value) a real market, so the probe is
+    # now innings_pitched — a market the vocabulary still does not carry.
     with pytest.raises(ValueError, match="Unknown prop_stat"):
-        _FixtureProvider().get_prop_odds(746437, 682243, "doubles")
+        _FixtureProvider().get_prop_odds(746437, 682243, "innings_pitched")
 
 
 # --------------------------------------------------------------------------- registry

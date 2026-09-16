@@ -40,6 +40,8 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
+    BATTER_PROP_STATS,
+    PITCHER_PROP_STATS,
     PROP_BOOKS,
     PROP_STATS,
     LiveIngestionPipeline,
@@ -64,15 +66,25 @@ def _make_game_state(
     home_lineup_ids: list[int] | None = None,
     away_lineup_ids: list[int] | None = None,
 ) -> dict:
-    """Minimal game_state with the keys _collect_prop_player_ids() reads."""
+    """Minimal game_state with the keys _collect_prop_player_roles() reads.
+
+    SIM-421: every lineup entry carries a position-player code so the cycle
+    exercises the pitcher / batter market split (the pitcher gets the
+    PITCHER_PROP_STATS, each hitter the BATTER_PROP_STATS).
+    """
     home_lineup_ids = home_lineup_ids if home_lineup_ids is not None else [101, 102]
     away_lineup_ids = away_lineup_ids if away_lineup_ids is not None else [201]
     return {
         "game_pk": 745000,
         "current_pitcher_id": current_pitcher_id,
-        "home_lineup": [{"player_id": pid} for pid in home_lineup_ids],
-        "away_lineup": [{"player_id": pid} for pid in away_lineup_ids],
+        "home_lineup": [{"player_id": pid, "position": "CF"} for pid in home_lineup_ids],
+        "away_lineup": [{"player_id": pid, "position": "1B"} for pid in away_lineup_ids],
     }
+
+
+#: SIM-421: the quote count the default fixture yields — one pitcher × the
+#: pitcher markets + three hitters × the batter markets, at every book.
+_DEFAULT_FIXTURE_QUOTES = (len(PITCHER_PROP_STATS) + 3 * len(BATTER_PROP_STATS)) * len(PROP_BOOKS)
 
 
 # ===========================================================================
@@ -96,10 +108,13 @@ class TestSIM340PersistPropOddsWired:
         assert pipeline._persist_prop_odds.await_count > 0, (
             "_persist_prop_odds was never called — the SIM-340 live wiring is broken."
         )
-        # players(4) × stats(7) × books(4) = 112 quotes for the default fixture.
-        expected = 4 * len(PROP_STATS) * len(PROP_BOOKS)
-        assert pipeline._persist_prop_odds.await_count == expected
-        assert written == expected
+        # SIM-421 changed this pin deliberately. It was players(4) × stats(7) ×
+        # books(4) = 112; the cycle now asks the pitcher for the 5 pitcher
+        # markets and each of the 3 hitters for the 10 batter markets:
+        # (5 + 3 × 10) × 4 books = 140.
+        assert _DEFAULT_FIXTURE_QUOTES == 140
+        assert pipeline._persist_prop_odds.await_count == _DEFAULT_FIXTURE_QUOTES
+        assert written == _DEFAULT_FIXTURE_QUOTES
 
     @pytest.mark.asyncio
     async def test_cycle_writes_to_prop_odds_table(self) -> None:
@@ -154,7 +169,8 @@ class TestSIM340MultiBookSharpFlag:
         quotes = pipeline._fetch_prop_odds(745000, [101], line_type="current")
         books_seen = {q["book"] for q in quotes}
         assert books_seen == {b for b, _ in PROP_BOOKS}
-        # One quote per stat per book for the single player.
+        # One quote per stat per book for the single player. No ``roles`` were
+        # passed, so the player gets every market (the SIM-421 safe default).
         assert len(quotes) == len(PROP_STATS) * len(PROP_BOOKS)
 
     def test_sharp_flag_propagates_to_quotes(self) -> None:

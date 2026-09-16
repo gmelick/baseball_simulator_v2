@@ -113,6 +113,13 @@ class _FielderStub(_StubEngine):
     profiles = [(11, "SS", 2024), (12, "SS", 2024), (13, "CF", 2024), (14, "SS", 2023)]
 
 
+class _ManagerStub(_StubEngine):
+    # SIM-427: the manager's usage sub-score is the matrix (``manager_usage``).
+    key_attrs = ("manager_id", "season")
+    score_attrs = ("score", "usage_score")
+    profiles = [(4061, 2024), (4062, 2024), (4063, 2023)]
+
+
 _STUBS = {
     "BatterSimilarityEngine": _BatterStub,
     "CatcherSimilarityEngine": _CatcherStub,
@@ -120,6 +127,7 @@ _STUBS = {
     "BaserunnerSimilarityEngine": _RunnerStub,
     "PitcherStealSimilarityEngine": _PitcherStealStub,
     "FielderSimilarityEngine": _FielderStub,
+    "ManagerSimilarityEngine": _ManagerStub,
 }
 
 
@@ -139,6 +147,7 @@ class TestTheBuilder:
         sizes = build_actor_sim_matrices("x.duckdb", str(tmp_path), [2024])
         sim_dir = tmp_path / "actor_sim"
         assert sizes == {
+            "manager_usage": 2,  # SIM-427: the two 2024 manager-seasons
             "batter": 2,
             "catcher": 2,
             "catcher_throwing": 2,

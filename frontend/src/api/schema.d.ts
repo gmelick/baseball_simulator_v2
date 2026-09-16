@@ -4,6 +4,193 @@
  */
 
 export interface paths {
+    "/api/analytics/by-season": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Games + pitches per season */
+        get: operations["by_season_api_analytics_by_season_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analytics/count-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Swing/whiff by ball-strike count */
+        get: operations["count_state_api_analytics_count_state_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analytics/kpis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Top-line coverage KPIs */
+        get: operations["get_kpis_api_analytics_kpis_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analytics/leaderboard/batters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Batter contact-quality leaderboard */
+        get: operations["batter_leaderboard_api_analytics_leaderboard_batters_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analytics/leaderboard/pitchers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pitcher rate-stat leaderboard */
+        get: operations["pitcher_leaderboard_api_analytics_leaderboard_pitchers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analytics/pa-outcomes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Plate-appearance outcome distribution */
+        get: operations["pa_outcomes_api_analytics_pa_outcomes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analytics/pitch-type-mix": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pitch-type usage + stuff (season, optional pitcher/stand) */
+        get: operations["pitch_type_mix_api_analytics_pitch_type_mix_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analytics/velo-distribution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Release-speed histogram (1 mph buckets) */
+        get: operations["velo_distribution_api_analytics_velo_distribution_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analytics/zone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whiff / called-strike by Statcast zone bucket */
+        get: operations["zone_api_analytics_zone_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/ask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask the AI assistant (SSE stream) */
+        post: operations["ask_api_assistant_ask_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether the AI assistant is configured */
+        get: operations["status_probe_api_assistant_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/betting/games/{game_pk}/clv": {
         parameters: {
             query?: never;
@@ -133,7 +320,7 @@ export interface paths {
         };
         /**
          * Per-player boxscore-average card (prop means over N iterations)
-         * @description Resolve the game's lineup, run an N-iteration boxscore batch, and return each player's prop MEANS as a boxscore card (SIM-366): for a batter the H/HR/RBI/TB means, for a pitcher the K/BB/ER/OUTS means -- the means-only projection of the run's PropDistributionSet (SIM-329). numpy-free JSON (SIM-350). 503 if no DB pool is attached; 404 if the lineup cannot be resolved.
+         * @description Resolve the game's lineup, run an N-iteration boxscore batch, and return each player's prop MEANS as a boxscore card (SIM-366): for a batter the H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means, for a pitcher the K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's other lines) -- the means-only projection of the run's PropDistributionSet (SIM-329). numpy-free JSON (SIM-350). 503 if no DB pool is attached; 404 if the lineup cannot be resolved.
          */
         get: operations["get_game_boxscore_api_games__game_pk__boxscore_get"];
         put?: never;
@@ -253,7 +440,7 @@ export interface paths {
         };
         /**
          * Player prop PMF + optional edge report (SIM-390)
-         * @description Run an N-iteration Monte-Carlo batch for the game, look up one player's prop PMF (e.g. K, BB, H, HR), and return the full integer-support PMF.  Supply ``line`` to also get ``p_over``/``p_under``/``p_push``; supply ``line``, ``over_ml``, and ``under_ml`` to also get a full ``edge_report`` via the CLV engine (SIM-339).  ``bet_side`` controls which side's edge is computed (``'over'`` or ``'under'``, default ``'over'``).  Valid props: K, BB, ER, OUTS (pitcher), H, HR, RBI, TB (batter).  503 if no DB pool is attached; 404 if the lineup or player cannot be resolved.
+         * @description Run an N-iteration Monte-Carlo batch for the game, look up one player's prop PMF (e.g. K, BB, H, HR), and return the full integer-support PMF.  Supply ``line`` to also get ``p_over``/``p_under``/``p_push``; supply ``line``, ``over_ml``, and ``under_ml`` to also get a full ``edge_report`` via the CLV engine (SIM-339).  ``bet_side`` controls which side's edge is computed (``'over'`` or ``'under'``, default ``'over'``).  Valid props (SIM-421 added the market's other lines): K, BB, ER, OUTS, H_ALLOWED (pitcher); H, HR, RBI, TB, 1B, 2B, 3B, R, SB, HRR (batter; HRR = hits + runs + RBI as one per-game sum).  503 if no DB pool is attached; 404 if the lineup or player cannot be resolved.
          */
         get: operations["get_player_prop_edge_api_games__game_pk__props__player_id___prop__get"];
         put?: never;
@@ -373,10 +560,80 @@ export interface paths {
         };
         /**
          * Get Game Odds
-         * @description Returns mock betting lines for a game.  In Phase 7, replace this handler
-         *     with a call to a real odds provider and flip is_mock=False.
+         * @description Returns mock betting lines for a game.  This handler calls MockOddsAPI
+         *     directly (it predates the SIM-370 seam); the live ingestion path instead
+         *     goes through get_odds_provider(), so ODDS_PROVIDER=bettingpros yields real
+         *     lines (is_mock=False) there.
          */
         get: operations["get_game_odds_api_odds__game_pk__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/players/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Player name typeahead (raw.players, pg_trgm) */
+        get: operations["search_players_api_players_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/players/{player_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Player identity + seasons on file */
+        get: operations["get_player_api_players__player_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/schema": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** raw.* schema tree (tables + columns) for the SQL console / assistant */
+        get: operations["get_schema_api_schema_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/similarity/engines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Engine catalog + build status */
+        get: operations["list_engines_api_similarity_engines_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -399,6 +656,94 @@ export interface paths {
         get: operations["get_pitcher_similarity_distribution_api_similarity_pitcher__pitcher_id___season__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/similarity/situation/query": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Nearest historical game states */
+        post: operations["situation_query_api_similarity_situation_query_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/similarity/{engine}/meta": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Engine sub-score metadata */
+        get: operations["engine_meta_api_similarity__engine__meta_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/similarity/{engine}/pair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One subject-vs-comp breakdown */
+        get: operations["engine_pair_api_similarity__engine__pair_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/similarity/{engine}/query": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ranked comps + score distribution */
+        get: operations["engine_query_api_similarity__engine__query_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sql/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a read-only SQL query against raw.* (Postgres)
+         * @description Executes a single SELECT / WITH query in a read-only transaction with a statement timeout and a hard row cap. Only raw.* (Postgres) is reachable; derived.*\/sim.* live in DuckDB and are not on this pool. 400 on a rejected or failing query; 503 with no pool.
+         */
+        post: operations["run_sql_api_sql_run_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -512,6 +857,20 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AskRequest */
+        AskRequest: {
+            /** History */
+            history?: components["schemas"]["ChatTurn"][];
+            /** Question */
+            question: string;
+        };
+        /** AssistantStatus */
+        AssistantStatus: {
+            /** Configured */
+            configured: boolean;
+            /** Model */
+            model: string;
+        };
         /**
          * AuthStatusResponse
          * @description Response for GET /auth/me — always 200, never 401.
@@ -582,8 +941,9 @@ export interface components {
          * @description One player's row in the SIM-366 boxscore card.
          *
          *     A compact per-player payload exposing that player's prop **means** over a
-         *     Monte-Carlo run -- for a batter the H/HR/RBI/TB means, for a pitcher the
-         *     K/BB/ER/OUTS means -- as a ``{prop_name -> mean}`` map.  Built from a
+         *     Monte-Carlo run -- for a batter the H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means,
+         *     for a pitcher the K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's
+         *     other lines) -- as a ``{prop_name -> mean}`` map.  Built from a
          *     :class:`simulation.prop_distributions.PropDistribution` map (one player's
          *     ``by_player`` entry), reading each :attr:`PropDistribution.mean`.  numpy-free
          *     (plain floats).
@@ -619,6 +979,13 @@ export interface components {
             /** Entry Fair Prob */
             entry_fair_prob: number;
         };
+        /** ChatTurn */
+        ChatTurn: {
+            /** Content */
+            content: string;
+            /** Role */
+            role: string;
+        };
         /**
          * ClvSnapshotResponse
          * @description The ``GET /api/betting/games/{game_pk}/clv`` envelope.
@@ -643,6 +1010,13 @@ export interface components {
             market_type: string;
             /** Series */
             series?: components["schemas"]["LineMovementModel"][];
+        };
+        /** ColumnInfo */
+        ColumnInfo: {
+            /** Data Type */
+            data_type: string;
+            /** Name */
+            name: string;
         };
         /**
          * ConfidenceIntervalModel
@@ -761,6 +1135,65 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /** EngineCatalogEntry */
+        EngineCatalogEntry: {
+            /**
+             * Built
+             * @default false
+             */
+            built: boolean;
+            /** Engine */
+            engine: string;
+            /** Kind */
+            kind: string;
+            /** Method */
+            method: string;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /** Partition */
+            partition?: string | null;
+            /**
+             * Profile Count
+             * @default 0
+             */
+            profile_count: number;
+            /**
+             * Sub Score Count
+             * @default 0
+             */
+            sub_score_count: number;
+        };
+        /** EngineMetaResponse */
+        EngineMetaResponse: {
+            /** Built */
+            built: boolean;
+            /** Engine */
+            engine: string;
+            /** Method */
+            method: string;
+            /** Min Sample */
+            min_sample: number;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /** Partition */
+            partition: string;
+            /** Position Keyed */
+            position_keyed: boolean;
+            /** Profile Count */
+            profile_count: number;
+            /** Sample Field */
+            sample_field: string;
+            /** Sub Scores */
+            sub_scores: components["schemas"]["SubScoreMeta"][];
+            /** Supports Vs Hand */
+            supports_vs_hand: boolean;
+        };
         /**
          * FieldSnapshotModel
          * @description Response model for :class:`simulation.snapshots.FieldSnapshot` (SIM-331).
@@ -840,6 +1273,8 @@ export interface components {
             home_team_name?: string | null;
             /** Home Wins */
             home_wins?: number | null;
+            /** Lineup Ready */
+            lineup_ready?: boolean | null;
             /** Season */
             season: number;
             /** Status */
@@ -1061,6 +1496,21 @@ export interface components {
             home_played: boolean;
             /** Inning */
             inning: number;
+        };
+        /** KpisResponse */
+        KpisResponse: {
+            /** First Date */
+            first_date: string | null;
+            /** Last Date */
+            last_date: string | null;
+            /** Seasons */
+            seasons: number[];
+            /** Total Games */
+            total_games: number;
+            /** Total Pitches */
+            total_pitches: number;
+            /** Total Pitches Estimated */
+            total_pitches_estimated: boolean;
         };
         /**
          * LineMovementModel
@@ -1332,6 +1782,25 @@ export interface components {
             /** Override */
             override: number;
         };
+        /** NearestSituationModel */
+        NearestSituationModel: {
+            /** Distance */
+            distance: number;
+            /** Game Pk */
+            game_pk: number;
+            /** Inning */
+            inning: number;
+            /** Leverage Index */
+            leverage_index: number;
+            /** Outs */
+            outs: number;
+            /** Play Id */
+            play_id: string;
+            /** Runners */
+            runners: number;
+            /** Score Differential */
+            score_differential: number;
+        };
         /**
          * OverrideDeltaModel
          * @description Response model for :class:`simulation.snapshots.OverrideDelta` (SIM-331).
@@ -1450,6 +1919,37 @@ export interface components {
             /** Total Entries */
             total_entries?: number | null;
         };
+        /** PlayerDetail */
+        PlayerDetail: {
+            /** Bats */
+            bats?: string | null;
+            /** Name */
+            name: string;
+            /** Player Id */
+            player_id: number;
+            /** Position */
+            position?: string | null;
+            /**
+             * Seasons
+             * @default []
+             */
+            seasons: number[];
+            /** Throws */
+            throws?: string | null;
+        };
+        /** PlayerHit */
+        PlayerHit: {
+            /** Bats */
+            bats?: string | null;
+            /** Name */
+            name: string;
+            /** Player Id */
+            player_id: number;
+            /** Position */
+            position?: string | null;
+            /** Throws */
+            throws?: string | null;
+        };
         /**
          * PlayerRefModel
          * @description Response model for :class:`simulation.snapshots.PlayerRef`.
@@ -1546,6 +2046,18 @@ export interface components {
             /** Substitutions */
             substitutions?: components["schemas"]["SubstitutionSlot"][] | null;
         };
+        /** SchemaInfo */
+        SchemaInfo: {
+            /** Name */
+            name: string;
+            /** Tables */
+            tables: components["schemas"]["TableInfo"][];
+        };
+        /** SchemaResponse */
+        SchemaResponse: {
+            /** Schemas */
+            schemas: components["schemas"]["SchemaInfo"][];
+        };
         /**
          * SeasonCoverage
          * @description Per-season ingest coverage.
@@ -1584,6 +2096,94 @@ export interface components {
             /** Signals */
             signals?: components["schemas"]["BetSignalModel"][];
         };
+        /** SimBin */
+        SimBin: {
+            /** Bin Index */
+            bin_index: number;
+            /** Count */
+            count: number;
+            /** Hi */
+            hi: number;
+            /** Lo */
+            lo: number;
+            /** Members */
+            members: components["schemas"]["SimMember"][];
+            /** Preview */
+            preview: components["schemas"]["SimMember"][];
+        };
+        /** SimMember */
+        SimMember: {
+            /** Below Min Sample */
+            below_min_sample: boolean;
+            /** Entity Id */
+            entity_id: number;
+            /**
+             * Extra
+             * @default {}
+             */
+            extra: Record<string, never>;
+            /** Name */
+            name: string;
+            /** Sample */
+            sample: number;
+            /** Score */
+            score: number;
+            /** Season */
+            season: number;
+            /** Sub Scores */
+            sub_scores: {
+                [key: string]: number;
+            };
+        };
+        /** SimPairResponse */
+        SimPairResponse: {
+            comp: components["schemas"]["SimMember"];
+            /** Engine */
+            engine: string;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /** Sub Scores Meta */
+            sub_scores_meta: components["schemas"]["SubScoreMeta"][];
+            /** Subject */
+            subject: Record<string, never>;
+        };
+        /** SimQueryResponse */
+        SimQueryResponse: {
+            /** Bins */
+            bins: components["schemas"]["SimBin"][];
+            /** Diagnostic */
+            diagnostic: Record<string, never>;
+            /** Engine */
+            engine: string;
+            /** Method */
+            method: string;
+            /** Min Sample */
+            min_sample: number;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /** Partition */
+            partition: string;
+            /** Population Size */
+            population_size: number;
+            /** Sample Field */
+            sample_field: string;
+            /** Score Summary */
+            score_summary: {
+                [key: string]: number;
+            };
+            /** Sub Scores Meta */
+            sub_scores_meta: components["schemas"]["SubScoreMeta"][];
+            /** Subject */
+            subject: Record<string, never>;
+            /** Top N */
+            top_n: components["schemas"]["SimMember"][];
+        };
         /**
          * SimilarityDistributionResponse
          * @description Top-level response for the histogram endpoint.
@@ -1621,6 +2221,115 @@ export interface components {
             n_iterations: number;
             summary: components["schemas"]["GameSimSummaryModel"];
         };
+        /** SituationQueryRequest */
+        SituationQueryRequest: {
+            /**
+             * Batter Pa Count
+             * @default 1
+             */
+            batter_pa_count: number;
+            /**
+             * Inning
+             * @default 1
+             */
+            inning: number;
+            /**
+             * K
+             * @default 25
+             */
+            k: number;
+            /**
+             * Leverage Index
+             * @default 1
+             */
+            leverage_index: number;
+            /**
+             * Outs
+             * @default 0
+             */
+            outs: number;
+            /**
+             * Park Factor Runs
+             * @default 1
+             */
+            park_factor_runs: number;
+            /**
+             * Pitcher Pitch Count
+             * @default 0
+             */
+            pitcher_pitch_count: number;
+            /**
+             * Runner On 1B
+             * @default 0
+             */
+            runner_on_1b: number;
+            /**
+             * Runner On 2B
+             * @default 0
+             */
+            runner_on_2b: number;
+            /**
+             * Runner On 3B
+             * @default 0
+             */
+            runner_on_3b: number;
+            /**
+             * Score Differential
+             * @default 0
+             */
+            score_differential: number;
+            /**
+             * Top Or Bottom
+             * @default 0
+             */
+            top_or_bottom: number;
+        };
+        /** SituationQueryResponse */
+        SituationQueryResponse: {
+            /** Count */
+            count: number;
+            /** K */
+            k: number;
+            /** Results */
+            results: components["schemas"]["NearestSituationModel"][];
+        };
+        /** SqlRunRequest */
+        SqlRunRequest: {
+            /**
+             * Max Rows
+             * @description Row cap (hard-limited server-side); results over the cap are truncated.
+             * @default 1000
+             */
+            max_rows: number;
+            /**
+             * Sql
+             * @description A single read-only SELECT / WITH query.
+             */
+            sql: string;
+        };
+        /** SqlRunResponse */
+        SqlRunResponse: {
+            /** Columns */
+            columns: string[];
+            /** Elapsed Ms */
+            elapsed_ms: number;
+            /** Max Rows */
+            max_rows: number;
+            /** Row Count */
+            row_count: number;
+            /**
+             * Rows
+             * @description Row-major result cells (JSON-safe).
+             */
+            rows: unknown[][];
+            /** Timeout Ms */
+            timeout_ms: number;
+            /**
+             * Truncated
+             * @description True when the result hit the row cap.
+             */
+            truncated: boolean;
+        };
         /**
          * StateAtPitchModel
          * @description Response model for :class:`simulation.snapshots.StateAtPitch` (SIM-331).
@@ -1636,6 +2345,15 @@ export interface components {
             pitch: number;
             /** Sequence */
             sequence?: number | null;
+        };
+        /** SubScoreMeta */
+        SubScoreMeta: {
+            /** Field */
+            field: string;
+            /** Label */
+            label: string;
+            /** Weight */
+            weight?: number | null;
         };
         /**
          * SubstitutionSlot
@@ -1671,12 +2389,15 @@ export interface components {
              */
             side: "home" | "away";
         };
+        /** TableInfo */
+        TableInfo: {
+            /** Columns */
+            columns: components["schemas"]["ColumnInfo"][];
+            /** Name */
+            name: string;
+        };
         /** ValidationError */
         ValidationError: {
-            /** Context */
-            ctx?: Record<string, never>;
-            /** Input */
-            input?: unknown;
             /** Location */
             loc: (string | number)[];
             /** Message */
@@ -1785,6 +2506,337 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    by_season_api_analytics_by_season_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                };
+            };
+        };
+    };
+    count_state_api_analytics_count_state_get: {
+        parameters: {
+            query: {
+                season: number;
+                pitcher?: number | null;
+                batter?: number | null;
+                include_flagged?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_kpis_api_analytics_kpis_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KpisResponse"];
+                };
+            };
+        };
+    };
+    batter_leaderboard_api_analytics_leaderboard_batters_get: {
+        parameters: {
+            query: {
+                season: number;
+                metric?: string;
+                min_pa?: number;
+                limit?: number;
+                vs_hand?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pitcher_leaderboard_api_analytics_leaderboard_pitchers_get: {
+        parameters: {
+            query: {
+                season: number;
+                metric?: string;
+                min_pa?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pa_outcomes_api_analytics_pa_outcomes_get: {
+        parameters: {
+            query: {
+                season: number;
+                batter?: number | null;
+                p_throws?: string | null;
+                include_flagged?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pitch_type_mix_api_analytics_pitch_type_mix_get: {
+        parameters: {
+            query: {
+                season: number;
+                pitcher?: number | null;
+                stand?: string | null;
+                include_flagged?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    velo_distribution_api_analytics_velo_distribution_get: {
+        parameters: {
+            query: {
+                season: number;
+                pitcher?: number | null;
+                pitch_type?: string | null;
+                include_flagged?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    zone_api_analytics_zone_get: {
+        parameters: {
+            query: {
+                season: number;
+                pitcher?: number | null;
+                include_flagged?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ask_api_assistant_ask_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    status_probe_api_assistant_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssistantStatus"];
+                };
+            };
+        };
+    };
     get_game_clv_api_betting_games__game_pk__clv_get: {
         parameters: {
             query?: {
@@ -2432,9 +3484,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": Record<string, never>[];
                 };
             };
         };
@@ -2456,9 +3506,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -2468,6 +3516,110 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_players_api_players_search_get: {
+        parameters: {
+            query: {
+                /** @description Name fragment (>= 2 chars). */
+                q: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlayerHit"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_player_api_players__player_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                player_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlayerDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_schema_api_schema_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchemaResponse"];
+                };
+            };
+        };
+    };
+    list_engines_api_similarity_engines_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EngineCatalogEntry"][];
                 };
             };
         };
@@ -2509,6 +3661,186 @@ export interface operations {
             };
         };
     };
+    situation_query_api_similarity_situation_query_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SituationQueryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SituationQueryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    engine_meta_api_similarity__engine__meta_get: {
+        parameters: {
+            query?: {
+                /** @description Fielder only — resolves IF/OF sub-score labels. */
+                position?: string | null;
+                vs_hand?: string | null;
+            };
+            header?: never;
+            path: {
+                engine: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EngineMetaResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    engine_pair_api_similarity__engine__pair_get: {
+        parameters: {
+            query: {
+                a_id: number;
+                a_season: number;
+                b_id: number;
+                b_season: number;
+                position?: string | null;
+                vs_hand?: string | null;
+            };
+            header?: never;
+            path: {
+                engine: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SimPairResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    engine_query_api_similarity__engine__query_get: {
+        parameters: {
+            query: {
+                /** @description Player / manager id. */
+                entity_id: number;
+                season: number;
+                /** @description Required for the fielder engine (2B/SS/CF/...). */
+                position?: string | null;
+                /** @description Batter engine — platoon-weighted mode. */
+                vs_hand?: string | null;
+                bins?: number;
+                top_n?: number;
+            };
+            header?: never;
+            path: {
+                engine: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SimQueryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_sql_api_sql_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SqlRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SqlRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     login_auth_login_post: {
         parameters: {
             query?: never;
@@ -2528,9 +3860,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -2559,9 +3889,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": Record<string, never>;
                 };
             };
         };
@@ -2601,9 +3929,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": Record<string, never>;
                 };
             };
         };

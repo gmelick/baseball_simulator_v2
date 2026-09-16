@@ -1,0 +1,189 @@
+{
+ "offers": [
+  {
+   "id": "2d8dbeb159cf735285c0136d94e32fb3",
+   "market_id": 280,
+   "event_id": 99026,
+   "player_id": null,
+   "team_id": null,
+   "opponent_id": null,
+   "link": "",
+   "active": true,
+   "participants": [],
+   "selections": [
+    {
+     "participant": null,
+     "selection": "over",
+     "active": true,
+     "opening_line": {
+      "line": 1.5,
+      "cost": 240,
+      "book_id": 14,
+      "created": "2026-09-09 17:37:43"
+     },
+     "label": "Over",
+     "short_label": "Over",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:35",
+         "cost": 205,
+         "line": 1.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": {
+          "market_ev": null,
+          "fair_probability": null,
+          "pm_win_pct": 50.49
+         }
+        }
+       ]
+      },
+      {
+       "id": 12,
+       "lines": [
+        {
+         "id": "12_6f8636a5171825ead6a7ffdcbb48973a",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:33",
+         "cost": 205,
+         "line": 1.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://btng.pro/FMwkO6",
+         "metrics": {
+          "market_ev": -0.09293867019535185,
+          "fair_probability": 0.2973971573129994,
+          "pm_win_pct": 50.49
+         }
+        }
+       ]
+      },
+      {
+       "id": 14,
+       "lines": [
+        {
+         "id": "14_6f8636a5171825ead6a7ffdcbb48973a",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:35",
+         "cost": 215,
+         "line": 1.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://betfanatics.com/sportsbook?af_force_deeplink=true&deep_link_value=consume-betslip&deep_link_sub1=%7B%22legs%22%3A%5B%7B%22eventId%22%3A%225348803%22%2C%22marketId%22%3A%22698639450_280_5348803%22%2C%22selectionId%22%3A%221723239447%22%7D%5D%7D&pid=inteliticstech_int&af_siteid=Raketech&c=bettingpros.com-US-SPO-Fanatics-A186782C&af_click_lookback=7d&source_caller=sdk",
+         "metrics": {
+          "market_ev": -0.02677708991810046,
+          "fair_probability": 0.30895965399425385,
+          "pm_win_pct": 50.49
+         }
+        }
+       ]
+      }
+     ],
+     "id": "6f8636a5171825ead6a7ffdcbb48973a"
+    },
+    {
+     "participant": null,
+     "selection": "under",
+     "active": true,
+     "opening_line": {
+      "line": 1.5,
+      "cost": -340,
+      "book_id": 14,
+      "created": "2026-09-09 17:37:43"
+     },
+     "label": "Under",
+     "short_label": "Under",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:35",
+         "cost": -300,
+         "line": 1.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": {
+          "market_ev": null,
+          "fair_probability": null,
+          "pm_win_pct": 58.28
+         }
+        }
+       ]
+      },
+      {
+       "id": 12,
+       "lines": [
+        {
+         "id": "12_84f4cd809791bf2368d031dc8a860f9c",
+         "from_scout": true,
+         "main": true,
+         "best": true,
+         "updated": "2026-09-10 16:15:35",
+         "cost": -275,
+         "line": 1.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://btng.pro/FMwkO6",
+         "metrics": {
+          "market_ev": -0.04190645700666484,
+          "fair_probability": 0.7026019315284457,
+          "pm_win_pct": 58.28
+         }
+        }
+       ]
+      },
+      {
+       "id": 14,
+       "lines": [
+        {
+         "id": "14_84f4cd809791bf2368d031dc8a860f9c",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:35",
+         "cost": -300,
+         "line": 1.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://betfanatics.com/sportsbook?af_force_deeplink=true&deep_link_value=consume-betslip&deep_link_sub1=%7B%22legs%22%3A%5B%7B%22eventId%22%3A%225348803%22%2C%22marketId%22%3A%22698639450_280_5348803%22%2C%22selectionId%22%3A%221723239461%22%7D%5D%7D&pid=inteliticstech_int&af_siteid=Raketech&c=bettingpros.com-US-SPO-Fanatics-A186782C&af_click_lookback=7d&source_caller=sdk",
+         "metrics": {
+          "market_ev": -0.0786134054234866,
+          "fair_probability": 0.691039945932385,
+          "pm_win_pct": 58.28
+         }
+        }
+       ]
+      }
+     ],
+     "id": "84f4cd809791bf2368d031dc8a860f9c"
+    }
+   ]
+  }
+ ],
+ "_pagination": {
+  "page": 1,
+  "limit": 10,
+  "total_pages": 1,
+  "total_items": 1,
+  "paginated_array": "offers",
+  "self": "/v3/offers?event_id=99026&market_id=280&sport=MLB&event_id=99026&market_id=280&sport=MLB"
+ }
+}

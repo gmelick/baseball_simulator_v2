@@ -1,0 +1,254 @@
+{
+ "_parameters": {
+  "market_id": "287",
+  "sport": "MLB",
+  "event_id": "92857",
+  "limit": 3,
+  "page": 2
+ },
+ "_pagination": {
+  "page": 2,
+  "limit": 3,
+  "total_pages": 2,
+  "total_items": 5,
+  "paginated_array": "offers",
+  "self": "/v3/offers?event_id=92857&market_id=287&sport=MLB&page=2"
+ },
+ "offers": [
+  {
+   "id": "h-11",
+   "market_id": 287,
+   "event_id": 92857,
+   "player_id": 62011,
+   "team_id": null,
+   "opponent_id": null,
+   "link": "",
+   "active": true,
+   "participants": [
+    {
+     "id": "62011",
+     "name": "Kerry Carpenter",
+     "link": "/mlb/props/kerry-carpenter/",
+     "player": {
+      "short_name": "K. Carpenter",
+      "first_name": "Kerry",
+      "last_name": "Carpenter",
+      "image": "",
+      "position": "OF",
+      "team": "DET",
+      "slug": "kerry-carpenter",
+      "jersey_number": 0
+     }
+    }
+   ],
+   "selections": [
+    {
+     "participant": null,
+     "selection": "over",
+     "active": true,
+     "opening_line": {
+      "line": 0.5,
+      "cost": -175,
+      "book_id": 10,
+      "created": "2024-08-15 06:50:00"
+     },
+     "label": "Over",
+     "short_label": "Over",
+     "books": [
+      {
+       "id": 10,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": true,
+         "updated": "2024-08-15 16:40:00",
+         "cost": -175,
+         "line": 0.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": {
+          "projection": 0,
+          "cover_probability": 0,
+          "expected_value": null,
+          "bet_rating": null,
+          "result": null,
+          "notes": null,
+          "market_ev": null,
+          "fair_probability": null
+         }
+        }
+       ]
+      }
+     ],
+     "id": "h-11-o"
+    },
+    {
+     "participant": null,
+     "selection": "under",
+     "active": true,
+     "opening_line": {
+      "line": 0.5,
+      "cost": 135,
+      "book_id": 10,
+      "created": "2024-08-15 06:50:00"
+     },
+     "label": "Under",
+     "short_label": "Under",
+     "books": [
+      {
+       "id": 10,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": true,
+         "updated": "2024-08-15 16:40:00",
+         "cost": 135,
+         "line": 0.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": {
+          "projection": 0,
+          "cover_probability": 0,
+          "expected_value": null,
+          "bet_rating": null,
+          "result": null,
+          "notes": null,
+          "market_ev": null,
+          "fair_probability": null
+         }
+        }
+       ]
+      }
+     ],
+     "id": "h-11-u"
+    }
+   ]
+  },
+  {
+   "id": "h-12",
+   "market_id": 287,
+   "event_id": 92857,
+   "player_id": 62012,
+   "team_id": null,
+   "opponent_id": null,
+   "link": "",
+   "active": true,
+   "participants": [
+    {
+     "id": "62012",
+     "name": "Spencer Torkelson",
+     "link": "/mlb/props/spencer-torkelson/",
+     "player": {
+      "short_name": "S. Torkelson",
+      "first_name": "Spencer",
+      "last_name": "Torkelson",
+      "image": "",
+      "position": "OF",
+      "team": "DET",
+      "slug": "spencer-torkelson",
+      "jersey_number": 0
+     }
+    }
+   ],
+   "selections": [
+    {
+     "participant": null,
+     "selection": "over",
+     "active": true,
+     "opening_line": {
+      "line": 0.5,
+      "cost": -160,
+      "book_id": 10,
+      "created": "2024-08-15 06:50:00"
+     },
+     "label": "Over",
+     "short_label": "Over",
+     "books": [
+      {
+       "id": 10,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": true,
+         "updated": "2024-08-15 16:40:00",
+         "cost": -160,
+         "line": 0.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": {
+          "projection": 0,
+          "cover_probability": 0,
+          "expected_value": null,
+          "bet_rating": null,
+          "result": null,
+          "notes": null,
+          "market_ev": null,
+          "fair_probability": null
+         }
+        }
+       ]
+      }
+     ],
+     "id": "h-12-o"
+    },
+    {
+     "participant": null,
+     "selection": "under",
+     "active": true,
+     "opening_line": {
+      "line": 0.5,
+      "cost": 125,
+      "book_id": 10,
+      "created": "2024-08-15 06:50:00"
+     },
+     "label": "Under",
+     "short_label": "Under",
+     "books": [
+      {
+       "id": 10,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": true,
+         "updated": "2024-08-15 16:40:00",
+         "cost": 125,
+         "line": 0.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": {
+          "projection": 0,
+          "cover_probability": 0,
+          "expected_value": null,
+          "bet_rating": null,
+          "result": null,
+          "notes": null,
+          "market_ev": null,
+          "fair_probability": null
+         }
+        }
+       ]
+      }
+     ],
+     "id": "h-12-u"
+    }
+   ]
+  }
+ ],
+ "markets": [
+  287
+ ],
+ "ts": 1779781823,
+ "utc": "2026-05-26 07:50:23"
+}

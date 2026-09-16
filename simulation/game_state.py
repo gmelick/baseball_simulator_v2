@@ -370,20 +370,14 @@ class ManagerContext:
 
     #: High-leverage index (spec step 1 reads 'leverage'); 1.0 == average LI.
     leverage: float = 1.0
-    #: Manager steal green-light tendency in [0, 1] (spec §3 item 4).  SIM-323.
-    green_light_rate: float = 0.0
     #: Available bullpen pitcher ids per defending team (spec §3 item 1). SIM-323.
+    #: SIM-427: the arms the MLB box lists for the game, minus the rotation.
     bullpen_available: dict[int, list[int]] = field(default_factory=dict)
     #: Whether an intentional walk is signalled for THIS PA (spec §3 item 2).
     intentional_walk_signalled: bool = False
-    #: Whether a pitch-out is signalled for THIS pitch (spec §3 item 3).
-    pitch_out_signalled: bool = False
-    #: SIM-349 hit-and-run: a pre-pitch signal that the runner(s) break with the
-    #: pitch and the batter is in a contact-oriented PA (runner-go + contact bias
-    #: for THIS pitch).  Reset each pitch in the pre-pitch hook.
-    hit_and_run_signalled: bool = False
-    # (SIM-349's ``sac_fly_intent`` flag lived here until 2026-08-19 — retired
-    # by SIM-513; the SIM-512 tag draw from 3B owns sacrifice flies.)
+    # (The steal green-light rate, the pitch-out signal and the hit-and-run
+    # signal lived here until 2026-09-13 — deleted by SIM-427 with their hooks;
+    # SIM-349's ``sac_fly_intent`` until 2026-08-19 — retired by SIM-513.)
 
 
 # ---------------------------------------------------------------------------
@@ -499,6 +493,22 @@ class GameState:
     # Both default empty -> on the no-manager / count-machine path they are inert.
     pitcher_bf: dict[int, int] = field(default_factory=dict)
     pitcher_rest_days: dict[int, float] = field(default_factory=dict)
+    # SIM-427: the real pen's facts. Each side's MANAGER (raw.games; the
+    # pitching-change draw weights its pool rows by the live manager's usage
+    # similarity), the pen arms' RECENT USAGE (pitcher_id -> (days of rest
+    # capped at five, pitched on either of the two preceding days, pitches over
+    # the three preceding days) — the reliever draw's usage weights), where the
+    # pen came from ('box' = the MLB API's per-game listing; 'synthetic' = the
+    # no-DB seam), and each side's manager TENDENCY profile plus the season's
+    # league means (the steal weight reads the batting side's rate over the
+    # league's). All empty by default -> every consumer is neutral.
+    home_manager_id: int | None = None
+    away_manager_id: int | None = None
+    pitcher_recent_usage: dict[int, tuple[int, int, int]] = field(default_factory=dict)
+    bullpen_source: str | None = None
+    home_manager_profile: dict[str, float] = field(default_factory=dict)
+    away_manager_profile: dict[str, float] = field(default_factory=dict)
+    manager_league_profile: dict[str, float] = field(default_factory=dict)
     # SIM-434: per-pitcher pitch-count ledger so the half-inning pitcher swap
     # (``_set_half_matchup``) restores the incoming pitcher's OWN accrued count
     # instead of carrying the other starter's.  ``pitcher_pitch_count`` remains the
@@ -733,9 +743,16 @@ class PlayResult:
 
     # ---- step 7: baserunner movement (placeholders, typed; SIM-319) ---------
     #: Per-runner advancement as ``{runner_id: end_base}`` where end_base is
-    #: 0=scored/out-resolved-elsewhere, 1/2/3 = the base reached.  Empty until
-    #: SIM-319 resolves advancement.
+    #: 0 = scored, 1/2/3 = the base reached.  A retired runner has NO entry
+    #: (SIM-421: the box-score accumulator credits a run to every runner whose
+    #: entry reads 0).  Empty until SIM-319 resolves advancement.
     baserunner_advances: dict[int, int] = field(default_factory=dict)
+    #: SIM-421: the runner ids whose box-score run (``PlayerStatLine.r``) a
+    #: mid-pitch path already credited on THIS pitch.  The steal of home
+    #: credits its runner in ``_resolve_steal_outcome`` on every pitch, so
+    #: ``_accumulate_pa`` skips these ids on a terminal pitch and credits
+    #: every other runner who scored.
+    box_run_credited: set[int] = field(default_factory=set)
     #: Whether a steal was attempted on this pitch (spec §3 item 4 / step 7).
     steal_attempted: bool = False
     #: Steal outcome: None / "safe" / "caught" / "pickoff" (SIM-319).

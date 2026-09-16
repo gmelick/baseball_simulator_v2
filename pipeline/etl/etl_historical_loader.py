@@ -92,6 +92,12 @@ import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 
+from pipeline.etl.boxscore_ingest import (
+    parse_boxscore,
+    parse_bullpen_listing,
+    persist_bullpen_sync,
+    persist_sync,
+)
 from pipeline.etl.coercion import to_bool, to_float, to_int, to_str
 from pipeline.etl.play_events import extract_play_events
 
@@ -2302,6 +2308,12 @@ class HistoricalDataLoader:
         # + decisions (under liveData, not gameData), then ingest the lineups.
         self._ensure_game(game_pk, season, game_dict, managers)
         self._ensure_game_lineups(game_pk, season, game_dict)
+        # SIM-545: the official per-player box score (the prop ground truth) from
+        # the same in-hand payload. Non-fatal: a failure logs a warning and never
+        # fails the game load.
+        self._ensure_game_player_stats(
+            game_pk, season, game_date, game_dict, home_team_id, away_team_id
+        )
 
     # --- 1. Venues ----------------------------------------------------------
 
@@ -2988,6 +3000,113 @@ class HistoricalDataLoader:
             )
             conn.commit()
         log.info("  Inserted %d starting-lineup rows for game %s", len(rows), game_pk)
+
+    #: SIM-545: tri-state cache of "does ``raw.game_player_stats`` exist" (Alembic
+    #: 0023). ``None`` means not yet probed. Same reasoning as
+    #: ``_play_events_table_exists``: one catalogue lookup per run, not per game.
+    _game_player_stats_table_exists: bool | None = None
+    #: SIM-427: the same tri-state cache for ``raw.game_bullpen`` (Alembic 0025).
+    _game_bullpen_table_exists: bool | None = None
+
+    def _ensure_game_player_stats(
+        self,
+        game_pk: int,
+        season: int,
+        game_date: str,
+        game_dict: dict,
+        home_team_id: int,
+        away_team_id: int,
+    ) -> None:
+        """Upsert the official per-player box score into ``raw.game_player_stats``.
+
+        The official box-score ground truth (SIM-545): the live feed already
+        carries the box under ``liveData.boxscore.teams``, so the loader writes
+        it from the payload it holds — no extra HTTP call. The parser
+        (:func:`pipeline.etl.boxscore_ingest.parse_boxscore`) emits one row per
+        player who appeared; the upsert refreshes a game's rows on a reload.
+
+        Non-fatal by design: the pitch rows are the load's product, and a
+        box-score failure (the table absent before Alembic 0023, a malformed
+        block, a transient DB error) logs a warning and returns. A game with no
+        box block writes nothing.
+        """
+        try:
+            teams = game_dict.get("liveData", {}).get("boxscore", {}).get("teams", {})
+            rows = parse_boxscore(
+                teams or {},
+                game_pk=game_pk,
+                season=season,
+                game_date=date.fromisoformat(str(game_date)[:10]),
+                home_team_id=home_team_id,
+                away_team_id=away_team_id,
+            )
+            if not rows:
+                return
+            with self._get_conn() as conn:
+                try:
+                    with conn.cursor() as cur:
+                        if self._game_player_stats_table_exists is None:
+                            cur.execute("SELECT to_regclass('raw.game_player_stats')")
+                            probe = cur.fetchone()
+                            self._game_player_stats_table_exists = bool(
+                                probe and probe[0] is not None
+                            )
+                            if not self._game_player_stats_table_exists:
+                                log.warning(
+                                    "raw.game_player_stats is absent (Alembic 0023 not "
+                                    "applied) — the official box score is not stored."
+                                )
+                        if not self._game_player_stats_table_exists:
+                            conn.rollback()
+                            return
+                        written = persist_sync(cur, rows)
+                        # SIM-427: the arms the box lists per side (Alembic
+                        # 0025) — the simulator's pen for the game. The same
+                        # payload, no extra call; absent table = not stored.
+                        pen_written = 0
+                        if self._game_bullpen_table_exists is None:
+                            cur.execute("SELECT to_regclass('raw.game_bullpen')")
+                            probe = cur.fetchone()
+                            self._game_bullpen_table_exists = bool(probe and probe[0] is not None)
+                            if not self._game_bullpen_table_exists:
+                                log.warning(
+                                    "raw.game_bullpen is absent (Alembic 0025 not applied) "
+                                    "— the per-game bullpen listing is not stored."
+                                )
+                        if self._game_bullpen_table_exists:
+                            # Best-effort inside the same transaction: a bad
+                            # listing must never cost the box rows their commit.
+                            try:
+                                cur.execute("SAVEPOINT sim427_bullpen")
+                                pen_written = persist_bullpen_sync(
+                                    cur,
+                                    parse_bullpen_listing(
+                                        teams or {},
+                                        game_pk=game_pk,
+                                        home_team_id=home_team_id,
+                                        away_team_id=away_team_id,
+                                    ),
+                                )
+                                cur.execute("RELEASE SAVEPOINT sim427_bullpen")
+                            except Exception as pen_exc:  # noqa: BLE001
+                                cur.execute("ROLLBACK TO SAVEPOINT sim427_bullpen")
+                                log.warning(
+                                    "SIM-427: bullpen listing not written for game %s: %s",
+                                    game_pk,
+                                    pen_exc,
+                                )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+            log.info(
+                "  Upserted %d box-score rows + %d bullpen rows for game %s",
+                written,
+                pen_written,
+                game_pk,
+            )
+        except Exception as exc:  # noqa: BLE001 — never fail the game load on the box
+            log.warning("SIM-545: box-score rows not written for game %s: %s", game_pk, exc)
 
     # ------------------------------------------------------------------
     # Internal helpers

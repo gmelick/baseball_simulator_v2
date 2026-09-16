@@ -1,0 +1,1007 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.15, pytest-8.4.2, pluggy-1.6.0
+benchmark: 4.0.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /app
+configfile: pyproject.toml
+plugins: mock-3.15.1, benchmark-4.0.0, hypothesis-6.168.0, cov-5.0.0, asyncio-0.26.0, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 93 items
+
+tests/acceptance/test_band_arithmetic_sim450.py ........................ [ 25%]
+...........................                                              [ 54%]
+tests/acceptance/test_production_config_bands_sim450.py .EEEEEEEEEEEEEEE [ 72%]
+EEEEEEEEEEEEEEEEEEEEEEEEEE                                               [100%]
+
+==================================== ERRORS ====================================
+____ ERROR at setup of test_sample_is_large_enough_to_mean_anything_sim450 _____
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+_ ERROR at setup of test_the_game_set_does_not_bias_the_run_environment_sim450 _
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+_______ ERROR at setup of test_sim449_inputs_reach_the_simulator_sim450 ________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+________ ERROR at setup of test_every_band_channel_was_measured_sim450 _________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+_____________ ERROR at setup of test_steal_totals_reconcile_sim450 _____________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+_____________ ERROR at setup of test_full_pool_outcome_runs_sim450 _____________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+____________ ERROR at setup of test_full_pool_fielding_runs_sim450 _____________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+___________ ERROR at setup of test_transition_resolution_runs_sim450 ___________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+_____________ ERROR at setup of test_commit_run_delta_runs_sim450 ______________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+__________ ERROR at setup of test_steal_opportunity_draw_runs_sim450 ___________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+___________________ ERROR at setup of test_runs_band_sim450 ____________________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+___________________ ERROR at setup of test_hits_band_sim450 ____________________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+_________________ ERROR at setup of test_home_runs_band_sim450 _________________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+__________________ ERROR at setup of test_doubles_band_sim450 __________________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+__________________ ERROR at setup of test_triples_band_sim450 __________________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+___________________ ERROR at setup of test_walks_band_sim450 ___________________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+________________ ERROR at setup of test_strikeouts_band_sim450 _________________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+_______________ ERROR at setup of test_stolen_bases_band_sim450 ________________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+______________ ERROR at setup of test_caught_stealing_band_sim450 ______________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+________________ ERROR at setup of test_double_play_band_sim450 ________________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+___________ ERROR at setup of test_reach_on_error_drawn_band_sim450 ____________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+__________ ERROR at setup of test_reach_on_error_reached_band_sim450 ___________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+_______________ ERROR at setup of test_home_win_pct_band_sim450 ________________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+_____________ ERROR at setup of test_pool_band_walks_per_pa_sim450 _____________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+_______ ERROR at setup of test_pool_band_intentional_walks_per_pa_sim450 _______
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+__________ ERROR at setup of test_pool_band_strikeouts_per_pa_sim450 ___________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+______________ ERROR at setup of test_pool_band_hbp_per_pa_sim450 ______________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+____________ ERROR at setup of test_pool_band_pitches_per_pa_sim450 ____________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+___________ ERROR at setup of test_pool_band_singles_per_bip_sim450 ____________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+___________ ERROR at setup of test_pool_band_doubles_per_bip_sim450 ____________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+___________ ERROR at setup of test_pool_band_triples_per_bip_sim450 ____________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+__________ ERROR at setup of test_pool_band_home_runs_per_bip_sim450 ___________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+_____________ ERROR at setup of test_pool_band_roe_per_bip_sim450 ______________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+__________ ERROR at setup of test_pool_band_steal_attempts_2b_sim450 ___________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+__________ ERROR at setup of test_pool_band_steal_attempts_3b_sim450 ___________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+_________ ERROR at setup of test_pool_band_steal_safe_share_2b_sim450 __________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+__________ ERROR at setup of test_pool_band_dp_per_opportunity_sim450 __________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+_________ ERROR at setup of test_pool_band_called_strike_taken_sim450 __________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+____________ ERROR at setup of test_pool_band_got_away_pitch_sim450 ____________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+_______________ ERROR at setup of test_report_pool_bands_sim450 ________________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+______________ ERROR at setup of test_report_every_channel_sim450 ______________
+tests/acceptance/conftest.py:804: in acceptance_run
+    result = simulate_game(state_machine=machine, seed=seed, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/sim_loop.py:3185: in simulate_game
+    state_machine.step_pitch(state)
+simulation/sim_loop.py:623: in step_pitch
+    pitch_outcome = self._full_pool_outcome(state)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/acceptance/conftest.py:585: in outcome
+    out = _o(state)
+          ^^^^^^^^^
+simulation/sim_loop.py:786: in _full_pool_outcome
+    outcome = fp.draw(state.balls, state.strikes)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1268: in draw
+    gi = self._result_draw(b, rows, gi)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:1397: in _result_draw
+    fb = self._bucket_fb[b]
+             ^^^^^^^^^^^^^^^
+simulation/full_pool_sampler.py:69: in _repower_neutral
+    def _repower_neutral(
+E   Failed: Timeout (>7200.0s) from pytest-timeout.
+=============================== warnings summary ===============================
+tests/acceptance/test_band_arithmetic_sim450.py::test_every_channel_has_a_reference_sim450
+  /app/tests/conftest.py:340: DeprecationWarning: There is no current event loop
+    loop = asyncio.get_event_loop_policy().get_event_loop()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+============ 52 passed, 1 warning, 41 errors in 7215.50s (2:00:15) =============
+LANE_EXIT 1

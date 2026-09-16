@@ -44,6 +44,7 @@ lineups / ``max_innings`` / ...) flow through to ``simulate_game``.
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -53,6 +54,36 @@ import numpy as np
 from simulation.batch_runner import GameSpec
 from simulation.filter_cells import DEFAULT_MIN_CELL
 from simulation.sim_loop import StateMachine
+
+logger = logging.getLogger(__name__)
+
+#: SIM-548: the pitch draw's situation bandwidth, the sampler's code default.
+DEFAULT_SIT_SIGMA = 2.0
+
+
+def apply_sit_sigma_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
+    """SIM-548: read ``SIM_SIT_SIGMA``, the pitch draw's situation bandwidth.
+
+    The bandwidth is the Gaussian on the base-out situation
+    (``FullPoolSampler.sit_sigma``). The default is 2.0, the sampler's own
+    default, so an unset variable keeps production byte for byte. A value
+    that does not parse keeps the default and logs a warning. The offline
+    fit ladders this value; an arm sets it here.
+    """
+    src = os.environ if env is None else env
+    raw = src.get("SIM_SIT_SIGMA")
+    if raw is None:
+        sampler.sit_sigma = DEFAULT_SIT_SIGMA
+        return
+    try:
+        sampler.sit_sigma = float(raw)
+    except ValueError:
+        logger.warning(
+            "SIM-548: SIM_SIT_SIGMA=%r does not parse as a float; keeping %.1f",
+            raw,
+            DEFAULT_SIT_SIGMA,
+        )
+        sampler.sit_sigma = DEFAULT_SIT_SIGMA
 
 
 def _kwarg(spec: GameSpec, name: str, default: Any) -> Any:
@@ -282,6 +313,8 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
             setattr(sampler, attr, float(os.environ.get(env, "0")))
         except ValueError:
             setattr(sampler, attr, 0.0)
+    # SIM-548: the pitch draw's situation bandwidth (2.0 = the code default).
+    apply_sit_sigma_env(sampler)
     # SIM-518 (SIM-464's pitch half): the batting-side weight on the PITCH
     # draw. 1.0 (the default, and any unparsable value) disables it EXACTLY;
     # 0.0 is a hard match on the side (the owner's fielding-draw ruling).
@@ -467,14 +500,13 @@ def warm_worker_cache(pool_dir: str | None = None) -> bool:
 #: similarity rate names the SIM-323 hooks read by name.  Tuned to league-typical
 #: behaviour (a starter is reliably pulled around the floor/ceiling; modest
 #: small-ball aggression).  A duck-typed dict so no engine import is needed.
-_DEFAULT_MANAGER_PROFILE: dict[str, float] = {
-    "starter_pull_pct_before_100": 0.35,
-    "pinch_hit_rate_high_leverage": 0.20,
-    "sac_bunt_rate_high_leverage": 0.10,
-    "sac_bunt_rate_low_leverage": 0.05,
-    "steal_order_rate_per_1b_opp": 0.08,
-    "platoon_advantage_exploitation_rate": 0.30,
-}
+#: SIM-427 (2026-09-13): the machine's manager GATE. ``StateMachine.manager``
+#: is ``None`` (every manager hook a no-op) or this marker (the hooks run). The
+#: six hand-set league-flat rates that lived here are gone: the pull is a draw
+#: from the change pool, the steal weight reads each side's REAL profile and
+#: the league mean off the game state, and the hooks that read the other four
+#: rates are deleted (the SIM-434 pull formula went at the flip, 2026-09-13).
+_DEFAULT_MANAGER_PROFILE: dict[str, float] = {}
 
 
 def _manager_enabled() -> bool:
@@ -488,8 +520,9 @@ def _manager_enabled() -> bool:
 
 
 def _manager_draw_enabled() -> bool:
-    """SIM-523 part D: whether SIM_MANAGER_DRAW makes the pitching change a
-    draw from the opportunity pool (default OFF: the SIM-434 formula)."""
+    """SIM-523 part D / SIM-427: whether SIM_MANAGER_DRAW makes the pitching
+    change a draw from the opportunity pool (production ON since the flip of
+    2026-09-13; OFF = no pitching change, the unit lane's byte-identical state)."""
     env = os.environ.get("SIM_MANAGER_DRAW", "").strip().lower()
     return env not in ("", "0", "false", "no", "off")
 
@@ -512,6 +545,19 @@ def apply_manager_env(sampler: Any, env: Mapping[str, str] | None = None) -> Non
         sampler.change_min_cell = int(src.get("SIM_CHANGE_MIN_CELL", "20"))
     except ValueError:
         sampler.change_min_cell = 20
+    # SIM-427: the reliever draw's weights (every one OFF by default).
+    for key, attr, default in (
+        ("SIM_RELIEF_ROLE_SIGMA", "relief_role_sigma", 0.0),
+        ("SIM_RELIEF_PITCHER_POWER", "relief_pitcher_power", 0.0),
+        ("SIM_RELIEF_REST_SIGMA", "relief_rest_sigma", 0.0),
+        ("SIM_RELIEF_PITCHED2D_OFF_WEIGHT", "relief_pitched2d_off_weight", 1.0),
+        ("SIM_RELIEF_PITCHES3D_SIGMA", "relief_pitches3d_sigma", 0.0),
+        ("SIM_RELIEF_HAND_OFF_WEIGHT", "relief_hand_off_weight", 1.0),
+    ):
+        try:
+            setattr(sampler, attr, float(src.get(key, str(default))))
+        except ValueError:
+            setattr(sampler, attr, default)
 
 
 def _default_bullpen_for_spec(spec: GameSpec) -> dict[int, list[int]]:

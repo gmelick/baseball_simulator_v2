@@ -11,12 +11,14 @@ WHAT THIS COVERS (the SIM-323 acceptance criteria)
   * **IBB** fires in the canonical spot (first base open + RISP + close & late +
     high LI + an aggressive matchup manager) and NOT otherwise (first base taken,
     or early / blowout);
-  * the steal **green-light** tracks the manager's steal tendency (a high-steal
-    manager green-lights, a no-steal manager does not);
-  * a high pitch-count + high-leverage spot triggers a **starter pull** to a
-    **leverage-appropriate reliever** (the closer enters a high-LI late spot);
-  * a **pinch-hit** fires from the bench in a high-leverage spot;
   * a game with **no manager profile** still completes (every hook is no-op-safe).
+
+  The steal green-light, the pinch hit and the sac-bunt setup were deleted on
+  2026-09-13 (SIM-427, owner decision: the four dead hooks go — the steal is a
+  draw with the manager's rate as a weight, no bench was ever wired, the bunt
+  changed no play), and the starter-pull formula at the SIM-427 flip the same
+  day (the pitching change is a draw: ``test_sim523_manager_draw.py``); their
+  tests went with them.
 
 HOW THE TENDENCIES ARE INJECTED (no live DB)
 --------------------------------------------
@@ -206,142 +208,6 @@ class TestIntentionalWalk:
         assert result.event == "intentional_walk"
         # The batter (or the new due-up batter) reached first via the walk force.
         assert s.bases.first is not None
-
-
-# ===========================================================================
-# Steal green-light
-# ===========================================================================
-
-
-class TestStealGreenLight:
-    def test_green_light_tracks_an_aggressive_steal_tendency(self):
-        m = _machine({"steal_order_rate_per_1b_opp": 0.9}, seed=3)
-        s = _state(inning=7, first=11)
-        m._pre_pitch_hook(s)
-        assert s.manager.green_light_rate > 0.0
-
-    def test_green_light_off_for_a_no_steal_manager(self):
-        m = _machine({"steal_order_rate_per_1b_opp": 0.0}, seed=3)
-        s = _state(inning=7, first=11)
-        m._pre_pitch_hook(s)
-        assert s.manager.green_light_rate == 0.0
-
-    def test_green_light_higher_in_high_leverage(self):
-        # Same tendency, a higher-leverage spot -> a higher (or equal) green-light.
-        m = _machine({"steal_order_rate_per_1b_opp": 0.5}, seed=3)
-        low = _state(inning=1, home_score=0, away_score=9, first=11)
-        m._pre_pitch_hook(low)
-        low_green = low.manager.green_light_rate
-        m2 = _machine({"steal_order_rate_per_1b_opp": 0.5}, seed=3)
-        high = _state(inning=9, half=Half.BOTTOM, home_score=2, away_score=2, first=11)
-        m2._pre_pitch_hook(high)
-        assert high.manager.green_light_rate >= low_green
-
-    def test_the_steal_draw_is_staged_ungated_sim474(self):
-        # SIM-474 deleted the green-light GATE: from 2026-06-04 to 2026-08-16 it
-        # routed every production pitch to a resolver stub and zero steals were
-        # attempted (SIM-495 measured SB 0.0000 against 0.59). The decision is
-        # now the opportunity-pool draw, UNGATED — manager aggression weights
-        # the draw instead of gating it — so a pool whose every row runs stages
-        # a steal for an aggressive AND a passive manager alike.
-        for rate in (1.0, 0.0):
-            m = StateMachine(
-                synthetic_sampler(league_artifacts(steal=(1.0, 1.0)), 2),
-                rng=np.random.default_rng(2),
-                manager={"steal_order_rate_per_1b_opp": rate},
-            )
-            s = _state(inning=7, first=11)
-            m._pre_pitch_hook(s)
-            assert m._pending_steal is not None and m._pending_steal.attempted, rate
-
-
-# ===========================================================================
-# Starter pull + bullpen by leverage
-# ===========================================================================
-
-
-class TestStarterPull:
-    def test_high_pitch_count_high_leverage_pulls_to_the_closer(self):
-        # Away team is defending in the bottom of the 9th (closer territory).
-        bullpen = {Team.HOME: [301, 302, 303]}  # 301 == the closer (first arm)
-        s = _state(inning=9, half=Half.TOP, home_score=2, away_score=2, second=55, pitch_count=105)
-        s.manager.bullpen_available = bullpen
-        m = _machine(_AGGRESSIVE, seed=4)
-        m._end_of_pa_hook(s)
-        # The defending team (HOME, fielding in the top) pulled its starter.
-        assert s.pitcher_id == 301  # the closer entered
-        assert s.pitcher_pitch_count == 0  # fresh arm
-        assert any(d["kind"] == "pitching_change" for d in m.manager_decisions)
-
-    def test_low_pitch_count_does_not_pull(self):
-        bullpen = {Team.HOME: [301, 302, 303]}
-        s = _state(inning=9, half=Half.TOP, home_score=2, away_score=2, second=55, pitch_count=10)
-        s.manager.bullpen_available = bullpen
-        m = _machine(_AGGRESSIVE, seed=4)
-        m._end_of_pa_hook(s)
-        assert s.pitcher_id == PITCHER  # starter stays
-
-    def test_ceiling_forces_a_pull_even_for_a_passive_manager(self):
-        bullpen = {Team.HOME: [301, 302, 303]}
-        s = _state(inning=3, half=Half.TOP, home_score=0, away_score=0, pitch_count=120)
-        s.manager.bullpen_available = bullpen
-        m = _machine(_PASSIVE, seed=4)
-        m._end_of_pa_hook(s)
-        assert s.pitcher_id != PITCHER  # the hard ceiling forced the hook
-
-    def test_pull_degrades_gracefully_with_an_empty_bullpen(self):
-        s = _state(inning=9, half=Half.TOP, home_score=2, away_score=2, second=55, pitch_count=130)
-        s.manager.bullpen_available = {}  # no arms available
-        m = _machine(_AGGRESSIVE, seed=4)
-        m._end_of_pa_hook(s)
-        assert s.pitcher_id == PITCHER  # no illegal state -> starter stays
-
-
-# ===========================================================================
-# Pinch-hit
-# ===========================================================================
-
-
-class TestPinchHit:
-    def test_pinch_hit_fires_from_the_bench_in_high_leverage(self):
-        s = _state(inning=9, half=Half.BOTTOM, home_score=2, away_score=2, second=55)
-        s.home_lineup = list(HOME_LINEUP)
-        s.home_lineup_slot = 0
-        bench = {Team.HOME: [777, 778]}
-        m = _machine(_AGGRESSIVE, seed=6, bench=bench)
-        out_batter = s.home_lineup[0]
-        m._maybe_pinch_hit(s, StateMachine.compute_leverage(s))
-        assert s.home_lineup[0] == 777  # the bench bat replaced the slot
-        assert s.batter_id == 777
-        assert out_batter not in s.home_lineup
-        assert any(d["kind"] == "pinch_hit" for d in m.manager_decisions)
-
-    def test_no_pinch_hit_in_low_leverage(self):
-        s = _state(inning=1, half=Half.BOTTOM, home_score=0, away_score=9)
-        s.home_lineup = list(HOME_LINEUP)
-        bench = {Team.HOME: [777]}
-        m = _machine(_AGGRESSIVE, seed=6, bench=bench)
-        m._maybe_pinch_hit(s, StateMachine.compute_leverage(s))
-        assert s.home_lineup[0] == HOME_LINEUP[0]  # unchanged
-
-
-# ===========================================================================
-# Sac-bunt setup
-# ===========================================================================
-
-
-class TestSacBunt:
-    def test_sac_bunt_signalled_with_a_runner_on_and_under_two_outs(self):
-        s = _state(inning=7, first=11, outs=1)
-        m = _machine(_AGGRESSIVE, seed=8)
-        m._maybe_sac_bunt(s, StateMachine.compute_leverage(s))
-        assert any(d["kind"] == "sac_bunt" for d in m.manager_decisions)
-
-    def test_no_sac_bunt_with_two_outs(self):
-        s = _state(inning=7, first=11, outs=2)
-        m = _machine(_AGGRESSIVE, seed=8)
-        m._maybe_sac_bunt(s, StateMachine.compute_leverage(s))
-        assert not any(d["kind"] == "sac_bunt" for d in m.manager_decisions)
 
 
 # ===========================================================================

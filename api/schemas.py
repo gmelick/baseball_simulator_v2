@@ -885,17 +885,21 @@ class BoxscoreCardRowModel(_ApiModel):
     """One player's row in the SIM-366 boxscore card.
 
     A compact per-player payload exposing that player's prop **means** over a
-    Monte-Carlo run -- for a batter the H/HR/RBI/TB means, for a pitcher the
-    K/BB/ER/OUTS means -- as a ``{prop_name -> mean}`` map.  Built from a
+    Monte-Carlo run -- for a batter the H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means,
+    for a pitcher the K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's
+    other lines) -- as a ``{prop_name -> mean}`` map.  Built from a
     :class:`simulation.prop_distributions.PropDistribution` map (one player's
     ``by_player`` entry), reading each :attr:`PropDistribution.mean`.  numpy-free
     (plain floats).
     """
 
     player_id: int
-    #: ``prop_name -> mean`` (e.g. ``{"H": 1.2, "HR": 0.3, "RBI": 0.9, "TB": 2.1}``
-    #: for a batter, or ``{"K": 6.4, "BB": 2.1, "ER": 2.8, "OUTS": 17.0}`` for a
-    #: pitcher).  Whichever props the player owns in the prop set.
+    #: ``prop_name -> mean`` in :data:`simulation.prop_distributions.BATTER_PROPS`
+    #: / :data:`PITCHER_PROPS` order (e.g. ``{"H": 1.2, "HR": 0.3, "RBI": 0.9,
+    #: "TB": 2.1, "1B": 0.8, "2B": 0.3, "3B": 0.0, "R": 0.7, "SB": 0.1,
+    #: "HRR": 2.8}`` for a batter, or ``{"K": 6.4, "BB": 2.1, "ER": 2.8,
+    #: "OUTS": 17.0, "H_ALLOWED": 5.2}`` for a pitcher).  Whichever props the
+    #: player owns in the prop set.
     means: dict[str, float] = Field(default_factory=dict)
 
     @classmethod

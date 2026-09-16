@@ -30,6 +30,7 @@ Run with:
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import tempfile
 import unittest
@@ -37,6 +38,28 @@ import unittest
 import duckdb
 
 SEASONS = [2023, 2024]
+
+
+#: The manager engine's seventeen tendency columns (the league row's keys).
+_MANAGER_COLS = (
+    "starter_avg_pitch_count",
+    "starter_pull_pct_before_100",
+    "closer_entry_leverage_index",
+    "high_leverage_reliever_rate",
+    "opener_usage_rate",
+    "bulk_innings_rate",
+    "available_reliever_usage_rate",
+    "steal_order_rate_per_1b_opp",
+    "hit_and_run_rate_per_opportunity",
+    "sac_bunt_rate_high_leverage",
+    "sac_bunt_rate_low_leverage",
+    "squeeze_play_rate_per_3b_opp",
+    "pinch_hit_rate_vs_same_hand",
+    "pinch_hit_rate_high_leverage",
+    "defensive_sub_rate_late_innings",
+    "double_switch_rate_per_reliever_change",
+    "platoon_advantage_exploitation_rate",
+)
 
 
 def _build_source_tables(path: str) -> None:
@@ -127,7 +150,30 @@ def _build_source_tables(path: str) -> None:
             )
         """)
 
+        # --- manager_season_metrics (SIM-427: the sixth entity) ---------------
+        # The seventeen tendency columns the league row averages, game-weighted.
+        conn.execute(f"""
+            CREATE TABLE derived.manager_season_metrics (
+                manager_id           INTEGER,
+                season               SMALLINT,
+                {", ".join(f"{c} FLOAT" for c in _MANAGER_COLS)},
+                sample_games         INTEGER,
+                below_minimum_sample BOOLEAN
+            )
+        """)
+
         for season in SEASONS:
+            # managers: two qualifying (one with a NULL hit-and-run column, as
+            # the real table carries) + one disqualified
+            n = len(_MANAGER_COLS)
+            conn.executemany(
+                f"INSERT INTO derived.manager_season_metrics VALUES (?,?,{','.join('?' * n)},?,?)",
+                [
+                    (50, season, *[0.30 + 0.01 * i for i in range(n)], 150, False),
+                    (51, season, *[0.20 + 0.01 * i for i in range(n - 1)], None, 100, False),
+                    (52, season, *[9.9] * n, 5, True),  # disqualified
+                ],
+            )
             # pitchers: two qualifying + one disqualified
             conn.executemany(
                 "INSERT INTO derived.pitcher_season_metrics VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -210,8 +256,8 @@ def _build_source_tables(path: str) -> None:
 
 
 class TestLeagueAverageProfilesCompute(unittest.TestCase):
-    """SIM-162: compute() must produce non-empty inserts for all 5 entity
-    types."""
+    """SIM-162: compute() must produce non-empty inserts for all entity
+    types (five, plus the manager since SIM-427)."""
 
     def setUp(self):
         fd, self._db_path = tempfile.mkstemp(suffix=".duckdb")
@@ -251,9 +297,10 @@ class TestLeagueAverageProfilesCompute(unittest.TestCase):
         rows = self._fetch_league_averages()
         entity_types = {r[0] for r in rows}
 
-        # Pitcher, batter, baserunner, catcher are single entity types; the
-        # fielder is expanded per position into fielder_<pos>.
-        required_simple = {"pitcher", "batter", "baserunner", "catcher"}
+        # Pitcher, batter, baserunner, catcher and (since SIM-427) manager are
+        # single entity types; the fielder is expanded per position into
+        # fielder_<pos>.
+        required_simple = {"pitcher", "batter", "baserunner", "catcher", "manager"}
         for et in required_simple:
             self.assertIn(
                 et,
@@ -303,6 +350,20 @@ class TestLeagueAverageProfilesCompute(unittest.TestCase):
                 str(profile_json),
                 f"{entity_type}/{season} profile_json looks empty: {profile_json!r}",
             )
+
+    def test_the_manager_row_is_the_game_weighted_mean_of_the_qualifying_managers(self):
+        # SIM-427: the league row the engine shrinks toward and the steal weight
+        # divides by. Manager 50 (150 games) and 51 (100 games) qualify; 52 is
+        # below the minimum sample. A column NULL on one manager averages over
+        # the other alone; the game weights are the denominators.
+        self._run_compute()
+        rows = {(r[0], r[1]): r[2] for r in self._fetch_league_averages()}
+        doc = json.loads(rows[("manager", SEASONS[0])])
+        steal = _MANAGER_COLS.index("steal_order_rate_per_1b_opp")
+        expected = (0.30 + 0.01 * steal) * 150 / 250 + (0.20 + 0.01 * steal) * 100 / 250
+        self.assertAlmostEqual(doc["steal_order_rate_per_1b_opp"], expected, places=6)
+        last = _MANAGER_COLS[-1]  # NULL on manager 51 -> manager 50 alone
+        self.assertAlmostEqual(doc[last], 0.30 + 0.01 * (len(_MANAGER_COLS) - 1), places=6)
 
     def test_all_eight_fielder_positions_present(self):
         # The fielder entity is expanded into 8 positional sub-types; all

@@ -7416,6 +7416,52 @@ class LeagueAverageProfiles:
                 GROUP BY season
             """)
 
+            # Manager average (SIM-427, 2026-09-13): the GAME-weighted mean of the
+            # seventeen tendency columns per season — the manager engine's
+            # shrinkage target (``ManagerSimilarityEngine._load_league_averages``
+            # reads the feature names as JSON keys) and the steal weight's
+            # measured denominator (``steal_order_rate_per_1b_opp``). A column
+            # that is NULL on every row (hit-and-run, the double switch) averages
+            # to NULL, which the engine reads as 0.0 — the same value the
+            # profiles carry for it.
+            manager_cols = (
+                "starter_avg_pitch_count",
+                "starter_pull_pct_before_100",
+                "closer_entry_leverage_index",
+                "high_leverage_reliever_rate",
+                "opener_usage_rate",
+                "bulk_innings_rate",
+                "available_reliever_usage_rate",
+                "steal_order_rate_per_1b_opp",
+                "hit_and_run_rate_per_opportunity",
+                "sac_bunt_rate_high_leverage",
+                "sac_bunt_rate_low_leverage",
+                "squeeze_play_rate_per_3b_opp",
+                "pinch_hit_rate_vs_same_hand",
+                "pinch_hit_rate_high_leverage",
+                "defensive_sub_rate_late_innings",
+                "double_switch_rate_per_reliever_change",
+                "platoon_advantage_exploitation_rate",
+            )
+            weighted = ", ".join(
+                f"'{c}', SUM({c} * sample_games) / NULLIF(SUM(CASE WHEN {c} IS NOT NULL "
+                f"THEN sample_games END), 0)"
+                for c in manager_cols
+            )
+            conn.execute(f"""
+                INSERT OR REPLACE INTO derived.league_averages
+                SELECT
+                    'manager' AS entity_type, season,
+                    JSON_OBJECT(
+                        {weighted}
+                    ) AS profile_json,
+                    CURRENT_TIMESTAMP AS updated_at
+                FROM derived.manager_season_metrics
+                WHERE season IN ({season_list})
+                  AND below_minimum_sample = FALSE
+                GROUP BY season
+            """)
+
             log.info("League averages computed for seasons: %s", seasons)
         finally:
             conn.close()

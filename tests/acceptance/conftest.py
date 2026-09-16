@@ -113,16 +113,18 @@ PRODUCTION_FLAGS: dict[str, str] = {
         "SIM523_LANE_ACTOR_POWER_CATCHER_THROWING", "2"
     ),
     "SIM_ACTOR_POWER_PITCHER_STEAL": os.environ.get("SIM523_LANE_ACTOR_POWER_PITCHER_STEAL", "12"),
-    # SIM-523 part B (2026-09-08): the pitch / pitch-result split. Built and
-    # fitted (pitcher 16 / 16, batter 8) but OFF: the balanced 45 × 130 lane
-    # reds strikeouts per plate appearance −2.4% with it ON at those powers
-    # and passes (−1.0%) with it OFF (SIM-527). Set SIM523_LANE_RESULT_SPLIT=1
-    # and the powers below on a lane run to measure the ON arm.
-    "SIM_PITCH_RESULT_SPLIT": os.environ.get("SIM523_LANE_RESULT_SPLIT", "0"),
-    "SIM_PITCH_PITCHER_POWER": os.environ.get("SIM523_LANE_PITCH_PITCHER_POWER", "1.0"),
+    # SIM-523 part B (2026-09-08): the pitch / pitch-result split, fitted
+    # pitcher 16 / 16, batter 8. Held OFF while the balanced lane read
+    # strikeouts per plate appearance −2.4% (SIM-527); FLIPPED ON 2026-09-14 by
+    # owner decision on the accuracy comparison (SIM-548 Part A4: the starter
+    # strikeout market −0.0155 Brier). The same values as the compose file (a
+    # test holds them together). Set SIM523_LANE_RESULT_SPLIT=0 and the powers
+    # to 1.0 on a lane run to measure the OFF arm.
+    "SIM_PITCH_RESULT_SPLIT": os.environ.get("SIM523_LANE_RESULT_SPLIT", "1"),
+    "SIM_PITCH_PITCHER_POWER": os.environ.get("SIM523_LANE_PITCH_PITCHER_POWER", "16"),
     "SIM_RESULT_PITCH_SIGMA": os.environ.get("SIM523_LANE_RESULT_PITCH_SIGMA", "1.0"),
-    "SIM_RESULT_PITCHER_POWER": os.environ.get("SIM523_LANE_RESULT_PITCHER_POWER", "1.0"),
-    "SIM_RESULT_BATTER_POWER": os.environ.get("SIM523_LANE_RESULT_BATTER_POWER", "1.0"),
+    "SIM_RESULT_PITCHER_POWER": os.environ.get("SIM523_LANE_RESULT_PITCHER_POWER", "16"),
+    "SIM_RESULT_BATTER_POWER": os.environ.get("SIM523_LANE_RESULT_BATTER_POWER", "8"),
     "SIM_PITCH_BATTER_POWER": os.environ.get("SIM523_LANE_PITCH_BATTER_POWER", "1.0"),
     "SIM_RESULT_DENSITY_POWER": os.environ.get("SIM523_LANE_RESULT_DENSITY_POWER", "1.0"),
     "SIM_BB_BORN_SIGMA": os.environ.get("SIM523_LANE_BORN_SIGMA", "1.0"),
@@ -135,9 +137,69 @@ PRODUCTION_FLAGS: dict[str, str] = {
     "SIM_WALL_ZONE_DISTANCE": os.environ.get("SIM523_LANE_WALL_ZONE_DISTANCE", "300"),
     "SIM_FENCE_STAGE": os.environ.get("SIM523_LANE_FENCE_STAGE", "1"),
     "SIM_FENCE_MARGIN": os.environ.get("SIM523_LANE_FENCE_MARGIN", "0"),
-    # SIM-523 part D (2026-09-08): the pitching change as a draw — OFF until part F.
-    "SIM_MANAGER_DRAW": os.environ.get("SIM523_LANE_MANAGER_DRAW", "0"),
+    # SIM-523 part D / SIM-427: the pitching change as a draw — production ON
+    # since the flip of 2026-09-13 (the pull formula is deleted, so OFF means no
+    # pitching change; SIM427_LANE_MANAGER_DRAW=0 measures that arm).
+    "SIM_MANAGER_DRAW": os.environ.get(
+        "SIM427_LANE_MANAGER_DRAW", os.environ.get("SIM523_LANE_MANAGER_DRAW", "1")
+    ),
+    # SIM-427 (2026-09-13): the live manager's usage-similarity weight on the
+    # change draw and the reliever draw's weights at their FITTED values
+    # (docs/audit/2026-09-13-sim427-build-plan.md, part 4f: power 4, role 0.1,
+    # rest 0.5, pitched-in-2-days 0.25, pitches-in-3-days 10; hand and stuff
+    # off); a lane run overrides one with its SIM427_LANE_* twin.
+    "SIM_ACTOR_POWER_MANAGER_USAGE": os.environ.get("SIM427_LANE_MANAGER_POWER", "4"),
+    # The pen source: 'box' (production since the flip) or 'synthetic'.
+    "SIM_BULLPEN_SOURCE": os.environ.get("SIM427_LANE_BULLPEN_SOURCE", "box"),
+    "SIM_RELIEF_ROLE_SIGMA": os.environ.get("SIM427_LANE_RELIEF_ROLE_SIGMA", "0.1"),
+    "SIM_RELIEF_PITCHER_POWER": os.environ.get("SIM427_LANE_RELIEF_PITCHER_POWER", "0"),
+    "SIM_RELIEF_REST_SIGMA": os.environ.get("SIM427_LANE_RELIEF_REST_SIGMA", "0.5"),
+    "SIM_RELIEF_PITCHED2D_OFF_WEIGHT": os.environ.get(
+        "SIM427_LANE_RELIEF_PITCHED2D_OFF_WEIGHT", "0.25"
+    ),
+    "SIM_RELIEF_PITCHES3D_SIGMA": os.environ.get("SIM427_LANE_RELIEF_PITCHES3D_SIGMA", "10"),
+    "SIM_RELIEF_HAND_OFF_WEIGHT": os.environ.get("SIM427_LANE_RELIEF_HAND_OFF_WEIGHT", "1.0"),
+    # SIM-518 (2026-09-13; LANDED 2026-09-14 by owner decision): the
+    # pitcher-fatigue weight on the pitch draw — the times-through-the-order
+    # term at bandwidth 0.5, the pitch-count term OFF, the same values as the
+    # compose file (a test holds them together). Set SIM518_LANE_FATIGUE_PC_SIGMA
+    # / SIM518_LANE_FATIGUE_TTO_SIGMA on a lane run to measure another arm
+    # (docs/audit/2026-09-12-sim518-fit-plan.md). The other two SIM-518 weights
+    # stay at their off values by owner ruling (2026-09-12): the batting side
+    # is a hard filter of the cell index; the pitch reaches the fielding draw
+    # through the born batted ball.
+    "SIM_FATIGUE_PC_SIGMA": os.environ.get("SIM518_LANE_FATIGUE_PC_SIGMA", "0"),
+    "SIM_FATIGUE_TTO_SIGMA": os.environ.get("SIM518_LANE_FATIGUE_TTO_SIGMA", "0.5"),
+    # SIM-548: the pitch draw's situation bandwidth (2.0 = the code default).
+    "SIM_SIT_SIGMA": os.environ.get("SIM548_LANE_SIT_SIGMA", "2.0"),
+    "SIM_PITCH_HOME_OFF_WEIGHT": "1.0",
+    "SIM_BB_PITCH_SIGMA": "0",
 }
+
+
+def cell_index_line(stats: dict[str, Any]) -> str:
+    """SIM-518: one report line for the pitch-draw cell index — its shape
+    (cells per side: 3 = away / home / unknown, 1 = no side dimension), its
+    minimum cell size, and the share of draws at each widening level (0 = the
+    exact cell; 1 = the score band widened; 2 = the batting side too; 3 = the
+    count too). The level-2+ share is what the batting-side record cites."""
+    if not stats:
+        return "cell index: not reported (the sampler exposes no cell_index_stats)"
+    if not stats.get("enabled", False):
+        return "cell index: OFF (whole-pool weights)"
+    draws = [int(x) for x in stats.get("draws_by_level", [])]
+    total = sum(draws)
+    shares = (
+        "  ".join(f"L{i} {d / total:.4%}" for i, d in enumerate(draws))
+        if total > 0
+        else "no draws counted"
+    )
+    n_side = stats.get("n_side", {})
+    return (
+        f"cell index: ON, min cell {stats.get('min_cell')}, sides per hand {n_side}, "
+        f"draws by widening level: {shares} (n={total})"
+    )
+
 
 #: Env names the lane must ERASE (not set) so a default code path proves
 #: itself. Empty since SIM-476 deleted the SIM-412 flip this once guarded;
@@ -386,6 +448,12 @@ class AcceptanceRun:
     #: DP_OPP_DEN (per fielding resolution). Pitches come from
     #: ``calls["_full_pool_outcome"]``.
     pool_counts: dict[str, int] = field(default_factory=dict)
+    #: SIM-518 (2026-09-13): the pitch-draw cell index's shape and its draws
+    #: per widening level (``FullPoolSampler.cell_index_stats``), read once at
+    #: the end of the run from the process-cached sampler. The share of draws
+    #: that widened past the batting side (level 2+) is the evidence the
+    #: side-weight record and the thin-cell census (SIM-451) cite.
+    cell_index: dict[str, Any] = field(default_factory=dict)
 
     @property
     def total_sims(self) -> int:
@@ -660,6 +728,7 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
     from simulation.sim_kwargs import (
         SIM_KWARG_KEYS,
         open_sim_duckdb,
+        resolve_manager_profiles_onto_state,
         resolve_park_run_factor,
         sim_kwargs_from_state,
     )
@@ -697,6 +766,8 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
             state.park_run_factor = await resolve_park_run_factor(
                 conn, duck, int(game_pk), int(getattr(state, "season", 2024) or 2024)
             )
+            # SIM-427: the managers' tendency profiles and the league means.
+            resolve_manager_profiles_onto_state(state, duck)
             return state
         finally:
             await conn.close()
@@ -763,6 +834,12 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
                     run.ties += 1
                 else:
                     run.observations["home_win_pct"].append(1.0 if home_r > away_r else 0.0)
+            # SIM-518: the cell index's counters live on the process-cached
+            # sampler, so the last machine's read covers the whole lane.
+            fp = getattr(machine, "full_pool_sampler", None)
+            stats = getattr(fp, "cell_index_stats", None)
+            if callable(stats):
+                run.cell_index = dict(stats())
     finally:
         duck.close()
         run.elapsed_s = time.perf_counter() - started

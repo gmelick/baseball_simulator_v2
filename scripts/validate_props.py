@@ -15,8 +15,10 @@ For each completed ("Final") game in the requested seasons:
   3. take the simulator's home win probability (SIM-330) + per-player prop PMFs
      (SIM-329, built from the per-iteration boxscores), and
   4. pair each against what ACTUALLY happened — the real home/away score from
-     ``raw.games`` (win prob), and the real per-player prop totals aggregated
-     from ``raw.pitches.events`` (props: batter H/HR/TB, pitcher K/BB).
+     ``raw.games`` (win prob), and the real per-player prop totals from the
+     official box score (``raw.game_player_stats``, every priced market), or
+     from ``raw.pitches.events`` for a game with no box-score rows (batter
+     H/HR/TB, pitcher K/BB only).
 
 It then scores those (prediction, actual) pairs with
 ``simulation.prop_validation`` — win-prob ECE/Brier/log-loss + the fitted
@@ -27,18 +29,26 @@ so the next API boot applies the empirical win-prob correction.
 
 WHAT PROPS ARE VALIDATED
 ------------------------
-The prop ground truth comes from ``raw.pitches.events`` — the SAME pitch-by-pitch
-table the similarity engines are built from, so NO extra data source is needed.
-Only the props EXACTLY recoverable from the per-PA event label are scored:
+Two ground-truth sources, chosen per game (SIM-545):
 
-  * batter:  H, HR, TB
-  * pitcher: K, BB
+  * **The official box score** (``raw.game_player_stats``, one row per player
+    who appeared; ``--official-boxscore``, the default). It pairs EVERY market
+    the platform prices — batter H, HR, TB, RBI, 1B, 2B, 3B, R, SB, HRR;
+    pitcher K, BB, ER, OUTS, H_ALLOWED — through ``simulation.prop_validation.
+    real_props_from_boxscore_rows``. A player who did not play is absent, so
+    his PMF is never paired against a guessed zero.
+  * **The event-label fallback** (``raw.pitches.events`` — the SAME
+    pitch-by-pitch table the similarity engines are built from), used for a
+    game with no box-score rows, or for every game under
+    ``--no-official-boxscore``. Only the props EXACTLY recoverable from the
+    per-PA event label are paired: batter H, HR, TB; pitcher K, BB. RBI / ER /
+    OUTS are NOT derived from an event label — it carries no runs-driven-in
+    count, no earned/unearned attribution, no per-event out count — so a
+    fallback game pairs five props and no others.
 
-RBI / ER / OUTS are intentionally NOT derived — RBI needs the per-PA
-runs-driven-in count, ER needs earned/unearned attribution, and OUTS needs a
-per-event out count, none of which the event label carries; deriving them from
-``events`` would produce wrong actuals that corrupt the calibration. They are left
-for a richer box-score source. ``--no-props`` runs the win-prob fit alone (a fast
+The run logs how many games each source paired, and the summary prints the
+same two counts: a run that paired most games on the fallback is a five-prop
+validation, and it says so. ``--no-props`` runs the win-prob fit alone (a fast
 smoke run) — the win-prob reliability curve does not depend on the props.
 
 USAGE
@@ -47,6 +57,7 @@ USAGE
     python scripts/validate_props.py --seasons 2023 2024 --iterations 100
     python scripts/validate_props.py --seasons 2024 --max-games 200 --write-calibration
     python scripts/validate_props.py --seasons 2024 --no-props      # win-prob only
+    python scripts/validate_props.py --seasons 2024 --no-official-boxscore  # event label only
 
     # Via the Makefile wrapper:
     make validate-props FLAGS="--seasons 2024 --write-calibration"
@@ -79,9 +90,14 @@ if _REPO_ROOT not in sys.path:
 
 from simulation.prop_distributions import PropDistributionSet  # noqa: E402
 from simulation.prop_validation import (  # noqa: E402
+    BOXSCORE_BATTER_PROPS,
+    BOXSCORE_PITCHER_PROPS,
+    DERIVABLE_BATTER_PROPS,
+    DERIVABLE_PITCHER_PROPS,
     PropValidationReport,
     build_validation_report,
     pair_props_for_validation,
+    real_props_from_boxscore_rows,
     real_props_from_pa_events,
     write_reliability_curve_to_calibration_report,
 )
@@ -161,6 +177,101 @@ async def _fetch_pa_events(pool, game_pk: int) -> list[tuple]:
         int(game_pk),
     )
     return [(r["batter"], r["pitcher"], r["events"]) for r in rows]
+
+
+#: SIM-545: which ground truth paired a game's props.
+GROUND_TRUTH_OFFICIAL = "official_boxscore"
+GROUND_TRUTH_EVENT_LABEL = "event_label"
+
+#: SIM-545: every column of ``raw.game_player_stats`` (migration 0023) — the
+#: SAME reader ``scripts/clv_backtest.py`` uses (``scripts/`` is not a package,
+#: so each script carries its own copy, as they already do for
+#: ``_fetch_pa_events``).
+_OFFICIAL_BOXSCORE_SQL = """
+    SELECT game_pk, player_id, team_id, side, season, game_date,
+           batting_order, position_code, played_bat, played_pitch,
+           pa, ab, r, h, b2, b3, hr, rbi, sb, cs, bb, k, hbp, sf, tb,
+           p_outs, p_h, p_r, p_er, p_bb, p_k, p_hr, p_pitches,
+           p_batters_faced, p_started, fetched_at
+    FROM raw.game_player_stats
+    WHERE game_pk = $1
+"""
+
+#: SIM-545: warn ONCE when the box-score table is missing (migration 0023 not
+#: applied); the run then falls back to the event label for every game.
+_OFFICIAL_BOXSCORE_TABLE_MISSING_WARNED: bool = False
+
+
+async def _fetch_official_boxscore(pool, game_pk: int) -> list[dict]:
+    """SIM-545: every ``raw.game_player_stats`` row for one game — the official
+    per-player box score, one row per player who appeared.
+
+    Returns plain dicts keyed by the table's column names (the shape
+    :func:`real_props_from_boxscore_rows` reads). An empty list means the
+    game has no box-score rows and the caller falls back to the event label.
+    A missing TABLE also reads as empty: one warning, then every game pairs
+    on the fallback and the summary's per-source counts say so.
+    """
+    global _OFFICIAL_BOXSCORE_TABLE_MISSING_WARNED
+    import asyncpg
+
+    try:
+        rows = await pool.fetch(_OFFICIAL_BOXSCORE_SQL, int(game_pk))
+    except asyncpg.exceptions.UndefinedTableError:
+        if not _OFFICIAL_BOXSCORE_TABLE_MISSING_WARNED:
+            _OFFICIAL_BOXSCORE_TABLE_MISSING_WARNED = True
+            log.warning(
+                "SIM-545: raw.game_player_stats does not exist on this database "
+                "(migration 0023 not applied). Every game pairs its props on the "
+                "event-label fallback this run."
+            )
+        return []
+    return [dict(r) for r in rows]
+
+
+async def _pair_game_props(
+    pool,
+    game_pk: int,
+    pset: PropDistributionSet,
+    prop_pairs_by_line: dict[tuple[str, float], list],
+    *,
+    official_boxscore: bool,
+) -> tuple[int, str]:
+    """SIM-545: pair one game's prop PMFs against the best ground truth the
+    database holds; return ``(pairs_added, source)``.
+
+    The official box score wins when ``official_boxscore`` is set and the
+    game has rows — it pairs every priced market (:data:`BOXSCORE_BATTER_PROPS`
+    / :data:`BOXSCORE_PITCHER_PROPS`). Otherwise the event label pairs the
+    five props it can see (:data:`DERIVABLE_BATTER_PROPS` /
+    :data:`DERIVABLE_PITCHER_PROPS`). ``source`` is
+    :data:`GROUND_TRUTH_OFFICIAL` or :data:`GROUND_TRUTH_EVENT_LABEL`, so the
+    caller can count games per source.
+    """
+    if official_boxscore:
+        rows = await _fetch_official_boxscore(pool, game_pk)
+        if rows:
+            batter_actuals, pitcher_actuals = real_props_from_boxscore_rows(rows)
+            added = pair_props_for_validation(
+                pset,
+                batter_actuals,
+                pitcher_actuals,
+                prop_pairs_by_line,
+                batter_props=BOXSCORE_BATTER_PROPS,
+                pitcher_props=BOXSCORE_PITCHER_PROPS,
+            )
+            return added, GROUND_TRUTH_OFFICIAL
+    pa_events = await _fetch_pa_events(pool, game_pk)
+    batter_actuals, pitcher_actuals = real_props_from_pa_events(pa_events)
+    added = pair_props_for_validation(
+        pset,
+        batter_actuals,
+        pitcher_actuals,
+        prop_pairs_by_line,
+        batter_props=DERIVABLE_BATTER_PROPS,
+        pitcher_props=DERIVABLE_PITCHER_PROPS,
+    )
+    return added, GROUND_TRUTH_EVENT_LABEL
 
 
 def _collect_game_results(state, n_iter: int, base_seed: int | None) -> list:
@@ -249,6 +360,9 @@ async def run(args: argparse.Namespace) -> int:
     n_done = 0
     n_props = 0
     n_park_nonneutral = 0
+    # SIM-545: games paired per prop ground-truth source.
+    n_official_boxscore = 0
+    n_event_label = 0
     # Pool created INSIDE the try so a construction failure still hits the finally.
     pool = None
     try:
@@ -284,14 +398,22 @@ async def run(args: argparse.Namespace) -> int:
             winprob_pairs.append((float(wp.home_win_prob), home_won))
 
             # Prop PMFs (from the per-iteration boxscores) paired against the REAL
-            # per-player outcomes derived from raw.pitches.events for this game.
+            # per-player outcomes for this game: the official box score when the
+            # game has rows, else raw.pitches.events (SIM-545).
             if not args.no_props:
                 pset = PropDistributionSet.from_results(results)
-                pa_events = await _fetch_pa_events(pool, game_pk)
-                batter_actuals, pitcher_actuals = real_props_from_pa_events(pa_events)
-                n_props += pair_props_for_validation(
-                    pset, batter_actuals, pitcher_actuals, prop_pairs_by_line
+                added, source = await _pair_game_props(
+                    pool,
+                    game_pk,
+                    pset,
+                    prop_pairs_by_line,
+                    official_boxscore=bool(args.official_boxscore),
                 )
+                n_props += added
+                if source == GROUND_TRUTH_OFFICIAL:
+                    n_official_boxscore += 1
+                else:
+                    n_event_label += 1
 
             n_done += 1
             if n_done % 25 == 0:
@@ -315,6 +437,22 @@ async def run(args: argparse.Namespace) -> int:
             n_done,
         )
 
+    # SIM-545: say which record paired the props. A run with zero games on the
+    # official box score paired only five props per game, not every market.
+    # A --no-props run paired nothing, so it carries no counts at all.
+    ground_truth_counts: dict[str, int] | None = None
+    if not args.no_props:
+        ground_truth_counts = {
+            GROUND_TRUTH_OFFICIAL: n_official_boxscore,
+            GROUND_TRUTH_EVENT_LABEL: n_event_label,
+        }
+        log.info(
+            "SIM-545: props paired on the official box score for %d games, on the "
+            "event-label fallback for %d games.",
+            n_official_boxscore,
+            n_event_label,
+        )
+
     log.info("Building validation report from %d games (%d prop pairs).", n_done, n_props)
     report = build_validation_report(
         winprob_pairs,
@@ -324,7 +462,7 @@ async def run(args: argparse.Namespace) -> int:
         seasons_used=seasons,
     )
 
-    print(_summary_text(report))
+    print(_summary_text(report, ground_truth_counts=ground_truth_counts))
 
     out_dir = os.path.dirname(os.path.abspath(args.output))
     os.makedirs(out_dir, exist_ok=True)
@@ -349,13 +487,31 @@ async def run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _summary_text(report: PropValidationReport) -> str:
+def _summary_text(
+    report: PropValidationReport,
+    *,
+    ground_truth_counts: dict[str, int] | None = None,
+) -> str:
+    """Render the report for the console.
+
+    ``ground_truth_counts`` (SIM-545) maps :data:`GROUND_TRUTH_OFFICIAL` /
+    :data:`GROUND_TRUTH_EVENT_LABEL` to the games each source paired; when
+    given, the header prints both counts.
+    """
     lines = [
         "=" * 64,
         "SIM-407 PROP / WIN-PROBABILITY VALIDATION REPORT",
         "=" * 64,
         f"Games validated: {report.n_games}",
         f"Seasons: {report.seasons_used}",
+    ]
+    if ground_truth_counts is not None:
+        lines.append(
+            "Prop ground truth: official box score="
+            f"{ground_truth_counts.get(GROUND_TRUTH_OFFICIAL, 0)} games  "
+            f"event-label fallback={ground_truth_counts.get(GROUND_TRUTH_EVENT_LABEL, 0)} games"
+        )
+    lines += [
         "",
         "--- Win probability ---",
         f"  n:        {report.winprob_n}",
@@ -398,6 +554,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--no-props",
         action="store_true",
         help="Win-prob validation only (skip the per-game prop pairing; faster smoke run).",
+    )
+    p.add_argument(
+        "--official-boxscore",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "SIM-545: pair every priced prop against the official box score "
+            "(raw.game_player_stats), falling back per game to the event label when "
+            "a game has no rows (default on). --no-official-boxscore pairs every game "
+            "on the event label alone (H/HR/TB, K/BB)."
+        ),
     )
     p.add_argument("--output", default=DEFAULT_OUTPUT, help="PropValidationReport JSON path.")
     p.add_argument(

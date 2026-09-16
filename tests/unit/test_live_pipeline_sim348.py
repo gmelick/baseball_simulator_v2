@@ -50,6 +50,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
+    PITCHER_PROP_STATS,
     PROP_BOOKS,
     PROP_STATS,
     RESIM_COOLDOWN_S,
@@ -643,8 +644,14 @@ class TestPropOddsCycle:
     ) -> None:
         pipeline = _bare_pipeline(_db=mock_db_pool)
         written = await pipeline._persist_prop_odds_cycle(745000, sample_game_state)
-        n_players = len(LiveIngestionPipeline._collect_prop_player_ids(sample_game_state))
-        expected = n_players * len(PROP_STATS) * len(PROP_BOOKS)
+        # SIM-421 changed this expectation deliberately (it was every player ×
+        # every market). The current pitcher (999) is asked for the pitcher
+        # markets only; the four lineup entries carry no position, so their
+        # role is unknown and they are asked for every market (the safe default).
+        roles = LiveIngestionPipeline._collect_prop_player_roles(sample_game_state)
+        assert roles[999] == "pitcher"
+        assert all(roles[pid] == "both" for pid in (401, 402, 501, 502))
+        expected = (len(PITCHER_PROP_STATS) + 4 * len(PROP_STATS)) * len(PROP_BOOKS)
         assert written == expected
         assert mock_db_pool.execute.await_count == expected
 
@@ -672,6 +679,7 @@ class TestPropOddsCycle:
     async def test_capture_opening_prop_lines_writes_opening(self, mock_db_pool) -> None:
         pipeline = _bare_pipeline(_db=mock_db_pool)
         written = await pipeline.capture_opening_prop_lines(745000, [100001])
+        # No ``roles`` passed → every market for the player (SIM-421 safe default).
         expected = 1 * len(PROP_STATS) * len(PROP_BOOKS)
         assert written == expected
 

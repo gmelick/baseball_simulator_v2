@@ -23,7 +23,7 @@
 
 - **▶ STATE AS OF 2026-06-06 — SUPERSEDED where §2b (2026-08-16) says otherwise: data foundation rebuilt, the runs band PASSES, CI all-green.**
   - **Phases 1–6 COMPLETE and CI-green** on **Python 3.13 / numpy 2.x** (SIM-431). Frontend shipped as
-    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v13**, Alembic head **0015**.
+    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v13**, Alembic head **0025** (2026-09-13; was 0015).
   - **Calibration is LIVE, REFIT 2026-08-16 on the rebuilt data** (SIM-432/459): `/data/calibration.json`
     fitted + applied at boot; win-prob map = fitted reliability-curve. 120-game validation: win-prob
     **ECE 0.0377** (was 0.047); batter **H/HR/TB 0.066/0.024/0.060** (bettable); pitcher **BB 0.044 —
@@ -171,6 +171,11 @@ there. Every "`BACKLOG.md` is the single source of truth" statement elsewhere in
 (several appear below, plus the 2026-06-04 note that `backlog.xlsx` was retired) is a
 historical record of an earlier decision and is superseded by this one. Read `BACKLOG.xlsx`
 for the current ticket list; read `docs/archive/BACKLOG-history.md` only for history.
+**The subtitle row (row 2) carries ONLY the updated date, the two pointers and the next free
+ticket ID (owner ruling 2026-09-12).** Do not write closure or status notes into it — a
+closure, a status change or a data-run result goes to `CHANGES.md`, and a ticket's own row
+carries its status while it is open. Update the ID in the subtitle each time you file a
+ticket; a closed ticket's row is deleted, and `CHANGES.md` is its record.
 
 **The CURRENT state authority is `BACKLOG.xlsx`'s open tickets, plus two docs:
 `docs/audit/2026-08-20-sim429-514-diagnosis-results.md` (why the model reads the way it
@@ -185,8 +190,10 @@ standing owner rulings that govern all new work:
   closing-line-value re-measure and any edge read built on it wait until every band the lanes
   grade is inside its range. As of 2026-09-10 the certified production arm is green on every
   pool band and on runs (the balanced 45 × 130 lane); the one open red is the pitch /
-  pitch-result split's strikeout shortfall (SIM-527), which stays OFF; the home-win channel
-  is underpowered below 13,365 game-sims. The strikeout-prop refit may proceed.
+  pitch-result split's strikeout shortfall (SIM-527) — the split was FLIPPED ON on 2026-09-14
+  by owner decision on the accuracy comparison, so that red is now IN production and the
+  lane has not re-graded it; the home-win channel is underpowered below 13,365 game-sims.
+  The strikeout-prop refit may proceed.
 - **The play-picker redesign (owner rulings 2026-09-08; the plan is
   `docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md`):** the weight order in the
   pitch draws is pitcher first, batter, recency, catcher receiving last, with powers fitted
@@ -234,17 +241,39 @@ merged 8 stale rows. SIM-456 CLOSED 2026-09-04 (the whiff fix was live since the
 recompute; the platoon z-swing legs' inversion found in its close is SIM-522, CLOSED the same
 day by owner decision: fixed in code, the data lands with the next recompute; the D-N7
 csw/whiff overlap is parked on SIM-429). **The open board after the redesign's completion (2026-09-10),
-deliverable first:** the pitch / pitch-result split's strikeout shortfall — a results-aware
-pitcher score, a refit of the split's powers on the balanced set, a lane (SIM-527, P1); the
+deliverable first:** the fit of the draw weights AGAINST THE ACCURACY COMPARISON, the
+strikeout market first (SIM-548, P1, planned 2026-09-14 — the comparison found the
+simulator's strikeout projection does not know who is pitching: its projected strikeouts
+correlate +0.07 with the real count against the closing line's +0.45, and its strikeout
+probabilities score worse than a coin flip; the plan is
+`docs/audit/2026-09-14-sim548-accuracy-fit-plan.md`: ladder a weight on 250 games of 2024,
+confirm on 250 of 2025, the pitcher's power in the pitch draw first); the pitch / pitch-result split's strikeout shortfall — a results-aware
+pitcher score, a refit of the split's powers on the balanced set, a lane (SIM-527 — CLOSED
+2026-09-10 by owner decision with SIM-429: the pool-totals metric no longer decides; the
+shortfall reappears under the accuracy comparison as a 6.5-point low bias on the strikeout
+market, the calibration layer's job in SIM-548); the
 live-slate epic (SIM-519, P1); the calibration payoff — the strikeout-prop refit and the CLV
-re-measure, the latter waiting on every band green (SIM-429, P1); the draw-conditioning
-weights' fits and lane — the rebuild ran with the redesign's part G, the three weights stay
-OFF (SIM-518); the forkserver's DuckDB lock that blocks every rebuild while the app runs
-(SIM-524); backups (SIM-525); the receiving ratio's enable (SIM-526); real per-team manager
-profiles for the pitching-change draw (SIM-427); the fielding chain factor (the credits are
+re-measure, the latter waiting on every band green (SIM-429 — CLOSED 2026-09-10; the prop
+calibration layer is SIM-548's plan v2, §7); the pitcher-fatigue
+factor — re-scoped to ONE factor by the owner's rulings of 2026-09-12 (the batting side is a
+hard filter of the cell index; the pitch-similarity kernel is superseded by the born ball),
+fitted 2026-09-13 and **LANDED 2026-09-14 by owner decision at a times-through-the-order
+bandwidth of 0.5 with the pitch-count term OFF** (`SIM_FATIGUE_TTO_SIGMA=0.5`; the
+recommendation was HOLD OFF: on the flipped composition neither bandwidth passes the
+within-pitcher fit rule and the two paired accuracy arms, σ 0.5 and 0.7 on 250 games of
+2024, read flat on every market; the plan with its stamps is
+`docs/audit/2026-09-12-sim518-fit-plan.md`, SIM-518 CLOSED); the forkserver's DuckDB lock that blocks every rebuild while the app runs
+(SIM-524); backups (SIM-525); the receiving ratio's enable (SIM-526); the manager-draw
+follow-ons — the pen on the API, the preview-game fallbacks, the pen order, a finer rest
+fit (SIM-547, P3; the parent, each team's real manager for the pitching change, SIM-427,
+CLOSED 2026-09-13 — see the bullet below); the
+fielding chain factor (the credits are
 on the pool, the consumer is not built); the fielder arm features (SIM-521); the
-cell-occupancy census re-run (SIM-451); the sim-loop decomposition (SIM-493, P3); the
-book-offered-market projection (SIM-421, P3); three parked fence-resolution design rows
+cell-occupancy census re-run (SIM-451 — RE-RAN 2026-09-13 at 2,880 cells: 0.25% / 0.17% of
+draws widen at MIN_CELL 20, so 20 stands and hand-as-a-weight has no case); the sim-loop
+decomposition (SIM-493, P3); the
+twelve segment markets' API / game-page surface (SIM-546, P2 — the prop-market work itself,
+SIM-421, CLOSED 2026-09-12, see the bullet below); three parked fence-resolution design rows
 (SIM-478/479/480). **Closed by the redesign's completion:** SIM-523 itself; the run-grading
 question on defense-aware sims (SIM-520 — runs +0.1% with the fielder factor ON on the
 balanced set); the date-range lane (SIM-497a/b — absorbed by the balanced-set ruling); the
@@ -279,18 +308,97 @@ weights by the born ball's kernel (`SIM_BB_BORN_SIGMA` 1.0), the batter matrix
 (`SIM_BB_BATTER_POWER` 4), the fielder matrix and the park only in the wall zone
 (`SIM_PARK_WALL_ZONE_ONLY`), then runs the fence stage (`SIM_FENCE_STAGE`;
 `park_geometry.json`, `--what park`). The pitch draw runs one draw per pitch at pitcher
-power 1 through the cell index (`SIM_PITCH_CELL_INDEX`). Built and OFF: the pitch /
+power 1 through the cell index (`SIM_PITCH_CELL_INDEX`). The pitch /
 pitch-result split (`SIM_PITCH_RESULT_SPLIT`; fitted at pitcher 16 / 16, batter 8; it reds
-strikeouts −2.4% on the balanced set — SIM-527), the catcher receiving ratio
+strikeouts −2.4% on the balanced set — SIM-527) was built and OFF until **2026-09-14, when
+the owner FLIPPED IT ON** on the accuracy comparison's read (the starter strikeout market
+−0.0155 Brier on 250 games of 2024; the strikeout probabilities sit 6.5 points low — the
+calibration layer's first job; the 2025 hold-out has not run). Built and OFF: the catcher receiving ratio
 (`SIM_CATCHER_RECEIVING`, `receiving.json`, `--what receiving`; enable = SIM-526) and the
-pitching change as a draw (`SIM_MANAGER_DRAW`, `--what manager`; the formula runs 2.4
-pitchers a side against the majors' ~4.2, the draw 4.35; real profiles = SIM-427). The data
+pitching change as a draw (`SIM_MANAGER_DRAW`, `--what manager`) — **FLIPPED ON
+2026-09-13 with the real managers and pens (SIM-427; see the bullet below)**. The data
 adds: sprint speed in both profiles (migration 0024, schema v24), the fielding chain on the
 batted-ball pool (builder sim523g.1; the chain FACTOR is a follow-on), the catcher embedding
 without its got-away columns, the SIM-469 rebuild. The grade: the balanced 45-game set at
 45 × 130 (two lanes 2026-09-09, `scripts/sim523_lane_h.txt`) — the certified arm is green on
 every pool band, runs +0.1%. Next free ID SIM-528.
 
+- **The eight unpriced prop markets + the official box-score ground truth (SIM-421 + SIM-545,
+  BOTH CLOSED 2026-09-12 — owner decision; the wrong-game odds match, SIM-536, closed with
+  them on the 2024 re-load; the 2019–2026 odds load runs as two detached processes).** The platform prices fifteen player-prop markets (was seven): singles, doubles,
+  triples, runs, stolen bases, hits+runs+RBI, pitcher outs recorded and pitcher hits allowed
+  joined the original seven. The odds vocabulary has one source (`pipeline/odds_provider.py`:
+  `PROP_STATS` 15 / `PITCHER_PROP_STATS` 5 / `BATTER_PROP_STATS` 10 /
+  `PROP_STAT_TO_MODEL_PROP`); markets are requested by role, so the batter "hits" market
+  (BettingPros 287) and the pitcher "hits allowed" market (404) never cross; Alembic 0022
+  widens the `raw.prop_odds.prop_stat` CHECK constraint (its downgrade DELETES the eight new
+  markets' rows). Alembic 0023 adds `raw.game_player_stats`, the official per-player box score
+  (one row per player who APPEARED; no row = did not play = the book voids the bet;
+  `player_id` has no foreign key on purpose), written by the historical loader from the feed
+  it already holds and backfilled by `scripts/load_official_boxscores.py`. The accuracy
+  comparison and `validate_props` grade every market on the box per game, with the
+  event-label reader (H/HR/TB, K/BB) as the fallback, and both report how many games each
+  source graded. **Ran 2026-09-12:** both migrations applied (`alembic current` = 0023); the
+  backfill loaded the FULL 2024 season (2,472 games, 72,651 rows, zero failures; on every
+  game the box-score runs equal the `raw.games` final score); the audit on all 2,472 games
+  reads the `raw.pitches` derivation exact on every hit-type prop and RBI, and inexact on
+  SB 99.08% / R 99.97% / K 99.67% / BB 99.71% / OUTS 97.93% / ER 87.57% (exact-match rates;
+  the causes — K: strikeouts anchored to a trailing `no_pitch` event; OUTS: the
+  displaced-runner out; ER: an inherited runner charged to the pitcher of the pitch — and
+  the open hypotheses for R/SB/BB are in `docs/audit/2026-09-12-sim545-boxscore-audit.md`).
+  That study is the evidence for the owner decision: grade props on the box, never the
+  derivation (the old event-label path mis-graded the K prop on about one pitcher-game in
+  300). **Second batch, the same day (owner ruling: "all the different markets in the
+  odds tables, because we are simulating games"):** `raw.game_odds` carries EVERY game
+  market the book posts — the three full-game markets plus twelve segment and team markets
+  (the first-inning and first-five moneyline [three-way, with a `draw_ml` column], total and
+  run line; each side's full-game and first-five team total; the first team to score; "a run
+  in the first inning", stored as over / under at 0.5). Alembic 0024 (applied; head 0024)
+  widens the `market_type` CHECK and adds `draw_ml`; the vocabulary is `GAME_MARKET_TYPES`
+  (+ `_KIND` / `_SEGMENT` / `_SIDE`) in `pipeline/odds_provider.py`; the provider, the mock,
+  the loader (`--game-markets`) and the live cycle (on the prop cadence) serve all fifteen.
+  `simulation/game_market_distributions.py` prices every one of them from the per-iteration
+  linescore, and the backtest grades them against `raw.games.inning_scores`. **Data runs
+  started 2026-09-12 at the owner's instruction:** the full 2024 odds re-load (all fifteen
+  game markets + all fifteen prop markets, ~18 s per game) and the box scores for the other
+  nine seasons — the latter FINISHED the same afternoon (20,270 games, 596,480 rows, zero
+  failures; all ten seasons: 22,742 games, 669,131 lines, box runs = final score on every
+  game), which CLOSES SIM-545. Two facts from the loader smoke: BettingPros has no walks / outs-recorded /
+  hits-allowed offers on the 2024 games checked (why the old load had zero walks rows), and
+  the old load saw only page 1 of each batter market (~8 of ~15-18 hitters). **Not built:**
+  the API's `/edges` and the game page still serve the three full-game markets (the sim
+  cache holds score arrays, not inning grids) — SIM-546. Details: `CHANGES.md` (2026-09-12,
+  two entries) and the build record in `docs/audit/2026-09-11-sim421-prop-market-scrape.md`.
+
+- **Each team's real manager decides the pitching change (SIM-427, CLOSED 2026-09-13 —
+  FLIPPED into production the same day; plan `docs/audit/2026-09-13-sim427-build-plan.md`,
+  record `CHANGES.md` 2026-09-13, two entries).** What production runs: the pitching change
+  is a draw from the change opportunity pool (`SIM_MANAGER_DRAW=1`) with the live manager's
+  usage-similarity score at power 4 (`SIM_ACTOR_POWER_MANAGER_USAGE`; the `manager_usage`
+  matrix, 123 manager-seasons); the pen is the MLB box's per-game listing (Alembic 0025
+  `raw.game_bullpen`, backfilled 2023-2026, `SIM_BULLPEN_SOURCE=box`; `pipeline/bullpen_usage.py`
+  derives the pen — minus the last-five-games rotation, an opener's start under 45 pitches
+  not counting — and each arm's rest / pitched-in-two-days / pitches-in-three); the entering
+  arm is a second draw over that pen (`SIM_RELIEF_ROLE_SIGMA` 0.1, `SIM_RELIEF_REST_SIGMA`
+  0.5, `SIM_RELIEF_PITCHED2D_OFF_WEIGHT` 0.25, `SIM_RELIEF_PITCHES3D_SIGMA` 10; hand and
+  stuff off); the steal weight is the batting manager's measured rate over the league mean
+  (`derived.league_averages`, entity `manager`). DELETED: the SIM-434 pull formula and its
+  helpers, the by-name tendency reader, the reliever ranking, the pinch hit, the sac-bunt
+  setup, the hit-and-run, the pitch-out and the green-light. `SIM_MANAGER_DRAW=0` = no
+  pitching change (the unit lane). The evidence: the usage read on the balanced 45 games
+  (4.45 pitchers per team-game vs the box's 4.28; starter pitches 84.6 ± 19.2 vs 84.7 ±
+  17.4; the manager terciles' pull depth 80.8 / 85.4 / 87.9 vs their own 79.3 / 84.5 /
+  88.4 — the formula read 2.28 / 80.5 ± 6.0 / flat) and the paired accuracy run on 250
+  games of 2024 (the starter strikeout market −0.0156 Brier for the draw, range
+  [−0.0255, −0.0066]; the moneyline −0.0062; the totals flat; every batter prop within
+  ±0.0011). The fatigue composition read the fatigue plan flagged is repaired by the draw
+  (the pitch share by band / times through sits on the pool's). Instruments:
+  `scripts/sim427_manager_probe.py`, `scripts/sim427_pen_check.py`,
+  `scripts/sim427_accuracy_pair.sh` + `scripts/sim518_pair_accuracy.py`. Two traps found on
+  the way: `make calibrate` DROPS the win-probability reliability curve from
+  `/data/calibration.json` (write it back from `/data/prop_validation.json` through
+  `write_reliability_curve_to_calibration_report`, or the app boots uncalibrated); the
+  change pool must carry `game_ymd` or the SIM-535 cutoff refuses every backtest game.
 - **DO NOT run the profile recompute** (`make profile-computor`) — but the reason changed on
   2026-08-13. SIM-501a/c CLOSED: SIM-457 is re-landed on the events-based out label, no profile
   site reads `outs_on_pitch` any more (a unit test enforces this), and `outs_recorded` now matches
@@ -403,7 +511,7 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   → Core sim loop (simulation/sim_loop.py) : 8-step pitch-by-pitch state machine + manager/situational
     decisions → GameSimResult                                     [Phase 4]
   → Runner + API (simulation/batch_runner.py, api/) : 100-iteration ProcessPool runner (forkserver
-    workers — SIM-430), REST + WebSocket, Redis cache, persistence (DuckDB v13 / Alembic 0015),
+    workers — SIM-430), REST + WebSocket, Redis cache, persistence (DuckDB v13 / Alembic 0025),
     betting/CLV surface, auth/rate-limit/CORS, nginx, Prometheus/Grafana   [Phase 5 — COMPLETE]
   → Frontend (frontend/) : React 18 + Vite + TypeScript, Playwright e2e   [Phase 6 — COMPLETE]
 ```
@@ -419,31 +527,46 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   fielding draw with the fence stage, the steal and advancement draws; reads the SIM-430 dense
   `pitcher_sim_matrix` fast path), `synthetic_bundle.py` (SIM-486: the in-memory bundle every
   no-DB test and the batch runner's no-DB factory draw from — the same loop, the same sampler),
+  `game_market_distributions.py` (SIM-421, 2026-09-12: per-iteration segment runs from the
+  linescore and the probability of every game market the book posts — first-inning / first-five
+  moneyline, total, run line, team totals, first team to score, a run in the first inning),
   `game_state.py` (carries bat/throw hands + per-team pitcher/catcher ids + the SIM-434 per-pitcher
   rest / pitch-count fields), `results.py`, `batch_runner.py` (ProcessPool runner — `mp_context=forkserver`
   per SIM-430), `production_factory.py` (builds the full-pool sampler from disk per worker, and
   RAISES when the bundle is missing — no fallback; `_manager_enabled()` + synthetic-bullpen builder gate SIM-434), `lineup_resolver.py`
   (also resolves the per-team catcher via the SIM-363 defense map), `linescore.py`, `pitcher_decisions.py`
-  (W/L/S + the manager pull model), `play_recorder.py`, `prop_distributions.py`, `win_probability.py`,
+  (W/L/S + the manager pull model), `play_recorder.py`, `prop_distributions.py` (the per-player prop
+  PMFs — fifteen props since SIM-421: pitchers K/BB/ER/OUTS/H_ALLOWED, batters H/HR/RBI/TB/1B/2B/3B/R/SB/HRR),
+  `prop_validation.py` (the prop ground-truth readers: the official box score, SIM-545, and the
+  event-label fallback), `win_probability.py`,
   `snapshots.py`, `validation/replay_chi_squared.py`.
 - `similarity/` — `engines/` (the 11 engines), `similarity_calibration.py`, `backtesting/` (backtester +
   walk-forward), `registry.py`.
 - `betting/` — `clv_engine.py`, `bet_signal.py`, `line_movement.py`.
 - `pipeline/` — `etl/` (historical loader + `coercion.py`, the SIM-437 shared type-coercion helpers
-  imported by both ETL loaders), `live/live_ingestion_pipeline.py` (MLB WS + REST + odds),
+  imported by both ETL loaders; `boxscore_ingest.py`, the SIM-545 official box-score parser + upsert into
+  `raw.game_player_stats`, which the loader calls per game), `live/live_ingestion_pipeline.py` (MLB WS + REST + odds),
   `live/bullpen_availability_ingest.py` (SIM-433 MLB-API active-roster/IL → `raw.game_bullpen_availability`),
   `batch/player_profile_computor.py` (+ the SIM-433 `_compute_bullpen_workload` from `raw.pitches`) +
   `engine_artifacts.py` (SIM-422
   builder + per-worker loader for the full-pool bundle: hand pools, pitcher×pitcher sim — incl. the
   SIM-430 dense `pitcher_sim_matrix` — batter/catcher/fielder/baserunner/manager embeddings, batted-ball
-  pools), `odds_provider.py`, `bettingpros_odds_provider.py` (SIM-435 `closing`-line branch).
+  pools), `odds_provider.py` (the provider seam AND, since SIM-421, the one source of the 15-market prop
+  vocabulary), `bettingpros_odds_provider.py` (SIM-435 `closing`-line branch; SIM-421 per-(event, market)
+  offers cache + pagination).
 - `scripts/` — operational scripts (NOT bind-mounted; see §2a): `sim_stats.py` (v2 sim harness),
-  `load_historical_odds.py` (SIM-435 opening+closing backfill → `raw.game_odds`/`raw.prop_odds`),
-  `clv_backtest.py` (SIM-429 CLV scoreboard: sim → model prices → opening/closing → CLV per market/side;
-  `--workers` parallelizes across games — SIM-436), `validate_props.py`, `check_file_integrity.py`.
+  `load_historical_odds.py` (SIM-435 opening+closing backfill → `raw.game_odds`/`raw.prop_odds`; SIM-421
+  `--prop-stats` / `--line-types` / `--no-game-odds` for the eight-new-markets pass),
+  `clv_backtest.py` (the SIM-538 sim-vs-closing-line accuracy comparison — the SIM-429 CLV scoreboard was
+  deleted by SIM-544; `--workers` parallelizes across games — SIM-436; props graded on the official box
+  score since SIM-545), `validate_props.py`, `load_official_boxscores.py` (SIM-545: backfill
+  `raw.game_player_stats` from the MLB box-score endpoint), `sim545_boxscore_audit.py` (SIM-545: the
+  derived-vs-official per-player totals study), `check_file_integrity.py`.
   *(scripts/ is baked into the image; run a not-yet-rebuilt new script via
   `docker compose run --rm -v "$PWD/scripts:/app/scripts" app python scripts/<x>.py`.)*
-- `db/` — `migrations/` (Alembic, head **0015**) + `migrations/duckdb/` (numbered SQL, schema **v13**) +
+- `db/` — `migrations/` (Alembic, head **0025** — 0022 = the 15-market `raw.prop_odds` CHECK constraint,
+  0023 = `raw.game_player_stats`, 0024 = the 15-market `raw.game_odds` CHECK + `draw_ml`; all three applied to the live DB on 2026-09-12; 0025 = `raw.game_bullpen`, the MLB box's per-game bullpen listing for the SIM-427 real pen, applied 2026-09-13) + `migrations/duckdb/`
+  (numbered SQL, schema **v13**) +
   `schemas/duckdb_schema_version.txt`.
 - `tests/` — `unit/`, `regression/` (engine invariant gate), `integration/` (E2E TestClient),
   `performance/` (pytest-benchmark). `conftest.py` has shared fixtures + the event-loop guard.
@@ -482,7 +605,9 @@ consolidates; QA cross-validates and never self-certifies its own work.
 - **TDD:** tests first, then implementation (Backend Developer convention). Unit tests use the `__new__`
   constructor-bypass + in-memory mock pattern (no live DB) — see `tests/conftest.py`.
 - **Ticketing:** every change maps to a `SIM-NNN` ticket. The next free ID lives in the SUBTITLE
-  ROW of `BACKLOG.xlsx` (row 2) — read it there; do not trust a number copied into this file (this
+  ROW of `BACKLOG.xlsx` (row 2), which carries ONLY that ID, the updated date and the two doc
+  pointers (owner ruling 2026-09-12 — closure and status notes go to `CHANGES.md`, never the
+  subtitle) — read it there; do not trust a number copied into this file (this
   line once said SIM-438 while the true next ID was SIM-504, and SIM-534/535 were used in commits
   and code before either was ever filed). File the ticket when you use the number, not after. Recent IDs: SIM-437 = consolidate the two ETL loaders' duplicate type-coercion
   helpers into `pipeline/etl/coercion.py` [CLOSED 2026-06-22], SIM-430 = full-pool `/simulate` throughput / 2s-30s SLA
@@ -490,10 +615,21 @@ consolidates; QA cross-validates and never self-certifies its own work.
   SIM-432 = the calibrator/validate_props ↔ live-schema reconciliation [CLOSED 2026-06-01, the
   SIM-406/407 unlock], SIM-433/434/435 = bullpen-availability / manager-decision-model / historical-odds
   loader [code-complete, data-runs pending], SIM-436 = revisit `/simulate` per-game cost for the 30 s
-  SLA [P3, open], and the SIM-422→429 full-pool epic is filed under its own banner. NOTE: a
-  realism-work batch was tagged `SIM-421` *in code comments* before the epic was filed — `SIM-421` the
-  ticket is the P3 book-offered-market projection, so treat in-code `SIM-421` tags as the realism work
-  and reconcile if you touch them.
+  SLA [P3, open], and the SIM-422→429 full-pool epic is filed under its own banner. NOTE: the
+  in-code `SIM-421` tag has TWO meanings; read the tag's own words to tell them apart. (a) A
+  realism-work batch (2026-05) was tagged `SIM-421` before the full-pool epic was filed. Its
+  tags talk about per-batter hands, the starters carried onto the state, the outcome-type fix
+  and the replay proportions; they live in `simulation/sim_loop.py`, `game_state.py`,
+  `lineup_resolver.py`, `sim_kwargs.py`, `validation/replay_chi_squared.py`,
+  `pipeline/batch/engine_artifacts.py`, `pipeline/batch/player_profile_computor.py` and
+  `scripts/archive/rebuild_pools.py`. (b) `SIM-421` the ticket is the prop-market work (P1,
+  code complete 2026-09-12). Its tags talk about prop markets, odds, the box score and the
+  per-player prop lines; they live in `simulation/prop_distributions.py`,
+  `pipeline/odds_provider.py`, `pipeline/bettingpros_odds_provider.py`,
+  `pipeline/live/live_ingestion_pipeline.py`, `pipeline/etl/opening_line_job.py`,
+  `scripts/load_historical_odds.py`, `scripts/clv_backtest.py`, `api/routes/games.py`,
+  `api/schemas.py`, migration 0022, and any `SIM-421 fix` on a box-line credit in
+  `simulation/sim_loop.py`. Reconcile a realism tag if you touch it.
 - **Migrations (mandatory):** every Postgres schema change ships an Alembic migration in
   `db/migrations/versions/`; every DuckDB schema change ships a numbered SQL file in
   `db/migrations/duckdb/` AND increments `db/schemas/duckdb_schema_version.txt`. *Gotcha:* a past sprint
@@ -725,6 +861,9 @@ status enum; typed WebSocket schema; calibration-wiring fix; auth enforcement) �
 - `docs/technical/README.md` — the technical code reference: per-subsystem module maps (purpose,
   key functions, callers, dependencies) for api/, simulation/, similarity/, pipeline/, betting/,
   and the operational scripts — start here to find where any piece of logic lives.
+- `docs/technical/sim-loop-cheat-sheet.md` — the loop on one page (2026-09-14): every draw, its
+  hard filters, the weights and their production values, and the feature groups of each
+  similarity score. Keep it current when a weight lands.
 
 ## 14. Writing standard (applies to ALL prose: chat replies, docs, commit messages, code comments)
 

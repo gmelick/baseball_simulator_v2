@@ -1685,8 +1685,10 @@ def _build_prop_set(
     description=(
         "Resolve the game's lineup, run an N-iteration boxscore batch, and return "
         "each player's prop MEANS as a boxscore card (SIM-366): for a batter the "
-        "H/HR/RBI/TB means, for a pitcher the K/BB/ER/OUTS means -- the means-only "
-        "projection of the run's PropDistributionSet (SIM-329). numpy-free JSON "
+        "H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means, for a pitcher the "
+        "K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's other lines) "
+        "-- the means-only projection of the run's PropDistributionSet (SIM-329). "
+        "numpy-free JSON "
         "(SIM-350). 503 if no DB pool is attached; 404 if the lineup cannot be "
         "resolved."
     ),
@@ -1735,9 +1737,10 @@ _VALID_PROP_NAMES: frozenset[str] = frozenset(ALL_PROPS)
         "``line``, ``over_ml``, and ``under_ml`` to also get a full "
         "``edge_report`` via the CLV engine (SIM-339).  ``bet_side`` controls "
         "which side's edge is computed (``'over'`` or ``'under'``, default "
-        "``'over'``).  Valid props: K, BB, ER, OUTS (pitcher), H, HR, RBI, TB "
-        "(batter).  503 if no DB pool is attached; 404 if the lineup or player "
-        "cannot be resolved."
+        "``'over'``).  Valid props (SIM-421 added the market's other lines): "
+        "K, BB, ER, OUTS, H_ALLOWED (pitcher); H, HR, RBI, TB, 1B, 2B, 3B, R, "
+        "SB, HRR (batter; HRR = hits + runs + RBI as one per-game sum).  503 if "
+        "no DB pool is attached; 404 if the lineup or player cannot be resolved."
     ),
 )
 async def get_player_prop_edge(

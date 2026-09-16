@@ -742,6 +742,9 @@ CREATE TABLE IF NOT EXISTS raw.game_odds (
     -- Moneyline (American odds: negative = favourite)
     home_ml         INTEGER,        -- e.g. -150
     away_ml         INTEGER,        -- e.g. +130
+    -- SIM-421 (migration 0024): the tie price of a three-way segment
+    -- moneyline (f1_moneyline, f5_moneyline). NULL on every two-way market.
+    draw_ml         INTEGER,
 
     -- Run line / spread
     home_spread     FLOAT,          -- e.g. -1.5
@@ -758,8 +761,21 @@ CREATE TABLE IF NOT EXISTS raw.game_odds (
     book            VARCHAR(50)     NOT NULL DEFAULT 'consensus',
     line_type       VARCHAR(20)     NOT NULL DEFAULT 'current'
                         CHECK (line_type IN ('opening','current','closing','bet_placement')),
+    -- SIM-421 (migration 0024, owner ruling 2026-09-12): every market the
+    -- book posts on a game, in one row layout. The vocabulary's one source is
+    -- pipeline/odds_provider.py GAME_MARKET_TYPES; a unit test keeps this
+    -- list in step. A team total names the side whose runs the line counts;
+    -- first_inning_run stores Yes / No as over / under at 0.5.
     market_type     VARCHAR(20)     NOT NULL DEFAULT 'moneyline'
-                        CHECK (market_type IN ('moneyline','runline','total')),
+                        CHECK (market_type IN (
+                            'moneyline', 'runline', 'total',
+                            'f1_moneyline', 'f5_moneyline',
+                            'f1_total', 'f5_total',
+                            'f1_runline', 'f5_runline',
+                            'team_total_home', 'team_total_away',
+                            'f5_team_total_home', 'f5_team_total_away',
+                            'first_to_score', 'first_inning_run'
+                        )),
     is_sharp_book   BOOLEAN         NOT NULL DEFAULT FALSE,
     -- SIM-092: SHA-256 of the concatenated odds payload.  Application code
     -- (_persist_odds) computes this and uses
@@ -796,6 +812,7 @@ COMMENT ON COLUMN raw.game_odds.is_sharp_book IS
 -- SIM-134: prop_type renamed to prop_stat with CHECK constraint.
 --          Betting Analyst (Agent 8) confirmed 7-value scope — see CHANGES.md.
 --          Migration 0004 applies these changes to live databases.
+-- SIM-421: migration 0022 widens the CHECK to 15 markets (see the column).
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS raw.prop_odds (
@@ -806,8 +823,11 @@ CREATE TABLE IF NOT EXISTS raw.prop_odds (
     source          VARCHAR(50)     NOT NULL DEFAULT 'consensus',
     is_mock         BOOLEAN         NOT NULL DEFAULT TRUE,
     -- SIM-134: renamed from prop_type; CHECK constraint enforces known markets.
-    -- 7 values confirmed by Betting Analyst (Agent 8).
-    -- innings_pitched deferred to Phase 4 (requires pitch-count model).
+    -- 7 values confirmed by Betting Analyst (Agent 8); SIM-421 (migration 0022)
+    -- adds the eight markets BettingPros already posts: singles, doubles,
+    -- triples, runs, stolen bases, hits+runs+RBI (batter), outs recorded and
+    -- hits allowed (pitcher). The vocabulary's one source is
+    -- pipeline/odds_provider.py PROP_STATS; a unit test keeps this list in step.
     prop_stat       VARCHAR(30)     NOT NULL
                         CHECK (prop_stat IN (
                             'strikeouts',
@@ -816,7 +836,15 @@ CREATE TABLE IF NOT EXISTS raw.prop_odds (
                             'earned_runs',
                             'walks',
                             'total_bases',
-                            'rbis'
+                            'rbis',
+                            'singles',
+                            'doubles',
+                            'triples',
+                            'runs',
+                            'stolen_bases',
+                            'hits_runs_rbis',
+                            'outs_recorded',
+                            'hits_allowed'
                         )),
     line            FLOAT           NOT NULL,
     over_ml         INTEGER,
@@ -844,7 +872,67 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_prop_odds_dedup
     WHERE odds_hash IS NOT NULL;
 
 COMMENT ON TABLE raw.prop_odds IS
-    'Player prop odds snapshots. Opening lines captured nightly when starter is announced (SIM-138). prop_stat CHECK constraint enforces 7 known markets (SIM-134).';
+    'Player prop odds snapshots. Opening lines captured nightly when starter is announced (SIM-138). prop_stat CHECK constraint enforces the 15 known markets (SIM-134 + SIM-421).';
+
+-- =============================================================================
+-- RAW.GAME_PLAYER_STATS
+-- The official per-player box score (SIM-545): one row per (game_pk, player_id)
+-- for every player who APPEARED, copied from the MLB Stats API box score
+-- (/api/v1/game/{game_pk}/boxscore; the live feed's liveData.boxscore has the
+-- same shape). This is the ground truth that grades a player prop the way a
+-- sportsbook does. A player who did not play has no row (the book voids his
+-- bet). player_id carries NO foreign key to raw.players on purpose: a box score
+-- can list a player the pitch sweep never wrote, and a missing ground-truth row
+-- must never come from a foreign-key failure. Migration 0023 applies this.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS raw.game_player_stats (
+    game_pk          INTEGER     NOT NULL REFERENCES raw.games(game_pk),
+    player_id        INTEGER     NOT NULL,
+    team_id          INTEGER     NOT NULL,
+    side             VARCHAR(4)  NOT NULL CHECK (side IN ('home', 'away')),
+    season           SMALLINT    NOT NULL,
+    game_date        DATE        NOT NULL,
+    batting_order    SMALLINT,
+    position_code    VARCHAR(5),
+    played_bat       BOOLEAN     NOT NULL DEFAULT FALSE,
+    played_pitch     BOOLEAN     NOT NULL DEFAULT FALSE,
+    -- batting line (the box score's batting block)
+    pa               SMALLINT    NOT NULL DEFAULT 0,
+    ab               SMALLINT    NOT NULL DEFAULT 0,
+    r                SMALLINT    NOT NULL DEFAULT 0,
+    h                SMALLINT    NOT NULL DEFAULT 0,
+    b2               SMALLINT    NOT NULL DEFAULT 0,
+    b3               SMALLINT    NOT NULL DEFAULT 0,
+    hr               SMALLINT    NOT NULL DEFAULT 0,
+    rbi              SMALLINT    NOT NULL DEFAULT 0,
+    sb               SMALLINT    NOT NULL DEFAULT 0,
+    cs               SMALLINT    NOT NULL DEFAULT 0,
+    bb               SMALLINT    NOT NULL DEFAULT 0,
+    k                SMALLINT    NOT NULL DEFAULT 0,
+    hbp              SMALLINT    NOT NULL DEFAULT 0,
+    sf               SMALLINT    NOT NULL DEFAULT 0,
+    tb               SMALLINT    NOT NULL DEFAULT 0,
+    -- pitching line (the box score's pitching block)
+    p_outs           SMALLINT    NOT NULL DEFAULT 0,
+    p_h              SMALLINT    NOT NULL DEFAULT 0,
+    p_r              SMALLINT    NOT NULL DEFAULT 0,
+    p_er             SMALLINT    NOT NULL DEFAULT 0,
+    p_bb             SMALLINT    NOT NULL DEFAULT 0,
+    p_k              SMALLINT    NOT NULL DEFAULT 0,
+    p_hr             SMALLINT    NOT NULL DEFAULT 0,
+    p_pitches        SMALLINT    NOT NULL DEFAULT 0,
+    p_batters_faced  SMALLINT    NOT NULL DEFAULT 0,
+    p_started        BOOLEAN     NOT NULL DEFAULT FALSE,
+    fetched_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (game_pk, player_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gps_player ON raw.game_player_stats(player_id);
+CREATE INDEX IF NOT EXISTS idx_gps_season ON raw.game_player_stats(season);
+
+COMMENT ON TABLE raw.game_player_stats IS
+    'SIM-545: the official per-player box score, one row per (game_pk, player_id) for every player who appeared. The ground truth that grades a player prop the way a sportsbook does. A player who did not play has no row. player_id carries no foreign key to raw.players on purpose.';
 
 -- =============================================================================
 -- RAW.ETL_ERRORS

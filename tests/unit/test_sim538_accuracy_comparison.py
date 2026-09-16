@@ -26,6 +26,7 @@ objects built the same way ``tests/unit/test_betting_sim339.py`` and
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import os
 import sys
@@ -54,7 +55,10 @@ ClosingPrices = clv_backtest.ClosingPrices
 _closing_prices = clv_backtest._closing_prices
 score_game_accuracy = clv_backtest.score_game_accuracy
 score_prop_accuracy = clv_backtest.score_prop_accuracy
-_ACCURACY_SCORED_PROPS = clv_backtest._ACCURACY_SCORED_PROPS
+#: SIM-545: the per-game prop sets each ground-truth source can grade. The
+#: scorer takes the set for the game it scores; there is no module constant.
+BOXSCORE_SCORED_PROPS = clv_backtest.BOXSCORE_SCORED_PROPS
+EVENT_LABEL_SCORED_PROPS = clv_backtest.EVENT_LABEL_SCORED_PROPS
 _bootstrap_paired_diff_ci = clv_backtest._bootstrap_paired_diff_ci
 _accuracy_row_for = clv_backtest._accuracy_row_for
 aggregate_accuracy_comparison = clv_backtest.aggregate_accuracy_comparison
@@ -216,6 +220,9 @@ def test_accuracy_record_to_from_jsonable_roundtrip():
         # score_hypothetical_return relies on).
         "market_side_price": None,
         "market_other_price": None,
+        # SIM-548: the raw (pre-calibration) probability; None where no map
+        # applies — every market but the moneyline today.
+        "sim_prob_raw": None,
     }
     assert AccuracyRecord.from_jsonable(d) == rec
 
@@ -267,6 +274,27 @@ def test_score_game_accuracy_moneyline_home_win():
     # as previously untested end-to-end).
     assert rec.market_side_price == pytest.approx(-140.0)
     assert rec.market_other_price == pytest.approx(120.0)
+
+
+def test_score_game_accuracy_moneyline_carries_the_raw_share_sim548():
+    """SIM-548: the moneyline record carries the simulator's RAW decisive
+    home-win share beside the mapped probability, so the calibration layer can
+    be fitted on the raw value. The summary here says 62 home wins, 36 away
+    wins and 2 ties in 100 iterations -> raw = 62 / 98."""
+    wp = _win_prob(0.50)  # the mapped value the stale curve would give
+    summary = _summary_from_totals_and_margins(totals=[8] * 10, margins=[2] * 10)
+    summary = dataclasses.replace(summary, home_win_pct=0.62, away_win_pct=0.36, tie_pct=0.02)
+    odds = _odds_closing_only("moneyline", "home_ml", "away_ml", None, side=-140.0, other=120.0)
+    recs = score_game_accuracy(1, wp, summary, odds, home_score=5, away_score=3)
+    assert len(recs) == 1
+    assert recs[0].sim_prob == pytest.approx(0.50)
+    assert recs[0].sim_prob_raw == pytest.approx(0.62 / 0.98)
+    # the round trip keeps it, and an older record without it still loads
+    again = clv_backtest.AccuracyRecord.from_jsonable(recs[0].to_jsonable())
+    assert again.sim_prob_raw == pytest.approx(0.62 / 0.98)
+    old = recs[0].to_jsonable()
+    old.pop("sim_prob_raw")
+    assert clv_backtest.AccuracyRecord.from_jsonable(old).sim_prob_raw is None
 
 
 def test_score_game_accuracy_moneyline_home_loss():
@@ -368,7 +396,11 @@ def test_score_game_accuracy_scores_all_three_markets_together():
 
 
 # ---------------------------------------------------------------------------
-# (d) score_prop_accuracy -- H/HR/TB/K/BB on the OVER side, RBI/ER excluded
+# (d) score_prop_accuracy -- the OVER side against the closing line. The props
+# it grades are the SOURCE's own set (SIM-545): every priced market on the
+# official box score, H/HR/TB/K/BB on the event-label fallback. The tests here
+# drive the fallback set; tests/unit/test_sim421_backtest_props.py drives the
+# official set (RBI/ER and the SIM-421 markets).
 # ---------------------------------------------------------------------------
 
 
@@ -385,7 +417,9 @@ def test_score_prop_accuracy_batter_hits_over_and_under():
     pset = _pset(dist)
     prop_odds = _prop_odds_row("hits", 7, close_over=110.0, close_under=-130.0, line=1.5)
 
-    over_recs = score_prop_accuracy(1, pset, prop_odds, {7: {"H": 2}}, {})
+    over_recs = score_prop_accuracy(
+        1, pset, prop_odds, {7: {"H": 2}}, {}, scorable_props=EVENT_LABEL_SCORED_PROPS
+    )
     assert len(over_recs) == 1
     assert over_recs[0].market == "H"
     assert over_recs[0].market_type == "prop"
@@ -397,7 +431,9 @@ def test_score_prop_accuracy_batter_hits_over_and_under():
     assert over_recs[0].market_side_price == pytest.approx(110.0)
     assert over_recs[0].market_other_price == pytest.approx(-130.0)
 
-    under_recs = score_prop_accuracy(1, pset, prop_odds, {7: {"H": 1}}, {})
+    under_recs = score_prop_accuracy(
+        1, pset, prop_odds, {7: {"H": 1}}, {}, scorable_props=EVENT_LABEL_SCORED_PROPS
+    )
     assert under_recs[0].outcome == 0  # actual 1 < line 1.5
 
 
@@ -405,7 +441,9 @@ def test_score_prop_accuracy_pitcher_strikeouts():
     dist = _dist_from_samples(9, "K", [3, 4, 5, 5, 6, 6, 6, 7, 8, 9])
     pset = _pset(dist)
     prop_odds = _prop_odds_row("strikeouts", 9, close_over=-115.0, close_under=-105.0, line=5.5)
-    recs = score_prop_accuracy(1, pset, prop_odds, {}, {9: {"K": 6}})
+    recs = score_prop_accuracy(
+        1, pset, prop_odds, {}, {9: {"K": 6}}, scorable_props=EVENT_LABEL_SCORED_PROPS
+    )
     assert len(recs) == 1
     assert recs[0].market == "K"
     assert recs[0].outcome == 1  # 6 > 5.5
@@ -414,9 +452,10 @@ def test_score_prop_accuracy_pitcher_strikeouts():
     assert recs[0].market_other_price == pytest.approx(-105.0)
 
 
-def test_score_prop_accuracy_excludes_rbi_and_er():
-    """RBI and ER have no reliable per-PA-event ground truth and are not
-    scored, even when the odds row and a PropDistribution both exist."""
+def _rbi_and_er_fixture():
+    """A batter RBI prop and a pitcher ER prop, each with an odds row, a
+    PropDistribution AND a real total — everything but the ground truth's
+    permission to grade them."""
     dist_rbi = _dist_from_samples(7, "RBI", [0, 1, 1, 2])
     dist_er = _dist_from_samples(9, "ER", [1, 2, 2, 3])
     pset = _pset(dist_rbi, dist_er)
@@ -424,9 +463,44 @@ def test_score_prop_accuracy_excludes_rbi_and_er():
         **_prop_odds_row("rbis", 7, close_over=100.0, close_under=-120.0, line=0.5),
         **_prop_odds_row("earned_runs", 9, close_over=100.0, close_under=-120.0, line=1.5),
     }
-    recs = score_prop_accuracy(1, pset, prop_odds, {7: {"RBI": 1}}, {9: {"ER": 2}})
+    return pset, prop_odds
+
+
+def test_score_prop_accuracy_fallback_path_still_skips_rbi_and_er():
+    """On the event-label fallback, RBI and ER have no ground truth an event
+    label can carry, so they are not scored even when the odds row, a
+    PropDistribution and (a stray) actual all exist. The scorer trusts the
+    per-game ``scorable_props`` set, not the presence of an actual."""
+    pset, prop_odds = _rbi_and_er_fixture()
+    recs = score_prop_accuracy(
+        1,
+        pset,
+        prop_odds,
+        {7: {"RBI": 1}},
+        {9: {"ER": 2}},
+        scorable_props=EVENT_LABEL_SCORED_PROPS,
+    )
     assert recs == []
-    assert {"RBI", "ER"} & _ACCURACY_SCORED_PROPS == set()
+    assert {"RBI", "ER"} & EVENT_LABEL_SCORED_PROPS == set()
+
+
+def test_score_prop_accuracy_official_path_scores_rbi_and_er():
+    """On the official box score (SIM-545), the SAME inputs score both — the
+    two props the platform priced but could not grade before."""
+    pset, prop_odds = _rbi_and_er_fixture()
+    recs = score_prop_accuracy(
+        1,
+        pset,
+        prop_odds,
+        {7: {"RBI": 1}},
+        {9: {"ER": 2}},
+        scorable_props=BOXSCORE_SCORED_PROPS,
+    )
+    assert {r.market for r in recs} == {"RBI", "ER"}
+    by_market = {r.market: r for r in recs}
+    assert by_market["RBI"].outcome == 1  # 1 > 0.5
+    assert by_market["ER"].outcome == 1  # 2 > 1.5
+    assert {"RBI", "ER"} <= BOXSCORE_SCORED_PROPS
 
 
 def test_score_prop_accuracy_skips_when_no_real_outcome_recorded():
@@ -435,7 +509,9 @@ def test_score_prop_accuracy_skips_when_no_real_outcome_recorded():
     dist = _dist_from_samples(7, "H", [0, 1, 1, 2, 2, 2, 3, 3, 3, 3])
     pset = _pset(dist)
     prop_odds = _prop_odds_row("hits", 7, close_over=110.0, close_under=-130.0, line=1.5)
-    recs = score_prop_accuracy(1, pset, prop_odds, {}, {})  # no batter_actuals entry
+    recs = score_prop_accuracy(
+        1, pset, prop_odds, {}, {}, scorable_props=EVENT_LABEL_SCORED_PROPS
+    )  # no batter_actuals entry
     assert recs == []
 
 
@@ -443,7 +519,9 @@ def test_score_prop_accuracy_skips_push():
     dist = _dist_from_samples(7, "H", [0, 1, 1, 2, 2, 2, 3, 3, 3, 3])
     pset = _pset(dist)
     prop_odds = _prop_odds_row("hits", 7, close_over=110.0, close_under=-130.0, line=2.0)
-    recs = score_prop_accuracy(1, pset, prop_odds, {7: {"H": 2}}, {})  # actual == line
+    recs = score_prop_accuracy(
+        1, pset, prop_odds, {7: {"H": 2}}, {}, scorable_props=EVENT_LABEL_SCORED_PROPS
+    )  # actual == line
     assert recs == []
 
 
@@ -451,7 +529,9 @@ def test_score_prop_accuracy_skips_when_no_model_distribution():
     """A player with an odds row but no model PropDistribution (never
     appeared in the sim's boxscores) is skipped."""
     prop_odds = _prop_odds_row("hits", 7, close_over=110.0, close_under=-130.0, line=1.5)
-    recs = score_prop_accuracy(1, _pset(), prop_odds, {7: {"H": 2}}, {})
+    recs = score_prop_accuracy(
+        1, _pset(), prop_odds, {7: {"H": 2}}, {}, scorable_props=EVENT_LABEL_SCORED_PROPS
+    )
     assert recs == []
 
 
@@ -694,7 +774,7 @@ async def test_score_one_game_skips_when_the_cutoff_cannot_be_resolved(monkeypat
     including this game's own real plays -- the exact leak SIM-535/538 exist
     to close. An adversarial review of SIM-538 confirmed this. Confirm the
     game is now skipped (status "unresolved", no records) and the replay
-    (_collect_game_results) is NEVER reached."""
+    (_replay_game) is NEVER reached."""
     import api.routes.games as games_mod
     import simulation.sim_kwargs as sim_kwargs_mod
 
@@ -722,9 +802,13 @@ async def test_score_one_game_skips_when_the_cutoff_cannot_be_resolved(monkeypat
     monkeypatch.setattr(sim_kwargs_mod, "resolve_park_factor_onto_state", fake_park_factor)
     monkeypatch.setattr(sim_kwargs_mod, "resolve_asof_ymd", fake_asof)
     monkeypatch.setattr(clv_backtest, "_fetch_game_odds", fake_fetch_game_odds)
-    monkeypatch.setattr(clv_backtest, "_collect_game_results", replay_must_not_run)
+    monkeypatch.setattr(
+        clv_backtest, "_replay_game", replay_must_not_run
+    )  # SIM-421: the seam moved
 
-    accuracy, status, park_factor = await clv_backtest._score_one_game(
+    # SIM-545: the fourth element is the prop ground-truth source; a skipped
+    # game graded nothing, so it has none.
+    accuracy, status, park_factor, ground_truth_source = await clv_backtest._score_one_game(
         pool=object(),
         game_pk=12345,
         duck=object(),
@@ -736,3 +820,4 @@ async def test_score_one_game_skips_when_the_cutoff_cannot_be_resolved(monkeypat
     assert status == "unresolved"
     assert accuracy == []
     assert park_factor == pytest.approx(1.05)
+    assert ground_truth_source is None

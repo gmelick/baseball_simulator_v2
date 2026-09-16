@@ -414,8 +414,31 @@ class FullPoolSampler:
         self.change_sit_sigma = 1.0
         self.change_pitcher_power = 1.0
         self.change_min_cell = 20
+        # SIM-427: the reliever draw's weights — which of the live pen's arms
+        # comes in, drawn by the candidate's resemblance to the arm the pool
+        # row brought in: role (a Gaussian on the difference in high-leverage
+        # entry share), stuff (the pitcher engine's score at a power), recent
+        # usage (a Gaussian on the difference in days of rest, a mismatch
+        # weight on "pitched in the last two days", a Gaussian on the
+        # difference in pitches over the last three days) and a hand mismatch
+        # weight. Every one OFF (0 / 1.0) = the positional pick, byte for byte
+        # (``relief_arm_draw`` returns None and the caller keeps its pick).
+        self.relief_role_sigma = 0.0
+        self.relief_pitcher_power = 0.0
+        self.relief_rest_sigma = 0.0
+        self.relief_pitched2d_off_weight = 1.0
+        self.relief_pitches3d_sigma = 0.0
+        self.relief_hand_off_weight = 1.0
+        #: Draws by the reliever draw and the share that had every weight neutral.
+        self.relief_draw_counts = np.zeros(2, dtype=np.int64)
         #: Draws per widening level 0..3.
         self.change_widen_counts = np.zeros(4, dtype=np.int64)
+        #: SIM-427: the starvation guard for the manager power — the sum over
+        #: change draws of the cell's effective-sample SHARE (the Kish effective
+        #: sample size of the final weights over the cell's row count) and the
+        #: number of draws; the mean share falls as a power concentrates the
+        #: draw on a few rows.
+        self.change_ess_stats = np.zeros(2, dtype=np.float64)
         self._change_meta_cache: dict | None = None
         self._change_last_row: int | None = None
         self._steal_emb_z: dict[str, np.ndarray] = {}
@@ -1341,18 +1364,21 @@ class FullPoolSampler:
         cache[ckey] = out
         return out
 
-    def _result_draw(self, b: int, rows: np.ndarray, pitch_gi: int) -> int:
-        """Step 4: draw the RESULT row among the pitch draw's candidate rows
-        (the same count sub-cell), weighted by the raw per-PA weight × the
-        pitch-to-pitch factor × the re-raised pitcher / batter factors. Falls
-        back to the pitch row itself when nothing can condition the draw."""
+    def result_weights(self, b: int, rows: np.ndarray, pitch_gi: int) -> np.ndarray | None:
+        """SIM-548: the RESULT draw's weight over the pitch draw's candidate
+        rows (the same count sub-cell ``b``), anchored on the pitch ``pitch_gi``:
+        the raw per-PA weight × the pitch-to-pitch factor × the density
+        correction × the re-raised pitcher / batter factors × the receiving
+        ratio. None when nothing can condition the draw (the pitch row itself
+        then stands). The one code path :meth:`_result_draw` samples from and
+        the offline joint fit reads whole — so the two cannot disagree."""
         assert self._bucket_w is not None and self._hand is not None
         w = self._bucket_w[b]
         if w is None or w.size == 0:
-            return pitch_gi
+            return None
         f = self._f_result_pitch(self._hand, rows, pitch_gi)
         if f is None:
-            return pitch_gi
+            return None
         wr = w * f
         if self.result_density_power != 0.0:
             key = self._pa_keys[b] if self._pa_keys is not None else (-1, b)
@@ -1376,6 +1402,15 @@ class FullPoolSampler:
         if self._bucket_recv is not None and self._bucket_recv[b] is not None:
             taken = self._pool_meta(self._hand)["taken"][rows]
             wr = self._apply_receiving(wr, taken, self._bucket_recv[b])
+        return wr
+
+    def _result_draw(self, b: int, rows: np.ndarray, pitch_gi: int) -> int:
+        """Step 4: draw the RESULT row among the pitch draw's candidate rows
+        under :meth:`result_weights`. Falls back to the pitch row itself when
+        nothing can condition the draw."""
+        wr = self.result_weights(b, rows, pitch_gi)
+        if wr is None:
+            return pitch_gi
         cdf = np.cumsum(wr, dtype=np.float64)
         total = float(cdf[-1])
         if not np.isfinite(total) or total <= 0.0:
@@ -2419,6 +2454,22 @@ class FullPoolSampler:
             count=pool.n,
         )
         meta = {"cells": cells, "mean": mean, "std": std, "prof": prof, "widened": {}}
+        # SIM-427: each row's column in the manager-usage score matrix (-1 =
+        # unscored, no manager on the row, or no matrix in the bundle).
+        entry = self._actor_matrix("manager_usage")
+        mid = getattr(pool, "manager_id", None)
+        if entry is not None and mid is not None:
+            index = entry["index"]
+            meta["mgr_col"] = np.fromiter(
+                (
+                    index.get(f"{int(m)}:{int(s)}", -1) if int(m) >= 0 else -1
+                    for m, s in zip(mid, pool.season, strict=False)
+                ),
+                dtype=np.int64,
+                count=pool.n,
+            )
+        else:
+            meta["mgr_col"] = None
         self._change_meta_cache = meta
         return meta
 
@@ -2467,6 +2518,7 @@ class FullPoolSampler:
         runners_state: int,
         score_diff: int,
         manager_weight: np.ndarray | None = None,
+        manager_key: str | None = None,
     ) -> bool | None:
         """Step 1 of the loop: does the manager change pitchers at this
         plate-appearance boundary? ONE draw from the opportunity pool's hard
@@ -2511,15 +2563,178 @@ class FullPoolSampler:
                 w = w * f
         if manager_weight is not None:
             w = w * np.asarray(manager_weight, dtype=np.float32)
+        # SIM-427 (owner decision 2026-09-13): the live manager's USAGE
+        # similarity to each row's manager, from the nightly matrix, at its
+        # fitted power (``SIM_ACTOR_POWER_MANAGER_USAGE``; 0 = off, the
+        # default). The draw-neutral rule for an unscored row.
+        if manager_key:
+            f = self._change_manager_factor(meta, rows, manager_key)
+            if f is not None:
+                w = w * f
         w = self._apply_asof(w, pool, rows)
         total = float(w.sum())
         if not np.isfinite(total) or total <= 0.0:
             return None
+        sq = float(np.square(w.astype(np.float64)).sum())
+        if sq > 0.0:
+            self.change_ess_stats[0] += (total * total / sq) / rows.size
+            self.change_ess_stats[1] += 1.0
         cdf = np.cumsum(w, dtype=np.float64)
         i = int(np.searchsorted(cdf, self.rng.random() * cdf[-1]))
         r = int(rows[min(i, rows.size - 1)])
         self._change_last_row = r
         return bool(pool.changed[r])
+
+    def _change_manager_factor(
+        self, meta: dict, rows: np.ndarray, manager_key: str
+    ) -> np.ndarray | None:
+        """SIM-427: the live manager's usage-similarity row gathered onto the
+        cell's rows, raised to ``actor_power['manager_usage']`` (0 = off ->
+        None), an unscored row draw-neutral at the mean scored weight. None
+        when the bundle has no manager matrix, the pool no manager column, or
+        the live manager no matrix row (then the factor is neutral)."""
+        power = float(self.actor_power.get("manager_usage", 0.0))
+        if power <= 0.0:
+            return None
+        entry = self._actor_matrix("manager_usage")
+        cols_all = meta.get("mgr_col")
+        if entry is None or cols_all is None:
+            return None
+        live = entry["index"].get(manager_key)
+        if live is None:
+            return None
+        cols = cols_all[rows]
+        valid = cols >= 0
+        out = np.ones(len(rows), dtype=np.float32)
+        if not valid.any():
+            return out
+        scores = entry["matrix"][live, cols[valid]].astype(np.float32)
+        scores = np.where(np.isfinite(scores), scores, np.float32(1.0))
+        if power != 1.0:
+            scores = np.power(np.clip(scores, 0.0, None), np.float32(power)).astype(np.float32)
+        out[valid] = scores
+        if not valid.all():
+            out[~valid] = np.float32(scores.mean())
+        return out
+
+    # ---- SIM-427: which arm — the reliever draw from the live pen -----------
+    def relief_weights_on(self) -> bool:
+        return (
+            self.relief_role_sigma > 0.0
+            or self.relief_pitcher_power > 0.0
+            or self.relief_rest_sigma > 0.0
+            or self.relief_pitched2d_off_weight != 1.0
+            or self.relief_pitches3d_sigma > 0.0
+            or self.relief_hand_off_weight != 1.0
+        )
+
+    def relief_arm_draw(
+        self,
+        candidates: list[int],
+        *,
+        live_season: int,
+        throw_hands: dict[int, str] | None = None,
+        recent_usage: dict[int, tuple[int, int, int]] | None = None,
+    ) -> int | None:
+        """SIM-427: draw the entering arm's INDEX in ``candidates`` (the live
+        pen's available, unused arms), weighted by each candidate's resemblance
+        to the arm the last drawn change-pool row brought in — role, stuff,
+        recent usage and hand (the weights on the sampler; every one OFF ->
+        None, and the caller keeps its positional pick). ``recent_usage`` maps
+        a candidate to (days of rest, pitched in the last two days, pitches
+        over the last three), the resolver's facts; ``throw_hands`` his hand.
+        A fact missing on either side leaves that weight neutral for him."""
+        if not candidates or not self.relief_weights_on():
+            return None
+        pool = getattr(self.a, "change_pool", None)
+        r = self._change_last_row
+        if pool is None or r is None:
+            return None
+        n = len(candidates)
+        w = np.ones(n, dtype=np.float64)
+        season = int(pool.season[r])
+        drawn_id = int(pool.incoming_id[r])
+        roles = getattr(self.a, "change_roles", None) or {}
+        # role: the high-leverage entry share
+        if self.relief_role_sigma > 0.0:
+            drawn_role = roles.get(f"{drawn_id}:{season}")
+            if drawn_role is not None:
+                f = np.ones(n)
+                for i, pid in enumerate(candidates):
+                    cand = roles.get(f"{int(pid)}:{int(live_season)}") or roles.get(
+                        f"{int(pid)}:{int(live_season) - 1}"
+                    )
+                    if cand is not None:
+                        d = float(cand[1]) - float(drawn_role[1])
+                        f[i] = np.exp(-(d * d) / (2.0 * self.relief_role_sigma**2))
+                w *= f / max(float(f.mean()), 1e-12)
+        # stuff: the pitcher engine's score between the drawn arm and the candidate
+        if self.relief_pitcher_power > 0.0:
+            scores = self._pitcher_prof_scores(f"{drawn_id}:{season}")
+            if scores is not None:
+                idx = self.a.pitcher_sim_index
+                f = np.ones(n)
+                valid = np.zeros(n, dtype=bool)
+                for i, pid in enumerate(candidates):
+                    j = idx.get(f"{int(pid)}:{int(live_season)}")
+                    if j is None:
+                        j = idx.get(f"{int(pid)}:{int(live_season) - 1}")
+                    if j is not None and np.isfinite(scores[j]):
+                        f[i] = max(float(scores[j]), 0.0) ** float(self.relief_pitcher_power)
+                        valid[i] = True
+                if valid.any():
+                    f[~valid] = float(f[valid].mean())  # draw-neutral for an unscored arm
+                    w *= f / max(float(f.mean()), 1e-12)
+        # recent usage: rest, pitched in the last two days, pitches in three
+        usage = recent_usage or {}
+        in_rest = getattr(pool, "in_days_rest", None)
+        in_p2 = getattr(pool, "in_pitched_2d", None)
+        in_p3 = getattr(pool, "in_pitches_3d", None)
+        if in_rest is not None and int(in_rest[r]) >= 0:
+            d_rest, d_p2, d_p3 = int(in_rest[r]), int(in_p2[r]), int(in_p3[r])
+            if self.relief_rest_sigma > 0.0:
+                f = np.ones(n)
+                for i, pid in enumerate(candidates):
+                    u = usage.get(int(pid))
+                    if u is not None:
+                        d = float(u[0]) - float(d_rest)
+                        f[i] = np.exp(-(d * d) / (2.0 * self.relief_rest_sigma**2))
+                w *= f / max(float(f.mean()), 1e-12)
+            if self.relief_pitched2d_off_weight != 1.0 and d_p2 >= 0:
+                f = np.ones(n)
+                for i, pid in enumerate(candidates):
+                    u = usage.get(int(pid))
+                    if u is not None and int(u[1]) != d_p2:
+                        f[i] = float(self.relief_pitched2d_off_weight)
+                w *= f / max(float(f.mean()), 1e-12)
+            if self.relief_pitches3d_sigma > 0.0 and d_p3 >= 0:
+                f = np.ones(n)
+                for i, pid in enumerate(candidates):
+                    u = usage.get(int(pid))
+                    if u is not None:
+                        d = float(u[2]) - float(d_p3)
+                        f[i] = np.exp(-(d * d) / (2.0 * self.relief_pitches3d_sigma**2))
+                w *= f / max(float(f.mean()), 1e-12)
+        # hand: a mismatch with the drawn arm's throwing hand
+        in_throws = getattr(pool, "in_throws", None)
+        if self.relief_hand_off_weight != 1.0 and in_throws is not None and int(in_throws[r]) > 0:
+            drawn_hand = "L" if int(in_throws[r]) == 1 else "R"
+            hands = throw_hands or {}
+            f = np.ones(n)
+            for i, pid in enumerate(candidates):
+                h = hands.get(int(pid))
+                if h is not None and str(h)[:1].upper() != drawn_hand:
+                    f[i] = float(self.relief_hand_off_weight)
+            w *= f / max(float(f.mean()), 1e-12)
+        total = float(w.sum())
+        self.relief_draw_counts[0] += 1
+        if not np.isfinite(total) or total <= 0.0:
+            return None
+        if np.allclose(w, w[0]):
+            self.relief_draw_counts[1] += 1  # every weight neutral: a uniform draw
+        cdf = np.cumsum(w)
+        i = int(np.searchsorted(cdf, self.rng.random() * cdf[-1]))
+        return min(i, n - 1)
 
     def _change_pitcher_factor(self, pitcher_key: str, prof_rows: np.ndarray) -> np.ndarray | None:
         """The live pitcher's similarity to each candidate row's pitcher, from
@@ -2573,12 +2788,17 @@ class FullPoolSampler:
         pool = getattr(self.a, "change_pool", None)
         if r is None or pool is None:
             return None
-        return {
+        out = {
             "row": r,
             "changed": bool(pool.changed[r]),
             "incoming_id": int(pool.incoming_id[r]),
             "pitcher_id": int(pool.pitcher_id[r]),
         }
+        # SIM-427: the row's manager and the incoming arm's rest and hand.
+        for attr in ("manager_id", "in_days_rest", "in_pitched_2d", "in_pitches_3d", "in_throws"):
+            col = getattr(pool, attr, None)
+            out[attr] = int(col[r]) if col is not None else None
+        return out
 
     def has_steal_pool(self) -> bool:
         return bool(self.a.steal_pools)

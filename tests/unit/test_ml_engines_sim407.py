@@ -378,16 +378,31 @@ class TestRealPropsFromEvents:
         batter, _pitcher = real_props_from_pa_events(pa)
         assert batter[10] == {"H": 4, "HR": 1, "TB": 1 + 2 + 3 + 4}
 
-    def test_pitcher_k_bb_excludes_intentional_walk(self):
+    def test_pitcher_k_bb_counts_the_intentional_walk(self):
+        # SIM-421 / SIM-545: the sim's BB line counts an intentional walk
+        # (``_BB_CANONICAL``) and so does the official box score, so the
+        # event-label fallback counts ``intent_walk`` too.
         pa = [
             (1, 99, "strikeout"),
             (2, 99, "strikeout_double_play"),
             (3, 99, "walk"),
-            (4, 99, "intent_walk"),  # IBB excluded (sim doesn't model it)
+            (4, 99, "intent_walk"),
             (5, 99, "single"),
         ]
         _batter, pitcher = real_props_from_pa_events(pa)
-        assert pitcher[99] == {"K": 2, "BB": 1}
+        assert pitcher[99] == {"K": 2, "BB": 2}
+
+    def test_walk_vocabulary_matches_the_sim_bb_line(self):
+        # The fallback's walk labels and the sim's box-line walk keys are the
+        # same set, seen through the Statcast alias table: every label the
+        # fallback counts is a walk on the sim's line, and every walk the
+        # sim's line counts has a Statcast label the fallback recognises.
+        from simulation.constants import STATCAST_EVENT_ALIASES
+        from simulation.prop_validation import _WALK_EVENTS
+        from simulation.sim_loop import StateMachine
+
+        canonical = {STATCAST_EVENT_ALIASES[label] for label in _WALK_EVENTS}
+        assert canonical == set(StateMachine._BB_CANONICAL)
 
     def test_case_insensitive_and_blank_tolerant(self):
         pa = [(1, 2, "HOME_RUN"), (1, 2, ""), (1, 2, None), (1, 2, "  walk ")]

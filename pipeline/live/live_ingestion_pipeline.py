@@ -63,7 +63,7 @@ import json
 import logging
 import os
 import random
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from typing import Any
@@ -80,7 +80,17 @@ from fastapi.routing import APIRouter
 # get_odds_provider() (env-selected, defaults to MockOddsAPI) instead of
 # hard-instantiating MockOddsAPI, so a real provider can drop in behind the
 # OddsProvider interface without touching ingestion/CLV/persistence code.
-from pipeline.odds_provider import OddsProvider, get_odds_provider
+from pipeline.odds_provider import (
+    BATTER_PROP_STATS,
+    GAME_MARKET_KIND,
+    GAME_MARKET_TYPES,
+    GAME_ODDS_FIELDS,
+    LEGACY_GAME_MARKET_TYPES,
+    PITCHER_PROP_STATS,
+    PROP_STATS,
+    OddsProvider,
+    get_odds_provider,
+)
 
 # SIM-106: Type alias for the simulation callback. It MUST be an async
 # function — passing a sync function would either raise TypeError when the
@@ -149,18 +159,22 @@ PROP_BOOKS: list[tuple[str, bool]] = [
     ("fanduel", False),  # soft — retail line
 ]
 
-# The 7 Betting-Analyst-confirmed prop markets (mirror MockOddsAPI._PROP_CONFIG
-# and the raw.prop_odds CHECK constraint).  Kept as a tuple so callers cannot
-# mutate the canonical ordering.
-PROP_STATS: tuple[str, ...] = (
-    "strikeouts",
-    "hits",
-    "home_runs",
-    "earned_runs",
-    "walks",
-    "total_bases",
-    "rbis",
-)
+# The 15 prop markets live in pipeline/odds_provider.py (PROP_STATS, split into
+# PITCHER_PROP_STATS / BATTER_PROP_STATS — SIM-421). This module imports them
+# and re-exports PROP_STATS; MockOddsAPI._PROP_CONFIG and the raw.prop_odds
+# CHECK constraint (migration 0022) list the same 15 values.
+
+# SIM-421: the role a prop-eligible player plays, as _collect_prop_player_roles()
+# reports it. A pitcher is asked only for the pitcher markets and a hitter only
+# for the batter markets. "both" is the safe default: a player whose role is
+# unknown, or a two-way player who bats AND pitches, is asked for every market.
+PROP_ROLE_PITCHER = "pitcher"
+PROP_ROLE_BATTER = "batter"
+PROP_ROLE_BOTH = "both"
+
+#: SIM-421: boxscore position codes that mark a pitcher (P; some feeds use
+#: SP / RP; TWP is a two-way player).
+_PITCHER_POSITION_CODES = frozenset({"P", "SP", "RP", "TWP"})
 
 # SIM-340: prop-odds fetch cadence.  Prop lines move far more slowly than the
 # WS refresh rate (a WS message fires on every pitch).  Polling every book ×
@@ -200,7 +214,8 @@ class MockOddsAPI:
       Favourite:  odds = -(prob / (1-prob)) * 100  (negative integer)
       Underdog:   odds = ((1-prob) / prob) * 100   (positive integer)
 
-    SIM-134: Added get_prop_odds() for all 7 Betting-Analyst-confirmed prop markets.
+    SIM-134: Added get_prop_odds() for the 7 Betting-Analyst-confirmed prop markets.
+    SIM-421: the eight markets the book already offers joined them (15 in all).
     """
 
     # ------------------------------------------------------------------
@@ -216,6 +231,10 @@ class MockOddsAPI:
     #   - Home runs / RBIs set at 0.5; these are binary-feel props.
     #   - Juice asymmetry on HR (books shade the under) reflects sharp-book
     #     behaviour Betting Analyst observed in real markets.
+    #   - SIM-421 markets: doubles / triples / stolen bases sit at 0.5 with a
+    #     plus-money over (a rare event); outs recorded centres on a 5.2-inning
+    #     start (16.5); hits allowed on 4.5; hits+runs+RBIs on 1.5.
+    # The keys are exactly PROP_STATS (a SIM-421 unit test enforces it).
     # ------------------------------------------------------------------
     _PROP_CONFIG: dict[str, tuple[float, float, tuple[int, int], tuple[int, int]]] = {
         #  prop_stat       center  ±spread  over_vig        under_vig
@@ -226,6 +245,15 @@ class MockOddsAPI:
         "walks": (2.5, 0.5, (-115, -105), (-115, -105)),
         "total_bases": (1.5, 0.5, (-120, -105), (-115, -105)),
         "rbis": (0.5, 0.5, (-120, -110), (-110, -100)),
+        # SIM-421: the eight markets the book already offers.
+        "singles": (0.5, 0.5, (-120, -105), (-115, -100)),
+        "doubles": (0.5, 0.0, (+150, +200), (-250, -190)),
+        "triples": (0.5, 0.0, (+600, +900), (-1400, -1000)),
+        "runs": (0.5, 0.5, (-125, -105), (-120, -100)),
+        "stolen_bases": (0.5, 0.0, (+250, +450), (-650, -350)),
+        "hits_runs_rbis": (1.5, 1.0, (-120, -105), (-120, -105)),
+        "outs_recorded": (16.5, 1.5, (-120, -105), (-120, -105)),
+        "hits_allowed": (4.5, 1.0, (-120, -105), (-120, -105)),
     }
 
     @staticmethod
@@ -255,10 +283,23 @@ class MockOddsAPI:
         ----------
         game_pk       : MLB game identifier (seeds the RNG for determinism)
         line_type     : 'opening' | 'current' | 'closing' | 'bet_placement'
-        market_type   : 'moneyline' | 'runline' | 'total'
+        market_type   : any value of ``GAME_MARKET_TYPES`` (``run_line`` is the
+                        legacy alias of ``runline``); an unknown value raises
+                        ``ValueError`` like the real provider does
         book          : book identifier (e.g. 'consensus', 'pinnacle', 'draftkings')
         is_sharp_book : TRUE for sharp books used as CLV reference (e.g. Pinnacle, Circa)
+
+        SIM-421 (2026-09-12): the three full-game markets keep the original
+        shape (one row carries the moneyline, the run line and the total). A
+        segment or team market fills only its own fields, the way the real
+        provider does — a first-inning moneyline gets a ``draw_ml`` (a segment
+        can end tied), a team total a lower line, a yes / no market an over /
+        under pair at 0.5.
         """
+        canonical = "runline" if market_type == "run_line" else market_type
+        if canonical not in GAME_MARKET_KIND:
+            known = ", ".join(GAME_MARKET_TYPES)
+            raise ValueError(f"Unknown market_type '{market_type}'. Known values: {known}")
         rng = random.Random(game_pk)
 
         # Home win probability: slight home-field edge built in
@@ -301,7 +342,7 @@ class MockOddsAPI:
         total_line = round(rng.uniform(7.5, 10.5) * 2) / 2  # nearest 0.5
         total_juice = rng.randint(-115, -105)
 
-        return {
+        result: dict[str, Any] = {
             "game_pk": game_pk,
             "source": "mock",
             "is_mock": True,
@@ -310,17 +351,66 @@ class MockOddsAPI:
             "line_type": line_type,
             "market_type": market_type,
             "is_sharp_book": is_sharp_book,
-            # Odds values
-            "home_ml": home_ml,
-            "away_ml": away_ml,
-            "home_spread": home_spread,
-            "home_spread_ml": spread_juice,
-            "away_spread": away_spread,
-            "away_spread_ml": spread_juice,
-            "total_line": total_line,
-            "over_ml": total_juice,
-            "under_ml": total_juice,
         }
+        for field in GAME_ODDS_FIELDS:
+            result[field] = None
+        if canonical in LEGACY_GAME_MARKET_TYPES:
+            result.update(
+                {
+                    "home_ml": home_ml,
+                    "away_ml": away_ml,
+                    "home_spread": home_spread,
+                    "home_spread_ml": spread_juice,
+                    "away_spread": away_spread,
+                    "away_spread_ml": spread_juice,
+                    "total_line": total_line,
+                    "over_ml": total_juice,
+                    "under_ml": total_juice,
+                }
+            )
+            return result
+
+        # A segment / team market: its own deterministic draw, seeded on the
+        # game AND the market so two markets of one game never share numbers.
+        mrng = random.Random(game_pk * 1_000 + (GAME_MARKET_TYPES.index(canonical) + 1))
+        kind = GAME_MARKET_KIND[canonical]
+        if kind == "three_way":
+            # A first-inning / first-five moneyline: the tie is a real outcome,
+            # so the three prices carry the vig between them.
+            tie_prob = mrng.uniform(0.18, 0.30)
+            side_prob = (1.0 - tie_prob) / 2.0
+            edge = mrng.uniform(-0.06, 0.06)
+            result["home_ml"] = MockOddsAPI._prob_to_american((side_prob + edge) * (1 + vig / 3))
+            result["away_ml"] = MockOddsAPI._prob_to_american((side_prob - edge) * (1 + vig / 3))
+            result["draw_ml"] = MockOddsAPI._prob_to_american(tie_prob * (1 + vig / 3))
+        elif kind == "moneyline":
+            # First team to score: near a coin flip with the book's margin.
+            p = mrng.uniform(0.44, 0.56)
+            result["home_ml"] = MockOddsAPI._prob_to_american(p * (1 + vig / 2))
+            result["away_ml"] = MockOddsAPI._prob_to_american((1.0 - p) * (1 + vig / 2))
+        elif kind == "runline":
+            spread = mrng.choice([-0.5, 0.5])
+            result["home_spread"], result["away_spread"] = spread, -spread
+            result["home_spread_ml"] = mrng.randint(-130, 115)
+            result["away_spread_ml"] = mrng.randint(-130, 115)
+        elif kind == "total":
+            # The line scales with the slice of the game and the side.
+            if canonical.startswith("f1_"):
+                line = mrng.choice([0.5, 1.5])
+            elif canonical.startswith("f5_team"):
+                line = mrng.choice([1.5, 2.0, 2.5])
+            elif canonical.startswith("f5_"):
+                line = mrng.choice([4.0, 4.5, 5.0])
+            else:  # a full-game team total
+                line = mrng.choice([3.5, 4.0, 4.5, 5.0])
+            result["total_line"] = line
+            result["over_ml"] = mrng.randint(-140, 120)
+            result["under_ml"] = mrng.randint(-140, 120)
+        elif kind == "yes_no":
+            result["total_line"] = 0.5
+            result["over_ml"] = mrng.randint(-125, 110)
+            result["under_ml"] = mrng.randint(-125, 110)
+        return result
 
     @staticmethod
     def get_prop_odds(
@@ -343,9 +433,12 @@ class MockOddsAPI:
         ----------
         game_pk       : MLB game identifier
         player_id     : MLB player identifier
-        prop_stat     : one of the 7 Betting-Analyst-confirmed markets:
-                        'strikeouts' | 'hits' | 'home_runs' | 'earned_runs'
-                        | 'walks' | 'total_bases' | 'rbis'
+        prop_stat     : one of the 15 markets in PROP_STATS (pipeline/odds_provider.py):
+                        the pitcher markets 'strikeouts' | 'earned_runs' | 'walks'
+                        | 'outs_recorded' | 'hits_allowed' and the batter markets
+                        'hits' | 'home_runs' | 'total_bases' | 'rbis' | 'singles'
+                        | 'doubles' | 'triples' | 'runs' | 'stolen_bases'
+                        | 'hits_runs_rbis'
         line_type     : 'opening' | 'current' | 'closing' | 'bet_placement'
         book          : book identifier (default 'consensus')
         is_sharp_book : True for sharp reference books (Pinnacle, Circa)
@@ -360,7 +453,7 @@ class MockOddsAPI:
         Raises
         ------
         ValueError
-            If prop_stat is not in the 7 known markets.  Prevents silent
+            If prop_stat is not in the 15 known markets.  Prevents silent
             schema violations before the DB CHECK constraint catches them.
         """
         if prop_stat not in MockOddsAPI._PROP_CONFIG:
@@ -1164,6 +1257,8 @@ class LiveIngestionPipeline:
         # _persist_prop_odds_cycle() consults this map and skips the fetch
         # unless PROP_FETCH_CADENCE_S seconds have elapsed for this game.
         self._last_prop_fetch: dict[int, datetime] = {}
+        # SIM-421: the same cadence clock for the segment / team game markets.
+        self._last_segment_fetch: dict[int, datetime] = {}
 
         self._schedule_task: asyncio.Task | None = None
         self._running = False
@@ -1358,6 +1453,10 @@ class LiveIngestionPipeline:
                     feed["gameData"]["status"]["abstractGameState"],
                 )
                 await self._persist_odds(game_pk, odds)
+                # SIM-421 (owner ruling 2026-09-12): every market the book posts
+                # goes into the odds table. The twelve segment and team markets
+                # ride the prop cadence gate (60 s), never the per-pitch signal.
+                await self._persist_segment_odds_cycle(game_pk)
                 # SIM-340: persist player-prop odds on the same refresh cycle.
                 # _persist_prop_odds_cycle() self-throttles to PROP_FETCH_CADENCE_S
                 # per game so it does not fire on every WS pitch signal.  This is
@@ -1437,36 +1536,72 @@ class LiveIngestionPipeline:
         return self._odds_provider().get_odds(game_pk)
 
     @staticmethod
-    def _collect_prop_player_ids(game_state: dict) -> list[int]:
+    def _collect_prop_player_roles(game_state: dict) -> dict[int, str]:
         """
-        SIM-340: Extract the player_ids eligible for prop-line capture from a
-        built game_state.
+        SIM-421: player_id → role for every player eligible for prop-line
+        capture in a built game_state.
 
-        Props are offered on the two probable/active starting pitchers and on
-        the batters in both lineups.  We pull:
-          * current_pitcher_id (the pitcher on the mound right now)
-          * every player_id in home_lineup / away_lineup (the hitters)
+        Props are offered on the pitcher on the mound and on the batters in
+        both lineups.  We pull:
+          * current_pitcher_id → PROP_ROLE_PITCHER
+          * every player_id in home_lineup / away_lineup → PROP_ROLE_BATTER,
+            read from the entry's boxscore ``position``
 
-        Deduplicated, None-filtered, and order-stable so a fixed game_state
-        always yields the same id list (keeps the dedup hash and tests stable).
+        The safe default is PROP_ROLE_BOTH (every market is requested):
+          * a lineup entry with no ``position`` (the role is unknown);
+          * a lineup entry whose position is a pitcher code — a two-way
+            player bats AND pitches;
+          * a player seen in two roles (the current pitcher who also bats).
+
+        The dict keeps insertion order, is None-filtered and de-duplicated, so
+        a fixed game_state always yields the same ids in the same order (keeps
+        the dedup hash and tests stable).
         """
-        ids: list[int] = []
+        roles: dict[int, str] = {}
         cp = game_state.get("current_pitcher_id")
         if cp:
-            ids.append(int(cp))
+            roles[int(cp)] = PROP_ROLE_PITCHER
         for side in ("home_lineup", "away_lineup"):
             for entry in game_state.get(side, []) or []:
                 pid = entry.get("player_id")
-                if pid:
-                    ids.append(int(pid))
-        # Order-stable dedup.
-        seen: set[int] = set()
-        unique: list[int] = []
-        for pid in ids:
-            if pid not in seen:
-                seen.add(pid)
-                unique.append(pid)
-        return unique
+                if not pid:
+                    continue
+                pid = int(pid)
+                position = str(entry.get("position") or "").upper()
+                if not position or position in _PITCHER_POSITION_CODES:
+                    role = PROP_ROLE_BOTH
+                else:
+                    role = PROP_ROLE_BATTER
+                if pid in roles and roles[pid] != role:
+                    role = PROP_ROLE_BOTH
+                roles[pid] = role
+        return roles
+
+    @classmethod
+    def _collect_prop_player_ids(cls, game_state: dict) -> list[int]:
+        """
+        SIM-340: Extract the player_ids eligible for prop-line capture from a
+        built game_state (the keys of :meth:`_collect_prop_player_roles`).
+
+        Deduplicated, None-filtered, and order-stable so a fixed game_state
+        always yields the same id list.
+        """
+        return list(cls._collect_prop_player_roles(game_state))
+
+    @staticmethod
+    def _prop_stats_for_role(role: str, prop_stats: tuple[str, ...]) -> tuple[str, ...]:
+        """
+        SIM-421: the subset of ``prop_stats`` a player in ``role`` is asked for.
+
+        A pitcher gets the pitcher markets, a hitter the batter markets. Any
+        other role (PROP_ROLE_BOTH, or an unknown string) gets every market —
+        the safe default, so a mis-labelled player loses no quote.
+        """
+        if role == PROP_ROLE_PITCHER:
+            return tuple(s for s in prop_stats if s in PITCHER_PROP_STATS)
+        if role == PROP_ROLE_BATTER:
+            return tuple(s for s in prop_stats if s in BATTER_PROP_STATS)
+        return prop_stats
 
     def _fetch_prop_odds(
         self,
@@ -1476,6 +1611,7 @@ class LiveIngestionPipeline:
         line_type: str = "current",
         books: list[tuple[str, bool]] | None = None,
         prop_stats: tuple[str, ...] = PROP_STATS,
+        roles: Mapping[int, str] | None = None,
     ) -> list[dict]:
         """
         SIM-340: Returns a flat list of prop-odds quotes for the given players.
@@ -1485,6 +1621,12 @@ class LiveIngestionPipeline:
         with the sharp-book flag carried through to raw.prop_odds.  Capturing
         both sharp (Pinnacle, Circa) and soft (DraftKings, FanDuel) quotes lets
         the CLV engine (SIM-339) measure soft-vs-sharp divergence per prop.
+
+        SIM-421: ``roles`` (player_id → PROP_ROLE_*) splits the markets by
+        role — a pitcher is asked only for the pitcher markets and a hitter
+        only for the batter markets (see :meth:`_prop_stats_for_role`).  A
+        player missing from ``roles``, or ``roles=None``, is asked for every
+        market in ``prop_stats`` (the safe default).
 
         The provider's get_prop_odds() is resolved via the SIM-370 seam
         (mock by default, the real BettingProsOddsProvider under
@@ -1497,7 +1639,8 @@ class LiveIngestionPipeline:
         provider = self._odds_provider()  # SIM-370: env-selected, mock by default
         quotes: list[dict] = []
         for player_id in player_ids:
-            for prop_stat in prop_stats:
+            role = roles.get(player_id, PROP_ROLE_BOTH) if roles else PROP_ROLE_BOTH
+            for prop_stat in self._prop_stats_for_role(role, prop_stats):
                 for book, is_sharp in books:
                     try:
                         quote = provider.get_prop_odds(
@@ -1520,6 +1663,69 @@ class LiveIngestionPipeline:
                     quotes.append(quote)
         return quotes
 
+    #: SIM-421: the segment and team markets the live cycle persists beside the
+    #: full-game row — every ``GAME_MARKET_TYPES`` value except the three the
+    #: full-game row already carries.
+    SEGMENT_MARKET_TYPES: tuple[str, ...] = tuple(
+        m for m in GAME_MARKET_TYPES if m not in LEGACY_GAME_MARKET_TYPES
+    )
+
+    def _fetch_segment_odds(self, game_pk: int, *, line_type: str = "current") -> list[dict]:
+        """SIM-421: one ``get_odds`` dict per segment / team market for a game.
+
+        A market the provider cannot resolve (no event, no offer) comes back
+        with every odds field ``None``; it is dropped here so no empty row is
+        written. An unknown market_type is a programming error and is logged,
+        not raised, so one bad entry cannot stop the cycle.
+        """
+        provider = self._odds_provider()
+        quotes: list[dict] = []
+        for market_type in self.SEGMENT_MARKET_TYPES:
+            try:
+                odds = provider.get_odds(game_pk, line_type=line_type, market_type=market_type)
+            except ValueError as exc:
+                log.warning("skipping game market %r for game %s: %s", market_type, game_pk, exc)
+                continue
+            except Exception as exc:  # noqa: BLE001 — one market must not stop the rest
+                log.warning(
+                    "game market %r fetch failed for game %s: %s", market_type, game_pk, exc
+                )
+                continue
+            if any(odds.get(f) is not None for f in GAME_ODDS_FIELDS):
+                quotes.append(odds)
+        return quotes
+
+    async def _persist_segment_odds_cycle(self, game_pk: int) -> int:
+        """SIM-421: persist the segment / team game markets on the prop cadence.
+
+        Gated by its own clock (``_last_segment_fetch``) at ``PROP_FETCH_CADENCE_S``
+        so the twelve extra markets are fetched once a minute per game, not on
+        every pitch signal. Returns the rows written this cycle (0 while the gate
+        is closed).
+        """
+        now = datetime.now(UTC)
+        last = getattr(self, "_last_segment_fetch", {}).get(game_pk)
+        if last is not None and (now - last).total_seconds() < PROP_FETCH_CADENCE_S:
+            return 0
+        if not hasattr(self, "_last_segment_fetch"):
+            self._last_segment_fetch = {}
+        self._last_segment_fetch[game_pk] = now
+        written = 0
+        for odds in self._fetch_segment_odds(game_pk, line_type="current"):
+            try:
+                await self._persist_odds(game_pk, odds)
+                written += 1
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "game market persist failed game %s %s: %s",
+                    game_pk,
+                    odds.get("market_type"),
+                    exc,
+                )
+        if written:
+            log.info("SIM-421: persisted %d segment/team market rows for game %s", written, game_pk)
+        return written
+
     async def _persist_prop_odds_cycle(self, game_pk: int, game_state: dict) -> int:
         """
         SIM-340: Live prop-odds persistence cycle.
@@ -1528,8 +1734,10 @@ class LiveIngestionPipeline:
         to at most once per PROP_FETCH_CADENCE_S seconds per game (prop lines move
         far more slowly than the per-pitch WS feed).  When the cadence gate opens,
         it:
-          1. Collects prop-eligible player_ids from the game_state.
-          2. Fetches multi-book prop quotes (sharp + soft) via _fetch_prop_odds().
+          1. Collects prop-eligible players + their roles from the game_state
+             (SIM-421: pitcher / batter / both).
+          2. Fetches multi-book prop quotes (sharp + soft) via _fetch_prop_odds(),
+             the pitcher markets for pitchers and the batter markets for hitters.
           3. Persists each quote via _persist_prop_odds() (the previously-unwired
              method this ticket activates).
 
@@ -1542,14 +1750,15 @@ class LiveIngestionPipeline:
             # Cadence gate closed — too soon since the last prop fetch.
             return 0
 
-        player_ids = self._collect_prop_player_ids(game_state)
+        roles = self._collect_prop_player_roles(game_state)
+        player_ids = list(roles)
         if not player_ids:
             # Nothing to price yet (e.g. lineups not posted) — don't stamp the
             # cadence clock so the next signal retries promptly.
             return 0
 
         self._last_prop_fetch[game_pk] = now
-        quotes = self._fetch_prop_odds(game_pk, player_ids, line_type="current")
+        quotes = self._fetch_prop_odds(game_pk, player_ids, line_type="current", roles=roles)
         written = 0
         for quote in quotes:
             try:
@@ -1565,12 +1774,14 @@ class LiveIngestionPipeline:
                     exc,
                 )
         if written:
+            # SIM-421: the stat count varies per player (pitcher markets for
+            # pitchers, batter markets for hitters), so log the quote count.
             log.info(
-                "SIM-340: persisted %d prop quotes for game %s (%d players × %d stats × %d books)",
+                "SIM-340: persisted %d of %d prop quotes for game %s (%d players × %d books)",
                 written,
+                len(quotes),
                 game_pk,
                 len(player_ids),
-                len(PROP_STATS),
                 len(PROP_BOOKS),
             )
         return written
@@ -1582,6 +1793,7 @@ class LiveIngestionPipeline:
         *,
         books: list[tuple[str, bool]] | None = None,
         prop_stats: tuple[str, ...] = PROP_STATS,
+        roles: Mapping[int, str] | None = None,
     ) -> int:
         """
         SIM-340 / SIM-138: Opening-line capture hook for player props.
@@ -1591,6 +1803,9 @@ class LiveIngestionPipeline:
         game-line capture (opening_line_job.py / SIM-138): it records the FIRST
         line posted so opening→closing movement (and therefore CLV) is
         recoverable for props, not just game markets.
+
+        SIM-421: pass ``roles`` (player_id → PROP_ROLE_*) to split the markets
+        by role; without it every player is asked for every market.
 
         Idempotent by virtue of the dedup hash (migration 0013): re-running with
         an unchanged opening line is a no-op via ON CONFLICT DO NOTHING.
@@ -1603,6 +1818,7 @@ class LiveIngestionPipeline:
             line_type="opening",
             books=books,
             prop_stats=prop_stats,
+            roles=roles,
         )
         written = 0
         for quote in quotes:
@@ -1820,6 +2036,12 @@ class LiveIngestionPipeline:
             return str(v)
 
         payload = "|".join(f"{k}={_fmt(odds.get(k))}" for k in ordered_keys)
+        # SIM-421 (2026-09-12): the tie price of a three-way segment moneyline
+        # joins the hash ONLY when it is set. A two-way market's payload is
+        # therefore byte-identical to what it was before the column existed,
+        # so every hash stored before this change still deduplicates.
+        if odds.get("draw_ml") is not None:
+            payload += f"|draw_ml={_fmt(odds.get('draw_ml'))}"
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     async def _persist_odds(self, game_pk: int, odds: dict) -> None:
@@ -1847,8 +2069,8 @@ class LiveIngestionPipeline:
                  home_ml, away_ml,
                  home_spread, home_spread_ml, away_spread, away_spread_ml,
                  total_line, over_ml, under_ml,
-                 odds_hash)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+                 draw_ml, odds_hash)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
             ON CONFLICT (game_pk, source, odds_hash)
               WHERE odds_hash IS NOT NULL
               DO NOTHING
@@ -1869,7 +2091,8 @@ class LiveIngestionPipeline:
             odds.get("total_line"),
             odds.get("over_ml"),
             odds.get("under_ml"),
-            odds_hash,
+            odds.get("draw_ml"),  # SIM-421: the tie price of a three-way segment moneyline
+            odds_hash,  # stays LAST: two pinned tests read the hash as the final argument
         )
 
     @staticmethod

@@ -1,0 +1,207 @@
+production attributes: {'pitch_pitcher_power': 16.0, 'pitch_batter_power': 1.0, 'fatigue_tto_sigma': 0.5, 'sit_sigma': 2.0, 'result_pitch_sigma': 1.0, 'result_pitcher_power': 16.0, 'result_batter_power': 8.0, 'result_density_power': 1.0} (split ON, cell index True)
+10579 pitches in 2714 plate appearances of 120 starts of 2024; 2644 plate appearances with a known end; 89 pitchers with a season yardstick; sampled in 0.6 s
+78 settings (production first)
+  [1/78]  170.7 s  pitch 0.8144  result 0.8616  chain 0.8623  production
+  [2/78]  173.5 s  pitch 0.7585  result 0.8616  chain 0.8526  {'pitch_pitcher_power': 1.0}
+  [3/78]  164.9 s  pitch 0.7597  result 0.8616  chain 0.8530  {'pitch_pitcher_power': 2.0}
+  [4/78]  162.6 s  pitch 0.7623  result 0.8616  chain 0.8535  {'pitch_pitcher_power': 4.0}
+  [5/78]  162.1 s  pitch 0.7726  result 0.8616  chain 0.8567  {'pitch_pitcher_power': 8.0}
+/app/simulation/full_pool_sampler.py:85: RuntimeWarning: overflow encountered in power
+  adj = np.where(f > 0.0, np.power(np.maximum(f, 1e-30), np.float32(power - 1.0)), 0.0)
+  [6/78]  167.5 s  pitch 0.9208  result 0.8616  chain 0.8710  {'pitch_pitcher_power': 32.0}
+  [7/78]  164.8 s  pitch 0.8129  result 0.8616  chain 0.8616  {'pitch_batter_power': 0.5}
+  [8/78]  171.4 s  pitch 0.8166  result 0.8616  chain 0.8640  {'pitch_batter_power': 2.0}
+  [9/78]  174.2 s  pitch 0.8274  result 0.8616  chain 0.8683  {'pitch_batter_power': 4.0}
+  [10/78]  168.1 s  pitch 0.7893  result 0.8312  chain 0.8327  {'fatigue_tto_sigma': 0.0}
+  [11/78]  179.0 s  pitch 0.8334  result 0.8838  chain 0.8858  {'fatigue_tto_sigma': 0.35}
+  [12/78]  179.4 s  pitch 0.8022  result 0.8467  chain 0.8500  {'fatigue_tto_sigma': 0.7}
+  [13/78]  185.9 s  pitch 0.7954  result 0.8381  chain 0.8408  {'fatigue_tto_sigma': 1.0}
+  [14/78]  581.0 s  pitch 0.8249  result 0.8736  chain 0.8747  {'sit_sigma': 1.0}
+production attributes: {'pitch_pitcher_power': 16.0, 'pitch_batter_power': 1.0, 'fatigue_tto_sigma': 0.5, 'sit_sigma': 2.0, 'result_pitch_sigma': 1.0, 'result_pitcher_power': 16.0, 'result_batter_power': 8.0, 'result_density_power': 1.0} (split ON, cell index True)
+10579 pitches in 2714 plate appearances of 120 starts of 2024; 2644 plate appearances with a known end; 89 pitchers with a season yardstick; sampled in 0.7 s
+78 settings (production first)
+checkpoint: 14 settings already scored
+  [1/78]  170.7 s  pitch 0.8144  result 0.8616  chain 0.8623  production
+  [2/78]  173.5 s  pitch 0.7585  result 0.8616  chain 0.8526  {'pitch_pitcher_power': 1.0}
+  [3/78]  164.9 s  pitch 0.7597  result 0.8616  chain 0.8530  {'pitch_pitcher_power': 2.0}
+  [4/78]  162.6 s  pitch 0.7623  result 0.8616  chain 0.8535  {'pitch_pitcher_power': 4.0}
+  [5/78]  162.1 s  pitch 0.7726  result 0.8616  chain 0.8567  {'pitch_pitcher_power': 8.0}
+  [6/78]  167.5 s  pitch 0.9208  result 0.8616  chain 0.8710  {'pitch_pitcher_power': 32.0}
+  [7/78]  164.8 s  pitch 0.8129  result 0.8616  chain 0.8616  {'pitch_batter_power': 0.5}
+  [8/78]  171.4 s  pitch 0.8166  result 0.8616  chain 0.8640  {'pitch_batter_power': 2.0}
+  [9/78]  174.2 s  pitch 0.8274  result 0.8616  chain 0.8683  {'pitch_batter_power': 4.0}
+  [10/78]  168.1 s  pitch 0.7893  result 0.8312  chain 0.8327  {'fatigue_tto_sigma': 0.0}
+  [11/78]  179.0 s  pitch 0.8334  result 0.8838  chain 0.8858  {'fatigue_tto_sigma': 0.35}
+  [12/78]  179.4 s  pitch 0.8022  result 0.8467  chain 0.8500  {'fatigue_tto_sigma': 0.7}
+  [13/78]  185.9 s  pitch 0.7954  result 0.8381  chain 0.8408  {'fatigue_tto_sigma': 1.0}
+  [14/78]  581.0 s  pitch 0.8249  result 0.8736  chain 0.8747  {'sit_sigma': 1.0}
+  [15/78]  344.3 s  pitch 0.8105  result 0.8575  chain 0.8591  {'sit_sigma': 4.0}
+  [16/78]  386.8 s  pitch 0.8144  result 0.8715  chain 0.8614  {'result_pitch_sigma': 0.5}
+  [17/78]  391.0 s  pitch 0.8144  result 0.8660  chain 0.8637  {'result_pitch_sigma': 0.7}
+  [18/78]  399.2 s  pitch 0.8144  result 0.8599  chain 0.8599  {'result_pitch_sigma': 1.4}
+  [19/78]  395.8 s  pitch 0.8144  result 0.8595  chain 0.8581  {'result_pitch_sigma': 2.0}
+/app/simulation/full_pool_sampler.py:85: RuntimeWarning: overflow encountered in power
+  adj = np.where(f > 0.0, np.power(np.maximum(f, 1e-30), np.float32(power - 1.0)), 0.0)
+  [20/78]  427.1 s  pitch 0.8144  result 0.7969  chain 0.8063  {'result_pitcher_power': 4.0}
+  [21/78]  417.3 s  pitch 0.8144  result 0.8116  chain 0.8208  {'result_pitcher_power': 8.0}
+  [22/78]  419.1 s  pitch 0.8144  result 0.9665  chain 0.9635  {'result_pitcher_power': 32.0}
+  [23/78]  387.5 s  pitch 0.8144  result 0.8177  chain 0.8337  {'result_batter_power': 2.0}
+  [24/78]  400.0 s  pitch 0.8144  result 0.8290  chain 0.8380  {'result_batter_power': 4.0}
+  [25/78]  396.5 s  pitch 0.8144  result 0.9427  chain 0.9414  {'result_batter_power': 16.0}
+  [26/78]  388.4 s  pitch 0.8144  result 0.8632  chain 0.8644  {'result_density_power': 0.0}
+  [27/78]  393.3 s  pitch 0.8144  result 0.8620  chain 0.8629  {'result_density_power': 0.5}
+  [28/78]  420.4 s  pitch 0.7578  result 0.8616  chain 0.8522  {'pitch_pitcher_power': 1.0, 'pitch_batter_power': 0.5}
+  [29/78]  424.2 s  pitch 0.7599  result 0.8616  chain 0.8519  {'pitch_pitcher_power': 1.0, 'pitch_batter_power': 2.0}
+  [30/78]  421.6 s  pitch 0.7665  result 0.8616  chain 0.8531  {'pitch_pitcher_power': 1.0, 'pitch_batter_power': 4.0}
+  [31/78]  424.0 s  pitch 0.7588  result 0.8616  chain 0.8521  {'pitch_pitcher_power': 2.0, 'pitch_batter_power': 0.5}
+  [32/78]  426.4 s  pitch 0.7610  result 0.8616  chain 0.8528  {'pitch_pitcher_power': 2.0, 'pitch_batter_power': 2.0}
+  [33/78]  430.9 s  pitch 0.7679  result 0.8616  chain 0.8548  {'pitch_pitcher_power': 2.0, 'pitch_batter_power': 4.0}
+  [34/78]  425.1 s  pitch 0.7613  result 0.8616  chain 0.8518  {'pitch_pitcher_power': 4.0, 'pitch_batter_power': 0.5}
+  [35/78]  435.6 s  pitch 0.7637  result 0.8616  chain 0.8540  {'pitch_pitcher_power': 4.0, 'pitch_batter_power': 2.0}
+  [36/78]  431.2 s  pitch 0.7709  result 0.8616  chain 0.8547  {'pitch_pitcher_power': 4.0, 'pitch_batter_power': 4.0}
+  [37/78]  432.2 s  pitch 0.7714  result 0.8616  chain 0.8559  {'pitch_pitcher_power': 8.0, 'pitch_batter_power': 0.5}
+  [38/78]  424.1 s  pitch 0.7743  result 0.8616  chain 0.8568  {'pitch_pitcher_power': 8.0, 'pitch_batter_power': 2.0}
+  [39/78]  430.0 s  pitch 0.7825  result 0.8616  chain 0.8602  {'pitch_pitcher_power': 8.0, 'pitch_batter_power': 4.0}
+  [40/78]  441.6 s  pitch 0.9190  result 0.8616  chain 0.8704  {'pitch_pitcher_power': 32.0, 'pitch_batter_power': 0.5}
+  [41/78]  426.4 s  pitch 0.9239  result 0.8616  chain 0.8725  {'pitch_pitcher_power': 32.0, 'pitch_batter_power': 2.0}
+  [42/78]  429.3 s  pitch 0.9357  result 0.8616  chain 0.8749  {'pitch_pitcher_power': 32.0, 'pitch_batter_power': 4.0}
+  [43/78]  340.5 s  pitch 0.8144  result 0.7584  chain 0.7702  {'result_pitcher_power': 4.0, 'result_batter_power': 2.0}
+  [44/78]  367.1 s  pitch 0.8144  result 0.7663  chain 0.7760  {'result_pitcher_power': 4.0, 'result_batter_power': 4.0}
+  [45/78]  427.0 s  pitch 0.8144  result 0.8964  chain 0.9007  {'result_pitcher_power': 4.0, 'result_batter_power': 16.0}
+  [46/78]  419.9 s  pitch 0.8144  result 0.7711  chain 0.7861  {'result_pitcher_power': 8.0, 'result_batter_power': 2.0}
+  [47/78]  454.6 s  pitch 0.8144  result 0.7801  chain 0.7923  {'result_pitcher_power': 8.0, 'result_batter_power': 4.0}
+  [48/78]  460.7 s  pitch 0.8144  result 0.9068  chain 0.9106  {'result_pitcher_power': 8.0, 'result_batter_power': 16.0}
+  [49/78]  435.7 s  pitch 0.8144  result 0.9274  chain 0.9348  {'result_pitcher_power': 32.0, 'result_batter_power': 2.0}
+  [50/78]  447.1 s  pitch 0.8144  result 0.9386  chain 0.9426  {'result_pitcher_power': 32.0, 'result_batter_power': 4.0}
+  [51/78]  451.2 s  pitch 0.8144  result 1.0258  chain 1.0149  {'result_pitcher_power': 32.0, 'result_batter_power': 16.0}
+  [52/78]  421.4 s  pitch 0.8144  result 0.8259  chain 0.8465  {'result_pitch_sigma': 0.5, 'result_batter_power': 2.0}
+  [53/78]  424.6 s  pitch 0.8144  result 0.8379  chain 0.8477  {'result_pitch_sigma': 0.5, 'result_batter_power': 4.0}
+  [54/78]  425.8 s  pitch 0.8144  result 0.9524  chain 0.9167  {'result_pitch_sigma': 0.5, 'result_batter_power': 16.0}
+  [55/78]  402.1 s  pitch 0.8144  result 0.8215  chain 0.8400  {'result_pitch_sigma': 0.7, 'result_batter_power': 2.0}
+  [56/78]  413.6 s  pitch 0.8144  result 0.8331  chain 0.8437  {'result_pitch_sigma': 0.7, 'result_batter_power': 4.0}
+  [57/78]  412.4 s  pitch 0.8144  result 0.9466  chain 0.9305  {'result_pitch_sigma': 0.7, 'result_batter_power': 16.0}
+  [58/78]  416.7 s  pitch 0.8144  result 0.8166  chain 0.8287  {'result_pitch_sigma': 1.4, 'result_batter_power': 2.0}
+  [59/78]  433.3 s  pitch 0.8144  result 0.8276  chain 0.8347  {'result_pitch_sigma': 1.4, 'result_batter_power': 4.0}
+  [60/78]  416.7 s  pitch 0.8144  result 0.9417  chain 0.9409  {'result_pitch_sigma': 1.4, 'result_batter_power': 16.0}
+  [61/78]  430.5 s  pitch 0.8144  result 0.8165  chain 0.8257  {'result_pitch_sigma': 2.0, 'result_batter_power': 2.0}
+  [62/78]  419.6 s  pitch 0.8144  result 0.8274  chain 0.8320  {'result_pitch_sigma': 2.0, 'result_batter_power': 4.0}
+  [63/78]  435.8 s  pitch 0.8144  result 0.9415  chain 0.9402  {'result_pitch_sigma': 2.0, 'result_batter_power': 16.0}
+  [64/78]  445.4 s  pitch 0.7585  result 0.8177  chain 0.8202  {'pitch_pitcher_power': 1.0, 'result_batter_power': 2.0}
+  [65/78]  447.5 s  pitch 0.7585  result 0.8290  chain 0.8269  {'pitch_pitcher_power': 1.0, 'result_batter_power': 4.0}
+  [66/78]  460.0 s  pitch 0.7585  result 0.9427  chain 0.9331  {'pitch_pitcher_power': 1.0, 'result_batter_power': 16.0}
+  [67/78]  459.5 s  pitch 0.7597  result 0.8177  chain 0.8211  {'pitch_pitcher_power': 2.0, 'result_batter_power': 2.0}
+  [68/78]  456.4 s  pitch 0.7597  result 0.8290  chain 0.8285  {'pitch_pitcher_power': 2.0, 'result_batter_power': 4.0}
+  [69/78]  430.5 s  pitch 0.7597  result 0.9427  chain 0.9321  {'pitch_pitcher_power': 2.0, 'result_batter_power': 16.0}
+  [70/78]  448.6 s  pitch 0.7623  result 0.8177  chain 0.8221  {'pitch_pitcher_power': 4.0, 'result_batter_power': 2.0}
+  [71/78]  455.8 s  pitch 0.7623  result 0.8290  chain 0.8279  {'pitch_pitcher_power': 4.0, 'result_batter_power': 4.0}
+  [72/78]  284.2 s  pitch 0.7623  result 0.9427  chain 0.9335  {'pitch_pitcher_power': 4.0, 'result_batter_power': 16.0}
+  [73/78]  452.7 s  pitch 0.7726  result 0.8177  chain 0.8257  {'pitch_pitcher_power': 8.0, 'result_batter_power': 2.0}
+  [74/78]  464.2 s  pitch 0.7726  result 0.8290  chain 0.8310  {'pitch_pitcher_power': 8.0, 'result_batter_power': 4.0}
+  [75/78]  466.4 s  pitch 0.7726  result 0.9427  chain 0.9340  {'pitch_pitcher_power': 8.0, 'result_batter_power': 16.0}
+  [76/78]  461.7 s  pitch 0.9208  result 0.8177  chain 0.8430  {'pitch_pitcher_power': 32.0, 'result_batter_power': 2.0}
+  [77/78]  455.7 s  pitch 0.9208  result 0.8290  chain 0.8476  {'pitch_pitcher_power': 32.0, 'result_batter_power': 4.0}
+  [78/78]  453.7 s  pitch 0.9208  result 0.9427  chain 0.9466  {'pitch_pitcher_power': 32.0, 'result_batter_power': 16.0}
+
+=== SIM-548 offline joint fit — the pitch draws on 2024 ===
+  production: {'pitch_pitcher_power': 16.0, 'pitch_batter_power': 1.0, 'fatigue_tto_sigma': 0.5, 'sit_sigma': 2.0, 'result_pitch_sigma': 1.0, 'result_pitcher_power': 16.0, 'result_batter_power': 8.0, 'result_density_power': 1.0}
+  10578 pitches, 2644 plate appearances, 120 starts; real K per start 4.51; real K share per PA 0.205
+  per pitch: the six-outcome Brier (Δ vs production, pitcher-clustered range). per PA: the four-way Brier of the count chain (K/BB/in play/HBP). per start: the sum of P(K) vs real K — corr, slope of real on predicted, bias, spread ratio. disc: per-pitcher predicted vs season whiff+called share — corr, spread ratio. eff = effective rows (and the 10th percentile) of the admissible rows.
+  setting                                  |  pitch       Δ | result       Δ |  chain |  PA4 p  PA4 c | start corr p/c   slope p/c    bias p/c   spr p/c | disc corr p/r   spr p/r |  eff p   p10  eff r   p10
+  production                               | 0.8144 +0.0000 | 0.8616 +0.0000 | 0.8623 | 0.4833 0.5037 | +0.35/+0.42 +0.85/+0.92 +0.03/-0.02 0.41/0.46 | +0.47/+0.44 1.14/1.31 |   45.0   3.8   16.6   2.2
+  pitch_pitcher^=1                         | 0.7585 -0.0559 | 0.8616 +0.0000 | 0.8526 | 0.4585 0.4961 | +0.38/+0.43 +1.29/+0.95 +0.20/-0.04 0.29/0.45 | +0.19/+0.44 0.66/1.31 |  301.8  16.6   16.6   2.2
+  pitch_pitcher^=2                         | 0.7597 -0.0547 | 0.8616 -0.0000 | 0.8530 | 0.4585 0.4963 | +0.38/+0.43 +1.33/+0.96 +0.19/-0.03 0.29/0.45 | +0.24/+0.44 0.66/1.31 |  283.0  15.5   16.6   2.2
+  pitch_pitcher^=4                         | 0.7623 -0.0521 | 0.8616 +0.0000 | 0.8535 | 0.4593 0.4991 | +0.41/+0.43 +1.37/+0.96 +0.15/-0.01 0.30/0.45 | +0.34/+0.44 0.71/1.31 |  233.8  13.5   16.6   2.2
+  pitch_pitcher^=8                         | 0.7726 -0.0418 | 0.8616 +0.0000 | 0.8567 | 0.4638 0.4978 | +0.41/+0.44 +1.25/+0.96 +0.10/-0.03 0.33/0.45 | +0.42/+0.44 0.84/1.31 |  137.2   8.9   16.6   2.2
+  pitch_pitcher^=32                        | 0.9208 +0.1064 | 0.8616 +0.0000 | 0.8710 | 0.5403 0.5096 | +0.25/+0.41 +0.43/+0.89 -0.04/-0.03 0.57/0.47 | +0.48/+0.44 1.48/1.31 |   11.9   1.6   16.6   2.2
+  pitch_batter^=0.5                        | 0.8129 -0.0015 | 0.8616 +0.0000 | 0.8616 | 0.4829 0.5033 | +0.34/+0.45 +0.84/+0.99 -0.02/-0.03 0.40/0.45 | +0.46/+0.44 1.15/1.31 |   47.4   3.9   16.6   2.2
+  pitch_batter^=2                          | 0.8166 +0.0022 | 0.8616 +0.0000 | 0.8640 | 0.4825 0.5044 | +0.36/+0.40 +0.87/+0.88 -0.03/-0.05 0.41/0.46 | +0.48/+0.44 1.17/1.31 |   41.0   3.7   16.6   2.2
+  pitch_batter^=4                          | 0.8274 +0.0130 | 0.8616 +0.0000 | 0.8683 | 0.4853 0.5077 | +0.39/+0.42 +0.91/+0.90 -0.03/-0.03 0.43/0.46 | +0.47/+0.44 1.20/1.31 |   31.4   3.3   16.6   2.2
+  fatigue_tto σ=0                          | 0.7893 -0.0251 | 0.8312 -0.0304 | 0.8327 | 0.4742 0.4899 | +0.38/+0.47 +0.94/+1.05 +0.07/-0.03 0.40/0.44 | +0.52/+0.46 1.03/1.22 |   76.8   5.9   24.6   2.9
+  fatigue_tto σ=0.35                       | 0.8334 +0.0191 | 0.8838 +0.0222 | 0.8858 | 0.4902 0.5157 | +0.35/+0.39 +0.82/+0.83 +0.02/-0.04 0.42/0.47 | +0.43/+0.42 1.20/1.35 |   37.0   3.1   13.7   2.0
+  fatigue_tto σ=0.7                        | 0.8022 -0.0122 | 0.8467 -0.0149 | 0.8500 | 0.4791 0.4988 | +0.36/+0.43 +0.88/+0.95 +0.04/-0.03 0.40/0.45 | +0.49/+0.43 1.10/1.30 |   56.7   4.6   19.9   2.5
+  fatigue_tto σ=1                          | 0.7954 -0.0190 | 0.8381 -0.0235 | 0.8408 | 0.4770 0.4947 | +0.36/+0.45 +0.91/+1.01 +0.05/-0.03 0.40/0.45 | +0.51/+0.44 1.08/1.27 |   66.0   5.2   22.1   2.7
+  sit σ=1                                  | 0.8249 +0.0105 | 0.8736 +0.0121 | 0.8747 | 0.4882 0.5090 | +0.33/+0.39 +0.79/+0.83 +0.02/-0.04 0.42/0.47 | +0.47/+0.44 1.16/1.31 |   38.9   3.4   14.6   2.1
+  sit σ=4                                  | 0.8105 -0.0038 | 0.8575 -0.0041 | 0.8591 | 0.4818 0.5038 | +0.35/+0.43 +0.86/+0.96 +0.03/-0.02 0.41/0.45 | +0.46/+0.45 1.15/1.31 |   48.0   4.0   17.5   2.3
+  result_pitch σ=0.5                       | 0.8144 +0.0000 | 0.8715 +0.0099 | 0.8614 | 0.4833 0.5038 | +0.35/+0.38 +0.85/+0.85 +0.03/-0.09 0.41/0.45 | +0.47/+0.45 1.14/1.46 |   45.0   3.8   11.0   1.7
+  result_pitch σ=0.7                       | 0.8144 +0.0000 | 0.8660 +0.0044 | 0.8637 | 0.4833 0.5071 | +0.35/+0.42 +0.85/+0.93 +0.03/-0.04 0.41/0.46 | +0.47/+0.45 1.14/1.37 |   45.0   3.8   14.1   2.0
+  result_pitch σ=1.4                       | 0.8144 +0.0000 | 0.8599 -0.0016 | 0.8599 | 0.4833 0.5025 | +0.35/+0.42 +0.85/+0.93 +0.03/-0.02 0.41/0.45 | +0.47/+0.44 1.14/1.28 |   45.0   3.8   17.8   2.3
+  result_pitch σ=2                         | 0.8144 +0.0000 | 0.8595 -0.0021 | 0.8581 | 0.4833 0.5008 | +0.35/+0.42 +0.85/+0.94 +0.03/-0.03 0.41/0.45 | +0.47/+0.43 1.14/1.27 |   45.0   3.8   18.3   2.4
+  result_pitcher^=4                        | 0.8144 +0.0000 | 0.7969 -0.0647 | 0.8063 | 0.4833 0.4716 | +0.35/+0.48 +0.85/+1.39 +0.03/+0.06 0.41/0.35 | +0.47/+0.31 1.14/0.95 |   45.0   3.8   49.6   4.1
+  result_pitcher^=8                        | 0.8144 +0.0000 | 0.8116 -0.0499 | 0.8208 | 0.4833 0.4781 | +0.35/+0.49 +0.85/+1.27 +0.03/+0.02 0.41/0.38 | +0.47/+0.41 1.14/1.05 |   45.0   3.8   34.3   3.4
+  result_pitcher^=32                       | 0.8144 +0.0000 | 0.9665 +0.1049 | 0.9635 | 0.4833 0.5670 | +0.35/+0.31 +0.85/+0.54 +0.03/-0.09 0.41/0.59 | +0.47/+0.42 1.14/1.64 |   45.0   3.8    6.6   1.4
+  result_batter^=2                         | 0.8144 +0.0000 | 0.8177 -0.0439 | 0.8337 | 0.4833 0.4897 | +0.35/+0.34 +0.85/+0.79 +0.03/-0.04 0.41/0.43 | +0.47/+0.49 1.14/1.24 |   45.0   3.8   35.0   3.3
+  result_batter^=4                         | 0.8144 +0.0000 | 0.8290 -0.0326 | 0.8380 | 0.4833 0.4930 | +0.35/+0.37 +0.85/+0.83 +0.03/-0.05 0.41/0.44 | +0.47/+0.48 1.14/1.26 |   45.0   3.8   27.2   2.9
+  result_batter^=16                        | 0.8144 +0.0000 | 0.9427 +0.0811 | 0.9414 | 0.4833 0.5517 | +0.35/+0.44 +0.85/+0.80 +0.03/+0.11 0.41/0.55 | +0.47/+0.34 1.14/1.50 |   45.0   3.8    8.4   1.4
+  result_density^=0                        | 0.8144 +0.0000 | 0.8632 +0.0016 | 0.8644 | 0.4833 0.5038 | +0.35/+0.40 +0.85/+0.86 +0.03/+0.02 0.41/0.46 | +0.47/+0.45 1.14/1.30 |   45.0   3.8   16.6   2.2
+  result_density^=0.5                      | 0.8144 +0.0000 | 0.8620 +0.0005 | 0.8629 | 0.4833 0.5027 | +0.35/+0.44 +0.85/+0.96 +0.03/-0.02 0.41/0.46 | +0.47/+0.45 1.14/1.30 |   45.0   3.8   16.7   2.2
+  pitch_pitcher^=1, pitch_batter^=0.5      | 0.7578 -0.0566 | 0.8616 +0.0000 | 0.8522 | 0.4590 0.4984 | +0.37/+0.43 +1.27/+0.94 +0.15/-0.02 0.29/0.45 | +0.19/+0.44 0.66/1.31 |  324.7  17.8   16.6   2.2
+  pitch_pitcher^=1, pitch_batter^=2        | 0.7599 -0.0545 | 0.8616 +0.0000 | 0.8519 | 0.4571 0.4983 | +0.40/+0.42 +1.34/+0.94 +0.14/-0.02 0.29/0.45 | +0.17/+0.44 0.67/1.31 |  264.3  14.9   16.6   2.2
+  pitch_pitcher^=1, pitch_batter^=4        | 0.7665 -0.0479 | 0.8616 +0.0000 | 0.8531 | 0.4576 0.4985 | +0.42/+0.44 +1.38/+0.97 +0.13/-0.02 0.31/0.45 | +0.15/+0.44 0.71/1.31 |  173.1  10.5   16.6   2.2
+  pitch_pitcher^=2, pitch_batter^=0.5      | 0.7588 -0.0556 | 0.8616 -0.0000 | 0.8521 | 0.4592 0.4981 | +0.38/+0.42 +1.31/+0.94 +0.14/-0.02 0.29/0.45 | +0.24/+0.44 0.67/1.31 |  304.5  16.5   16.6   2.2
+  pitch_pitcher^=2, pitch_batter^=2        | 0.7610 -0.0533 | 0.8616 -0.0000 | 0.8528 | 0.4573 0.4976 | +0.40/+0.42 +1.38/+0.93 +0.13/-0.03 0.29/0.45 | +0.23/+0.44 0.67/1.31 |  248.0  14.0   16.6   2.2
+  pitch_pitcher^=2, pitch_batter^=4        | 0.7679 -0.0465 | 0.8616 -0.0000 | 0.8548 | 0.4578 0.4994 | +0.43/+0.43 +1.43/+0.96 +0.12/-0.03 0.30/0.45 | +0.21/+0.44 0.71/1.31 |  162.9  10.0   16.6   2.2
+  pitch_pitcher^=4, pitch_batter^=0.5      | 0.7613 -0.0531 | 0.8616 +0.0000 | 0.8518 | 0.4600 0.4980 | +0.40/+0.44 +1.36/+0.97 +0.11/-0.02 0.30/0.45 | +0.34/+0.44 0.71/1.31 |  251.2  14.1   16.6   2.2
+  pitch_pitcher^=4, pitch_batter^=2        | 0.7637 -0.0507 | 0.8616 +0.0000 | 0.8540 | 0.4582 0.4984 | +0.42/+0.43 +1.41/+0.94 +0.09/-0.03 0.30/0.45 | +0.33/+0.44 0.72/1.31 |  205.4  12.2   16.6   2.2
+  pitch_pitcher^=4, pitch_batter^=4        | 0.7709 -0.0435 | 0.8616 +0.0000 | 0.8547 | 0.4590 0.5003 | +0.45/+0.44 +1.45/+0.96 +0.08/-0.02 0.31/0.45 | +0.32/+0.44 0.74/1.31 |  136.6   8.9   16.6   2.2
+  pitch_pitcher^=8, pitch_batter^=0.5      | 0.7714 -0.0430 | 0.8616 +0.0000 | 0.8559 | 0.4644 0.5000 | +0.41/+0.41 +1.24/+0.90 +0.05/-0.03 0.33/0.46 | +0.42/+0.44 0.85/1.31 |  146.7   9.2   16.6   2.2
+  pitch_pitcher^=8, pitch_batter^=2        | 0.7743 -0.0401 | 0.8616 +0.0000 | 0.8568 | 0.4628 0.5011 | +0.43/+0.42 +1.28/+0.94 +0.04/-0.03 0.33/0.45 | +0.43/+0.44 0.86/1.31 |  121.9   8.2   16.6   2.2
+  pitch_pitcher^=8, pitch_batter^=4        | 0.7825 -0.0318 | 0.8616 +0.0000 | 0.8602 | 0.4639 0.5020 | +0.45/+0.40 +1.32/+0.88 +0.04/-0.03 0.34/0.45 | +0.43/+0.44 0.88/1.31 |   84.6   6.5   16.6   2.2
+  pitch_pitcher^=32, pitch_batter^=0.5     | 0.9190 +0.1046 | 0.8616 +0.0000 | 0.8704 | 0.5377 0.5080 | +0.24/+0.40 +0.42/+0.87 -0.07/-0.03 0.56/0.46 | +0.47/+0.44 1.49/1.31 |   12.2   1.6   16.6   2.2
+  pitch_pitcher^=32, pitch_batter^=2       | 0.9239 +0.1095 | 0.8616 +0.0000 | 0.8725 | 0.5400 0.5104 | +0.26/+0.42 +0.47/+0.91 -0.07/-0.05 0.56/0.46 | +0.47/+0.44 1.51/1.31 |   11.1   1.6   16.6   2.2
+  pitch_pitcher^=32, pitch_batter^=4       | 0.9357 +0.1213 | 0.8616 +0.0000 | 0.8749 | 0.5467 0.5133 | +0.29/+0.42 +0.53/+0.90 -0.09/-0.05 0.56/0.47 | +0.45/+0.44 1.54/1.31 |    9.4   1.5   16.6   2.2
+  result_pitcher^=4, result_batter^=2      | 0.8144 +0.0000 | 0.7584 -0.1032 | 0.7702 | 0.4833 0.4605 | +0.35/+0.42 +0.85/+1.36 +0.03/+0.07 0.41/0.31 | +0.47/+0.38 1.14/0.76 |   45.0   3.8  167.4  10.4
+  result_pitcher^=4, result_batter^=4      | 0.8144 +0.0000 | 0.7663 -0.0953 | 0.7760 | 0.4833 0.4611 | +0.35/+0.45 +0.85/+1.42 +0.03/+0.07 0.41/0.32 | +0.47/+0.37 1.14/0.79 |   45.0   3.8  112.6   7.9
+  result_pitcher^=4, result_batter^=16     | 0.8144 +0.0000 | 0.8964 +0.0348 | 0.9007 | 0.4833 0.5265 | +0.35/+0.42 +0.85/+0.91 +0.03/+0.15 0.41/0.46 | +0.47/+0.18 1.14/1.31 |   45.0   3.8   19.3   1.7
+  result_pitcher^=8, result_batter^=2      | 0.8144 +0.0000 | 0.7711 -0.0905 | 0.7861 | 0.4833 0.4670 | +0.35/+0.43 +0.85/+1.22 +0.03/+0.03 0.41/0.35 | +0.47/+0.46 1.14/0.91 |   45.0   3.8   99.4   7.1
+  result_pitcher^=8, result_batter^=4      | 0.8144 +0.0000 | 0.7801 -0.0815 | 0.7923 | 0.4833 0.4681 | +0.35/+0.44 +0.85/+1.25 +0.03/+0.00 0.41/0.35 | +0.47/+0.45 1.14/0.93 |   45.0   3.8   70.1   5.7
+  result_pitcher^=8, result_batter^=16     | 0.8144 +0.0000 | 0.9068 +0.0452 | 0.9106 | 0.4833 0.5329 | +0.35/+0.44 +0.85/+0.88 +0.03/+0.12 0.41/0.49 | +0.47/+0.26 1.14/1.34 |   45.0   3.8   14.2   1.6
+  result_pitcher^=32, result_batter^=2     | 0.8144 +0.0000 | 0.9274 +0.0658 | 0.9348 | 0.4833 0.5452 | +0.35/+0.25 +0.85/+0.44 +0.03/-0.08 0.41/0.57 | +0.47/+0.47 1.14/1.61 |   45.0   3.8   10.1   1.5
+  result_pitcher^=32, result_batter^=4     | 0.8144 +0.0000 | 0.9386 +0.0770 | 0.9426 | 0.4833 0.5503 | +0.35/+0.30 +0.85/+0.53 +0.03/-0.08 0.41/0.57 | +0.47/+0.45 1.14/1.63 |   45.0   3.8    8.7   1.5
+  result_pitcher^=32, result_batter^=16    | 0.8144 +0.0000 | 1.0258 +0.1642 | 1.0149 | 0.4833 0.6006 | +0.35/+0.39 +0.85/+0.61 +0.03/+0.01 0.41/0.64 | +0.47/+0.40 1.14/1.67 |   45.0   3.8    4.5   1.2
+  result_pitch σ=0.5, result_batter^=2     | 0.8144 +0.0000 | 0.8259 -0.0357 | 0.8465 | 0.4833 0.4961 | +0.35/+0.31 +0.85/+0.69 +0.03/-0.10 0.41/0.44 | +0.47/+0.51 1.14/1.31 |   45.0   3.8   20.3   2.1
+  result_pitch σ=0.5, result_batter^=4     | 0.8144 +0.0000 | 0.8379 -0.0237 | 0.8477 | 0.4833 0.5028 | +0.35/+0.30 +0.85/+0.64 +0.03/-0.10 0.41/0.46 | +0.47/+0.50 1.14/1.35 |   45.0   3.8   16.4   2.0
+  result_pitch σ=0.5, result_batter^=16    | 0.8144 +0.0000 | 0.9524 +0.0908 | 0.9167 | 0.4833 0.5355 | +0.35/+0.38 +0.85/+0.74 +0.03/+0.08 0.41/0.51 | +0.47/+0.36 1.14/1.66 |   45.0   3.8    6.2   1.3
+  result_pitch σ=0.7, result_batter^=2     | 0.8144 +0.0000 | 0.8215 -0.0401 | 0.8400 | 0.4833 0.4953 | +0.35/+0.34 +0.85/+0.76 +0.03/-0.04 0.41/0.44 | +0.47/+0.50 1.14/1.27 |   45.0   3.8   28.2   2.8
+  result_pitch σ=0.7, result_batter^=4     | 0.8144 +0.0000 | 0.8331 -0.0285 | 0.8437 | 0.4833 0.4949 | +0.35/+0.38 +0.85/+0.85 +0.03/-0.06 0.41/0.44 | +0.47/+0.50 1.14/1.30 |   45.0   3.8   22.3   2.5
+  result_pitch σ=0.7, result_batter^=16    | 0.8144 +0.0000 | 0.9466 +0.0850 | 0.9305 | 0.4833 0.5467 | +0.35/+0.43 +0.85/+0.79 +0.03/+0.13 0.41/0.54 | +0.47/+0.35 1.14/1.56 |   45.0   3.8    7.5   1.4
+  result_pitch σ=1.4, result_batter^=2     | 0.8144 +0.0000 | 0.8166 -0.0450 | 0.8287 | 0.4833 0.4866 | +0.35/+0.35 +0.85/+0.84 +0.03/-0.04 0.41/0.42 | +0.47/+0.48 1.14/1.21 |   45.0   3.8   38.6   3.5
+  result_pitch σ=1.4, result_batter^=4     | 0.8144 +0.0000 | 0.8276 -0.0340 | 0.8347 | 0.4833 0.4888 | +0.35/+0.39 +0.85/+0.90 +0.03/-0.04 0.41/0.43 | +0.47/+0.48 1.14/1.23 |   45.0   3.8   29.7   3.1
+  result_pitch σ=1.4, result_batter^=16    | 0.8144 +0.0000 | 0.9417 +0.0801 | 0.9409 | 0.4833 0.5536 | +0.35/+0.43 +0.85/+0.77 +0.03/+0.11 0.41/0.56 | +0.47/+0.33 1.14/1.47 |   45.0   3.8    8.8   1.5
+  result_pitch σ=2, result_batter^=2       | 0.8144 +0.0000 | 0.8165 -0.0451 | 0.8257 | 0.4833 0.4844 | +0.35/+0.37 +0.85/+0.88 +0.03/-0.02 0.41/0.42 | +0.47/+0.48 1.14/1.19 |   45.0   3.8   40.1   3.6
+  result_pitch σ=2, result_batter^=4       | 0.8144 +0.0000 | 0.8274 -0.0342 | 0.8320 | 0.4833 0.4871 | +0.35/+0.39 +0.85/+0.90 +0.03/-0.03 0.41/0.43 | +0.47/+0.47 1.14/1.22 |   45.0   3.8   30.8   3.2
+  result_pitch σ=2, result_batter^=16      | 0.8144 +0.0000 | 0.9415 +0.0799 | 0.9402 | 0.4833 0.5539 | +0.35/+0.43 +0.85/+0.76 +0.03/+0.11 0.41/0.56 | +0.47/+0.32 1.14/1.46 |   45.0   3.8    9.0   1.5
+  pitch_pitcher^=1, result_batter^=2       | 0.7585 -0.0559 | 0.8177 -0.0439 | 0.8202 | 0.4585 0.4818 | +0.38/+0.37 +1.29/+0.91 +0.20/-0.03 0.29/0.41 | +0.19/+0.49 0.66/1.24 |  301.8  16.6   35.0   3.3
+  pitch_pitcher^=1, result_batter^=4       | 0.7585 -0.0559 | 0.8290 -0.0326 | 0.8269 | 0.4585 0.4836 | +0.38/+0.41 +1.29/+0.97 +0.20/-0.02 0.29/0.42 | +0.19/+0.48 0.66/1.26 |  301.8  16.6   27.2   2.9
+  pitch_pitcher^=1, result_batter^=16      | 0.7585 -0.0559 | 0.9427 +0.0811 | 0.9331 | 0.4585 0.5483 | +0.38/+0.44 +1.29/+0.80 +0.20/+0.11 0.29/0.54 | +0.19/+0.34 0.66/1.50 |  301.8  16.6    8.4   1.4
+  pitch_pitcher^=2, result_batter^=2       | 0.7597 -0.0547 | 0.8177 -0.0439 | 0.8211 | 0.4585 0.4821 | +0.38/+0.37 +1.33/+0.91 +0.19/-0.03 0.29/0.41 | +0.24/+0.49 0.66/1.24 |  283.0  15.5   35.0   3.3
+  pitch_pitcher^=2, result_batter^=4       | 0.7597 -0.0547 | 0.8290 -0.0326 | 0.8285 | 0.4585 0.4842 | +0.38/+0.39 +1.33/+0.90 +0.19/-0.04 0.29/0.43 | +0.24/+0.48 0.66/1.26 |  283.0  15.5   27.2   2.9
+  pitch_pitcher^=2, result_batter^=16      | 0.7597 -0.0547 | 0.9427 +0.0811 | 0.9321 | 0.4585 0.5482 | +0.38/+0.42 +1.33/+0.77 +0.19/+0.13 0.29/0.55 | +0.24/+0.34 0.66/1.50 |  283.0  15.5    8.4   1.4
+  pitch_pitcher^=4, result_batter^=2       | 0.7623 -0.0521 | 0.8177 -0.0439 | 0.8221 | 0.4593 0.4826 | +0.41/+0.36 +1.37/+0.87 +0.15/-0.04 0.30/0.41 | +0.34/+0.49 0.71/1.24 |  233.8  13.5   35.0   3.3
+  pitch_pitcher^=4, result_batter^=4       | 0.7623 -0.0521 | 0.8290 -0.0326 | 0.8279 | 0.4593 0.4853 | +0.41/+0.41 +1.37/+0.95 +0.15/-0.03 0.30/0.43 | +0.34/+0.48 0.71/1.26 |  233.8  13.5   27.2   2.9
+  pitch_pitcher^=4, result_batter^=16      | 0.7623 -0.0521 | 0.9427 +0.0811 | 0.9335 | 0.4593 0.5474 | +0.41/+0.43 +1.37/+0.78 +0.15/+0.11 0.30/0.55 | +0.34/+0.34 0.71/1.50 |  233.8  13.5    8.4   1.4
+  pitch_pitcher^=8, result_batter^=2       | 0.7726 -0.0418 | 0.8177 -0.0439 | 0.8257 | 0.4638 0.4835 | +0.41/+0.37 +1.25/+0.87 +0.10/-0.02 0.33/0.42 | +0.42/+0.49 0.84/1.24 |  137.2   8.9   35.0   3.3
+  pitch_pitcher^=8, result_batter^=4       | 0.7726 -0.0418 | 0.8290 -0.0326 | 0.8310 | 0.4638 0.4864 | +0.41/+0.40 +1.25/+0.94 +0.10/-0.04 0.33/0.42 | +0.42/+0.48 0.84/1.26 |  137.2   8.9   27.2   2.9
+  pitch_pitcher^=8, result_batter^=16      | 0.7726 -0.0418 | 0.9427 +0.0811 | 0.9340 | 0.4638 0.5502 | +0.41/+0.43 +1.25/+0.77 +0.10/+0.11 0.33/0.55 | +0.42/+0.34 0.84/1.50 |  137.2   8.9    8.4   1.4
+  pitch_pitcher^=32, result_batter^=2      | 0.9208 +0.1064 | 0.8177 -0.0439 | 0.8430 | 0.5403 0.4959 | +0.25/+0.33 +0.43/+0.74 -0.04/-0.06 0.57/0.44 | +0.48/+0.49 1.48/1.24 |   11.9   1.6   35.0   3.3
+  pitch_pitcher^=32, result_batter^=4      | 0.9208 +0.1064 | 0.8290 -0.0326 | 0.8476 | 0.5403 0.4971 | +0.25/+0.35 +0.43/+0.78 -0.04/-0.07 0.57/0.45 | +0.48/+0.48 1.48/1.26 |   11.9   1.6   27.2   2.9
+  pitch_pitcher^=32, result_batter^=16     | 0.9208 +0.1064 | 0.9427 +0.0811 | 0.9466 | 0.5403 0.5561 | +0.25/+0.43 +0.43/+0.78 -0.04/+0.09 0.57/0.55 | +0.48/+0.34 1.48/1.50 |   11.9   1.6    8.4   1.4
+
+=== the interaction read: the best value of A at each value of B ===
+  [pitch_brier] pitch_pitcher_power x pitch_batter_power: pitch_batter_power=1 → pitch_pitcher_power=1; pitch_batter_power=0.5 → pitch_pitcher_power=1; pitch_batter_power=2 → pitch_pitcher_power=1; pitch_batter_power=4 → pitch_pitcher_power=1
+  [pitch_brier] result_pitcher_power x result_batter_power: result_batter_power=8 → result_pitcher_power=16; result_batter_power=2 → result_pitcher_power=16; result_batter_power=4 → result_pitcher_power=16; result_batter_power=16 → result_pitcher_power=16
+  [pitch_brier] result_pitch_sigma x result_batter_power: result_batter_power=8 → result_pitch_sigma=1; result_batter_power=2 → result_pitch_sigma=1; result_batter_power=4 → result_pitch_sigma=1; result_batter_power=16 → result_pitch_sigma=1
+  [pitch_brier] pitch_pitcher_power x result_batter_power: result_batter_power=8 → pitch_pitcher_power=1; result_batter_power=2 → pitch_pitcher_power=1; result_batter_power=4 → pitch_pitcher_power=1; result_batter_power=16 → pitch_pitcher_power=1
+  [result_brier] pitch_pitcher_power x pitch_batter_power: pitch_batter_power=1 → pitch_pitcher_power=2; pitch_batter_power=0.5 → pitch_pitcher_power=2; pitch_batter_power=2 → pitch_pitcher_power=2; pitch_batter_power=4 → pitch_pitcher_power=2
+  [result_brier] result_pitcher_power x result_batter_power: result_batter_power=8 → result_pitcher_power=4; result_batter_power=2 → result_pitcher_power=4; result_batter_power=4 → result_pitcher_power=4; result_batter_power=16 → result_pitcher_power=4
+  [result_brier] result_pitch_sigma x result_batter_power: result_batter_power=8 → result_pitch_sigma=2; result_batter_power=2 → result_pitch_sigma=2; result_batter_power=4 → result_pitch_sigma=2; result_batter_power=16 → result_pitch_sigma=2
+  [result_brier] pitch_pitcher_power x result_batter_power: result_batter_power=8 → pitch_pitcher_power=2; result_batter_power=2 → pitch_pitcher_power=2; result_batter_power=4 → pitch_pitcher_power=16; result_batter_power=16 → pitch_pitcher_power=2
+  [pa_brier4_chain] pitch_pitcher_power x pitch_batter_power: pitch_batter_power=1 → pitch_pitcher_power=1; pitch_batter_power=0.5 → pitch_pitcher_power=4; pitch_batter_power=2 → pitch_pitcher_power=2; pitch_batter_power=4 → pitch_pitcher_power=1
+  [pa_brier4_chain] result_pitcher_power x result_batter_power: result_batter_power=8 → result_pitcher_power=4; result_batter_power=2 → result_pitcher_power=4; result_batter_power=4 → result_pitcher_power=4; result_batter_power=16 → result_pitcher_power=4
+  [pa_brier4_chain] result_pitch_sigma x result_batter_power: result_batter_power=8 → result_pitch_sigma=2; result_batter_power=2 → result_pitch_sigma=2; result_batter_power=4 → result_pitch_sigma=2; result_batter_power=16 → result_pitch_sigma=0.5
+  [pa_brier4_chain] pitch_pitcher_power x result_batter_power: result_batter_power=8 → pitch_pitcher_power=1; result_batter_power=2 → pitch_pitcher_power=1; result_batter_power=4 → pitch_pitcher_power=1; result_batter_power=16 → pitch_pitcher_power=4
+  [start_k_neg_corr_chain] pitch_pitcher_power x pitch_batter_power: pitch_batter_power=1 → pitch_pitcher_power=8; pitch_batter_power=0.5 → pitch_pitcher_power=16; pitch_batter_power=2 → pitch_pitcher_power=4; pitch_batter_power=4 → pitch_pitcher_power=4
+  [start_k_neg_corr_chain] result_pitcher_power x result_batter_power: result_batter_power=8 → result_pitcher_power=8; result_batter_power=2 → result_pitcher_power=8; result_batter_power=4 → result_pitcher_power=4; result_batter_power=16 → result_pitcher_power=16
+  [start_k_neg_corr_chain] result_pitch_sigma x result_batter_power: result_batter_power=8 → result_pitch_sigma=2; result_batter_power=2 → result_pitch_sigma=2; result_batter_power=4 → result_pitch_sigma=1.4; result_batter_power=16 → result_pitch_sigma=1
+  [start_k_neg_corr_chain] pitch_pitcher_power x result_batter_power: result_batter_power=8 → pitch_pitcher_power=8; result_batter_power=2 → pitch_pitcher_power=2; result_batter_power=4 → pitch_pitcher_power=1; result_batter_power=16 → pitch_pitcher_power=16
+wrote /app/scripts/sim548_offline_v2_20260915.json
+OFFLINE_EXIT 0

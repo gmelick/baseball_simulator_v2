@@ -269,16 +269,15 @@ def test_gamestate_exposes_spec_step1_situation_context_fields():
 
 
 def test_manager_context_fields_present():
-    """Spec §3 pre-pitch hook context (steal/IBB/pitch-out/bullpen) — SIM-323."""
+    """Spec §3 pre-pitch hook context (IBB / bullpen / leverage) — SIM-323.
+    The green-light rate, the pitch-out and the hit-and-run signals left with
+    their hooks on 2026-09-13 (SIM-427): the steal is a draw with the manager's
+    measured rate as a weight; no signal field carries it."""
     mc = ManagerContext()
-    for fld in (
-        "leverage",
-        "green_light_rate",
-        "bullpen_available",
-        "intentional_walk_signalled",
-        "pitch_out_signalled",
-    ):
+    for fld in ("leverage", "bullpen_available", "intentional_walk_signalled"):
         assert hasattr(mc, fld)
+    for gone in ("green_light_rate", "pitch_out_signalled", "hit_and_run_signalled"):
+        assert not hasattr(mc, gone)
 
 
 def test_playresult_exposes_spec_step_deltas():

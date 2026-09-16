@@ -24,6 +24,7 @@ then open the printed `http://127.0.0.1:8000/` link. `mkdocs build` produces a s
 | **Similarity Engines** | The eleven similarity engines that compare the live matchup to real history, plus calibration and backtesting. | [similarity.md](similarity.md) |
 | **Data Pipeline, Betting, and Database** | ETL and live ingestion, the nightly profile/artifact builders, the CLV and betting-signal engines, and the migration system. | [pipeline-betting-db.md](pipeline-betting-db.md) |
 | **Operational Scripts and Frontend** | The scripts that are still run operationally (not one-off probes), plus a map of the frontend structure. | [scripts-frontend.md](scripts-frontend.md) |
+| **The loop on one page** | The owner's cheat sheet (2026-09-14): every draw in the simulation loop, its hard filters, the similarity scores and bandwidths that weight it and their production values, and the feature groups inside each similarity score. | [sim-loop-cheat-sheet.md](sim-loop-cheat-sheet.md) |
 
 ## Worked example: "where is the steal-attempt sampling logic?"
 

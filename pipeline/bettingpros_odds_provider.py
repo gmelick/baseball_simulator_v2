@@ -20,10 +20,22 @@ How it bridges identifiers (the provider only receives ``game_pk`` / MLB
     people endpoint, then match the BettingPros prop offer participant by
     normalized first+last name.
 
-Markets (discovered from /v3/markets?sport=MLB):
-  game:  moneyline 122, total 175, run-line 176
-  props: strikeouts 285, hits 287, home_runs 299, earned_runs 290,
-         walks 408, total_bases 293, rbis 289
+Markets (discovered from /v3/markets?sport=MLB; the eight SIM-421 prop ids
+were verified against the owner's scraper, the twelve segment ids against a
+live event on 2026-09-12):
+  game:    moneyline 122, total 175, run-line 176
+  segment: f1_moneyline 278, f5_moneyline 279 (three-way: home / away / draw),
+           f1_total 280, f5_total 281, f1_runline 282, f5_runline 283,
+           team_total_{home,away} 277 (one offer per team), f5_team_total 407,
+           first_to_score 286, first_inning_run 369 (yes / no, stored as
+           over / under at 0.5)
+  pitcher: strikeouts 285, earned_runs 290, walks 408, outs_recorded 405,
+           hits_allowed 404
+  batter:  hits 287, home_runs 299, total_bases 293, rbis 289, singles 295,
+           doubles 291, triples 292, runs 288, stolen_bases 294,
+           hits_runs_rbis 403
+``hits`` (287) is the batter market and ``hits_allowed`` (404) the pitcher
+market; the vocabulary itself lives in ``pipeline/odds_provider.py``.
 
 ``line_type``: ``"opening"`` reads each selection's ``opening_line``;
 ``"closing"`` reads the most-recently-updated line (SIM-435 — the last line the
@@ -32,6 +44,42 @@ has no explicit closing field); any other value reads the current best/main book
 line. CLV is therefore available by comparing opening vs closing (or current).
 ``book``/``is_sharp_book`` are echoed through; a specific BettingPros ``book_id``
 can be preferred via ``prefer_book_id`` (it also scopes the closing-line scan).
+
+The offers cache (SIM-421)
+--------------------------
+One ``/offers`` response for an (event_id, market_id) pair carries EVERY
+player's offer for that market, and the same response serves every book and
+both the opening and the closing line (each line type is a different field of
+the same selection). Before SIM-421 the provider fetched it again for every
+(player, market, book, line type) — several hundred HTTP calls per game where
+15 would do. The provider now keeps a per-instance cache keyed
+``(event_id, market_id)`` with a time-to-live, plus a per-date cache of the
+``/events`` list (``_resolve_event`` used to re-fetch the whole day's slate for
+every game on that date).
+
+The time-to-live matters because the live pipeline keeps ONE provider for the
+process lifetime and fetches props every ``PROP_FETCH_CADENCE_S`` (60) seconds:
+a cached snapshot must never be older than that cadence, or a cycle would
+persist a stale line as if it were current. The default is 30 seconds (half the
+cadence): long enough to collapse one cycle's calls into one fetch per market,
+short enough that the next cycle always sees a fresh snapshot. Set it with the
+``offers_cache_ttl_s`` constructor argument or the ``ODDS_OFFERS_CACHE_TTL_S``
+environment variable (0 disables the cache); the offline historical loader
+uses a longer value because its games are over and their lines are final. The
+clock is ``time.monotonic()``, injectable for tests.
+
+Both caches evict. A finished game's (event, market) key is never read again,
+so a cache that only overwrote keys would hold every payload of a season-long
+process (the live pipeline) or of a whole-season backfill (the historical
+loader: 2,378 games × 18 markets, several MB per game, inside the app
+container's 10 GB memory cap). Each store first drops every entry past the
+time-to-live, so a cache holds at most one time-to-live's worth of payloads;
+a time-to-live of 0 stores nothing.
+
+A ``/offers`` market is paged. A failure on page 1 raises to the caller. A
+failure on a later page logs a warning that names the event, the market and
+the page, and returns the pages already in hand, so the players on page 1
+keep their quotes. Neither result is cached: the next call fetches again.
 
 HTTP is stdlib ``urllib`` (sync — the protocol methods are sync; the module
 stays importable without aiohttp). The two ``_bp_get`` / ``_mlb_get`` seams are
@@ -44,11 +92,25 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 import unicodedata
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, TypeVar
+
+from pipeline.odds_provider import (
+    GAME_MARKET_KIND,
+    GAME_MARKET_SIDE,
+    GAME_MARKET_TYPES,
+    GAME_ODDS_FIELDS,
+    LEGACY_GAME_MARKET_TYPES,
+    PROP_STATS,
+)
+
+_K = TypeVar("_K")
+_V = TypeVar("_V")
 
 log = logging.getLogger("pipeline.bettingpros_odds_provider")
 
@@ -59,6 +121,11 @@ _MLB_BASE = "https://statsapi.mlb.com/api/v1"
 #: BettingPros event we matched it to. A match beyond this is treated as no
 #: match at all, rather than silently priced against the wrong game.
 _MAX_EVENT_TIME_DELTA = timedelta(hours=2)
+
+#: SIM-421: the most ``/offers`` pages read for one (event, market). The API
+#: pages at 10 offers; a batter market lists every hitter in the game (two to
+#: three pages), so the cap only guards against a runaway pager.
+_MAX_OFFER_PAGES = 20
 
 
 def _parse_utc(value: str) -> datetime | None:
@@ -79,15 +146,36 @@ def _parse_utc(value: str) -> datetime | None:
     return None
 
 
-#: BettingPros game-odds market ids.
+#: market_type (the GAME_MARKET_TYPES vocabulary) → BettingPros market id.
+#: ``run_line`` is a legacy alias of ``runline``. Both team-total markets of a
+#: side pair share one BettingPros market: the response holds one offer per
+#: team, and :meth:`_team_offer_selections` picks the side's offer.
 _GAME_MARKET_IDS: dict[str, int] = {
     "moneyline": 122,
     "total": 175,
     "runline": 176,
     "run_line": 176,
+    "f1_moneyline": 278,
+    "f5_moneyline": 279,
+    "f1_total": 280,
+    "f5_total": 281,
+    "f1_runline": 282,
+    "f5_runline": 283,
+    "team_total_home": 277,
+    "team_total_away": 277,
+    "f5_team_total_home": 407,
+    "f5_team_total_away": 407,
+    "first_to_score": 286,
+    "first_inning_run": 369,
 }
+if set(GAME_MARKET_TYPES) - set(_GAME_MARKET_IDS):
+    raise RuntimeError(
+        "bettingpros_odds_provider: _GAME_MARKET_IDS lacks a market id for "
+        f"{sorted(set(GAME_MARKET_TYPES) - set(_GAME_MARKET_IDS))} — keep it in step "
+        "with pipeline.odds_provider.GAME_MARKET_TYPES"
+    )
 
-#: prop_stat (MockOddsAPI vocabulary) → BettingPros market id.
+#: prop_stat (the PROP_STATS vocabulary) → BettingPros market id.
 _PROP_MARKET_IDS: dict[str, int] = {
     "strikeouts": 285,
     "hits": 287,
@@ -96,7 +184,21 @@ _PROP_MARKET_IDS: dict[str, int] = {
     "walks": 408,
     "total_bases": 293,
     "rbis": 289,
+    # SIM-421: the eight markets the book already offers.
+    "singles": 295,
+    "doubles": 291,
+    "triples": 292,
+    "runs": 288,
+    "stolen_bases": 294,
+    "hits_runs_rbis": 403,
+    "outs_recorded": 405,
+    "hits_allowed": 404,
 }
+if set(_PROP_MARKET_IDS) != set(PROP_STATS):  # pragma: no cover — an import-time guard
+    raise RuntimeError(
+        "BettingPros market ids and PROP_STATS disagree: "
+        f"{sorted(set(_PROP_MARKET_IDS) ^ set(PROP_STATS))}"
+    )
 
 
 def _normalize_name(name: str) -> str:
@@ -108,9 +210,21 @@ def _normalize_name(name: str) -> str:
 
 
 class BettingProsOddsProvider:
-    """Real odds provider backed by BettingPros v3 (SIM-405)."""
+    """Real odds provider backed by BettingPros v3 (SIM-405).
+
+    ``offers_cache_ttl_s`` (SIM-421) is the time-to-live of the offers and the
+    per-date events caches, in seconds. ``None`` reads ``ODDS_OFFERS_CACHE_TTL_S``
+    and falls back to 30 seconds — half the live pipeline's 60-second prop
+    cadence, so a cycle never persists a stale snapshot (see the module
+    docstring). ``0`` disables the caches. ``clock`` is the monotonic time
+    source, injectable for tests.
+    """
 
     API_KEY_ENV = "ODDS_API_KEY"
+    #: SIM-421: env var that sets the offers-cache time-to-live (seconds).
+    OFFERS_CACHE_TTL_ENV = "ODDS_OFFERS_CACHE_TTL_S"
+    #: SIM-421: the default time-to-live — half PROP_FETCH_CADENCE_S (60 s).
+    DEFAULT_OFFERS_CACHE_TTL_S = 30.0
 
     def __init__(
         self,
@@ -118,14 +232,26 @@ class BettingProsOddsProvider:
         *,
         prefer_book_id: int | None = None,
         timeout: float = 15.0,
+        offers_cache_ttl_s: float | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self._api_key = api_key or os.environ.get(self.API_KEY_ENV)
         self._prefer_book_id = prefer_book_id
         self._timeout = timeout
+        if offers_cache_ttl_s is None:
+            offers_cache_ttl_s = float(
+                os.environ.get(self.OFFERS_CACHE_TTL_ENV, self.DEFAULT_OFFERS_CACHE_TTL_S)
+            )
+        self._offers_cache_ttl_s = float(offers_cache_ttl_s)
+        self._clock: Callable[[], float] = clock or time.monotonic
         # Per-instance caches (cleared by constructing a new provider).
         self._event_cache: dict[int, dict[str, Any] | None] = {}
         self._game_meta_cache: dict[int, tuple[str, str, str, datetime | None] | None] = {}
         self._player_name_cache: dict[int, str | None] = {}
+        # SIM-421: time-stamped caches — (stored_at, payload), served while
+        # younger than the time-to-live; every store drops the stale entries.
+        self._offers_cache: dict[tuple[int, int], tuple[float, list[dict[str, Any]]]] = {}
+        self._events_by_date_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
     # ----------------------------------------------------------------- HTTP
     def _http_get_json(self, url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
@@ -208,9 +334,8 @@ class BettingProsOddsProvider:
             date_str, home_name, away_name, game_dt = meta
             home_n, away_n = _normalize_name(home_name), _normalize_name(away_name)
             try:
-                data = self._bp_get("events", {"sport": "MLB", "date": date_str})
                 candidates = []
-                for e in data.get("events", []):
+                for e in self._events_for_date(date_str):
                     parts = {p["id"]: _normalize_name(p["name"]) for p in e.get("participants", [])}
                     home_nick = parts.get(e.get("home"), "")
                     away_nick = parts.get(e.get("visitor"), "")
@@ -264,6 +389,104 @@ class BettingProsOddsProvider:
                 log.warning("BettingPros: event lookup failed for game_pk %s: %s", game_pk, exc)
         self._event_cache[game_pk] = event
         return event
+
+    # ------------------------------------------------------- SIM-421 caches
+    def _is_fresh(self, stored_at: float) -> bool:
+        """True while a cache entry stored at ``stored_at`` is inside the time-to-live."""
+        return self._clock() - stored_at < self._offers_cache_ttl_s
+
+    def _store(self, cache: dict[_K, tuple[float, _V]], key: _K, payload: _V) -> None:
+        """Put ``payload`` in ``cache`` under ``key`` after dropping every stale entry.
+
+        The sweep bounds the cache to one time-to-live's worth of entries. A
+        long-lived provider (the live pipeline, the historical loader) would
+        otherwise keep every finished game's payload for the process lifetime.
+        A time-to-live of 0 stores nothing.
+        """
+        if self._offers_cache_ttl_s <= 0:
+            return
+        stale = [k for k, (stored_at, _) in cache.items() if not self._is_fresh(stored_at)]
+        for k in stale:
+            del cache[k]
+        cache[key] = (self._clock(), payload)
+
+    def _events_for_date(self, date_str: str) -> list[dict[str, Any]]:
+        """The BettingPros events of one date, served from the per-date cache while fresh.
+
+        Every game on a date shares one ``/events`` response; before SIM-421
+        each game_pk fetched the whole slate again. A fetch failure raises to
+        the caller (``_resolve_event`` logs it) and is not cached, so the next
+        game retries.
+        """
+        hit = self._events_by_date_cache.get(date_str)
+        if hit is not None and self._is_fresh(hit[0]):
+            return hit[1]
+        data = self._bp_get("events", {"sport": "MLB", "date": date_str})
+        events = list(data.get("events", []))
+        self._store(self._events_by_date_cache, date_str, events)
+        return events
+
+    def _offers(self, event_id: int, market_id: int) -> list[dict[str, Any]]:
+        """Every offer of one (event, market), served from the offers cache while fresh.
+
+        One response carries every player's offer for the market and serves
+        every book and both line types, so one fetch per (event, market) per
+        time-to-live replaces one fetch per (player, market, book, line type).
+        A page-1 fetch failure raises to the caller. A later-page failure
+        returns the pages in hand. Neither result is cached, so the next call
+        fetches again; only a complete market is stored.
+        """
+        key = (int(event_id), int(market_id))
+        hit = self._offers_cache.get(key)
+        if hit is not None and self._is_fresh(hit[0]):
+            return hit[1]
+        offers, complete = self._fetch_offers_all_pages(event_id, market_id)
+        if complete:
+            self._store(self._offers_cache, key, offers)
+        return offers
+
+    def _fetch_offers_all_pages(
+        self, event_id: int, market_id: int
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """GET ``/offers`` for one (event, market) and follow its pagination.
+
+        The API pages at 10 offers (``_pagination.total_pages``). A batter
+        market lists every hitter in the game, so page 1 alone silently
+        dropped the players on later pages — their quotes came back empty.
+
+        Returns ``(offers, complete)``. Page 1 raises on failure. A later page
+        that fails logs a warning naming the event, the market and the page,
+        and the offers already in hand come back with ``complete=False`` so
+        the players on the earlier pages keep their quotes. A ``_pagination``
+        block that is not a dict counts as one page.
+        """
+        params: dict[str, Any] = {"sport": "MLB", "market_id": market_id, "event_id": event_id}
+        data = self._bp_get("offers", params)
+        offers = list(data.get("offers", []))
+        pagination = data.get("_pagination")
+        total_pages = 1
+        if isinstance(pagination, dict):
+            try:
+                total_pages = int(pagination.get("total_pages") or 1)
+            except (TypeError, ValueError):
+                total_pages = 1
+        for page in range(2, min(total_pages, _MAX_OFFER_PAGES) + 1):
+            try:
+                more = self._bp_get("offers", {**params, "page": page})
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "BettingPros: offers page %d of %d failed (event %s, market %s); "
+                    "using the %d offers in hand: %s",
+                    page,
+                    total_pages,
+                    event_id,
+                    market_id,
+                    len(offers),
+                    exc,
+                )
+                return offers, False
+            offers.extend(more.get("offers", []))
+        return offers, True
 
     def _resolve_player_name(self, player_id: int) -> str | None:
         """MLB ``player_id`` → normalized full name (cached)."""
@@ -354,9 +577,22 @@ class BettingProsOddsProvider:
     ) -> dict[str, Any]:
         """Game-level lines for ``game_pk`` in the MockOddsAPI dict shape (SIM-405).
 
-        Populates all moneyline / total / run-line fields it can resolve;
-        unresolved fields are ``None``. ``source='bettingpros'``, ``is_mock=False``.
+        ``market_type`` is any value of ``GAME_MARKET_TYPES`` (``run_line`` is
+        accepted as the legacy alias of ``runline``); an unknown value raises
+        ``ValueError``, mirroring :meth:`get_prop_odds`.
+
+        The three full-game markets keep the pre-2026-09-12 behaviour: a row
+        for any of them carries every full-game field the API resolves
+        (moneyline + run line + total), because the stored dedup hashes were
+        computed over that shape. A segment or team market fills only its own
+        fields (see ``GAME_MARKET_KIND``); every other field is ``None``.
+        ``source='bettingpros'``, ``is_mock=False``.
         """
+        canonical = "runline" if market_type == "run_line" else market_type
+        if canonical not in GAME_MARKET_KIND:
+            known = ", ".join(GAME_MARKET_TYPES)
+            raise ValueError(f"Unknown market_type '{market_type}'. Known values: {known}")
+
         result: dict[str, Any] = {
             "game_pk": game_pk,
             "source": "bettingpros",
@@ -365,16 +601,9 @@ class BettingProsOddsProvider:
             "line_type": line_type,
             "market_type": market_type,
             "is_sharp_book": is_sharp_book,
-            "home_ml": None,
-            "away_ml": None,
-            "home_spread": None,
-            "home_spread_ml": None,
-            "away_spread": None,
-            "away_spread_ml": None,
-            "total_line": None,
-            "over_ml": None,
-            "under_ml": None,
         }
+        for field in GAME_ODDS_FIELDS:
+            result[field] = None
         event = self._resolve_event(game_pk)
         if event is None:
             log.warning("BettingPros: no event for game_pk %s — returning empty odds", game_pk)
@@ -382,24 +611,108 @@ class BettingProsOddsProvider:
         event_id = event["id"]
         home_abbrev, away_abbrev = event.get("home"), event.get("visitor")
 
-        # Moneyline
-        for sel in self._selections(event_id, _GAME_MARKET_IDS["moneyline"]):
-            cost, _ = self._pick_line(sel, line_type)
-            if sel.get("participant") == home_abbrev:
-                result["home_ml"] = cost
-            elif sel.get("participant") == away_abbrev:
-                result["away_ml"] = cost
+        if canonical in LEGACY_GAME_MARKET_TYPES:
+            # The legacy shape: every full-game market on one row.
+            self._fill_moneyline(
+                result,
+                self._selections(event_id, _GAME_MARKET_IDS["moneyline"]),
+                home_abbrev,
+                away_abbrev,
+                line_type,
+                three_way=False,
+            )
+            self._fill_runline(
+                result,
+                self._selections(event_id, _GAME_MARKET_IDS["runline"]),
+                home_abbrev,
+                away_abbrev,
+                line_type,
+            )
+            self._fill_total(
+                result, self._selections(event_id, _GAME_MARKET_IDS["total"]), line_type
+            )
+            return result
 
-        # Run line (spread)
-        for sel in self._selections(event_id, _GAME_MARKET_IDS["runline"]):
+        market_id = _GAME_MARKET_IDS[canonical]
+        kind = GAME_MARKET_KIND[canonical]
+        if kind in ("moneyline", "three_way"):
+            self._fill_moneyline(
+                result,
+                self._selections(event_id, market_id),
+                home_abbrev,
+                away_abbrev,
+                line_type,
+                three_way=(kind == "three_way"),
+            )
+        elif kind == "runline":
+            self._fill_runline(
+                result, self._selections(event_id, market_id), home_abbrev, away_abbrev, line_type
+            )
+        elif kind == "total":
+            side = GAME_MARKET_SIDE[canonical]
+            if side is None:
+                selections = self._selections(event_id, market_id)
+            else:
+                team_abbrev = home_abbrev if side == "home" else away_abbrev
+                selections = self._team_offer_selections(event_id, market_id, team_abbrev)
+            self._fill_total(result, selections, line_type)
+        elif kind == "yes_no":
+            self._fill_yes_no(result, self._selections(event_id, market_id), line_type)
+        return result
+
+    # --------------------------------------------------- game-market parsers
+    def _fill_moneyline(
+        self,
+        result: dict[str, Any],
+        selections: list[dict[str, Any]],
+        home_abbrev: Any,
+        away_abbrev: Any,
+        line_type: str,
+        *,
+        three_way: bool,
+    ) -> None:
+        """Fill ``home_ml`` / ``away_ml`` (and ``draw_ml`` on a three-way market).
+
+        A selection names its team in ``participant``; the tie selection of a
+        segment moneyline carries ``selection == 'draw'`` and no participant.
+        BettingPros folds an unrelated yes / no pair into the first-five
+        moneyline's selections (seen live 2026-09-12); those carry neither a
+        participant nor ``draw`` and are ignored here.
+        """
+        for sel in selections:
+            cost, _ = self._pick_line(sel, line_type)
+            participant = sel.get("participant")
+            if participant and participant == home_abbrev:
+                result["home_ml"] = cost
+            elif participant and participant == away_abbrev:
+                result["away_ml"] = cost
+            elif (
+                three_way and str(sel.get("selection") or sel.get("label") or "").lower() == "draw"
+            ):
+                result["draw_ml"] = cost
+
+    def _fill_runline(
+        self,
+        result: dict[str, Any],
+        selections: list[dict[str, Any]],
+        home_abbrev: Any,
+        away_abbrev: Any,
+        line_type: str,
+    ) -> None:
+        """Fill the spread and its price for each side (a run line, any segment)."""
+        for sel in selections:
             cost, line = self._pick_line(sel, line_type)
-            if sel.get("participant") == home_abbrev:
+            participant = sel.get("participant")
+            if participant and participant == home_abbrev:
                 result["home_spread"], result["home_spread_ml"] = line, cost
-            elif sel.get("participant") == away_abbrev:
+            elif participant and participant == away_abbrev:
                 result["away_spread"], result["away_spread_ml"] = line, cost
 
-        # Total (over/under)
-        for sel in self._selections(event_id, _GAME_MARKET_IDS["total"]):
+    def _fill_total(
+        self, result: dict[str, Any], selections: list[dict[str, Any]], line_type: str
+    ) -> None:
+        """Fill ``total_line`` / ``over_ml`` / ``under_ml`` from an over / under pair."""
+        for sel in selections:
             cost, line = self._pick_line(sel, line_type)
             label = (sel.get("label") or sel.get("selection") or "").lower()
             if line is not None:
@@ -409,7 +722,24 @@ class BettingProsOddsProvider:
             elif "under" in label:
                 result["under_ml"] = cost
 
-        return result
+    def _fill_yes_no(
+        self, result: dict[str, Any], selections: list[dict[str, Any]], line_type: str
+    ) -> None:
+        """Store a yes / no market as over / under at 0.5.
+
+        "A run in the first inning: yes" IS "over 0.5 first-inning runs", so
+        the row keeps the total layout and no consumer needs a special case.
+        The line is set only when at least one price resolved.
+        """
+        for sel in selections:
+            cost, _ = self._pick_line(sel, line_type)
+            label = (sel.get("selection") or sel.get("label") or "").lower()
+            if label == "yes":
+                result["over_ml"] = cost
+            elif label == "no":
+                result["under_ml"] = cost
+        if result["over_ml"] is not None or result["under_ml"] is not None:
+            result["total_line"] = 0.5
 
     # ------------------------------------------------------------ get_prop_odds
     def get_prop_odds(
@@ -469,27 +799,47 @@ class BettingProsOddsProvider:
     def _selections(self, event_id: int, market_id: int) -> list[dict[str, Any]]:
         """All selections of the (single) offer for a game-level market."""
         try:
-            data = self._bp_get(
-                "offers", {"sport": "MLB", "market_id": market_id, "event_id": event_id}
-            )
+            offers = self._offers(event_id, market_id)  # SIM-421: cached per (event, market)
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: offers fetch failed (market %s): %s", market_id, exc)
             return []
-        offers = data.get("offers", [])
         return offers[0].get("selections", []) if offers else []
+
+    def _team_offer_selections(
+        self, event_id: int, market_id: int, team_abbrev: Any
+    ) -> list[dict[str, Any]]:
+        """The selections of the offer for ONE team in a per-team market.
+
+        A team-total market holds one offer per team; each offer names its
+        team in ``team_id`` (the abbreviation the event uses for ``home`` /
+        ``visitor``) and again as its only participant. Returns ``[]`` when the
+        team has no offer.
+        """
+        try:
+            offers = self._offers(event_id, market_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("BettingPros: team offers fetch failed (market %s): %s", market_id, exc)
+            return []
+        if not team_abbrev:
+            return []
+        for offer in offers:
+            if offer.get("team_id") == team_abbrev:
+                return offer.get("selections", [])
+            ids = {p.get("id") for p in offer.get("participants", [])}
+            if team_abbrev in ids:
+                return offer.get("selections", [])
+        return []
 
     def _find_player_offer(
         self, event_id: int, market_id: int, player_name: str
     ) -> dict[str, Any] | None:
         """The prop offer whose participant matches ``player_name`` (normalized)."""
         try:
-            data = self._bp_get(
-                "offers", {"sport": "MLB", "market_id": market_id, "event_id": event_id}
-            )
+            offers = self._offers(event_id, market_id)  # SIM-421: cached per (event, market)
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: prop offers fetch failed (market %s): %s", market_id, exc)
             return None
-        for offer in data.get("offers", []):
+        for offer in offers:
             for part in offer.get("participants", []):
                 player = part.get("player") or {}
                 first = player.get("first_name", "")

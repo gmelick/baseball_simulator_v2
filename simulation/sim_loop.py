@@ -34,7 +34,9 @@ SIM-500), the transition draw (SIM-511 / SIM-512).
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
@@ -155,75 +157,12 @@ STEAL_CAUGHT = "caught"
 #: Base order for the "next base" mapping used by steal / forced advances.
 _NEXT_BASE = {1: 2, 2: 3, 3: 4}  # 4 == home (scores)
 
-# ---------------------------------------------------------------------------
-# SIM-323 — manager-tendency access (the §3/§5.3 decision inputs)
-# ---------------------------------------------------------------------------
-
-#: Maps a manager-tendency *name* to its position in the SIM-2.8
-#: :class:`similarity.engines.manager_similarity.ManagerProfile` feature vectors
-#: (``usage_vec`` / ``aggression_vec`` / ``platoon_vec``), so a profile-shaped
-#: object can be read by name without importing the engine (which would drag in
-#: DuckDB).  The order mirrors ``USAGE_FEATURES`` / ``AGGRESSION_FEATURES`` /
-#: ``PLATOON_FEATURES`` exactly.  Used by :meth:`StateMachine._tendency`.
-_MANAGER_TENDENCY_INDEX = {
-    # usage_vec
-    "starter_avg_pitch_count": ("usage_vec", 0),
-    "starter_pull_pct_before_100": ("usage_vec", 1),
-    "closer_entry_leverage_index": ("usage_vec", 2),
-    "high_leverage_reliever_rate": ("usage_vec", 3),
-    "opener_usage_rate": ("usage_vec", 4),
-    "bulk_innings_rate": ("usage_vec", 5),
-    "available_reliever_usage_rate": ("usage_vec", 6),  # SIM-427 capstone
-    # aggression_vec
-    "steal_order_rate_per_1b_opp": ("aggression_vec", 0),
-    "hit_and_run_rate_per_opportunity": ("aggression_vec", 1),
-    "sac_bunt_rate_high_leverage": ("aggression_vec", 2),
-    "sac_bunt_rate_low_leverage": ("aggression_vec", 3),
-    "squeeze_play_rate_per_3b_opp": ("aggression_vec", 4),
-    # platoon_vec
-    "pinch_hit_rate_vs_same_hand": ("platoon_vec", 0),
-    "pinch_hit_rate_high_leverage": ("platoon_vec", 1),
-    "defensive_sub_rate_late_innings": ("platoon_vec", 2),
-    "double_switch_rate_per_reliever_change": ("platoon_vec", 3),
-    "platoon_advantage_exploitation_rate": ("platoon_vec", 4),
-}
-
 #: Late-inning threshold (7th+) at which leverage-sensitive bullpen / pinch
 #: decisions engage (spec §5.3; the manager-similarity ``*_late_innings`` cut).
 _LATE_INNING = 7
-#: A starter pull is *considered* once the pitch count reaches this (the
-#: manager's ``starter_avg_pitch_count`` tendency biases the actual hook around
-#: it); a hard ceiling forces a pull regardless of tendency.
-_PULL_PITCH_FLOOR = 75
-_PULL_PITCH_CEILING = 110
 #: The leverage index above which a spot is "high leverage" (the LI > 1.5 cut the
 #: manager-similarity features use for sac-bunt / pinch-hit gating).
 _HIGH_LEVERAGE = 1.5
-
-# ---------------------------------------------------------------------------
-# SIM-434 — manager pull + reliever-selection model (fatigue / TTO / rest)
-# ---------------------------------------------------------------------------
-#
-# A per-pitcher fatigue / times-through-the-order (TTO) effectiveness model + a
-# reliever-selection scoring function, all PURE helpers (no GameState mutation,
-# no rng) so they unit-test in isolation.  They are CONSULTED by the SIM-323
-# manager hooks ONLY when a manager + bullpen are wired (i.e. when SIM_MANAGER
-# enables the wiring); with the flag off, ``manager is None`` and none of this
-# runs — production output is byte-identical (see SIM-434 integration notes).
-
-#: A starter's "typical" pitch budget; fatigue ramps as the count approaches and
-#: exceeds it.  Used as the denominator of the in-game pitch-count fatigue term
-#: when real per-team rest data is not yet available (SIM-433 not ingested).
-_FATIGUE_PITCH_BUDGET = 95.0
-#: Each time through the order beyond the first adds this much to the pitcher's
-#: effective fatigue (the documented "times-through-the-order penalty": a
-#: starter loses effectiveness the 2nd and especially the 3rd time facing a
-#: lineup).  Linear, capped at the 3rd time through (TTO >= 3 is treated as 3).
-_TTO_FATIGUE_PER_TIME = 0.12
-#: A full season's "fully rested" starter rest, in days; rest at/above this gives
-#: the maximum rest bonus, rest at 0 (back-to-back) the minimum.  Used only when
-#: a per-pitcher rest map is wired; the in-game fatigue fallback ignores it.
-_FULL_REST_DAYS = 5.0
 
 #: SIM-425b: scorekeeping position number (sim.outcome_pool.fielded_by_position) ->
 #: the position string the fielder embedding is keyed by (player_id:position:season).
@@ -296,126 +235,6 @@ def times_through_order(batters_faced: int, lineup_size: int = 9) -> int:
     size = lineup_size if lineup_size and lineup_size > 0 else 9
     bf = max(0, int(batters_faced))
     return (bf // size) + 1
-
-
-def pitcher_fatigue(
-    pitch_count: int,
-    *,
-    tto: int = 1,
-    rest_days: float | None = None,
-) -> float:
-    """A bounded [0, 1] fatigue index for the current pitcher (SIM-434).
-
-    0.0 == fully fresh, 1.0 == maximally gassed.  Three additive drivers, each a
-    documented, monotone proxy (so the gating is transparent + DB-free):
-
-      * **in-game pitch count** — ramps from 0 toward 1 as the count approaches
-        and exceeds :data:`_FATIGUE_PITCH_BUDGET` (the dominant signal, always
-        available);
-      * **times through the order** — each time through beyond the first adds
-        :data:`_TTO_FATIGUE_PER_TIME` (the TTO penalty), capped at the 3rd time;
-      * **rest** — when a per-pitcher ``rest_days`` is wired (SIM-433 follow-on),
-        short rest ADDS fatigue (back-to-back work tires an arm); when ``None``
-        (the data-not-ingested fallback) this term is simply 0 and the index is
-        driven by pitch count + TTO alone.
-
-    Monotone in the obvious directions (more pitches / more times through / less
-    rest -> higher) and clamped to ``[0.0, 1.0]``.
-    """
-    pc = max(0, int(pitch_count))
-    pc_term = pc / _FATIGUE_PITCH_BUDGET if _FATIGUE_PITCH_BUDGET > 0 else 0.0
-    times = max(1, min(int(tto), 3))
-    tto_term = (times - 1) * _TTO_FATIGUE_PER_TIME
-    rest_term = 0.0
-    if rest_days is not None:
-        # Short rest tires the arm; full (>=_FULL_REST_DAYS) rest contributes 0.
-        deficit = max(0.0, _FULL_REST_DAYS - max(0.0, float(rest_days)))
-        rest_term = 0.06 * (deficit / _FULL_REST_DAYS if _FULL_REST_DAYS > 0 else 0.0)
-    return float(max(0.0, min(1.0, pc_term + tto_term + rest_term)))
-
-
-def tto_effectiveness(tto: int) -> float:
-    """A bounded (0, 1] effectiveness multiplier from the times-through-the-order
-    penalty (SIM-434).
-
-    A starter is most effective the 1st time through a lineup and decays the 2nd
-    and (especially) the 3rd time; a reliever, called for one trip, sits at the
-    top.  Returns 1.0 for the 1st time through and decays by
-    :data:`_TTO_FATIGUE_PER_TIME` per subsequent time, floored so it never reaches
-    0 (a tired pitcher is still *some* use).
-    """
-    times = max(1, int(tto))
-    decay = (times - 1) * _TTO_FATIGUE_PER_TIME
-    return float(max(0.25, 1.0 - decay))
-
-
-def platoon_factor(bat_hand: str | None, throw_hand: str | None) -> float:
-    """The platoon multiplier for a reliever vs the current batter (SIM-434).
-
-    Same-handed matchup (R-vs-R / L-vs-L) favours the pitcher; opposite-handed
-    favours the batter.  Returns ``> 1`` when the matchup is in the *pitcher's*
-    favour (same hand), ``< 1`` when it is not, ``1.0`` when either hand is
-    unknown (a switch hitter resolved to 'S', or an unwired hand) so the score is
-    platoon-neutral rather than guessing.
-    """
-    if not bat_hand or not throw_hand:
-        return 1.0
-    bh = str(bat_hand).upper()
-    th = str(throw_hand).upper()
-    if bh not in ("L", "R") or th not in ("L", "R"):
-        return 1.0
-    return 1.15 if bh == th else 0.87
-
-
-def score_reliever(
-    *,
-    leverage: float,
-    platoon: float,
-    effectiveness: float,
-    rest_days: float | None = None,
-) -> float:
-    """Score a candidate reliever for the current spot (SIM-434).
-
-    The multiplicative product of the four levers the manager weighs:
-    ``leverage × platoon × effectiveness × rest_bonus``.  A higher score is a
-    better fit for THIS spot:
-
-      * **leverage** — a high-LI spot wants the best available arm (the score
-        scales with the live Leverage Index);
-      * **platoon** — :func:`platoon_factor` (same-hand advantage);
-      * **effectiveness** — the arm's fresh-arm effectiveness (a closer's
-        :func:`tto_effectiveness` is 1.0; a tired bulk arm scores lower);
-      * **rest** — a rested arm (``rest_days`` high, or ``None`` == treated as
-        rested) scores at full; a short-rest arm is discounted.
-
-    Pure + monotone (higher leverage / platoon / effectiveness / rest -> higher
-    score); never negative.  Used by :meth:`StateMachine._pick_reliever` to RANK
-    a wired bullpen when SIM_MANAGER is on.
-    """
-    lev = max(0.0, float(leverage))
-    plt = max(0.0, float(platoon))
-    eff = max(0.0, float(effectiveness))
-    if rest_days is None:
-        rest_bonus = 1.0
-    else:
-        rd = max(0.0, float(rest_days))
-        # 0 days -> 0.7 (tired), >=_FULL_REST_DAYS -> 1.0 (rested), linear between.
-        frac = min(1.0, rd / _FULL_REST_DAYS) if _FULL_REST_DAYS > 0 else 1.0
-        rest_bonus = 0.7 + 0.3 * frac
-    return float(max(0.0, lev * plt * eff * rest_bonus))
-
-
-def _safe_float(val, default: float = 0.0) -> float:
-    """Coerce ``val`` to a finite float, falling back to ``default`` on a None /
-    NaN / non-numeric (the SIM-323 tendency reads are defensive — a missing or
-    junk profile value must degrade to the no-op default)."""
-    try:
-        f = float(val)
-    except (TypeError, ValueError):
-        return float(default)
-    if f != f:  # NaN
-        return float(default)
-    return f
 
 
 def _venue_of(state: object) -> int | None:
@@ -673,22 +492,16 @@ class StateMachine:
         self._got_away = _env_flag("SIM_GOT_AWAY")
         #: The last drawn pitch's got-away fact (False on every other path).
         self._last_pitch_got_away = False
-        # SIM-323: the manager tendency source the §3/§5.3 hooks read.  Duck-typed:
-        # any object/mapping exposing the manager-similarity tendency rates
-        # (``starter_pull_pct_before_100`` / ``closer_entry_leverage_index`` /
-        # ``steal_order_rate_per_1b_opp`` / ``pinch_hit_rate_high_leverage`` /
-        # ``sac_bunt_rate_high_leverage`` / ``sac_bunt_rate_low_leverage`` /
-        # ``starter_avg_pitch_count``), OR a :class:`ManagerProfile`-shaped object
-        # exposing ``usage_vec`` / ``aggression_vec`` / ``platoon_vec`` (read via
-        # :data:`_MANAGER_TENDENCY_INDEX`).  ``None`` == no profile wired -> every
-        # decision is a no-op (the SIM-320/324/326 no-DB test path stays green).
+        # The manager GATE (SIM-323, reshaped by SIM-427 on 2026-09-13): any
+        # non-None value turns the manager hooks on — the pitching-change draw,
+        # the intentional-walk draw and the steal weight, which read the REAL
+        # per-side profiles off the game state, never off this object. ``None``
+        # == no manager wired -> every decision is a no-op (the SIM-320/324/326
+        # no-DB test path stays green). The SIM-434 pull formula and its by-name
+        # tendency reader were deleted at the SIM-427 flip (2026-09-13).
         self.manager = manager
-        # SIM-323: available pinch-hitters per team, ``{Team: [batter_id, ...]}``
-        # (Team value or int key both accepted).  The end-of-PA pinch-hit decision
-        # pops from here so a bench player can only be used once; ``None``/empty ->
-        # pinch-hit degrades to a no-op (the no-DB test path).  Production wires the
-        # real bench off the roster.
-        self.bench = dict(bench) if bench else {}
+        # (The SIM-323 bench — the pinch-hit decision's source — was deleted
+        # 2026-09-13 with the pinch hit, SIM-427; ``bench`` is accepted and ignored.)
         # SIM-434: per-defending-team available-arms bullpen map, staged on the machine
         # by the production factory (when SIM_MANAGER is on) and read by ``simulate_game``
         # as the fallback when no explicit ``bullpen=`` is passed. ``None`` -> no bullpen
@@ -1573,8 +1386,9 @@ class StateMachine:
         mid-pitch scoring path): the delta routes through
         :meth:`_commit_run_delta`, the run carries no RBI (Rule 9.04 — the
         ``steal_runs_scored`` field is the no-RBI-on-this-pitch marker), and
-        on a NON-terminal pitch the pitcher is charged here because
-        ``_accumulate_pa`` never runs. The run counts EARNED: ~90% of real
+        on a NON-terminal pitch the runner's R and the pitcher's charge are
+        credited here because ``_accumulate_pa`` never runs. On a TERMINAL
+        pitch ``_accumulate_pa`` credits both. The run counts EARNED: ~90% of real
         got-aways are wild pitches (earned, Rule 9.16); the pool flag merges
         the passed-ball minority, a box-stat nuance accepted knowingly.
         """
@@ -1614,7 +1428,14 @@ class StateMachine:
             # No RBI on a got-away run (the same withholding a steal of home
             # uses — the field is the no-RBI marker, not steal-specific here).
             result.steal_runs_scored += runs
-            self._box_line(int(scorer)).r += 1
+            # SIM-421 fix: credit the runner's box run ONLY on a NON-terminal
+            # pitch. On a terminal pitch (a got-away strike three)
+            # ``_accumulate_pa`` runs next and credits every runner whose
+            # ``baserunner_advances`` entry reads 0, so a credit here too
+            # doubled the runner's R (the R and HRR props read ``line.r``).
+            # The pitcher's charge below already carried this guard.
+            if not result.pa_terminal:
+                self._box_line(int(scorer)).r += 1
             if not result.pa_terminal and state.pitcher_id is not None:
                 self._box_line(int(state.pitcher_id)).r_allowed += 1
                 outs_lost = self._half_inning_error_outs_lost
@@ -1693,6 +1514,10 @@ class StateMachine:
                     result.baserunner_advances[rid] = 0
                     # SIM-365: the runner scored on the steal of home.
                     self._box_line(int(rid)).r += 1
+                    # SIM-421: mark the runner as credited, so a terminal
+                    # pitch's ``_accumulate_pa`` skips exactly him (and no
+                    # other scorer on the same pitch).
+                    result.box_run_credited.add(int(rid))
                 # SIM-365: charge the pitcher the run.  Only on a NON-terminal
                 # pitch — on a terminal pitch ``_accumulate_pa`` will add this
                 # play's ``runs_scored`` (which includes this run) to r_allowed,
@@ -1735,8 +1560,12 @@ class StateMachine:
                 runners_scored=0,
                 runners_retired=1 if moving is not None else 0,
             )
-            if rid is not None:
-                result.baserunner_advances[rid] = 0  # out (off the bases)
+            # SIM-421: write NO ``baserunner_advances`` entry for the caught
+            # runner. An entry of 0 means "scored" to ``_accumulate_pa``, which
+            # now credits every scorer on a steal pitch; the old ``rid: 0``
+            # write would have credited the caught runner a run. The in-play
+            # and pickoff paths use the same convention: a retired runner has
+            # no entry.
 
     def _resolve_pickoff(
         self, state: GameState, result: PlayResult, steal: StealResolution
@@ -1787,8 +1616,12 @@ class StateMachine:
             runners_scored=0,
             runners_retired=1 if moving is not None else 0,
         )
-        if rid is not None:
-            result.baserunner_advances[rid] = 0
+        # SIM-421 fix: write NO ``baserunner_advances`` entry for the retired
+        # runner. ``_accumulate_pa`` reads an entry of 0 as "scored", and a
+        # pickoff never sets ``steal_attempted``, so the old ``rid: 0`` write
+        # credited the picked-off runner a run on a terminal pitch (the R and
+        # HRR props read ``line.r``). The in-play path uses the same
+        # convention: a retired runner has no entry.
 
     @staticmethod
     def _move_runner(state: GameState, from_base: int | None, to_base: int) -> None:
@@ -2015,16 +1848,34 @@ class StateMachine:
         return bool(self._last_pitch_got_away)
 
     def _force_on_reach(self, state: GameState, result: PlayResult) -> int:
-        """Place the batter on 1B and force runners behind him (shared by the
-        walk and the dropped-third-strike reach).  Returns forced runs."""
+        """Place the batter on 1B and force runners behind him (the
+        dropped-third-strike reach; the walk has its own copy in
+        :meth:`_resolve_walk`).  Returns forced runs.
+
+        SIM-421 fix: record every forced runner in ``result.baserunner_advances``
+        the way :meth:`_resolve_walk` does. The forced run from 3B is written
+        as ``0`` ("scored"), because :meth:`_accumulate_pa` credits a runner's
+        box ``r`` only from that entry. Before this fix the reach wrote only
+        the batter's entry, so a run forced home by a dropped third strike
+        with the bases loaded reached the team score but never the runner's
+        box line — and the R and HRR props read ``line.r``.
+        """
         b = state.bases
+        # Capture the pre-shift runner identities: the advances dict is keyed
+        # on the runner who moved, not the bag.
+        rid_1 = b.first
+        rid_2 = b.second
+        rid_3 = b.third
         forced_run = 0
-        if b.first is not None:
-            if b.second is not None:
-                if b.third is not None:
+        if rid_1 is not None:
+            if rid_2 is not None:
+                if rid_3 is not None:
                     forced_run = 1
-                b.third = b.second
-            b.second = b.first
+                    result.baserunner_advances[int(rid_3)] = 0
+                b.third = rid_2
+                result.baserunner_advances[int(rid_2)] = 3
+            b.second = rid_1
+            result.baserunner_advances[int(rid_1)] = 2
         b.first = state.batter_id if state.batter_id is not None else b.first
         self._check_bases(b)
         if state.batter_id is not None:
@@ -2281,15 +2132,21 @@ class StateMachine:
         # play.  ``baserunner_advances`` records ``end_base == 0`` for a runner who
         # SCORED (set in :meth:`_resolve_in_play_transition` for a runner or the
         # batter who crossed home, and SIM-414 for the runner on 3B forced home
-        # by a bases-loaded walk).  Steals are credited entirely in :meth:`_resolve_steal_outcome`
-        # (so a steal on a NON-terminal pitch — which never reaches this method —
-        # is still counted, and a caught-stealing ``0`` is never mistaken for a
-        # scored run); we therefore skip run attribution on a steal PA here to
-        # avoid double-counting a steal-of-home.
-        if not result.steal_attempted:
-            for rid, end_base in result.baserunner_advances.items():
-                if int(end_base) == 0:
-                    box.line(int(rid)).r += 1
+        # by a bases-loaded walk).  A retired runner has NO entry: the in-play
+        # path, :meth:`_resolve_pickoff` (SIM-507) and the caught-stealing
+        # branch of :meth:`_resolve_steal_outcome` all write none.
+        # SIM-421: a steal of home credits its runner in
+        # :meth:`_resolve_steal_outcome` on every pitch (a NON-terminal steal
+        # never reaches this method) and records him in ``box_run_credited``.
+        # Skip exactly that runner here.  The old guard skipped the whole loop
+        # on any steal pitch, so a safe steal to 2B plus a home run on the same
+        # pitch credited nobody a run — the R and HRR props read ``line.r``.
+        # A got-away run on a terminal pitch is credited HERE only
+        # (:meth:`_resolve_got_away_advance` credits the runner on a
+        # non-terminal pitch only).
+        for rid, end_base in result.baserunner_advances.items():
+            if int(end_base) == 0 and int(rid) not in result.box_run_credited:
+                box.line(int(rid)).r += 1
 
         # ---- pitcher (defense) ----
         if state.pitcher_id is not None:
@@ -2493,45 +2350,6 @@ class StateMachine:
         state.manager.leverage = li
         return li
 
-    def _tendency(self, name: str, default: float = 0.0) -> float:
-        """Read a single manager-tendency rate by name (SIM-323).
-
-        Reads from the injected ``self.manager`` source, which may be EITHER:
-
-          * a mapping / attribute-bearing object exposing the tendency *directly*
-            by name (e.g. a dict ``{"steal_order_rate_per_1b_opp": 0.4}`` or a
-            ``ManagerContext`` subtype), OR
-          * a :class:`ManagerProfile`-shaped object exposing the SIM-2.8
-            ``usage_vec`` / ``aggression_vec`` / ``platoon_vec`` arrays (read by
-            position via :data:`_MANAGER_TENDENCY_INDEX`).
-
-        Returns ``default`` (0.0) when no profile is wired or the name is absent —
-        so an unwired machine makes EVERY manager decision a no-op (the SIM-320/
-        324/326 no-DB test path stays green).  Values are coerced to float and
-        NaN-guarded.
-        """
-        src = self.manager
-        if src is None:
-            return float(default)
-        # 1) direct mapping access.
-        if isinstance(src, dict):
-            val = src.get(name)
-            if val is not None:
-                return _safe_float(val, default)
-        # 2) direct attribute access (object exposing the rate by name).
-        if hasattr(src, name):
-            return _safe_float(getattr(src, name), default)
-        # 3) ManagerProfile-shaped vectors, read by position.
-        slot = _MANAGER_TENDENCY_INDEX.get(name)
-        if slot is not None:
-            vec = getattr(src, slot[0], None)
-            if vec is not None:
-                try:
-                    return _safe_float(vec[slot[1]], default)
-                except (IndexError, TypeError):
-                    return float(default)
-        return float(default)
-
     def _manager_rng(self) -> float:
         """A single [0, 1) draw from the machine's loop rng for a manager decision
         (so a fixed seed makes every manager decision deterministic, spec §6.3)."""
@@ -2548,15 +2366,9 @@ class StateMachine:
              ``platoon_advantage_exploitation_rate`` manager will signal an
              intentional walk (``ManagerContext.intentional_walk_signalled``); the
              count machine never runs on that pitch — the loop issues the walk.
-          2. **Pitch-out** (§3 item 3) — with a steal threat (runner on 1B/2B,
-             1B/2B not the lead) and a high-leverage spot, a manager who runs the
-             bases a lot (proxy: their own ``steal_order_rate``) anticipates the
-             opponent and signals a pitch-out for THIS pitch.
-          3. **Steal green-light** (§3 item 4) — sets whether the SIM-319 steal
-             path *may* attempt this pitch: the manager's
-             ``steal_order_rate_per_1b_opp`` tendency, scaled DOWN in low leverage
-             and UP late-and-close, vs a loop-rng draw, written to
-             ``ManagerContext.green_light_rate``.
+          2. (The pitch-out and the leverage-scaled steal green-light that sat
+             here were deleted 2026-09-13 — SIM-427; the steal draw's manager
+             weight is the batting manager's measured rate over the league's.)
 
         The steal *decision* is the SIM-474 opportunity draw
         (:meth:`_steal_opportunity_draw`, which stages the
@@ -2570,16 +2382,15 @@ class StateMachine:
         """
         li = self.compute_leverage(state)
         mgr = state.manager
-        # Reset the per-pitch signals (they apply to THIS pitch only).
+        # Reset the per-pitch signal (it applies to THIS pitch only). SIM-427
+        # (owner decision 2026-09-13) deleted the pitch-out and hit-and-run
+        # signals with their hooks: neither had a consumer that changed a play,
+        # and the hit-and-run's only effect was to skip the steal draw.
         mgr.intentional_walk_signalled = False
-        mgr.pitch_out_signalled = False
-        mgr.hit_and_run_signalled = False
 
-        # --- (1) Intentional walk: first base open + RISP + close & late -------
+        # --- (1) Intentional walk: the SIM-515 cell draw --------------------------
         if self._should_issue_ibb(state, li):
             mgr.intentional_walk_signalled = True
-            # An IBB pre-empts the steal/pitch-out: the loop will issue the walk.
-            mgr.green_light_rate = 0.0
             self.manager_decisions.append(
                 {
                     "kind": "intentional_walk",
@@ -2589,42 +2400,6 @@ class StateMachine:
                 }
             )
             return
-
-        # --- (3) Steal green-light: tendency scaled by leverage ----------------
-        steal_rate = self._tendency("steal_order_rate_per_1b_opp", 0.0)
-        # Scale the green-light by leverage: aggression rises in close & late
-        # spots, falls when way ahead/behind (running into outs is costly there).
-        li_scale = 0.5 + 0.5 * min(li / _HIGH_LEVERAGE, 2.0)
-        green = float(max(0.0, min(steal_rate * li_scale, 1.0)))
-        mgr.green_light_rate = green
-
-        # --- (4) Hit-and-run (SIM-349): runner-go + contact-oriented PA --------
-        # Evaluated before the pitch-out / steal-initiate so a hit-and-run (a
-        # *contact* play) and a straight steal are not both staged on the same
-        # pitch.  When the hit-and-run fires it pre-empts the steal-initiate (the
-        # runner goes WITH the swing, not on a pure steal), keeping the situational
-        # set coherent (no double-fire of two runner-go decisions).
-        self._maybe_hit_and_run(state, li)
-        if mgr.hit_and_run_signalled:
-            return
-
-        # --- (2) Pitch-out: anticipate a steal threat in a high-leverage spot --
-        b = state.bases
-        steal_threat = (b.first is not None and b.second is None) or (
-            b.second is not None and b.third is None
-        )
-        if steal_threat and li >= _HIGH_LEVERAGE and green > 0.0:
-            # Pitch out a fraction of the time the green-light would be on against
-            # this manager (a defensive mirror of the running tendency).
-            if self._manager_rng() < min(0.5 * green, 0.5):
-                mgr.pitch_out_signalled = True
-                self.manager_decisions.append(
-                    {
-                        "kind": "pitch_out",
-                        "inning": int(state.inning),
-                        "leverage": li,
-                    }
-                )
 
         # --- steal initiate wiring (SIM-474) -----------------------------------
         # Only auto-stage if a test has not already staged one. The old chain
@@ -2679,62 +2454,6 @@ class StateMachine:
             return False
         return self._manager_rng() < rate
 
-    def _maybe_hit_and_run(self, state: GameState, li: float) -> None:
-        """Signal a hit-and-run for THIS pitch (SIM-349 §3 / aggression).
-
-        The canonical hit-and-run spot: a **runner on 1B** (the lead runner
-        breaks with the pitch), **fewer than 2 outs**, and a **favorable count**
-        (the batter is not behind in the count, so a contact-oriented swing is
-        sensible — we use a non-two-strike, non-3-ball count where putting the
-        ball in play protects the runner who is going).  Gated by the manager's
-        ``hit_and_run_rate_per_opportunity`` tendency (manager-similarity
-        AGGRESSION_FEATURES idx 1 — the directly-mapped H&R tendency) scaled by
-        leverage, vs a loop-rng draw.
-
-        When it fires, sets ``ManagerContext.hit_and_run_signalled`` for this
-        pitch: the runner on 1B breaks (a forced runner-go) and the batter's PA
-        is biased toward contact (so the contact path in step-4 / the in-play
-        resolution sees the runner already advancing).  Records a decision.  This
-        is a *bias/flag*, not a forced outcome — the count machine and resolution
-        still play out; it never mutates the base-out state here, so it cannot
-        create an illegal state.
-
-        No-op-safe: with no manager profile the tendency reads 0.0 and nothing
-        fires.
-        """
-        b = state.bases
-        # Runner on 1B is the defining precondition (the lead runner goes).
-        if b.first is None:
-            return
-        # Fewer than 2 outs (running into the 3rd out on contact is the bad case).
-        if int(state.outs) >= 2:
-            return
-        # Favorable count: not behind (a hit-and-run on a 2-strike or 3-ball count
-        # is too risky / pointless).  The hook fires pre-pitch at the START of a
-        # PA / between pitches; a fresh count (0-0) or a hitter's-but-not-deep
-        # count qualifies.
-        if int(state.strikes) >= 2 or int(state.balls) >= 3:
-            return
-        tend = self._tendency("hit_and_run_rate_per_opportunity", 0.0)
-        if tend <= 0.0:
-            return
-        # Leverage scales the call: managers run more aggressively close & late,
-        # less when the margin is lopsided (a contact play into outs is costly).
-        li_scale = 0.5 + 0.5 * min(li / _HIGH_LEVERAGE, 2.0)
-        fire_p = min(1.0, tend * li_scale)
-        if self._manager_rng() >= fire_p:
-            return
-        state.manager.hit_and_run_signalled = True
-        self.manager_decisions.append(
-            {
-                "kind": "hit_and_run",
-                "inning": int(state.inning),
-                "leverage": li,
-                "batter_id": state.batter_id,
-                "runner_id": b.first,
-            }
-        )
-
     def stage_steal(
         self,
         *,
@@ -2759,11 +2478,22 @@ class StateMachine:
             safe=bool(safe),
         )
 
-    #: SIM-474: the league-mean ``steal_order_rate_per_1b_opp`` — the SIM-434
-    #: default manager profile's value. The live manager's leverage-scaled
-    #: tendency is divided by this to form the aggression WEIGHT on the pool
-    #: draw's attempted rows (1.0 = league-average running game).
-    _LEAGUE_STEAL_ORDER_RATE: float = 0.08
+    def _steal_aggression(self, state: GameState) -> float:
+        """SIM-427: the batting side's manager weight on the steal draw's
+        attempted rows — his measured ``steal_order_rate_per_1b_opp`` over the
+        season's measured league mean, clamped to [0.05, 4.0]; exactly 1.0
+        (neutral) with no manager wired, no profile or no league row."""
+        if self.manager is None:
+            return 1.0
+        prof = (
+            state.home_manager_profile if state.offense == Team.HOME else state.away_manager_profile
+        ) or {}
+        league = getattr(state, "manager_league_profile", None) or {}
+        rate = prof.get("steal_order_rate_per_1b_opp")
+        mean = league.get("steal_order_rate_per_1b_opp")
+        if rate is None or mean is None or not (float(mean) > 0.0):
+            return 1.0
+        return float(min(max(float(rate) / float(mean), 0.05), 4.0))
 
     def _steal_opportunity_draw(self, state: GameState) -> None:
         """SIM-474: stage a steal by drawing ONE row from the SIM-468 steal
@@ -2814,11 +2544,11 @@ class StateMachine:
         # a leverage formula. If localization ever shows a late-game residual,
         # the fix is an inning/late soft KERNEL on the steal draw (data
         # conditioning), not a reinstated multiplier.
-        if self.manager is None:
-            aggression = 1.0
-        else:
-            rate = self._tendency("steal_order_rate_per_1b_opp", self._LEAGUE_STEAL_ORDER_RATE)
-            aggression = float(min(max(rate / self._LEAGUE_STEAL_ORDER_RATE, 0.05), 4.0))
+        # SIM-427: the batting manager's MEASURED steal-order rate over the
+        # season's MEASURED league mean (``derived.league_averages``' manager
+        # row) — a ratio near 1, clamped; no leverage term (SIM-476 step 0).
+        # Without a profile or a league mean on the state it is exactly 1.0.
+        aggression = self._steal_aggression(state)
         drawn = fp.steal_draw(
             target,
             f"{int(runner_id)}:{season}",
@@ -2866,88 +2596,39 @@ class StateMachine:
         return self._end_of_pa_hook(state)
 
     def _end_of_pa_hook(self, state: GameState) -> None:
-        """The manager decisions at a plate-appearance boundary (§5.3): substitution +
-        small-ball setup, evaluated ONLY at PA / half-inning boundaries (never
-        mid-PA — the loop calls this from :meth:`_end_of_pa` and
-        :meth:`advance_half_inning`).  SIM-323.
-
-        Three decisions, each gated by the live Leverage Index + a manager
-        tendency drawn from ``self.manager``:
-
-          1. **Starter pull + bullpen-by-leverage** (§5.3 / §3 item 1) — once the
-             current pitcher's pitch count clears a floor, an above-average
-             ``starter_pull_pct_before_100`` manager pulls in a high-leverage
-             spot; the pitch count ceiling forces a pull regardless.  The
-             replacement is chosen BY LEVERAGE from the defending team's
-             ``ManagerContext.bullpen_available``: the **closer** (the first /
-             highest-leverage arm) enters a high-LI late spot, a middle reliever
-             otherwise.  Mutates ``state.pitcher_id`` + resets the new arm's pitch
-             count; degrades to a no-op when no bullpen is wired.
-          2. **Pinch-hit** (§5.3 platoon) — in a high-leverage spot, an
-             above-average ``pinch_hit_rate_high_leverage`` manager swaps the
-             batter now due up for a bench player from ``self.bench`` (one-time
-             use per bench player); degrades to a no-op with no bench.
-          3. **Sac-bunt setup** (§3 / aggression) — with a runner on and fewer
-             than two outs, the manager may signal a sacrifice bunt for the next
-             PA, gated by ``sac_bunt_rate_high_leverage`` (in a high-LI spot) or
-             ``sac_bunt_rate_low_leverage`` (small-ball otherwise).  Recorded as a
-             decision (the bunt's batted-ball resolution is SIM-319's); never
-             produces an illegal state.
-
-        No-op-safe: with ``self.manager is None`` all tendencies read 0.0 and the
-        bullpen / bench are empty, so nothing fires (the SIM-320/324/326 no-DB
-        full-game tests stay green).
+        """The manager decision at a plate-appearance boundary: the pitching
+        change (the loop's step 1), evaluated once per plate appearance on its
+        first pitch (SIM-523 part D). Since 2026-09-13 (SIM-427) it is a draw
+        from the change opportunity pool with the live manager's usage
+        similarity as a weight, and the entering arm is a draw from the live
+        pen; the pull formula, the pinch hit and the sac-bunt setup are
+        deleted. No-op-safe: with ``self.manager is None`` nothing fires (the
+        SIM-320/324/326 no-DB full-game tests stay green).
         """
         if self.manager is None:
             return None
-        # Only evaluate at a real boundary with a half-inning still to play.
+        # SIM-427 (owner decision 2026-09-13): the pitching change is the one
+        # decision here — the pinch hit and the bunt setup are deleted (no
+        # bench was ever wired; the bunt changed no play). (SIM-349's
+        # _maybe_sac_fly_intent sat here until 2026-08-19 — retired by
+        # SIM-513; the SIM-512 tag draw owns sacrifice flies.)
         li = self.compute_leverage(state)
         self._maybe_pull_starter(state, li)
-        self._maybe_pinch_hit(state, li)
-        self._maybe_sac_bunt(state, li)
-        # (SIM-349's _maybe_sac_fly_intent sat here until 2026-08-19 —
-        # retired by SIM-513; the SIM-512 tag draw owns sacrifice flies.)
         return None
 
     def _maybe_pull_starter(self, state: GameState, li: float) -> None:
-        """Pull the current pitcher for a leverage-appropriate reliever (SIM-323).
-
-        Considers a pull once the pitch count clears :data:`_PULL_PITCH_FLOOR`;
-        fires when the manager's ``starter_pull_pct_before_100`` tendency (scaled
-        by leverage) wins a loop-rng draw, OR unconditionally at
-        :data:`_PULL_PITCH_CEILING`.  Picks the reliever BY LEVERAGE from the
-        defending team's bullpen.  No-op when no bullpen is available.
+        """The pitching change (the loop's step 1) — a DRAW from the change
+        opportunity pool at the pool's own rate for this boundary's cell, the
+        live manager's usage similarity a weight (SIM-427). No floor, no
+        ceiling, no formula: the SIM-434 pull formula was deleted at the flip
+        (2026-09-13; it pulled every starter at ~81 pitches with a spread of
+        1.6). With the draw switch off, or no pool in the bundle, no change is
+        ever drawn — the no-DB synthetic bundle carries its own change pool.
         """
-        pc = int(state.pitcher_pitch_count)
-        # SIM-523 part D: the decision as a DRAW from the opportunity pool —
-        # the pool's own change rate for this boundary's cell, no floor and
-        # no ceiling. None (no pool in the bundle) keeps the formula.
-        drawn = self._pitching_change_by_draw(state) if self.manager_draw else None
-        if drawn is not None:
-            if not drawn:
-                return
+        if not self.manager_draw:
+            return
+        if self._pitching_change_by_draw(state):
             self._change_pitcher(state, li, forced=False, source="draw")
-            return
-        if pc < _PULL_PITCH_FLOOR:
-            return
-        pull_tend = self._tendency("starter_pull_pct_before_100", 0.0)
-        # Leverage scales the pull aggression; a high-LI jam hastens the hook.
-        fire_p = min(1.0, pull_tend * (0.5 + 0.5 * min(li / _HIGH_LEVERAGE, 2.0)))
-        # SIM-434: a fatigued / deep-into-the-order starter hastens the hook.  The
-        # fatigue index (pitch count + times-through-the-order + optional rest) is
-        # a >= 0 BOOST applied multiplicatively, so it can only RAISE fire_p (a
-        # fresh, 1st-time-through starter has fatigue ~ pc/budget and TTO term 0 ->
-        # boost ~1.0).  fire_p stays clamped to [0, 1], so a pull that fired before
-        # still fires (the SIM-323 gate is monotone under this term).
-        tto = times_through_order(state.pitcher_bf.get(state.pitcher_id, 0))
-        fatigue = pitcher_fatigue(
-            pc, tto=tto, rest_days=state.pitcher_rest_days.get(state.pitcher_id)
-        )
-        fire_p = min(1.0, fire_p * (1.0 + fatigue))
-        forced = pc >= _PULL_PITCH_CEILING
-        if not forced and self._manager_rng() >= fire_p:
-            return
-        self._change_pitcher(state, li, forced=forced, source="formula")
 
     def _pitching_change_by_draw(self, state: GameState) -> bool | None:
         """SIM-523 part D: the boundary's inputs for the sampler's draw —
@@ -2966,6 +2647,8 @@ class StateMachine:
         fld = state.home_score if defense == Team.HOME else state.away_score
         bat = state.away_score if defense == Team.HOME else state.home_score
         season = int(getattr(state, "season", 2024) or 2024)
+        # SIM-427: the FIELDING side's manager keys his usage-similarity row.
+        mid = state.home_manager_id if defense == Team.HOME else state.away_manager_id
         return draw(
             f"{pid}:{season}",
             is_starter=is_starter,
@@ -2976,12 +2659,13 @@ class StateMachine:
             outs=int(state.outs),
             runners_state=int(state.runners_state),
             score_diff=int(fld) - int(bat),
+            manager_key=(f"{int(mid)}:{season}" if mid is not None else None),
         )
 
     def _change_pitcher(self, state: GameState, li: float, *, forced: bool, source: str) -> None:
         """Bring in the reliever ``_pick_reliever`` selects and record the
-        change (``source``: "draw" or "formula"). No arm: stay with the pitcher."""
-        new_arm = self._pick_reliever(state, li)
+        change (``source`` is "draw" since the flip). No arm: stay with the pitcher."""
+        new_arm = self._pick_reliever(state, li, source=source)
         if new_arm is None:
             return  # bullpen empty -> degrade gracefully (stay with the starter).
         old = state.pitcher_id
@@ -3010,25 +2694,17 @@ class StateMachine:
             }
         )
 
-    def _pick_reliever(self, state: GameState, li: float) -> int | None:
-        """Choose a reliever from the defending team's bullpen (SIM-323/SIM-434).
+    def _pick_reliever(self, state: GameState, li: float, *, source: str = "draw") -> int | None:
+        """Choose the entering arm from the defending team's pen.
 
-        Two selection modes, both popping the chosen arm so it cannot be reused
-        and reading ``ManagerContext.bullpen_available`` keyed by the defending
-        Team (or its int value):
-
-          * **SIM-434 scored mode** — when per-arm metadata is wired (a hand in
-            ``state.throw_hands`` and/or a rest in ``state.pitcher_rest_days`` for
-            ANY candidate), rank the arms by :func:`score_reliever`
-            (leverage × platoon × fresh-arm effectiveness × rest) and pop the
-            best fit for THIS spot.  Ties break by list position (the closer / top
-            arm first), so a no-metadata bullpen behaves exactly like the legacy
-            positional mode below.
-          * **legacy positional mode (SIM-323)** — High-LI + late -> the
-            **closer** (the first arm in the list); otherwise a middle reliever
-            from the back of the list.
-
-        Returns ``None`` when no arm is available.
+        SIM-427 (owner decision 2026-09-13): the arm is a second draw from the
+        live pen — the candidate's resemblance to the arm the drawn pool row
+        brought in, in role, stuff, recent usage and hand
+        (:meth:`FullPoolSampler.relief_arm_draw`). Every weight off, or no
+        sampler, keeps the positional pick: high leverage late -> the first arm
+        (the closer / the arm the box listed as used first), otherwise from the
+        back. The SIM-434 ranking was deleted at the flip. Pops the chosen arm
+        so it cannot enter twice. None when no arm is available.
         """
         pen_map = state.manager.bullpen_available or {}
         team = state.defense
@@ -3037,107 +2713,21 @@ class StateMachine:
             arms = pen_map.get(int(team))
         if not arms:
             return None
-        # SIM-434 scored mode: only when at least one arm carries hand/rest meta,
-        # so a metadata-less bullpen (the SIM-323 tests) keeps the positional path
-        # byte-identical.
-        has_meta = any((a in state.throw_hands) or (a in state.pitcher_rest_days) for a in arms)
-        if has_meta:
-            bat_hand = state.bat_hand_for(state.batter_id)
-            best_i = 0
-            best_score = float("-inf")
-            for i, arm in enumerate(arms):
-                throw = state.throw_hands.get(arm)
-                score = score_reliever(
-                    leverage=li,
-                    platoon=platoon_factor(bat_hand, throw),
-                    # A fresh reliever enters on his 1st time through -> top
-                    # effectiveness; a tired bulk arm could carry a TTO via
-                    # ``pitcher_bf`` if it has already pitched this game.
-                    effectiveness=tto_effectiveness(
-                        times_through_order(state.pitcher_bf.get(arm, 0))
-                    ),
-                    rest_days=state.pitcher_rest_days.get(arm),
-                )
-                # Strictly-greater keeps the first (top / closer) arm on a tie.
-                if score > best_score:
-                    best_score = score
-                    best_i = i
-            return int(arms.pop(best_i))
+        fp = self.full_pool_sampler
+        draw = getattr(fp, "relief_arm_draw", None)
+        if fp is not None and draw is not None:
+            i = draw(
+                list(arms),
+                live_season=int(getattr(state, "season", 2024) or 2024),
+                throw_hands=state.throw_hands,
+                recent_usage=state.pitcher_recent_usage,
+            )
+            if i is not None:
+                return int(arms.pop(int(i)))
         high_lev_late = li >= _HIGH_LEVERAGE and int(state.inning) >= _LATE_INNING
         if high_lev_late:
             return int(arms.pop(0))  # closer / highest-leverage arm.
         return int(arms.pop())  # middle reliever from the back.
-
-    def _maybe_pinch_hit(self, state: GameState, li: float) -> None:
-        """Pinch-hit a bench player for the batter now due up (SIM-323).
-
-        Fires only in a high-leverage spot, gated by the manager's
-        ``pinch_hit_rate_high_leverage`` tendency vs a loop-rng draw.  Swaps the
-        OFFENSE's current lineup slot (the batter about to hit) for a bench player
-        popped from ``self.bench`` for that team, keeping the lineup valid.  No-op
-        when no bench / no lineup is wired.
-        """
-        if li < _HIGH_LEVERAGE:
-            return
-        ph_tend = self._tendency("pinch_hit_rate_high_leverage", 0.0)
-        if ph_tend <= 0.0:
-            return
-        if self._manager_rng() >= min(1.0, ph_tend):
-            return
-        team = state.offense
-        bench = self.bench.get(team)
-        if bench is None:
-            bench = self.bench.get(int(team))
-        if not bench:
-            return  # no bench -> degrade gracefully.
-        if team == Team.HOME:
-            lineup, slot = state.home_lineup, state.home_lineup_slot
-        else:
-            lineup, slot = state.away_lineup, state.away_lineup_slot
-        if not lineup:
-            return
-        sub = int(bench.pop(0))
-        out_batter = lineup[slot % len(lineup)]
-        lineup[slot % len(lineup)] = sub
-        state.batter_id = sub
-        self.manager_decisions.append(
-            {
-                "kind": "pinch_hit",
-                "inning": int(state.inning),
-                "leverage": li,
-                "out_batter_id": out_batter,
-                "in_batter_id": sub,
-            }
-        )
-
-    def _maybe_sac_bunt(self, state: GameState, li: float) -> None:
-        """Signal a sacrifice bunt for the next PA (SIM-323 small-ball setup).
-
-        With a runner on and fewer than two outs, the manager may call for a
-        sac bunt, gated by ``sac_bunt_rate_high_leverage`` (high-LI spot) or
-        ``sac_bunt_rate_low_leverage`` (otherwise).  Recorded as a decision (the
-        bunt's batted-ball outcome is SIM-319's job); never mutates the base-out
-        state, so it cannot create an illegal state.
-        """
-        b = state.bases
-        if b.count_on_base == 0 or int(state.outs) >= 2:
-            return
-        if li >= _HIGH_LEVERAGE:
-            tend = self._tendency("sac_bunt_rate_high_leverage", 0.0)
-        else:
-            tend = self._tendency("sac_bunt_rate_low_leverage", 0.0)
-        if tend <= 0.0:
-            return
-        if self._manager_rng() >= min(1.0, tend):
-            return
-        self.manager_decisions.append(
-            {
-                "kind": "sac_bunt",
-                "inning": int(state.inning),
-                "leverage": li,
-                "batter_id": state.batter_id,
-            }
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -3386,6 +2976,15 @@ def simulate_game(
     bench=None,
     bullpen=None,
     pitcher_rest_days: dict[int, float] | None = None,
+    # SIM-427: each side's manager, the pen's recent usage and source, the
+    # per-side tendency profiles and the league means (all optional; the
+    # kwargs contract carries them, every consumer is neutral without them).
+    home_manager_id: int | None = None,
+    away_manager_id: int | None = None,
+    pitcher_recent_usage: dict[int, tuple[int, int, int]] | None = None,
+    bullpen_source: str | None = None,
+    manager_profiles: Mapping[Any, dict[str, float]] | None = None,
+    manager_league_profile: dict[str, float] | None = None,
     max_innings: int = _MAX_INNINGS,
 ) -> GameSimResult:
     """Drive the SIM-316 :class:`StateMachine` to a completed game (SIM-320).
@@ -3414,13 +3013,14 @@ def simulate_game(
     ``pitcher_id`` / ``bat_hand`` / ``season`` / the two lineups.
 
     SIM-434 manager passthrough (GATED by ``SIM_MANAGER``): ``manager`` /
-    ``bench`` / ``bullpen`` / ``pitcher_rest_days`` are wired ONLY when supplied
+    ``bullpen`` / ``pitcher_rest_days`` are wired ONLY when supplied
     (the production factory passes them only when ``SIM_MANAGER`` is on).  With
     none supplied this is a total no-op: the machine keeps ``manager is None`` so
     every §3/§5.3 hook early-returns and the simulated game is byte-identical to
-    the manager-less default.  When supplied, ``manager`` (+ optional ``bench``)
-    are attached to the machine (only if it does not already carry one — a
-    pre-built machine wins), ``bullpen`` (a ``{Team|int: [pitcher_id, ...]}`` map)
+    the manager-less default.  When supplied, ``manager`` is attached to the
+    machine (only if it does not already carry one — a pre-built machine wins;
+    ``bench`` is accepted and ignored since SIM-427 deleted the pinch hit),
+    ``bullpen`` (a ``{Team|int: [pitcher_id, ...]}`` map)
     seeds ``initial_state.manager.bullpen_available`` so the pull hook has arms,
     and ``pitcher_rest_days`` (a ``{pitcher_id: days}`` map, SIM-433 follow-on)
     feeds the fatigue / reliever-scoring model.
@@ -3455,8 +3055,6 @@ def simulate_game(
     # SIM-323 hook is a no-op -> byte-identical to the manager-less game.
     if manager is not None and getattr(state_machine, "manager", None) is None:
         state_machine.manager = manager
-        if bench:
-            state_machine.bench = dict(bench)
 
     # --- Thread the seed through the full-pool sampler's rng (§6.3) ----------
     # SIM-402: the full-pool sampler is CACHED per worker process
@@ -3530,6 +3128,26 @@ def simulate_game(
     )
     if eff_rest:
         state.pitcher_rest_days = dict(eff_rest)
+    # SIM-427: the managers, the pen's recent usage and source, the profiles.
+    if home_manager_id is not None:
+        state.home_manager_id = int(home_manager_id)
+    if away_manager_id is not None:
+        state.away_manager_id = int(away_manager_id)
+    if pitcher_recent_usage:
+        state.pitcher_recent_usage = {
+            int(k): (int(v[0]), int(v[1]), int(v[2])) for k, v in pitcher_recent_usage.items()
+        }
+    if bullpen_source is not None:
+        state.bullpen_source = str(bullpen_source)
+    if manager_profiles:
+        state.away_manager_profile = dict(
+            manager_profiles.get(0) or manager_profiles.get("0") or {}
+        )
+        state.home_manager_profile = dict(
+            manager_profiles.get(1) or manager_profiles.get("1") or {}
+        )
+    if manager_league_profile:
+        state.manager_league_profile = dict(manager_league_profile)
 
     # --- The game loop -------------------------------------------------------
     total_pitches = 0

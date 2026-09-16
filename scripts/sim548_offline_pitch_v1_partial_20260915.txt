@@ -1,0 +1,20 @@
+production attributes: {'pitch_pitcher_power': 16.0, 'pitch_batter_power': 1.0, 'fatigue_tto_sigma': 0.5, 'sit_sigma': 2.0, 'result_pitch_sigma': 1.0, 'result_pitcher_power': 16.0, 'result_batter_power': 8.0, 'result_density_power': 1.0} (split ON, cell index True)
+8000 test pitches of 2024 in 4447 (pitcher, game) groups; sampled in 0.2 s
+78 settings (production first)
+  [1/78]  108.4 s  pitch 0.8330  result 0.8804  chain 0.8821  production
+  [2/78]   83.1 s  pitch 0.7653  result 0.8804  chain 0.8723  {'pitch_pitcher_power': 1.0}
+  [3/78]   89.0 s  pitch 0.7663  result 0.8804  chain 0.8728  {'pitch_pitcher_power': 2.0}
+  [4/78]  113.2 s  pitch 0.7700  result 0.8804  chain 0.8742  {'pitch_pitcher_power': 4.0}
+  [5/78]  115.6 s  pitch 0.7838  result 0.8804  chain 0.8764  {'pitch_pitcher_power': 8.0}
+/app/simulation/full_pool_sampler.py:85: RuntimeWarning: overflow encountered in power
+  adj = np.where(f > 0.0, np.power(np.maximum(f, 1e-30), np.float32(power - 1.0)), 0.0)
+  [6/78]  121.1 s  pitch 0.9443  result 0.8804  chain 0.8894  {'pitch_pitcher_power': 32.0}
+  [7/78]  124.8 s  pitch 0.8316  result 0.8804  chain 0.8817  {'pitch_batter_power': 0.5}
+  [8/78]  141.1 s  pitch 0.8357  result 0.8804  chain 0.8844  {'pitch_batter_power': 2.0}
+  [9/78]  150.9 s  pitch 0.8461  result 0.8804  chain 0.8885  {'pitch_batter_power': 4.0}
+  [10/78]  142.5 s  pitch 0.8094  result 0.8519  chain 0.8689  {'fatigue_tto_sigma': 0.0}
+  [11/78]  144.1 s  pitch 0.8449  result 0.8957  chain 0.8919  {'fatigue_tto_sigma': 0.35}
+  [12/78]  134.3 s  pitch 0.8240  result 0.8690  chain 0.8781  {'fatigue_tto_sigma': 0.7}
+  [13/78]  143.6 s  pitch 0.8173  result 0.8603  chain 0.8757  {'fatigue_tto_sigma': 1.0}
+  [14/78]  166.5 s  pitch 0.8485  result 0.8996  chain 0.9010  {'sit_sigma': 1.0}
+  [15/78]  155.1 s  pitch 0.8282  result 0.8755  chain 0.8785  {'sit_sigma': 4.0}

@@ -1,0 +1,193 @@
+{
+ "_parameters": {
+  "market_id": "404",
+  "sport": "MLB",
+  "event_id": "92857",
+  "limit": 10,
+  "page": 1
+ },
+ "_pagination": {
+  "page": 1,
+  "limit": 10,
+  "total_pages": 1,
+  "total_items": 1,
+  "paginated_array": "offers",
+  "self": "/v3/offers?event_id=92857&market_id=404&sport=MLB&page=1"
+ },
+ "offers": [
+  {
+   "id": "ha-1",
+   "market_id": 404,
+   "event_id": 92857,
+   "player_id": 45184,
+   "team_id": null,
+   "opponent_id": null,
+   "link": "",
+   "active": true,
+   "participants": [
+    {
+     "id": "45184",
+     "name": "Bryce Miller",
+     "link": "/mlb/props/bryce-miller/",
+     "player": {
+      "short_name": "B. Miller",
+      "first_name": "Bryce",
+      "last_name": "Miller",
+      "image": "",
+      "position": "SP",
+      "team": "SEA",
+      "slug": "bryce-miller",
+      "jersey_number": 0
+     }
+    }
+   ],
+   "selections": [
+    {
+     "participant": null,
+     "selection": "over",
+     "active": true,
+     "opening_line": {
+      "line": 4.5,
+      "cost": -105,
+      "book_id": 10,
+      "created": "2024-08-15 06:46:34"
+     },
+     "label": "Over",
+     "short_label": "Over",
+     "books": [
+      {
+       "id": 10,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2024-08-15 16:30:00",
+         "cost": -110,
+         "line": 4.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": {
+          "projection": 0,
+          "cover_probability": 0,
+          "expected_value": null,
+          "bet_rating": null,
+          "result": null,
+          "notes": null,
+          "market_ev": null,
+          "fair_probability": null
+         }
+        }
+       ]
+      },
+      {
+       "id": 15,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": false,
+         "best": true,
+         "updated": "2024-08-15 16:55:00",
+         "cost": -102,
+         "line": 4.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": {
+          "projection": 0,
+          "cover_probability": 0,
+          "expected_value": null,
+          "bet_rating": null,
+          "result": null,
+          "notes": null,
+          "market_ev": null,
+          "fair_probability": null
+         }
+        }
+       ]
+      }
+     ],
+     "id": "ha-1-o"
+    },
+    {
+     "participant": null,
+     "selection": "under",
+     "active": true,
+     "opening_line": {
+      "line": 4.5,
+      "cost": -115,
+      "book_id": 10,
+      "created": "2024-08-15 06:46:34"
+     },
+     "label": "Under",
+     "short_label": "Under",
+     "books": [
+      {
+       "id": 10,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": true,
+         "updated": "2024-08-15 16:30:00",
+         "cost": -112,
+         "line": 4.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": {
+          "projection": 0,
+          "cover_probability": 0,
+          "expected_value": null,
+          "bet_rating": null,
+          "result": null,
+          "notes": null,
+          "market_ev": null,
+          "fair_probability": null
+         }
+        }
+       ]
+      },
+      {
+       "id": 15,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": false,
+         "best": false,
+         "updated": "2024-08-15 16:55:00",
+         "cost": -120,
+         "line": 4.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": {
+          "projection": 0,
+          "cover_probability": 0,
+          "expected_value": null,
+          "bet_rating": null,
+          "result": null,
+          "notes": null,
+          "market_ev": null,
+          "fair_probability": null
+         }
+        }
+       ]
+      }
+     ],
+     "id": "ha-1-u"
+    }
+   ]
+  }
+ ],
+ "markets": [
+  404
+ ],
+ "ts": 1779781823,
+ "utc": "2026-05-26 07:50:23"
+}

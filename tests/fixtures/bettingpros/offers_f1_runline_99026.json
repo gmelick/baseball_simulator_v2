@@ -1,0 +1,186 @@
+{
+ "offers": [
+  {
+   "id": "fdcb636e0400bc48a1053f39f529b93d",
+   "market_id": 282,
+   "event_id": 99026,
+   "player_id": null,
+   "team_id": null,
+   "opponent_id": null,
+   "link": "",
+   "active": true,
+   "participants": [
+    {
+     "id": "ATL",
+     "name": "Braves",
+     "link": "/mlb/teams/atlanta-braves/",
+     "team": {
+      "city": "Atlanta",
+      "abbreviation": "ATL",
+      "conference": "NL",
+      "division": "East",
+      "slug": "atlanta-braves",
+      "stadium_deg_offset": "160"
+     }
+    },
+    {
+     "id": "TB",
+     "name": "Rays",
+     "link": "/mlb/teams/tampa-bay-rays/",
+     "team": {
+      "city": "Tampa Bay",
+      "abbreviation": "TB",
+      "conference": "AL",
+      "division": "East",
+      "slug": "tampa-bay-rays",
+      "stadium_deg_offset": "45"
+     }
+    }
+   ],
+   "selections": [
+    {
+     "participant": "ATL",
+     "selection": "",
+     "active": true,
+     "opening_line": {
+      "line": -0.5,
+      "cost": 280,
+      "book_id": 14,
+      "created": "2026-09-09 17:37:43"
+     },
+     "label": "Braves",
+     "short_label": "ATL",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:12",
+         "cost": 265,
+         "line": 0,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com"
+        }
+       ]
+      },
+      {
+       "id": 33,
+       "lines": [
+        {
+         "id": "33_b9d7dd10cd09f46bca07f4132fe97744",
+         "from_scout": true,
+         "main": true,
+         "best": true,
+         "updated": "2026-09-10 16:16:12",
+         "cost": -450,
+         "line": 0.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://thescore.bet/sport/baseball/organization/united-states/competition/mlb/event/142621b6-66b6-4f66-a428-f3be154ce57d"
+        }
+       ]
+      },
+      {
+       "id": 49,
+       "lines": [
+        {
+         "id": "49_b9d7dd10cd09f46bca07f4132fe97744",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:12",
+         "cost": 260,
+         "line": -0.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://app.hardrock.bet/?deep_link_value=betslip%2F1085411550132568461"
+        }
+       ]
+      }
+     ],
+     "id": "b9d7dd10cd09f46bca07f4132fe97744"
+    },
+    {
+     "participant": "TB",
+     "selection": "",
+     "active": true,
+     "opening_line": {
+      "line": 0.5,
+      "cost": -400,
+      "book_id": 14,
+      "created": "2026-09-09 17:37:43"
+     },
+     "label": "Rays",
+     "short_label": "TB",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:12",
+         "cost": 260,
+         "line": 0,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com"
+        }
+       ]
+      },
+      {
+       "id": 33,
+       "lines": [
+        {
+         "id": "33_c1c723465151e3be4635b064b6c03e2e",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:12",
+         "cost": 260,
+         "line": -0.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://thescore.bet/sport/baseball/organization/united-states/competition/mlb/event/142621b6-66b6-4f66-a428-f3be154ce57d"
+        }
+       ]
+      },
+      {
+       "id": 49,
+       "lines": [
+        {
+         "id": "49_c1c723465151e3be4635b064b6c03e2e",
+         "from_scout": true,
+         "main": true,
+         "best": true,
+         "updated": "2026-09-10 16:16:12",
+         "cost": -375,
+         "line": 0.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://app.hardrock.bet/?deep_link_value=betslip%2F8712257519084503437"
+        }
+       ]
+      }
+     ],
+     "id": "c1c723465151e3be4635b064b6c03e2e"
+    }
+   ]
+  }
+ ],
+ "_pagination": {
+  "page": 1,
+  "limit": 10,
+  "total_pages": 1,
+  "total_items": 1,
+  "paginated_array": "offers",
+  "self": "/v3/offers?event_id=99026&market_id=282&sport=MLB&event_id=99026&market_id=282&sport=MLB"
+ }
+}

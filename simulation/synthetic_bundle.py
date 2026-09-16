@@ -48,6 +48,7 @@ import numpy as np
 from pipeline.batch.engine_artifacts import (
     AdvancementPool,
     BattedBallPool,
+    ChangePool,
     EngineArtifacts,
     HandPool,
     StealPool,
@@ -57,6 +58,8 @@ __all__ = [
     "LEAGUE_PITCH_MODEL",
     "LEAGUE_INPLAY_MODEL",
     "DEFAULT_ADVANCEMENT_RATES",
+    "DEFAULT_CHANGE_RATES",
+    "change_pool",
     "PlayRow",
     "canonical_transition",
     "inplay_rows",
@@ -393,6 +396,84 @@ def steal_pools(
     return out
 
 
+#: The synthetic change pool's rates per boundary: (a starter, a half-inning
+#: boundary), (a starter, mid-inning), (a reliever, half), (a reliever, mid) —
+#: near the live pool's own (2026-09-13: 28.7% at a half boundary, 3.5%
+#: mid-inning; starters 4.5%, relievers 15.4%), with the starter's rate rising
+#: with his pitch-count bucket so a no-DB game pulls him around 85-95 pitches.
+DEFAULT_CHANGE_RATES: dict[str, float] = {
+    "starter_half_low": 0.02,  # a starter, a new half inning, under 60 pitches
+    "starter_half_mid": 0.25,  # 60-89 pitches
+    "starter_half_high": 0.70,  # 90+ pitches
+    "starter_mid": 0.03,
+    "reliever_half": 0.40,
+    "reliever_mid": 0.10,
+}
+
+
+def change_pool(
+    rates: dict[str, float] | None = None, *, season: int = 2024, manager_id: int = 1
+) -> ChangePool:
+    """SIM-427: a pitching-change opportunity pool for the no-DB seam — three
+    weighted rows (changed / changed / stayed) in every hard cell the draw
+    reads: (starter, half boundary, pitch-count bucket 0..15, times through
+    1..4). The rows carry one manager and a rested incoming arm so the
+    manager weight and the reliever draw's usage weights have something to
+    read (neutral, since every row is alike)."""
+    r = dict(DEFAULT_CHANGE_RATES)
+    if rates:
+        r.update(rates)
+    sit_rows: list[list[float]] = []
+    starter_col: list[int] = []
+    half_col: list[int] = []
+    changed_col: list[int] = []
+    weight_col: list[float] = []
+    for starter in (1, 0):
+        for half in (1, 0):
+            for bucket in range(16):
+                for tto in range(1, 5):
+                    if starter and half:
+                        rate = (
+                            r["starter_half_low"]
+                            if bucket < 6
+                            else r["starter_half_mid"]
+                            if bucket < 9
+                            else r["starter_half_high"]
+                        )
+                    elif starter:
+                        rate = r["starter_mid"] * (1.0 + bucket / 8.0)
+                    elif half:
+                        rate = r["reliever_half"]
+                    else:
+                        rate = r["reliever_mid"]
+                    rate = float(min(max(rate, 0.0), 1.0))
+                    pc = bucket * 10 + 5
+                    bf = (tto - 1) * 9 + 4
+                    inning = min(9, 1 + bucket // 2)
+                    for changed, w in ((1, rate / 2.0), (1, rate / 2.0), (0, 1.0 - rate)):
+                        sit_rows.append([pc, bf, inning, 0.0, 0.0, 0.0])
+                        starter_col.append(starter)
+                        half_col.append(half)
+                        changed_col.append(changed)
+                        weight_col.append(w)
+    n = len(sit_rows)
+    return ChangePool(
+        sit=np.asarray(sit_rows, dtype=np.float32),
+        pitcher_id=np.zeros(n, dtype=np.int64),
+        incoming_id=np.full(n, 9_999_990, dtype=np.int64),
+        season=np.full(n, int(season), dtype=np.int64),
+        is_starter=np.asarray(starter_col, dtype=np.int8),
+        new_half=np.asarray(half_col, dtype=np.int8),
+        changed=np.asarray(changed_col, dtype=np.int8),
+        recency=np.asarray(weight_col, dtype=np.float32),
+        manager_id=np.full(n, int(manager_id), dtype=np.int64),
+        in_days_rest=np.full(n, 5, dtype=np.int8),
+        in_pitched_2d=np.zeros(n, dtype=np.int8),
+        in_pitches_3d=np.zeros(n, dtype=np.int16),
+        in_throws=np.full(n, 2, dtype=np.int8),
+    )
+
+
 def synthetic_artifacts(
     *,
     pitch_model: dict[str, float] | None = None,
@@ -405,6 +486,7 @@ def synthetic_artifacts(
     got_away: bool = False,
     air_share: float = 0.45,
     season: int = 2024,
+    manager: bool = False,
 ) -> EngineArtifacts:
     """Build an in-memory bundle.
 
@@ -433,6 +515,8 @@ def synthetic_artifacts(
         adv_pools=adv,
         steal_pools=stl,
         seasons=[int(season)],
+        # SIM-427: the change pool the manager draw reads (``manager=True``).
+        change_pool=change_pool(season=season) if manager else None,
     )
 
 
@@ -444,9 +528,11 @@ def league_artifacts(
     advancement: dict[str, tuple[float, float]] | bool = True,
     steal: tuple[float, float] | None = None,
     season: int = 2024,
+    manager: bool = True,
 ) -> EngineArtifacts:
     """The league-average bundle: every count, every cell, the advancement
-    draws on. A no-DB game drawn from it is realistic baseball."""
+    draws on, the change pool present. A no-DB game drawn from it is
+    realistic baseball."""
     return synthetic_artifacts(
         pitch_model=pitch_model or LEAGUE_PITCH_MODEL,
         pitch_models=pitch_models,
@@ -454,6 +540,7 @@ def league_artifacts(
         advancement=advancement,
         steal=steal,
         season=season,
+        manager=manager,
     )
 
 

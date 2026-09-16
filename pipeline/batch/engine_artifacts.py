@@ -34,6 +34,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from typing import Any
 
 import duckdb
 import numpy as np
@@ -599,20 +600,84 @@ def build_park_geometry(con: duckdb.DuckDBPyConnection, out_dir: str, seasons: l
 _CHANGE_SIT_COLS = ["pitch_count", "batters_faced", "inning", "outs", "runners_state", "score_diff"]
 
 
+def _default_game_context(seasons: list[int]) -> tuple[dict, dict, dict] | None:
+    """SIM-427: the builder's one Postgres read — the game's two managers and
+    every appearance's rest as of its game (``pipeline.bullpen_usage``).
+    None when no DSN is set or the read fails: the pool then carries unknowns
+    (-1) in the manager and rest columns, and the log says so."""
+    dsn = os.environ.get("BASEBALL_DB_DSN", "").strip()
+    if not dsn:
+        log.warning(
+            "SIM-427: BASEBALL_DB_DSN is unset — the change pool carries no manager "
+            "and no incoming-arm rest (every row unknown)."
+        )
+        return None
+    try:
+        from pipeline.bullpen_usage import fetch_game_context_sync
+
+        return fetch_game_context_sync(dsn, seasons)
+    except Exception as exc:  # noqa: BLE001 — the pool still builds, degraded
+        log.warning(
+            "SIM-427: the game context could not be read from Postgres (%s: %s) — the "
+            "change pool carries no manager and no incoming-arm rest.",
+            type(exc).__name__,
+            exc,
+        )
+        return None
+
+
+#: The four SIM-427 columns the change pool's meta parquet carries beyond the
+#: part-D set, and their "unknown" value.
+_CHANGE_CTX_COLS: tuple[tuple[str, int], ...] = (
+    ("manager_id", -1),
+    ("in_days_rest", -1),
+    ("in_pitched_2d", -1),
+    ("in_pitches_3d", -1),
+    ("in_throws", 0),
+)
+
+
 def build_pitching_change_pool(
-    con: duckdb.DuckDBPyConnection, out_dir: str, seasons: list[int]
+    con: duckdb.DuckDBPyConnection,
+    out_dir: str,
+    seasons: list[int],
+    *,
+    game_context: tuple[dict, dict] | None | bool = True,
 ) -> dict:
-    """Write ``<out_dir>/manager_pool/change.{sit.npy, meta.parquet}`` and the
-    manifest (the counts and the pool's own change rates). Returns the manifest."""
+    """Write ``<out_dir>/manager_pool/change.{sit.npy, meta.parquet}``, the
+    reliever ROLE sidecar ``roles.parquet`` and the manifest (the counts and
+    the pool's own change rates). Returns the manifest.
+
+    SIM-427: every row also carries the FIELDING side's manager (``manager_id``;
+    the top of an inning is the home side fielding) and the incoming arm's rest
+    as of the game (``in_days_rest`` capped at five, ``in_pitched_2d``,
+    ``in_pitches_3d`` — ``pipeline.bullpen_usage``'s definitions), read from
+    Postgres through ``game_context`` (``True`` = read it; a ``(managers,
+    usage)`` pair = use it, the test seam; ``None`` / ``False`` = unknowns).
+    """
     pool_dir = os.path.join(out_dir, "manager_pool")
     os.makedirs(pool_dir, exist_ok=True)
     season_list = ", ".join(str(int(s)) for s in seasons)
+    # SIM-535: the row's game date (a YYYYMMDD integer) so the backtest's
+    # point-in-time cutoff applies to this draw too; an older pitch pool
+    # without the column leaves it NULL (the cutoff then refuses, loudly).
+    have_date = "game_date" in {
+        r[0]
+        for r in con.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema='sim' AND table_name='pitch_pool'"
+        ).fetchall()
+    }
+    ymd_agg = (
+        "CAST(strftime(max(game_date), '%Y%m%d') AS INTEGER)" if have_date else "NULL::INTEGER"
+    )
     con.execute(
         f"""
         CREATE OR REPLACE TEMP TABLE _change_pool AS
         WITH pp AS (
             SELECT game_pk, at_bat_number, arg_min(pitcher_id, pitch_number) AS pitcher_id,
-                   count(*) AS n_pitches, max(recency_weight) AS recency
+                   count(*) AS n_pitches, max(recency_weight) AS recency,
+                   {ymd_agg} AS game_ymd
             FROM sim.pitch_pool WHERE season IN ({season_list}) GROUP BY 1, 2
         ),
         pa AS (
@@ -620,7 +685,8 @@ def build_pitching_change_pool(
                    s.outs_when_up AS outs,
                    CAST(s.on_1b > 0 AS INTEGER) + 2 * CAST(s.on_2b > 0 AS INTEGER)
                        + 4 * CAST(s.on_3b > 0 AS INTEGER) AS runners_state,
-                   s.home_score, s.away_score, pp.pitcher_id, pp.n_pitches, pp.recency
+                   s.home_score, s.away_score, pp.pitcher_id, pp.n_pitches, pp.recency,
+                   pp.game_ymd
             FROM derived.at_bat_situations s JOIN pp USING (game_pk, at_bat_number)
             WHERE s.season IN ({season_list})
         ),
@@ -636,7 +702,7 @@ def build_pitching_change_pool(
             FROM pa WINDOW side AS (PARTITION BY game_pk, top_or_bottom ORDER BY at_bat_number)
         ),
         b AS (
-            SELECT game_pk, season, at_bat_number, inning, outs, runners_state,
+            SELECT game_pk, season, at_bat_number, top_or_bottom, inning, outs, runners_state,
                 CASE WHEN top_or_bottom = 0 THEN home_score - away_score
                      ELSE away_score - home_score END AS score_diff,
                 prev_pitcher AS pitcher_id, pitcher_id AS incoming_id,
@@ -645,23 +711,87 @@ def build_pitching_change_pool(
                 CAST(prev_pitcher = side_starter AS TINYINT) AS is_starter,
                 lag(pc_after) OVER side AS pitch_count,
                 lag(bf_after) OVER side AS batters_faced,
-                recency
+                recency, game_ymd
             FROM seq WINDOW side AS (PARTITION BY game_pk, top_or_bottom ORDER BY at_bat_number)
         )
         SELECT * FROM b WHERE pitcher_id IS NOT NULL AND pitch_count IS NOT NULL
         ORDER BY game_pk, at_bat_number
         """
     )
-    d = con.execute(f"SELECT {', '.join(_CHANGE_SIT_COLS)} FROM _change_pool").fetchnumpy()
+    # Every read below orders by (game_pk, at_bat_number) so the sit array and
+    # the meta parquet share one row order whatever the scan order.
+    d = con.execute(
+        f"SELECT {', '.join(_CHANGE_SIT_COLS)} FROM _change_pool ORDER BY game_pk, at_bat_number"
+    ).fetchnumpy()
     n = len(d[_CHANGE_SIT_COLS[0]])
     sit = np.nan_to_num(
         np.stack([np.ma.filled(d[c], np.nan).astype(np.float32) for c in _CHANGE_SIT_COLS], axis=1)
     ).astype(np.float32)
     np.save(os.path.join(pool_dir, "change.sit.npy"), sit)
+    # --- SIM-427: the fielding manager and the incoming arm's rest per row ---
+    ctx = _default_game_context(seasons) if game_context is True else game_context
+    keys = con.execute(
+        "SELECT game_pk, at_bat_number, top_or_bottom, incoming_id FROM _change_pool "
+        "ORDER BY game_pk, at_bat_number"
+    ).fetchnumpy()
+    gpk = np.ma.filled(keys["game_pk"], 0).astype(np.int64)
+    abn = np.ma.filled(keys["at_bat_number"], 0).astype(np.int64)
+    tob = np.ma.filled(keys["top_or_bottom"], 0).astype(np.int64)
+    inc = np.ma.filled(keys["incoming_id"], 0).astype(np.int64)
+    manager = np.full(n, -1, dtype=np.int64)
+    rest = np.full((n, 3), -1, dtype=np.int64)
+    throws_col = np.zeros(n, dtype=np.int64)
+    if ctx:
+        managers, usage = ctx[0], ctx[1]
+        throws: dict = ctx[2] if len(ctx) > 2 else {}
+        for i in range(n):
+            pair = managers.get(int(gpk[i]))
+            if pair is not None:
+                m = pair[0] if int(tob[i]) == 0 else pair[1]  # top: the home side fields
+                if m is not None:
+                    manager[i] = int(m)
+            u = usage.get((int(gpk[i]), int(inc[i])))
+            if u is not None:
+                rest[i] = u
+            throws_col[i] = int(throws.get(int(inc[i]), 0))
+    import pyarrow as pa
+
+    ctx_tbl = pa.table(
+        {
+            "game_pk": pa.array(gpk, type=pa.int64()),
+            "at_bat_number": pa.array(abn, type=pa.int64()),
+            "manager_id": pa.array(manager, type=pa.int64()),
+            "in_days_rest": pa.array(rest[:, 0], type=pa.int64()),
+            "in_pitched_2d": pa.array(rest[:, 1], type=pa.int64()),
+            "in_pitches_3d": pa.array(rest[:, 2], type=pa.int64()),
+            "in_throws": pa.array(throws_col, type=pa.int64()),
+        }
+    )
+    con.register("_change_ctx", ctx_tbl)
     con.execute(
-        "COPY (SELECT game_pk, at_bat_number, season, pitcher_id, incoming_id, is_starter, "
-        "new_half, changed, recency AS recency_weight FROM _change_pool) "
+        "COPY (SELECT p.game_pk, p.at_bat_number, p.season, p.pitcher_id, p.incoming_id, "
+        "p.is_starter, p.new_half, p.changed, p.recency AS recency_weight, p.game_ymd, "
+        "c.manager_id, c.in_days_rest, c.in_pitched_2d, c.in_pitches_3d, c.in_throws "
+        "FROM _change_pool p LEFT JOIN _change_ctx c USING (game_pk, at_bat_number) "
+        "ORDER BY p.game_pk, p.at_bat_number) "
         f"TO '{os.path.join(pool_dir, 'change.meta.parquet')}' (FORMAT parquet)"
+    )
+    con.unregister("_change_ctx")
+    # --- SIM-427: the reliever ROLE sidecar — per incoming arm and season, his
+    # entries, the share in a high-leverage spot (inning >= 7, margin within
+    # two — the manager computor's own bucket) and his mean entry inning.
+    con.execute(
+        "COPY (SELECT incoming_id AS pitcher_id, season, count(*) AS n_entries, "
+        "avg(CASE WHEN inning >= 7 AND abs(score_diff) <= 2 THEN 1.0 ELSE 0.0 END) "
+        "AS hi_lev_share, avg(inning) AS mean_entry_inning "
+        "FROM _change_pool WHERE changed = 1 AND is_starter IS NOT NULL "
+        "GROUP BY incoming_id, season) "
+        f"TO '{os.path.join(pool_dir, 'roles.parquet')}' (FORMAT parquet)"
+    )
+    n_roles = int(
+        con.execute(
+            f"SELECT count(*) FROM read_parquet('{os.path.join(pool_dir, 'roles.parquet')}')"
+        ).fetchone()[0]
     )
     rates = con.execute(
         "SELECT avg(changed), avg(changed) FILTER (WHERE new_half = 1), "
@@ -681,17 +811,27 @@ def build_pitching_change_pool(
             "changed_reliever": (float(rates[4]) if rates[4] is not None else None),
         },
         "games": int(rates[5] or 0),
+        # SIM-427: the context coverage and the role sidecar's size.
+        "manager_coverage": float((manager >= 0).mean()) if n else 0.0,
+        "rest_coverage": float((rest[:, 0] >= 0).mean()) if n else 0.0,
+        "roles": n_roles,
+        # SIM-535: whether every row carries its game date (the cutoff's input).
+        "game_ymd": bool(have_date),
     }
     with open(os.path.join(pool_dir, "manifest.json"), "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2)
     log.info(
         "manager_pool[change]: %d boundaries over %d games; change rate %.4f "
-        "(new half %.4f, mid-inning %.4f)",
+        "(new half %.4f, mid-inning %.4f); manager on %.1f%% of rows, incoming-arm rest "
+        "on %.1f%%; %d reliever role rows",
         n,
         manifest["games"],
         manifest["rates"]["changed"] or 0.0,
         manifest["rates"]["changed_new_half"] or 0.0,
         manifest["rates"]["changed_mid_inning"] or 0.0,
+        100.0 * manifest["manager_coverage"],
+        100.0 * manifest["rest_coverage"],
+        n_roles,
     )
     return manifest
 
@@ -1067,11 +1207,25 @@ _ACTOR_SIM_ENGINES: dict[str, tuple[str, str]] = {
         "similarity.engines.pitcher_steal_similarity",
         "PitcherStealSimilarityEngine",
     ),
+    # SIM-427: the manager (the usage sub-score weights the pitching-change draw).
+    "manager": ("similarity.engines.manager_similarity", "ManagerSimilarityEngine"),
 }
 
 #: The matrices, each: (engine, the key-tuple -> "a:b[:c]" string, the score
 #: attribute on the engine's SimilarityResult, the result's key attributes).
 _ACTOR_SIM_SPECS: dict[str, dict] = {
+    # SIM-427 (owner decision 2026-09-13): the manager's USAGE similarity —
+    # starter pitch counts, pulled-before-100, closer entry leverage, the
+    # high-leverage reliever share, opener and bulk rates, available-reliever
+    # usage — is the weight on the pitching-change draw. The concentration
+    # check does not apply to it by design (the live manager's own rows
+    # carrying more weight is the point); the fit's effective-sample floor is
+    # its guard.
+    "manager_usage": {
+        "engine": "manager",
+        "score": "usage_score",
+        "keys": ("manager_id", "season"),
+    },
     "batter": {"engine": "batter", "score": "score", "keys": ("batter_id", "season")},
     "catcher": {"engine": "catcher", "score": "score", "keys": ("catcher_id", "season")},
     "catcher_throwing": {
@@ -1140,16 +1294,29 @@ def build_actor_sim_matrices(
     *,
     limit: int | None = None,
     strict: bool = False,
+    only: set[str] | None = None,
 ) -> dict[str, int]:
     """SIM-523 part A: export the actor score matrices for ``seasons`` into
     ``<out_dir>/actor_sim/`` and write the concentration report. ``limit``
     scores only the first N profiles per matrix (verification mode). Returns
-    the matrix sizes by name."""
+    the matrix sizes by name.
+
+    SIM-427: ``only`` (matrix names, e.g. ``{"manager_usage"}``) rebuilds those
+    matrices alone and MERGES their sizes into the existing manifest — one
+    matrix at a time, without paying for the others (a full build segfaulted
+    on the batter engine on 2026-09-13, the SIM-445 class). The concentration
+    report is not re-run in that mode.
+    """
     sim_dir = os.path.join(out_dir, "actor_sim")
     os.makedirs(sim_dir, exist_ok=True)
     season_set = {int(s) for s in seasons}
     sizes: dict[str, int] = {}
-    engines: dict[str, object] = {}
+    if only:
+        manifest_path = os.path.join(sim_dir, "manifest.json")
+        if os.path.exists(manifest_path):
+            with open(manifest_path, encoding="utf-8") as fh:
+                sizes = dict(json.load(fh).get("sizes", {}))
+    engines: dict[str, Any] = {}
 
     def _engine(name: str):
         eng = engines.get(name)
@@ -1167,6 +1334,8 @@ def build_actor_sim_matrices(
         return eng
 
     for name, spec in _ACTOR_SIM_SPECS.items():
+        if only and name not in only:
+            continue
         eng = _engine(spec["engine"])
         keys = sorted(k for k in eng._profiles if int(k[-1]) in season_set)
         if limit is not None:
@@ -1175,19 +1344,24 @@ def build_actor_sim_matrices(
         _write_actor_sim(sim_dir, name, index, mat)
         sizes[name] = len(index)
         log.info("actor_sim[%s]: %d x %d", name, len(index), len(index))
-    feng = _engine("fielder")
-    for pos in _FIELDER_POSITIONS:
-        keys = sorted(k for k in feng._profiles if k[1] == pos and int(k[2]) in season_set)
-        if limit is not None:
-            keys = keys[:limit]
-        index, mat = _matrix_from_queries(
-            keys, feng.query, ("player_id", "position", "season"), "score"
-        )
-        _write_actor_sim(sim_dir, f"fielder_{pos}", index, mat)
-        sizes[f"fielder_{pos}"] = len(index)
-        log.info("actor_sim[fielder_%s]: %d x %d", pos, len(index), len(index))
+    if not only or any(n.startswith("fielder_") for n in only):
+        feng = _engine("fielder")
+        for pos in _FIELDER_POSITIONS:
+            if only and f"fielder_{pos}" not in only:
+                continue
+            keys = sorted(k for k in feng._profiles if k[1] == pos and int(k[2]) in season_set)
+            if limit is not None:
+                keys = keys[:limit]
+            index, mat = _matrix_from_queries(
+                keys, feng.query, ("player_id", "position", "season"), "score"
+            )
+            _write_actor_sim(sim_dir, f"fielder_{pos}", index, mat)
+            sizes[f"fielder_{pos}"] = len(index)
+            log.info("actor_sim[fielder_%s]: %d x %d", pos, len(index), len(index))
     with open(os.path.join(sim_dir, "manifest.json"), "w", encoding="utf-8") as fh:
         json.dump({"seasons": sorted(season_set), "sizes": sizes}, fh, indent=2)
+    if only:
+        return sizes
 
     report = concentration_report(duckdb_path, sim_dir, sorted(season_set))
     with open(os.path.join(sim_dir, "concentration.json"), "w", encoding="utf-8") as fh:
@@ -1672,6 +1846,18 @@ class ChangePool:
     new_half: np.ndarray  # (N,) int8 — the first plate appearance of a half inning
     changed: np.ndarray  # (N,) int8
     recency: np.ndarray  # (N,) float32
+    # SIM-427: the FIELDING side's manager (-1 unknown) and the incoming arm's
+    # rest as of the game — days since his last outing capped at five,
+    # pitched on either of the two preceding days, pitches over the three
+    # preceding days (-1 = unknown, neutral). None on a pre-SIM-427 bundle.
+    manager_id: np.ndarray | None = None  # (N,) int64
+    in_days_rest: np.ndarray | None = None  # (N,) int8
+    in_pitched_2d: np.ndarray | None = None  # (N,) int8
+    in_pitches_3d: np.ndarray | None = None  # (N,) int16
+    in_throws: np.ndarray | None = None  # (N,) int8 — 0 unknown, 1 L, 2 R
+    #: SIM-535: the row's game date as YYYYMMDD (the point-in-time cutoff's
+    #: input); None on a bundle built before it — a cutoff then refuses.
+    game_ymd: np.ndarray | None = None  # (N,) int32
 
     @property
     def n(self) -> int:
@@ -1773,6 +1959,13 @@ _CHANGE_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
     "new_half",
     "changed",
     "recency",
+    # SIM-427 (None on an older bundle — the isinstance guard skips them).
+    "manager_id",
+    "in_days_rest",
+    "in_pitched_2d",
+    "in_pitches_3d",
+    "in_throws",
+    "game_ymd",
 )
 #: SIM-510: every AdvancementPool column is numeric, so the whole pool is shareable.
 _ADV_POOL_SHAREABLE_ATTRS: tuple[str, ...] = (
@@ -1818,6 +2011,7 @@ class EngineArtifacts:
         park_geometry: dict | None = None,
         change_pool: ChangePool | None = None,
         receiving: dict | None = None,
+        change_roles: dict[str, tuple[int, float, float]] | None = None,
     ):
         self.pools: dict[str, HandPool] = pools
         #: SIM-523 part A: matrix role -> {"index": {key: row}, "matrix": (n, n)
@@ -1833,6 +2027,10 @@ class EngineArtifacts:
         #: SIM-523 part E: the receiving-ratio document (``build_receiving_profiles``),
         #: or None on a bundle without it — the factor then stays neutral.
         self.receiving: dict | None = receiving
+        #: SIM-427: the reliever ROLE sidecar — ``"pitcher_id:season"`` ->
+        #: (entries, high-leverage entry share, mean entry inning); None on a
+        #: bundle without it (the role weight then stays neutral).
+        self.change_roles: dict[str, tuple[int, float, float]] | None = change_roles
         self.bb_pools: dict[str, BattedBallPool] = bb_pools or {}
         #: SIM-474: target base ("2"/"3") -> StealPool; {} on a legacy bundle.
         self.steal_pools: dict[str, StealPool] = steal_pools or {}
@@ -2441,6 +2639,7 @@ class EngineArtifacts:
             # SIM-523 part D: the pitching-change opportunity pool (None on a
             # bundle without it).
             change_pool: ChangePool | None = None
+            change_roles: dict[str, tuple[int, float, float]] | None = None
             mp_dir = os.path.join(art_dir, "manager_pool")
             if os.path.exists(os.path.join(mp_dir, "manifest.json")):
                 cm = con.execute(
@@ -2452,6 +2651,15 @@ class EngineArtifacts:
                     if isinstance(v, np.ndarray):
                         return v
                     return np.asarray(np.ma.filled(_m[col], fill), dtype=dtype)
+
+                def _cp_opt(attr: str, col: str, dtype, *, _m=cm) -> np.ndarray | None:
+                    # SIM-427: a column an older bundle lacks stays None.
+                    v = views.get(f"change_pool.{attr}")
+                    if isinstance(v, np.ndarray):
+                        return v
+                    if col not in _m:
+                        return None
+                    return np.asarray(np.ma.filled(_m[col], -1), dtype=dtype)
 
                 change_pool = ChangePool(
                     sit=_take("change_pool.sit", os.path.join(mp_dir, "change.sit.npy")),
@@ -2468,7 +2676,28 @@ class EngineArtifacts:
                             np.ma.filled(cm["recency_weight"], 1.0).astype(np.float32), nan=1.0
                         )
                     ),
+                    manager_id=_cp_opt("manager_id", "manager_id", np.int64),
+                    in_days_rest=_cp_opt("in_days_rest", "in_days_rest", np.int8),
+                    in_pitched_2d=_cp_opt("in_pitched_2d", "in_pitched_2d", np.int8),
+                    in_pitches_3d=_cp_opt("in_pitches_3d", "in_pitches_3d", np.int16),
+                    in_throws=_cp_opt("in_throws", "in_throws", np.int8),
+                    game_ymd=_cp_opt("game_ymd", "game_ymd", np.int32),
                 )
+                # SIM-535: a date column that is NULL on every row (a pitch pool
+                # without dates) must read as ABSENT, so a cutoff refuses instead
+                # of admitting every row through the -1 fill.
+                if change_pool.game_ymd is not None and not (change_pool.game_ymd > 0).any():
+                    change_pool.game_ymd = None
+                roles_path = os.path.join(mp_dir, "roles.parquet")
+                if os.path.exists(roles_path):
+                    rr = con.execute(
+                        f"SELECT pitcher_id, season, n_entries, hi_lev_share, mean_entry_inning "
+                        f"FROM read_parquet('{roles_path}')"
+                    ).fetchall()
+                    change_roles = {
+                        f"{int(pid)}:{int(se)}": (int(ne), float(hs), float(mi))
+                        for pid, se, ne, hs, mi in rr
+                    }
         finally:
             con.close()
         ps_index: dict[str, int] = {}
@@ -2564,6 +2793,7 @@ class EngineArtifacts:
             park_geometry=park_geometry,
             change_pool=change_pool,
             receiving=receiving,
+            change_roles=change_roles,
         )
 
 
@@ -2605,6 +2835,15 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Score only N pitcher profiles (verification; omit for full nightly run).",
     )
+    ap.add_argument(
+        "--matrix",
+        action="append",
+        default=None,
+        help=(
+            "SIM-427: with --what actors_sim, build only this matrix (repeatable; e.g. "
+            "--matrix manager_usage) and merge its size into the existing manifest."
+        ),
+    )
     args = ap.parse_args(argv)
 
     con = duckdb.connect(args.duckdb_path, read_only=True)
@@ -2638,6 +2877,7 @@ def main(argv: list[str] | None = None) -> int:
                 seasons,
                 limit=args.pitcher_sim_limit,
                 strict=args.strict_concentration,
+                only=set(args.matrix) if args.matrix else None,
             )
     finally:
         con.close()

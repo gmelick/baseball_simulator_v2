@@ -1,0 +1,253 @@
+{
+ "offers": [
+  {
+   "id": "5e345aff961a3a346db13a79d9ab5f42",
+   "market_id": 278,
+   "event_id": 99026,
+   "player_id": null,
+   "team_id": null,
+   "opponent_id": null,
+   "link": "",
+   "active": true,
+   "participants": [
+    {
+     "id": "TB",
+     "name": "Rays",
+     "link": "/mlb/teams/tampa-bay-rays/",
+     "team": {
+      "city": "Tampa Bay",
+      "abbreviation": "TB",
+      "conference": "AL",
+      "division": "East",
+      "slug": "tampa-bay-rays",
+      "stadium_deg_offset": "45"
+     }
+    },
+    {
+     "id": "ATL",
+     "name": "Braves",
+     "link": "/mlb/teams/atlanta-braves/",
+     "team": {
+      "city": "Atlanta",
+      "abbreviation": "ATL",
+      "conference": "NL",
+      "division": "East",
+      "slug": "atlanta-braves",
+      "stadium_deg_offset": "160"
+     }
+    }
+   ],
+   "selections": [
+    {
+     "participant": null,
+     "selection": "draw",
+     "active": true,
+     "opening_line": {
+      "line": 1,
+      "cost": -120,
+      "book_id": 10,
+      "created": "2026-09-09 23:15:46"
+     },
+     "label": "Draw",
+     "short_label": "Draw",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:44",
+         "cost": -130,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com"
+        }
+       ]
+      },
+      {
+       "id": 10,
+       "lines": [
+        {
+         "id": "10_69e7fdf703bb594c833ecbd50120b2a8",
+         "from_scout": true,
+         "main": true,
+         "best": true,
+         "updated": "2026-09-10 16:15:44",
+         "cost": -125,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://account.sportsbook.fanduel.com/sportsbook/addToBetslip?marketId=42.606928946&selectionId=131604"
+        }
+       ]
+      },
+      {
+       "id": 33,
+       "lines": [
+        {
+         "id": "33_69e7fdf703bb594c833ecbd50120b2a8",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:44",
+         "cost": -130,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://thescore.bet/sport/baseball/organization/united-states/competition/mlb/event/142621b6-66b6-4f66-a428-f3be154ce57d"
+        }
+       ]
+      }
+     ],
+     "id": "69e7fdf703bb594c833ecbd50120b2a8"
+    },
+    {
+     "participant": "TB",
+     "selection": "",
+     "active": true,
+     "opening_line": {
+      "line": 1,
+      "cost": -110,
+      "book_id": 13,
+      "created": "2026-09-09 17:41:08"
+     },
+     "label": "Rays",
+     "short_label": "TB",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:44",
+         "cost": 290,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com"
+        }
+       ]
+      },
+      {
+       "id": 10,
+       "lines": [
+        {
+         "id": "10_acd9f38be31456b6b9eaf1ad36165db4",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:44",
+         "cost": 290,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://account.sportsbook.fanduel.com/sportsbook/addToBetslip?marketId=42.606928946&selectionId=29162"
+        }
+       ]
+      },
+      {
+       "id": 13,
+       "lines": [
+        {
+         "id": "13_acd9f38be31456b6b9eaf1ad36165db4",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:44",
+         "cost": -105,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://sportsbook.caesars.com/us/nj/bet/betslip?selectionIds=ff46c275-9601-360e-8f49-b5c17c68c543"
+        }
+       ]
+      }
+     ],
+     "id": "acd9f38be31456b6b9eaf1ad36165db4"
+    },
+    {
+     "participant": "ATL",
+     "selection": "",
+     "active": true,
+     "opening_line": {
+      "line": 1,
+      "cost": -120,
+      "book_id": 13,
+      "created": "2026-09-09 17:41:08"
+     },
+     "label": "Braves",
+     "short_label": "ATL",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:44",
+         "cost": 255,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com"
+        }
+       ]
+      },
+      {
+       "id": 10,
+       "lines": [
+        {
+         "id": "10_b0f61ff5eba15a5bf2c90959c19db115",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:44",
+         "cost": 300,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://account.sportsbook.fanduel.com/sportsbook/addToBetslip?marketId=42.606928946&selectionId=7100960"
+        }
+       ]
+      },
+      {
+       "id": 13,
+       "lines": [
+        {
+         "id": "13_b0f61ff5eba15a5bf2c90959c19db115",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:15:44",
+         "cost": -125,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://sportsbook.caesars.com/us/nj/bet/betslip?selectionIds=d9b7dc87-e458-3cc7-bfd9-08f68a7f7248"
+        }
+       ]
+      }
+     ],
+     "id": "b0f61ff5eba15a5bf2c90959c19db115"
+    }
+   ]
+  }
+ ],
+ "_pagination": {
+  "page": 1,
+  "limit": 10,
+  "total_pages": 1,
+  "total_items": 1,
+  "paginated_array": "offers",
+  "self": "/v3/offers?event_id=99026&market_id=278&sport=MLB&event_id=99026&market_id=278&sport=MLB"
+ }
+}

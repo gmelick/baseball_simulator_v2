@@ -1,6 +1,46 @@
 {
   "components": {
     "schemas": {
+      "AskRequest": {
+        "properties": {
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/ChatTurn"
+            },
+            "title": "History",
+            "type": "array"
+          },
+          "question": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "AskRequest",
+        "type": "object"
+      },
+      "AssistantStatus": {
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "configured",
+          "model"
+        ],
+        "title": "AssistantStatus",
+        "type": "object"
+      },
       "AuthStatusResponse": {
         "description": "Response for GET /auth/me \u2014 always 200, never 401.",
         "properties": {
@@ -114,7 +154,7 @@
       },
       "BoxscoreCardRowModel": {
         "additionalProperties": false,
-        "description": "One player's row in the SIM-366 boxscore card.\n\nA compact per-player payload exposing that player's prop **means** over a\nMonte-Carlo run -- for a batter the H/HR/RBI/TB means, for a pitcher the\nK/BB/ER/OUTS means -- as a ``{prop_name -> mean}`` map.  Built from a\n:class:`simulation.prop_distributions.PropDistribution` map (one player's\n``by_player`` entry), reading each :attr:`PropDistribution.mean`.  numpy-free\n(plain floats).",
+        "description": "One player's row in the SIM-366 boxscore card.\n\nA compact per-player payload exposing that player's prop **means** over a\nMonte-Carlo run -- for a batter the H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means,\nfor a pitcher the K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's\nother lines) -- as a ``{prop_name -> mean}`` map.  Built from a\n:class:`simulation.prop_distributions.PropDistribution` map (one player's\n``by_player`` entry), reading each :attr:`PropDistribution.mean`.  numpy-free\n(plain floats).",
         "properties": {
           "means": {
             "additionalProperties": {
@@ -179,6 +219,24 @@
         "title": "CLVModel",
         "type": "object"
       },
+      "ChatTurn": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "ChatTurn",
+        "type": "object"
+      },
       "ClvSnapshotResponse": {
         "description": "The ``GET /api/betting/games/{game_pk}/clv`` envelope.\n\nA thin snapshot projection of /line-movement: the entry-vs-close CLV of every\nline-movement series that HAS one (a series with < 2 quotes or a missing\nopposite-side price is omitted). Each row carries the side / book identity plus\nthe CLV's ``clv_prob`` / ``beat_close`` for a compact \"did I beat the close\"\nview without the full quote series.",
         "properties": {
@@ -219,6 +277,24 @@
           "market_type"
         ],
         "title": "ClvSnapshotResponse",
+        "type": "object"
+      },
+      "ColumnInfo": {
+        "properties": {
+          "data_type": {
+            "title": "Data Type",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "data_type"
+        ],
+        "title": "ColumnInfo",
         "type": "object"
       },
       "ConfidenceIntervalModel": {
@@ -444,6 +520,126 @@
         "title": "EdgesResponse",
         "type": "object"
       },
+      "EngineCatalogEntry": {
+        "properties": {
+          "built": {
+            "default": false,
+            "title": "Built",
+            "type": "boolean"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "partition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Partition"
+          },
+          "profile_count": {
+            "default": 0,
+            "title": "Profile Count",
+            "type": "integer"
+          },
+          "sub_score_count": {
+            "default": 0,
+            "title": "Sub Score Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "engine",
+          "kind",
+          "method"
+        ],
+        "title": "EngineCatalogEntry",
+        "type": "object"
+      },
+      "EngineMetaResponse": {
+        "properties": {
+          "built": {
+            "title": "Built",
+            "type": "boolean"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "min_sample": {
+            "title": "Min Sample",
+            "type": "integer"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "partition": {
+            "title": "Partition",
+            "type": "string"
+          },
+          "position_keyed": {
+            "title": "Position Keyed",
+            "type": "boolean"
+          },
+          "profile_count": {
+            "title": "Profile Count",
+            "type": "integer"
+          },
+          "sample_field": {
+            "title": "Sample Field",
+            "type": "string"
+          },
+          "sub_scores": {
+            "items": {
+              "$ref": "#/components/schemas/SubScoreMeta"
+            },
+            "title": "Sub Scores",
+            "type": "array"
+          },
+          "supports_vs_hand": {
+            "title": "Supports Vs Hand",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "engine",
+          "method",
+          "partition",
+          "sub_scores",
+          "sample_field",
+          "min_sample",
+          "supports_vs_hand",
+          "position_keyed",
+          "built",
+          "profile_count"
+        ],
+        "title": "EngineMetaResponse",
+        "type": "object"
+      },
       "FieldSnapshotModel": {
         "additionalProperties": false,
         "description": "Response model for :class:`simulation.snapshots.FieldSnapshot` (SIM-331).\n\nThe BaseballFieldGraphic state: 9 defensive positions + batter + baserunners\n+ count/outs/inning/half/score chrome.  ``positions`` and ``baserunners`` map\na label to an OPTIONAL :class:`PlayerRefModel` (``None`` == unassigned slot /\nempty bag).  ``occupied_bases`` / ``runners_on`` mirror the source's derived\nproperties for consumer convenience.",
@@ -667,6 +863,17 @@
               }
             ],
             "title": "Home Wins"
+          },
+          "lineup_ready": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lineup Ready"
           },
           "season": {
             "title": "Season",
@@ -1273,6 +1480,61 @@
         "title": "InningLineModel",
         "type": "object"
       },
+      "KpisResponse": {
+        "properties": {
+          "first_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Date"
+          },
+          "last_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Date"
+          },
+          "seasons": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Seasons",
+            "type": "array"
+          },
+          "total_games": {
+            "title": "Total Games",
+            "type": "integer"
+          },
+          "total_pitches": {
+            "title": "Total Pitches",
+            "type": "integer"
+          },
+          "total_pitches_estimated": {
+            "title": "Total Pitches Estimated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "total_pitches",
+          "total_pitches_estimated",
+          "total_games",
+          "seasons",
+          "first_date",
+          "last_date"
+        ],
+        "title": "KpisResponse",
+        "type": "object"
+      },
       "LineMovementModel": {
         "additionalProperties": false,
         "description": "Response model for :class:`betting.line_movement.LineMovement` (SIM-368).\n\nThe line-movement time-series for one (game_pk, market, side, book): the\nordered :class:`LineQuoteModel` series plus the derived opening->closing\nsummary (the American / implied-prob / line deltas, the per-step delta series,\nthe running ``implied_prob_series`` plottable surface, the steam ``direction``)\nand the entry-vs-close :class:`CLVModel`. ``side`` is the MarketSide enum's\n``.value``; ``has_movement`` / ``beat_close`` mirror the source's derived\nproperties. numpy-free (plain floats).",
@@ -1866,6 +2128,54 @@
         "title": "MetricDeltaModel",
         "type": "object"
       },
+      "NearestSituationModel": {
+        "properties": {
+          "distance": {
+            "title": "Distance",
+            "type": "number"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "inning": {
+            "title": "Inning",
+            "type": "integer"
+          },
+          "leverage_index": {
+            "title": "Leverage Index",
+            "type": "number"
+          },
+          "outs": {
+            "title": "Outs",
+            "type": "integer"
+          },
+          "play_id": {
+            "title": "Play Id",
+            "type": "string"
+          },
+          "runners": {
+            "title": "Runners",
+            "type": "integer"
+          },
+          "score_differential": {
+            "title": "Score Differential",
+            "type": "number"
+          }
+        },
+        "required": [
+          "play_id",
+          "game_pk",
+          "distance",
+          "inning",
+          "outs",
+          "runners",
+          "leverage_index",
+          "score_differential"
+        ],
+        "title": "NearestSituationModel",
+        "type": "object"
+      },
       "OverrideDeltaModel": {
         "additionalProperties": false,
         "description": "Response model for :class:`simulation.snapshots.OverrideDelta` (SIM-331).\n\nThe baseline-vs-override comparison: a ``{metric_name -> MetricDeltaModel}``\nmap plus an optional free-text ``description`` of the roster change.",
@@ -2122,6 +2432,116 @@
         "title": "PlayByPlayModel",
         "type": "object"
       },
+      "PlayerDetail": {
+        "properties": {
+          "bats": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bats"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "player_id": {
+            "title": "Player Id",
+            "type": "integer"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "seasons": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Seasons",
+            "type": "array"
+          },
+          "throws": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Throws"
+          }
+        },
+        "required": [
+          "player_id",
+          "name"
+        ],
+        "title": "PlayerDetail",
+        "type": "object"
+      },
+      "PlayerHit": {
+        "properties": {
+          "bats": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bats"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "player_id": {
+            "title": "Player Id",
+            "type": "integer"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "throws": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Throws"
+          }
+        },
+        "required": [
+          "player_id",
+          "name"
+        ],
+        "title": "PlayerHit",
+        "type": "object"
+      },
       "PlayerRefModel": {
         "additionalProperties": false,
         "description": "Response model for :class:`simulation.snapshots.PlayerRef`.\n\nA player reference: integer id + optional display label.",
@@ -2348,6 +2768,43 @@
         "title": "RosterOverride",
         "type": "object"
       },
+      "SchemaInfo": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/TableInfo"
+            },
+            "title": "Tables",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "tables"
+        ],
+        "title": "SchemaInfo",
+        "type": "object"
+      },
+      "SchemaResponse": {
+        "properties": {
+          "schemas": {
+            "items": {
+              "$ref": "#/components/schemas/SchemaInfo"
+            },
+            "title": "Schemas",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schemas"
+        ],
+        "title": "SchemaResponse",
+        "type": "object"
+      },
       "SeasonCoverage": {
         "description": "Per-season ingest coverage.",
         "properties": {
@@ -2421,6 +2878,221 @@
           "n_iterations"
         ],
         "title": "SignalsResponse",
+        "type": "object"
+      },
+      "SimBin": {
+        "properties": {
+          "bin_index": {
+            "title": "Bin Index",
+            "type": "integer"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "hi": {
+            "title": "Hi",
+            "type": "number"
+          },
+          "lo": {
+            "title": "Lo",
+            "type": "number"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/SimMember"
+            },
+            "title": "Members",
+            "type": "array"
+          },
+          "preview": {
+            "items": {
+              "$ref": "#/components/schemas/SimMember"
+            },
+            "title": "Preview",
+            "type": "array"
+          }
+        },
+        "required": [
+          "bin_index",
+          "lo",
+          "hi",
+          "count",
+          "preview",
+          "members"
+        ],
+        "title": "SimBin",
+        "type": "object"
+      },
+      "SimMember": {
+        "properties": {
+          "below_min_sample": {
+            "title": "Below Min Sample",
+            "type": "boolean"
+          },
+          "entity_id": {
+            "title": "Entity Id",
+            "type": "integer"
+          },
+          "extra": {
+            "default": {},
+            "title": "Extra",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "sample": {
+            "title": "Sample",
+            "type": "integer"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "season": {
+            "title": "Season",
+            "type": "integer"
+          },
+          "sub_scores": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Sub Scores",
+            "type": "object"
+          }
+        },
+        "required": [
+          "entity_id",
+          "season",
+          "name",
+          "score",
+          "sub_scores",
+          "sample",
+          "below_min_sample"
+        ],
+        "title": "SimMember",
+        "type": "object"
+      },
+      "SimPairResponse": {
+        "properties": {
+          "comp": {
+            "$ref": "#/components/schemas/SimMember"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "sub_scores_meta": {
+            "items": {
+              "$ref": "#/components/schemas/SubScoreMeta"
+            },
+            "title": "Sub Scores Meta",
+            "type": "array"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "object"
+          }
+        },
+        "required": [
+          "engine",
+          "subject",
+          "comp",
+          "sub_scores_meta"
+        ],
+        "title": "SimPairResponse",
+        "type": "object"
+      },
+      "SimQueryResponse": {
+        "properties": {
+          "bins": {
+            "items": {
+              "$ref": "#/components/schemas/SimBin"
+            },
+            "title": "Bins",
+            "type": "array"
+          },
+          "diagnostic": {
+            "title": "Diagnostic",
+            "type": "object"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "min_sample": {
+            "title": "Min Sample",
+            "type": "integer"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "partition": {
+            "title": "Partition",
+            "type": "string"
+          },
+          "population_size": {
+            "title": "Population Size",
+            "type": "integer"
+          },
+          "sample_field": {
+            "title": "Sample Field",
+            "type": "string"
+          },
+          "score_summary": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Score Summary",
+            "type": "object"
+          },
+          "sub_scores_meta": {
+            "items": {
+              "$ref": "#/components/schemas/SubScoreMeta"
+            },
+            "title": "Sub Scores Meta",
+            "type": "array"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "object"
+          },
+          "top_n": {
+            "items": {
+              "$ref": "#/components/schemas/SimMember"
+            },
+            "title": "Top N",
+            "type": "array"
+          }
+        },
+        "required": [
+          "engine",
+          "method",
+          "subject",
+          "sub_scores_meta",
+          "sample_field",
+          "min_sample",
+          "partition",
+          "population_size",
+          "score_summary",
+          "diagnostic",
+          "bins",
+          "top_n"
+        ],
+        "title": "SimQueryResponse",
         "type": "object"
       },
       "SimilarityDistributionResponse": {
@@ -2514,6 +3186,172 @@
         "title": "SimulateResponse",
         "type": "object"
       },
+      "SituationQueryRequest": {
+        "properties": {
+          "batter_pa_count": {
+            "default": 1,
+            "title": "Batter Pa Count",
+            "type": "integer"
+          },
+          "inning": {
+            "default": 1,
+            "title": "Inning",
+            "type": "integer"
+          },
+          "k": {
+            "default": 25,
+            "title": "K",
+            "type": "integer"
+          },
+          "leverage_index": {
+            "default": 1.0,
+            "title": "Leverage Index",
+            "type": "number"
+          },
+          "outs": {
+            "default": 0,
+            "title": "Outs",
+            "type": "integer"
+          },
+          "park_factor_runs": {
+            "default": 1.0,
+            "title": "Park Factor Runs",
+            "type": "number"
+          },
+          "pitcher_pitch_count": {
+            "default": 0,
+            "title": "Pitcher Pitch Count",
+            "type": "integer"
+          },
+          "runner_on_1b": {
+            "default": 0,
+            "title": "Runner On 1B",
+            "type": "integer"
+          },
+          "runner_on_2b": {
+            "default": 0,
+            "title": "Runner On 2B",
+            "type": "integer"
+          },
+          "runner_on_3b": {
+            "default": 0,
+            "title": "Runner On 3B",
+            "type": "integer"
+          },
+          "score_differential": {
+            "default": 0.0,
+            "title": "Score Differential",
+            "type": "number"
+          },
+          "top_or_bottom": {
+            "default": 0,
+            "title": "Top Or Bottom",
+            "type": "integer"
+          }
+        },
+        "title": "SituationQueryRequest",
+        "type": "object"
+      },
+      "SituationQueryResponse": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "k": {
+            "title": "K",
+            "type": "integer"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/NearestSituationModel"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "k",
+          "count",
+          "results"
+        ],
+        "title": "SituationQueryResponse",
+        "type": "object"
+      },
+      "SqlRunRequest": {
+        "properties": {
+          "max_rows": {
+            "default": 1000,
+            "description": "Row cap (hard-limited server-side); results over the cap are truncated.",
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Max Rows",
+            "type": "integer"
+          },
+          "sql": {
+            "description": "A single read-only SELECT / WITH query.",
+            "title": "Sql",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sql"
+        ],
+        "title": "SqlRunRequest",
+        "type": "object"
+      },
+      "SqlRunResponse": {
+        "properties": {
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "elapsed_ms": {
+            "title": "Elapsed Ms",
+            "type": "number"
+          },
+          "max_rows": {
+            "title": "Max Rows",
+            "type": "integer"
+          },
+          "row_count": {
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "rows": {
+            "description": "Row-major result cells (JSON-safe).",
+            "items": {
+              "items": {},
+              "type": "array"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "timeout_ms": {
+            "title": "Timeout Ms",
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "True when the result hit the row cap.",
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "columns",
+          "rows",
+          "row_count",
+          "truncated",
+          "elapsed_ms",
+          "max_rows",
+          "timeout_ms"
+        ],
+        "title": "SqlRunResponse",
+        "type": "object"
+      },
       "StateAtPitchModel": {
         "additionalProperties": false,
         "description": "Response model for :class:`simulation.snapshots.StateAtPitch` (SIM-331).\n\nA point-in-time :class:`FieldSnapshotModel` tagged with the at-bat / pitch\nindices (and global sequence, if known).",
@@ -2547,6 +3385,35 @@
           "field"
         ],
         "title": "StateAtPitchModel",
+        "type": "object"
+      },
+      "SubScoreMeta": {
+        "properties": {
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "weight": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weight"
+          }
+        },
+        "required": [
+          "field",
+          "label"
+        ],
+        "title": "SubScoreMeta",
         "type": "object"
       },
       "SubstitutionSlot": {
@@ -2583,15 +3450,29 @@
         "title": "SubstitutionSlot",
         "type": "object"
       },
+      "TableInfo": {
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/ColumnInfo"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "columns"
+        ],
+        "title": "TableInfo",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
-          "ctx": {
-            "title": "Context",
-            "type": "object"
-          },
-          "input": {
-            "title": "Input"
-          },
           "loc": {
             "items": {
               "anyOf": [
@@ -2859,10 +3740,736 @@
   "info": {
     "description": "Pitch-by-pitch MLB game simulator powered by Statcast data and multi-dimensional similarity engines. Full API available in Phase 5.",
     "title": "MLB Baseball Simulation Platform",
-    "version": "0.1.0-phase2"
+    "version": "0.1.0-phase7"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/analytics/by-season": {
+      "get": {
+        "operationId": "by_season_api_analytics_by_season_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "object"
+                  },
+                  "title": "Response By Season Api Analytics By Season Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Games + pitches per season",
+        "tags": [
+          "data-lab"
+        ]
+      }
+    },
+    "/api/analytics/count-state": {
+      "get": {
+        "operationId": "count_state_api_analytics_count_state_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "season",
+            "required": true,
+            "schema": {
+              "maximum": 2027,
+              "minimum": 2015,
+              "title": "Season",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pitcher",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pitcher"
+            }
+          },
+          {
+            "in": "query",
+            "name": "batter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Batter"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_flagged",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Flagged",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "object"
+                  },
+                  "title": "Response Count State Api Analytics Count State Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Swing/whiff by ball-strike count",
+        "tags": [
+          "data-lab"
+        ]
+      }
+    },
+    "/api/analytics/kpis": {
+      "get": {
+        "operationId": "get_kpis_api_analytics_kpis_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KpisResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Top-line coverage KPIs",
+        "tags": [
+          "data-lab"
+        ]
+      }
+    },
+    "/api/analytics/leaderboard/batters": {
+      "get": {
+        "operationId": "batter_leaderboard_api_analytics_leaderboard_batters_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "season",
+            "required": true,
+            "schema": {
+              "maximum": 2027,
+              "minimum": 2015,
+              "title": "Season",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "metric",
+            "required": false,
+            "schema": {
+              "default": "hard_hit_pct",
+              "title": "Metric",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_pa",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 5000,
+              "minimum": 0,
+              "title": "Min Pa",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vs_hand",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[LR]$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vs Hand"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "object"
+                  },
+                  "title": "Response Batter Leaderboard Api Analytics Leaderboard Batters Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Batter contact-quality leaderboard",
+        "tags": [
+          "data-lab"
+        ]
+      }
+    },
+    "/api/analytics/leaderboard/pitchers": {
+      "get": {
+        "operationId": "pitcher_leaderboard_api_analytics_leaderboard_pitchers_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "season",
+            "required": true,
+            "schema": {
+              "maximum": 2027,
+              "minimum": 2015,
+              "title": "Season",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "metric",
+            "required": false,
+            "schema": {
+              "default": "k_pct",
+              "title": "Metric",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_pa",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 5000,
+              "minimum": 0,
+              "title": "Min Pa",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "object"
+                  },
+                  "title": "Response Pitcher Leaderboard Api Analytics Leaderboard Pitchers Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pitcher rate-stat leaderboard",
+        "tags": [
+          "data-lab"
+        ]
+      }
+    },
+    "/api/analytics/pa-outcomes": {
+      "get": {
+        "operationId": "pa_outcomes_api_analytics_pa_outcomes_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "season",
+            "required": true,
+            "schema": {
+              "maximum": 2027,
+              "minimum": 2015,
+              "title": "Season",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "batter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Batter"
+            }
+          },
+          {
+            "in": "query",
+            "name": "p_throws",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[LR]$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "P Throws"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_flagged",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Flagged",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "object"
+                  },
+                  "title": "Response Pa Outcomes Api Analytics Pa Outcomes Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Plate-appearance outcome distribution",
+        "tags": [
+          "data-lab"
+        ]
+      }
+    },
+    "/api/analytics/pitch-type-mix": {
+      "get": {
+        "operationId": "pitch_type_mix_api_analytics_pitch_type_mix_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "season",
+            "required": true,
+            "schema": {
+              "maximum": 2027,
+              "minimum": 2015,
+              "title": "Season",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pitcher",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pitcher"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stand",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[LRS]$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Stand"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_flagged",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Flagged",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "object"
+                  },
+                  "title": "Response Pitch Type Mix Api Analytics Pitch Type Mix Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pitch-type usage + stuff (season, optional pitcher/stand)",
+        "tags": [
+          "data-lab"
+        ]
+      }
+    },
+    "/api/analytics/velo-distribution": {
+      "get": {
+        "operationId": "velo_distribution_api_analytics_velo_distribution_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "season",
+            "required": true,
+            "schema": {
+              "maximum": 2027,
+              "minimum": 2015,
+              "title": "Season",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pitcher",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pitcher"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pitch_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pitch Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_flagged",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Flagged",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "object"
+                  },
+                  "title": "Response Velo Distribution Api Analytics Velo Distribution Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release-speed histogram (1 mph buckets)",
+        "tags": [
+          "data-lab"
+        ]
+      }
+    },
+    "/api/analytics/zone": {
+      "get": {
+        "operationId": "zone_api_analytics_zone_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "season",
+            "required": true,
+            "schema": {
+              "maximum": 2027,
+              "minimum": 2015,
+              "title": "Season",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pitcher",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pitcher"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_flagged",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Flagged",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "object"
+                  },
+                  "title": "Response Zone Api Analytics Zone Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Whiff / called-strike by Statcast zone bucket",
+        "tags": [
+          "data-lab"
+        ]
+      }
+    },
+    "/api/assistant/ask": {
+      "post": {
+        "operationId": "ask_api_assistant_ask_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Ask Api Assistant Ask Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ask the AI assistant (SSE stream)",
+        "tags": [
+          "data-lab"
+        ]
+      }
+    },
+    "/api/assistant/status": {
+      "get": {
+        "operationId": "status_probe_api_assistant_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Whether the AI assistant is configured",
+        "tags": [
+          "data-lab"
+        ]
+      }
+    },
     "/api/betting/games/{game_pk}/clv": {
       "get": {
         "description": "A thin projection of /line-movement: the line-movement series that carry an entry-vs-close CLV (>= 2 quotes with both opposite-side prices). Each model's clv.clv_prob / clv.beat_close answers 'did the opening price beat the close' for that side/book. numpy-free. 503 if no DB pool, 422 on a bad market_type.",
@@ -3642,7 +5249,7 @@
     },
     "/api/games/{game_pk}/boxscore": {
       "get": {
-        "description": "Resolve the game's lineup, run an N-iteration boxscore batch, and return each player's prop MEANS as a boxscore card (SIM-366): for a batter the H/HR/RBI/TB means, for a pitcher the K/BB/ER/OUTS means -- the means-only projection of the run's PropDistributionSet (SIM-329). numpy-free JSON (SIM-350). 503 if no DB pool is attached; 404 if the lineup cannot be resolved.",
+        "description": "Resolve the game's lineup, run an N-iteration boxscore batch, and return each player's prop MEANS as a boxscore card (SIM-366): for a batter the H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means, for a pitcher the K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's other lines) -- the means-only projection of the run's PropDistributionSet (SIM-329). numpy-free JSON (SIM-350). 503 if no DB pool is attached; 404 if the lineup cannot be resolved.",
         "operationId": "get_game_boxscore_api_games__game_pk__boxscore_get",
         "parameters": [
           {
@@ -3965,7 +5572,7 @@
     },
     "/api/games/{game_pk}/props/{player_id}/{prop}": {
       "get": {
-        "description": "Run an N-iteration Monte-Carlo batch for the game, look up one player's prop PMF (e.g. K, BB, H, HR), and return the full integer-support PMF.  Supply ``line`` to also get ``p_over``/``p_under``/``p_push``; supply ``line``, ``over_ml``, and ``under_ml`` to also get a full ``edge_report`` via the CLV engine (SIM-339).  ``bet_side`` controls which side's edge is computed (``'over'`` or ``'under'``, default ``'over'``).  Valid props: K, BB, ER, OUTS (pitcher), H, HR, RBI, TB (batter).  503 if no DB pool is attached; 404 if the lineup or player cannot be resolved.",
+        "description": "Run an N-iteration Monte-Carlo batch for the game, look up one player's prop PMF (e.g. K, BB, H, HR), and return the full integer-support PMF.  Supply ``line`` to also get ``p_over``/``p_under``/``p_push``; supply ``line``, ``over_ml``, and ``under_ml`` to also get a full ``edge_report`` via the CLV engine (SIM-339).  ``bet_side`` controls which side's edge is computed (``'over'`` or ``'under'``, default ``'over'``).  Valid props (SIM-421 added the market's other lines): K, BB, ER, OUTS, H_ALLOWED (pitcher); H, HR, RBI, TB, 1B, 2B, 3B, R, SB, HRR (batter; HRR = hits + runs + RBI as one per-game sum).  503 if no DB pool is attached; 404 if the lineup or player cannot be resolved.",
         "operationId": "get_player_prop_edge_api_games__game_pk__props__player_id___prop__get",
         "parameters": [
           {
@@ -4421,7 +6028,6 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Get Todays Odds Api Odds Today All Get",
@@ -4440,7 +6046,7 @@
     },
     "/api/odds/{game_pk}": {
       "get": {
-        "description": "Returns mock betting lines for a game.  In Phase 7, replace this handler\nwith a call to a real odds provider and flip is_mock=False.",
+        "description": "Returns mock betting lines for a game.  This handler calls MockOddsAPI\ndirectly (it predates the SIM-370 seam); the live ingestion path instead\ngoes through get_odds_provider(), so ODDS_PROVIDER=bettingpros yields real\nlines (is_mock=False) there.",
         "operationId": "get_game_odds_api_odds__game_pk__get",
         "parameters": [
           {
@@ -4458,7 +6064,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get Game Odds Api Odds  Game Pk  Get",
                   "type": "object"
                 }
@@ -4480,6 +6085,156 @@
         "summary": "Get Game Odds",
         "tags": [
           "odds"
+        ]
+      }
+    },
+    "/api/players/search": {
+      "get": {
+        "operationId": "search_players_api_players_search_get",
+        "parameters": [
+          {
+            "description": "Name fragment (>= 2 chars).",
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "description": "Name fragment (>= 2 chars).",
+              "maxLength": 60,
+              "minLength": 2,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PlayerHit"
+                  },
+                  "title": "Response Search Players Api Players Search Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Player name typeahead (raw.players, pg_trgm)",
+        "tags": [
+          "data-lab"
+        ]
+      }
+    },
+    "/api/players/{player_id}": {
+      "get": {
+        "operationId": "get_player_api_players__player_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "player_id",
+            "required": true,
+            "schema": {
+              "title": "Player Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayerDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Player identity + seasons on file",
+        "tags": [
+          "data-lab"
+        ]
+      }
+    },
+    "/api/schema": {
+      "get": {
+        "operationId": "get_schema_api_schema_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchemaResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "raw.* schema tree (tables + columns) for the SQL console / assistant",
+        "tags": [
+          "data-lab"
+        ]
+      }
+    },
+    "/api/similarity/engines": {
+      "get": {
+        "operationId": "list_engines_api_similarity_engines_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EngineCatalogEntry"
+                  },
+                  "title": "Response List Engines Api Similarity Engines Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Engine catalog + build status",
+        "tags": [
+          "similarity"
         ]
       }
     },
@@ -4563,6 +6318,406 @@
         ]
       }
     },
+    "/api/similarity/situation/query": {
+      "post": {
+        "operationId": "situation_query_api_similarity_situation_query_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SituationQueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SituationQueryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Nearest historical game states",
+        "tags": [
+          "similarity"
+        ]
+      }
+    },
+    "/api/similarity/{engine}/meta": {
+      "get": {
+        "operationId": "engine_meta_api_similarity__engine__meta_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "engine",
+            "required": true,
+            "schema": {
+              "title": "Engine",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fielder only \u2014 resolves IF/OF sub-score labels.",
+            "in": "query",
+            "name": "position",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Fielder only \u2014 resolves IF/OF sub-score labels.",
+              "title": "Position"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vs_hand",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[LR]$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vs Hand"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineMetaResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Engine sub-score metadata",
+        "tags": [
+          "similarity"
+        ]
+      }
+    },
+    "/api/similarity/{engine}/pair": {
+      "get": {
+        "operationId": "engine_pair_api_similarity__engine__pair_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "engine",
+            "required": true,
+            "schema": {
+              "title": "Engine",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "a_id",
+            "required": true,
+            "schema": {
+              "title": "A Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "a_season",
+            "required": true,
+            "schema": {
+              "maximum": 2027,
+              "minimum": 2015,
+              "title": "A Season",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "b_id",
+            "required": true,
+            "schema": {
+              "title": "B Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "b_season",
+            "required": true,
+            "schema": {
+              "maximum": 2027,
+              "minimum": 2015,
+              "title": "B Season",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "position",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Position"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vs_hand",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[LR]$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vs Hand"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimPairResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One subject-vs-comp breakdown",
+        "tags": [
+          "similarity"
+        ]
+      }
+    },
+    "/api/similarity/{engine}/query": {
+      "get": {
+        "operationId": "engine_query_api_similarity__engine__query_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "engine",
+            "required": true,
+            "schema": {
+              "title": "Engine",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Player / manager id.",
+            "in": "query",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "description": "Player / manager id.",
+              "title": "Entity Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "season",
+            "required": true,
+            "schema": {
+              "maximum": 2027,
+              "minimum": 2015,
+              "title": "Season",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required for the fielder engine (2B/SS/CF/...).",
+            "in": "query",
+            "name": "position",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Required for the fielder engine (2B/SS/CF/...).",
+              "title": "Position"
+            }
+          },
+          {
+            "description": "Batter engine \u2014 platoon-weighted mode.",
+            "in": "query",
+            "name": "vs_hand",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[LR]$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Batter engine \u2014 platoon-weighted mode.",
+              "title": "Vs Hand"
+            }
+          },
+          {
+            "in": "query",
+            "name": "bins",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 4,
+              "title": "Bins",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "top_n",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Top N",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimQueryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ranked comps + score distribution",
+        "tags": [
+          "similarity"
+        ]
+      }
+    },
+    "/api/sql/run": {
+      "post": {
+        "description": "Executes a single SELECT / WITH query in a read-only transaction with a statement timeout and a hard row cap. Only raw.* (Postgres) is reachable; derived.*/sim.* live in DuckDB and are not on this pool. 400 on a rejected or failing query; 503 with no pool.",
+        "operationId": "run_sql_api_sql_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SqlRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SqlRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run a read-only SQL query against raw.* (Postgres)",
+        "tags": [
+          "data-lab"
+        ]
+      }
+    },
     "/auth/login": {
       "post": {
         "description": "Validate the shared AUTH_PASSWORD and issue an httpOnly session cookie (sim_session). The cookie is Secure + SameSite=strict in non-development environments. Session lifetime is SESSION_TTL_HOURS (default 8 hours). Returns 401 on an incorrect password.",
@@ -4582,7 +6737,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Login Auth Login Post",
                   "type": "object"
                 }
@@ -4616,7 +6770,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Logout Auth Logout Post",
                   "type": "object"
                 }
@@ -4661,7 +6814,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Health Health Get",
                   "type": "object"
                 }

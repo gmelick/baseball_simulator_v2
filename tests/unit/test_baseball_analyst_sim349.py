@@ -6,18 +6,14 @@ sac-fly-intent (PA-boundary) triggers added to the Phase-4 simulation loop
 (``simulation/sim_loop.py``), consolidated with SIM-323's IBB + sac-bunt into one
 leverage- and base/out-state-conditioned situational set.
 
-WHAT THIS COVERS (the SIM-349 acceptance criteria)
---------------------------------------------------
-  * **hit-and-run** fires in the right spot -- runner on 1B, <2 outs, a favorable
-    count, an above-average ``hit_and_run_rate_per_opportunity`` manager -- and
-    NOT otherwise (1B empty, two outs, a deep count, a passive manager);
-  * **sac-fly intent** is flagged with a runner on 3rd + <2 outs in a run-needed
-    spot and biases a sampled fly-OUT into a credited ``sacrifice_fly`` (a run
-    scores from 3rd), while leaving hits / strikeouts / grounders untouched;
-  * the consolidated set does NOT double-fire: a hit-and-run pre-empts the steal
-    initiate, and the new triggers never collide with SIM-323's IBB / sac-bunt;
-  * everything is deterministic under a fixed seed;
-  * a no-manager-profile game still completes (every new trigger is no-op-safe).
+WHAT THIS COVERS (what is left of the SIM-349 acceptance criteria)
+------------------------------------------------------------------
+  * a no-manager-profile game still completes with no decision taken, and an
+    aggressive-manager game completes validly.
+
+  The hit-and-run trigger (deleted 2026-09-13 by SIM-427 with the other dead
+  hooks) and the sac-fly intent (retired 2026-08-19 by SIM-513) are gone; their
+  tests went with them.
 
 HOW THE TENDENCIES ARE INJECTED (no live DB)
 --------------------------------------------
@@ -93,115 +89,12 @@ _PASSIVE = dict.fromkeys(_AGGRESSIVE, 0.0)
 # here until 2026-08-19 — retired with the SIM-349 nudge by SIM-513. The
 # SIM-512 tag draw from 3B owns sacrifice flies now, pinned by
 # tests/unit/test_sim511_512_transition_draw.py and the retargeted sac-fly
-# ledger test in tests/unit/test_sim499_run_ledger.py. The hit-and-run and
-# sac-bunt halves of SIM-349 stay live and tested below.)
-
-
-# ===========================================================================
-# Hit-and-run (pre-pitch trigger)
-# ===========================================================================
-
-
-class TestHitAndRun:
-    def test_hit_and_run_fires_runner_on_1b_under_two_outs_favorable_count(self):
-        m = _machine({"hit_and_run_rate_per_opportunity": 0.95}, seed=3)
-        s = _state(inning=7, first=11, outs=1, balls=1, strikes=0)
-        m._pre_pitch_hook(s)
-        assert s.manager.hit_and_run_signalled is True
-        assert any(d["kind"] == "hit_and_run" for d in m.manager_decisions)
-
-    def test_no_hit_and_run_with_first_base_empty(self):
-        m = _machine({"hit_and_run_rate_per_opportunity": 0.95}, seed=3)
-        s = _state(inning=7, second=22, outs=1)  # runner on 2B, 1B empty
-        m._pre_pitch_hook(s)
-        assert s.manager.hit_and_run_signalled is False
-
-    def test_no_hit_and_run_with_two_outs(self):
-        m = _machine({"hit_and_run_rate_per_opportunity": 0.95}, seed=3)
-        s = _state(inning=7, first=11, outs=2)
-        m._pre_pitch_hook(s)
-        assert s.manager.hit_and_run_signalled is False
-
-    def test_no_hit_and_run_in_a_deep_count(self):
-        # Two strikes -> unfavorable for a contact-protect play.
-        m = _machine({"hit_and_run_rate_per_opportunity": 0.95}, seed=3)
-        s = _state(inning=7, first=11, outs=0, strikes=2)
-        m._pre_pitch_hook(s)
-        assert s.manager.hit_and_run_signalled is False
-
-    def test_passive_manager_never_hits_and_runs(self):
-        m = _machine(_PASSIVE, seed=3)
-        s = _state(inning=7, first=11, outs=1)
-        m._pre_pitch_hook(s)
-        assert s.manager.hit_and_run_signalled is False
-
-    def test_no_profile_is_no_op(self):
-        m = _machine(None, seed=3)
-        s = _state(inning=7, first=11, outs=1)
-        m._pre_pitch_hook(s)
-        assert s.manager.hit_and_run_signalled is False
-        assert m.manager_decisions == []
-
-    def test_hit_and_run_signal_is_reset_each_pitch(self):
-        # A spot that would NOT fire (two outs) clears a previously-set flag.
-        m = _machine({"hit_and_run_rate_per_opportunity": 0.95}, seed=3)
-        s = _state(inning=7, first=11, outs=1)
-        m._pre_pitch_hook(s)
-        assert s.manager.hit_and_run_signalled is True
-        s.outs = 2
-        m._pre_pitch_hook(s)
-        assert s.manager.hit_and_run_signalled is False
-
-
-# ===========================================================================
-# Hit-and-run consolidation: it does NOT double-fire with the steal initiate
-# ===========================================================================
-
-
-class TestHitAndRunConsolidation:
-    def test_hit_and_run_preempts_the_steal_initiate(self):
-        # A steal pool whose every row runs: when the hit-and-run fires the
-        # steal is NOT also staged (the runner goes WITH the swing, one decision).
-        m = StateMachine(
-            synthetic_sampler(league_artifacts(steal=(1.0, 1.0)), 3),
-            rng=np.random.default_rng(3),
-            manager={"hit_and_run_rate_per_opportunity": 1.0, "steal_order_rate_per_1b_opp": 1.0},
-        )
-        s = _state(inning=7, first=11, outs=1, balls=1)
-        m._pre_pitch_hook(s)
-        assert s.manager.hit_and_run_signalled is True
-        assert m._pending_steal is None  # the steal was NOT also staged
-        kinds = [d["kind"] for d in m.manager_decisions]
-        assert kinds.count("hit_and_run") == 1
-        assert "steal" not in kinds
-
-    def test_ibb_still_takes_precedence_over_hit_and_run(self):
-        # The IBB spot (1B open) cannot be a hit-and-run spot (needs 1B occupied),
-        # so the two are mutually exclusive by construction; assert the IBB path
-        # wins and no hit-and-run is recorded.
-        # SIM-515: the IBB draws at the injected cell rate (1.0 = certain).
-        m = _machine(_AGGRESSIVE, seed=1, ibb_rates={(2, 0, True, True): 1.0})
-        s = _state(inning=9, half=Half.BOTTOM, home_score=3, away_score=3, second=55)
-        m._pre_pitch_hook(s)
-        assert s.manager.intentional_walk_signalled is True
-        assert s.manager.hit_and_run_signalled is False
-        assert not any(d["kind"] == "hit_and_run" for d in m.manager_decisions)
-
-
-# ===========================================================================
-# Determinism under a fixed seed
-# ===========================================================================
-
-
-class TestDeterminism:
-    def test_hit_and_run_is_deterministic_under_a_fixed_seed(self):
-        decisions = []
-        for _ in range(3):
-            m = _machine({"hit_and_run_rate_per_opportunity": 0.5}, seed=42)
-            s = _state(inning=7, first=11, outs=1, balls=1)
-            m._pre_pitch_hook(s)
-            decisions.append(s.manager.hit_and_run_signalled)
-        assert len(set(decisions)) == 1  # identical across identical seeds
+# ledger test in tests/unit/test_sim499_run_ledger.py. The hit-and-run trigger,
+# its consolidation with the steal initiate and its determinism tests lived
+# here until 2026-09-13 — deleted with the hook by SIM-427 (owner decision:
+# the four dead hooks go; a hit-and-run is a steal draw plus a pitch draw, and
+# the hook changed no play). What stays: a no-manager game and an aggressive-
+# manager game both complete.)
 
 
 # ===========================================================================

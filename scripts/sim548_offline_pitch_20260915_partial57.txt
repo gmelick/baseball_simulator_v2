@@ -1,0 +1,62 @@
+production attributes: {'pitch_pitcher_power': 16.0, 'pitch_batter_power': 1.0, 'fatigue_tto_sigma': 0.5, 'sit_sigma': 2.0, 'result_pitch_sigma': 1.0, 'result_pitcher_power': 16.0, 'result_batter_power': 8.0, 'result_density_power': 1.0} (split ON, cell index True)
+8000 test pitches of 2024 in 6413 (pitcher, game) groups; sampled in 0.2 s
+78 settings (production first)
+  [1/78]  133.3 s  pitch 0.8189  result 0.8624  chain 0.8642  production
+  [2/78]   93.0 s  pitch 0.7559  result 0.8624  chain 0.8538  {'pitch_pitcher_power': 1.0}
+  [3/78]  104.3 s  pitch 0.7566  result 0.8624  chain 0.8560  {'pitch_pitcher_power': 2.0}
+  [4/78]  134.9 s  pitch 0.7597  result 0.8624  chain 0.8568  {'pitch_pitcher_power': 4.0}
+  [5/78]  134.6 s  pitch 0.7717  result 0.8624  chain 0.8588  {'pitch_pitcher_power': 8.0}
+/app/simulation/full_pool_sampler.py:85: RuntimeWarning: overflow encountered in power
+  adj = np.where(f > 0.0, np.power(np.maximum(f, 1e-30), np.float32(power - 1.0)), 0.0)
+  [6/78]  135.1 s  pitch 0.9280  result 0.8624  chain 0.8688  {'pitch_pitcher_power': 32.0}
+  [7/78]  134.1 s  pitch 0.8180  result 0.8624  chain 0.8642  {'pitch_batter_power': 0.5}
+  [8/78]  135.0 s  pitch 0.8208  result 0.8624  chain 0.8660  {'pitch_batter_power': 2.0}
+  [9/78]  136.3 s  pitch 0.8304  result 0.8624  chain 0.8689  {'pitch_batter_power': 4.0}
+  [10/78]  130.9 s  pitch 0.7965  result 0.8380  chain 0.8377  {'fatigue_tto_sigma': 0.0}
+  [11/78]  134.9 s  pitch 0.8315  result 0.8787  chain 0.8844  {'fatigue_tto_sigma': 0.35}
+  [12/78]  135.2 s  pitch 0.8099  result 0.8520  chain 0.8524  {'fatigue_tto_sigma': 0.7}
+  [13/78]  135.8 s  pitch 0.8033  result 0.8447  chain 0.8446  {'fatigue_tto_sigma': 1.0}
+  [14/78]  135.5 s  pitch 0.8310  result 0.8753  chain 0.8765  {'sit_sigma': 1.0}
+  [15/78]  135.3 s  pitch 0.8157  result 0.8598  chain 0.8608  {'sit_sigma': 4.0}
+  [16/78]  138.4 s  pitch 0.8189  result 0.8744  chain 0.8608  {'result_pitch_sigma': 0.5}
+  [17/78]  138.6 s  pitch 0.8189  result 0.8666  chain 0.8651  {'result_pitch_sigma': 0.7}
+  [18/78]  138.9 s  pitch 0.8189  result 0.8613  chain 0.8624  {'result_pitch_sigma': 1.4}
+  [19/78]  139.0 s  pitch 0.8189  result 0.8613  chain 0.8609  {'result_pitch_sigma': 2.0}
+  [20/78]  138.7 s  pitch 0.8189  result 0.7940  chain 0.7996  {'result_pitcher_power': 4.0}
+  [21/78]  139.9 s  pitch 0.8189  result 0.8101  chain 0.8167  {'result_pitcher_power': 8.0}
+  [22/78]  137.1 s  pitch 0.8189  result 0.9717  chain 0.9593  {'result_pitcher_power': 32.0}
+  [23/78]  134.3 s  pitch 0.8189  result 0.8223  chain 0.8296  {'result_batter_power': 2.0}
+  [24/78]  133.3 s  pitch 0.8189  result 0.8317  chain 0.8375  {'result_batter_power': 4.0}
+  [25/78]  133.2 s  pitch 0.8189  result 0.9464  chain 0.9471  {'result_batter_power': 16.0}
+  [26/78]  133.7 s  pitch 0.8189  result 0.8647  chain 0.8709  {'result_density_power': 0.0}
+  [27/78]  137.8 s  pitch 0.8189  result 0.8632  chain 0.8674  {'result_density_power': 0.5}
+  [28/78]   96.1 s  pitch 0.7551  result 0.8624  chain 0.8542  {'pitch_pitcher_power': 1.0, 'pitch_batter_power': 0.5}
+  [29/78]   97.3 s  pitch 0.7566  result 0.8624  chain 0.8546  {'pitch_pitcher_power': 1.0, 'pitch_batter_power': 2.0}
+  [30/78]   98.5 s  pitch 0.7626  result 0.8624  chain 0.8553  {'pitch_pitcher_power': 1.0, 'pitch_batter_power': 4.0}
+  [31/78]  110.5 s  pitch 0.7557  result 0.8624  chain 0.8565  {'pitch_pitcher_power': 2.0, 'pitch_batter_power': 0.5}
+  [32/78]  107.2 s  pitch 0.7573  result 0.8624  chain 0.8566  {'pitch_pitcher_power': 2.0, 'pitch_batter_power': 2.0}
+  [33/78]  107.7 s  pitch 0.7638  result 0.8624  chain 0.8574  {'pitch_pitcher_power': 2.0, 'pitch_batter_power': 4.0}
+  [34/78]  139.0 s  pitch 0.7588  result 0.8624  chain 0.8570  {'pitch_pitcher_power': 4.0, 'pitch_batter_power': 0.5}
+  [35/78]  137.0 s  pitch 0.7603  result 0.8624  chain 0.8575  {'pitch_pitcher_power': 4.0, 'pitch_batter_power': 2.0}
+  [36/78]  137.8 s  pitch 0.7672  result 0.8624  chain 0.8588  {'pitch_pitcher_power': 4.0, 'pitch_batter_power': 4.0}
+  [37/78]  137.3 s  pitch 0.7707  result 0.8624  chain 0.8590  {'pitch_pitcher_power': 8.0, 'pitch_batter_power': 0.5}
+  [38/78]  136.6 s  pitch 0.7725  result 0.8624  chain 0.8601  {'pitch_pitcher_power': 8.0, 'pitch_batter_power': 2.0}
+  [39/78]  137.4 s  pitch 0.7803  result 0.8624  chain 0.8620  {'pitch_pitcher_power': 8.0, 'pitch_batter_power': 4.0}
+  [40/78]  137.7 s  pitch 0.9272  result 0.8624  chain 0.8686  {'pitch_pitcher_power': 32.0, 'pitch_batter_power': 0.5}
+  [41/78]  137.8 s  pitch 0.9310  result 0.8624  chain 0.8708  {'pitch_pitcher_power': 32.0, 'pitch_batter_power': 2.0}
+  [42/78]  137.8 s  pitch 0.9418  result 0.8624  chain 0.8740  {'pitch_pitcher_power': 32.0, 'pitch_batter_power': 4.0}
+  [43/78]  136.0 s  pitch 0.8189  result 0.7554  chain 0.7647  {'result_pitcher_power': 4.0, 'result_batter_power': 2.0}
+  [44/78]  136.3 s  pitch 0.8189  result 0.7625  chain 0.7703  {'result_pitcher_power': 4.0, 'result_batter_power': 4.0}
+  [45/78]  134.2 s  pitch 0.8189  result 0.9005  chain 0.9038  {'result_pitcher_power': 4.0, 'result_batter_power': 16.0}
+  [46/78]  132.4 s  pitch 0.8189  result 0.7700  chain 0.7800  {'result_pitcher_power': 8.0, 'result_batter_power': 2.0}
+  [47/78]  132.2 s  pitch 0.8189  result 0.7781  chain 0.7870  {'result_pitcher_power': 8.0, 'result_batter_power': 4.0}
+  [48/78]  131.4 s  pitch 0.8189  result 0.9116  chain 0.9147  {'result_pitcher_power': 8.0, 'result_batter_power': 16.0}
+  [49/78]  131.7 s  pitch 0.8189  result 0.9341  chain 0.9328  {'result_pitcher_power': 32.0, 'result_batter_power': 2.0}
+  [50/78]  123.6 s  pitch 0.8189  result 0.9442  chain 0.9409  {'result_pitcher_power': 32.0, 'result_batter_power': 4.0}
+  [51/78]  130.8 s  pitch 0.8189  result 1.0282  chain 1.0002  {'result_pitcher_power': 32.0, 'result_batter_power': 16.0}
+  [52/78]  130.8 s  pitch 0.8189  result 0.8307  chain 0.8384  {'result_pitch_sigma': 0.5, 'result_batter_power': 2.0}
+  [53/78]  132.6 s  pitch 0.8189  result 0.8420  chain 0.8430  {'result_pitch_sigma': 0.5, 'result_batter_power': 4.0}
+  [54/78]  133.0 s  pitch 0.8189  result 0.9534  chain 0.9172  {'result_pitch_sigma': 0.5, 'result_batter_power': 16.0}
+  [55/78]  132.4 s  pitch 0.8189  result 0.8256  chain 0.8353  {'result_pitch_sigma': 0.7, 'result_batter_power': 2.0}
+  [56/78]  133.5 s  pitch 0.8189  result 0.8357  chain 0.8417  {'result_pitch_sigma': 0.7, 'result_batter_power': 4.0}
+  [57/78]  133.6 s  pitch 0.8189  result 0.9484  chain 0.9374  {'result_pitch_sigma': 0.7, 'result_batter_power': 16.0}

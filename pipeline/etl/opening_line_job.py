@@ -63,7 +63,11 @@ _PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from pipeline.odds_provider import get_odds_provider  # noqa: E402
+from pipeline.odds_provider import (  # noqa: E402
+    BATTER_PROP_STATS,
+    PITCHER_PROP_STATS,
+    get_odds_provider,
+)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -84,13 +88,14 @@ MLB_SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
 GAME_TYPES = ["R", "F", "D", "L", "W", "P"]
 LOOKAHEAD_DAYS = 7  # how many days ahead to capture opening lines
 
-# SIM-134: Prop stat lists aligned with the 7-value CHECK constraint on raw.prop_odds.
-# Betting Analyst (Agent 8) confirmed scope — see CHANGES.md.
+# SIM-134 / SIM-421: the prop markets, aligned with the 15-value CHECK constraint
+# on raw.prop_odds (migration 0022). The lists live in pipeline/odds_provider.py
+# (the single source); this job keeps its historical names as aliases.
 #
 # Pitcher props captured when a starter is announced (starting pitcher known at schedule time).
 # Batter props deferred: lineup position not reliably known 5–7 days out.
-PITCHER_PROP_TYPES = ["strikeouts", "earned_runs", "walks"]
-BATTER_PROP_TYPES = ["hits", "home_runs", "total_bases", "rbis"]
+PITCHER_PROP_TYPES: tuple[str, ...] = PITCHER_PROP_STATS
+BATTER_PROP_TYPES: tuple[str, ...] = BATTER_PROP_STATS
 
 # Legacy _MOCK_PROP_LINES and local _mock_prop_odds() removed in SIM-134.
 # All prop generation is now delegated to the configured provider's
@@ -359,7 +364,8 @@ class OpeningLineJob:
         SIM-134: Stores opening prop lines for announced starters.
 
         Covers:
-          - Pitcher props: strikeouts, earned_runs, walks
+          - Pitcher props: every market in PITCHER_PROP_TYPES (strikeouts,
+            earned_runs, walks, outs_recorded, hits_allowed — SIM-421)
             (captured when starter is announced — known 5–7 days out)
           - Batter props deferred: lineup order not reliably known this far
             in advance; captured intraday once lineup is posted.

@@ -257,6 +257,16 @@ SIM_KWARG_KEYS: frozenset[str] = frozenset(
         # SIM-523 part C4: the live park for the fence stage (None = unknown).
         "venue_id",
         "max_innings",
+        # SIM-427: each side's manager, the real pen and its usage, the pen's
+        # source, each side's manager tendency profile and the league means.
+        "home_manager_id",
+        "away_manager_id",
+        "bullpen",
+        "pitcher_rest_days",
+        "pitcher_recent_usage",
+        "bullpen_source",
+        "manager_profiles",
+        "manager_league_profile",
     }
 )
 
@@ -332,6 +342,26 @@ def sim_kwargs_from_state(
         # SIM-523 part C4: the venue id ``state.park`` carries (a digit string).
         "venue_id": venue_id_of_state(state),
         "max_innings": 12,
+        # SIM-427: the managers and the real pen (picklable: int keys, tuples).
+        "home_manager_id": getattr(state, "home_manager_id", None),
+        "away_manager_id": getattr(state, "away_manager_id", None),
+        "bullpen": {
+            int(k): list(v)
+            for k, v in (
+                getattr(getattr(state, "manager", None), "bullpen_available", {}) or {}
+            ).items()
+        },
+        "pitcher_rest_days": dict(getattr(state, "pitcher_rest_days", {}) or {}),
+        "pitcher_recent_usage": {
+            int(k): tuple(int(x) for x in v)
+            for k, v in (getattr(state, "pitcher_recent_usage", {}) or {}).items()
+        },
+        "bullpen_source": getattr(state, "bullpen_source", None),
+        "manager_profiles": {
+            0: dict(getattr(state, "away_manager_profile", {}) or {}),
+            1: dict(getattr(state, "home_manager_profile", {}) or {}),
+        },
+        "manager_league_profile": dict(getattr(state, "manager_league_profile", {}) or {}),
     }
     # SIM-538: see the docstring above — a factory-only key, added only when a
     # caller resolved and wrote a cutoff onto the state.
@@ -498,6 +528,85 @@ async def resolve_asof_ymd(pool: Any, game_pk: int) -> int | None:
         return None
 
 
+#: The manager tendency columns the profile dicts carry (the engine's vocabulary).
+MANAGER_TENDENCY_COLUMNS: tuple[str, ...] = (
+    "starter_avg_pitch_count",
+    "starter_pull_pct_before_100",
+    "closer_entry_leverage_index",
+    "high_leverage_reliever_rate",
+    "opener_usage_rate",
+    "bulk_innings_rate",
+    "available_reliever_usage_rate",
+    "steal_order_rate_per_1b_opp",
+    "hit_and_run_rate_per_opportunity",
+    "sac_bunt_rate_high_leverage",
+    "sac_bunt_rate_low_leverage",
+    "squeeze_play_rate_per_3b_opp",
+    "pinch_hit_rate_vs_same_hand",
+    "pinch_hit_rate_high_leverage",
+    "defensive_sub_rate_late_innings",
+    "double_switch_rate_per_reliever_change",
+    "platoon_advantage_exploitation_rate",
+)
+
+
+def resolve_manager_profiles_onto_state(state: Any, con: Any) -> None:
+    """SIM-427: read each side's manager tendency profile and the season's
+    league means from the sim DuckDB onto ``state`` (``home_manager_profile``,
+    ``away_manager_profile``, ``manager_league_profile``).
+
+    The chain per side: (manager, season) -> (manager, season - 1) -> empty
+    (the consumer then reads the league mean, never a hand-set value). ``con``
+    None, a missing table or an unknown manager leaves the dicts empty — every
+    consumer is neutral on an empty dict. Read-only; never raises."""
+    if con is None:
+        return
+    season = int(getattr(state, "season", 0) or 0)
+    cols = ", ".join(MANAGER_TENDENCY_COLUMNS)
+
+    def _profile(manager_id: Any) -> dict[str, float]:
+        if manager_id is None:
+            return {}
+        for s in (season, season - 1):
+            try:
+                row = con.execute(
+                    f"SELECT {cols} FROM derived.manager_season_metrics "
+                    "WHERE manager_id = ? AND season = ? AND NOT below_minimum_sample",
+                    [int(manager_id), int(s)],
+                ).fetchone()
+            except Exception:  # noqa: BLE001 — a missing table reads as no profile
+                return {}
+            if row is not None and len(row) == len(MANAGER_TENDENCY_COLUMNS):
+                return {
+                    c: float(v)
+                    for c, v in zip(MANAGER_TENDENCY_COLUMNS, row, strict=True)
+                    if v is not None
+                }
+        return {}
+
+    league: dict[str, float] = {}
+    try:
+        league_row = con.execute(
+            "SELECT profile_json FROM derived.league_averages "
+            "WHERE entity_type = 'manager' AND season = ?",
+            [season],
+        ).fetchone()
+        if league_row is not None and league_row[0] is not None:
+            import json
+
+            raw = league_row[0]
+            doc = json.loads(raw) if isinstance(raw, str) else dict(raw)
+            league = {str(k): float(v) for k, v in doc.items() if v is not None}
+    except Exception:  # noqa: BLE001 — a missing table, an unexpected shape: no league row
+        league = {}
+    try:
+        state.home_manager_profile = _profile(getattr(state, "home_manager_id", None))
+        state.away_manager_profile = _profile(getattr(state, "away_manager_id", None))
+        state.manager_league_profile = league
+    except AttributeError:  # a state stand-in that takes no attributes: nothing to carry
+        return
+
+
 async def resolve_park_factor_onto_state(
     state: Any,
     pool: Any,
@@ -576,6 +685,8 @@ async def build_sim_kwargs(
             f"{on_unavailable_park_factor!r}"
         )
     await resolve_park_factor_onto_state(state, pool, con, int(game_pk), season)
+    # SIM-427: the two managers' tendency profiles and the league means.
+    resolve_manager_profiles_onto_state(state, con)
     if not park_factor_is_resolved(state) and on_unavailable_park_factor == "proceed":
         log.warning(
             "SIM-453: game_pk=%s simulates PARK-BLIND — %s",

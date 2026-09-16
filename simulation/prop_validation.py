@@ -49,6 +49,15 @@ WHAT IT PROVIDES
 5. **A persistable report** (:class:`PropValidationReport`) aggregating the above
    + the fitted win-prob curve, JSON round-trippable like ``CalibrationReport``.
 
+6. **The prop ground truth** — two readers that turn real data into per-player
+   prop totals. :func:`real_props_from_boxscore_rows` reads the official box
+   score (``raw.game_player_stats``, the official box-score ground truth,
+   SIM-545) and covers every prop the market offers
+   (:data:`BOXSCORE_BATTER_PROPS` / :data:`BOXSCORE_PITCHER_PROPS`).
+   :func:`real_props_from_pa_events` reads the ``raw.pitches`` event labels and
+   covers H / HR / TB and K / BB only; it is the FALLBACK for a game that has
+   no box-score rows.
+
 DETERMINISM
 -----------
 Pure NumPy / stdlib over arrays — no DB, no FAISS, no RNG (the PIT uses the
@@ -59,7 +68,7 @@ the same metrics, so the unit tests pin exact numbers.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -85,9 +94,12 @@ __all__ = [
     "reliability_curve_for_calibration_report",
     "write_reliability_curve_to_calibration_report",
     "real_props_from_pa_events",
+    "real_props_from_boxscore_rows",
     "pair_props_for_validation",
     "DERIVABLE_BATTER_PROPS",
     "DERIVABLE_PITCHER_PROPS",
+    "BOXSCORE_BATTER_PROPS",
+    "BOXSCORE_PITCHER_PROPS",
     "DEFAULT_PROP_LINES",
     "PropCalibration",
     "PropValidationReport",
@@ -417,12 +429,17 @@ def pmf_coverage(
 _HIT_EVENTS: dict[str, int] = {"single": 1, "double": 2, "triple": 3, "home_run": 4}
 #: `events` labels that are pitcher strikeouts (the K prop).
 _STRIKEOUT_EVENTS = frozenset({"strikeout", "strikeout_double_play"})
-#: `events` labels counted as a pitcher walk (the BB prop). Intentional walks
-#: (``intent_walk``) are EXCLUDED: a pitch-by-pitch sim does not model the IBB
-#: managerial decision, so its BB PMF is unintentional-walks only — counting IBB
-#: in the realized total would unfairly penalise the sim's high tail. (One-line
-#: change here if the sim is ever found to model the IBB.)
-_WALK_EVENTS = frozenset({"walk"})
+#: `events` labels counted as a pitcher walk (the BB prop). The intentional
+#: walk (``intent_walk``, the Statcast spelling) COUNTS: the sim issues one as
+#: a per-PA draw (SIM-515, ``sim.ibb_rates``) and its box line counts it as a
+#: walk (``_BB_CANONICAL`` in ``simulation/sim_loop.py``), and the official
+#: box score counts it too. The fallback's vocabulary has to match both.
+#: This is a vocabulary completion, not a data change: ``raw.pitches`` carries
+#: no ``intent_walk`` row today (an IBB is signalled, not thrown — its rows
+#: live in ``raw.play_events``), so the event-label fallback still under-counts
+#: a pitcher's walks by his intentional ones. The box-score reader (SIM-545)
+#: is the ground truth that carries them.
+_WALK_EVENTS = frozenset({"walk", "intent_walk"})
 
 #: Prop totals EXACTLY recoverable from the per-PA event LABEL alone. RBI, ER and
 #: OUTS are intentionally NOT derived: RBI needs the per-PA runs-driven-in count,
@@ -430,8 +447,35 @@ _WALK_EVENTS = frozenset({"walk"})
 #: — none carried by the event label — so deriving them from ``events`` would
 #: produce wrong "actuals" that silently corrupt the calibration. They are scored
 #: only when a richer box-score source supplies them.
+#:
+#: That richer source now exists: the official box-score ground truth (SIM-545,
+#: ``raw.game_player_stats``, read by :func:`real_props_from_boxscore_rows`)
+#: supersedes this event-label derivation whenever a game has box-score rows.
+#: These tuples stay as the FALLBACK for a game with no rows, and they keep
+#: ``scripts/validate_props.py`` unchanged.
 DERIVABLE_BATTER_PROPS: tuple[str, ...] = ("H", "HR", "TB")
 DERIVABLE_PITCHER_PROPS: tuple[str, ...] = ("K", "BB")
+
+#: The props the official box score grades (SIM-545) — every batter and pitcher
+#: market the platform prices (SIM-421). Order is not significant: these tuples
+#: feed pairing (:func:`pair_props_for_validation`) and set membership (the
+#: backtest's scored-prop set) only. The display order lives in
+#: ``simulation/prop_distributions.py`` (``BATTER_PROPS`` / ``PITCHER_PROPS``).
+#: 1B = H - 2B - 3B - HR; HRR = R + H + RBI (hits + runs + RBI, one market);
+#: OUTS = outs recorded; H_ALLOWED = hits allowed by the pitcher.
+BOXSCORE_BATTER_PROPS: tuple[str, ...] = (
+    "H",
+    "HR",
+    "TB",
+    "RBI",
+    "1B",
+    "2B",
+    "3B",
+    "R",
+    "SB",
+    "HRR",
+)
+BOXSCORE_PITCHER_PROPS: tuple[str, ...] = ("K", "BB", "ER", "OUTS", "H_ALLOWED")
 
 #: Default over/under lines per prop for the binary calibration metric (typical
 #: half-integer book lines, so no push). The PIT / coverage goodness-of-fit check
@@ -442,6 +486,17 @@ DEFAULT_PROP_LINES: dict[str, float] = {
     "TB": 1.5,
     "K": 5.5,
     "BB": 1.5,
+    # SIM-545: the box-score-graded props.
+    "RBI": 0.5,
+    "1B": 0.5,
+    "2B": 0.5,
+    "3B": 0.5,
+    "R": 0.5,
+    "SB": 0.5,
+    "HRR": 1.5,
+    "ER": 2.5,
+    "OUTS": 16.5,
+    "H_ALLOWED": 4.5,
 }
 
 
@@ -486,6 +541,67 @@ def real_props_from_pa_events(
     return batter, pitcher
 
 
+def _row_int(row: Any, key: str) -> int:
+    """Read an integer column from a box-score row (a mapping or an asyncpg Record)."""
+    value = row[key]
+    return int(value or 0)
+
+
+def real_props_from_boxscore_rows(
+    rows: Iterable[Any],
+) -> tuple[dict[int, dict[str, int]], dict[int, dict[str, int]]]:
+    """Turn official box-score rows into real per-player prop totals (SIM-545).
+
+    ``rows`` is an iterable of ``raw.game_player_stats`` rows for ONE game —
+    asyncpg Records or plain dicts keyed by the table's column names. Returns
+    two dicts:
+
+        batter_actuals[player_id]  = {prop: int for prop in BOXSCORE_BATTER_PROPS}
+        pitcher_actuals[player_id] = {prop: int for prop in BOXSCORE_PITCHER_PROPS}
+
+    A batter total exists ONLY for a row with ``played_bat`` true; a pitcher
+    total ONLY for a row with ``played_pitch`` true. A player who did not play
+    is ABSENT from both dicts: that is the "did not play → the book voids the
+    bet" rule, and downstream code skips a player with no actual. A two-way
+    row lands in both dicts.
+
+    The derived props: 1B = h - b2 - b3 - hr; HRR = r + h + rbi; TB is the
+    box's own ``tb`` (not recomputed). OUTS = p_outs, H_ALLOWED = p_h.
+    """
+    batter: dict[int, dict[str, int]] = {}
+    pitcher: dict[int, dict[str, int]] = {}
+    for row in rows:
+        pid = int(row["player_id"])
+        if bool(row["played_bat"]):
+            h = _row_int(row, "h")
+            b2 = _row_int(row, "b2")
+            b3 = _row_int(row, "b3")
+            hr = _row_int(row, "hr")
+            r = _row_int(row, "r")
+            rbi = _row_int(row, "rbi")
+            batter[pid] = {
+                "H": h,
+                "HR": hr,
+                "TB": _row_int(row, "tb"),
+                "RBI": rbi,
+                "1B": h - b2 - b3 - hr,
+                "2B": b2,
+                "3B": b3,
+                "R": r,
+                "SB": _row_int(row, "sb"),
+                "HRR": r + h + rbi,
+            }
+        if bool(row["played_pitch"]):
+            pitcher[pid] = {
+                "K": _row_int(row, "p_k"),
+                "BB": _row_int(row, "p_bb"),
+                "ER": _row_int(row, "p_er"),
+                "OUTS": _row_int(row, "p_outs"),
+                "H_ALLOWED": _row_int(row, "p_h"),
+            }
+    return batter, pitcher
+
+
 def pair_props_for_validation(
     pset: Any,
     batter_actuals: dict[int, dict[str, int]],
@@ -493,10 +609,12 @@ def pair_props_for_validation(
     prop_pairs_by_line: dict[tuple[str, float], list],
     *,
     prop_lines: dict[str, float] | None = None,
+    batter_props: Sequence[str] = DERIVABLE_BATTER_PROPS,
+    pitcher_props: Sequence[str] = DERIVABLE_PITCHER_PROPS,
 ) -> int:
     """Pair this game's sim prop PMFs with the realized per-player prop totals.
 
-    For every (player, derivable prop) that BOTH the sim PMF set (``pset``, a
+    For every (player, prop) that BOTH the sim PMF set (``pset``, a
     :class:`~simulation.prop_distributions.PropDistributionSet`) and the realized
     actuals contain, appends ``(PropDistribution, actual_value)`` onto
     ``prop_pairs_by_line[(prop, line)]`` (accumulated across games). A player/prop
@@ -504,17 +622,26 @@ def pair_props_for_validation(
     is skipped — we only score where the sim actually made a prediction. Returns
     the number of pairs added.
 
+    ``batter_props`` / ``pitcher_props`` select which props to pair. The default
+    is the event-label tuples (``DERIVABLE_*_PROPS``), so
+    ``scripts/validate_props.py`` is unchanged; pass
+    :data:`BOXSCORE_BATTER_PROPS` / :data:`BOXSCORE_PITCHER_PROPS` with the
+    box-score actuals (SIM-545) to pair every market. A prop absent from a
+    player's totals (a mixed-source run) is skipped, never a KeyError.
+
     ``pset`` is typed ``Any`` so this module needn't import the heavy
     prop_distributions at module load; it just needs ``pset.get(pid, prop)``.
     """
     lines = prop_lines or DEFAULT_PROP_LINES
     added = 0
     for actuals, props in (
-        (batter_actuals, DERIVABLE_BATTER_PROPS),
-        (pitcher_actuals, DERIVABLE_PITCHER_PROPS),
+        (batter_actuals, batter_props),
+        (pitcher_actuals, pitcher_props),
     ):
         for pid, totals in actuals.items():
             for prop in props:
+                if prop not in totals:
+                    continue
                 dist = pset.get(int(pid), prop)
                 if dist is None:
                     continue

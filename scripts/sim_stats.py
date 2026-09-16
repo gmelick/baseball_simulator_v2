@@ -69,6 +69,7 @@ from simulation.lineup_resolver import resolve_game_state  # noqa: E402
 from simulation.production_factory import production_machine_factory  # noqa: E402
 from simulation.sim_kwargs import (  # noqa: E402
     open_sim_duckdb,
+    resolve_manager_profiles_onto_state,
     resolve_park_run_factor,
     resolve_venue_id,
     sim_kwargs_from_state,
@@ -122,6 +123,15 @@ _REALISM_FLAGS = (
     "SIM_PARK_WALL_ZONE_ONLY",
     "SIM_FENCE_STAGE",
     "SIM_MANAGER_DRAW",
+    # SIM-427: the pen source, the manager weight and the reliever-draw weights.
+    "SIM_BULLPEN_SOURCE",
+    "SIM_ACTOR_POWER_MANAGER_USAGE",
+    "SIM_RELIEF_ROLE_SIGMA",
+    "SIM_RELIEF_PITCHER_POWER",
+    "SIM_RELIEF_REST_SIGMA",
+    "SIM_RELIEF_PITCHED2D_OFF_WEIGHT",
+    "SIM_RELIEF_PITCHES3D_SIGMA",
+    "SIM_RELIEF_HAND_OFF_WEIGHT",
 )
 
 
@@ -150,6 +160,8 @@ async def _resolve(game_pk: int, duck: Any):
         venue = await resolve_venue_id(conn, int(game_pk))
         if venue is not None:
             state.park = str(venue)
+        # SIM-427: each side's manager tendency profile and the league means.
+        resolve_manager_profiles_onto_state(state, duck)
         return state
     finally:
         await conn.close()

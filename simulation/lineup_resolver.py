@@ -78,11 +78,16 @@ that module's public surface.
 
 from __future__ import annotations
 
+import logging
+import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from simulation.game_state import GameState, Half, Team
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -207,6 +212,19 @@ class ResolvedLineup:
     bat_hands: dict[int, str] = field(default_factory=dict)
     #: player_id -> 'L'/'R'/'S' throwing hand (from raw.players.throws).
     throw_hands: dict[int, str] = field(default_factory=dict)
+    # SIM-427: each side's manager (raw.games) and the real pen — the arms the
+    # MLB box lists as available for the game (``raw.game_bullpen``, minus the
+    # rotation and today's starter), keyed by the Team int (0 = AWAY, 1 = HOME),
+    # with each arm's rest and recent usage. ``bullpen_source`` is 'box' when the
+    # listing supplied it and 'synthetic' when it did not (the caller then
+    # stages the no-DB seam's pen and the decision log says so).
+    home_manager_id: int | None = None
+    away_manager_id: int | None = None
+    game_date: Any = None
+    bullpen: dict[int, list[int]] = field(default_factory=dict)
+    pitcher_rest_days: dict[int, float] = field(default_factory=dict)
+    pitcher_recent_usage: dict[int, tuple[int, int, int]] = field(default_factory=dict)
+    bullpen_source: str = "synthetic"
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +469,16 @@ def build_game_state(
     state.away_catcher_id = away_def.get("C")
     state.home_defense = home_def
     state.away_defense = away_def
+    # SIM-427: the managers and the real pen (the pen rides the manager
+    # context the pull hook pops from; ``simulate_game`` copies it per game).
+    state.home_manager_id = resolved.home_manager_id
+    state.away_manager_id = resolved.away_manager_id
+    if resolved.bullpen:
+        state.manager.bullpen_available = {int(k): list(v) for k, v in resolved.bullpen.items()}
+    if resolved.pitcher_rest_days:
+        state.pitcher_rest_days = dict(resolved.pitcher_rest_days)
+    state.pitcher_recent_usage = dict(resolved.pitcher_recent_usage)
+    state.bullpen_source = resolved.bullpen_source
     return state
 
 
@@ -589,7 +617,8 @@ def _normalize_side(side: Any) -> Team:
 # so these helpers work against a pool or a single connection.
 
 _GAME_SIDES_SQL = """
-    SELECT game_pk, season, home_team_id, away_team_id
+    SELECT game_pk, season, home_team_id, away_team_id,
+           home_manager_id, away_manager_id, game_date
     FROM   raw.games
     WHERE  game_pk = $1
 """
@@ -696,7 +725,7 @@ async def resolve_lineup(
     }
     bat_hands, throw_hands = await fetch_player_hands(conn, player_ids)
 
-    return resolve_lineup_from_rows(
+    resolved = resolve_lineup_from_rows(
         game_pk=int(game_pk),
         season=season,
         home_team_id=home_team_id,
@@ -706,6 +735,82 @@ async def resolve_lineup(
         throw_hands=throw_hands,
         as_of_at_bat=as_of_at_bat,
     )
+    # SIM-427: the managers and the real pens.
+    hm = _row_get(game, "home_manager_id")
+    am = _row_get(game, "away_manager_id")
+    resolved.home_manager_id = int(hm) if hm is not None else None
+    resolved.away_manager_id = int(am) if am is not None else None
+    resolved.game_date = _row_get(game, "game_date")
+    await _attach_bullpens(conn, resolved)
+    return resolved
+
+
+def bullpen_source_enabled() -> bool:
+    """SIM-427: whether the resolver reads the REAL pen (``SIM_BULLPEN_SOURCE=box``,
+    the MLB box's per-game listing) or leaves the synthetic pen in place (the
+    default, ``synthetic`` — production today; the flip sets ``box``)."""
+    return os.environ.get("SIM_BULLPEN_SOURCE", "synthetic").strip().lower() == "box"
+
+
+async def _attach_bullpens(conn: Any, resolved: ResolvedLineup) -> None:
+    """SIM-427: fill ``resolved.bullpen`` / ``pitcher_rest_days`` /
+    ``pitcher_recent_usage`` from the MLB box's per-game listing
+    (``pipeline.bullpen_usage.fetch_pen_for_game``), both sides, and merge the
+    pen arms' throwing hands. Leaves ``bullpen_source = 'synthetic'`` (and the
+    maps empty) when the source switch is off (:func:`bullpen_source_enabled`),
+    when the listing is absent for either side or when the table does not
+    exist yet — the caller falls back to the no-DB seam's pen and says so."""
+    from pipeline.bullpen_usage import fetch_pen_for_game
+
+    if not bullpen_source_enabled():
+        return
+    game_date = resolved.game_date
+    if game_date is None:
+        return
+    if not isinstance(game_date, date):
+        try:
+            game_date = date.fromisoformat(str(game_date)[:10])
+        except ValueError:
+            return
+    sides = ((0, resolved.away), (1, resolved.home))
+    pens: dict[int, list[int]] = {}
+    rest: dict[int, float] = {}
+    usage: dict[int, tuple[int, int, int]] = {}
+    for side_int, team in sides:
+        try:
+            out = await fetch_pen_for_game(
+                conn,
+                game_pk=int(resolved.game_pk),
+                team_id=int(team.team_id),
+                game_date=game_date,
+                exclude=[team.pitcher_id] if team.pitcher_id is not None else [],
+            )
+        except Exception as exc:  # noqa: BLE001 — an absent table / a DB hiccup
+            log.warning(
+                "SIM-427: the pen for game %s team %s could not be read (%s: %s); "
+                "the synthetic pen stands in.",
+                resolved.game_pk,
+                team.team_id,
+                type(exc).__name__,
+                exc,
+            )
+            return
+        if out is None:
+            return
+        pen, arm_usage = out
+        pens[side_int] = list(pen)
+        for pid, u in arm_usage.items():
+            rest[int(pid)] = float(u.days_rest)
+            usage[int(pid)] = u.as_tuple()
+    pen_ids = {pid for arms in pens.values() for pid in arms}
+    if pen_ids:
+        _, pen_throws = await fetch_player_hands(conn, pen_ids)
+        for pid, hand in pen_throws.items():
+            resolved.throw_hands.setdefault(int(pid), str(hand))
+    resolved.bullpen = pens
+    resolved.pitcher_rest_days = rest
+    resolved.pitcher_recent_usage = usage
+    resolved.bullpen_source = "box"
 
 
 async def resolve_game_state(

@@ -479,23 +479,38 @@ class TestStolenBases:
             assert ln.sb == 0
             assert ln.r == 0
         assert result.steal_outcome == STEAL_CAUGHT
-        # The caught runner's baserunner_advances == 0 is an OUT, not a score:
-        # it carries steal_attempted, so _accumulate_pa skips run attribution.
-        assert result.baserunner_advances.get(803) == 0
+        # SIM-421: the caught runner has NO baserunner_advances entry. An
+        # entry of 0 means "scored" to _accumulate_pa, which credits every
+        # scorer on a steal pitch; a retired runner is simply absent.
+        assert 803 not in result.baserunner_advances
+        assert result.box_run_credited == set()
 
 
 class TestStealRunAttributionDoesNotDoubleCount:
-    def test_accumulate_pa_skips_runs_on_a_steal_play(self):
-        # If a terminal PlayResult carries a steal (steal_attempted), the run
-        # attribution in _accumulate_pa is skipped (the steal path owns it) so a
-        # steal-of-home is not counted twice.  Here the 0-advance must NOT become
-        # an R via _accumulate_pa.
+    def test_accumulate_pa_skips_the_credited_steal_of_home_runner(self):
+        # SIM-421: _resolve_steal_outcome credits the steal-of-home runner's R
+        # itself and records him in ``box_run_credited``. On a terminal pitch
+        # his advances entry reads 0, so _accumulate_pa must skip exactly him.
         sm = _machine()
         state = _fresh_state()
         result = _pa("strikeout", outs_recorded=1, advances={902: 0})
         result.steal_attempted = True
+        result.box_run_credited = {902}
         sm._accumulate_pa(state, result)
         assert sm.boxscore.line(902).r == 0
+
+    def test_accumulate_pa_credits_the_other_scorers_on_a_steal_play(self):
+        # SIM-421: the old guard skipped the whole loop on any steal pitch, so
+        # a safe steal to 2B plus a scoring play credited nobody a run. Only
+        # the marked steal-of-home runner is skipped; every other 0 is a run.
+        sm = _machine()
+        state = _fresh_state()
+        result = _pa("home_run", runs_scored=2, advances={902: 0, state.batter_id: 0})
+        result.steal_attempted = True
+        result.box_run_credited = {902}
+        sm._accumulate_pa(state, result)
+        assert sm.boxscore.line(902).r == 0
+        assert sm.boxscore.line(state.batter_id).r == 1
 
 
 # ===========================================================================

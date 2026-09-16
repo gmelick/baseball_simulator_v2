@@ -94,9 +94,12 @@ services:
     shm_size: "1gb"
     # SIM-430: hard cgroup memory cap so the app + its ProcessPool workers can
     # NEVER pressure the host (a runaway is OOM-killed in THIS container only,
-    # protecting other tenants/Docker). Sized for the ~6 GB serving engines + a
-    # forkserver worker pool (~0.5 GB/worker): fits ~6-8 workers under the cap.
-    mem_limit: "10g"
+    # protecting other tenants/Docker). Measured 2026-09-15 on the 4-season
+    # bundle: the serving parent holds ~6.7 GB private, each forkserver worker
+    # ~575 MB private + one 400 MB shared segment. 16g fits 10 workers with
+    # ~2.5 GB spare; 14 workers overran 14g and swapped 7.6 GB (n=100 read
+    # 55-86 s). The WSL VM is 20 GB (.wslconfig); raise it before this.
+    mem_limit: "16g"
     env_file:
       - .env
     environment:
@@ -108,13 +111,21 @@ services:
       BASEBALL_DB_DSN: postgresql://baseball_user:baseball_pass@db:5432/baseball_sim
       REDIS_URL:       redis://redis:6379/0
       ENVIRONMENT:     ${ENVIRONMENT:-development}
-      # SIM-434: enable the manager decision model (starter pull + reliever
-      # selection by fatigue/leverage/TTO). Validated 2026-06-04 at 400 sims x 3
-      # games: pitchers/game 2.0 -> 9.25, starter IP ~9 -> ~6.4 (realistic), with
-      # runs unchanged (-0.10/team) and box stats flat — fixes the pitcher K/BB
-      # over-prediction without distorting the run environment. Uses a league-flat
-      # default manager profile + synthetic bullpen (real per-team rosters are the
-      # SIM-427 follow-on). Unit tests pin it OFF (tests/conftest.py). =0 reverts.
+      # SIM-402 pre-warm: how many workers warm their full-pool cache at once
+      # (default 2). At 14 workers (2026-09-15, the WSL cap raised to 16 vCPU /
+      # 20 GB) waves of 2 mean 7 waves; 4 keeps the warm inside its 120 s deadline.
+      SIM_PREWARM_MAX_CONCURRENT: "4"
+      # 2026-09-15: numpy's OpenBLAS defaults to 16 threads PER PROCESS, so ten
+      # sim workers spun ~160 BLAS threads on 16 vCPUs (the app read ~1,500%
+      # CPU for 10 single-threaded games). One BLAS thread per worker; the
+      # games are independent processes and need no intra-process threads.
+      OPENBLAS_NUM_THREADS: "1"
+      # SIM-434: the manager GATE. ON = the manager hooks run: the pitching
+      # change (the draw, SIM_MANAGER_DRAW below; the SIM-434 pull formula was
+      # deleted at the SIM-427 flip of 2026-09-13, so with the draw off no
+      # pitcher is ever changed), the intentional-walk draw and the steal
+      # weight, which read each side's REAL manager profile off the game state.
+      # Unit tests pin it OFF (tests/conftest.py). =0 reverts.
       SIM_MANAGER:     "1"
       # SIM-413: L/R platoon batted-ball draw reweight by pitcher hand.
       # Unit tests pin it OFF (tests/conftest.py). Set to 0 to revert.
@@ -144,14 +155,32 @@ services:
       # deleted). OFF; fitting and enabling is SIM-526.
       SIM_CATCHER_RECEIVING:     "0"
       SIM_GOT_AWAY:              "1"
-      # SIM-518 (2026-09-07): the draw-conditioning weights — fatigue (pitch
-      # count + times through the order) and the batting side on the PITCH
-      # draw, the drawn pitch's similarity on the batted-ball draw. All OFF
-      # until their SIM-476-style fits and the certifying lane land them
-      # (docs/audit/2026-09-04-sim467-518-plan.md §8). 0 / 0 / 1.0 / 0 = off.
+      # SIM-518 (2026-09-07; re-scoped 2026-09-12 by owner ruling): the
+      # pitcher-fatigue weight on the PITCH draw — a Gaussian on |live - row|
+      # pitch count times one on |live - row| times through the order.
+      # LANDED 2026-09-14 by owner decision: the times-through term at
+      # bandwidth 0.5, the pitch-count term OFF (it imports "pitchers allowed
+      # to pitch deep throw fewer balls"). The evidence on record: the fit on
+      # the pool's own within-pitcher effect (docs/audit/2026-09-12-sim518-fit-plan.md
+      # §5), the probe re-run on the flipped composition (§5.3 — the ball
+      # channel short of the rule) and the two paired accuracy arms on 250
+      # games of 2024 (§6 — flat on every market at 0.5 and 0.7; the
+      # recommendation was HOLD OFF; the owner chose 0.5). 0 = off.
       SIM_FATIGUE_PC_SIGMA:      "0"
-      SIM_FATIGUE_TTO_SIGMA:     "0"
+      SIM_FATIGUE_TTO_SIGMA:     "0.5"
+      # The pitch draw's situation bandwidth (the Gaussian on the base-out
+      # situation). 2.0 = today's code default; SIM-548 ladders it.
+      SIM_SIT_SIGMA:             "2.0"
+      # The batting side on the pitch draw: LIVE as a HARD FILTER — the side
+      # is one of the cell index's five dimensions (2,880 cells since the
+      # SIM-469 rebuild), so every level-0 draw already matches it. This soft
+      # weight would act only in a widened cell, where re-imposing the side
+      # would re-starve it. Stays 1.0 (off) by owner ruling 2026-09-12.
       SIM_PITCH_HOME_OFF_WEIGHT: "1.0"
+      # The drawn pitch's similarity on the batted-ball draw: SUPERSEDED by
+      # the born batted ball (SIM-523 part B/C) — the pitch reaches the
+      # fielding draw through the ball it produced. Stays 0 (off) by owner
+      # ruling 2026-09-12; the code and its tests stay.
       SIM_BB_PITCH_SIGMA:        "0"
       # SIM-467 (2026-09-07): the pitch-draw CELL INDEX — each plate appearance
       # draws from its (runners, outs, score band, side) cell instead of the
@@ -175,15 +204,21 @@ services:
       # SIM-523 part B (2026-09-08): the PITCH / PITCH-RESULT split — the
       # pitch draw picks the pitch thrown, the result draw picks what happens
       # to it (conditioned on the pitch through the pitch engine's metric;
-      # the in-play result carries its own batted ball). Built and fitted
-      # (pitcher 16 in both draws, batter 8 in the result draw) but OFF: on
-      # the balanced 45 × 130 lane the split at those powers reds strikeouts
-      # per plate appearance −2.4% (OFF: −1.0%, PASS) — SIM-527. The certified
-      # configuration (2026-09-09) runs one draw per pitch at pitcher power 1.
-      SIM_PITCH_RESULT_SPLIT:    "0"
-      SIM_PITCH_PITCHER_POWER:   "1.0"
-      SIM_RESULT_PITCHER_POWER:  "1.0"
-      SIM_RESULT_BATTER_POWER:   "1.0"
+      # the in-play result carries its own batted ball). Fitted 2026-09-09
+      # (pitcher 16 in both draws, batter 8 in the result draw); held OFF
+      # because the balanced lane read strikeouts per plate appearance −2.4%
+      # (SIM-527). FLIPPED ON 2026-09-14 by owner decision on the accuracy
+      # comparison (SIM-548 Part A4, 250 games of 2024): the starter strikeout
+      # market −0.0155 Brier [−0.0258, −0.0050] — the gap to the closing line
+      # halved; the moneyline −0.0050; the batter props flat; the first-five
+      # total +0.0113 at two standard errors against an outlier baseline row.
+      # The 2025 hold-out has NOT run. The strikeout probabilities sit 6.5
+      # points low with the split on (the SIM-527 shortfall as a bias) — the
+      # calibration layer's first job (the SIM-548 joint-fit plan, §7).
+      SIM_PITCH_RESULT_SPLIT:    "1"
+      SIM_PITCH_PITCHER_POWER:   "16"
+      SIM_RESULT_PITCHER_POWER:  "16"
+      SIM_RESULT_BATTER_POWER:   "8"
       # SIM-523 part F: the runner kernels' bandwidths in the steal and the
       # advancement draws (empty = the shared sigma 1.0).
       # The born batted ball's kernel on the fielding draw (0 = off).
@@ -203,9 +238,38 @@ services:
       SIM_FENCE_STAGE:           "1"
       SIM_FENCE_MARGIN:          "0"
       # SIM-523 part D (2026-09-08): the pitching change as a DRAW from the
-      # opportunity pool (the pool's own change rate for the boundary's
-      # cell) instead of the SIM-434 formula. OFF until part F and a lane.
-      SIM_MANAGER_DRAW:          "0"
+      # opportunity pool (the pool's own change rate for the boundary's cell,
+      # the live manager's usage similarity a weight). FLIPPED ON 2026-09-13
+      # (SIM-427, the plan's §5 conditions met: the usage numbers sit on the
+      # box score's — 4.45 pitchers per team-game vs 4.28, starter pitches
+      # 84.6 ± 19.2 vs 84.7 ± 17.4 — and the paired accuracy run on 250 games
+      # of 2024 read the draw MORE accurate on the starter strikeout market
+      # (Brier −0.0156, CI [−0.0255, −0.0066]) and the moneyline (−0.0062), flat
+      # elsewhere). OFF = no pitching change (the pull formula is deleted).
+      SIM_MANAGER_DRAW:          "1"
+      # SIM-427: the live manager's usage-similarity weight on the change
+      # draw (the manager engine's 0-1 score at this power; 0 = off) and the
+      # reliever draw's weights — the entering arm's resemblance to the arm
+      # the drawn row brought in: role (high-leverage entry share, a Gaussian
+      # bandwidth), stuff (the pitcher engine's score at a power), rest (days,
+      # a bandwidth), pitched in the last two days (a mismatch weight; 1.0 =
+      # off), pitches over the last three days (a bandwidth) and hand (a
+      # mismatch weight; 1.0 = off). FITTED and FLIPPED 2026-09-13 (the plan's
+      # 4f stamp): manager power 4, role 0.1, rest 0.5, pitched-in-2-days
+      # 0.25, pitches-in-3-days 10; hand and stuff stay off (no read needed them).
+      SIM_ACTOR_POWER_MANAGER_USAGE: "4"
+      # SIM-427: where the pen comes from. "box" = the MLB box's per-game
+      # listing (raw.game_bullpen, minus the rotation and today's starter,
+      # with each arm's rest and recent usage; production since the flip);
+      # "synthetic" = the invented six-arm pen (the no-DB seam, and the
+      # fallback for a game with no listing — logged).
+      SIM_BULLPEN_SOURCE:            "box"
+      SIM_RELIEF_ROLE_SIGMA:         "0.1"
+      SIM_RELIEF_PITCHER_POWER:      "0"
+      SIM_RELIEF_REST_SIGMA:         "0.5"
+      SIM_RELIEF_PITCHED2D_OFF_WEIGHT: "0.25"
+      SIM_RELIEF_PITCHES3D_SIGMA:    "10"
+      SIM_RELIEF_HAND_OFF_WEIGHT:    "1.0"
       # SIM-453: WHERE the park factors come from. The park consumer above was on,
       # but the factors were dark: api/routes/games.py read them through
       # app.state.sim_duckdb, and api/main.py only opened that connection under

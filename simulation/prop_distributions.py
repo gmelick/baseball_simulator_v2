@@ -18,23 +18,45 @@ over/under against a book line; a mean alone cannot answer ``P(K >= 6.5)``.
 
 THE PROPS
 ---------
-Derived directly from the SIM-328 :class:`PlayerStatLine` fields:
+Every prop reads directly off the SIM-328 :class:`PlayerStatLine` fields.  The
+first four of each list are the original SIM-329 props; the rest are the
+market's other prop-bet types the platform did not price until SIM-421.  The
+tuples keep the original four FIRST because the frontend renders a player's
+prop chips in tuple order.
 
-  * **Pitcher** (charged on defense):
-      - ``K``    -- strikeouts (``line.k``)
-      - ``BB``   -- walks (``line.bb``)
-      - ``ER``   -- earned runs (``line.er``)
-      - ``OUTS`` -- outs recorded == IP in thirds (``line.outs_recorded``).  We
-        expose the prop in *outs* (an exact integer) rather than the ``x.1/x.2``
-        IP string, because a PMF needs an integer support and ``2.1`` IP is not a
-        real number you can sum -- ``7`` outs is.  A consumer that wants "P(IP >=
-        6.0)" asks ``p_at_least(18)`` (6 innings == 18 outs).
+  * **Pitcher** (charged on defense) -- :data:`PITCHER_PROPS`:
+      - ``K``         -- strikeouts (``line.k``)
+      - ``BB``        -- walks (``line.bb``)
+      - ``ER``        -- earned runs (``line.er``)
+      - ``OUTS``      -- outs recorded == IP in thirds (``line.outs_recorded``).
+        We expose the prop in *outs* (an exact integer) rather than the
+        ``x.1/x.2`` IP string, because a PMF needs an integer support and
+        ``2.1`` IP is not a real number you can sum -- ``7`` outs is.  A
+        consumer that wants "P(IP >= 6.0)" asks ``p_at_least(18)`` (6 innings
+        == 18 outs).
+      - ``H_ALLOWED`` -- hits allowed (``line.h_allowed``; SIM-421).  This is
+        the PITCHER's market.  It is a separate field from the batter's ``H``.
 
-  * **Batter** (credited on offense):
-      - ``H``    -- hits (``line.h``)
-      - ``HR``   -- home runs (``line.hr``)
-      - ``RBI``  -- runs batted in (``line.rbi``)
-      - ``TB``   -- total bases (see the limitation below).
+  * **Batter** (credited on offense) -- :data:`BATTER_PROPS`:
+      - ``H``   -- hits (``line.h``)
+      - ``HR``  -- home runs (``line.hr``)
+      - ``RBI`` -- runs batted in (``line.rbi``)
+      - ``TB``  -- total bases (see the note below).
+      - ``1B``  -- singles (SIM-421).  The boxscore tracks doubles, triples and
+        home runs as subsets of ``h``, so singles are the remainder
+        ``h - b2 - b3 - hr``.
+      - ``2B``  -- doubles (``line.b2``; SIM-421)
+      - ``3B``  -- triples (``line.b3``; SIM-421)
+      - ``R``   -- runs scored (``line.r``; SIM-421)
+      - ``SB``  -- stolen bases (``line.sb``; SIM-421)
+      - ``HRR`` -- hits + runs + RBI (``line.h + line.r + line.rbi``; SIM-421).
+        The market prices this combined line as ONE number.  We compute the
+        sum PER ITERATION (one game's ``h + r + rbi``) and then build the PMF
+        from those per-game sums.  Do NOT build it from the three marginal
+        PMFs.  A convolution of the H, R and RBI PMFs treats them as
+        independent.  They are not: a home run is a hit, a run and an RBI at
+        once.  The convolution throws that within-game correlation away and
+        gives a wrong PMF.
 
 TOTAL BASES (TB) -- NOW EXACT (SIM-365)
 ---------------------------------------
@@ -102,10 +124,12 @@ _Z_BY_LEVEL: dict[float, float] = {
     0.99: 2.5758293035489004,
 }
 
-#: Pitcher prop names (charged on defense).
-PITCHER_PROPS: tuple[str, ...] = ("K", "BB", "ER", "OUTS")
-#: Batter prop names (credited on offense).
-BATTER_PROPS: tuple[str, ...] = ("H", "HR", "RBI", "TB")
+#: Pitcher prop names (charged on defense).  The original four stay first
+#: (the frontend renders chips in tuple order); ``H_ALLOWED`` is SIM-421.
+PITCHER_PROPS: tuple[str, ...] = ("K", "BB", "ER", "OUTS", "H_ALLOWED")
+#: Batter prop names (credited on offense).  The original four stay first;
+#: ``1B`` / ``2B`` / ``3B`` / ``R`` / ``SB`` / ``HRR`` are SIM-421.
+BATTER_PROPS: tuple[str, ...] = ("H", "HR", "RBI", "TB", "1B", "2B", "3B", "R", "SB", "HRR")
 #: Every prop name this aggregator can build.
 ALL_PROPS: tuple[str, ...] = PITCHER_PROPS + BATTER_PROPS
 
@@ -134,6 +158,28 @@ def _total_bases(line: PlayerStatLine) -> int:
     return h + b2 + 2 * b3 + 3 * hr
 
 
+def _singles(line: PlayerStatLine) -> int:
+    """Singles from the (h, b2, b3, hr) fields (SIM-421).
+
+    The boxscore tracks doubles (``b2``), triples (``b3``) and home runs
+    (``hr``) as subsets of ``h``, so singles are the remainder::
+
+        1B = h - b2 - b3 - hr
+    """
+    return int(line.h) - int(line.b2) - int(line.b3) - int(line.hr)
+
+
+def _hits_runs_rbi(line: PlayerStatLine) -> int:
+    """Hits + runs + RBI for ONE game (SIM-421).
+
+    The market prices this combined line as one number.  This function sums
+    the three fields per iteration.  The PMF is then built from the per-game
+    sums.  A convolution of the three marginal PMFs drops the within-game
+    correlation between a hit, a run and an RBI.  That PMF is wrong.
+    """
+    return int(line.h) + int(line.r) + int(line.rbi)
+
+
 #: How to read each prop's integer value off a single-game :class:`PlayerStatLine`.
 #: Keeping the extractors in one table makes :meth:`PropDistributionSet.from_boxscores`
 #: a single uniform loop and keeps "which field is which prop" in exactly one place.
@@ -142,10 +188,18 @@ _PROP_EXTRACTORS = {
     "BB": lambda ln: int(ln.bb),
     "ER": lambda ln: int(ln.er),
     "OUTS": lambda ln: int(ln.outs_recorded),
+    "H_ALLOWED": lambda ln: int(ln.h_allowed),  # SIM-421: the pitcher's hits allowed
     "H": lambda ln: int(ln.h),
     "HR": lambda ln: int(ln.hr),
     "RBI": lambda ln: int(ln.rbi),
     "TB": _total_bases,
+    # SIM-421: the market's other batter lines.
+    "1B": _singles,
+    "2B": lambda ln: int(ln.b2),
+    "3B": lambda ln: int(ln.b3),
+    "R": lambda ln: int(ln.r),
+    "SB": lambda ln: int(ln.sb),
+    "HRR": _hits_runs_rbi,
 }
 
 
@@ -358,9 +412,14 @@ class PropDistributionSet:
         over "games the pitcher happened to be listed in".
 
         Whether a player gets pitcher props, batter props, or both is decided by
-        whether they EVER recorded pitching / batting activity across the run
-        (mirroring :attr:`BoxScore.pitchers` / :attr:`BoxScore.batters`), so a
-        pure batter never gets a (meaningless) all-zero K PMF.
+        whether they EVER recorded pitching / batting activity across the run,
+        so a pure batter never gets a (meaningless) all-zero K PMF.  Batting
+        activity is an AB, a hit, an RBI, a run, a steal, a double or a triple.
+        So a pinch runner who only scores or steals owns the batter props
+        (SIM-421).  Pitching activity is an out, a K, a BB, an ER or a hit
+        allowed (SIM-421).  This net is wider than :attr:`BoxScore.batters` /
+        :attr:`BoxScore.pitchers`.  Those two still read the original SIM-328
+        fields only.
         """
         games = list(boxscores)
         n = len(games)
@@ -378,9 +437,12 @@ class PropDistributionSet:
             per_game_lines.append(lines)
             for pid, ln in lines.items():
                 all_ids.add(int(pid))
-                if ln.outs_recorded or ln.k or ln.bb or ln.er:
+                # SIM-421: a hit allowed is pitching activity too.
+                if ln.outs_recorded or ln.k or ln.bb or ln.er or ln.h_allowed:
                     pitched.add(int(pid))
-                if ln.ab or ln.h or ln.rbi:
+                # SIM-421: a run, a steal, a double or a triple is batting
+                # activity too, so a pinch-runner-only game owns batter props.
+                if ln.ab or ln.h or ln.rbi or ln.r or ln.sb or ln.b2 or ln.b3:
                     batted.add(int(pid))
 
         # Pass 2: for each player, build the per-prop sample vector (length N,

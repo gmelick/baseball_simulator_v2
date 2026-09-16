@@ -1,0 +1,175 @@
+{
+ "season": 2024,
+ "n_pitches": 300,
+ "production": {
+  "pitch_pitcher_power": 16.0,
+  "pitch_batter_power": 1.0,
+  "fatigue_tto_sigma": 0.5,
+  "sit_sigma": 2.0,
+  "result_pitch_sigma": 1.0,
+  "result_pitcher_power": 16.0,
+  "result_batter_power": 8.0,
+  "result_density_power": 1.0
+ },
+ "production_split": true,
+ "outcomes": [
+  "ball",
+  "called_strike",
+  "swinging_strike",
+  "foul",
+  "in_play",
+  "hit_by_pitch",
+  "other"
+ ],
+ "settings": [
+  {
+   "setting": {
+    "pitch_pitcher_power": 16.0,
+    "pitch_batter_power": 1.0,
+    "fatigue_tto_sigma": 0.5,
+    "sit_sigma": 2.0,
+    "result_pitch_sigma": 1.0,
+    "result_pitcher_power": 16.0,
+    "result_batter_power": 8.0,
+    "result_density_power": 1.0
+   },
+   "n_scored": 300,
+   "seconds": 8.0,
+   "brier_pitch": 0.8133495915309105,
+   "brier_result": 0.8479458478755798,
+   "brier_chain": 0.9090682494818997,
+   "n_chain": 30,
+   "ess_pitch": 0.021836629054744656,
+   "ess_result": 0.010954363606925359,
+   "rows_mean": 2490.6666666666665,
+   "ess_rows_pitch": 45.52128725400693,
+   "ess_rows_result": 17.795912643721355,
+   "share_pitch": [
+    0.3614096506539863,
+    0.16342362195193816,
+    0.10542746359676655,
+    0.1909815672867691,
+    0.17672037729242693,
+    0.002037319218113269,
+    0.0
+   ],
+   "share_result": [
+    0.3647032682194844,
+    0.1564160966451754,
+    0.10867411395485407,
+    0.1877913422489646,
+    0.17981328483408152,
+    0.0026018940974398175,
+    0.0
+   ],
+   "actual": [
+    0.38333333333333336,
+    0.17333333333333334,
+    0.13,
+    0.17,
+    0.14,
+    0.0033333333333333335,
+    0.0
+   ],
+   "label": "production",
+   "delta_pitch": 0.0,
+   "delta_pitch_lo": 0.0,
+   "delta_pitch_hi": 0.0,
+   "delta_result": 0.0,
+   "delta_result_lo": 0.0,
+   "delta_result_hi": 0.0,
+   "discrimination_pitch": {
+    "pitchers": 0
+   },
+   "discrimination_result": {
+    "pitchers": 0
+   }
+  }
+ ],
+ "interactions": {
+  "pitch_score": {
+   "pitch_pitcher_power x pitch_batter_power": {
+    "best_a_by_b": {
+     "pitch_batter_power=1": "pitch_pitcher_power=16"
+    },
+    "table": {
+     "pitch_batter_power=1": {
+      "pitch_pitcher_power=16": 0.8133495915309105
+     }
+    }
+   },
+   "result_pitcher_power x result_batter_power": {
+    "best_a_by_b": {
+     "result_batter_power=8": "result_pitcher_power=16"
+    },
+    "table": {
+     "result_batter_power=8": {
+      "result_pitcher_power=16": 0.8133495915309105
+     }
+    }
+   },
+   "result_pitch_sigma x result_batter_power": {
+    "best_a_by_b": {
+     "result_batter_power=8": "result_pitch_sigma=1"
+    },
+    "table": {
+     "result_batter_power=8": {
+      "result_pitch_sigma=1": 0.8133495915309105
+     }
+    }
+   },
+   "pitch_pitcher_power x result_batter_power": {
+    "best_a_by_b": {
+     "result_batter_power=8": "pitch_pitcher_power=16"
+    },
+    "table": {
+     "result_batter_power=8": {
+      "pitch_pitcher_power=16": 0.8133495915309105
+     }
+    }
+   }
+  },
+  "result_score": {
+   "pitch_pitcher_power x pitch_batter_power": {
+    "best_a_by_b": {
+     "pitch_batter_power=1": "pitch_pitcher_power=16"
+    },
+    "table": {
+     "pitch_batter_power=1": {
+      "pitch_pitcher_power=16": 0.8479458478755798
+     }
+    }
+   },
+   "result_pitcher_power x result_batter_power": {
+    "best_a_by_b": {
+     "result_batter_power=8": "result_pitcher_power=16"
+    },
+    "table": {
+     "result_batter_power=8": {
+      "result_pitcher_power=16": 0.8479458478755798
+     }
+    }
+   },
+   "result_pitch_sigma x result_batter_power": {
+    "best_a_by_b": {
+     "result_batter_power=8": "result_pitch_sigma=1"
+    },
+    "table": {
+     "result_batter_power=8": {
+      "result_pitch_sigma=1": 0.8479458478755798
+     }
+    }
+   },
+   "pitch_pitcher_power x result_batter_power": {
+    "best_a_by_b": {
+     "result_batter_power=8": "pitch_pitcher_power=16"
+    },
+    "table": {
+     "result_batter_power=8": {
+      "pitch_pitcher_power=16": 0.8479458478755798
+     }
+    }
+   }
+  }
+ }
+}

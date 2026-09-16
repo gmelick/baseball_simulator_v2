@@ -1,0 +1,189 @@
+{
+ "offers": [
+  {
+   "id": "fe6990d4a5640d0d2cb4875323dc0696",
+   "market_id": 281,
+   "event_id": 99026,
+   "player_id": null,
+   "team_id": null,
+   "opponent_id": null,
+   "link": "",
+   "active": true,
+   "participants": [],
+   "selections": [
+    {
+     "participant": null,
+     "selection": "over",
+     "active": true,
+     "opening_line": {
+      "line": 4.5,
+      "cost": -125,
+      "book_id": 14,
+      "created": "2026-09-09 17:37:43"
+     },
+     "label": "Over",
+     "short_label": "Over",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:12",
+         "cost": -110,
+         "line": 4.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": {
+          "market_ev": null,
+          "fair_probability": null,
+          "pm_win_pct": 51.45
+         }
+        }
+       ]
+      },
+      {
+       "id": 10,
+       "lines": [
+        {
+         "id": "10_46774bb94d40aa4070e45653b6878c3a",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:12",
+         "cost": -110,
+         "line": 4.5,
+         "is_off": true,
+         "active": true,
+         "link": "https://account.sportsbook.fanduel.com/sportsbook/addToBetslip?marketId=42.606928992&selectionId=7017905",
+         "metrics": {
+          "market_ev": null,
+          "fair_probability": null,
+          "pm_win_pct": 51.45
+         }
+        }
+       ]
+      },
+      {
+       "id": 12,
+       "lines": [
+        {
+         "id": "12_46774bb94d40aa4070e45653b6878c3a",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:12",
+         "cost": -110,
+         "line": 4.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://btng.pro/FMwkO6",
+         "metrics": {
+          "market_ev": null,
+          "fair_probability": null,
+          "pm_win_pct": 51.45
+         }
+        }
+       ]
+      }
+     ],
+     "id": "46774bb94d40aa4070e45653b6878c3a"
+    },
+    {
+     "participant": null,
+     "selection": "under",
+     "active": true,
+     "opening_line": {
+      "line": 4.5,
+      "cost": -105,
+      "book_id": 14,
+      "created": "2026-09-09 17:37:43"
+     },
+     "label": "Under",
+     "short_label": "Under",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:13",
+         "cost": -118,
+         "line": 4.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": {
+          "market_ev": null,
+          "fair_probability": null,
+          "pm_win_pct": 50.08
+         }
+        }
+       ]
+      },
+      {
+       "id": 10,
+       "lines": [
+        {
+         "id": "10_d9fd9f4706aeb1f7767fe4321aed799f",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:12",
+         "cost": -118,
+         "line": 4.5,
+         "is_off": true,
+         "active": true,
+         "link": "https://account.sportsbook.fanduel.com/sportsbook/addToBetslip?marketId=42.606928992&selectionId=7017906",
+         "metrics": {
+          "market_ev": null,
+          "fair_probability": null,
+          "pm_win_pct": 50.08
+         }
+        }
+       ]
+      },
+      {
+       "id": 12,
+       "lines": [
+        {
+         "id": "12_d9fd9f4706aeb1f7767fe4321aed799f",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:13",
+         "cost": -120,
+         "line": 4.5,
+         "is_off": false,
+         "active": true,
+         "link": "https://btng.pro/FMwkO6",
+         "metrics": {
+          "market_ev": null,
+          "fair_probability": null,
+          "pm_win_pct": 50.08
+         }
+        }
+       ]
+      }
+     ],
+     "id": "d9fd9f4706aeb1f7767fe4321aed799f"
+    }
+   ]
+  }
+ ],
+ "_pagination": {
+  "page": 1,
+  "limit": 10,
+  "total_pages": 1,
+  "total_items": 1,
+  "paginated_array": "offers",
+  "self": "/v3/offers?event_id=99026&market_id=281&sport=MLB&event_id=99026&market_id=281&sport=MLB"
+ }
+}

@@ -640,14 +640,28 @@ class TestTheLoopWiring:
     def test_manager_aggression_is_a_weight_not_a_gate(self):
         # An aggressive manager raises the weight; a never-runs manager damps
         # it but the draw still happens — the sampler is ALWAYS consulted.
+        # SIM-427 (2026-09-13): the weight is the BATTING side's real measured
+        # rate over the season's league mean, read off the game state (the
+        # hand-set 0.08 default is gone); the machine's manager is the gate.
         fp = _FakeStealFP((False, False))
-        m = _machine_with_fp(fp, manager={"steal_order_rate_per_1b_opp": 0.32})
-        m._steal_opportunity_draw(_state(first=11))
+        m = _machine_with_fp(fp, manager={})
+        s = _state(first=11)  # the away side bats (top half)
+        s.away_manager_profile = {"steal_order_rate_per_1b_opp": 0.32}
+        s.manager_league_profile = {"steal_order_rate_per_1b_opp": 0.08}
+        m._steal_opportunity_draw(s)
         assert fp.calls[0]["aggression"] > 1.0
         fp2 = _FakeStealFP((False, False))
-        m2 = _machine_with_fp(fp2, manager={"steal_order_rate_per_1b_opp": 0.0})
-        m2._steal_opportunity_draw(_state(first=11))
+        m2 = _machine_with_fp(fp2, manager={})
+        s2 = _state(first=11)
+        s2.away_manager_profile = {"steal_order_rate_per_1b_opp": 0.0}
+        s2.manager_league_profile = {"steal_order_rate_per_1b_opp": 0.08}
+        m2._steal_opportunity_draw(s2)
         assert 0.0 < fp2.calls[0]["aggression"] <= 0.05
+        # no profile on the state (the resolver found none): neutral, still drawn
+        fp3 = _FakeStealFP((False, False))
+        m3 = _machine_with_fp(fp3, manager={})
+        m3._steal_opportunity_draw(_state(first=11))
+        assert fp3.calls[0]["aggression"] == 1.0
 
     def test_no_manager_is_neutral(self):
         fp = _FakeStealFP((False, False))

@@ -274,6 +274,33 @@ WHAT THIS DELIBERATELY DOES NOT CLAIM
   review of SIM-540 confirmed this is a real, unexamined gap in the
   guarantee, not just a stylistic difference from its sibling report.
 
+THE PROP GROUND TRUTH (SIM-421 / SIM-545)
+-------------------------------------------
+The platform prices fifteen player-prop markets (SIM-421 added the eight the
+book already offered: singles, doubles, triples, runs, stolen bases,
+hits+runs+RBI, outs recorded, hits allowed). A prop can only be scored against
+what the player really did, so the ground truth decides which props this file
+grades:
+
+  * **The official box score** (``raw.game_player_stats``, SIM-545 — one row
+    per player who appeared, read by :func:`_fetch_official_boxscore` and
+    turned into totals by ``simulation.prop_validation.
+    real_props_from_boxscore_rows``). It grades EVERY priced market — RBI and
+    ER included, two props the platform priced but could not grade before —
+    and a player who did not play is absent from it, so his bet is skipped
+    the way the book voids it.
+  * **The event-label fallback** (``raw.pitches.events``, the SIM-538 path
+    through ``real_props_from_pa_events``) for a game with no box-score rows.
+    An event label carries only H/HR/TB and K/BB, so a fallback game grades
+    those five props and no others.
+
+:func:`_fetch_prop_ground_truth` picks the source per game and hands
+:func:`score_prop_accuracy` that source's own prop set, so a fallback game
+never grades a prop its source cannot see. The run counts games per source
+(``counters.games_official_boxscore`` / ``games_event_label`` in the JSON
+report, and one line in the console header): a report that graded most games
+on the fallback is a five-prop report, and it says so.
+
 HOW IT REUSES THE EXISTING SEAMS (no re-invention)
 --------------------------------------------------
   * **Sim run + game summary + win prob** — the SAME machinery the API / batch
@@ -303,12 +330,13 @@ HOW IT REUSES THE EXISTING SEAMS (no re-invention)
     calls them twice per market — once with the sim's probabilities, once with
     the market's — over the SAME paired outcomes.
   * **Real outcomes** — game markets read ``raw.games.home_score_final`` /
-    ``away_score_final`` (already read elsewhere in this file). Props reuse
-    ``simulation.prop_validation.real_props_from_pa_events`` — the SAME
-    ``raw.pitches.events``-derived ground truth ``validate_props.py`` uses,
-    covering H/HR/TB (batter) and K/BB (pitcher) only; RBI/ER have no reliable
-    per-PA-event ground truth and are not scored here for the same reason
-    ``validate_props.py`` excludes them.
+    ``away_score_final`` (already read elsewhere in this file). Props read the
+    official box score (``raw.game_player_stats`` through
+    ``simulation.prop_validation.real_props_from_boxscore_rows``, SIM-545) —
+    every priced market, RBI and ER included — and fall back per game to
+    ``real_props_from_pa_events`` (the ``raw.pitches.events`` ground truth
+    ``validate_props.py`` also uses; H/HR/TB and K/BB only) when a game has no
+    box-score rows. See "THE PROP GROUND TRUTH" above.
   * **Odds I/O** — read directly from Postgres (``raw.game_odds`` /
     ``raw.prop_odds``). The accuracy comparison reads ONLY the closing row
     (:func:`_closing_prices`) — a game needs no matched opening line to be
@@ -346,11 +374,15 @@ THE MARKETS
 -----------
   * Game: moneyline (home/away ML), total (over/under at ``total_line``), run-line
     (home/away at ``home_spread``).
-  * Props (the SIM-134 7-market vocab; odds ``prop_stat`` → model
-    ``PropDistribution`` stat): strikeouts→K, walks→BB, earned_runs→ER, hits→H,
-    home_runs→HR, total_bases→TB, rbis→RBI. The accuracy comparison scores only
-    the five with a real-outcome source (K, BB, H, HR, TB) — RBI and ER have no
-    reliable per-play ground truth (see the seams section above).
+  * Props (the 15-market vocab, :data:`PROP_VOCAB_MAP`; odds ``prop_stat`` →
+    model ``PropDistribution`` stat). Batter: hits→H, home_runs→HR,
+    total_bases→TB, rbis→RBI, singles→1B, doubles→2B, triples→3B, runs→R,
+    stolen_bases→SB, hits_runs_rbis→HRR. Pitcher: strikeouts→K, walks→BB,
+    earned_runs→ER, outs_recorded→OUTS, hits_allowed→H_ALLOWED. The accuracy
+    comparison scores every one of them on a game graded by the official box
+    score, and only K/BB/H/HR/TB on a game graded by the event-label fallback
+    (see "THE PROP GROUND TRUTH" above). The eight SIM-421 markets carry the
+    ``unvalidated`` trust label until their rows have been read.
 
 PURE vs. IMPACTFUL
 ------------------
@@ -420,16 +452,33 @@ from betting.clv_engine import (  # noqa: E402
     OddsQuote,
     TwoWayMarket,
     american_to_decimal,
+    devig_multiway,
+    devig_two_way,
     expected_value,
     moneyline_edge_report,
     prop_edge_report,
     run_line_edge_report,
     total_over_under_edge_report,
 )
+from pipeline.odds_provider import (  # noqa: E402
+    GAME_MARKET_KIND,
+    GAME_MARKET_TYPES,
+    LEGACY_GAME_MARKET_TYPES,
+)
+from simulation.game_market_distributions import (  # noqa: E402
+    SegmentRuns,
+    market_outcome,
+    market_probability,
+)
 from simulation.prop_validation import (  # noqa: E402
+    BOXSCORE_BATTER_PROPS,
+    BOXSCORE_PITCHER_PROPS,
+    DERIVABLE_BATTER_PROPS,
+    DERIVABLE_PITCHER_PROPS,
     OUTCOME_PROB_EPS,
     binary_brier,
     binary_log_loss,
+    real_props_from_boxscore_rows,
     real_props_from_pa_events,
 )
 from simulation.win_probability import IDENTITY_CALIBRATION, CalibrationMap  # noqa: E402
@@ -571,13 +620,22 @@ def _pool_mp_context() -> Any:
 
 
 # ===========================================================================
-# Vocab: odds prop_stat -> model PropDistribution stat (the SIM-134 7 markets)
+# Vocab: odds prop_stat -> model PropDistribution stat (the 15 markets the
+# platform prices — the SIM-134 seven plus the eight SIM-421 added)
 # ===========================================================================
 
 #: Maps the ``raw.prop_odds.prop_stat`` vocabulary to the
-#: ``simulation.prop_distributions`` model-prop names. Covers exactly the 7
-#: markets the SIM-134 CHECK constraint enforces.
+#: ``simulation.prop_distributions`` model-prop names. Covers exactly the 15
+#: markets the SIM-421 CHECK constraint enforces (migration 0022). The first
+#: seven are the SIM-134 vocabulary; the eight after them are the markets the
+#: book already offered but the platform did not price until SIM-421.
+#:
+#: ``hits`` is the BATTER market (a batter's own hits, model prop ``H``);
+#: ``hits_allowed`` is the PITCHER market (the hits a pitcher gives up, model
+#: prop ``H_ALLOWED``). They read different ``PlayerStatLine`` fields, so they
+#: must never share a model prop.
 PROP_VOCAB_MAP: dict[str, str] = {
+    # SIM-134
     "strikeouts": "K",
     "walks": "BB",
     "earned_runs": "ER",
@@ -585,23 +643,41 @@ PROP_VOCAB_MAP: dict[str, str] = {
     "home_runs": "HR",
     "total_bases": "TB",
     "rbis": "RBI",
+    # SIM-421 — batter markets
+    "singles": "1B",
+    "doubles": "2B",
+    "triples": "3B",
+    "runs": "R",
+    "stolen_bases": "SB",
+    "hits_runs_rbis": "HRR",
+    # SIM-421 — pitcher markets
+    "outs_recorded": "OUTS",
+    "hits_allowed": "H_ALLOWED",
 }
 
 # ===========================================================================
-# Trust labels: how much to trust each market's CLV (Betting-Analyst tiers)
+# Trust labels: a per-market label carried over from the retired pool view
 # ===========================================================================
 
 #: market key -> trust tier. The market key is the game market_type
-#: ('moneyline'/'total'/'runline') OR the MODEL prop stat (K/BB/ER/H/HR/TB/RBI).
-#: Tiers (per the §11 realism residual + SIM-429 over-prediction notes):
-#:   trustworthy  — box rate stats within ~4% of MLB (H/HR/TB).
+#: ('moneyline'/'total'/'runline') OR the MODEL prop stat (K/BB/ER/H/...).
+#:
+#: The tiers are LABELS carried over from the retired pool-totals view of the
+#: simulator (the §11 realism residual + the SIM-429 over-prediction notes).
+#: They group the rows of the report; they do not grade anything. The
+#: accuracy comparison (SIM-538) is the read that matters: a market's own
+#: Brier / log-loss row against the closing line says whether the simulator
+#: is accurate on it, whatever its label says. Use the label to find a row,
+#: then read the row.
+#:   trustworthy  — box rate stats within ~4% of MLB in the pool view (H/HR/TB).
 #:   loose        — moneyline (win-prob fit over a bounded sample).
-#:   caution      — total/runline (the hits→runs conversion gap lives here). The
-#:                  AUTHORITATIVE size of that gap is **runs ~7-8% low**
-#:                  (CLAUDE.md:85). CLAUDE.md:465 still says "~10-12% low"; that
-#:                  line predates the 2026-05-28 DP-rate fix and is STALE. Read
-#:                  7-8% when you size a total/runline bias.
-#:   untrustworthy— K/BB/ER/RBI (over-predicted props / not validated — SIM-429).
+#:   caution      — total/runline (the hits→runs conversion gap lives here;
+#:                  its authoritative size is runs ~7-8% low, CLAUDE.md §11).
+#:   untrustworthy— K/BB/ER/RBI (over-predicted props in the pool view — SIM-429).
+#:   unvalidated  — SIM-421: the eight markets the platform prices but has
+#:                  never scored (1B/2B/3B/R/SB/HRR/OUTS/H_ALLOWED). A market
+#:                  keeps this label until the accuracy comparison has scored
+#:                  it; then its row, not its label, is the verdict.
 MARKET_TRUST: dict[str, str] = {
     # trustworthy
     "H": "trustworthy",
@@ -612,11 +688,37 @@ MARKET_TRUST: dict[str, str] = {
     # caution
     "total": "caution",
     "runline": "caution",
+    # unvalidated — the twelve segment and team markets (SIM-421, owner ruling
+    # 2026-09-12): priced by the simulator's per-iteration linescore, never yet
+    # scored by the accuracy comparison.
+    **{m: "unvalidated" for m in GAME_MARKET_TYPES if m not in LEGACY_GAME_MARKET_TYPES},
     # untrustworthy
     "K": "untrustworthy",
     "BB": "untrustworthy",
     "ER": "untrustworthy",
     "RBI": "untrustworthy",
+    # unvalidated (SIM-421)
+    "1B": "unvalidated",
+    "2B": "unvalidated",
+    "3B": "unvalidated",
+    "R": "unvalidated",
+    "SB": "unvalidated",
+    "HRR": "unvalidated",
+    "OUTS": "unvalidated",
+    "H_ALLOWED": "unvalidated",
+}
+
+#: The order the report groups its rows in: one tier after another, then the
+#: market key. ``unknown`` (a key with no label) sorts last so a new market
+#: never hides an established one. Shared by the accuracy comparison and the
+#: hypothetical-return report.
+TRUST_TIER_ORDER: dict[str, int] = {
+    "trustworthy": 0,
+    "loose": 1,
+    "caution": 2,
+    "untrustworthy": 3,
+    "unvalidated": 4,
+    "unknown": 5,
 }
 
 
@@ -627,6 +729,50 @@ def trust_label(market: str) -> str:
     market never crashes the scoreboard.
     """
     return MARKET_TRUST.get(str(market), "unknown")
+
+
+# ===========================================================================
+# SIM-545: the prop ground truth — the official box score, or the event label
+# ===========================================================================
+
+#: The two ground-truth sources a game's props can be graded on. The report
+#: counts games per source, so a reader can tell how many games were graded
+#: on the official record and how many on the fallback.
+GROUND_TRUTH_OFFICIAL = "official_boxscore"
+GROUND_TRUTH_EVENT_LABEL = "event_label"
+
+#: The props each ground-truth source can grade. The official box score
+#: (``raw.game_player_stats``, SIM-545) grades every batter and pitcher market
+#: the platform prices — RBI and ER included, two props the platform priced
+#: but could not grade before it. The event-label fallback
+#: (``raw.pitches.events``) grades only the five props an event label
+#: carries. :func:`score_prop_accuracy` takes the set for the game it is
+#: scoring, so a fallback game never grades a prop its source cannot see.
+BOXSCORE_SCORED_PROPS: frozenset[str] = frozenset(BOXSCORE_BATTER_PROPS) | frozenset(
+    BOXSCORE_PITCHER_PROPS
+)
+EVENT_LABEL_SCORED_PROPS: frozenset[str] = frozenset(DERIVABLE_BATTER_PROPS) | frozenset(
+    DERIVABLE_PITCHER_PROPS
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PropGroundTruth:
+    """SIM-545: one game's real per-player prop totals, with the source that
+    produced them and the props that source can grade.
+
+    ``batter_actuals`` / ``pitcher_actuals`` have the shape
+    :func:`score_prop_accuracy` reads (``{player_id: {prop: total}}``). A
+    player who did not play is absent from both — the book voids his bet, and
+    the scorer skips him.
+    """
+
+    batter_actuals: dict[int, dict[str, int]]
+    pitcher_actuals: dict[int, dict[str, int]]
+    #: :data:`GROUND_TRUTH_OFFICIAL` or :data:`GROUND_TRUTH_EVENT_LABEL`.
+    source: str
+    #: :data:`BOXSCORE_SCORED_PROPS` or :data:`EVENT_LABEL_SCORED_PROPS`.
+    scorable_props: frozenset[str]
 
 
 # ===========================================================================
@@ -670,6 +816,12 @@ class AccuracyRecord:
     #: record missing either price rather than guessing.
     market_side_price: float | None = None
     market_other_price: float | None = None
+    #: SIM-548: the simulator's probability BEFORE the calibration map, where
+    #: a map applies (today only the moneyline, through the win-probability
+    #: reliability curve): the decisive home-win share of the iterations.
+    #: The per-market calibration layer is fitted on this, never on the
+    #: mapped value. ``None`` where no map applies or on an older record.
+    sim_prob_raw: float | None = None
 
     def to_jsonable(self) -> dict[str, Any]:
         return asdict(self)
@@ -1107,7 +1259,6 @@ def aggregate_accuracy_comparison(
     for r in records:
         by_market_key.setdefault(r.market, []).append(r)
 
-    _trust_order = {"trustworthy": 0, "loose": 1, "caution": 2, "untrustworthy": 3, "unknown": 4}
     by_market_alpha = _bonferroni_alpha(base_alpha, len(by_market_key))
     rows = [
         _accuracy_row_for(
@@ -1120,7 +1271,7 @@ def aggregate_accuracy_comparison(
         )
         for i, (market, bucket) in enumerate(sorted(by_market_key.items()), start=1)
     ]
-    rows.sort(key=lambda r: (_trust_order.get(r.trust, 9), r.group))
+    rows.sort(key=lambda r: (TRUST_TIER_ORDER.get(r.trust, 9), r.group))
 
     return {
         "overall": overall.to_jsonable(),
@@ -1155,8 +1306,19 @@ def _fmt_or_na(x: float | None, spec: str) -> str:
     return "n/a" if x is None else format(x, spec)
 
 
-def format_accuracy_comparison(comparison: dict[str, Any], *, params: dict[str, Any]) -> str:
-    """Render the sim-vs-close accuracy comparison as a readable, trust-grouped table."""
+def format_accuracy_comparison(
+    comparison: dict[str, Any],
+    *,
+    params: dict[str, Any],
+    counters: dict[str, Any] | None = None,
+) -> str:
+    """Render the sim-vs-close accuracy comparison as a readable, trust-grouped table.
+
+    ``counters`` (the run's ``counters`` block, SIM-545) adds one header line
+    that says how many games graded their props on the official box score and
+    how many on the event-label fallback. Omit it for a table with no run
+    behind it (a unit test on synthetic records).
+    """
     lines = [
         "=" * 100,
         "SIM-538 SIM-VS-CLOSING-LINE ACCURACY COMPARISON  (the headline metric)",
@@ -1172,8 +1334,15 @@ def format_accuracy_comparison(comparison: dict[str, Any], *, params: dict[str, 
         f"seasons={params.get('seasons')}  iterations={params.get('iterations')}  "
         f"markets={params.get('markets')}  base_seed={params.get('base_seed')}  "
         f"calibrated={params.get('calibration_applied')}",
-        "",
     ]
+    if counters is not None:
+        # SIM-545: the fallback grades five props per game; the official record
+        # grades every priced market. A reader must see the split.
+        lines.append(
+            f"prop ground truth: official box score={counters.get('games_official_boxscore', 0)} "
+            f"games  event-label fallback={counters.get('games_event_label', 0)} games"
+        )
+    lines.append("")
     header = (
         f"{'market':<14}{'trust':<14}{'n':>7}{'games':>7}{'simBrier':>10}{'mktBrier':>10}"
         f"{'brierDiff':>11}{'95% range':>18}{'minN':>7}{'pwr':>10}"
@@ -1464,7 +1633,6 @@ def aggregate_hypothetical_return(
     for r in return_records:
         by_market_key.setdefault(r.market, []).append(r)
 
-    _trust_order = {"trustworthy": 0, "loose": 1, "caution": 2, "untrustworthy": 3, "unknown": 4}
     by_market_alpha = _bonferroni_alpha(base_alpha, len(by_market_key))
     rows = [
         _return_row_for(
@@ -1477,7 +1645,7 @@ def aggregate_hypothetical_return(
         )
         for i, (market, bucket) in enumerate(sorted(by_market_key.items()), start=1)
     ]
-    rows.sort(key=lambda r: (_trust_order.get(r.trust, 9), r.group))
+    rows.sort(key=lambda r: (TRUST_TIER_ORDER.get(r.trust, 9), r.group))
 
     return {
         # SIM-540: a MACHINE-READABLE "do not trust this as a betting edge"
@@ -1550,6 +1718,82 @@ def format_hypothetical_return(comparison: dict[str, Any], *, params: dict[str, 
 # ===========================================================================
 
 
+def _read_game_pks_file(path: str) -> set[int]:
+    """SIM-518: the game_pks in ``path`` — a JSON list, or one integer per
+    line (blank lines and ``#`` comments ignored)."""
+    text = open(path, encoding="utf-8").read()
+    stripped = text.strip()
+    if stripped.startswith("["):
+        return {int(x) for x in json.loads(stripped)}
+    out: set[int] = set()
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            out.add(int(line))
+    return out
+
+
+def bundle_provenance(calibration_path: str) -> dict[str, Any]:
+    """SIM-518: what this run's probabilities were built from — the artifact
+    bundle's manifest timestamps and the calibration file's hash — so two
+    reports can be PAIRED only when they came from the same frozen inputs
+    (scripts/sim518_pair_accuracy.py refuses a mismatch). A missing file
+    reads as ``None`` rather than failing the run."""
+    import hashlib
+
+    art_dir = os.path.join(
+        os.environ.get("BASEBALL_PLAY_POOL_DIR", "/data/play_pool"), "engine_artifacts"
+    )
+    stamps: dict[str, float | None] = {}
+    # SIM-427: the change pool (manager_pool) is part of the frozen bundle too.
+    for sub in ("pitch_pool", "battedball_pool", "actor_sim", "manager_pool"):
+        mp = os.path.join(art_dir, sub, "manifest.json")
+        stamps[sub] = os.path.getmtime(mp) if os.path.exists(mp) else None
+    cal_hash: str | None = None
+    if os.path.exists(calibration_path):
+        with open(calibration_path, "rb") as fh:
+            cal_hash = hashlib.sha256(fh.read()).hexdigest()
+    return {
+        "artifact_dir": art_dir,
+        "manifest_mtimes": stamps,
+        "calibration_sha256": cal_hash,
+        "fatigue_pc_sigma": os.environ.get("SIM_FATIGUE_PC_SIGMA"),
+        "fatigue_tto_sigma": os.environ.get("SIM_FATIGUE_TTO_SIGMA"),
+        "sit_sigma": os.environ.get("SIM_SIT_SIGMA"),
+        # SIM-427: which arm of the manager switch this report measured — the
+        # draw, the pen source, the manager power and the reliever weights.
+        "manager": {
+            key: os.environ.get(key)
+            for key in (
+                "SIM_MANAGER",
+                "SIM_MANAGER_DRAW",
+                "SIM_BULLPEN_SOURCE",
+                "SIM_ACTOR_POWER_MANAGER_USAGE",
+                "SIM_RELIEF_ROLE_SIGMA",
+                "SIM_RELIEF_PITCHER_POWER",
+                "SIM_RELIEF_REST_SIGMA",
+                "SIM_RELIEF_PITCHED2D_OFF_WEIGHT",
+                "SIM_RELIEF_PITCHES3D_SIGMA",
+                "SIM_RELIEF_HAND_OFF_WEIGHT",
+            )
+        },
+        # SIM-548: which arm of the pitch / pitch-result split this report
+        # measured — the switch, the pitch draw's pitcher power and the result
+        # draw's pitcher / batter powers, bandwidth and density correction.
+        "split": {
+            key: os.environ.get(key)
+            for key in (
+                "SIM_PITCH_RESULT_SPLIT",
+                "SIM_PITCH_PITCHER_POWER",
+                "SIM_RESULT_PITCHER_POWER",
+                "SIM_RESULT_BATTER_POWER",
+                "SIM_RESULT_PITCH_SIGMA",
+                "SIM_RESULT_DENSITY_POWER",
+            )
+        },
+    }
+
+
 async def _fetch_final_games(dsn: str, seasons: list[int], max_games: int | None) -> list[int]:
     """Return ``game_pk``s for Final games in the requested seasons (ordered).
 
@@ -1590,7 +1834,7 @@ async def _fetch_game_odds(pool, game_pk: int) -> dict[str, dict[str, dict[str, 
         """
         SELECT DISTINCT ON (market_type, line_type)
                market_type, line_type,
-               home_ml, away_ml,
+               home_ml, away_ml, draw_ml,
                home_spread, home_spread_ml, away_spread, away_spread_ml,
                total_line, over_ml, under_ml
         FROM raw.game_odds
@@ -1647,16 +1891,115 @@ async def _fetch_final_score(pool: Any, game_pk: int) -> tuple[int, int] | None:
     return int(row["home_score_final"]), int(row["away_score_final"])
 
 
+async def _fetch_official_grid(pool: Any, game_pk: int) -> dict[str, list[int]] | None:
+    """SIM-421: the official per-inning run grid of one game
+    (``raw.games.inning_scores`` = ``{"home": [...], "away": [...]}``), or
+    ``None`` when the game has none. The segment markets (first inning, first
+    five innings, first team to score) are graded against it."""
+    row = await pool.fetchrow(
+        "SELECT inning_scores FROM raw.games WHERE game_pk = $1", int(game_pk)
+    )
+    if row is None or row["inning_scores"] is None:
+        return None
+    grid = row["inning_scores"]
+    if isinstance(grid, str):
+        grid = json.loads(grid)
+    if not isinstance(grid, dict) or "home" not in grid or "away" not in grid:
+        return None
+    return {"home": list(grid["home"]), "away": list(grid["away"])}
+
+
 async def _fetch_pa_events(pool: Any, game_pk: int) -> list[tuple]:
     """SIM-538: one ``(batter, pitcher, events)`` tuple per completed plate
     appearance — the SAME reader ``scripts/validate_props.py`` uses, feeding
-    :func:`simulation.prop_validation.real_props_from_pa_events`."""
+    :func:`simulation.prop_validation.real_props_from_pa_events`.
+
+    SIM-545: this is now the FALLBACK ground truth, read only for a game with
+    no official box-score rows (see :func:`_fetch_prop_ground_truth`)."""
     rows = await pool.fetch(
         "SELECT batter, pitcher, events FROM raw.pitches "
         "WHERE game_pk = $1 AND events IS NOT NULL AND events <> ''",
         int(game_pk),
     )
     return [(r["batter"], r["pitcher"], r["events"]) for r in rows]
+
+
+#: SIM-545: every column of ``raw.game_player_stats`` (migration 0023), read in
+#: full so :func:`simulation.prop_validation.real_props_from_boxscore_rows`
+#: sees the whole row and a new prop never needs a second SELECT.
+_OFFICIAL_BOXSCORE_SQL = """
+    SELECT game_pk, player_id, team_id, side, season, game_date,
+           batting_order, position_code, played_bat, played_pitch,
+           pa, ab, r, h, b2, b3, hr, rbi, sb, cs, bb, k, hbp, sf, tb,
+           p_outs, p_h, p_r, p_er, p_bb, p_k, p_hr, p_pitches,
+           p_batters_faced, p_started, fetched_at
+    FROM raw.game_player_stats
+    WHERE game_pk = $1
+"""
+
+#: SIM-545: warn ONCE per process when the box-score table is missing (the
+#: migration has not been applied on this database). Every game would log the
+#: same line otherwise. One warning, then the run falls back to the event
+#: label for every game and the per-source counts in the report say so.
+_OFFICIAL_BOXSCORE_TABLE_MISSING_WARNED: bool = False
+
+
+async def _fetch_official_boxscore(pool: Any, game_pk: int) -> list[dict[str, Any]]:
+    """SIM-545: every ``raw.game_player_stats`` row for one game — the official
+    per-player box score, one row per player who appeared.
+
+    Returns plain dicts keyed by the table's column names (the shape
+    :func:`simulation.prop_validation.real_props_from_boxscore_rows` reads).
+    An empty list means the game has no box-score rows and the caller falls
+    back to the event label. A missing TABLE also reads as empty: the run
+    then grades every game on the fallback, warns once, and the report's
+    per-source counts show zero games on the official record.
+    """
+    global _OFFICIAL_BOXSCORE_TABLE_MISSING_WARNED
+    import asyncpg
+
+    try:
+        rows = await pool.fetch(_OFFICIAL_BOXSCORE_SQL, int(game_pk))
+    except asyncpg.exceptions.UndefinedTableError:
+        if not _OFFICIAL_BOXSCORE_TABLE_MISSING_WARNED:
+            _OFFICIAL_BOXSCORE_TABLE_MISSING_WARNED = True
+            log.warning(
+                "SIM-545: raw.game_player_stats does not exist on this database "
+                "(migration 0023 not applied). Every game grades its props on the "
+                "event-label fallback this run."
+            )
+        return []
+    return [dict(r) for r in rows]
+
+
+async def _fetch_prop_ground_truth(pool: Any, game_pk: int) -> PropGroundTruth:
+    """SIM-545: the real per-player prop totals for one game, from the best
+    source the database holds.
+
+    The official box score (``raw.game_player_stats``) wins when the game has
+    rows: it grades every market the platform prices, and a player who did
+    not play is absent (the book voids his bet). A game with no rows falls
+    back to the event label (``raw.pitches.events``), which grades only the
+    five props an event label carries. The returned ``source`` says which
+    path this game took; the run counts games per source for the report.
+    """
+    rows = await _fetch_official_boxscore(pool, game_pk)
+    if rows:
+        batter_actuals, pitcher_actuals = real_props_from_boxscore_rows(rows)
+        return PropGroundTruth(
+            batter_actuals=batter_actuals,
+            pitcher_actuals=pitcher_actuals,
+            source=GROUND_TRUTH_OFFICIAL,
+            scorable_props=BOXSCORE_SCORED_PROPS,
+        )
+    pa_events = await _fetch_pa_events(pool, game_pk)
+    batter_actuals, pitcher_actuals = real_props_from_pa_events(pa_events)
+    return PropGroundTruth(
+        batter_actuals=batter_actuals,
+        pitcher_actuals=pitcher_actuals,
+        source=GROUND_TRUTH_EVENT_LABEL,
+        scorable_props=EVENT_LABEL_SCORED_PROPS,
+    )
 
 
 # ===========================================================================
@@ -1747,6 +2090,11 @@ def score_game_accuracy(
             )
             er = moneyline_edge_report(win_prob, market, side=MarketSide.HOME)
             outcome = 1 if home_score > away_score else 0
+            # SIM-548: the raw decisive home-win share, before the reliability
+            # curve (the calibration layer is fitted on this).
+            hw = float(getattr(summary, "home_win_pct", 0.0) or 0.0)
+            aw = float(getattr(summary, "away_win_pct", 0.0) or 0.0)
+            raw = hw / (hw + aw) if (hw + aw) > 0 else None
             records.append(
                 AccuracyRecord(
                     game_pk=int(game_pk),
@@ -1757,6 +2105,7 @@ def score_game_accuracy(
                     outcome=outcome,
                     market_side_price=float(cp.side),
                     market_other_price=float(cp.other),
+                    sim_prob_raw=raw,
                 )
             )
         except ValueError as exc:
@@ -1820,11 +2169,102 @@ def score_game_accuracy(
     return records
 
 
-#: SIM-538: derivable straight from an event LABEL (see
-#: simulation.prop_validation.real_props_from_pa_events) — RBI/ER are omitted
-#: for the same reason validate_props.py omits them: no reliable per-PA-event
-#: ground truth exists for either.
-_ACCURACY_SCORED_PROPS = frozenset({"K", "BB", "H", "HR", "TB"})
+#: SIM-421: the segment and team markets — every game market except the three
+#: full-game ones :func:`score_game_accuracy` already scores.
+SEGMENT_MARKET_TYPES: tuple[str, ...] = tuple(
+    m for m in GAME_MARKET_TYPES if m not in LEGACY_GAME_MARKET_TYPES
+)
+
+#: (side column, other column, line column) per market kind, for the FIXED
+#: reference side: HOME on a side / run-line market, OVER on a total.
+_SEGMENT_COLUMNS: dict[str, tuple[str, str, str | None]] = {
+    "moneyline": ("home_ml", "away_ml", None),
+    "three_way": ("home_ml", "away_ml", None),
+    "runline": ("home_spread_ml", "away_spread_ml", "home_spread"),
+    "total": ("over_ml", "under_ml", "total_line"),
+    "yes_no": ("over_ml", "under_ml", "total_line"),
+}
+
+
+def score_segment_market_accuracy(
+    game_pk: int,
+    runs: SegmentRuns,
+    odds: dict[str, dict[str, dict[str, Any]]],
+    official_grid: dict[str, Sequence[int]] | None,
+) -> list[AccuracyRecord]:
+    """SIM-421 (owner ruling 2026-09-12): score the twelve segment and team
+    markets on a FIXED reference side against the CLOSING line and the official
+    per-inning grid.
+
+    The simulator's probability comes from
+    :func:`simulation.game_market_distributions.market_probability` (the
+    per-iteration linescore), the market's from the de-vigged closing prices
+    — two-way for a moneyline, total, run line or yes / no market; THREE-way
+    for the first-inning and first-five moneylines, whose tie is a priced
+    outcome — and the outcome from
+    :func:`simulation.game_market_distributions.market_outcome` on the official
+    grid. A push (``None`` outcome) is skipped, as the full-game markets do.
+    A three-way record carries no "other" price: its fade side (away OR draw)
+    has no single price, so the hypothetical return leaves it out rather than
+    price it wrong.
+    """
+    records: list[AccuracyRecord] = []
+    if official_grid is None:
+        return records
+    actual = SegmentRuns.from_official_grid(official_grid)
+    for market_type in SEGMENT_MARKET_TYPES:
+        kind = GAME_MARKET_KIND[market_type]
+        side_col, other_col, line_col = _SEGMENT_COLUMNS[kind]
+        cp = _closing_prices(odds, market_type, side_col, other_col, line_col)
+        if cp is None:
+            continue
+        if line_col is not None and cp.line is None:
+            continue
+        try:
+            sim_prob = market_probability(runs, market_type, line=cp.line)
+            if kind == "three_way":
+                cl = odds[market_type]["closing"]
+                draw = cl.get("draw_ml")
+                if draw is None:
+                    continue
+                fair = devig_multiway(
+                    [
+                        _implied(cp.side),
+                        _implied(cp.other),
+                        _implied(float(draw)),
+                    ]
+                )
+                market_prob = float(fair[0])
+                other_price: float | None = None
+            else:
+                market_prob = float(devig_two_way(cp.side, cp.other)[0])
+                other_price = float(cp.other)
+            outcome = market_outcome(actual, market_type, line=cp.line)
+        except ValueError as exc:
+            log.info("game %s %s accuracy skipped (degenerate): %s", game_pk, market_type, exc)
+            continue
+        if outcome is None:
+            continue  # a push has no 0/1 label
+        records.append(
+            AccuracyRecord(
+                game_pk=int(game_pk),
+                market=market_type,
+                market_type=market_type,
+                sim_prob=float(sim_prob),
+                market_prob=market_prob,
+                outcome=int(outcome),
+                market_side_price=float(cp.side),
+                market_other_price=other_price,
+            )
+        )
+    return records
+
+
+def _implied(american: float) -> float:
+    """The raw (vig-included) implied probability of one American price."""
+    from betting.clv_engine import implied_prob_from_american
+
+    return float(implied_prob_from_american(float(american)))
 
 
 def score_prop_accuracy(
@@ -1833,22 +2273,29 @@ def score_prop_accuracy(
     prop_odds: dict[tuple[int, str], dict[str, dict[str, Any]]],
     batter_actuals: dict[int, dict[str, int]],
     pitcher_actuals: dict[int, dict[str, int]],
+    *,
+    scorable_props: frozenset[str],
 ) -> list[AccuracyRecord]:
     """SIM-538: score player-prop markets on the OVER side against the CLOSING
     line and the real per-player total.
 
-    ``batter_actuals`` / ``pitcher_actuals`` come from
-    ``simulation.prop_validation.real_props_from_pa_events`` — covers H/HR/TB
-    (batter) and K/BB (pitcher) only (see :data:`_ACCURACY_SCORED_PROPS`); a
-    player/prop outside that set (RBI, ER) or with no real-outcome entry at all
-    (no plate appearance this game) is skipped, not scored with a guessed
-    ground truth. A push (the real total lands exactly on the closing line) is
-    also skipped, mirroring :func:`score_game_accuracy`.
+    ``batter_actuals`` / ``pitcher_actuals`` are one game's ground truth
+    (:class:`PropGroundTruth`), and ``scorable_props`` is the set of model
+    props THAT game's source can grade — :data:`BOXSCORE_SCORED_PROPS` (every
+    priced market, RBI and ER included) on the official box score,
+    :data:`EVENT_LABEL_SCORED_PROPS` (H/HR/TB, K/BB) on the event-label
+    fallback (SIM-545). The set is per game, not a module constant, so a
+    fallback game never grades a prop its source cannot see.
+
+    A player/prop outside that set, or with no real-outcome entry at all
+    (he did not play — the book voids the bet), is skipped, not scored with a
+    guessed ground truth. A push (the real total lands exactly on the closing
+    line) is also skipped, mirroring :func:`score_game_accuracy`.
     """
     records: list[AccuracyRecord] = []
     for (player_id, odds_stat), by_lt in prop_odds.items():
         model_stat = PROP_VOCAB_MAP.get(odds_stat)
-        if model_stat is None or model_stat not in _ACCURACY_SCORED_PROPS:
+        if model_stat is None or model_stat not in scorable_props:
             continue
         cl = by_lt.get("closing")
         if cl is None:
@@ -1866,7 +2313,7 @@ def score_prop_accuracy(
         if actual is None:
             actual = pitcher_actuals.get(pid, {}).get(model_stat)
         if actual is None:
-            continue  # no plate appearance recorded for this player this game
+            continue  # did not play this game — the book voids the bet
 
         line_f = float(line)
         if float(actual) == line_f:
@@ -1911,7 +2358,15 @@ def score_prop_accuracy(
 
 
 def _collect_game_results(state, n_iter: int, base_seed: int | None) -> list:
-    """Replay one already-resolved game N times; return the per-iteration results.
+    """Replay one already-resolved game N times; return the per-iteration results
+    (the grids :func:`_replay_game` also returns are dropped here)."""
+    return _replay_game(state, n_iter, base_seed)[0]
+
+
+def _replay_game(state, n_iter: int, base_seed: int | None) -> tuple[list, list]:
+    """Replay one already-resolved game N times; return the per-iteration results
+    AND the per-iteration inning grids ``(home_by_inning, away_by_inning)`` the
+    segment markets are priced from (SIM-421).
 
     The SAME ``record_game_plays`` seam ``scripts/validate_props.py`` uses: builds
     the live machine from the production factory ref + the resolved GameState's
@@ -1934,17 +2389,22 @@ def _collect_game_results(state, n_iter: int, base_seed: int | None) -> list:
     """
     from api.routes.games import _sim_kwargs_from_state
     from simulation.batch_runner import derive_seed
+    from simulation.linescore import linescore_from_plays
     from simulation.play_recorder import record_game_plays
 
     sim_kwargs = _sim_kwargs_from_state(state)
     results = []
+    grids = []
     for i in range(int(n_iter)):
         seed = derive_seed(base_seed, i)
-        result, _plays = record_game_plays(
+        result, plays = record_game_plays(
             factory_ref=_FACTORY_REF, seed=seed, sim_kwargs=sim_kwargs
         )
         results.append(result)
-    return results
+        # SIM-421: the per-inning run cells (the light form; the plays are dropped).
+        ls = linescore_from_plays(plays)
+        grids.append((list(ls.home_by_inning), list(ls.away_by_inning)))
+    return results, grids
 
 
 # ===========================================================================
@@ -1962,9 +2422,9 @@ async def _score_one_game(
     iterations: int,
     base_seed: int,
     calibration_map: Any = IDENTITY_CALIBRATION,
-) -> tuple[list[AccuracyRecord], str, float]:
+) -> tuple[list[AccuracyRecord], str, float, str | None]:
     """Resolve, replay, and score ONE game; return ``(accuracy_records, status,
-    park_factor)``.
+    park_factor, ground_truth_source)``.
 
     This is the ENTIRE per-game pipeline, factored out of :func:`run`'s old loop so
     BOTH the serial in-process path and a parallel worker call the exact same code:
@@ -1993,20 +2453,30 @@ async def _score_one_game(
     many games got a non-neutral one, so an operator can see whether the park nudge
     was live for this run.
 
+    ``ground_truth_source`` (SIM-545) says which record graded this game's props:
+    :data:`GROUND_TRUTH_OFFICIAL` (the official box score) or
+    :data:`GROUND_TRUTH_EVENT_LABEL` (the event-label fallback). It is ``None``
+    when the game scored no props at all (no prop odds, ``do_props`` off, or a
+    non-``"scored"`` status). The caller counts games per source for the report.
+
     Deterministic: the only RNG is the per-iteration seed derived from ``base_seed``,
     so the returned records are byte-identical regardless of where this runs.
     """
     from api.routes.games import _resolve_state_or_error
     from simulation.prop_distributions import PropDistributionSet
     from simulation.results import GameSimSummary
-    from simulation.sim_kwargs import resolve_asof_ymd, resolve_park_factor_onto_state
+    from simulation.sim_kwargs import (
+        resolve_asof_ymd,
+        resolve_manager_profiles_onto_state,
+        resolve_park_factor_onto_state,
+    )
     from simulation.win_probability import win_probability
 
     # Read odds first — a game with NO odds rows is skipped (counts as 'no_odds').
     game_odds = await _fetch_game_odds(pool, game_pk) if do_game else {}
     prop_odds = await _fetch_prop_odds(pool, game_pk) if do_props else {}
     if not game_odds and not prop_odds:
-        return [], "no_odds", 1.0
+        return [], "no_odds", 1.0, None
 
     try:
         state = await _resolve_state_or_error(pool, game_pk)
@@ -2017,13 +2487,17 @@ async def _score_one_game(
             log.error("game %s: process-level failure while resolving state", game_pk)
             raise
         log.info("skip game %s (state unresolved: %s)", game_pk, type(exc).__name__)
-        return [], "unresolved", 1.0
+        return [], "unresolved", 1.0, None
 
     # SIM-452: resolve the park factor HERE, where the connections live. The replay
     # below runs in a worker thread with no event loop, and the builder rejects an
     # unresolved state, so an edit that drops this line fails loudly instead of
     # replaying park-blind.
     park_factor = await resolve_park_factor_onto_state(state, pool, duck, int(game_pk))
+    # SIM-427: each side's manager tendency profile and the league means, the
+    # same read the API's builder makes (the steal weight's inputs; empty and
+    # neutral when the DuckDB is closed or the manager is unknown).
+    resolve_manager_profiles_onto_state(state, duck)
     # SIM-538: resolve the point-in-time cutoff the SAME way — the day before this
     # game, so the replay below can never draw on a pool row or a player profile
     # dated after the game it is predicting. sim_kwargs_from_state (called inside
@@ -2043,12 +2517,12 @@ async def _score_one_game(
     asof_ymd = await resolve_asof_ymd(pool, int(game_pk))
     if asof_ymd is None:
         log.info("skip game %s (point-in-time cutoff unresolved)", game_pk)
-        return [], "unresolved", park_factor
+        return [], "unresolved", park_factor, None
     state.asof_ymd = asof_ymd
 
-    results = await asyncio.to_thread(_collect_game_results, state, iterations, base_seed)
+    results, grids = await asyncio.to_thread(_replay_game, state, iterations, base_seed)
     if not results:
-        return [], "empty", park_factor
+        return [], "empty", park_factor, None
 
     summary = GameSimSummary.from_results(results)
     wp = win_probability(summary, calibration_map=calibration_map)
@@ -2063,14 +2537,33 @@ async def _score_one_game(
             accuracy.extend(
                 score_game_accuracy(game_pk, wp, summary, game_odds, home_score, away_score)
             )
+        # SIM-421: the twelve segment and team markets, priced from the
+        # per-iteration linescore and graded on the official inning grid.
+        if grids and any(m in game_odds for m in SEGMENT_MARKET_TYPES):
+            official_grid = await _fetch_official_grid(pool, game_pk)
+            accuracy.extend(
+                score_segment_market_accuracy(
+                    game_pk, SegmentRuns.from_inning_grids(grids), game_odds, official_grid
+                )
+            )
+    ground_truth_source: str | None = None
     if do_props and prop_odds and pset is not None:
-        pa_events = await _fetch_pa_events(pool, game_pk)
-        batter_actuals, pitcher_actuals = real_props_from_pa_events(pa_events)
+        # SIM-545: the official box score when the game has rows, else the
+        # event-label fallback. The source's own prop set bounds what is graded.
+        truth = await _fetch_prop_ground_truth(pool, game_pk)
+        ground_truth_source = truth.source
         accuracy.extend(
-            score_prop_accuracy(game_pk, pset, prop_odds, batter_actuals, pitcher_actuals)
+            score_prop_accuracy(
+                game_pk,
+                pset,
+                prop_odds,
+                truth.batter_actuals,
+                truth.pitcher_actuals,
+                scorable_props=truth.scorable_props,
+            )
         )
 
-    return accuracy, "scored", park_factor
+    return accuracy, "scored", park_factor, ground_truth_source
 
 
 # ===========================================================================
@@ -2331,11 +2824,14 @@ def _process_one_game(game_pk: int, params: dict[str, Any]) -> dict[str, Any]:
     :func:`_score_one_game` pipeline on this worker's dedicated loop + pool.
 
     Returns a fully-picklable payload ``{"status": str, "accuracy_records":
-    list[dict]}`` where each dict is ``AccuracyRecord.to_jsonable()`` — the
-    parent turns those back into dataclasses and folds ``status`` into the
-    SAME run counters the serial path keeps. Returning plain dicts (not the
-    dataclasses) keeps the cross-process boundary robust to how this script
-    module is named in the worker.
+    list[dict], "park_run_factor": float, "ground_truth_source": str | None}``
+    where each record dict is ``AccuracyRecord.to_jsonable()`` — the parent
+    turns those back into dataclasses and folds ``status`` and the SIM-545
+    ``ground_truth_source`` into the SAME run counters the serial path keeps.
+    Returning plain dicts (not the dataclasses) keeps the cross-process
+    boundary robust to how this script module is named in the worker. A
+    failed game's payload carries no ``ground_truth_source`` key: it graded
+    nothing, so it has no source.
 
     A game with BAD DATA logs and contributes NO records (status
     ``"unresolved"``) — it NEVER raises out, so one bad game can never sink
@@ -2367,22 +2863,25 @@ def _process_one_game(game_pk: int, params: dict[str, Any]) -> dict[str, Any]:
             allow_neutral_parks=allow_neutral,
             calibration_path=calibration_path,
         )
-        accuracy_records, status, park_factor = _WORKER_LOOP.run_until_complete(
-            _score_one_game(
-                _WORKER_POOL,
-                int(game_pk),
-                duck=_WORKER_DUCK,
-                do_game=bool(params["do_game"]),
-                do_props=bool(params["do_props"]),
-                iterations=int(params["iterations"]),
-                base_seed=int(params["base_seed"]),
-                calibration_map=_WORKER_CALIBRATION_MAP,
+        accuracy_records, status, park_factor, ground_truth_source = (
+            _WORKER_LOOP.run_until_complete(
+                _score_one_game(
+                    _WORKER_POOL,
+                    int(game_pk),
+                    duck=_WORKER_DUCK,
+                    do_game=bool(params["do_game"]),
+                    do_props=bool(params["do_props"]),
+                    iterations=int(params["iterations"]),
+                    base_seed=int(params["base_seed"]),
+                    calibration_map=_WORKER_CALIBRATION_MAP,
+                )
             )
         )
         return {
             "status": status,
             "accuracy_records": [a.to_jsonable() for a in accuracy_records],
             "park_run_factor": float(park_factor),
+            "ground_truth_source": ground_truth_source,
         }
     except UnresolvedParkFactorError:
         raise
@@ -2410,13 +2909,29 @@ class _Counters:
     #: A scored run with zero of these means the park nudge did nothing all run, and
     #: the operator gets to see that instead of guessing.
     games_park_nonneutral: int = 0
+    #: SIM-545: scored games whose props were graded on the official box score
+    #: (``raw.game_player_stats``) vs. the event-label fallback
+    #: (``raw.pitches.events``). An honest report says how many games each
+    #: source graded — the fallback sees only five props, the official record
+    #: every priced market. The two sum to the games that scored any prop.
+    games_official_boxscore: int = 0
+    games_event_label: int = 0
 
 
-def _tally(counters: _Counters, status: str, park_factor: float = 1.0) -> None:
+def _tally(
+    counters: _Counters,
+    status: str,
+    park_factor: float = 1.0,
+    ground_truth_source: str | None = None,
+) -> None:
     """Fold one game's status into the run counters (shared by both paths)."""
     counters.games_attempted += 1
     if status == "scored" and abs(float(park_factor) - 1.0) > 1e-9:
         counters.games_park_nonneutral += 1
+    if status == "scored" and ground_truth_source == GROUND_TRUTH_OFFICIAL:
+        counters.games_official_boxscore += 1
+    elif status == "scored" and ground_truth_source == GROUND_TRUTH_EVENT_LABEL:
+        counters.games_event_label += 1
     if status == "no_odds":
         counters.games_no_odds += 1
     elif status == "unresolved":
@@ -2455,7 +2970,7 @@ async def _run_serial(
         if game_pks:
             pool = await asyncpg.create_pool(args.dsn, min_size=1, max_size=4)
         for game_pk in game_pks:
-            accuracy_records, status, park_factor = await _score_one_game(
+            accuracy_records, status, park_factor, ground_truth_source = await _score_one_game(
                 pool,
                 game_pk,
                 duck=duck,
@@ -2465,7 +2980,7 @@ async def _run_serial(
                 base_seed=args.base_seed,
                 calibration_map=calibration_map,
             )
-            _tally(counters, status, park_factor)
+            _tally(counters, status, park_factor, ground_truth_source)
             counters.accuracy_records.extend(accuracy_records)
             if counters.games_scored and counters.games_scored % 25 == 0:
                 log.info(
@@ -2579,6 +3094,7 @@ def _run_parallel(
                 counters,
                 str(payload.get("status", "unresolved")),
                 float(payload.get("park_run_factor", 1.0)),
+                payload.get("ground_truth_source"),
             )
             counters.accuracy_records.extend(
                 AccuracyRecord.from_jsonable(d) for d in payload.get("accuracy_records", [])
@@ -2666,6 +3182,14 @@ async def run(args: argparse.Namespace) -> int:
 
     try:
         game_pks = await _fetch_final_games(args.dsn, seasons, args.max_games)
+        if args.game_pks_file:
+            wanted = _read_game_pks_file(args.game_pks_file)
+            game_pks = [g for g in game_pks if g in wanted]
+            log.info(
+                "SIM-518: --game-pks-file kept %d of the seasons' Final games (%d listed).",
+                len(game_pks),
+                len(wanted),
+            )
     except Exception:
         # SIM-454: the parent cannot reach Postgres. That used to escape as a raw
         # traceback out of asyncio.run; name it and exit on a documented code.
@@ -2732,6 +3256,15 @@ async def run(args: argparse.Namespace) -> int:
             counters.games_park_nonneutral,
             counters.games_scored,
         )
+    # SIM-545: say which record graded the props. A run with zero games on the
+    # official box score graded only five props per game, not every market.
+    if do_props:
+        log.info(
+            "SIM-545: props graded on the official box score for %d games, on the "
+            "event-label fallback for %d games.",
+            counters.games_official_boxscore,
+            counters.games_event_label,
+        )
 
     params = {
         "seasons": seasons,
@@ -2765,6 +3298,21 @@ async def run(args: argparse.Namespace) -> int:
         # SIM-540
         "report_hypothetical_return": bool(args.report_hypothetical_return),
         "edge_threshold": float(args.edge_threshold),
+        # SIM-518: the frozen inputs, for the paired-arm read.
+        "game_pks_file": args.game_pks_file,
+        "provenance": bundle_provenance(args.calibration_path),
+    }
+
+    run_counters = {
+        "games_attempted": counters.games_attempted,
+        "games_scored": counters.games_scored,
+        "games_no_odds": counters.games_no_odds,
+        "games_unresolved": counters.games_unresolved,
+        "games_park_nonneutral": counters.games_park_nonneutral,
+        # SIM-545: games per prop ground-truth source.
+        "games_official_boxscore": counters.games_official_boxscore,
+        "games_event_label": counters.games_event_label,
+        "n_accuracy_records": len(counters.accuracy_records),
     }
 
     accuracy_comparison = aggregate_accuracy_comparison(
@@ -2772,7 +3320,7 @@ async def run(args: argparse.Namespace) -> int:
         n_bootstrap=int(args.bootstrap_samples),
         seed=int(args.bootstrap_seed),
     )
-    print(format_accuracy_comparison(accuracy_comparison, params=params))
+    print(format_accuracy_comparison(accuracy_comparison, params=params, counters=run_counters))
     print()
 
     # SIM-540: opt-in. Needs the accuracy records the accuracy comparison
@@ -2790,14 +3338,7 @@ async def run(args: argparse.Namespace) -> int:
 
     report: dict[str, Any] = {
         "params": params,
-        "counters": {
-            "games_attempted": counters.games_attempted,
-            "games_scored": counters.games_scored,
-            "games_no_odds": counters.games_no_odds,
-            "games_unresolved": counters.games_unresolved,
-            "games_park_nonneutral": counters.games_park_nonneutral,
-            "n_accuracy_records": len(counters.accuracy_records),
-        },
+        "counters": run_counters,
         "accuracy_comparison": accuracy_comparison,
         "accuracy_records": [a.to_jsonable() for a in counters.accuracy_records],
     }
@@ -2848,6 +3389,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--seasons", type=int, nargs="+", required=True, help="Seasons to backtest.")
     p.add_argument("--max-games", type=int, default=None, help="Cap games (smoke run).")
+    p.add_argument(
+        "--game-pks-file",
+        default=None,
+        help=(
+            "SIM-518: score ONLY the game_pks listed in this file (one per line, or a JSON "
+            "list), intersected with the seasons' Final games — the paired-arm subset run. "
+            "The same file on both arms keeps the pairing exact."
+        ),
+    )
     p.add_argument("--iterations", type=int, default=100, help="Monte-Carlo iters per game.")
     p.add_argument(
         "--markets",

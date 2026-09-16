@@ -262,6 +262,7 @@ from tests.acceptance.conftest import (
     MIN_MEANINGFUL_SIMS,
     PRODUCTION_FLAGS,
     AcceptanceRun,
+    cell_index_line,
     opted_in,
 )
 
@@ -880,6 +881,7 @@ def test_report_every_channel_sim450(acceptance_run: AcceptanceRun) -> None:
         f"ties (excluded from home_win_pct): {acceptance_run.ties}",
         f"run environment: mean park run factor {park_mean:.5f} "
         f"(full set {bands.mean_park_factor(bands.BALANCED_GAME_ORDER):.5f})",
+        cell_index_line(acceptance_run.cell_index),
         "",
         f"{'channel':<14}{'sim':>9}{'MLB':>9}{'delta':>10}{'half':>9}"
         f"{'driver':>8}{'n':>8}{'needs':>8}  verdict",

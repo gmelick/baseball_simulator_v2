@@ -90,7 +90,9 @@ def test_builder_returns_the_whole_contract():
     assert set(sim_kwargs_from_state(state)) == SIM_KWARG_KEYS
     # The count is pinned too: an added key is a behaviour change and must be a
     # deliberate edit here, not a silent drift.
-    assert len(SIM_KWARG_KEYS) == 16  # SIM-486 deleted ``k``; SIM-523 added venue_id
+    # SIM-486 deleted ``k``; SIM-523 added venue_id; SIM-427 added the two managers,
+    # the pen, its rest, usage and source, the profiles and the league means (8).
+    assert len(SIM_KWARG_KEYS) == 24
 
 
 def test_builder_carries_defense_maps_and_park_factor():

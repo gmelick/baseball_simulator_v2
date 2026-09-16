@@ -154,3 +154,16 @@ models/
 
 # MkDocs build output for docs/technical/ (see requirements-docs.txt) — generated, not committed.
 site/
+
+# Large run outputs (2026-09): the per-record accuracy reports, the manager and
+# fatigue probes, the offline fit's arrays and the in-progress design directory.
+# Each is 1-55 MB and regenerable from its runner script; the small skill tables,
+# pairings and text reads next to them ARE tracked.
+scripts/sim427_accuracy_on.json
+scripts/sim427_accuracy_off.json
+scripts/sim427_probe_*.json
+scripts/sim518_accuracy_tto0*.json
+scripts/sim548_accuracy_split.json
+scripts/sim548_baseline_2024_chunk*.json
+scripts/*.npz
+scripts/sim548_design_*/

@@ -31,15 +31,62 @@ depend on them:
 
 ``get_odds(game_pk, *, line_type, market_type, book, is_sharp_book) -> dict``
     Keys: ``game_pk, source, is_mock, book, line_type, market_type,
-    is_sharp_book, home_ml, away_ml, home_spread, home_spread_ml, away_spread,
-    away_spread_ml, total_line, over_ml, under_ml``.
+    is_sharp_book, home_ml, away_ml, draw_ml, home_spread, home_spread_ml,
+    away_spread, away_spread_ml, total_line, over_ml, under_ml``. ``market_type``
+    is one of :data:`GAME_MARKET_TYPES`; :data:`GAME_MARKET_KIND` says which of
+    those keys the market fills (see "The game-market vocabulary" below).
 
 ``get_prop_odds(game_pk, player_id, prop_stat, *, line_type, book,
 is_sharp_book) -> dict``
     Keys: ``game_pk, player_id, prop_stat, line, over_ml, under_ml, book,
     line_type, is_sharp_book, source, is_mock``.  Must raise ``ValueError`` on
-    an unknown ``prop_stat`` (the 7 Betting-Analyst markets in
-    ``PROP_STATS``), mirroring ``MockOddsAPI``.
+    an unknown ``prop_stat`` (the 15 markets in ``PROP_STATS``), mirroring
+    ``MockOddsAPI``.
+
+The prop-market vocabulary (SIM-421)
+------------------------------------
+This module is the ONE place the ``raw.prop_odds.prop_stat`` vocabulary is
+written down. :data:`PITCHER_PROP_STATS` and :data:`BATTER_PROP_STATS` split
+the 15 markets by the role they price; :data:`PROP_STATS` is their union in
+the canonical order. The mock provider, the BettingPros provider, the live
+pipeline, the nightly opening-line job and the historical loader all import
+these tuples — none carries a private copy. The CHECK constraint on
+``raw.prop_odds`` (Alembic migration 0022) lists the same 15 values.
+:data:`PROP_STAT_TO_MODEL_PROP` maps each market to the prop name the
+simulator emits (``simulation/prop_distributions.py``).
+
+The game-market vocabulary (SIM-421, owner ruling 2026-09-12)
+------------------------------------------------------------
+The owner's ruling: the odds tables carry EVERY market the book posts, because
+the simulator can price every one of them. :data:`GAME_MARKET_TYPES` is the
+``raw.game_odds.market_type`` vocabulary: the three full-game markets
+(moneyline, run line, total) plus the twelve segment and team markets
+BettingPros posts on every game (the first-inning and first-five-innings
+moneyline / total / run line, the full-game and first-five team totals for
+each side, the first team to score, and "a run in the first inning").
+Every market is stored in the SAME row layout; :data:`GAME_MARKET_KIND` says
+which columns a market fills:
+
+  * ``moneyline``  — ``home_ml`` / ``away_ml`` (the full-game moneyline, the
+    first team to score).
+  * ``three_way``  — ``home_ml`` / ``away_ml`` / ``draw_ml`` (the first-inning
+    and first-five moneylines, which can end tied; ``draw_ml`` is migration
+    0024's column).
+  * ``runline``    — ``home_spread`` / ``home_spread_ml`` / ``away_spread`` /
+    ``away_spread_ml``.
+  * ``total``      — ``total_line`` / ``over_ml`` / ``under_ml`` (the full-game,
+    first-inning and first-five totals, and each side's team total — the
+    market name says whose runs the line counts).
+  * ``yes_no``     — "a run in the first inning": Yes is stored as ``over_ml``
+    and No as ``under_ml`` at ``total_line`` 0.5, because "yes, a run scores"
+    IS "over 0.5 first-inning runs". One layout, no special column.
+
+The CHECK constraint on ``raw.game_odds.market_type`` (migration 0024) lists
+the same 15 values. :data:`GAME_MARKET_SEGMENT` names the slice of the game a
+market settles on (``game``, ``f1`` = the first inning, ``f5`` = the first
+five innings) and :data:`GAME_MARKET_SIDE` the team a team total counts
+(``home`` / ``away``; ``None`` for both-team markets), so a consumer never
+parses the market name.
 
 Multi-book / sharp-flag / line_type rules the provider MUST preserve:
   * ``book`` is echoed through verbatim — the pipeline iterates ``PROP_BOOKS``
@@ -58,6 +105,173 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
+
+# ---------------------------------------------------------------------------
+# SIM-421: the prop-market vocabulary (the single source; see the module docstring)
+# ---------------------------------------------------------------------------
+
+#: The pitcher markets. A pitcher gets these and never a batter market.
+PITCHER_PROP_STATS: tuple[str, ...] = (
+    "strikeouts",
+    "earned_runs",
+    "walks",
+    "outs_recorded",
+    "hits_allowed",
+)
+
+#: The batter markets. A hitter gets these and never a pitcher market.
+#: ``hits`` is the BATTER market (hits recorded); ``hits_allowed`` above is the
+#: PITCHER market. They price different stat lines and must never be swapped.
+BATTER_PROP_STATS: tuple[str, ...] = (
+    "hits",
+    "home_runs",
+    "total_bases",
+    "rbis",
+    "singles",
+    "doubles",
+    "triples",
+    "runs",
+    "stolen_bases",
+    "hits_runs_rbis",
+)
+
+#: Every prop market, in the canonical order: the seven original markets
+#: (SIM-134) first, then the eight SIM-421 markets. A tuple so a caller cannot
+#: mutate the order.
+PROP_STATS: tuple[str, ...] = (
+    "strikeouts",
+    "hits",
+    "home_runs",
+    "earned_runs",
+    "walks",
+    "total_bases",
+    "rbis",
+    "singles",
+    "doubles",
+    "triples",
+    "runs",
+    "stolen_bases",
+    "hits_runs_rbis",
+    "outs_recorded",
+    "hits_allowed",
+)
+
+#: prop_stat → the model-side prop name the simulator emits
+#: (``PITCHER_PROPS`` / ``BATTER_PROPS`` in ``simulation/prop_distributions.py``).
+PROP_STAT_TO_MODEL_PROP: dict[str, str] = {
+    "strikeouts": "K",
+    "walks": "BB",
+    "earned_runs": "ER",
+    "outs_recorded": "OUTS",
+    "hits_allowed": "H_ALLOWED",
+    "hits": "H",
+    "home_runs": "HR",
+    "total_bases": "TB",
+    "rbis": "RBI",
+    "singles": "1B",
+    "doubles": "2B",
+    "triples": "3B",
+    "runs": "R",
+    "stolen_bases": "SB",
+    "hits_runs_rbis": "HRR",
+}
+
+# ---------------------------------------------------------------------------
+# SIM-421 (owner ruling 2026-09-12): the game-market vocabulary — every market
+# the book posts on a game, in one row layout (see the module docstring)
+# ---------------------------------------------------------------------------
+
+#: The three full-game markets the platform stored before 2026-09-12. A row for
+#: one of these carries ALL three markets' columns (the provider fills every
+#: full-game field it can resolve), which is what the stored dedup hashes
+#: expect; keep that behaviour for these three.
+LEGACY_GAME_MARKET_TYPES: tuple[str, ...] = ("moneyline", "runline", "total")
+
+#: Every ``raw.game_odds.market_type`` value, in the canonical order: the three
+#: full-game markets first, then the twelve segment and team markets.
+GAME_MARKET_TYPES: tuple[str, ...] = (
+    "moneyline",
+    "runline",
+    "total",
+    "f1_moneyline",
+    "f5_moneyline",
+    "f1_total",
+    "f5_total",
+    "f1_runline",
+    "f5_runline",
+    "team_total_home",
+    "team_total_away",
+    "f5_team_total_home",
+    "f5_team_total_away",
+    "first_to_score",
+    "first_inning_run",
+)
+
+#: market_type → the column layout it fills (the kinds are explained in the
+#: module docstring).
+GAME_MARKET_KIND: dict[str, str] = {
+    "moneyline": "moneyline",
+    "runline": "runline",
+    "total": "total",
+    "f1_moneyline": "three_way",
+    "f5_moneyline": "three_way",
+    "f1_total": "total",
+    "f5_total": "total",
+    "f1_runline": "runline",
+    "f5_runline": "runline",
+    "team_total_home": "total",
+    "team_total_away": "total",
+    "f5_team_total_home": "total",
+    "f5_team_total_away": "total",
+    "first_to_score": "moneyline",
+    "first_inning_run": "yes_no",
+}
+
+#: market_type → the slice of the game the market settles on.
+GAME_MARKET_SEGMENT: dict[str, str] = {
+    "moneyline": "game",
+    "runline": "game",
+    "total": "game",
+    "f1_moneyline": "f1",
+    "f5_moneyline": "f5",
+    "f1_total": "f1",
+    "f5_total": "f5",
+    "f1_runline": "f1",
+    "f5_runline": "f5",
+    "team_total_home": "game",
+    "team_total_away": "game",
+    "f5_team_total_home": "f5",
+    "f5_team_total_away": "f5",
+    "first_to_score": "game",
+    "first_inning_run": "f1",
+}
+
+#: market_type → the team whose runs a team total counts; ``None`` for a
+#: both-team market.
+GAME_MARKET_SIDE: dict[str, str | None] = {
+    m: ("home" if m.endswith("_home") else "away" if m.endswith("_away") else None)
+    for m in GAME_MARKET_TYPES
+}
+
+#: The markets whose ``draw_ml`` column is meaningful.
+THREE_WAY_GAME_MARKET_TYPES: tuple[str, ...] = tuple(
+    m for m in GAME_MARKET_TYPES if GAME_MARKET_KIND[m] == "three_way"
+)
+
+#: The odds fields a ``get_odds`` dict carries, in the ``raw.game_odds`` column
+#: order. Every provider returns all of them (``None`` when unresolved).
+GAME_ODDS_FIELDS: tuple[str, ...] = (
+    "home_ml",
+    "away_ml",
+    "draw_ml",
+    "home_spread",
+    "home_spread_ml",
+    "away_spread",
+    "away_spread_ml",
+    "total_line",
+    "over_ml",
+    "under_ml",
+)
 
 # ---------------------------------------------------------------------------
 # Provider interface
@@ -261,4 +475,17 @@ __all__ = [
     "available_providers",
     "ODDS_PROVIDER_ENV",
     "DEFAULT_PROVIDER",
+    # SIM-421: the prop-market vocabulary
+    "PROP_STATS",
+    "PITCHER_PROP_STATS",
+    "BATTER_PROP_STATS",
+    "PROP_STAT_TO_MODEL_PROP",
+    # SIM-421 (2026-09-12): the game-market vocabulary
+    "GAME_MARKET_TYPES",
+    "LEGACY_GAME_MARKET_TYPES",
+    "GAME_MARKET_KIND",
+    "GAME_MARKET_SEGMENT",
+    "GAME_MARKET_SIDE",
+    "THREE_WAY_GAME_MARKET_TYPES",
+    "GAME_ODDS_FIELDS",
 ]

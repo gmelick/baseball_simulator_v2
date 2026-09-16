@@ -1197,3 +1197,150 @@ def test_a_shortened_run_cannot_hide_a_park_shift_in_the_R_band_sim450() -> None
     assert bands.prefix_park_bias(
         bands.BALANCED_GAME_ORDER, len(bands.BALANCED_GAME_ORDER)
     ) == pytest.approx(0.0, abs=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# SIM-518 — the lane names the fatigue knobs and reports the cell index
+# ---------------------------------------------------------------------------
+
+
+def test_the_lane_grades_the_landed_fatigue_weight_sim518() -> None:
+    """The lane's flag map carries the SIM-518 fatigue weight as the owner
+    landed it on 2026-09-14 — the times-through term at bandwidth 0.5, the
+    pitch-count term OFF — and the two closed factors at their off values by
+    the 2026-09-12 rulings, so a shell that exported one cannot run another
+    arm unnoticed."""
+    from tests.acceptance.conftest import PRODUCTION_FLAGS
+
+    assert PRODUCTION_FLAGS["SIM_FATIGUE_PC_SIGMA"] == "0"
+    assert PRODUCTION_FLAGS["SIM_FATIGUE_TTO_SIGMA"] == "0.5"
+    assert PRODUCTION_FLAGS["SIM_PITCH_HOME_OFF_WEIGHT"] == "1.0"
+    assert PRODUCTION_FLAGS["SIM_BB_PITCH_SIGMA"] == "0"
+
+
+def test_the_compose_file_carries_the_same_fatigue_values_sim518() -> None:
+    """The lane's fatigue bandwidths and the production environment must agree,
+    or the lane certifies a simulator users do not get."""
+    import yaml
+
+    from tests.acceptance.conftest import PRODUCTION_FLAGS
+
+    compose = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "docker-compose.yml").read_text(encoding="utf-8")
+    )
+    env = compose["services"]["app"]["environment"]
+    for key in ("SIM_FATIGUE_PC_SIGMA", "SIM_FATIGUE_TTO_SIGMA"):
+        assert str(env[key]) == PRODUCTION_FLAGS[key], key
+
+
+def test_the_compose_file_carries_the_same_split_values_sim548() -> None:
+    """The pitch / pitch-result split's switch and powers must agree between
+    the lane's flags and the production environment (flipped ON 2026-09-14 by
+    owner decision at the 2026-09-09 fit: pitcher 16 / 16, batter 8)."""
+    import yaml
+
+    from tests.acceptance.conftest import PRODUCTION_FLAGS
+
+    compose = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "docker-compose.yml").read_text(encoding="utf-8")
+    )
+    env = compose["services"]["app"]["environment"]
+    for key in (
+        "SIM_PITCH_RESULT_SPLIT",
+        "SIM_PITCH_PITCHER_POWER",
+        "SIM_RESULT_PITCHER_POWER",
+        "SIM_RESULT_BATTER_POWER",
+    ):
+        assert str(env[key]) == PRODUCTION_FLAGS[key], key
+    assert PRODUCTION_FLAGS["SIM_PITCH_RESULT_SPLIT"] == "1"
+
+
+def test_the_lane_flag_overrides_are_named_sim518() -> None:
+    """The other-arm overrides exist in the source under the SIM518_LANE_ names
+    (the SIM523_LANE_ pattern), one per fatigue bandwidth."""
+    src = (Path(__file__).parent / "conftest.py").read_text(encoding="utf-8")
+    assert 'os.environ.get("SIM518_LANE_FATIGUE_PC_SIGMA", "0")' in src
+    assert 'os.environ.get("SIM518_LANE_FATIGUE_TTO_SIGMA", "0.5")' in src
+
+
+def test_the_report_states_the_cell_index_sim518() -> None:
+    """The report line reads the sampler's ``cell_index_stats`` shape: the
+    widening shares and the sides per hand — the batting-side record's
+    evidence — and says so plainly when the stats are absent or the index is OFF."""
+    from tests.acceptance.conftest import cell_index_line as _cell_index_line
+
+    assert "not reported" in _cell_index_line({})
+    assert _cell_index_line({"enabled": False}) == "cell index: OFF (whole-pool weights)"
+    line = _cell_index_line(
+        {"enabled": True, "min_cell": 20, "draws_by_level": [9990, 8, 2, 0], "n_side": {"L": 3}}
+    )
+    assert "min cell 20" in line and "L0 99.9000%" in line and "L2 0.0200%" in line
+    assert "{'L': 3}" in line
+
+
+# ---------------------------------------------------------------------------
+# SIM-427 — the lane grades the flipped manager draw at its fitted values
+# ---------------------------------------------------------------------------
+
+
+def test_the_lane_grades_the_flipped_manager_draw_sim427() -> None:
+    """Since the flip (2026-09-13; docs/audit/2026-09-13-sim427-build-plan.md §5)
+    the lane grades production: the pitching change as a draw, the real pen,
+    the manager weight and the reliever weights at their FITTED values."""
+    from tests.acceptance.conftest import PRODUCTION_FLAGS
+
+    assert PRODUCTION_FLAGS["SIM_MANAGER_DRAW"] == "1"
+    assert PRODUCTION_FLAGS["SIM_BULLPEN_SOURCE"] == "box"
+    assert PRODUCTION_FLAGS["SIM_ACTOR_POWER_MANAGER_USAGE"] == "4"
+    for key, fitted in (
+        ("SIM_RELIEF_ROLE_SIGMA", "0.1"),
+        ("SIM_RELIEF_PITCHER_POWER", "0"),
+        ("SIM_RELIEF_REST_SIGMA", "0.5"),
+        ("SIM_RELIEF_PITCHED2D_OFF_WEIGHT", "0.25"),
+        ("SIM_RELIEF_PITCHES3D_SIGMA", "10"),
+        ("SIM_RELIEF_HAND_OFF_WEIGHT", "1.0"),
+    ):
+        assert PRODUCTION_FLAGS[key] == fitted, key
+
+
+def test_the_compose_file_carries_the_same_fitted_values_sim427() -> None:
+    """The lane's flags and the production environment must agree, or the lane
+    certifies a simulator users do not get."""
+    import yaml
+
+    from tests.acceptance.conftest import PRODUCTION_FLAGS
+
+    compose = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "docker-compose.yml").read_text(encoding="utf-8")
+    )
+    env = compose["services"]["app"]["environment"]
+    for key in (
+        "SIM_MANAGER_DRAW",
+        "SIM_BULLPEN_SOURCE",
+        "SIM_ACTOR_POWER_MANAGER_USAGE",
+        "SIM_RELIEF_ROLE_SIGMA",
+        "SIM_RELIEF_PITCHER_POWER",
+        "SIM_RELIEF_REST_SIGMA",
+        "SIM_RELIEF_PITCHED2D_OFF_WEIGHT",
+        "SIM_RELIEF_PITCHES3D_SIGMA",
+        "SIM_RELIEF_HAND_OFF_WEIGHT",
+    ):
+        assert str(env[key]) == PRODUCTION_FLAGS[key], key
+
+
+def test_the_lane_flag_overrides_are_named_sim427() -> None:
+    """The ON-arm overrides exist under the SIM427_LANE_ names: the draw switch,
+    the pen source, the manager power and one per reliever weight."""
+    src = (Path(__file__).parent / "conftest.py").read_text(encoding="utf-8")
+    for name in (
+        "SIM427_LANE_MANAGER_DRAW",
+        "SIM427_LANE_BULLPEN_SOURCE",
+        "SIM427_LANE_MANAGER_POWER",
+        "SIM427_LANE_RELIEF_ROLE_SIGMA",
+        "SIM427_LANE_RELIEF_PITCHER_POWER",
+        "SIM427_LANE_RELIEF_REST_SIGMA",
+        "SIM427_LANE_RELIEF_PITCHED2D_OFF_WEIGHT",
+        "SIM427_LANE_RELIEF_PITCHES3D_SIGMA",
+        "SIM427_LANE_RELIEF_HAND_OFF_WEIGHT",
+    ):
+        assert f'os.environ.get("{name}"' in src or f'"{name}",' in src, name

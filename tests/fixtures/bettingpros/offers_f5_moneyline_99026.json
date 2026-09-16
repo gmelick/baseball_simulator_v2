@@ -1,0 +1,374 @@
+{
+ "offers": [
+  {
+   "id": "f5a6c8c96bf6b943578d7e0e2296de0f",
+   "market_id": 279,
+   "event_id": 99026,
+   "player_id": null,
+   "team_id": null,
+   "opponent_id": null,
+   "link": "",
+   "active": true,
+   "participants": [
+    {
+     "id": "TB",
+     "name": "Rays",
+     "link": "/mlb/teams/tampa-bay-rays/",
+     "team": {
+      "city": "Tampa Bay",
+      "abbreviation": "TB",
+      "conference": "AL",
+      "division": "East",
+      "slug": "tampa-bay-rays",
+      "stadium_deg_offset": "45"
+     }
+    },
+    {
+     "id": "ATL",
+     "name": "Braves",
+     "link": "/mlb/teams/atlanta-braves/",
+     "team": {
+      "city": "Atlanta",
+      "abbreviation": "ATL",
+      "conference": "NL",
+      "division": "East",
+      "slug": "atlanta-braves",
+      "stadium_deg_offset": "160"
+     }
+    }
+   ],
+   "selections": [
+    {
+     "participant": null,
+     "selection": "yes",
+     "active": true,
+     "opening_line": {
+      "line": 1,
+      "cost": 426,
+      "book_id": 75,
+      "created": "2026-09-09 21:51:43"
+     },
+     "label": "Yes",
+     "short_label": "Yes",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:11",
+         "cost": 488,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": {
+          "pm_win_pct": 17.01
+         }
+        }
+       ]
+      },
+      {
+       "id": 75,
+       "lines": [
+        {
+         "id": "75_3d214fcc8cd3fb76d8dd06aff3b59b47",
+         "from_scout": true,
+         "main": true,
+         "best": true,
+         "updated": "2026-09-10 16:16:11",
+         "cost": 488,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://polymarket.us/event/mlb-tb-atl-2026-09-10",
+         "metrics": {
+          "pm_win_pct": 17.01
+         }
+        }
+       ]
+      }
+     ],
+     "id": "3d214fcc8cd3fb76d8dd06aff3b59b47"
+    },
+    {
+     "participant": null,
+     "selection": "no",
+     "active": true,
+     "opening_line": {
+      "line": 1,
+      "cost": -733,
+      "book_id": 75,
+      "created": "2026-09-09 21:51:43"
+     },
+     "label": "No",
+     "short_label": "No",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:11",
+         "cost": -525,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": {
+          "pm_win_pct": 84
+         }
+        }
+       ]
+      },
+      {
+       "id": 75,
+       "lines": [
+        {
+         "id": "75_cb56241faca7b3c1a695960715e1a83a",
+         "from_scout": true,
+         "main": true,
+         "best": true,
+         "updated": "2026-09-10 16:16:11",
+         "cost": -525,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://polymarket.us/event/mlb-tb-atl-2026-09-10",
+         "metrics": {
+          "pm_win_pct": 84
+         }
+        }
+       ]
+      }
+     ],
+     "id": "cb56241faca7b3c1a695960715e1a83a"
+    },
+    {
+     "participant": null,
+     "selection": "draw",
+     "active": true,
+     "opening_line": {
+      "line": 1,
+      "cost": 460,
+      "book_id": 13,
+      "created": "2026-09-09 17:41:08"
+     },
+     "label": "Draw",
+     "short_label": "Draw",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:10",
+         "cost": 460,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": null
+        }
+       ]
+      },
+      {
+       "id": 10,
+       "lines": [
+        {
+         "id": "10_8d1e3b300e021183e2ca1618839bd538",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:10",
+         "cost": 460,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://account.sportsbook.fanduel.com/sportsbook/addToBetslip?marketId=42.606928939&selectionId=131604",
+         "metrics": null
+        }
+       ]
+      },
+      {
+       "id": 13,
+       "lines": [
+        {
+         "id": "13_8d1e3b300e021183e2ca1618839bd538",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:10",
+         "cost": 460,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://sportsbook.caesars.com/us/nj/bet/betslip?selectionIds=2060c854-ccc3-334b-8e69-f86cd6d1c0b6",
+         "metrics": null
+        }
+       ]
+      }
+     ],
+     "id": "8d1e3b300e021183e2ca1618839bd538"
+    },
+    {
+     "participant": "TB",
+     "selection": "",
+     "active": true,
+     "opening_line": {
+      "line": 1,
+      "cost": 120,
+      "book_id": 13,
+      "created": "2026-09-09 17:41:08"
+     },
+     "label": "Rays",
+     "short_label": "TB",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:10",
+         "cost": 105,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": null
+        }
+       ]
+      },
+      {
+       "id": 10,
+       "lines": [
+        {
+         "id": "10_a7e92e0b162642b4a873e97cf0af6c53",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:10",
+         "cost": 130,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://account.sportsbook.fanduel.com/sportsbook/addToBetslip?marketId=42.606928939&selectionId=29162",
+         "metrics": null
+        }
+       ]
+      },
+      {
+       "id": 13,
+       "lines": [
+        {
+         "id": "13_a7e92e0b162642b4a873e97cf0af6c53",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:10",
+         "cost": 105,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://sportsbook.caesars.com/us/nj/bet/betslip?selectionIds=37edda68-c3e8-3269-b034-d4a2d0466f0d",
+         "metrics": null
+        }
+       ]
+      }
+     ],
+     "id": "a7e92e0b162642b4a873e97cf0af6c53"
+    },
+    {
+     "participant": "ATL",
+     "selection": "",
+     "active": true,
+     "opening_line": {
+      "line": 1,
+      "cost": 112,
+      "book_id": 13,
+      "created": "2026-09-09 17:41:08"
+     },
+     "label": "Braves",
+     "short_label": "ATL",
+     "books": [
+      {
+       "id": 0,
+       "lines": [
+        {
+         "id": null,
+         "from_scout": false,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:10",
+         "cost": -135,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://www.bettingpros.com",
+         "metrics": null
+        }
+       ]
+      },
+      {
+       "id": 10,
+       "lines": [
+        {
+         "id": "10_ac272eb6e52792d79ce8a99ed434030d",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:10",
+         "cost": 116,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://account.sportsbook.fanduel.com/sportsbook/addToBetslip?marketId=42.606928939&selectionId=7100960",
+         "metrics": null
+        }
+       ]
+      },
+      {
+       "id": 13,
+       "lines": [
+        {
+         "id": "13_ac272eb6e52792d79ce8a99ed434030d",
+         "from_scout": true,
+         "main": true,
+         "best": false,
+         "updated": "2026-09-10 16:16:10",
+         "cost": -135,
+         "line": 1,
+         "is_off": false,
+         "active": true,
+         "link": "https://sportsbook.caesars.com/us/nj/bet/betslip?selectionIds=b4638f36-83dc-35f6-81d0-1f87793d1362",
+         "metrics": null
+        }
+       ]
+      }
+     ],
+     "id": "ac272eb6e52792d79ce8a99ed434030d"
+    }
+   ]
+  }
+ ],
+ "_pagination": {
+  "page": 1,
+  "limit": 10,
+  "total_pages": 1,
+  "total_items": 1,
+  "paginated_array": "offers",
+  "self": "/v3/offers?event_id=99026&market_id=279&sport=MLB&event_id=99026&market_id=279&sport=MLB"
+ }
+}

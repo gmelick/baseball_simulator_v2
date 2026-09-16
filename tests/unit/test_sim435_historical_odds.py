@@ -274,8 +274,12 @@ async def test_load_prop_odds_routes_pitcher_vs_batter_markets():
     players = [(111, True), (222, False)]  # one pitcher, one batter
     written = await loader._load_prop_odds(provider, persist, 999, players)
 
-    # pitcher: 3 stats × 2 line_types = 6 ; batter: 4 stats × 2 = 8 ; total 14.
-    assert written == 14
+    # SIM-421 changed this pin deliberately: it was pitcher 3 + batter 4 markets
+    # (14 rows). The vocabulary is now 5 pitcher + 10 batter markets, each at 2
+    # line_types: 10 + 20 = 30.
+    assert len(loader.PITCHER_PROP_STATS) == 5
+    assert len(loader.BATTER_PROP_STATS) == 10
+    assert written == 30
     pitcher_stats = {q["prop_stat"] for q in persisted if q["player_id"] == 111}
     batter_stats = {q["prop_stat"] for q in persisted if q["player_id"] == 222}
     assert pitcher_stats == set(loader.PITCHER_PROP_STATS)
