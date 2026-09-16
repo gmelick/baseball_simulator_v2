@@ -1,3 +1,28 @@
+# Sim — the joint fit PAUSED by owner decision: the fit runs once the model is in its final state; the design stopped at run 3 of 21; the app back up; everything committed — the fit of the draw weights against the accuracy comparison (SIM-548), 2026-09-16
+
+**The decision.** The owner pauses the fit of the draw weights and works on other tickets
+first: "I want to run this fitting once the model is at its finalized state." The design
+container stopped at 04:42 UTC at run 3 of 21 (runs 1 and 2 complete and kept in
+`scripts/sim548_design_20260915/`; the partial run 3 discarded). The app came back at 04:44
+UTC, healthy, with the calibration and the reliability curve applied. The whole working tree
+is committed (`5f6a0ef`, 161 files — the first commit since 2026-09-11).
+
+**Kept for the resume:** the offline fit's read and checkpoint, the calibration-layer read,
+the 1,000-game production baseline, the two finished design runs (valid only while the bundle
+is unchanged — each report carries the bundle's file times), and the unseen design game set
+(games 1001–1250 of 2024; keep it unseen).
+
+**The resume order** is stamped in `docs/audit/2026-09-14-sim548-joint-fit-plan.md` §11: the
+pool-window test first (the owner's question — does a ten-season pool cure the sharp draw's
+starvation, and do old rows predict worse at equal similarity; the recency decay is an
+unfitted weight), then the design on the chosen pool, then the hold-out, the flip and the
+calibration layer. The reason the window test goes first: the accuracy comparison's leak
+guard leaves a 2024 game about 1.4 seasons of rows against live production's 3.7, and a wider
+window moves the best powers up, which changes what the design should run on.
+
+**Production is unchanged:** the split at 16 / 16 / 8, fatigue 0.5, the four-season pool
+window. The `market_calibration` key is still not read by the app.
+
 # Sim — the offline joint fit (v2) READ on the pitch draws: per pitch the flat draws win, between pitchers the sharp draws win, and per start the read is flat; the full-simulator design decides — the fit of the draw weights against the accuracy comparison (SIM-548), 2026-09-16
 
 **What ran.** `scripts/sim548_offline_fit.py` v2 on 120 starts of 2024 (10,578 pitches, 2,644

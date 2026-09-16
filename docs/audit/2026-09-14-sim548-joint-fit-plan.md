@@ -610,3 +610,41 @@ About three weeks elapsed, of which nine to twelve days are unattended compute.
   The full-simulator design (running; 21 arms at ten workers, about 3.4 hours each) decides.
   The 2025 hold-out (`--holdout-season 2025 --top 3`) and the profile-season leak check
   (`--profile-season 2023`) follow the design, when the memory is free.
+- **2026-09-16 04:42 UTC — PAUSED by owner decision.** The owner runs this fit once the model
+  is in its final state and works on other tickets first. The design container was stopped at
+  run 3 of 21 (runs 1 and 2 are complete and kept: `scripts/sim548_design_20260915/run01.json`,
+  `run02.json`; the partial run 3 is discarded). The app is back up (04:44 UTC, healthy;
+  calibration applied, the reliability curve present). Everything committed (`5f6a0ef`).
+  **State preserved for the resume:** the bundle is unchanged since the two finished runs
+  (`bundle_provenance` in each report carries its file times — a resume must compare them);
+  the offline fit's checkpoint (`sim548_offline_v2_20260915.npz`) and its read (§11 above);
+  the calibration-layer read; the 1,000-game production baseline
+  (`scripts/sim548_baseline_1000_skill.txt`); the fresh design game set
+  (`scripts/sim548_games_2024_design.txt`, games 1001–1250 — unseen by every fit so far;
+  keep it unseen).
+  **The resume order (decided 2026-09-16 with the owner's pool-window question):**
+  1. The pool-window test first (about one day): export a second bundle with a ten-season
+     window beside the current one (`last_n_seasons(n=10)` in `engine_artifacts.py`; the
+     pool tables hold all ten seasons; the actor matrices must cover the added
+     pitcher-seasons); rerun `sim548_offline_fit.py` on the same 120 starts against both
+     bundles across the pitcher-power ladder; add the row-age read (at equal similarity, do
+     the 2017–2019 rows predict 2024 pitches worse than the 2023 rows?). The recency decay
+     (2.0 / ×0.75 per season / floor 0.25, `player_profile_computor.recency_weight`, set by
+     hand in May and never fitted) joins the weight inventory of §4 if the window widens.
+     Reason: the accuracy comparison's leak guard leaves a 2024 game about 1.4 seasons of
+     rows against live production's 3.7, so the starvation read is worse than live; a wider
+     window also moves the best powers up, which changes what the design should run on.
+  2. Then the design on the chosen pool (`scripts/sim548_design_run.sh`; if the pool is
+     unchanged, runs 1–2 stand and the script skips them; if it changed, delete the folder
+     and start clean — never mix bundles in one design).
+  3. Then the rest of §6 unchanged: the analysis, the split-OFF pair, the pool-totals lane,
+     the 2025 hold-out, the flip decision, the calibration-layer refit and its app wiring,
+     the stale win-probability curve decision.
+  **What the pause does not change:** production runs the split at 16 / 16 / 8 and fatigue
+  0.5 (both owner decisions); the strikeout market sits 0.022 behind the line with the line's
+  discrimination (the 1,000-game read); the app does not read the `market_calibration` key.
+  **Warning for the other tickets in the meantime:** any change to the pool, the bundle,
+  the profiles, `calibration.json` or the draw code before the resume invalidates runs 1–2
+  and the offline read's absolute numbers (their shape survives). That is expected — the
+  owner wants the fit on the final model — but the resume must then start every measurement
+  clean rather than reuse these.

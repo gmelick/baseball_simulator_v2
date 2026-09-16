@@ -247,7 +247,12 @@ simulator's strikeout projection does not know who is pitching: its projected st
 correlate +0.07 with the real count against the closing line's +0.45, and its strikeout
 probabilities score worse than a coin flip; the plan is
 `docs/audit/2026-09-14-sim548-accuracy-fit-plan.md`: ladder a weight on 250 games of 2024,
-confirm on 250 of 2025, the pitcher's power in the pitch draw first); the pitch / pitch-result split's strikeout shortfall — a results-aware
+confirm on 250 of 2025, the pitcher's power in the pitch draw first — superseded by plan v2,
+`docs/audit/2026-09-14-sim548-joint-fit-plan.md`: one model, a composite objective across the
+markets, an offline joint fit, a four-factor designed experiment on the full simulator, the
+2025 hold-out, a per-market calibration layer; **PAUSED 2026-09-16 by owner decision — the
+fit runs once the model is in its final state; the resume order is in that plan's §11: the
+pool-window test first, then the design on the chosen pool**); the pitch / pitch-result split's strikeout shortfall — a results-aware
 pitcher score, a refit of the split's powers on the balanced set, a lane (SIM-527 — CLOSED
 2026-09-10 by owner decision with SIM-429: the pool-totals metric no longer decides; the
 shortfall reappears under the accuracy comparison as a 6.5-point low bias on the strikeout
