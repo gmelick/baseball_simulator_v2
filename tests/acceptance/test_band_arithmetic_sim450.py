@@ -1236,7 +1236,8 @@ def test_the_compose_file_carries_the_same_fatigue_values_sim518() -> None:
 def test_the_compose_file_carries_the_same_split_values_sim548() -> None:
     """The pitch / pitch-result split's switch and powers must agree between
     the lane's flags and the production environment (flipped ON 2026-09-14 by
-    owner decision at the 2026-09-09 fit: pitcher 16 / 16, batter 8)."""
+    owner decision at the 2026-09-09 fit: pitcher 16 / 16, batter 8; every power
+    1 since the owner ruling of 2026-09-16, the sweep re-fits them)."""
     import yaml
 
     from tests.acceptance.conftest import PRODUCTION_FLAGS
@@ -1286,15 +1287,18 @@ def test_the_report_states_the_cell_index_sim518() -> None:
 def test_the_lane_grades_the_flipped_manager_draw_sim427() -> None:
     """Since the flip (2026-09-13; docs/audit/2026-09-13-sim427-build-plan.md §5)
     the lane grades production: the pitching change as a draw, the real pen,
-    the manager weight and the reliever weights at their FITTED values."""
+    the manager weight and the reliever weights. The two POWERS read 1 since
+    the owner ruling of 2026-09-16 (every similarity power is 1 until the sweep
+    fits them together; the manager weight was fitted at 4, reliever stuff was
+    OFF at 0); the bandwidths and mismatch weights keep their fitted values."""
     from tests.acceptance.conftest import PRODUCTION_FLAGS
 
     assert PRODUCTION_FLAGS["SIM_MANAGER_DRAW"] == "1"
     assert PRODUCTION_FLAGS["SIM_BULLPEN_SOURCE"] == "box"
-    assert PRODUCTION_FLAGS["SIM_ACTOR_POWER_MANAGER_USAGE"] == "4"
+    assert PRODUCTION_FLAGS["SIM_ACTOR_POWER_MANAGER_USAGE"] == "1"
     for key, fitted in (
         ("SIM_RELIEF_ROLE_SIGMA", "0.1"),
-        ("SIM_RELIEF_PITCHER_POWER", "0"),
+        ("SIM_RELIEF_PITCHER_POWER", "1"),
         ("SIM_RELIEF_REST_SIGMA", "0.5"),
         ("SIM_RELIEF_PITCHED2D_OFF_WEIGHT", "0.25"),
         ("SIM_RELIEF_PITCHES3D_SIGMA", "10"),

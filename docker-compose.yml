@@ -195,12 +195,21 @@ services:
       # factor becomes its engine's composite score, looked up from the nightly
       # matrix and raised to a fitted power (SIM_ACTOR_POWER_<name>). OFF until
       # part F fits the powers and the lane certifies them.
-      SIM_ACTOR_POWER_BATTER:    "1.0"
-      SIM_ACTOR_POWER_FIELDER:   "1.2"
-      SIM_ACTOR_POWER_RUNNER_STEAL: "12"
-      SIM_ACTOR_POWER_RUNNER_ADV: "20"
-      SIM_ACTOR_POWER_CATCHER_THROWING: "2"
-      SIM_ACTOR_POWER_PITCHER_STEAL: "12"
+      # OWNER RULING 2026-09-16: EVERY similarity power is 1 until the
+      # comprehensive sweep of the tunable parameters fits them together
+      # (the fitted values they replace: fielder 1.2, steal-runner 12,
+      # advancement-runner 20, catcher-throwing 2, pitcher-steal 12, the
+      # split's pitcher 16 / 16 and batter 8, the fielding draw's batter 4,
+      # manager-usage 4; reliever stuff was OFF at 0). At power 1 the
+      # sampler skips np.power on every draw (the split's power-16 pass was
+      # 29% of an iteration), and the factors read nearly flat (the
+      # redesign's part F finding) — the sweep decides their strength.
+      SIM_ACTOR_POWER_BATTER:    "1"
+      SIM_ACTOR_POWER_FIELDER:   "1"
+      SIM_ACTOR_POWER_RUNNER_STEAL: "1"
+      SIM_ACTOR_POWER_RUNNER_ADV: "1"
+      SIM_ACTOR_POWER_CATCHER_THROWING: "1"
+      SIM_ACTOR_POWER_PITCHER_STEAL: "1"
       # SIM-523 part B (2026-09-08): the PITCH / PITCH-RESULT split — the
       # pitch draw picks the pitch thrown, the result draw picks what happens
       # to it (conditioned on the pitch through the pitch engine's metric;
@@ -215,10 +224,12 @@ services:
       # The 2025 hold-out has NOT run. The strikeout probabilities sit 6.5
       # points low with the split on (the SIM-527 shortfall as a bias) — the
       # calibration layer's first job (the SIM-548 joint-fit plan, §7).
+      # The powers are 1 since 2026-09-16 (the owner ruling above; the fit
+      # read 16 / 16 / 8 and the sweep re-fits them).
       SIM_PITCH_RESULT_SPLIT:    "1"
-      SIM_PITCH_PITCHER_POWER:   "16"
-      SIM_RESULT_PITCHER_POWER:  "16"
-      SIM_RESULT_BATTER_POWER:   "8"
+      SIM_PITCH_PITCHER_POWER:   "1"
+      SIM_RESULT_PITCHER_POWER:  "1"
+      SIM_RESULT_BATTER_POWER:   "1"
       # SIM-523 part F: the runner kernels' bandwidths in the steal and the
       # advancement draws (empty = the shared sigma 1.0).
       # The born batted ball's kernel on the fielding draw (0 = off).
@@ -229,7 +240,7 @@ services:
       SIM_BB_CLASS_FILTER:       "1"
       # SIM-523 (the kernel retirement): the fielding draw's batter factor is
       # the batter engine's score raised to this power (with the matrices on).
-      SIM_BB_BATTER_POWER:       "4"
+      SIM_BB_BATTER_POWER:       "1"
       SIM_PARK_WALL_ZONE_ONLY:   "1"
       SIM_WALL_ZONE_DISTANCE:    "300"
       # The fence stage (the born ball against the live park's fence) and its
@@ -257,7 +268,7 @@ services:
       # mismatch weight; 1.0 = off). FITTED and FLIPPED 2026-09-13 (the plan's
       # 4f stamp): manager power 4, role 0.1, rest 0.5, pitched-in-2-days
       # 0.25, pitches-in-3-days 10; hand and stuff stay off (no read needed them).
-      SIM_ACTOR_POWER_MANAGER_USAGE: "4"
+      SIM_ACTOR_POWER_MANAGER_USAGE: "1"
       # SIM-427: where the pen comes from. "box" = the MLB box's per-game
       # listing (raw.game_bullpen, minus the rotation and today's starter,
       # with each arm's rest and recent usage; production since the flip);
@@ -265,7 +276,7 @@ services:
       # fallback for a game with no listing — logged).
       SIM_BULLPEN_SOURCE:            "box"
       SIM_RELIEF_ROLE_SIGMA:         "0.1"
-      SIM_RELIEF_PITCHER_POWER:      "0"
+      SIM_RELIEF_PITCHER_POWER:      "1"
       SIM_RELIEF_REST_SIGMA:         "0.5"
       SIM_RELIEF_PITCHED2D_OFF_WEIGHT: "0.25"
       SIM_RELIEF_PITCHES3D_SIGMA:    "10"

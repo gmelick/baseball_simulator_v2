@@ -105,14 +105,20 @@ PRODUCTION_FLAGS: dict[str, str] = {
     # SIM-523 (2026-09-09, the kernel retirement): the actor SCORE MATRICES are
     # the only actor factors, at the fitted powers below (a power of 0 turns
     # that actor's factor off). The 45 × 130 lane certified them 2026-09-09.
-    "SIM_ACTOR_POWER_BATTER": os.environ.get("SIM523_LANE_ACTOR_POWER_BATTER", "1.0"),
-    "SIM_ACTOR_POWER_FIELDER": os.environ.get("SIM523_LANE_ACTOR_POWER_FIELDER", "1.2"),
-    "SIM_ACTOR_POWER_RUNNER_STEAL": os.environ.get("SIM523_LANE_ACTOR_POWER_RUNNER_STEAL", "12"),
-    "SIM_ACTOR_POWER_RUNNER_ADV": os.environ.get("SIM523_LANE_ACTOR_POWER_RUNNER_ADV", "20"),
+    # OWNER RULING 2026-09-16: every similarity power is 1 until the sweep of the
+    # tunable parameters fits them together (the fitted values they replace:
+    # fielder 1.2, steal-runner 12, advancement-runner 20, catcher-throwing 2,
+    # pitcher-steal 12; the split's 16 / 16 / 8; the fielding draw's batter 4;
+    # manager-usage 4; reliever stuff ON at 1, was OFF at 0). The compose file
+    # carries the same values (the parity tests hold them together).
+    "SIM_ACTOR_POWER_BATTER": os.environ.get("SIM523_LANE_ACTOR_POWER_BATTER", "1"),
+    "SIM_ACTOR_POWER_FIELDER": os.environ.get("SIM523_LANE_ACTOR_POWER_FIELDER", "1"),
+    "SIM_ACTOR_POWER_RUNNER_STEAL": os.environ.get("SIM523_LANE_ACTOR_POWER_RUNNER_STEAL", "1"),
+    "SIM_ACTOR_POWER_RUNNER_ADV": os.environ.get("SIM523_LANE_ACTOR_POWER_RUNNER_ADV", "1"),
     "SIM_ACTOR_POWER_CATCHER_THROWING": os.environ.get(
-        "SIM523_LANE_ACTOR_POWER_CATCHER_THROWING", "2"
+        "SIM523_LANE_ACTOR_POWER_CATCHER_THROWING", "1"
     ),
-    "SIM_ACTOR_POWER_PITCHER_STEAL": os.environ.get("SIM523_LANE_ACTOR_POWER_PITCHER_STEAL", "12"),
+    "SIM_ACTOR_POWER_PITCHER_STEAL": os.environ.get("SIM523_LANE_ACTOR_POWER_PITCHER_STEAL", "1"),
     # SIM-523 part B (2026-09-08): the pitch / pitch-result split, fitted
     # pitcher 16 / 16, batter 8. Held OFF while the balanced lane read
     # strikeouts per plate appearance −2.4% (SIM-527); FLIPPED ON 2026-09-14 by
@@ -121,10 +127,10 @@ PRODUCTION_FLAGS: dict[str, str] = {
     # test holds them together). Set SIM523_LANE_RESULT_SPLIT=0 and the powers
     # to 1.0 on a lane run to measure the OFF arm.
     "SIM_PITCH_RESULT_SPLIT": os.environ.get("SIM523_LANE_RESULT_SPLIT", "1"),
-    "SIM_PITCH_PITCHER_POWER": os.environ.get("SIM523_LANE_PITCH_PITCHER_POWER", "16"),
+    "SIM_PITCH_PITCHER_POWER": os.environ.get("SIM523_LANE_PITCH_PITCHER_POWER", "1"),
     "SIM_RESULT_PITCH_SIGMA": os.environ.get("SIM523_LANE_RESULT_PITCH_SIGMA", "1.0"),
-    "SIM_RESULT_PITCHER_POWER": os.environ.get("SIM523_LANE_RESULT_PITCHER_POWER", "16"),
-    "SIM_RESULT_BATTER_POWER": os.environ.get("SIM523_LANE_RESULT_BATTER_POWER", "8"),
+    "SIM_RESULT_PITCHER_POWER": os.environ.get("SIM523_LANE_RESULT_PITCHER_POWER", "1"),
+    "SIM_RESULT_BATTER_POWER": os.environ.get("SIM523_LANE_RESULT_BATTER_POWER", "1"),
     "SIM_PITCH_BATTER_POWER": os.environ.get("SIM523_LANE_PITCH_BATTER_POWER", "1.0"),
     "SIM_RESULT_DENSITY_POWER": os.environ.get("SIM523_LANE_RESULT_DENSITY_POWER", "1.0"),
     "SIM_BB_BORN_SIGMA": os.environ.get("SIM523_LANE_BORN_SIGMA", "1.0"),
@@ -132,7 +138,7 @@ PRODUCTION_FLAGS: dict[str, str] = {
     # SIM-523 part C (2026-09-08): the fielding draw's class filter, the batter
     # power and the park wall-zone rule — fitted and certified 2026-09-09.
     "SIM_BB_CLASS_FILTER": os.environ.get("SIM523_LANE_CLASS_FILTER", "1"),
-    "SIM_BB_BATTER_POWER": os.environ.get("SIM523_LANE_BB_BATTER_POWER", "4"),
+    "SIM_BB_BATTER_POWER": os.environ.get("SIM523_LANE_BB_BATTER_POWER", "1"),
     "SIM_PARK_WALL_ZONE_ONLY": os.environ.get("SIM523_LANE_WALL_ZONE_ONLY", "1"),
     "SIM_WALL_ZONE_DISTANCE": os.environ.get("SIM523_LANE_WALL_ZONE_DISTANCE", "300"),
     "SIM_FENCE_STAGE": os.environ.get("SIM523_LANE_FENCE_STAGE", "1"),
@@ -148,11 +154,11 @@ PRODUCTION_FLAGS: dict[str, str] = {
     # (docs/audit/2026-09-13-sim427-build-plan.md, part 4f: power 4, role 0.1,
     # rest 0.5, pitched-in-2-days 0.25, pitches-in-3-days 10; hand and stuff
     # off); a lane run overrides one with its SIM427_LANE_* twin.
-    "SIM_ACTOR_POWER_MANAGER_USAGE": os.environ.get("SIM427_LANE_MANAGER_POWER", "4"),
+    "SIM_ACTOR_POWER_MANAGER_USAGE": os.environ.get("SIM427_LANE_MANAGER_POWER", "1"),
     # The pen source: 'box' (production since the flip) or 'synthetic'.
     "SIM_BULLPEN_SOURCE": os.environ.get("SIM427_LANE_BULLPEN_SOURCE", "box"),
     "SIM_RELIEF_ROLE_SIGMA": os.environ.get("SIM427_LANE_RELIEF_ROLE_SIGMA", "0.1"),
-    "SIM_RELIEF_PITCHER_POWER": os.environ.get("SIM427_LANE_RELIEF_PITCHER_POWER", "0"),
+    "SIM_RELIEF_PITCHER_POWER": os.environ.get("SIM427_LANE_RELIEF_PITCHER_POWER", "1"),
     "SIM_RELIEF_REST_SIGMA": os.environ.get("SIM427_LANE_RELIEF_REST_SIGMA", "0.5"),
     "SIM_RELIEF_PITCHED2D_OFF_WEIGHT": os.environ.get(
         "SIM427_LANE_RELIEF_PITCHED2D_OFF_WEIGHT", "0.25"

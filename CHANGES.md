@@ -1,3 +1,49 @@
+# Ruling — every similarity-score power is 1 until the comprehensive sweep fits them together; production recreated at the new values — 2026-09-16
+
+**The ruling (owner, 2026-09-16).** Every similarity-score POWER — the exponent a draw applies
+to an actor's 0-to-1 similarity score — is 1 in production from today, and stays 1 until the
+comprehensive sweep of the tunable parameters (the designed experiment) fits them together.
+The values the 1s replace, kept as the sweep's starting points: fielder 1.2; steal-runner 12,
+pitcher-steal 12, catcher-throwing 2; advancement-runner 20; the pitch / pitch-result split's
+pitcher 16 / 16 and batter 8; the fielding draw's batter 4; manager-usage 4. Reliever "stuff"
+(the entering arm's pitcher similarity, `SIM_RELIEF_PITCHER_POWER`) was OFF at 0 and is now ON
+at 1 — my reading of "all to 1" under the standing rule that every factor lands ON; the owner
+can veto that one line. Every bandwidth and mismatch weight keeps its fitted value.
+
+**Why.** (1) The per-change accuracy run cannot resolve the small effects most powers carry
+(the entry below), so the powers are fitted once, together. (2) Speed: the sampler's power
+helpers (`_repower`, `_repower_neutral`, `_raise_neutral`, the matrix gathers) skip
+`np.power` at 1.0, and the split's power-16 pass over the whole pool was 29% of an iteration
+(the 2026-09-15 profile). Measured: the same ten-game × 50-iteration smoke ran in 9 min 15 s wall against 16 min 5 s
+at the fitted powers (both include the container start and the engine load) — about 1.8×
+per iteration; the live `/simulate` at 100 iterations reads 24.7 / 26.7 / 27.1 s warm (32.8 s
+on the first call after the boot) against 31–35 s before, so the 30-second criterion now holds
+with margin.
+
+**The cost the owner accepted.** At power 1 the identity factors read nearly flat (the
+redesign's part F finding, 2026-09-09). The split's strikeout gain at 16 / 16 / 8 (the starter
+strikeout market −0.0155 Brier on 250 games of 2024 — the one effect the accuracy comparison
+could see) is given back until the sweep. The strikeout market's blindness to who is pitching
+returns with it.
+
+**What changed.** `docker-compose.yml` (the twelve power lines, with the ruling and the
+replaced values in the comment); `tests/acceptance/conftest.py` `PRODUCTION_FLAGS` (the same
+twelve; the three parity tests hold the compose file and the lane together — all 51 arithmetic
+tests pass); the SIM-427 lane test now expects manager-usage 1 and reliever stuff 1; the cheat
+sheet (every draw row, every engine heading, and the summary table, which now carries the 1 and
+the fitted value side by side); CLAUDE.md §2b; the app recreated with `docker compose up -d app`
+(a restart does not re-read the compose environment) — its environment reads 1 on all twelve.
+
+**The cheap gates.** Ruff, format, the affected unit tests and all 51 acceptance-arithmetic
+tests pass. The ten-game × 50 smoke at power 1 (the same games as this morning's smoke at the
+fitted powers): strikeouts −0.4% against the pool (−3.0% before), walks −0.1%, singles +0.6%,
+doubles +0.6%, homers −5.0%, the double-play rate −0.3%, runs 4.34 against the 4.45 centre
+(4.55 before), the safe share of steals −1.0%. The steal channels moved the other way: attempts
+at second −12.6% (627 against 717 expected; +8.3% on these games at power 12), attempts at
+third −23.9% (74 against 97; −27.9% before). Not a collapse; the sweep decides the steal
+powers. Every verdict is UNDERPOWERED at 500 game-sims by design.
+---
+
 # Ruling — every change lands ON at its best-known default, no per-change accuracy run; the lead-distance run book RAN on the live data (Alembic 0026, five boards, DuckDB 0028 + 0029, the recompute, the calibration fit, the three matrices, the app restarted) — SIM-531, 2026-09-16
 
 **The ruling (owner, 2026-09-16; the architecture rule's third clause, CLAUDE.md §2b).** No

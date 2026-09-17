@@ -317,7 +317,13 @@ detail is `CHANGES.md`. What production runs today: every actor factor is its en
 0-to-1 score matrix (`actor_sim/` in the bundle, `--what actors_sim` in the nightly `all`;
 the concentration report gates a strict build at a 3.0 own-staff ratio) raised to its fitted
 power — batter 1.0, fielder 1.2, steal-runner 12, advancement-runner 20, catcher-throwing 2,
-pitcher-steal 12 (`SIM_ACTOR_POWER_<NAME>`; 0 = off); the runner engines score thin profiles
+pitcher-steal 12 (`SIM_ACTOR_POWER_<NAME>`; 0 = off) **— EVERY similarity power is 1 since
+2026-09-16 (owner ruling: the powers are fitted together in the comprehensive sweep of the
+tunable parameters; the fitted values in this paragraph — these, the split's 16 / 16 / 8, the
+fielding draw's batter 4, manager-usage 4 — are its starting points; reliever stuff joined at
+1, it was OFF; the sampler skips the power step at 1 — the live n=100 `/simulate` reads 25–27 s
+warm, was 31–35 s — and at 1 the factors read nearly flat, the part F finding). The cheat
+sheet's summary table carries both columns.**; the runner engines score thin profiles
 so the matrices cover the pools; the actor bell-curve kernels and their bandwidths are
 DELETED. The fielding draw filters the cell by the born ball's class (`SIM_BB_CLASS_FILTER`),
 weights by the born ball's kernel (`SIM_BB_BORN_SIGMA` 1.0), the batter matrix
