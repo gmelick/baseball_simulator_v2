@@ -378,6 +378,55 @@ CREATE TABLE raw.savant_first_base_receiving (
     PRIMARY KEY (player_id, season)
 );
 
+-- SIM-531 (Alembic 0026): the two running-game boards, pulled at n=1 (every
+-- player with one chance; owner ruling 2026-09-16). One shape, two sides: the
+-- runner's lead off the bag and his jump on the delivery (raw.savant_basestealing
+-- -> derived.baserunner_steal_metrics), and the lead and the jump the pitcher
+-- allows (raw.savant_pitcher_running_game -> derived.pitcher_steal_metrics).
+-- n_init is the number of pitches on which a steal was possible — the count the
+-- lead was measured over. The *_sbx leads (attempted pitches only) are stored,
+-- not read: they repeat year to year at 0.29-0.32.
+CREATE TABLE raw.savant_basestealing (
+    player_id                   INTEGER     NOT NULL REFERENCES raw.players(player_id),
+    season                      INTEGER     NOT NULL,
+    n_init                      INTEGER,    -- pitches on which the runner could have gone
+    rate_sbx                    FLOAT,      -- (n_sb + n_cs) / n_init
+    n_sb                        INTEGER,
+    n_cs                        INTEGER,
+    n_pk                        INTEGER,    -- picked off
+    n_bk                        INTEGER,    -- balks drawn
+    runs_stolen_on_running_act  FLOAT,      -- the runner's run value
+    r_primary_lead              FLOAT,      -- feet, before the pitch
+    r_secondary_lead            FLOAT,      -- feet, after the pitcher's first move
+    r_sec_minus_prim_lead       FLOAT,      -- feet, the jump
+    r_primary_lead_sbx          FLOAT,
+    r_secondary_lead_sbx        FLOAT,
+    r_sec_minus_prim_lead_sbx   FLOAT,
+    scraped_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (player_id, season)
+);
+
+CREATE TABLE raw.savant_pitcher_running_game (
+    player_id                       INTEGER     NOT NULL REFERENCES raw.players(player_id),
+    season                          INTEGER     NOT NULL,
+    n_init                          INTEGER,    -- pitches with a runner who could go
+    rate_sbx                        FLOAT,
+    n_sb                            INTEGER,
+    n_cs                            INTEGER,
+    n_pk                            INTEGER,
+    n_bk                            INTEGER,
+    runs_prevented_on_running_attr  FLOAT,      -- the pitcher's run value
+    n_pitcher_cs_aa                 FLOAT,      -- caught stealings above average
+    r_primary_lead                  FLOAT,      -- feet, the lead he allows
+    r_secondary_lead                FLOAT,
+    r_sec_minus_prim_lead           FLOAT,      -- feet, the jump he gives up
+    r_primary_lead_sbx              FLOAT,
+    r_secondary_lead_sbx            FLOAT,
+    r_sec_minus_prim_lead_sbx       FLOAT,
+    scraped_at                      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (player_id, season)
+);
+
 CREATE INDEX idx_savant_bat_tracking_season         ON raw.savant_bat_tracking(season);
 CREATE INDEX idx_savant_swing_path_season           ON raw.savant_swing_path(season);
 CREATE INDEX idx_savant_batting_stance_season       ON raw.savant_batting_stance(season);
@@ -386,6 +435,8 @@ CREATE INDEX idx_savant_baserunning_season          ON raw.savant_baserunning(se
 CREATE INDEX idx_savant_poptime_season              ON raw.savant_poptime(season);
 CREATE INDEX idx_savant_catcher_throwing_season     ON raw.savant_catcher_throwing(season);
 CREATE INDEX idx_savant_first_base_receiving_season ON raw.savant_first_base_receiving(season);
+CREATE INDEX idx_savant_basestealing_season         ON raw.savant_basestealing(season);
+CREATE INDEX idx_savant_pitcher_running_game_season ON raw.savant_pitcher_running_game(season);
 
 -- =============================================================================
 -- RAW.PITCHES

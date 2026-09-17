@@ -60,8 +60,8 @@ The API the frontend consumes (`api/routes/`, contracts in `api/schemas.py`, num
 - `WS /ws/games/{game_pk}` — live channel *(untyped today — SIM-385 schematizes it)*
 - `/api/odds/*`, `/api/similarity/*`, `/metrics`, `/health`, `/ready`
 
-Backed by: a persistent `ProcessPool` runner (`simulation/batch_runner.py`), Redis caching, DuckDB v10 /
-Alembic 0014 persistence (`db/sim_store.py`), an 11-engine build (`api/state.py`), auth/rate-limit/CORS
+Backed by: a persistent `ProcessPool` runner (`simulation/batch_runner.py`), Redis caching, DuckDB v29 /
+Alembic 0026 persistence (`db/sim_store.py`), an 11-engine build (`api/state.py`), auth/rate-limit/CORS
 (`api/auth.py`), nginx + Prometheus/Grafana (`deploy/`). The sim loop (`simulation/sim_loop.py`) and the 11
 similarity engines (`similarity/engines/`) are complete and regression-gated.
 

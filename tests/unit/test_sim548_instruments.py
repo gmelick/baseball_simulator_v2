@@ -189,7 +189,14 @@ def test_build_arms_names_levels_and_baseline_repeats():
     arms = design.build_arms(
         {"A": ["1", "2"], "B": ["3", "4"]}, baseline_repeats=2, base_seed=7, iterations=100
     )
-    assert [a["name"] for a in arms] == ["run01", "run02", "run03", "run04", "baseline1", "baseline2"]
+    assert [a["name"] for a in arms] == [
+        "run01",
+        "run02",
+        "run03",
+        "run04",
+        "baseline1",
+        "baseline2",
+    ]
     assert arms[0]["env"] == {"A": "1", "B": "3"}  # (-1, -1) = production levels
     assert arms[3]["env"] == {"A": "2", "B": "4"}  # (+1, +1) = the candidates
     assert arms[4]["env"] == {"A": "1", "B": "3"} and arms[4]["kind"] == "baseline"

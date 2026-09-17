@@ -1,3 +1,300 @@
+# Ruling — every change lands ON at its best-known default, no per-change accuracy run; the lead-distance run book RAN on the live data (Alembic 0026, five boards, DuckDB 0028 + 0029, the recompute, the calibration fit, the three matrices, the app restarted) — SIM-531, 2026-09-16
+
+**The ruling (owner, 2026-09-16; the architecture rule's third clause, CLAUDE.md §2b).** No
+change waits on a per-change accuracy run. The paired accuracy comparison on 250 games
+resolves only large effects: its `min n` column says the strikeout market needs 83,000
+pitcher-games to resolve a 0.0005 Brier effect (the squared error of a probability), and
+250 games give 482; every market but triples read `res: no` in the fatigue read. Three hours
+per change bought a coin flip on the small ones. From now on every change lands ON at its
+best-known default; the per-change gates are the unit and regression lanes plus a short sim
+smoke of the affected channels; the weights are fitted TOGETHER, once, when the owner calls
+the model final — one designed experiment over every factor (`scripts/sim548_design.py`,
+16–20 arms, about three days of unattended compute). The run book below dropped its two
+accuracy arms (plan §8 steps 0 and 8c) under that ruling; the plan says so at the top of §8.
+
+**The run book, as it ran (all on 2026-09-16, the app stopped from step 4 to step 7).**
+
+1. `alembic upgrade head`: 0025 → 0026 (`raw.savant_basestealing`,
+   `raw.savant_pitcher_running_game`).
+2. The five boards, seasons 2023–2026, 9,525 rows in four minutes: basestealing
+   635 / 638 / 655 / 630; pitcher running game 851 / 849 / 869 / 832; baserunning
+   633 / 623 / 644 / 621; catcher throwing 99 / 94 / 101 / 105; first-base receiving
+   168 / 152 / 172 / 154. Every 2024 count equals the plan's `n=1` expectation, so the
+   smallest minimum was honoured on every board. 2026 dropped 8 / 9 / 12 / 2 / 3 rows for
+   players not yet in `raw.players`.
+3. `scripts/sim531_runner_recompute.py --seasons 2023 2024 2025 2026`, 19 seconds: 0028
+   (five statements) then 0029 (thirteen) applied; the three runner tables and the league
+   averages rebuilt; every verify check passed. The steal driver now carries every runner
+   with a chance: 646 / 644 / 663 / 632 rows for 2023–2026, of them 213 / 184 / 184 / 195
+   who never went (0 attempts, NULL success), 635 / 638 / 653 / 625 with a measured lead.
+   Pitchers 856 / 819 with a lead allowed in 2025 / 2026; advancement runners 615 / 615 /
+   630 / 603 with the Savant expectation. The 2017–2022 rows keep the old attempt-only
+   shape (outside the pool window; no Savant board covers them). The league rows the
+   shrinkage needs exist for the first time: `baserunner_steal` 2024 lead 12.09 ft, jump
+   3.85 ft; `pitcher_steal` 2024 lead allowed 11.63 ft, jump allowed 3.70 ft; the
+   `baserunner` row's attempt rate above expectation 0.030. The three named players match
+   the 2024 CSV value for value.
+4. `make calibrate` (every season, as before): `sigma_baserunner_steal_lead` 0.9836 over
+   the 481 qualified runner-seasons with a lead; `sigma_pitcher_steal_hold` 0.9897 over
+   2,390 pitcher-seasons; the aggression sigma 1.0478 (unchanged) with SEVEN reliability
+   weights now, the new feature's the largest (0.565 against 0.26 / 0.20 / 0.10 / 0.10 /
+   0.10 / 0.26). The fit DROPPED the win-probability reliability curve again (the SIM-427
+   trap); it was written back from `/data/prop_validation.json` and equals the pre-fit
+   file's curve exactly. The pre-fit file is `/data/calibration.json.bak_20260916_pre_sim531`.
+   The two fitted sigmas are copied into the module defaults (`RBF_SIGMA_LEAD`,
+   `RBF_SIGMA_HOLD`), because the matrix builder does not read the calibration file.
+5. The three matrices: `runner_steal` 2,585 × 2,585 (was about 1,000 a season's worth of
+   attempt-only rows), `runner_adv` 2,486 × 2,486, `pitcher_steal` 2,390 × 2,390; the
+   manifest updated. The concentration report covers only the two actors whose rows carry
+   a staff (catchers, fielders) — the plan expected it to grade the runner matrices, and it
+   never did; re-run at the fitted powers it reads PASS on all nine (worst p90 own-staff
+   ratio 2.24 against the strict 3.0).
+6. The app restarted; the boot log reads `Loaded calibration report`, `applied calibration
+   to BaserunnerStealSimilarityEngine (sigma_tendency=0.6985, sigma_success=0.9930,
+   sigma_lead=0.9836)`, `PitcherStealSimilarityEngine (sigma_outcome=0.8927,
+   sigma_hold=0.9897)`, `BaserunnerSimilarityEngine (… sigma_agg=1.0478 …)`, the
+   win-probability map `reliability-curve(2026..2017)`, `Application startup complete`.
+
+**A crash fixed on the way (the SIM-445 class, reproduced).** The steal-runner matrix build
+segfaulted three times out of three inside `engine_artifacts._key_of`, which joined a
+GENERATOR EXPRESSION of `str(getattr(result, a))` over 6.7 million query results. A
+standalone reproduction crashed after about 1.3 million evaluations of that generator
+expression; the same work as a list comprehension, or as plain concatenation, completed
+all 6.7 million. `_key_of` now uses the list comprehension. The unit lane's recurring crash
+sits on the same shape (`simulation/filter_cells.py:85`, `sum(1 for edge in …)`), so this
+is the first reproducible lead on the crash class that forced the ETL transport swap; a
+sweep of the hot paths is proposed as a separate task, not done here.
+
+**Two things found, not this ticket's.** (1) The live app has booted with 10 of 11 engines
+since at least the morning of 2026-09-16: the batter engine refuses to build because
+`derived.batter_season_metrics` carries two cutoff dates (2026-09-10 and 2026-09-11). The
+simulator is unaffected at draw time (it reads the batter matrix in the bundle), the
+Similarity Explorer's batter page and a batter matrix rebuild are. Proposed as a separate
+task. (2) The app had been DOWN since 17:29 on 2026-09-16: the dev server's file watcher
+reloaded on this session's engine edits and the reload died in
+`pitcher_similarity.shrink` on a corrupted object (`'float' * 'code'`, the crash class
+again, in a file this ticket did not touch). The restart in step 6 cleared it.
+
+**The cheap gates.** Ruff, `ruff format --check`, mypy and the affected unit tests pass; the
+full unit + regression lanes read 3,959 passed / 2 skipped in the container before the two
+sigma copies and the `_key_of` rewrite (the affected tests were re-run after). The sim smoke
+ran twice through the acceptance lane at its smoke size, 500 game-sims each — ten games ×
+50 iterations, then twenty games × 25 — on the rebuilt bundle with every production flag.
+Every verdict is UNDERPOWERED at that size by design; the reads are the point. Nothing
+collapsed: runs 4.55 and 4.62 against the 4.45 centre (inside the band), strikeouts −3.0% /
+−1.0%, walks −1.3% / −0.6%, singles / doubles / homers within 2%, the double-play rate −6% /
+−5%, the safe share of steals at second +3.0% / +0.9%. **The steal channels moved.** Over
+the two smokes together (20 distinct games, 1,000 game-sims): steal attempts at second
+1,529 / 66,893 chances = 2.29% against the pool's 2.14% (+6.8%, 2.6 standard errors);
+steal attempts at THIRD 154 / 46,583 = 0.33% against 0.44% (−24.9%, 3.6 standard errors;
+the last certified lane, 45 × 130 before this change, read −12.3%, inside the 15% floor).
+That is not a collapse — steals of third are three per hundred team-games and the run
+environment did not move — but it is the one channel outside its floor, so the record
+names it for the designed experiment. The mechanism is the change itself: before this
+ticket a pool row whose runner had no profile (every runner who never went) carried a
+NEUTRAL weight of 1.0 in the steal draw, which at power 12 outweighed most scored rows;
+every such runner now has a profile and his rows are scored like everyone else's. Whether
+the new composition is closer to the pool's own conditionals is the fit probe's question
+(hours) or the experiment's; neither ran, by the ruling. Three lane tests fail for a reason
+outside the model: they read `/app/docker-compose.yml`, which the documented invocation
+does not mount (mount it and all 51 arithmetic tests pass).
+**Not done.** The paired accuracy read — by the ruling above, it folds into the designed
+experiment. The plan's §8 text is kept for that experiment's reader. The SIM-531 row stays
+in `BACKLOG.xlsx` until the owner closes it on this record.
+
+---
+
+# Build — lead distance in the stolen-base and baserunning models: the CODE LANDED and was REVIEWED (migrations 0026 + 0029, the two Savant boards, the three profile joins, the three models, the calibrator, the recompute script, 52 tests); the data run book is NEXT — SIM-531, 2026-09-16
+
+**What landed** (the plan's §5 file by file, `docs/audit/2026-09-16-sim531-lead-distance-build-plan.md`).
+Every gate is green: ruff, mypy, and the unit + regression lanes in the container. Nothing
+has run against the live data yet — see "the run book" below.
+
+- **Two Savant boards** (`pipeline/etl/savant_boards.py`). `basestealing` is the runner's
+  side: his lead off the bag before the pitch, his secondary lead after the pitcher's first
+  move, and the jump (their difference), in feet; 638 runners in 2024. `pitcher_running_game`
+  is the same three as what the pitcher ALLOWS; 849 pitchers. Both pull at `n=1` (every
+  player with one chance); the CSV headers were confirmed live on 2026-09-16.
+  `RUNNING_BOARDS` groups them with `baserunning`, and `--boards running` loads all three.
+  The four new count columns coerce to whole numbers.
+- **Alembic 0026** creates `raw.savant_basestealing` and `raw.savant_pitcher_running_game`
+  (the 0019 shape: a foreign key to `raw.players`, a season index, a clean downgrade). The
+  Postgres reference DDL mirrors both.
+- **DuckDB 0029 (schema v29)** adds thirteen columns. The steal runner gets
+  `lead_primary_ft`, `lead_secondary_ft`, `lead_jump_ft`, `savant_steal_opps` and
+  `sample_second_base_opps`. The pitcher gets `lead_allowed_primary_ft`,
+  `lead_allowed_secondary_ft`, `lead_allowed_jump_ft`, `savant_hold_opps`. The advancement
+  runner gets `xb_opportunities`, `xb_attempt_rate`, `xb_expected_attempt_rate`,
+  `xb_attempt_rate_above_expected` — appended LAST in `XB_COLUMN_ORDER`, because that
+  table's INSERT is positional; a test holds the canonical DDL's tail to
+  `BASERUNNER_TAIL_COLUMNS`. The canonical DDL mirrors all thirteen.
+- **The profile builders** (`pipeline/batch/player_profile_computor.py`). The steal-runner
+  builder joins the Basestealing board. Its DRIVER is now every runner who HAD a chance (a
+  plate appearance begun on first or second), not only the runners who went: a runner who
+  never went has attempt rate 0.0 and a NULL success rate, and the row carries his
+  second-base chances too. The pitcher builder joins the Pitcher Running Game board. The
+  advancement builder joins the baserunning board (the runner's own side) and writes the
+  attempt rate above expectation. Under a backtest cutoff every Savant join season-shifts
+  (the SIM-537 rule); a live build does not. The league writer adds
+  `xb_attempt_rate_above_expected` to the `baserunner` row and writes the
+  `baserunner_steal` and `pitcher_steal` rows — the shrinkage target both engines have
+  always read, which never existed (plan §3, Finding 3). It probes for the 0029 columns and
+  the two tables, so an older database still gets its averages. The new tests execute all
+  three builders end to end on a fake `pg` catalog.
+- **The steal-runner model** (`baserunner_steal_similarity.py`). Tendency 0.45 / Lead 0.45 /
+  Success 0.10 (the owner's decision of 2026-09-16). `LEAD_FEATURES` carry their measured
+  repeats (0.735 / 0.823). `RBF_SIGMA_LEAD` is 1.0 until `make calibrate` fits it. NULL loads
+  as NaN, never 0.0; `has_lead` is set at load. A pair missing the lead on either side
+  scores over tendency and success renormalized, and its `lead_score` is None. `score_all`
+  and `query_pair` share one arithmetic (a test holds them equal). The confidence basis is
+  the runner's CHANCES — first-base plus second-base plate-appearance starts, never below
+  his attempts — over prior 50 (`EB_N_PRIOR_OPPS`), so no profile the driver admits reads
+  confidence 0. The tendency and the lead shrink on that basis; the success rate shrinks on
+  attempts (prior 20). An unmeasured lead is not shrunk at all: its NaN stays out of the
+  normalizer's statistics.
+- **The pitcher-hold model** (`pitcher_steal_similarity.py`). Outcome 0.35 / Hold 0.65;
+  `HOLD_FEATURES` at 0.43 / 0.895; `RBF_SIGMA_HOLD` 1.0; the same missing-value rule (a pair
+  missing the hold scores on the outcome alone); both groups shrink on baserunner events,
+  and an unmeasured hold is not shrunk.
+- **The advancement model** (`baserunner_similarity.py`). `xb_attempt_rate_above_expected`
+  joins the aggression group at 0.76. THIS feature loads NULL as NaN, and the NaN survives
+  the shrinkage whatever the league row carries. The kernel is MASKED: a feature missing on
+  either side drops out of the distance AND its normalisation, so a half-measured pair is
+  neither inflated (the old `nan_to_num` read a missing feature as an exact match) nor
+  penalised, and a fully-measured pair gets exactly the number it got before; the
+  normalizer keeps NaN for that reason. `apply_calibration` REFUSES a reliability-weight
+  vector of the wrong length: the live `/data/calibration.json` was fitted with six
+  aggression weights, and applying it to seven features would have failed on the first
+  query. It keeps the module weights until the report is refitted.
+- **The calibrator** (`similarity_calibration.py`). `sigma_baserunner_steal_lead` and
+  `sigma_pitcher_steal_hold`, each fitted over the rows that carry both features (the
+  SIM-530 measured-rows rule; the sentinel 0.0 with none). The aggression sigma and its
+  weights are fitted over the measured rows, and the weights are written only when the fit
+  covered all seven features. Every fit probes for its columns.
+- **The Similarity Explorer** (`api/routes/similarity_explorer.py`). The two adapters list
+  the Lead and Hold sub-scores; a sub-score the pair could not score is omitted from the row.
+- **The recompute script** (`scripts/sim531_runner_recompute.py`, the SIM-427 pattern). It
+  applies 0028 and then 0029 — the live DuckDB had never applied 0028 (no `asof_date` on the
+  five tables, checked 2026-09-16), and the positional table needs `asof_date` before the
+  four new columns — rebuilds the three runner tables and the league averages for the
+  seasons, and verifies: the baserunner tail order, the rows and the Savant coverage per
+  season (a completed season from 2023 must carry at least 550 / 700 / 500 rows with a
+  Savant figure — a lost `n=1` falls back to 432 / 496 / 305), the zero-attempt rows, no
+  row without a chance, one cutoff per table, the two league rows, and three named players
+  value for value against the 2024 CSV. It refuses with a plain message when the app holds
+  the DuckDB lock.
+- **Tests.** `tests/unit/test_sim531_lead_distance.py` (52). `test_ml_engines_sim066_071.py`
+  (the outcome-is-sole-weight test became the 0.35 / 0.65 sum). The `test_sim432_…` and
+  `test_sim506_…` fixtures gained the new column shapes. `test_sim_store.py` pins 29.
+- **Docs.** The cheat sheet's three model sections (marked "landed in code; production's
+  matrices predate it until the run book runs") and its arm-block line (now naming the
+  SIM-550 defect); `similarity.md`'s three engine sections; a new `pipeline-betting-db.md`
+  section for the Savant loader with the per-board minimums.
+
+**The adversarial review (59 agents: five lenses, three refuters per finding) confirmed
+five defects and four prose errors; all are fixed above.** The defects: (1) a runner whose
+chances were all on second, or whose only attempts were of third or home, read confidence
+0 on a first-base-only basis — a zero score against every row, an all-zero matrix row, a
+steal draw with no weight — the exact trap plan §3 Finding 2 set out to close; the basis
+is now his chances, and the row carries `sample_second_base_opps`. (2) The shrinkage
+filled every unmeasured lead and hold with the league mean BEFORE the normalizer was
+fitted, which parked those runners at the exact mean, deflated the spread by a quarter and
+sharpened the kernel past the fitted bandwidth; an unmeasured group is no longer shrunk.
+(3) The advancement feature's NaN was filled with the league mean whenever the league row
+carried the key — every in-window season after the recompute — so the masked kernel never
+ran in production; the NaN now survives. (4) The three calibrator tests could not tell a
+measured-rows fit from a fit over every row; they now compare against the measured subset
+and hold the sigma still when unmeasured rows are added. (5) The run book's paired grade
+is cross-bundle by nature (the matrices and the calibration file both change between the
+arms), so `sim518_pair_accuracy.py` needs `--force`; the plan and the script say so. The
+prose: the `savant_boards.py` docstring said the baserunning board rejects `year=` — it
+IGNORES it and serves the current season (633 rows stamped 2026 for `year=2024`); the
+cheat sheet stated the recompute as a fact of production; `n_cs` was already an integer
+target; the WORKFLOW.md stamp. Two findings were left as the plan wrote them and are
+flagged for the owner: the `baserunner_steal` league row averages only runners with ten or
+more attempts (plan §5.2), so a thin runner's tendency shrinks toward the frequent
+stealers' rate, not the population's; and a nightly profile rebuild that fires before
+run-book steps 2 and 4 fails loudly on the missing tables and the wider positional insert.
+
+**Two judgment calls inside the plan's intent.** (1) The tendency group shrinks on the
+runner's chances like the lead (an attempts-based shrink would replace a non-runner's
+measured 0.0 with the league mean, the opposite of the plan's aim); the plan named only
+the confidence basis and the lead's. (2) The plan's three "season-shift" builder tests
+live in the new SIM-531 test file, next to the executed-builder tests that prove the same
+thing on a real DuckDB.
+
+**The DuckDB version prose, everywhere (the owner's ask of 2026-09-16).** CLAUDE.md,
+WORKFLOW.md, agent_team.md and the Phase-6 handoff still said "v13" (the file read 28
+before this ticket, 29 after it). Every current-state citation now reads v29 and the
+Alembic head 0026, and a new guard, `tests/unit/test_docs_duckdb_version.py`, holds each
+of them to the version file and the newest migration (the pattern of
+`test_docs_alembic_head.py`). The historical citations ("migration 0023 (schema v23)")
+were left as history. One pre-existing format failure
+(`tests/unit/test_sim548_instruments.py`, committed in 5f6a0ef) was reformatted so
+`ruff format --check` passes again.
+
+**The run book (plan §8) — NOT run.** Step 0 (the OFF accuracy arm on today's bundle,
+hours). Step 2 (`alembic upgrade head` → 0026). Step 3 (load the two new boards and re-load
+the three whose minimum was lifted: `python -m pipeline.etl.savant_loader --boards running
+catcher_throwing first_base_receiving --seasons 2023 2024 2025 2026`). Step 4 (stop the
+app; `scripts/sim531_runner_recompute.py`, which applies 0028 then 0029). Step 5
+(`make calibrate`, write the win-probability curve back, copy the two sigmas into the
+module defaults). Step 6 (the three matrices + the concentration report). Step 7 (start;
+the boot log). Step 8 (the power scan, the fit probe, the ON arm + `sim518_pair_accuracy.py
+--force`). The ticket closes on the paired accuracy read, not on this entry. Until step 5
+runs, production's `/data/calibration.json` carries six aggression weights and the engine
+keeps its module weights (logged at boot). No profile rebuild may run between now and
+steps 2 + 4: the builders name the new tables and columns.
+
+---
+
+# Plan — the lead-distance design APPROVED (SIM-531); every Savant pull at its smallest minimum (owner ruling); the outfield arm-block defect FILED (SIM-550, P2) — 2026-09-16
+
+**The plan.** `docs/audit/2026-09-16-sim531-lead-distance-build-plan.md` (page:
+https://claude.ai/artifact/RdSK6WUptRHqNVwux17p9z) designs SIM-531: the runner's lead
+off the bag and his jump on the delivery, the pitcher's lead and jump allowed, and the
+extra-base attempt rate above a situational expectation, as new feature groups in the
+steal-runner, pitcher-hold and advancement-runner models. The owner took all four
+recommendations the same day: the measured weights (steal runner Tendency 0.45 / Lead
+0.45 / Success 0.10; pitcher Outcome 0.35 / Hold 0.65), a steal profile for every runner
+with a chance with the confidence basis moved to first-base opportunities, and the paired
+accuracy comparison on 250 games of 2024 as the grade. Nothing is built yet.
+
+**Owner ruling: every Savant pull uses the smallest minimum the endpoint honours.**
+Probed live on 2024: `n=1` lifts the run-value boards (basestealing 432 → 638 runners,
+pitcher running game 496 → 849, baserunning 305 → 623), catcher throwing `n=1` (66 → 94),
+first-base receiving `min=1` (42 → 152); the bat-tracking family, stance, pop time and
+sprint speed were already lifted; arm strength has no honoured minimum (50 throws is
+Savant's own floor). `n=0` is IGNORED by the run-value boards and silently serves the
+qualified default. The registry (`pipeline/etl/savant_boards.py`) now sends `n=1` for
+baserunning and catcher throwing and `min=1` for first-base receiving, and its docstring
+carries the per-board table; three loader tests changed, 31 green. The three boards need a
+re-load (the plan's run book, step 3). Measured on the lifted pulls: rows with fewer than
+50 chances repeat year to year at 0.0–0.5 (noise) against 0.73–0.90 on qualified rows, so
+the plan makes the opportunity-based confidence and the two missing league-average rows
+(`baserunner_steal`, `pitcher_steal`) mandatory.
+
+**Found while planning — SIM-550 filed (P2).** The outfield arm block built by SIM-530
+reads `raw.savant_baserunning`'s opportunity columns as the fielder's holds, thrown-out
+rate and advancement prevention. Those columns are the player's OWN running (catchers and
+a designated hitter carry 60–160 chances). The loader pulls the board's RUNNER view, its
+default; the FIELDER view exists under `type=Fld` (the owner found it the same day;
+`type=fielder` is silently ignored, which misled the September audit) and the registry now
+pins `type=Run` on the runner entry. So all four
+`OF_ARM_FEATURES` are filled from the wrong view — the run value too, since on a runner's
+row the `fielder_runs_*` columns belong to the runner (a designated hitter who never fielded
+carries them; found designing the fix). The data is right for the view we asked for; the
+parameter was ours. Only `arm_strength` was pulled as intended, and the model does not read
+it. The design:
+`docs/audit/2026-09-16-sim550-outfield-arm-block-plan.md` — APPROVED the same day on all
+four decisions (the throw velocity joins the arm group; the run value and the raw hold
+rate leave it; the dead extraction is deleted; the source is our advancement pool, with
+Savant's fielder view as the verify cross-check).
+The fix in the ticket derives the figures from `sim.advancement_opportunity_pool`
+(fielder_id, attempted, safe) and runs after SIM-531. Next free ID: SIM-551.
+
+---
+
 # Sim — the joint fit PAUSED by owner decision: the fit runs once the model is in its final state; the design stopped at run 3 of 21; the app back up; everything committed — the fit of the draw weights against the accuracy comparison (SIM-548), 2026-09-16
 
 **The decision.** The owner pauses the fit of the draw weights and works on other tickets

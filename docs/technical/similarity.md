@@ -135,14 +135,15 @@ Compares baserunners on EXTRA-BASE advancement tendency (taking first-to-third, 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
 | `BaserunnerSimilarityEngine.build` | Loads league averages + profiles from derived.baserunner_season_metrics; the `include_below_minimum` flag (SIM-523) additionally loads THIN (below-minimum-sample) profiles so the score matrix covers every runner-season a pool holds, relying on eb_alpha to down-weight low-confidence rows instead of excluding them. | — | — |
-| `BaserunnerSimilarityEngine.apply_calibration` | Rebuilds the speed/aggression/success WeightedRBFSimilarity scorers from a CalibrationReport. | — | — |
+| `BaserunnerSimilarityEngine.apply_calibration` | Rebuilds the speed/aggression/success WeightedRBFSimilarity scorers from a CalibrationReport. SIM-531: a reliability-weight vector whose length does not match the engine's feature list (a report fitted before `xb_attempt_rate_above_expected` joined the aggression group) is refused with a warning and the module weights stay. | — | — |
+| `WeightedRBFSimilarity.score / score_batch` | SIM-531: the MASKED kernel — a feature missing (NaN) on either side drops out of the weighted distance AND its normalisation, so a half-measured pair is neither inflated (the old `nan_to_num` read a missing feature as an exact match) nor penalised; a fully-measured pair gets exactly the number it got before. The normalizer keeps NaN for this reason. | `BaserunnerPartition.score_all`, `_score_pair` | — |
 | `BaserunnerSimilarityEngine.query / query_pair` | Scores a query runner-season against the (single, unpartitioned) population. | — | — |
 
 **Depends on:** `duckdb`, `numpy`, `similarity.similarity_diagnostics.run_baserunner_diagnostics`, `similarity.similarity_calibration.CalibrationReport (type-only)`
 
 **Used by:** `api/state.py build_all_engines (keyed 'baserunner')`, `api/routes/similarity_explorer.py`, `pipeline/batch/engine_artifacts.py::_ACTOR_SIM_ENGINES as 'runner_adv' (feeds the advancement draw's runner factor; listed in _THIN_PROFILE_ENGINES so its thin-profile build() flag is used)`, `similarity/similarity_calibration.py (SPEED_FEATURES/AGGRESSION_FEATURES/SUCCESS_FEATURES constants)`
 
-> **Notes for anyone changing this file:** Not partitioned by any attribute - every runner is compared to every other runner; the RBF kernel is trusted to naturally separate fast/slow profiles. sprint_speed is often NULL/unpopulated on the live DB (see similarity_calibration.py comment), which is why _fit_sigma's 0.0 sentinel matters here specifically - a naive calibrator would otherwise clobber the tuned RBF_SIGMA_SPEED=0.8171 with a spurious 1.0.
+> **Notes for anyone changing this file:** Not partitioned by any attribute - every runner is compared to every other runner; the RBF kernel is trusted to naturally separate fast/slow profiles. sprint_speed is often NULL/unpopulated on the live DB (see similarity_calibration.py comment), which is why _fit_sigma's 0.0 sentinel matters here specifically - a naive calibrator would otherwise clobber the tuned RBF_SIGMA_SPEED=0.8171 with a spurious 1.0. SIM-531 (2026-09-16): the aggression group has SEVEN features — the seventh, `xb_attempt_rate_above_expected` (the runner's extra-base attempt rate above Savant's expectation for his chances, weight 0.76 = its year-to-year repeat), loads NULL as NaN (0.0 is a real reading there); the `baserunner` league row carries its mean, and a league row without the key leaves the raw value (or the NaN) alone.
 
 ---
 
@@ -152,15 +153,16 @@ Compares baserunners specifically on STOLEN-BASE tendency and success (separate 
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `BaserunnerStealSimilarityEngine.build` | Loads profiles from derived.baserunner_steal_metrics; two sub-scores only (Tendency ~62%, Success ~38%) since SIM-408 removed the unmeasurable Jump/First-Step sub-score and renormalized its weight. | — | — |
-| `BaserunnerStealSimilarityEngine.apply_calibration` | Rebuilds the tendency/success WeightedRBFSimilarity scorers from a CalibrationReport. | — | — |
+| `BaserunnerStealSimilarityEngine.build` | Loads profiles from derived.baserunner_steal_metrics; three sub-scores since SIM-531 (owner decision 2026-09-16): Tendency 0.45, Lead 0.45 (`lead_primary_ft`, `lead_jump_ft` — the runner's lead off the bag and his jump on the delivery, from Savant's Basestealing Run Value board), Success 0.10 — each weight the group's share of its year-to-year repeat. The confidence (`eb_alpha`) is first-base opportunities over prior 50 (`EB_N_PRIOR_OPPS`), not attempts, so a runner who never went — every runner with a chance has a row since SIM-531 — still carries weight in the steal draw. NULL loads as NaN; `has_lead` is set at load. | — | — |
+| `BaserunnerStealSimilarityEngine.apply_calibration` | Rebuilds the tendency/lead/success WeightedRBFSimilarity scorers from a CalibrationReport (`sigma_baserunner_steal_lead` is the SIM-531 field; 0.0 keeps `RBF_SIGMA_LEAD`). | — | — |
+| `StealPartition.score_all / query_pair` | The missing-value rule (SIM-531): a pair with a measured lead on both sides blends the three groups; a pair missing it on either side blends tendency and success renormalized to one, and its `lead_score` is None. The two paths share one arithmetic (a test holds them equal). | — | — |
 | `BaserunnerStealSimilarityEngine.query / query_pair` | Scores a query runner-season against the population using run_generic_diagnostics-compatible SimilarityResult fields. | — | — |
 
 **Depends on:** `duckdb`, `numpy`, `similarity.similarity_diagnostics.run_generic_diagnostics`, `similarity.similarity_calibration.CalibrationReport (type-only)`
 
 **Used by:** `api/state.py build_all_engines (keyed 'baserunner_steal')`, `api/routes/similarity_explorer.py`, `pipeline/batch/engine_artifacts.py::_ACTOR_SIM_ENGINES as 'runner_steal' (feeds the steal draw's runner factor; also in _THIN_PROFILE_ENGINES)`, `similarity/similarity_calibration.py::_calibrate_baserunner_steal_params (TENDENCY/SUCCESS feature columns read directly by name, not via imported constants)`
 
-> **Notes for anyone changing this file:** SIM-408 permanently removed the Jump/First-Step sub-score because Statcast never published per-runner reaction-time/burst-distance/break-angle historically - don't re-add it without a real data source. WEIGHT_TENDENCY/WEIGHT_SUCCESS are literal fractions (0.40/0.65, 0.25/0.65) preserving the ORIGINAL 3-way ratio after renormalization - keep that derivation visible if you touch the weights again.
+> **Notes for anyone changing this file:** SIM-408 removed the Jump/First-Step sub-score because Statcast never published per-runner reaction-time/burst-distance/break-angle; SIM-531 fills that hole with what Savant DOES publish — the lead and the jump in feet — as the Lead group. The weights are the measured split 0.45 / 0.45 / 0.10 (plan §6.1 of docs/audit/2026-09-16-sim531-lead-distance-build-plan.md), not the old renormalized fractions. Two shrinkage bases: tendency and lead on first-base opportunities (prior 50), success on attempts (prior 20) — each group on the denominator its features are measured over. `RBF_SIGMA_LEAD` carries the fitted value (0.9836, `make calibrate` on 2026-09-16 over the 481 qualified runner-seasons with a lead); a refit is copied in by hand because the matrix builder does not read the calibration report.
 
 ---
 
@@ -184,12 +186,13 @@ Compares catchers across four defensive dimensions - Framing, Blocking, Throwing
 
 ### `similarity/engines/pitcher_steal_similarity.py`
 
-Compares pitchers on their ability to hold runners / prevent steals, using an OUTCOME-only sub-score (SB allowed per 9, CS rate when challenged, attempt rate allowed) after SIM-408 removed the unmeasurable Delivery and Pickoff/Disengagement sub-scores. Real-world comparison: 'do runners fare similarly against these two pitchers when trying to steal'.
+Compares pitchers on their ability to hold runners / prevent steals: an OUTCOME sub-score (SB allowed per 9, CS rate when challenged, attempt rate allowed) and, since SIM-531, a HOLD sub-score (the lead and the jump the pitcher allows, in feet, from Savant). SIM-408 had removed the unmeasurable Delivery and Pickoff/Disengagement sub-scores. Real-world comparison: 'do runners get the same lead and jump against these two pitchers, and fare similarly when they go'.
 
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
-| `PitcherStealSimilarityEngine.build` | Loads profiles from derived.pitcher_steal_metrics; single sub-score at weight 1.0 (WEIGHT_OUTCOME). | — | — |
-| `PitcherStealSimilarityEngine.apply_calibration` | Rebuilds the single outcome WeightedRBFSimilarity scorer from a CalibrationReport. | — | — |
+| `PitcherStealSimilarityEngine.build` | Loads profiles from derived.pitcher_steal_metrics; two sub-scores since SIM-531 (owner decision 2026-09-16): Outcome 0.35 and Hold 0.65 (`lead_allowed_primary_ft`, `lead_allowed_jump_ft` — the lead and the jump the pitcher allows, from Savant's Pitcher Running Game board; the jump allowed repeats at 0.89–0.90). NULL loads as NaN; `has_hold` is set at load; both groups shrink on baserunner events (prior 25). | — | — |
+| `PitcherStealSimilarityEngine.apply_calibration` | Rebuilds the outcome and hold WeightedRBFSimilarity scorers from a CalibrationReport (`sigma_pitcher_steal_hold` is the SIM-531 field; 0.0 keeps `RBF_SIGMA_HOLD`). | — | — |
+| `PitcherStealPartition.score_all / query_pair` | The missing-value rule (SIM-531): a pair with a measured hold on both sides is the two-way blend; a pair missing it on either side is the outcome score alone, and its `hold_score` is None. | — | — |
 | `PitcherStealSimilarityEngine.query / query_pair` | Scores a query pitcher-season against the population. | — | — |
 
 **Depends on:** `duckdb`, `numpy`, `similarity.similarity_diagnostics.run_generic_diagnostics`, `similarity.similarity_calibration.CalibrationReport (type-only)`

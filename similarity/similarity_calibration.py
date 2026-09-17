@@ -444,6 +444,11 @@ class CalibrationReport:
     sigma_baserunner_steal_tendency: float = 0.0
     sigma_baserunner_steal_success: float = 0.0
     sigma_pitcher_steal_outcome: float = 0.0
+    # SIM-531: the lead groups — the runner's lead and jump, the pitcher's lead
+    # and jump allowed — fitted over the rows that carry a measurement. 0.0
+    # (the default) keeps each engine's module bandwidth.
+    sigma_baserunner_steal_lead: float = 0.0
+    sigma_pitcher_steal_hold: float = 0.0
     sigma_manager_usage: float = 0.0
     sigma_manager_aggression: float = 0.0
     sigma_manager_platoon: float = 0.0
@@ -528,8 +533,10 @@ class CalibrationReport:
             "",
             "  RBF Sigma (steal / manager):",
             f"    BR-steal tendency: {self.sigma_baserunner_steal_tendency:.4f}",
+            f"    BR-steal lead:     {self.sigma_baserunner_steal_lead:.4f}",
             f"    BR-steal success:  {self.sigma_baserunner_steal_success:.4f}",
             f"    P-steal outcome:   {self.sigma_pitcher_steal_outcome:.4f}",
+            f"    P-steal hold:      {self.sigma_pitcher_steal_hold:.4f}",
             f"    Mgr usage:         {self.sigma_manager_usage:.4f}",
             f"    Mgr aggression:    {self.sigma_manager_aggression:.4f}",
             f"    Mgr platoon:       {self.sigma_manager_platoon:.4f}",
@@ -1429,15 +1436,24 @@ class SimilarityCalibrator:
         )
 
         sl = ", ".join(str(s) for s in seasons)
+        # SIM-531: the Savant feature exists only after DuckDB migration 0029.
+        xb_col = (
+            "xb_attempt_rate_above_expected"
+            if self._has_columns(
+                conn, "baserunner_season_metrics", ("xb_attempt_rate_above_expected",)
+            )
+            else "NULL AS xb_attempt_rate_above_expected"
+        )
         rows = conn.execute(f"""
             SELECT
                 player_id, season, sample_advancement_opps,
                 -- Speed (1)
                 sprint_speed,
-                -- Aggression (6)
+                -- Aggression (7 since SIM-531)
                 extra_base_attempt_rate, first_to_third_attempt_rate,
                 second_to_home_attempt_rate, first_to_home_attempt_rate,
                 tag_up_attempt_rate, stop_rate,
+                {xb_col},
                 -- Success (5)
                 extra_base_success_rate, first_to_third_success_rate,
                 second_to_home_success_rate, first_to_home_success_rate,
@@ -1456,13 +1472,43 @@ class SimilarityCalibrator:
         n_speed = len(SPEED_FEATURES)
         n_agg = len(AGGRESSION_FEATURES)
         n_suc = len(SUCCESS_FEATURES)
+        # SIM-531: the aggression group's last feature loads NULL as NaN
+        # (unmeasured), never 0.0 — 0.0 is a real reading there.
+        nan_cols = {
+            i
+            for i, (f, _) in enumerate(AGGRESSION_FEATURES)
+            if f == "xb_attempt_rate_above_expected"
+        }
 
         col = 3
         speed_raw = np.array([[r[col + i] or 0.0 for i in range(n_speed)] for r in rows])
         col += n_speed
-        agg_raw = np.array([[r[col + i] or 0.0 for i in range(n_agg)] for r in rows])
+        agg_raw = np.array(
+            [
+                [
+                    (np.nan if r[col + i] is None else float(r[col + i]))
+                    if i in nan_cols
+                    else (r[col + i] or 0.0)
+                    for i in range(n_agg)
+                ]
+                for r in rows
+            ],
+            dtype=np.float64,
+        )
         col += n_agg
         suc_raw = np.array([[r[col + i] or 0.0 for i in range(n_suc)] for r in rows])
+
+        # SIM-531: the aggression sigma and its reliability weights are fitted
+        # over the MEASURED rows (every feature finite) — the SIM-530 rule. A row
+        # with no Savant figure would otherwise read as an exact match on that
+        # feature (calibrate_sigma zeroes a NaN difference) and pull the median
+        # distance down. With no measured row at all (a pre-load database) the
+        # fit runs over the old six features on every row, as before.
+        agg_measured = np.isfinite(agg_raw).all(axis=1)
+        if agg_measured.any():
+            agg_fit, agg_fit_ids = agg_raw[agg_measured], ids[agg_measured]
+        else:
+            agg_fit, agg_fit_ids = agg_raw[:, [i for i in range(n_agg) if i not in nan_cols]], ids
 
         # SIM-432: _fit_sigma so a degenerate (all-NULL) sub-score keeps the
         # engine's tuned default instead of overriding it with calibrate_sigma's
@@ -1472,21 +1518,32 @@ class SimilarityCalibrator:
             self._zscore_matrix(speed_raw), target_median_score
         )
         report.sigma_baserunner_aggression = self._fit_sigma(
-            self._zscore_matrix(agg_raw), target_median_score
+            self._zscore_matrix(agg_fit), target_median_score
         )
         report.sigma_baserunner_success = self._fit_sigma(
             self._zscore_matrix(suc_raw), target_median_score
         )
 
-        # EB prior
+        # EB prior (nan-aware over the population)
         all_raw = np.hstack([speed_raw, agg_raw, suc_raw])
         report.eb_n_prior_baserunner = calibrate_eb_prior(all_raw, samples, min_sample=20)
 
-        # Reliability weights
+        # Reliability weights. SIM-531: the aggression weights are written ONLY
+        # when the fit covered every feature — a six-weight vector on a
+        # seven-feature engine is refused by ``apply_calibration`` (and logged),
+        # so a pre-load database keeps the engine's module weights.
         report.reliability_weights_baserunner_speed = calibrate_reliability_weights(speed_raw, ids)
-        report.reliability_weights_baserunner_aggression = calibrate_reliability_weights(
-            agg_raw, ids
-        )
+        if agg_fit.shape[1] == n_agg:
+            report.reliability_weights_baserunner_aggression = calibrate_reliability_weights(
+                agg_fit, agg_fit_ids
+            )
+        else:
+            report.reliability_weights_baserunner_aggression = None
+            log.warning(
+                "SIM-531: no baserunner row carries xb_attempt_rate_above_expected; the "
+                "aggression reliability weights are left unset (the engine keeps its module "
+                "weights). Load the Savant baserunning board and rebuild the profiles."
+            )
         report.reliability_weights_baserunner_success = calibrate_reliability_weights(suc_raw, ids)
 
         log.info(
@@ -1503,6 +1560,23 @@ class SimilarityCalibrator:
     # ------------------------------------------------------------------
     # SIM-406: the four SIM-408-era RBF engines.
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _has_columns(conn: Any, table: str, columns: tuple[str, ...]) -> bool:
+        """SIM-531: whether ``derived.<table>`` carries every one of ``columns``
+        — the graceful-optional probe the engines use, so a database that has
+        not run a migration still calibrates the groups it has."""
+        try:
+            present = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    f"WHERE table_schema = 'derived' AND table_name = '{table}'"
+                ).fetchall()
+            }
+        except Exception:  # noqa: BLE001
+            return False
+        return set(columns) <= present
 
     @staticmethod
     def _zscore_matrix(mat: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -1601,12 +1675,25 @@ class SimilarityCalibrator:
         target: float,
         report: CalibrationReport,
     ) -> CalibrationReport:
-        """SIM-406: calibrate the stolen-base engine's tendency + success sigmas."""
+        """SIM-406: calibrate the stolen-base engine's tendency + success sigmas.
+
+        SIM-531: and the lead sigma, fitted over the rows that carry BOTH lead
+        features (the SIM-530 measured-rows rule); with none measured the
+        sigma stays 0.0 and the engine keeps its module bandwidth.
+        """
         sl = ", ".join(str(s) for s in seasons)
+        lead_cols = (
+            "lead_primary_ft, lead_jump_ft"
+            if self._has_columns(
+                conn, "baserunner_steal_metrics", ("lead_primary_ft", "lead_jump_ft")
+            )
+            else "NULL AS lead_primary_ft, NULL AS lead_jump_ft"
+        )
         try:
             rows = conn.execute(f"""
                 SELECT steal_attempt_rate, steal_attempt_rate_2b,
-                       steal_success_rate, steal_success_rate_2b
+                       steal_success_rate, steal_success_rate_2b,
+                       {lead_cols}
                 FROM derived.baserunner_steal_metrics
                 WHERE NOT below_minimum_sample AND season IN ({sl})
             """).fetchall()
@@ -1621,12 +1708,21 @@ class SimilarityCalibrator:
         succ = self._zscore_matrix(np.array([[(r[2] or 0.0), (r[3] or 0.0)] for r in rows]))
         report.sigma_baserunner_steal_tendency = self._fit_sigma(tend, target)
         report.sigma_baserunner_steal_success = self._fit_sigma(succ, target)
+        lead_rows = np.array(
+            [[float(r[4]), float(r[5])] for r in rows if r[4] is not None and r[5] is not None],
+            dtype=np.float64,
+        ).reshape(-1, 2)
+        report.sigma_baserunner_steal_lead = (
+            self._fit_sigma(self._zscore_matrix(lead_rows), target) if len(lead_rows) else 0.0
+        )
         log.info(
             "Baserunner-steal calibration complete: %d profiles, sigma_tendency=%.3f, "
-            "sigma_success=%.3f",
+            "sigma_success=%.3f, sigma_lead=%.3f (%d rows with a lead)",
             len(rows),
             report.sigma_baserunner_steal_tendency,
             report.sigma_baserunner_steal_success,
+            report.sigma_baserunner_steal_lead,
+            len(lead_rows),
         )
         return report
 
@@ -1637,11 +1733,25 @@ class SimilarityCalibrator:
         target: float,
         report: CalibrationReport,
     ) -> CalibrationReport:
-        """SIM-406: calibrate the pitcher steal-prevention engine's outcome sigma."""
+        """SIM-406: calibrate the pitcher steal-prevention engine's outcome sigma.
+
+        SIM-531: and the hold sigma (the lead and the jump the pitcher allows),
+        fitted over the rows that carry both; with none the sigma stays 0.0.
+        """
         sl = ", ".join(str(s) for s in seasons)
+        hold_cols = (
+            "lead_allowed_primary_ft, lead_allowed_jump_ft"
+            if self._has_columns(
+                conn,
+                "pitcher_steal_metrics",
+                ("lead_allowed_primary_ft", "lead_allowed_jump_ft"),
+            )
+            else "NULL AS lead_allowed_primary_ft, NULL AS lead_allowed_jump_ft"
+        )
         try:
             rows = conn.execute(f"""
-                SELECT sb_against_per_9, cs_rate_forced, steal_attempt_rate_allowed
+                SELECT sb_against_per_9, cs_rate_forced, steal_attempt_rate_allowed,
+                       {hold_cols}
                 FROM derived.pitcher_steal_metrics
                 WHERE NOT below_minimum_sample AND season IN ({sl})
             """).fetchall()
@@ -1656,10 +1766,20 @@ class SimilarityCalibrator:
             np.array([[(r[0] or 0.0), (r[1] or 0.0), (r[2] or 0.0)] for r in rows])
         )
         report.sigma_pitcher_steal_outcome = self._fit_sigma(out, target)
+        hold_rows = np.array(
+            [[float(r[3]), float(r[4])] for r in rows if r[3] is not None and r[4] is not None],
+            dtype=np.float64,
+        ).reshape(-1, 2)
+        report.sigma_pitcher_steal_hold = (
+            self._fit_sigma(self._zscore_matrix(hold_rows), target) if len(hold_rows) else 0.0
+        )
         log.info(
-            "Pitcher-steal calibration complete: %d profiles, sigma_outcome=%.3f",
+            "Pitcher-steal calibration complete: %d profiles, sigma_outcome=%.3f, "
+            "sigma_hold=%.3f (%d rows with a lead allowed)",
             len(rows),
             report.sigma_pitcher_steal_outcome,
+            report.sigma_pitcher_steal_hold,
+            len(hold_rows),
         )
         return report
 

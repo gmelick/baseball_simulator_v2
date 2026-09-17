@@ -159,10 +159,16 @@ SCORE_ADAPTERS: dict[str, EngineAdapter] = {
         sample_field="sample_steal_attempts",
         min_sample=10,
         subscores=(
-            ("tendency_score", "Tendency", 0.62),
-            ("success_score", "Success", 0.38),
+            ("tendency_score", "Tendency", 0.45),
+            ("lead_score", "Lead", 0.45),
+            ("success_score", "Success", 0.10),
         ),
-        note="Two sub-scores only (the jump dimension was removed). Warn under ~30 attempts.",
+        note=(
+            "SIM-531: the lead (the runner's lead off the bag and his jump on the "
+            "delivery, from Savant) joins tendency and success. A pair missing the lead "
+            "on either side omits lead_score and blends the other two. Warn under ~30 "
+            "attempts."
+        ),
     ),
     "pitcher_steal": EngineAdapter(
         name="pitcher_steal",
@@ -171,9 +177,13 @@ SCORE_ADAPTERS: dict[str, EngineAdapter] = {
         id_field="pitcher_id",
         sample_field="sample_baserunner_events",
         min_sample=30,
-        subscores=(("outcome_score", "Outcome", 1.00),),
+        subscores=(("outcome_score", "Outcome", 0.35), ("hold_score", "Hold", 0.65)),
         extra_fields=(("throws", "Throws"),),
-        note="A single outcome dimension (SB/9, forced-CS, attempt rate rolled into one).",
+        note=(
+            "SIM-531: the hold (the lead and the jump the pitcher allows, from Savant) "
+            "joins the outcome dimension (SB/9, forced-CS, attempt rate). A pair missing "
+            "the hold on either side omits hold_score and scores on the outcome alone."
+        ),
     ),
     "manager": EngineAdapter(
         name="manager",
@@ -415,7 +425,9 @@ def _member(
         "season": int(result.season),
         "name": names.get(eid, f"#{eid}"),
         "score": float(result.score),
-        "sub_scores": {f: float(getattr(result, f)) for f in fields},
+        # SIM-531: a sub-score the pair could not score (a lead / hold missing
+        # on either side) is None on the result and is omitted here.
+        "sub_scores": {f: float(v) for f in fields if (v := getattr(result, f, None)) is not None},
         "sample": sample,
         "below_min_sample": sample < adapter.min_sample,
         "extra": {lbl: getattr(result, f, None) for f, lbl in adapter.extra_fields},

@@ -472,8 +472,11 @@ def test_migration_0028_adds_only_the_five_stamps() -> None:
     ]
 
 
-def test_the_schema_version_was_bumped_to_28() -> None:
-    assert VERSION_FILE.read_text(encoding="utf-8").strip() == "28"
+def test_the_schema_version_was_bumped_past_28() -> None:
+    """0028 bumped the version to 28; SIM-531's 0029 has since moved it to 29
+    (tests/unit/test_sim_store.py pins the exact number, and
+    tests/unit/test_docs_duckdb_version.py holds it to the newest migration)."""
+    assert int(VERSION_FILE.read_text(encoding="utf-8").strip()) >= 28
 
 
 @pytest.mark.parametrize(

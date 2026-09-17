@@ -1263,7 +1263,12 @@ _ENGINE_LOADER = _default_actor_engine_loader
 
 
 def _key_of(result, key_attrs: tuple[str, ...]) -> str:
-    return ":".join(str(getattr(result, a)) for a in key_attrs)
+    # A list comprehension, not a generator expression: the interpreter (3.13.15)
+    # segfaults inside a ``str.join(genexpr)`` after ~1.3 million evaluations —
+    # the SIM-445 crash class — and the steal-runner matrix makes 6.7 million
+    # of them since SIM-531 widened the driver to every runner with a chance
+    # (reproduced 3/3 on 2026-09-16; the comprehension form runs clean).
+    return ":".join([str(getattr(result, a)) for a in key_attrs])
 
 
 def _matrix_from_queries(

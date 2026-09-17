@@ -28,10 +28,25 @@ The fourth was found by the probe below, not by reading anything. First base
 receiving accepts ``year``, ``seasonStart`` and ``season`` without complaint and
 returns the current season for all three. Only ``season[]`` is honoured.
 
-Two boards reject every other parameter. Fielding Run Value and Baserunning
-answer only to a bare ``csv=true`` plus their season pair; adding ``year=``
-returns zero rows or HTTP 500. Their ``extra`` dict is therefore empty on
-purpose — do not "helpfully" add a team or minimum filter to them.
+Fielding Run Value (not loaded) rejects every parameter but its season pair:
+adding ``year=`` returns zero rows or HTTP 500. Baserunning was believed to
+as well; it does take ``n=`` (measured 2026-09-16: ``n=1`` widens 2024 from
+305 runners to 623), and it IGNORES ``year=`` — it serves the CURRENT season
+under it (633 rows stamped 2026 for ``year=2024``, measured the same day). That
+is the silent wrong-year failure the probe and ``check_row_seasons`` exist for.
+
+THE BASERUNNING BOARD HAS TWO VIEWS (measured 2026-09-16)
+--------------------------------------------------------
+``type=Run`` is the RUNNER's side — his own extra-base chances, attempts and
+the runs he earned — and it is what the board serves when ``type`` is absent.
+``type=Fld`` is the FIELDER's side — the chances runners had against him, the
+attempts, the runners he threw out, the generic-fielder expectation and his arm
+run value; a designated hitter appears in the runner view and not there. The
+spelling ``type=fielder`` is silently IGNORED (it serves the runner view), which
+is how the 2026-09-10 audit concluded the board had no fielder view and how the
+SIM-530 join came to read the runner view as the fielder's (SIM-550). The
+``baserunning`` entry below pins ``type=Run``; the fielder view is a separate
+pull when a ticket needs it.
 
 HOW THE LOADER PROVES THE SEASON WAS HONOURED
 ---------------------------------------------
@@ -41,12 +56,25 @@ no possible Statcast data. The loader asks for it once per board per run. An
 honoured parameter returns zero rows; an ignored one returns the current
 season's rows, and the loader fails loudly instead of writing the wrong year.
 
-FULL ROSTER, NOT QUALIFIERS
----------------------------
-Savant defaults to qualified players. ``minSwings=0`` on the bat-tracking family
-and ``min=0`` elsewhere widen the result from roughly 215 batters to roughly
-650. The ``extra`` dicts below set this. A row count near 215 in the log means a
-minimum crept back in.
+FULL ROSTER, NOT QUALIFIERS (owner ruling 2026-09-16)
+------------------------------------------------------
+Savant defaults to qualified players. Every board is pulled at the SMALLEST
+minimum its endpoint honours, measured live on 2024 (2026-09-16):
+
+    bat-tracking family, stance   minSwings=0        215 -> 650 batters (min 1 swing)
+    basestealing (SIM-531)        n=1                432 -> 638 runners (min 1 chance)
+    pitcher running game (SIM-531) n=1               496 -> 849 pitchers (min 1 chance)
+    baserunning                   n=1                305 -> 623 runners (min 1 chance)
+    catcher throwing              n=1                 66 ->  94 catchers (min 1 attempt)
+    first base receiving          min=1               42 -> 152 first basemen (min 1 play)
+    pop time                      min2b=0 & min3b=0   83 -> 100 catchers
+    arm strength                  (none honoured)    388 either way: Savant's own floor is
+                                                     50 throws — its smallest dropdown option
+    sprint speed (its own loader) min=0              566 -> 606 runners; 5 runs is Savant's floor
+
+``n=0`` is IGNORED by the run-value boards (it reads as "not set" and serves the
+qualified default) — the smallest honoured value is ``n=1``. A row count near
+the qualified figure in the log means a minimum crept back in.
 
 BATTING STANCE IS NOT UNDER /leaderboard/
 -----------------------------------------
@@ -222,6 +250,8 @@ BOARDS: dict[str, SavantBoard] = {
         season_style="year",
         table="raw.savant_arm_strength",
         player_column="player_id",
+        # minThrows is the page's own control, but its smallest option is 50 and
+        # the CSV honours nothing below it (388 rows for 0, 1, 5 and unset alike).
         extra={"type": "player", "minThrows": "0"},
         columns=(
             ("total_throws", "total_throws"),
@@ -238,8 +268,12 @@ BOARDS: dict[str, SavantBoard] = {
             ("arm_rf", "arm_rf"),
         ),
     ),
-    # Baserunning answers ONLY to a bare csv=true plus the season pair. The
-    # empty ``extra`` is deliberate — see the module docstring.
+    # Baserunning ignores ``year=`` (it serves the current season) and ``min=``,
+    # but it honours ``n=`` (the minimum number of chances: n=1 is every runner
+    # with one extra-base chance, 623 in 2024 against 305 qualifiers) and
+    # ``type=``. This entry is the RUNNER view, pinned as ``type=Run`` (the
+    # board's default when absent). The FIELDER view is ``type=Fld`` — a separate
+    # pull (SIM-550); ``type=fielder`` is silently ignored and serves the runner view.
     "baserunning": SavantBoard(
         name="baserunning",
         url=f"{BASE}/leaderboard/baserunning",
@@ -247,6 +281,7 @@ BOARDS: dict[str, SavantBoard] = {
         table="raw.savant_baserunning",
         player_column="entity_id",
         season_column="year",
+        extra={"n": "1", "type": "Run"},
         columns=(
             ("fielder_runs", "fielder_runs"),
             ("fielder_runs_advances", "fielder_runs_advances"),
@@ -260,6 +295,63 @@ BOARDS: dict[str, SavantBoard] = {
             ("est_rate_att_generic_runner", "est_rate_att_generic_runner"),
             ("n_out", "n_out"),
             ("n_safe", "n_safe"),
+        ),
+    ),
+    # -- SIM-531: the two running-game boards ---------------------------------
+    # One shape, two sides. Both honour the season pair (1990 returns zero rows)
+    # and carry the season on every row (start_year). ``n`` is the minimum
+    # number of chances: n=1 is every player with one (2024: 638 runners against
+    # 432 qualifiers; 849 pitchers against 496). ``n=0`` is IGNORED — it reads
+    # as "not set" and serves the qualified default — so the registry never
+    # sends it (a test forbids it). The ``*_sbx`` leads (attempted pitches only)
+    # are stored, not read: they repeat year to year at 0.29-0.32.
+    "basestealing": SavantBoard(
+        name="basestealing",
+        url=f"{BASE}/leaderboard/basestealing-run-value",
+        season_style="snake",
+        table="raw.savant_basestealing",
+        player_column="player_id",
+        season_column="start_year",
+        extra={"n": "1"},
+        columns=(
+            ("n_init", "n_init"),
+            ("rate_sbx", "rate_sbx"),
+            ("n_sb", "n_sb"),
+            ("n_cs", "n_cs"),
+            ("n_pk", "n_pk"),
+            ("n_bk", "n_bk"),
+            ("runs_stolen_on_running_act", "runs_stolen_on_running_act"),
+            ("r_primary_lead", "r_primary_lead"),
+            ("r_secondary_lead", "r_secondary_lead"),
+            ("r_sec_minus_prim_lead", "r_sec_minus_prim_lead"),
+            ("r_primary_lead_sbx", "r_primary_lead_sbx"),
+            ("r_secondary_lead_sbx", "r_secondary_lead_sbx"),
+            ("r_sec_minus_prim_lead_sbx", "r_sec_minus_prim_lead_sbx"),
+        ),
+    ),
+    "pitcher_running_game": SavantBoard(
+        name="pitcher_running_game",
+        url=f"{BASE}/leaderboard/pitcher-running-game",
+        season_style="snake",
+        table="raw.savant_pitcher_running_game",
+        player_column="player_id",
+        season_column="start_year",
+        extra={"n": "1"},
+        columns=(
+            ("n_init", "n_init"),
+            ("rate_sbx", "rate_sbx"),
+            ("n_sb", "n_sb"),
+            ("n_cs", "n_cs"),
+            ("n_pk", "n_pk"),
+            ("n_bk", "n_bk"),
+            ("runs_prevented_on_running_attr", "runs_prevented_on_running_attr"),
+            ("n_pitcher_cs_aa", "n_pitcher_cs_aa"),
+            ("r_primary_lead", "r_primary_lead"),
+            ("r_secondary_lead", "r_secondary_lead"),
+            ("r_sec_minus_prim_lead", "r_sec_minus_prim_lead"),
+            ("r_primary_lead_sbx", "r_primary_lead_sbx"),
+            ("r_secondary_lead_sbx", "r_secondary_lead_sbx"),
+            ("r_sec_minus_prim_lead_sbx", "r_sec_minus_prim_lead_sbx"),
         ),
     ),
     "poptime": SavantBoard(
@@ -284,6 +376,8 @@ BOARDS: dict[str, SavantBoard] = {
         table="raw.savant_catcher_throwing",
         player_column="player_id",
         season_column="start_year",
+        # every catcher with one steal attempt against (94 vs 66 qualifiers, 2024)
+        extra={"n": "1"},
         columns=(
             ("arm_strength", "arm_strength"),
             ("pop_time", "pop_time"),
@@ -303,6 +397,8 @@ BOARDS: dict[str, SavantBoard] = {
         table="raw.savant_first_base_receiving",
         player_column="id",
         season_column="year",
+        # every first baseman with one play (152 vs 42 qualifiers, 2024)
+        extra={"min": "1"},
         columns=(
             ("height_in_inches", "height_in_inches"),
             ("n_plays", "n_plays"),
@@ -325,5 +421,16 @@ FIELDING_BOARDS = (
     "catcher_throwing",
     "first_base_receiving",
 )
+#: The boards SIM-531 (lead distance in the steal and baserunning models)
+#: consumes: the runner's lead and jump, the pitcher's lead and jump allowed,
+#: and the extra-base attempt rate above expectation.
+RUNNING_BOARDS = ("basestealing", "pitcher_running_game", "baserunning")
 
-__all__ = ["BATTER_BOARDS", "BOARDS", "FIELDING_BOARDS", "PROBE_SEASON", "SavantBoard"]
+__all__ = [
+    "BATTER_BOARDS",
+    "BOARDS",
+    "FIELDING_BOARDS",
+    "PROBE_SEASON",
+    "RUNNING_BOARDS",
+    "SavantBoard",
+]

@@ -113,6 +113,18 @@ GMM_FEATURE_NAMES = [
     "release_ext",
 ]
 
+# SIM-531: derived.baserunner_season_metrics carries a POSITIONAL insert (no
+# column list), so the Savant baserunning columns go LAST, in this order, after
+# ``asof_date`` — the SELECT below appends them in ``XB_COLUMN_ORDER`` and a
+# unit test holds the live table's tail to ``BASERUNNER_TAIL_COLUMNS``.
+XB_COLUMN_ORDER: tuple[str, ...] = (
+    "xb_opportunities",
+    "xb_attempt_rate",
+    "xb_expected_attempt_rate",
+    "xb_attempt_rate_above_expected",
+)
+BASERUNNER_TAIL_COLUMNS: tuple[str, ...] = ("asof_date", *XB_COLUMN_ORDER)
+
 # Minimum sample thresholds (from schema comments)
 MIN_PITCHER_PITCHES = 200
 MIN_BATTER_PA = 100
@@ -2982,6 +2994,15 @@ class PlayerProfileComputor:
         Savant), a season-level leaderboard with no per-row date of its
         own — only a season number and an unrelated load timestamp.
 
+        SIM-531: the four trailing columns come from Savant's baserunning
+        board (raw.savant_baserunning, the RUNNER's own side): his extra-base
+        chances, his attempt rate, the rate a typical runner would have
+        attempted in the same chances, and the difference — the one feature
+        the advancement model reads (it repeats year to year at 0.75-0.77
+        against 0.50-0.59 for the raw rate). The join follows the sprint
+        speed season shift. The INSERT is positional, so these four stay
+        LAST, in ``XB_COLUMN_ORDER``; NULL means no Savant row.
+
         SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof`` —
         the same rule SIM-534 applies to every batter source. The sprint
         speed join cannot follow that rule (its table has no date to
@@ -3186,7 +3207,16 @@ class PlayerProfileComputor:
                  OR COALESCE(sba.sb_attempts, 0) < {MIN_RUNNER_SB_ATTEMPTS})
                                                                 AS below_minimum_sample,
                 CURRENT_TIMESTAMP                               AS updated_at,
-                DATE '{asof_sql}'                               AS asof_date
+                DATE '{asof_sql}'                               AS asof_date,
+
+                -- SIM-531 (migration 0029): Savant's baserunning board, the
+                -- runner's own extra-base chances. POSITIONAL: these four are
+                -- the table's last columns, in XB_COLUMN_ORDER. NULL = no row.
+                sbr.n_opp_xb                                    AS xb_opportunities,
+                sbr.rate_att_xb                                 AS xb_attempt_rate,
+                sbr.est_rate_att_generic_runner                 AS xb_expected_attempt_rate,
+                sbr.rate_att_xb - sbr.est_rate_att_generic_runner
+                                                                AS xb_attempt_rate_above_expected
             FROM all_players ap
             LEFT JOIN extra_base eb ON ap.player_id = eb.player_id AND ap.season = eb.season
             LEFT JOIN first_to_third ftt ON ap.player_id = ftt.player_id AND ap.season = ftt.season
@@ -3196,6 +3226,8 @@ class PlayerProfileComputor:
             LEFT JOIN sb_agg sba         ON ap.player_id = sba.player_id AND ap.season = sba.season
             LEFT JOIN pg.raw.sprint_speed ss
                 ON ap.player_id = ss.player_id AND ss.season = {sprint_speed_season}
+            LEFT JOIN pg.raw.savant_baserunning sbr
+                ON ap.player_id = sbr.player_id AND sbr.season = {sprint_speed_season}
         """)
         self._conn.execute(f"""
             UPDATE derived.baserunner_season_metrics
@@ -3268,18 +3300,40 @@ class PlayerProfileComputor:
           * steal_success_rate / _2b — success fractions
 
         Biomech jump features (reaction_time / burst_distance / break_angle) are
-        NOT computed — Statcast doesn't publish them and the engine's JUMP
-        sub-score was removed (see baserunner_steal_similarity.py). Idempotent
-        via INSERT OR REPLACE on (player_id, season).
+        NOT computed — Statcast doesn't publish them. SIM-531 adds the lead
+        in feet from Savant's Basestealing Run Value board
+        (raw.savant_basestealing): the primary lead before the pitch, the
+        secondary lead after the pitcher's first move, and the jump (their
+        difference), plus ``n_init`` — the pitches the lead was measured over.
+        The steal-runner model's Lead sub-score reads them. Idempotent via
+        INSERT OR REPLACE on (player_id, season).
+
+        SIM-531 also widens the DRIVER: a row for every runner who HAD a chance
+        (a plate appearance begun on first or second), not only the runners who
+        went. A runner who never attempted a steal has attempt rate 0.0 and a
+        NULL success rate (unmeasured), and with a lead he can be compared; the
+        model's confidence basis moved to his chances for the same reason (plan
+        §3, Finding 2) — ``sample_first_base_opps`` plus
+        ``sample_second_base_opps``, never below his attempts, so no row the
+        driver admits can read confidence 0 (a runner whose chances were all
+        on second, or whose only attempts were of third or home).
 
         SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof`` —
-        the only dated source this method reads.
+        the only DATED source this method reads. The Savant board carries no
+        date, so it follows the season-shift rule (the sprint speed pattern):
+        the season containing the cutoff joins the PRIOR season's row.
         """
         log.info("Building derived.baserunner_steal_metrics …")
         season_list = ", ".join(str(s) for s in seasons)
         asof_date = asof or date.today()
         asof_sql = asof_date.isoformat()
         date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
+        # SIM-531: the Savant season-shift substitute (no shift on a live build).
+        savant_season = (
+            f"(CASE WHEN r.season = {asof_date.year} THEN r.season - 1 ELSE r.season END)"
+            if asof is not None
+            else "r.season"
+        )
         # Matches the engine's MIN_STEAL_ATTEMPTS gate (rows flagged below this
         # are filtered out by the engine's `WHERE NOT below_minimum_sample`).
         min_attempts = 10
@@ -3295,7 +3349,9 @@ class PlayerProfileComputor:
                 player_id, season, sample_steal_attempts, sample_first_base_opps,
                 steal_attempt_rate, steal_attempt_rate_2b,
                 steal_success_rate, steal_success_rate_2b, below_minimum_sample,
-                asof_date
+                asof_date,
+                lead_primary_ft, lead_secondary_ft, lead_jump_ft, savant_steal_opps,
+                sample_second_base_opps
             )
             WITH clean AS (
                 SELECT
@@ -3359,21 +3415,49 @@ class PlayerProfileComputor:
             opp_2b AS (
                 SELECT on_2b AS player_id, season, COUNT(*) AS opps_2b
                 FROM pa_state WHERE on_2b IS NOT NULL GROUP BY on_2b, season
+            ),
+            -- SIM-531: the driver is every runner who HAD a chance, not only
+            -- the runners who went.
+            runners AS (
+                SELECT player_id, season FROM attempt_agg
+                UNION
+                SELECT player_id, season FROM opp_1b
+                UNION
+                SELECT player_id, season FROM opp_2b
+            ),
+            savant AS (
+                SELECT player_id, season, r_primary_lead, r_secondary_lead,
+                       r_sec_minus_prim_lead, n_init
+                FROM pg.raw.savant_basestealing
             )
             SELECT
-                a.player_id,
-                a.season,
-                a.n_attempts                                          AS sample_steal_attempts,
+                r.player_id,
+                r.season,
+                COALESCE(a.n_attempts, 0)                             AS sample_steal_attempts,
                 COALESCE(o1.opps_1b, 0)                               AS sample_first_base_opps,
-                a.n_attempts    * 1.0 / NULLIF(o1.opps_1b, 0)         AS steal_attempt_rate,
-                a.n_attempts_2b * 1.0 / NULLIF(o2.opps_2b, 0)         AS steal_attempt_rate_2b,
+                -- 0.0 when he never went (a measured rate over his chances).
+                COALESCE(a.n_attempts, 0)    * 1.0 / NULLIF(o1.opps_1b, 0)
+                                                                      AS steal_attempt_rate,
+                COALESCE(a.n_attempts_2b, 0) * 1.0 / NULLIF(o2.opps_2b, 0)
+                                                                      AS steal_attempt_rate_2b,
+                -- NULL when he never went (unmeasured, never 0.0).
                 a.n_success     * 1.0 / NULLIF(a.n_attempts, 0)       AS steal_success_rate,
                 a.n_success_2b  * 1.0 / NULLIF(a.n_attempts_2b, 0)    AS steal_success_rate_2b,
-                (a.n_attempts < {min_attempts})                       AS below_minimum_sample,
-                DATE '{asof_sql}'                                     AS asof_date
-            FROM attempt_agg a
-            LEFT JOIN opp_1b o1 ON o1.player_id = a.player_id AND o1.season = a.season
-            LEFT JOIN opp_2b o2 ON o2.player_id = a.player_id AND o2.season = a.season
+                (COALESCE(a.n_attempts, 0) < {min_attempts})          AS below_minimum_sample,
+                DATE '{asof_sql}'                                     AS asof_date,
+                sv.r_primary_lead                                     AS lead_primary_ft,
+                sv.r_secondary_lead                                   AS lead_secondary_ft,
+                sv.r_sec_minus_prim_lead                              AS lead_jump_ft,
+                sv.n_init                                             AS savant_steal_opps,
+                -- The model's confidence basis is his TOTAL chances (first +
+                -- second, never below his attempts), so a runner whose chances
+                -- were all on second never reads confidence 0.
+                COALESCE(o2.opps_2b, 0)                               AS sample_second_base_opps
+            FROM runners r
+            LEFT JOIN attempt_agg a ON a.player_id = r.player_id AND a.season = r.season
+            LEFT JOIN opp_1b o1 ON o1.player_id = r.player_id AND o1.season = r.season
+            LEFT JOIN opp_2b o2 ON o2.player_id = r.player_id AND o2.season = r.season
+            LEFT JOIN savant sv ON sv.player_id = r.player_id AND sv.season = {savant_season}
         """)
         self._conn.execute(f"""
             UPDATE derived.baserunner_steal_metrics
@@ -3414,13 +3498,18 @@ class PlayerProfileComputor:
 
         Attempt labels use the SIM-506 shared expressions (columns OR events —
         a PA-ending caught stealing lives only in `events`). Delivery (biomech
-        timings) is NOT computed — the engine's Delivery sub-score was removed
-        (see pitcher_steal_similarity.py). Idempotent via INSERT OR REPLACE on
+        timings) is NOT computed. SIM-531 adds the lead the pitcher ALLOWS in
+        feet from Savant's Pitcher Running Game board
+        (raw.savant_pitcher_running_game): the primary lead, the secondary
+        lead and the jump he gives up, plus ``n_init``. The pitcher-hold
+        model's Hold sub-score reads them. Idempotent via INSERT OR REPLACE on
         (pitcher_id, season).
 
         SIM-537: ``asof`` restricts both dated sources — raw.pitches (this
         method's own query) and raw.play_events (via the two CTE helpers,
-        which already accept a cutoff) — to ``game_date <= asof``.
+        which already accept a cutoff) — to ``game_date <= asof``. The Savant
+        board carries no date, so it follows the season-shift rule: the
+        season containing the cutoff joins the PRIOR season's row.
         """
         log.info("Building derived.pitcher_steal_metrics …")
         season_list = ", ".join(str(s) for s in seasons)
@@ -3433,6 +3522,12 @@ class PlayerProfileComputor:
         disengagement_cte = self._play_events_disengagement_cte(
             asof_sql if asof is not None else None
         )  # SIM-504 item 3
+        # SIM-531: the Savant season-shift substitute (no shift on a live build).
+        savant_season = (
+            f"(CASE WHEN p.season = {asof_date.year} THEN p.season - 1 ELSE p.season END)"
+            if asof is not None
+            else "p.season"
+        )
         min_events = 30  # matches the engine's MIN_BASERUNNER_EVENTS gate
 
         if asof is not None:
@@ -3447,7 +3542,9 @@ class PlayerProfileComputor:
                 sample_baserunner_events, sample_steal_attempts_against,
                 sb_against_per_9, cs_rate_forced, steal_attempt_rate_allowed,
                 pickoff_rate, stepoff_rate,
-                below_minimum_sample, asof_date
+                below_minimum_sample, asof_date,
+                lead_allowed_primary_ft, lead_allowed_secondary_ft,
+                lead_allowed_jump_ft, savant_hold_opps
             )
             WITH clean AS (
                 SELECT
@@ -3532,11 +3629,18 @@ class PlayerProfileComputor:
                 COALESCE(dg.n_stepoffs * 1.0
                     / NULLIF(p.runner_on_pitches, 0), 0.0)                   AS stepoff_rate,
                 (COALESCE(b.n_br_events, 0) < {min_events})                  AS below_minimum_sample,
-                DATE '{asof_sql}'                                            AS asof_date
+                DATE '{asof_sql}'                                            AS asof_date,
+                -- SIM-531: the lead he allows (NULL = no Savant row).
+                sv.r_primary_lead                                            AS lead_allowed_primary_ft,
+                sv.r_secondary_lead                                          AS lead_allowed_secondary_ft,
+                sv.r_sec_minus_prim_lead                                     AS lead_allowed_jump_ft,
+                sv.n_init                                                    AS savant_hold_opps
             FROM pitch_agg p
             LEFT JOIN br_events b ON b.pitcher_id = p.pitcher_id AND b.season = p.season
             LEFT JOIN pickoff_outs po ON po.pitcher_id = p.pitcher_id AND po.season = p.season
             LEFT JOIN disengagements dg ON dg.pitcher_id = p.pitcher_id AND dg.season = p.season
+            LEFT JOIN pg.raw.savant_pitcher_running_game sv
+                ON sv.player_id = p.pitcher_id AND sv.season = {savant_season}
         """)
         self._conn.execute(f"""
             UPDATE derived.pitcher_steal_metrics
@@ -7307,11 +7411,30 @@ class LeagueAverageProfiles:
     def __init__(self, duckdb_path: str) -> None:
         self._path = duckdb_path
 
+    @staticmethod
+    def _derived_columns(conn: duckdb.DuckDBPyConnection, table: str) -> set[str]:
+        """SIM-531: the columns ``derived.<table>`` carries (empty when the
+        table is absent) — the runtime probe the engines and the calibrator
+        use, so a database that has not run migration 0029, or a fixture that
+        builds only some tables, still gets its league averages."""
+        return {
+            r[0]
+            for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                f"WHERE table_schema = 'derived' AND table_name = '{table}'"
+            ).fetchall()
+        }
+
     def compute(self, seasons: list[int]) -> None:
         conn = duckdb.connect(self._path)
         try:
             conn.execute(self.LEAGUE_AVG_DDL)
             season_list = ", ".join(str(s) for s in seasons)
+            # SIM-531: the columns and tables migration 0029 / SIM-408 added,
+            # probed rather than assumed.
+            brm_cols = self._derived_columns(conn, "baserunner_season_metrics")
+            bss_cols = self._derived_columns(conn, "baserunner_steal_metrics")
+            psm_cols = self._derived_columns(conn, "pitcher_steal_metrics")
 
             # Pitcher average (used for GMM fallback)
             conn.execute(f"""
@@ -7381,7 +7504,16 @@ class LeagueAverageProfiles:
                     GROUP BY season
                 """)
 
-            # Baserunner average
+            # Baserunner average. SIM-531: the extra-base attempt rate above
+            # expectation joins so the advancement model can shrink a thin
+            # runner's figure toward the league's (AVG skips NULLs, so a
+            # runner with no Savant row does not pull the mean). The key is
+            # written only when the table carries the 0029 column.
+            xb_key = (
+                ", 'xb_attempt_rate_above_expected', AVG(xb_attempt_rate_above_expected)"
+                if "xb_attempt_rate_above_expected" in brm_cols
+                else ""
+            )
             conn.execute(f"""
                 INSERT OR REPLACE INTO derived.league_averages
                 SELECT
@@ -7390,7 +7522,7 @@ class LeagueAverageProfiles:
                         'sprint_speed',            AVG(sprint_speed),
                         'extra_base_attempt_rate', AVG(extra_base_attempt_rate),
                         'extra_base_success_rate', AVG(extra_base_success_rate),
-                        'sb_success_rate',         AVG(sb_success_rate)
+                        'sb_success_rate',         AVG(sb_success_rate){xb_key}
                     ) AS profile_json,
                     CURRENT_TIMESTAMP AS updated_at
                 FROM derived.baserunner_season_metrics
@@ -7398,6 +7530,59 @@ class LeagueAverageProfiles:
                   AND below_minimum_sample = FALSE
                 GROUP BY season
             """)
+
+            # SIM-531 (plan §3, Finding 3): the steal-runner and pitcher-hold
+            # rows. Both engines have always read these entity types
+            # (``_load_league_averages`` filters on them) but the rows never
+            # existed, so neither engine ever shrank a thin profile toward the
+            # league mean. With the n=1 Savant load a 20-initiation lead must
+            # not be read at face value; these rows are the shrinkage target.
+            # Each is written when its table exists; the lead keys when the
+            # 0029 columns do.
+            if bss_cols:
+                lead_keys = (
+                    ", 'lead_primary_ft', AVG(lead_primary_ft), 'lead_jump_ft', AVG(lead_jump_ft)"
+                    if {"lead_primary_ft", "lead_jump_ft"} <= bss_cols
+                    else ""
+                )
+                conn.execute(f"""
+                    INSERT OR REPLACE INTO derived.league_averages
+                    SELECT
+                        'baserunner_steal' AS entity_type, season,
+                        JSON_OBJECT(
+                            'steal_attempt_rate',    AVG(steal_attempt_rate),
+                            'steal_attempt_rate_2b', AVG(steal_attempt_rate_2b),
+                            'steal_success_rate',    AVG(steal_success_rate),
+                            'steal_success_rate_2b', AVG(steal_success_rate_2b){lead_keys}
+                        ) AS profile_json,
+                        CURRENT_TIMESTAMP AS updated_at
+                    FROM derived.baserunner_steal_metrics
+                    WHERE season IN ({season_list})
+                      AND below_minimum_sample = FALSE
+                    GROUP BY season
+                """)
+            if psm_cols:
+                hold_keys = (
+                    ", 'lead_allowed_primary_ft', AVG(lead_allowed_primary_ft), "
+                    "'lead_allowed_jump_ft', AVG(lead_allowed_jump_ft)"
+                    if {"lead_allowed_primary_ft", "lead_allowed_jump_ft"} <= psm_cols
+                    else ""
+                )
+                conn.execute(f"""
+                    INSERT OR REPLACE INTO derived.league_averages
+                    SELECT
+                        'pitcher_steal' AS entity_type, season,
+                        JSON_OBJECT(
+                            'sb_against_per_9',           AVG(sb_against_per_9),
+                            'cs_rate_forced',             AVG(cs_rate_forced),
+                            'steal_attempt_rate_allowed', AVG(steal_attempt_rate_allowed){hold_keys}
+                        ) AS profile_json,
+                        CURRENT_TIMESTAMP AS updated_at
+                    FROM derived.pitcher_steal_metrics
+                    WHERE season IN ({season_list})
+                      AND below_minimum_sample = FALSE
+                    GROUP BY season
+                """)
 
             # Catcher average
             conn.execute(f"""

@@ -23,7 +23,7 @@
 
 - **▶ STATE AS OF 2026-06-06 — SUPERSEDED where §2b (2026-08-16) says otherwise: data foundation rebuilt, the runs band PASSES, CI all-green.**
   - **Phases 1–6 COMPLETE and CI-green** on **Python 3.13 / numpy 2.x** (SIM-431). Frontend shipped as
-    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v13**, Alembic head **0025** (2026-09-13; was 0015).
+    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v29**, Alembic head **0026** (2026-09-16; was 0025).
   - **Calibration is LIVE, REFIT 2026-08-16 on the rebuilt data** (SIM-432/459): `/data/calibration.json`
     fitted + applied at boot; win-prob map = fitted reliability-curve. 120-game validation: win-prob
     **ECE 0.0377** (was 0.047); batter **H/HR/TB 0.066/0.024/0.060** (bettable); pitcher **BB 0.044 —
@@ -185,7 +185,18 @@ standing owner rulings that govern all new work:
 - **The architecture rule, both clauses (2026-08-10 + 2026-08-29):** every decision is a
   similarity-weighted draw from a hard-filtered pool — never a hand-tuned formula — and
   **the drawn row IS the play**: no post-draw adjustment of any kind; every factor is a
-  draw WEIGHT or OFF until its weight lands.
+  draw WEIGHT or OFF until its weight lands. **Third clause (owner ruling 2026-09-16):
+  every change lands ON at its best-known default, and no change waits on a per-change
+  accuracy run.** The paired accuracy comparison on 250 games resolves only large effects
+  (its `min n` column: the strikeout market needs 83,000 pitcher-games to resolve a
+  0.0005 Brier effect; 250 games give 482), so three hours per change bought a coin flip
+  on the small ones. Per change, the gates are cheap: the unit and regression lanes, and a
+  short sim smoke of the affected channels (`scripts/sim_stats.py`, ten games) to catch a
+  collapse. The weights are fitted TOGETHER, once, when the owner calls the model final:
+  one designed experiment over every factor (`scripts/sim548_design.py` — each arm flips
+  several factors, so 16–20 arms read every factor's effect and the pairwise interactions;
+  about three days of unattended compute). "OFF until its weight lands" now means OFF
+  until its best-known default exists, not OFF until a paired read confirms it.
 - **No betting-value measurement until everything is green (owner ruling 2026-09-08):** the
   closing-line-value re-measure and any edge read built on it wait until every band the lanes
   grade is inside its range. As of 2026-09-10 the certified production arm is green on every
@@ -516,7 +527,7 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   → Core sim loop (simulation/sim_loop.py) : 8-step pitch-by-pitch state machine + manager/situational
     decisions → GameSimResult                                     [Phase 4]
   → Runner + API (simulation/batch_runner.py, api/) : 100-iteration ProcessPool runner (forkserver
-    workers — SIM-430), REST + WebSocket, Redis cache, persistence (DuckDB v13 / Alembic 0025),
+    workers — SIM-430), REST + WebSocket, Redis cache, persistence (DuckDB v29 / Alembic 0026),
     betting/CLV surface, auth/rate-limit/CORS, nginx, Prometheus/Grafana   [Phase 5 — COMPLETE]
   → Frontend (frontend/) : React 18 + Vite + TypeScript, Playwright e2e   [Phase 6 — COMPLETE]
 ```
@@ -569,9 +580,9 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   derived-vs-official per-player totals study), `check_file_integrity.py`.
   *(scripts/ is baked into the image; run a not-yet-rebuilt new script via
   `docker compose run --rm -v "$PWD/scripts:/app/scripts" app python scripts/<x>.py`.)*
-- `db/` — `migrations/` (Alembic, head **0025** — 0022 = the 15-market `raw.prop_odds` CHECK constraint,
+- `db/` — `migrations/` (Alembic, head **0026** — 0026 = the two Savant running-game landing tables `raw.savant_basestealing` + `raw.savant_pitcher_running_game` (SIM-531, 2026-09-16); 0022 = the 15-market `raw.prop_odds` CHECK constraint,
   0023 = `raw.game_player_stats`, 0024 = the 15-market `raw.game_odds` CHECK + `draw_ml`; all three applied to the live DB on 2026-09-12; 0025 = `raw.game_bullpen`, the MLB box's per-game bullpen listing for the SIM-427 real pen, applied 2026-09-13) + `migrations/duckdb/`
-  (numbered SQL, schema **v13**) +
+  (numbered SQL, schema **v29**) +
   `schemas/duckdb_schema_version.txt`.
 - `tests/` — `unit/`, `regression/` (engine invariant gate), `integration/` (E2E TestClient),
   `performance/` (pytest-benchmark). `conftest.py` has shared fixtures + the event-loop guard.

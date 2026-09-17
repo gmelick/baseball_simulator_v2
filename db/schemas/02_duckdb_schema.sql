@@ -506,8 +506,18 @@ CREATE TABLE IF NOT EXISTS derived.baserunner_season_metrics (
     below_minimum_sample        BOOLEAN     NOT NULL DEFAULT FALSE,
     updated_at                  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
     -- SIM-537 (migration 0028): the date this row's data runs through.
-    -- Appended LAST: the builder's INSERT carries no column list.
+    -- The builder's INSERT carries no column list, so the trailing columns
+    -- stay in this order.
     asof_date                   DATE,
+    -- SIM-531 (migration 0029): Savant's baserunning board — the runner's own
+    -- extra-base chances, his attempt rate, the rate a typical runner would
+    -- have attempted in the same chances, and the difference (the one the
+    -- advancement model reads; it repeats year to year at 0.75-0.77). Appended
+    -- LAST in the builder's XB_COLUMN_ORDER; NULL = no Savant row.
+    xb_opportunities            INTEGER,
+    xb_attempt_rate             FLOAT,
+    xb_expected_attempt_rate    FLOAT,
+    xb_attempt_rate_above_expected FLOAT,
 
     PRIMARY KEY (player_id, season)
 );
@@ -525,8 +535,9 @@ COMMENT ON COLUMN derived.baserunner_season_metrics.below_minimum_sample IS 'TRU
 -- Indexed by the Step 2.5 Baserunner-Steal similarity engine. SIM-408: the
 -- engine referenced this table but the computor never built it. Built from
 -- raw.pitches SB attempt/success flags. Biomech jump features (reaction_time,
--- burst_distance, break_angle) are intentionally ABSENT — Statcast does not
--- publish them, and the engine's JUMP sub-score was removed accordingly.
+-- burst_distance, break_angle) are ABSENT — Statcast does not publish them.
+-- SIM-531 (migration 0029) adds the lead and the jump in feet from Savant's
+-- Basestealing Run Value board, the steal-runner model's Lead sub-score.
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS derived.baserunner_steal_metrics (
@@ -547,6 +558,19 @@ CREATE TABLE IF NOT EXISTS derived.baserunner_steal_metrics (
     updated_at                  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
     -- SIM-537 (migration 0028): the date this row's data runs through.
     asof_date                   DATE,
+    -- SIM-531 (migration 0029): the runner's lead off the bag (feet) from
+    -- Savant's Basestealing Run Value board — before the pitch, after the
+    -- pitcher's first move, and the difference (the jump). savant_steal_opps
+    -- is n_init, the pitches the lead was measured over. NULL = no Savant row.
+    lead_primary_ft             FLOAT,
+    lead_secondary_ft           FLOAT,
+    lead_jump_ft                FLOAT,
+    savant_steal_opps           INTEGER,
+    -- SIM-531: plate appearances begun on second. The steal driver covers
+    -- every runner with a chance, and the model's confidence is his TOTAL
+    -- chances (first + second, never below his attempts), so a runner whose
+    -- chances were all on second never reads confidence 0.
+    sample_second_base_opps     INTEGER,
 
     PRIMARY KEY (player_id, season)
 );
@@ -588,6 +612,13 @@ CREATE TABLE IF NOT EXISTS derived.pitcher_steal_metrics (
     updated_at                      TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
     -- SIM-537 (migration 0028): the date this row's data runs through.
     asof_date                       DATE,
+    -- SIM-531 (migration 0029): the lead the pitcher allows (feet) from
+    -- Savant's Pitcher Running Game board — before the pitch, after his first
+    -- move, and the jump he gives up. savant_hold_opps is n_init. NULL = no row.
+    lead_allowed_primary_ft         FLOAT,
+    lead_allowed_secondary_ft       FLOAT,
+    lead_allowed_jump_ft            FLOAT,
+    savant_hold_opps                INTEGER,
 
     PRIMARY KEY (pitcher_id, season)
 );

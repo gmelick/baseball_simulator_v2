@@ -189,7 +189,7 @@ into a matrix the draws look up.
   attempt rate, DP success rate; the pivot for second basemen) · errors 0.15 (fielding,
   throwing) · specialty 0.10 (bunt fielding; the first baseman's scoop rate).
 - **Outfield**: range 0.40 (the same five OAA components) · arm 0.30 (hold rate, thrown-out
-  rate, advancement prevention, arm runs — the arm block is still empty in the data, SIM-530)
+  rate, advancement prevention, arm runs — three of the four are WRONG in the data: SIM-530 filled them from Savant's baserunning board, which is the player's OWN running, not the runners he held; the fix is SIM-550)
   · star catches 0.15 (five-star, four-star, routine catch rates) · errors 0.15.
 - Shrinkage prior 15; never scored across positions.
 
@@ -204,21 +204,56 @@ into a matrix the draws look up.
 
 ### Steal runner — `baserunner_steal_similarity.py` (the steal draw at power 12)
 
-- **Tendency 0.62** (σ 1.05): steal-attempt rate from first, from second.
-- **Success 0.38** (σ 1.02): steal success rate from first, from second.
-- Shrinkage prior 20. (Lead distance is the open SIM-531 addition.)
+*SIM-531 landed on 2026-09-16, code and data: the boards loaded, the profiles rebuilt, the
+bandwidths fitted (lead 0.9836), the `runner_steal` matrix rebuilt at 2,585 profiles.*
+
+- **Tendency 0.45** (σ 1.05): steal-attempt rate from first, from second.
+- **Lead 0.45** (σ 0.9836, fitted 2026-09-16; SIM-531):
+  the runner's lead off the bag before the pitch, in feet, and his jump — the extra distance
+  he gets on the pitcher's delivery — from Savant's Basestealing Run Value board at n=1
+  (every runner with one chance). The jump repeats year to year at 0.80–0.85; the lead at
+  0.73. A runner with no Savant row is scored over tendency and success alone, never
+  against a lead of 0.0 ft.
+- **Success 0.10** (σ 1.02): steal success rate from first, from second — it repeats at
+  only 0.13–0.26, which is why its weight fell from 0.38.
+- Every runner who HAD a chance carries a profile, including the ones who never went. The
+  confidence, the tendency and the lead shrink on the runner's chances — plate appearances
+  begun on first plus those begun on second, never below his attempts (prior 50), so no
+  profile reads confidence 0; the success rate shrinks on attempts (prior 20). A runner
+  with no measured lead is not shrunk on the lead at all (his NaN stays out of the
+  normalizer). The `baserunner_steal` league-average row the shrinkage needs never
+  existed before the SIM-531 recompute of 2026-09-16 wrote it.
 
 ### Pitcher against the run — `pitcher_steal_similarity.py` (the steal draw at power 12)
 
-- **Outcome 1.00** (σ 1.10): stolen bases allowed per nine, caught-stealing rate when
+*SIM-531 landed on 2026-09-16, code and data: the hold bandwidth fitted (0.9897), the
+`pitcher_steal` matrix rebuilt at 2,390 profiles.*
+
+- **Outcome 0.35** (σ 1.10): stolen bases allowed per nine, caught-stealing rate when
   challenged, the attempt rate allowed. (Delivery and pickoff mechanics were trimmed in
-  SIM-408 — the data does not carry them.) Shrinkage prior 25.
+  SIM-408 — the data does not carry them.)
+- **Hold 0.65** (σ 0.9897, fitted 2026-09-16; SIM-531): the lead the pitcher
+  allows before the pitch and the jump he gives up on the delivery, in feet, from Savant's
+  Pitcher Running Game board at n=1. The jump allowed repeats at 0.89–0.90 — the most
+  stable number either steal model holds. A pitcher with no Savant row is scored on the
+  outcome group alone.
+- Shrinkage prior 25 on baserunner events, both groups (an unmeasured hold is not shrunk);
+  the `pitcher_steal` league-average row never existed before the SIM-531 recompute of
+  2026-09-16 wrote it.
 
 ### Advancement runner — `baserunner_similarity.py` (the advancement draws at power 20)
 
 - **Speed 0.35** (σ 0.82): sprint speed.
 - **Aggression 0.40** (σ 1.05): extra-base attempt rate overall, first-to-third,
-  second-to-home, first-to-home, tag-up; the stop rate.
+  second-to-home, first-to-home, tag-up; the stop rate; and (SIM-531) how often the runner
+  tried for the extra base ABOVE how often a typical runner would have tried in the same
+  chances — Savant's baserunning board supplies the expectation (repeats at 0.75–0.77
+  against 0.50–0.59 for the raw rate). A runner with no Savant row has no value there: the
+  value stays missing through the shrinkage, and the kernel drops the feature from the
+  distance for that pair instead of reading it as a match. (SIM-531 landed on
+  2026-09-16, code and data; the `runner_adv` matrix was rebuilt at 2,486 profiles, and the
+  calibration file now carries seven aggression weights — the new feature's is the largest,
+  0.565.)
 - **Success 0.25** (σ 1.00): the matching success rates.
 - Shrinkage prior 15.
 

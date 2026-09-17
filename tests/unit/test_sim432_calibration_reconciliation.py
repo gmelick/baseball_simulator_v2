@@ -176,8 +176,11 @@ class TestBaserunnerKeepsDefaultOnDegenerate:
             speed = 27.0  # constant -> degenerate
             agg = rng.normal(size=6).tolist()
             suc = rng.normal(size=5).tolist()
-            rows.append((3000 + i, 2024, 100 + i, speed, *agg, *suc))
-        conn = _FakeConn(present_cols=[], data_rows=rows)  # no info_schema probe here
+            # SIM-531: the SELECT carries a seventh aggression column
+            # (xb_attempt_rate_above_expected) — NULL on a database without the
+            # 0029 column, which is what an empty information_schema probe means.
+            rows.append((3000 + i, 2024, 100 + i, speed, *agg, None, *suc))
+        conn = _FakeConn(present_cols=[], data_rows=rows)  # no 0029 column on this DB
 
         cal = SimilarityCalibrator(duckdb_path=":memory:")
         report = cal._calibrate_baserunner_params(conn, [2024], 0.5, CalibrationReport())

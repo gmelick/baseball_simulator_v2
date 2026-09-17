@@ -51,7 +51,13 @@ import psycopg2
 from psycopg2.extras import execute_batch
 
 from pipeline.etl.coercion import to_float, to_int, to_str
-from pipeline.etl.savant_boards import BATTER_BOARDS, BOARDS, FIELDING_BOARDS, SavantBoard
+from pipeline.etl.savant_boards import (
+    BATTER_BOARDS,
+    BOARDS,
+    FIELDING_BOARDS,
+    RUNNING_BOARDS,
+    SavantBoard,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -90,6 +96,11 @@ _INT_TARGETS = frozenset(
         "n_scoop",
         "outs_scoop",
         "height_in_inches",
+        # SIM-531: the running-game boards' counts.
+        "n_init",
+        "n_sb",
+        "n_pk",
+        "n_bk",
     }
 )
 
@@ -344,6 +355,8 @@ def resolve_boards(names: list[str]) -> list[SavantBoard]:
             picked += list(BATTER_BOARDS)
         elif n == "fielding":
             picked += list(FIELDING_BOARDS)
+        elif n == "running":
+            picked += list(RUNNING_BOARDS)
         elif n in BOARDS:
             picked.append(n)
         else:
@@ -360,7 +373,7 @@ def main(argv: list[str] | None = None) -> int:
         "--boards",
         nargs="+",
         default=["all"],
-        help="board names, or 'all' / 'batter' / 'fielding'",
+        help="board names, or 'all' / 'batter' / 'fielding' / 'running'",
     )
     ap.add_argument("--seasons", nargs="+", type=int, required=True)
     ap.add_argument("--dry-run", action="store_true")

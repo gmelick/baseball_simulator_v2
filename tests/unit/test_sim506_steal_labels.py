@@ -96,7 +96,16 @@ def _conn(with_play_events: bool = True) -> duckdb.DuckDBPyConnection:
         # SIM-537: the cutoff stamp (migration 0028) — _build_pitcher_steal_metrics
         # names it in its INSERT's explicit column list.
         "asof_date DATE, "
+        # SIM-531: the lead the pitcher allows (migration 0029) — named in the
+        # INSERT too, read from the Savant board the builder joins.
+        "lead_allowed_primary_ft FLOAT, lead_allowed_secondary_ft FLOAT, "
+        "lead_allowed_jump_ft FLOAT, savant_hold_opps INTEGER, "
         "PRIMARY KEY (pitcher_id, season))"
+    )
+    c.execute(
+        "CREATE TABLE pg.raw.savant_pitcher_running_game (player_id INTEGER, season INTEGER, "
+        "n_init INTEGER, r_primary_lead FLOAT, r_secondary_lead FLOAT, "
+        "r_sec_minus_prim_lead FLOAT)"
     )
     return c
 

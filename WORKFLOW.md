@@ -1,6 +1,6 @@
 # MLB Baseball Simulation Platform — End-to-End Workflow
 
-*Last updated: 2026-09-13 (Alembic head 0025; the 2026-06-04 Phase-7 refresh: Python 3.13 · DuckDB v13 · full API surface live)*
+*Last updated: 2026-09-16 (Alembic head 0026; the 2026-06-04 Phase-7 refresh: Python 3.13 · DuckDB v29 · full API surface live)*
 
 This document is the operator's manual.  It describes how to run the
 platform end-to-end from a clean checkout, and how to confirm each
@@ -16,7 +16,7 @@ exited zero.
 
 > **Phase note.** As of 2026-06-06 the platform is at **Phase 7 — live
 > bring-up (largely complete)**; Phases 1–6 are COMPLETE and CI-green
-> (Python 3.13 / numpy 2.x; 89% coverage; DuckDB v13 / Alembic 0025).  The
+> (Python 3.13 / numpy 2.x; 89% coverage; DuckDB v29 / Alembic 0026).  The
 > full API surface (games, simulate, betting, WebSocket, odds, similarity,
 > metrics) is live.  Calibration is LIVE (SIM-432; win-prob map = fitted
 > reliability-curve), the full-pool sampler + all realism flags are ON in
@@ -72,7 +72,7 @@ make test
 ```
 
 **What good looks like.**
-- `make migrate` ends with `alembic current` printing the head revision — the newest file under `db/migrations/versions/` (`0025` as of 2026-09-13).
+- `make migrate` ends with `alembic current` printing the head revision — the newest file under `db/migrations/versions/` (`0026` as of 2026-09-16).
 - `make test` exits 0 (unit suite green at 89% coverage; ~22 slow/skipped).
 
 ### 1.3 Local Python development (without Docker)
@@ -256,13 +256,13 @@ python scripts\check_bat_side_coverage.py --out docs\data_quality\2026-05-20-bat
 echo %ERRORLEVEL%
 ```
 
-**What good looks like.**  ~700 000 rows per fully-loaded season; `alembic current` prints the newest revision under `db/migrations/versions/` (`0025` as of 2026-09-13); `check_bat_side_coverage.py` exits 0.
+**What good looks like.**  ~700 000 rows per fully-loaded season; `alembic current` prints the newest revision under `db/migrations/versions/` (`0026` as of 2026-09-16); `check_bat_side_coverage.py` exits 0.
 
 ### 2.2 DuckDB analytical layer
 
 ```bat
 type db\schemas\duckdb_schema_version.txt
-:: Expected: 13
+:: Expected: 29
 
 duckdb db\schemas\baseball_simulator.duckdb -c "SELECT * FROM migration_history ORDER BY applied_at;"
 
@@ -425,7 +425,7 @@ echo %BASEBALL_DB_DSN%
 | Live pipeline misses pitches | Check `raw.etl_errors` — SIM-093 audits skipped rows. |
 | Vig flake | Fixed in SIM-159; check `_VIG_LOWER`/`_VIG_UPPER` in `test_live_pipeline_bugs.py`. |
 | Mock odds returns NULL hash | Run `python scripts\backfill_odds_hash.py`. |
-| DuckDB schema mismatch | Re-apply `db\migrations\duckdb\*.sql` in numbered order (through `0013_*`) and bump `duckdb_schema_version.txt` to match the latest migration (currently `13`). |
+| DuckDB schema mismatch | Re-apply `db\migrations\duckdb\*.sql` in numbered order (through `0029_*`) and bump `duckdb_schema_version.txt` to match the latest migration (currently `29`). |
 | `curl` truncates URL | Escape `&` as `^&` or wrap the URL in double quotes. |
 | `set VAR=value` doesn't persist | Use `setx VAR "value"` and open a new cmd window. |
 | `make test` shows 21 errors | Integration tests can't reach Docker daemon — fixed in conftest.py; rebuild image with `make build`. |

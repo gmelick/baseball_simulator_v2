@@ -105,6 +105,14 @@ AGGRESSION_FEATURES = [
     ("first_to_home_attempt_rate", 0.112),  # rarer situation — noisier
     ("tag_up_attempt_rate", 0.100),  # rarest — noisiest
     ("stop_rate", 0.202),  # low weight — redundant with overall
+    # SIM-531: how often the runner tried for the extra base ABOVE how often a
+    # typical runner would have tried in the same chances — Savant's
+    # baserunning board supplies the expectation our data never had. The one
+    # aggression feature that carries its own denominator; it repeats year to
+    # year at 0.75-0.77 against 0.50-0.59 for the raw rate (the weight). NaN
+    # when the runner has no Savant row, and the kernel then drops it from the
+    # distance AND its normalisation (see WeightedRBFSimilarity).
+    ("xb_attempt_rate_above_expected", 0.760),
 ]
 
 # --- Success / efficiency features ---
@@ -134,6 +142,14 @@ RBF_SIGMA_SUCCESS = 1.0000
 # Empirical Bayes shrinkage prior strength
 # At EB_N_PRIOR advancement opportunities, shrinkage weight α = 0.5
 EB_N_PRIOR = 15
+
+#: SIM-531: the features whose NULL loads as NaN (unmeasured) rather than 0.0,
+#: in the profile AND in the league-average row, and whose NaN survives the
+#: shrinkage (the masked kernel drops them from the pair).
+_NAN_WHEN_MISSING = frozenset({"xb_attempt_rate_above_expected"})
+_NAN_WHEN_MISSING_MASK = np.array(
+    [f in _NAN_WHEN_MISSING for f, _ in AGGRESSION_FEATURES], dtype=bool
+)
 
 # Minimum sample for inclusion (matches schema: below_minimum_sample)
 MIN_ADVANCEMENT_OPPS = 20
@@ -196,6 +212,16 @@ class WeightedRBFSimilarity:
     Weights are normalized to sum to 1.0 so the exponent computes the
     weighted *average* per-feature squared distance, making the score
     independent of feature count per sub-score.
+
+    SIM-531 — the MASKED kernel. A feature missing on either side (NaN)
+    drops out of the distance AND of its normalisation: the weighted average
+    runs over the features both sides have. A fully-measured pair gets
+    exactly the number it got before (the weights already sum to one); a
+    half-measured pair is not inflated toward similarity, which is what the
+    old ``nan_to_num(diff)`` did by reading a missing feature as an exact
+    match. A pair with no feature in common scores 1.0 (an empty distance),
+    which no sub-score here can reach because every group has at least one
+    feature that is never NaN.
     """
 
     def __init__(
@@ -213,8 +239,10 @@ class WeightedRBFSimilarity:
 
     def score(self, x: NDArray, y: NDArray) -> float:
         diff = x - y
-        diff = np.nan_to_num(diff, nan=0.0)
-        dist_sq = np.dot(self.weights * diff, diff)
+        present = np.isfinite(diff)
+        d2 = np.where(present, diff * diff, 0.0)
+        wsum = float((self.weights * present).sum())
+        dist_sq = float((self.weights * d2).sum()) / max(wsum, 1e-12)
         return float(np.exp(-self.gamma * dist_sq))
 
     def score_batch(
@@ -223,8 +251,10 @@ class WeightedRBFSimilarity:
         candidates: NDArray,
     ) -> NDArray[np.float64]:
         diff = candidates - query[np.newaxis, :]
-        diff = np.nan_to_num(diff, nan=0.0)
-        dist_sq = np.sum(self.weights[np.newaxis, :] * diff**2, axis=1)
+        present = np.isfinite(diff)
+        d2 = np.where(present, diff * diff, 0.0)
+        wsum = (self.weights[np.newaxis, :] * present).sum(axis=1)
+        dist_sq = (self.weights[np.newaxis, :] * d2).sum(axis=1) / np.maximum(wsum, 1e-12)
         return np.exp(-self.gamma * dist_sq)
 
 
@@ -246,9 +276,19 @@ class EmpiricalBayesShrinkage:
         league_avg_vec: NDArray[np.float64],
         n_samples: int,
     ) -> NDArray[np.float64]:
+        """Pull ``raw_vec`` toward the league mean by ``alpha(n_samples)``.
+
+        A NaN raw value becomes the league mean. SIM-531: a NaN LEAGUE value
+        (a key the league row lacks) leaves the raw value alone. The caller
+        (``_apply_shrinkage``) restores the NaN of an UNMEASURED Savant feature
+        afterwards, so a missing measurement stays NaN through shrinkage and
+        the masked kernel drops it — never a runner scored as exactly average
+        on a feature nobody measured.
+        """
         a = self.alpha(n_samples)
-        raw_clean = np.where(np.isnan(raw_vec), league_avg_vec, raw_vec)
-        return a * raw_clean + (1.0 - a) * league_avg_vec
+        avg = np.where(np.isnan(league_avg_vec), raw_vec, league_avg_vec)
+        raw_clean = np.where(np.isnan(raw_vec), avg, raw_vec)
+        return a * raw_clean + (1.0 - a) * avg
 
 
 # ============================================================================
@@ -273,8 +313,15 @@ class FeatureNormalizer:
 
         def _fit_group(vecs: list[NDArray]) -> tuple[NDArray, NDArray]:
             mat = np.array(vecs, dtype=np.float64)
-            m = np.nanmean(mat, axis=0)
-            s = np.nanstd(mat, axis=0)
+            # SIM-531: a column no profile measured (the Savant feature on a
+            # database built before the load) z-scores to 0 / 1, so the
+            # normalizer never emits NaN statistics.
+            measured = np.isfinite(mat).any(axis=0)
+            m = np.zeros(mat.shape[1], dtype=np.float64)
+            s = np.ones(mat.shape[1], dtype=np.float64)
+            if measured.any():
+                m[measured] = np.nanmean(mat[:, measured], axis=0)
+                s[measured] = np.nanstd(mat[:, measured], axis=0)
             s[s == 0] = 1.0
             return m, s
 
@@ -285,8 +332,9 @@ class FeatureNormalizer:
     def _normalize(self, vec: NDArray, mean: NDArray | None, std: NDArray | None) -> NDArray:
         if mean is None:
             return vec
-        normed = (vec - mean) / std
-        return np.nan_to_num(normed, nan=0.0)
+        # SIM-531: a NaN survives normalisation — the masked kernel drops a
+        # missing feature from the distance rather than reading it as the mean.
+        return (vec - mean) / std
 
     def normalize_speed(self, vec: NDArray) -> NDArray:
         return self._normalize(vec, self.speed_mean, self.speed_std)
@@ -467,7 +515,23 @@ class BaserunnerSimilarityEngine:
 
         def _wts(field: str, default: list[float]) -> NDArray[np.float64]:
             w = getattr(report, field, None)
-            return np.asarray(w, dtype=np.float64) if w is not None else np.array(default)
+            if w is None:
+                return np.array(default)
+            arr = np.asarray(w, dtype=np.float64)
+            # SIM-531: a report fitted before a feature joined its group carries
+            # one weight too few; applying it would broadcast against the wider
+            # feature vector and fail on the first query. Keep the module
+            # defaults until ``make calibrate`` refits the report.
+            if arr.shape != (len(default),):
+                log.warning(
+                    "SIM-531: %s holds %d weights but the engine has %d features; "
+                    "keeping the module defaults until the report is refitted.",
+                    field,
+                    arr.size,
+                    len(default),
+                )
+                return np.array(default)
+            return arr
 
         self._speed_rbf = WeightedRBFSimilarity(
             sigma=_sig("sigma_baserunner_speed", self._speed_rbf.sigma),
@@ -562,8 +626,18 @@ class BaserunnerSimilarityEngine:
                 [pj.get(f, 0.0) or 0.0 for f, _ in SPEED_FEATURES], dtype=np.float64
             )
 
+            # SIM-531: ``xb_attempt_rate_above_expected`` is NaN when the row
+            # lacks it (a league row written before the Savant load), so the
+            # shrinkage leaves a runner's raw value — or his NaN — alone; the
+            # other keys keep their long-standing 0.0 fallback.
             self._league_avg["aggression"][season] = np.array(
-                [pj.get(f, 0.0) or 0.0 for f, _ in AGGRESSION_FEATURES], dtype=np.float64
+                [
+                    (np.nan if pj.get(f) is None else float(pj[f]))
+                    if f in _NAN_WHEN_MISSING
+                    else (pj.get(f, 0.0) or 0.0)
+                    for f, _ in AGGRESSION_FEATURES
+                ],
+                dtype=np.float64,
             )
 
             self._league_avg["success"][season] = np.array(
@@ -595,6 +669,12 @@ class BaserunnerSimilarityEngine:
             ).fetchall()
         }
         _asof_col = "brm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
+        # SIM-531: the Savant feature exists only after migration 0029.
+        _xb_col = (
+            "brm.xb_attempt_rate_above_expected"
+            if "xb_attempt_rate_above_expected" in _present
+            else "NULL AS xb_attempt_rate_above_expected"
+        )
 
         rows = conn.execute(f"""
             SELECT
@@ -624,7 +704,9 @@ class BaserunnerSimilarityEngine:
                 brm.sample_first_to_home_opps,
                 brm.sample_tag_up_opps,
                 brm.below_minimum_sample,
-                {_asof_col}
+                {_asof_col},
+                -- SIM-531: the attempt rate above expectation (NULL = no row)
+                {_xb_col}
             FROM derived.baserunner_season_metrics brm
             WHERE {min_filter}
               {season_filter}
@@ -658,20 +740,25 @@ class BaserunnerSimilarityEngine:
                 tu_opps,
                 below_min,
                 asof_val,
+                xb_above,
             ) = row
             asof_values.add(asof_val)
 
             def _v(vals):
                 return np.array([v or 0.0 for v in vals], dtype=np.float64)
 
+            # SIM-531: THIS feature loads NULL as NaN (unmeasured), never 0.0 —
+            # 0.0 is "exactly as aggressive as expected", a real reading.
+            aggression = np.append(
+                _v([eb_attempt, ftt_attempt, sth_attempt, fth_attempt, tu_attempt, stop]),
+                np.nan if xb_above is None else float(xb_above),
+            )
             self._profiles[(player_id, season)] = BaserunnerProfile(
                 player_id=player_id,
                 season=season,
                 sample_advancement_opps=sample_adv or 0,
                 speed_vec=_v([sprint_speed]),
-                aggression_vec=_v(
-                    [eb_attempt, ftt_attempt, sth_attempt, fth_attempt, tu_attempt, stop]
-                ),
+                aggression_vec=aggression,
                 success_vec=_v([eb_success, ftt_success, sth_success, fth_success, tu_success]),
                 sample_first_to_third_opps=ftt_opps or 0,
                 sample_second_to_home_opps=sth_opps or 0,
@@ -696,7 +783,15 @@ class BaserunnerSimilarityEngine:
             log.info("Baserunner profiles are as of %s.", self._asof_date)
 
     def _apply_shrinkage(self) -> None:
-        """Apply EB shrinkage to all feature vectors."""
+        """Apply EB shrinkage to all feature vectors.
+
+        SIM-531: an UNMEASURED ``xb_attempt_rate_above_expected`` (NaN — no
+        Savant row) stays NaN through the aggression shrink, whatever the
+        league row carries, so the masked kernel drops it from that runner's
+        pairs and the normalizer's statistics come from the measured runners
+        alone. A measured value shrinks toward the league mean like every
+        other aggression feature.
+        """
         for _key, p in self._profiles.items():
             s = p.season
             for group, vec_attr in [
@@ -705,16 +800,15 @@ class BaserunnerSimilarityEngine:
                 ("success", "success_vec"),
             ]:
                 avg = self._league_avg[group].get(s)
-                if avg is not None:
-                    setattr(
-                        p,
-                        vec_attr,
-                        self._shrinkage.shrink(
-                            getattr(p, vec_attr),
-                            avg,
-                            p.sample_advancement_opps,
-                        ),
-                    )
+                if avg is None:
+                    continue
+                raw = getattr(p, vec_attr)
+                shrunk = self._shrinkage.shrink(raw, avg, p.sample_advancement_opps)
+                if group == "aggression":
+                    unmeasured = _NAN_WHEN_MISSING_MASK & np.isnan(raw)
+                    if unmeasured.any():
+                        shrunk = np.where(unmeasured, np.nan, shrunk)
+                setattr(p, vec_attr, shrunk)
 
     # ------------------------------------------------------------------
     # Query

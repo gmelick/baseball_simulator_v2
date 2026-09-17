@@ -251,19 +251,32 @@ def test_an_unknown_board_name_fails_loudly() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_two_boards_that_reject_parameters_send_none() -> None:
-    """Baserunning and the run-value boards return zero rows or a 500 if any
-    other parameter is added. Keep their extras empty."""
-    assert BOARDS["baserunning"].extra == {}
+def test_baserunning_lifts_its_minimum_and_pins_the_runner_view() -> None:
+    """Baserunning ignores ``year=`` and ``min=``, but it honours ``n=`` (measured
+    2026-09-16: n=1 widens 2024 from 305 to 623 runners) and ``type=``. The entry
+    is the RUNNER view, pinned as type=Run; the fielder view is type=Fld
+    (SIM-550). Nothing else may be added to it."""
+    assert BOARDS["baserunning"].extra == {"n": "1", "type": "Run"}
 
 
 def test_the_full_roster_minimum_is_set_on_every_board_that_takes_one() -> None:
-    """A qualified-only pull is roughly 215 batters against roughly 650."""
+    """Owner ruling 2026-09-16: every board is pulled at the smallest minimum its
+    endpoint honours, never at the qualified default (215 vs 650 batters; 66 vs
+    94 catchers; 42 vs 152 first basemen)."""
     assert BOARDS["bat_tracking"].extra["minSwings"] == "0"
     assert BOARDS["swing_path"].extra["minSwings"] == "0"
     assert BOARDS["batting_stance"].extra["minSwings"] == "0"
     assert BOARDS["arm_strength"].extra["minThrows"] == "0"
     assert BOARDS["poptime"].extra["min2b"] == "0"
+    assert BOARDS["catcher_throwing"].extra["n"] == "1"
+    assert BOARDS["first_base_receiving"].extra["min"] == "1"
+
+
+def test_n_zero_is_never_sent_to_a_run_value_board() -> None:
+    """``n=0`` reads as "not set" on the run-value boards and silently serves the
+    qualified default (432 runners for n=0 and unset alike; 638 for n=1)."""
+    for board in BOARDS.values():
+        assert board.extra.get("n") != "0", board.name
 
 
 def test_batting_stance_is_not_under_the_leaderboard_path() -> None:

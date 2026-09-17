@@ -442,11 +442,16 @@ class TestPitcherStealEngine(unittest.TestCase):
         self.assertIsNotNone(r)
         self.assertLess(r.score, 0.7, msg="Opposite steal-prevention outcomes should be dissimilar")
 
-    def test_outcome_is_sole_weight(self):
-        """SIM-408: outcome is the only sub-score, weight 1.0."""
-        from similarity.engines.pitcher_steal_similarity import WEIGHT_OUTCOME
+    def test_outcome_and_hold_weights_sum_to_one(self):
+        """SIM-531 (owner decision 2026-09-16): the outcome group carries 0.35
+        and the hold group (the lead and the jump the pitcher allows) 0.65 —
+        each group's share of its year-to-year repeat. Before SIM-531 the
+        outcome group was the sole sub-score (SIM-408)."""
+        from similarity.engines.pitcher_steal_similarity import WEIGHT_HOLD, WEIGHT_OUTCOME
 
-        self.assertAlmostEqual(WEIGHT_OUTCOME, 1.0, places=9)
+        self.assertAlmostEqual(WEIGHT_OUTCOME, 0.35, places=9)
+        self.assertAlmostEqual(WEIGHT_HOLD, 0.65, places=9)
+        self.assertAlmostEqual(WEIGHT_OUTCOME + WEIGHT_HOLD, 1.0, places=9)
 
 
 # ===========================================================================
