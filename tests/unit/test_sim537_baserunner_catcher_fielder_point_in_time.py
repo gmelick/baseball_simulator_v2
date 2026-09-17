@@ -108,8 +108,13 @@ def test_every_baserunner_profile_ends_up_stamped() -> None:
         _src(), "_compute_baserunner_profiles", "def _assert_baserunner_profiles_have_no_leakage"
     )
     assert "AS asof_date" in body
-    assert "SET asof_date = DATE '{asof_sql}'" in body
-    assert "WHERE asof_date IS NULL" in body
+    # SIM-551: the whole-table stamp through the shared helper, guarded by
+    # the pre-write check against a mixed cutoff.
+    assert (
+        'self._refuse_a_mixed_cutoff("derived.baserunner_season_metrics", seasons, asof_date)'
+        in body
+    )
+    assert 'self._stamp_one_cutoff("derived.baserunner_season_metrics", asof_sql)' in body
 
 
 def test_the_baserunner_leakage_assertion_covers_raw_pitches() -> None:
@@ -158,7 +163,11 @@ def test_every_baserunner_steal_profile_ends_up_stamped() -> None:
     # asof_date is named in the explicit INSERT column list, not appended
     # positionally, so this checks the column list carries it.
     assert re.search(r"steal_success_rate_2b, below_minimum_sample,\s*\n\s*asof_date", body)
-    assert "SET asof_date = DATE '{asof_sql}'" in body
+    assert (
+        'self._refuse_a_mixed_cutoff("derived.baserunner_steal_metrics", seasons, asof_date)'
+        in body
+    )
+    assert 'self._stamp_one_cutoff("derived.baserunner_steal_metrics", asof_sql)' in body
 
 
 def test_baserunner_steal_asof_is_threaded_from_run() -> None:
@@ -305,7 +314,10 @@ def test_every_catcher_profile_ends_up_stamped() -> None:
         _src(), "_aggregate_catcher_season_metrics", "def _compute_catcher_uncaught_k3"
     )
     assert "below_minimum_sample, updated_at, asof_date" in body
-    assert "SET asof_date = DATE '{asof_sql}'" in body
+    assert (
+        'self._refuse_a_mixed_cutoff("derived.catcher_season_metrics", seasons, asof_date)' in body
+    )
+    assert 'self._stamp_one_cutoff("derived.catcher_season_metrics", asof_sql)' in body
 
 
 def test_the_catcher_leakage_assertion_covers_raw_pitches() -> None:
@@ -420,7 +432,10 @@ def test_every_fielder_profile_ends_up_stamped_last() -> None:
     sprint_idx = body.index("ss.sprint_speed AS sprint_speed")
     asof_idx = body.index("DATE '{asof_sql}' AS asof_date")
     assert asof_idx > sprint_idx
-    assert "SET asof_date = DATE '{asof_sql}'" in body
+    assert (
+        'self._refuse_a_mixed_cutoff("derived.fielder_season_metrics", seasons, asof_date)' in body
+    )
+    assert 'self._stamp_one_cutoff("derived.fielder_season_metrics", asof_sql)' in body
 
 
 def test_the_fielder_leakage_assertion_covers_raw_pitches() -> None:

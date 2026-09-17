@@ -1711,6 +1711,13 @@ class PlayerProfileComputor:
             log.info("=== Player Profile & Defensive Metrics Pre-computation ===")
             log.info("  Seasons: %s | full_rebuild=%s", seasons, full_rebuild)
 
+            # SIM-551: check every stamped table up front, so a run that the
+            # batter section would refuse does not first spend an hour per
+            # season on the pitcher GMMs. Each builder repeats its own check
+            # (the scripts call the builders one at a time).
+            for table in self.STAMPED_TABLES:
+                self._refuse_a_mixed_cutoff(table, seasons, asof or date.today())
+
             if full_rebuild:
                 self._delete_seasons(seasons)
 
@@ -1905,6 +1912,136 @@ class PlayerProfileComputor:
             if not present:
                 failed.append(idx_qualified_name)
         return failed
+
+    # ------------------------------------------------------------------
+    # One cutoff per profile table (SIM-551)
+    # ------------------------------------------------------------------
+
+    #: The profile tables that carry a point-in-time stamp. ``asof_date`` is
+    #: the date a row's data runs through (SIM-534 / SIM-537). Every engine
+    #: that reads one of these tables refuses a set of rows stamped at two
+    #: different dates, so a build that leaves two stamps behind takes that
+    #: engine down at the next boot. A unit test keeps this list equal to the
+    #: tables that declare the column in ``02_duckdb_schema.sql``.
+    STAMPED_TABLES: tuple[str, ...] = (
+        "derived.pitcher_season_metrics",
+        "derived.batter_season_metrics",
+        "derived.baserunner_season_metrics",
+        "derived.baserunner_steal_metrics",
+        "derived.pitcher_steal_metrics",
+        "derived.manager_season_metrics",
+        "derived.fielder_season_metrics",
+        "derived.catcher_season_metrics",
+    )
+
+    def _refuse_a_mixed_cutoff(self, table: str, seasons: list[int], asof_date: date) -> None:
+        """Refuse a rebuild of ``seasons`` that would leave ``table`` at two
+        cutoffs. The check runs BEFORE the delete and the insert, so a
+        refusal leaves the table exactly as it found it.
+
+        SIM-551: the batter table reached two stamps on 2026-09-11. A rebuild
+        of the four pool seasons stamped them at its own date, and the six
+        seasons it did not touch kept the stamp of the day before. The old
+        stamping step filled only the rows with NO stamp, so nothing
+        reconciled the two, and the batter engine refused to build at every
+        boot for five days.
+
+        The rule: after the build, every row must hold data through the new
+        cutoff and none after it. The rows the build rewrites hold that by
+        construction. A row the build leaves alone (a "survivor") holds it
+        only when its season ended before the cutoff and the row is complete:
+
+        * a survivor already stamped at the cutoff — nothing to check;
+        * a survivor of the cutoff's own season — stale, or it leaks the
+          future; refuse and name the season to add to the run;
+        * a survivor of an earlier season with no stamp (built before the
+          stamps existed, so a live build) or stamped after its season's last
+          game — complete; ``_stamp_one_cutoff`` re-stamps it at the new
+          cutoff, which says the true thing: as of that date, this is the
+          whole season;
+        * a survivor stamped inside its own season, before its last game — a
+          truncated point-in-time build; refuse.
+        """
+        if not seasons:
+            return
+        season_list = ", ".join(str(int(s)) for s in seasons)
+        try:
+            survivors = self._conn.execute(f"""
+                SELECT season, asof_date, COUNT(*)
+                FROM {table}
+                WHERE season NOT IN ({season_list}) AND season <= {asof_date.year}
+                GROUP BY 1, 2
+                ORDER BY 1, 2
+            """).fetchall()
+        except duckdb.Error as exc:
+            raise RuntimeError(
+                f"{table} cannot be checked for a mixed cutoff ({exc}). Apply the DuckDB "
+                "migrations (0026-0028 add the asof_date stamp) before rebuilding it."
+            ) from exc
+        problems: list[str] = []
+        for season, stamp, n_rows in survivors:
+            season = int(season)
+            if isinstance(stamp, datetime):
+                stamp = stamp.date()
+            if stamp == asof_date:
+                continue
+            if season == asof_date.year:
+                problems.append(
+                    f"season {season} carries {n_rows} rows as of {stamp}, and this build is "
+                    f"as of {asof_date} — add {season} to the seasons, or build as of {stamp}"
+                )
+            elif stamp is None or stamp.year > season:
+                continue  # a completed season, whole at any later date
+            elif stamp.year == season:
+                last_game = self._season_last_game_date(season)
+                if last_game is not None and stamp >= last_game:
+                    continue  # stamped in the off-season: the whole season
+                problems.append(
+                    f"season {season} carries {n_rows} rows as of {stamp}, inside its own "
+                    f"season (last game {last_game or 'unknown'}) — a truncated build; "
+                    f"add {season} to the seasons to rebuild it whole"
+                )
+            else:
+                problems.append(
+                    f"season {season} carries {n_rows} rows stamped {stamp}, before the "
+                    f"season began — add {season} to the seasons to rebuild it"
+                )
+        if problems:
+            raise RuntimeError(
+                f"{table}: a rebuild of seasons [{season_list}] as of {asof_date} would leave "
+                f"the table at two cutoffs (the engine refuses a mixed set): " + "; ".join(problems)
+            )
+
+    def _season_last_game_date(self, season: int) -> date | None:
+        """The date of ``season``'s last game in ``raw.pitches``, or None when
+        the source cannot answer (a narrow test fixture with no game_date)."""
+        try:
+            row = self._conn.execute(
+                f"SELECT MAX(game_date) FROM pg.raw.pitches WHERE season = {int(season)}"
+            ).fetchone()
+        except Exception:  # noqa: BLE001 — a fixture's schema, not a data fact
+            return None
+        value = row[0] if row else None
+        if isinstance(value, datetime):
+            return value.date()
+        return value if isinstance(value, date) else None
+
+    def _stamp_one_cutoff(self, table: str, asof_sql: str) -> None:
+        """Stamp every row of ``table`` at the build's cutoff — the whole
+        table, not only the rows with no stamp yet.
+
+        SIM-551: ``_refuse_a_mixed_cutoff`` has already refused any survivor
+        this stamp would misdescribe. Every row here was either rewritten at
+        the cutoff or is a completed season, which is whole as of any later
+        date. Stamping the survivors says that: as of the cutoff, this is
+        what we know.
+        """
+        self._conn.execute(f"""
+            UPDATE {table}
+            SET asof_date = DATE '{asof_sql}'
+            WHERE asof_date IS DISTINCT FROM DATE '{asof_sql}'
+        """)
+        log.info("  %s stamped as of %s (one cutoff).", table, asof_sql)
 
     def _compute_park_factors(self, seasons: list[int]) -> None:
         """
@@ -2177,6 +2314,10 @@ class PlayerProfileComputor:
         season_list = ", ".join(str(s) for s in seasons)
         date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
         pickoff_outs_cte = self._play_events_outs_cte(asof_sql if asof is not None else None)
+
+        # SIM-551: refuse, before any write, a rebuild that would leave the
+        # table at two cutoffs.
+        self._refuse_a_mixed_cutoff("derived.pitcher_season_metrics", seasons, asof_date)
 
         if asof is not None:
             # SIM-537: same removal rule as the batter grouping — INSERT OR
@@ -2457,16 +2598,9 @@ class PlayerProfileComputor:
             gmm_fallback,
         )
 
-        # SIM-537: leave the whole table coherent at ONE cutoff — same reasoning
-        # as _compute_batter_profiles. A season this run did not touch (outside
-        # `seasons`) still holds valid, unexpanded data; an unstamped row is
-        # only indistinguishable from one built at a different cutoff, and the
-        # engine refuses a mixed set.
-        self._conn.execute(f"""
-            UPDATE derived.pitcher_season_metrics
-            SET asof_date = DATE '{asof_sql}'
-            WHERE asof_date IS NULL
-        """)
+        # SIM-537 / SIM-551: leave the whole table at ONE cutoff — the same
+        # reasoning as _compute_batter_profiles.
+        self._stamp_one_cutoff("derived.pitcher_season_metrics", asof_sql)
 
         self._assert_pitcher_profiles_have_no_leakage(seasons, asof_date)
         log.info("  Pitcher profiles done (as of %s).", asof_sql)
@@ -2536,6 +2670,10 @@ class PlayerProfileComputor:
         asof_sql = asof_date.isoformat()
         log.info("Computing batter profiles (as of %s) …", asof_sql)
         season_list = ", ".join(str(s) for s in seasons)
+
+        # SIM-551: refuse, before any write, a rebuild that would leave the
+        # table at two cutoffs.
+        self._refuse_a_mixed_cutoff("derived.batter_season_metrics", seasons, asof_date)
 
         if asof is not None:
             # SIM-534: a point-in-time build has to REMOVE as well as write.
@@ -2923,18 +3061,11 @@ class PlayerProfileComputor:
             LEFT JOIN savant_stance st
                 ON st.st_batter_id = bp.batter_id AND st.st_season = bp.season
         """)
-        # SIM-534: leave the whole table coherent at ONE cutoff. Seasons this
-        # run did not touch still hold valid data — a 2019 profile contains
-        # nothing recorded after 2024 — but an unstamped row is indistinguishable
-        # from a row built at some other cutoff, and the engine refuses a mixed
-        # set. Stamping them says the true thing: this is what we know as of the
-        # cutoff. The cutoff path has already deleted anything that could not
-        # exist yet, so every survivor here is genuinely admissible.
-        self._conn.execute(f"""
-            UPDATE derived.batter_season_metrics
-            SET asof_date = DATE '{asof_sql}'
-            WHERE asof_date IS NULL
-        """)
+        # SIM-534 / SIM-551: leave the whole table at ONE cutoff. The seasons
+        # this run did not touch passed _refuse_a_mixed_cutoff above, so every
+        # survivor is a whole season, and stamping it at this cutoff says the
+        # true thing: this is what we know as of the cutoff.
+        self._stamp_one_cutoff("derived.batter_season_metrics", asof_sql)
 
         self._assert_batter_profiles_have_no_leakage(seasons, asof_date)
         log.info("  Batter profiles done (as of %s).", asof_sql)
@@ -3044,6 +3175,10 @@ class PlayerProfileComputor:
             if asof is not None
             else "ap.season"
         )
+
+        # SIM-551: refuse, before any write, a rebuild that would leave the
+        # table at two cutoffs.
+        self._refuse_a_mixed_cutoff("derived.baserunner_season_metrics", seasons, asof_date)
 
         if asof is not None:
             self._conn.execute(f"""
@@ -3246,11 +3381,7 @@ class PlayerProfileComputor:
             LEFT JOIN pg.raw.savant_baserunning sbr
                 ON ap.player_id = sbr.player_id AND sbr.season = {sprint_speed_season}
         """)
-        self._conn.execute(f"""
-            UPDATE derived.baserunner_season_metrics
-            SET asof_date = DATE '{asof_sql}'
-            WHERE asof_date IS NULL
-        """)
+        self._stamp_one_cutoff("derived.baserunner_season_metrics", asof_sql)
         self._assert_baserunner_profiles_have_no_leakage(seasons, asof_date)
         log.info("  Baserunner profiles done.")
 
@@ -3354,6 +3485,10 @@ class PlayerProfileComputor:
         # Matches the engine's MIN_STEAL_ATTEMPTS gate (rows flagged below this
         # are filtered out by the engine's `WHERE NOT below_minimum_sample`).
         min_attempts = 10
+
+        # SIM-551: refuse, before any write, a rebuild that would leave the
+        # table at two cutoffs.
+        self._refuse_a_mixed_cutoff("derived.baserunner_steal_metrics", seasons, asof_date)
 
         if asof is not None:
             self._conn.execute(f"""
@@ -3476,11 +3611,7 @@ class PlayerProfileComputor:
             LEFT JOIN opp_2b o2 ON o2.player_id = r.player_id AND o2.season = r.season
             LEFT JOIN savant sv ON sv.player_id = r.player_id AND sv.season = {savant_season}
         """)
-        self._conn.execute(f"""
-            UPDATE derived.baserunner_steal_metrics
-            SET asof_date = DATE '{asof_sql}'
-            WHERE asof_date IS NULL
-        """)
+        self._stamp_one_cutoff("derived.baserunner_steal_metrics", asof_sql)
         self._assert_baserunner_steal_profiles_have_no_leakage(seasons, asof_date)
         log.info("  derived.baserunner_steal_metrics done.")
 
@@ -3546,6 +3677,10 @@ class PlayerProfileComputor:
             else "p.season"
         )
         min_events = 30  # matches the engine's MIN_BASERUNNER_EVENTS gate
+
+        # SIM-551: refuse, before any write, a rebuild that would leave the
+        # table at two cutoffs.
+        self._refuse_a_mixed_cutoff("derived.pitcher_steal_metrics", seasons, asof_date)
 
         if asof is not None:
             self._conn.execute(f"""
@@ -3659,11 +3794,7 @@ class PlayerProfileComputor:
             LEFT JOIN pg.raw.savant_pitcher_running_game sv
                 ON sv.player_id = p.pitcher_id AND sv.season = {savant_season}
         """)
-        self._conn.execute(f"""
-            UPDATE derived.pitcher_steal_metrics
-            SET asof_date = DATE '{asof_sql}'
-            WHERE asof_date IS NULL
-        """)
+        self._stamp_one_cutoff("derived.pitcher_steal_metrics", asof_sql)
         self._assert_pitcher_steal_profiles_have_no_leakage(seasons, asof_date)
         log.info("  derived.pitcher_steal_metrics done.")
 
@@ -3838,6 +3969,10 @@ class PlayerProfileComputor:
         log.info("Computing manager profiles (as of %s) …", asof_sql)
         season_list = ", ".join(str(s) for s in seasons)
         date_cutoff = f"AND game_date <= DATE '{asof_sql}'" if asof is not None else ""
+
+        # SIM-551: refuse, before any write, a rebuild that would leave the
+        # table at two cutoffs.
+        self._refuse_a_mixed_cutoff("derived.manager_season_metrics", seasons, asof_date)
 
         if asof is not None:
             # SIM-537: same removal rule as the batter/pitcher groupings —
@@ -4152,13 +4287,9 @@ class PlayerProfileComputor:
             LEFT JOIN bullpen_opp bo ON bo.manager_id = g.manager_id AND bo.season = g.season
         """)
 
-        # SIM-537: leave the whole table coherent at ONE cutoff (see
-        # _compute_batter_profiles for the full reasoning).
-        self._conn.execute(f"""
-            UPDATE derived.manager_season_metrics
-            SET asof_date = DATE '{asof_sql}'
-            WHERE asof_date IS NULL
-        """)
+        # SIM-537 / SIM-551: leave the whole table at ONE cutoff (see
+        # _compute_batter_profiles for the reasoning).
+        self._stamp_one_cutoff("derived.manager_season_metrics", asof_sql)
 
         self._assert_manager_profiles_have_no_leakage(seasons, asof_date)
         log.info("  Manager profiles done (as of %s).", asof_sql)
@@ -5702,6 +5833,10 @@ class PlayerProfileComputor:
         # ----------------------------------------------------------------
         self._ensure_fielder_temp_tables_exist()
 
+        # SIM-551: refuse, before any write, a rebuild that would leave the
+        # table at two cutoffs.
+        self._refuse_a_mixed_cutoff("derived.fielder_season_metrics", seasons, asof_date)
+
         # Delete existing rows for these seasons (full rebuild pattern).
         # SIM-537: a cutoff build also removes a season that had not
         # started yet — INSERT alone only overwrites rows the new query
@@ -5952,11 +6087,7 @@ class PlayerProfileComputor:
             LEFT JOIN pg.raw.savant_arm_strength sas
                 ON c.player_id = sas.player_id AND sas.season = {savant_season}
         """)
-        self._conn.execute(f"""
-            UPDATE derived.fielder_season_metrics
-            SET asof_date = DATE '{asof_sql}'
-            WHERE asof_date IS NULL
-        """)
+        self._stamp_one_cutoff("derived.fielder_season_metrics", asof_sql)
         self._assert_fielder_profiles_have_no_leakage(seasons, asof_date)
 
         log.info("  Fielder season metrics aggregated.")
@@ -6179,6 +6310,10 @@ class PlayerProfileComputor:
         # FULL OUTER JOIN inputs all exist (possibly empty) before running.
         self._ensure_catcher_temp_tables_exist()
 
+        # SIM-551: refuse, before any write, a rebuild that would leave the
+        # table at two cutoffs.
+        self._refuse_a_mixed_cutoff("derived.catcher_season_metrics", seasons, asof_date)
+
         delete_cutoff = f"OR season > {asof_date.year}" if asof is not None else ""
         self._conn.execute(f"""
             DELETE FROM derived.catcher_season_metrics
@@ -6300,11 +6435,7 @@ class PlayerProfileComputor:
                 ON sct.player_id = COALESCE(f.catcher_id, b.catcher_id, t.catcher_id)
                AND sct.season    = {savant_season}
         """)
-        self._conn.execute(f"""
-            UPDATE derived.catcher_season_metrics
-            SET asof_date = DATE '{asof_sql}'
-            WHERE asof_date IS NULL
-        """)
+        self._stamp_one_cutoff("derived.catcher_season_metrics", asof_sql)
 
         # Clean up temp tables
         for t in [

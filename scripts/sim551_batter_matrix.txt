@@ -1,0 +1,8 @@
+ Container baseball_simulator_v2-app-run-113edbd5149b Creating 
+ Container baseball_simulator_v2-app-run-113edbd5149b Created 
+2026-09-17 03:16:08,684 INFO Loaded batter league averages for 4 seasons.
+2026-09-17 03:16:08,931 INFO Loading 1807 batter profiles from DuckDB …
+2026-09-17 03:16:08,981 INFO Batter profiles are as of 2026-09-17.
+2026-09-17 03:16:09,131 INFO BatterSimilarityEngine built: 1807 profiles in 0.45s.
+2026-09-17 03:16:21,727 INFO actor_sim[batter]: 1807 x 1807
+2026-09-17 03:16:21,738 INFO engine-artifact build complete -> /data/play_pool/engine_artifacts

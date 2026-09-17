@@ -449,6 +449,16 @@ every pool band, runs +0.1%. Next free ID SIM-528.
   (the recompute picks up SIM-501a/457/503 + 458 + the corrected pool `result_outs` in one pass).
 - **The re-sweep takes ~6 hours, not 55.** Measured from `.sweep_progress/`: 2017-2025 ran in
   6 h 9 m. The old figure took a SPAN between file timestamps as a duration.
+- **One cutoff per profile table (SIM-551, 2026-09-16).** Eight `derived.*` profile tables
+  carry `asof_date`, the date a row's data runs through, and every engine refuses a table
+  stamped at two dates. A partial recompute (`--seasons` a subset) on a later day used to
+  leave exactly that behind — the batter table sat at 2026-09-10 / 2026-09-11 from 09-11 to
+  09-16 and the app booted `build_all_engines: 10/11`. Now the computor refuses such a
+  rebuild BEFORE it writes and stamps the whole table after its insert. The rule for a
+  partial recompute: include the season in progress in `--seasons` (the CLI default is the
+  current season). The batter table was rebuilt at one date with
+  `scripts/sim551_batter_recompute.py` (11 s, the app stopped); the batter matrix came back
+  byte-identical.
 - **Sample hundreds of games when validating ETL work, never dozens.** Two adversarial review rounds
   found four defects each, all from real payloads at scale, none from reading code. A 70-game sample
   reported "100%" on a metric that 950 games disproved.

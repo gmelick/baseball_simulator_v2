@@ -169,6 +169,20 @@ The official box-score backfill (SIM-545): fetches the MLB Stats API box score f
 
 ---
 
+### `scripts/sim551_batter_recompute.py`
+
+**Purpose:** SIM-551 — rebuild the batter profiles (`derived.batter_season_metrics`) at ONE cutoff, on their own, after a partial rebuild left the table at two dates and the batter engine refused to build (`build_all_engines: 10/11`, 2026-09-11 → 09-16). The app must be STOPPED (a DuckDB write). Runs the computor's own `_compute_batter_profiles` for the seasons in one transaction (the seasons' old rows deleted first), recomputes ONLY the `batter` rows of `derived.league_averages` (the writer's other blocks would overwrite the runner rows the SIM-531 recompute wrote with their new keys), then verifies. Ran 2026-09-17: ten seasons in 11 s, one stamp on 7,885 rows, the batter engine built 4,371 profiles.
+
+| Function | What it does | Called by | Depends on |
+|---|---|---|---|
+| `stamps(duckdb_path)` | Read-only: the distinct `asof_date` stamps on the table with their season range and row count — printed before and after the rebuild. | `main()` | — |
+| `recompute_batter_league_averages(duckdb_path, seasons)` | The `batter` block of `LeagueAverageProfiles.compute`, alone (INSERT OR REPLACE on the batter rows for the seasons). | `main()` | — |
+| `verify(duckdb_path, seasons)` | Read-only: rows per season with the physical block's coverage (a floor of 500 batter-seasons with a bat-speed figure on a completed season from 2023 on), exactly ONE stamp on the table, a batter league row per season, and a build of `BatterSimilarityEngine` over every season — the build the app runs at boot; raises on any problem. | `main()` | `similarity.engines.batter_similarity.BatterSimilarityEngine` |
+
+**Used by:** `operator CLI only. Then \`docker compose start app\` (check the boot log for \`build_all_engines: 11/11\`) and \`python -m pipeline.batch.engine_artifacts --what actors_sim --matrix batter\` (read-only).`
+
+---
+
 ### `scripts/sim427_manager_probe.py`
 
 **Purpose:** SIM-427 part 4f — the manager probe: real games on the balanced 45-game set with ONE configuration of the pitching-change draw (an "arm") per process, paired by `report`. The reads: THE USAGE READ (pitchers per team-game, the starters' pitches at the pull — mean and spread across starter-games — the starters' outs, the half-boundary share of changes, against the official box score's numbers for the set's seasons from `raw.game_player_stats` and the pool's own change rates); THE MANAGER READ (the change rate per boundary with a starter on the mound, by manager tier — terciles of the live managers' own `starter_avg_pitch_count` — against the pool's own rate on those managers' starter rows: the per-opportunity conditional the manager power is fitted on); THE RELIEVER READ (the entering arm's high-leverage role share by inning tier, its rest at entry, its hand mix, against the pool's own incoming arms); THE COMPOSITION READ (the sim's pitch share by pitch-count band and times through the order against the pool's row share — the fatigue read of the SIM-518 plan); THE PREDICTION SHIFT (per starter-game strikeout mean and probability of clearing the closing line, arm minus baseline).

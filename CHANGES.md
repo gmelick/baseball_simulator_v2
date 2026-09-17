@@ -1,3 +1,88 @@
+# Fix — the batter engine failed at every boot for five days: a partial profile rebuild left the batter table at two cutoffs; rebuilt at one date, and the computor now refuses the rebuild that causes it (SIM-551) — 2026-09-16
+
+**What was wrong.** Since 2026-09-11 the app booted `build_all_engines: 10/11` — the batter
+engine refused to build: "batter profiles were built at different cutoffs (['2026-09-10',
+'2026-09-11'])". The batter engine is the Similarity Explorer's batter page and the
+calibrator's batter fit. The simulator draws from the batter actor matrix in the artifact
+bundle, which was built on 2026-09-11 and was unaffected at draw time — but the matrix could
+not be rebuilt while the engine refused to build. Found on 2026-09-16 while running the
+lead-distance run book (SIM-531); not part of that ticket.
+
+**The cause.** `derived.batter_season_metrics` carried `asof_date` 2026-09-10 on seasons
+2017-2022 (5,266 rows) and 2026-09-11 on seasons 2023-2026 (2,619 rows). The stamp is the
+date a row's data runs through (the point-in-time rule, SIM-534 / SIM-537). Two runs wrote
+the two dates; no log of either survives (`docker compose run --rm` keeps none), so the
+commit times and the stamps date them. The first was the batter build that landed the
+point-in-time rule on 2026-09-10 (commit `5eb0006`, 13:00 -0400): it wrote the seasons it
+rebuilt at its own date, and its last step filled every row with NO stamp at the same
+date, so the whole table read 2026-09-10. The second was the overnight rebuild of the four
+pool seasons for the physical swing features and the arm blocks (SIM-529 / SIM-530, the
+2026-09-11 entry below: "the profile rebuild (four pool seasons, five hours)"). Its batter
+section ran after midnight UTC, so it wrote 2023-2026 at 2026-09-11; the 2017-2022 rows
+already carried a stamp, so the fill-the-NULLs step left them at 2026-09-10. Nothing
+reconciled the two dates, and the engine refuses a mixed set. The same fill-the-NULLs
+step sat under all eight stamped tables (pitcher, batter, baserunner, baserunner-steal,
+pitcher-steal, manager, fielder, catcher), so every partial rebuild on a later day would
+do the same to its table. The other seven were at one date only because
+each had been rebuilt once since its stamp column arrived: the three runner tables read
+2026-09-17 (today's SIM-531 recompute), the manager table 2026-09-13, and pitcher, fielder
+and catcher NULL on every row.
+
+**The fix in the computor.** Two shared helpers replace the eight fill-the-NULLs steps
+(`pipeline/batch/player_profile_computor.py`, `STAMPED_TABLES`):
+
+* `_refuse_a_mixed_cutoff(table, seasons, asof_date)` runs at the head of every builder,
+  BEFORE its delete and its insert, so a refusal leaves the table exactly as it found it.
+  It looks at the rows the build leaves alone. A row of a completed season passes (whole at
+  any later date). A row of the cutoff's own season at another date is refused — it is
+  stale, or it holds the future — and the message names the season to add to the run. A
+  row stamped inside its own season before that season's last game (a truncated
+  point-in-time build) is refused too; a same-year stamp after the last game (a live build
+  in the off-season) passes. `run()` checks all eight tables up front, so a run the batter
+  section would refuse does not first spend an hour per season on the pitcher GMMs.
+* `_stamp_one_cutoff(table, asof_sql)` runs after the insert and stamps the WHOLE table,
+  not only the unstamped rows. Every survivor passed the check, so the stamp says the true
+  thing: as of this date, this is the whole season.
+
+The refusal also closes a hole the old step never covered: a point-in-time build as of
+2024-04-15 that did not include 2024 would have kept a live, full-season 2024 row and
+stamped it as of April. 17 new unit tests (`tests/unit/test_sim551_one_cutoff_per_table.py`)
+run the helpers against an in-memory DuckDB: the defect replayed and cured, each refusal
+before any write, the off-season case, the unstamped tables, the cutoff path, and the wiring
+(every stamped table calls both helpers, the check precedes the first write in every
+builder, the list matches the schema). Six existing source tests moved from the old step
+to the helpers.
+
+**The data run (2026-09-17 03:13 UTC, the app stopped for about a minute).**
+`scripts/sim551_batter_recompute.py` rebuilt the batter table for all ten seasons in one
+transaction (the seasons' old rows deleted first, then the corrected batter section) and
+the `batter` rows of `derived.league_averages` — only those rows, because the writer's other
+blocks would overwrite the runner rows the SIM-531 recompute wrote today with their new
+keys. 11 seconds. The table now reads ONE stamp, 2026-09-17, on 7,885 rows; the row counts
+per season and the physical block's coverage (571 / 650 / 671 / 636 batter-seasons with a
+bat-speed figure for 2023-2026) are unchanged; the leakage checks pass (raw.pitches newest
+2026-08-29, the Savant boards 2026-09-10). The script's own verdict is the build the app
+runs at boot: the batter engine built 4,371 profiles as of 2026-09-17. The app came back at
+03:15 UTC with **`build_all_engines: 11/11`**, the batter calibration applied
+(`sigma_phys=1.1193`) and the win-probability curve intact. The batter actor matrix was
+then rebuilt (`--what actors_sim --matrix batter`, read-only, 13 seconds): 1807 × 1807,
+mean similarity 0.471 — **byte-identical to the 2026-09-11 matrix (md5 `8b17b889…`)**. The
+pool seasons' content did not change, only the stamp, so the simulator's draws are
+unchanged and no restart was needed. Logs: `scripts/sim551_batter_recompute.txt`,
+`scripts/sim551_batter_matrix.txt`.
+
+**What this does not change.** The stamp is still `date.today()` in the container, which is
+UTC — a run that starts in the evening (local) stamps the next day's date, which is how
+the 2026-09-11 run got its date. Each section stamps its own table at its own moment, so
+a run that crosses midnight can leave two tables at two dates; every table is coherent on
+its own, which is all the engines check. The pitcher, fielder and catcher tables still
+read NULL on every row (no rebuild since their stamp columns arrived); the next rebuild of
+each stamps it whole. A partial rebuild that leaves out the season in progress is now
+refused — add the current season to `--seasons` (the CLI default is the current season, so
+the nightly is unaffected).
+
+---
+
 # Build — the outfield arm block rebuilt from our own advancement pool: built, reviewed, and RUN on the live data (the fill, the refit, the three matrices, the app restarted); the prevention repeats at 0.14 within a position, not the plan's 0.60 — SIM-550, 2026-09-17
 
 **The defect (plan §0).** The fielding model compares outfielders partly on their arm:

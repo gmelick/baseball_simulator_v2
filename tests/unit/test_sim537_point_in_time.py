@@ -107,8 +107,12 @@ def test_every_pitcher_profile_ends_up_stamped() -> None:
     start = src.index("def _compute_pitcher_profiles")
     end = src.index("def _assert_pitcher_profiles_have_no_leakage")
     body = src[start:end]
-    assert "SET asof_date = DATE '{asof_sql}'" in body
-    assert "WHERE asof_date IS NULL" in body
+    # SIM-551: the whole-table stamp through the shared helper, guarded by
+    # the pre-write check against a mixed cutoff.
+    assert (
+        'self._refuse_a_mixed_cutoff("derived.pitcher_season_metrics", seasons, asof_date)' in body
+    )
+    assert 'self._stamp_one_cutoff("derived.pitcher_season_metrics", asof_sql)' in body
 
 
 def test_pitcher_asof_is_threaded_from_run() -> None:
@@ -172,8 +176,10 @@ def test_every_manager_profile_ends_up_stamped() -> None:
     start = src.index("def _compute_manager_profiles")
     end = src.index("def _assert_manager_profiles_have_no_leakage")
     body = src[start:end]
-    assert "SET asof_date = DATE '{asof_sql}'" in body
-    assert "WHERE asof_date IS NULL" in body
+    assert (
+        'self._refuse_a_mixed_cutoff("derived.manager_season_metrics", seasons, asof_date)' in body
+    )
+    assert 'self._stamp_one_cutoff("derived.manager_season_metrics", asof_sql)' in body
 
 
 def test_manager_asof_is_threaded_from_run() -> None:

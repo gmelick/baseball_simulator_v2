@@ -1,0 +1,36 @@
+ Container baseball_simulator_v2-app-run-7a5bc68ee84a Creating 
+ Container baseball_simulator_v2-app-run-7a5bc68ee84a Created 
+2026-09-17 03:13:53  INFO      before: asof 2026-09-10 on seasons 2017-2022 (5266 rows)
+2026-09-17 03:13:53  INFO      before: asof 2026-09-11 on seasons 2023-2026 (2619 rows)
+2026-09-17 03:13:53  INFO      Opening DuckDB at /data/baseball_sim.duckdb …
+2026-09-17 03:13:55  INFO      PostgreSQL attached as 'pg'.
+2026-09-17 03:13:55  INFO      DuckDB schema already present — skipping DDL.
+2026-09-17 03:13:55  INFO      Computing batter profiles (as of 2026-09-17) …
+2026-09-17 03:14:02  INFO        derived.batter_season_metrics stamped as of 2026-09-17 (one cutoff).
+2026-09-17 03:14:02  INFO          no leakage from raw.pitches                  newest = 2026-08-29
+2026-09-17 03:14:03  INFO          no leakage from raw.savant_pitch_tracking    newest = 2026-08-29
+2026-09-17 03:14:03  INFO          no leakage from raw.savant_bat_tracking      newest = 2026-09-10
+2026-09-17 03:14:03  INFO          no leakage from raw.savant_swing_path        newest = 2026-09-10
+2026-09-17 03:14:03  INFO          no leakage from raw.savant_batting_stance    newest = 2026-09-10
+2026-09-17 03:14:03  INFO        Batter profiles done (as of 2026-09-17).
+2026-09-17 03:14:03  INFO      batter profiles recomputed in 11s
+2026-09-17 03:14:04  INFO      batter league-average rows for the seasons: 10
+2026-09-17 03:14:04  INFO      after: asof 2026-09-17 on seasons 2017-2026 (7885 rows)
+2026-09-17 03:14:04  INFO        batters 2017: 958 rows, 0 with a bat-speed figure, 528 below minimum, asof 2026-09-17
+2026-09-17 03:14:04  INFO        batters 2018: 992 rows, 0 with a bat-speed figure, 554 below minimum, asof 2026-09-17
+2026-09-17 03:14:04  INFO        batters 2019: 990 rows, 0 with a bat-speed figure, 545 below minimum, asof 2026-09-17
+2026-09-17 03:14:04  INFO        batters 2020: 583 rows, 0 with a bat-speed figure, 264 below minimum, asof 2026-09-17
+2026-09-17 03:14:04  INFO        batters 2021: 1050 rows, 0 with a bat-speed figure, 587 below minimum, asof 2026-09-17
+2026-09-17 03:14:04  INFO        batters 2022: 693 rows, 0 with a bat-speed figure, 224 below minimum, asof 2026-09-17
+2026-09-17 03:14:04  INFO        batters 2023: 656 rows, 571 with a bat-speed figure, 194 below minimum, asof 2026-09-17
+2026-09-17 03:14:04  INFO        batters 2024: 651 rows, 650 with a bat-speed figure, 195 below minimum, asof 2026-09-17
+2026-09-17 03:14:04  INFO        batters 2025: 674 rows, 671 with a bat-speed figure, 215 below minimum, asof 2026-09-17
+2026-09-17 03:14:04  INFO        batters 2026: 638 rows, 636 with a bat-speed figure, 208 below minimum, asof 2026-09-17
+2026-09-17 03:14:04  INFO      batter league-average rows: 10
+2026-09-17 03:14:04  INFO      Loaded batter league averages for 10 seasons.
+2026-09-17 03:14:04  INFO      Loading 4371 batter profiles from DuckDB …
+2026-09-17 03:14:04  INFO      Batter profiles are as of 2026-09-17.
+2026-09-17 03:14:04  INFO      BatterSimilarityEngine built: 4371 profiles in 0.52s.
+2026-09-17 03:14:04  INFO      batter engine built: 4371 profiles as of 2026-09-17 in 0.5s
+2026-09-17 03:14:04  INFO      verify: every check passed
+2026-09-17 03:14:04  INFO      done in 11s

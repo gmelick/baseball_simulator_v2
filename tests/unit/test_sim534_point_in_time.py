@@ -85,9 +85,18 @@ def test_a_cutoff_build_deletes_seasons_that_had_not_started() -> None:
 
 
 def test_every_profile_ends_up_stamped() -> None:
+    """SIM-551: the stamp covers the WHOLE table, through the shared helper.
+    The old step stamped only the rows with no stamp yet, which is how the
+    batter table reached two cutoffs on 2026-09-11."""
     src = COMPUTOR.read_text(encoding="utf-8")
-    assert "SET asof_date = DATE '{asof_sql}'" in src
-    assert "WHERE asof_date IS NULL" in src
+    start = src.index("def _compute_batter_profiles")
+    end = src.index("def _assert_batter_profiles_have_no_leakage")
+    body = src[start:end]
+    assert (
+        'self._refuse_a_mixed_cutoff("derived.batter_season_metrics", seasons, asof_date)' in body
+    )
+    assert 'self._stamp_one_cutoff("derived.batter_season_metrics", asof_sql)' in body
+    assert "WHERE asof_date IS NULL" not in src
 
 
 # ---------------------------------------------------------------------------
