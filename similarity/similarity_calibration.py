@@ -282,6 +282,7 @@ def calibrate_reliability_weights(
     player_ids: NDArray[np.int64],
     n_splits: int = 100,
     seed: int = 42,
+    seasons: NDArray[np.int64] | None = None,
 ) -> NDArray[np.float64]:
     """
     Compute per-feature reliability weights via split-half correlation.
@@ -300,11 +301,21 @@ def calibrate_reliability_weights(
     raw_feature_matrix : (N, D) array
         Feature vectors, one per player-season.
     player_ids : (N,) array
-        Player ID for each row (to identify multi-season players).
+        Player ID for each row (to identify multi-season players). A caller
+        whose rows are finer than one per player-season (the fielder
+        profiles: one per player, position and season) passes a composite
+        id so a pair never crosses positions.
     n_splits : int
         Number of random split-half iterations.
     seed : int
         Random seed.
+    seasons : (N,) array, optional
+        The season of each row. When given, the pairs are EVERY pair of
+        consecutive seasons inside one id (2023 with 2024, 2024 with 2025),
+        so the weight is a season-to-season repeat. When absent, the pair
+        is the first two rows of the id in scan order, whatever their
+        seasons (the pre-SIM-550 rule, kept for the callers that pass one
+        row per player-season).
 
     Returns
     -------
@@ -338,10 +349,22 @@ def calibrate_reliability_weights(
     # Build paired feature matrices
     rows_a, rows_b = [], []
     for _pid, row_indices in player_rows.items():
-        if len(row_indices) >= 2:
+        if len(row_indices) < 2:
+            continue
+        if seasons is None:
             # Use first two seasons as the pair
             rows_a.append(raw_feature_matrix[row_indices[0]])
             rows_b.append(raw_feature_matrix[row_indices[1]])
+            continue
+        # SIM-550: every consecutive-season pair inside the id. A gap
+        # (2023 then 2025) forms no pair; a duplicate season keeps the
+        # last row (the callers pass one row per id and season).
+        by_season = {int(seasons[i]): i for i in row_indices}
+        for season, row in sorted(by_season.items()):
+            following = by_season.get(season + 1)
+            if following is not None:
+                rows_a.append(raw_feature_matrix[row])
+                rows_b.append(raw_feature_matrix[following])
 
     if len(rows_a) < 5:
         return np.ones(d)
@@ -371,6 +394,21 @@ def calibrate_reliability_weights(
     weights = np.maximum(weights, 0.1)
 
     return weights
+
+
+_FIELDER_POSITION_CODES = {"1B": 3, "2B": 4, "3B": 5, "SS": 6, "LF": 7, "CF": 8, "RF": 9}
+
+
+def _fielder_pair_ids(rows: list[tuple]) -> NDArray[np.int64]:
+    """SIM-550: the id the fielder reliability fit pairs on: one per player
+    AND position. The fielder table holds one row per (player, position,
+    season); a player-only id would pair a centre fielder's row with his own
+    right-field row. ``rows`` are the calibrator's SELECT rows: player_id
+    first, position second."""
+    return np.array(
+        [int(r[0]) * 10 + _FIELDER_POSITION_CODES.get(str(r[1]), 0) for r in rows],
+        dtype=np.int64,
+    )
 
 
 # ============================================================================
@@ -1222,6 +1260,7 @@ class SimilarityCalibrator:
         Returns a dict with calibrated sigma values keyed by sub-score name.
         """
         from similarity.engines.fielder_similarity import (
+            ARM_ALPHA_PRIOR_CHANCES,
             IF_DP_FEATURES,
             IF_ERROR_FEATURES,
             IF_RANGE_FEATURES,
@@ -1246,21 +1285,31 @@ class SimilarityCalibrator:
             WHERE season IN ({sl})
               AND position IN ('1B','2B','3B','SS')
               AND NOT below_minimum_sample
+            ORDER BY player_id, position, season
         """).fetchall()
 
-        # Load outfield profiles
+        # Load outfield profiles. The column blocks sit in the engine's feature
+        # order (range, errors, arm, star counts) because the index arithmetic
+        # below walks them by the feature lists' lengths.
+        # SIM-550: the arm block is OF_ARM_FEATURES' three columns, in its
+        # order: the throw velocity, the advancement prevention, the thrown-out
+        # rate. of_arm_runs and arm_hold_rate left the SELECT with the group.
+        # The arm's chance count rides LAST so the block arithmetic stays put;
+        # the reliability fit floors its pairs on it (the plan's section 2.2).
         of_rows = conn.execute(f"""
             SELECT
                 player_id, position, season, sample_batted_balls,
                 oaa_glove_side, oaa_arm_side, oaa_charging, oaa_deep, catch_pct_added,
                 fielding_error_rate, throwing_error_rate,
-                arm_hold_rate, arm_thrown_out_rate, arm_advancement_prevention, of_arm_runs,
+                arm_strength, arm_advancement_prevention, arm_thrown_out_rate,
                 five_star_opps, five_star_catches, four_star_opps, four_star_catches,
-                routine_opps, routine_catches
+                routine_opps, routine_catches,
+                arm_opportunities
             FROM derived.fielder_season_metrics
             WHERE season IN ({sl})
               AND position IN ('LF','CF','RF')
               AND NOT below_minimum_sample
+            ORDER BY player_id, position, season
         """).fetchall()
 
         # Calibrate IF sigmas
@@ -1289,7 +1338,8 @@ class SimilarityCalibrator:
                 ]
             )
 
-            ids = np.array([r[0] for r in if_rows])
+            ids = _fielder_pair_ids(if_rows)
+            season_of = np.array([int(r[2]) for r in if_rows], dtype=np.int64)
 
             # SIM-432: _fit_sigma (not raw calibrate_sigma) so a NO-variance
             # sub-score (e.g. a metric the live computor leaves all-NULL) returns
@@ -1311,11 +1361,21 @@ class SimilarityCalibrator:
                 self._zscore_matrix(spec_raw), target_median_score
             )
 
-            report.reliability_weights_if_range = calibrate_reliability_weights(range_raw, ids)
-            report.reliability_weights_if_dp = calibrate_reliability_weights(dp_raw, ids)
-            report.reliability_weights_if_pivot = calibrate_reliability_weights(pivot_raw, ids)
-            report.reliability_weights_if_error = calibrate_reliability_weights(err_raw, ids)
-            report.reliability_weights_if_specialty = calibrate_reliability_weights(spec_raw, ids)
+            report.reliability_weights_if_range = calibrate_reliability_weights(
+                range_raw, ids, seasons=season_of
+            )
+            report.reliability_weights_if_dp = calibrate_reliability_weights(
+                dp_raw, ids, seasons=season_of
+            )
+            report.reliability_weights_if_pivot = calibrate_reliability_weights(
+                pivot_raw, ids, seasons=season_of
+            )
+            report.reliability_weights_if_error = calibrate_reliability_weights(
+                err_raw, ids, seasons=season_of
+            )
+            report.reliability_weights_if_specialty = calibrate_reliability_weights(
+                spec_raw, ids, seasons=season_of
+            )
 
             log.info(
                 "IF calibration: %d profiles, sigma_range=%.3f, sigma_dp=%.3f, "
@@ -1335,13 +1395,14 @@ class SimilarityCalibrator:
 
             range_raw = np.array([[r[4 + i] or 0.0 for i in range(n_range)] for r in of_rows])
             err_raw = np.array([[r[4 + n_range + i] or 0.0 for i in range(n_err)] for r in of_rows])
-            # SIM-530: the arm block is MEASURED for roughly half of
-            # outfielder-seasons (Savant's baserunning board publishes the
-            # regulars). A missing measurement is not a zero arm — `or 0.0`
-            # would plant half the population on one point and the fit would
-            # degenerate to the keep-default sentinel, which is exactly what it
-            # did. NaN for absent, then fit over the rows that were measured,
-            # as the physical and platoon blocks already do.
+            # SIM-530 / SIM-550: a missing arm measurement is not a zero arm —
+            # `or 0.0` would plant the unmeasured rows on one point and the
+            # fit would degenerate to the keep-default sentinel, which is
+            # exactly what it once did. NaN for NULL, then fit over the rows
+            # that carry all three features (SIM-550: a 2023+ outfielder with
+            # a velocity on the arm-strength board and at least one challenge
+            # in the advancement pool — the thrown-out rate is NULL until he
+            # has been challenged), as the physical and platoon blocks do.
             arm_raw = np.array(
                 [
                     [
@@ -1373,7 +1434,21 @@ class SimilarityCalibrator:
                 )
             star_raw = np.array(star_raw)
 
-            ids = np.array([r[0] for r in of_rows])
+            # SIM-550: one row per (player, position, season), so a pair is
+            # formed inside one player AND one position, season to season.
+            # A player-only id paired a centre fielder's row with his own
+            # right-field row of the same season (half the pairs on the live
+            # table) and read the prevention's repeat at a third of its value.
+            ids = _fielder_pair_ids(of_rows)
+            season_of = np.array([int(r[2]) for r in of_rows], dtype=np.int64)
+            # The arm's reliability pairs need the plan's floor: at least
+            # ARM_ALPHA_PRIOR_CHANCES chances in BOTH seasons (a pair needs
+            # both rows, so a row floor is a pair floor). The sigma fit keeps
+            # every measured row.
+            arm_chances = np.array(
+                [0.0 if r[-1] is None else float(r[-1]) for r in of_rows], dtype=np.float64
+            )
+            arm_reliable = arm_mask & (arm_chances >= ARM_ALPHA_PRIOR_CHANCES)
 
             report.sigma_of_range = self._fit_sigma(
                 self._zscore_matrix(range_raw), target_median_score
@@ -1395,13 +1470,26 @@ class SimilarityCalibrator:
                 self._zscore_matrix(err_raw), target_median_score
             )
 
-            report.reliability_weights_of_range = calibrate_reliability_weights(range_raw, ids)
-            if len(arm_measured) >= 20:
+            report.reliability_weights_of_range = calibrate_reliability_weights(
+                range_raw, ids, seasons=season_of
+            )
+            if arm_reliable.sum() >= 20:
                 report.reliability_weights_of_arm = calibrate_reliability_weights(
-                    arm_measured, ids[arm_mask]
+                    arm_raw[arm_reliable], ids[arm_reliable], seasons=season_of[arm_reliable]
                 )
-            report.reliability_weights_of_star = calibrate_reliability_weights(star_raw, ids)
-            report.reliability_weights_of_error = calibrate_reliability_weights(err_raw, ids)
+            elif len(arm_measured) >= 20:
+                log.warning(
+                    "Only %d outfielder-seasons carry %d or more arm chances; keeping the "
+                    "engine's default arm reliability weights.",
+                    int(arm_reliable.sum()),
+                    ARM_ALPHA_PRIOR_CHANCES,
+                )
+            report.reliability_weights_of_star = calibrate_reliability_weights(
+                star_raw, ids, seasons=season_of
+            )
+            report.reliability_weights_of_error = calibrate_reliability_weights(
+                err_raw, ids, seasons=season_of
+            )
 
             log.info(
                 "OF calibration: %d profiles, sigma_range=%.3f, sigma_arm=%.3f, "

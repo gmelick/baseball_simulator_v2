@@ -143,9 +143,8 @@ def _make_of_profile(
         error_vec=error_vec if error_vec is not None else np.array([0.01, 0.005], dtype=np.float64),
         dp_vec=None,
         specialty_vec=None,
-        arm_vec=arm_vec
-        if arm_vec is not None
-        else np.array([0.6, 0.1, 0.5, 0.0], dtype=np.float64),
+        # SIM-550: velocity (mph), advancement prevention, thrown-out rate.
+        arm_vec=arm_vec if arm_vec is not None else np.array([88.0, 0.01, 0.05], dtype=np.float64),
         star_vec=star_vec if star_vec is not None else np.array([0.1, 0.4, 0.98], dtype=np.float64),
         eb_alpha=eb_alpha if eb_alpha is not None else sample_bb / (sample_bb + EB_N_PRIOR),
     )
@@ -266,12 +265,11 @@ def _generate_cf_population(n: int = 20, seed: int = 99) -> list[FielderProfile]
                     error_vec=np.clip(rng.beta(2, 50, len(OF_ERROR_FEATURES)), 0, 0.2).astype(
                         np.float64
                     ),
-                    arm_vec=np.concatenate(
-                        [
-                            rng.beta(5, 5, 3),
-                            rng.normal(0, 1, 1),
-                        ]
-                    ).astype(np.float64),
+                    # SIM-550: velocity (mph), prevention, thrown-out rate.
+                    arm_vec=np.array(
+                        [rng.normal(88.0, 3.0), rng.normal(0.0, 0.03), rng.beta(2, 30)],
+                        dtype=np.float64,
+                    ),
                     star_vec=rng.beta(5, 5, len(OF_STAR_FEATURES)).astype(np.float64),
                 )
             )
@@ -905,7 +903,7 @@ class TestEngineIdenticalProfiles:
     def test_identical_of_profiles_high_score(self):
         vec_r = np.array([3.0, 2.0, -1.0, 4.0, 1.0])
         vec_e = np.array([0.01, 0.005])
-        vec_arm = np.array([0.7, 0.15, 0.6, 1.5])
+        vec_arm = np.array([91.0, 0.04, 0.08])  # SIM-550: velocity, prevention, thrown-out
         vec_star = np.array([0.15, 0.45, 0.97])
         p1 = _make_of_profile(
             player_id=10,
@@ -1281,7 +1279,7 @@ class TestEdgeCases:
                 player_id=i,
                 range_vec=vec.copy(),
                 error_vec=np.array([0.02, 0.01]),
-                arm_vec=np.array([0.5, 0.1, 0.4, 0.5]),
+                arm_vec=np.array([87.0, 0.0, 0.04]),  # SIM-550: three arm features
                 star_vec=np.array([0.1, 0.3, 0.95]),
                 sample_bb=400,
             )

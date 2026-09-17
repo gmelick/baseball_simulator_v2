@@ -20,6 +20,18 @@ the factor reads, matches the pool's own conditional. Read per opportunity:
   * RUNNERS, CATCHERS and PITCHERS in the steal draw: attempts per
     opportunity and the safe share, own rows vs the sim, by tier.
   * RUNNERS in the advancement draws: attempts per opportunity, own vs sim.
+  * OUTFIELDERS in the advancement draws (the outfield arm block, SIM-550):
+    attempts per chance against the LIVE fielder, by tercile of his
+    prevention (``arm_advancement_prevention`` on his position-season row of
+    ``derived.fielder_season_metrics``) RELATIVE TO HIS POSITION-SEASON'S
+    chances-weighted mean, against the pool's own rate for those fielders.
+    The centering guards against a position offset (runners challenge a left
+    fielder less; the fill's cell carries the position since the 2026-09-17
+    review, so the offset is 0 by construction, and a bundle built before
+    that review still carries it), so a raw tercile cannot sort by
+    position instead of by arm. A flat read means the
+    arm does not reach the draw; a read steeper than the pool's own means
+    the fielder power over-concentrates.
   * The FIELDING draw: the drawn event mix per BORN batted-ball class vs the
     pool's own per-class mix (and the share of draws whose row has the born
     class); the ground-ball reach rate by the live batter's sprint-speed
@@ -234,6 +246,117 @@ class AdvRef:
                 self.by[kl[i]] = acc[i] + self.by.get(kl[i], np.zeros(3))
 
 
+#: The three outfield positions the arm block covers (the fielder key's middle
+#: part is the position name).
+_OUTFIELD_POSITIONS = ("LF", "CF", "RF")
+
+
+def _center_within_position(raw: dict[str, tuple[float, float]]) -> dict[str, float]:
+    """Each outfielder's prevention minus the chances-weighted mean of his
+    position-season (``raw`` maps ``"id:POS:season"`` to (prevention, chances)).
+
+    Runners challenge a left fielder far less than a right fielder on the
+    same decision. A position-blind expectation cell (season x decision x
+    outs, one rate for LF, CF and RF together) leaves a per-position offset
+    in the prevention (2024: LF about +0.04, CF and RF about -0.02) larger
+    than the within-position spread (about 0.025), and a tercile over the
+    raw value then sorts the outfielders by position, not by arm. The fill's
+    cell carries the position since the 2026-09-17 review, so a block it
+    wrote centres at 0 per position already; a bundle built before that
+    review does not. The deviation from the position mean ranks arms in
+    both cases; the engine itself z-scores per position, so this mirrors
+    what the score matrix sees."""
+    groups: dict[tuple[str, str], list[tuple[str, float, float]]] = defaultdict(list)
+    for key, (prevention, chances) in raw.items():
+        parts = key.split(":")
+        groups[(parts[1], parts[2])].append((key, float(prevention), float(chances)))
+    out: dict[str, float] = {}
+    for members in groups.values():
+        weight = sum(c for _, _, c in members)
+        if weight > 0:
+            mean = sum(p * c for _, p, c in members) / weight
+        else:
+            mean = sum(p for _, p, _ in members) / len(members)
+        for key, prevention, _ in members:
+            out[key] = prevention - mean
+    return out
+
+
+def _fielder_prevention_map(duck: Any) -> dict[str, float]:
+    """The arm block's prevention per outfielder key ``"id:POS:season"``, read
+    from ``derived.fielder_season_metrics`` (SIM-550) and centered on the
+    position-season's chances-weighted mean (``_center_within_position``).
+    Empty when the DuckDB is unavailable, the table lacks the column, or the
+    block is unfilled; the reference then falls back to the fielder embedding."""
+    if duck is None:
+        return {}
+    try:
+        rows = duck.execute(
+            "SELECT player_id, position, season, arm_advancement_prevention, "
+            "COALESCE(arm_opportunities, 0) "
+            "FROM derived.fielder_season_metrics "
+            "WHERE position IN ('LF', 'CF', 'RF') AND arm_advancement_prevention IS NOT NULL"
+        ).fetchall()
+    except Exception:  # noqa: BLE001 — an old database reads as "no block"
+        return {}
+    return _center_within_position(
+        {f"{int(p)}:{pos}:{int(s)}": (float(v), float(n)) for p, pos, s, v, n in rows}
+    )
+
+
+def _embedding_prevention_map(fp: Any) -> dict[str, float]:
+    """The fallback: the prevention column of the fielder embedding, for the
+    outfield keys whose ``arm_opportunities`` is above zero (the embedding
+    writes a NULL as 0.0, so the chance count says whether the block exists),
+    centered on the position-season's chances-weighted mean as the table
+    read is."""
+    emb = fp.a.actor_emb.get("fielder")
+    if emb is None:
+        return {}
+    feats = list(emb.get("features") or [])
+    if "arm_advancement_prevention" not in feats or "arm_opportunities" not in feats:
+        return {}
+    keys = _keys_by_row(emb) or []
+    vecs = np.asarray(emb["vecs"], dtype=np.float64)
+    col = feats.index("arm_advancement_prevention")
+    n_col = feats.index("arm_opportunities")
+    raw: dict[str, tuple[float, float]] = {}
+    for i, key in enumerate(keys):
+        parts = key.split(":")
+        if len(parts) == 3 and parts[1] in _OUTFIELD_POSITIONS and vecs[i, n_col] > 0:
+            raw[key] = (float(vecs[i, col]), float(vecs[i, n_col]))
+    return _center_within_position(raw)
+
+
+class AdvFielderRef:
+    """Own-rows attempts / safe per FIELDER key over every advancement pool,
+    plus each outfielder's prevention, centered on his position-season's
+    mean (the tier key of the SIM-550 read)."""
+
+    def __init__(self, fp: Any, prevention: dict[str, float] | None = None) -> None:
+        self.by: dict[str, np.ndarray] = {}
+        kl = _keys_by_row(fp.a.actor_emb.get("fielder"))
+        for key, pool in fp.a.adv_pools.items():
+            meta = fp._adv_meta(key)
+            if meta is None or kl is None or meta.get("fielder_rows") is None:
+                continue
+            rows = meta["fielder_rows"]
+            rcy = pool.recency.astype(np.float64)
+            att = pool.attempted.astype(np.float64)
+            safe = pool.safe.astype(np.float64) * att
+            vals = np.column_stack([rcy, rcy * att, rcy * safe])
+            acc = np.zeros((len(kl), 3))
+            ok = rows >= 0
+            np.add.at(acc, rows[ok], vals[ok])
+            for i in np.nonzero(acc[:, 0] > 0)[0]:
+                self.by[kl[i]] = acc[i] + self.by.get(kl[i], np.zeros(3))
+        self.prevention: dict[str, float] = dict(prevention or {})
+        self.prevention_source = "derived.fielder_season_metrics"
+        if not self.prevention:
+            self.prevention = _embedding_prevention_map(fp)
+            self.prevention_source = "fielder embedding"
+
+
 def _pool_speed_z(fp: Any, pool: Any) -> np.ndarray | None:
     """The z-scored sprint speed of each pool row's batter, read from the
     baserunner embedding (NaN where the batter has no speed); None when the
@@ -322,13 +445,19 @@ class BBRef:
 
 
 class Refs:
-    def __init__(self, fp: Any) -> None:
+    def __init__(self, fp: Any, fielder_prevention: dict[str, float] | None = None) -> None:
         t0 = time.perf_counter()
         self.pitch = PitchRef(fp)
         self.steal = StealRef(fp)
         self.adv = AdvRef(fp)
+        self.adv_fielder = AdvFielderRef(fp, fielder_prevention)
         self.bb = BBRef(fp)
-        print(f"  references built in {time.perf_counter() - t0:.0f}s", flush=True)
+        print(
+            f"  references built in {time.perf_counter() - t0:.0f}s "
+            f"({len(self.adv_fielder.prevention)} outfielders with a prevention from the "
+            f"{self.adv_fielder.prevention_source})",
+            flush=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +475,8 @@ class Rec:
             a: defaultdict(lambda: [0, 0, 0]) for a in ("runner", "catcher", "pitcher")
         }
         self.adv: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
+        # SIM-550: the same three counts per LIVE fielder key ("id:POS:season").
+        self.adv_fielder: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
         self.bb_class: dict[int, np.ndarray] = defaultdict(lambda: np.zeros(len(_EVENT_CLASSES)))
         self.bb_agree: dict[int, list[int]] = defaultdict(lambda: [0, 0])
         self.gb_speed: dict[str, list[int]] = {t: [0, 0] for t in _SPEED_TIERS}
@@ -488,11 +619,14 @@ def install(fp: Any, rec: Rec, refs: Refs) -> None:
         res = o_adv(*a, **kw)
         if res is not None:
             runner_key = a[3] if len(a) > 3 else kw.get("runner_key")
-            if runner_key:
-                t = fp._sim523_fit_rec.adv[str(runner_key)]
-                t[0] += 1
-                t[1] += int(bool(res[0]))
-                t[2] += int(bool(res[0]) and bool(res[1]))
+            fielder_key = a[4] if len(a) > 4 else kw.get("fielder_key")
+            r = fp._sim523_fit_rec
+            for key, store in ((runner_key, r.adv), (fielder_key, r.adv_fielder)):
+                if key:
+                    t = store[str(key)]
+                    t[0] += 1
+                    t[1] += int(bool(res[0]))
+                    t[2] += int(bool(res[0]) and bool(res[1]))
         return res
 
     fp.advancement_draw = advancement_draw
@@ -654,13 +788,23 @@ def pa_report(sim: dict[str, np.ndarray], ref: np.ndarray, index: dict[str, int]
     return out
 
 
-def rate_report(sim: dict[str, list[int]], ref: dict[str, np.ndarray], label: str) -> dict:
+def rate_report(
+    sim: dict[str, list[int]],
+    ref: dict[str, np.ndarray],
+    label: str,
+    tier_by: dict[str, float] | None = None,
+) -> dict:
     """Attempt rate (and the success share among attempts) by tier of the
-    actor's own attempt rate; sim vs own rows."""
+    actor's own attempt rate; sim vs own rows. With ``tier_by`` (SIM-550: the
+    outfielder's prevention, centered on his position-season's mean), the
+    tiers follow that value instead, an actor without one is dropped, and
+    each tier reports its mean of the value."""
     rows = []
     for key, (n, att, suc) in sim.items():
         r = ref.get(key)
         if r is None or n < 30 or r[0] < 30:
+            continue
+        if tier_by is not None and key not in tier_by:
             continue
         rows.append(
             (
@@ -670,36 +814,49 @@ def rate_report(sim: dict[str, list[int]], ref: dict[str, np.ndarray], label: st
                 (suc / att) if att else np.nan,
                 r[1] / r[0],
                 (r[2] / r[1]) if r[1] else np.nan,
+                float(tier_by[key]) if tier_by is not None else np.nan,
             )
         )
+    key_i = 6 if tier_by is not None else 4
     table = []
-    for t_i, grp in enumerate(_tiers(rows, 1, lambda t: t[4], 3)):
+    for t_i, grp in enumerate(_tiers(rows, 1, lambda t, key_i=key_i: t[key_i], 3)):
         nn = np.array([t[1] for t in grp])
-        table.append(
-            {
-                "tier": t_i,
-                "actors": len(grp),
-                "opps": float(nn.sum()),
-                "sim_att": float(np.average([t[2] for t in grp], weights=nn)),
-                "own_att": float(np.average([t[4] for t in grp], weights=nn)),
-                "sim_safe": float(
-                    np.nansum([t[3] * t[1] for t in grp])
-                    / max(1e-9, np.sum([t[1] for t in grp if np.isfinite(t[3])]))
-                ),
-                "own_safe": float(
-                    np.nansum([t[5] * t[1] for t in grp])
-                    / max(1e-9, np.sum([t[1] for t in grp if np.isfinite(t[5])]))
-                ),
-            }
-        )
+        entry = {
+            "tier": t_i,
+            "actors": len(grp),
+            "opps": float(nn.sum()),
+            "sim_att": float(np.average([t[2] for t in grp], weights=nn)),
+            "own_att": float(np.average([t[4] for t in grp], weights=nn)),
+            "sim_safe": float(
+                np.nansum([t[3] * t[1] for t in grp])
+                / max(1e-9, np.sum([t[1] for t in grp if np.isfinite(t[3])]))
+            ),
+            "own_safe": float(
+                np.nansum([t[5] * t[1] for t in grp])
+                / max(1e-9, np.sum([t[1] for t in grp if np.isfinite(t[5])]))
+            ),
+        }
+        if tier_by is not None:
+            entry["tier_value"] = float(np.average([t[6] for t in grp], weights=nn))
+        table.append(entry)
     tot_n = sum(t[1] for t in rows)
-    return {
+    out = {
         "label": label,
         "n_actors": len(rows),
         "sim_att_all": (sum(t[1] * t[2] for t in rows) / tot_n) if tot_n else None,
         "own_att_all": (sum(t[1] * t[4] for t in rows) / tot_n) if tot_n else None,
         "tiers": table,
     }
+    if tier_by is not None and len(table) > 1:
+        # The fit signal: the sim's attempt-rate spread across the tiers
+        # against the pool's own (1.0 = the factor reaches the draw at the
+        # pool's strength; near 0 = flat; well above 1 = over-concentrated).
+        s_sim = table[-1]["sim_att"] - table[0]["sim_att"]
+        s_own = table[-1]["own_att"] - table[0]["own_att"]
+        out["spread_sim"] = s_sim
+        out["spread_own"] = s_own
+        out["spread_ratio"] = (s_sim / s_own) if s_own else None
+    return out
 
 
 def bb_report(rec: Rec, refs: Refs) -> dict:
@@ -760,9 +917,17 @@ def _fmt_rate(rep: dict) -> None:
         f"vs own {rep['own_att_all'] if rep['own_att_all'] is None else round(rep['own_att_all'], 4)}"
     )
     for t in rep["tiers"]:
+        tier_value = f" [{t['tier_value']:+.4f}]" if "tier_value" in t else ""
         print(
-            f"      tier {t['tier']} ({t['actors']:3d} actors, {int(t['opps']):6d} opps): att sim "
-            f"{t['sim_att']:.4f} own {t['own_att']:.4f}; safe sim {t['sim_safe']:.3f} own {t['own_safe']:.3f}"
+            f"      tier {t['tier']}{tier_value} ({t['actors']:3d} actors, {int(t['opps']):6d} opps): "
+            f"att sim {t['sim_att']:.4f} own {t['own_att']:.4f}; safe sim {t['sim_safe']:.3f} "
+            f"own {t['own_safe']:.3f}"
+        )
+    if "spread_ratio" in rep:
+        ratio = rep["spread_ratio"]
+        print(
+            f"      spread sim {rep['spread_sim']:+.4f} vs own {rep['spread_own']:+.4f} "
+            f"(ratio {ratio if ratio is None else round(ratio, 3)})"
         )
 
 
@@ -803,6 +968,8 @@ def main() -> int:
     duck = open_sim_duckdb()
     try:
         states = [asyncio.run(_resolve(gp, duck)) for gp in game_pks]
+        # SIM-550: the outfielders' prevention, the tier key of the fielder read.
+        fielder_prevention = _fielder_prevention_map(duck)
     finally:
         if duck is not None:
             duck.close()
@@ -818,7 +985,7 @@ def main() -> int:
         )
         fp = machine.full_pool_sampler
         if refs is None:
-            refs = Refs(fp)
+            refs = Refs(fp, fielder_prevention)
         install(fp, rec, refs)
         home_ids, away_ids = _ids(state)
         machine._fp_pitcher_key = None
@@ -878,6 +1045,17 @@ def main() -> int:
         _fmt_rate(rep)
     rep = rate_report(rec.adv, refs.adv.by, "advancement draws by runner")
     report["adv_runner"] = rep
+    _fmt_rate(rep)
+    # SIM-550: the same draws by the LIVE outfielder, tiered by his prevention
+    # relative to his position-season's mean (a raw tercile sorts by position).
+    rep = rate_report(
+        rec.adv_fielder,
+        refs.adv_fielder.by,
+        "advancement draws by live outfielder (tiers by his prevention, "
+        "centered per position-season)",
+        tier_by=refs.adv_fielder.prevention,
+    )
+    report["adv_fielder"] = rep
     _fmt_rate(rep)
     report["fielding"] = bb_report(rec, refs)
     print("  --- fielding: the drawn event mix per BORN class (sim | own), the class agreement")

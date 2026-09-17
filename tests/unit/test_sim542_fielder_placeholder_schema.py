@@ -165,12 +165,9 @@ class TestAggregatorAgainstBarePlaceholders:
             "arm_overall DOUBLE, arm_1b DOUBLE, arm_2b DOUBLE, arm_3b DOUBLE, arm_ss DOUBLE, "
             "arm_lf DOUBLE, arm_cf DOUBLE, arm_rf DOUBLE)"
         )
-        c.execute(
-            "CREATE TABLE pg.raw.savant_baserunning (player_id INTEGER, season SMALLINT, "
-            "n_opp_xb INTEGER, n_att_xb INTEGER, rate_att_xb DOUBLE, n_out INTEGER, "
-            "est_rate_att_generic_fielder DOUBLE, fielder_runs_hold DOUBLE, "
-            "fielder_runs_advances DOUBLE, fielder_runs_thrown_out DOUBLE)"
-        )
+        # SIM-550: no pg.raw.savant_baserunning here on purpose. The aggregator
+        # no longer joins that board — the arm block is filled from the
+        # advancement pool by a later step — so the INSERT must bind without it.
         c.execute("CREATE SCHEMA derived")
         c.execute(_real_ddl("derived.fielder_season_metrics"))
         return c

@@ -1,11 +1,32 @@
 # Build plan — the outfield arm block, rebuilt from our own advancement pool (SIM-550)
 
-> **STATUS 2026-09-16 — APPROVED. The owner took all four recommendations (§10); the
-> build follows this plan as written.** Nothing is built. The readable page is https://claude.ai/artifact/Up1J2fALc1Ea5DJik22Qza (the same
-> content as this file). Runs AFTER the lead-distance work (SIM-531) lands, so each
-> accuracy read stays attributable. **Revised the same day:** the owner found that Savant's
-> baserunning board does have a fielder view (`type=Fld`); §2.5 measures it against the
-> pool, and decision 4 settles the source: the pool.
+> **STATUS 2026-09-17 — BUILT, REVIEWED AND RUN.** The code landed, a 61-agent adversarial
+> review confirmed twelve findings (all fixed — the expectation cell gained the POSITION;
+> the fill resets the block before it writes; the reliability refit pairs consecutive
+> seasons at one position with 50 chances), and the run book's steps 2 to 5 ran the same
+> day: the fill on every season (verify: every check passed; the Savant fielder-view
+> cross-check r = 0.980 on chances, 0.782 on the thrown-out rate), `make calibrate`
+> (sigma_of_arm 0.9912; weights velocity 0.844 / prevention 0.137 / thrown-out 0.240,
+> copied into the module defaults), the three outfield matrices (concentration PASS), the
+> app restarted at 11/11 engines. **A correction to §2.2:** the prevention's repeat of
+> 0.50–0.65 pooled the three positions under a position-blind cell and was mostly the
+> position label; WITHIN a position it repeats at 0.1–0.3 (LF about 0, CF about 0.2, RF
+> 0.2–0.5), the hold rate lower still, the thrown-out rate 0.1–0.3, the velocity 0.85–0.90.
+> The refit says the same. The arm group is the velocity with two weak companions; the
+> group's 0.30 share is the sweep's question. The record is `CHANGES.md` 2026-09-17.
+> *(The earlier stamp follows.)* The build follows
+> this plan as written, under two owner rulings of 2026-09-16 that supersede it where they
+> touch it: (a) **no per-change accuracy run** — every change lands ON at its best-known
+> default and the weights are fitted together in one designed experiment later, so §8
+> steps 0 and 6c (the OFF and ON accuracy arms and the paired read) do not run and nothing
+> was built for them; (b) **every similarity-score power is 1 in production**, so §6's
+> "power 1.2 on the fielder factor" reads 1 and no power moves. The lead-distance work (SIM-531) landed and ran on
+> 2026-09-16 (commit c4a6a76), as this plan required. *Approved 2026-09-16: the owner took
+> all four recommendations (§10). The readable page is
+> https://claude.ai/artifact/Up1J2fALc1Ea5DJik22Qza (the plan as approved; this stamp is
+> newer). Revised 2026-09-16: the owner found that Savant's baserunning board does have a
+> fielder view (`type=Fld`); §2.5 measures it against the pool, and decision 4 settles the
+> source: the pool.*
 
 **Date:** 2026-09-16
 **Ticket:** SIM-550 (P2) in `BACKLOG.xlsx`. Next free ID: SIM-551.

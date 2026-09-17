@@ -1116,12 +1116,15 @@ def _run_synthetic_fielder_test() -> DiagnosticReport:
             else:
                 base_dp = None
                 base_spec = None
+                # SIM-550: OF_ARM_FEATURES order — velocity, prevention, thrown-out rate.
                 base_arm = np.concatenate(
                     [
-                        rng.beta(5, 5, 3),
-                        rng.normal(0, 1, 1),
+                        rng.normal(0, 1, 1),  # arm_strength (standardized velocity)
+                        rng.normal(0, 0.05, 1),  # arm_advancement_prevention
+                        rng.beta(5, 5, 1),  # arm_thrown_out_rate
                     ]
                 )
+                assert base_arm.shape == (len(OF_ARM_FEATURES),)
                 base_star = rng.beta(5, 5, len(OF_STAR_FEATURES))
 
             for season in seasons:
@@ -1143,8 +1146,9 @@ def _run_synthetic_fielder_test() -> DiagnosticReport:
                 else:
                     arm_vec = np.concatenate(
                         [
-                            np.clip(base_arm[:3] + rng.normal(0, 0.03, 3), 0, 1),
-                            base_arm[3:] + rng.normal(0, 0.3, 1),
+                            base_arm[:1] + rng.normal(0, 0.3, 1),
+                            base_arm[1:2] + rng.normal(0, 0.02, 1),
+                            np.clip(base_arm[2:] + rng.normal(0, 0.03, 1), 0, 1),
                         ]
                     ).astype(np.float64)
                     star_vec = np.clip(
@@ -1158,6 +1162,7 @@ def _run_synthetic_fielder_test() -> DiagnosticReport:
                         season=season,
                         innings_played=float(rng.integers(200, 1200)),
                         sample_batted_balls=int(bb),
+                        sample_arm_chances=0 if is_if else int(rng.integers(20, 120)),
                         range_vec=range_vec.astype(np.float64),
                         error_vec=error_vec.astype(np.float64),
                         dp_vec=dp_vec,

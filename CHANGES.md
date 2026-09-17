@@ -1,3 +1,190 @@
+# Build — the outfield arm block rebuilt from our own advancement pool: built, reviewed, and RUN on the live data (the fill, the refit, the three matrices, the app restarted); the prevention repeats at 0.14 within a position, not the plan's 0.60 — SIM-550, 2026-09-17
+
+**The defect (plan §0).** The fielding model compares outfielders partly on their arm:
+whether runners hold against them, how often a runner is thrown out, how much runners
+challenge them below expectation, and a run value. Since 2026-09-11 those four figures came
+from Savant's baserunning board in the loader's default view: the RUNNER's side. On a
+runner's row the fielder columns describe the fielders on HIS plays. Our join wrote those
+figures into the outfielder's arm block, so the block held how the outfielder runs the
+bases (a catcher and a designated hitter who never fielded carried 60 to 160 chances on
+it). All four arm features the model read were filled from the wrong view. Only the throw
+velocity, from the arm-strength board, was pulled as intended, and the model did not read
+it. The board does have a fielder view (`type=Fld`). The owner chose our own advancement
+opportunity pool as the source instead (plan §10, decision 4). The pool keeps the positions
+apart. It repeats year to year as well as or better than the board's fielder view on the
+same players. It is point-in-time exact by game date. It covers every season without a new
+load. The plan with its evidence is `docs/audit/2026-09-16-sim550-outfield-arm-block-plan.md`.
+
+**What landed, file by file (plan §5).**
+- `pipeline/batch/player_profile_computor.py`: a new step, `_fill_outfield_arm_block`,
+  runs after the pools in `run()`. It reads `sim.advancement_opportunity_pool`. That pool
+  holds one row per real chance to take an extra base. Each row names the fielder who
+  fielded the ball and his position. The step counts, per fielder, position and season,
+  the chances against him, the holds and the runners thrown out. From those it writes the
+  hold rate, the thrown-out rate and the advancement prevention. The thrown-out rate stays
+  NULL until a runner has challenged him. The prevention is expected attempts minus
+  attempts, per chance. The expectation is the pool's own rate for the same season,
+  decision and outs cell. A backtest
+  cutoff filters the pool by `game_date`, so the block is point-in-time exact with no season
+  shift. Without the pool (a fresh database) the step logs and leaves the block NULL, never
+  0. The fielder aggregator now writes the six arm columns NULL, and the fill step fills
+  them. It writes `of_arm_runs` NULL. It no longer joins `raw.savant_baserunning`, and the
+  run-value cutoff guard is gone; `arm_strength` keeps its source (the arm-strength board). The dead
+  extraction `_compute_outfield_arm_metrics` and its `_tmp_of_arm` placeholder are deleted
+  (decision 3). The `fielder_LF` / `fielder_CF` / `fielder_RF` league rows gain three keys —
+  `arm_advancement_prevention`, `arm_thrown_out_rate`, `arm_strength` — so a thin arm
+  shrinks toward the league mean, never toward 0.0. The leakage check names the pool as a
+  dated source.
+- `similarity/engines/fielder_similarity.py`: `OF_ARM_FEATURES` is three features, each
+  weighted by its measured year-to-year repeat: the throw velocity (`arm_strength`, 0.857;
+  Savant's arm-strength board, per position), the advancement prevention (0.60) and the
+  thrown-out rate (0.25). The run value and the raw hold rate leave the group (decision 2);
+  both stay stored. The profile carries `sample_arm_chances`; the two pool rates shrink on
+  the arm's OWN chances (prior 50: 25 chances → two thirds of the way to the league mean,
+  200 chances → a fifth), not on the batted-ball sample. A missing velocity becomes the
+  league mean. A league row's absent arm key loads as NaN, not 0.0.
+  `EmpiricalBayesShrinkage.shrink` gains an optional `n_prior`; nothing else moves.
+  `apply_calibration` refuses a reliability-weight vector of the wrong length (logged, the
+  module defaults kept): the live `/data/calibration.json` still holds FOUR arm weights, so
+  the app boots on the module-default WEIGHTS until `make calibrate` refits (run book step
+  2). The refusal covers the weights only. The stale fitted bandwidth (`sigma_of_arm`
+  1.007, fitted on the four runner-view features) still applies until that refit; the
+  module default is 1.000.
+- `similarity/similarity_calibration.py`: the outfield SELECT and the arm fit mirror the
+  three-feature list. `sigma_of_arm` and the three `reliability_weights_of_arm` fit over the
+  rows where all three features are measured; fewer than 20 such rows keep the module
+  default.
+- `db/schemas/02_duckdb_schema.sql`: the arm columns' comments say what the columns mean now
+  (the pool's figures against THIS fielder at THIS position). No schema change; DuckDB stays
+  at v29.
+- `scripts/sim550_arm_recompute.py` (new): the fill for every season the pool holds, the
+  league rows, and a verify block with the fielder-view cross-check (Savant's `type=Fld`
+  board for 2024, one HTTP request; `--no-cross-check` skips it).
+- `scripts/sim523_fit_probe.py`: one tier read on the advancement draws — attempts per
+  chance against the live fielder, by tercile of his prevention, against the pool's own rate.
+- `pipeline/etl/savant_boards.py`: the runner entry pins `type=Run` (landed 2026-09-16 with
+  the plan), so the two views can never be confused again.
+- `docs/technical/sim-loop-cheat-sheet.md`, `docs/technical/similarity.md`: the outfield arm
+  group re-described; the defect note replaced.
+- Unchanged: `simulation/*`, `pipeline/batch/engine_artifacts.py`, `docker-compose.yml`. The
+  fielding and advancement draws, the matrix specs and the powers do not move.
+
+**Two rulings that changed the run book (owner, 2026-09-16; both after the plan was
+written).** (1) No per-change accuracy run: every change lands ON at its best-known default,
+and the weights are fitted together in one designed experiment later. The plan's OFF and ON
+accuracy arms and the paired read (§8 steps 0 and 6c) do not run, and nothing was built for
+them. (2) Every similarity-score power is 1 in production. The plan says "power 1.2 on the
+fielder factor, unchanged"; the fielder factor runs at power 1 today, and no power was
+touched.
+
+**The tests (plan §7).** Three new files: `tests/unit/test_sim550_arm_block.py` (the fill
+on an in-memory DuckDB — hand-computed counts and rates, a catcher's and an infielder's row
+stay NULL, a chance with no fielder is ignored, the expectation cell, the cutoff, a database
+without the pool; the aggregator's source assertions); `tests/unit/test_sim550_arm_model.py`
+(the three features, the chances-based arm confidence, the missing velocity and the absent
+league key, `score_all` against `query_pair`; the calibrator's SELECT and its sentinel);
+`tests/unit/test_sim550_arm_recompute.py` (the recompute script's fill and verify block).
+Four existing files changed: `tests/unit/test_fielder_similarity.py` resizes its outfield
+arm vectors from four values to three (velocity, prevention, thrown-out rate); the SIM-529
+arm-block source assertions now grade the fill step; the SIM-537 point-in-time file drops
+the dead step from its method-order list and its run-value guard test becomes the
+pool-cutoff test; the SIM-542 fixture no longer fakes `pg.raw.savant_baserunning`, so it
+proves the aggregator binds without that board.
+
+**The adversarial review (61 agents: five lenses, three refuters per finding) confirmed
+twelve findings; all are fixed.** The ones that mattered: (1) the fill wrote only the rows
+the pool supports, so the run-book path (the fill alone, not the nightly aggregator) would
+have left the runner-view block on 23 live rows the pool never touches — the fill now
+resets the seven arm columns over the requested seasons before its matched UPDATE, and the
+script clears them too and reports the count (1,124 rows carried the old block); (2) the
+reliability-weight refit paired a player's rows by table order — half the pairs crossed
+positions, a fifth sat in one season — it now pairs consecutive seasons of one player at
+ONE position, with 50 chances in both for the arm (`calibrate_reliability_weights` takes a
+`seasons` array; the composite id serves the range, star and error groups too, so their
+next refit changes as well); (3) the expectation cell gained the POSITION (season ×
+decision × outs × position), because a position-blind cell left every left fielder about
++0.045 above zero and every centre fielder about −0.02 below it — the position label, not
+the arm; (4) the probe's tier read centres each outfielder's prevention on his
+position-season's mean, so a tercile ranks arms, not positions; (5) the script's league
+check now asserts the prevention mean per position; (6) two tests that could not fail were
+rebuilt to fail on the defect they name. Five findings were refuted. A class of five tests
+that graded this entry's prose was deleted: one of them would have failed by design after
+the recompute.
+
+**The QA gate.** `ruff check` clean, `ruff format --check` clean, `mypy similarity/
+pipeline/ api/` "Success: no issues found in 59 source files"; the container lane
+`pytest tests/unit/ tests/regression/` read **4,053 passed, 1 skipped, 0 failed** after
+the review (two stochastic interpreter crashes on the way, the SIM-445 class; the third
+attempt was clean). Repairs on the way: `similarity/similarity_diagnostics.py`'s synthetic
+fielder test built a FOUR-long arm vector (a (3,) vs (4,) broadcast error against the new
+engine) — now sized from `OF_ARM_FEATURES`; `scripts/sim550_arm_recompute.py` imports the
+computor's `_table_exists`; a composition test runs the computor's REAL fill on the recompute
+fixture and passes the script's value-for-value check; the cheat sheet's Fielder heading
+reads "at power 1 — fitted 1.2" like its siblings.
+
+**The run book, as it ran (2026-09-17, the app stopped for steps 1–3).**
+1. `scripts/sim550_arm_recompute.py --seasons 2017 … 2026`, 2 seconds: the old block cleared
+   on 1,124 rows; the fill wrote a block on 562 / 548 / 600 / 457 / 644 / 623 / 593 / 559 /
+   594 / 574 of the 586 / 566 / 616 / 475 / 681 / 646 / 611 / 577 / 620 / 596 outfield rows
+   of 2017–2026; the chances quartiles about 8 / 28 / 85 (2020: 5 / 14 / 44). The league
+   figures per season: hold 0.792–0.802, thrown-out share of attempts 0.048–0.057, the
+   chances-weighted prevention mean 0 to five decimals, per position too. The block sits
+   only on outfield rows with a pool chance (off-position 0, without a chance 0, unfilled
+   0, catcher-only 0). The 2024 centre fielder with the most chances reads 505 chances, 385
+   holds (0.762), 5 thrown out — the plan's §2.3 example, value for value. `of_arm_runs`
+   NULL everywhere; the velocity's coverage 0.71–0.77 of outfield rows from 2023 (none
+   before, as the board starts then). The three arm keys sit on every `fielder_LF/CF/RF`
+   league row (the 2024 velocities 86.5 / 88.1 / 88.2 mph; the thrown-out rates 0.069 /
+   0.030 / 0.048). **The cross-check** pulled Savant's fielder view for 2024 (`type=Fld`,
+   `n=1`: 398 outfielders; the column names the script assumed were the real ones): 178
+   fielders with 50 or more chances in both sources, chances r = 0.980, the thrown-out rate
+   r = 0.782 — the plan's measured 0.98 / 0.78 exactly. Every verify check passed.
+2. `make calibrate` (backup `/data/calibration.json.bak_20260917_pre_sim550`):
+   `sigma_of_arm` 0.9912; the arm reliability weights **velocity 0.844, prevention 0.137,
+   thrown-out 0.240**; the outfield range, star and error groups refitted under the
+   corrected pairing. The win-probability curve written back (it equals the backup's).
+   The three values are copied into the module defaults (`RBF_SIGMA_OF_ARM`,
+   `OF_ARM_FEATURES`); the engine tests re-pinned to them.
+3. The three outfield matrices rebuilt (LF 325, CF 312, RF 342 profiles); the
+   concentration report reads LF 1.97 / CF 1.67 / RF 1.98 at the p90 own-staff ratio
+   (2.07 / 1.77 / 2.06 before), PASS against the strict 3.0 — the park-signature risk
+   (plan §9, risk 2) did not fire.
+4. The app restarted: `build_all_engines: 11/11` (the batter engine's split cutoff was
+   repaired in its own session), `applied calibration to FielderSimilarityEngine (… OF
+   range/arm/star/err=0.974/0.991/1.073/0.773)`, `startup complete`. The lanes after the
+   copies: 4,053 passed.
+
+**What the data says that the plan did not (owner, please read).** The plan chose the
+prevention as the arm's main pool-derived feature on a year-to-year repeat of 0.505 /
+0.546 at 50 chances and 0.641 / 0.650 at 100. Those numbers reproduce exactly on the live
+pool — but they pool the three positions under a position-blind cell, and most of the
+repeat is the position label: runners challenge a left fielder less than a right fielder,
+so every left fielder sat high and repeated high. WITHIN a position, the only comparison
+the position-partitioned engine makes, the prevention repeats at 0.09 / 0.16 at 50 chances
+and 0.27 / 0.16 at 100 (per position: LF about 0, CF about 0.2, RF 0.2–0.5); the hold rate
+at −0.02 / 0.08 and 0.14 / 0.24; the thrown-out rate at 0.24 / 0.25 and 0.08 / 0.34; the
+velocity at 0.85 / 0.90. The refit read the same thing: prevention 0.137, thrown-out 0.240,
+velocity 0.844. So the arm group is, in effect, the throw velocity with two weak
+companions; the position cell did not cause this (the within-position repeat is the same
+under either cell), it only exposed it. Not changed here: the group's weight (0.30 of an
+outfielder's score) — the sweep's question. The plan's §2.2 table is corrected in its
+STATUS stamp, not rewritten.
+
+**Not run, by the rulings.** The OFF / ON accuracy arms and the paired read; the power scan.
+The fit probe's fielder tier read is built and not run (a 45-game × 60 probe is hours). The
+ten-game smoke on the rebuilt matrices is in the next paragraph. The SIM-550 row stays in
+`BACKLOG.xlsx` until the owner closes it on this record.
+
+**The ten-game smoke on the rebuilt matrices** (500 game-sims, every production flag, every
+power 1; the same ten games as the two earlier smokes; every verdict UNDERPOWERED at this
+size by design): runs 4.46 against the 4.45 centre; singles −0.2%, doubles +1.3%, triples
+−8.9% (130 events), homers −5.6%, reached on error +4.4%, the double-play rate −3.2%,
+strikeouts −2.2%, walks +2.2%; the steal channels −9.9% / −9.6% at second / third with the
+safe share −0.3% (the power-1 read of the day before was −12.6% / −24%). Nothing collapsed;
+the fielding and advancement channels the arm group reaches sit inside noise.
+
+---
+
 # Ruling — every similarity-score power is 1 until the comprehensive sweep fits them together; production recreated at the new values — 2026-09-16
 
 **The ruling (owner, 2026-09-16).** Every similarity-score POWER — the exponent a draw applies

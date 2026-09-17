@@ -270,28 +270,66 @@ def test_a_fitted_physical_sigma_is_applied() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SIM-530 — the placeholders are gone
+# SIM-530 / SIM-550 — the outfield arm block is filled, not a placeholder
+#
+# SIM-530 filled the block from Savant's baserunning board. SIM-550 found the
+# loader had pulled that board's RUNNER view, so the block held how the
+# outfielder runs the bases. The block now comes from our own advancement
+# pool: the aggregator writes the six advancement columns NULL BY DESIGN and
+# `_fill_outfield_arm_block` fills them after the pools are built. The throw
+# velocity keeps its source, the arm-strength board.
 # ---------------------------------------------------------------------------
 
 
-_ARM_COLUMNS = (
-    "arm_strength",
+_ARM_BLOCK_COLUMNS = (
     "arm_opportunities",
     "arm_holds",
     "arm_hold_rate",
     "arm_assists",
     "arm_thrown_out_rate",
     "arm_advancement_prevention",
-    "of_arm_runs",
 )
 
 
-def test_no_arm_column_is_still_a_null_placeholder() -> None:
-    """Every one of these was a literal NULL on all 4,799 fielder-seasons while
-    the fielder model weighted the group at 0.30 of an outfielder's score."""
+def _fill_step_body() -> str:
     src = COMPUTOR.read_text(encoding="utf-8")
-    for col in _ARM_COLUMNS:
-        assert not re.search(rf"NULL::\w+\s+AS {col}\b", src), f"{col} is still a placeholder"
+    start = src.index("def _fill_outfield_arm_block")
+    return src[start : src.index("\n    def ", start + 1)]
+
+
+def _aggregator_body() -> str:
+    src = COMPUTOR.read_text(encoding="utf-8")
+    start = src.index("def _aggregate_fielder_season_metrics")
+    return src[start : src.index("def _assert_fielder_profiles_have_no_leakage", start)]
+
+
+def test_the_fill_step_writes_every_arm_block_column_and_nulls_the_run_value() -> None:
+    """The aggregator writes the six NULL on purpose; the fill step's UPDATE
+    must name all six, and it writes ``of_arm_runs`` NULL (the model does not
+    read it)."""
+    body = _fill_step_body()
+    update = body[body.index("UPDATE derived.fielder_season_metrics") :]
+    for col in _ARM_BLOCK_COLUMNS:
+        # The assignment reads the `_arm` aggregate (alias `a`) on its line.
+        assert re.search(rf"\b{col}\s*=[^\n]*\ba\.", update), f"{col} is not written by the fill"
+    assert re.search(r"\bof_arm_runs\s*=\s*NULL\b", update)
+
+
+def test_the_aggregator_writes_the_arm_block_null_for_the_fill_step() -> None:
+    """An outfielder who fielded no chance keeps NULL, never 0, and the
+    aggregator no longer reads Savant's baserunning board for the block."""
+    body = _aggregator_body()
+    for col in (*_ARM_BLOCK_COLUMNS, "of_arm_runs"):
+        assert re.search(rf"NULL::\w+\s+AS {col}\b", body), f"{col} is not written NULL"
+    assert "savant_baserunning" not in body
+    assert "_fill_outfield_arm_block" in body, "the comment must name the step that fills them"
+
+
+def test_the_throw_velocity_still_comes_from_the_arm_strength_board() -> None:
+    body = _aggregator_body()
+    assert "LEFT JOIN pg.raw.savant_arm_strength sas" in body
+    assert not re.search(r"NULL::\w+\s+AS arm_strength\b", body)
+    assert re.search(r"sas\.arm_overall\s*\)\s+AS arm_strength\b", body)
 
 
 def test_the_catcher_arm_is_no_longer_a_null_placeholder() -> None:
@@ -300,20 +338,12 @@ def test_the_catcher_arm_is_no_longer_a_null_placeholder() -> None:
 
 
 def test_the_advancement_block_stays_outfield_only() -> None:
-    """Savant's baserunning board measures runners taking an extra base on a
-    hit. Applying it to an infielder would be wrong, and the column comments
-    have always promised it is outfield-only."""
-    from pipeline.batch.player_profile_computor import _SQL_IS_OF
-
-    src = COMPUTOR.read_text(encoding="utf-8")
-    assert _SQL_IS_OF == "c.position IN ('LF', 'CF', 'RF')"
-    for col in _ARM_COLUMNS:
-        if col == "arm_strength":
-            continue  # a physical fact; filled for every position on purpose
-        m = re.search(rf"AS {col}\b", src)
-        assert m is not None, col
-        window = src[max(0, m.start() - 700) : m.start()]
-        assert "_SQL_IS_OF" in window, f"{col} is not guarded to the outfield"
+    """The pool row names the fielder's position slot; the fill keeps only
+    the three outfield slots (7 LF, 8 CF, 9 RF), so a catcher's or an
+    infielder's block is never written."""
+    body = _fill_step_body()
+    assert "fielder_pos IN (7, 8, 9)" in body
+    assert "WHEN 7 THEN 'LF' WHEN 8 THEN 'CF' ELSE 'RF'" in body
 
 
 def test_pop_time_prefers_the_measurement_over_the_old_proxy() -> None:

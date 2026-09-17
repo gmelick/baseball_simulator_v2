@@ -379,15 +379,20 @@ CREATE TABLE IF NOT EXISTS derived.fielder_season_metrics (
 
     -- =========================================================================
     -- OUTFIELD ARM  (NULL for infielders)
+    -- SIM-550: the six advancement columns come from sim.advancement_opportunity_pool
+    -- (one row per real chance to take an extra base, with the fielder who
+    -- fielded the ball), filled per (fielder, position, season) by
+    -- _fill_outfield_arm_block after the pools are built. NULL when the
+    -- fielder had no chance at that position.
     -- =========================================================================
     arm_strength                FLOAT,      -- supplemental scrape or proxy
-    arm_opportunities           INTEGER,    -- plays with runner advancement opportunity
-    arm_holds                   INTEGER,    -- runner did not attempt extra base
-    arm_hold_rate               FLOAT,      -- deterrence
-    arm_assists                 INTEGER,    -- OF assists (throw-outs)
-    arm_thrown_out_rate         FLOAT,      -- of those who attempted, % thrown out
-    arm_advancement_prevention  FLOAT,      -- (holds + thrown_out) / opportunities
-    of_arm_runs                 FLOAT,      -- RE24-based arm run value
+    arm_opportunities           INTEGER,    -- chances to advance on a ball THIS fielder fielded at THIS position
+    arm_holds                   INTEGER,    -- chances on which the runner held
+    arm_hold_rate               FLOAT,      -- holds / chances
+    arm_assists                 INTEGER,    -- runners thrown out on his throws
+    arm_thrown_out_rate         FLOAT,      -- thrown out / attempts against him (NULL until challenged)
+    arm_advancement_prevention  FLOAT,      -- (expected attempts - attempts) / chances; expectation per season x decision x outs x position
+    of_arm_runs                 FLOAT,      -- NULL (not read by the model)
 
     -- =========================================================================
     -- DOUBLE PLAY  (NULL for outfielders)

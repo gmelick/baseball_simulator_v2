@@ -23,9 +23,12 @@ sub-score dimensions:
   Outfielders (LF, CF, RF):
     1. Range (40%)         — directional OAA: coming-in, going-back, left/right.
                              Plus overall catch percentage added.
-    2. Arm (30%)           — deterrence (hold rate), execution (thrown-out rate),
-                             combined advancement prevention, and RE24-based
-                             arm run value.
+    2. Arm (30%)           — the throw velocity (Savant's arm-strength board),
+                             the advancement prevention and the thrown-out rate
+                             (both from our own advancement opportunity pool,
+                             per fielder x position x season; SIM-550). The arm
+                             group shrinks on its OWN chances, not on the
+                             profile's batted balls.
     3. Star Plays (15%)    — success rate on difficult opportunities (5-star,
                              4-star) and routine play reliability. Separates
                              elite range from sure-handedness.
@@ -177,16 +180,42 @@ OF_RANGE_FEATURES = [
     ("catch_pct_added", 0.100),
 ]
 
-# Arm: deterrence + execution + run value
-# Hold rate captures deterrence (runners don't even try).
-# Thrown-out rate captures arm accuracy on actual attempts.
-# of_arm_runs is the RE24-based total value.
-OF_ARM_FEATURES = [
-    ("arm_hold_rate", 0.500),
-    ("arm_thrown_out_rate", 0.500),
-    ("arm_advancement_prevention", 0.500),
-    ("of_arm_runs", 0.500),
+# Arm (SIM-550, owner decisions 2026-09-16): three features, each weighted by
+# its year-to-year repeat as `make calibrate` fitted it on 2026-09-17 over
+# the filled block — pairs of consecutive seasons of one player at ONE
+# position with 50 or more chances in both.
+#   * arm_strength — the throw velocity in mph from Savant's arm-strength
+#     board, per position. Repeats at 0.844 and is near-independent of the
+#     prevention.
+#   * arm_advancement_prevention — expected minus actual attempts per chance,
+#     from sim.advancement_opportunity_pool (the expectation is the pool's
+#     rate per season x decision x outs x position, so 0 is average at
+#     every position). Repeats at 0.137. The plan's section 2.2 read 0.60,
+#     but that figure pooled the three positions and a position-blind
+#     cell: runners challenge a left fielder less, so every left fielder
+#     sat high and every centre fielder low, and the position label
+#     repeated, not the arm. Within a position the repeat is 0.1 to 0.3
+#     (measured 2026-09-17), and the engine scores within a position.
+#   * arm_thrown_out_rate — runners thrown out per attempt against him.
+#     Thin (about five assists a season); repeats at 0.240.
+# The raw hold rate left the group: it is the prevention without the
+# situation adjustment (r = 0.90). The run value (of_arm_runs) left it: an
+# outcome summary that repeats at 0.38 to 0.49. Both stay stored, unread.
+# `make calibrate` refits these weights by season-to-season correlation for
+# the API; the run book copies the fitted values back here.
+OF_ARM_FEATURES = [  # weight = the fitted year-to-year repeat (make calibrate, 2026-09-17)
+    ("arm_strength", 0.844),  # throw velocity, mph (Savant, per position)
+    ("arm_advancement_prevention", 0.137),  # expected - actual attempts per chance, from our pool
+    ("arm_thrown_out_rate", 0.240),  # thrown out / attempts against him
 ]
+
+# SIM-550: the arm group's own confidence. The chance count at which the
+# prevention's year-to-year repeat reaches about 0.5. The profile computor
+# carries the same constant. 25 chances -> alpha 0.33 (two thirds of the way
+# to the league mean); 200 chances -> alpha 0.80. It applies to the two
+# pool-derived rates only; the velocity is Savant's, measured over 50 or
+# more throws, and a missing velocity takes the league mean.
+ARM_ALPHA_PRIOR_CHANCES = 50
 
 # Star Plays: success rates on plays bucketed by difficulty
 # Separates "highlight reel range" from "fundamentally sound"
@@ -227,7 +256,10 @@ RBF_SIGMA_IF_ERRORS = 1.000
 RBF_SIGMA_IF_SPECIALTY = 1.000
 
 RBF_SIGMA_OF_RANGE = 1.027
-RBF_SIGMA_OF_ARM = 1.000
+# SIM-550: sigma_of_arm as `make calibrate` fitted it on 2026-09-17 over the
+# outfielder-seasons that carry all three arm features; copied here because
+# the matrix builder does not read the calibration report.
+RBF_SIGMA_OF_ARM = 0.9912
 RBF_SIGMA_OF_STARS = 0.449
 RBF_SIGMA_OF_ERRORS = 1.000
 
@@ -271,6 +303,12 @@ class FielderProfile:
     # Empirical Bayes
     eb_alpha: float = 1.0
     below_minimum: bool = False
+
+    # SIM-550: the arm group's own sample — chances to advance on a ball this
+    # fielder fielded at this position (arm_opportunities; 0 when NULL). The
+    # two pool-derived arm rates shrink on this count, never on the batted
+    # balls above. Outfielders only; 0 for an infielder.
+    sample_arm_chances: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,18 +389,36 @@ class EmpiricalBayesShrinkage:
     def __init__(self, n_prior: int = EB_N_PRIOR) -> None:
         self.n_prior = n_prior
 
-    def alpha(self, n_samples: int) -> float:
-        return n_samples / (n_samples + self.n_prior)
+    def alpha(self, n_samples: int, n_prior: int | None = None) -> float:
+        """The share of his own reading: ``n_samples / (n_samples + prior)``.
+        ``n_prior`` overrides the instance's prior for one call (SIM-550)."""
+        prior = self.n_prior if n_prior is None else n_prior
+        return n_samples / (n_samples + prior)
 
     def shrink(
         self,
         raw_vec: NDArray[np.float64],
         avg_vec: NDArray[np.float64],
         n_samples: int,
+        n_prior: int | None = None,
     ) -> NDArray[np.float64]:
-        a = self.alpha(n_samples)
-        raw_clean = np.where(np.isnan(raw_vec), avg_vec, raw_vec)
-        return a * raw_clean + (1.0 - a) * avg_vec
+        """Pull ``raw_vec`` toward ``avg_vec`` by ``n_samples / (n_samples + prior)``.
+
+        ``n_prior`` overrides the instance's prior for one call (SIM-550: the
+        arm group shrinks on its own chances at ``ARM_ALPHA_PRIOR_CHANCES``);
+        ``None`` keeps the instance's, so every other group is unchanged.
+
+        A NaN raw value becomes the league mean. A NaN LEAGUE value (a key the
+        league row lacks) leaves the raw value alone — the rule the steal
+        engine uses (SIM-531): a feature can shrink only toward a mean that
+        exists. The range, error, DP, specialty and star league vectors never
+        carry NaN (their loader maps an absent key to 0.0), so this rule moves
+        nothing for them.
+        """
+        a = self.alpha(n_samples, n_prior)
+        avg = np.where(np.isnan(avg_vec), raw_vec, avg_vec)
+        raw_clean = np.where(np.isnan(raw_vec), avg, raw_vec)
+        return a * raw_clean + (1.0 - a) * avg
 
 
 # ============================================================================
@@ -763,7 +819,25 @@ class FielderSimilarityEngine:
 
         def _wts(field: str, default: list[float]) -> NDArray[np.float64]:
             w = getattr(report, field, None)
-            return np.asarray(w, dtype=np.float64) if w is not None else np.array(default)
+            if w is None:
+                return np.array(default)
+            arr = np.asarray(w, dtype=np.float64)
+            # SIM-550: a report fitted before a group's feature list changed
+            # carries the wrong number of weights (the live report holds FOUR
+            # arm weights; the arm group has three). Applying it would
+            # broadcast against the feature vector and fail on the first
+            # query. Keep the module defaults until ``make calibrate`` refits
+            # the report — the SIM-531 rule from the baserunner engine.
+            if arr.shape != (len(default),):
+                log.warning(
+                    "SIM-550: %s holds %d weights but the engine has %d features; "
+                    "keeping the module defaults until the report is refitted.",
+                    field,
+                    arr.size,
+                    len(default),
+                )
+                return np.array(default)
+            return arr
 
         self._if_range_rbf = WeightedRBFSimilarity(
             sigma=_sig("sigma_if_range", self._if_range_rbf.sigma),
@@ -933,8 +1007,14 @@ class FielderSimilarityEngine:
                 self._pos_avg["range"][pos][season] = np.array(
                     [pj.get(f, 0.0) or 0.0 for f, _ in OF_RANGE_FEATURES], dtype=np.float64
                 )
+                # SIM-550: an arm key the league row lacks (a row written
+                # before the arm block was rebuilt from the pool) is NaN —
+                # never 0.0 mph or a 0.0 thrown-out rate, which is the weakest
+                # arm in the league — and the shrinkage then leaves the raw
+                # value alone.
                 self._pos_avg["arm"][pos][season] = np.array(
-                    [pj.get(f, 0.0) or 0.0 for f, _ in OF_ARM_FEATURES], dtype=np.float64
+                    [np.nan if pj.get(f) is None else float(pj[f]) for f, _ in OF_ARM_FEATURES],
+                    dtype=np.float64,
                 )
                 self._pos_avg["error"][pos][season] = np.array(
                     [pj.get(f, 0.0) or 0.0 for f, _ in OF_ERROR_FEATURES], dtype=np.float64
@@ -966,6 +1046,20 @@ class FielderSimilarityEngine:
         }
         _asof_col = "fsm.asof_date" if "asof_date" in _present else "NULL AS asof_date"
 
+        # SIM-550: the arm block's four columns, guarded the same way, so a
+        # table built before the block existed still loads (the arm reads
+        # NULL, which becomes NaN below). The order is OF_ARM_FEATURES' order,
+        # then the chance count the group shrinks on.
+        _arm_cols = ", ".join(
+            f"fsm.{col}" if col in _present else f"NULL AS {col}"
+            for col in (
+                "arm_strength",
+                "arm_advancement_prevention",
+                "arm_thrown_out_rate",
+                "arm_opportunities",
+            )
+        )
+
         rows = conn.execute(f"""
             SELECT
                 fsm.player_id, fsm.position, fsm.season,
@@ -981,9 +1075,8 @@ class FielderSimilarityEngine:
                 fsm.dp_pivot_above_expected,
                 -- Specialty (IF only)
                 fsm.bunt_fielding_rate, fsm.scoop_success_rate,
-                -- Arm (OF only)
-                fsm.arm_hold_rate, fsm.arm_thrown_out_rate,
-                fsm.arm_advancement_prevention, fsm.of_arm_runs,
+                -- Arm (OF only; SIM-550: velocity, prevention, thrown-out, chances)
+                {_arm_cols},
                 -- Star plays (OF only — compute rates from counts)
                 fsm.five_star_opps, fsm.five_star_catches,
                 fsm.four_star_opps, fsm.four_star_catches,
@@ -1026,11 +1119,11 @@ class FielderSimilarityEngine:
                 # Specialty (2)
                 bunt_rate,
                 scoop_rate,
-                # Arm (4)
-                arm_hold,
-                arm_throw_out,
+                # Arm (3 features + the chance count; SIM-550)
+                arm_strength,
                 arm_adv_prev,
-                of_arm_runs,
+                arm_throw_out,
+                arm_opps,
                 # Star play counts (6)
                 five_opps,
                 five_catches,
@@ -1072,7 +1165,10 @@ class FielderSimilarityEngine:
                 dp_vec = _v(dp_feats)
                 specialty_vec = _v([bunt_rate, scoop_rate])
             else:
-                arm_vec = _v([arm_hold, arm_throw_out, arm_adv_prev, of_arm_runs])
+                # SIM-550: OF_ARM_FEATURES' order. NULL loads as NaN
+                # (unmeasured), never 0.0 — a 0.0 mph velocity or a 0.0
+                # thrown-out rate would be a measurement he never produced.
+                arm_vec = _v([arm_strength, arm_adv_prev, arm_throw_out])
                 star_vec = _v([five_star_rate, four_star_rate, routine_rate])
 
             self._profiles[(player_id, position, season)] = FielderProfile(
@@ -1089,6 +1185,8 @@ class FielderSimilarityEngine:
                 star_vec=star_vec,
                 eb_alpha=self._shrinkage.alpha(sample_bb or 0),
                 below_minimum=bool(below_min),
+                # SIM-550: the arm group's own sample (0 for an infielder).
+                sample_arm_chances=int(arm_opps or 0),
             )
 
         # SIM-537: refuse a mixed set.
@@ -1103,7 +1201,13 @@ class FielderSimilarityEngine:
             log.info("Fielder profiles are as of %s.", self._asof_date)
 
     def _apply_shrinkage(self) -> None:
-        """Apply EB shrinkage to all feature vectors using positional averages."""
+        """Apply EB shrinkage to all feature vectors using positional averages.
+
+        Every group shrinks on the profile's batted balls at ``EB_N_PRIOR``,
+        except the outfield arm (SIM-550): its two pool-derived rates shrink
+        on the arm's own chances at ``ARM_ALPHA_PRIOR_CHANCES``, and a missing
+        velocity takes the league mean.
+        """
         for _key, p in self._profiles.items():
             pos = p.position
             s = p.season
@@ -1130,7 +1234,24 @@ class FielderSimilarityEngine:
             else:
                 avg = self._pos_avg["arm"].get(pos, {}).get(s)
                 if avg is not None and p.arm_vec is not None:
-                    p.arm_vec = self._shrinkage.shrink(p.arm_vec, avg, n)
+                    # SIM-550: the two rates (prevention, thrown-out) shrink on
+                    # the arm's OWN chances. An everyday outfielder has 600
+                    # batted balls and 25 to 200 arm chances; on the batted
+                    # balls a 25-chance arm was read at face value. A NaN
+                    # league value leaves the raw rate alone (see ``shrink``).
+                    # 25 chances -> alpha 0.33: two thirds of the way to the
+                    # league mean; 200 chances -> 0.80.
+                    rates = self._shrinkage.shrink(
+                        p.arm_vec[1:],
+                        avg[1:],
+                        p.sample_arm_chances,
+                        n_prior=ARM_ALPHA_PRIOR_CHANCES,
+                    )
+                    # The velocity is Savant's, measured over 50 or more
+                    # throws: kept as read; a missing one takes the league
+                    # mean, never 0 mph.
+                    velocity = np.where(np.isnan(p.arm_vec[:1]), avg[:1], p.arm_vec[:1])
+                    p.arm_vec = np.concatenate([velocity, rates])
 
                 avg = self._pos_avg["star"].get(pos, {}).get(s)
                 if avg is not None and p.star_vec is not None:

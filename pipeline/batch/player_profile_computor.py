@@ -135,6 +135,12 @@ MIN_FIELDER_PLAYS = 50
 MIN_CATCHER_SB_ATTEMPTS = 10
 MIN_MANAGER_GAMES = 50
 
+#: SIM-550: the chance count at which an outfielder's arm block repeats
+#: year to year at about 0.5 (measured on the advancement pool, plan §2.2).
+#: The fielder model shares this value: it is the prior the arm group's own
+#: shrinkage confidence uses, chances / (chances + 50).
+ARM_ALPHA_PRIOR_CHANCES = 50
+
 # ---------------------------------------------------------------------------
 # Statcast pitch-result codes (SIM-456 / SIM-501)
 #
@@ -167,12 +173,6 @@ def sql_in(types: tuple[str, ...]) -> str:
 
 
 SQL_WHIFF = f"type IN {sql_in(WHIFF_TYPES)}"
-
-#: SIM-530: the outfield positions, as the fielder aggregation labels them.
-#: The arm advancement block is outfield-only — Savant's baserunning board
-#: measures runners taking an extra base on a hit, which is an outfield arm's
-#: job — so every column in that block guards on this.
-_SQL_IS_OF = "c.position IN ('LF', 'CF', 'RF')"
 
 
 # ===========================================================================
@@ -1455,6 +1455,19 @@ def _record_pool_build(conn, pool_name: str, seasons: list[int], ref_season: int
         )
 
 
+def _table_exists(conn, schema: str, table: str) -> bool:
+    """SIM-550: TRUE when ``schema.table`` exists in the DuckDB catalog.
+
+    The probe reads ``information_schema`` (the SIM-531 pattern), so a fresh
+    database or a narrow test fixture answers FALSE instead of raising.
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ?",
+        [schema, table],
+    ).fetchone()
+    return bool(row and row[0])
+
+
 # ---------------------------------------------------------------------------
 # Index-recreate hardening (SIM-419)
 # ---------------------------------------------------------------------------
@@ -1719,7 +1732,7 @@ class PlayerProfileComputor:
             self._compute_manager_profiles(seasons, asof=asof)  # 5.
 
             # ── Defensive metrics ────────────────────────────────────────────
-            # RE matrix first — DP run value and OF arm runs depend on it
+            # RE matrix first — the DP run value depends on it
             self._re_matrix = build_run_expectancy_matrix(self._conn, seasons, asof=asof)
 
             # Catcher: framing → blocking → throwing (temp tables consumed in order)
@@ -1727,9 +1740,10 @@ class PlayerProfileComputor:
             self._compute_catcher_blocking(seasons, asof=asof)
             self._compute_catcher_throwing(seasons, asof=asof)
 
-            # Outfield
+            # Outfield. The arm block is NOT built here: it reads the
+            # advancement pool, so `_fill_outfield_arm_block` runs after the
+            # pools below (step 6b).
             self._compute_outfield_catch_probability(seasons, asof=asof)
-            self._compute_outfield_arm_metrics(seasons, asof=asof)
 
             # Infield
             self._compute_infield_oaa(seasons, asof=asof)
@@ -1754,6 +1768,9 @@ class PlayerProfileComputor:
             self._build_steal_opportunity_pool(seasons, incremental=incremental)
             # SIM-510: reads sim.outcome_pool, so it must follow that rebuild.
             self._build_advancement_opportunity_pool(seasons, incremental=incremental)
+            # 6b. SIM-550: the outfield arm block, from the advancement pool
+            # (an UPDATE over the fielder rows aggregated above).
+            self._fill_outfield_arm_block(seasons, asof=asof)
             # SIM-515: the measured IBB rate table (a full recompute — the
             # table is tiny and window-scoped, so no incremental gating).
             self._build_ibb_rates(seasons)
@@ -4850,67 +4867,6 @@ class PlayerProfileComputor:
         )
 
     # ------------------------------------------------------------------
-    # OUTFIELD ARM METRICS
-    # ------------------------------------------------------------------
-
-    def _compute_outfield_arm_metrics(self, seasons: list[int], asof: date | None = None) -> None:
-        """
-        Compute OF arm value: hold rate, thrown-out rate, arm runs.
-        Uses RE24 deltas to value advancement prevention.
-
-        SIM-537: ``asof`` restricts raw.pitches to ``game_date <= asof``.
-        """
-        log.info("Computing outfield arm metrics …")
-        season_list = ", ".join(str(s) for s in seasons)
-        date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
-
-        # Extract all BIP with runners on base where an OF fielded the ball
-        self._conn.execute(f"""
-            DROP TABLE IF EXISTS _tmp_of_arm;
-            CREATE TABLE _tmp_of_arm AS
-
-            WITH of_bip AS (
-                SELECT
-                    game_pk, at_bat_number, season,
-                    fielded_by,
-                    fielder_7, fielder_8, fielder_9,
-                    on_1b, on_2b, on_3b,
-                    post_on_1b, post_on_2b, post_on_3b,
-                    runner_1b_scored, runner_2b_scored, runner_3b_scored,
-                    of_assist,
-                    outs,
-                    -- runners state bitmask
-                    (CASE WHEN on_1b IS NOT NULL THEN 1 ELSE 0 END)
-                    + (CASE WHEN on_2b IS NOT NULL THEN 2 ELSE 0 END)
-                    + (CASE WHEN on_3b IS NOT NULL THEN 4 ELSE 0 END) AS runners_state
-                FROM pg.raw.pitches
-                WHERE season IN ({season_list})
-                  {date_cutoff}
-                  -- SIM-457: an arm opportunity is ANY ball the outfielder
-                  -- fielded with runners on. The old `type='X'` excluded the
-                  -- main case — a hit that a runner tries to advance on.
-                  AND {SQL_IN_PLAY}
-                  AND events IS NOT NULL
-                  AND (on_1b IS NOT NULL OR on_2b IS NOT NULL OR on_3b IS NOT NULL)
-                  AND (fielded_by = fielder_7 OR fielded_by = fielder_8 OR fielded_by = fielder_9)
-            )
-            SELECT
-                *,
-                CASE
-                    WHEN fielded_by = fielder_7 THEN 'LF'
-                    WHEN fielded_by = fielder_8 THEN 'CF'
-                    WHEN fielded_by = fielder_9 THEN 'RF'
-                END AS fielder_position,
-                fielded_by AS fielder_id,
-                -- Runner advancement outcomes
-                CASE WHEN of_assist IS NOT NULL AND of_assist > 0 THEN TRUE ELSE FALSE END
-                    AS threw_out_runner
-            FROM of_bip
-        """)
-
-        log.info("  OF arm metrics extracted.")
-
-    # ------------------------------------------------------------------
     # INFIELD OAA
     # ------------------------------------------------------------------
 
@@ -5695,15 +5651,6 @@ class PlayerProfileComputor:
                     scoop_success_rate FLOAT
                 )
             """,
-            # OF arm — _compute_outfield_arm_metrics (not joined directly by
-            # the aggregator today, but referenced by the cleanup loop, so
-            # we ensure it's safe to DROP).
-            "_tmp_of_arm": """
-                CREATE TABLE IF NOT EXISTS _tmp_of_arm (
-                    season SMALLINT, fielder_id INTEGER, position VARCHAR,
-                    arm_opportunities INTEGER, arm_runs FLOAT
-                )
-            """,
         }
         for table, ddl in placeholders.items():
             try:
@@ -5718,20 +5665,20 @@ class PlayerProfileComputor:
         Combine all per-play detail tables into the final
         derived.fielder_season_metrics rows.
 
-        SIM-537: the seven per-play temp tables are already cutoff-filtered
+        SIM-537: the six per-play temp tables are already cutoff-filtered
         by the time this method reads them (they carry no date of their
-        own). Three Savant joins here have no date column at all — sprint
-        speed, arm strength, and baserunning (advancement) — so each
-        follows the season-shift substitution described on
-        ``_compute_baserunner_profiles``: a season that ENDED before the
-        cutoff joins its own row; the season CONTAINING the cutoff joins
-        the PRIOR season's row. Measured year-to-year correlation: fielder
-        arm strength 0.857, the advancement-rate columns 0.546 — both
-        substitute cheaply. ``of_arm_runs`` is the one exception: its
-        year-to-year correlation is only 0.254 (mostly noise), so neither
-        the current season (which would leak) nor the prior season (a weak
-        predictor) is carried for the cutoff season — it is left NULL there
-        instead (docs/audit/2026-09-10-savant-point-in-time-data.md §5).
+        own). Two Savant joins here have no date column at all — sprint
+        speed and arm strength — so each follows the season-shift
+        substitution described on ``_compute_baserunner_profiles``: a
+        season that ENDED before the cutoff joins its own row; the season
+        CONTAINING the cutoff joins the PRIOR season's row. Measured
+        year-to-year correlation of the fielder arm strength: 0.857, so it
+        substitutes cheaply.
+
+        SIM-550: the six outfield arm columns and ``of_arm_runs`` are
+        written NULL here. ``_fill_outfield_arm_block`` fills the six from
+        the advancement pool after the pools are built; ``of_arm_runs``
+        stays NULL (the model does not read it).
         """
         log.info("Aggregating fielder season metrics …")
         season_list = ", ".join(str(s) for s in seasons)
@@ -5741,12 +5688,6 @@ class PlayerProfileComputor:
             f"(CASE WHEN c.season = {asof_date.year} THEN c.season - 1 ELSE c.season END)"
             if asof is not None
             else "c.season"
-        )
-        # SIM-537: TRUE only for a row in the season containing the cutoff —
-        # the guard that keeps of_arm_runs NULL there instead of carrying a
-        # low-correlation value from either direction.
-        of_arm_runs_in_cutoff_season = (
-            f"c.season = {asof_date.year}" if asof is not None else "FALSE"
         )
 
         # ----------------------------------------------------------------
@@ -5923,15 +5864,8 @@ class PlayerProfileComputor:
                 COALESCE(e.throwing_error_rate, 0)  AS throwing_error_rate,
                 NULL::FLOAT                          AS error_oaa_cost,
 
-                -- OF Arm — SIM-530 (2026-09-10). Every one of these eight was a
-                -- literal NULL on all 4,799 fielder-seasons in the pool window,
-                -- while the fielder engine weights the group at 0.30 of an
-                -- outfielder's score. The engine's kernel treats a missing
-                -- feature as zero distance, so until now EVERY pair of
-                -- outfielders scored a perfect match on the arm. Two Savant
-                -- boards fill it.
-                --
-                -- Throw velocity is per position on Savant's board, so the CASE
+                -- OF Arm. The throw velocity comes from Savant's arm-strength
+                -- board (SIM-530). It is per position on the board, so the CASE
                 -- takes the column for THIS row's position and falls back to the
                 -- player's overall figure. This one is filled for infielders
                 -- too: it is a physical fact, and the infield feature groups do
@@ -5948,51 +5882,20 @@ class PlayerProfileComputor:
                     END,
                     sas.arm_overall
                 )                                       AS arm_strength,
-                -- The advancement block stays outfield-only, as the column
-                -- comments have always promised. Savant's baserunning board
-                -- measures runners taking an extra base on a hit, which is an
-                -- outfield arm's job.
-                --
-                -- ⚠ That board is per PLAYER-SEASON, not per position. A player
-                -- who works both corners carries the same advancement figures on
-                -- his left-field row and his right-field row. That is right for
-                -- an arm, which does not change between corners, but it is not
-                -- a per-position measurement and must not be read as one.
-                CASE WHEN {_SQL_IS_OF} THEN sbr.n_opp_xb END
-                                                        AS arm_opportunities,
-                CASE WHEN {_SQL_IS_OF} AND sbr.n_opp_xb IS NOT NULL
-                          AND sbr.n_att_xb IS NOT NULL
-                     THEN sbr.n_opp_xb - sbr.n_att_xb END
-                                                        AS arm_holds,
-                CASE WHEN {_SQL_IS_OF} AND sbr.rate_att_xb IS NOT NULL
-                     THEN 1.0 - sbr.rate_att_xb END     AS arm_hold_rate,
-                CASE WHEN {_SQL_IS_OF} THEN sbr.n_out END
-                                                        AS arm_assists,
-                CASE WHEN {_SQL_IS_OF} AND sbr.n_att_xb > 0
-                     THEN sbr.n_out * 1.0 / sbr.n_att_xb END
-                                                        AS arm_thrown_out_rate,
-                -- Positive means runners challenge this fielder LESS often than
-                -- they would a generic one. Savant supplies the generic
-                -- baseline; our own data has no way to compute it.
-                CASE WHEN {_SQL_IS_OF}
-                          AND sbr.est_rate_att_generic_fielder IS NOT NULL
-                          AND sbr.rate_att_xb IS NOT NULL
-                     THEN sbr.est_rate_att_generic_fielder - sbr.rate_att_xb END
-                                                        AS arm_advancement_prevention,
-                -- NULL when the player has no Savant row at all. Summing three
-                -- COALESCEd nulls would write a confident 0.0 instead.
-                --
-                -- SIM-537: also NULL for the season containing the cutoff —
-                -- see the class docstring note above. This guard applies
-                -- even though sbr is already season-shift-joined, because
-                -- the shifted (prior-season) value is a weak predictor
-                -- here, not merely a leak risk.
-                CASE WHEN {_SQL_IS_OF} AND sbr.player_id IS NOT NULL
-                          AND NOT ({of_arm_runs_in_cutoff_season})
-                     THEN COALESCE(sbr.fielder_runs_hold, 0)
-                        + COALESCE(sbr.fielder_runs_advances, 0)
-                        + COALESCE(sbr.fielder_runs_thrown_out, 0) END
-                                                        AS of_arm_runs,
+                -- SIM-550: the six advancement columns are written NULL here.
+                -- `_fill_outfield_arm_block` fills them from the advancement
+                -- pool, per (fielder, position, season), after the pools are
+                -- built. An outfielder who fielded no chance keeps NULL, never
+                -- 0; a catcher or an infielder never gets a block.
+                NULL::INTEGER                           AS arm_opportunities,
+                NULL::INTEGER                           AS arm_holds,
+                NULL::FLOAT                             AS arm_hold_rate,
+                NULL::INTEGER                           AS arm_assists,
+                NULL::FLOAT                             AS arm_thrown_out_rate,
+                NULL::FLOAT                             AS arm_advancement_prevention,
+                -- SIM-550: not read by the model; the runner-view figure that
+                -- used to sit here described the fielder's own running.
+                NULL::FLOAT                             AS of_arm_runs,
 
                 -- DP (NULL for outfielders)
                 dp.dp_opportunities,
@@ -6045,11 +5948,9 @@ class PlayerProfileComputor:
             -- docstring — unshifted (c.season) when asof is None.
             LEFT JOIN pg.raw.sprint_speed ss
                 ON c.player_id = ss.player_id AND ss.season = {savant_season}
-            -- SIM-530: the two boards that fill the outfield arm block.
+            -- SIM-530: the throw velocity board.
             LEFT JOIN pg.raw.savant_arm_strength sas
                 ON c.player_id = sas.player_id AND sas.season = {savant_season}
-            LEFT JOIN pg.raw.savant_baserunning sbr
-                ON c.player_id = sbr.player_id AND sbr.season = {savant_season}
         """)
         self._conn.execute(f"""
             UPDATE derived.fielder_season_metrics
@@ -6063,12 +5964,13 @@ class PlayerProfileComputor:
     def _assert_fielder_profiles_have_no_leakage(self, seasons: list[int], asof: date) -> None:
         """Prove raw.pitches contributed no row dated after the cutoff.
 
-        Covers all seven per-play builders and this aggregator — they all
+        Covers all six per-play builders and this aggregator — they all
         read raw.pitches under the identical season+cutoff filter, so one
-        check at the end of the chain covers all of them. The three Savant
-        joins (sprint speed, arm strength, baserunning) have no date of
-        their own to check — they are made safe by the season-shift
-        substitution in the query above, not by filtering.
+        check at the end of the chain covers all of them. The two Savant
+        joins (sprint speed, arm strength) have no date of their own to
+        check — they are made safe by the season-shift substitution in the
+        query above, not by filtering. The arm block's own dated source, the
+        advancement pool, is checked by ``_fill_outfield_arm_block``.
         """
         season_list = ", ".join(str(s) for s in seasons)
         self._check_leakage(
@@ -6077,6 +5979,115 @@ class PlayerProfileComputor:
             f"WHERE season IN ({season_list}) AND game_date <= DATE '{asof}'",
             asof,
         )
+
+    # ------------------------------------------------------------------
+    # OUTFIELD ARM BLOCK (SIM-550) — from the advancement pool
+    # ------------------------------------------------------------------
+
+    def _fill_outfield_arm_block(self, seasons: list[int], asof: date | None = None) -> None:
+        """SIM-550: fill the outfield arm block from
+        ``sim.advancement_opportunity_pool``, per (fielder, position, season).
+
+        The pool holds one row per real chance to take an extra base, with
+        the fielder who fielded the ball and his position. This step counts
+        each outfielder's chances, the attempts against him and the runners
+        he threw out, then writes the six arm columns on his fielder row.
+        The expectation behind ``arm_advancement_prevention`` is the pool's
+        own attempt rate in the same season, decision, out state AND
+        position: runners take the extra base less often against a left
+        fielder for the geometry, not for his arm, so a 0 prevention is
+        average at every position.
+
+        The step first resets the seven arm columns on every fielder row of
+        the requested seasons, then writes the block where the pool holds a
+        chance. So the fill is self-contained: a row the pool no longer
+        supports (a stale block from an earlier source, or a position the
+        player did not field that season) is left NULL, not kept.
+
+        Runs AFTER the pools. A cutoff filters the pool by ``game_date``, so
+        the block is exact to the day — no season shift. Without the pool (a
+        fresh database) the step logs and leaves the block NULL; the next
+        nightly fills it. ``of_arm_runs`` is written NULL: the model does not
+        read it.
+        """
+        if not _table_exists(self._conn, "sim", "advancement_opportunity_pool"):
+            log.warning("  arm block skipped: sim.advancement_opportunity_pool absent")
+            return
+        log.info("Filling the outfield arm block from the advancement pool …")
+        season_list = ", ".join(str(s) for s in seasons)
+        date_cutoff = f"AND game_date <= DATE '{asof.isoformat()}'" if asof is not None else ""
+        self._conn.execute(f"""
+            CREATE OR REPLACE TEMP TABLE _arm AS
+            WITH pool AS (
+                SELECT season, scenario, from_base, target_base, outs,
+                       fielder_id, fielder_pos, attempted, safe
+                FROM sim.advancement_opportunity_pool
+                WHERE season IN ({season_list})
+                  AND fielder_pos IN (7, 8, 9)
+                  AND fielder_id IS NOT NULL
+                  {date_cutoff}
+            ),
+            -- What a generic fielder AT HIS POSITION concedes in the same
+            -- cell: season x decision x outs x position. Without the
+            -- position the prevention carries a position offset (2024:
+            -- LF about +0.045, CF and RF about -0.02), because runners
+            -- challenge a left fielder less on the same decision.
+            expected AS (
+                SELECT season, scenario, from_base, target_base, outs, fielder_pos,
+                       AVG(attempted::INT) AS rate
+                FROM pool
+                GROUP BY 1, 2, 3, 4, 5, 6
+            )
+            SELECT p.fielder_id AS player_id,
+                   CASE p.fielder_pos WHEN 7 THEN 'LF' WHEN 8 THEN 'CF' ELSE 'RF' END AS position,
+                   p.season,
+                   COUNT(*)                                                    AS chances,
+                   SUM(p.attempted::INT)                                       AS attempts,
+                   SUM(CASE WHEN p.attempted AND NOT p.safe THEN 1 ELSE 0 END) AS thrown_out,
+                   SUM(e.rate)                                                 AS expected_attempts
+            FROM pool p
+            JOIN expected e USING (season, scenario, from_base, target_base, outs, fielder_pos)
+            GROUP BY 1, 2, 3
+        """)
+        # The reset: the fill alone must leave the table right. The join
+        # UPDATE below touches only rows the pool supports, so a row it
+        # does not (a block from an earlier source, or a position the player
+        # did not field that season) would keep stale figures. The infield
+        # and the catcher never carry a block, so every position is reset.
+        self._conn.execute(f"""
+            UPDATE derived.fielder_season_metrics SET
+                arm_opportunities          = NULL,
+                arm_holds                  = NULL,
+                arm_hold_rate              = NULL,
+                arm_assists                = NULL,
+                arm_thrown_out_rate        = NULL,
+                arm_advancement_prevention = NULL,
+                of_arm_runs                = NULL
+            WHERE season IN ({season_list})
+        """)
+        self._conn.execute("""
+            UPDATE derived.fielder_season_metrics f SET
+                arm_opportunities          = a.chances,
+                arm_holds                  = a.chances - a.attempts,
+                arm_hold_rate              = 1.0 - a.attempts * 1.0 / a.chances,
+                arm_assists                = a.thrown_out,
+                -- NULL until a runner has challenged him.
+                arm_thrown_out_rate        = a.thrown_out * 1.0 / NULLIF(a.attempts, 0),
+                arm_advancement_prevention = (a.expected_attempts - a.attempts) / a.chances,
+                of_arm_runs                = NULL
+            FROM _arm a
+            WHERE f.player_id = a.player_id
+              AND f.position = a.position
+              AND f.season = a.season
+        """)
+        self._conn.execute("DROP TABLE IF EXISTS _arm")
+        self._check_leakage(
+            "sim.advancement_opportunity_pool",
+            f"SELECT MAX(game_date) FROM sim.advancement_opportunity_pool "
+            f"WHERE season IN ({season_list}) {date_cutoff}",
+            asof or date.today(),
+        )
+        log.info("  outfield arm block filled from the advancement pool.")
 
     def _ensure_catcher_temp_tables_exist(self) -> None:
         """Defensive — same pattern as _ensure_fielder_temp_tables_exist.
@@ -6303,7 +6314,6 @@ class PlayerProfileComputor:
             "_tmp_of_plays",
             "_tmp_if_plays",
             "_tmp_dp_plays",
-            "_tmp_of_arm",
             "_tmp_bunt_defense",
             "_tmp_1b_scoop",
             "_tmp_errors",
@@ -7435,6 +7445,7 @@ class LeagueAverageProfiles:
             brm_cols = self._derived_columns(conn, "baserunner_season_metrics")
             bss_cols = self._derived_columns(conn, "baserunner_steal_metrics")
             psm_cols = self._derived_columns(conn, "pitcher_steal_metrics")
+            fsm_cols = self._derived_columns(conn, "fielder_season_metrics")
 
             # Pitcher average (used for GMM fallback)
             conn.execute(f"""
@@ -7485,6 +7496,24 @@ class LeagueAverageProfiles:
             # Fielder average — one row per position so shrinkage falls
             # back to position-specific league averages (a 1B should not
             # be compared to an OF league average).
+            #
+            # SIM-550: the three arm keys the fielder model shrinks toward
+            # join the row. Without them a thin arm is pulled toward 0.0,
+            # and a 0 thrown-out rate is the weakest arm in the league. The
+            # per-position WHERE below keeps the positions apart: an infield
+            # row never enters an outfield row's AVG. AVG skipping NULL does
+            # a different job: an outfielder without a block (he fielded no
+            # chance) or without a velocity does not pull his position's
+            # mean. An infield row's two pool-derived keys come out null
+            # (the block is never filled there); its `arm_strength` is the
+            # infield velocity, which the aggregator fills for every
+            # position. Each key is written only when the fielder table
+            # carries its column (a narrow fixture may not).
+            arm_keys = "".join(
+                f", '{col}', AVG({col})"
+                for col in ("arm_advancement_prevention", "arm_thrown_out_rate", "arm_strength")
+                if col in fsm_cols
+            )
             for position in ("C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"):
                 conn.execute(f"""
                     INSERT OR REPLACE INTO derived.league_averages
@@ -7494,7 +7523,7 @@ class LeagueAverageProfiles:
                             'outs_above_average', AVG(outs_above_average),
                             'error_rate',         AVG(error_rate),
                             'arm_hold_rate',      AVG(arm_hold_rate),
-                            'dp_run_value',       AVG(dp_run_value)
+                            'dp_run_value',       AVG(dp_run_value){arm_keys}
                         ) AS profile_json,
                         CURRENT_TIMESTAMP AS updated_at
                     FROM derived.fielder_season_metrics

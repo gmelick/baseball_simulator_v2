@@ -190,15 +190,22 @@ into a matrix the draws look up.
   until the matrix is rebuilt.*
 - Opposite-hand batters are penalized ×0.92; switch hitters resolve to the hand in play.
 
-### Fielder — `fielder_similarity.py` (per position; the fielding and advancement draws at 1.2)
+### Fielder — `fielder_similarity.py` (per position; the fielding and advancement draws at power 1 — fitted 1.2)
 
 - **Infield**: range 0.45 (σ 1.03: outs above average to the glove side, arm side, charging,
   going back; catch percentage added) · double play 0.30 (σ 0.37: DP above expected, DP
   attempt rate, DP success rate; the pivot for second basemen) · errors 0.15 (fielding,
   throwing) · specialty 0.10 (bunt fielding; the first baseman's scoop rate).
-- **Outfield**: range 0.40 (the same five OAA components) · arm 0.30 (hold rate, thrown-out
-  rate, advancement prevention, arm runs — three of the four are WRONG in the data: SIM-530 filled them from Savant's baserunning board, which is the player's OWN running, not the runners he held; the fix is SIM-550)
-  · star catches 0.15 (five-star, four-star, routine catch rates) · errors 0.15.
+- **Outfield**: range 0.40 (the same five OAA components) · arm 0.30 (σ 0.99, fitted
+  2026-09-17: the throw velocity from Savant's arm-strength board at weight 0.844; the
+  advancement prevention at 0.137 and the thrown-out rate at 0.240 from our own advancement
+  pool, per fielder × position, the two rates shrunk on the arm's own chances, prior 50) ·
+  star catches 0.15 (five-star, four-star, routine catch rates) · errors 0.15.
+  *The outfield arm block (SIM-550) landed on 2026-09-17, code and data: the fill from the
+  advancement pool replaced the runner-view figures the September Savant join wrote, the
+  three outfield matrices were rebuilt. The weights are the fitted year-to-year repeats
+  WITHIN a position; the plan's 0.60 for the prevention pooled the positions and was mostly
+  the position label.*
 - Shrinkage prior 15; never scored across positions.
 
 ### Catcher — `catcher_similarity.py` (the throwing sub-score feeds the steal draw at power 1 — fitted 2; the full score fed the retired receiving kernel)

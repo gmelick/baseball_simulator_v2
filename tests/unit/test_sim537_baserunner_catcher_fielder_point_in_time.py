@@ -13,9 +13,12 @@ raw.savant_poptime, raw.savant_catcher_throwing, raw.savant_arm_strength,
 and raw.savant_baserunning — only a season number. These follow the design
 doc's alternative instead (docs/audit/2026-09-10-savant-point-in-time-data.md
 §5): a season that ENDED before the cutoff joins its own row; the season
-CONTAINING the cutoff joins the PRIOR season's row. One column,
-of_arm_runs, correlates too weakly year-to-year (0.254) to substitute even
-the prior season — it is left NULL for the cutoff season instead.
+CONTAINING the cutoff joins the PRIOR season's row.
+
+The outfield arm block no longer reads a Savant board (SIM-550): it is
+filled after the pools from sim.advancement_opportunity_pool, our own dated
+table, so the fill takes the plain ``game_date <= cutoff`` filter and the
+run-value guard the board needed is gone.
 
 Most tests follow test_sim537_point_in_time.py's style: reading the
 computor's actual source text and asserting the cutoff reaches every dated
@@ -326,19 +329,18 @@ def test_catcher_asof_is_threaded_from_run() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fielder: seven per-play methods read only raw.pitches (two of them —
+# Fielder: six per-play methods read only raw.pitches (two of them —
 # infield OAA and DP — also do a Python-side sprint-speed lookup); the
-# aggregator's three Savant joins have no date column, and of_arm_runs gets
-# a stricter NULL-out because its year-to-year correlation is too weak
-# (0.254) to substitute even the prior season.
+# aggregator's two Savant joins have no date column. The outfield arm block
+# (SIM-550) is filled after the pools from sim.advancement_opportunity_pool,
+# which carries game_date, so the fill filters by the cutoff directly.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "method,next_marker",
     [
-        ("_compute_outfield_catch_probability", "def _compute_outfield_arm_metrics"),
-        ("_compute_outfield_arm_metrics", "def _compute_infield_oaa"),
+        ("_compute_outfield_catch_probability", "def _compute_infield_oaa"),
         ("_compute_infield_oaa", "def _compute_dp_metrics"),
         ("_compute_dp_metrics", "def _compute_bunt_defense"),
         ("_compute_bunt_defense", "def _compute_first_base_scooping"),
@@ -375,21 +377,38 @@ def test_a_fielder_cutoff_build_deletes_seasons_that_had_not_started() -> None:
     assert "season > {asof_date.year}" in body
 
 
-def test_fielder_aggregator_season_shifts_all_three_savant_joins() -> None:
+def test_fielder_aggregator_season_shifts_both_savant_joins() -> None:
+    """Sprint speed and arm strength. The baserunning board's join left with
+    SIM-550: the arm block now comes from our own dated pool."""
     body = _method_body(
         _src(), "_aggregate_fielder_season_metrics", "def _assert_fielder_profiles_have_no_leakage"
     )
     assert "CASE WHEN c.season = {asof_date.year} THEN c.season - 1 ELSE c.season END" in body
-    assert body.count("season = {savant_season}") == 3
+    assert body.count("season = {savant_season}") == 2
+    assert "savant_baserunning" not in body
+    assert "of_arm_runs_in_cutoff_season" not in body  # the run-value guard is gone
 
 
-def test_of_arm_runs_is_nulled_for_the_season_containing_the_cutoff() -> None:
-    body = _method_body(
-        _src(), "_aggregate_fielder_season_metrics", "def _assert_fielder_profiles_have_no_leakage"
+def test_the_arm_block_fill_filters_the_pool_by_the_cutoff_and_not_without() -> None:
+    """SIM-550: the pool carries game_date, so the fill takes the plain
+    ``game_date <= cutoff`` filter — no season shift — and a live build
+    (asof None) applies no date filter at all."""
+    body = _method_body(_src(), "_fill_outfield_arm_block", "def _ensure_catcher_temp_tables_exist")
+    assert "FROM sim.advancement_opportunity_pool" in body
+    assert (
+        'date_cutoff = f"AND game_date <= DATE \'{asof.isoformat()}\'" if asof is not None else ""'
+        in body
     )
-    assert "of_arm_runs_in_cutoff_season" in body
-    assert 'f"c.season = {asof_date.year}" if asof is not None else "FALSE"' in body
-    assert "AND NOT ({of_arm_runs_in_cutoff_season})" in body
+    # Once in the pool CTE, once in the leakage query.
+    assert body.count("{date_cutoff}") == 2
+    assert "savant_season" not in body
+
+
+def test_the_arm_block_leakage_check_names_the_pool() -> None:
+    body = _method_body(_src(), "_fill_outfield_arm_block", "def _ensure_catcher_temp_tables_exist")
+    assert '"sim.advancement_opportunity_pool"' in body
+    assert "SELECT MAX(game_date) FROM sim.advancement_opportunity_pool" in body
+    assert "asof or date.today()" in body
 
 
 def test_every_fielder_profile_ends_up_stamped_last() -> None:
@@ -416,15 +435,22 @@ def test_fielder_asof_is_threaded_from_run() -> None:
     src = _src()
     for call in [
         "self._compute_outfield_catch_probability(seasons, asof=asof)",
-        "self._compute_outfield_arm_metrics(seasons, asof=asof)",
         "self._compute_infield_oaa(seasons, asof=asof)",
         "self._compute_dp_metrics(seasons, asof=asof)",
         "self._compute_bunt_defense(seasons, asof=asof)",
         "self._compute_first_base_scooping(seasons, asof=asof)",
         "self._compute_error_decomposition(seasons, asof=asof)",
         "self._aggregate_fielder_season_metrics(seasons, asof=asof)",
+        "self._fill_outfield_arm_block(seasons, asof=asof)",
     ]:
         assert call in src, call
+    # SIM-550: the dead extraction is gone, and the fill runs after the pool
+    # it reads.
+    assert "_compute_outfield_arm_metrics" not in src
+    run_body = _method_body(src, "run", "def _delete_seasons")
+    assert run_body.index("self._build_advancement_opportunity_pool(") < run_body.index(
+        "self._fill_outfield_arm_block("
+    )
 
 
 # ---------------------------------------------------------------------------
