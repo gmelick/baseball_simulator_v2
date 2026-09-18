@@ -23,7 +23,7 @@
 
 - **▶ STATE AS OF 2026-06-06 — SUPERSEDED where §2b (2026-08-16) says otherwise: data foundation rebuilt, the runs band PASSES, CI all-green.**
   - **Phases 1–6 COMPLETE and CI-green** on **Python 3.13 / numpy 2.x** (SIM-431). Frontend shipped as
-    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v29**, Alembic head **0026** (2026-09-16; was 0025).
+    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v30**, Alembic head **0027** (2026-09-17; was 0026).
   - **Calibration is LIVE, REFIT 2026-08-16 on the rebuilt data** (SIM-432/459): `/data/calibration.json`
     fitted + applied at boot; win-prob map = fitted reliability-curve. 120-game validation: win-prob
     **ECE 0.0377** (was 0.047); batter **H/HR/TB 0.066/0.024/0.060** (bettable); pitcher **BB 0.044 —
@@ -543,7 +543,7 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   → Core sim loop (simulation/sim_loop.py) : 8-step pitch-by-pitch state machine + manager/situational
     decisions → GameSimResult                                     [Phase 4]
   → Runner + API (simulation/batch_runner.py, api/) : 100-iteration ProcessPool runner (forkserver
-    workers — SIM-430), REST + WebSocket, Redis cache, persistence (DuckDB v29 / Alembic 0026),
+    workers — SIM-430), REST + WebSocket, Redis cache, persistence (DuckDB v30 / Alembic 0027),
     betting/CLV surface, auth/rate-limit/CORS, nginx, Prometheus/Grafana   [Phase 5 — COMPLETE]
   → Frontend (frontend/) : React 18 + Vite + TypeScript, Playwright e2e   [Phase 6 — COMPLETE]
 ```
@@ -596,9 +596,9 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   derived-vs-official per-player totals study), `check_file_integrity.py`.
   *(scripts/ is baked into the image; run a not-yet-rebuilt new script via
   `docker compose run --rm -v "$PWD/scripts:/app/scripts" app python scripts/<x>.py`.)*
-- `db/` — `migrations/` (Alembic, head **0026** — 0026 = the two Savant running-game landing tables `raw.savant_basestealing` + `raw.savant_pitcher_running_game` (SIM-531, 2026-09-16); 0022 = the 15-market `raw.prop_odds` CHECK constraint,
+- `db/` — `migrations/` (Alembic, head **0027** — 0027 = the two Savant fielding landing tables `raw.savant_outs_above_average` + `raw.savant_outfield_jump` (SIM-532, 2026-09-17); 0026 = the two Savant running-game landing tables `raw.savant_basestealing` + `raw.savant_pitcher_running_game` (SIM-531, 2026-09-16); 0022 = the 15-market `raw.prop_odds` CHECK constraint,
   0023 = `raw.game_player_stats`, 0024 = the 15-market `raw.game_odds` CHECK + `draw_ml`; all three applied to the live DB on 2026-09-12; 0025 = `raw.game_bullpen`, the MLB box's per-game bullpen listing for the SIM-427 real pen, applied 2026-09-13) + `migrations/duckdb/`
-  (numbered SQL, schema **v29**) +
+  (numbered SQL, schema **v30**) +
   `schemas/duckdb_schema_version.txt`.
 - `tests/` — `unit/`, `regression/` (engine invariant gate), `integration/` (E2E TestClient),
   `performance/` (pytest-benchmark). `conftest.py` has shared fixtures + the event-loop guard.

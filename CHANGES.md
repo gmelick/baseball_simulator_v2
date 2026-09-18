@@ -1,3 +1,163 @@
+# Build — Savant's per-position outs above average and the outfield jump in the fielder model: built, reviewed, and RUN on the live data (the two board loads, the fielder chain, the refit, the seven fielder matrices, the app restarted); the fielder split by batter hand stored and left unread — SIM-532, 2026-09-17
+
+**What changed for the model (plan §0, §10).** The fielding and advancement draws compare the
+live fielder to the fielders of past plays. Until today the range part of that comparison
+read only our own five components, which repeat year to year at 0.04 to 0.47 within a
+position. Two Savant measurements now join it. Savant's outs above average at the fielder's
+position, per 100 of our chances, repeats at 0.34 to 0.63 within a position and is read in
+BOTH range groups (decisions 2 and 4). The three parts of Savant's outfield jump — how far
+an outfielder gets in the first 1.5 seconds after contact, in the next 1.5 seconds, and by
+the direction he takes — repeat at 0.64 to 0.92 and join the outfield range group
+(decision 3). The batter-hand split of outs above average is loaded into the raw table and
+read by nothing (decision 1): within a position it repeats only at shortstop. Every
+similarity power stays 1 (owner ruling 2026-09-16), so the fielder factor reads nearly flat
+in the draw today; the sharper matrices pay off when the comprehensive sweep fits the
+fielder power. The plan is `docs/audit/2026-09-17-sim532-fielder-hand-split-and-jump-plan.md`.
+
+**What landed, file by file (plan §5).**
+- `pipeline/etl/savant_boards.py`, `pipeline/etl/savant_loader.py`: two boards
+  (`outs_above_average`, `outfield_jump`); a fifth season style (`startYear` / `endYear`);
+  the hand-split mechanism generalised to a `split_param` + `splits` pair (the
+  outs-above-average board is pulled once per position, `pos=3` … `pos=9`, and the loader
+  writes the position from the query — the board's own label is the player's primary
+  position). The board's year column is blank, so the 1990 probe is its only season guard.
+- Alembic 0027 (`raw.savant_outs_above_average`, keyed player × season × position, with the
+  hand split stored; `raw.savant_outfield_jump`), mirrored in the reference DDL.
+- DuckDB 0030 (schema v29 → v30): six fielder columns after `asof_date` — the fielder INSERT
+  is positional, so `FIELDER_TAIL_COLUMNS` in the computor is the one definition and a test
+  holds the migration, the canonical schema and the SELECT to it.
+- `pipeline/batch/player_profile_computor.py`: two season-shifted joins in the fielder
+  aggregator (Savant's figure per position; the jump per player, outfield rows only); the
+  league rows gain `savant_oaa_per_100` on all seven fielding positions and the three jump
+  keys on the outfield rows.
+- `similarity/engines/fielder_similarity.py`: the outfield range group is nine features and
+  the infield six; the jump trio shrinks on its own plays (prior 25: 10 plays → seven tenths
+  of the way to the league mean, 64 plays → just over a quarter); a missing measurement is
+  the league mean, never 0; an absent league key is NaN. `similarity/similarity_calibration.py`:
+  the range sigmas fit over the rows measured on every range feature; each new feature's
+  reliability weight fits on the season pairs that carry it, the jump on pairs with 25 or
+  more plays in both seasons, and a feature with fewer than 20 pairs keeps its module default.
+- `scripts/sim532_fielder_recompute.py` (new): the migration, the fielder chain (the
+  run-expectancy matrix, the six per-play builders, the aggregator, the arm fill), the league
+  rows, and a verify block. `scripts/sim532_by_position.py` (new): the within-position
+  repeat probe from the plan's §2.2b, ported to read the loaded tables.
+- Tests: four new files (`tests/unit/test_sim532_*.py`) and nine existing files resized to
+  the six / nine-feature range vectors. Docs: the cheat sheet, `similarity.md`,
+  `pipeline-betting-db.md`, `scripts-frontend.md`, the version citations (v30 / 0027).
+- Unchanged: `simulation/*`, `pipeline/batch/engine_artifacts.py`, `docker-compose.yml`.
+
+**Landed with it:** the one-cutoff-per-profile-table guard (SIM-551, another session's
+branch, a strict descendant of master) was fast-forwarded onto master first, because it
+rewrites the same fielder-aggregator lines.
+
+**The adversarial review (64 agents: seven lenses, three refuters per finding) confirmed
+sixteen findings (two duplicated); all are fixed.** The ones that mattered: (1) at a backtest
+cutoff the per-100 figure divided the PRIOR season's outs by the CURRENT season's partial
+chances (the join season-shifts, the denominator did not) — the denominator now follows the
+numerator's season (the prior season's chances from the build, else from its surviving row,
+else NULL → the league mean), with tests for all three; (2) the recompute's verify compared a
+32-bit stored value with a 64-bit recomputation at 1e-6 and would have failed a correct run
+on every thin row; (3) a new feature with no data would have entered the calibration report
+as a "fitted" 0.5 — the per-entry floor above; (4) the plan's run book passed 2016 to a chain
+that starts in 2017; (5) two tail-order tests passed on the exact swap they name, and two tests
+could not fail. Three findings were refuted; two of them were still worth a line (the jump's
+plays floor in the fit; the probe's docstring said the app may stay up — a read-only DuckDB
+open fails while the app holds the file). A test that graded the DDL comments was deleted (the
+prose-grading class the owner removed on SIM-550).
+
+**The QA gate.** `ruff check` clean, `ruff format --check` clean, `mypy similarity/ pipeline/
+api/` "Success: no issues found in 59 source files"; the container lane `pytest tests/unit/
+tests/regression/` read **4,183 passed, 1 skipped, 0 failed** after the review fixes (4,053
+before this ticket; +130).
+
+**The run book, as it ran (2026-09-17; the app stopped for steps 3 to 5).**
+1. Alembic 0027 applied (`alembic current` prints 0027).
+2. The two boards loaded for 2016–2026: 15,389 rows in 5 minutes. Outs above average 958
+   to 1,304 rows a season across the seven positions, every row with the hand split, 545 to
+   731 of them at a position other than the player's primary one (which is why the pull is
+   per position); the jump 161 to 240 outfielders a season (2020 fewer), mean plays 29 to 37.
+   The probe passed on both boards; 169 rows of 2016 dropped for players the pitch feed has
+   never seen.
+3. `scripts/sim532_fielder_recompute.py --seasons 2017 … 2026`: the chain ran in **80
+   seconds** (not the hour the plan allowed); every verify check passed. Per season 1,145 to
+   1,291 of 1,171 to 1,332 fielder-position rows carry a Savant figure (2020: 943 of 967);
+   297 to 496 of 475 to 681 outfield rows carry a jump — more than the plan's 210, because a
+   jump row (per player) joins every outfield position the player has a row at. The jump is
+   NULL on every infield and catcher row; the per-100 figure equals the count over our
+   chances on every row. The named 2024 checks read value for value: the outfielder with the
+   most plays (97: outs above average 14, reaction −1.4, burst 0.9, route 0.9); a player with
+   left- and right-field rows whose Savant figure differs by position (−1 and −3); an
+   outfielder with no jump row (NULL jump, figure −1). The rebuilt table matches the SIM-550
+   state column for column (the arm block on 562 / 548 / 600 … outfield rows, the same
+   figures), one cutoff stamp.
+4. `make calibrate` (backup `/data/calibration.json.bak_20260917_pre_sim532`; the
+   win-probability curve written back and equal to the backup's): no entry fell back to its
+   default. **Outfield range σ 1.061 (was 1.027), infield 1.055 (was 1.033). The fitted
+   weights: outfield — our five 0.344 / 0.373 / 0.677 / 0.594 / 0.203, Savant's figure
+   0.472, reaction 0.775, burst 0.658, route 0.743; infield — our five 0.620 / 0.548 / 0.452 /
+   0.535 / 0.529, Savant's figure 0.356.** The plan's starting values (0.50 / 0.81 / 0.69 /
+   0.77 and 0.45) were the within-position repeats on 2023–2025; the fit reads 2017–2026.
+   All fifteen weights and both sigmas are copied into the module defaults, which the matrix
+   builder reads (the live report already carried the five original components at these
+   values; the module defaults had sat at 0.10). The engine tests are re-pinned.
+5. The seven fielder matrices rebuilt (1B 232 / 2B 254 / 3B 249 / SS 245 / LF 325 / CF 312 /
+   RF 342 profiles); the concentration report's p90 own-staff ratio reads 2.10 / 2.24 /
+   2.14 / 2.18 / 2.06 / 1.77 / 2.06 — under the strict 3.0 (the outfield was 1.97 / 1.67 /
+   1.98 after SIM-550).
+6. The app restarted: `build_all_engines: 11/11`, `applied calibration to
+   FielderSimilarityEngine (IF range … 1.055, OF range … 1.061)`, `win-prob map:
+   reliability-curve(2026 … 2017)`, ten workers pre-warmed.
+
+**The ten-game smoke on the rebuilt matrices** (500 game-sims, every production flag,
+every power 1; every verdict UNDERPOWERED at this size by design): runs 4.55 against the
+4.45 centre (+2.4%); singles +1.7%, doubles +0.1%, triples +10.5% (159 events), homers
+−8.6%, reached on error −6.5%, the double-play rate −1.6%, strikeouts −3.7%, walks +3.1%;
+the steal channels −8.8% at second and −29% at third (72 events), the safe share +0.1%.
+Nothing collapsed; the fielding and advancement channels the range group reaches sit inside
+the same noise band as the SIM-550 smoke. One acceptance test failed for an unrelated
+reason: the 2026 park factor of one venue has moved since the test pinned it on 2026-08-10
+(DuckDB 1.0022 against 0.9853; the chain never touches park factors) — filed as a follow-up
+chip, not a ticket.
+
+**Not run, by the rulings.** The paired accuracy arms (owner ruling 2026-09-16: no
+per-change accuracy run; the weights are fitted together in one designed experiment). Every
+similarity power stays 1.
+
+# Design — the fielder's batter-hand split and the outfield jump: PROPOSED, revised the same day on a within-position re-measure, and APPROVED on all four decisions — SIM-532, 2026-09-17
+
+**What the ticket asks.** Two Savant measurements we do not compute: how each fielder
+performs against left-handed and right-handed batters, and how much of an outfielder's
+range is his reaction, his acceleration and his route in the first three seconds after
+contact.
+
+**What the measurements say** (the plan is
+`docs/audit/2026-09-17-sim532-fielder-hand-split-and-jump-plan.md`; the page is
+https://claude.ai/artifact/GA1aZoPWcGmCA9PJaTzWVL). The hand split does not repeat year to
+year: the gap between a fielder's figure against left-handers and against right-handers
+reads 0.04 to 0.14 for outfielders. The outfield jump repeats at 0.80 to 0.92, the most
+stable defensive numbers the platform would hold. The same board pull brings Savant's
+official per-position outs above average.
+
+**The owner's question and the re-measure (plan §2.2b).** The owner asked whether the hand
+split was measured for infielders, expecting a larger effect from positioning. It was, but
+the pooled infield figures carried the position label: the arm rebuild found the same
+morning that the engine scores within a position, so a repeat must be measured within one.
+Re-measured within each position over the shift era (2018→19, 2021→22) and the ban era
+(2023→24, 2024→25): the infield gap is larger (1.1 to 1.7 outs per 100 chances against
+0.6 to 0.7), but it repeats only at shortstop (0.36 to 0.38 in both eras) and at third base
+in the shift era alone; everywhere else it reads −0.19 to 0.21. Savant's per-position outs
+above average per 100 chances repeats within a position at 0.38 to 0.61 (outfield) and
+0.34 to 0.63 (infield); our own five range components repeat at 0.04 to 0.47, and
+`make calibrate` had already fitted every one of them at its 0.10 floor. The first draft's
+"infield unchanged" is withdrawn.
+
+**Decisions.** 2 (Savant's figure as an outfield range feature) and 3 (the three jump parts
+inside the outfield range group at 0.40) TAKEN as recommended; the starting weight for
+Savant's figure is 0.50, not 0.65 (its within-position repeat; the fit sets the final
+value). 1 (the hand split: store, do not read; the shortstop-only alternative not taken)
+and 4 (Savant's figure in the infield range group too, at 0.45) TAKEN the same day, all four
+as recommended. The build record is the entry above this one (the same day).
+
 # Fix — the batter engine failed at every boot for five days: a partial profile rebuild left the batter table at two cutoffs; rebuilt at one date, and the computor now refuses the rebuild that causes it (SIM-551) — 2026-09-16
 
 **What was wrong.** Since 2026-09-11 the app booted `build_all_engines: 10/11` — the batter

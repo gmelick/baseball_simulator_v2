@@ -6,27 +6,49 @@ platform ingests.
 
 WHY A REGISTRY
 --------------
-Eight Savant files feed three tickets. They differ in three ways that matter and
+Twelve Savant files feed four tickets. They differ in three ways that matter and
 in no other way: the web address, how the season is named in the query, and
 which columns we keep. Everything else — the browser-like user agent Savant
 demands, the retry, the unknown-player guard, the upsert — is identical. So the
 differences live here as data and the behaviour lives once in
 ``savant_loader.py``.
 
-THE FOUR SEASON-PARAMETER STYLES (measured 2026-09-10, not assumed)
--------------------------------------------------------------------
-Savant names the season four different ways, and **sending the wrong one fails
+THE FIVE SEASON-PARAMETER STYLES (measured 2026-09-10 and 2026-09-17, not assumed)
+----------------------------------------------------------------------------------
+Savant names the season five different ways, and **sending the wrong one fails
 silently**: the board answers HTTP 200 with a well-formed CSV holding the
 CURRENT season. Nothing errors. The rows are simply the wrong year.
 
-    "year"    -> year=<s>                        arm strength, pop time
-    "camel"   -> seasonStart=<s>&seasonEnd=<s>   the bat-tracking family, stance
-    "snake"   -> season_start=<s>&season_end=<s> the run-value boards
-    "bracket" -> season[]=<s>                    first base receiving
+    "year"      -> year=<s>                        arm strength, pop time, outfield jump
+    "camel"     -> seasonStart=<s>&seasonEnd=<s>   the bat-tracking family, stance
+    "snake"     -> season_start=<s>&season_end=<s> the run-value boards
+    "bracket"   -> season[]=<s>                    first base receiving
+    "startyear" -> startYear=<s>&endYear=<s>       outs above average (SIM-532)
 
 The fourth was found by the probe below, not by reading anything. First base
 receiving accepts ``year``, ``seasonStart`` and ``season`` without complaint and
-returns the current season for all three. Only ``season[]`` is honoured.
+returns the current season for all three. Only ``season[]`` is honoured. The
+fifth was probed on 2026-09-17: the outs-above-average board answers
+``startYear=1990&endYear=1990`` with zero rows, so the probe passes.
+
+THE OUTS-ABOVE-AVERAGE BOARD: A BLANK YEAR AND A PULL PER POSITION (SIM-532)
+---------------------------------------------------------------------------
+Two traps, both measured on 2026-09-17.
+
+1. **Its ``year`` column is BLANK on every row.** The loader's per-row season
+   check cannot run on it (``season_column=None``). The probe is the only
+   guard, and it runs once per board per load.
+2. **The figure is the fielder's AT the pulled position.** The board is pulled
+   once per position (``pos=3`` … ``pos=9``), and 92 of the 147 center-field
+   rows of 2024 differ from the same player's all-positions figure. The CSV's
+   ``primary_pos_formatted`` column is the player's PRIMARY position, not the
+   pulled one, so the loader writes ``position`` from the query and keeps the
+   board's label in ``primary_position``.
+
+The board also carries the split by the batter's hand (``oaa_vs_rhh``,
+``oaa_vs_lhh``). Those two columns are stored for the record and read by
+nothing: the left-minus-right gap repeats year to year at 0.04 to 0.14 for
+outfielders and, within a position, only at shortstop (plan Finding 1).
 
 Fielding Run Value (not loaded) rejects every parameter but its season pair:
 adding ``year=`` returns zero rows or HTTP 500. Baserunning was believed to
@@ -71,6 +93,8 @@ minimum its endpoint honours, measured live on 2024 (2026-09-16):
     arm strength                  (none honoured)    388 either way: Savant's own floor is
                                                      50 throws — its smallest dropdown option
     sprint speed (its own loader) min=0              566 -> 606 runners; 5 runs is Savant's floor
+    outs above average (SIM-532)  min=0              271 -> 551 fielders (2024, all positions)
+    outfield jump (SIM-532)       min=0              100 -> 212 outfielders (2024; min=1 the same)
 
 ``n=0`` is IGNORED by the run-value boards (it reads as "not set" and serves the
 qualified default) — the smallest honoured value is ``n=1``. A row count near
@@ -99,7 +123,7 @@ class SavantBoard:
 
     name: str
     url: str
-    #: "year" | "camel" | "snake" — see the module docstring.
+    #: "year" | "camel" | "snake" | "bracket" | "startyear" — see the module docstring.
     season_style: str
     #: Target Postgres table, schema-qualified.
     table: str
@@ -116,10 +140,16 @@ class SavantBoard:
     #: A third key column beyond (player_id, season), when the board emits more
     #: than one row per player-season.
     split_column: str | None = None
-    #: When set, the loader pulls the board once per entry, adding the parameter
-    #: and writing the label into ``split_column``. Used for the pitcher-hand
-    #: splits (SIM-529: a switch hitter is two batters, not one).
-    hand_splits: tuple[tuple[str, str], ...] = ()
+    #: The query parameter a split pull varies. The pitcher-hand split (SIM-529)
+    #: is ``pitchHand``; the per-position outs-above-average pull (SIM-532) is
+    #: ``pos``.
+    split_param: str = "pitchHand"
+    #: The (label, value) pairs of a split pull. When set, the loader pulls the
+    #: board once per entry, sending ``split_param=<value>`` (an empty value
+    #: sends nothing) and writing the label into ``split_column``. Used for the
+    #: pitcher-hand splits (SIM-529: a switch hitter is two batters, not one)
+    #: and the per-position pull (SIM-532: the figure is AT that position).
+    splits: tuple[tuple[str, str], ...] = ()
     probe_season: int = PROBE_SEASON
     #: SIM-534: the board accepts ``dateStart`` / ``dateEnd``, so it can be
     #: pulled "as of" a date instead of as a whole season. Only the bat-tracking
@@ -138,7 +168,16 @@ class SavantBoard:
             return {"season_start": s, "season_end": s}
         if self.season_style == "bracket":
             return {"season[]": s}
+        if self.season_style == "startyear":
+            # SIM-532: the outs-above-average board. Probed 2026-09-17: 1990
+            # returns zero rows, so the pair is honoured.
+            return {"startYear": s, "endYear": s}
         raise ValueError(f"{self.name}: unknown season style {self.season_style!r}")
+
+    @property
+    def hand_splits(self) -> tuple[tuple[str, str], ...]:
+        """The old name of ``splits`` (SIM-529). Read-only; kept one release."""
+        return self.splits
 
     @property
     def target_columns(self) -> tuple[str, ...]:
@@ -165,6 +204,30 @@ class SavantBoard:
 #   vs_r    pitchHand=R        his swings against right-handed pitchers
 _HAND_SPLITS = (("all", ""), ("vs_l", "L"), ("vs_r", "R"))
 
+# --- the per-position pull ------------------------------------------------
+# SIM-532: the outs-above-average board is pulled once per position, because
+# the figure is the fielder's AT that position (92 of the 147 center-field rows
+# of 2024 differ from the same player's all-positions figure). The label is the
+# position the fielder profile keys on; the value is Savant's ``pos`` code.
+#
+#   label   parameter   position
+#   1B      pos=3       first base
+#   2B      pos=4       second base
+#   3B      pos=5       third base
+#   SS      pos=6       shortstop
+#   LF      pos=7       left field
+#   CF      pos=8       center field
+#   RF      pos=9       right field
+_POSITION_SPLITS = (
+    ("1B", "3"),
+    ("2B", "4"),
+    ("3B", "5"),
+    ("SS", "6"),
+    ("LF", "7"),
+    ("CF", "8"),
+    ("RF", "9"),
+)
+
 
 BOARDS: dict[str, SavantBoard] = {
     # -- SIM-529: the physical swing and stance boards ----------------------
@@ -175,7 +238,7 @@ BOARDS: dict[str, SavantBoard] = {
         table="raw.savant_bat_tracking",
         player_column="id",
         split_column="split",
-        hand_splits=_HAND_SPLITS,
+        splits=_HAND_SPLITS,
         extra={
             "type": "batter",
             "minSwings": "0",
@@ -195,7 +258,7 @@ BOARDS: dict[str, SavantBoard] = {
         table="raw.savant_swing_path",
         player_column="id",
         split_column="split",
-        hand_splits=_HAND_SPLITS,
+        splits=_HAND_SPLITS,
         extra={
             "type": "batter",
             "minSwings": "0",
@@ -409,17 +472,78 @@ BOARDS: dict[str, SavantBoard] = {
             ("oaa_scoop", "oaa_scoop"),
         ),
     ),
+    # -- SIM-532: Savant's per-position outs above average and the outfield jump --
+    # One pull per position (``pos=3`` … ``pos=9``): the figure is the fielder's
+    # AT that position, and the loader writes ``position`` from the query. The
+    # board's ``year`` column is BLANK on every row, so there is no per-row
+    # season check; the probe (1990 -> 0 rows, measured 2026-09-17) is the only
+    # guard. ``min=0`` is every fielder with one chance (551 against 271
+    # qualifiers, 2024). The three ``*_formatted`` success rates (percent
+    # strings) are not stored. The hand split (``oaa_vs_rhh``, ``oaa_vs_lhh``)
+    # is stored and read by nothing (the module docstring).
+    "outs_above_average": SavantBoard(
+        name="outs_above_average",
+        url=f"{BASE}/leaderboard/outs_above_average",
+        season_style="startyear",
+        table="raw.savant_outs_above_average",
+        player_column="player_id",
+        season_column=None,
+        split_column="position",
+        split_param="pos",
+        splits=_POSITION_SPLITS,
+        extra={"type": "Fielder", "min": "0", "split": "no", "range": "year", "viz": "hide"},
+        columns=(
+            ("primary_pos_formatted", "primary_position"),
+            ("fielding_runs_prevented", "fielding_runs_prevented"),
+            ("outs_above_average", "outs_above_average"),
+            ("outs_above_average_infront", "oaa_in_front"),
+            ("outs_above_average_lateral_toward3bline", "oaa_toward_3b_line"),
+            ("outs_above_average_lateral_toward1bline", "oaa_toward_1b_line"),
+            ("outs_above_average_behind", "oaa_behind"),
+            ("outs_above_average_rhh", "oaa_vs_rhh"),
+            ("outs_above_average_lhh", "oaa_vs_lhh"),
+        ),
+    ),
+    # Per player, not per position: an outfielder's jump is the same at any
+    # outfield spot. The board carries ``year`` on every row, so the per-row
+    # check runs. ``min=0`` is every outfielder with one play (212 against 100
+    # qualifiers, 2024; ``min=1`` returns the same). The four ``rel_league_*``
+    # columns are feet against the league average; ``outs_per_play`` is not
+    # stored.
+    "outfield_jump": SavantBoard(
+        name="outfield_jump",
+        url=f"{BASE}/leaderboard/outfield_jump",
+        season_style="year",
+        table="raw.savant_outfield_jump",
+        player_column="resp_fielder_id",
+        season_column="year",
+        extra={"min": "0"},
+        columns=(
+            ("n", "n_plays"),
+            ("n_outs", "n_outs"),
+            ("outs_above_average", "outs_above_average"),
+            ("rel_league_reaction_distance", "reaction_ft"),
+            ("rel_league_burst_distance", "burst_ft"),
+            ("rel_league_routing_distance", "route_ft"),
+            ("rel_league_bootup_distance", "jump_ft"),
+            ("f_bootup_distance", "feet_covered"),
+        ),
+    ),
 }
 
 #: The boards SIM-529 (batter swing features) consumes.
 BATTER_BOARDS = ("bat_tracking", "swing_path", "batting_stance")
-#: The boards SIM-530 (the empty measurement blocks) consumes.
+#: The boards SIM-530 (the empty measurement blocks) consumes, plus the two
+#: SIM-532 boards (Savant's per-position outs above average and the outfield
+#: jump, both read by the fielder model's range groups).
 FIELDING_BOARDS = (
     "arm_strength",
     "baserunning",
     "poptime",
     "catcher_throwing",
     "first_base_receiving",
+    "outs_above_average",
+    "outfield_jump",
 )
 #: The boards SIM-531 (lead distance in the steal and baserunning models)
 #: consumes: the runner's lead and jump, the pitcher's lead and jump allowed,

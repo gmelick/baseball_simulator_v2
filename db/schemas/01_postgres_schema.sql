@@ -427,6 +427,52 @@ CREATE TABLE raw.savant_pitcher_running_game (
     PRIMARY KEY (player_id, season)
 );
 
+-- SIM-532 (Alembic 0027): two fielding boards, pulled at min=0 (every fielder
+-- with one chance). Outs Above Average is pulled once per position (pos=3..9):
+-- the figure is the fielder's AT that position, so the key carries the position
+-- PULLED, written from the query; primary_position is the board's own label.
+-- Every measurement is a whole number of outs. oaa_vs_rhh / oaa_vs_lhh are the
+-- split by the batter's hand — stored for the record, read by nothing: the gap
+-- repeats year to year at 0.04-0.14 for outfielders and, within a position,
+-- only at shortstop. Feeds derived.fielder_season_metrics.savant_oaa (per 100
+-- of our chances in both range groups of the fielder model).
+CREATE TABLE raw.savant_outs_above_average (
+    player_id                  INTEGER     NOT NULL REFERENCES raw.players(player_id),
+    season                     INTEGER     NOT NULL,
+    position                   VARCHAR(2)  NOT NULL,   -- the position PULLED (1B..RF)
+    primary_position           VARCHAR(2),             -- the board's own label for the player
+    fielding_runs_prevented    INTEGER,
+    outs_above_average         INTEGER,                -- at this position
+    oaa_in_front               INTEGER,
+    oaa_toward_3b_line         INTEGER,
+    oaa_toward_1b_line         INTEGER,
+    oaa_behind                 INTEGER,
+    oaa_vs_rhh                 INTEGER,                -- the hand split: stored, read by nothing
+    oaa_vs_lhh                 INTEGER,
+    scraped_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (player_id, season, position)
+);
+
+-- Outfield Jump is per player (an outfielder's jump is the same at any outfield
+-- spot). The four *_ft columns are feet against the league average in the first
+-- three seconds after contact. Feeds the jump_* columns of
+-- derived.fielder_season_metrics (outfield rows only); n_plays is the jump
+-- features' own confidence basis.
+CREATE TABLE raw.savant_outfield_jump (
+    player_id                  INTEGER     NOT NULL REFERENCES raw.players(player_id),
+    season                     INTEGER     NOT NULL,
+    n_plays                    INTEGER,                -- the plays Savant scored
+    n_outs                     INTEGER,
+    outs_above_average         INTEGER,                -- on those plays
+    reaction_ft                FLOAT,                  -- the first 1.5 s
+    burst_ft                   FLOAT,                  -- the next 1.5 s
+    route_ft                   FLOAT,                  -- the direction taken
+    jump_ft                    FLOAT,                  -- the total (Savant's "jump")
+    feet_covered               FLOAT,                  -- feet in the first 3 s, unadjusted
+    scraped_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (player_id, season)
+);
+
 CREATE INDEX idx_savant_bat_tracking_season         ON raw.savant_bat_tracking(season);
 CREATE INDEX idx_savant_swing_path_season           ON raw.savant_swing_path(season);
 CREATE INDEX idx_savant_batting_stance_season       ON raw.savant_batting_stance(season);
@@ -437,6 +483,8 @@ CREATE INDEX idx_savant_catcher_throwing_season     ON raw.savant_catcher_throwi
 CREATE INDEX idx_savant_first_base_receiving_season ON raw.savant_first_base_receiving(season);
 CREATE INDEX idx_savant_basestealing_season         ON raw.savant_basestealing(season);
 CREATE INDEX idx_savant_pitcher_running_game_season ON raw.savant_pitcher_running_game(season);
+CREATE INDEX idx_savant_outs_above_average_season   ON raw.savant_outs_above_average(season);
+CREATE INDEX idx_savant_outfield_jump_season        ON raw.savant_outfield_jump(season);
 
 -- =============================================================================
 -- RAW.PITCHES

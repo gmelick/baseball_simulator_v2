@@ -1163,6 +1163,9 @@ def _run_synthetic_fielder_test() -> DiagnosticReport:
                         innings_played=float(rng.integers(200, 1200)),
                         sample_batted_balls=int(bb),
                         sample_arm_chances=0 if is_if else int(rng.integers(20, 120)),
+                        # SIM-532: the jump's own plays (the range vector is
+                        # OF_RANGE_FEATURES long: the jump parts sit at [6:]).
+                        sample_jump_plays=0 if is_if else int(rng.integers(5, 80)),
                         range_vec=range_vec.astype(np.float64),
                         error_vec=error_vec.astype(np.float64),
                         dp_vec=dp_vec,

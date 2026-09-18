@@ -168,8 +168,11 @@ class TestMigrations:
         assert by_table["pitcher_steal_metrics"] == list(HOLD_COLUMNS)
         assert by_table["baserunner_season_metrics"] == list(XB_COLUMNS)
 
-    def test_the_version_file_reads_29(self) -> None:
-        assert VERSION_FILE.read_text(encoding="utf-8").strip() == "29"
+    def test_the_version_file_reads_at_least_29(self) -> None:
+        """The lead-distance migration is 0029. A later ticket moves the file
+        on (SIM-532 took it to 30); ``test_docs_duckdb_version.py`` holds the
+        file to the newest migration."""
+        assert int(VERSION_FILE.read_text(encoding="utf-8").strip()) >= 29
 
     def test_the_canonical_duckdb_schema_mirrors_the_columns(self) -> None:
         ddl = SCHEMA_SQL.read_text(encoding="utf-8")

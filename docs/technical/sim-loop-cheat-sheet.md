@@ -192,11 +192,21 @@ into a matrix the draws look up.
 
 ### Fielder — `fielder_similarity.py` (per position; the fielding and advancement draws at power 1 — fitted 1.2)
 
-- **Infield**: range 0.45 (σ 1.03: outs above average to the glove side, arm side, charging,
-  going back; catch percentage added) · double play 0.30 (σ 0.37: DP above expected, DP
-  attempt rate, DP success rate; the pivot for second basemen) · errors 0.15 (fielding,
-  throwing) · specialty 0.10 (bunt fielding; the first baseman's scoop rate).
-- **Outfield**: range 0.40 (the same five OAA components) · arm 0.30 (σ 0.99, fitted
+- **Infield**: range 0.45 (σ 1.05, fitted 2026-09-17: outs above average to the glove side
+  0.620, arm side 0.548, charging 0.452, going back 0.535; catch percentage added 0.529;
+  **Savant's per-position outs above average per 100 of our chances at 0.356** — every weight
+  the fitted year-to-year repeat within a position; the plan started Savant's figure at 0.45)
+  · double play 0.30
+  (σ 0.37: DP above expected, DP attempt rate, DP success rate; the pivot for second basemen)
+  · errors 0.15 (fielding, throwing) · specialty 0.10 (bunt fielding; the first baseman's
+  scoop rate).
+- **Outfield**: range 0.40 (σ 1.06, fitted 2026-09-17; nine features: the same five OAA
+  components at 0.344 / 0.373 / 0.677 / 0.594 / 0.203; **Savant's per-position outs above
+  average per 100 of our chances at 0.472; the outfield jump — reaction 0.775, burst 0.658,
+  route 0.743**, feet against the league in the first three seconds after contact, each at
+  its fitted repeat (the plan started them at 0.50 / 0.81 / 0.69 / 0.77); the three jump
+  parts shrink on their own plays, prior 25, and a missing jump is the league mean) · arm
+  0.30 (σ 0.99, fitted
   2026-09-17: the throw velocity from Savant's arm-strength board at weight 0.844; the
   advancement prevention at 0.137 and the thrown-out rate at 0.240 from our own advancement
   pool, per fielder × position, the two rates shrunk on the arm's own chances, prior 50) ·
@@ -206,6 +216,16 @@ into a matrix the draws look up.
   three outfield matrices were rebuilt. The weights are the fitted year-to-year repeats
   WITHIN a position; the plan's 0.60 for the prevention pooled the positions and was mostly
   the position label.*
+  *Savant's outs above average and the outfield jump (SIM-532) landed on 2026-09-17, code
+  and data: the two boards loaded for 2016–2026, the fielder chain recomputed
+  (`scripts/sim532_fielder_recompute.py`), the calibration refitted, the seven fielder
+  matrices rebuilt. The fielder split by batter hand — a
+  fielder's outs above average against left-handed batters minus his figure against
+  right-handed batters — was measured and left out: within a position it repeats at 0.04
+  to 0.14 for outfielders and only at shortstop (0.36 to 0.38) on the infield. It is stored
+  in the raw table and read by nothing. Savant's figure repeats within a position at 0.38 to
+  0.61 in the outfield and 0.34 to 0.63 on the infield against 0.04 to 0.47 for our own
+  range components; the jump at 0.80 to 0.92.*
 - Shrinkage prior 15; never scored across positions.
 
 ### Catcher — `catcher_similarity.py` (the throwing sub-score feeds the steal draw at power 1 — fitted 2; the full score fed the retired receiving kernel)

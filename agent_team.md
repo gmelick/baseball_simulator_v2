@@ -356,7 +356,7 @@ has been RETIRED (do not regenerate or consult it).
 
 **Test suite:** 1814 pass / 1 skip / 0 fail @ 89% coverage on Python 3.13; 8 CI jobs green.
 
-**Tech stack:** Python 3.13, FastAPI, PostgreSQL + async SQLAlchemy + Alembic, DuckDB v29 (in-process),
+**Tech stack:** Python 3.13, FastAPI, PostgreSQL + async SQLAlchemy + Alembic, DuckDB v30 (in-process),
 Redis, scikit-learn (GMMs), FAISS, NumPy/pandas, scipy, POT (Wasserstein), pybaseball,
 Docker/docker-compose, nginx, Prometheus + Grafana. Frontend framework: **React 18 + Vite + TypeScript** (chosen in SIM-378 ADR, with Playwright e2e).
 

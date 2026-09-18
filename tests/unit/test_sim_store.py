@@ -359,7 +359,7 @@ class TestMigrationSanity:
         assert "def downgrade()" in text
         assert "sim.sim_runs" in text
 
-    def test_duckdb_schema_version_is_29(self):
+    def test_duckdb_schema_version_is_30(self):
         # SIM-357 bumped 8 -> 9 (0009); SIM-362/364 -> 10 (0010);
         # SIM-408 -> 11 (0011 engine ↔ schema reconciliation);
         # SIM-411/413/425b -> 12 (0012 batted-ball realism columns);
@@ -394,7 +394,10 @@ class TestMigrationSanity:
         # pitcher's lead and jump allowed, and the extra-base attempt rate
         # above expectation — twelve columns across the three runner-side
         # profile tables, from Savant's running-game boards at n=1).
-        assert DUCKDB_VERSION_FILE.read_text().strip() == "29"
+        # SIM-532 -> 30 (0030 six fielder columns after asof_date: Savant's outs
+        # above average at the position and per 100 of our chances, and the
+        # outfield jump's reaction, burst, route and plays).
+        assert DUCKDB_VERSION_FILE.read_text().strip() == "30"
 
     def test_duckdb_version_matches_latest_migration(self):
         """The version file must equal the highest-numbered DuckDB migration.

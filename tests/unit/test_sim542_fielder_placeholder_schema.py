@@ -168,6 +168,17 @@ class TestAggregatorAgainstBarePlaceholders:
         # SIM-550: no pg.raw.savant_baserunning here on purpose. The aggregator
         # no longer joins that board — the arm block is filled from the
         # advancement pool by a later step — so the INSERT must bind without it.
+        # SIM-532: the two boards the aggregator joins for the six tail
+        # columns (Alembic 0027's shape, the columns the SELECT reads).
+        c.execute(
+            "CREATE TABLE pg.raw.savant_outs_above_average (player_id INTEGER, season INTEGER, "
+            "position VARCHAR, primary_position VARCHAR, outs_above_average INTEGER, "
+            "oaa_vs_rhh INTEGER, oaa_vs_lhh INTEGER)"
+        )
+        c.execute(
+            "CREATE TABLE pg.raw.savant_outfield_jump (player_id INTEGER, season INTEGER, "
+            "n_plays INTEGER, reaction_ft DOUBLE, burst_ft DOUBLE, route_ft DOUBLE)"
+        )
         c.execute("CREATE SCHEMA derived")
         c.execute(_real_ddl("derived.fielder_season_metrics"))
         return c

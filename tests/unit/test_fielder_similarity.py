@@ -519,21 +519,25 @@ class TestFeatureNormalizer:
         """Create a small population for normalization fitting."""
         ss_profiles = [
             _make_if_profile(
-                player_id=1, position="SS", range_vec=np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+                player_id=1, position="SS", range_vec=np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
             ),
             _make_if_profile(
-                player_id=2, position="SS", range_vec=np.array([3.0, 4.0, 5.0, 6.0, 7.0])
+                player_id=2, position="SS", range_vec=np.array([3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
             ),
             _make_if_profile(
-                player_id=3, position="SS", range_vec=np.array([5.0, 6.0, 7.0, 8.0, 9.0])
+                player_id=3, position="SS", range_vec=np.array([5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
             ),
         ]
         cf_profiles = [
             _make_of_profile(
-                player_id=10, position="CF", range_vec=np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+                player_id=10,
+                position="CF",
+                range_vec=np.array([10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 1.0, 2.0, 3.0]),
             ),
             _make_of_profile(
-                player_id=11, position="CF", range_vec=np.array([20.0, 30.0, 40.0, 50.0, 60.0])
+                player_id=11,
+                position="CF",
+                range_vec=np.array([20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 2.0, 3.0, 4.0]),
             ),
         ]
         return {"SS": ss_profiles, "CF": cf_profiles}
@@ -582,7 +586,7 @@ class TestFeatureNormalizer:
         profiles = self._make_profiles()
         norm = FeatureNormalizer()
         norm.fit(profiles)
-        vec_with_nan = np.array([1.0, np.nan, 3.0, 4.0, 5.0])
+        vec_with_nan = np.array([1.0, np.nan, 3.0, 4.0, 5.0, 6.0])
         result = norm.normalize_range(vec_with_nan, "SS")
         assert np.isfinite(result).all()
 
@@ -591,7 +595,9 @@ class TestFeatureNormalizer:
         profiles = {
             "SS": [
                 _make_if_profile(
-                    player_id=i, position="SS", range_vec=np.array([0.0, float(i), 0.0, 0.0, 0.0])
+                    player_id=i,
+                    position="SS",
+                    range_vec=np.array([0.0, float(i), 0.0, 0.0, 0.0, 0.0]),
                 )
                 for i in range(5)
             ]
@@ -669,7 +675,7 @@ class TestPositionPartition:
         part = PositionPartition("SS")
         norm = FeatureNormalizer()
         part.build([], norm)
-        rbf = WeightedRBFSimilarity(sigma=1.0, reliability_weights=np.ones(5))
+        rbf = WeightedRBFSimilarity(sigma=1.0, reliability_weights=np.ones(len(IF_RANGE_FEATURES)))
         rbf2 = WeightedRBFSimilarity(sigma=1.0, reliability_weights=np.ones(2))
         query = _make_if_profile()
         results = part.score_all(query, norm, rbf, rbf, rbf2, rbf2)
@@ -866,7 +872,7 @@ class TestEngineIdenticalProfiles:
     """Two identical profiles (different ids) should score near 1.0."""
 
     def test_identical_if_profiles_high_score(self):
-        vec_r = np.array([2.0, 1.5, -1.0, 3.0, 0.5])
+        vec_r = np.array([2.0, 1.5, -1.0, 3.0, 0.5, 1.2])
         vec_e = np.array([0.02, 0.01])
         vec_dp = np.array([1.0, 0.6, 0.7, 0.5])
         vec_sp = np.array([0.5, 0.9])
@@ -901,7 +907,7 @@ class TestEngineIdenticalProfiles:
         assert result.score > 0.95
 
     def test_identical_of_profiles_high_score(self):
-        vec_r = np.array([3.0, 2.0, -1.0, 4.0, 1.0])
+        vec_r = np.array([3.0, 2.0, -1.0, 4.0, 1.0, 1.5, 0.8, -0.3, 0.4])
         vec_e = np.array([0.01, 0.005])
         vec_arm = np.array([91.0, 0.04, 0.08])  # SIM-550: velocity, prevention, thrown-out
         vec_star = np.array([0.15, 0.45, 0.97])
@@ -941,7 +947,7 @@ class TestEngineDivergentProfiles:
     def test_divergent_if_profiles_low_score(self):
         p1 = _make_if_profile(
             player_id=1,
-            range_vec=np.array([10, 10, 10, 10, 10.0]),
+            range_vec=np.array([10, 10, 10, 10, 10, 10.0]),
             error_vec=np.array([0.0, 0.0]),
             dp_vec=np.array([5.0, 0.9, 0.9, 3.0]),
             specialty_vec=np.array([0.95, 0.99]),
@@ -949,7 +955,7 @@ class TestEngineDivergentProfiles:
         )
         p2 = _make_if_profile(
             player_id=2,
-            range_vec=np.array([-10, -10, -10, -10, -10.0]),
+            range_vec=np.array([-10, -10, -10, -10, -10, -10.0]),
             error_vec=np.array([0.15, 0.12]),
             dp_vec=np.array([-5.0, 0.1, 0.1, -3.0]),
             specialty_vec=np.array([0.1, 0.3]),
@@ -957,7 +963,7 @@ class TestEngineDivergentProfiles:
         )
         p3 = _make_if_profile(
             player_id=3,
-            range_vec=np.zeros(5),
+            range_vec=np.zeros(len(IF_RANGE_FEATURES)),
             error_vec=np.array([0.05, 0.05]),
             dp_vec=np.zeros(4),
             specialty_vec=np.array([0.5, 0.6]),
@@ -973,7 +979,7 @@ class TestEngineConfidenceDiscount:
     """Low-sample profiles should be penalized."""
 
     def test_low_sample_lower_score(self):
-        base_range = np.array([2.0, 1.0, 0.0, 1.5, 0.5])
+        base_range = np.array([2.0, 1.0, 0.0, 1.5, 0.5, 0.7])
         base_err = np.array([0.02, 0.01])
         base_dp = np.array([1.0, 0.6, 0.7, 0.3])
         base_spec = np.array([0.5, 0.8])
@@ -1250,10 +1256,10 @@ class TestEdgeCases:
 
     def test_two_profiles_one_result(self):
         p1 = _make_if_profile(
-            player_id=1, position="3B", range_vec=np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+            player_id=1, position="3B", range_vec=np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
         )
         p2 = _make_if_profile(
-            player_id=2, position="3B", range_vec=np.array([2.0, 3.0, 4.0, 5.0, 6.0])
+            player_id=2, position="3B", range_vec=np.array([2.0, 3.0, 4.0, 5.0, 6.0, 7.0])
         )
         engine = _build_test_engine(if_profiles=[p1, p2])
         results = engine.query(1, "3B", 2024)
@@ -1262,9 +1268,15 @@ class TestEdgeCases:
 
     def test_nan_in_feature_vec_no_crash(self):
         """NaN in feature vectors should not crash — treated as neutral."""
-        p1 = _make_of_profile(player_id=10, range_vec=np.array([np.nan, 2.0, 3.0, 4.0, 5.0]))
-        p2 = _make_of_profile(player_id=11, range_vec=np.array([1.0, 2.0, 3.0, 4.0, 5.0]))
-        p3 = _make_of_profile(player_id=12, range_vec=np.array([5.0, 6.0, 7.0, 8.0, 9.0]))
+        p1 = _make_of_profile(
+            player_id=10, range_vec=np.array([np.nan, 2.0, 3.0, 4.0, 5.0, 6.0, 0.5, np.nan, 0.2])
+        )
+        p2 = _make_of_profile(
+            player_id=11, range_vec=np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.4, 0.1, 0.3])
+        )
+        p3 = _make_of_profile(
+            player_id=12, range_vec=np.array([5.0, 6.0, 7.0, 8.0, 9.0, 10.0, -0.4, 0.6, -0.2])
+        )
         engine = _build_test_engine(of_profiles=[p1, p2, p3])
         results = engine.query(10, "CF", 2024)
         assert len(results) == 2
@@ -1273,7 +1285,7 @@ class TestEdgeCases:
 
     def test_all_identical_profiles_high_scores(self):
         """When all profiles are identical, all scores should be very high."""
-        vec = np.array([2.0, 1.0, 0.5, -1.0, 3.0])
+        vec = np.array([2.0, 1.0, 0.5, -1.0, 3.0, 1.1, 0.6, 0.2, -0.3])  # SIM-532: nine
         profiles = [
             _make_of_profile(
                 player_id=i,

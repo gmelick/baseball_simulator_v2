@@ -29,6 +29,8 @@ from pipeline.etl.savant_boards import BOARDS, PROBE_SEASON, SavantBoard
         ("bat_tracking", "seasonStart=2024"),
         ("baserunning", "season_start=2024"),
         ("first_base_receiving", "season%5B%5D=2024"),
+        # SIM-532: the fifth style, the outs-above-average board.
+        ("outs_above_average", "startYear=2024&endYear=2024"),
     ],
 )
 def test_each_season_style_reaches_the_query_string(board_name: str, expected: str) -> None:

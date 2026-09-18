@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import date
 from pathlib import Path
 
@@ -441,6 +442,17 @@ class TestAggregatorThenFill:
             "INSERT INTO pg.raw.savant_arm_strength VALUES "
             "(11, 2024, 88.0, NULL, NULL, NULL, NULL, 91.5, NULL, NULL)"
         )
+        # SIM-532: the aggregator joins the two fielding boards too. Empty
+        # stand-ins let the INSERT bind; the six new columns read NULL.
+        con.execute(
+            "CREATE TABLE pg.raw.savant_outs_above_average (player_id INTEGER, season INTEGER, "
+            "position VARCHAR, primary_position VARCHAR, outs_above_average INTEGER, "
+            "oaa_vs_rhh INTEGER, oaa_vs_lhh INTEGER)"
+        )
+        con.execute(
+            "CREATE TABLE pg.raw.savant_outfield_jump (player_id INTEGER, season INTEGER, "
+            "n_plays INTEGER, reaction_ft DOUBLE, burst_ft DOUBLE, route_ft DOUBLE)"
+        )
         # One outfield play for the left fielder and one infield play for
         # the shortstop drive the aggregator; the placeholders cover the rest.
         con.execute(
@@ -504,7 +516,14 @@ class TestSourceShape:
         src = COMPUTOR.read_text(encoding="utf-8")
         assert "_compute_outfield_arm_metrics" not in src
         assert "_tmp_of_arm" not in src
-        assert "_SQL_IS_OF" not in src  # the guard only the deleted board join used
+        # SIM-532 re-created ``_SQL_IS_OF`` as the jump columns' outfield guard.
+        # In the fielder aggregator the guard wraps only the four jump columns
+        # (alias ``sj``), and the deleted board join (alias ``sbr``) is gone.
+        start = src.index("def _aggregate_fielder_season_metrics")
+        body = src[start : src.index("def _assert_fielder_profiles_have_no_leakage", start)]
+        uses = re.findall(r"\{_SQL_IS_OF\}\s+THEN\s+(\w+)\.", body)
+        assert uses == ["sj"] * 4
+        assert "sbr." not in body
 
     def test_the_fielder_aggregator_reads_no_baserunning_board(self) -> None:
         src = COMPUTOR.read_text(encoding="utf-8")

@@ -399,6 +399,22 @@ def calibrate_reliability_weights(
 _FIELDER_POSITION_CODES = {"1B": 3, "2B": 4, "3B": 5, "SS": 6, "LF": 7, "CF": 8, "RF": 9}
 
 
+def _nan_block(rows: list[tuple], start: int, width: int) -> NDArray[np.float64]:
+    """SIM-532: ``width`` columns of every row from ``start`` on, NULL as NaN.
+
+    The fielder calibrator reads its blocks by index; a block whose columns can
+    be NULL (the range block since SIM-532, like the arm block since SIM-550)
+    must not map NULL to 0.0, which plants an unmeasured fielder on one point.
+    """
+    return np.array(
+        [
+            [np.nan if r[start + i] is None else float(r[start + i]) for i in range(width)]
+            for r in rows
+        ],
+        dtype=np.float64,
+    )
+
+
 def _fielder_pair_ids(rows: list[tuple]) -> NDArray[np.int64]:
     """SIM-550: the id the fielder reliability fit pairs on: one per player
     AND position. The fielder table holds one row per (player, position,
@@ -409,6 +425,83 @@ def _fielder_pair_ids(rows: list[tuple]) -> NDArray[np.int64]:
         [int(r[0]) * 10 + _FIELDER_POSITION_CODES.get(str(r[1]), 0) for r in rows],
         dtype=np.int64,
     )
+
+
+# SIM-532: a fitted reliability weight needs this many consecutive-season
+# pairs; under it the entry keeps its module default (the arm block's rule).
+_RELIABILITY_MIN_PAIRS = 20
+
+
+def _reliable_pair_count(
+    values: NDArray[np.float64],
+    ids: NDArray[np.int64],
+    seasons: NDArray[np.int64],
+    row_ok: NDArray[np.bool_],
+) -> int:
+    """SIM-532: the consecutive-season pairs one feature's reliability weight
+    is fitted on.
+
+    A pair is two rows of one id in seasons s and s + 1, the rule
+    ``calibrate_reliability_weights`` uses (a duplicate season keeps the last
+    row). The pair counts when the value is finite on both rows and
+    ``row_ok`` holds on both rows. The fielder calibrator reads this count
+    per new range entry: under ``_RELIABILITY_MIN_PAIRS`` the entry keeps its
+    module default.
+    """
+    from collections import defaultdict
+
+    by_id: dict[int, dict[int, int]] = defaultdict(dict)
+    for i in range(len(ids)):
+        by_id[int(ids[i])][int(seasons[i])] = i
+    count = 0
+    for by_season in by_id.values():
+        for season, row in by_season.items():
+            following = by_season.get(season + 1)
+            if following is None:
+                continue
+            if not (row_ok[row] and row_ok[following]):
+                continue
+            if np.isfinite(values[row]) and np.isfinite(values[following]):
+                count += 1
+    return count
+
+
+def _keep_defaults_on_thin_entries(
+    weights: NDArray[np.float64],
+    features: list[tuple[str, float]],
+    matrix: NDArray[np.float64],
+    ids: NDArray[np.int64],
+    seasons: NDArray[np.int64],
+    entries: dict[int, NDArray[np.bool_]],
+    group: str,
+) -> NDArray[np.float64]:
+    """SIM-532: overwrite each thin entry of ``weights`` with its module default.
+
+    ``entries`` maps a column index to the rows that may form a pair for it.
+    An entry with fewer than ``_RELIABILITY_MIN_PAIRS`` reliable pairs (see
+    ``_reliable_pair_count``) takes the default from ``features`` and logs a
+    warning that names the column and the count. ``calibrate_reliability_weights``
+    returns 0.5 for a column with under five valid pairs, and the report would
+    otherwise carry that 0.5 as a fitted weight for a column with no data (the
+    board not loaded; one season only).
+    """
+    fitted = weights.copy()
+    for j, row_ok in entries.items():
+        pairs = _reliable_pair_count(matrix[:, j], ids, seasons, row_ok)
+        if pairs >= _RELIABILITY_MIN_PAIRS:
+            continue
+        name, default = features[j]
+        fitted[j] = default
+        log.warning(
+            "Only %d reliable season-to-season pairs carry %s in the %s range block "
+            "(%d needed); keeping the engine's default weight %.3f for it.",
+            pairs,
+            name,
+            group,
+            _RELIABILITY_MIN_PAIRS,
+            default,
+        )
+    return fitted
 
 
 # ============================================================================
@@ -1265,18 +1358,25 @@ class SimilarityCalibrator:
             IF_ERROR_FEATURES,
             IF_RANGE_FEATURES,
             IF_SPECIALTY_FEATURES,
+            JUMP_ALPHA_PRIOR_PLAYS,
             OF_ARM_FEATURES,
             OF_ERROR_FEATURES,
+            OF_RANGE_BASE_COUNT,
             OF_RANGE_FEATURES,
         )
 
         sl = ", ".join(str(s) for s in seasons)
 
-        # Load infield profiles
+        # Load infield profiles. The range block is IF_RANGE_FEATURES' six
+        # columns in its order: our five, then Savant's outs above average at
+        # this position per 100 of our chances (SIM-532, decision 4). The
+        # SELECT names the column directly: the SIM-532 recompute applies
+        # migration 0030 before `make calibrate` runs.
         if_rows = conn.execute(f"""
             SELECT
                 player_id, position, season, sample_batted_balls,
                 oaa_glove_side, oaa_arm_side, oaa_charging, oaa_deep, catch_pct_added,
+                savant_oaa_per_100,
                 fielding_error_rate, throwing_error_rate,
                 dp_above_expected, dp_attempt_rate, dp_success_rate,
                 dp_pivot_above_expected,
@@ -1291,20 +1391,29 @@ class SimilarityCalibrator:
         # Load outfield profiles. The column blocks sit in the engine's feature
         # order (range, errors, arm, star counts) because the index arithmetic
         # below walks them by the feature lists' lengths.
+        # SIM-532: the range block is OF_RANGE_FEATURES' nine columns in its
+        # order: our five, Savant's figure, then the three jump parts
+        # (reaction, burst, route). Every block after it keeps its place
+        # because the arithmetic reads n_range from the feature list.
         # SIM-550: the arm block is OF_ARM_FEATURES' three columns, in its
         # order: the throw velocity, the advancement prevention, the thrown-out
         # rate. of_arm_runs and arm_hold_rate left the SELECT with the group.
-        # The arm's chance count rides LAST so the block arithmetic stays put;
-        # the reliability fit floors its pairs on it (the plan's section 2.2).
+        # The two count columns ride AFTER the blocks so the block arithmetic
+        # stays put: the arm's chance count, then the jump's play count
+        # (SIM-532). The reliability fit floors the arm pairs on the first and
+        # the jump pairs on the second (the plan's section 2.2). The code
+        # below reads both by an explicit index computed from the block
+        # lengths, never by ``r[-1]``.
         of_rows = conn.execute(f"""
             SELECT
                 player_id, position, season, sample_batted_balls,
                 oaa_glove_side, oaa_arm_side, oaa_charging, oaa_deep, catch_pct_added,
+                savant_oaa_per_100, jump_reaction_ft, jump_burst_ft, jump_route_ft,
                 fielding_error_rate, throwing_error_rate,
                 arm_strength, arm_advancement_prevention, arm_thrown_out_rate,
                 five_star_opps, five_star_catches, four_star_opps, four_star_catches,
                 routine_opps, routine_catches,
-                arm_opportunities
+                arm_opportunities, jump_plays
             FROM derived.fielder_season_metrics
             WHERE season IN ({sl})
               AND position IN ('LF','CF','RF')
@@ -1320,7 +1429,12 @@ class SimilarityCalibrator:
             n_pivot = len(IF_PIVOT_FEATURES)
             n_spec = len(IF_SPECIALTY_FEATURES)
 
-            range_raw = np.array([[r[4 + i] or 0.0 for i in range(n_range)] for r in if_rows])
+            # SIM-532: NaN for NULL on the range block (was `or 0.0`). Savant's
+            # figure is NULL on a fielder-season the board does not cover;
+            # 0.0 would plant him at league average. The sigma fits over the
+            # rows that carry every range feature; the reliability fit takes
+            # the whole matrix and drops NaN pairs per feature.
+            range_raw = _nan_block(if_rows, 4, n_range)
             err_raw = np.array([[r[4 + n_range + i] or 0.0 for i in range(n_err)] for r in if_rows])
             dp_raw = np.array(
                 [[r[4 + n_range + n_err + i] or 0.0 for i in range(n_dp)] for r in if_rows]
@@ -1347,9 +1461,21 @@ class SimilarityCalibrator:
             # 1.0 — which apply_calibration's ``v if v > 0 else current`` would
             # otherwise apply as a real override, silently clobbering the engine's
             # tuned module default.
-            report.sigma_if_range = self._fit_sigma(
-                self._zscore_matrix(range_raw), target_median_score
-            )
+            # SIM-532: the range sigma fits over the rows finite on every
+            # range feature (the SIM-529 physical rule: fewer than 20 such
+            # rows keeps the module default, the 0.0 sentinel).
+            range_measured = range_raw[np.isfinite(range_raw).all(axis=1)]
+            if len(range_measured) >= 20:
+                report.sigma_if_range = self._fit_sigma(
+                    self._zscore_matrix(range_measured), target_median_score
+                )
+            else:
+                log.warning(
+                    "Only %d infielder-seasons carry every range feature; keeping the "
+                    "engine's default infield range sigma. Load the Savant outs-above-"
+                    "average board (SIM-532) and rebuild the fielder profiles.",
+                    len(range_measured),
+                )
             report.sigma_if_dp = self._fit_sigma(
                 self._zscore_matrix(np.concatenate((dp_raw, pivot_raw), axis=1)),
                 target_median_score,
@@ -1361,8 +1487,24 @@ class SimilarityCalibrator:
                 self._zscore_matrix(spec_raw), target_median_score
             )
 
-            report.reliability_weights_if_range = calibrate_reliability_weights(
-                range_raw, ids, seasons=season_of
+            # SIM-532: the reliability rule, per entry. The fit takes the FULL
+            # NaN-carrying matrix and drops NaN pairs per feature, so our five
+            # components keep every pair and Savant's figure is fitted on the
+            # pairs that carry it (both seasons measured). Then the Savant
+            # entry (the last one) keeps its module default when fewer than
+            # _RELIABILITY_MIN_PAIRS (20) pairs carry it — the arm block's
+            # rule; the raw fit would
+            # otherwise report 0.5 for a column with no data. The sigma above
+            # is unchanged.
+            savant_col = n_range - 1
+            report.reliability_weights_if_range = _keep_defaults_on_thin_entries(
+                calibrate_reliability_weights(range_raw, ids, seasons=season_of),
+                IF_RANGE_FEATURES,
+                range_raw,
+                ids,
+                season_of,
+                {savant_col: np.ones(len(if_rows), dtype=bool)},
+                "infield",
             )
             report.reliability_weights_if_dp = calibrate_reliability_weights(
                 dp_raw, ids, seasons=season_of
@@ -1393,7 +1535,14 @@ class SimilarityCalibrator:
             n_err = len(OF_ERROR_FEATURES)
             n_arm = len(OF_ARM_FEATURES)
 
-            range_raw = np.array([[r[4 + i] or 0.0 for i in range(n_range)] for r in of_rows])
+            # SIM-532: NaN for NULL on the range block (was `or 0.0`). About
+            # a third of outfielder-seasons carry a jump row, and Savant's
+            # figure covers 2016 on; a 0.0 reaction would plant every
+            # unmeasured outfielder at league average. The sigma fits over
+            # the rows that carry all nine (the 2016+ outfielders with a jump
+            # row and a Savant figure, about 200 a season, well over the
+            # 20-row floor); the reliability fit takes the whole matrix.
+            range_raw = _nan_block(of_rows, 4, n_range)
             err_raw = np.array([[r[4 + n_range + i] or 0.0 for i in range(n_err)] for r in of_rows])
             # SIM-530 / SIM-550: a missing arm measurement is not a zero arm —
             # `or 0.0` would plant the unmeasured rows on one point and the
@@ -1441,18 +1590,41 @@ class SimilarityCalibrator:
             # table) and read the prevention's repeat at a third of its value.
             ids = _fielder_pair_ids(of_rows)
             season_of = np.array([int(r[2]) for r in of_rows], dtype=np.int64)
+            # The two count columns sit after the six star counts: the arm's
+            # chances first, the jump's plays second (SIM-532). Explicit
+            # indexes from the block lengths — a trailing read (``r[-1]``)
+            # picked up whichever column was appended last.
+            count_base = 4 + n_range + n_err + n_arm + 6
+            arm_chances = np.array(
+                [0.0 if r[count_base] is None else float(r[count_base]) for r in of_rows],
+                dtype=np.float64,
+            )
+            jump_plays = np.array(
+                [0.0 if r[count_base + 1] is None else float(r[count_base + 1]) for r in of_rows],
+                dtype=np.float64,
+            )
             # The arm's reliability pairs need the plan's floor: at least
             # ARM_ALPHA_PRIOR_CHANCES chances in BOTH seasons (a pair needs
             # both rows, so a row floor is a pair floor). The sigma fit keeps
             # every measured row.
-            arm_chances = np.array(
-                [0.0 if r[-1] is None else float(r[-1]) for r in of_rows], dtype=np.float64
-            )
             arm_reliable = arm_mask & (arm_chances >= ARM_ALPHA_PRIOR_CHANCES)
 
-            report.sigma_of_range = self._fit_sigma(
-                self._zscore_matrix(range_raw), target_median_score
-            )
+            # SIM-532: the range sigma fits over the rows finite on every
+            # range feature (the SIM-529 physical rule; under 20 such rows
+            # the module default stays, the 0.0 sentinel).
+            range_measured = range_raw[np.isfinite(range_raw).all(axis=1)]
+            if len(range_measured) >= 20:
+                report.sigma_of_range = self._fit_sigma(
+                    self._zscore_matrix(range_measured), target_median_score
+                )
+            else:
+                log.warning(
+                    "Only %d outfielder-seasons carry every range feature; keeping the "
+                    "engine's default outfield range sigma. Load the Savant outs-above-"
+                    "average and outfield-jump boards (SIM-532) and rebuild the fielder "
+                    "profiles.",
+                    len(range_measured),
+                )
             if len(arm_measured) >= 20:
                 report.sigma_of_arm = self._fit_sigma(
                     self._zscore_matrix(arm_measured), target_median_score
@@ -1470,8 +1642,36 @@ class SimilarityCalibrator:
                 self._zscore_matrix(err_raw), target_median_score
             )
 
-            report.reliability_weights_of_range = calibrate_reliability_weights(
-                range_raw, ids, seasons=season_of
+            # SIM-532: the reliability rule, per entry. Each new range feature
+            # is fitted on the pairs that carry it. The fit takes the FULL
+            # NaN-carrying matrix and drops NaN pairs per feature, so our five
+            # components keep every pair and Savant's figure pairs where both
+            # seasons carry it. The three jump parts pair only where BOTH
+            # seasons carry JUMP_ALPHA_PRIOR_PLAYS or more plays, the
+            # measurement basis of the plan's section 2.2: the three jump
+            # columns are set to NaN below the floor BEFORE the fit, so a row
+            # under the floor forms no jump pair and still forms a pair for
+            # the other six. Then each new entry (Savant's figure and the
+            # three jump parts) keeps its module default when fewer than
+            # _RELIABILITY_MIN_PAIRS (20) pairs carry it — the arm block's
+            # rule; the raw fit would
+            # otherwise report 0.5 for a column with no data. The sigma above
+            # is unchanged.
+            jump_ok = jump_plays >= JUMP_ALPHA_PRIOR_PLAYS
+            range_for_fit = range_raw.copy()
+            range_for_fit[~jump_ok, OF_RANGE_BASE_COUNT:] = np.nan
+            every_row = np.ones(len(of_rows), dtype=bool)
+            new_entries = {OF_RANGE_BASE_COUNT - 1: every_row}
+            for j in range(OF_RANGE_BASE_COUNT, n_range):
+                new_entries[j] = jump_ok
+            report.reliability_weights_of_range = _keep_defaults_on_thin_entries(
+                calibrate_reliability_weights(range_for_fit, ids, seasons=season_of),
+                OF_RANGE_FEATURES,
+                range_raw,
+                ids,
+                season_of,
+                new_entries,
+                "outfield",
             )
             if arm_reliable.sum() >= 20:
                 report.reliability_weights_of_arm = calibrate_reliability_weights(

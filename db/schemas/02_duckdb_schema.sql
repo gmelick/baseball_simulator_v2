@@ -436,8 +436,18 @@ CREATE TABLE IF NOT EXISTS derived.fielder_season_metrics (
     -- builder's INSERT carries no column list.
     sprint_speed                DOUBLE,
     -- SIM-537 (migration 0028): the date this row's data runs through.
-    -- Appended LAST for the same positional-INSERT reason as sprint_speed.
+    -- Appended after sprint_speed for the same positional-INSERT reason.
     asof_date                   DATE,
+    -- SIM-532 (migration 0030): Savant's outs above average and the outfield
+    -- jump. Appended LAST, after asof_date, in the builder's
+    -- OAA_JUMP_COLUMN_ORDER; a unit test holds this tail to
+    -- FIELDER_TAIL_COLUMNS. NULL = no measurement.
+    savant_oaa                  INTEGER,    -- Savant's outs above average AT this position
+    savant_oaa_per_100          FLOAT,      -- savant_oaa * 100 / our opportunities
+    jump_reaction_ft            FLOAT,      -- feet against the league, the first 1.5 s; outfield rows only
+    jump_burst_ft               FLOAT,      -- the next 1.5 s; outfield rows only
+    jump_route_ft               FLOAT,      -- the direction taken; outfield rows only
+    jump_plays                  INTEGER,    -- the plays Savant scored: the jump features' confidence basis
 
     PRIMARY KEY (player_id, position, season)
 );

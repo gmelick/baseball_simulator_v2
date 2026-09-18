@@ -141,6 +141,32 @@ MIN_MANAGER_GAMES = 50
 #: shrinkage confidence uses, chances / (chances + 50).
 ARM_ALPHA_PRIOR_CHANCES = 50
 
+# SIM-532: derived.fielder_season_metrics carries a POSITIONAL insert (no
+# column list), so Savant's outs above average and the outfield jump go LAST,
+# in this order, after ``asof_date`` — the aggregator's SELECT appends them in
+# ``OAA_JUMP_COLUMN_ORDER`` and a unit test holds the live table's tail to
+# ``FIELDER_TAIL_COLUMNS``.
+OAA_JUMP_COLUMN_ORDER: tuple[str, ...] = (
+    "savant_oaa",
+    "savant_oaa_per_100",
+    "jump_reaction_ft",
+    "jump_burst_ft",
+    "jump_route_ft",
+    "jump_plays",
+)
+FIELDER_TAIL_COLUMNS: tuple[str, ...] = ("asof_date", *OAA_JUMP_COLUMN_ORDER)
+
+#: SIM-532: the play count at which the outfield jump's year-to-year repeat
+#: passes 0.8 (plan §2.2). The fielder model shares this value: it is the
+#: prior the jump features' own shrinkage confidence uses,
+#: plays / (plays + 25).
+JUMP_ALPHA_PRIOR_PLAYS = 25
+
+#: SIM-532: the outfield test the aggregator's jump columns use. The jump is
+#: an outfield measurement, so an infield row gets NULL, never the player's
+#: figure from an outfield season.
+_SQL_IS_OF = "c.position IN ('LF', 'CF', 'RF')"
+
 # ---------------------------------------------------------------------------
 # Statcast pitch-result codes (SIM-456 / SIM-501)
 #
@@ -5798,18 +5824,37 @@ class PlayerProfileComputor:
 
         SIM-537: the six per-play temp tables are already cutoff-filtered
         by the time this method reads them (they carry no date of their
-        own). Two Savant joins here have no date column at all — sprint
-        speed and arm strength — so each follows the season-shift
-        substitution described on ``_compute_baserunner_profiles``: a
-        season that ENDED before the cutoff joins its own row; the season
-        CONTAINING the cutoff joins the PRIOR season's row. Measured
-        year-to-year correlation of the fielder arm strength: 0.857, so it
-        substitutes cheaply.
+        own). Four Savant joins here have no date column at all — sprint
+        speed, arm strength, outs above average and the outfield jump — so
+        each follows the season-shift substitution described on
+        ``_compute_baserunner_profiles``: a season that ENDED before the
+        cutoff joins its own row; the season CONTAINING the cutoff joins
+        the PRIOR season's row. Measured year-to-year correlations: the
+        arm strength 0.857, the jump 0.80 to 0.92, Savant's outs above
+        average per 100 chances 0.38 to 0.61 within an outfield position
+        and 0.34 to 0.63 within an infield position (plan §2.2b), so the
+        substitute costs little.
+
+        The shifted numerator takes the shifted denominator. At a cutoff
+        the per-100 figure divides the PRIOR season's outs by the PRIOR
+        season's chances, never by this season's partial count. A cutoff
+        build reads the prior season's chances from the build when that
+        season is in ``seasons``, else from its surviving row in the table
+        (the delete above removes only the run's seasons, and the SIM-551
+        guard makes a survivor a completed season). With no prior-season
+        chances anywhere the figure is NULL, and the model reads the league
+        mean for it.
 
         SIM-550: the six outfield arm columns and ``of_arm_runs`` are
         written NULL here. ``_fill_outfield_arm_block`` fills the six from
         the advancement pool after the pools are built; ``of_arm_runs``
         stays NULL (the model does not read it).
+
+        SIM-532: the six Savant columns come LAST, after ``asof_date``, in
+        ``OAA_JUMP_COLUMN_ORDER``. The outs above average join is per
+        position (the board is pulled once per position, so a player's
+        figure differs between his LF and CF rows); the jump join is per
+        player and the jump columns are NULL on an infield row.
         """
         log.info("Aggregating fielder season metrics …")
         season_list = ", ".join(str(s) for s in seasons)
@@ -5819,6 +5864,18 @@ class PlayerProfileComputor:
             f"(CASE WHEN c.season = {asof_date.year} THEN c.season - 1 ELSE c.season END)"
             if asof is not None
             else "c.season"
+        )
+        # SIM-532: the per-100 denominator follows the numerator's season.
+        # For the season that contains the cutoff, the outs come from the
+        # prior season, so the chances must too: from the build (`prev`)
+        # when the prior season is in the run, else from its surviving row
+        # (`stored`). A live build divides by the row's own chances.
+        savant_denominator = (
+            f"(CASE WHEN c.season = {asof_date.year} "
+            "THEN COALESCE(prev.opportunities, stored.opportunities) "
+            "ELSE c.opportunities END)"
+            if asof is not None
+            else "c.opportunities"
         )
 
         # ----------------------------------------------------------------
@@ -6064,9 +6121,28 @@ class PlayerProfileComputor:
                 -- SIM-523 part G (migration 0024): the fielder's sprint speed (one join;
                 -- appended LAST — the INSERT carries no column list).
                 ss.sprint_speed AS sprint_speed,
-                -- SIM-537 (migration 0028): appended LAST for the same
-                -- positional-INSERT reason as sprint_speed above.
-                DATE '{asof_sql}' AS asof_date
+                -- SIM-537 (migration 0028): appended after sprint_speed for
+                -- the same positional-INSERT reason.
+                DATE '{asof_sql}' AS asof_date,
+                -- SIM-532 (migration 0030): the six Savant columns, appended
+                -- LAST. The order below IS OAA_JUMP_COLUMN_ORDER: savant_oaa,
+                -- savant_oaa_per_100, jump_reaction_ft, jump_burst_ft,
+                -- jump_route_ft, jump_plays. A unit test holds the live
+                -- table's tail to FIELDER_TAIL_COLUMNS; change both together.
+                -- The board is pulled once per position, so this is the
+                -- figure AT this row's position. NULLIF guards a row with no
+                -- chance (the per-100 figure would divide by zero).
+                -- The numerator and the denominator must cover the same
+                -- season and span: at a cutoff the CASE in the denominator
+                -- takes the prior season's chances with the prior season's
+                -- outs; a live build takes the row's own chances.
+                soaa.outs_above_average                                       AS savant_oaa,
+                soaa.outs_above_average * 100.0 / NULLIF({savant_denominator}, 0)  AS savant_oaa_per_100,
+                -- The jump is an outfield measurement: outfield rows only.
+                CASE WHEN {_SQL_IS_OF} THEN sj.reaction_ft END                 AS jump_reaction_ft,
+                CASE WHEN {_SQL_IS_OF} THEN sj.burst_ft END                    AS jump_burst_ft,
+                CASE WHEN {_SQL_IS_OF} THEN sj.route_ft END                    AS jump_route_ft,
+                CASE WHEN {_SQL_IS_OF} THEN sj.n_plays END                     AS jump_plays
 
             FROM combined_oaa c
             LEFT JOIN dp_init_agg dp
@@ -6079,6 +6155,21 @@ class PlayerProfileComputor:
                 ON c.player_id = b.fielder_id AND c.position = b.position AND c.season = b.season
             LEFT JOIN scoop s
                 ON c.player_id = s.fielder_id AND c.position = s.position AND c.season = s.season
+            -- SIM-532: the prior season's chances for the per-100 denominator
+            -- at a cutoff. `prev` is the prior season when it is in the build
+            -- (complete at the cutoff: every one of its games precedes it).
+            -- `stored` is the prior season's SURVIVING row when it is not in
+            -- the build (the delete above removes only the run's seasons; the
+            -- INSERT reads the pre-insert snapshot). Both keys are the full
+            -- (player, position, season), so neither join multiplies rows.
+            LEFT JOIN combined_oaa prev
+                ON prev.player_id = c.player_id
+               AND prev.position = c.position
+               AND prev.season = c.season - 1
+            LEFT JOIN derived.fielder_season_metrics stored
+                ON stored.player_id = c.player_id
+               AND stored.position = c.position
+               AND stored.season = c.season - 1
             -- SIM-537: the season-shift substitution described in the class
             -- docstring — unshifted (c.season) when asof is None.
             LEFT JOIN pg.raw.sprint_speed ss
@@ -6086,6 +6177,16 @@ class PlayerProfileComputor:
             -- SIM-530: the throw velocity board.
             LEFT JOIN pg.raw.savant_arm_strength sas
                 ON c.player_id = sas.player_id AND sas.season = {savant_season}
+            -- SIM-532: Savant's outs above average, one board row per
+            -- (player, season, position) — the join carries the position.
+            LEFT JOIN pg.raw.savant_outs_above_average soaa
+                ON c.player_id = soaa.player_id
+               AND soaa.position = c.position
+               AND soaa.season = {savant_season}
+            -- SIM-532: the outfield jump, one board row per (player, season);
+            -- the same row serves each of his outfield positions.
+            LEFT JOIN pg.raw.savant_outfield_jump sj
+                ON c.player_id = sj.player_id AND sj.season = {savant_season}
         """)
         self._stamp_one_cutoff("derived.fielder_season_metrics", asof_sql)
         self._assert_fielder_profiles_have_no_leakage(seasons, asof_date)
@@ -6097,11 +6198,12 @@ class PlayerProfileComputor:
 
         Covers all six per-play builders and this aggregator — they all
         read raw.pitches under the identical season+cutoff filter, so one
-        check at the end of the chain covers all of them. The two Savant
-        joins (sprint speed, arm strength) have no date of their own to
-        check — they are made safe by the season-shift substitution in the
-        query above, not by filtering. The arm block's own dated source, the
-        advancement pool, is checked by ``_fill_outfield_arm_block``.
+        check at the end of the chain covers all of them. The four Savant
+        joins (sprint speed, arm strength, outs above average, the outfield
+        jump) have no date of their own to check — they are made safe by
+        the season-shift substitution in the query above, not by
+        filtering. The arm block's own dated source, the advancement pool,
+        is checked by ``_fill_outfield_arm_block``.
         """
         season_list = ", ".join(str(s) for s in seasons)
         self._check_leakage(
@@ -7645,7 +7747,29 @@ class LeagueAverageProfiles:
                 for col in ("arm_advancement_prevention", "arm_thrown_out_rate", "arm_strength")
                 if col in fsm_cols
             )
+            # SIM-532: the Savant keys the fielder model shrinks toward.
+            # Every fielding position (not the catcher) gets Savant's outs
+            # above average per 100 chances; the three outfield positions
+            # also get the three jump parts. AVG skips NULL: an outfielder
+            # without a jump row (about two thirds of outfield rows) does
+            # not pull the mean, and a row without a Savant figure does not
+            # pull the per-100 mean. Each key is written only when the
+            # fielder table carries its column (a database that has not
+            # run migration 0030, or a narrow fixture).
+            savant_cols: dict[str, tuple[str, ...]] = {
+                "C": (),
+                "1B": ("savant_oaa_per_100",),
+                "2B": ("savant_oaa_per_100",),
+                "3B": ("savant_oaa_per_100",),
+                "SS": ("savant_oaa_per_100",),
+                "LF": ("savant_oaa_per_100", "jump_reaction_ft", "jump_burst_ft", "jump_route_ft"),
+                "CF": ("savant_oaa_per_100", "jump_reaction_ft", "jump_burst_ft", "jump_route_ft"),
+                "RF": ("savant_oaa_per_100", "jump_reaction_ft", "jump_burst_ft", "jump_route_ft"),
+            }
             for position in ("C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"):
+                savant_keys = "".join(
+                    f", '{col}', AVG({col})" for col in savant_cols[position] if col in fsm_cols
+                )
                 conn.execute(f"""
                     INSERT OR REPLACE INTO derived.league_averages
                     SELECT
@@ -7654,7 +7778,7 @@ class LeagueAverageProfiles:
                             'outs_above_average', AVG(outs_above_average),
                             'error_rate',         AVG(error_rate),
                             'arm_hold_rate',      AVG(arm_hold_rate),
-                            'dp_run_value',       AVG(dp_run_value){arm_keys}
+                            'dp_run_value',       AVG(dp_run_value){arm_keys}{savant_keys}
                         ) AS profile_json,
                         CURRENT_TIMESTAMP AS updated_at
                     FROM derived.fielder_season_metrics

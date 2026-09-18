@@ -78,7 +78,8 @@ MAX_RETRIES = 3
 PAUSE_BETWEEN_FETCHES_S = 1.5
 
 #: Columns whose target name says they hold a label, not a number.
-_TEXT_TARGETS = frozenset({"bat_side", "split"})
+#: SIM-532 adds the two position labels of the outs-above-average board.
+_TEXT_TARGETS = frozenset({"bat_side", "split", "position", "primary_position"})
 #: Target columns that are whole numbers.
 _INT_TARGETS = frozenset(
     {
@@ -101,6 +102,19 @@ _INT_TARGETS = frozenset(
         "n_sb",
         "n_pk",
         "n_bk",
+        # SIM-532: the outs-above-average board's counts (all whole outs) and the
+        # outfield jump's outs above average on its plays (also whole). The name
+        # ``outs_above_average`` is a target on these two boards only: first base
+        # receiving stores ``total_oaa`` (a float), so no other board's column
+        # changes type here.
+        "outs_above_average",
+        "fielding_runs_prevented",
+        "oaa_in_front",
+        "oaa_toward_3b_line",
+        "oaa_toward_1b_line",
+        "oaa_behind",
+        "oaa_vs_rhh",
+        "oaa_vs_lhh",
     }
 )
 
@@ -118,12 +132,22 @@ class SavantFetchError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
-def build_url(board: SavantBoard, season: int, hand: str = "", asof: date | None = None) -> str:
+def build_url(
+    board: SavantBoard, season: int, split_value: str = "", asof: date | None = None
+) -> str:
+    """The query for one pull of ``board`` for ``season``.
+
+    ``split_value`` is one value of the board's split pull: the pitcher's hand
+    on the swing boards, Savant's position code on the outs-above-average board.
+    The board names the parameter (``board.split_param``); an empty value sends
+    nothing. It stays the third positional argument because the recompute
+    scripts call ``build_url(board, season)``.
+    """
     params: dict[str, str] = {}
     params.update(board.extra)
     params.update(board.season_params(season))
-    if hand:
-        params["pitchHand"] = hand
+    if split_value:
+        params[board.split_param] = split_value
     if asof is not None:
         # SIM-534: a point-in-time pull. dateStart is 1 January so the window is
         # "this season up to and including the cutoff" — the same span a
@@ -232,8 +256,10 @@ def coerce_row(
             asof if asof is not None else min(date(season, 12, 31), date.today())
         )
     if board.split_column:
-        # A hand-split board carries its label from the query; the stance board
-        # carries it in the CSV itself.
+        # A split board carries its label from the query (the pitcher's hand on
+        # the swing boards; the position PULLED on the outs-above-average board,
+        # whose CSV names only the player's primary position). The stance board
+        # carries its label in the CSV itself.
         out[board.split_column] = (
             split if split is not None else to_str(row.get(board.split_column))
         )
@@ -300,13 +326,15 @@ def load_board_season(
     asof: date | None = None,
 ) -> int:
     """Fetch and upsert one board for one season. Returns rows written."""
+    # A split board is pulled once per (label, value) pair: three pulls for the
+    # pitcher-hand split, seven for the per-position outs-above-average pull.
     pulls: list[tuple[str | None, str]] = (
-        [(label, hand) for label, hand in board.hand_splits] if board.hand_splits else [(None, "")]
+        [(label, value) for label, value in board.splits] if board.splits else [(None, "")]
     )
 
     payload: list[dict] = []
-    for label, hand in pulls:
-        body = fetcher(build_url(board, season, hand, asof))
+    for label, value in pulls:
+        body = fetcher(build_url(board, season, value, asof))
         rows = parse_rows(body)
         check_row_seasons(board, rows, season)
         log.info(

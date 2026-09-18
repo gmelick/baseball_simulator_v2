@@ -343,7 +343,8 @@ def test_catcher_asof_is_threaded_from_run() -> None:
 # ---------------------------------------------------------------------------
 # Fielder: six per-play methods read only raw.pitches (two of them —
 # infield OAA and DP — also do a Python-side sprint-speed lookup); the
-# aggregator's two Savant joins have no date column. The outfield arm block
+# aggregator's four Savant joins (sprint speed, arm strength, and SIM-532's
+# outs above average and outfield jump) have no date column. The outfield arm block
 # (SIM-550) is filled after the pools from sim.advancement_opportunity_pool,
 # which carries game_date, so the fill filters by the cutoff directly.
 # ---------------------------------------------------------------------------
@@ -389,14 +390,20 @@ def test_a_fielder_cutoff_build_deletes_seasons_that_had_not_started() -> None:
     assert "season > {asof_date.year}" in body
 
 
-def test_fielder_aggregator_season_shifts_both_savant_joins() -> None:
-    """Sprint speed and arm strength. The baserunning board's join left with
-    SIM-550: the arm block now comes from our own dated pool."""
+def test_fielder_aggregator_season_shifts_all_four_savant_joins() -> None:
+    """Sprint speed, arm strength, outs above average and the outfield jump
+    (the last two joined by SIM-532; neither board has a date control). The
+    baserunning board's join left with SIM-550: the arm block now comes
+    from our own dated pool."""
     body = _method_body(
         _src(), "_aggregate_fielder_season_metrics", "def _assert_fielder_profiles_have_no_leakage"
     )
     assert "CASE WHEN c.season = {asof_date.year} THEN c.season - 1 ELSE c.season END" in body
-    assert body.count("season = {savant_season}") == 2
+    assert body.count("season = {savant_season}") == 4
+    assert "ss.season = {savant_season}" in body
+    assert "sas.season = {savant_season}" in body
+    assert "soaa.season = {savant_season}" in body
+    assert "sj.season = {savant_season}" in body
     assert "savant_baserunning" not in body
     assert "of_arm_runs_in_cutoff_season" not in body  # the run-value guard is gone
 
@@ -424,14 +431,24 @@ def test_the_arm_block_leakage_check_names_the_pool() -> None:
 
 
 def test_every_fielder_profile_ends_up_stamped_last() -> None:
-    """asof_date must be the LAST column — the INSERT carries no column
-    list, same trap sprint_speed already documents."""
+    """asof_date follows sprint_speed, and the six SIM-532 Savant columns
+    follow asof_date in ``OAA_JUMP_COLUMN_ORDER`` — the INSERT carries no
+    column list, the trap sprint_speed already documents. The SELECT tail
+    must read ``FIELDER_TAIL_COLUMNS`` in order."""
+    from pipeline.batch.player_profile_computor import FIELDER_TAIL_COLUMNS
+
     body = _method_body(
         _src(), "_aggregate_fielder_season_metrics", "def _assert_fielder_profiles_have_no_leakage"
     )
     sprint_idx = body.index("ss.sprint_speed AS sprint_speed")
     asof_idx = body.index("DATE '{asof_sql}' AS asof_date")
     assert asof_idx > sprint_idx
+    # ``\b`` so "AS savant_oaa" cannot match inside "AS savant_oaa_per_100".
+    positions = [re.search(rf"AS {re.escape(col)}\b", body).start() for col in FIELDER_TAIL_COLUMNS]
+    assert positions == sorted(positions)
+    assert positions[0] > sprint_idx
+    # Nothing follows the tail before the FROM.
+    assert body.index("FROM combined_oaa c") > positions[-1]
     assert (
         'self._refuse_a_mixed_cutoff("derived.fielder_season_metrics", seasons, asof_date)' in body
     )

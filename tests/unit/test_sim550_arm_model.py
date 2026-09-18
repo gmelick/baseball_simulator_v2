@@ -66,6 +66,18 @@ SCHEMA_SQL = REPO / "db" / "schemas" / "02_duckdb_schema.sql"
 # The league row's arm vector: velocity (mph), prevention, thrown-out rate.
 LEAGUE_ARM = np.array([88.0, 0.0, 0.05])
 
+# SIM-532: the six fielder columns migration 0030 appends after asof_date, in
+# OAA_JUMP_COLUMN_ORDER. The canonical-schema tests add them when the schema
+# file does not carry them yet, the way 0030 does (idempotent).
+SIM532_FIELDER_COLUMNS = (
+    ("savant_oaa", "INTEGER"),
+    ("savant_oaa_per_100", "FLOAT"),
+    ("jump_reaction_ft", "FLOAT"),
+    ("jump_burst_ft", "FLOAT"),
+    ("jump_route_ft", "FLOAT"),
+    ("jump_plays", "INTEGER"),
+)
+
 
 # ===========================================================================
 # Helpers — engines assembled without a database
@@ -90,7 +102,12 @@ def _of_profile(
         season=season,
         innings_played=900.0,
         sample_batted_balls=bb,
-        range_vec=np.array(range_vec or [3.0, 1.0, 0.5, 2.0, 0.01], dtype=np.float64),
+        # SIM-532: nine range entries — our five, Savant's figure, the three
+        # jump parts. The jump plays default to 0, so with a zero league row
+        # the jump entries shrink to 0 and the arm reads alone.
+        range_vec=np.array(
+            range_vec or [3.0, 1.0, 0.5, 2.0, 0.01, 1.2, 0.5, 0.3, 0.2], dtype=np.float64
+        ),
         error_vec=np.array([0.02, 0.01], dtype=np.float64),
         arm_vec=np.array(arm, dtype=np.float64),
         star_vec=np.array([0.2, 0.5, 0.97], dtype=np.float64),
@@ -278,7 +295,7 @@ class TestArmShrinkage:
             season=2024,
             innings_played=800.0,
             sample_batted_balls=300,
-            range_vec=np.array([1.0, 1.0, 1.0, 1.0, 0.0]),
+            range_vec=np.array([1.0, 1.0, 1.0, 1.0, 0.0, 0.5]),  # SIM-532: six
             error_vec=np.array([0.02, 0.01]),
             dp_vec=np.array([0.5, 0.3, 0.6, 0.1]),
             specialty_vec=np.array([0.5, 0.5]),
@@ -346,8 +363,11 @@ def _row(
     *,
     below: bool = False,
     stars: tuple = (4, 1, 10, 4, 100, 98),
+    oaa_jump: tuple = (None, None, None, None, None),
 ) -> tuple:
-    """One row in the loader's SELECT order (30 columns)."""
+    """One row in the loader's SELECT order (35 columns since SIM-532: the
+    Savant figure, the three jump parts and the jump's play count sit right
+    after catch_pct_added)."""
     return (
         pid,
         position,
@@ -360,6 +380,8 @@ def _row(
         0.2,
         1.5,
         0.01,
+        # range, continued (SIM-532: savant_oaa_per_100, reaction, burst, route, jump_plays)
+        *oaa_jump,
         # errors (2)
         0.02,
         0.01,
@@ -481,6 +503,13 @@ class TestProfileLoader:
                         "arm_advancement_prevention": 0.0,
                         "arm_thrown_out_rate": 0.05,
                         "arm_strength": 88.0,
+                        # SIM-532: the four range keys a post-recompute league
+                        # row carries; the rows above have no jump, so each
+                        # reads the league's.
+                        "savant_oaa_per_100": 0.2,
+                        "jump_reaction_ft": 0.5,
+                        "jump_burst_ft": 1.0,
+                        "jump_route_ft": -0.5,
                     }
                 )
             ],
@@ -513,14 +542,30 @@ class TestProfileLoader:
 class TestScoring:
     def test_score_all_and_query_pair_agree_on_an_outfield_pair(self) -> None:
         profiles = [
-            _of_profile(1, [92.0, 0.05, 0.10], chances=150, range_vec=[3.0, 1.0, 0.5, 2.0, 0.01]),
             _of_profile(
-                2, [86.0, -0.03, 0.02], chances=40, range_vec=[-1.0, 0.0, 0.5, -2.0, -0.01]
+                1,
+                [92.0, 0.05, 0.10],
+                chances=150,
+                range_vec=[3.0, 1.0, 0.5, 2.0, 0.01, 1.0, 0.5, 0.2, 0.3],
             ),
             _of_profile(
-                3, [np.nan, 0.01, np.nan], chances=10, range_vec=[0.0, 2.0, -0.5, 0.0, 0.0]
+                2,
+                [86.0, -0.03, 0.02],
+                chances=40,
+                range_vec=[-1.0, 0.0, 0.5, -2.0, -0.01, -0.8, -0.2, 0.1, -0.4],
             ),
-            _of_profile(4, [89.0, 0.02, 0.06], chances=90, range_vec=[1.0, -1.0, 1.5, 1.0, 0.02]),
+            _of_profile(
+                3,
+                [np.nan, 0.01, np.nan],
+                chances=10,
+                range_vec=[0.0, 2.0, -0.5, 0.0, 0.0, 0.2, np.nan, np.nan, np.nan],
+            ),
+            _of_profile(
+                4,
+                [89.0, 0.02, 0.06],
+                chances=90,
+                range_vec=[1.0, -1.0, 1.5, 1.0, 0.02, 0.6, 0.1, -0.3, 0.5],
+            ),
         ]
         engine = _engine_with(profiles)
         engine._apply_shrinkage()
@@ -608,9 +653,11 @@ class _RoutingConn:
 
 
 def _of_calibration_rows(n: int, seed: int, measured_every: int = 3) -> list[tuple]:
-    """Outfield rows in the calibrator's SELECT order: 4 meta, 5 range, 2
-    errors, 3 arm, 6 star counts, then the arm's chance count. The arm is NULL
-    on every ``measured_every``-th row."""
+    """Outfield rows in the calibrator's SELECT order: 4 meta, 9 range (our
+    five, Savant's figure, the three jump parts — SIM-532), 2 errors, 3 arm,
+    6 star counts, then the arm's chance count, then the jump's play count
+    (SIM-532, appended last). The arm is NULL on every ``measured_every``-th
+    row."""
     rng = np.random.default_rng(seed)
     rows = []
     for i in range(n):
@@ -630,7 +677,7 @@ def _of_calibration_rows(n: int, seed: int, measured_every: int = 3) -> list[tup
                 "CF",
                 2023 + i // 40,
                 int(rng.integers(200, 600)),
-                *rng.normal(0, 2, 5).tolist(),
+                *rng.normal(0, 2, 9).tolist(),
                 *rng.beta(2, 60, 2).tolist(),
                 *arm,
                 f5o,
@@ -640,6 +687,7 @@ def _of_calibration_rows(n: int, seed: int, measured_every: int = 3) -> list[tup
                 ro,
                 ro - int(rng.integers(0, 5)),
                 int(rng.integers(60, 300)) if arm[0] is not None else None,
+                int(rng.integers(25, 80)),
             )
         )
     return rows
@@ -648,11 +696,14 @@ def _of_calibration_rows(n: int, seed: int, measured_every: int = 3) -> list[tup
 def _paired_of_rows(
     prevention: dict[tuple[int, str, int], float],
     chances: int = 200,
+    plays: int = 40,
 ) -> list[tuple]:
     """Outfield rows in the calibrator's SELECT order with a HAND-SET
     prevention per (player, position, season); the velocity and the
     thrown-out rate follow it so every arm feature carries the same signal.
-    Everything else is deterministic filler."""
+    Everything else is deterministic filler. ``chances`` is the arm's chance
+    count and ``plays`` the jump's play count, the two trailing columns in
+    that order (SIM-532 appended the second)."""
     rows = []
     for k, ((pid, pos, season), prev) in enumerate(prevention.items()):
         rows.append(
@@ -666,6 +717,11 @@ def _paired_of_rows(
                 0.2,
                 0.3,
                 0.4,
+                # SIM-532: Savant's figure and the three jump parts
+                0.5,
+                0.6,
+                0.7,
+                0.8,
                 0.02,
                 0.01,
                 88.0 + 10.0 * prev,
@@ -678,6 +734,7 @@ def _paired_of_rows(
                 120,
                 118,
                 chances,
+                plays,
             )
         )
     return rows
@@ -693,9 +750,10 @@ class TestCalibrator:
         of_sql = [q for q in conn.queries if "'LF'" in q][0]
         assert "arm_strength, arm_advancement_prevention, arm_thrown_out_rate," in of_sql
         assert "of_arm_runs" not in of_sql and "arm_hold_rate" not in of_sql
-        # The chance count rides last (the pair floor) and both SELECTs come
-        # back in (player, position, season) order.
-        assert of_sql.rstrip().split("FROM")[0].rstrip().endswith("arm_opportunities")
+        # The two count columns ride after the blocks — the arm's chances,
+        # then the jump's plays (SIM-532) — and both SELECTs come back in
+        # (player, position, season) order.
+        assert of_sql.rstrip().split("FROM")[0].rstrip().endswith("arm_opportunities, jump_plays")
         if_sql = [q for q in conn.queries if "'1B'" in q][0]
         for sql in (of_sql, if_sql):
             assert "ORDER BY player_id, position, season" in sql
@@ -712,11 +770,13 @@ class TestCalibrator:
         assert report.reliability_weights_of_arm is not None
         assert len(report.reliability_weights_of_arm) == len(OF_ARM_FEATURES) == 3
         # The sigma is the one fitted on the MEASURED rows alone …
-        measured = np.array([r[11:14] for r in rows if r[11] is not None], dtype=np.float64)
+        # The arm block sits at columns 15 to 17 (four meta, nine range, two
+        # errors precede it — SIM-532 widened the range block to nine).
+        measured = np.array([r[15:18] for r in rows if r[15] is not None], dtype=np.float64)
         expected = cal._fit_sigma(cal._zscore_matrix(measured), 0.5)
         assert report.sigma_of_arm == pytest.approx(expected)
         # … and more unmeasured rows do not move it (a zero-filled fit would).
-        more = rows + [r[:11] + (None, None, None) + r[14:] for r in rows[:60]]
+        more = rows + [r[:15] + (None, None, None) + r[18:] for r in rows[:60]]
         again = cal._calibrate_fielder_params(
             _RoutingConn([], more), [2023, 2024, 2025], 0.5, CalibrationReport()
         )
@@ -726,8 +786,8 @@ class TestCalibrator:
         from similarity.similarity_calibration import CalibrationReport, SimilarityCalibrator
 
         rows = _of_calibration_rows(120, seed=13, measured_every=8)  # 105 measured
-        thin = [r[:11] + (None, None, None) + r[14:] for r in rows[:101]] + rows[101:]
-        assert sum(r[11] is not None for r in thin) < 20
+        thin = [r[:15] + (None, None, None) + r[18:] for r in rows[:101]] + rows[101:]
+        assert sum(r[15] is not None for r in thin) < 20
         report = SimilarityCalibrator(duckdb_path=":memory:")._calibrate_fielder_params(
             _RoutingConn([], thin), [2023, 2024, 2025], 0.5, CalibrationReport()
         )
@@ -746,6 +806,14 @@ class TestCalibrator:
         path = str(tmp_path / "sim550_cal.duckdb")
         con = duckdb.connect(path)
         con.execute(SCHEMA_SQL.read_text(encoding="utf-8"))
+        # SIM-532: the calibrator names the Savant and jump columns directly
+        # (the recompute applies migration 0030 before `make calibrate`).
+        # Add them here the way 0030 does, so this test holds whether or not
+        # the canonical schema already carries them.
+        for col, typ in SIM532_FIELDER_COLUMNS:
+            con.execute(
+                f"ALTER TABLE derived.fielder_season_metrics ADD COLUMN IF NOT EXISTS {col} {typ}"
+            )
         rng = np.random.default_rng(14)
         for i in range(90):
             f5o, f4o, ro = (
@@ -761,17 +829,22 @@ class TestCalibrator:
             con.execute(
                 "INSERT INTO derived.fielder_season_metrics (player_id, position, season, "
                 "innings_played, sample_batted_balls, oaa_glove_side, oaa_arm_side, "
-                "oaa_charging, oaa_deep, catch_pct_added, fielding_error_rate, "
+                "oaa_charging, oaa_deep, catch_pct_added, "
+                "savant_oaa_per_100, jump_reaction_ft, jump_burst_ft, jump_route_ft, "
+                "fielding_error_rate, "
                 "throwing_error_rate, arm_strength, arm_advancement_prevention, "
                 "arm_thrown_out_rate, arm_hold_rate, of_arm_runs, arm_opportunities, "
                 "five_star_opps, five_star_catches, four_star_opps, four_star_catches, "
                 "routine_opps, routine_catches, below_minimum_sample) VALUES "
-                "(?, 'RF', ?, 800, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE)",
+                "(?, 'RF', ?, 800, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "?, ?, ?, ?, FALSE)",
                 [
                     5000 + i % 30,
                     2023 + i // 30,
                     int(rng.integers(200, 600)),
-                    *rng.normal(0, 2, 5).tolist(),
+                    # SIM-532: nine range values — our five, Savant's figure,
+                    # the three jump parts
+                    *rng.normal(0, 2, 9).tolist(),
                     *rng.beta(2, 60, 2).tolist(),
                     *arm,
                     # the two stored-only columns carry DISTINCTIVE values: a
@@ -932,12 +1005,14 @@ class TestReliabilityPairing:
         assert report.reliability_weights_of_arm is not None
         assert report.reliability_weights_of_arm[1] == pytest.approx(1.0)
         # The sigma fit keeps every measured row: the thin rows still count.
-        measured = np.array([r[11:14] for r in rows], dtype=np.float64)
+        measured = np.array([r[15:18] for r in rows], dtype=np.float64)
         assert report.sigma_of_arm == pytest.approx(
             cal._fit_sigma(cal._zscore_matrix(measured), 0.5)
         )
-        # A NULL chance count is no chance: the row never pairs.
-        no_count = [r[:-1] + (None,) for r in rows]
+        # A NULL chance count is no chance: the row never pairs. The chance
+        # count is the second-to-last column; the jump's play count rides
+        # after it (SIM-532).
+        no_count = [r[:-2] + (None, r[-1]) for r in rows]
         report_none = cal._calibrate_fielder_params(
             _RoutingConn([], no_count), [2023, 2024], 0.5, CalibrationReport()
         )
@@ -969,12 +1044,12 @@ class TestReliabilityPairing:
         rng = np.random.default_rng(26)
         rows = []
         for pid in range(6000, 6030):
-            v = rng.normal(0.0, 2.0, 5)
+            v = rng.normal(0.0, 2.0, 9)  # SIM-532: the nine range features
             for season in (2023, 2024):
                 for pos, sign in (("CF", 1.0), ("RF", -1.0)):
                     rows.append(
                         (pid, pos, season, 400, *(sign * v).tolist(), 0.02, 0.01)
-                        + (88.0, 0.0, 0.05, 5, 3, 12, 8, 120, 118, 200)
+                        + (88.0, 0.0, 0.05, 5, 3, 12, 8, 120, 118, 200, 40)
                     )
         report = SimilarityCalibrator(duckdb_path=":memory:")._calibrate_fielder_params(
             _RoutingConn([], rows), [2023, 2024], 0.5, CalibrationReport()
