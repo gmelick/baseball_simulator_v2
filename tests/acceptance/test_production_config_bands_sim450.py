@@ -367,8 +367,11 @@ def test_the_game_set_does_not_bias_the_run_environment_sim450(
     for game_pk, factor in resolved.items():
         expected = bands.ACCEPTANCE_PARK_FACTORS[int(game_pk)]
         assert factor == pytest.approx(expected, abs=5e-4), (
-            f"game {game_pk} resolved park_run_factor {factor:.4f}, but DuckDB held "
-            f"{expected:.4f} on 2026-08-10. The park-factor resolution changed."
+            f"game {game_pk} resolved park_run_factor {factor:.4f}, but "
+            f"bands.ACCEPTANCE_PARK_FACTORS pins {expected:.4f}. Either the park-factor "
+            "resolution changed, or the season in progress moved on (its factors are "
+            "recomputed as games accumulate): re-read that season's pins from "
+            "derived.park_factors."
         )
 
     run_mean = bands.mean_park_factor(list(resolved))

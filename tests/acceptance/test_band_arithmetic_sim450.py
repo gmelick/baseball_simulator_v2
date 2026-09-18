@@ -1125,16 +1125,17 @@ def test_the_prefix_check_rejects_an_ascending_order_sim450() -> None:
     ``conftest.py`` listed the twelve games in ASCENDING park-factor order on
     delivery, so an 8-game run took the eight most pitcher-friendly parks: mean
     factor 0.96848 against 0.99874 for the full set (values re-pinned
-    2026-08-16 to the SIM-459-recomputed park factors; the rank order and the
-    verdict are unchanged). A check that could not reject that order would
-    protect nothing.
+    2026-08-16 to the SIM-459-recomputed park factors, and the fifteen 2026
+    games again on 2026-09-18 as the season in progress moved; the rank
+    order and the verdict are unchanged). A check that could not reject that
+    order would protect nothing.
     """
     ascending = tuple(sorted(bands.ACCEPTANCE_PARK_FACTORS, key=bands.ACCEPTANCE_PARK_FACTORS.get))
     k, bias = bands.worst_prefix_park_bias(ascending)
     assert abs(bias) > bands.MAX_PREFIX_PARK_BIAS, "the check must reject the ascending order"
-    assert bands.mean_park_factor(ascending[:8]) == pytest.approx(0.92175, abs=5e-5)
-    assert bands.prefix_park_bias(ascending, 8) == pytest.approx(-0.07219, abs=5e-5)
-    assert bands.mean_park_factor(bands.BALANCED_GAME_ORDER[:8]) == pytest.approx(0.99415, abs=5e-5)
+    assert bands.mean_park_factor(ascending[:8]) == pytest.approx(0.91841, abs=5e-5)
+    assert bands.prefix_park_bias(ascending, 8) == pytest.approx(-0.07513, abs=5e-5)
+    assert bands.mean_park_factor(bands.BALANCED_GAME_ORDER[:8]) == pytest.approx(0.99384, abs=5e-5)
 
 
 def test_conftest_slices_the_balanced_game_order_sim450() -> None:
@@ -1188,8 +1189,10 @@ def test_a_shortened_run_cannot_hide_a_park_shift_in_the_R_band_sim450() -> None
 
     _, worst = bands.worst_prefix_park_bias(bands.BALANCED_GAME_ORDER)
     actual_in_runs = abs(worst) * centre
-    # SIM-523 (2026-09-09): the 45-game set's greedy prefix order reads 0.0024
-    assert actual_in_runs / floor == pytest.approx(0.09, abs=0.02)
+    # SIM-523 (2026-09-09): the 45-game set's greedy prefix order read 0.0024;
+    # 0.0033 after the 2026 pins were re-read on 2026-09-18 (the season in
+    # progress moved), still a sixth of the floor.
+    assert actual_in_runs / floor == pytest.approx(0.12, abs=0.02)
     assert actual_in_runs < floor / 2.0
 
     # The full twelve-game set has no prefix bias at all, which is why a
