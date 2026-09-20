@@ -401,6 +401,8 @@ in degrees, plus release and shoulder coordinates. This is one clean physical nu
 that the pitcher engine deliberately excludes its release-point sub-score, so this is a
 design question for the modelling pass, not an automatic add.
 
+*Correction (2026-09-19, SIM-533): the engine reads the release point — release x, release z and extension are three of the arsenal fingerprint's eight dimensions; SIM-067 removed a second sub-score that double-counted them. Measured, neither the arm angle nor the spin-shape numbers add to the score; the decision record is `docs/audit/2026-09-18-sim533-pitcher-arm-angle-spin-shape-plan.md`.*
+
 **Active Spin** and **Spin Direction** describe how much of a pitch's spin actually moves the
 ball, and where the spin axis points. Our pitch model uses spin rate and spin axis but not
 the efficiency of that spin.
@@ -486,7 +488,7 @@ them if that is too many.
 | **SIM-530** · P1 | Fill the empty arm columns — outfielder arm and catcher arm, exchange time, first-base receiving. | A bug fix, not an enhancement. It absorbs the retired fielder arm item (SIM-521). |
 | **SIM-531** · P2 | Lead distance and opportunity features for the stealing and advancing runner engines, and the pitcher's hold engine. | Highest actor powers in the sim (12 and 20). |
 | **SIM-532** · P3 | The fielder's platoon split and jump features. | Improves the fielding draw. |
-| **SIM-533** · P3 | Pitcher arm angle and spin-shape features. | Lowest confidence. Needs a design decision on release point. |
+| **SIM-533** · P3 | Pitcher arm angle and spin-shape features. | Lowest confidence. Needs a design decision on release point. *Decided 2026-09-19: not adopted (see the correction in §5.4).* |
 
 **Two standing rules apply to all of it.** Every new factor is a draw weight, fitted, or it
 stays off — no post-draw adjustment. And nothing gets a betting-value read until every band

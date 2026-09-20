@@ -212,6 +212,21 @@ The official box-score backfill (SIM-545): fetches the MLB Stats API box score f
 
 ---
 
+### `scripts/sim533_arm_angle_probe.py`
+
+**Purpose:** SIM-533 — the evidence behind the decision that Savant's pitcher arm angle, active spin and spin-axis deviation are NOT features (owner, 2026-09-19; the plan is `docs/audit/2026-09-18-sim533-pitcher-arm-angle-spin-shape-plan.md`). The design session's two probes merged so the numbers re-run: the board pulls with their probes (the arm-angle board takes `season=` and ignores `year=` silently; the 1990 pull is the empty-body probe), the reconstructions of the three numbers from our own columns (part A the arm angle, part B the spin shape), the year-to-year repeats, and the pair test of what each number adds to the production pitcher score on 67,941 same-hand pairs of 2024 (part C, read from the production `pitcher_sim.npz`). The numbers it printed on 2026-09-18 sit in its docstring. `--offline` runs six checks on a bundled fixture of twenty real 2024 rows (Savant's formula r 1.000; the mirrored spin-axis convention 360 − ours; the inferred-axis formula 180 − atan2(hb, ivb)) so the conventions cannot rot; the guard `tests/unit/test_sim533_arm_angle_decision.py` runs it. It changes nothing in production.
+
+| Function | What it does | Called by | Depends on |
+|---|---|---|---|
+| `offline_checks(arm_rows, spin_rows)` / `run_offline()` | The six fixture checks: (name, passed, detail) per check; exit 0 when all pass. | `main()`, the guard test | — |
+| `pull_boards(csv_dir)` / `board_probes(csv_dir)` | Fetch the three boards for 2020–2025 plus the 1990 and `year=` probes into the directory (urllib, a browser User-Agent); print rows per file, the zero-row probes, the `year=` comparison and the `min=1` counts. | `main()` (`--pull`) | the three Savant boards |
+| `dump_inputs(csv_dir, dsn, duckdb_path, matrix_path)` | Write our four inputs: the per-pitcher release means and the per-pitch-type means from `raw.pitches`, the heights from `raw.players`, the outcome rates from `derived.pitcher_season_metrics` (read-only open), and a copy of the production matrix. | `main()` (`--dump`) | `raw.pitches`<br>`raw.players`<br>`derived.pitcher_season_metrics`<br>`pitcher_sim.npz` |
+| `part_a(csv_dir)` / `part_b(csv_dir)` / `part_c(csv_dir)` | The arm-angle reconstruction and repeats; the spin-shape reconstruction and repeats; the pair test (the gain in R² from each candidate over the score, the standardised coefficients, the two random halves, seed 533). Each part skips with a message when its inputs are absent. | `analyse()` | the directory's CSVs |
+
+**Used by:** `operator CLI only (a read; the plan's §2.2–2.4 evidence) and the guard test's --offline run.`
+
+---
+
 ### `scripts/sim427_manager_probe.py`
 
 **Purpose:** SIM-427 part 4f — the manager probe: real games on the balanced 45-game set with ONE configuration of the pitching-change draw (an "arm") per process, paired by `report`. The reads: THE USAGE READ (pitchers per team-game, the starters' pitches at the pull — mean and spread across starter-games — the starters' outs, the half-boundary share of changes, against the official box score's numbers for the set's seasons from `raw.game_player_stats` and the pool's own change rates); THE MANAGER READ (the change rate per boundary with a starter on the mound, by manager tier — terciles of the live managers' own `starter_avg_pitch_count` — against the pool's own rate on those managers' starter rows: the per-opportunity conditional the manager power is fitted on); THE RELIEVER READ (the entering arm's high-leverage role share by inning tier, its rest at entry, its hand mix, against the pool's own incoming arms); THE COMPOSITION READ (the sim's pitch share by pitch-count band and times through the order against the pool's row share — the fatigue read of the SIM-518 plan); THE PREDICTION SHIFT (per starter-game strikeout mean and probability of clearing the closing line, arm minus baseline).

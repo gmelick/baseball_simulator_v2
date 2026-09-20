@@ -1,3 +1,118 @@
+# Build — pitcher arm angle and spin shape: the decision record landed, no data build; the ticket closed — SIM-533, 2026-09-19
+
+**What changed for the model.** Nothing. The owner took the plan's three decisions as
+recommended on 2026-09-19: Savant's arm angle, active spin and spin-axis deviation do not
+join the pitcher model. The ticket's premise was that the model leaves out where the ball is
+released. It does not: the arsenal fingerprint reads the release point of every pitch (three
+of its eight dimensions), and the 2026 removal (SIM-067) was of a second sub-score that
+double-counted it. The build puts the record where the next reader finds it. The plan is
+`docs/audit/2026-09-18-sim533-pitcher-arm-angle-spin-shape-plan.md`.
+
+**What landed, file by file (plan §5).**
+- `similarity/engines/pitcher_similarity.py`: a comment block beside `GMM_FEATURE_NAMES`
+  with the decision and its numbers. No code changed.
+- `docs/technical/similarity.md`: one paragraph in the pitcher engine's notes.
+  `docs/technical/sim-loop-cheat-sheet.md`: one bullet under the pitcher score.
+  `docs/technical/scripts-frontend.md`: the probe's entry.
+- `docs/audit/2026-09-10-savant-leaderboard-data-audit.md`: a one-line correction under
+  the sentence that filed the ticket ("the pitcher engine deliberately excludes its
+  release-point sub-score"), and the ticket table's cell.
+- `tests/unit/test_sim533_arm_angle_decision.py` (new), six guards: the two feature lists
+  name neither number and the arsenal is exactly its eight dimensions; the engine carries
+  the block within 40 lines of the feature list and names the plan; both documents carry
+  the record, the reference's inside the pitcher section; no profile column (the DuckDB DDL
+  with its comments stripped), no board landing table (the canonical DDL and every Alembic
+  migration), no registered board, and the per-pitch column below stays unread by the
+  profile computor, the engines and the artifact builder; the probe's offline checks pass
+  in process and as a subprocess; and they can fail (a rotated spin axis trips the
+  convention check, a zero-angle formula trips the formula check). A mutation check
+  reddened the guard on each of six deliberate edits.
+- `scripts/sim533_arm_angle_probe.py` (new): the design session's two probes merged.
+  `--pull` fetches the three boards with their probes (the arm-angle board takes `season=`
+  and ignores `year=` silently; the 1990 pull must read zero rows; `min=1` against the
+  default). `--dump` writes our four inputs from the live stack. `--csv-dir` runs the
+  three parts: the arm-angle reconstruction and repeats, the spin-shape reconstruction
+  and repeats, the pair test. `--offline` runs six checks on twenty real 2024 rows so the
+  conventions cannot rot: Savant's formula r 1.000; the mirrored spin-axis convention
+  (360 minus ours) 0.999; the inferred-axis formula (180 minus atan2(hb, ivb)) 0.993; the
+  same measurements 1.000 / 1.000 / 0.993; the active-spin proxy r 0.986; the deviation
+  rebuilt r 0.736. Re-run on the design session's pulls, it reproduces every figure in the
+  plan's §2.2 to §2.4 (625 pitchers at r 1.000 and a 0.03° gap; R² 0.728 and 0.806; the
+  0.992 / 0.987 / 0.942 / 0.803 spin reads; 475 pitchers, 67,941 pairs; the gains and the
+  −0.17 coefficient).
+- `scripts/sim532_by_position.py`: its docstring said a read-only DuckDB open fails while
+  the app runs; it does not (see the review below). Corrected.
+- Not built, by the decisions: no migration, no profile column, no board table, no
+  recompute, no calibration, no matrix, no restart. Every similarity power stays 1.
+
+**One fact the design missed.** Savant's per-pitch arm angle already sits in our raw data:
+`raw.savant_pitch_tracking.arm_angle`, which Alembic 0020 carried "because a later ticket
+wants it" — this one. 2.02 million of the 2.12 million rows of 2023–2026 carry a value, and
+nothing reads it. The decision stands: the per-pitcher angle is the release point measured
+from the shoulder, and the pair test read what that adds. The engine block, the reference
+and the plan's stamp name the column, and the guard holds it unread.
+
+**The adversarial review (68 agents: six lenses, three refuters per finding) confirmed
+eleven findings; all are fixed.** The ones that mattered: (1) both document paragraphs
+stated the 0.009 R² ceiling without its scope — it holds on the four outcomes the score does
+not read, while on all nine rates the arm-angle gap adds 0.026 with the negative
+coefficient — and said the score reads all nine rates (the command sub-score reads six);
+(2) `--pull` alone ended in a traceback, because parts A and B read the dump files
+unconditionally — each part now skips with a message; (3) the probe's docstring said the
+DuckDB read needs the app stopped. Checked live: the app holds the file read-only, and a
+second read-only open from another container succeeds. Only a writer (a recompute or a
+pool rebuild) blocks the open, which is the SIM-524 lock's real shape; the SIM-532 probe
+carried the same wrong sentence and is corrected. Refuted, and worth a line: a reviewer
+asked for a row in the scripts reference (added anyway, for consistency with the SIM-532
+probe); another wanted the two offline proxy checks to tell the formula from a sign-flipped
+one on twenty rows (the fixture's job is the two conventions the plan names; the full-board
+figures are the evidence).
+
+**The QA gate.** `ruff check` clean, `ruff format --check` clean, `mypy similarity/
+pipeline/ api/` "Success: no issues found in 59 source files"; the pitcher-side unit tests
+and the guard 94 passed locally; the container lane `pytest tests/unit/ tests/regression/`
+read ****4,189 passed, 1 skipped, 0 failed** (+6, the guard)** (4,183 passed, 1 skipped before this ticket).
+
+**The run book, as it ran (plan §8).** The code landed; the gates ran; nothing to migrate,
+recompute, calibrate, rebuild or restart; the SIM-533 row deleted from `BACKLOG.xlsx` (the
+next free ID stays SIM-552).
+
+# Design — pitcher arm angle and spin shape: a decision record, not a data build; PROPOSED 2026-09-18 and APPROVED on all three decisions 2026-09-19 — SIM-533
+
+**What the ticket asks.** Whether Savant's pitcher arm angle and its spin-shape numbers
+(active spin; the measured spin axis against the axis the movement implies) belong in the
+pitcher model. The ticket's premise was that the model "deliberately leaves out where the
+ball is released". It does not: the arsenal fingerprint reads the release point of every
+pitch (release x, release z and extension are three of its eight dimensions). What was
+removed in 2026 (SIM-067) was a second release sub-score that double-counted them.
+
+**What the measurements say** (the plan is
+`docs/audit/2026-09-18-sim533-pitcher-arm-angle-spin-shape-plan.md`; the page is
+https://claude.ai/artifact/2cGe6u1p8wss8U1UyoTKAw). Savant's arm angle is exactly the angle
+from the shoulder to the release point (0.03° on their own columns); our mean release point
+reproduces 73% of it, 81% with height, and the rest is the shoulder's posture at release.
+Our spin axis is Savant's measured axis (0.992), their inferred axis is a formula on our
+movement (0.987), active spin follows movement × velocity / spin rate (r 0.94) and the
+deviation rebuilds from our two axes (r 0.80). Every candidate repeats at 0.93 to 0.98, as
+does everything the arsenal already reads. On 67,941 same-hand pairs of 2024 the production
+score explains 47% of the distance between two pitchers' nine outcome rates; the shoulder
+part of the angle adds 0.0005, active spin 0.0003, the fastball's axis deviation 0.0001. On
+the four outcomes the score does not read the strongest candidate adds 0.009, unstable
+across two random halves of the pitchers. The one signal points the other way: given the
+score, a larger arm-angle gap goes with a SMALLER outcome gap (coefficient −0.17), so the
+arsenal distance may weight its release dimensions more than outcomes warrant — a
+per-dimension weight for the comprehensive sweep, not a feature. The boards start in 2020;
+the arm-angle board takes `season=` (honoured: 2025 lists Kershaw, who has not pitched in
+2026) and a date range, and ignores the `year=` spelling silently (a sixth season style).
+
+**Recommendation.** Neither number joins the model. Record the decision in the engine
+beside the arsenal's feature list, in the two technical documents, in a unit guard and in a
+probe script under `scripts/`; no migration, no profile column, no recompute, no matrices,
+no restart; delete the row. The alternative (a third sub-score at 0.10 with two raw tables,
+two profile columns, the sixth season style and the pitcher matrix rebuild) is specified in
+full in the plan. **All three decisions TAKEN as recommended on 2026-09-19.** The build
+record is the entry above this one (the same day).
+
 # Build — Savant's per-position outs above average and the outfield jump in the fielder model: built, reviewed, and RUN on the live data (the two board loads, the fielder chain, the refit, the seven fielder matrices, the app restarted); the fielder split by batter hand stored and left unread — SIM-532, 2026-09-17
 
 **What changed for the model (plan §0, §10).** The fielding and advancement draws compare the

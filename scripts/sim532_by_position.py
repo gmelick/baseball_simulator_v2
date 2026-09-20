@@ -36,9 +36,10 @@ Savant's figure joins both range groups (decisions 1 and 4).
 Sources, after the loads (run-book step 3): Savant's per-position rows from Postgres
 ``raw.savant_outs_above_average`` (``--dsn`` or ``BASEBALL_DB_DSN``) and our chances
 and outs above average from DuckDB ``derived.fielder_season_metrics`` (``--duckdb-path``).
-The DuckDB read opens the file read-only, and that open FAILS while the app holds
-the file read-write (the forkserver's writer lock, SIM-524): stop the app first
-(``docker compose stop app``), or pass ``--csv-dir`` and leave the app up.
+The DuckDB read opens the file read-only. The running app also holds it read-only, so
+the read runs with the app up (checked 2026-09-19 on the SIM-533 probe); only a writer
+(a profile recompute or a pool rebuild, SIM-524) blocks the open — wait for it, or pass
+``--csv-dir``.
 ``--csv-dir DIR`` reads the design session's CSV layout instead:
 ``DIR/fielder_range.csv`` (player_id, position, season, opportunities,
 outs_above_average) and ``DIR/sim532/oaa_{year}_pos{3..9}.csv`` (or ``DIR/oaa_...`` when
@@ -106,9 +107,9 @@ def _connect_read_only(duckdb_path: str):
         return duckdb.connect(duckdb_path, read_only=True)
     except duckdb.IOException as exc:
         raise SystemExit(
-            f"cannot open {duckdb_path} read-only ({exc}). The app holds the DuckDB "
-            "writer lock (SIM-524): stop it first — docker compose stop app — or pass "
-            "--csv-dir to read the design session's CSV layout instead."
+            f"cannot open {duckdb_path} read-only ({exc}): a writer (a profile recompute "
+            "or a pool rebuild, SIM-524) holds the file. Wait for it, or pass --csv-dir to "
+            "read the design session's CSV layout instead."
         ) from exc
 
 

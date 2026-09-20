@@ -184,6 +184,30 @@ log = logging.getLogger("pitcher_similarity")
 # Config
 # ---------------------------------------------------------------------------
 
+# SIM-533 (designed 2026-09-18, decided by the owner 2026-09-19): Savant's arm angle, active spin
+# and spin-axis deviation are NOT features, by owner decision on the measurements in
+# docs/audit/2026-09-18-sim533-pitcher-arm-angle-spin-shape-plan.md.
+#   * The release point is already here (release_x, release_z, release_ext,
+#     per pitch cluster). SIM-067 removed a second release sub-score that
+#     double-counted it; the model reads the release point once.
+#   * Arm angle = atan2(release z - shoulder z, |release x - shoulder x|)
+#     (r 1.000 on Savant's own columns). Our release point reproduces 73% of
+#     it, 81% with height; the rest is the shoulder's posture, which the
+#     ball's flight does not carry. On 67,941 same-hand pairs of 2024 that
+#     remainder adds 0.0005 R2 to the score's fit of nine outcome rates.
+#   * Active spin follows movement x velocity / spin rate (r 0.94); the
+#     measured axis IS spin_axis (0.992); the inferred axis is a formula on
+#     ivb/hb (0.987); their difference rebuilds at r 0.80. None adds more than
+#     0.009 R2 on outcomes the score does not read.
+#   * The one signal points the other way: given the score, a larger
+#     arm-angle gap goes with a SMALLER outcome gap (coefficient -0.17), so
+#     the W2's equal weighting of its release dimensions may be too heavy.
+#     A per-dimension weight is a candidate tunable for the comprehensive
+#     sweep (SIM-548), not a feature.
+#   * Savant's per-pitch arm angle already sits in raw.savant_pitch_tracking
+#     (Alembic 0020 carried it for this ticket); it stays stored and unread.
+# The guard is tests/unit/test_sim533_arm_angle_decision.py; the numbers
+# re-run from scripts/sim533_arm_angle_probe.py.
 # Feature names inside GMM (must match GMM_FEATURE_NAMES in player_profile_computor)
 GMM_FEATURE_NAMES = [
     "velo",

@@ -172,6 +172,15 @@ into a matrix the draws look up.
 - Shrinkage prior 5. Note: this composite is what the pitch draw raises to power 1 today; the
   strikeout market's blindness (SIM-548) is the question of whether this score, at any power,
   carries a pitcher's strikeout ability into the draw.
+- Not features, by owner decision (SIM-533, 2026-09-19): Savant's arm angle, active spin and
+  spin-axis deviation. The arsenal already reads the release point (three of its eight
+  dimensions), and the spin numbers are formulas on the other five. On 67,941 same-hand pairs
+  none adds more than 0.009 R² (the share of the pairs' outcome gap the fit explains) on the
+  four outcome rates the score does not read; on all nine rates the arm-angle gap adds 0.026
+  with a NEGATIVE coefficient (−0.17) — the gap is already in the score, and that coefficient
+  is the sweep's per-dimension W2-weight lead, not a feature. Savant's per-pitch arm angle
+  stays stored and unread in `raw.savant_pitch_tracking`. The record sits in the engine
+  beside `GMM_FEATURE_NAMES` and in `similarity.md`.
 
 ### Batter — `batter_similarity.py` (the pitch draw at power 1, the fielding draw at power 1 — fitted 4)
 
