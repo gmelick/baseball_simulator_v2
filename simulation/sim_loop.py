@@ -3010,7 +3010,9 @@ def simulate_game(
     test's over a :mod:`simulation.synthetic_bundle` bundle), or let the driver
     build a bare count-machine-only machine.  Likewise pass an ``initial_state``
     or let the driver build a fresh "top of the 1st" GameState from
-    ``pitcher_id`` / ``bat_hand`` / ``season`` / the two lineups.
+    ``pitcher_id`` / ``bat_hand`` / ``season`` / the two lineups.  The driver
+    needs both lineups.  It raises ``ValueError`` before the first pitch when
+    either side has no batting order (SIM-552).
 
     SIM-434 manager passthrough (GATED by ``SIM_MANAGER``): ``manager`` /
     ``bullpen`` / ``pitcher_rest_days`` are wired ONLY when supplied
@@ -3110,6 +3112,24 @@ def simulate_game(
     state = initial_state
     if seed is not None and state.seed is None:
         state.seed = seed
+
+    # --- A game needs a batting order on each side (SIM-552) -----------------
+    # The loop rotates the batter through the lineup.  It seats a batter who
+    # reaches base by his id.  With no lineup the batter id is None.  The first
+    # hit then trips the SIM-500 base guard deep inside the in-play resolver
+    # ("Bases.1B has a negative runner id: -1"), and that message does not
+    # name the cause.  Since the per-tile fallback was deleted (SIM-486), the
+    # production machine is the only in-play path.  So refuse here and name
+    # the requirement.  The check reads the state, so the kwargs path and the
+    # initial_state path get the same rule.
+    away_batters = len(state.away_lineup or [])
+    home_batters = len(state.home_lineup or [])
+    if away_batters == 0 or home_batters == 0:
+        raise ValueError(
+            "simulate_game needs a batting order on each side: pass away_lineup "
+            "and home_lineup, or an initial_state that carries them (got "
+            f"{away_batters} away and {home_batters} home batters)."
+        )
 
     # --- SIM-434: seed the bullpen + per-pitcher rest onto the state ---------
     # Applied whether the state was built here or passed in.  ``bullpen`` is the

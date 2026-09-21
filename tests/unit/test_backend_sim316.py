@@ -313,8 +313,9 @@ class TestMiscContract:
 
     def test_simulate_game_is_implemented_by_sim320(self):
         # SIM-320 replaced the SIM-316 guarded NotImplementedError stub with the
-        # real full-game driver.  Called with no sampler AND no way to produce a
-        # pitch outcome it now fails fast with a clear ValueError (the machine
-        # cannot sample) rather than the old NotImplementedError.
+        # real full-game driver.  Called bare, it fails fast with a clear
+        # ValueError rather than the old NotImplementedError.  The driver refuses
+        # a game with no batting order before the first pitch (SIM-552).  A
+        # machine with no sampler cannot draw a pitch either.
         with pytest.raises(ValueError):
             simulate_game()

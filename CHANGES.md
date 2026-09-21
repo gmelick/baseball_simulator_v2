@@ -1,3 +1,107 @@
+# Fix — the two weekly GitHub lanes are green again: the performance bench ran a game with no batting order, and the schema-drift test's table list stopped at migration 0018 — SIM-552, 2026-09-21
+
+**Why it matters.** Two weekly GitHub Actions workflows had failed on every run since
+2026-09-07 (the performance benchmarks) and 2026-09-14 (the integration tests). Neither
+failure was a real slowdown or a real schema defect. Both were tests that fell behind the
+code. The performance lane's failure did expose one gap in the simulator: a game with no
+batting order failed deep inside the play resolver with a message that did not name the
+cause. The driver now refuses such a game before the first pitch.
+
+**Failure 1 — the performance lane (`Performance Benchmarks (weekly)`, 3 red runs:
+2026-09-07, 09-14, 09-21).** The failing test was
+`tests/performance/bench_simulation.py::test_bench_phase4_batch_runner` with
+`ValueError: Bases.1B has a negative runner id: -1`. The bench passed no lineup. Until the
+per-tile fallback was deleted (SIM-486, commit 6ab341c on 2026-09-06), the no-DB batch
+factory built a count-only machine: its balls in play resolved nothing, no runner ever
+reached a base, and the base guard was switched off on that path. Since that deletion the
+factory builds the production `StateMachine` over the in-memory league bundle. The loop
+then plays real hits, and with no lineup the batter id is `None`. The in-play resolver
+substitutes `-1` for the missing batter (`simulation/sim_loop.py`, the transition draw),
+seats `-1` on first base on the first single, and the SIM-500 base guard rejects the
+negative id. Reproduced in Docker on the bench's own seed: the first ball in play of the
+first inning, a single, trips it. The same seed with two nine-man lineups plays 299
+pitches clean. The `-1` substitution and the guard are both older than the break; the
+factory swap is what changed.
+
+Three independent reviews confirmed that no production request can reach this state: the
+lineup resolver raises `LineupNotIngestedError` (503 + Retry-After) when no lineup rows
+exist and `LineupResolutionError` when the offense has no batting order, so every
+`/simulate` enters the loop with a batter. Every unit, e2e and acceptance caller of the
+loop passes both lineups. The bench was the one caller that did not.
+
+**What changed for failure 1.** (1) The bench now passes the two nine-man batting orders
+plus season, pitcher id and bat hand — the spec shape `tests/unit/test_backend_sim332.py`
+runs the runner on — and drops its `max_innings: 9` cap. The cap's stated reason ("no
+real outs source to end innings") has been false since SIM-486, and with it a game tied
+after nine returned TIED, a result production never produces. The bench's comments and
+docstring now say what it runs: the production machine over the synthetic bundle, real
+outs, a game that ends by its own rules, and both the per-game and the per-pitch checks
+hard under `PERF_STRICT_LOOP` (the old "soft per-game note" comment was wrong; the code
+already asserted it). (2) `simulate_game` refuses a game with no batting order on either
+side, before the first pitch, with a message that names the requirement and the counts
+it got. The check reads the state, so the kwargs path and the `initial_state` path share
+the rule. A survey of every `simulate_game` caller in `api/`, `simulation/`, `scripts/`,
+the acceptance lane and `tests/` found no caller that relies on a no-lineup game; the one
+bare call (`tests/unit/test_backend_sim316.py`) sits inside `pytest.raises(ValueError)`
+and still passes. Seven new unit tests
+(`tests/unit/test_sim552_simulate_game_requires_lineup.py`) pin the refusal on both paths,
+prove no pitch is thrown before it, and pin the old bench spec to the clear message rather
+than the SIM-500 one. Measured under the weekly job's environment (`PERF_STRICT=1`,
+`PERF_STRICT_SANDBOX=1`): all 7 performance tests pass; the batch bench reads about
+0.03 s per game against the 0.37 s budget and about 0.1 ms per pitch against the 1.233 ms
+budget, more than ten times inside each gate, so GitHub's slower runner has room.
+
+**Failure 2 — the integration lane (`Integration Tests (weekly)`, 2 red runs: 2026-09-14
+and 09-21).** The failing test was
+`tests/integration/test_schema_migrations.py::test_raw_schema_tables_exist`, the exact-set
+guard over the `raw.*` tables. Its `_RAW_TABLES` list stopped at migration 0018. Alembic
+migrations 0019 (the eight Savant boards, SIM-528/529/530, landed 2026-09-10), 0020
+(`savant_pitch_tracking`, SIM-534), 0023 (`game_player_stats`, SIM-545), 0025
+(`game_bullpen`, SIM-427), 0026 (`savant_basestealing`, `savant_pitcher_running_game`,
+SIM-531) and 0027 (`savant_outs_above_average`, `savant_outfield_jump`, SIM-532) added
+fifteen tables without a change to the list. The lane passed on 2026-09-07 because 0019
+had not landed yet. This is the fourth time the guard caught a new table a week late
+(earlier repairs: 847be57, e4be4c1, dbaa9c9).
+
+**What changed for failure 2.** The fifteen tables join `_RAW_TABLES`, each annotated with
+its migration and ticket. The set was checked three ways: every `CREATE TABLE` in
+0019..0027 lands in schema `raw` and every `DROP TABLE` sits inside a `downgrade()`; the
+live database (at head 0027) holds exactly these 31 `raw.*` base tables and 2 `sim.*`
+tables; and the test passed on a fresh `postgres:15-alpine` through testcontainers, the
+weekly job's own mechanism (14 passed). Added coverage in the same file, beyond the drift
+repair: two tests read the CHECK constraints that migrations 0022 and 0024 widen (the
+fifteen prop markets on `raw.prop_odds.prop_stat`, the fifteen game markets on
+`raw.game_odds.market_type` plus the nullable `draw_ml` column) from the database and
+compare them to the one source of the vocabulary, `pipeline/odds_provider.py`. The unit
+tests that pin those migrations read the migration file's text, so a constraint that
+failed to apply passed them.
+
+**Gates.** `ruff check` and `ruff format --check` clean; `mypy simulation/` and the CI
+scope clean; the unit lane (`-m "not slow"`) 4,240 passed; the regression lane 33 passed;
+the performance lane 7 passed under the strict env; the integration schema file 14
+passed on a fresh Postgres.
+
+**Follow-ups, not done here (owner decisions).** (1) `POST /api/games/{pk}/simulate/with_override`
+accepts an empty `away_lineup` / `home_lineup` (`RosterOverride` has no minimum length).
+Such a request now fails in the worker with the clear "needs a batting order" message,
+but it is still a 500; a `min_length=9` on the two fields would make it a 422 at the edge.
+(2) The lineup resolver accepts a game whose `raw.game_lineups` rows cover only the away
+side; it now fails up front instead of mid-game, but a 503 + Retry-After ("lineup not yet
+published") may fit better. (3) The `_RAW_TABLES` guard has gone red four times for the
+same reason; a cheap unit-lane test that parses the `CREATE TABLE` statements out of
+`db/migrations/versions/*.py` and compares them to the list would catch the drift on every
+push instead of on Monday. (4) `db/schemas/01_postgres_schema.sql` (the reference DDL)
+lacks `raw.savant_pitch_tracking` and `raw.game_bullpen`. (5) Bench 4
+(`test_bench_phase4_simulation_loop`) still drives `step_pitch` with no lineup over a fixed
+`field_out` play; it passes because a field out seats nobody, and it would break if that
+fixed play ever became a hit.
+
+**Files.** `simulation/sim_loop.py` (the guard + one docstring sentence),
+`tests/performance/bench_simulation.py`, `tests/integration/test_schema_migrations.py`,
+`tests/unit/test_backend_sim316.py` (comment), new
+`tests/unit/test_sim552_simulate_game_requires_lineup.py`, `BACKLOG.xlsx` (next free ID
+SIM-553; the ticket closes with this entry, so it has no row).
+
 # Build — pitcher arm angle and spin shape: the decision record landed, no data build; the ticket closed — SIM-533, 2026-09-19
 
 **What changed for the model.** Nothing. The owner took the plan's three decisions as

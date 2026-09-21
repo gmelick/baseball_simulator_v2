@@ -102,13 +102,13 @@ SIM_LOOP_PER_PITCH_BUDGET_MS = 1.233  # SIM-119 §3 per-pitch roll-up (≈1.23 m
 
 # Bench 5 — Phase 4 batch-runner per-game throughput (SIM-119 §4.2).
 #   The single-game SLA is 2 s; the SIM-119 *budgeted* per-game roll-up is
-#   ~0.37 s (1.233 ms × 300 pitches).  The no-DB rng-driven batch game here runs
-#   far more loop iterations than a real ~300-pitch game (no real outs source to
-#   end innings cleanly), so we assert PER-PITCH throughput against the same
-#   SIM-119 per-pitch budget rather than per-game wall time — an honest,
-#   loop-bounded measure that does not over-claim a 300-pitch game it does not
-#   simulate.  The per-game budget constant is kept for documentation / the soft
-#   note.
+#   ~0.37 s (1.233 ms × 300 pitches).  Since the per-tile fallback was deleted
+#   (SIM-486), the no-DB batch game is a real game.  The production
+#   StateMachine plays it over the in-memory league bundle
+#   (simulation/synthetic_bundle.py): it records real outs and ends by its own
+#   rules, at about 300 pitches.  The bench checks the per-game wall time
+#   against this budget.  It also checks the per-pitch throughput against the
+#   SIM-119 per-pitch budget.  Both are hard gates under PERF_STRICT_LOOP.
 SIM_GAME_BUDGET_SECONDS = 0.37  # SIM-119 §4.2 budgeted per-game roll-up
 
 # When set, latency/throughput targets are asserted as hard failures.
@@ -536,15 +536,26 @@ def test_bench_phase4_simulation_loop(benchmark):
 # Bench 5 — Phase 4 batch-runner throughput (SIM-335 / SIM-332 / SIM-119 §4)
 #
 # Times the SIM-332 BatchRunner fan-out/fan-in for a small N-game Monte-Carlo
-# batch on the in-process (max_workers=1) path, with NO live DB/FAISS: the
-# picklable rng-driven no-DB factory (simulation.batch_runner.
-# rng_driven_machine_factory) builds a sampler-less StateMachine per game that
-# draws each pitch outcome from its own loop rng and resolves contact via a
-# the synthetic bundle.  This is the real batch hot path (derive seeds ->
-# simulate_game per iteration -> GameSimSummary.from_results), measured as a
-# per-pitch throughput so the figure is comparable to the SIM-119 per-pitch
-# budget without over-claiming a 300-pitch game the no-DB driver does not model.
+# batch on the in-process (max_workers=1) path, with NO live DB/FAISS.  The
+# picklable no-DB factory (simulation.batch_runner.rng_driven_machine_factory)
+# builds the production StateMachine over a FullPoolSampler.  The sampler reads
+# the in-memory league bundle (simulation/synthetic_bundle.py), the seam that
+# replaced the per-tile fallback (SIM-486).  Every pitch and every batted ball
+# is a real full-pool draw.  The loop records real outs.  The game ends by its
+# own rules.  This is the real batch hot path (derive seeds -> simulate_game
+# per iteration -> GameSimSummary.from_results).  The bench reports per-pitch
+# throughput, so the figure is comparable to the SIM-119 per-pitch budget
+# whatever the game length.
 # ---------------------------------------------------------------------------
+
+# Bench 5 plays a real game, so each side needs a nine-man batting order.  The
+# loop rotates the batter through it.  It seats a batter who reaches base by
+# his id.  Without a lineup the batter id is None, and the first hit trips the
+# SIM-500 base guard ("Bases.1B has a negative runner id: -1").  The two
+# lineups mirror the spec that tests/unit/test_backend_sim332.py passes to the
+# runner (SIM-552).
+_BENCH5_AWAY_LINEUP = list(range(101, 110))
+_BENCH5_HOME_LINEUP = list(range(201, 210))
 
 
 @pytest.mark.benchmark(min_rounds=3, max_time=2.0, warmup=False)
@@ -552,33 +563,42 @@ def test_bench_phase4_batch_runner(benchmark):
     """Bench 5: time a small no-DB Monte-Carlo batch via the SIM-332 BatchRunner.
 
     Runs ``_BATCH_N`` games in-process (max_workers=1 — fast, deterministic, no
-    fork/pickle round-trip) through the rng-driven no-DB factory, then aggregates
-    to a GameSimSummary.  Measures the whole batch hot path (seed derivation ->
-    simulate_game per game -> summary aggregation).  Reported as per-pitch
-    throughput (total wall / total pitches across the batch) and asserted against
-    the SIM-119 per-pitch budget.
+    fork/pickle round-trip) through the no-DB factory, then aggregates to a
+    GameSimSummary.  Each game runs the production StateMachine over the
+    synthetic league bundle.  A nine-man lineup on each side lets the loop play
+    a complete game (about 300 pitches).  Measures the whole batch hot path
+    (seed derivation -> simulate_game per game -> summary aggregation).
+    Reported as per-game wall time and as per-pitch throughput (total wall /
+    total pitches across the batch).  Each figure is asserted against its
+    SIM-119 budget.
 
-    Target: per-pitch throughput <= SIM_LOOP_PER_PITCH_BUDGET_MS (SIM-119 §3).
-    HARD only under PERF_STRICT_LOOP (CI hardware); soft otherwise.
+    Targets: per-game wall <= SIM_GAME_BUDGET_SECONDS (SIM-119 §4.2) and
+    per-pitch throughput <= SIM_LOOP_PER_PITCH_BUDGET_MS (SIM-119 §3).
+    Both HARD only under PERF_STRICT_LOOP (CI hardware); soft otherwise.
     """
     from simulation.batch_runner import BatchRunner, GameSpec, _run_one, derive_seed
 
     _BATCH_N = 3  # small batch — enough to exercise fan-in without a slow bench
     _BASE_SEED = 335
 
+    # The same spec shape tests/unit/test_backend_sim332.py runs the runner on.
+    # No inning cap: the game ends by its own rules (a decided game, extras
+    # allowed), the contract production plays.
     spec = GameSpec(
         machine_factory="simulation.batch_runner:rng_driven_machine_factory",
-        # Cap the per-game inning ceiling so the no-DB rng game (which has no real
-        # outs source to end innings cleanly) is bounded to a regulation-length
-        # pitch budget rather than the default 50-inning safety ceiling — keeps the
-        # bench fast/deterministic while still exercising the full batch hot path.
-        sim_kwargs={"max_innings": 9},
+        sim_kwargs={
+            "away_lineup": _BENCH5_AWAY_LINEUP,
+            "home_lineup": _BENCH5_HOME_LINEUP,
+            "season": 2024,
+            "pitcher_id": 477132,
+            "bat_hand": "R",
+        },
     )
 
     # Pre-count the pitches one batch run does so per-pitch throughput is exact.
     # GameSimSummary does not retain the per-game results, so count via the same
-    # deterministic _run_one path the runner uses (rng-driven game length is a
-    # pure function of the per-game seed).
+    # deterministic _run_one path the runner uses (the game length is a pure
+    # function of the per-game seed).
     total_pitches = sum(
         int(getattr(_run_one(spec, derive_seed(_BASE_SEED, i)), "total_pitches", 0))
         for i in range(_BATCH_N)
@@ -599,9 +619,10 @@ def test_bench_phase4_batch_runner(benchmark):
 
     batch_median_s = benchmark.stats.stats.median
     per_game_s = batch_median_s / _BATCH_N
-    # Soft per-game note against the SIM-119 §4.2 budgeted ~0.37 s/game.
+    # Per-game wall against the SIM-119 §4.2 budgeted ~0.37 s/game: hard under
+    # PERF_STRICT_LOOP, soft elsewhere.
     _check_loop_threshold("batch per-game wall", per_game_s, SIM_GAME_BUDGET_SECONDS, "s")
-    # Hard(-able) per-pitch throughput against the SIM-119 §3 per-pitch budget.
+    # Per-pitch throughput against the SIM-119 §3 per-pitch budget (same gate).
     if total_pitches > 0:
         per_pitch_ms = (batch_median_s / total_pitches) * 1_000.0
         _check_loop_threshold(

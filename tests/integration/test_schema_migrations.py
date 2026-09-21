@@ -19,6 +19,10 @@ Note that ``sim.live_games`` is a VIEW, not a base table, so it is deliberately
 absent from ``_SIM_TABLES`` — the queries below filter on
 ``table_type = 'BASE TABLE'``.
 
+Two tests also read the CHECK constraints that migrations 0022 and 0024 widen
+(the fifteen prop markets and the fifteen game markets).  They compare the
+applied constraint to the vocabulary in ``pipeline/odds_provider.py``.
+
 These tests run against the session-scoped testcontainers PostgreSQL instance
 spun up in conftest.py — migrations are applied once per session before any
 test in this suite runs.
@@ -27,6 +31,7 @@ Run:
     pytest tests/integration/test_schema_migrations.py -v -m integration
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -35,6 +40,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import text
 
+from pipeline.odds_provider import GAME_MARKET_TYPES, PROP_STATS
 from tests.integration.conftest import assert_table_exists
 
 pytestmark = pytest.mark.integration
@@ -64,6 +70,21 @@ _RAW_TABLES = {
     "game_bullpen_availability",  # 0015 (SIM-433)
     "etl_game_ingest",  # 0017 (SIM-441)
     "play_events",  # 0018 (SIM-502) — non-pitch play events
+    "savant_bat_tracking",  # 0019 (SIM-528 / SIM-529) — asof_date + PK rebuilt in 0021
+    "savant_swing_path",  # 0019 (SIM-528 / SIM-529) — asof_date + PK rebuilt in 0021
+    "savant_batting_stance",  # 0019 (SIM-528 / SIM-529) — asof_date + PK rebuilt in 0020
+    "savant_arm_strength",  # 0019 (SIM-528 / SIM-530)
+    "savant_baserunning",  # 0019 (SIM-528 / SIM-530)
+    "savant_poptime",  # 0019 (SIM-528 / SIM-530)
+    "savant_catcher_throwing",  # 0019 (SIM-528 / SIM-530)
+    "savant_first_base_receiving",  # 0019 (SIM-528 / SIM-530)
+    "savant_pitch_tracking",  # 0020 (SIM-534) — per-pitch batter measurements
+    "game_player_stats",  # 0023 (SIM-545) — the official per-player box score
+    "game_bullpen",  # 0025 (SIM-427) — the MLB box's per-game bullpen listing
+    "savant_basestealing",  # 0026 (SIM-531)
+    "savant_pitcher_running_game",  # 0026 (SIM-531)
+    "savant_outs_above_average",  # 0027 (SIM-532)
+    "savant_outfield_jump",  # 0027 (SIM-532)
 }
 
 _SIM_TABLES = {
@@ -74,6 +95,23 @@ _SIM_TABLES = {
 #: Views are tracked separately — information_schema.tables lists them too, so
 #: the base-table assertions must filter them out to stay meaningful.
 _SIM_VIEWS = {"live_games"}  # 0001
+
+
+def _check_values(conn: sa.Connection, table: str, constraint: str) -> set[str]:
+    """Return the quoted values of the applied CHECK ``constraint`` on ``raw.table``.
+
+    Postgres renders an ``IN`` list as ``= ANY (ARRAY['a'::character varying, ...])``.
+    The quoted strings are the vocabulary the database enforces today.
+    """
+    row = conn.execute(
+        text(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+            "WHERE conname = :c AND conrelid = CAST(:t AS regclass)"
+        ),
+        {"c": constraint, "t": f"raw.{table}"},
+    ).fetchone()
+    assert row is not None, f"CHECK constraint {constraint} is missing on raw.{table}"
+    return set(re.findall(r"'([^']+)'", row[0]))
 
 
 def _base_tables(conn: sa.Connection, schema: str) -> set[str]:
@@ -312,6 +350,58 @@ class TestSchemaMigrations:
             assert is_nullable == "YES", (
                 f"raw.pitches.{column_name} is still NOT NULL — migration 0017 did not apply"
             )
+
+    # -- migrations 0022 + 0024 (SIM-421, the fifteen-market odds vocabulary) --
+    #
+    # The unit tests that pin these two CHECK constraints read the migration
+    # file's TEXT.  A constraint that fails to apply, or drifts from the code's
+    # vocabulary, passes them.  The two tests below read the constraint the
+    # database enforces.  They compare it to the one source of the vocabulary,
+    # ``pipeline/odds_provider.py`` (added with SIM-552).
+
+    def test_sim421_prop_odds_check_matches_the_code_vocabulary(
+        self, pg_connection: sa.Connection
+    ) -> None:
+        """0022: raw.prop_odds accepts exactly the fifteen prop markets the code prices.
+
+        A narrower constraint rejects the eight new markets at load time. A wider
+        one lets a typo'd market into the table, where no pricer reads it.
+        """
+        found = _check_values(pg_connection, "prop_odds", "ck_prop_odds_prop_stat")
+        assert found == set(PROP_STATS), (
+            f"raw.prop_odds.prop_stat CHECK drift — missing: {sorted(set(PROP_STATS) - found)}, "
+            f"unexpected: {sorted(found - set(PROP_STATS))}. Migration 0022 and "
+            "PROP_STATS in pipeline/odds_provider.py must list the same markets."
+        )
+
+    def test_sim421_game_odds_check_matches_the_code_vocabulary(
+        self, pg_connection: sa.Connection
+    ) -> None:
+        """0024: raw.game_odds accepts exactly the fifteen game markets the code prices.
+
+        The same migration adds ``draw_ml``, the tie price of a three-way segment
+        moneyline. It must be nullable: every two-way market leaves it NULL.
+        """
+        found = _check_values(pg_connection, "game_odds", "game_odds_market_type_check")
+        assert found == set(GAME_MARKET_TYPES), (
+            "raw.game_odds.market_type CHECK drift — missing: "
+            f"{sorted(set(GAME_MARKET_TYPES) - found)}, "
+            f"unexpected: {sorted(found - set(GAME_MARKET_TYPES))}. Migration 0024 and "
+            "GAME_MARKET_TYPES in pipeline/odds_provider.py must list the same markets."
+        )
+
+        row = pg_connection.execute(
+            text("""
+                SELECT is_nullable, data_type
+                FROM   information_schema.columns
+                WHERE  table_schema = 'raw' AND table_name = 'game_odds'
+                AND    column_name  = 'draw_ml'
+            """)
+        ).fetchone()
+        assert row is not None, "raw.game_odds.draw_ml is missing (migration 0024)"
+        is_nullable, data_type = row
+        assert is_nullable == "YES", "draw_ml must accept NULL — two-way markets have no tie price"
+        assert data_type == "integer", f"draw_ml must be an integer American price, got {data_type}"
 
     def test_raw_etl_freshness_table_exists(self, pg_connection: sa.Connection) -> None:
         """SIM-083: raw.etl_data_freshness must exist.
