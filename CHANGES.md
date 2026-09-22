@@ -1,3 +1,222 @@
+# Build — the outfield fence's three amendments landed and RUN: the born ball read in the live park's air (the carry offset), the born-ball kernel measured on the ball's class, and the wall-margin band; A1–A7 pass and the wall play now reads as the real balls do (C PASS) — SIM-478/479/480, 2026-09-22
+
+**What changed for the model (the plan's §11–§12.7, decisions 5–9 TAKEN 2026-09-22 by the
+owner's instruction "implement this updated design").** Three changes to the fielding draw,
+all on the born ball — the batted ball the pitch-result draw produces — and none a weight:
+
+1. **The born ball is read in the live park's air (§11).** Every park now carries a carry
+   offset in the geometry document — its extra carry in its own air for the same exit
+   velocity, launch angle and spray, fitted on the window's 21,803 home runs with one term per
+   park and centred on the median park: Coors +21.4 ft, Kauffman +9.9, Chase +7.0, Yankee
+   Stadium −6.5, Daikin −6.2, Fenway −2.8, the rest within ±6 (the spread 5.5 ft over the 32
+   parks with 100+ home runs). A born ball's distance becomes its own distance plus the live
+   park's offset minus the offset of the park it was hit in, and that ONE number is what the
+   fence check, the kernel and the wall margin read; the candidate rows keep their own
+   distances (their actual landings in their own parks). `SIM_CARRY_OFFSET=1`.
+2. **The born-ball kernel is measured on the born ball's class (§12).** A fly ball is
+   compared with fly balls on the fly balls' spread (distance 64 ft, launch angle 10°), not
+   the whole pool's (135 ft, 28°, ground balls included), and the kernel's exponent is per
+   feature (`SIM_BB_BORN_PER_FEATURE=1`; the class ruler itself has no flag — it is the
+   kernel's construction, on whenever the kernel is). A row 60 ft shorter than the born ball
+   keeps 64% of an exact match's weight where it kept 98%.
+3. **The wall-margin band (§12.7).** For a wall-zone air ball (300+ ft in the live air) the fence calls short, the candidate rows
+   are hard-filtered to balls that landed within 15 ft of the same distance from THEIR park's
+   fence as the born ball is from the live one (`SIM_BB_MARGIN_BAND=15`; the rows as they were
+   when fewer than 20 remain, `SIM_BB_MARGIN_MIN_ROWS`). Each row's margin comes from the
+   geometry document at first use, never from the bundle, so it follows the lines when they
+   are rebuilt. The same kind of fact filter as the class filter and the fence stage.
+
+**Why (the reads that decided it, all on real balls, each re-derived by independent
+reviewers).** Distance varies about 13 ft for balls with the same three factors at the same
+park, so a fence check on the factors alone gets 74% of its over calls right against the
+measured distance's 92% — the ball's own distance stays, and the park's air is added to it.
+At a fixed raw distance a ball's fate depends on the fence (345–360 ft: extra-base hits 33%
+in front of a shallow fence, 9% a deep one); at a fixed margin it does not (10–20 ft short:
+33 / 36 / 26%); feet short of the fence beat the ratio to it and the raw distance adds nothing
+beyond the ball's own factors, while the two together beat either — so the margin joins as a
+hard band and the distance stays in the kernel. The class ruler with the exponent per feature
+closed two thirds of the wall-play gap on its own; the band takes the rest.
+
+**The certification, re-run (the plan's §7 plus A7).**
+
+| Check | The 2026-09-21 build | Today |
+|---|---|---|
+| A1–A6 the fence lines (the whole window, per park, held-out seasons, down the line, moved walls, thin parks) | PASS | PASS, unchanged — the adjustment is zero on a ball measured in its own park |
+| A7 the transfer: every pool ball born into each park, called over against a fair target (32 parks) | not built | mean gap 0.97 points with the ball's own distance → **0.46 with the offset**; worst 4.5 (Coors) → 1.4 (Yankee −1.4, Fenway +1.4); PASS at 1.5 points |
+| B1 the lane's home-run band (45 × 130) | +1.2% PASS | 0.04556 vs the pool's 0.04590 (−0.7%) — PASS |
+| B2 the per-park read, powered (parks with 3+ games; the expectation's error counted) | FAIL (r −0.07; Coors −2.5 points) | PASS on the five parks with three or more games (r −0.02, reported; none beyond 3 combined SE); informational on the rest: **Coors +0.35 points** (sim 0.0543 vs 0.0508 expected — was −2.5), Fenway +0.1 (was +1.0), Kauffman +0.4 (was −1.0), Wrigley +0.5 (was +1.1), PNC −0.85 (was −1.1), Great American +1.2 (was +0.9) |
+| C the wall play (born air balls 0–30 ft short, 45 × 30) | FAIL: drawn singles 12.5% / doubles 9.9% / outs 76.7% against the born rows' 1.8 / 25.9 / 69.6 | **PASS**: drawn doubles 24.9% / triples 3.0% / outs 69.6% against the born rows' 26.2 / 2.9 / 68.6 (4,007 near-wall balls; every share within its standard error; the first run, with the band on every short air ball, read 26.1 / 3.0 / 68.3 against 26.7 / 2.6 / 68.5); the over side's home-run share 1.0 as the stage guarantees |
+| D the counters (the ten-game smoke) | over 9.9% of air balls, passed 0, no rows 0 — PASS | over 9.2%, passed 0, no rows 0 — PASS; the band applied on 35.4% of air balls (the wall zone), the fallback on 0.5% of those |
+
+The A7 gate: the plan's first 1.0-point line came from the reviewers' outcome-free fit
+(Coors +20, Fenway −4); the home-run park-term fit decision 6 chose reads Coors +21.4 and
+Fenway −2.8 and misses 1.0 at four parks by 0.1 to 0.4 points, so the gate is 1.5 with the
+reason in the script — an owner call, recorded, not a silent widening. The density floor the
+plan's §12.3 asked to read before the default was set: under the class ruler with the
+exponent per feature at most 1.1% of a cell's rows sit at the 5%-of-median floor (0.1–0.9% in
+the fly-ball cells read), against 0% today — not a material clip.
+
+**The lane (45 × 130, the balanced set), twice.** The first run had the band applied to EVERY
+short air ball (93% of them), which the plan never asked for — for a 220-ft line drive the band is
+not a wall play, it only selects candidate parks by fence depth — and it read singles per ball in
+play +2.7% (red by 0.2 points) and runs +4.7% (red). The band was restricted to the wall zone (a
+ball carrying 300+ ft in the live air; 35% of air balls; a unit test holds it) and the lane ran
+again (1 h 36 m): **singles, hits, runs, home runs, triples, reached-on-error, strikeouts,
+intentional walks, pitches, the double play, the safe share, the called strike and the got-away
+pitch PASS; doubles per ball in play +5.8% RED** (0.0661 vs the pool's 0.0625; the floor 3%);
+walks +3.1%, hit by pitch +8.0% and the steal attempts −11% / −19% RED as before this ticket
+(their reds predate it and the fence cannot reach them). Runs 4.556 a team-game, hits 8.28, home
+runs 1.18 — where the 2026-09-21 lane stood.
+
+**Where the extra doubles come from — the one open read.** By the born ball's distance to the
+live fence (ten games × 12 iterations under three arms), the near-wall bands now read as the
+pool does (0–10 ft short: extra-base hits 39% against the pool's 48%; 10–20 ft: 26% against
+32%; 20–30 ft: 19% against 21% — slightly UNDER, not over), and the class ruler alone with the
+band reads the same doubles per game as production (3.68 against 3.64), so the exponent is not
+the cause. The extra doubles sit in the balls far from the fence: the draw gives balls 60+ ft
+short an extra-base hit 11–13% of the time where the pool gives about 9–10%, and it did so
+before this ticket too — the old wall smear (15% doubles where the real figure is 48%) hid it
+in the total. The wall fix unmasked an over-production of doubles on ordinary air balls, which
+belongs to the kernel's treatment of them (the bandwidth and the density correction — the
+sweep's, by the plan's own rule in §12.5), not to the fence or the band. Recorded here and in
+the plan for the owner's decision.
+
+**What landed, file by file.**
+- `pipeline/batch/engine_artifacts.py`: `load_air_balls` carries exit velocity and launch
+  angle; `carry_offsets` (the fit above; `PARK_OFFSET_MIN_HR` 100) and the document's
+  `carry_offset_ft` / `carry_offset_fit`; the rest of the document byte-equal to the 09-21 one.
+- `simulation/full_pool_sampler.py`: `carry_of(born, venue_live)` and `_born_in_live_air` (one
+  working copy per born ball; the caller's dict untouched); `_bb_born_z_stats(hand, cls)` and
+  the per-feature exponent; the valid mask requires a distance above 0; `_bb_margins(hand)`
+  (vectorised over the pool from the document, cached per document object) and
+  `_bb_margin_rows` with `bb_margin_counts`; the density correction is not cached for a
+  banded set (its key could not tell two banded sets apart — a review finding).
+  `simulation/production_factory.py`, `docker-compose.yml`, `tests/conftest.py`: the four
+  flags (production 1 / 1 / 15 / 20; the unit lane pins them off).
+- `scripts/sim478_fence_check.py`: A7 (the fair target: the pool's mix scored at the park's
+  own home-run rate per 4 mph × 4° × 10° cell, the league's rate under five park balls) and
+  B2 redesigned (`--min-games` 3; the SE combines the sim's and the expectation's own
+  sampling error; the extremes graded, r reported). `scripts/sim478_wall_zone_probe.py` reads
+  the born carry as the stage does (in the live air — a review finding). `scripts/sim_stats.py`
+  and the lane record carry the band's counters and the three flags.
+- Tests: `tests/unit/test_sim478_carry_offset_and_margin.py` (new: the shift, the fence and
+  the kernel reading it, the class ruler's statistics, the 60-ft-gap weights 0.976 / 0.896 /
+  0.644, the band with its fallback and counters, the margins from the document's season
+  groups, off = byte-identical); additions to the builder, check, harness and season-group
+  files. Docs: the cheat sheet, `simulation.md`, `pipeline-betting-db.md`,
+  `scripts-frontend.md`, `CLAUDE.md`; the plan's §11.1 table corrected to the built fit.
+- Not built: the game-set builder's `--min-games-per-park` option (§11.4) — the balanced set
+  gives most parks one game, so the powered B2 reads few parks until the set grows.
+
+**The adversarial review (97 agents: six lenses, three refuters per finding) confirmed eleven
+findings; all are fixed** — the three that mattered are above (the probe's carry, the density
+cache under the band, the A7 gate). Refuted and worth a line: the carry shift and the band act
+only with the fence stage on (the loop passes the live park with it; production has it on);
+the class ruler has no flag of its own.
+
+**The QA gate.** `ruff check` clean, `ruff format --check` clean, `mypy similarity/ pipeline/
+api/` "Success: no issues found in 60 source files"; the container lane `pytest tests/unit/
+tests/regression/` read **4,356 passed, 1 skipped, 0 failed** (4,288 before; +68).
+
+**The run book, as it ran (2026-09-22).** 1. The gates. 2. `--what park` (the offsets join
+the live document; every other block unchanged; the old document kept beside the run's
+outputs). 3. The check: A1–A7 PASS. 4. The app recreated on the new flags
+(`build_all_engines: 11/11`, ten workers). 5. The ten-game smoke (D). 6. The wall-play probe
+at 45 × 30 (C). 7. The lane at 45 × 130 with the record — twice, as above (B1, B2).
+
+**The close (owner, 2026-09-22): the doubles red is ACCEPTED and the ticket is closed.** The
+definition of done asked for a dedicated accuracy check on the standard set for home-run and
+wall-play outcomes: home runs pass every offline check and the lane's band, and the wall play
+now reads as the real balls do. The doubles over-production sits on ordinary air balls, in the
+born-ball kernel's bandwidth and its density correction — a weight, so the comprehensive sweep
+owns it (the plan's §12.5); the finding is recorded on that ticket's row. The
+SIM-478/479/480 row is deleted; the next free ID stays SIM-553. Still open beside it, and NOT
+this ticket's: the four bands that were red before it (walks +3.1%, hit by pitch +8.0%, steal
+attempts −11.2% at second and −18.9% at third), which the 2026-09-21 lane read first.
+
+# Design — the box-score credits on the dropped-third-strike play: PROPOSED with four owner decisions — SIM-484, 2026-09-22
+
+**What the ticket asks.** The box score's credits on a dropped third strike must match
+official scoring: the pitcher gets the strikeout, the batter's line records it, a run
+forced home by the reach pays no RBI, and the "first base open" test reads the bases as
+they were at the pitch. The team score, the outs and the runs allowed must not change.
+
+**What the code and the data say** (the plan is
+`docs/audit/2026-09-22-sim484-dropped-third-strike-box-credits-plan.md`; the page is
+https://claude.ai/artifact/8x4G6hQ48CYh39q1HTLm4N). The play is real and rare: 69 to 99 strikeouts a
+season end on a wild pitch or a passed ball (about 0.2% of strikeouts), 49 to 69 with the
+batter reaching, three to eight with a run scoring; seven in ten are wild pitches; about
+one play in fifty games. The official box credits the strikeout: on all 50 of 2025's
+reaches the pitcher's and the batter's box strikeouts equal their strikeout plate
+appearances. The loop gets the bases and the score right and the labels wrong: the reach
+commits with the event `field_error`, so the box credits the pitcher no strikeout, pays the
+batter an RBI on a forced run (nothing marks it a got-away run), charges the run earned
+always (right seven times in ten), and the lane's reach-on-error counter counts a play
+official scoring calls a strikeout and a wild pitch. Two more facts the ticket did not
+state: the box never credits the batter's own strikeout on ANY strikeout (no such line
+exists), and on a terminal strikeout the got-away advance lacks the non-terminal path's
+"one mover per pitch" guard, so a runner who stole on a got-away third strike is moved
+twice.
+
+**Recommendation.** Four edits in `simulation/sim_loop.py`, no data change, one app
+restart: commit the reach with the event `strikeout` and `result_hits = 0` (the play is a
+strikeout; the reach lives in the base states; the box credits the K on that word and the
+lane's counter stops counting it); mark the forced run with the loop's existing no-RBI
+marker (`steal_runs_scored`, the got-away advance's own); credit the batter's strikeout on
+every strikeout (`bat.k`); snapshot first base and the outs before the steal resolves and
+pass them to the eligibility test; and the one-line guard on the terminal got-away advance.
+The pinned test flips; eight new tests assert the credits with the score, the outs and the
+runs allowed unchanged. The passed-ball earned run stays earned (the pool's got-away flag
+has no kind; about two runs a season). Nothing is built.
+
+# Design amendment — the outfield fence, two additions at the owner's instruction: the Coors air (the born ball's carry in the live park's air) and the wall play (the born-ball kernel measured on the born ball's class); PROPOSED 2026-09-21, nothing built — SIM-478/479/480
+
+**Why (the build record below).** The certification passed every check on the fence lines and
+failed the two that read the draw around them: the parks' home-run character does not come
+through (B2; Coors at half its home runs) and a near-wall ball is not kept near the wall (C).
+The owner asked whether the fence check should run on exit velocity, launch angle and spray
+angle — a modelled distance that can carry Coors' air — and how much distance varies for balls
+with the same three factors at the same park; then asked for the class filter's approach to be
+adopted for batted-ball similarity on the wall plays. Both are now specified in the plan,
+`docs/audit/2026-09-20-sim478-480-fence-certification-plan.md` §11 and §12, with the
+measurements (three independent reviewers re-derived each figure).
+
+**§11 the Coors air.** Distance varies about 13 ft (one standard deviation) for balls with the
+same three factors at the same park — 10 ft at modest exit velocities, 14–15 ft at 104+ mph;
+the park explains 4–5 ft of it, and the park offsets are small and stable (Coors +20 ft, Kauffman
++10, Fenway −4, the rest within ±6; held across seasons within 2.5 ft). A fence check on the
+factors alone cannot work as a yes / no call: the best factor-only decision gets its over calls
+right 73.5% of the time and misses 14.7% of home runs against the measured distance's 91.7% /
+7.8%. The fix keeps the ball's own distance and adds the park's air — the live park's carry
+offset minus the offset of the park the ball was hit in, two stored facts. In the transfer test
+(every pool air ball born into one park) today's simulator calls 5.0% of them over Coors' fence
+against a fair target of 9.5% and 10.5% over Fenway's against 8.1%; with the offset difference
+9.6% and 8.8%, PNC and Great American unchanged and on target; on the real-ball checks the
+adjustment is zero by construction. Specified: the offset table in `park_geometry.json`, the
+stage's shift — read by the fence check, by the fielding draw's kernel and by the wall margin
+alike, so every distance the draw compares is an actual landing (the born ball's in the live
+park's air, each candidate row's in its own; the rows are not adjusted) — a transfer check A7,
+B2 redesigned to be powered. Decision 5 puts the rule
+reading to the owner (a fact of the air, or a post-draw adjustment); decision 6 the fit.
+
+**§12 the wall play.** The born-ball kernel measures a fly ball on a ruler built for every ball
+in play (distance 135 ft, launch angle 28°); the class ruler measures it against fly balls (64
+ft, 10°). With the class filter on, that is a per-feature rescale of the kernel — launch angle
+at 0.34 of the pool's scale, distance at 0.48. On eight games × 12 iterations: the class ruler
+alone moves the drawn row's carry from 69 ft short of the born ball to 54; with the exponent
+per feature (equivalently bandwidth 0.5 today) to 22 ft, 61% of drawn rows within 30 ft
+instead of 22%, the drawn near-wall doubles from 8% to 20% (the born rows' own 24%). Two
+replications on other games hold the mechanism and temper the size: the change closes about
+two thirds of the gap; the rest is structural — the fence stage removes every home-run row from
+a short ball's candidates, and a row at the same distance from the plate is not the same
+distance from its own wall. The follow-on that would take the rest is a per-row margin to its
+own wall as the wall-zone similarity (§12.7, measured 2026-09-22 on 220,780 real balls at the
+owner's question: at a fixed raw distance the extra-base-hit share runs 33 / 19 / 9% in front of a
+shallow / middle / deep fence, at a fixed margin 33 / 36 / 26%; the margin in feet beats the
+ratio, the raw distance adds nothing beyond exit velocity and launch angle, and the two together
+beat either — decision 9 asks for a ±15-ft band on the margin for wall-zone balls now). Decision 7 places the exponent (a bandwidth: now
+with the ruler, or the sweep's); decision 8 orders the two amendments (§11 first).
+
 # Fix — the two weekly GitHub lanes are green again: the performance bench ran a game with no batting order, and the schema-drift test's table list stopped at migration 0018 — SIM-552, 2026-09-21
 
 **Why it matters.** Two weekly GitHub Actions workflows had failed on every run since
@@ -101,6 +320,240 @@ fixed play ever became a hit.
 `tests/unit/test_backend_sim316.py` (comment), new
 `tests/unit/test_sim552_simulate_game_requires_lineup.py`, `BACKLOG.xlsx` (next free ID
 SIM-553; the ticket closes with this entry, so it has no row).
+
+# Build — the outfield fence certified: the geometry rebuilt on a wider grid with season groups and a published-distance prior, a two-minute certification check, a wall-play probe, the fence counters in the harness and a lane record; the fence LINES pass every check, the DRAW around them does not — and the acceptance lane had never given the fence stage a park — SIM-478/479/480, 2026-09-21
+
+**What changed for the model (plan §0, §3).** Nothing in the draw. The fence stage still calls
+a born air ball over or short of the live park's fence before the fielding draw, at a margin
+of 0 feet, and every weight and power stays where it was. What changed is the fence LINES,
+the facts the stage reads (`park_geometry.json`, version 2): eleven ten-degree sectors over
+±55° instead of nine over ±45°, so a ball hit down the line has a sector built from balls hit
+down the line; one line per park and SEASON GROUP, opened by a change detector where a
+sector's early and late lines differ by ten feet with ten home runs on each side (Camden
+Yards' left field moved in for 2025; the old line blended the two walls); and a
+published-distance prior for a thin sector (the MLB Stats API's fence distances at that
+direction plus the league's offset between the effective and the published fence), blended
+toward the park's own balls at ten home runs, so a new park (Las Vegas Ballpark, six games)
+no longer rests on the league line. The plan is
+`docs/audit/2026-09-20-sim478-480-fence-certification-plan.md`.
+
+**The certification, before and after (the plan's §7).** `scripts/sim478_fence_check.py`
+grades the stage's decision on every real fly ball and line drive of the pool window
+(242,957 balls, 21,892 home runs, 2023–2026), the way production makes it.
+
+| Check | Before (the 2026-09-08 lines) | After (the 2026-09-21 rebuild) |
+|---|---|---|
+| A1 the whole window: P(home run ǀ over) / home runs called short | 0.918 / 9.0% — PASS | 0.917 / **7.8%** — PASS |
+| A2 every park with 200+ decided balls (worst) | 0.830 / 11.4% — PASS | 0.829 / 11.2% — PASS |
+| A3 held-out seasons (lines rebuilt without the season) | 0.899–0.920 / 7.3–9.9% — PASS | 0.896–0.918 / 7.2–9.1% — PASS |
+| A4 the down-the-line balls (ǀsprayǀ ≥ 45°, 12,726 balls): home runs called short | **24.5%** — FAIL | **4.5%** — PASS |
+| A5 the moved walls: the live line's missed share on the late seasons against a late-seasons-only line | Camden 18.4% vs 7.2%, seven other sectors over — FAIL | every listed move within 5 points — PASS |
+| A6 a current-season park on the league line | Las Vegas 7 of 9 sectors, Mexico City 8 of 9, Williamsport 9 of 9 — FAIL | none — PASS |
+| B1 the lane's home-run band (45 × 130) | 0.04522 vs the pool's 0.04590 (−1.5%) — PASS, **measured with the stage inert** (see below) | **0.04643 (+1.2%) — PASS**, the stage active; the plan's expected +1 to +2% |
+| B2 the per-park read (the residual against the park home-run factor) | not read | **FAIL**: r −0.07 (≥ 0.5 needed); 13 of 27 parks beyond 3 SE |
+| C the wall play (born air balls within 30 ft of the fence, 45 × 30) | not read | **FAIL** on the short side (below); the over side's home-run share 1.0, as the stage guarantees |
+| D the counters | not read | the lane: over 9.09% of 153,714 air balls (the pool's 9.07%), passed 0.00%, no matching rows 0.00% — PASS; the ten-game smoke 9.9% — PASS |
+
+The whole-window read moves little because most balls are nowhere near a fence: beyond
+twenty feet from the line the call is right 99.5% of the time or better, within five feet it
+is a coin flip (63% / 30%), the same before and after. The gains are where the defects were.
+The lines carry to a held-out season within two points, so the rebuild does not overfit its
+own window. The change detector listed twelve moves at ten parks (the plan expected
+Camden's alone): Camden's three left-field sectors (392/394/397 → 372/380/377 ft), Daikin
+Park's left field for 2024 (349/359 → 336/349, on 263 home runs), Kauffman's left field
+for 2026, Globe Life's for 2024, and eight single outer sectors at the ten-home-run minimum
+(Rate Field, Tropicana, Coors, Petco, Nationals, Yankee Stadium, Daikin twice). A split on
+noise costs support, not correctness (plan §9.2): every split sits in the document's `moves`
+block for review, and a move in the season in progress is detected only once that season
+holds ten home runs at the sector (recorded in the detector's docstring). The owner's
+roof-closed comparison re-ran on the new lines: within the six retractable-roof parks, roof
+closed against open reads P(home run ǀ over) 0.916 vs 0.926, missed 7.4% vs 7.6%, errors
+within ten feet 22.8% vs 21.3% — none significant, as before; weather stays out.
+
+**The finding that matters most: the acceptance lane had never given the fence stage a
+park.** The lane resolved each game's park run factor and managers but never its venue, so
+`state.park` stayed empty, the stage passed every air ball (its counter read 100% passed, 0
+over), and every lane since the stage flipped on (2026-09-09) — including the certified
+45 × 130 lanes of that day — graded the fence lines inactive. Production and the accuracy
+comparison resolve the venue (`resolve_park_factor_onto_state`), so the stage has been live
+for users; only the lane's grade of it was hollow. The lane now resolves the venue the way
+the harness does and REFUSES to run with the stage on and no venue. Today's lane is the
+first 45 × 130 read of production since the ruling of 2026-09-16 (every power 1) and the
+first with the fence active. It reads: home runs per ball in play +1.2% (PASS, above); the
+other eleven pool bands — singles, doubles, triples, reached-on-error, strikeouts,
+intentional walks, pitches, the double play, the safe share, the called strike, the
+got-away pitch — PASS; **four bands RED that the fence stage cannot reach** (it acts only on
+the fielding draw's candidate rows, after the plate appearance's result is known): walks per plate
+appearance +4.0% (0.0884 vs 0.0850; the 2026-09-09 lane read −0.7%), hit by pitch +6.7%
+(0.0121 vs 0.0113; was +1.7%), steal attempts per opportunity at second −9.1% (was +0.4%)
+and at third −17.9% (was −12.3%, inside the band then); runs 4.55 a team-game; the home-win
+channel underpowered as always. Those four are the state of production after the flips
+since 2026-09-09 (the split on, the fatigue term, the manager draw, every power to 1), not
+this ticket's — and this is the first lane that shows them. Three flag-agreement tests
+also failed in the run because the lane container did not mount `docker-compose.yml`; they
+passed when re-run with the mount.
+
+**What the two draw checks found (C and B2) — the fence lines are right, the draw around
+them is not.** *The wall play (C).* For a born fly ball or line drive carrying 0 to 30 feet
+SHORT of the live fence (4,065 of them on the balanced set at 30 iterations) the fielding
+draw returned singles 12.5%, doubles 9.9%, triples 0.8%, outs 76.7% — where the born rows'
+own outcomes read 1.8 / 25.9 / 2.6 / 69.6 and the pool's own balls within 30 feet of their
+park's fence (27,453) read 2.2 / 28.3 / 3.0 / 63.1. The drawn row's ball carries 60 feet
+shorter than the born ball on average (305 against 365 feet; only 29% within 30 feet; the
+drawn singles carry 232 feet). The cause is the born-ball kernel's scale: it z-scores
+distance by the whole pool's spread (135 feet, ground balls included) and divides the
+exponent by its four features, so at bandwidth 1.0 a row 60 feet shorter keeps 98% of an
+exact match's weight. The kernel is flat in distance; the class filter and the fence stage
+are the only shape a born ball keeps, which is why the doubles and triples bands pass over
+ALL balls (the smear runs both ways) while a warning-track fly ball becomes a single one
+time in eight. *The per-park read (B2).* Each park's simulated home-run rate against its
+games' actor-matched expectation does not track the park's real home-run factor (r −0.07
+over 27 parks; the residuals' spread 0.8 points against a sampling error of 0.15–0.3):
+Coors −2.5 points (sim 0.026 against 0.051 expected), the small parks +1 (Fenway, Wrigley,
+Citi Field, Citizens Bank, Great American), the big parks −1 (Kauffman, PNC). Coors is the
+mechanism the plan misread: the wall-zone park kernel keeps Coors ROWS at Coors in the
+fielding draw, but the fence DECISION runs on the born ball's carry, and the born ball comes
+from the pitch-result draw, which is park-blind — a sea-level carry measured against Coors'
+deep effective lines (built from balls that flew 21 feet farther in Coors air) is called
+short too often. The per-park pattern elsewhere is the stage's own error rate per park
+(Fenway's over calls are right 83% of the time) and the born balls' carries. **Neither is
+fixed here:** the born kernel's bandwidth is a weight (the comprehensive sweep's, SIM-548);
+a hard distance band for wall-zone air balls, or a park-conditioned born ball, is a design
+change the plan did not take (§6 "nothing moves") — an owner decision, put to the owner
+with this record. The 3 SE rule of B2 also ignores the expectation's own sampling error
+(a lineup's home-run rate on a few hundred balls), so "13 parks beyond 3 SE" overstates the
+count; the r of −0.07 does not depend on it.
+
+**What landed, file by file (plan §5).**
+- `pipeline/batch/engine_artifacts.py`: the park-geometry section rebuilt as pure pieces
+  (`load_air_balls`, `sector_of`, `sector_line`, `published_at`, `league_offsets`,
+  `prior_lines`, `detect_moves`, `group_for_season`, `build_geometry_document`) under the
+  same `build_park_geometry(con, out_dir, seasons)`; the version-2 document carries the
+  groups, the sources ("both" / "hr" / "kept" / "blend" / "prior" / "league" / "override"),
+  the support, the league offset, every park's prior, the moves and the balls dropped
+  outside the grid; a published park the pool never saw gets the prior alone (the plan's
+  "prior alone at n_hr = 0" — 31 such parks in the document today). The carry model is
+  unchanged (21,875 home runs, MAE 13.6 ft).
+- `pipeline/etl/mlb_venue_dimensions.py` (new): the Stats API venues call
+  (`hydrate=fieldInfo`) into `venue_dimensions.json` in the bundle; a failed or truncated
+  answer keeps the last copy and logs a warning, so the API can never fail the bundle build.
+- `simulation/full_pool_sampler.py`: `fence_at(venue_id, spray, season)` reads the
+  document's own grid and picks the season's group (the latest group when none holds it; a
+  plain list on an old document), parsed once per venue; `fence_decision` and `_fence_rows`
+  carry the live season (the loop already passed it); a sixth counter, "not an air ball",
+  so the harness can put the over calls over air balls. Off, byte-identical.
+- `scripts/sim478_fence_check.py` (new): the certification (A1–A6, `--lane` for B2 and D,
+  `--json-out`), read-only, about two minutes with the app up.
+  `scripts/sim478_wall_zone_probe.py` (new): the wall-play check (C).
+  `scripts/sim_stats.py`: the fence counters printed and in `--json-out`, with the D read.
+- `tests/acceptance/conftest.py`: the venue on the state and the guard; a per-game record
+  (park, home runs, hits, runs, balls in play, plate appearances) and the fence counters;
+  `SIM_ACCEPTANCE_JSON_OUT` writes the lane's record for the per-park read (a record that
+  cannot be written warns and never voids the run). The bands and the observations are
+  untouched.
+- Tests: `tests/unit/test_sim478_geometry_builder.py` (the builder's pieces, the detector's
+  split year and the blend formula on hand-computed numbers, the venues ETL with the
+  network mocked), `test_sim478_fence_season_groups.py` (the sampler's lookup on old and
+  new documents), `test_sim478_fence_check.py` (a 200-ball fixture with known answers; the
+  thresholds), `test_sim478_harness_counters.py`; `test_sim523_fence_stage.py` resized to
+  the eleven-sector document. Docs: the cheat sheet, `simulation.md`,
+  `pipeline-betting-db.md`, `scripts-frontend.md`; the plan carries the build stamp.
+- Not changed, by the decisions: no migration, no profile column, no recompute, no
+  calibration, no matrices; the DuckDB `derived.park_geometry` table stays deferred behind
+  the writer lock (SIM-524); the fence margin stays 0; every power stays 1.
+
+**The adversarial review (125 agents: six lenses, three refuters per finding) confirmed
+sixteen findings; all are fixed.** The ones that mattered: (1) the lane's missing venue,
+above; (2) the wall-play check could not pass by construction — the stage forces the drawn
+home-run share to 1.0 over the fence and 0.0 short of it, so the probe now grades the
+home-run share against that guarantee and the double / triple / out shares among the plays
+that were not a home run; (3) the two readers of the "no matching rows" counter used two
+denominators (air balls now, in both); (4) a truncated answer from the venues API would have
+failed the whole bundle build; (5) an override that created a venue labelled prior-derived
+sectors "league"; (6) the check's docstring quoted the plan's Camden figures (20.1% / 7.5%,
+the design probe's clamped nine-sector selection) where the script reads 18.4% / 7.2% on
+the eleven-sector one. Refuted and worth a line: the twelve moves against the plan's one
+(the rule is the plan's own; the splits are listed).
+
+**The QA gate.** `ruff check` clean, `ruff format --check` clean, `mypy similarity/
+pipeline/ api/` "Success: no issues found in 60 source files"; the container lane `pytest
+tests/unit/ tests/regression/` read **4,288 passed, 1 skipped, 0 failed** (4,189 before;
++99).
+
+**The run book, as it ran (2026-09-21; the app up throughout — a read-only DuckDB open
+works while it runs).**
+1. The baseline check on the live document of 2026-09-08 (the "before" column).
+2. The gates above.
+3. `python -m pipeline.batch.engine_artifacts --what park` (35 s): `park_geometry.json`
+   version 2 (71 venues, 83 season groups, 12 moves, 11 sectors; 242 balls outside ±55°
+   dropped) and `venue_dimensions.json` (74 venues, four seasons fetched). No recompute, no
+   matrices. The old document is kept beside the run's outputs.
+4. The check on the new document: A1–A6 PASS (the "after" column).
+5. The app restarted: `build_all_engines: 11/11`, ten workers pre-warmed.
+6. The ten-game smoke (`scripts/sim_stats.py`, 10 × 50): the fence counters (D) — over
+   1,311 of 13,217 air balls (9.9%), passed 0, no matching rows 0. Runs 4.73 a team-game,
+   hits +1.8%, home runs +13.6% on these ten games (their born air balls were called over
+   9.9% of the time; on the 45 balanced games 9.09%, the pool's own 9.07%).
+7. The wall-play probe on the balanced set at 30 iterations (21 minutes): C FAIL, above.
+8. The lane at 45 × 130 (1 h 32 m) with the record written (`SIM_ACCEPTANCE_JSON_OUT`):
+   B1 PASS, the four reds outside the fence, above; then
+   `scripts/sim478_fence_check.py --lane`: B2 FAIL, D PASS, above.
+
+**The close.** The ticket's definition of done asks for a dedicated accuracy check on the
+standard set for home-run AND wall-play outcomes. Home runs: certified — the lines pass
+every offline check and the lane's home-run band passes with the stage active for the
+first time. Wall plays: NOT certified — the draw around the fence smears a near-wall ball's
+distance (C), and the parks' home-run character does not come through (B2); both sit in
+the born-ball draw, not in the fence pieces, and the levers are the sweep's or the owner's.
+The row stays in `BACKLOG.xlsx` until the owner decides how to carry the two draw findings
+(re-scope this row, or a new ticket).
+
+# Design — certifying the outfield fence (the park geometry, the carry model and the fence stage): PROPOSED 2026-09-20 and APPROVED on all four decisions 2026-09-21 — SIM-478/479/480
+
+**What the ticket asks.** The three fence pieces have run in production since 2026-09-09
+(a fence line per park and ten-degree direction sector from the pool's own balls; a carry
+model as the fallback for a ball with no distance; the stage that calls a born air ball
+over or short of the live park's fence before the fielding draw). The row says they await
+"their own dedicated accuracy test" for home-run and wall-play outcomes.
+
+**What the measurements say** (the plan is
+`docs/audit/2026-09-20-sim478-480-fence-certification-plan.md`; the page is https://claude.ai/artifact/KT5bq1meb9Rx6yFn2NBbBZ).
+Against every real air ball of the pool window (242,957 balls, 21,892 home runs), a ball
+the stage calls over the fence was a home run 91.8% of the time and 9.0% of the home runs
+were called short; beyond twenty feet from the line the call is right 99.5% of the time or
+better, within five feet it is a coin flip; lines rebuilt without a season and tested on
+it read the same (0.90 to 0.92; 7 to 10%). The certified lane's home-run band passes with
+the stage on (0.0452 vs the pool's 0.0459). The carry model runs on 0.09% of balls. Coors
+carries 21 ft farther on home runs, but the wall-zone park kernel at bandwidth 0.02 keeps
+Coors rows at Coors. Three defects surfaced, all in the geometry: (1) the sector grid
+stops at ±45 degrees, 5.2% of air balls are hit beyond it with the same home-run rate, and
+the stage calls 24.5% of those home runs short (about 280 of the window's); (2) Camden
+Yards moved its left-field wall in for 2025 and the season-blind line blends the two, so
+20.1% of its 2025-26 left-field home runs are called short (7.5% with a 2025-26 line); (3)
+Las Vegas Ballpark, a 2026 home park with six games in the pool, sits on the league line
+at seven of nine sectors (Mexico City and Williamsport likewise). The MLB Stats API's
+published fence distances cannot certify a sector line (the effective fence sits 15 to 60
+ft beyond the published line distances and up to 23 ft short of the alley points) but can
+bound a new park's line.
+
+**Recommendation.** The dedicated check is not the betting-line comparison (the fence is
+a fact filter, and the ruling of 2026-09-16 leaves per-change accuracy runs to the sweep):
+it is an offline decision check on the real balls with thresholds (`scripts/sim478_fence_check.py`),
+the lane's home-run band plus a per-park read from the lane's own output, a wall-play
+probe at the sampler level (the born row's own outcome against the drawn one within
+thirty feet of the live fence), and the stage's counters in the harness. The three fixes in
+one rebuild of `park_geometry.json`: the grid to ±55 degrees (eleven sectors), a season
+dimension per venue with a change detector (ten feet, ten home runs each side), and a
+published-distance prior for thin sectors (blended at ten home runs). No migration, no
+recompute, no matrices; one bundle file, one restart, one lane. **All four decisions TAKEN as recommended on
+2026-09-21.** Weather stays out of the carry model: the owner asked for the fence model's
+indoor-against-outdoor performance, and at the six retractable-roof parks (roof closed
+against roof open, the same fence lines) the decision is no better indoors — P(home run ǀ
+over) 0.915 against 0.927, missed home runs 8.7% against 9.2%, errors within ten feet 23.9%
+against 23.0%, none significant; the carry runs 3 ft longer indoors with 1 ft less spread
+(the day before, the stored game weather read +3.4 ft per 10°F and +3.7 ft per 10 mph of
+reported tailwind, a ±4 ft game-to-game shift). The comparison is re-run after the fixes.
+The build record is the entry above this one (the same day).
 
 # Build — pitcher arm angle and spin shape: the decision record landed, no data build; the ticket closed — SIM-533, 2026-09-19
 

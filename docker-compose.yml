@@ -248,6 +248,18 @@ services:
       # ~30% of home runs). OFF until part F and a lane.
       SIM_FENCE_STAGE:           "1"
       SIM_FENCE_MARGIN:          "0"
+      # SIM-478 §11 (2026-09-22): the born ball's carry in the LIVE park's air
+      # (own distance + the live park's offset - the row's park's; Coors +20 ft).
+      SIM_CARRY_OFFSET:          "1"
+      # SIM-478 §12 (2026-09-22): the born kernel's exponent per feature (the
+      # divisor 2 sigma^2, not 2 sigma^2 x 4); the class ruler is not a flag.
+      SIM_BB_BORN_PER_FEATURE:   "1"
+      # SIM-478 §12.7 (2026-09-22): the wall-margin band in feet — an air ball
+      # short of the fence draws rows within this margin to their OWN wall.
+      SIM_BB_MARGIN_BAND:        "15"
+      # The fewest rows the band may leave; below it the rows stay as they
+      # were (the class filter's shape).
+      SIM_BB_MARGIN_MIN_ROWS:    "20"
       # SIM-523 part D (2026-09-08): the pitching change as a DRAW from the
       # opportunity pool (the pool's own change rate for the boundary's cell,
       # the live manager's usage similarity a weight). FLIPPED ON 2026-09-13

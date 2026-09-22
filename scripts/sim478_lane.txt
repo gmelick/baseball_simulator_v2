@@ -1,0 +1,84 @@
+SIM-478/479/480 — the fence certification's lane, 2026-09-21: 45 games × 130 iterations
+(the balanced set, scripts/sim523_game_set.json; tests/acceptance/test_production_config_bands_sim450.py;
+the record written by SIM_ACCEPTANCE_JSON_OUT and read by scripts/sim478_fence_check.py --lane).
+The full record is CHANGES.md (2026-09-21). 1 h 32 m, 5,850 game-sims.
+
+THE FIRST LANE WITH THE FENCE STAGE ACTIVE. Every lane before this one ran the stage inert:
+the lane never put the venue on the game state, so the stage passed every air ball (the
+counter read 100% passed). The lane now resolves the venue and refuses to run the stage
+without one. It is also the first 45 × 130 read of production since the ruling of 2026-09-16
+(every similarity power 1), the split ON (2026-09-14), the fatigue term (2026-09-14) and the
+manager draw (2026-09-13).
+
+The fence counters over the lane: over 13,977 · short 287,065 · band 0 · passed 0 · no matching
+rows 0 · not an air ball 147,328 → 153,714 air balls, over 9.09% of them (the pool's own
+home-run share of air balls 9.07%); D PASS.
+
+B1 HR_BIP: rate 0.04643 = 14121/304126 vs pool centre 0.04590 (delta +0.00053 = +1.2%), half-width 0.00161 -> PASS
+   (the 2026-09-09 lane, the stage inert: 0.04522, −1.5%; the plan expected +1 to +2% as the missed home runs came back)
+
+Four bands RED — none of them a channel the fence stage can reach (it acts on the fielding
+draw's candidate rows, after the plate appearance's result is known):
+  BB_PA: rate 0.08837 = 39428/446187 vs pool centre 0.08500 (delta +0.00337 = +4.0%), half-width 0.00170 (floor 0.00170, Z*se 0.00167) -> RED   (2026-09-09: −0.7%)
+  HBP_PA: rate 0.01205 = 5378/446187 vs pool centre 0.01130 (delta +0.00075 = +6.7%), half-width 0.00068 (floor 0.00068, Z*se 0.00063) -> RED   (2026-09-09: +1.7%)
+  STEAL_ATT_OPP_2B: rate 0.01946 = 7757/398637 vs pool centre 0.02140 (delta -0.00194 = -9.1%), half-width 0.00128 (floor 0.00128, Z*se 0.00092) -> RED   (2026-09-09: +0.4%)
+  STEAL_ATT_OPP_3B: rate 0.00361 = 933/258413 vs pool centre 0.00440 (delta -0.00079 = -17.9%), half-width 0.00066 (floor 0.00066, Z*se 0.00052) -> RED   (2026-09-09: −12.3%, inside the band)
+The other twelve pool bands PASS (singles, doubles, triples, home runs, reached-on-error,
+strikeouts, intentional walks, pitches per PA, the double play, the safe share at second,
+the called strike on a taken pitch, the got-away pitch); from the record: K_PA 0.21461 (−0.9%),
+IBB_PA 0.00281 (−2.5%), DP_OPP 0.13986 (−1.8%), STEAL_SAFE_2B 0.7976 (−0.2%),
+CALLED_STRIKE_TAKEN 0.31031 (−1.1%). Game-graded: runs 4.55 a team-game, hits 8.29, home
+runs 1.21 (+3.8% on MLB's 1.1626); home_win_pct underpowered below 13,365 game-sims, as
+always. Three flag-agreement tests failed only because this lane's container did not mount
+docker-compose.yml; they pass with the mount.
+
+B2 the per-park read (scripts/sim478_fence_check.py --lane, 27 parks): FAIL — r(residual,
+park home-run factor − 1) = −0.07 (≥ 0.5 needed); Coors −2.5 points of home runs per ball in
+play (sim 0.026 vs 0.051 expected), Fenway / Wrigley / Citi / Citizens Bank / Great American
+about +1, Kauffman / PNC about −1. The born ball's carry is park-blind (the pitch-result
+draw), so Coors' deep effective lines — built from balls that flew 21 ft farther in Coors
+air — call a sea-level born ball short too often; the wall-zone park kernel keeps Coors ROWS
+at Coors only in the fielding draw, after the decision.
+
+C the wall play (scripts/sim478_wall_zone_probe.py, 45 × 30): FAIL on the short side — for
+a born air ball 0–30 ft short of the live fence the drawn plays read singles 12.5% / doubles
+9.9% / triples 0.8% / outs 76.7% against the born rows' own 1.8 / 25.9 / 2.6 / 69.6 (the
+pool's own balls within 30 ft of their park's fence: 2.2 / 28.3 / 3.0 / 63.1); the drawn
+row's ball carries 60 ft shorter on average (305 vs 365 ft). The born-ball kernel z-scores
+distance by the whole pool's spread (135 ft) over four features, so at bandwidth 1.0 a row
+60 ft shorter keeps 98% of an exact match's weight — the kernel is flat in distance.
+
+==============================================================================
+THE AMENDMENTS' LANES, 2026-09-22 (the plan's §11–§12.7: the carry offset, the class ruler with
+the exponent per feature, the wall-margin band). The full record is CHANGES.md 2026-09-22.
+
+Lane 2 — the band applied to EVERY short air ball (93% of them; not what the plan asked), 1 h 40 m:
+  HR_BIP 0.04610 (+0.4%) PASS; SINGLES_BIP 0.21056 (+2.7%) RED (the floor 2.5%); R 4.655 (+4.7%) RED;
+  BB_PA +2.7% RED, STEAL_ATT 2B −9.1% / 3B −19.6% RED (pre-existing); doubles, triples PASS.
+  The band was then restricted to the wall zone (300+ ft in the live air).
+
+Lane 3 — the band on the wall zone (35% of air balls), THE PRODUCTION CONFIGURATION, 1 h 36 m:
+  HR_BIP 0.04556 = 13,852/303,986 vs 0.04590 (−0.7%) PASS; runs 4.556, hits 8.28, home runs 1.18 a
+  team-game (where the 2026-09-21 lane stood); singles, triples, reached-on-error, strikeouts,
+  intentional walks, pitches, the double play, the safe share, the called strike, the got-away pitch PASS.
+  BB_PA: rate 0.08760 = 39095/446295 vs pool centre 0.08500 (delta +0.00260 = +3.1%), half-width 0.00170 (floor 0.00170, Z*se 0.00167) -> RED
+  DOUBLES_BIP: rate 0.06612 = 20099/303986 vs pool centre 0.06250 (delta +0.00362 = +5.8%), half-width 0.00187 (floor 0.00187, Z*se 0.00176) -> RED
+  HBP_PA: rate 0.01221 = 5448/446295 vs pool centre 0.01130 (delta +0.00091 = +8.0%), half-width 0.00068 (floor 0.00068, Z*se 0.00063) -> RED
+  STEAL_ATT_OPP_2B: rate 0.01900 = 7491/394303 vs pool centre 0.02140 (delta -0.00240 = -11.2%), half-width 0.00128 (floor 0.00128, Z*se 0.00092) -> RED
+  STEAL_ATT_OPP_3B: rate 0.00357 = 942/263970 vs pool centre 0.00440 (delta -0.00083 = -18.9%), half-width 0.00066 (floor 0.00066, Z*se 0.00052) -> RED
+  (walks, hit by pitch and the steal attempts were red before this ticket; the fence cannot reach them.)
+  The fence counters: over 13,709 of 153,553 air balls (8.93%; the pool's 9.07%), passed 0, no rows 0;
+  the wall-margin band: applied 54,937 (35.8% of air balls), fallback 176, skipped 245,709.
+  B2 (scripts/sim478_fence_check.py --lane --min-games 3): PASS on the five parks with 3+ games (r −0.02,
+  reported; none beyond 3 combined SE); informational: Coors +0.35 points (sim 0.0543 vs 0.0508 expected;
+  the 2026-09-21 lane read −2.5), Fenway +0.1 (was +1.0), Kauffman +0.4 (was −1.0), PNC −0.85 (was −1.1).
+  C (scripts/sim478_wall_zone_probe.py, 45 × 30): PASS — near-wall short balls drawn doubles 24.9% /
+  triples 3.0% / outs 69.6% against the born rows' own 26.2 / 2.9 / 68.6 (the 2026-09-21 read: 9.9 / 0.8 / 76.7).
+
+The one open read: doubles +5.8%. By the born ball's distance to the fence (ten games × 12 iterations),
+the near-wall bands read as the pool does (0–10 ft short 39% extra-base hits against the pool's 48%,
+10–20 ft 26% against 32%, 20–30 ft 19% against 21% — slightly under); the class ruler alone with the
+band reads the same doubles per game as production (3.68 against 3.64), so the exponent is not the
+cause; the extra doubles sit in the balls 60+ ft short of the fence (11–13% extra-base hits against the
+pool's ~9–10%), where the draw stood before this ticket too — the wall smear hid them in the total.
+The kernel's treatment of ordinary air balls (the bandwidth, the density correction) is the sweep's.

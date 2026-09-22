@@ -122,6 +122,11 @@ _REALISM_FLAGS = (
     "SIM_BB_CLASS_FILTER",
     "SIM_PARK_WALL_ZONE_ONLY",
     "SIM_FENCE_STAGE",
+    # SIM-478 (the plan's §11 / §12 / §12.7): the born ball's carry in the live
+    # park's air, the born-ball kernel's exponent per feature, the wall-margin band.
+    "SIM_CARRY_OFFSET",
+    "SIM_BB_BORN_PER_FEATURE",
+    "SIM_BB_MARGIN_BAND",
     "SIM_MANAGER_DRAW",
     # SIM-427: the pen source, the manager weight and the reliever-draw weights.
     "SIM_BULLPEN_SOURCE",
@@ -313,6 +318,102 @@ def _print_report(agg: dict, *, n_games: int) -> None:
     print(f"\n--- precision: R standard error = {se:.4f}  ({verdict}) ---")
 
 
+# SIM-478/479/480 (plan §7 D): the fence stage's own counters and their read.
+#: passed <= 0.1% of air balls; no matching rows <= 0.5%; over = 9 +/- 1%.
+FENCE_PASSED_MAX = 0.001
+FENCE_NO_ROWS_MAX = 0.005
+FENCE_OVER_CENTRE = 0.09
+FENCE_OVER_TOL = 0.01
+
+
+def _fence_counter_summary(counts: Any) -> tuple[str, dict[str, Any]]:
+    """One report line and one record for the sampler's ``fence_counts``.
+
+    The six entries are [over, short, band, passed, no matching rows, not an
+    air ball]; a ground ball, a popup or a bunt counts in BOTH short and
+    not-an-air-ball, so air balls = over + (short - not_air) + band + passed.
+    A five-entry array (an older sampler) has no sixth counter: the summary
+    treats every short ball as an air ball and says so. Every share, the
+    no-matching-rows share included, is over the air balls; the check
+    script's ``counters_read`` (``scripts/sim478_fence_check.py``) uses the
+    same denominator, so one lane reads the same number in both.
+    """
+    c = [int(x) for x in (counts if counts is not None else [])]
+    over, short, band, passed, no_rows = (c + [0] * 5)[:5]
+    has_not_air = len(c) >= 6
+    not_air = c[5] if has_not_air else 0
+    air = over + (short - not_air) + band + passed
+    shares = {
+        "over": over / air if air else None,
+        "passed": passed / air if air else None,
+        "no_rows": no_rows / air if air else None,
+    }
+
+    def _pct(key: str, digits: int) -> str:
+        v = shares[key]
+        return f"{v * 100:.{digits}f}%" if v is not None else "n/a"
+
+    text = (
+        f"fence stage: over {over} ({_pct('over', 1)} of air balls) · short {short} · band {band} "
+        f"· passed {passed} ({_pct('passed', 2)}) · no matching rows {no_rows} "
+        f"({_pct('no_rows', 2)}) · not an air ball "
+        + (str(not_air) if has_not_air else "n/a (a five-entry sampler; short counts every class)")
+    )
+    record = {
+        "fence_counts": c,
+        "fence_air_balls": air,
+        "fence_over_share": shares["over"],
+        "fence_passed_share": shares["passed"],
+        "fence_no_rows_share": shares["no_rows"],
+    }
+    return text, record
+
+
+def _margin_counter_summary(
+    counts: Any, air_balls: int | None = None
+) -> tuple[str, dict[str, Any]]:
+    """One report line and one record for the sampler's ``bb_margin_counts``
+    (SIM-478, the plan's §12.7): [applied, fallback (too few rows), skipped
+    (not an air ball / over / no margin / off)]. The applied share is over
+    the air balls when the caller gives their count (the fence counters'
+    denominator); without it the line says "n/a". Informational: no read,
+    no threshold."""
+    c = [int(x) for x in (counts if counts is not None else [])]
+    applied, fallback, skipped = (c + [0] * 3)[:3]
+    share = applied / air_balls if air_balls else None
+    share_txt = f"{share * 100:.1f}% of air balls" if share is not None else "n/a of air balls"
+    text = (
+        f"wall-margin band: applied {applied} ({share_txt}) · fallback {fallback} "
+        f"· skipped {skipped}"
+    )
+    record = {
+        "bb_margin_counts": c[:3] if c else [],
+        "bb_margin_applied_share": share,
+    }
+    return text, record
+
+
+def _fence_d_read(record: dict[str, Any]) -> tuple[str, bool]:
+    """The §7 D thresholds as a read: PASS when every share sits inside."""
+    over = record.get("fence_over_share")
+    passed = record.get("fence_passed_share")
+    no_rows = record.get("fence_no_rows_share")
+    if over is None or passed is None or no_rows is None:
+        return "D: no air balls counted — FAIL", False
+    ok = (
+        passed <= FENCE_PASSED_MAX
+        and no_rows <= FENCE_NO_ROWS_MAX
+        and abs(over - FENCE_OVER_CENTRE) <= FENCE_OVER_TOL
+    )
+    text = (
+        f"D: passed {passed * 100:.2f}% (<= {FENCE_PASSED_MAX * 100:.1f}%), "
+        f"no rows {no_rows * 100:.2f}% (<= {FENCE_NO_ROWS_MAX * 100:.1f}%), "
+        f"over share {over * 100:.1f}% ({FENCE_OVER_CENTRE * 100:.0f} ± {FENCE_OVER_TOL * 100:.0f}%)"
+        f" — {'PASS' if ok else 'FAIL'}"
+    )
+    return text, ok
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("game_pks", type=int, nargs="+")
@@ -345,6 +446,8 @@ def main() -> None:
         print("  sim DuckDB: open (read-only) — the harness resolves a park factor per game.")
 
     park_factors: dict[int, float] = {}
+    fence_counts: Any = None
+    margin_counts: Any = None
     try:
         for gp in args.game_pks:
             state = asyncio.run(_resolve(gp, duck))
@@ -368,6 +471,20 @@ def main() -> None:
             kw = sim_kwargs_from_state(state)
             spec = GameSpec(machine_factory=_FACTORY, sim_kwargs=dict(kw))
             machine = production_machine_factory(0, spec)
+            # SIM-478: the fence counters live on the process-cached sampler
+            # (one object across games), so they accumulate over the run; the
+            # first machine zeroes them so the run reads its own.
+            fp = getattr(machine, "full_pool_sampler", None)
+            if fp is not None and hasattr(fp, "fence_counts"):
+                if fence_counts is None:
+                    fp.fence_counts[:] = 0
+                fence_counts = fp.fence_counts
+            # SIM-478 §12.7: the wall-margin band's counters, the same way
+            # (an older sampler has none: the line is skipped).
+            if fp is not None and hasattr(fp, "bb_margin_counts"):
+                if margin_counts is None:
+                    fp.bb_margin_counts[:] = 0
+                margin_counts = fp.bb_margin_counts
             game_summaries: list[dict] = []
             for seed in range(args.iters):
                 machine.boxscore = BoxScore()  # reset per iteration
@@ -391,6 +508,18 @@ def main() -> None:
     elapsed = time.perf_counter() - started
     agg = _aggregate(per_game)
     _print_report(agg, n_games=len(args.game_pks))
+    # SIM-478 (plan §7 D): the fence stage's counters and their read. A read,
+    # not a gate — the harness's exit code does not change.
+    fence_text, fence_record = _fence_counter_summary(fence_counts)
+    print("\n--- SIM-478 the fence stage ---")
+    print("  " + fence_text)
+    print("  " + _fence_d_read(fence_record)[0])
+    margin_record: dict[str, Any] = {}
+    if margin_counts is not None:
+        margin_text, margin_record = _margin_counter_summary(
+            margin_counts, fence_record.get("fence_air_balls")
+        )
+        print("  " + margin_text)
     print(f"\nelapsed: {elapsed:.1f}s")
 
     if args.json_out:
@@ -406,6 +535,10 @@ def main() -> None:
             # from a neutral no-op.
             "park_run_factors": {str(k): v for k, v in park_factors.items()},
             "env": {n: os.environ.get(n) for n in _REALISM_FLAGS},
+            # SIM-478: the fence stage's counters over the run, and the
+            # wall-margin band's when the sampler has them.
+            **fence_record,
+            **margin_record,
         }
         Path(args.json_out).write_text(json.dumps(out, indent=2))
         print(f"wrote {args.json_out}")

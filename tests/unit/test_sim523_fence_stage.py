@@ -88,9 +88,9 @@ CREATE TABLE sim.outcome_pool (
 
 def _seed_geometry(con: duckdb.DuckDBPyConnection) -> None:
     """Venue 1: a short left field (home runs from 340 ft, kept balls up to
-    330 ft in sector 0) and a deep centre (400 / 390 in sector 4); every other
-    sector is thin. Venue 2: only sector 4, home runs from 410 ft with no kept
-    balls; the rest thin."""
+    330 ft in sector 1, spray -45 .. -35 on the eleven-sector grid) and a deep
+    centre (400 / 390 in sector 5); every other sector is thin. Venue 2: only
+    sector 5, home runs from 410 ft with no kept balls; the rest thin."""
     con.execute(_OUTCOME_POOL_DDL)
     pid = 0
 
@@ -124,24 +124,39 @@ def _seed_geometry(con: duckdb.DuckDBPyConnection) -> None:
     def hr(venue, spray, dist, la):
         add(venue, spray, "home_run", dist, ev=(dist + 150.0) / 5.0, la=la)
 
-    # Venue 1, sector 0 (spray -45 .. -35): 30 home runs from 340 up, 30 kept balls up to 330.
+    # Venue 1, sector 1 (spray -45 .. -35): 30 home runs from 340 up, 30 kept balls up to 330.
     for i in range(30):
         hr(1, -40.0, 340.0 + i, la=26.0 + (i % 5))
         add(1, -40.0, "field_out", 300.0 + i)
-    # Venue 1, sector 4 (spray -5 .. 5): home runs from 400, kept balls up to 390.
+    # Venue 1, sector 5 (spray -5 .. 5): home runs from 400, kept balls up to 390.
     for i in range(30):
         hr(1, 0.0, 400.0 + i, la=27.0 + (i % 5))
         add(1, 0.0, "double", 360.0 + i)
-    # Venue 2, sector 4: home runs only, from 410.
+    # Venue 2, sector 5: home runs only, from 410.
     for i in range(30):
         hr(2, 0.0, 410.0 + i, la=28.0 + (i % 4))
-    # A thin sector everywhere (3 home runs in sector 8 of venue 1): below support.
+    # A thin sector everywhere (3 home runs in sector 9 of venue 1, spray 35 .. 45): below support.
     hr(1, 40.0, 350.0, la=30.0)
     hr(1, 40.0, 350.0, la=30.0)
     hr(1, 40.0, 350.0, la=30.0)
 
 
 class TestTheBuilder:
+    """The version-2 document (the fence certification, SIM-478): the +-55
+    grid puts the toy's spray -40 in sector 1, 0 in sector 5 and 40 in
+    sector 9; the single season 2024 gives one group, "2024-2024"."""
+
+    @pytest.fixture(autouse=True)
+    def _no_network(self, monkeypatch):
+        import urllib.error
+
+        import pipeline.etl.mlb_venue_dimensions as mvd
+
+        def _down(season, timeout=30):
+            raise urllib.error.URLError("no network in the unit lane")
+
+        monkeypatch.setattr(mvd, "fetch_venue_dimensions", _down)
+
     def test_lines_come_from_the_quantiles_with_league_fallback(self, tmp_path):
         con = duckdb.connect(":memory:")
         try:
@@ -149,47 +164,70 @@ class TestTheBuilder:
             doc = build_park_geometry(con, str(tmp_path), [_SEASON])
         finally:
             con.close()
-        assert doc["n_sectors"] == PARK_N_SECTORS == 9
-        v1, v2 = doc["venues"]["1"], doc["venues"]["2"]
-        # Sector 0 of venue 1: (home-run 10th pct 342.9 + kept 99th pct 328.7) / 2.
-        assert v1[0] == pytest.approx((342.9 + 328.71) / 2, abs=0.6)
-        assert doc["source"]["1"][0] == "both"
-        # Sector 4 of venue 1: both again; venue 2 has home runs only there.
-        assert doc["source"]["1"][4] == "both" and doc["source"]["2"][4] == "hr"
-        assert v2[4] == pytest.approx(412.9, abs=0.6)
-        # The league line in sector 4 is the median of the two venues' evidence.
-        assert doc["league"][4] is not None
-        # A thin sector falls back to the league line; an empty league sector is None.
-        assert doc["source"]["1"][8] == "league" and doc["support_hr"]["1"][8] == 3
-        assert v1[8] is None and doc["league"][8] is None
-        # Venue 2's sector 0 has nothing of its own: the league line (venue 1's).
-        assert doc["source"]["2"][0] == "league" and v2[0] == v1[0]
+        assert doc["version"] == 2
+        assert doc["n_sectors"] == PARK_N_SECTORS == 11
+        assert doc["spray_min"] == -55.0 and doc["spray_max"] == 55.0
+        assert list(doc["venues"]["1"]) == ["2024-2024"] and list(doc["venues"]["2"]) == [
+            "2024-2024"
+        ]
+        v1, v2 = doc["venues"]["1"]["2024-2024"], doc["venues"]["2"]["2024-2024"]
+        s1, s2 = doc["source"]["1"]["2024-2024"], doc["source"]["2"]["2024-2024"]
+        assert len(v1) == len(s1) == 11
+        # Sector 1 of venue 1 (spray -40): (home-run 10th pct 342.9 + kept 99th pct 328.7) / 2.
+        assert v1[1] == pytest.approx((342.9 + 328.71) / 2, abs=0.6)
+        assert s1[1] == "both"
+        # Sector 5 of venue 1 (spray 0): both again; venue 2 has home runs only there.
+        assert v1[5] == pytest.approx((402.9 + 388.71) / 2, abs=0.6)
+        assert s1[5] == "both" and s2[5] == "hr"
+        assert v2[5] == pytest.approx(412.9, abs=0.6)
+        # The league line in sector 5 is the median over the two venues' lines.
+        assert doc["league"][5] == pytest.approx((v1[5] + v2[5]) / 2, abs=0.1)
+        # A thin sector (3 home runs, no prior) falls back to the league line;
+        # an empty league sector is None.
+        assert s1[9] == "league" and doc["support_hr"]["1"]["2024-2024"][9] == 3
+        assert v1[9] is None and doc["league"][9] is None
+        assert doc["support_kept"]["1"]["2024-2024"][1] == 30
+        # Venue 2's sector 1 has nothing of its own: the league line (venue 1's).
+        assert s2[1] == "league" and v2[1] == v1[1]
+        # No published distances reached the build: no prior, no offset, no moves.
+        assert doc["prior"] == {} and doc["league_offset"] == [None] * 11
+        assert doc["moves"] == [] and doc["dropped_outside_grid"] == 0
         # The carry model fitted on the 93 home runs, validated on them.
         carry = doc["carry"]
         assert carry["n_hr"] == 93 and len(carry["coef"]) == 6
         assert carry["hr_mae_ft"] < 1.0
         assert carry_predict(carry["coef"], 110.0, 28.0) == pytest.approx(400.0, abs=2.0)
         with open(tmp_path / "park_geometry.json", encoding="utf-8") as fh:
-            assert json.load(fh)["venues"]["1"] == v1
+            assert json.load(fh)["venues"]["1"] == doc["venues"]["1"]
+        # The dimensions file records the failed fetch and keeps no venues.
+        with open(tmp_path / "venue_dimensions.json", encoding="utf-8") as fh:
+            dims = json.load(fh)
+        assert dims == {"fetched": {"2024": "failed"}, "venues": {}}
 
     def test_overrides_replace_sectors(self, tmp_path):
         with open(tmp_path / "park_geometry_overrides.json", "w", encoding="utf-8") as fh:
-            json.dump({"1": {"0": 310.0}, "9": {"4": 405.0}}, fh)
+            json.dump({"1": {"0": 310.0}, "9": {"4": 405.0}, "2": {"2024-2024": {"5": 420.0}}}, fh)
         con = duckdb.connect(":memory:")
         try:
             _seed_geometry(con)
             doc = build_park_geometry(con, str(tmp_path), [_SEASON])
         finally:
             con.close()
-        assert doc["venues"]["1"][0] == 310.0 and doc["source"]["1"][0] == "override"
-        # A venue the pool never saw starts from the league line.
-        assert doc["venues"]["9"][4] == 405.0 and doc["source"]["9"][4] == "override"
-        assert doc["venues"]["9"][0] == doc["league"][0]
+        g = "2024-2024"
+        assert doc["venues"]["1"][g][0] == 310.0 and doc["source"]["1"][g][0] == "override"
+        # A group-keyed override lands on that group alone.
+        assert doc["venues"]["2"][g][5] == 420.0 and doc["source"]["2"][g][5] == "override"
+        # A venue the pool never saw starts from the league line under the window's group.
+        assert list(doc["venues"]["9"]) == [g]
+        assert doc["venues"]["9"][g][4] == 405.0 and doc["source"]["9"][g][4] == "override"
+        assert doc["venues"]["9"][g][1] == doc["league"][1] is not None
+        assert doc["source"]["9"][g][1] == "league"
+        assert doc["overrides"]["2"] == {g: {"5": 420.0}}
 
     def test_park_sector(self):
-        assert park_sector(-45.0) == 0 and park_sector(-35.1) == 0
-        assert park_sector(-35.0) == 1 and park_sector(0.0) == 4
-        assert park_sector(44.9) == 8 and park_sector(60.0) == 8 and park_sector(-80.0) == 0
+        assert park_sector(-55.0) == 0 and park_sector(-45.1) == 0
+        assert park_sector(-45.0) == 1 and park_sector(0.0) == 5
+        assert park_sector(54.9) == 10 and park_sector(60.0) == 10 and park_sector(-80.0) == 0
 
 
 # ===========================================================================
@@ -216,6 +254,17 @@ def _minimal_pitch_pool(tmp_path) -> None:
 
 
 class TestTheLoader:
+    @pytest.fixture(autouse=True)
+    def _no_network(self, monkeypatch):
+        import urllib.error
+
+        import pipeline.etl.mlb_venue_dimensions as mvd
+
+        def _down(season, timeout=30):
+            raise urllib.error.URLError("no network in the unit lane")
+
+        monkeypatch.setattr(mvd, "fetch_venue_dimensions", _down)
+
     def test_load_reads_the_geometry_or_none(self, tmp_path):
         _minimal_pitch_pool(tmp_path)
         assert EngineArtifacts.load(str(tmp_path)).park_geometry is None
@@ -227,6 +276,7 @@ class TestTheLoader:
             con.close()
         pg = EngineArtifacts.load(str(tmp_path)).park_geometry
         assert pg is not None and "1" in pg["venues"] and pg["carry"]["coef"]
+        assert pg["version"] == 2 and "2024-2024" in pg["venues"]["1"]
 
 
 # ===========================================================================
@@ -307,6 +357,8 @@ class TestTheGeometryReads:
         fp = _sampler(_bb_pool(_MIXED))
         assert fp.fence_at(7, -40.0) == 330.0  # the venue's own sector 0
         assert fp.fence_at(7, 0.0) == 410.0
+        # SIM-478: an old document's plain list is the one group for every season.
+        assert fp.fence_at(7, 0.0, 2024) == 410.0 and fp.fence_at(7, 0.0, 2031) == 410.0
         assert fp.fence_at(7, 44.0) == 340.0  # the venue's sector 8 is None -> league
         assert fp.fence_at(99, 0.0) == 400.0  # an unknown venue -> league
         assert fp.fence_at(None, 0.0) == 400.0
@@ -353,20 +405,21 @@ class TestTheStage:
         fp.fence_stage = True
         born = {"cls": _FLY, "spray_raw": 0.0, "dist": 430.0}
         assert _draws(fp, born_bb=born, venue_id=7) == {"home_run"}
-        assert fp.fence_counts.tolist() == [40, 0, 0, 0, 0]
+        assert fp.fence_counts.tolist() == [40, 0, 0, 0, 0, 0]
 
     def test_short_drops_home_run_rows(self):
         fp = _sampler(_bb_pool(_MIXED))
         fp.fence_stage = True
         born = {"cls": _FLY, "spray_raw": 0.0, "dist": 380.0}
         assert _draws(fp, born_bb=born, venue_id=7) == {"double", "field_out"}
-        assert fp.fence_counts.tolist() == [0, 40, 0, 0, 0]
-        # A ground ball: the same, without any geometry read.
+        assert fp.fence_counts.tolist() == [0, 40, 0, 0, 0, 0]
+        # A ground ball: the same, without any geometry read; the class rule
+        # counts it in [5] as well as [1].
         assert _draws(fp, born_bb={"cls": _GROUND, "dist": 100.0}, venue_id=None) == {
             "double",
             "field_out",
         }
-        assert fp.fence_counts.tolist() == [0, 80, 0, 0, 0]
+        assert fp.fence_counts.tolist() == [0, 80, 0, 0, 0, 40]
 
     def test_band_and_passed_leave_the_rows(self):
         fp = _sampler(_bb_pool(_MIXED))
@@ -377,7 +430,7 @@ class TestTheStage:
         assert _draws(
             fp, born_bb={"cls": _FLY, "spray_raw": 0.0, "dist": 430.0}, venue_id=None
         ) == set(_MIXED)
-        assert fp.fence_counts.tolist() == [0, 0, 40, 40, 0]
+        assert fp.fence_counts.tolist() == [0, 0, 40, 40, 0, 0]
 
     def test_over_falls_back_to_the_cells_home_runs_past_the_class_filter(self):
         # Every home run in the cell is a line drive; the born ball is a fly
@@ -396,7 +449,7 @@ class TestTheStage:
         assert _draws(fp, born_bb={"cls": _FLY, "spray_raw": 0.0, "dist": 430.0}, venue_id=7) == {
             "double"
         }
-        assert fp.fence_counts.tolist() == [40, 0, 0, 0, 40]
+        assert fp.fence_counts.tolist() == [40, 0, 0, 0, 40, 0]
 
     def test_off_is_byte_identical(self):
         born = {"cls": _FLY, "spray_raw": 0.0, "dist": 430.0}

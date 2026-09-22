@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import os
 import time
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -143,6 +144,17 @@ PRODUCTION_FLAGS: dict[str, str] = {
     "SIM_WALL_ZONE_DISTANCE": os.environ.get("SIM523_LANE_WALL_ZONE_DISTANCE", "300"),
     "SIM_FENCE_STAGE": os.environ.get("SIM523_LANE_FENCE_STAGE", "1"),
     "SIM_FENCE_MARGIN": os.environ.get("SIM523_LANE_FENCE_MARGIN", "0"),
+    # SIM-478 (2026-09-22, the plan's §11 / §12 / §12.7 — the owner's
+    # "implement this updated design"). Three flags. The carry offset: the
+    # born ball's carry in the live park's air (the document's per-park
+    # offset, a fact of the air). The born-ball kernel's exponent per
+    # feature, under the class ruler. The wall-margin band (feet; 0 = off)
+    # with its row floor. The compose file carries the same values. Set the
+    # SIM523_LANE_* twin to measure the other arm.
+    "SIM_CARRY_OFFSET": os.environ.get("SIM523_LANE_CARRY_OFFSET", "1"),
+    "SIM_BB_BORN_PER_FEATURE": os.environ.get("SIM523_LANE_BORN_PER_FEATURE", "1"),
+    "SIM_BB_MARGIN_BAND": os.environ.get("SIM523_LANE_MARGIN_BAND", "15"),
+    "SIM_BB_MARGIN_MIN_ROWS": os.environ.get("SIM523_LANE_MARGIN_MIN_ROWS", "20"),
     # SIM-523 part D / SIM-427: the pitching change as a draw — production ON
     # since the flip of 2026-09-13 (the pull formula is deleted, so OFF means no
     # pitching change; SIM427_LANE_MANAGER_DRAW=0 measures that arm).
@@ -460,10 +472,46 @@ class AcceptanceRun:
     #: that widened past the batting side (level 2+) is the evidence the
     #: side-weight record and the thin-cell census (SIM-451) cite.
     cell_index: dict[str, Any] = field(default_factory=dict)
+    #: SIM-478 (2026-09-21): one record per game — ``game_pk``, ``venue_id``,
+    #: ``season``, ``iters``, the game's home runs / hits / runs summed over
+    #: both teams and every iteration, and its balls in play / plate
+    #: appearances (the ``pool_counts`` deltas). The certification script's
+    #: per-park read (``scripts/sim478_fence_check.py --lane``) joins it.
+    per_game: list[dict[str, Any]] = field(default_factory=list)
+    #: SIM-478: the fence stage's own counters (``FullPoolSampler.fence_counts``:
+    #: over, short, band, passed, no matching rows, not an air ball), read once
+    #: at the end from the process-cached sampler; zeroed at the lane's start.
+    fence_counts: list[int] = field(default_factory=list)
+    #: SIM-478 (the plan's §12.7): the wall-margin band's counters
+    #: (``FullPoolSampler.bb_margin_counts``: applied, fallback (too few
+    #: rows), skipped), read with the fence counters; empty on a sampler
+    #: without them.
+    bb_margin_counts: list[int] = field(default_factory=list)
 
     @property
     def total_sims(self) -> int:
         return self.n_games * self.n_iters
+
+
+def _lane_json(run: AcceptanceRun, flags: dict[str, str]) -> dict[str, Any]:
+    """SIM-478: the lane's machine-readable record (``SIM_ACCEPTANCE_JSON_OUT``).
+
+    The per-game series, the pool counters, the fence counters, the cell index
+    and the park factors, with the flag set that produced them. The band
+    arithmetic does not read it; the certification script does.
+    """
+    return {
+        "n_games": int(run.n_games),
+        "n_iters": int(run.n_iters),
+        "elapsed_s": float(run.elapsed_s),
+        "flags": dict(flags),
+        "per_game": [dict(g) for g in run.per_game],
+        "pool_counts": {str(k): int(v) for k, v in run.pool_counts.items()},
+        "fence_counts": [int(x) for x in run.fence_counts],
+        "bb_margin_counts": [int(x) for x in run.bb_margin_counts],
+        "cell_index": dict(run.cell_index),
+        "park_factors": {str(k): float(v) for k, v in run.park_factors.items()},
+    }
 
 
 #: The channels ``_install_probes`` tallies per game-sim. ``R``, ``SB``, ``CS``
@@ -736,6 +784,7 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
         open_sim_duckdb,
         resolve_manager_profiles_onto_state,
         resolve_park_run_factor,
+        resolve_venue_id,
         sim_kwargs_from_state,
     )
     from simulation.sim_loop import BoxScore, simulate_game
@@ -772,6 +821,13 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
             state.park_run_factor = await resolve_park_run_factor(
                 conn, duck, int(game_pk), int(getattr(state, "season", 2024) or 2024)
             )
+            # SIM-478: the venue itself, for the fence stage. Without it the
+            # stage PASSES every air ball (``fence_counts[3]``) and the lane
+            # grades the fence lines inactive. The harness resolves it the
+            # same way (``scripts/sim_stats.py``).
+            venue = await resolve_venue_id(conn, int(game_pk))
+            if venue is not None:
+                state.park = str(venue)
             # SIM-427: the managers' tendency profiles and the league means.
             resolve_manager_profiles_onto_state(state, duck)
             return state
@@ -782,6 +838,18 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
     try:
         for game_pk in game_pks:
             state = asyncio.run(_resolve(game_pk))
+            # SIM-478 guard. With the fence stage ON and no venue on the state
+            # the stage passes every air ball, so the lane would certify the
+            # fence lines inactive. The lane does not report that as a read.
+            if (
+                os.environ.get("SIM_FENCE_STAGE", "0") == "1"
+                and not str(getattr(state, "park", None) or "").strip().isdigit()
+            ):
+                pytest.fail(
+                    f"SIM-478: game {game_pk} resolved with no venue while "
+                    "SIM_FENCE_STAGE=1, so the fence stage cannot act.",
+                    pytrace=False,
+                )
             kwargs = sim_kwargs_from_state(state)
 
             # SIM-449 guard. A missing key here means the lane is measuring a
@@ -804,6 +872,19 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
             tally = _blank_tally()
             _install_probes(machine, tally, run.calls, run.pool_counts)
 
+            # SIM-478: the fence counters live on the process-cached sampler,
+            # so the first game zeroes them and the lane reads its own at the
+            # end. The per-game record starts from a snapshot of the pool
+            # counters (its BIP / PA are the deltas over this game).
+            fp = getattr(machine, "full_pool_sampler", None)
+            if not run.per_game and fp is not None and hasattr(fp, "fence_counts"):
+                fp.fence_counts[:] = 0
+            # SIM-478 §12.7: the wall-margin band's counters, zeroed with them.
+            if not run.per_game and fp is not None and hasattr(fp, "bb_margin_counts"):
+                fp.bb_margin_counts[:] = 0
+            pool_before = dict(run.pool_counts)
+            game_hr = game_h = game_r = 0
+
             for seed in range(n_iters):
                 for values in tally.values():
                     values[0] = 0
@@ -816,6 +897,9 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
                 run.observations["R"].extend([float(away_r), float(home_r)])
                 for name in TALLY_CHANNELS:
                     run.observations[name].extend([float(tally[name][0]), float(tally[name][1])])
+                game_r += away_r + home_r
+                game_hr += int(tally["HR"][0]) + int(tally["HR"][1])
+                game_h += int(tally["H"][0]) + int(tally["H"][1])
 
                 # SB / CS live on the RUNNER's boxscore line, so they partition by
                 # lineup membership rather than by the batting side.
@@ -840,14 +924,54 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
                     run.ties += 1
                 else:
                     run.observations["home_win_pct"].append(1.0 if home_r > away_r else 0.0)
+            # SIM-478: the game's record. The venue is the state's ``park``
+            # (a digit string; ``simulation.sim_loop._venue_of``), 0 when the
+            # state carries none.
+            park_text = str(getattr(state, "park", None) or "").strip()
+            run.per_game.append(
+                {
+                    "game_pk": int(game_pk),
+                    "venue_id": int(park_text) if park_text.isdigit() else 0,
+                    "season": int(getattr(state, "season", 0) or 0),
+                    "iters": int(n_iters),
+                    "HR": int(game_hr),
+                    "H": int(game_h),
+                    "R": int(game_r),
+                    "BIP": int(run.pool_counts.get("BIP", 0)) - int(pool_before.get("BIP", 0)),
+                    "PA": int(run.pool_counts.get("PA", 0)) - int(pool_before.get("PA", 0)),
+                }
+            )
             # SIM-518: the cell index's counters live on the process-cached
             # sampler, so the last machine's read covers the whole lane.
-            fp = getattr(machine, "full_pool_sampler", None)
             stats = getattr(fp, "cell_index_stats", None)
             if callable(stats):
                 run.cell_index = dict(stats())
+            # SIM-478: the fence counters, the same way.
+            fence = getattr(fp, "fence_counts", None)
+            if fence is not None:
+                run.fence_counts = [int(x) for x in fence]
+            margin = getattr(fp, "bb_margin_counts", None)
+            if margin is not None:
+                run.bb_margin_counts = [int(x) for x in margin]
     finally:
         duck.close()
         run.elapsed_s = time.perf_counter() - started
+
+    # SIM-478: the machine-readable record, when the operator asked for one.
+    json_out = os.environ.get("SIM_ACCEPTANCE_JSON_OUT", "").strip()
+    if json_out:
+        import json
+
+        # A record that cannot be written must not void the run the bands
+        # grade: warn, and let the bands read the run in memory.
+        try:
+            with open(json_out, "w", encoding="utf-8") as fh:
+                json.dump(_lane_json(run, production_flags), fh, indent=2)
+        except OSError as exc:
+            warnings.warn(
+                f"SIM-478: could not write the lane record to {json_out!r} ({exc}); "
+                "the bands grade the run in memory and the per-park read has no file.",
+                stacklevel=1,
+            )
 
     return run

@@ -87,6 +87,12 @@ os.environ["SIM_BB_BORN_SIGMA"] = "0"
 os.environ["SIM_BB_CLASS_FILTER"] = "0"
 os.environ["SIM_PARK_WALL_ZONE_ONLY"] = "0"
 os.environ["SIM_FENCE_STAGE"] = "0"
+# SIM-478 (the fence certification's amendments): the carry offset, the born
+# kernel's exponent per feature and the wall-margin band. All off =
+# byte-identical; the SIM-478 tests set the sampler attributes directly.
+os.environ["SIM_CARRY_OFFSET"] = "0"
+os.environ["SIM_BB_BORN_PER_FEATURE"] = "0"
+os.environ["SIM_BB_MARGIN_BAND"] = "0"
 
 # SIM-523 part D: the pitching change as a draw from the opportunity pool.
 # Off = the SIM-434 formula, production today and the OFF arm of the SIM-427

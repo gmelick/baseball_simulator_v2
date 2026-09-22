@@ -234,7 +234,20 @@ standing owner rulings that govern all new work:
   pool's own totals (`tests/acceptance/bands.py` `POOL_REFERENCES`, 16 per-opportunity
   bands); R / home_win_pct stay game-graded. **CERTIFIED 2026-09-09 (45 × 130 on the
   balanced set): all 16 pool bands PASS, R +0.1%;** the only non-pass is home_win_pct
-  (underpowered below 13,365 game-sims).
+  (underpowered below 13,365 game-sims). **⚠ Two corrections from 2026-09-21 (the fence
+  certification, CHANGES.md):** that lane, and every lane before 2026-09-21, ran the
+  fence stage INERT — the lane never put the venue on the game state, so the stage
+  passed every air ball (production and the accuracy comparison do resolve the venue;
+  the lane now does, and refuses to run the stage without one). And the first 45 × 130
+  lane since the powers-to-1 ruling (2026-09-21, the stage active) reads **four bands
+  RED: walks per PA +4.0%, hit by pitch +6.7%, steal attempts at second −9.1% and at
+  third −17.9%**; the other twelve pass (home runs +1.2%). Those four are the state of
+  production after the flips since 2026-09-09, unread until this lane. **The 2026-09-22
+  lane (the fence amendments: the carry offset, the class ruler, the wall-margin band —
+  `scripts/sim478_lane.txt`) reads the same four red plus doubles per ball in play +5.8%**:
+  the wall play is now right (near-wall balls draw doubles as the real ones do) and the
+  fix unmasked an over-production of doubles on ordinary air balls that the born kernel's
+  bandwidth owns (the sweep's); singles, hits, runs and home runs pass.
 - **The pool window (2026-08-20):** the last three COMPLETED seasons plus the current one
   (`RECENCY_FLOOR_SEASONS = 4`; full 2023-2026 today). Schema v20, `POOL_BUILDER_VERSION`
   sim515.1.
@@ -289,8 +302,12 @@ cell-occupancy census re-run (SIM-451 — RE-RAN 2026-09-13 at 2,880 cells: 0.25
 draws widen at MIN_CELL 20, so 20 stands and hand-as-a-weight has no case); the sim-loop
 decomposition (SIM-493, P3); the
 twelve segment markets' API / game-page surface (SIM-546, P2 — the prop-market work itself,
-SIM-421, CLOSED 2026-09-12, see the bullet below); three parked fence-resolution design rows
-(SIM-478/479/480). **Closed by the redesign's completion:** SIM-523 itself; the run-grading
+SIM-421, CLOSED 2026-09-12, see the bullet below); the outfield-fence certification
+(SIM-478/479/480 — BUILT AND RUN 2026-09-21: the lines pass every offline check and the
+lane's home-run band with the stage active; the wall play and the per-park pattern do NOT
+pass, and both defects sit in the born-ball draw, not the fence — the born kernel is flat
+in distance and the born ball's carry is park-blind; the row stays open for the owner's
+decision on those two; `CHANGES.md` 2026-09-21). **Closed by the redesign's completion:** SIM-523 itself; the run-grading
 question on defense-aware sims (SIM-520 — runs +0.1% with the fielder factor ON on the
 balanced set); the date-range lane (SIM-497a/b — absorbed by the balanced-set ruling); the
 cell index's ruling (SIM-467 — flipped 2026-09-08). The catcher receiving profile (SIM-517)
@@ -326,10 +343,18 @@ warm, was 31–35 s — and at 1 the factors read nearly flat, the part F findin
 sheet's summary table carries both columns.**; the runner engines score thin profiles
 so the matrices cover the pools; the actor bell-curve kernels and their bandwidths are
 DELETED. The fielding draw filters the cell by the born ball's class (`SIM_BB_CLASS_FILTER`),
-weights by the born ball's kernel (`SIM_BB_BORN_SIGMA` 1.0), the batter matrix
+weights by the born ball's kernel (`SIM_BB_BORN_SIGMA` 1.0 — since 2026-09-22 measured on
+the born ball's CLASS, a fly ball against the fly balls' spread, with the exponent per
+feature `SIM_BB_BORN_PER_FEATURE`), the batter matrix
 (`SIM_BB_BATTER_POWER` 4), the fielder matrix and the park only in the wall zone
 (`SIM_PARK_WALL_ZONE_ONLY`), then runs the fence stage (`SIM_FENCE_STAGE`;
-`park_geometry.json`, `--what park`). The pitch draw runs one draw per pitch at pitcher
+`park_geometry.json`, `--what park` — version 2 since 2026-09-21: eleven sectors over
+±55°, a line per park and SEASON GROUP, a published-distance prior for thin sectors;
+since 2026-09-22 the born ball's carry is read in the LIVE park's air through the
+document's per-park carry offsets, `SIM_CARRY_OFFSET` — Coors +21 ft — and a wall-zone air
+ball called short draws only rows within `SIM_BB_MARGIN_BAND` 15 ft of the same distance from
+THEIR park's fence; certified by `scripts/sim478_fence_check.py`, A1–A7, which runs in the
+run book of every geometry rebuild). The pitch draw runs one draw per pitch at pitcher
 power 1 through the cell index (`SIM_PITCH_CELL_INDEX`). The pitch /
 pitch-result split (`SIM_PITCH_RESULT_SPLIT`; fitted at pitcher 16 / 16, batter 8; it reds
 strikeouts −2.4% on the balanced set — SIM-527) was built and OFF until **2026-09-14, when
@@ -343,7 +368,8 @@ adds: sprint speed in both profiles (migration 0024, schema v24), the fielding c
 batted-ball pool (builder sim523g.1; the chain FACTOR is a follow-on), the catcher embedding
 without its got-away columns, the SIM-469 rebuild. The grade: the balanced 45-game set at
 45 × 130 (two lanes 2026-09-09, `scripts/sim523_lane_h.txt`) — the certified arm is green on
-every pool band, runs +0.1%. Next free ID SIM-528.
+every pool band, runs +0.1% (with the fence stage inert; the 2026-09-21 lane with the stage
+active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade bullet). Next free ID SIM-528.
 
 - **The eight unpriced prop markets + the official box-score ground truth (SIM-421 + SIM-545,
   BOTH CLOSED 2026-09-12 — owner decision; the wrong-game odds match, SIM-536, closed with

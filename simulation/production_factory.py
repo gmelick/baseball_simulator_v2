@@ -199,6 +199,15 @@ def apply_fielding_env(sampler: Any, env: Mapping[str, str] | None = None) -> No
     (0/1), ``SIM_BB_BATTER_POWER`` (1.0), ``SIM_PARK_WALL_ZONE_ONLY`` (0/1)
     with ``SIM_WALL_ZONE_DISTANCE`` (feet, 300), and the fence stage
     ``SIM_FENCE_STAGE`` (0/1) with ``SIM_FENCE_MARGIN`` (feet, 0 = decisive).
+
+    SIM-478 (the fence certification's amendments), all OFF by default:
+    ``SIM_CARRY_OFFSET`` (0/1) — the born ball's carry re-expressed in the
+    live park's air from the document's per-park offsets; ``SIM_BB_BORN_PER_FEATURE``
+    (0/1) — the born kernel's exponent per feature (its divisor 2 sigma^2
+    instead of 2 sigma^2 x the feature count); ``SIM_BB_MARGIN_BAND`` (feet,
+    0 = off) — an air ball the fence did not call over draws only rows within
+    this band of its margin to the wall, with ``SIM_BB_MARGIN_MIN_ROWS`` (20)
+    the fewest rows the band may leave before the rows stay as they were.
     """
     src = os.environ if env is None else env
 
@@ -209,15 +218,24 @@ def apply_fielding_env(sampler: Any, env: Mapping[str, str] | None = None) -> No
     sampler.park_wall_zone_only = flag("SIM_PARK_WALL_ZONE_ONLY")
     # SIM-523 part C4: the fence stage (0/1) and its band (feet, 10).
     sampler.fence_stage = flag("SIM_FENCE_STAGE")
+    # SIM-478 §11 / §12: the carry offset and the born kernel's exponent per feature.
+    sampler.carry_offset = flag("SIM_CARRY_OFFSET")
+    sampler.bb_born_per_feature = flag("SIM_BB_BORN_PER_FEATURE")
     for key, attr, default in (
         ("SIM_BB_BATTER_POWER", "bb_batter_power", 1.0),
         ("SIM_WALL_ZONE_DISTANCE", "wall_zone_distance", 300.0),
         ("SIM_FENCE_MARGIN", "fence_margin", 0.0),
+        # SIM-478 §12.7: the wall-margin band (feet; 0 = off).
+        ("SIM_BB_MARGIN_BAND", "bb_margin_band", 0.0),
     ):
         try:
             setattr(sampler, attr, float(src.get(key, str(default))))
         except ValueError:
             setattr(sampler, attr, default)
+    try:
+        sampler.bb_margin_min_rows = int(float(src.get("SIM_BB_MARGIN_MIN_ROWS", "20")))
+    except ValueError:
+        sampler.bb_margin_min_rows = 20
 
 
 def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
