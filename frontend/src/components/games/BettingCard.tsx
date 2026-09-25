@@ -28,6 +28,9 @@ export interface BettingCardProps {
 }
 
 const MARKET_ORDER = ['moneyline', 'total', 'run_line']
+// The edge label of a market -> its key in odds_source (the API keys the run
+// line's source 'runline' while its edges carry the label 'run_line').
+const SOURCE_KEY: Record<string, string> = { run_line: 'runline' }
 const MARKET_LABELS: Record<string, string> = {
   moneyline: 'Moneyline',
   total: 'Total',
@@ -108,7 +111,8 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
     <div className={styles.card}>
       {markets.map((market) => {
         const sides = byMarket.get(market) ?? []
-        const source = edges.odds_source[market]
+        const source = edges.odds_source[SOURCE_KEY[market] ?? market]
+        const pricing = edges.run_line_pricing
         return (
           <section key={market} className={styles.market}>
             <div className={styles.marketHeader}>
@@ -119,6 +123,17 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
                 </Badge>
               )}
             </div>
+
+            {market === 'run_line' && pricing?.shape === 'two_bets' && (
+              <p className={styles.note}>
+                Listed as two separate bets, not the two sides of one: each price is read
+                over{' '}
+                {pricing.reference_source === 'flat' || pricing.reference_source == null
+                  ? 'a flat 1.05 margin (no two-way market for this game)'
+                  : `the game's ${pricing.reference_source} margin`}
+                .
+              </p>
+            )}
 
             <div className={styles.sides}>
               {sides.map((e) => {

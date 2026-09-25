@@ -11,7 +11,8 @@ that pairing (plan: docs/audit/2026-09-12-sim518-fit-plan.md §6):
 
   * it REFUSES to pair reports whose provenance differs — the bundle's
     manifest timestamps, the calibration file's hash, the base seed, the
-    iteration count or the game list — unless ``--force`` says the operator
+    iteration count, the game list, or (SIM-549) the run lines' scoring stamp
+    and whether a report was re-scored — unless ``--force`` says the operator
     accepts the confound;
   * per market it reports the records, the games, the mean paired Brier and
     log-loss difference, the game-clustered bootstrap range and the SIM-539
@@ -82,9 +83,25 @@ def provenance_mismatches(a: dict[str, Any], b: dict[str, Any]) -> list[str]:
     """Every reason the two reports must not be paired; [] when they may."""
     pa, pb = a.get("params", {}), b.get("params", {})
     out: list[str] = []
-    for key in ("base_seed", "iterations", "seasons", "markets", "calibration_applied"):
+    # SIM-549: "run_line_scoring" too — a run line scored as two bets and one
+    # scored as a pair carry different market probabilities.
+    for key in (
+        "base_seed",
+        "iterations",
+        "seasons",
+        "markets",
+        "calibration_applied",
+        "run_line_scoring",
+    ):
         if pa.get(key) != pb.get(key):
             out.append(f"params.{key}: {pa.get(key)!r} vs {pb.get(key)!r}")
+    # SIM-549: a re-scored report holds the run lines' home bets only; a fresh
+    # run holds the away bets too, which would pair with nothing.
+    if bool(pa.get("rescored")) != bool(pb.get("rescored")):
+        out.append(
+            f"params.rescored: {bool(pa.get('rescored'))} vs {bool(pb.get('rescored'))} "
+            "(a re-scored report has no run-line away bets)"
+        )
     prov_a, prov_b = pa.get("provenance") or {}, pb.get("provenance") or {}
     if not prov_a or not prov_b:
         out.append("provenance missing on one report (run the backtest at or after SIM-518)")

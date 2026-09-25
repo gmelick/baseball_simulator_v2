@@ -210,7 +210,16 @@ def test_edges_respects_injected_odds_and_market_filter(patch_resolver):
     # The injected price is reflected on the offered side.
     for e in body["edges"]:
         assert e["offered_american"] == -110.0
-        assert e["line"] == -1.5
+    # SIM-549: each side carries its OWN spread — home -1.5, away +1.5 (the
+    # away side used to carry the home spread).
+    assert {e["side"]: e["line"] for e in body["edges"]} == {"home": -1.5, "away": 1.5}
+    assert body["run_line_pricing"] == {
+        "shape": "pair",
+        "home_line": -1.5,
+        "away_line": 1.5,
+        "reference_margin": None,
+        "reference_source": None,
+    }
 
 
 def test_edges_bad_market_is_422(patch_resolver):

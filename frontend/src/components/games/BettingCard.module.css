@@ -137,3 +137,10 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* SIM-549: how the run line was priced. */
+.note {
+  margin: 0 0 var(--sim-space-2);
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+}

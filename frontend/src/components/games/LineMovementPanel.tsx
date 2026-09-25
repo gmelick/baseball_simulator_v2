@@ -21,7 +21,8 @@ export interface LineMovementPanelProps {
 const MARKETS: Array<{ key: string; label: string }> = [
   { key: 'moneyline', label: 'Moneyline' },
   { key: 'total', label: 'Total' },
-  { key: 'run_line', label: 'Run line' },
+  // The API's market key is 'runline' ('run_line' was refused with a 422).
+  { key: 'runline', label: 'Run line' },
 ]
 
 export function LineMovementPanel({ gamePk }: LineMovementPanelProps): React.ReactElement {

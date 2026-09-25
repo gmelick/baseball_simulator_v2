@@ -200,7 +200,7 @@ export interface paths {
         };
         /**
          * Entry-vs-close CLV snapshot per side/book
-         * @description A thin projection of /line-movement: the line-movement series that carry an entry-vs-close CLV (>= 2 quotes with both opposite-side prices). Each model's clv.clv_prob / clv.beat_close answers 'did the opening price beat the close' for that side/book. numpy-free. 503 if no DB pool, 422 on a bad market_type.
+         * @description A thin projection of /line-movement: the line-movement series that carry an entry-vs-close CLV (>= 2 quotes and both ends priceable). Each model's clv.clv_prob / clv.beat_close answers 'did the opening price beat the close' for that side/book. A run-line series has a CLV only when its spread was the same at both ends (SIM-549). clv_basis says whether it was priced as a pair or as two separate bets. numpy-free. 503 if no DB pool, 422 on a bad market_type.
          */
         get: operations["get_game_clv_api_betting_games__game_pk__clv_get"];
         put?: never;
@@ -240,7 +240,7 @@ export interface paths {
         };
         /**
          * Opening->closing line-movement time-series per side/book
-         * @description Read the persisted raw.game_odds history for the (game_pk, market_type[, book]) and build the SIM-368 line-movement time-series: one series per (side, book) with the ordered quotes, the per-step + opening->closing deltas, the running implied-prob surface, the steam direction, the sharp-consensus flag, and the entry-vs-close CLV. numpy-free LineMovementModel list. 503 if no DB pool, 422 on a bad market_type.
+         * @description Read the persisted raw.game_odds history for the (game_pk, market_type[, book]) and build the SIM-368 line-movement time-series: one series per (side, book) with the ordered quotes, the per-step + opening->closing deltas, the running implied-prob surface, the steam direction, the sharp-consensus flag, and the entry-vs-close CLV. A run line (SIM-549) carries run_line_shape: pair, two_bets or mixed. When either end is two separate bets, both ends are priced on their own price over the game's two-way margin. A side whose spread moved gets no CLV; clv_note says why. numpy-free LineMovementModel list. 503 if no DB pool, 422 on a bad market_type.
          */
         get: operations["get_game_line_movement_api_betting_games__game_pk__line_movement_get"];
         put?: never;
@@ -991,8 +991,9 @@ export interface components {
          * @description The ``GET /api/betting/games/{game_pk}/clv`` envelope.
          *
          *     A thin snapshot projection of /line-movement: the entry-vs-close CLV of every
-         *     line-movement series that HAS one (a series with < 2 quotes or a missing
-         *     opposite-side price is omitted). Each row carries the side / book identity plus
+         *     line-movement series that HAS one. Omitted: a series with < 2 quotes, a pair
+         *     with a missing opposite-side price, and a run-line side whose spread moved
+         *     between the open and the close. Each row carries the side / book identity plus
          *     the CLV's ``clv_prob`` / ``beat_close`` for a compact "did I beat the close"
          *     view without the full quote series.
          */
@@ -1134,6 +1135,7 @@ export interface components {
             odds_source?: {
                 [key: string]: string;
             };
+            run_line_pricing?: components["schemas"]["RunLinePricingModel"] | null;
         };
         /** EngineCatalogEntry */
         EngineCatalogEntry: {
@@ -1539,6 +1541,10 @@ export interface components {
             /** Closing Implied Prob */
             closing_implied_prob?: number | null;
             clv?: components["schemas"]["CLVModel"] | null;
+            /** Clv Basis */
+            clv_basis?: string | null;
+            /** Clv Note */
+            clv_note?: string | null;
             /**
              * Direction
              * @default flat
@@ -1565,6 +1571,8 @@ export interface components {
             opening_implied_prob?: number | null;
             /** Quotes */
             quotes?: components["schemas"]["LineQuoteModel"][];
+            /** Run Line Shape */
+            run_line_shape?: string | null;
             /** Sharp Consensus */
             sharp_consensus?: boolean | null;
             /** Side */
@@ -1623,6 +1631,8 @@ export interface components {
             line_type: string;
             /** Other American */
             other_american?: number | null;
+            /** Other Line */
+            other_line?: number | null;
         };
         /**
          * LinescoreModel
@@ -2046,6 +2056,27 @@ export interface components {
             /** Substitutions */
             substitutions?: components["schemas"]["SubstitutionSlot"][] | null;
         };
+        /**
+         * RunLinePricingModel
+         * @description SIM-549: how the run line was priced.
+         *
+         *     ``shape`` is 'pair' (the away spread is the negative of the home spread:
+         *     the two prices de-vig against each other) or 'two_bets' (two separate bets:
+         *     each price over the game's two-way ``reference_margin``, taken from
+         *     ``reference_source`` -- 'total', 'moneyline' or 'flat').
+         */
+        RunLinePricingModel: {
+            /** Away Line */
+            away_line: number;
+            /** Home Line */
+            home_line: number;
+            /** Reference Margin */
+            reference_margin?: number | null;
+            /** Reference Source */
+            reference_source?: string | null;
+            /** Shape */
+            shape: string;
+        };
         /** SchemaInfo */
         SchemaInfo: {
             /** Name */
@@ -2093,6 +2124,7 @@ export interface components {
             odds_source?: {
                 [key: string]: string;
             };
+            run_line_pricing?: components["schemas"]["RunLinePricingModel"] | null;
             /** Signals */
             signals?: components["schemas"]["BetSignalModel"][];
         };
@@ -2121,7 +2153,9 @@ export interface components {
              * Extra
              * @default {}
              */
-            extra: Record<string, never>;
+            extra: {
+                [key: string]: unknown;
+            };
             /** Name */
             name: string;
             /** Sample */
@@ -2148,14 +2182,18 @@ export interface components {
             /** Sub Scores Meta */
             sub_scores_meta: components["schemas"]["SubScoreMeta"][];
             /** Subject */
-            subject: Record<string, never>;
+            subject: {
+                [key: string]: unknown;
+            };
         };
         /** SimQueryResponse */
         SimQueryResponse: {
             /** Bins */
             bins: components["schemas"]["SimBin"][];
             /** Diagnostic */
-            diagnostic: Record<string, never>;
+            diagnostic: {
+                [key: string]: unknown;
+            };
             /** Engine */
             engine: string;
             /** Method */
@@ -2180,7 +2218,9 @@ export interface components {
             /** Sub Scores Meta */
             sub_scores_meta: components["schemas"]["SubScoreMeta"][];
             /** Subject */
-            subject: Record<string, never>;
+            subject: {
+                [key: string]: unknown;
+            };
             /** Top N */
             top_n: components["schemas"]["SimMember"][];
         };
@@ -2521,7 +2561,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
         };
@@ -2546,7 +2588,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -2601,7 +2645,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -2635,7 +2681,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -2669,7 +2717,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -2703,7 +2753,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -2737,7 +2789,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -2770,7 +2824,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
             /** @description Validation Error */
@@ -2900,6 +2956,8 @@ export interface operations {
                 away_rl_ml?: number | null;
                 /** @description Injected HOME run line (e.g. -1.5) */
                 run_line?: number | null;
+                /** @description Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml (each injected, else the mock's) */
+                away_run_line?: number | null;
             };
             header?: never;
             path: {
@@ -3000,6 +3058,8 @@ export interface operations {
                 away_rl_ml?: number | null;
                 /** @description Injected HOME run line (e.g. -1.5) */
                 run_line?: number | null;
+                /** @description Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml (each injected, else the mock's) */
+                away_run_line?: number | null;
             };
             header?: never;
             path: {
@@ -3484,7 +3544,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>[];
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
         };
@@ -3506,7 +3568,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -3860,7 +3924,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -3889,7 +3955,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
@@ -3929,7 +3997,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };

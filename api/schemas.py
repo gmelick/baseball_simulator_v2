@@ -1189,6 +1189,9 @@ class LineQuoteModel(_ApiModel):
     other_american: float | None = None
     line: float | None = None
     implied_prob: float
+    #: SIM-549: the other side's own line (run lines only). A run-line quote is
+    #: a pair when it is the negative of ``line``; otherwise two separate bets.
+    other_line: float | None = None
 
     @classmethod
     def from_dataclass(cls, quote: Any) -> LineQuoteModel:
@@ -1204,6 +1207,9 @@ class LineQuoteModel(_ApiModel):
             other_american=(None if quote.other_american is None else float(quote.other_american)),
             line=None if quote.line is None else float(quote.line),
             implied_prob=float(quote.implied_prob),
+            other_line=(
+                None if getattr(quote, "other_line", None) is None else float(quote.other_line)
+            ),
         )
 
 
@@ -1245,6 +1251,16 @@ class LineMovementModel(_ApiModel):
     clv: CLVModel | None = None
     sharp_consensus: bool | None = None
 
+    #: SIM-549, run lines only: 'pair' / 'two_bets' / 'mixed' — whether the
+    #: book listed the two sides of one bet or two separate bets.
+    run_line_shape: str | None = None
+    #: How the CLV was priced: 'pair' (one two-way bet at both ends) or
+    #: 'two_bets' (an end was two separate bets, so both ends are priced on
+    #: their own price over the game's two-way margin). None without a CLV.
+    clv_basis: str | None = None
+    #: Run lines only: why there is no CLV, or a caveat on it, in plain words.
+    clv_note: str | None = None
+
     #: Derived from the source dataclass's properties.
     has_movement: bool = False
     beat_close: bool = False
@@ -1277,6 +1293,9 @@ class LineMovementModel(_ApiModel):
             direction=str(mv.direction),
             clv=None if mv.clv is None else CLVModel.from_dataclass(mv.clv),
             sharp_consensus=(None if mv.sharp_consensus is None else bool(mv.sharp_consensus)),
+            run_line_shape=getattr(mv, "run_line_shape", None),
+            clv_basis=getattr(mv, "clv_basis", None),
+            clv_note=getattr(mv, "clv_note", None),
             has_movement=bool(mv.has_movement),
             beat_close=bool(mv.beat_close),
         )

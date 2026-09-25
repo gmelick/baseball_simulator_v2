@@ -1,3 +1,186 @@
+# Build — the live betting pages read a run line by its shape: /edges and /signals price two separate bets as two, the line-movement series refuses a CLV across a moved spread, and the game page says which it is — SIM-549 follow-on, 2026-09-25
+
+**What changed.** The accuracy comparison learned on 2026-09-25 that a run line is either one
+bet with two sides (a PAIR: the away spread is the negative of the home spread) or two
+separate bets (home −1.5 / away −1.5 both lose on a tie; home +1.5 / away +1.5 both win on a
+one-run game). The live pages still treated every run line as a pair. The owner asked:
+"Update the live line-movement, CLV and edges pages to reflect the updated run line betting
+logic."
+
+1. **One rule, one home.** The shape rule and its pricing moved from `scripts/clv_backtest.py`
+   into `betting/clv_engine.py`: `run_line_is_pair`, `reference_margin_from_prices` (the
+   game's two-way margin, band 1.00–1.15, else a flat 1.05), `devig_one_sided`,
+   `run_line_bet_cover_prob` (the sim's cover probability at the side's OWN spread) and
+   `one_sided_edge_report`. The accuracy comparison imports them; its output does not change.
+2. **/edges and /signals** (`api/routes/betting.py`) take a new `away_run_line` query
+   parameter. Without it, the away line mirrors an injected home line, else it is the mock
+   odds' own away spread. A pair prices as before. Two separate bets price each side at its
+   own spread, from its own price over the margin of the game's total, then its moneyline,
+   then 1.05. Both responses carry `run_line_pricing`: the shape, both lines, the margin and
+   its source.
+3. **The line-movement and CLV series** (`betting/line_movement.py`). Each quote carries the
+   other side's spread (`other_line`). Each run-line series reports `run_line_shape` (pair,
+   two_bets or mixed), `clv_basis` (pair or two_bets) and `clv_note`. The CLV compares one bet
+   at two times:
+   - When the side's spread moved between the open and the close, the two quotes are different
+     bets. The series gives NO CLV, and the note says so.
+   - When both ends are pairs, the CLV is the pair de-vig, as before.
+   - When either end is two separate bets, BOTH ends are priced the same way: each price over
+     the book's margin on the game's total or moneyline in the same snapshot. So a change of
+     shape alone never moves the CLV. The note names the flat 1.05 when it priced an end.
+   - A missing spread gives no CLV and a note, never an error.
+   The reader fetches the reference rows only when a two-bet run line is present.
+4. **The game page** (React). The line-movement chart shows a "two separate bets" badge and
+   the CLV note. It shows "line changed" instead of "steam" when the line itself moved, and
+   names each line in the open / close footer. The betting card says when the run line was
+   priced as two bets, and over which margin. `frontend/openapi.json` and the generated types
+   were refreshed.
+
+**Four defects fixed on the way (they predate this change).** (a) The line-movement panel
+asked the API for `market_type=run_line`; the API's key is `runline`, so the run-line tab
+always failed with a 422. (b) The chart's steam arrow tested for `up` / `down`; the API sends
+`toward` / `away`, so the arrow always read flat. (c) The TypeScript `LineQuote` type did not
+match the API's model. (d) The betting card looked up the run line's odds source under its
+edge label `run_line`; the API keys it `runline`, so the "mock odds" badge never showed.
+
+**The review (26 agents: three lenses — the logic, the API contract with the frontend, the
+docs — then a skeptic per finding).** It checked the moneyline and total series against the
+old code on 3,000 random series (identical), a pair series to the bit, 400 pair cases of
+/edges, the regenerated OpenAPI file (byte-identical to the app's) and the served web bundle.
+It confirmed 18 findings; all are fixed:
+- **The reference snapshot (medium).** The loader writes a snapshot's moneyline, run line and
+  total about 2 ms apart, total last. The first rule ("the latest total at or before the
+  quote") never saw the quote's own snapshot: a closing quote read the OPENING total. On 534
+  real games the CLV moved by up to 0.034 and `beat_close` flipped on 31 of 509 series. The
+  reader now takes the reference row of the quote's line type nearest the quote in time, as
+  the accuracy comparison reads the closing total for the closing run line. The test that hid
+  it stamped the totals before the quotes; a new test uses the real order.
+- **Mixed shapes (low).** A series that was a pair at one end and two bets at the other
+  compared a pair de-vig with a one-sided price. The gap between the two methods read as a
+  move: 60 of 61 such series at an unchanged price showed a CLV, and 14 read "beat close". Both
+  ends now use one method.
+- A missing spread raised a TypeError (a 500); a missing other-side spread was priced as two
+  bets; an away-only price never fetched the reference; the notes said "the game's margin"
+  when the flat 1.05 priced the bet; `clv_basis` said `one_sided` where every other field says
+  `two_bets` (renamed); the chart showed "steam" across a changed line; the run-line odds badge
+  (above).
+- Docs and comments: "both lose on a tie" is false for the (+1.5, +1.5) shape, the most common
+  full-game two-bet shape (169 rows against 123); the /clv docs listed only the old no-CLV
+  reasons; the /edges docs did not say the margin reads the total and moneyline prices, which
+  can be the mock's under an injected run line; the backtest's dependency rows; the
+  `betting/__init__` note; long sentences; this file's SIM-549 entry.
+
+**Checked on the live stack.** Game 825104's run-line series: the home side opened +1.5 (−176) and
+closed −1.5 (+165). The page shows "line changed", names both lines, and gives no CLV ("the line
+moved from +1.5 to −1.5: not the same bet"). The away side stayed at −1.5 (a pair at the open,
+two bets at the close) and reads a CLV of −0.0064, both ends priced over the game's total. On
+game 564873 the away price is +178 at both ends. The closing quote now reads the closing total
+(margin 1.0519; the first build read the opening 1.0498), so the CLV is the margin's move alone,
+−0.0007. /edges on game 825104 with the away line injected at −1.5 (home +165, away +150, total
+−110 / −110) prices two bets over the total's margin 1.0476: fair 0.360 home and 0.382 away.
+Paired, the same prices read about 0.485 each. Without injected odds the route reports the mock's
+pair and the card now shows its "mock odds" badge on the run line.
+
+**A live outage, about ten minutes, caused by this change.** The app hot-reloads `api/` from
+the bind mount, but `betting/` is baked into the image. The reloaded route imported the new
+`betting.clv_engine` names from the image's old copy, raised an ImportError, and the app went
+unhealthy. `docker compose build app` then `docker compose up -d app` fixed it; the app booted
+11/11 engines. CLAUDE.md §2a now carries the rule: a change that adds a `betting/` name used
+by `api/` needs the image rebuilt BEFORE the `api/` edit lands.
+
+**Tests.** `tests/unit/test_sim549_live_run_lines.py` (new, 23 tests): the primitives, the
+series (the shapes, a moved line, a missing spread, the flat note, an unchanged price across a
+shape change), the reference reader (the real snapshot order), the database reader over a stub
+connection and both routes. `test_api_betting_sim36x.py` checks `run_line_pricing` on a pair.
+The container's unit and regression lanes after the review's fixes: 4,587 passed, 1 skipped
+(slow tests excluded; the first build's run with them read 4,655 passed). Ruff, mypy, `tsc` and eslint are clean.
+
+# Build — the run lines scored by their shape in the accuracy comparison: a pair as one bet, two separate bets as two; the first-five run line's "beat" of the line was the whole artefact, and the row now reads the simulator 0.007 behind the line — SIM-549, 2026-09-25
+
+**What changed.** The accuracy comparison (`scripts/clv_backtest.py`) used to price every
+closing run line as the two sides of ONE bet. The book often lists two SEPARATE bets instead —
+home −1.5 at +350 and away −1.5 at +150, both lost on a tie — and pairing their prices inflated
+the line's probability by a fifth. On the 2024 first-five run line that inflation was the whole
+of the simulator's apparent lead over the line. The owner's instruction "implement the tech
+design for SIM-549" built the approved plan
+(`docs/audit/2026-09-23-sim549-first-five-run-line-two-bets-plan.md`; §11 is the build record):
+
+1. **One shape rule, one scorer.** A run line is a pair if and only if the away spread is the
+   negative of the home spread. A pair keeps its one record, byte-identical to before. Two
+   separate bets give two records: the home bet under the market's own key and the away bet
+   under `<market>_away` (`f5_runline_away`, `runline_away`, `f1_runline_away`), each priced
+   from its OWN price over the book's margin on the same game's two-way markets — the
+   segment's total, then the full-game total, then the moneyline, then a flat 1.05, never a
+   three-way market. The full-game, first-five and first-inning run lines share the scorer.
+2. **The away bet's probability.** `market_probability` / `market_outcome`
+   (`simulation/game_market_distributions.py`) take a side; the away bet is priced at its own
+   spread.
+3. **The report says what it holds.** `params.run_line_scoring = "sim549.1"`;
+   `counters.market_shapes` gives each run line's pairs, its games listed as two bets and each
+   side's line against its own outcome rate; a warning names them at load. The skill table and
+   the paired read refuse to mix a stamped report with an unstamped one, or a re-scored report
+   (home bets only) with a fresh run.
+4. **The stored reports re-scored**, beside the originals (`scripts/sim549_rescore_runlines.py`,
+   `<name>.sim549.json`): the home record of every one-sided run line re-priced; the away
+   record joins from the next backtest run (a report does not store what its simulator
+   probability needs).
+
+**What it shows.** The 1,000-game 2024 baseline, re-scored: the first-five run line — excluded
+until now as LINE SUSPECT — enters the table with 986 records, the simulator behind the line by
++0.0066 [+0.0022, +0.0110] (the old read: ahead by 0.028), the line's bias −0.006 (was +0.158),
+its AUC 0.63 (was 0.56). That is where the simulator stands on the first-five total (+0.007)
+and the run line (+0.006). Nothing about the simulator changed: its probability on every record
+is the same. The full-game run line moves from +0.0052 to +0.0057; the first-inning run line
+does not move (all pairs in 2024). The paired reads' simulator-side differences are identical in
+every bucket.
+
+**Two guards the plan did not have (from the review).** (a) A reference market whose margin
+sits outside 1.00–1.15 is skipped for the next. (b) The skill table's price-sum guard cannot see
+a one-sided record (it has no fade price), and on 2025 that guard was what kept the mis-stored
+first-inning +1 / +1 rows out of the table. So a run line's one-sided records must now sit
+within 4 standard errors of their own outcome rate. Run on every season's real closing rows
+(2021–2026, both run lines, both sides), it excludes the 2025 first-inning run line alone (z
+−6.6 / −4.4) and passes every other (|z| ≤ 1.5).
+
+**The review (52 agents: five lenses — the arithmetic, every report reader, mutation coverage,
+the re-score, the docs — a skeptic per finding, a completeness critic).** The cover arithmetic
+matched a hand oracle on 4,928 cases; 60,000 random pair rows gave byte-identical records to
+the old code; the built functions reproduce the plan's real-data figures (one-sided first-five
+home 0.438 against a cover rate of 0.448, away 0.375 against 0.369). Fixed from it: the three
+re-scored reports that escaped `.gitignore` with the run's DSN; a mislabelled tally count (a
+game with one record is `one_record_games`, not "one bet pushed"); the re-score's one `--force`
+split into `--accept-problems` (recorded in the report) and `--overwrite`; twelve surviving
+mutants, each now killed by a test; stale docstrings and the technical docs.
+
+**Plan corrections** (§11.3): four of the run book's twelve files are paired reads, regenerated
+rather than re-scored; the paused design's run01 / run02 exist (re-scored beside themselves; the
+design read uses the simulator's Brier only, but a resumed design sees the away markets on no
+common game until those two arms re-run); a one-sided record leaves the hypothetical return
+entirely (the plan said its reference side is priced); one test case in §7 was reversed; the
+first-inning figures of §2.2 used the first-five total's margin; a fresh run's table shifts
+every row's minimum sample and some bootstrap ranges, because the away keys add rows — compare
+arms with the paired read.
+
+**Not built, for the owner:** the 2025 first-inning +1 / +1 rows are still in the store (a
+loader question, unfiled; the guard keeps them out of any read). The live /line-movement, /clv
+and /edges routes took the same rule the same day (the entry above).
+
+**Files.** `simulation/game_market_distributions.py`; `scripts/clv_backtest.py`;
+`scripts/sim548_market_skill.py`; `scripts/sim518_pair_accuracy.py`;
+`scripts/sim549_rescore_runlines.py` (new); `.gitignore`. Tests:
+`tests/unit/test_sim421_segment_markets.py` (+9, one fixture gained its away spread),
+`tests/unit/test_sim538_accuracy_comparison.py` (+9, two fixtures), `tests/unit/test_sim548_instruments.py`
+(+6), `tests/unit/test_sim549_rescore.py` (new, 10). Regenerated: `scripts/sim548_baseline_1000_skill.{txt,json}`,
+`scripts/sim548_skill_first{250,500}.json`, `scripts/sim548_market_calibration_2024split.{txt,json}`;
+new: the four paired reads' `.sim549.{json,txt}`. Docs: `docs/technical/scripts-frontend.md`,
+`pipeline-betting-db.md`, `simulation.md`; the plan (status, §11). `BACKLOG.xlsx`: the SIM-549
+row deleted; the next free ID stays SIM-555.
+
+**The QA gate.** ruff, ruff format and mypy clean. The four test files pass on the host except
+the one test that needs the container's FastAPI. The container lane (`pytest tests/unit/ tests/regression/
+tests/acceptance/test_band_arithmetic_sim450.py`, the docs and deploy files mounted): 4,638
+passed, 1 skipped, 0 failed.
+
 # Build — the two-strike foul tip and foul bunt are strike three in the pitch pool: the class expression fixed and made one tested constant, the pitch pool rebuilt for all ten seasons, and the pool's labels now checked against real plate appearances — SIM-553, 2026-09-25
 
 **What changed for the model.** The pitch pool's class for a pitch comes from the MLB feed's
@@ -233,6 +416,55 @@ and 20 failed on files the container does not mount (`CLAUDE.md`, `WORKFLOW.md`,
 `build_all_engines: 11/11`, calibration applied. 3. The ten-game smoke (above). 4. This
 record; the backlog row; the cheat sheet. No lane: at about one play in fifty games no band
 can move.
+
+# Design — the first-five run line scored as two separate bets in the accuracy comparison: PROPOSED and APPROVED the same day (three decisions as recommended, the record's identity as the alternative) — SIM-549, 2026-09-23
+
+**What the ticket asks.** The accuracy comparison must score the first-five run line as
+two records per game — the home team leads by two or more after five, the away team leads
+by two or more — each priced from its own line with the book's margin removed by the same
+game's two-way first-five markets, never by pairing it with the other team's price; a test
+on a real payload; the skill table's guard accepts the row again; the 2024 baseline's rows
+re-scored from the stored reports without re-running the simulator.
+
+**What the code and the data say** (the plan is
+`docs/audit/2026-09-23-sim549-first-five-run-line-two-bets-plan.md`; the page is
+https://claude.ai/artifact/BY2ypcrDS8C3ttANsPYxdD). The store is right and the scorer is wrong. The scorer never reads the away
+spread, so it cannot tell a pair (away +0.5 against home −0.5) from two separate bets
+(both −1.5) and prices every row as a pair. The shape is in 24% of the first-five closing
+rows (3,289 of 13,715) and 80% of 2024's (1,946 of 2,433 — that season's closing snapshot
+carries the ±1.5 pair on four games in five); the full-game run line has it on 3% of rows
+and the first-inning run line on 10%, and both scorers treat those as pairs too. Measured on
+3,216 real games with the shape: a one-sided price carries the same margin as the game's
+two-way markets, and dividing it by the same game's first-five total margin (mean 1.0585)
+calibrates both sides within a point and bin by bin (home 0.438 against a rate of 0.448,
+away 0.375 against 0.369); pairing the two prices, the method today, reads 0.537 against
+0.448; the three-way first-five moneyline's margin (1.22, the tie is priced) over-corrects by
+a tenth and must not enter. On the 1,000-game baseline the row reads a line 15.8 points too
+high and the simulator "beating" it by 0.028 of Brier; re-scored on the stored prices (the
+home record; 789 of 986 are one-sided) the line is unbiased (−0.6 points, its discrimination
+0.56 → 0.63) and the simulator is behind it by 0.007 — the same standing as the first-five
+total and the run line. The artefact is the whole of the "beat". The stored reports can
+re-price the home record from their own first-five total prices (975 of 986 games) and
+cannot build the away record (no per-iteration margin is kept). Found on the way: the
+first-inning (+1.0, +1.0) rows of the 2025 load (768 rows, 764 games) read as mis-stored
+under every method (a cover rate of 0.885 against an implied 0.465) — a loader question,
+not filed.
+
+**Recommendation.** One shape rule — a pair if and only if the away spread is the negative
+of the home spread — in one run-line scorer that both the full-game and the segment paths
+call; a pair keeps today's one record; two separate bets give two records, one per side,
+each priced from its own line, the margin from the same game's two-way total of the same
+segment (then the full-game total, the moneyline pair, a flat 1.05; never a three-way
+market); the away bet's record under its own market key (`f5_runline_away`, `runline_away`,
+`f1_runline_away`; the market type unchanged), so no record field and no pairing key
+changes; a per-market shape tally and a warning line in the backtest's report; `scripts/sim549_rescore_runlines.py` re-prices the home records of
+the twelve stored reports beside the originals with a stamp, and the two derived skill
+tables are regenerated; the away record joins from the next run. Nine tests, one on game
+744796's real payload. No simulator change, no data change, no weight, no restart. **The
+owner took the four decisions on 2026-09-23: the reference margin, the re-score's scope and
+the rule's scope as recommended; the record's identity as the alternative — distinct market
+keys for the away bet rather than a `side` field, so the away bet is its own row in every
+table and its own market in the composite objective.** Nothing is built.
 
 # Build — the outfield fence's three amendments landed and RUN: the born ball read in the live park's air (the carry offset), the born-ball kernel measured on the ball's class, and the wall-margin band; A1–A7 pass and the wall play now reads as the real balls do (C PASS) — SIM-478/479/480, 2026-09-22
 

@@ -52,21 +52,35 @@ import numpy as np
 BINS = [0.0, 0.2, 0.35, 0.5, 0.65, 0.8, 1.0001]
 #: A real two-way pair's implied probabilities add to about 1.03-1.10 (the
 #: book's margin). Outside this band the two prices are not two sides of one
-#: bet — the first-five run line is two separate bets, home -1.5 and away -1.5,
-#: which the comparison prices as a pair (SIM-549) — and the market probability
-#: is not trustworthy.
+#: bet, and the market probability is not trustworthy. The guard found the
+#: first-five run line, whose closing row is often two separate bets (home
+#: -1.5 and away -1.5) that the comparison priced as a pair. Since SIM-549 the
+#: comparison scores such a row as two bets, each record with no fade price,
+#: so the mean reads the pairs only and the run line enters on its own.
 OVERROUND_OK = (1.0, 1.15)
+#: SIM-549: the guard above reads only records that carry both prices. A
+#: run-line bet the book listed on its own carries no fade price, so it needs
+#: its own check: its line's mean probability against its own outcome rate.
+#: A gap over ONE_SIDED_LINE_Z standard errors, on at least ONE_SIDED_LINE_MIN_N
+#: records, is a mis-stored row (such as the 2025 first-inning +1 / +1 rows),
+#: and the row is excluded. The backtest's warning uses the same two numbers.
+RUN_LINE_MARKET_TYPES = ("runline", "f5_runline", "f1_runline")
+ONE_SIDED_LINE_Z = 4.0
+ONE_SIDED_LINE_MIN_N = 30
 DEFAULT_MIN_N = 100
 DEFAULT_BOOTSTRAP = 1000
 GAME_MARKET_ORDER = [
     "moneyline",
     "runline",
+    "runline_away",  # SIM-549: the away bet of a run line listed as two bets
     "total",
     "f5_moneyline",
     "f5_runline",
+    "f5_runline_away",
     "f5_total",
     "f1_moneyline",
     "f1_runline",
+    "f1_runline_away",
     "f1_total",
     "first_inning_run",
     "team_total_home",
@@ -97,6 +111,13 @@ def _provenance_key(report: dict[str, Any]) -> dict[str, Any]:
         "fatigue_tto_sigma": prov.get("fatigue_tto_sigma"),
         "manager": prov.get("manager"),
         "split": prov.get("split"),
+        # SIM-549: a run line scored as two bets and one scored as a pair are
+        # two different market probabilities; never merge them unknowingly.
+        "run_line_scoring": p.get("run_line_scoring"),
+        # A re-scored report holds the run lines' home bets only; a fresh run
+        # holds the away bets too. Merged, the away rows would cover some
+        # games and the home rows all of them.
+        "run_line_rescored": bool(p.get("rescored")),
     }
 
 
@@ -186,13 +207,39 @@ def _implied(american: float) -> float:
 
 def _mean_overround(recs: list[dict[str, Any]]) -> float | None:
     """The mean of the two prices' implied probabilities added up, over the
-    records that carry both prices; None when none does (a three-way market)."""
+    records that carry both prices. None when none does: a three-way market,
+    or a run line's away bet (SIM-549: a bet listed on its own)."""
     vals = [
         _implied(r["market_side_price"]) + _implied(r["market_other_price"])
         for r in recs
         if r.get("market_side_price") is not None and r.get("market_other_price") is not None
     ]
     return float(np.mean(vals)) if vals else None
+
+
+def _one_sided_line(recs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """SIM-549: the line's calibration over a market's one-sided run-line
+    records (no fade price). The bias is the line's mean probability minus
+    the outcome rate; z is the bias over sqrt(mean(p(1 - p)) / n), its
+    standard error under a calibrated line. None when there is no such record."""
+    one = [
+        r
+        for r in recs
+        if r.get("market_type") in RUN_LINE_MARKET_TYPES and r.get("market_other_price") is None
+    ]
+    if not one:
+        return None
+    pm = np.array([float(r["market_prob"]) for r in one])
+    y = np.array([float(r["outcome"]) for r in one])
+    se = float(np.sqrt(max(float(np.mean(pm * (1.0 - pm))), 1e-12) / len(one)))
+    bias = float(pm.mean() - y.mean())
+    return {
+        "n": len(one),
+        "line_mean": float(pm.mean()),
+        "outcome_rate": float(y.mean()),
+        "bias": bias,
+        "z": bias / se,
+    }
 
 
 def market_rows(
@@ -211,7 +258,14 @@ def market_rows(
         n = len(recs)
         base_rate = float(y.mean())
         overround = _mean_overround(recs)
-        line_ok = overround is None or (OVERROUND_OK[0] <= overround <= OVERROUND_OK[1])
+        pairs_ok = overround is None or (OVERROUND_OK[0] <= overround <= OVERROUND_OK[1])
+        one_sided = _one_sided_line(recs)
+        one_sided_ok = (
+            one_sided is None
+            or one_sided["n"] < ONE_SIDED_LINE_MIN_N
+            or abs(one_sided["z"]) <= ONE_SIDED_LINE_Z
+        )
+        line_ok = pairs_ok and one_sided_ok
         brier_sim = float(np.mean((ps - y) ** 2))
         brier_mkt = float(np.mean((pm - y) ** 2))
         brier_base = float(base_rate * (1.0 - base_rate))
@@ -244,6 +298,7 @@ def market_rows(
                 "games": int(len(np.unique(g))),
                 "enters": n >= min_n and line_ok,
                 "overround": overround,
+                "one_sided_line": one_sided,
                 "line_ok": line_ok,
                 "outcome_rate": base_rate,
                 "brier_sim": brier_sim,
@@ -393,7 +448,9 @@ def print_table(rows: list[dict[str, Any]], prov: dict[str, Any], min_n: int) ->
         f"(pitch pitcher {(prov.get('split') or {}).get('SIM_PITCH_PITCHER_POWER')}, "
         f"result pitcher {(prov.get('split') or {}).get('SIM_RESULT_PITCHER_POWER')}, "
         f"result batter {(prov.get('split') or {}).get('SIM_RESULT_BATTER_POWER')}); "
-        f"manager draw={(prov.get('manager') or {}).get('SIM_MANAGER_DRAW')}"
+        f"manager draw={(prov.get('manager') or {}).get('SIM_MANAGER_DRAW')}; "
+        f"run lines scored {prov.get('run_line_scoring') or 'as pairs (before SIM-549)'}"
+        f"{' (re-scored: the home bets only)' if prov.get('run_line_rescored') else ''}"
     )
     print(
         "  Brier: lower is better. base = a forecast that always says the market's outcome rate. "
@@ -409,8 +466,16 @@ def print_table(rows: list[dict[str, Any]], prov: dict[str, Any], min_n: int) ->
     print(hdr)
     for r in rows:
         note = ""
-        if not r["line_ok"]:
-            note = f"LINE SUSPECT: the two prices add to {r['overround']:.2f} — two separate bets priced as one (SIM-549) — excluded"
+        one = r.get("one_sided_line")
+        if not r["line_ok"] and (
+            r["overround"] is not None and not OVERROUND_OK[0] <= r["overround"] <= OVERROUND_OK[1]
+        ):
+            note = f"LINE SUSPECT: the two prices add to {r['overround']:.2f} — not the two sides of one bet — excluded"
+        elif not r["line_ok"] and one is not None:
+            note = (
+                f"LINE SUSPECT: the one-sided line says {one['line_mean']:.3f}, the bets came true "
+                f"{one['outcome_rate']:.3f} (z {one['z']:+.1f}) — mis-stored lines? — excluded"
+            )
         elif not r["enters"]:
             note = f"under {min_n} records"
         elif r["gap_hi"] < 0:

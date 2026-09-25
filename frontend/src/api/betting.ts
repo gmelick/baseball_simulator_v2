@@ -28,6 +28,20 @@ export interface BetSignal {
   report: EdgeReport
 }
 
+/**
+ * How the run line was priced (SIM-549). A `pair` is one bet with two sides
+ * (the away spread is the negative of the home spread): the two prices de-vig
+ * against each other. `two_bets` is two separate bets (e.g. home -1.5 and
+ * away -1.5): each price is read over the game's two-way `reference_margin`.
+ */
+export interface RunLinePricing {
+  shape: 'pair' | 'two_bets' | string
+  home_line: number
+  away_line: number
+  reference_margin: number | null
+  reference_source: string | null
+}
+
 export interface EdgesResponse {
   game_pk: number
   n_iterations: number
@@ -36,6 +50,7 @@ export interface EdgesResponse {
   /** market → "injected" | "mock" (where each market's prices came from). */
   odds_source: Record<string, string>
   edges: EdgeReport[]
+  run_line_pricing?: RunLinePricing | null
 }
 
 export interface SignalsResponse {
@@ -45,16 +60,23 @@ export interface SignalsResponse {
   config: Record<string, number>
   odds_source: Record<string, string>
   signals: BetSignal[]
+  run_line_pricing?: RunLinePricing | null
 }
 
 // --- line-movement / CLV (SIM-396) ----------------------------------------
 
+/** One timestamped quote for one side of a market (LineQuoteModel). */
 export interface LineQuote {
-  american: number | null
-  implied_prob: number | null
+  fetched_at: string | null
+  line_type: string
+  book: string
+  is_sharp_book: boolean
+  american: number
+  other_american: number | null
   line: number | null
-  ts: string | null
-  is_closing: boolean
+  implied_prob: number
+  /** SIM-549: the other side's own spread (run lines only). */
+  other_line?: number | null
 }
 
 export interface LineMovement {
@@ -67,12 +89,20 @@ export interface LineMovement {
   closing_american: number | null
   opening_implied_prob: number | null
   closing_implied_prob: number | null
+  line_delta?: number | null
   implied_prob_series: number[]
+  /** 'toward' | 'away' | 'flat' — where the price steamed for this side. */
   direction: string
   clv: Record<string, unknown> | null
   sharp_consensus: boolean | null
   has_movement: boolean
   beat_close: boolean
+  /** SIM-549, run lines: 'pair' | 'two_bets' | 'mixed'. */
+  run_line_shape?: string | null
+  /** How the CLV was priced: 'pair' | 'two_bets' (an end was two separate bets). */
+  clv_basis?: string | null
+  /** Why there is no CLV, or a caveat on it. */
+  clv_note?: string | null
 }
 
 export interface LineMovementResponse {

@@ -3,7 +3,7 @@
 > Project guide for Claude Code. This is a pitch-by-pitch Monte-Carlo MLB game simulator built and run
 > as a **sports-trading hedge fund**: the product is player-prop prediction and betting-edge validation,
 > anchored to **Closing Line Value (CLV)** as the gold-standard metric. Work is executed by a **9-agent
-> team** with cross-validation. Read this file first, then `docs/HANDOFF_PHASE6.md` before starting work.
+> team** with cross-validation. Read this file first before starting work.
 
 ---
 
@@ -510,6 +510,11 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   `scripts/` are picked up by the running container only after `docker compose build app` +
   `docker compose up -d app` (recreate).  Edits to the mounted dirs are picked up by
   `docker compose restart app` alone.
+- **`betting/` is NOT mounted either, and the app hot-reloads `api/`.** An edit to a
+  mounted `api/` file that imports a NEW `betting/` name breaks the reload: the app
+  fails to import until the image is rebuilt (a ten-minute outage on 2026-09-25).
+  Rebuild first (`docker compose build app`, then `docker compose up -d app`), then
+  edit `api/`.
 - **Git Bash on Windows mangles container paths.** Any `docker compose exec` / `docker compose run`
   command from Git Bash that uses a Linux container path like `/app/scripts/foo.py` gets translated
   to `C:/Program Files/Git/app/scripts/foo.py` before Docker sees it.  Prefix with

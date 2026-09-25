@@ -35,7 +35,9 @@
    "SIM_RESULT_BATTER_POWER": "8",
    "SIM_RESULT_PITCH_SIGMA": null,
    "SIM_RESULT_DENSITY_POWER": null
-  }
+  },
+  "run_line_scoring": "sim549.1",
+  "run_line_rescored": true
  },
  "records": 40501,
  "markets": [
@@ -46,6 +48,7 @@
    "games": 249,
    "enters": true,
    "overround": 1.0825820095777985,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.4297872340425532,
    "brier_sim": 0.24221170212765958,
@@ -66,7 +69,7 @@
    "spread_mkt": 0.051557160653618844,
    "auc_sim": 0.5874279592138318,
    "auc_mkt": 0.5340161814688932,
-   "corr_sim": 0.1236539211718609,
+   "corr_sim": 0.12365392117186087,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -113,6 +116,7 @@
    "games": 243,
    "enters": true,
    "overround": 1.0399547193373155,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.014548981571290009,
    "brier_sim": 0.01439815712900097,
@@ -133,7 +137,7 @@
    "spread_mkt": 0.010990688830006671,
    "auc_sim": 0.5781824146981628,
    "auc_mkt": 0.6219451735199767,
-   "corr_sim": 0.046023960932570517,
+   "corr_sim": 0.04602396093257045,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -180,6 +184,7 @@
    "games": 250,
    "enters": true,
    "overround": 1.0632117403862889,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.10037684138403563,
    "brier_sim": 0.08801586159643714,
@@ -200,7 +205,7 @@
    "spread_mkt": 0.06765560030357448,
    "auc_sim": 0.6596973296699583,
    "auc_mkt": 0.6733739007925471,
-   "corr_sim": 0.1865177639203823,
+   "corr_sim": 0.18651776392038252,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -247,6 +252,7 @@
    "games": 250,
    "enters": true,
    "overround": 1.0744409524764145,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.15485623726511208,
    "brier_sim": 0.13200627122481323,
@@ -267,7 +273,7 @@
    "spread_mkt": 0.027930687811883632,
    "auc_sim": 0.5301873365886365,
    "auc_mkt": 0.5351219877088024,
-   "corr_sim": 0.03440469952374726,
+   "corr_sim": 0.034404699523747216,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -314,6 +320,7 @@
    "games": 245,
    "enters": true,
    "overround": 1.059656813948668,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.10863509749303621,
    "brier_sim": 0.09738398328690809,
@@ -334,7 +341,7 @@
    "spread_mkt": 0.04849466613387525,
    "auc_sim": 0.5758029513888889,
    "auc_mkt": 0.6305575031160968,
-   "corr_sim": 0.0746668243519031,
+   "corr_sim": 0.074666824351903,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -381,6 +388,7 @@
    "games": 250,
    "enters": true,
    "overround": 1.0701127797505277,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.4489472492642065,
    "brier_sim": 0.24675091691193116,
@@ -401,7 +409,7 @@
    "spread_mkt": 0.06263584341584101,
    "auc_sim": 0.5464296769044686,
    "auc_mkt": 0.5626233005194937,
-   "corr_sim": 0.08198639247613708,
+   "corr_sim": 0.08198639247613722,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -448,6 +456,7 @@
    "games": 250,
    "enters": true,
    "overround": 1.0789422763541296,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.2816742081447964,
    "brier_sim": 0.2044277375565611,
@@ -468,7 +477,7 @@
    "spread_mkt": 0.04811614283385663,
    "auc_sim": 0.5373883565759099,
    "auc_mkt": 0.5585461214938494,
-   "corr_sim": 0.060113699846824555,
+   "corr_sim": 0.06011369984682432,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -515,6 +524,7 @@
    "games": 250,
    "enters": true,
    "overround": 1.0766879978508948,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.41306805335744967,
    "brier_sim": 0.2383514130680534,
@@ -535,7 +545,7 @@
    "spread_mkt": 0.08979145695275276,
    "auc_sim": 0.5959093101845878,
    "auc_mkt": 0.6026338993171255,
-   "corr_sim": 0.17001120173216966,
+   "corr_sim": 0.17001120173216908,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -582,6 +592,7 @@
    "games": 250,
    "enters": true,
    "overround": 1.0698610489415166,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.5523637186156978,
    "brier_sim": 0.23779108798914272,
@@ -602,7 +613,7 @@
    "spread_mkt": 0.09650991771152659,
    "auc_sim": 0.5976250838555033,
    "auc_mkt": 0.6232890063107345,
-   "corr_sim": 0.21547827583264584,
+   "corr_sim": 0.21547827583264573,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -649,6 +660,7 @@
    "games": 250,
    "enters": true,
    "overround": 1.0747397309826168,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.36382159836993433,
    "brier_sim": 0.2329492415666742,
@@ -669,7 +681,7 @@
    "spread_mkt": 0.061045363047170384,
    "auc_sim": 0.5488816720442371,
    "auc_mkt": 0.5782158572260595,
-   "corr_sim": 0.07953687662174934,
+   "corr_sim": 0.07953687662174956,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -716,6 +728,7 @@
    "games": 247,
    "enters": true,
    "overround": 1.06966959241296,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.4854771784232365,
    "brier_sim": 0.2621836099585062,
@@ -736,7 +749,7 @@
    "spread_mkt": 0.05302115195667046,
    "auc_sim": 0.5470343948166528,
    "auc_mkt": 0.58427247036118,
-   "corr_sim": 0.08776330408588466,
+   "corr_sim": 0.08776330408588472,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -783,6 +796,7 @@
    "games": 250,
    "enters": true,
    "overround": 1.0418431385267768,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.504,
    "brier_sim": 0.24724858305232067,
@@ -803,7 +817,7 @@
    "spread_mkt": 0.07955669804694153,
    "auc_sim": 0.5974142345110087,
    "auc_mkt": 0.5937980030721967,
-   "corr_sim": 0.16024375098269014,
+   "corr_sim": 0.1602437509826905,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -849,28 +863,35 @@
    "n": 250,
    "games": 250,
    "enters": true,
-   "overround": 1.0469980305245605,
+   "overround": 1.0457644215440702,
+   "one_sided_line": {
+    "n": 1,
+    "line_mean": 0.6376811594202898,
+    "outcome_rate": 1.0,
+    "bias": -0.3623188405797102,
+    "z": -0.7537783614444091
+   },
    "line_ok": true,
    "outcome_rate": 0.484,
    "brier_sim": 0.24493,
    "brier_sim_lo": 0.22803258,
    "brier_sim_hi": 0.26128781,
-   "brier_mkt": 0.24438635260771355,
-   "brier_mkt_lo": 0.23301055134849868,
-   "brier_mkt_hi": 0.2563758754036341,
+   "brier_mkt": 0.2438804464595099,
+   "brier_mkt_lo": 0.2322761800338161,
+   "brier_mkt_hi": 0.2560448859790674,
    "brier_base": 0.249744,
    "skill_sim": 0.004813999999999985,
-   "skill_mkt": 0.0053576473922864465,
-   "gap": 0.0005436473922864615,
-   "gap_lo": -0.00923154537399678,
-   "gap_hi": 0.010015606370325714,
+   "skill_mkt": 0.005863553540490091,
+   "gap": 0.0010495535404901057,
+   "gap_lo": -0.008573043742440885,
+   "gap_hi": 0.010518611928893772,
    "bias_sim": 0.009560000000000013,
-   "bias_mkt": 0.020852486456084174,
+   "bias_mkt": 0.021433980324534585,
    "spread_sim": 0.136705985238394,
-   "spread_mkt": 0.09659648823850864,
+   "spread_mkt": 0.09695611245763787,
    "auc_sim": 0.5989172913062977,
-   "auc_mkt": 0.5903004676789032,
-   "corr_sim": 0.1726772191525159,
+   "auc_mkt": 0.5939842398616183,
+   "corr_sim": 0.1726772191525158,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -917,6 +938,7 @@
    "games": 242,
    "enters": true,
    "overround": 1.0468714145619251,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.4834710743801653,
    "brier_sim": 0.2537115702479339,
@@ -937,7 +959,7 @@
    "spread_mkt": 0.01810491596307746,
    "auc_sim": 0.5314529914529914,
    "auc_mkt": 0.4865982905982906,
-   "corr_sim": 0.04503291977279605,
+   "corr_sim": 0.04503291977279603,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -984,6 +1006,7 @@
    "games": 250,
    "enters": true,
    "overround": null,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.436,
    "brier_sim": 0.24490800000000004,
@@ -1004,7 +1027,7 @@
    "spread_mkt": 0.06209393998572413,
    "auc_sim": 0.5575509141778906,
    "auc_mkt": 0.5844231895373805,
-   "corr_sim": 0.08966774354904118,
+   "corr_sim": 0.0896677435490414,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -1049,29 +1072,36 @@
    "market_type": "f5_runline",
    "n": 249,
    "games": 249,
-   "enters": false,
-   "overround": 0.7592750447041514,
-   "line_ok": false,
+   "enters": true,
+   "overround": 1.0621250902855237,
+   "one_sided_line": {
+    "n": 196,
+    "line_mean": 0.3280515940293294,
+    "outcome_rate": 0.32142857142857145,
+    "bias": 0.006623022600757922,
+    "z": 0.20064329015907123
+   },
+   "line_ok": true,
    "outcome_rate": 0.36947791164658633,
    "brier_sim": 0.21999477911646587,
    "brier_sim_lo": 0.19860588353413655,
    "brier_sim_hi": 0.2421144779116466,
-   "brier_mkt": 0.25202022400556195,
-   "brier_mkt_lo": 0.24194944898697354,
-   "brier_mkt_hi": 0.2628837355187092,
+   "brier_mkt": 0.21593203152672175,
+   "brier_mkt_lo": 0.19694139067521316,
+   "brier_mkt_hi": 0.23365952596918302,
    "brier_base": 0.2329639844518637,
    "skill_sim": 0.012969205335397832,
-   "skill_mkt": -0.019056239553698257,
-   "gap": -0.03202544488909609,
-   "gap_lo": -0.05611682275471812,
-   "gap_hi": -0.009115266699016756,
+   "skill_mkt": 0.017031952925141952,
+   "gap": 0.00406274758974412,
+   "gap_lo": -0.003974324710075526,
+   "gap_hi": 0.012194351845886952,
    "bias_sim": -0.023092369477911656,
-   "bias_mkt": 0.14196267438594617,
+   "bias_mkt": -0.005054048624397844,
    "spread_sim": 0.11482389148618573,
-   "spread_mkt": 0.08240616496320569,
+   "spread_mkt": 0.10387742546603286,
    "auc_sim": 0.6167612849626143,
-   "auc_mkt": 0.5566671282193298,
-   "corr_sim": 0.24076476252887027,
+   "auc_mkt": 0.646185267238992,
+   "corr_sim": 0.24076476252887044,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -1118,6 +1148,7 @@
    "games": 244,
    "enters": true,
    "overround": 1.0629996344496695,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.4262295081967213,
    "brier_sim": 0.26007909836065574,
@@ -1138,7 +1169,7 @@
    "spread_mkt": 0.03160613694113957,
    "auc_sim": 0.5025412087912088,
    "auc_mkt": 0.49038461538461536,
-   "corr_sim": -0.02209899355546121,
+   "corr_sim": -0.022098993555461178,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -1185,6 +1216,7 @@
    "games": 250,
    "enters": true,
    "overround": null,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.228,
    "brier_sim": 0.1810684,
@@ -1252,6 +1284,7 @@
    "games": 250,
    "enters": true,
    "overround": 1.049943744666698,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.512,
    "brier_sim": 0.0881808,
@@ -1272,7 +1305,7 @@
    "spread_mkt": 0.37251267437855345,
    "auc_sim": 0.9098040471311475,
    "auc_mkt": 0.9060578893442623,
-   "corr_sim": 0.8077704028152193,
+   "corr_sim": 0.8077704028152184,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -1319,6 +1352,7 @@
    "games": 25,
    "enters": false,
    "overround": 1.075421692952625,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.2,
    "brier_sim": 0.178848,
@@ -1386,6 +1420,7 @@
    "games": 225,
    "enters": true,
    "overround": 1.0655904892515973,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.4311111111111111,
    "brier_sim": 0.2534484444444445,
@@ -1406,7 +1441,7 @@
    "spread_mkt": 0.02907866150121966,
    "auc_sim": 0.5143766108247423,
    "auc_mkt": 0.5190077319587629,
-   "corr_sim": 0.017799257109457484,
+   "corr_sim": 0.017799257109457442,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -1453,6 +1488,7 @@
    "games": 244,
    "enters": true,
    "overround": 1.0666617545863375,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.5491803278688525,
    "brier_sim": 0.21865942622950815,
@@ -1473,7 +1509,7 @@
    "spread_mkt": 0.08696505923510925,
    "auc_sim": 0.6724219810040706,
    "auc_mkt": 0.4852103120759837,
-   "corr_sim": 0.34803161613080663,
+   "corr_sim": 0.34803161613080685,
    "reliability": [
     {
      "bin": "0.00-0.20",
@@ -1520,6 +1556,7 @@
    "games": 235,
    "enters": true,
    "overround": 1.0656602984119847,
+   "one_sided_line": null,
    "line_ok": true,
    "outcome_rate": 0.5574468085106383,
    "brier_sim": 0.2147731914893617,
@@ -1540,7 +1577,7 @@
    "spread_mkt": 0.09414845771215542,
    "auc_sim": 0.690619495008808,
    "auc_mkt": 0.4270772166764533,
-   "corr_sim": 0.37263024543056233,
+   "corr_sim": 0.37263024543056256,
    "reliability": [
     {
      "bin": "0.00-0.20",

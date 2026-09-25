@@ -165,5 +165,15 @@ scripts/sim427_probe_*.json
 scripts/sim518_accuracy_tto0*.json
 scripts/sim548_accuracy_split.json
 scripts/sim548_baseline_2024_chunk*.json
+# SIM-549: the re-scored copies beside the reports above (each 11 MB, and each
+# carries the run's DSN). Named one by one, like the originals.
+scripts/sim427_accuracy_on.sim549.json
+scripts/sim427_accuracy_off.sim549.json
+scripts/sim518_accuracy_tto05.sim549.json
+scripts/sim518_accuracy_tto07.sim549.json
+scripts/sim548_accuracy_split.sim549.json
+scripts/sim548_baseline_2024_chunk2.sim549.json
+scripts/sim548_baseline_2024_chunk3.sim549.json
+scripts/sim548_baseline_2024_chunk4.sim549.json
 scripts/*.npz
 scripts/sim548_design_*/

@@ -54,7 +54,7 @@ signal endpoints take a layered approach, in precedence:
 
   1. INJECTED query params -- a caller can pass the exact American prices
      (home_ml/away_ml, over_ml/under_ml, home_rl_ml/away_rl_ml) + lines
-     (total_line, run_line) and the endpoint prices against those. This makes the
+     (total_line, run_line, away_run_line) and the endpoint prices against those. This makes the
      endpoint exercisable with real lines from any source and keeps the math
      deterministic / testable.
   2. the MOCK odds provider -- when a market's prices are NOT injected, the
@@ -68,6 +68,24 @@ the Postgres pool (the real opening->closing series), so it is pool-backed (503
 without a pool) -- there is no synthetic fallback for a time-series that only the
 DB has.
 
+A RUN LINE IS A PAIR, OR TWO SEPARATE BETS (SIM-549)
+---------------------------------------------------
+Each team's run line has its own spread. The two are the two sides of ONE bet
+only when the away spread is the negative of the home spread (home -1.5 / away
++1.5). Then the two prices de-vig against each other, as before. Otherwise the
+book listed two SEPARATE bets, such as home -1.5 / away -1.5. /edges prices each
+bet from its own price over the book's margin. The margin comes from the game's
+total, then its moneyline, then a flat 1.05 (``betting.clv_engine.devig_one_sided``).
+Those reference prices are the injected over_ml / under_ml and home_ml / away_ml,
+else the mock's. So an injected run line can rest on the mock's total.
+
+Every run-line report carries its OWN side's spread in ``line``. The away side
+used to carry the home spread. ``away_run_line`` injects the away spread. Left
+out, it mirrors an injected ``run_line`` (a pair) or takes the provider's. The
+response's ``run_line_pricing`` says which shape was priced. The line-movement and
+CLV reads apply the same rule per quote. They compare only the SAME bet (see
+``betting.line_movement``).
+
 Owner: Backend Developer + Betting Analyst (SIM-367 / SIM-368 / SIM-369).
 """
 
@@ -75,6 +93,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -100,8 +119,13 @@ from betting.clv_engine import (
     MarketSide,
     OddsQuote,
     TwoWayMarket,
+    devig_one_sided,
     moneyline_edge_report,
+    one_sided_edge_report,
+    reference_margin_from_prices,
+    run_line_bet_cover_prob,
     run_line_edge_report,
+    run_line_is_pair,
     total_over_under_edge_report,
 )
 from betting.line_movement import fetch_line_movement
@@ -177,7 +201,8 @@ def _build_edge_reports(
     home_rl_ml: float | None,
     away_rl_ml: float | None,
     run_line: float | None,
-) -> tuple[list[EdgeReport], dict[str, str]]:
+    away_run_line: float | None = None,
+) -> tuple[list[EdgeReport], dict[str, str], dict[str, Any] | None]:
     """Build the EdgeReports for the requested markets off the sim + odds.
 
     For each requested market the two sides are priced:
@@ -186,15 +211,21 @@ def _build_edge_reports(
         (``moneyline_edge_report``), de-vigged against (home_ml, away_ml).
       * **total** -- OVER + UNDER off the SIM-327 ``total_scores`` array
         (``total_over_under_edge_report``) at ``total_line``, vs (over_ml, under_ml).
-      * **runline** -- HOME + AWAY cover off the score margin
-        (``run_line_edge_report``) at ``run_line`` (the HOME line; AWAY is its
-        complement), vs (home_rl_ml, away_rl_ml).
+      * **runline** -- HOME + AWAY cover off the score margin, each side at its
+        OWN spread (``run_line`` for home, ``away_run_line`` for away). A pair
+        (the away spread is the negative of the home spread) de-vigs
+        (home_rl_ml, away_rl_ml) against each other (``run_line_edge_report``).
+        Two separate bets (SIM-549) price each bet from its own price over
+        the book's margin: the total's, then the moneyline's, then a flat 1.05
+        (``one_sided_edge_report``).
 
     Prices come from the injected query params when supplied, else the mock
     provider (per market). A side whose simulated probability is degenerate (0.0 /
     1.0 -- no priceable edge) is skipped via :func:`_safe_report` rather than
-    erroring the endpoint. Returns ``(reports, odds_source_by_market)`` where the
-    source map flags "injected" / "mock" per market for the response envelope.
+    erroring the endpoint. Returns ``(reports, odds_source_by_market,
+    run_line_pricing)``: the source map flags "injected" / "mock" per market, and
+    ``run_line_pricing`` (None without the run line) says how the run line was
+    priced.
     """
     reports: list[EdgeReport] = []
     odds_source: dict[str, str] = {}
@@ -245,33 +276,95 @@ def _build_edge_reports(
             ),
         )
 
+    run_line_pricing: dict[str, Any] | None = None
     if "runline" in markets:
         mock = _mock_odds(game_pk, "runline")
         h, h_inj = _resolve_price(home_rl_ml, mock, "home_spread_ml")
         a, a_inj = _resolve_price(away_rl_ml, mock, "away_spread_ml")
-        # The HOME run line (negative == home laying runs); AWAY is its negation.
+        # The HOME run line (negative == home laying runs).
         eff_line, line_inj = _resolve_price(run_line, mock, "home_spread")
-        odds_source["runline"] = "injected" if (h_inj or a_inj or line_inj) else "mock"
-        _safe_report(
-            reports,
-            lambda: run_line_edge_report(
-                summary,
-                TwoWayMarket(side=MarketSide.HOME, entry=OddsQuote(side=h, other=a, line=eff_line)),
-                side=MarketSide.HOME,
-                line=eff_line,
-            ),
-        )
-        _safe_report(
-            reports,
-            lambda: run_line_edge_report(
-                summary,
-                TwoWayMarket(side=MarketSide.AWAY, entry=OddsQuote(side=a, other=h, line=eff_line)),
-                side=MarketSide.AWAY,
-                line=eff_line,
-            ),
-        )
+        # SIM-549: the AWAY team's own spread. Injected; else the mirror of an
+        # injected home line (a pair); else the provider's own away spread.
+        if away_run_line is not None:
+            away_line, away_inj = float(away_run_line), True
+        elif line_inj or mock.get("away_spread") is None:
+            away_line, away_inj = -eff_line, False
+        else:
+            away_line, away_inj = float(mock["away_spread"]), False
+        odds_source["runline"] = "injected" if (h_inj or a_inj or line_inj or away_inj) else "mock"
+        if run_line_is_pair(eff_line, away_line):
+            # A pair: the two prices de-vig against each other, as before.
+            _safe_report(
+                reports,
+                lambda: run_line_edge_report(
+                    summary,
+                    TwoWayMarket(
+                        side=MarketSide.HOME, entry=OddsQuote(side=h, other=a, line=eff_line)
+                    ),
+                    side=MarketSide.HOME,
+                    line=eff_line,
+                ),
+            )
+            # The away report prices at the mirrored home line; it carries the
+            # AWAY team's own spread (it used to carry the home spread).
+            _safe_report(
+                reports,
+                lambda: replace(
+                    run_line_edge_report(
+                        summary,
+                        TwoWayMarket(
+                            side=MarketSide.AWAY, entry=OddsQuote(side=a, other=h, line=eff_line)
+                        ),
+                        side=MarketSide.AWAY,
+                        line=eff_line,
+                    ),
+                    line=away_line,
+                ),
+            )
+            run_line_pricing = {"shape": "pair", "home_line": eff_line, "away_line": away_line}
+        else:
+            # Two separate bets: each from its own price over the game's
+            # two-way margin (the total, then the moneyline, then 1.05).
+            total_mock = _mock_odds(game_pk, "total")
+            ml_mock = _mock_odds(game_pk, "moneyline")
+            margin, source = reference_margin_from_prices(
+                [
+                    (
+                        "total",
+                        _resolve_price(over_ml, total_mock, "over_ml")[0],
+                        _resolve_price(under_ml, total_mock, "under_ml")[0],
+                    ),
+                    (
+                        "moneyline",
+                        _resolve_price(home_ml, ml_mock, "home_ml")[0],
+                        _resolve_price(away_ml, ml_mock, "away_ml")[0],
+                    ),
+                ]
+            )
+            for side, price, own_line in (
+                (MarketSide.HOME, h, eff_line),
+                (MarketSide.AWAY, a, away_line),
+            ):
+                _safe_report(
+                    reports,
+                    lambda side=side, price=price, own_line=own_line: one_sided_edge_report(
+                        label="run_line",
+                        side=side,
+                        line=own_line,
+                        sim_prob=run_line_bet_cover_prob(summary, side, own_line),
+                        offered_american=price,
+                        fair_prob=devig_one_sided(price, margin),
+                    ),
+                )
+            run_line_pricing = {
+                "shape": "two_bets",
+                "home_line": eff_line,
+                "away_line": away_line,
+                "reference_margin": margin,
+                "reference_source": source,
+            }
 
-    return reports, odds_source
+    return reports, odds_source, run_line_pricing
 
 
 def _parse_markets(markets: str | None) -> tuple[str, ...]:
@@ -346,6 +439,22 @@ async def _summary_and_winprob(
 # ---------------------------------------------------------------------------
 
 
+class RunLinePricingModel(BaseModel):
+    """SIM-549: how the run line was priced.
+
+    ``shape`` is 'pair' (the away spread is the negative of the home spread:
+    the two prices de-vig against each other) or 'two_bets' (two separate bets:
+    each price over the game's two-way ``reference_margin``, taken from
+    ``reference_source`` -- 'total', 'moneyline' or 'flat').
+    """
+
+    shape: str
+    home_line: float
+    away_line: float
+    reference_margin: float | None = None
+    reference_source: str | None = None
+
+
 class EdgesResponse(BaseModel):
     """The ``GET /api/betting/games/{game_pk}/edges`` envelope.
 
@@ -360,6 +469,8 @@ class EdgesResponse(BaseModel):
     markets: list[str] = Field(default_factory=list)
     odds_source: dict[str, str] = Field(default_factory=dict)
     edges: list[EdgeReportModel] = Field(default_factory=list)
+    #: SIM-549: how the run line was priced (None when it was not requested).
+    run_line_pricing: RunLinePricingModel | None = None
 
 
 class SignalsResponse(BaseModel):
@@ -376,6 +487,8 @@ class SignalsResponse(BaseModel):
     config: dict[str, float] = Field(default_factory=dict)
     odds_source: dict[str, str] = Field(default_factory=dict)
     signals: list[BetSignalModel] = Field(default_factory=list)
+    #: SIM-549: how the run line was priced (None when it was not requested).
+    run_line_pricing: RunLinePricingModel | None = None
 
 
 class LineMovementResponse(BaseModel):
@@ -396,8 +509,9 @@ class ClvSnapshotResponse(BaseModel):
     """The ``GET /api/betting/games/{game_pk}/clv`` envelope.
 
     A thin snapshot projection of /line-movement: the entry-vs-close CLV of every
-    line-movement series that HAS one (a series with < 2 quotes or a missing
-    opposite-side price is omitted). Each row carries the side / book identity plus
+    line-movement series that HAS one. Omitted: a series with < 2 quotes, a pair
+    with a missing opposite-side price, and a run-line side whose spread moved
+    between the open and the close. Each row carries the side / book identity plus
     the CLV's ``clv_prob`` / ``beat_close`` for a compact "did I beat the close"
     view without the full quote series.
     """
@@ -446,6 +560,15 @@ async def get_game_edges(
     home_rl_ml: float | None = Query(None, description="Injected home run-line price (American)"),
     away_rl_ml: float | None = Query(None, description="Injected away run-line price (American)"),
     run_line: float | None = Query(None, description="Injected HOME run line (e.g. -1.5)"),
+    away_run_line: float | None = Query(
+        None,
+        description=(
+            "Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists "
+            "two separate bets); defaults to the mirror of run_line (a pair). Two "
+            "separate bets are priced over the margin of over_ml / under_ml, then "
+            "home_ml / away_ml (each injected, else the mock's)"
+        ),
+    ),
 ) -> EdgesResponse:
     requested = _parse_markets(markets)
     summary, win_prob = await _summary_and_winprob(
@@ -456,7 +579,7 @@ async def get_game_edges(
         use_cache=use_cache,
     )
 
-    reports, odds_source = _build_edge_reports(
+    reports, odds_source, run_line_pricing = _build_edge_reports(
         summary,
         win_prob,
         game_pk=int(game_pk),
@@ -469,6 +592,7 @@ async def get_game_edges(
         home_rl_ml=home_rl_ml,
         away_rl_ml=away_rl_ml,
         run_line=run_line,
+        away_run_line=away_run_line,
     )
 
     return EdgesResponse(
@@ -478,6 +602,9 @@ async def get_game_edges(
         markets=list(requested),
         odds_source=odds_source,
         edges=[EdgeReportModel.from_dataclass(r) for r in reports],
+        run_line_pricing=(
+            None if run_line_pricing is None else RunLinePricingModel(**run_line_pricing)
+        ),
     )
 
 
@@ -523,6 +650,15 @@ async def get_game_signals(
     home_rl_ml: float | None = Query(None, description="Injected home run-line price (American)"),
     away_rl_ml: float | None = Query(None, description="Injected away run-line price (American)"),
     run_line: float | None = Query(None, description="Injected HOME run line (e.g. -1.5)"),
+    away_run_line: float | None = Query(
+        None,
+        description=(
+            "Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists "
+            "two separate bets); defaults to the mirror of run_line (a pair). Two "
+            "separate bets are priced over the margin of over_ml / under_ml, then "
+            "home_ml / away_ml (each injected, else the mock's)"
+        ),
+    ),
 ) -> SignalsResponse:
     requested = _parse_markets(markets)
     summary, win_prob = await _summary_and_winprob(
@@ -533,7 +669,7 @@ async def get_game_signals(
         use_cache=use_cache,
     )
 
-    reports, odds_source = _build_edge_reports(
+    reports, odds_source, run_line_pricing = _build_edge_reports(
         summary,
         win_prob,
         game_pk=int(game_pk),
@@ -546,6 +682,7 @@ async def get_game_signals(
         home_rl_ml=home_rl_ml,
         away_rl_ml=away_rl_ml,
         run_line=run_line,
+        away_run_line=away_run_line,
     )
 
     config = BetSignalConfig(
@@ -568,6 +705,9 @@ async def get_game_signals(
         },
         odds_source=odds_source,
         signals=[BetSignalModel.from_dataclass(s) for s in signals],
+        run_line_pricing=(
+            None if run_line_pricing is None else RunLinePricingModel(**run_line_pricing)
+        ),
     )
 
 
@@ -616,8 +756,11 @@ async def _fetch_movements(
         "[, book]) and build the SIM-368 line-movement time-series: one series per "
         "(side, book) with the ordered quotes, the per-step + opening->closing "
         "deltas, the running implied-prob surface, the steam direction, the "
-        "sharp-consensus flag, and the entry-vs-close CLV. numpy-free "
-        "LineMovementModel list. 503 if no DB pool, 422 on a bad market_type."
+        "sharp-consensus flag, and the entry-vs-close CLV. A run line (SIM-549) "
+        "carries run_line_shape: pair, two_bets or mixed. When either end is two "
+        "separate bets, both ends are priced on their own price over the game's "
+        "two-way margin. A side whose spread moved gets no CLV; clv_note says why. "
+        "numpy-free LineMovementModel list. 503 if no DB pool, 422 on a bad market_type."
     ),
 )
 async def get_game_line_movement(
@@ -648,10 +791,12 @@ async def get_game_line_movement(
     summary="Entry-vs-close CLV snapshot per side/book",
     description=(
         "A thin projection of /line-movement: the line-movement series that carry "
-        "an entry-vs-close CLV (>= 2 quotes with both opposite-side prices). Each "
-        "model's clv.clv_prob / clv.beat_close answers 'did the opening price beat "
-        "the close' for that side/book. numpy-free. 503 if no DB pool, 422 on a "
-        "bad market_type."
+        "an entry-vs-close CLV (>= 2 quotes and both ends priceable). Each model's "
+        "clv.clv_prob / clv.beat_close answers 'did the opening price beat the "
+        "close' for that side/book. A run-line series has a CLV only when its "
+        "spread was the same at both ends (SIM-549). clv_basis says whether it was "
+        "priced as a pair or as two separate bets. numpy-free. 503 if no DB pool, "
+        "422 on a bad market_type."
     ),
 )
 async def get_game_clv(
@@ -679,4 +824,5 @@ __all__ = [
     "SignalsResponse",
     "LineMovementResponse",
     "ClvSnapshotResponse",
+    "RunLinePricingModel",
 ]

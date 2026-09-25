@@ -85,11 +85,29 @@ line actually moved.  Each row carries BOTH sides of its market in paired
 columns (moneyline ``home_ml`` / ``away_ml``; runline ``home_spread_ml`` /
 ``away_spread_ml`` with ``home_spread`` / ``away_spread``; total ``over_ml`` /
 ``under_ml`` with ``total_line``), so a single row de-vigs as a two-way market.
+
+A RUN LINE IS A PAIR, OR TWO SEPARATE BETS (SIM-549)
+---------------------------------------------------
+A run-line row is a two-way market only when the away spread is the negative of
+the home spread (home −1.5 / away +1.5). The book also lists two SEPARATE bets,
+such as home −1.5 / away −1.5 or home +1.5 / away +1.5. Their prices must not
+be de-vigged against each other. So on a run line:
+
+  * each quote carries the other side's own spread (``other_line``);
+  * the series says whether its rows were pairs, two separate bets, or a mix
+    (:attr:`LineMovement.run_line_shape`);
+  * the CLV compares only the SAME bet. When the side's spread moved between
+    the opening and the closing quote, the series carries no CLV. The note
+    says why (:attr:`LineMovement.clv_note`);
+  * when either endpoint is two separate bets, BOTH endpoints are priced the
+    same way: each price over the book's margin on the game's total, then its
+    moneyline, at that time (:func:`betting.clv_engine.devig_one_sided`).
+    :attr:`LineMovement.clv_basis` says which way the CLV was priced.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -97,7 +115,11 @@ from betting.clv_engine import (
     CLV,
     MarketSide,
     clv_from_odds,
+    clv_from_prob,
+    devig_one_sided,
     implied_prob_from_american,
+    reference_margin_from_prices,
+    run_line_is_pair,
 )
 
 # ===========================================================================
@@ -119,6 +141,17 @@ _MARKET_COLUMNS: dict[tuple[str, MarketSide], tuple[str, str, str | None]] = {
     ("total", MarketSide.OVER): ("over_ml", "under_ml", "total_line"),
     ("total", MarketSide.UNDER): ("under_ml", "over_ml", "total_line"),
 }
+
+#: SIM-549: the OTHER side's own line column on a run line (the away spread for
+#: the home series and the reverse). It tells a pair from two separate bets.
+_OTHER_LINE_COLUMN: dict[tuple[str, MarketSide], str] = {
+    ("runline", MarketSide.HOME): "away_spread",
+    ("runline", MarketSide.AWAY): "home_spread",
+}
+
+#: ``reference_margin_at(quote) -> (margin, source)``: the book's margin on the
+#: same game's two-way markets as of a quote (see :func:`fetch_line_movement`).
+ReferenceMarginAt = Callable[["LineQuote"], tuple[float, str]]
 
 #: Valid (market_type, side) side-pairings, so callers (and the API) can
 #: enumerate what a market exposes without hard-coding the table layout.
@@ -187,6 +220,14 @@ class LineQuote:
     line: float | None = None
     #: RAW single-side implied probability of ``american`` (margin included).
     implied_prob: float = 0.0
+    #: SIM-549: the OTHER side's own line at the same snapshot (run lines only).
+    other_line: float | None = None
+
+    @property
+    def is_run_line_pair(self) -> bool:
+        """True when this run-line quote and its other side are the two sides of
+        ONE bet (the other spread is the negative of this one)."""
+        return run_line_is_pair(self.line, self.other_line)
 
     @staticmethod
     def from_american(
@@ -198,6 +239,7 @@ class LineQuote:
         american: float,
         other_american: float | None = None,
         line: float | None = None,
+        other_line: float | None = None,
     ) -> LineQuote:
         """Build a :class:`LineQuote`, computing ``implied_prob`` from ``american``.
 
@@ -214,6 +256,7 @@ class LineQuote:
             other_american=None if other_american is None else float(other_american),
             line=None if line is None else float(line),
             implied_prob=implied_prob_from_american(float(american)),
+            other_line=None if other_line is None else float(other_line),
         )
 
 
@@ -271,8 +314,9 @@ class LineMovement:
     direction: str = "flat"
 
     #: The SIM-339 entry-vs-close CLV with entry == opening quote, close ==
-    #: closing quote.  None when the series has < 2 quotes or is missing the
-    #: opposite-side price needed to de-vig either endpoint.
+    #: closing quote.  None when the series has < 2 quotes or an endpoint cannot
+    #: be priced. On a run line it is also None when the side's spread moved
+    #: (see ``clv_note``).
     clv: CLV | None = None
 
     #: True iff the SHARP books in this game's wider market moved this side the
@@ -280,6 +324,18 @@ class LineMovement:
     #: :func:`fetch_line_movement` (which sees every book); None on a pure single-
     #: book series built directly via :func:`line_movement_from_quotes`.
     sharp_consensus: bool | None = None
+
+    #: SIM-549, run lines only: 'pair' (every row the two sides of one bet),
+    #: 'two_bets' (every row two separate bets) or 'mixed'. A row with a
+    #: missing spread does not count. None elsewhere.
+    run_line_shape: str | None = None
+    #: How the CLV was priced. 'pair': both endpoints de-vigged as one two-way
+    #: bet. 'two_bets': an endpoint was two separate bets, so both endpoints
+    #: are priced on their own price over the game's two-way margin. None when
+    #: there is no CLV.
+    clv_basis: str | None = None
+    #: Run lines only: why there is no CLV, or a caveat on it, in plain words.
+    clv_note: str | None = None
 
     @property
     def has_movement(self) -> bool:
@@ -319,6 +375,8 @@ def _coerce_quote(
         raise ValueError(f"row has no {this_col} price (NULL) -- skip")
     other = row.get(other_col)
     line_val = row.get(line_col) if line_col is not None else None
+    other_line_col = _OTHER_LINE_COLUMN.get((market_type, side))
+    other_line = row.get(other_line_col) if other_line_col is not None else None
     return LineQuote.from_american(
         fetched_at=row.get("fetched_at"),
         line_type=row.get("line_type", "current"),
@@ -327,6 +385,7 @@ def _coerce_quote(
         american=american,
         other_american=other,
         line=line_val,
+        other_line=other_line,
     )
 
 
@@ -348,6 +407,7 @@ def line_movement_from_quotes(
     game_pk: int = 0,
     book: str | None = None,
     sharp_consensus: bool | None = None,
+    reference_margin_at: ReferenceMarginAt | None = None,
 ) -> LineMovement:
     """PURE: build a :class:`LineMovement` from an (unordered) quote sequence.
 
@@ -374,6 +434,13 @@ def line_movement_from_quotes(
     ``game_pk`` / ``book`` / ``sharp_consensus`` are carried onto the result for
     provenance; :func:`fetch_line_movement` supplies real values, direct callers
     may leave the defaults.
+
+    SIM-549, a run line: the CLV needs the SAME bet at both endpoints. A side
+    whose spread moved between them gets no CLV. When either endpoint is two
+    separate bets, both endpoints are priced over ``reference_margin_at`` (the
+    game's two-way margin at that quote). Without it, there is no CLV. The
+    result carries :attr:`LineMovement.run_line_shape`, ``clv_basis`` and
+    ``clv_note``.
     """
     quotes: list[LineQuote] = []
     for r in rows:
@@ -415,7 +482,15 @@ def line_movement_from_quotes(
         direction = "flat"
 
     clv: CLV | None = None
-    if (
+    clv_basis: str | None = None
+    clv_note: str | None = None
+    run_line_shape: str | None = None
+    if market_type == "runline":
+        shapes = {s for s in (_quote_shape(q) for q in quotes) if s is not None}
+        run_line_shape = shapes.pop() if len(shapes) == 1 else ("mixed" if shapes else None)
+        if len(quotes) >= 2:
+            clv, clv_basis, clv_note = _run_line_clv(opening, closing, reference_margin_at)
+    elif (
         len(quotes) >= 2
         and opening.other_american is not None
         and closing.other_american is not None
@@ -426,6 +501,7 @@ def line_movement_from_quotes(
             close_side_american=closing.american,
             close_other_american=closing.other_american,
         )
+        clv_basis = "pair"
 
     return LineMovement(
         game_pk=int(game_pk),
@@ -446,7 +522,70 @@ def line_movement_from_quotes(
         direction=direction,
         clv=clv,
         sharp_consensus=sharp_consensus,
+        run_line_shape=run_line_shape,
+        clv_basis=clv_basis,
+        clv_note=clv_note,
     )
+
+
+def _quote_shape(q: LineQuote) -> str | None:
+    """'pair' or 'two_bets' for one run-line quote; None when a spread is missing."""
+    if q.line is None or q.other_line is None:
+        return None
+    return "pair" if q.is_run_line_pair else "two_bets"
+
+
+def _run_line_clv(
+    opening: LineQuote, closing: LineQuote, reference_margin_at: ReferenceMarginAt | None
+) -> tuple[CLV | None, str | None, str | None]:
+    """SIM-549: the run line's entry-vs-close CLV, its basis and its note.
+
+    The CLV compares one bet at two times, so the side's spread must be the same
+    at both. Two pairs de-vig as before. When either endpoint is two separate
+    bets, both endpoints are priced the same way: each price over the game's
+    two-way margin at that time. So the CLV moves only when the price or the
+    margin moves, never because the method changed."""
+    if _quote_shape(opening) is None or _quote_shape(closing) is None:
+        return None, None, "a spread is missing, so the bet is not known"
+    if opening.line != closing.line:
+        return (
+            None,
+            None,
+            f"the line moved from {opening.line:+g} to {closing.line:+g}: not the same bet",
+        )
+    if opening.is_run_line_pair and closing.is_run_line_pair:
+        if opening.other_american is None or closing.other_american is None:
+            return None, None, "the other side's price is missing"
+        clv = clv_from_odds(
+            entry_side_american=opening.american,
+            entry_other_american=opening.other_american,
+            close_side_american=closing.american,
+            close_other_american=closing.other_american,
+        )
+        return clv, "pair", None
+    if reference_margin_at is None:
+        return None, None, "two separate bets, and no reference market to remove the margin"
+    entry_margin, entry_source = reference_margin_at(opening)
+    close_margin, close_source = reference_margin_at(closing)
+    clv = clv_from_prob(
+        devig_one_sided(opening.american, entry_margin),
+        devig_one_sided(closing.american, close_margin),
+    )
+    flat = [entry_source == "flat", close_source == "flat"]
+    if all(flat):
+        margin_words = "a flat 1.05 margin (no two-way market for this game)"
+    elif any(flat):
+        margin_words = "the game's two-way margin at one end and a flat 1.05 at the other"
+    else:
+        margin_words = "the game's two-way margin"
+    if opening.is_run_line_pair or closing.is_run_line_pair:
+        note = (
+            "a pair at one end and two separate bets at the other: "
+            f"both ends priced on their own, over {margin_words}"
+        )
+    else:
+        note = f"priced as two separate bets: each price over {margin_words}"
+    return clv, "two_bets", note
 
 
 # ===========================================================================
@@ -476,6 +615,80 @@ _SQL_FETCH_GAME_ODDS_BOOK = """
     WHERE game_pk = $1 AND market_type = $2 AND book = $3
     ORDER BY fetched_at ASC
 """
+
+
+#: SIM-549: the same game's two-way reference markets, for a run line whose
+#: rows are two separate bets.
+_SQL_FETCH_REFERENCE_ODDS = """
+    SELECT fetched_at, line_type, book, market_type, home_ml, away_ml, over_ml, under_ml
+    FROM raw.game_odds
+    WHERE game_pk = $1 AND market_type IN ('total', 'moneyline')
+    ORDER BY fetched_at ASC
+"""
+
+
+def _gap_seconds(a: Any, b: Any) -> float:
+    """The distance in time between two ``fetched_at`` stamps (inf when one is missing)."""
+    if a is None or b is None:
+        return float("inf")
+    d = a - b
+    return abs(d.total_seconds()) if hasattr(d, "total_seconds") else abs(float(d))
+
+
+def _reference_margin_reader(reference_rows: Sequence[Mapping[str, Any]]) -> ReferenceMarginAt:
+    """``reference_margin_at(quote)``: the book's margin on the game's total,
+    then its moneyline, from the quote's own snapshot — the quote's own book
+    first, any book second, the flat margin last.
+
+    The snapshot is the reference row of the quote's line type nearest the
+    quote in time. The loader writes one snapshot's markets milliseconds apart
+    (moneyline, run line, total), so the same snapshot's total is stamped just
+    AFTER its run line; an "at or before" rule would read the previous
+    snapshot's total. This matches the accuracy comparison, which reads the
+    closing total for a closing run line. A reference market with no row of the
+    quote's line type falls back to its latest row at or before the quote."""
+
+    def latest(market_type: str, quote: LineQuote, same_book: bool) -> Mapping[str, Any] | None:
+        rows = [
+            r
+            for r in reference_rows
+            if r.get("market_type") == market_type
+            and (not same_book or str(r.get("book", "consensus")) == quote.book)
+        ]
+        same_type = [r for r in rows if r.get("line_type") == quote.line_type]
+        if same_type:
+            if quote.fetched_at is None:
+                return same_type[-1]
+            # the quote's own snapshot; on a tie the earlier row (the list is time-ordered)
+            return min(same_type, key=lambda r: _gap_seconds(r.get("fetched_at"), quote.fetched_at))
+        best: Mapping[str, Any] | None = None
+        for r in rows:
+            t = r.get("fetched_at")
+            if quote.fetched_at is not None and t is not None and t > quote.fetched_at:
+                continue
+            best = r  # rows arrive ordered by fetched_at, so the last one wins
+        return best
+
+    def at(quote: LineQuote) -> tuple[float, str]:
+        for same_book in (True, False):
+            total = latest("total", quote, same_book)
+            moneyline = latest("moneyline", quote, same_book)
+            if total is None and moneyline is None:
+                continue
+            candidates = [
+                ("total", None, None)
+                if total is None
+                else ("total", total.get("over_ml"), total.get("under_ml")),
+                ("moneyline", None, None)
+                if moneyline is None
+                else ("moneyline", moneyline.get("home_ml"), moneyline.get("away_ml")),
+            ]
+            margin, source = reference_margin_from_prices(candidates)
+            if source != "flat":
+                return margin, source
+        return reference_margin_from_prices([])
+
+    return at
 
 
 def _row_to_mapping(row: Any) -> dict[str, Any]:
@@ -524,6 +737,21 @@ async def fetch_line_movement(
         rows = await conn.fetch(_SQL_FETCH_GAME_ODDS_BOOK, int(game_pk), market_type, str(book))
     mappings = [_row_to_mapping(r) for r in (rows or [])]
 
+    # SIM-549: a run line listed as two separate bets needs the game's two-way
+    # margin to price each bet on its own. One more read, only then.
+    reference_margin_at: ReferenceMarginAt | None = None
+    if market_type == "runline" and any(
+        (m.get("home_spread_ml") is not None or m.get("away_spread_ml") is not None)
+        and m.get("home_spread") is not None
+        and m.get("away_spread") is not None
+        and not run_line_is_pair(m.get("home_spread"), m.get("away_spread"))
+        for m in mappings
+    ):
+        reference_rows = await conn.fetch(_SQL_FETCH_REFERENCE_ODDS, int(game_pk))
+        reference_margin_at = _reference_margin_reader(
+            [_row_to_mapping(r) for r in (reference_rows or [])]
+        )
+
     # Group rows by book so each series is one (side, book).
     by_book: dict[str, list[dict[str, Any]]] = {}
     for m in mappings:
@@ -548,6 +776,7 @@ async def fetch_line_movement(
                 game_pk=int(game_pk),
                 book=bk,
                 sharp_consensus=sharp_flag,
+                reference_margin_at=reference_margin_at,
             )
             # Only emit a series that actually has quotes for this side.
             if movement.quotes:

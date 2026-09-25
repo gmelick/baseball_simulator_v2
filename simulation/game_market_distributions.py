@@ -49,6 +49,9 @@ same conventions the full-game markets already use in
   * a run-line-kind market (``runline``, ``f1_runline``, ``f5_runline``) — HOME
     covers when ``home_runs + spread > away_runs`` over the segment; an equal
     result is a push (mirrors :func:`betting.clv_engine.spread_cover_prob`).
+    SIM-549: the AWAY bet at its own spread is priced too (``side="away"``),
+    because the book sometimes lists the two teams' run lines as two
+    separate bets rather than the two sides of one.
 
 DETERMINISM
 -----------
@@ -280,7 +283,21 @@ def cover_probabilities(
     )
 
 
-def market_probability(runs: SegmentRuns, market_type: str, *, line: float | None = None) -> float:
+#: SIM-549: the two sides of a run-line market. The home side is the
+#: accuracy comparison's reference side; the away side is scored only when the
+#: book lists the two teams' run lines as two separate bets.
+RUN_LINE_SIDES: tuple[str, ...] = ("home", "away")
+
+
+def _run_line_side(side: str) -> str:
+    if side not in RUN_LINE_SIDES:
+        raise ValueError(f"run-line side must be 'home' or 'away', not {side!r}")
+    return side
+
+
+def market_probability(
+    runs: SegmentRuns, market_type: str, *, line: float | None = None, side: str = "home"
+) -> float:
     """The simulator's probability of the FIXED reference side of a market —
     the number the accuracy comparison pairs against the closing line.
 
@@ -288,7 +305,16 @@ def market_probability(runs: SegmentRuns, market_type: str, *, line: float | Non
     market and OVER for a total-kind market — the convention
     ``scripts/clv_backtest.py`` fixed once so the read never depends on which
     side the model would have bet. ``line`` is the total line or the home
-    spread; a side market ignores it.
+    spread; a side market ignores it. A run line's away bet is the one
+    exception (below).
+
+    SIM-549: a run-line market also takes ``side="away"``, and then ``line``
+    is the AWAY team's own spread. The book sometimes lists the two teams'
+    run lines as two separate bets (home −1.5 and away −1.5), so the away bet
+    needs its own probability at its own line. An away bet at spread ``A``
+    covers when ``away + A > home``, that is ``home − away < A``: the away leg
+    of :func:`cover_probabilities` at the mirrored home spread ``−A``. Every
+    other market kind ignores ``side``.
     """
     kind = _validate_market(market_type)
     if kind in ("total", "yes_no"):
@@ -297,13 +323,15 @@ def market_probability(runs: SegmentRuns, market_type: str, *, line: float | Non
         return total_probabilities(runs, market_type, 0.5 if line is None else line)[0]
     if kind == "runline":
         if line is None:
-            raise ValueError(f"{market_type!r} needs the home spread")
+            raise ValueError(f"{market_type!r} needs the side's spread")
+        if _run_line_side(side) == "away":
+            return cover_probabilities(runs, market_type, -float(line))[1]
         return cover_probabilities(runs, market_type, line)[0]
     return side_probabilities(runs, market_type)[0]
 
 
 def market_outcome(
-    actual: SegmentRuns, market_type: str, *, line: float | None = None
+    actual: SegmentRuns, market_type: str, *, line: float | None = None, side: str = "home"
 ) -> int | None:
     """The 0/1 outcome of the FIXED reference side on the REAL result (a
     one-iteration ``SegmentRuns`` from the official grid), or ``None`` on a
@@ -312,7 +340,12 @@ def market_outcome(
     A push (the total on the line, the adjusted margin exactly zero, a tied
     segment on a two-way side market) has no 0/1 label and returns ``None``;
     a tied segment on a THREE-way market is a real loss for the home side
-    (the draw was a priced outcome), so it returns 0.
+    (the draw was a priced outcome), so it returns 0. ``line`` is the total
+    line or the home spread, except for a run line's away bet (below).
+
+    SIM-549: a run-line market also takes ``side="away"``; ``line`` is then
+    the away team's own spread, and the away bet covers when
+    ``away − home + line > 0``. Every other market kind ignores ``side``.
     """
     kind = _validate_market(market_type)
     if actual.n != 1:
@@ -328,8 +361,12 @@ def market_outcome(
         return 1 if value > float(line) else 0
     if kind == "runline":
         if line is None:
-            raise ValueError(f"{market_type!r} needs the home spread")
-        adjusted = float(actual.segment_margin(GAME_MARKET_SEGMENT[market_type])[0]) + float(line)
+            raise ValueError(f"{market_type!r} needs the side's spread")
+        home_margin = float(actual.segment_margin(GAME_MARKET_SEGMENT[market_type])[0])
+        # The side's own margin plus the side's own spread: the home margin
+        # for the home bet, its negation for the away bet.
+        own_margin = home_margin if _run_line_side(side) == "home" else -home_margin
+        adjusted = own_margin + float(line)
         if adjusted == 0.0:
             return None
         return 1 if adjusted > 0 else 0
@@ -350,6 +387,7 @@ __all__ = [
     "HOME_FIRST",
     "AWAY_FIRST",
     "NOBODY_FIRST",
+    "RUN_LINE_SIDES",
     "total_probabilities",
     "side_probabilities",
     "cover_probabilities",

@@ -675,6 +675,113 @@ def run_line_edge_report(
     )
 
 
+# ===========================================================================
+# SIM-549: a run line is a PAIR, or TWO SEPARATE BETS
+# ===========================================================================
+#
+# raw.game_odds keeps each team's run line under its own spread, as the book
+# lists it. A PAIR is one bet with two sides (home −0.5 / away +0.5): exactly one
+# side wins, so the two prices de-vig against each other. TWO SEPARATE BETS
+# share a sign or carry two different lines. Home −1.5 / away −1.5 both lose on
+# a tie. Home +1.5 / away +1.5 both win on a one-run game. Pairing their prices
+# mis-prices each side, up or down. Each bet is then priced from its OWN price
+# over the book's margin on the same game's two-way markets. Here "margin" means a two-way market's two implied probabilities
+# added up: about 1.05, never below 1. The accuracy comparison
+# (scripts/clv_backtest.py), the /edges route and the line-movement / CLV
+# reads share these functions.
+
+#: The last-resort margin for a one-sided price: the league mean of the
+#: closing two-way margin (the full-game total 1.048, the first-five total 1.059).
+DEFAULT_ONE_SIDED_MARGIN = 1.05
+
+#: A reference market's margin must fall in this band, or the next market is
+#: tried. A stored "two-way" row outside it is not a pair.
+REFERENCE_MARGIN_BAND: tuple[float, float] = (1.0, 1.15)
+
+
+def run_line_is_pair(home_spread: float | None, away_spread: float | None) -> bool:
+    """True when the two spreads are the two sides of ONE bet: the away spread
+    is the negative of the home spread (the pick'em 0 / 0 included). A missing
+    spread is never a pair."""
+    if home_spread is None or away_spread is None:
+        return False
+    return float(away_spread) == -float(home_spread)
+
+
+def reference_margin_from_prices(
+    candidates: Sequence[tuple[str, float | None, float | None]],
+) -> tuple[float, str]:
+    """``(margin, source)``: the first candidate ``(name, price_a, price_b)`` whose
+    two implied probabilities add to a margin inside :data:`REFERENCE_MARGIN_BAND`,
+    else ``(DEFAULT_ONE_SIDED_MARGIN, "flat")``. The caller orders the candidates
+    (the same segment's total first) and never passes a three-way market: its
+    margin prices the tie."""
+    for name, a, b in candidates:
+        if a is None or b is None:
+            continue
+        try:
+            margin = implied_prob_from_american(float(a)) + implied_prob_from_american(float(b))
+        except ValueError:
+            continue
+        if REFERENCE_MARGIN_BAND[0] <= margin <= REFERENCE_MARGIN_BAND[1]:
+            return margin, name
+    return DEFAULT_ONE_SIDED_MARGIN, "flat"
+
+
+def devig_one_sided(american: float, margin: float) -> float:
+    """The fair probability of a bet listed on its own: its implied probability
+    over the reference margin, capped at 1. Raises ``ValueError`` on a margin
+    below 1 (not a two-way margin) or an American price of 0."""
+    if float(margin) < 1.0:
+        raise ValueError(f"a two-way margin is at least 1.0, not {margin}")
+    return min(implied_prob_from_american(float(american)) / float(margin), 1.0)
+
+
+def run_line_bet_cover_prob(
+    summary_or_margin: GameSimSummary | Sequence[float] | np.ndarray,
+    side: MarketSide,
+    own_line: float,
+) -> float:
+    """The simulator's cover probability of ONE run-line bet at its OWN spread.
+
+    :func:`spread_cover_prob` takes the HOME line for both sides. An away bet at
+    its own spread ``A`` covers when ``home − away < A``: the AWAY side at the
+    mirrored home line ``−A``."""
+    if side is MarketSide.HOME:
+        return spread_cover_prob(summary_or_margin, float(own_line), MarketSide.HOME)
+    if side is MarketSide.AWAY:
+        return spread_cover_prob(summary_or_margin, -float(own_line), MarketSide.AWAY)
+    raise ValueError("run line / spread side must be HOME or AWAY")
+
+
+def one_sided_edge_report(
+    *,
+    label: str,
+    side: MarketSide,
+    line: float | None,
+    sim_prob: float,
+    offered_american: float,
+    fair_prob: float,
+) -> EdgeReport:
+    """An :class:`EdgeReport` for a bet with no opposite side to de-vig against
+    (a run line listed as two separate bets): ``fair_prob`` comes from
+    :func:`devig_one_sided`. Like every report, a simulator probability of exactly
+    0 or 1 raises ``ValueError`` (it has no fair price). No CLV."""
+    p = float(sim_prob)
+    return EdgeReport(
+        label=label,
+        side=side,
+        line=None if line is None else float(line),
+        sim_prob=p,
+        market_fair_prob=float(fair_prob),
+        edge=edge(p, float(fair_prob)),
+        ev=expected_value(p, float(offered_american)),
+        offered_american=float(offered_american),
+        sim_fair_american=prob_to_american(p),
+        clv=None,
+    )
+
+
 __all__ = [
     # conversions
     "american_to_decimal",
@@ -703,4 +810,12 @@ __all__ = [
     "total_over_under_edge_report",
     "spread_cover_prob",
     "run_line_edge_report",
+    # SIM-549: run lines as a pair or two separate bets
+    "DEFAULT_ONE_SIDED_MARGIN",
+    "REFERENCE_MARGIN_BAND",
+    "run_line_is_pair",
+    "reference_margin_from_prices",
+    "devig_one_sided",
+    "run_line_bet_cover_prob",
+    "one_sided_edge_report",
 ]

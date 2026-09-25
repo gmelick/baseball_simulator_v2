@@ -1,9 +1,10 @@
 /**
  * LineMovementChart.tsx — SIM-396
  *
- * A small time-series chart of one side's no-vig implied probability from open
- * to close (`implied_prob_series`), with a marker on the closing quote and
- * sharp/steam/CLV badges. Pure SVG, auto-scaled Y to the series range.
+ * A small time-series chart of one side's raw (margin-included) implied
+ * probability from open to close (`implied_prob_series`), with a marker on the
+ * closing quote and sharp/steam/CLV badges. Pure SVG, auto-scaled Y to the
+ * series range.
  */
 import React from 'react'
 
@@ -49,9 +50,27 @@ export function LineMovementChart({ movement }: LineMovementChartProps): React.R
   const closeX = x(n - 1)
   const closeY = y(series[n - 1])
 
-  // Steam direction arrow: "up"/"down"/"flat" toward the chosen side.
+  // Steam direction arrow. The API sends 'toward' (the price shortened for
+  // this side), 'away' or 'flat'.
   const dir = movement.direction
-  const dirSymbol = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '■'
+  const dirSymbol = dir === 'toward' ? '▲' : dir === 'away' ? '▼' : '■'
+
+  // SIM-549: a run line the book listed as two separate bets (not the two
+  // sides of one bet) is priced on its own; say so, and say why a CLV is absent.
+  const shapeLabel =
+    movement.run_line_shape === 'two_bets'
+      ? 'two separate bets'
+      : movement.run_line_shape === 'mixed'
+        ? 'pair and separate bets'
+        : null
+
+  // When the line itself changed (a spread or a total), the open and the close
+  // are two different bets: the price move is not steam, so name each line.
+  const lineChanged = movement.line_delta != null && movement.line_delta !== 0
+  const fmtLine = (v: number | null | undefined): string =>
+    v == null ? '' : ` ${v > 0 ? '+' : ''}${v}`
+  const openLine = lineChanged ? fmtLine(movement.quotes[0]?.line) : ''
+  const closeLine = lineChanged ? fmtLine(movement.quotes[movement.quotes.length - 1]?.line) : ''
 
   const clvProb =
     movement.clv && typeof movement.clv['clv_prob'] === 'number'
@@ -64,12 +83,14 @@ export function LineMovementChart({ movement }: LineMovementChartProps): React.R
         <span className={styles.title}>{sideTitle}</span>
         <span className={styles.badges}>
           {movement.sharp_consensus && <Badge variant="info">sharp</Badge>}
-          {movement.has_movement && (
+          {movement.has_movement && !lineChanged && (
             <Badge variant="default">
               steam {dirSymbol}
             </Badge>
           )}
+          {lineChanged && <Badge variant="warning">line changed</Badge>}
           {movement.beat_close && <Badge variant="success">beat close</Badge>}
+          {shapeLabel && <Badge variant="warning">{shapeLabel}</Badge>}
         </span>
       </div>
 
@@ -88,14 +109,15 @@ export function LineMovementChart({ movement }: LineMovementChartProps): React.R
       </svg>
 
       <div className={styles.footer}>
-        <span>open {(series[0] * 100).toFixed(1)}%</span>
-        <span>close {(series[n - 1] * 100).toFixed(1)}%</span>
+        <span>open{openLine} {(series[0] * 100).toFixed(1)}%</span>
+        <span>close{closeLine} {(series[n - 1] * 100).toFixed(1)}%</span>
         {clvProb != null && (
           <span className={clvProb >= 0 ? styles.clvPos : styles.clvNeg}>
             CLV {clvProb >= 0 ? '+' : ''}{(clvProb * 100).toFixed(1)}%
           </span>
         )}
       </div>
+      {movement.clv_note && <p className={styles.note}>{movement.clv_note}</p>}
     </div>
   )
 }

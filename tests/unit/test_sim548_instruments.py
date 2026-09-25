@@ -99,6 +99,148 @@ def test_skill_table_excludes_a_market_whose_prices_are_not_a_pair():
     assert not row["enters"]
 
 
+def _two_bet_records(n_games: int, rng: np.random.Generator) -> list[dict]:
+    """SIM-549: the first-five run line as the comparison now scores two
+    separate bets — per game a home record and an away record, each with its
+    own price and no fade price."""
+    out = []
+    for g in range(n_games):
+        for market, price in (("f5_runline", 350.0), ("f5_runline_away", 150.0)):
+            p = float(rng.uniform(0.15, 0.45))
+            out.append(
+                {
+                    "game_pk": 5000 + g,
+                    "market": market,
+                    "market_type": "f5_runline",
+                    "sim_prob": p,
+                    "market_prob": p,
+                    "outcome": int(rng.uniform() < p),
+                    "player_id": None,
+                    "market_side_price": price,
+                    "market_other_price": None,
+                }
+            )
+    return out
+
+
+def test_skill_table_accepts_the_market_after_the_fix():
+    rng = np.random.default_rng(7)
+    # 150 pairs (they add to about 1.05) and 300 games of two separate bets
+    pairs = _records(150, "f5_runline", rng, side=105.0, other=-125.0)
+    for r in pairs:
+        r["market_type"] = "f5_runline"
+    recs = pairs + _two_bet_records(300, rng)
+    rows = {r["market"]: r for r in skill.market_rows(recs, min_n=100, n_boot=50, seed=7)}
+    home = rows["f5_runline"]
+    # the one-sided records leave the margin's mean; the pairs keep it in band
+    assert home["overround"] == pytest.approx(100 / 205 + 125 / 225, abs=1e-6)
+    assert home["line_ok"] and home["enters"]
+    # the away bet is its own row; it carries no pair, so the guard has nothing to read
+    away = rows["f5_runline_away"]
+    assert away["overround"] is None and away["line_ok"] and away["enters"]
+
+
+def test_away_record_is_its_own_market():
+    rng = np.random.default_rng(8)
+    base = _two_bet_records(150, rng)
+    arm = [dict(r, sim_prob=min(r["sim_prob"] + 0.05, 0.99)) for r in base]
+    # the composite objective keeps the two bets of one game apart
+    c = skill.composite(base, arm, min_n=100, n_boot=50, seed=8, weights=None)
+    assert c["records_paired"] == 300
+    assert set(c["per_market"]) == {"f5_runline", "f5_runline_away"}
+    # the paired read keeps them apart too
+    pair = _load("sim518_pair_accuracy")
+    rows = pair.pair_records(base, arm)
+    assert len(rows) == 300
+    # the skill table prints the away row right after its market
+    rows_t = skill._order(skill.market_rows(base, min_n=100, n_boot=20, seed=8))
+    assert [r["market"] for r in rows_t] == ["f5_runline", "f5_runline_away"]
+    for m in ("runline", "f5_runline", "f1_runline"):
+        order = skill.GAME_MARKET_ORDER
+        assert order.index(m + "_away") == order.index(m) + 1
+
+
+def test_a_mis_stored_one_sided_line_is_excluded(capsys):
+    """The pairs' guard cannot see a one-sided run line; the line's own
+    calibration can. The 2025 first-inning +1 / +1 shape: the line says 0.465
+    and the bet wins 88% of the time."""
+    rng = np.random.default_rng(10)
+    bad = []
+    for g in range(120):
+        bad.append(
+            {
+                "game_pk": 7000 + g,
+                "market": "f1_runline",
+                "market_type": "f1_runline",
+                "sim_prob": float(rng.uniform(0.7, 0.95)),
+                "market_prob": 0.465,
+                "outcome": int(rng.uniform() < 0.885),
+                "player_id": None,
+                "market_side_price": -1600.0,
+                "market_other_price": None,
+            }
+        )
+    rows = skill._order(skill.market_rows(bad, min_n=100, n_boot=20, seed=10))
+    row = rows[0]
+    assert row["overround"] is None  # no pair, so the old guard has nothing to read
+    assert row["one_sided_line"]["z"] < -skill.ONE_SIDED_LINE_Z
+    assert not row["line_ok"] and not row["enters"]
+    skill.print_table(rows, {}, 100)
+    assert "one-sided line says 0.465" in capsys.readouterr().out
+    # a calibrated one-sided line enters
+    good = _two_bet_records(150, rng)
+    rows = {r["market"]: r for r in skill.market_rows(good, min_n=100, n_boot=20, seed=10)}
+    assert rows["f5_runline"]["line_ok"] and rows["f5_runline_away"]["line_ok"]
+
+
+def test_the_skill_table_still_prints_the_pairs_note(capsys):
+    rng = np.random.default_rng(3)
+    recs = _records(150, "f5_runline", rng, side=350.0, other=150.0)
+    rows = skill._order(skill.market_rows(recs, min_n=100, n_boot=20, seed=3))
+    skill.print_table(rows, {}, 100)
+    assert "LINE SUSPECT: the two prices add to 0.62" in capsys.readouterr().out
+
+
+def test_a_rescored_and_a_fresh_report_do_not_merge(tmp_path: Path):
+    rng = np.random.default_rng(11)
+    stamp = {"base_seed": 0, "run_line_scoring": "sim549.1"}
+    rescored = {
+        "params": {**stamp, "rescored": {"from": "x.json"}},
+        "accuracy_records": _records(10, "H", rng),
+    }
+    fresh = {
+        "params": dict(stamp),
+        "accuracy_records": [dict(r, game_pk=r["game_pk"] + 100) for r in _records(10, "H", rng)],
+    }
+    a, b = tmp_path / "rescored.json", tmp_path / "fresh.json"
+    a.write_text(json.dumps(rescored), encoding="utf-8")
+    b.write_text(json.dumps(fresh), encoding="utf-8")
+    with pytest.raises(SystemExit, match="run_line_rescored"):
+        skill.load_reports([str(a), str(b)], force=False)
+    pair = _load("sim518_pair_accuracy")
+    assert any("params.rescored" in p for p in pair.provenance_mismatches(rescored, fresh))
+
+
+def test_a_stamped_and_an_unstamped_report_do_not_merge(tmp_path: Path):
+    rng = np.random.default_rng(9)
+    old = {"params": {"base_seed": 0}, "accuracy_records": _records(10, "H", rng)}
+    new = {
+        "params": {"base_seed": 0, "run_line_scoring": "sim549.1"},
+        "accuracy_records": [dict(r, game_pk=r["game_pk"] + 100) for r in _records(10, "H", rng)],
+    }
+    a, b = tmp_path / "old.json", tmp_path / "new.json"
+    a.write_text(json.dumps(old), encoding="utf-8")
+    b.write_text(json.dumps(new), encoding="utf-8")
+    with pytest.raises(SystemExit, match="run_line_scoring"):
+        skill.load_reports([str(a), str(b)], force=False)
+    records, _ = skill.load_reports([str(b)], force=False)
+    assert len(records) == 10
+    # the paired read names the same mismatch
+    pair = _load("sim518_pair_accuracy")
+    problems = pair.provenance_mismatches(old, new)
+    assert any("run_line_scoring" in p for p in problems)
+
+
 def test_auc_is_half_for_a_flat_forecast_and_one_for_a_perfect_one():
     y = np.array([0, 1, 0, 1, 1, 0])
     assert skill.auc(np.full(6, 0.5), y) == pytest.approx(0.5)

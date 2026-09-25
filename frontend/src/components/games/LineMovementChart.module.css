@@ -82,3 +82,10 @@
   color: var(--sim-color-loss);
   font-weight: var(--sim-font-semibold);
 }
+
+/* SIM-549: why a run-line CLV is absent, or how it was priced. */
+.note {
+  margin: 0;
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+}

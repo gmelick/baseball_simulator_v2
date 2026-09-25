@@ -1,5 +1,5 @@
 === SIM-548 market skill table: 160629 records on 992 games ===
-  iterations 100, seed 0, seasons [2024]; fatigue tto=0.5 pc=0; split=1 (pitch pitcher 16, result pitcher 16, result batter 8); manager draw=1
+  iterations 100, seed 0, seasons [2024]; fatigue tto=0.5 pc=0; split=1 (pitch pitcher 16, result pitcher 16, result batter 8); manager draw=1; run lines scored sim549.1 (re-scored: the home bets only)
   Brier: lower is better. base = a forecast that always says the market's outcome rate. skill = base − Brier (positive = better than knowing only the average). gap = sim − mkt (negative = the simulator beats the closing line; the range is a game-clustered bootstrap). AUC 0.5 = no discrimination. Markets under 100 records are shown but flagged.
   market                  n games |    sim    mkt   base |   skill  mkt-sk |      gap       lo       hi |    bias  m-bias | spread  m-spr |   AUC m-AUC | note
   3B                  12089   965 |  0.014  0.015  0.014 |  -0.000  -0.001 |  -0.0007  -0.0009  -0.0006 |  +0.007  +0.031 |  0.012  0.011 | 0.545 0.651 | BEATS the line
@@ -14,10 +14,10 @@
   R                   17559   986 |  0.232  0.228  0.231 |  -0.001  +0.004 |  +0.0046  +0.0035  +0.0057 |  +0.043  +0.028 |  0.071  0.064 | 0.553 0.583 | behind the line
   K                    1892   986 |  0.271  0.249  0.250 |  -0.021  +0.001 |  +0.0222  +0.0144  +0.0297 |  -0.095  -0.007 |  0.152  0.054 | 0.547 0.544 | behind the line
   moneyline             992   992 |  0.251  0.240  0.248 |  -0.003  +0.008 |  +0.0112  +0.0050  +0.0174 |  -0.073  -0.005 |  0.048  0.083 | 0.571 0.605 | behind the line
-  runline               991   991 |  0.246  0.241  0.250 |  +0.004  +0.009 |  +0.0052  +0.0000  +0.0105 |  -0.011  +0.005 |  0.133  0.097 | 0.591 0.609 | behind the line
+  runline               991   991 |  0.246  0.240  0.250 |  +0.004  +0.009 |  +0.0057  +0.0005  +0.0110 |  -0.011  +0.006 |  0.133  0.097 | 0.591 0.612 | behind the line
   total                 957   957 |  0.261  0.251  0.250 |  -0.011  -0.001 |  +0.0100  +0.0037  +0.0161 |  +0.046  +0.007 |  0.086  0.019 | 0.490 0.477 | behind the line
   f5_moneyline          989   989 |  0.248  0.240  0.248 |  +0.000  +0.008 |  +0.0073  +0.0026  +0.0123 |  -0.012  -0.003 |  0.075  0.068 | 0.550 0.606 | behind the line
-  f5_runline            986   986 |  0.230  0.257  0.234 |  +0.004  -0.023 |  -0.0276  -0.0407  -0.0138 |  -0.019  +0.158 |  0.108  0.089 | 0.596 0.559 | LINE SUSPECT: the two prices add to 0.74 — two separate bets priced as one (SIM-549) — excluded
+  f5_runline            986   986 |  0.230  0.223  0.234 |  +0.004  +0.011 |  +0.0066  +0.0022  +0.0110 |  -0.019  -0.006 |  0.108  0.099 | 0.596 0.633 | behind the line
   f5_total              975   975 |  0.255  0.248  0.250 |  -0.006  +0.001 |  +0.0069  +0.0013  +0.0125 |  +0.053  +0.013 |  0.086  0.033 | 0.538 0.544 | behind the line
   f1_moneyline          988   988 |  0.180  0.177  0.174 |  -0.005  -0.003 |  +0.0022  -0.0028  +0.0071 |  +0.013  +0.039 |  0.078  0.060 | 0.512 0.532 | level with the line
   f1_runline            989   989 |  0.097  0.095  0.245 |  +0.148  +0.150 |  +0.0022  +0.0001  +0.0043 |  -0.005  -0.003 |  0.382  0.365 | 0.885 0.889 | behind the line

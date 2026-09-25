@@ -358,6 +358,8 @@ def test_score_game_accuracy_runline_cover_and_push():
         other=-150.0,
         line=-1.0,
     )
+    # SIM-549: the store keeps the away spread too; its mirror makes this a pair.
+    odds["runline"]["closing"]["away_spread"] = 1.0
     # margin=3, threshold=-line=1.0 -> home covers (3 > 1.0).
     cover_recs = score_game_accuracy(1, wp, summary, odds, home_score=5, away_score=2)
     rl = [r for r in cover_recs if r.market == "runline"][0]
@@ -391,8 +393,230 @@ def test_score_game_accuracy_scores_all_three_markets_together():
             line=-1.5,
         ),
     }
+    odds["runline"]["closing"]["away_spread"] = 1.5  # SIM-549: a pair
     recs = score_game_accuracy(1, wp, summary, odds, home_score=5, away_score=3)
     assert {r.market for r in recs} == {"moneyline", "total", "runline"}
+
+
+# ---------------------------------------------------------------------------
+# SIM-549: the full-game run line uses the same shape rule as the segments
+# ---------------------------------------------------------------------------
+
+
+def _runline_row(home_spread, home_ml, away_spread, away_ml) -> dict:
+    return {
+        "runline": {
+            "closing": {
+                "home_spread": home_spread,
+                "home_spread_ml": home_ml,
+                "away_spread": away_spread,
+                "away_spread_ml": away_ml,
+            }
+        }
+    }
+
+
+def test_full_game_run_line_uses_the_same_rule():
+    """(+1.5, +1.5): two separate bets, each priced from its own line through
+    spread_cover_prob, its margin from the same game's full-game total."""
+    from betting.clv_engine import MarketSide, implied_prob_from_american, spread_cover_prob
+
+    wp = _win_prob(0.5)
+    # home +1.5 covers on a margin of -1 or better (0.8); away +1.5 on +1 or worse (0.6)
+    summary = _summary_from_totals_and_margins(
+        totals=[9] * 10, margins=[-3, -2, -1, 0, 1, 1, 2, 2, 3, 4]
+    )
+    odds = {
+        **_runline_row(1.5, -300.0, 1.5, -250.0),
+        **_odds_closing_only(
+            "total", "over_ml", "under_ml", "total_line", side=-108.0, other=-112.0, line=8.5
+        ),
+    }
+    # a one-run home win: home +1.5 covers, away +1.5 covers too (lost by one)
+    recs = {r.market: r for r in score_game_accuracy(1, wp, summary, odds, 4, 3)}
+    assert {"runline", "runline_away"} <= set(recs)
+    home, away = recs["runline"], recs["runline_away"]
+    assert home.market_type == away.market_type == "runline"
+    margin = implied_prob_from_american(-108.0) + implied_prob_from_american(-112.0)
+    assert home.market_prob == pytest.approx(implied_prob_from_american(-300.0) / margin)
+    assert away.market_prob == pytest.approx(implied_prob_from_american(-250.0) / margin)
+    assert home.market_other_price is None and away.market_other_price is None
+    # the home bet +1.5 is spread_cover_prob at home line +1.5; the away bet at
+    # its own +1.5 is the away side of the mirrored home line -1.5
+    assert home.sim_prob == pytest.approx(spread_cover_prob(summary, 1.5, MarketSide.HOME))
+    assert away.sim_prob == pytest.approx(spread_cover_prob(summary, -1.5, MarketSide.AWAY))
+    assert home.sim_prob == pytest.approx(0.8) and away.sim_prob == pytest.approx(0.6)
+    assert home.outcome == 1 and away.outcome == 1
+
+
+def test_full_game_away_bet_outcome_uses_the_away_margin():
+    """The away bet's real outcome reads the away team's own margin."""
+    wp = _win_prob(0.5)
+    summary = _summary_from_totals_and_margins(
+        totals=[9] * 10, margins=[-3, -2, -1, 0, 1, 1, 2, 2, 3, 4]
+    )
+    odds = {
+        **_runline_row(-1.5, 140.0, -1.5, 200.0),
+        **_odds_closing_only(
+            "total", "over_ml", "under_ml", "total_line", side=-110.0, other=-110.0, line=8.5
+        ),
+    }
+    # home 5-3: the home -1.5 covers; the away -1.5 loses (3 - 1.5 < 5)
+    recs = {r.market: r for r in score_game_accuracy(1, wp, summary, odds, 5, 3)}
+    assert recs["runline"].outcome == 1 and recs["runline_away"].outcome == 0
+    # away 6-2: the away -1.5 covers, the home -1.5 loses
+    recs = {r.market: r for r in score_game_accuracy(1, wp, summary, odds, 2, 6)}
+    assert recs["runline"].outcome == 0 and recs["runline_away"].outcome == 1
+
+
+def test_the_shape_warning_names_two_bets_and_an_unpaired_market(caplog):
+    import logging
+
+    tally = {
+        "run_lines": {
+            "f5_runline": {
+                "pairs": 3,
+                "one_sided_games": 5,
+                "one_sided_records": 9,
+                "one_record_games": 1,
+                "paired_margin_mean": 1.05,
+                "one_sided_line": {"home": None, "away": None},
+            }
+        },
+        "margin_mean": {"f5_runline": 1.05, "total": 1.30},
+    }
+    with caplog.at_level(logging.WARNING):
+        clv_backtest.warn_market_shapes(tally)
+    assert "f5_runline" in caplog.text and "two separate bets" in caplog.text
+    assert "total" in caplog.text and "1.300" in caplog.text
+
+
+async def test_run_stamps_the_report_and_writes_the_shape_tally(monkeypatch, tmp_path):
+    """run() writes the stamp the skill table and the paired read check, and
+    the shape tally, even on an empty slate."""
+    import json
+
+    import simulation.sim_kwargs as sk
+
+    class _NoDuck:
+        def execute(self, *_a, **_k):
+            raise AssertionError("no park lookup on an empty slate")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(sk, "open_sim_duckdb", lambda *_a, **_k: _NoDuck())
+
+    async def _no_games(*_a, **_k):
+        return []
+
+    monkeypatch.setattr(clv_backtest, "_fetch_final_games", _no_games)
+    out = tmp_path / "clv.json"
+    args = clv_backtest.parse_args(
+        [
+            "--seasons",
+            "2024",
+            "--output",
+            str(out),
+            "--workers",
+            "1",
+            "--calibration-path",
+            str(tmp_path / "no_calibration.json"),
+        ]
+    )
+    await clv_backtest.run(args)
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["params"]["run_line_scoring"] == clv_backtest.RUN_LINE_SCORING_VERSION
+    assert report["counters"]["market_shapes"] == {"run_lines": {}, "margin_mean": {}}
+
+
+def test_full_game_run_line_pair_is_byte_identical_to_the_edge_report():
+    """A pair still goes through today's arithmetic: the edge report's sim
+    probability and de-vigged fair probability, to the bit."""
+    from betting.clv_engine import MarketSide, OddsQuote, TwoWayMarket, run_line_edge_report
+
+    wp = _win_prob(0.5)
+    summary = _summary_from_totals_and_margins(totals=_VARIED_TOTALS, margins=_VARIED_MARGINS)
+    odds = _runline_row(-1.5, 140.0, 1.5, -160.0)
+    recs = [r for r in score_game_accuracy(1, wp, summary, odds, 5, 3) if "runline" in r.market]
+    assert len(recs) == 1
+    er = run_line_edge_report(
+        summary,
+        TwoWayMarket(side=MarketSide.HOME, entry=OddsQuote(side=140.0, other=-160.0, line=-1.5)),
+        side=MarketSide.HOME,
+        line=-1.5,
+    )
+    assert recs[0].sim_prob == er.sim_prob
+    assert recs[0].market_prob == er.market_fair_prob
+    assert (recs[0].market_side_price, recs[0].market_other_price) == (140.0, -160.0)
+
+
+def test_full_game_run_line_still_drops_a_certain_simulator_probability():
+    """The full-game run line never scored a simulator probability of exactly
+    0 or 1 (its edge report refuses one); the shared scorer keeps that."""
+    wp = _win_prob(0.5)
+    # every margin at least +2: home -1.5 covers in every iteration (p = 1.0)
+    summary = _summary_from_totals_and_margins(totals=[9] * 10, margins=[3] * 10)
+    pair = _runline_row(-1.5, 140.0, 1.5, -160.0)
+    assert [
+        r for r in score_game_accuracy(1, wp, summary, pair, 5, 3) if "runline" in r.market
+    ] == []
+    # two separate bets: home -1.5 (p = 1.0) is dropped, away -1.5 (p = 0.0) too
+    two_bets = {
+        **_runline_row(-1.5, 140.0, -1.5, 300.0),
+        **_odds_closing_only(
+            "total", "over_ml", "under_ml", "total_line", side=-110.0, other=-110.0, line=8.5
+        ),
+    }
+    assert [
+        r for r in score_game_accuracy(1, wp, summary, two_bets, 5, 3) if "runline" in r.market
+    ] == []
+
+
+def test_full_game_run_line_without_an_away_spread_gives_no_record():
+    wp = _win_prob(0.5)
+    summary = _summary_from_totals_and_margins(totals=_VARIED_TOTALS, margins=_VARIED_MARGINS)
+    odds = _odds_closing_only(
+        "runline",
+        "home_spread_ml",
+        "away_spread_ml",
+        "home_spread",
+        side=140.0,
+        other=-160.0,
+        line=-1.5,
+    )
+    assert [
+        r for r in score_game_accuracy(1, wp, summary, odds, 5, 3) if "runline" in r.market
+    ] == []
+
+
+def test_the_away_keys_carry_their_market_s_trust_label():
+    assert clv_backtest.trust_label("runline_away") == clv_backtest.trust_label("runline")
+    assert clv_backtest.trust_label("f5_runline_away") == "unvalidated"
+    assert clv_backtest.trust_label("f1_runline_away") == "unvalidated"
+    assert clv_backtest.run_line_market_key("f5_runline", "away") == "f5_runline_away"
+    assert clv_backtest.run_line_market_key("f5_runline", "home") == "f5_runline"
+
+
+def test_the_console_table_names_each_run_line_s_shape():
+    text = format_accuracy_comparison(
+        aggregate_accuracy_comparison([], n_bootstrap=10, seed=1),
+        params={"seasons": [2024]},
+        counters={
+            "market_shapes": {
+                "run_lines": {
+                    "f5_runline": {
+                        "pairs": 197,
+                        "one_sided_games": 789,
+                        "one_sided_records": 1500,
+                        "one_record_games": 78,
+                        "paired_margin_mean": 1.06,
+                    }
+                }
+            }
+        },
+    )
+    assert "run line f5_runline: 197 pairs, 789 games listed as two separate bets" in text
 
 
 # ---------------------------------------------------------------------------

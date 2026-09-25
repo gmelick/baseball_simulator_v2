@@ -238,7 +238,7 @@
         "type": "object"
       },
       "ClvSnapshotResponse": {
-        "description": "The ``GET /api/betting/games/{game_pk}/clv`` envelope.\n\nA thin snapshot projection of /line-movement: the entry-vs-close CLV of every\nline-movement series that HAS one (a series with < 2 quotes or a missing\nopposite-side price is omitted). Each row carries the side / book identity plus\nthe CLV's ``clv_prob`` / ``beat_close`` for a compact \"did I beat the close\"\nview without the full quote series.",
+        "description": "The ``GET /api/betting/games/{game_pk}/clv`` envelope.\n\nA thin snapshot projection of /line-movement: the entry-vs-close CLV of every\nline-movement series that HAS one. Omitted: a series with < 2 quotes, a pair\nwith a missing opposite-side price, and a run-line side whose spread moved\nbetween the open and the close. Each row carries the side / book identity plus\nthe CLV's ``clv_prob`` / ``beat_close`` for a compact \"did I beat the close\"\nview without the full quote series.",
         "properties": {
           "book": {
             "anyOf": [
@@ -511,6 +511,16 @@
             },
             "title": "Odds Source",
             "type": "object"
+          },
+          "run_line_pricing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunLinePricingModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1598,6 +1608,28 @@
               }
             ]
           },
+          "clv_basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clv Basis"
+          },
+          "clv_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clv Note"
+          },
           "direction": {
             "default": "flat",
             "title": "Direction",
@@ -1673,6 +1705,17 @@
             },
             "title": "Quotes",
             "type": "array"
+          },
+          "run_line_shape": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Line Shape"
           },
           "sharp_consensus": {
             "anyOf": [
@@ -1810,6 +1853,17 @@
               }
             ],
             "title": "Other American"
+          },
+          "other_line": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Other Line"
           }
         },
         "required": [
@@ -2768,6 +2822,52 @@
         "title": "RosterOverride",
         "type": "object"
       },
+      "RunLinePricingModel": {
+        "description": "SIM-549: how the run line was priced.\n\n``shape`` is 'pair' (the away spread is the negative of the home spread:\nthe two prices de-vig against each other) or 'two_bets' (two separate bets:\neach price over the game's two-way ``reference_margin``, taken from\n``reference_source`` -- 'total', 'moneyline' or 'flat').",
+        "properties": {
+          "away_line": {
+            "title": "Away Line",
+            "type": "number"
+          },
+          "home_line": {
+            "title": "Home Line",
+            "type": "number"
+          },
+          "reference_margin": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Margin"
+          },
+          "reference_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Source"
+          },
+          "shape": {
+            "title": "Shape",
+            "type": "string"
+          }
+        },
+        "required": [
+          "shape",
+          "home_line",
+          "away_line"
+        ],
+        "title": "RunLinePricingModel",
+        "type": "object"
+      },
       "SchemaInfo": {
         "properties": {
           "name": {
@@ -2865,6 +2965,16 @@
             "title": "Odds Source",
             "type": "object"
           },
+          "run_line_pricing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunLinePricingModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "signals": {
             "items": {
               "$ref": "#/components/schemas/BetSignalModel"
@@ -2935,6 +3045,7 @@
             "type": "integer"
           },
           "extra": {
+            "additionalProperties": true,
             "default": {},
             "title": "Extra",
             "type": "object"
@@ -2997,6 +3108,7 @@
             "type": "array"
           },
           "subject": {
+            "additionalProperties": true,
             "title": "Subject",
             "type": "object"
           }
@@ -3020,6 +3132,7 @@
             "type": "array"
           },
           "diagnostic": {
+            "additionalProperties": true,
             "title": "Diagnostic",
             "type": "object"
           },
@@ -3067,6 +3180,7 @@
             "type": "array"
           },
           "subject": {
+            "additionalProperties": true,
             "title": "Subject",
             "type": "object"
           },
@@ -3753,6 +3867,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response By Season Api Analytics By Season Get",
@@ -3833,6 +3948,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Count State Api Analytics Count State Get",
@@ -3953,6 +4069,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Batter Leaderboard Api Analytics Leaderboard Batters Get",
@@ -4035,6 +4152,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Pitcher Leaderboard Api Analytics Leaderboard Pitchers Get",
@@ -4126,6 +4244,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Pa Outcomes Api Analytics Pa Outcomes Get",
@@ -4217,6 +4336,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Pitch Type Mix Api Analytics Pitch Type Mix Get",
@@ -4308,6 +4428,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Velo Distribution Api Analytics Velo Distribution Get",
@@ -4382,6 +4503,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Zone Api Analytics Zone Get",
@@ -4472,7 +4594,7 @@
     },
     "/api/betting/games/{game_pk}/clv": {
       "get": {
-        "description": "A thin projection of /line-movement: the line-movement series that carry an entry-vs-close CLV (>= 2 quotes with both opposite-side prices). Each model's clv.clv_prob / clv.beat_close answers 'did the opening price beat the close' for that side/book. numpy-free. 503 if no DB pool, 422 on a bad market_type.",
+        "description": "A thin projection of /line-movement: the line-movement series that carry an entry-vs-close CLV (>= 2 quotes and both ends priceable). Each model's clv.clv_prob / clv.beat_close answers 'did the opening price beat the close' for that side/book. A run-line series has a CLV only when its spread was the same at both ends (SIM-549). clv_basis says whether it was priced as a pair or as two separate bets. numpy-free. 503 if no DB pool, 422 on a bad market_type.",
         "operationId": "get_game_clv_api_betting_games__game_pk__clv_get",
         "parameters": [
           {
@@ -4762,6 +4884,24 @@
               "description": "Injected HOME run line (e.g. -1.5)",
               "title": "Run Line"
             }
+          },
+          {
+            "description": "Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml (each injected, else the mock's)",
+            "in": "query",
+            "name": "away_run_line",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml (each injected, else the mock's)",
+              "title": "Away Run Line"
+            }
           }
         ],
         "responses": {
@@ -4794,7 +4934,7 @@
     },
     "/api/betting/games/{game_pk}/line-movement": {
       "get": {
-        "description": "Read the persisted raw.game_odds history for the (game_pk, market_type[, book]) and build the SIM-368 line-movement time-series: one series per (side, book) with the ordered quotes, the per-step + opening->closing deltas, the running implied-prob surface, the steam direction, the sharp-consensus flag, and the entry-vs-close CLV. numpy-free LineMovementModel list. 503 if no DB pool, 422 on a bad market_type.",
+        "description": "Read the persisted raw.game_odds history for the (game_pk, market_type[, book]) and build the SIM-368 line-movement time-series: one series per (side, book) with the ordered quotes, the per-step + opening->closing deltas, the running implied-prob surface, the steam direction, the sharp-consensus flag, and the entry-vs-close CLV. A run line (SIM-549) carries run_line_shape: pair, two_bets or mixed. When either end is two separate bets, both ends are priced on their own price over the game's two-way margin. A side whose spread moved gets no CLV; clv_note says why. numpy-free LineMovementModel list. 503 if no DB pool, 422 on a bad market_type.",
         "operationId": "get_game_line_movement_api_betting_games__game_pk__line_movement_get",
         "parameters": [
           {
@@ -5139,6 +5279,24 @@
               ],
               "description": "Injected HOME run line (e.g. -1.5)",
               "title": "Run Line"
+            }
+          },
+          {
+            "description": "Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml (each injected, else the mock's)",
+            "in": "query",
+            "name": "away_run_line",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Injected AWAY team's own run line (e.g. +1.5, or -1.5 when the book lists two separate bets); defaults to the mirror of run_line (a pair). Two separate bets are priced over the margin of over_ml / under_ml, then home_ml / away_ml (each injected, else the mock's)",
+              "title": "Away Run Line"
             }
           }
         ],
@@ -6028,6 +6186,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Get Todays Odds Api Odds Today All Get",
@@ -6064,6 +6223,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Game Odds Api Odds  Game Pk  Get",
                   "type": "object"
                 }
@@ -6737,6 +6897,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Login Auth Login Post",
                   "type": "object"
                 }
@@ -6770,6 +6931,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Logout Auth Logout Post",
                   "type": "object"
                 }
@@ -6814,6 +6976,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Health Health Get",
                   "type": "object"
                 }

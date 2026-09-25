@@ -315,16 +315,28 @@ HOW IT REUSES THE EXISTING SEAMS (no re-invention)
     per-iteration boxscores (exactly the ``validate_props`` path); each
     ``PropDistribution`` answers ``p_over(line)`` / ``p_under(line)``.
   * **De-vig + edge math** — ``betting.clv_engine``: ``moneyline_edge_report`` /
-    ``total_over_under_edge_report`` / ``run_line_edge_report`` / ``prop_edge_report``
-    already de-vig a two-way market and expose the resulting fair probability
+    ``total_over_under_edge_report`` / ``prop_edge_report`` already de-vig a
+    two-way market and expose the resulting fair probability
     (``EdgeReport.market_fair_prob``) alongside the sim's own
-    (``EdgeReport.sim_prob``). SIM-538 calls these with the CLOSING quote fed in
-    as the market (see :func:`score_game_accuracy` / :func:`score_prop_accuracy`)
+    (``EdgeReport.sim_prob``). The run lines call ``run_line_bet_cover_prob``,
+    ``devig_two_way`` (a pair) and ``devig_one_sided`` (two separate bets)
+    directly (SIM-549, below). SIM-538 calls these with the
+    CLOSING quote fed in as the market (see :func:`score_game_accuracy` /
+    :func:`score_prop_accuracy`)
     and a FIXED reference side per market (home / over), so the comparison never
     depends on which side the model would have bet. Picking whichever side the
     model liked best would bias the read toward games the model disagreed with
     the market on — the reason this file always scores a FIXED side, never the
     model's own pick.
+    SIM-549, the run lines: a closing run line is a PAIR only when the away
+    spread is the negative of the home spread. Otherwise the book listed two
+    separate bets (home −1.5 and away −1.5), and pairing their prices inflates
+    each side's probability. :func:`score_run_line_market` scores a pair as
+    one record, the same as before SIM-549. It scores two separate bets as two
+    records. Each is priced from its OWN price over the book's margin on the
+    same game's two-way markets (:func:`reference_margin`: the segment's
+    total, the full-game total, the moneyline, a flat 1.05; never a three-way
+    market; a margin outside 1.00-1.15 is skipped).
   * **Proper scoring rules** — ``simulation.prop_validation``: ``binary_brier`` /
     ``binary_log_loss`` take a probability array and a 0/1 outcome array; SIM-538
     calls them twice per market — once with the sim's probabilities, once with
@@ -373,7 +385,9 @@ HOW IT REUSES THE EXISTING SEAMS (no re-invention)
 THE MARKETS
 -----------
   * Game: moneyline (home/away ML), total (over/under at ``total_line``), run-line
-    (home/away at ``home_spread``).
+    (home/away at ``home_spread``; SIM-549: a run line listed as two separate
+    bets also scores the away bet at ``away_spread``, key ``runline_away``, and
+    the first-five and first-inning run lines the same way).
   * Props (the 15-market vocab, :data:`PROP_VOCAB_MAP`; odds ``prop_stat`` →
     model ``PropDistribution`` stat). Batter: hits→H, home_runs→HR,
     total_bases→TB, rbis→RBI, singles→1B, doubles→2B, triples→3B, runs→R,
@@ -435,7 +449,7 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -448,20 +462,27 @@ if _REPO_ROOT not in sys.path:
 
 from betting.bet_signal import DEFAULT_MIN_EDGE  # noqa: E402
 from betting.clv_engine import (  # noqa: E402
+    DEFAULT_ONE_SIDED_MARGIN,  # noqa: F401 — re-exported: the report's readers and tests use it
+    REFERENCE_MARGIN_BAND,
     MarketSide,
     OddsQuote,
     TwoWayMarket,
     american_to_decimal,
     devig_multiway,
+    devig_one_sided,
     devig_two_way,
     expected_value,
     moneyline_edge_report,
+    prob_to_american,
     prop_edge_report,
-    run_line_edge_report,
+    reference_margin_from_prices,
+    run_line_bet_cover_prob,
+    run_line_is_pair,
     total_over_under_edge_report,
 )
 from pipeline.odds_provider import (  # noqa: E402
     GAME_MARKET_KIND,
+    GAME_MARKET_SEGMENT,
     GAME_MARKET_TYPES,
     LEGACY_GAME_MARKET_TYPES,
 )
@@ -688,10 +709,15 @@ MARKET_TRUST: dict[str, str] = {
     # caution
     "total": "caution",
     "runline": "caution",
+    # SIM-549: the away bet of a run line the book lists as two separate
+    # bets carries its own key and its market's label.
+    "runline_away": "caution",
     # unvalidated — the twelve segment and team markets (SIM-421, owner ruling
     # 2026-09-12): priced by the simulator's per-iteration linescore, never yet
     # scored by the accuracy comparison.
     **{m: "unvalidated" for m in GAME_MARKET_TYPES if m not in LEGACY_GAME_MARKET_TYPES},
+    "f5_runline_away": "unvalidated",
+    "f1_runline_away": "unvalidated",
     # untrustworthy
     "K": "untrustworthy",
     "BB": "untrustworthy",
@@ -791,12 +817,23 @@ class AccuracyRecord:
     comparison honest: picking whichever side the model liked best would only
     ever measure accuracy on the games the model disagreed with the market
     on, which is a biased sample.
+
+    SIM-549, the one exception: a run line the book lists as TWO SEPARATE
+    BETS (home −1.5 and away −1.5, not the two sides of one bet) gives two
+    records, one per bet. The home bet keeps the market type as its key; the
+    away bet's key is ``<market_type>_away`` (:func:`run_line_market_key`),
+    so the (game, market, player) key still names one record.
     """
 
     game_pk: int
-    #: Market key: 'moneyline'/'total'/'runline' OR a model prop stat (K/H/...).
+    #: Market key: 'moneyline'/'total'/'runline' OR a model prop stat (K/H/...),
+    #: or a run line's away bet (``runline_away`` / ``f5_runline_away`` /
+    #: ``f1_runline_away``, SIM-549).
     market: str
-    #: Coarse group for aggregation: 'moneyline'/'total'/'runline'/'prop'.
+    #: The game market type ('moneyline' / 'total' / 'runline' / a segment
+    #: market such as 'f5_runline'), or 'prop'. The aggregation groups by
+    #: ``market``. SIM-549: a run line's away bet shares its market's type,
+    #: so ``market`` and ``market_type`` differ on that record.
     market_type: str
     #: The simulator's own probability of the reference event.
     sim_prob: float
@@ -813,7 +850,9 @@ class AccuracyRecord:
     #: hypothetical bet, which unlike ``market_prob`` above must transact at
     #: the OFFERED price, not the de-vigged fair one. ``None`` for a record
     #: built without them (e.g. an older test fixture) — SIM-540 skips any
-    #: record missing either price rather than guessing.
+    #: record missing either price rather than guessing. ``market_other_price``
+    #: is ``None`` on purpose on a three-way record and on a run-line bet the
+    #: book listed on its own (SIM-549): neither has a single fade price.
     market_side_price: float | None = None
     market_other_price: float | None = None
     #: SIM-548: the simulator's probability BEFORE the calibration map, where
@@ -1316,8 +1355,10 @@ def format_accuracy_comparison(
 
     ``counters`` (the run's ``counters`` block, SIM-545) adds one header line
     that says how many games graded their props on the official box score and
-    how many on the event-label fallback. Omit it for a table with no run
-    behind it (a unit test on synthetic records).
+    how many on the event-label fallback. SIM-549: it also adds one line per
+    run-line market, the pairs against the games listed as two separate bets.
+    Omit it for a table with no run behind it (a unit test on synthetic
+    records).
     """
     lines = [
         "=" * 100,
@@ -1342,9 +1383,18 @@ def format_accuracy_comparison(
             f"prop ground truth: official box score={counters.get('games_official_boxscore', 0)} "
             f"games  event-label fallback={counters.get('games_event_label', 0)} games"
         )
+        # SIM-549: how the book listed each run line — pairs, or two separate bets.
+        for market_type, shape in (
+            (counters.get("market_shapes") or {}).get("run_lines", {}).items()
+        ):
+            lines.append(
+                f"run line {market_type}: {shape['pairs']} pairs, "
+                f"{shape['one_sided_games']} games listed as two separate bets "
+                f"({shape['one_sided_records']} records)"
+            )
     lines.append("")
     header = (
-        f"{'market':<14}{'trust':<14}{'n':>7}{'games':>7}{'simBrier':>10}{'mktBrier':>10}"
+        f"{'market':<17}{'trust':<14}{'n':>7}{'games':>7}{'simBrier':>10}{'mktBrier':>10}"
         f"{'brierDiff':>11}{'95% range':>18}{'minN':>7}{'pwr':>10}"
     )
 
@@ -1358,7 +1408,7 @@ def format_accuracy_comparison(
         rng = f"[{_fmt_or_na(r['brier_diff_ci_low'], '.4f')},{_fmt_or_na(r['brier_diff_ci_high'], '.4f')}]"
         pwr = "UNDERPWR" if r.get("underpowered") else "ok"
         return (
-            f"{r['group']:<14}{r['trust']:<14}{r['n']:>7}{r['n_games']:>7}"
+            f"{r['group']:<17}{r['trust']:<14}{r['n']:>7}{r['n_games']:>7}"
             f"{_fmt_or_na(r['sim_brier'], '.4f'):>10}{_fmt_or_na(r['market_brier'], '.4f'):>10}"
             f"{_fmt_or_na(r['brier_diff_mean'], '.4f'):>11}{rng:>18}"
             f"{_fmt_min_n(r['min_n_recommended']):>7}{pwr:>10}"
@@ -1681,7 +1731,7 @@ def format_hypothetical_return(comparison: dict[str, Any], *, params: dict[str, 
         "",
     ]
     header = (
-        f"{'market':<14}{'trust':<14}{'n':>6}{'games':>7}{'modelEV':>10}{'realzdROI':>11}"
+        f"{'market':<17}{'trust':<14}{'n':>6}{'games':>7}{'modelEV':>10}{'realzdROI':>11}"
         f"{'95% range':>18}{'minN':>7}{'pwr':>10}"
     )
 
@@ -1689,7 +1739,7 @@ def format_hypothetical_return(comparison: dict[str, Any], *, params: dict[str, 
         rng = f"[{r['realized_return_ci_low']:.4f},{r['realized_return_ci_high']:.4f}]"
         pwr = "UNDERPWR" if r.get("underpowered") else "ok"
         return (
-            f"{r['group']:<14}{r['trust']:<14}{r['n']:>6}{r['n_games']:>7}"
+            f"{r['group']:<17}{r['trust']:<14}{r['n']:>6}{r['n_games']:>7}"
             f"{r['mean_model_ev']:>10.4f}{r['mean_realized_return'] * 100:>10.1f}%"
             f"{rng:>18}{_fmt_min_n(r['min_n_recommended']):>7}{pwr:>10}"
         )
@@ -2024,6 +2074,11 @@ class ClosingPrices:
     side: float
     other: float
     line: float | None = None
+    #: SIM-549: the OTHER side's own line — on a run line, the away spread.
+    #: The book lists the two teams' run lines under their own spreads, and
+    #: the two spreads tell a pair (home −0.5 / away +0.5) from two separate
+    #: bets (home −1.5 / away −1.5). ``None`` for a market without one.
+    other_line: float | None = None
 
 
 def _closing_prices(
@@ -2032,6 +2087,7 @@ def _closing_prices(
     side_col: str,
     other_col: str,
     line_col: str | None,
+    other_line_col: str | None = None,
 ) -> ClosingPrices | None:
     """Build :class:`ClosingPrices` for a game market from its CLOSING row only.
 
@@ -2051,11 +2107,311 @@ def _closing_prices(
     if None in (side, other):
         return None
     line = cl.get(line_col) if line_col else None
+    other_line = cl.get(other_line_col) if other_line_col else None
     return ClosingPrices(
         side=float(side),
         other=float(other),
         line=None if line is None else float(line),
+        other_line=None if other_line is None else float(other_line),
     )
+
+
+# ===========================================================================
+# SIM-549: a run line is a PAIR, or TWO SEPARATE BETS
+# ===========================================================================
+#
+# The store keeps each team's run line under its own spread. A PAIR is one bet
+# with two sides, such as home −0.5 at −115 and away +0.5 at −105. Exactly one
+# side wins, so the two prices de-vig against each other.
+#
+# TWO SEPARATE BETS share a sign or carry two different lines, such as home
+# −1.5 at +350 and away −1.5 at +150. Both lose on a tie or a one-run lead.
+# Pairing their prices inflates each side's probability. On the 2024
+# first-five run line the inflation was a fifth: the whole of the simulator's
+# apparent lead over the line.
+#
+# The rule: a pair if and only if the away spread is the negative of the home
+# spread. The pick'em 0 / 0 is a pair. Every other row is two bets. Each bet is
+# priced from its OWN price over the book's margin on the same game's two-way
+# markets (:func:`reference_margin`). Here "margin" means a two-way market's
+# two implied probabilities added up: about 1.05, never below 1.
+# The plan: docs/audit/2026-09-23-sim549-first-five-run-line-two-bets-plan.md.
+
+#: The report's stamp for this scoring of the run lines. The skill table and
+#: the paired read refuse to mix a stamped report with an unstamped one. The
+#: re-score script refuses a report that already carries it.
+RUN_LINE_SCORING_VERSION = "sim549.1"
+
+#: The three run-line markets the shape rule covers.
+RUN_LINE_MARKET_TYPES: tuple[str, ...] = tuple(
+    m for m in GAME_MARKET_TYPES if GAME_MARKET_KIND[m] == "runline"
+)
+
+# DEFAULT_ONE_SIDED_MARGIN (1.05, the last-resort margin), REFERENCE_MARGIN_BAND
+# (1.00-1.15) and run_line_is_pair live in betting.clv_engine, which the live
+# /edges and line-movement reads share; they are imported above.
+
+#: A one-sided bet's closing line whose mean probability sits more than this
+#: many standard errors from its own outcome rate, over at least
+#: :data:`ONE_SIDED_LINE_MIN_N` records, is named at load
+#: (:func:`warn_market_shapes`). The skill table refuses such a row. On real
+#: one-sided rows the corrected line sits within a point of the outcome rate
+#: (plan §2.2); a gap this large is a mis-stored row, such as the 2025
+#: first-inning (+1, +1) rows.
+ONE_SIDED_LINE_Z = 4.0
+ONE_SIDED_LINE_MIN_N = 30
+
+#: The two-way total of each segment — the first reference market.
+_SEGMENT_TOTAL_OF: dict[str, str] = {"game": "total", "f5": "f5_total", "f1": "f1_total"}
+
+
+def run_line_market_key(market_type: str, side: str) -> str:
+    """The record key of one run-line bet: the market type for the home bet,
+    ``<market_type>_away`` for the away bet (the owner's decision 2)."""
+    return market_type if side == "home" else f"{market_type}_away"
+
+
+def reference_margin(odds: dict[str, dict[str, dict[str, Any]]], segment: str) -> tuple[float, str]:
+    """The book's margin on the same game's two-way markets: ``(margin, source)``.
+
+    The order is the same segment's two-way total, then the full-game total,
+    then the full-game moneyline. The first market whose margin falls in
+    :data:`REFERENCE_MARGIN_BAND` wins. With none,
+    :data:`DEFAULT_ONE_SIDED_MARGIN` (``source == "flat"``). A three-way
+    market never enters: its margin prices the tie (1.22 on the first-five
+    moneyline) and would under-price a one-sided bet by a tenth.
+    """
+    order = (
+        (_SEGMENT_TOTAL_OF[segment], "over_ml", "under_ml"),
+        ("total", "over_ml", "under_ml"),
+        ("moneyline", "home_ml", "away_ml"),
+    )
+    candidates: list[tuple[str, float | None, float | None]] = []
+    for market_type, side_col, other_col in order:
+        cp = _closing_prices(odds, market_type, side_col, other_col, None)
+        candidates.append(
+            (market_type, None, None) if cp is None else (market_type, cp.side, cp.other)
+        )
+    return reference_margin_from_prices(candidates)
+
+
+def score_run_line_market(
+    game_pk: int,
+    market_type: str,
+    cp: ClosingPrices,
+    odds: dict[str, dict[str, dict[str, Any]]],
+    *,
+    sim_cover: Callable[[str, float], float],
+    real_cover: Callable[[str, float], int | None],
+    open_sim_prob_only: bool = False,
+) -> list[AccuracyRecord]:
+    """SIM-549: the accuracy records of one run-line market, by the shape of
+    its closing row.
+
+    ``sim_cover(side, line)`` gives the simulator's probability that ``side``
+    (``"home"`` or ``"away"``) covers at ITS OWN ``line``. ``real_cover(side,
+    line)`` gives the real 0/1 outcome, or ``None`` on a push. With
+    ``open_sim_prob_only`` a simulator probability of exactly 0 or 1 drops
+    the record. The full-game run line's edge report always refused such a
+    probability, and its pairs must stay byte-identical.
+
+    A PAIR (:func:`run_line_is_pair`) gives one record, as before SIM-549: the
+    home side, the two prices de-vigged against each other. TWO SEPARATE BETS
+    give up to two records. Each is priced from its own price over the same
+    game's reference margin. Neither carries a fade price
+    (``market_other_price`` is ``None``): the other price belongs to a
+    different bet. A push drops that side only. A row without an away spread
+    gives no record, because its shape is unknown.
+    """
+    home_line, away_line = cp.line, cp.other_line
+    if home_line is None or away_line is None:
+        return []
+    records: list[AccuracyRecord] = []
+    if run_line_is_pair(home_line, away_line):
+        try:
+            outcome = real_cover("home", home_line)
+            if outcome is None:
+                return []  # a push has no 0/1 label
+            sim_prob = float(sim_cover("home", home_line))
+            if open_sim_prob_only:
+                prob_to_american(sim_prob)  # raises on 0 or 1, as the edge report does
+            market_prob = float(devig_two_way(cp.side, cp.other)[0])
+        except ValueError as exc:
+            log.info("game %s %s accuracy skipped (degenerate): %s", game_pk, market_type, exc)
+            return []
+        records.append(
+            AccuracyRecord(
+                game_pk=int(game_pk),
+                market=market_type,
+                market_type=market_type,
+                sim_prob=sim_prob,
+                market_prob=market_prob,
+                outcome=int(outcome),
+                market_side_price=float(cp.side),
+                market_other_price=float(cp.other),
+            )
+        )
+        return records
+    margin, _source = reference_margin(odds, GAME_MARKET_SEGMENT[market_type])
+    for side, price, line in (("home", cp.side, home_line), ("away", cp.other, away_line)):
+        try:
+            outcome = real_cover(side, line)
+            if outcome is None:
+                continue  # a push on this side's integer spread; the other side stands
+            sim_prob = float(sim_cover(side, line))
+            if open_sim_prob_only:
+                prob_to_american(sim_prob)
+            market_prob = devig_one_sided(price, margin)
+        except ValueError as exc:
+            log.info(
+                "game %s %s %s accuracy skipped (degenerate): %s", game_pk, market_type, side, exc
+            )
+            continue
+        records.append(
+            AccuracyRecord(
+                game_pk=int(game_pk),
+                market=run_line_market_key(market_type, side),
+                market_type=market_type,
+                sim_prob=sim_prob,
+                market_prob=float(market_prob),
+                outcome=int(outcome),
+                market_side_price=float(price),
+                market_other_price=None,
+            )
+        )
+    return records
+
+
+def one_sided_line_check(records: Sequence[AccuracyRecord]) -> dict[str, Any] | None:
+    """PURE (SIM-549): does a one-sided bet's closing line match its own
+    outcome rate?
+
+    Returns ``n``, the line's mean probability, the outcome rate, the bias
+    (mean minus rate) and ``z``, the bias in standard errors. Under a
+    calibrated line the outcomes' variance is the mean of ``p(1 − p)``, so
+    the standard error is ``sqrt(mean(p(1 − p)) / n)``. ``None`` for no
+    records. One record per game and side, so the games are independent.
+    """
+    if not records:
+        return None
+    p = np.array([float(r.market_prob) for r in records])
+    y = np.array([float(r.outcome) for r in records])
+    n = len(records)
+    bias = float(p.mean() - y.mean())
+    se = float(np.sqrt(max(float(np.mean(p * (1.0 - p))), 1e-12) / n))
+    return {
+        "n": n,
+        "line_mean": float(p.mean()),
+        "outcome_rate": float(y.mean()),
+        "bias": bias,
+        "z": bias / se,
+    }
+
+
+def market_shape_tally(records: Sequence[AccuracyRecord]) -> dict[str, Any]:
+    """PURE (SIM-549): the shape of every run-line market and the mean margin
+    of every priced pair, from the records alone.
+
+    ``run_lines[<market type>]`` holds:
+
+      * ``pairs`` — the games the book listed as a pair (one record each);
+      * ``one_sided_games`` and ``one_sided_records`` — the games listed as
+        two separate bets, and their records;
+      * ``one_record_games`` — such games with one record, not two. One bet
+        pushed, or its probability was degenerate. In a re-scored report every
+        such game has one record: the re-score cannot build the away bet;
+      * ``paired_margin_mean`` — the pairs' mean margin;
+      * ``one_sided_line`` — :func:`one_sided_line_check` of the home bets and
+        of the away bets.
+
+    ``margin_mean[<market key>]`` is the mean margin over every record that
+    carries both prices. A pair adds to about 1.05; a market far from that
+    does not price the two sides of one bet.
+    """
+    run_lines: dict[str, Any] = {}
+    for market_type in RUN_LINE_MARKET_TYPES:
+        away_key = run_line_market_key(market_type, "away")
+        pairs = [r for r in records if r.market == market_type and r.market_other_price is not None]
+        home_one = [r for r in records if r.market == market_type and r.market_other_price is None]
+        away_one = [r for r in records if r.market == away_key]
+        if not pairs and not home_one and not away_one:
+            continue
+        per_game: dict[int, int] = {}
+        for r in home_one + away_one:
+            per_game[int(r.game_pk)] = per_game.get(int(r.game_pk), 0) + 1
+        sums = [
+            _implied(float(r.market_side_price)) + _implied(float(r.market_other_price))
+            for r in pairs
+            if r.market_side_price is not None and r.market_other_price is not None
+        ]
+        run_lines[market_type] = {
+            "pairs": len(pairs),
+            "one_sided_games": len(per_game),
+            "one_sided_records": len(home_one) + len(away_one),
+            "one_record_games": sum(1 for c in per_game.values() if c == 1),
+            "paired_margin_mean": float(np.mean(sums)) if sums else None,
+            "one_sided_line": {
+                "home": one_sided_line_check(home_one),
+                "away": one_sided_line_check(away_one),
+            },
+        }
+    by_market: dict[str, list[float]] = {}
+    for r in records:
+        if r.market_side_price is None or r.market_other_price is None:
+            continue
+        try:
+            s = _implied(float(r.market_side_price)) + _implied(float(r.market_other_price))
+        except ValueError:
+            continue
+        by_market.setdefault(str(r.market), []).append(s)
+    return {
+        "run_lines": run_lines,
+        "margin_mean": {m: float(np.mean(v)) for m, v in sorted(by_market.items())},
+    }
+
+
+def warn_market_shapes(tally: dict[str, Any]) -> None:
+    """SIM-549: name three things at load time, not at read time. A run-line
+    market the book lists as two separate bets. A one-sided line far from its
+    own outcome rate. A market whose paired prices do not add to a two-way
+    margin."""
+    for market_type, shape in tally.get("run_lines", {}).items():
+        if shape["one_sided_games"]:
+            log.warning(
+                "SIM-549: %s — %d games listed as two separate bets (%d records; %d games "
+                "with one record), %d pairs. Each bet is priced from its own price.",
+                market_type,
+                shape["one_sided_games"],
+                shape["one_sided_records"],
+                shape["one_record_games"],
+                shape["pairs"],
+            )
+        for side, check in (shape.get("one_sided_line") or {}).items():
+            if (
+                check is not None
+                and check["n"] >= ONE_SIDED_LINE_MIN_N
+                and abs(check["z"]) > ONE_SIDED_LINE_Z
+            ):
+                log.warning(
+                    "SIM-549: %s %s bets — the line says %.3f and the bets came true %.3f "
+                    "of the time (n %d, z %+.1f). Mis-stored lines? Do not read this row.",
+                    market_type,
+                    side,
+                    check["line_mean"],
+                    check["outcome_rate"],
+                    check["n"],
+                    check["z"],
+                )
+    for market, margin in tally.get("margin_mean", {}).items():
+        if not (REFERENCE_MARGIN_BAND[0] <= margin <= REFERENCE_MARGIN_BAND[1]):
+            log.warning(
+                "SIM-549: %s — the paired prices add to %.3f on average, outside %.2f-%.2f. "
+                "They are not the two sides of one bet; read the row with care.",
+                market,
+                margin,
+                REFERENCE_MARGIN_BAND[0],
+                REFERENCE_MARGIN_BAND[1],
+            )
 
 
 def score_game_accuracy(
@@ -2071,7 +2427,9 @@ def score_game_accuracy(
 
     Reference side per market — HOME for moneyline and the run line, OVER for
     the total — chosen once and never by model preference (see
-    :class:`AccuracyRecord`). A market with no closing price is skipped. A
+    :class:`AccuracyRecord`). SIM-549: a run line the book listed as two
+    separate bets also scores the away bet, under the key ``runline_away``
+    (:func:`score_run_line_market`). A market with no closing price is skipped. A
     total/run-line observation that landed EXACTLY on the closing line (a push)
     contributes no record: the probability being scored is a STRICT
     over/cover probability (mirrors :func:`betting.clv_engine.total_over_under_edge_report`
@@ -2138,33 +2496,36 @@ def score_game_accuracy(
             except ValueError as exc:
                 log.info("game %s total accuracy skipped (degenerate): %s", game_pk, exc)
 
-    # --- runline (HOME covers at home_spread) ---
-    cp = _closing_prices(odds, "runline", "home_spread_ml", "away_spread_ml", "home_spread")
-    if cp is not None and cp.line is not None:
-        margin = float(home_score - away_score)
-        threshold = -cp.line  # mirrors betting.clv_engine.spread_cover_prob
-        if margin != threshold:
-            try:
-                market = TwoWayMarket(
-                    side=MarketSide.HOME,
-                    entry=OddsQuote(side=cp.side, other=cp.other, line=cp.line),
-                )
-                er = run_line_edge_report(summary, market, side=MarketSide.HOME, line=cp.line)
-                outcome = 1 if margin > threshold else 0
-                records.append(
-                    AccuracyRecord(
-                        game_pk=int(game_pk),
-                        market="runline",
-                        market_type="runline",
-                        sim_prob=float(er.sim_prob),
-                        market_prob=float(er.market_fair_prob),
-                        outcome=outcome,
-                        market_side_price=float(cp.side),
-                        market_other_price=float(cp.other),
-                    )
-                )
-            except ValueError as exc:
-                log.info("game %s runline accuracy skipped (degenerate): %s", game_pk, exc)
+    # --- runline: the home bet at home_spread; SIM-549: and the away bet at
+    # away_spread when the book lists the two as separate bets ---
+    cp = _closing_prices(
+        odds, "runline", "home_spread_ml", "away_spread_ml", "home_spread", "away_spread"
+    )
+    if cp is not None:
+        final_margin = float(home_score - away_score)
+
+        def sim_cover(side: str, line: float) -> float:
+            # Each bet at its OWN spread (the away bet at the mirrored home line).
+            return run_line_bet_cover_prob(summary, MarketSide[side.upper()], line)
+
+        def real_cover(side: str, line: float) -> int | None:
+            own_margin = final_margin if side == "home" else -final_margin
+            adjusted = own_margin + float(line)
+            if adjusted == 0.0:
+                return None  # a push on an integer spread
+            return 1 if adjusted > 0 else 0
+
+        records.extend(
+            score_run_line_market(
+                game_pk,
+                "runline",
+                cp,
+                odds,
+                sim_cover=sim_cover,
+                real_cover=real_cover,
+                open_sim_prob_only=True,
+            )
+        )
 
     return records
 
@@ -2175,14 +2536,16 @@ SEGMENT_MARKET_TYPES: tuple[str, ...] = tuple(
     m for m in GAME_MARKET_TYPES if m not in LEGACY_GAME_MARKET_TYPES
 )
 
-#: (side column, other column, line column) per market kind, for the FIXED
-#: reference side: HOME on a side / run-line market, OVER on a total.
-_SEGMENT_COLUMNS: dict[str, tuple[str, str, str | None]] = {
-    "moneyline": ("home_ml", "away_ml", None),
-    "three_way": ("home_ml", "away_ml", None),
-    "runline": ("home_spread_ml", "away_spread_ml", "home_spread"),
-    "total": ("over_ml", "under_ml", "total_line"),
-    "yes_no": ("over_ml", "under_ml", "total_line"),
+#: (side column, other column, line column, other line column) per market
+#: kind, for the FIXED reference side: HOME on a side / run-line market, OVER
+#: on a total. SIM-549: the run line also reads the away spread, which tells a
+#: pair from two separate bets.
+_SEGMENT_COLUMNS: dict[str, tuple[str, str, str | None, str | None]] = {
+    "moneyline": ("home_ml", "away_ml", None, None),
+    "three_way": ("home_ml", "away_ml", None, None),
+    "runline": ("home_spread_ml", "away_spread_ml", "home_spread", "away_spread"),
+    "total": ("over_ml", "under_ml", "total_line", None),
+    "yes_no": ("over_ml", "under_ml", "total_line", None),
 }
 
 
@@ -2199,14 +2562,17 @@ def score_segment_market_accuracy(
     The simulator's probability comes from
     :func:`simulation.game_market_distributions.market_probability` (the
     per-iteration linescore), the market's from the de-vigged closing prices
-    — two-way for a moneyline, total, run line or yes / no market; THREE-way
-    for the first-inning and first-five moneylines, whose tie is a priced
-    outcome — and the outcome from
+    — two-way for a moneyline, total, run-line pair or yes / no market;
+    THREE-way for the first-inning and first-five moneylines, whose tie is a
+    priced outcome; a run line listed as two separate bets prices each bet
+    over the game's reference margin (SIM-549) — and the outcome from
     :func:`simulation.game_market_distributions.market_outcome` on the official
     grid. A push (``None`` outcome) is skipped, as the full-game markets do.
     A three-way record carries no "other" price: its fade side (away OR draw)
     has no single price, so the hypothetical return leaves it out rather than
-    price it wrong.
+    price it wrong. SIM-549: a run-line market goes through
+    :func:`score_run_line_market`, which scores a pair as one record and two
+    separate bets as two.
     """
     records: list[AccuracyRecord] = []
     if official_grid is None:
@@ -2214,11 +2580,25 @@ def score_segment_market_accuracy(
     actual = SegmentRuns.from_official_grid(official_grid)
     for market_type in SEGMENT_MARKET_TYPES:
         kind = GAME_MARKET_KIND[market_type]
-        side_col, other_col, line_col = _SEGMENT_COLUMNS[kind]
-        cp = _closing_prices(odds, market_type, side_col, other_col, line_col)
+        side_col, other_col, line_col, other_line_col = _SEGMENT_COLUMNS[kind]
+        cp = _closing_prices(odds, market_type, side_col, other_col, line_col, other_line_col)
         if cp is None:
             continue
         if line_col is not None and cp.line is None:
+            continue
+        if kind == "runline":
+
+            def sim_cover(side: str, line: float, _mt: str = market_type) -> float:
+                return market_probability(runs, _mt, line=line, side=side)
+
+            def real_cover(side: str, line: float, _mt: str = market_type) -> int | None:
+                return market_outcome(actual, _mt, line=line, side=side)
+
+            records.extend(
+                score_run_line_market(
+                    game_pk, market_type, cp, odds, sim_cover=sim_cover, real_cover=real_cover
+                )
+            )
             continue
         try:
             sim_prob = market_probability(runs, market_type, line=cp.line)
@@ -3301,7 +3681,15 @@ async def run(args: argparse.Namespace) -> int:
         # SIM-518: the frozen inputs, for the paired-arm read.
         "game_pks_file": args.game_pks_file,
         "provenance": bundle_provenance(args.calibration_path),
+        # SIM-549: the run lines are scored by their shape (a pair, or two
+        # separate bets). The skill table refuses to merge a stamped report
+        # with an unstamped one.
+        "run_line_scoring": RUN_LINE_SCORING_VERSION,
     }
+
+    # SIM-549: the shape of every run line and the margin of every pair.
+    market_shapes = market_shape_tally(counters.accuracy_records)
+    warn_market_shapes(market_shapes)
 
     run_counters = {
         "games_attempted": counters.games_attempted,
@@ -3313,6 +3701,7 @@ async def run(args: argparse.Namespace) -> int:
         "games_official_boxscore": counters.games_official_boxscore,
         "games_event_label": counters.games_event_label,
         "n_accuracy_records": len(counters.accuracy_records),
+        "market_shapes": market_shapes,
     }
 
     accuracy_comparison = aggregate_accuracy_comparison(
