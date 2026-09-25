@@ -29,25 +29,69 @@ It then GRADES the 2026-08-20 diagnosis run (12x150, the measured sim
 frequencies) against each window's pool centres, so the owner reads the same
 sim against all three references side by side.
 
+THE LABEL CHECK (SIM-553, 2026-09-23)
+=====================================
+Per window, the census also compares the pool's chain with REAL plate
+appearances counted from ``raw.pitches`` (Postgres): strikeouts, walks, hit by
+pitch and pitches per plate appearance, with the relative gap and a PASS or
+FAIL at 0.5% (``pipeline.batch.pool_chain.LABEL_CHECK_TOLERANCE``). The pool
+centres come from the pool's own labels, so a coding defect in the pool build
+moves the centre with the sim, and no band sees it. Two such defects hid that
+way: the hit-by-pitch rows coded as balls (SIM-509) and the two-strike foul
+tips coded as fouls (SIM-553; strikeouts -4.3% against real play). The real
+count shares no label with the pool, so a coding defect opens a gap here.
+
+The label check reads the chain over the pool rows of real plate appearances
+only (``chain_rates(..., pa_only=True)``), so both sides count the same
+groups. Its first line proves that: the pool's plate appearances
+(``pa_group_count``) must equal the real count, or the window FAILS, because
+the two sides no longer read the same plate appearances (for example,
+``raw.pitches`` gained games the pool has not been rebuilt for). The centres
+stay on every pool row, because the simulator draws them all. A line after the check prints the all-rows centres' gap for the record;
+the groups cut short by a runner out put about +0.6 points on its walks
+(``pipeline/batch/pool_chain.py``, THE POPULATION RULE). On the window
+2023-2026 the corrected coding reads +0.09% / -0.25% / +0.08% / +0.07%
+(strikeouts / walks / hit by pitch / pitches).
+
+The chain solver and the label check live in ``pipeline/batch/pool_chain.py``.
+This script imported the solver from ``scripts/sim429_chain_analysis.py``.
+Commit 6ab341c deleted that file on 2026-09-06, and the census failed on
+import until SIM-553 moved the solver into the pipeline package.
+
 USAGE
 -----
-    python scripts/pool_window_census.py
+    python scripts/pool_window_census.py                  # all three windows
+    python scripts/pool_window_census.py --windows W1     # a subset
+    python scripts/pool_window_census.py --strict         # exit 1 on a label-check FAIL
+
+Exit codes: 0 done; 1 ``--strict`` and a window's label check failed (a
+channel gap, or unequal plate-appearance counts) or could not run (Postgres
+unreachable); 2 the sim DuckDB cannot be opened read-only.
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
-_SCRIPTS = str(Path(__file__).resolve().parent)
-if _SCRIPTS not in sys.path:
-    sys.path.insert(0, _SCRIPTS)
 
-from sim429_chain_analysis import solve_chain  # noqa: E402
-
+from pipeline.batch.pool_chain import (  # noqa: E402
+    LABEL_CHECK_TOLERANCE,
+    attach_pg,
+    chain_rates,
+    format_gaps,
+    format_label_check,
+    format_pa_count,
+    label_check,
+    pa_group_count,
+    pool_count_matrix,
+    real_pa_rates,
+    solve_chain,
+)
 from simulation.sim_kwargs import open_sim_duckdb  # noqa: E402
 
 #: The three windows as SQL predicates (alias-free; every pool table carries
@@ -58,7 +102,8 @@ WINDOWS = {
     "W3 rolling 3y": "game_date BETWEEN DATE '2023-08-20' AND DATE '2026-08-19'",
 }
 
-OUTCOMES = ("ball", "called_strike", "swinging_strike", "foul", "in_play", "hit_by_pitch")
+#: The short names ``--windows`` takes: "W1" -> "W1 2023-2026", and so on.
+_WINDOW_KEYS = {name.split()[0]: name for name in WINDOWS}
 
 #: The 2026-08-20 diagnosis run's measured sim frequencies (12x150, the JSONs
 #: in docs/audit/). Terminal-PA rates exclude IBB by construction.
@@ -74,34 +119,100 @@ SIM = {
 }
 
 
-def main() -> None:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    ap = argparse.ArgumentParser(
+        description="Measure the pool windows, their centres and the label check (SIM-553)."
+    )
+    ap.add_argument(
+        "--windows",
+        nargs="+",
+        choices=list(_WINDOW_KEYS),
+        default=None,
+        help="the windows to measure, by short name (default: all three)",
+    )
+    ap.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit 1 when a window's label check fails or cannot run",
+    )
+    return ap.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv)
+    chosen = [_WINDOW_KEYS[key] for key in (args.windows or list(_WINDOW_KEYS))]
+
     con = open_sim_duckdb()
     if con is None:
         print("ERROR: cannot open the sim DuckDB read-only.")
         raise SystemExit(2)
 
-    for name, pred in WINDOWS.items():
+    # SIM-553: the label check reads real plate appearances from Postgres. An
+    # attach failure leaves the rest of the census intact and reports the check
+    # as NOT RUN; --strict counts that as a failure.
+    pg_error: str | None = None
+    try:
+        attach_pg(con)
+    except RuntimeError as exc:
+        pg_error = str(exc)
+    failed_windows: list[str] = []
+
+    for name in chosen:
+        pred = WINDOWS[name]
         print("\n" + "=" * 78)
         print(f" {name}   ({pred})")
         print("=" * 78)
 
         # --- pitch pool: volume + chain-implied per-PA centres -------------
-        rows = con.execute(
-            f"SELECT count_balls, count_strikes, outcome_type, COUNT(*) "
-            f"FROM sim.pitch_pool WHERE {pred} GROUP BY 1, 2, 3"
-        ).fetchall()
-        mat = [[0.0] * 6 for _ in range(12)]
-        n_pitch = 0
-        for b, s, o, n in rows:
-            if o in OUTCOMES:
-                mat[int(b) * 3 + int(s)][OUTCOMES.index(o)] += float(n)
-                n_pitch += int(n)
+        # SIM-553: pool_count_matrix RAISES on a class outside the chain's six.
+        # The old loop skipped such a class, so it dropped out of the centres
+        # silently.
+        mat = pool_count_matrix(con, pred)
+        n_pitch = int(sum(sum(row) for row in mat))
         chain = solve_chain(mat)
+        chain_rcy = solve_chain(pool_count_matrix(con, pred, weighted=True))
         print(f" pitch pool: {n_pitch:,} pitches")
         print(
             f"   pool-referenced centres: BB/PA {chain['walk']:.4f}   K/PA {chain['k']:.4f}"
             f"   HBP/PA {chain['hbp']:.4f}   pitches/PA {chain['pitches']:.3f}"
         )
+        print(
+            f"   recency-weighted chain:  BB/PA {chain_rcy['walk']:.4f}"
+            f"   K/PA {chain_rcy['k']:.4f}   HBP/PA {chain_rcy['hbp']:.4f}"
+            f"   pitches/PA {chain_rcy['pitches']:.3f}"
+        )
+
+        # --- the label check: the chain vs real plate appearances (SIM-553) -
+        # The check reads the chain over the pool rows of real plate
+        # appearances only (pa_only), so both sides count the same groups.
+        # The centres above stay on every row: the simulator draws them all.
+        if pg_error is not None:
+            print(f" label check: NOT RUN ({pg_error})")
+            failed_windows.append(name)
+        else:
+            real = real_pa_rates(con, pred)
+            n_real = int(real["n_pa"])
+            # SIM-553: both sides must read the same plate appearances. The
+            # pool's count comes from the SQL the pa_only chain reads.
+            n_pool = pa_group_count(con, pred)
+            chain_pa = chain_rates(con, pred, pa_only=True)
+            check = label_check(chain_pa, real)
+            ok = n_pool == n_real and all(row[4] for row in check)
+            print(
+                f" label check (the chain over the pool rows of the {n_real:,} real"
+                f" PAs vs raw.pitches, tolerance {LABEL_CHECK_TOLERANCE * 100.0:.1f}%):"
+                f" {'PASS' if ok else 'FAIL'}"
+            )
+            print(f"   {format_pa_count(n_pool, n_real)}")
+            for line in format_label_check(check):
+                print(f"   {line}")
+            # For the record: the all-rows centres against the same real PAs.
+            # The gap includes the groups cut short (about +0.6 points on
+            # walks in 2023-2026), so it is information, not the verdict.
+            all_rows = format_gaps(label_check(chain, real))
+            print(f"   for the record, the all-rows centres vs the same PAs: {all_rows}")
+            if not ok:
+                failed_windows.append(name)
 
         # --- batted-ball pool: volume, event mix, thin cells ---------------
         n_bip, n_1b, n_2b, n_3b, n_hr, n_roe = con.execute(
@@ -182,6 +293,14 @@ def main() -> None:
             print(f"   {k:>16}: sim {s:.4f}  pool {c:.4f}  delta {(s - c) / c * 100.0:+.1f}%")
 
     con.close()
+
+    print()
+    if failed_windows:
+        print(f"label check FAILED or NOT RUN on: {', '.join(failed_windows)}")
+        if args.strict:
+            raise SystemExit(1)
+    else:
+        print("label check PASSED on every window measured.")
 
 
 if __name__ == "__main__":

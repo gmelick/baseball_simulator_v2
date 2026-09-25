@@ -1,3 +1,149 @@
+# Build — the two-strike foul tip and foul bunt are strike three in the pitch pool: the class expression fixed and made one tested constant, the pitch pool rebuilt for all ten seasons, and the pool's labels now checked against real plate appearances — SIM-553, 2026-09-25
+
+**What changed for the model.** The pitch pool's class for a pitch comes from the MLB feed's
+one-letter result code. A foul tip (`T`) or a foul bunt (`L`) with two strikes is strike three
+by rule, but the pool coded both as `foul`, and the count machine keeps a two-strike foul
+alive: every real strikeout of that kind became one more pitch. About 2,900 strikeouts a season
+end this way (7.1% in 2025). The pool now codes them `swinging_strike` at two strikes; below
+two strikes they stay fouls. `O` (a foul tip; Retrosheet reads it as one on a bunt) is coded
+like `T`; `Q` (a swing and a miss at a pitchout) is a `swinging_strike` at every count and
+joins the profile's whiff set; `R` (a foul pitchout) is a `foul`; `P` is a `ball` explicitly;
+an `H` code is `hit_by_pitch` beside the events branch. Before, `O`, `Q` and `R` fell through an
+`ELSE 'ball'`. There is no ELSE now: an unknown code fails the pool build (the NOT NULL column
+refuses the insert), because the silent `ball` is how both this defect and the hit-by-pitch
+defect (SIM-509) hid. No loop code, no class vocabulary and no weight changed; the drawn row is
+now the play it records.
+
+**Why (measured 2026-09-23; the design `docs/audit/2026-09-23-foul-tip-strike-three-pool-coding-plan.md`,
+approved on all five decisions 2026-09-25).** Running the pool's per-count class shares through
+the count machine's rules (the count chain) gave 0.2163 strikeouts per plate appearance on the
+old coding and 0.2262 on the corrected coding, against 0.2255 in the real plate appearances of
+the same seasons. The loop lost 4.4% of its strikeouts and made 2.6% too many walks, 1.1% too
+many balls in play and 0.8% too many pitches. The pool-totals grade could not see it, because
+its centres come from the same labels. The loss is uneven across pitchers (the 10th to 90th
+percentile of the foul-tip share of their strikeouts: 4.7% to 9.4%), so no calibration factor
+could restore it.
+
+**The code.**
+- `pipeline/batch/player_profile_computor.py`: one code set per class (`BALL_TYPES`,
+  `CALLED_STRIKE_TYPES`, `WHIFF_TYPES` + `Q`, `FOUL_TYPES`, `STRIKE_THREE_FOUL_TYPES`) and
+  `SQL_OUTCOME_TYPE`, the class expression rendered from them; `_build_pitch_pool` inserts the
+  constant; `POOL_BUILDER_VERSION` `sim553.1`.
+- `pipeline/batch/pool_chain.py` (new): the count chain (verbatim to the solver the census used
+  until `scripts/sim429_chain_analysis.py` was deleted on 2026-09-06, which had left
+  `scripts/pool_window_census.py` unable to run); the real per-plate-appearance rates from
+  `raw.pitches`; and the LABEL CHECK: the chain against real play within 0.5% per channel, with
+  the plate-appearance counts required equal.
+- `scripts/pool_window_census.py`: repaired; prints the label check per window; `--strict`
+  exits 1 on a FAIL; `--windows` picks a subset.
+- `tests/acceptance/test_sim553_pool_label_check.py` (new): the standing label check on the
+  live window (`last_n_seasons`), guarded against a `bands.POOL_WINDOW` that did not roll with
+  it. It carries the acceptance marker; it skips without the live stores and fails under
+  `SIM_ACCEPTANCE=1`.
+- `scripts/sim553_rebuild_pitch_pool.py` (new): the pool-only rebuild (the design's §7, as
+  corrected by the review below).
+- Tests: `test_sim553_foul_tip_strike_three.py` (the class expression executed as a truth table
+  over every code at every count, the branch order, the events branch, an unknown code failing
+  the insert, the count machine end to end, and the real `_build_pitch_pool` run on an
+  in-memory store) and `test_sim553_pool_chain.py`. `test_sim501_profile_code_sets.py`,
+  `test_sim501a_out_label.py` and `test_sim509_hit_by_pitch.py` now EXECUTE the expression
+  instead of reading the source with a text pattern: a pattern cannot see a conditional branch
+  or a branch-order bug. The builder-version pins moved.
+- `tests/acceptance/bands.py`: the four chain centres restated (below).
+
+**The build, reviewed.** Three workflows built and adversarially reviewed the change (31, 6 and
+4 agents; two skeptics checked every finding, and every fix was checked again). The review
+corrected the design in three places, marked "[corrected 2026-09-25]" in the design doc.
+(1) The export must be the pitch pool ONLY. `engine_artifacts --what pool` also rewrites the
+batted-ball, steal and advancement pools, and DuckDB's steal and advancement pools are ahead of
+the bundle (the 2026 games of 08-14 to 08-29: +23,421 steal-opportunity rows and +4,444
+advancement rows, never exported). A pool export would have shipped an unapproved refresh and
+confounded the smoke. The rebuild exports the pitch pool and recomputes its batted-ball join
+against the bundle's untouched batted-ball ids. (2) The label check must compare like with
+like. About 0.6% of at-bat groups never reach a batting event (an inning ended by a pickoff or
+a caught stealing, a game ended mid-at-bat); their pitches sit in the pool and the full-pool
+chain plays them on, which adds about 0.6 points to walks. Pitch-clock automatic balls have no
+pitch row (547 in 2023, 185 in 2026 so far) and pull walks the other way. The two cancelled on
+today's window, but 2020–2022 already read +0.5% to +0.7%, so the check runs over the
+plate-appearance groups only (`pa_only`); the band centres stay the full-pool chain, because the
+simulator draws every row. (3) The rollback does not last on its own: DuckDB keeps the new
+coding, and any later pool export writes it back. The review also found a broken test import,
+a rebuild re-run path that could never pass, and a kill during the export that could certify a
+half-written bundle as the rollback point. All three are fixed and re-verified: every harness
+scenario passes on DuckDB 1.1.3 and on the container's 1.5.5 one-transaction path. Mutation
+testing: every requested mutant of the class expression and of the chain module dies.
+
+**The run (2026-09-25; the app stopped 07:07–07:11; log `scripts/sim553_rebuild.log`).** The
+pre-flight: pool rows equal raw rows in every season; the bundle equals DuckDB pitch for pitch;
+the batted-ball join reproduces. The rebuild (all ten seasons, one transaction): 0.7 minutes,
+the COMMIT 2.6 minutes, 3.5 minutes in all. The checks: rows unchanged (6,656,202); exactly the
+expected class moves — 11,258 window rows (T at two strikes 11,111; L 55; O 91; Q 1) and 25,961
+over ten seasons; no moved foul tip carries the got-away flag (one moved `Q` does — a real swing
+and miss with a passed ball, reported); **the label check PASSES: strikeouts +0.09%, walks
+−0.25%, hit by pitch +0.08%, pitches +0.07% against 708,439 real plate appearances (the old
+coding read −4.29%, +2.31%, +1.12%, +0.90%)**. The export: the pitch pool only; every exported
+class equals DuckDB's; every change from the copy is an expected move; the batted-ball, steal and
+advancement files are byte-identical. The rollback copy is
+`/data/play_pool/engine_artifacts.pre_sim553`. The app booted 11/11 with the calibration applied
+and the new bundle in shared memory. The standing test and the census `--strict` pass.
+
+**The references (`tests/acceptance/bands.py`, from the census on the rebuilt pool).** K_PA
+0.2165 → **0.2262**, BB_PA 0.0850 → **0.0829**, HBP_PA 0.0113 → **0.0112**, PITCHES_PA 3.938 →
+**3.906**. The per-ball-in-play, steal and double-play centres do not move. The balanced 45-game
+set stays inside 0.6% on every channel (strikeouts +0.41% → +0.30%), so it is kept.
+
+**What it shows.** A paired read on ten games of the balanced set: the old bundle (the rollback
+copy, mounted read-only) against the new, 300 game-sims per game each, production flags, the
+same seeds (the first 100 iterations of each reproduce the earlier 100-sim smokes exactly, 1,000
+of 1,000). Per team-game, new against old: **strikeouts 8.17 → 8.45 (+3.35%, 5.9 standard
+errors)**, walks 3.43 → 3.33 (−3.1%), hits 8.31 → 8.20 (−1.3%), home runs −2.0%, **runs 4.59 →
+4.46 (−2.8%, the design's estimate was about −3%)**; plate appearances −0.16%. Per plate
+appearance (K over AB + BB): **+3.5% ± 0.6%**. That is about three quarters of the 4.6% the
+pool's chain moved (1.7 standard errors short): the draw appears to take the moved rows at a
+little less than their pool share. I did not verify the cause; the likely candidates are the
+pitch-result draw's density correction and the actor weights, both the joint fit's to tune.
+**What it means for the next lane:** the K_PA band read −0.9% against the old centre; with a
+3.5% response it reads about −1.8% against the new centre — inside its 2% floor, close to it.
+The strikeout market: the sim's strikeouts per start rise about 3.5%, so the over probability
+rises about 3 points on an average line (the design estimated 4); the joint fit (SIM-548)
+re-reads the market on this pool when it resumes, and its strikeout calibration map (slope
+0.15, fitted on the old coding) is stale. Records: `scripts/sim553_paired_summary.txt`
+(the paired analysis) and the harness printouts `scripts/sim553_paired_old/new.txt` (300 per
+game) and `scripts/sim553_smoke_before/after.txt` (the first 100 per game, identical).
+
+**Found on the way, not fixed.** (1) DuckDB's steal and advancement pools are ahead of the
+bundle (above): the next `--what pool` export or `make engine-artifacts` ships that refresh,
+which is an owner decision. (2) The batter's `contact_rate` counts `D`/`E`/`F`/`X` over swings,
+so foul tips and foul bunts sit in no numerator: whiff plus contact is about 97.5% of swings.
+(3) The Data Lab's whiff (`api/routes/analytics.py`) counts a foul tip as a whiff; the profile
+does not. (4) Three diagnostic scripts (`sim518_fatigue_scan.py`, `sim523_fit_probe.py`,
+`sim523_power_scan.py`) call the `swinging_strike` class "whiff"; about 9% of that class at two
+strikes is now contact. (5) Nothing runs the standing label check on a schedule. The nightly
+chain (`scripts/nightly_ingest.sh`) could run `pool_window_census.py --windows W1 --strict`
+between the pool build and the export; that is an owner decision, and the scheduler is not
+running. (6) The 2017–2022 outcome, steal and advancement pools stay on older builders until a
+ten-season chain rebuild (the joint fit's pool-window test). (7) `acceptance-nightly.yml`'s
+roster names three tests that no longer exist.
+
+**⚠ Merge before the next nightly pool build.** The code lives on branch
+`claude/nifty-hermann-57ff18`; the live pool is on `sim553.1`. A nightly pool build from code
+without this change sees the new builder version as stale and rebuilds the current season on
+the OLD coding.
+
+**Files.** `pipeline/batch/player_profile_computor.py`, new `pipeline/batch/pool_chain.py`,
+`scripts/pool_window_census.py`, new `scripts/sim553_rebuild_pitch_pool.py`,
+`tests/acceptance/bands.py`, new `tests/acceptance/test_sim553_pool_label_check.py`, new
+`tests/unit/test_sim553_foul_tip_strike_three.py`, new `tests/unit/test_sim553_pool_chain.py`,
+`tests/unit/test_sim501_profile_code_sets.py`, `tests/unit/test_sim501a_out_label.py`,
+`tests/unit/test_sim509_hit_by_pitch.py`, `tests/unit/test_sim518_conditioning.py`,
+`tests/unit/test_sim523_part_g.py`, the design doc (its status and the corrections),
+`docs/architecture/2026-06-17-phase4-sim-loop-spec.md` (§5.4 marked implemented),
+`docs/technical/sim-loop-cheat-sheet.md`, `docs/technical/pipeline-betting-db.md`,
+`docs/technical/scripts-frontend.md`, `CLAUDE.md` (§2b), `BACKLOG.xlsx` (next free ID SIM-554;
+the ticket closes with this entry, so it has no row), and the run records
+`scripts/sim553_rebuild.log`, `scripts/sim553_census_after.txt`, `scripts/sim553_smoke_*.txt` and
+`scripts/sim553_paired_*.txt`.
+
 # Build — the outfield fence's three amendments landed and RUN: the born ball read in the live park's air (the carry offset), the born-ball kernel measured on the ball's class, and the wall-margin band; A1–A7 pass and the wall play now reads as the real balls do (C PASS) — SIM-478/479/480, 2026-09-22
 
 **What changed for the model (the plan's §11–§12.7, decisions 5–9 TAKEN 2026-09-22 by the

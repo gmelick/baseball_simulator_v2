@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from pipeline.statcast_events import (
     BATTER_RETIRED_EVENTS,
     FIELDING_OUT_EVENTS,
@@ -206,13 +208,16 @@ class TestSqlRendering:
             assert f"'{e}'" in sql_cs_out(), e
         assert "NOT IN" in sql_cs_out()
 
-    def test_in_play_set_matches_the_pool_build(self):
-        """The pool build's outcome_type CASE is the classification the
-        simulator draws from; the in-play row filter must be the same set
-        (the SIM-456 lesson, applied to the third code set)."""
-        from tests.unit.test_sim501_profile_code_sets import _pool_build_codes
+    @pytest.mark.parametrize("strikes", [0, 1, 2])
+    def test_in_play_set_matches_the_pool_build(self, strikes):
+        """The pool build's outcome_type expression is the classification the
+        simulator draws from; the in-play row filter must be the same set at
+        every count (the SIM-456 lesson, applied to the third code set).
+        SIM-553: the check runs the expression, so an earlier branch that took
+        an in-play code would fail it; it no longer reads the source."""
+        from tests.unit.test_sim501_profile_code_sets import _codes_by_class
 
-        assert set(IN_PLAY_TYPES) == _pool_build_codes("in_play")
+        assert _codes_by_class(strikes).get("in_play", set()) == set(IN_PLAY_TYPES)
 
 
 def _offending_reads(source: str) -> list[str]:

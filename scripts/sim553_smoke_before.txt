@@ -1,0 +1,57 @@
+sim_stats: 10 games × 100 sims = 1000 total sims
+  flags: SIM_MANAGER=1  SIM_BB_PLATOON=1  SIM_HOME_OFF_WEIGHT=0.0  SIM_PARK_KERNEL_SIGMA=0.02  SIM_CATCHER_RECEIVING=0  SIM_GOT_AWAY=1  SIM_PITCH_RESULT_SPLIT=1  SIM_PITCH_PITCHER_POWER=1  SIM_RESULT_PITCHER_POWER=1  SIM_RESULT_BATTER_POWER=1  SIM_BB_BORN_SIGMA=1.0  SIM_BB_CLASS_FILTER=1  SIM_PARK_WALL_ZONE_ONLY=1  SIM_FENCE_STAGE=1  SIM_CARRY_OFFSET=1  SIM_BB_BORN_PER_FEATURE=1  SIM_BB_MARGIN_BAND=15  SIM_MANAGER_DRAW=1  SIM_BULLPEN_SOURCE=box  SIM_ACTOR_POWER_MANAGER_USAGE=1  SIM_RELIEF_ROLE_SIGMA=0.1  SIM_RELIEF_PITCHER_POWER=1  SIM_RELIEF_REST_SIGMA=0.5  SIM_RELIEF_PITCHED2D_OFF_WEIGHT=0.25  SIM_RELIEF_PITCHES3D_SIGMA=10  SIM_RELIEF_HAND_OFF_WEIGHT=1.0
+  sim DuckDB: open (read-only) — the harness resolves a park factor per game.
+  game 776151: park_run_factor=0.9937   defense home=8/9 away=9/9
+  game 776151: R=9.15  H=16.81  HR=2.35  BB=7.24  K=16.51   (h_R=4.95/a_R=4.20)
+  game 776142: park_run_factor=0.9922   defense home=7/9 away=9/9
+  game 776142: R=9.35  H=16.89  HR=2.48  BB=6.80  K=16.35   (h_R=4.87/a_R=4.48)
+  game 776149: park_run_factor=0.9985   defense home=9/9 away=8/9
+  game 776149: R=9.28  H=16.89  HR=2.48  BB=6.53  K=16.48   (h_R=4.88/a_R=4.40)
+  game 745938: park_run_factor=0.9914   defense home=9/9 away=8/9
+  game 745938: R=9.15  H=16.23  HR=2.41  BB=6.73  K=15.85   (h_R=5.07/a_R=4.08)
+  game 824590: park_run_factor=1.0022   defense home=9/9 away=9/9
+  game 824590: R=8.38  H=15.69  HR=2.39  BB=6.52  K=16.96   (h_R=4.11/a_R=4.27)
+  game 746990: park_run_factor=1.0032   defense home=9/9 away=8/9
+  game 746990: R=8.87  H=16.62  HR=2.15  BB=6.96  K=16.13   (h_R=4.85/a_R=4.02)
+  game 823618: park_run_factor=0.9658   defense home=9/9 away=9/9
+  game 823618: R=9.70  H=16.93  HR=2.56  BB=6.83  K=16.19   (h_R=4.86/a_R=4.84)
+  game 746178: park_run_factor=1.0037   defense home=9/9 away=8/9
+  game 746178: R=9.40  H=16.59  HR=2.56  BB=6.36  K=17.04   (h_R=4.86/a_R=4.54)
+  game 824831: park_run_factor=0.9878   defense home=9/9 away=9/9
+  game 824831: R=10.30  H=17.51  HR=2.84  BB=7.00  K=16.44   (h_R=5.11/a_R=5.19)
+  game 822970: park_run_factor=0.9991   defense home=8/9 away=9/9
+  game 822970: R=8.69  H=16.22  HR=2.21  BB=6.63  K=16.01   (h_R=4.48/a_R=4.21)
+
+========================================================================
+ SIM_STATS — n_games=10  n_iters_total=1000  R sd=4.309  R se=0.1363
+========================================================================
+
+--- Both-teams per game ---
+  R=  9.23  H= 16.64  HR=  2.44  2B=  3.53  3B=  0.28  BB=  6.76  K= 16.40  SB=  1.15  CS=  0.33
+
+--- Per-team (both-teams / 2) vs MLB-2023 ---
+  R   sim=  4.61   mlb=  4.45   delta=  +3.7%
+  H   sim=  8.32   mlb=  8.26   delta=  +0.7%
+  HR  sim=  1.22   mlb=  1.16   delta=  +5.1%
+  2B  sim=  1.77   mlb=  1.59   delta= +10.9%
+  3B  sim=  0.14   mlb=  0.13   delta=  +8.7%
+  BB  sim=  3.38   mlb=  3.17   delta=  +6.8%
+  K   sim=  8.20   mlb=  8.35   delta=  -1.8%
+  SB  sim=  0.58   mlb=  0.63   delta=  -7.7%
+  CS  sim=  0.16   mlb=  0.19   delta= -14.4%
+
+--- SIM-412 home-field validation ---
+  home_win_pct = 0.565   (target MLB ~0.543)
+  home R/g     =  4.80   away R/g =  4.42   delta = +0.381  (target +0.13)
+  home H/g     =  8.34   away H/g =  8.30   delta = +0.040
+  home HR/g    =  1.25   away HR/g =  1.20  (no bias here — should be ~0)
+
+--- precision: R standard error = 0.1363  (NOISY — bump iters above this read) ---
+
+--- SIM-478 the fence stage ---
+  fence stage: over 2414 (9.2% of air balls) · short 48813 · band 0 · passed 0 (0.00%) · no matching rows 0 (0.00%) · not an air ball 25100
+  D: passed 0.00% (<= 0.1%), no rows 0.00% (<= 0.5%), over share 9.2% (9 ± 1%) — PASS
+  wall-margin band: applied 9151 (35.0% of air balls) · fallback 40 · skipped 42036
+
+elapsed: 1112.2s
+wrote /app/scripts/sim553_smoke_before.json

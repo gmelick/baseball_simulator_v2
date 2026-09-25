@@ -1,0 +1,53 @@
+
+==============================================================================
+ W1 2023-2026   (season BETWEEN 2023 AND 2026)
+==============================================================================
+ pitch pool: 2,771,222 pitches
+   pool-referenced centres: BB/PA 0.0829   K/PA 0.2262   HBP/PA 0.0112   pitches/PA 3.906
+   recency-weighted chain:  BB/PA 0.0830   K/PA 0.2257   HBP/PA 0.0111   pitches/PA 3.904
+ label check (the chain over the pool rows of the 708,439 real PAs vs raw.pitches, tolerance 0.5%): PASS
+           PAs: pool 708,439  real 708,439  equal  PASS
+          K/PA: chain 0.2257  real 0.2255  gap +0.09%  PASS
+         BB/PA: chain 0.0824  real 0.0826  gap -0.25%  PASS
+        HBP/PA: chain 0.0112  real 0.0112  gap +0.08%  PASS
+    pitches/PA: chain 3.8975  real 3.8949  gap +0.07%  PASS
+   for the record, the all-rows centres vs the same PAs: K/PA +0.30%  BB/PA +0.36%  HBP/PA -0.13%  pitches/PA +0.27%
+ batted-ball pool (consistent): 478,089 rows — per BIP: 1B 0.2051  2B 0.0625  3B 0.00545  HR 0.0458  ROE 0.00826
+   hard-filter cells present: 48/48 (stand x rs x outs); the 5 thinnest:
+     stand=L rs=4 outs=0: 450
+     stand=R rs=4 outs=0: 622
+     stand=L rs=6 outs=0: 753
+     stand=L rs=7 outs=0: 907
+     stand=R rs=6 outs=0: 984
+   DP rows / runner-on-1B <2-out BIP: 12,958/91,222 = 0.1420
+ steal pool [2B]: 599,654 opportunities — att/opp 0.0213  safe 0.7982   thinnest cells: o0 3-0:1,634, o1 3-0:2,163, o2 3-0:2,266
+ steal pool [3B]: 404,968 opportunities — att/opp 0.0045  safe 0.8557   thinnest cells: o0 3-0:1,045, o1 3-0:1,660, o0 3-1:2,032
+ advancement pools (4 smallest, rows(att_rate)): 4_3_4:8,435(0.61)  3_1_4:9,086(0.39)  4_2_3:16,381(0.29)  2_2_4:17,382(0.59)
+ grade of the 2026-08-20 sim run vs this window's pool centres:
+              BB/PA: sim 0.0850  pool 0.0829  delta +2.5%
+               K/PA: sim 0.2160  pool 0.2262  delta -4.5%
+             HBP/PA: sim 0.0113  pool 0.0112  delta +1.2%
+         pitches/PA: sim 3.9400  pool 3.9056  delta +0.9%
+             3B/BIP: sim 0.0052  pool 0.0055  delta -5.0%
+     DP/opportunity: sim 0.1417  pool 0.1420  delta -0.2%
+
+label check PASSED on every window measured.
+CENSUS_RC=0
+..window season IN (2023, 2024, 2025, 2026):
+        PAs: pool 708,439  real 708,439  equal  PASS
+.window season IN (2023, 2024, 2025, 2026); 708,439 real plate appearances; pitch pool built by ['sim553.1']; tolerance 0.5%; the chain over the pool rows of those plate appearances:
+        PAs: pool 708,439  real 708,439  equal  PASS
+       K/PA: chain 0.2257  real 0.2255  gap +0.09%  PASS
+      BB/PA: chain 0.0824  real 0.0826  gap -0.25%  PASS
+     HBP/PA: chain 0.0112  real 0.0112  gap +0.08%  PASS
+ pitches/PA: chain 3.8975  real 3.8949  gap +0.07%  PASS
+for the record, the all-rows chain against the same plate appearances: K/PA +0.30%  BB/PA +0.36%  HBP/PA -0.13%  pitches/PA +0.27%
+.
+=============================== warnings summary ===============================
+tests/acceptance/test_sim553_pool_label_check.py::test_the_bands_window_spans_the_export_floor
+  /app/tests/conftest.py:346: DeprecationWarning: There is no current event loop
+    loop = asyncio.get_event_loop_policy().get_event_loop()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+4 passed, 1 warning in 2.10s
+TEST_RC=0

@@ -75,6 +75,7 @@ from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 
 from pipeline.statcast_events import (
+    IN_PLAY_TYPES,
     batter_retired,
     play_outs,
     sql_batter_dest,
@@ -168,21 +169,47 @@ JUMP_ALPHA_PRIOR_PLAYS = 25
 _SQL_IS_OF = "c.position IN ('LF', 'CF', 'RF')"
 
 # ---------------------------------------------------------------------------
-# Statcast pitch-result codes (SIM-456 / SIM-501)
+# Statcast pitch-result codes (SIM-456 / SIM-501 / SIM-553)
 #
-# These MUST agree with the pitch-pool classification in `_build_pitch_pool`
-# (search `THEN 'swinging_strike'`), because that classification builds the pool
-# the simulator draws from.  If a pitcher's whiff_rate counts a different set of
-# codes than the pool does, the metric describes a different event than the thing
-# it is used to sample.  `test_profile_code_sets_match_pool_build` fails if they
-# ever diverge again.
+# One code set per pitch-pool class. The pool build's class expression
+# (SQL_OUTCOME_TYPE, below) is rendered from these sets, and the profile SQL
+# reads WHIFF_TYPES / NON_SWING_TYPES, so a pitcher's whiff rate and the pool
+# the simulator draws from describe the same events.
+# `tests/unit/test_sim501_profile_code_sets.py` and
+# `tests/unit/test_sim553_foul_tip_strike_three.py` run the expression and fail
+# if the two ever diverge.
 # ---------------------------------------------------------------------------
 
+#: A ball: 'B', '*B' a ball in the dirt, 'P' a pitchout the batter took.
+BALL_TYPES: tuple[str, ...] = ("B", "*B", "P")
+
+#: A called strike: the umpire called it; the batter did not swing.
+CALLED_STRIKE_TYPES: tuple[str, ...] = ("C",)
+
 #: A swing and a miss: 'S' swinging strike, 'W' swinging strike the catcher did
-#: not hold, 'M' missed bunt.  Foul tips ('T', 'O') are CONTACT — the bat touches
-#: the ball — and the pool build classifies them as fouls, so they are excluded.
+#: not hold, 'M' missed bunt, 'Q' a swing and a miss at a pitchout.  Foul tips
+#: ('T', 'O') are CONTACT — the bat touches the ball — so they are excluded: the
+#: pool build classifies them as fouls below two strikes and as strike three
+#: at two (STRIKE_THREE_FOUL_TYPES).
 #: Measured on 2024: 23.22% of swings, against an MLB whiff rate near 24%.
-WHIFF_TYPES: tuple[str, ...] = ("S", "W", "M")
+WHIFF_TYPES: tuple[str, ...] = ("S", "W", "M", "Q")
+
+#: The bat touched the ball and the ball was not put in play: 'F' foul, 'T' foul
+#: tip, 'L' foul bunt, 'O' a foul tip (the feed's own description; Retrosheet
+#: reads it as a foul tip on a bunt), 'R' foul pitchout. Each adds a strike
+#: below two strikes.
+FOUL_TYPES: tuple[str, ...] = ("F", "T", "L", "O", "R")
+
+#: SIM-553: the fouls that are STRIKE THREE with two strikes. A foul tip is a
+#: strike at any count (the rulebook's definition of a strike; it must be caught
+#: to be a foul tip), and so is a bunt fouled off (Rule 5.09(a)(4): the batter
+#: is out when he bunts foul on the third strike). A plain foul ('F', 'R') with
+#: two strikes is not. Before SIM-553 the pool coded 'T' and 'L' as 'foul' and
+#: 'O' as 'ball' at two strikes, so the count machine pitched on after a real
+#: strikeout: 7.1% of 2025's strikeouts end this way, and the count chain put
+#: the simulator's loss at 4.4% of its strikeouts
+#: (docs/audit/2026-09-23-foul-tip-strike-three-pool-coding-plan.md).
+STRIKE_THREE_FOUL_TYPES: tuple[str, ...] = ("T", "O", "L")
 
 #: Codes where the bat never left the shoulder: ball, called strike, hit by pitch,
 #: pitchout, blocked ball.  A swing is the complement of this set, which makes it
@@ -199,6 +226,25 @@ def sql_in(types: tuple[str, ...]) -> str:
 
 
 SQL_WHIFF = f"type IN {sql_in(WHIFF_TYPES)}"
+
+#: SIM-553: the pitch pool's class for one ``raw.pitches`` row — the class the
+#: simulator's count machine reads. The first matching branch wins, so the
+#: two-strike branch MUST precede the foul branch. ``strikes`` is the count
+#: BEFORE the pitch. The events branch comes first (SIM-509: an HBP pitch must
+#: never become ball four); the 'H' code covers the one 2022 hit-by-pitch row
+#: with no event label. There is no ELSE on purpose: an unknown code yields
+#: NULL, the NOT NULL ``outcome_type`` column refuses the insert, and a person
+#: looks. The old ``ELSE 'ball'`` is how 'O', 'Q' and the hit-by-pitch rows hid.
+SQL_OUTCOME_TYPE = f"""CASE
+                        WHEN events = 'hit_by_pitch' OR TRIM(type) = 'H' THEN 'hit_by_pitch'
+                        WHEN TRIM(type) IN {sql_in(BALL_TYPES)} THEN 'ball'
+                        WHEN TRIM(type) IN {sql_in(CALLED_STRIKE_TYPES)} THEN 'called_strike'
+                        WHEN TRIM(type) IN {sql_in(WHIFF_TYPES)} THEN 'swinging_strike'
+                        WHEN TRIM(type) IN {sql_in(STRIKE_THREE_FOUL_TYPES)} AND strikes = 2
+                            THEN 'swinging_strike'
+                        WHEN TRIM(type) IN {sql_in(FOUL_TYPES)} THEN 'foul'
+                        WHEN TRIM(type) IN {sql_in(IN_PLAY_TYPES)} THEN 'in_play'
+                    END"""
 
 
 # ===========================================================================
@@ -1287,7 +1333,11 @@ def _label_component(mean: list[float], fi: dict[str, int]) -> str | None:
 # sim517.1 = catcher_id + got_away on sim.pitch_pool (SIM-517 / migration 0022).
 # sim518.1 = bat_home + pitcher_pitch_count + times_through_order on
 # sim.pitch_pool (SIM-518 / migration 0023 — the draw-conditioning columns).
-POOL_BUILDER_VERSION = "sim523g.1"
+# sim523g.1 = the fielding chain on sim.outcome_pool (SIM-523 part G).
+# sim553.1 = a two-strike foul tip / foul bunt is strike three in
+# sim.pitch_pool.outcome_type; 'O' / 'Q' / 'R' / 'P' coded explicitly; no ELSE
+# (SIM-553 — SQL_OUTCOME_TYPE).
+POOL_BUILDER_VERSION = "sim553.1"
 
 #: SIM-523 part G: the loader's fielding-credit slot columns on raw.pitches.
 _PUTOUT_SLOTS: tuple[str, ...] = ("field_putout_1", "field_putout_2", "field_putout_3")
@@ -6746,15 +6796,11 @@ class PlayerProfileComputor:
                     -- — a WALK. Worth the whole 0.397/team-game 2025 HBP rate
                     -- (~82% of the measured BB surplus). The events branch must
                     -- come FIRST.
-                    CASE
-                        WHEN events = 'hit_by_pitch' THEN 'hit_by_pitch'
-                        WHEN TRIM(type) IN ('B', '*B') THEN 'ball'
-                        WHEN TRIM(type) = 'C' THEN 'called_strike'
-                        WHEN TRIM(type) IN ('S', 'W', 'M') THEN 'swinging_strike'
-                        WHEN TRIM(type) IN ('F', 'T', 'L') THEN 'foul'
-                        WHEN TRIM(type) IN ('X', 'D', 'E') THEN 'in_play'
-                        ELSE 'ball'
-                    END                                 AS outcome_type,
+                    -- SIM-553: the expression is the module constant
+                    -- SQL_OUTCOME_TYPE, rendered from the named code sets; a
+                    -- two-strike foul tip or foul bunt is strike three
+                    -- ('swinging_strike'), and an unknown code fails the insert.
+                    {SQL_OUTCOME_TYPE}                  AS outcome_type,
                     events,
                     {recency_expr} AS recency_weight,
 

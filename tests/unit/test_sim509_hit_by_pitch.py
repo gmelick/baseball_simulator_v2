@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import inspect
 
+import duckdb
 import numpy as np
 
 from pipeline.batch import player_profile_computor as ppc
@@ -82,14 +83,44 @@ class TestTheResolution:
 
 
 class TestTheBuilderMapping:
-    def test_the_events_branch_precedes_the_type_codes(self):
+    @staticmethod
+    def _classify(rows):
+        """Run the pool build's class expression over ``(type, events)`` rows."""
+        con = duckdb.connect(":memory:")
+        try:
+            con.execute(
+                "CREATE TABLE p (i INTEGER, type VARCHAR, strikes SMALLINT, events VARCHAR)"
+            )
+            con.executemany(
+                "INSERT INTO p VALUES (?, ?, 0, ?)",
+                [(i, code, events) for i, (code, events) in enumerate(rows)],
+            )
+            got = con.execute(f"SELECT {ppc.SQL_OUTCOME_TYPE} FROM p ORDER BY i").fetchall()
+        finally:
+            con.close()
+        return [r[0] for r in got]
+
+    def test_the_events_branch_wins_over_the_ball_branch(self):
         """The pool builder must classify events='hit_by_pitch' BEFORE the
         Gameday type-code branches — an HBP pitch carries a ball-class code,
-        so a later branch would swallow it back into 'ball'."""
+        so a later branch would swallow it back into 'ball'.
+
+        SIM-553 moved the expression into the module constant
+        ``SQL_OUTCOME_TYPE``, so this test runs it: the same ball code reads
+        ``hit_by_pitch`` with the HBP event and ``ball`` without it."""
+        got = self._classify(
+            [
+                ("B ", "hit_by_pitch"),
+                ("*B", "hit_by_pitch"),
+                ("B ", None),
+                ("*B", None),
+            ]
+        )
+        assert got == ["hit_by_pitch", "hit_by_pitch", "ball", "ball"]
+
+    def test_the_pool_build_renders_the_constant(self):
         src = inspect.getsource(ppc.PlayerProfileComputor._build_pitch_pool)
-        hbp = src.index("WHEN events = 'hit_by_pitch' THEN 'hit_by_pitch'")
-        ball = src.index("WHEN TRIM(type) IN ('B', '*B') THEN 'ball'")
-        assert hbp < ball
+        assert "{SQL_OUTCOME_TYPE}" in src
 
     def test_the_builder_version_is_current(self):
         """The watermark guard skips unchanged builders — a formula change
@@ -102,5 +133,6 @@ class TestTheBuilderMapping:
         pitcher_pitch_count + times_through_order (migration 0023);
         bump this assertion with every pool-formula change. SIM-523 part G
         superseded sim518 when the outcome pool gained the fielding chain
-        (migration 0024)."""
-        assert "sim523g" in ppc.POOL_BUILDER_VERSION
+        (migration 0024). SIM-553 superseded sim523g when the pitch pool coded
+        a two-strike foul tip or foul bunt as strike three."""
+        assert "sim553" in ppc.POOL_BUILDER_VERSION

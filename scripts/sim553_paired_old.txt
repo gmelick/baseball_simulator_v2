@@ -1,0 +1,62 @@
+total 8
+drwxr-xr-x 2 appuser appuser 4096 Sep 25 07:31 .
+drwxrwxrwt 1 root    root    4096 Sep 25 07:31 ..
+lrwxrwxrwx 1 appuser appuser   45 Sep 25 07:31 engine_artifacts -> /dataro/play_pool/engine_artifacts.pre_sim553
+sim_stats: 10 games × 300 sims = 3000 total sims
+  flags: SIM_MANAGER=1  SIM_BB_PLATOON=1  SIM_HOME_OFF_WEIGHT=0.0  SIM_PARK_KERNEL_SIGMA=0.02  SIM_CATCHER_RECEIVING=0  SIM_GOT_AWAY=1  SIM_PITCH_RESULT_SPLIT=1  SIM_PITCH_PITCHER_POWER=1  SIM_RESULT_PITCHER_POWER=1  SIM_RESULT_BATTER_POWER=1  SIM_BB_BORN_SIGMA=1.0  SIM_BB_CLASS_FILTER=1  SIM_PARK_WALL_ZONE_ONLY=1  SIM_FENCE_STAGE=1  SIM_CARRY_OFFSET=1  SIM_BB_BORN_PER_FEATURE=1  SIM_BB_MARGIN_BAND=15  SIM_MANAGER_DRAW=1  SIM_BULLPEN_SOURCE=box  SIM_ACTOR_POWER_MANAGER_USAGE=1  SIM_RELIEF_ROLE_SIGMA=0.1  SIM_RELIEF_PITCHER_POWER=1  SIM_RELIEF_REST_SIGMA=0.5  SIM_RELIEF_PITCHED2D_OFF_WEIGHT=0.25  SIM_RELIEF_PITCHES3D_SIGMA=10  SIM_RELIEF_HAND_OFF_WEIGHT=1.0
+  sim DuckDB: open (read-only) — the harness resolves a park factor per game.
+  game 776151: park_run_factor=0.9937   defense home=8/9 away=9/9
+  game 776151: R=9.60  H=17.06  HR=2.51  BB=7.36  K=16.13   (h_R=5.16/a_R=4.44)
+  game 776142: park_run_factor=0.9922   defense home=7/9 away=9/9
+  game 776142: R=9.23  H=16.73  HR=2.40  BB=7.09  K=16.65   (h_R=4.54/a_R=4.70)
+  game 776149: park_run_factor=0.9985   defense home=9/9 away=8/9
+  game 776149: R=8.87  H=16.56  HR=2.40  BB=6.40  K=16.35   (h_R=4.65/a_R=4.22)
+  game 745938: park_run_factor=0.9914   defense home=9/9 away=8/9
+  game 745938: R=9.20  H=16.43  HR=2.34  BB=6.66  K=15.82   (h_R=5.09/a_R=4.11)
+  game 824590: park_run_factor=1.0022   defense home=9/9 away=9/9
+  game 824590: R=8.81  H=16.29  HR=2.42  BB=6.91  K=16.64   (h_R=4.34/a_R=4.48)
+  game 746990: park_run_factor=1.0032   defense home=9/9 away=8/9
+  game 746990: R=8.96  H=16.46  HR=2.20  BB=6.96  K=16.12   (h_R=4.69/a_R=4.27)
+  game 823618: park_run_factor=0.9658   defense home=9/9 away=9/9
+  game 823618: R=9.32  H=16.50  HR=2.47  BB=6.82  K=16.08   (h_R=4.80/a_R=4.53)
+  game 746178: park_run_factor=1.0037   defense home=9/9 away=8/9
+  game 746178: R=9.42  H=16.83  HR=2.43  BB=6.76  K=16.70   (h_R=4.73/a_R=4.69)
+  game 824831: park_run_factor=0.9878   defense home=9/9 away=9/9
+  game 824831: R=9.83  H=16.78  HR=2.74  BB=6.92  K=16.64   (h_R=4.78/a_R=5.05)
+  game 822970: park_run_factor=0.9991   defense home=8/9 away=9/9
+  game 822970: R=8.59  H=16.45  HR=2.10  BB=6.80  K=16.33   (h_R=4.36/a_R=4.23)
+
+========================================================================
+ SIM_STATS — n_games=10  n_iters_total=3000  R sd=4.439  R se=0.0811
+========================================================================
+
+--- Both-teams per game ---
+  R=  9.18  H= 16.61  HR=  2.40  2B=  3.45  3B=  0.27  BB=  6.87  K= 16.35  SB=  1.17  CS=  0.33
+
+--- Per-team (both-teams / 2) vs MLB-2023 ---
+  R   sim=  4.59   mlb=  4.45   delta=  +3.2%
+  H   sim=  8.30   mlb=  8.26   delta=  +0.6%
+  HR  sim=  1.20   mlb=  1.16   delta=  +3.3%
+  2B  sim=  1.73   mlb=  1.59   delta=  +8.3%
+  3B  sim=  0.13   mlb=  0.13   delta=  +3.2%
+  BB  sim=  3.43   mlb=  3.17   delta=  +8.5%
+  K   sim=  8.17   mlb=  8.35   delta=  -2.1%
+  SB  sim=  0.58   mlb=  0.63   delta=  -6.5%
+  CS  sim=  0.16   mlb=  0.19   delta= -15.1%
+
+--- SIM-412 home-field validation ---
+  home_win_pct = 0.551   (target MLB ~0.543)
+  home R/g     =  4.71   away R/g =  4.47   delta = +0.243  (target +0.13)
+  home H/g     =  8.31   away H/g =  8.30   delta = +0.003
+  home HR/g    =  1.21   away HR/g =  1.19  (no bias here — should be ~0)
+
+--- precision: R standard error = 0.0811  (moderate — fine for trend reads) ---
+
+--- SIM-478 the fence stage ---
+  fence stage: over 7133 (9.1% of air balls) · short 147075 · band 0 · passed 0 (0.00%) · no matching rows 0 (0.00%) · not an air ball 75589
+  D: passed 0.00% (<= 0.1%), no rows 0.00% (<= 0.5%), over share 9.1% (9 ± 1%) — PASS
+  wall-margin band: applied 27817 (35.4% of air balls) · fallback 100 · skipped 126291
+
+elapsed: 3233.2s
+wrote /app/scripts/sim553_paired_old.json
+EXIT=0

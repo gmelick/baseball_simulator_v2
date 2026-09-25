@@ -340,7 +340,10 @@ Substitutions are evaluated **here and at half-inning boundaries**, never mid-PA
   reach) — resolved in step 6/7; owner SIM-319.
 - **Foul tip caught with two strikes = strikeout**, and **foul bunt with two strikes
   = strike three** — these must be encoded in `outcome_type` **upstream by the ETL**
-  (not inferred in the loop); foul-ball doc §3.3.
+  (not inferred in the loop); foul-ball doc §3.3. *Implemented 2026-09-25 (SIM-553):
+  the pitch-pool build codes a two-strike foul tip or foul bunt as `swinging_strike`
+  (`SQL_OUTCOME_TYPE` in `pipeline/batch/player_profile_computor.py`); until then it
+  coded both as `foul`, and the loop lost 4.4% of its strikeouts.*
 - **HBP** — a pitch outcome the current `outcome_type` vocab does not separate from
   `ball`; if HBP is not a distinct sampled outcome, it is out of the §5.1 machine and
   must be handled by SIM-312's event vocabulary reconciliation. **Flagged open.**

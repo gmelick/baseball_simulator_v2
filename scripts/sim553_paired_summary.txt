@@ -1,0 +1,37 @@
+SIM-553 paired read, 2026-09-25: the old bundle (engine_artifacts.pre_sim553, mounted read-only) vs the new,
+10 games of the balanced set x 300 game-sims each, production flags, seeds 0-299 (scripts/sim_stats.py).
+games: 776151 776142 776149 745938 824590 746990 823618 746178 824831 822970
+determinism: old[:100] == the before smoke (1000, 1000); new[:100] == the after smoke (1000, 1000) (iterations equal / compared)
+
+per team-game (both teams / 2):
+    R: old  4.592  new  4.463  change  -2.80%  (-2.3 SE)
+    H: old  8.305  new  8.197  change  -1.29%  (-1.8 SE)
+   HR: old  1.201  new  1.177  change  -1.98%  (-1.1 SE)
+   2B: old  1.726  new  1.706  change  -1.17%  (-0.8 SE)
+   3B: old  0.133  new  0.125  change  -6.12%  (-1.2 SE)
+   BB: old  3.434  new  3.328  change  -3.09%  (-3.0 SE)
+    K: old  8.173  new  8.447  change  +3.35%  (+5.9 SE)
+   SB: old  0.585  new  0.589  change  +0.80%  (+0.3 SE)
+   CS: old  0.163  new  0.160  change  -2.25%  (-0.5 SE)
+
+per plate appearance (over AB + BB), with a bootstrap sd of the change (300 resamples):
+   K: old 0.2198  new 0.2275  change +3.51%  (sd 0.62%)
+  BB: old 0.0923  new 0.0896  change -2.93%  (sd 0.88%)
+   H: old 0.2233  new 0.2208  change -1.14%  (sd 0.57%)
+
+AB+BB per team-game: old 37.190  new 37.131  change -0.16%
+home win: old 0.551  new 0.542
+
+per game, K per (AB+BB):
+  776151: old 0.2141  new 0.2285   +6.7%
+  776142: old 0.2224  new 0.2250   +1.2%
+  776149: old 0.2213  new 0.2317   +4.7%
+  745938: old 0.2147  new 0.2268   +5.6%
+  824590: old 0.2243  new 0.2277   +1.5%
+  746990: old 0.2178  new 0.2249   +3.3%
+  823618: old 0.2180  new 0.2290   +5.0%
+  746178: old 0.2236  new 0.2295   +2.6%
+  824831: old 0.2216  new 0.2285   +3.1%
+  822970: old 0.2200  new 0.2232   +1.5%
+
+the count chain moved the pool's K/PA +4.58% (0.2163 -> 0.2262); the sim's response is about three quarters of it.

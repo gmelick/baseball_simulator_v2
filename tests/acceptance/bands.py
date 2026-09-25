@@ -1257,6 +1257,18 @@ POOL_WINDOW = "full seasons 2023-2026 (SIM-516, owner ruling 2026-08-20)"
 
 _CENSUS = "scripts/pool_window_census.py (2026-08-20, the W1 block)"
 
+#: SIM-553 (2026-09-25): the four chain centres were restated after the pitch
+#: pool was rebuilt with a two-strike foul tip / foul bunt coded as strike
+#: three (builder sim553.1). The old coding gave K 0.2165 / BB 0.0850 /
+#: HBP 0.0113 / pitches 3.938: a strikeout played on as a foul, so the chain
+#: (and the sim) lost 4.4% of strikeouts. The per-ball-in-play, steal and DP
+#: centres did not move and keep ``_CENSUS``.
+_CENSUS_SIM553 = (
+    "scripts/pool_window_census.py (2026-09-25, the W1 block, pitch pool sim553.1 — "
+    "the chain over every pool row; label check vs real PAs K +0.09% BB -0.25% "
+    "HBP +0.08% pitches +0.07%)"
+)
+
 
 @dataclass(frozen=True, slots=True)
 class PoolReference:
@@ -1277,8 +1289,8 @@ class PoolReference:
 POOL_REFERENCES: dict[str, PoolReference] = {
     # --- per plate appearance ---------------------------------------------
     "BB_PA": PoolReference(
-        0.0850,
-        f"{_CENSUS}: chain(pool per-count rates) BB/PA",
+        0.0829,
+        f"{_CENSUS_SIM553}: chain(pool per-count rates) BB/PA",
         rel_floor=0.02,
         floor_rationale=(
             "The diagnosis run measured the kernel tilt at +0.4%; 2% passes a "
@@ -1296,14 +1308,14 @@ POOL_REFERENCES: dict[str, PoolReference] = {
         ),
     ),
     "K_PA": PoolReference(
-        0.2165,
-        f"{_CENSUS}: chain(pool per-count rates) K/PA",
+        0.2262,
+        f"{_CENSUS_SIM553}: chain(pool per-count rates) K/PA",
         rel_floor=0.02,
         floor_rationale="Measured tilt +0.3%; same sizing as BB_PA.",
     ),
     "HBP_PA": PoolReference(
-        0.0113,
-        f"{_CENSUS}: chain(pool per-count rates) HBP/PA",
+        0.0112,
+        f"{_CENSUS_SIM553}: chain(pool per-count rates) HBP/PA",
         rel_floor=0.06,
         floor_rationale=(
             "A rare channel: binomial noise ~1% of centre at lane volume; 6% "
@@ -1311,8 +1323,8 @@ POOL_REFERENCES: dict[str, PoolReference] = {
         ),
     ),
     "PITCHES_PA": PoolReference(
-        3.938,
-        f"{_CENSUS}: chain(pool per-count rates) pitches/PA",
+        3.906,
+        f"{_CENSUS_SIM553}: chain(pool per-count rates) pitches/PA",
         rel_floor=0.015,
         is_proportion=False,
         floor_rationale="A mean, not a proportion; measured drift +0.1%.",

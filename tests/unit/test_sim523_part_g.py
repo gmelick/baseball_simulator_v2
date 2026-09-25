@@ -88,7 +88,9 @@ class TestCreditMask:
         assert sql.count("CASE WHEN") == 9
 
     def test_the_builder_version_moved(self):
-        assert POOL_BUILDER_VERSION == "sim523g.1"
+        # sim518.1 -> sim523g.1 (SIM-523 part G: the fielding chain on the outcome pool)
+        # sim523g.1 -> sim553.1 (SIM-553: a two-strike foul tip / foul bunt is strike three)
+        assert POOL_BUILDER_VERSION == "sim553.1"
 
 
 _DDL = """

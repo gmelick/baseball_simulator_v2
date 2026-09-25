@@ -248,6 +248,20 @@ standing owner rulings that govern all new work:
   the wall play is now right (near-wall balls draw doubles as the real ones do) and the
   fix unmasked an over-production of doubles on ordinary air balls that the born kernel's
   bandwidth owns (the sweep's); singles, hits, runs and home runs pass.
+- **The pool's class labels are checked against real plate appearances (SIM-553, 2026-09-25).**
+  A two-strike foul tip or foul bunt is strike three in the pitch pool (`SQL_OUTCOME_TYPE`,
+  builder `sim553.1`, all ten seasons rebuilt 2026-09-25); it used to be coded `foul`, and the
+  count chain put the simulator's loss at 4.4% of its strikeouts (7.1% of 2025's strikeouts end
+  this way). The four chain band centres moved to K_PA 0.2262 / BB_PA 0.0829 / HBP_PA 0.0112 /
+  PITCHES_PA 3.906. A paired read (old vs new bundle, 10 games × 300) measured the sim's
+  strikeouts +3.5% per plate appearance (±0.6%; the pool moved 4.6%) and runs −2.8%, so the
+  next lane's K_PA band should read about −1.8% (floor 2%). `pipeline/batch/pool_chain.py` holds the count chain and the label check;
+  `tests/acceptance/test_sim553_pool_label_check.py` and `scripts/pool_window_census.py
+  --strict` fail when the pool's chain drifts more than 0.5% from real play — the pool-totals
+  grade cannot see a labelling defect, because it reads the same labels. **Merge the code
+  before the next nightly pool build**, or that build rebuilds the current season on the old
+  coding. The steal and advancement pools in DuckDB are AHEAD of the bundle (the 2026 games of
+  08-14 to 08-29, never exported); the next `--what pool` export ships that refresh.
 - **The pool window (2026-08-20):** the last three COMPLETED seasons plus the current one
   (`RECENCY_FLOOR_SEASONS = 4`; full 2023-2026 today). Schema v20, `POOL_BUILDER_VERSION`
   sim515.1.

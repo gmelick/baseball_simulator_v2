@@ -541,8 +541,24 @@ The current, most complete data-rebuild chain for the play-picker redesign (SIM-
 
 **Environment flags read here:** `BASEBALL_DUCKDB_PATH`, `BASEBALL_ENGINE_ARTIFACT_DIR`, `BASEBALL_DB_DSN`
 
-> **Notes for anyone changing this file:** This is the CURRENT full data-rebuild chain -- it produces sim523g.1, the pool builder version production actually runs today. Must run with the app container stopped, because the DuckDB forkserver holds a writer lock that blocks concurrent rebuilds (tracked as the still-open SIM-524 ticket). A future season/window extension would re-run this chain, or its constituent steps, again.
+> **Notes for anyone changing this file:** This was the full data-rebuild chain of 2026-09-09 -- it produced sim523g.1. Since 2026-09-25 the pitch pool is on sim553.1 (`scripts/sim553_rebuild_pitch_pool.py`); the outcome, steal and advancement pools of 2023-2026 still read sim523g.1. Must run with the app container stopped, because the DuckDB forkserver holds a writer lock that blocks concurrent rebuilds (tracked as the still-open SIM-524 ticket). A future season/window extension would re-run this chain, or its constituent steps, again.
 
+
+---
+
+### `scripts/sim553_rebuild_pitch_pool.py`
+
+SIM-553 (2026-09-25): the pool-only rebuild that coded a two-strike foul tip or foul bunt as strike three. It rebuilds `sim.pitch_pool` for all ten seasons in ONE transaction with the `sim553.1` builder, checks it, and exports the pitch pool only into the engine-artifact bundle. Run it with the app STOPPED (the app holds the DuckDB lock, SIM-524): `docker compose stop app`, then `MSYS_NO_PATHCONV=1 docker compose run -d --rm -v "$PWD/scripts:/app/scripts" app python scripts/sim553_rebuild_pitch_pool.py`, then `docker compose up -d app`. `--check-only` runs the pre-flight and check d read-only while the app runs.
+
+| Step | What it does |
+|---|---|
+| pre-flight | pool rows = `raw.pitches` rows per season; every raw code maps to a class; the rollback point (the bundle, or a whole kept copy) matches DuckDB pitch for pitch; the batted-ball join reproduces; an INFORMATION line names the pools DuckDB holds ahead of the bundle (on 2026-09-25: the steal and advancement pools, the 2026 games of 08-14 to 08-29) |
+| a–e (before COMMIT) | rows unchanged; exactly the expected class moves by raw code and count (11,258 window rows, 25,961 over ten seasons); no moved foul tip carries the got-away flag; the label check (`pipeline/batch/pool_chain.py`) within 0.5% with equal plate-appearance counts; the builder version recorded |
+| export + round-trip | copies the bundle to `engine_artifacts.pre_sim553` (the rollback point); exports the pitch pool and recomputes its batted-ball join; every exported class equals DuckDB's; every change from the copy is an expected move; the batted-ball, steal and advancement files byte-identical |
+
+**Exit codes:** 0 complete; 2 stopped before a write (pre-flight or a failed check, the transaction rolled back); 3 the DuckDB lock is held (the app is running); 4 a bundle problem after the COMMIT (the rollback text is printed).
+
+> **Notes for anyone changing this file:** The ROLLBACK does not last on its own: DuckDB keeps the new coding, so any later pool export (`make engine-artifacts`, the nightly chain) writes it back. Hold every export until the table is rebuilt on the coding you keep. Run on 2026-09-25: 3.5 minutes, every check passed.
 ---
 
 ### `scripts/sim523_game_set.py`

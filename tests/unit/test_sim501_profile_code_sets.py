@@ -16,62 +16,121 @@ SQL uses must equal the codes the pool build uses.**  A pitcher's whiff rate has
 to describe the same event as the pool the simulator samples from, or the metric
 and the model disagree about what happened.
 
+SIM-553 changed how the tests check it. The pool build now renders its class
+expression from the named code sets (``SQL_OUTCOME_TYPE``), and one of its
+branches is conditional: a foul tip or foul bunt is a ``foul`` below two strikes
+and strike three (``swinging_strike``) at two. The old helper read the source
+with a regular expression. A text pattern cannot see a conditional branch, and
+it cannot see a branch-order bug (a CASE takes the first branch that matches).
+So the helper below EXECUTES the expression in DuckDB and reads the class each
+code gets at a given count.
+
 Every test below fails if someone edits one definition and not the other.
 """
 
 from __future__ import annotations
 
 import re
+import string
 from pathlib import Path
 
+import duckdb
 import pytest
 
 from pipeline.batch.player_profile_computor import (
+    BALL_TYPES,
+    CALLED_STRIKE_TYPES,
+    FOUL_TYPES,
     NON_SWING_TYPES,
+    SQL_OUTCOME_TYPE,
     SQL_SWING,
     SQL_WHIFF,
+    STRIKE_THREE_FOUL_TYPES,
     WHIFF_TYPES,
     sql_in,
 )
+from pipeline.statcast_events import IN_PLAY_TYPES
 
 _SOURCE = Path(__file__).resolve().parents[2] / "pipeline" / "batch" / "player_profile_computor.py"
 
+#: Every code ``raw.pitches`` holds in ten seasons (17 codes; re-read 2026-09-25).
+_FEED_CODES: tuple[str, ...] = (
+    ("B", "*B", "P")  # ball
+    + ("C",)  # called strike
+    + ("S", "W", "M", "Q")  # swing and miss
+    + ("F", "T", "L", "O", "R")  # the bat touched it, not in play
+    + ("X", "D", "E")  # in play
+    + ("H",)  # hit by pitch
+)
 
-def _pool_build_codes(label: str) -> set[str]:
-    """Pull the code set the pool build maps to ``label`` straight from the SQL.
+#: The codes the helper runs: the feed's codes, every code a set names, and
+#: every capital letter, so a code spelled inline in the expression runs too.
+_CODES: tuple[str, ...] = tuple(
+    sorted(
+        set(_FEED_CODES)
+        | set(BALL_TYPES)
+        | set(CALLED_STRIKE_TYPES)
+        | set(WHIFF_TYPES)
+        | set(FOUL_TYPES)
+        | set(IN_PLAY_TYPES)
+        | set(NON_SWING_TYPES)
+        | set(string.ascii_uppercase)
+    )
+)
 
-    Reads the source rather than importing a constant on purpose: the pool build
-    spells its sets inline, so the only way to prove agreement is to go and read
-    what it actually says.
+
+def _codes_by_class(strikes: int) -> dict[str | None, set[str]]:
+    """Run the pool build's class expression over every code at ``strikes``.
+
+    Returns ``{class: codes}``. A code the expression does not know lands under
+    ``None``. The codes go in space-padded, as the feed's char(2) column holds
+    them, and come back trimmed.
     """
-    src = _SOURCE.read_text(encoding="utf-8")
-    lbl = re.escape(label)
-    # The pool build writes a multi-code set as `IN ('S', 'W', 'M')` and a single
-    # code as `= 'C'`. Match both, or this helper silently reports an empty set for
-    # every single-code label and the test passes for the wrong reason.
-    m = re.search(r"WHEN TRIM\(type\) IN \(([^)]*)\) THEN '" + lbl + r"'", src)
-    if m is None:
-        m = re.search(r"WHEN TRIM\(type\) = ('[^']+') THEN '" + lbl + r"'", src)
-    assert m is not None, f"the pool build no longer maps any code set to {label!r}"
-    codes = set(re.findall(r"'([^']+)'", m.group(1)))
-    assert codes, f"matched the {label!r} branch but parsed no codes from it"
-    return codes
+    con = duckdb.connect(":memory:")
+    try:
+        con.execute("CREATE TABLE p (type VARCHAR, strikes SMALLINT, events VARCHAR)")
+        con.executemany(
+            "INSERT INTO p VALUES (?, ?, NULL)", [(c.ljust(2), strikes) for c in _CODES]
+        )
+        rows = con.execute(f"SELECT TRIM(type), {SQL_OUTCOME_TYPE} FROM p").fetchall()
+    finally:
+        con.close()
+    out: dict[str | None, set[str]] = {}
+    for code, cls in rows:
+        out.setdefault(cls, set()).add(code)
+    return out
 
 
 class TestWhiffAgreesWithThePoolBuild:
-    def test_whiff_types_equal_the_pool_builds_swinging_strikes(self):
-        """The headline invariant. Edit one, this fails."""
-        assert set(WHIFF_TYPES) == _pool_build_codes("swinging_strike")
+    @pytest.mark.parametrize("strikes", [0, 1])
+    def test_whiff_types_equal_the_pool_builds_swinging_strikes(self, strikes):
+        """The headline invariant. Edit one, this fails.
+
+        Below two strikes the pool's ``swinging_strike`` codes are exactly the
+        profile's whiffs. At two strikes the class also takes the foul tips and
+        foul bunts (SIM-553), which are strikes, not whiffs.
+        """
+        assert _codes_by_class(strikes).get("swinging_strike", set()) == set(WHIFF_TYPES)
+
+    def test_at_two_strikes_the_class_adds_only_the_strike_three_fouls(self):
+        got = _codes_by_class(2).get("swinging_strike", set())
+        assert got == set(WHIFF_TYPES) | set(STRIKE_THREE_FOUL_TYPES)
 
     def test_foul_tips_are_not_whiffs(self):
         """A foul tip is CONTACT — the bat touches the ball.
 
         The reverted commit counted 'T' as a swing and a miss while this same file
         classified it as a foul, so the metric and the pool disagreed by 7,464
-        pitches per season.
+        pitches per season. Below two strikes the pool still codes 'T' a foul.
         """
         assert "T" not in WHIFF_TYPES
-        assert "T" in _pool_build_codes("foul")
+        assert "T" in _codes_by_class(0)["foul"]
+        assert "T" in _codes_by_class(1)["foul"]
+
+    def test_a_strike_three_foul_is_not_a_whiff(self):
+        """SIM-553: a two-strike foul tip or foul bunt is strike three, but the
+        bat touched the ball. Contact is not a whiff."""
+        assert not set(STRIKE_THREE_FOUL_TYPES) & set(WHIFF_TYPES)
 
     def test_a_swinging_strike_the_catcher_dropped_is_still_a_whiff(self):
         """'W' is a swing and a miss the catcher did not hold. 4,027 in 2024."""
@@ -89,7 +148,9 @@ class TestSwingIsTheComplementOfTheNonSwings:
         assert "C" not in WHIFF_TYPES
 
     def test_the_non_swing_set_matches_the_pool_builds_take_codes(self):
-        ball_and_called = _pool_build_codes("ball") | _pool_build_codes("called_strike")
+        by_class = _codes_by_class(0)
+        ball_and_called = by_class.get("ball", set()) | by_class.get("called_strike", set())
+        assert ball_and_called, "the pool build maps no code to a take"
         assert ball_and_called <= set(NON_SWING_TYPES)
 
 
