@@ -1,8 +1,16 @@
 # Build plan — the box-score credits on the dropped-third-strike play (SIM-484)
 
-> **STATUS 2026-09-22 — PROPOSED, awaiting four owner decisions (§10).** Nothing is
-> built. The readable page is https://claude.ai/artifact/8x4G6hQ48CYh39q1HTLm4N (the same content as this file).
-> Four small edits to the simulation loop, no data change, no rebuild, one app restart.
+> **STATUS 2026-09-23 — BUILT, REVIEWED AND CLOSED.** The owner's instruction
+> "implement the SIM-484 tech design" took all four decisions (§10) as recommended. The
+> build departs from this text in two places, both for a reason found while building: the
+> batter's strikeout goes to a new batting field `so`, not to `k`; and the at-the-pitch
+> snapshot applies after a steal only, not after a pickoff. §11 is the build record: the
+> two departures, the review's corrections to this plan, and the adjacent defects it found.
+> The readable page https://claude.ai/artifact/8x4G6hQ48CYh39q1HTLm4N shows the design as
+> PROPOSED (2026-09-22); this file is the record.
+>
+> *(2026-09-22, as proposed: four small edits to the simulation loop, no data change, no
+> rebuild, one app restart.)*
 >
 > **The play is modelled; its bookkeeping is wrong in three places, and the code reads a
 > fourth.** On a swinging third strike that gets away with first base open or two outs, the
@@ -262,6 +270,9 @@ already: `is_error` is false on this path).
 
 ### 5.2 The batter's strikeout
 
+> **Built differently (§11.1):** the credit is `bat.so += 1`, a new batting field. `k` is
+> the pitcher's field, and three readers tell a pitcher by it.
+
 ```python
 # simulation/sim_loop.py — _accumulate_pa, the batter block
 if canonical == "strikeout":
@@ -269,6 +280,11 @@ if canonical == "strikeout":
 ```
 
 ### 5.3 The bases at the pitch (item 3)
+
+> **Built differently (§11.1):** `step_pitch` passes the snapshot only when a STEAL
+> resolved (`result.steal_attempted`). A pickoff is thrown before the pitch, so after one
+> the live state is the state at the pitch; the unconditional snapshot below would retire
+> batters the rule lets run.
 
 ```python
 # simulation/sim_loop.py — step_pitch, the terminal branch
@@ -388,6 +404,9 @@ reach-on-error channel is the only reader that changes, by less than a tenth of 
 
 ## 10. Decisions for the owner
 
+**All four TAKEN as recommended, 2026-09-23** (the owner's instruction "implement the
+SIM-484 tech design"). Decision 2 is built on `so`, not `k` (§11.1).
+
 1. **The label.** Recommended: commit the reach with the event `strikeout` (the canonical
    word the box credits on, the play the states describe) and `result_hits = 0`, as §5.1.
    The ticket's other option, a "strikeout on this play" flag on `PlayResult` read by
@@ -412,3 +431,126 @@ Recorded, not asked: no run value, out, score or run allowed changes on any case
 `steal_runs_scored` marker keeps its name (three sites use it as "no RBI on this run"; a
 rename is hygiene for the sim-loop decomposition, SIM-493); every similarity power is 1
 and nothing here is a weight.
+
+> **Corrected 2026-09-23 (§11.2, item 2):** that sentence holds for the relabel, the RBI
+> marker and the batter's credit. The rule at the pitch and the one-mover guard change the
+> play itself, on purpose, in the cases they cover.
+
+---
+
+## 11. Build record (2026-09-23)
+
+### 11.1 What was built
+
+All in `simulation/sim_loop.py` (plus one comment in `simulation/game_state.py`):
+
+1. **The label.** The reach commits with the event `strikeout` and `result_hits = 0`
+   (§5.1). The run value comes from the two base-out states, so it does not move.
+2. **The RBI.** `result.steal_runs_scored += forced_run` on the reach (§5.1).
+3. **The batter's strikeout, on every strikeout**, on a new batting field
+   `PlayerStatLine.so`, NOT on `k` (a departure from §5.2). `k` is the pitcher's field:
+   the line's own contract says a pure batter leaves the pitching fields at 0.
+   `BoxScore.pitchers` and the prop builder (which feeds the /boxscore card and the prop
+   routes) tell a pitcher by `k`, and `scripts/sim_stats.py` sums `k` for the game's
+   strikeouts. The review emulated `bat.k`: 18 batters moved into the pitcher view and got
+   the five pitcher props, and the smoke's strikeout count doubled (2,874 against 1,437).
+   A two-way player's pitching K prop would also have absorbed his own batting strikeouts.
+   `so` reaches no API response and no prop today (`PlayerStatLineModel` mirrors only the
+   original batting and pitching fields). The box line records it, which is what the
+   definition of done asks.
+4. **The bases at the pitch.** `step_pitch` snapshots first base and the outs before the
+   steal resolves, and hands them to the rule only when a STEAL resolved (a departure from
+   §5.3). A pickoff is thrown before the pitch, so after a pickoff the live state is the
+   state at the pitch. The unconditional snapshot would retire batters the rule lets run.
+5. **One mover per pitch** on the terminal got-away advance (§5.4, decision 3), as designed.
+
+The earned-run note of decision 4 sits beside the code. The called-third-strike gap
+(§11.2, item 6) sits beside the predicate. The rule citations in the loop now read Rule
+9.04(a) (§11.2, item 1), the older steal-of-home sites included.
+
+**Tests.** `tests/unit/test_sim484_dropped_third_strike_credits.py` (new, 16 tests; the
+plan named the run-credit file, and the cases grew past it); the pinned test in
+`tests/unit/test_sim421_runner_run_credit.py` flipped; the three dropped-third-strike tests
+in `tests/unit/test_backend_sim319.py` assert the credits; a real-machine test in
+`tests/acceptance/test_band_arithmetic_sim450.py` drives the loop through the lane's probes
+(the reach-on-error channel stays empty, the strikeout channels count the play).
+
+**The review** (five lenses, a skeptic per finding, a completeness critic; 46 agents). The
+rules lens ran 432 terminal strike-three cases (outs × bases × swinging or called × got
+away or held × every steal and pickoff the draw can stage) against a rules oracle: the 78
+cases the old code got wrong now match. The readers lens ran the old and the new loop game
+by game with the same seeds (80 games): the score, the innings, the pitch count and every
+line's outs, runs allowed, earned runs, hits allowed, walks, at-bats, hits, runs, steals
+and caught stealing are identical; only the strikeout credits change. The mutation lens
+ran 19 mutants. After four tests added from its report, every logical edit has a test that
+fails without it; `result_hits` is an equivalent mutant (nothing reads it). The critic
+checked the official box on all four seasons: the K is credited to both players on all 200
+reaches of 2023–2026, and none of the 21 runs forced home pays an RBI.
+
+### 11.2 Corrections to this plan
+
+1. **The rule citation.** The no-RBI rule is 9.04(a): it pays an RBI only on a hit, a
+   sacrifice, an infield out, a fielder's choice or a bases-full award. Rule 9.04(b) is the
+   force double play. The conclusion (no RBI) stands.
+2. **"No run value, out, score or run allowed changes on any case" (§10)** holds for items
+   1–3 only. The rule at the pitch turns a reach into an out when a steal emptied first base
+   (§2.3). The guard holds a runner the steal did not move: runners on first and third, the
+   runner on first steals second on a got-away called third strike. The runner on third
+   used to score; now he holds. Both are the designed behaviour.
+3. **The lane's reach-on-error channel (§8, §9 item 5)** moves by about half its floor, not
+   a tenth: about 0.009 per team-game against a floor of 0.0171, toward the centre. The
+   certified lane (`scripts/sim523_lane_h.txt`) read the reached channel at 0.2150 (+3.5%)
+   and the drawn channel at 0.2057 (−1.0%) against a centre of 0.2078. The 0.0093 gap
+   between them was the dropped third strikes, which the build takes out of the reached
+   channel.
+4. **§9 item 2:** the batter's strikeout does not reach the API (§11.1, item 3).
+5. **§2.1:** checked on all four seasons, not only 2025 (§11.1, the review).
+6. **The swinging-only predicate.** Rule 5.05(a)(2) also lets the batter run on a CALLED
+   third strike that is not caught. Two such plays sit in the window (both 2026, of 296
+   uncaught third strikes in 2023–2026); the loop makes those batters out. Recorded beside
+   the predicate, not built.
+
+### 11.3 What the review found next to the change (not built here)
+
+None of these is this ticket's; each predates it. Ranked by size. Item 1 is SIM-553 (built on
+its own branch, 2026-09-25); items 2–5 are filed together as SIM-554 (P2, 2026-09-25).
+
+1. **Foul tips.** The pitch-pool build codes a foul tip (`T`) and a foul bunt (`L`) as
+   `foul` (`pipeline/batch/player_profile_computor.py`, the `outcome_type` CASE). At two
+   strikes the count machine absorbs a foul, so a real strikeout on a two-strike foul tip
+   becomes one more pitch. In 2025, 2,886 of about 40,600 strikeouts ended on a two-strike
+   foul tip or foul bunt (7.1%). Chained through the count machine, the pool's coding gives
+   0.2163 strikeouts per plate appearance against 0.2262 under official scoring: the loop
+   loses about 4.4% of strikeouts. The lane's strikeout reference chains the same coding
+   (0.2165), so no pool band can see it. The game-graded strikeout band read −2.5%, and
+   the accuracy comparison's strikeout probabilities sit low (the sweep's plan). The
+   Phase 4 loop spec required the ETL to code this case. About 35 times this ticket's size.
+2. **The steal draw ignores the pitch.** The pre-pitch steal draw knows only the count;
+   the pitch draw does not know a steal is staged. Real attempts never ride on a ball in
+   play or on a two-out strike three. In the loop about 17% land on a ball in play and 18%
+   on a foul (a 2025 estimate from the pool's rates). The steal volume stays on its bands
+   (they count at the draw); where the attempts land changes outs, bases and runs. A
+   two-out steal on a caught third strike is credited, although the strikeout ended the
+   inning first (about 0.014 stolen bases per team-game).
+3. **A two-out pickoff on a plate-appearance-ending pitch** uses up the batter's plate
+   appearance and credits the drawn pitch's event (about one plate appearance in 190 games).
+4. **A two-out caught stealing on a caught third strike** charges a caught stealing the
+   rules do not (about one in 235 games).
+5. **A dropped-third-strike reach freezes runners who are not forced.** Real runners left
+   their base on 28 of 32 such chances (2023–2026), about seven plays a season.
+
+The review also worried about the running app: a new slot on the stat line, workers on the
+new code and a parent on the old. That does not apply to this stack. The app runs with hot
+reload, so the server reloaded the new loop on every edit, and the run book's restart came
+next.
+
+### 11.4 The run book, as run
+
+1. The code landed. Ruff, ruff format and mypy are clean. The targeted tests and the
+   container unit, regression and band-arithmetic lanes pass: 4,422 tests, 4,400 passed and
+   2 skipped, with 20 failures on files the container does not mount (`CLAUDE.md`,
+   `WORKFLOW.md`, `deploy/`); a second run with those files mounted reports no failure.
+2. `docker compose restart app`: healthy, `build_all_engines: 11/11`, calibration applied.
+3. The ten-game smoke: the loop boots and the box records (10 games × 50: runs 9.34 a game for both teams; strikeouts −1.7% and walks +8.6% against MLB — no grade at this size). Beside it, a credit check on the production bundle (the same games × 20, `sim484_smoke_check.py` in the session scratch): 3,222 strikeouts, and the pitchers' `k` equals the batters' `so` equals the strikeout plate appearances in every one of the 200 games; 8 dropped-third-strike reaches, all committed as strikeouts; no batter in the pitcher view and none with a K prop.
+4. Closed: `CHANGES.md`; the SIM-484 row deleted from `BACKLOG.xlsx`; the cheat sheet's
+   step ⑧; the loop reference's `step_pitch` row.

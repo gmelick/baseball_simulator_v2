@@ -289,6 +289,10 @@ class TestDroppedThirdStrike:
         assert r.outs_recorded == 0  # batter reached (no out)
         assert state.outs == 0
         assert state.bases.first == 900  # batter safe at 1B
+        # SIM-484: the box credits the strikeout on both lines (Rule 9.15).
+        assert r.canonical_event == "strikeout"
+        assert sm.boxscore.line(PITCHER).k == 1
+        assert sm.boxscore.line(900).so == 1
 
     def test_ordinary_k3_records_an_out_when_the_ball_is_held(self):
         # The same pitch mix, but the rows say the catcher held the ball -> an
@@ -301,6 +305,8 @@ class TestDroppedThirdStrike:
         assert r.outs_recorded == 1
         assert state.outs == 1
         assert state.bases.first is None  # batter did NOT reach
+        assert sm.boxscore.line(PITCHER).k == 1
+        assert sm.boxscore.line(900).so == 1  # SIM-484
 
     def test_dropped_k3_not_eligible_with_first_occupied_and_under_two_outs(self):
         # 1B occupied AND fewer than two outs -> the edge is NOT eligible even
@@ -312,6 +318,8 @@ class TestDroppedThirdStrike:
         assert r.event == EVENT_STRIKEOUT
         assert r.outs_recorded == 1
         assert state.outs == 1
+        assert sm.boxscore.line(PITCHER).k == 1
+        assert sm.boxscore.line(900).so == 1  # SIM-484
 
 
 # ===========================================================================

@@ -243,7 +243,7 @@ class TestStealOnAScoringPitch:
         assert result.box_run_credited == {303}
         assert result.runs_scored == 1 and state.away_score == 1
         assert sm.boxscore.line(303).r == 1
-        assert sm.boxscore.line(BATTER).rbi == 0  # Rule 9.04(b)
+        assert sm.boxscore.line(BATTER).rbi == 0  # Rule 9.04(a)
         assert sm.boxscore.line(BATTER).r == 0
         pit = sm.boxscore.line(PITCHER)
         assert pit.r_allowed == 1 and pit.er == 1
@@ -310,7 +310,8 @@ class TestStealOnAScoringPitch:
 class TestDroppedThirdStrikeForcesARunHome:
     """The uncaught third strike with the bases loaded and two outs: the batter
     reaches first, the runner on 3B is forced home. The forced run is the
-    runner's ``r``, the batter's RBI, and the pitcher's run allowed."""
+    runner's ``r`` and the pitcher's run allowed; it pays no RBI (SIM-484,
+    Rule 9.04(a): the run scores on the wild pitch / passed ball)."""
 
     def _bases_loaded_two_out_d3k(self) -> tuple[StateMachine, GameState, object]:
         sm = _got_away_machine("swinging_strike")
@@ -342,13 +343,15 @@ class TestDroppedThirdStrikeForcesARunHome:
         pit = sm.boxscore.line(PITCHER)
         assert pit.outs_recorded == 0
         assert pit.r_allowed == 1 and pit.er == 1
-        # OPEN (pre-existing; the scope of the dropped-third-strike ticket,
-        # SIM-484): the reach commits to the run ledger as a reach-on-error,
-        # and the box reads that label, so the pitcher's K is NOT credited
-        # here although official scoring credits a strikeout on a dropped
-        # third strike. Pinned so the SIM-484 fix is seen.
-        assert pit.k == 0
-        assert sm.boxscore.line(BATTER).rbi == 1
+        assert state.away_score == 1 and state.outs == 2
+        # SIM-484: the reach commits as a strikeout (it committed as a reach
+        # on an error until 2026-09-23): the pitcher is credited the K, the
+        # batter is charged it, and the forced run pays no RBI.
+        assert result.canonical_event == "strikeout"
+        assert pit.k == 1
+        bat = sm.boxscore.line(BATTER)
+        assert bat.so == 1 and bat.k == 0
+        assert bat.rbi == 0
 
     def test_the_forced_runner_posts_the_r_prop(self):
         sm, _state_, _result = self._bases_loaded_two_out_d3k()
