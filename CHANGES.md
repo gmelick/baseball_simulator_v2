@@ -139,10 +139,100 @@ the OLD coding.
 `tests/unit/test_sim523_part_g.py`, the design doc (its status and the corrections),
 `docs/architecture/2026-06-17-phase4-sim-loop-spec.md` (§5.4 marked implemented),
 `docs/technical/sim-loop-cheat-sheet.md`, `docs/technical/pipeline-betting-db.md`,
-`docs/technical/scripts-frontend.md`, `CLAUDE.md` (§2b), `BACKLOG.xlsx` (next free ID SIM-554;
-the ticket closes with this entry, so it has no row), and the run records
+`docs/technical/scripts-frontend.md`, `CLAUDE.md` (§2b). `BACKLOG.xlsx` is unchanged by this entry: the next
+free ID is SIM-555 (SIM-554 went to the four baserunning defects filed with the
+dropped-third-strike close), and this ticket closes with this entry, so it has no row, and the run records
 `scripts/sim553_rebuild.log`, `scripts/sim553_census_after.txt`, `scripts/sim553_smoke_*.txt` and
 `scripts/sim553_paired_*.txt`.
+
+# Build — the dropped third strike is credited as the strikeout it is: the pitcher's K and the batter's, no RBI on a run it forces home, the eligibility rule read at the pitch, one mover per pitch — SIM-484, 2026-09-23
+
+**What changed.** On a swinging third strike that gets away with first base open or two
+outs, the batter reaches first. The loop already put him there; its bookkeeping was wrong.
+The owner's instruction "implement the SIM-484 tech design" took the plan's four decisions
+as recommended (`docs/audit/2026-09-22-sim484-dropped-third-strike-box-credits-plan.md`,
+§11 is the build record). Five edits in `simulation/sim_loop.py`:
+
+1. **The label.** The reach commits to the run ledger as a strikeout (it committed as
+   `field_error`, a reach on an error). The box now credits the pitcher's K on it, as
+   official scoring does (Rule 9.15(a)(3)). The run value comes from the two base-out
+   states, so it does not move.
+2. **The RBI.** A run the reach forces home pays no RBI (Rule 9.04(a): the run scores on the
+   wild pitch or the passed ball). The run stays earned: the pool's got-away flag does not
+   say wild pitch or passed ball, and about seven in ten are wild pitches.
+3. **The batter's own strikeout, on every strikeout** — a credit the box never had. It goes
+   to a new batting field, `PlayerStatLine.so`.
+4. **The rule reads the bases at the pitch.** A steal on the same pitch resolves first, so
+   the loop now hands the rule first base and the outs from before the steal. With one out
+   and the runner stealing second, the batter is out, not safe at first.
+5. **One mover per pitch.** A got-away third strike no longer moves a runner a steal or a
+   pickoff already moved (the non-terminal path's rule). A runner who stole second used to
+   go on to third.
+
+**Two departures from the plan, both found while building.** (a) The plan put the batter's
+strikeout on `k`. `k` is the pitcher's field: `BoxScore.pitchers` and the prop builder
+tell a pitcher by it, and `scripts/sim_stats.py` sums it for the game's strikeouts. On `k`,
+every batter who struck out would have received the five pitcher props, the smoke's
+strikeout count would have doubled, and a two-way player's pitching K prop would have
+absorbed his own batting strikeouts. So the credit lives on `so`; no API field or prop
+reads it yet. (b) The plan passed the at-the-pitch snapshot on every strikeout. A pickoff
+is thrown before the pitch, so after a pickoff the live bases are the bases at the pitch;
+the snapshot applies after a steal only.
+
+**What it moves.** The relabel, the RBI and the batter's credit change no run value, out,
+score or run allowed: the review ran the old and the new loop on the same seeds (80 games)
+and every line matches except the strikeout credits. Items 4 and 5 change the play itself,
+on purpose, in rare cases (a steal and a got-away third strike on one pitch). At the lane:
+the reach-on-error channel loses the dropped third strikes it never should have counted,
+about 0.009 per team-game (the certified lane read it +3.5% against the drawn channel's
+−1.0%; that gap was these plays), and the strikeout channels gain them (about +0.1%). The
+ten-game smoke: the loop boots and the box records (10 games × 50; runs 9.34 a game for both teams, strikeouts −1.7% and walks +8.6% against MLB, no grade at this size). A credit check on the production bundle (the same games × 20): 3,222 strikeouts, and the pitchers' `k` equals the batters' `so` equals the strikeout plate appearances in every one of the 200 games; 8 dropped-third-strike reaches, all committed as strikeouts; no batter in the pitcher view and none with a K prop.
+
+**The review (46 agents: five lenses — the rules, every reader, mutation coverage, the
+adjacent defects, the docs — a skeptic per finding, a completeness critic).** 32 findings
+survived; none breaks the change. The rules lens ran 432 terminal strike-three cases against
+a rules oracle: the 78 the old loop got wrong now match. The critic checked the official
+box on 2023–2026: all 200 reaches credit both strikeouts, and none of the 21 forced runs pays
+an RBI. Fixed from the review: four tests that kill the mutants that survived (the guard's
+two pickoff clauses, the snapshot after a pickoff error, `=` for `+=` on the no-RBI marker);
+the rule citation (9.04(a), not 9.04(b), here and at the older steal-of-home sites); stale
+comments in the loop, the lane's reach-on-error docstring and the band-arithmetic stub; the
+plan's own claims (§11.2).
+
+**Found next to the change — not built, for the owner (the plan's §11.3).** The largest:
+the pitch-pool build codes a two-strike FOUL TIP as a plain foul, which the count machine
+absorbs, so the loop loses about 4.4% of strikeouts (7.1% of 2025's strikeouts ended on a
+two-strike foul tip or foul bunt). The lane's strikeout reference shares the coding, so no
+band sees it. That is about 35 times this ticket's size, and it bears on the strikeout
+market's low bias. That fix is SIM-553 (designed, built and run on its own branch,
+2026-09-25; not merged when this entry landed). The four smaller ones are filed together as
+**SIM-554** (P2, 2026-09-25): the steal draw does not know the pitch (about 17% of the loop's
+steal attempts land on a ball in play; real ones never do); a two-out pickoff on a
+plate-appearance-ending pitch uses up the batter's turn; a two-out caught stealing on a caught
+third strike is charged; runners freeze on a dropped-third-strike reach.
+
+**Files.** `simulation/sim_loop.py` (the five edits; `PlayerStatLine.so`; the comments),
+`simulation/game_state.py` (the no-RBI marker's comment). Tests:
+`tests/unit/test_sim484_dropped_third_strike_credits.py` (new, 16),
+`tests/unit/test_sim421_runner_run_credit.py` (the pinned test flipped),
+`tests/unit/test_backend_sim319.py` (three tests assert the credits),
+`tests/acceptance/test_band_arithmetic_sim450.py` (the loop through the lane's probes: the
+reach-on-error channel stays empty), `tests/acceptance/test_production_config_bands_sim450.py`
+(a docstring). Docs: the cheat sheet's step ⑧, `docs/technical/simulation.md` (the
+`step_pitch` row), the plan (status, departures, §11). `BACKLOG.xlsx`: the SIM-484 row
+deleted; SIM-554 filed; the next free ID is SIM-555 (SIM-553 is the foul-tip branch's).
+
+**The QA gate.** `ruff check` and `ruff format --check` clean; `mypy` clean. The targeted
+tests pass (106 in the four changed test files, plus the box, ledger, steal-credit and
+got-away suites). The container lane (`pytest tests/unit/ tests/regression/
+tests/acceptance/test_band_arithmetic_sim450.py`) ran 4,422 tests: 4,400 passed, 2 skipped,
+and 20 failed on files the container does not mount (`CLAUDE.md`, `WORKFLOW.md`,
+`deploy/`). A second run with those files mounted reports no failure.
+
+**The run book, as run.** 1. The gates. 2. `docker compose restart app`: healthy,
+`build_all_engines: 11/11`, calibration applied. 3. The ten-game smoke (above). 4. This
+record; the backlog row; the cheat sheet. No lane: at about one play in fifty games no band
+can move.
 
 # Build — the outfield fence's three amendments landed and RUN: the born ball read in the live park's air (the carry offset), the born-ball kernel measured on the ball's class, and the wall-margin band; A1–A7 pass and the wall play now reads as the real balls do (C PASS) — SIM-478/479/480, 2026-09-22
 

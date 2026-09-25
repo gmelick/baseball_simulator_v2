@@ -758,9 +758,12 @@ class PlayResult:
     #: Steal outcome: None / "safe" / "caught" / "pickoff" (SIM-319).
     steal_outcome: str | None = None
     #: SIM-483: runs that scored ON THE STEAL itself (a steal of home). MLB
-    #: Rule 9.04(b) awards NO run batted in on a stolen base, so the box-score
+    #: Rule 9.04(a) pays NO run batted in on a stolen base, so the box-score
     #: accumulator subtracts this from the batter's RBI credit when the steal
     #: lands on a terminal pitch (its run is folded into the play's ``runs``).
+    #: The loop's "no RBI on this run" marker in general: the got-away advance
+    #: (SIM-517) and the run a dropped-third-strike reach forces home
+    #: (SIM-484) use it too — the name is narrower than its use.
     steal_runs_scored: int = 0
     #: SIM-507: a pickoff retired a runner on this pitch. NOT a steal attempt
     #: (``steal_attempted`` stays False); the runner is charged a CS only when

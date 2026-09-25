@@ -34,7 +34,8 @@ each pitch ──────────────► ④ steal / pickoff?   
                                                   pitch resembles ⑤a's; ball, called strike, whiff, foul, in play, hit by pitch)
    if in play ───────────► ⑥ the batted ball's fate: the fence stage, then the fielding draw
                            ⑦ the runners' extra bases (up to five discretionary decisions)
-   if the pitch got away ► ⑧ runners advance one base (wild pitch / passed ball / dropped third strike)
+   if the pitch got away ► ⑧ runners advance one base (wild pitch / passed ball / dropped third strike),
+                                                  unless a steal or pickoff already moved them on that pitch
 ```
 
 ## 2. The draws, one by one
@@ -123,6 +124,16 @@ first; a trailing runner cannot pass.
 The drawn pitch row's own fact: if that real pitch got away (wild pitch / passed ball /
 uncaught third strike), the runners advance one base and a striking-out batter may reach
 (first base open, or two outs). No weight; the row carries it.
+
+- **The rule reads the bases at the pitch.** A steal runs on the pitch, so the loop reads
+  first base and the outs from before the steal resolved; a pickoff comes before the pitch,
+  so the loop reads the state after it.
+- **One mover per pitch.** When a steal or a pickoff resolved the pitch's baserunning, the
+  got-away moves nobody (the same rule on every pitch, terminal or not).
+- **The credits on a batter who reaches (SIM-484, 2026-09-23).** The play commits as a
+  strikeout: the pitcher's `k` and the batter's `so` (the batter's own strikeouts, on every
+  strikeout; `k` stays the pitcher's field). A run the reach forces home pays no RBI. The run
+  stays earned, because the pool's got-away flag does not say wild pitch or passed ball.
 
 ### Summary of the fitted values in production
 

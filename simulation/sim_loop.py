@@ -677,6 +677,13 @@ class StateMachine:
         state.balls = adv.balls
         state.strikes = adv.strikes
 
+        # SIM-484: the dropped-third-strike rule reads first base and the outs
+        # AT THE PITCH. A steal runs on the pitch, and the loop resolves it
+        # below, before the strikeout. So after a steal the rule reads this
+        # snapshot. A pickoff is thrown BEFORE the pitch, so after a pickoff
+        # the live state is the state at the pitch.
+        first_open_at_pitch = state.bases.first is None
+        outs_at_pitch = int(state.outs)
         self._resolve_steal_outcome(state, result)
         if not state.is_half_inning_over():
             if adv.is_contact:
@@ -687,7 +694,15 @@ class StateMachine:
                 # SIM-509: identical force mechanics, its own canonical event.
                 self._resolve_walk(state, result, event=EVENT_HIT_BY_PITCH)
             elif adv.event == EVENT_STRIKEOUT:
-                self._resolve_strikeout(state, result)
+                if result.steal_attempted:
+                    self._resolve_strikeout(
+                        state,
+                        result,
+                        first_open_at_pitch=first_open_at_pitch,
+                        outs_at_pitch=outs_at_pitch,
+                    )
+                else:
+                    self._resolve_strikeout(state, result)
 
         # End-of-PA: advance the batting order + run the manager sub hook, then
         # reset the count for the next batter (or roll the half-inning).
@@ -1310,8 +1325,9 @@ class StateMachine:
         told the retired count that a derivation had to guess.
 
         ``result_hits`` does not feed the run value.  It stays on the signature
-        because it names the shape of the play, and the SIM-496 acceptance probe
-        reads it here to count batters who actually reached on an error.
+        because it names the shape of the play.  Nothing reads it: the SIM-496
+        acceptance probe counts a reach on an error from ``event`` and
+        ``batter_reached`` since 2026-08-19.
         """
         if int(state.outs) != int(pre_outs):
             raise AssertionError(
@@ -1508,7 +1524,7 @@ class StateMachine:
                 )
                 # SIM-483: mark the run as a STEAL run so the terminal-pitch
                 # accumulator can withhold the batter's RBI credit (Rule
-                # 9.04(b) awards no RBI on a stolen base).
+                # 9.04(a) pays no RBI on a stolen base).
                 result.steal_runs_scored += 1
                 if rid is not None:
                     result.baserunner_advances[rid] = 0
@@ -1765,7 +1781,14 @@ class StateMachine:
         result.next_state = state
         return result
 
-    def _resolve_strikeout(self, state: GameState, result: PlayResult) -> None:
+    def _resolve_strikeout(
+        self,
+        state: GameState,
+        result: PlayResult,
+        *,
+        first_open_at_pitch: bool | None = None,
+        outs_at_pitch: int | None = None,
+    ) -> None:
         """Resolve a strike-3 strikeout (§5.1) incl. the dropped-third-strike
         edge (§5.4).
 
@@ -1774,17 +1797,42 @@ class StateMachine:
         the batter may reach first — modelled here as a reach (no out, batter to
         1B) when the drawn pitch got away; the run/base-out delta still goes
         through ``resolve_runs``.
+
+        SIM-484: the reach commits as a STRIKEOUT, because the play is one.
+        Official scoring credits the pitcher's K and charges the batter's
+        (Rule 9.15(a)(3)). A run the reach forces home pays no RBI: Rule
+        9.04(a) pays one only on a hit, a sacrifice, an infield out, a
+        fielder's choice or a bases-full award, and this run scores on the
+        wild pitch or the passed ball. ``first_open_at_pitch`` and
+        ``outs_at_pitch`` carry the state at the pitch after a steal on the
+        same pitch has moved it (:meth:`step_pitch`). Without them, the live
+        state is the state at the pitch.
         """
         result.event = EVENT_STRIKEOUT
         result.pa_terminal = True
-        # SIM-517: read the D3K predicate BEFORE any base movement (the
-        # official rule reads the pre-pitch state), then let a got-away
-        # strike-3 that CANNOT award first (1B occupied, under two outs)
-        # still advance the runners — the ball still got away. The advance
-        # commits its own delta; the K's snapshots below then measure the
-        # post-advance state, so the two commits chain like a steal + K.
-        d3k = self._dropped_third_strike(state, result)
-        if not d3k and self._last_pitch_got_away:
+        # SIM-517: read the D3K predicate at the pitch, before this method
+        # moves anyone. A got-away strike three that CANNOT award first (1B
+        # occupied, under two outs) still advances the runners: the ball
+        # still got away. The advance commits its own delta. The K's
+        # snapshots below then measure the post-advance state, so the two
+        # commits chain like a steal and a K.
+        d3k = self._dropped_third_strike(
+            state,
+            result,
+            first_open_at_pitch=first_open_at_pitch,
+            outs_at_pitch=outs_at_pitch,
+        )
+        # SIM-484: one mover per pitch, the non-terminal path's rule. When a
+        # steal or a pickoff already resolved this pitch's baserunning, the
+        # got-away moves nobody. Without the guard, a runner who stole second
+        # on a called third strike that got away went on to third.
+        if (
+            not d3k
+            and self._last_pitch_got_away
+            and not result.steal_attempted
+            and not result.pickoff_out
+            and not result.pickoff_error
+        ):
             self._resolve_got_away_advance(state, result)
         # SIM-499: measure the base-out state before _force_on_reach can push
         # anyone.  ``_force_on_reach`` mutates ``state.bases`` in place.
@@ -1793,17 +1841,28 @@ class StateMachine:
         if d3k:
             # Uncaught K3: batter reaches 1B (no out recorded), pushing forced
             # runners exactly like a walk does.  resolve_runs scores any force.
-            result.event = "strikeout"  # still a K event; batter reached on D3K
             forced_run = self._force_on_reach(state, result)
-            # This is the ONE path in the loop that puts a batter on first on an
-            # error, so it is the one place the ledger's reach-on-error value is
-            # observable today.  It recorded +1.10 against a true +0.38 before
-            # SIM-499, because it read the post-reach bases as the pre-state.
+            # SIM-484: the forced run scores on the wild pitch or the passed
+            # ball, not on the batter, so it pays no RBI. The got-away advance
+            # and the steal of home use the same marker.
+            #
+            # The run stays EARNED. The pool's got-away flag has no kind, so
+            # the loop cannot tell a wild pitch (earned) from a passed ball
+            # (unearned). About seven in ten real uncaught third strikes are
+            # wild pitches (2023-2026). Splitting the charge needs a kind
+            # column on the pitch pool and a rebuild (the plan's decision 4).
+            result.steal_runs_scored += forced_run
+            # SIM-484: the reach commits as a strikeout. It used to commit as
+            # ``field_error``, so the box read a reach on an error: no K, an
+            # RBI paid, a count on the lane's reach-on-error channel. The run
+            # value comes from the two base-out states, never from the label,
+            # so the run value does not change. A reach is not a hit
+            # (``result_hits=0``).
             self._commit_run_delta(
                 state,
                 result,
-                event="field_error",  # batter safe at 1B (no out)
-                result_hits=1,
+                event=EVENT_STRIKEOUT,  # the batter struck out and reached 1B
+                result_hits=0,
                 result_outs=0,
                 result_runs=forced_run,
                 pre_outs=pre_outs,
@@ -1830,7 +1889,14 @@ class StateMachine:
             runners_retired=0,
         )
 
-    def _dropped_third_strike(self, state: GameState, result: PlayResult) -> bool:
+    def _dropped_third_strike(
+        self,
+        state: GameState,
+        result: PlayResult,
+        *,
+        first_open_at_pitch: bool | None = None,
+        outs_at_pitch: int | None = None,
+    ) -> bool:
         """The §5.4 dropped-third-strike predicate.
 
         The edge is *eligible* only on a swinging strike-3 when first base is
@@ -1838,11 +1904,24 @@ class StateMachine:
         away is the DRAWN PITCH ROW's own fact (SIM-517: the row was a real
         uncaught third strike — no roll, no formula).  Without that fact the
         edge does NOT fire (an ordinary K).
+
+        SIM-484: the rule reads first base and the outs AT THE PITCH. When a
+        steal on the same pitch has moved them, the caller passes the snapshot
+        it took before the steal resolved. Otherwise this method reads the
+        live state.
+
+        Known gap: Rule 5.05(a)(2) also lets the batter run on a CALLED third
+        strike that is not caught. This predicate reads swinging strikes only.
+        The window holds two such rows, both in 2026 (of 296 uncaught third
+        strikes in 2023-2026).
         """
         if result.pitch_outcome != "swinging_strike":
             return False
-        first_base_open = state.bases.first is None
-        two_outs = state.outs >= OUTS_PER_INNING - 1
+        first_base_open = (
+            state.bases.first is None if first_open_at_pitch is None else first_open_at_pitch
+        )
+        outs = int(state.outs) if outs_at_pitch is None else int(outs_at_pitch)
+        two_outs = outs >= OUTS_PER_INNING - 1
         if not (first_base_open or two_outs):
             return False
         return bool(self._last_pitch_got_away)
@@ -2049,11 +2128,17 @@ class StateMachine:
             bunt (the standard PA-minus-(BB+HBP+SF+SH) at-bat definition).
           * H   — single / double / triple / home_run.
           * HR  — home_run.
+          * SO  — a strikeout PA (canonical 'strikeout'), the dropped-third-
+            strike reach included (SIM-484); on ``so``, never on ``k``.
           * RBI — the integer runs that physically scored on this play
             (``result.runs_scored``), MINUS runs we treat as unearned-by-error
             (see the earned/unearned split below) — RBI is not credited on an
             error-driven run, mirroring the ER simplification.  A solo HR drives
-            in 1 (the batter himself scores), a 3-run HR drives in 3.
+            in 1 (the batter himself scores), a 3-run HR drives in 3.  No RBI
+            either on a run marked in ``result.steal_runs_scored``: a steal of
+            home, a got-away advance, a run a dropped-third-strike reach forces
+            home. Rule 9.04(a) pays none on a steal, a wild pitch or a passed
+            ball.
 
         PITCHER:
           * IP  — ``result.outs_recorded`` (thirds of an inning; accumulated as
@@ -2120,10 +2205,17 @@ class StateMachine:
                     bat.b2 += 1
                 elif canonical == "triple":
                     bat.b3 += 1
+            # SIM-484: the batter's own strikeout, on every strikeout, the
+            # dropped-third-strike reach included (Rule 9.15). It goes to
+            # ``so``. ``k`` is the pitcher's, and the readers that tell a
+            # pitcher by ``k`` would count this batter as one.
+            if canonical == "strikeout":
+                bat.so += 1
             # RBI: runs the batter drove in (not credited on an error-driven
             # run). SIM-483: a run that scored ON A STEAL (a terminal-pitch
             # steal of home folds its run into ``runs``) earns the batter NO
-            # RBI — MLB Rule 9.04(b) awards none on a stolen base.
+            # RBI — MLB Rule 9.04(a) pays none on a stolen base. The got-away
+            # runs and the dropped-third-strike forced run share the marker.
             rbi_runs = max(0, int(runs) - int(result.steal_runs_scored))
             if rbi_runs and not is_error:
                 bat.rbi += rbi_runs
@@ -2758,12 +2850,22 @@ class PlayerStatLine:
     player, or just to keep the keyspace uniform) has one home; a pure batter
     leaves the pitching fields at 0 and vice-versa.
 
-    Batting:  ``ab`` / ``h`` / ``hr`` / ``rbi``.
+    Batting:  ``ab`` / ``h`` / ``hr`` / ``rbi``, plus ``so`` (SIM-484: the
+              batter's own strikeouts — the official box's batting ``k``).
     Pitching: ``outs_recorded`` (the raw thirds-of-an-inning the pitcher retired)
               plus ``k`` / ``bb`` / ``er``.  Innings are represented internally as
               an integer count of OUTS (thirds) so accumulation is exact; the
               human-readable x.0 / x.1 / x.2 form and the decimal thirds are
               derived on demand (:attr:`ip` / :attr:`ip_outs`).
+
+    ``k`` is the PITCHER's strikeouts (the official box's ``p_k``). Readers
+    treat it that way. :attr:`BoxScore.pitchers` and the prop builder
+    (:meth:`PropDistributionSet.from_boxscores`, which feeds the /boxscore card
+    and the prop routes) tell a pitcher by it; ``scripts/sim_stats.py`` sums it
+    for the game's strikeouts. So a batter's strikeout goes to ``so``, never
+    to ``k``. On ``k`` it would hand every batter who struck out the pitcher
+    props, double the smoke's strikeout count, and fold a two-way player's
+    own strikeouts into his pitching K prop.
     """
 
     player_id: int
@@ -2780,6 +2882,7 @@ class PlayerStatLine:
     r: int = 0  # runs scored by this player (offense)
     sb: int = 0  # stolen bases
     cs: int = 0  # caught stealing (SIM-426)
+    so: int = 0  # SIM-484: struck out as a batter (``k`` below is the pitcher's)
 
     # --- pitching (IP stored as outs == thirds of an inning) ---
     outs_recorded: int = 0

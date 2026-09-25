@@ -665,11 +665,12 @@ def test_reach_on_error_drawn_band_sim450(acceptance_run: AcceptanceRun) -> None
 def test_reach_on_error_reached_band_sim450(acceptance_run: AcceptanceRun) -> None:
     """Batters who ACTUALLY reached on an error, per team per game (SIM-496).
 
-    Counted at ``_commit_run_delta`` (``sim_loop.py:1567``), the single point the
-    loop turns a play into a base-out delta: the commit carries the
-    ``field_error`` event, records no out, and credits at least one base. Both
-    reach-on-error sites pass through it — the in-play commit at ``:2378`` and the
-    dropped-third-strike commit at ``:1989``.
+    Counted at ``_commit_run_delta``, the single point the loop turns a play
+    into a base-out delta: the commit carries the ``field_error`` event and the
+    batter became a runner (``batter_reached``). The in-play commit is the one
+    reach-on-error site. The dropped-third-strike reach was a second until
+    2026-09-23; it commits as a strikeout since SIM-484, because official
+    scoring charges no error on it.
 
     ``test_commit_run_delta_runs_sim450`` asserts the probe fired, so a zero here
     means "nothing reached", never "nothing was measured".

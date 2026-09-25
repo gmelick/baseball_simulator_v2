@@ -934,9 +934,10 @@ def test_the_lane_carries_both_reach_on_error_channels_sim450() -> None:
 class _StubMachine:
     """The six methods ``_install_probes`` wraps, and nothing else.
 
-    A real ``StateMachine`` needs an artifact bundle, so the probe would
-    otherwise be exercised only by the heavy lane — which has never produced a
-    CI signal. This stub gives the counter a test that runs everywhere.
+    The stub records every commit as the probe forwarded it, so the test below
+    can check the probe alters nothing. (A real ``StateMachine`` no longer needs
+    an artifact bundle: since SIM-486 the synthetic bundle builds one with no
+    database, and the SIM-484 test further down drives one through the probes.)
     """
 
     def __init__(self) -> None:
@@ -1072,6 +1073,51 @@ def test_the_roe_reached_probe_counts_only_a_batter_who_reached_sim450() -> None
         (None, 1, 0, 0, True),
     ]
     assert calls["_commit_run_delta"] == 8
+
+
+def test_the_roe_reached_probe_skips_a_dropped_third_strike_reach_sim484() -> None:
+    """A batter who reaches on a dropped third strike struck out; he did not
+    reach on an error (SIM-484).
+
+    Until 2026-09-23 the loop committed that reach as ``field_error``, so this
+    probe counted it on the lane's reach-on-error channel, and the strikeout
+    channel missed it. The play now commits as a strikeout. This test drives
+    the real loop (the synthetic bundle, no database) through the probes: the
+    reach-on-error channel stays empty and the strikeout channels count it.
+    """
+    import numpy as np
+
+    from simulation.game_state import GameState
+    from simulation.sim_loop import StateMachine
+    from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
+    from tests.acceptance.conftest import _blank_tally, _install_probes
+
+    art = fixed_play_artifacts("field_out", pitch_model={"swinging_strike": 1.0}, got_away=True)
+    machine = StateMachine(synthetic_sampler(art, 0), rng=np.random.default_rng(0))
+    machine._got_away = True
+    tally = _blank_tally()
+    calls = {
+        "_full_pool_outcome": 0,
+        "_full_pool_fielding": 0,
+        "_resolve_in_play_transition": 0,
+        "_steal_opportunity_draw": 0,
+        "_commit_run_delta": 0,
+    }
+    pool_counts: dict[str, int] = {}
+    _install_probes(machine, tally, calls, pool_counts)
+
+    state = GameState(pitcher_id=477132, bat_hand="R", season=2024, batter_id=900, strikes=2)
+    result = machine.step_pitch(state)
+
+    assert state.bases.first == 900 and state.outs == 0, "the batter must reach first"
+    assert result.canonical_event == "strikeout"
+    assert tally["ROE_reached"] == [0, 0], (
+        "a dropped-third-strike reach is a strikeout and a wild pitch or passed "
+        "ball; official scoring charges no error"
+    )
+    assert tally["K"] == [1, 0]
+    assert pool_counts["K_pa"] == 1
+    assert calls["_commit_run_delta"] == 1
 
 
 def test_the_probe_tally_covers_every_channel_it_is_asked_for_sim450() -> None:
