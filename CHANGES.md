@@ -1,3 +1,48 @@
+# Design — turn on the catcher pitch-receiving factor: PROPOSED with four owner decisions — SIM-526, 2026-09-25
+
+**What the ticket asks.** The catcher pitch-receiving factor (the ratio the play-picker
+redesign's part E built OFF on 2026-09-09) gets a chosen strength, is switched on in
+production, and the platform's accuracy checks still pass.
+
+**What the code and the data say** (the plan is
+`docs/audit/2026-09-25-sim526-catcher-receiving-enable-plan.md`; the page is
+https://claude.ai/artifact/EYY2S5MMc1g5Ecaad9akvB). The factor is built right and shrunk wrong. The ratio moves ball-or-strike
+within a catcher's taken pitches by his own called-strike rate over the league's and
+leaves the league's totals alone by construction (the pitch-weighted mean multiplier
+reads 1.000 to 1.001 in every season and zone group). At power 1 the draw reproduces the
+catcher's own shrunk rate, so the strength IS the shrinkage — and the split-half
+reliability of the pool's 1,440,733 taken pitches (2023-2026) says the document trusts a
+rate five times too much: the two game-parity halves of a catcher-season's outside-zone
+rate correlate 0.53-0.69, which puts the prior weight where half of a rate is skill at
+1,000-1,500 taken pitches (the edge zone about 900; the blocking ratio 20-24 expected
+got-aways) against the document's 200 and 5. A regular keeps 95% of his raw deviation
+today and should keep 76%; a 500-pitch part-timer 71% where the data says 29%. With the
+fitted priors a regular's outside multiplier runs 0.86-1.19 (5th-95th) instead of
+0.82-1.23. The confounds: a fine-location model keeps 95% of the raw signal (the zone
+groups are fine); a pitcher-adjusted rate keeps 73%, so a quarter of the spread is the
+staff's command — and the adjusted version repeats half as well year to year (0.22 vs
+0.45) and matches the profile's framing block worse (r 0.54 vs 0.72), so it is not the
+better predictor. The profile's own framing block (`strikes_above_average`, which the
+catcher engine still reads) is not per season: its regulars average +34 / +42 in 2023-24
+and −66 in 2025, the year the league's outside called-strike rate fell from 7.3% to
+4.5% — a finding for another day, not filed. The part-E probe's open stolen-base read
+(1.49 a game ON against 1.19 OFF, 2.7 standard errors, no mechanism) is closed: at 150
+iterations on the same four games (600 games an arm, the production configuration) the
+ratio reads 1.21 against 1.17, and every other column holds within its noise (the
+called-strike share of taken pitches +0.0009, walks −0.04, pitches per plate appearance
+−0.008) — the 2026-09-09 gap was sampling noise.
+
+**Recommendation.** Land the ratio ON at the measured strength: the builder's priors
+1,200 taken pitches / 20 expected got-aways (`RECV_FRAME_PRIOR` / `RECV_BLOCK_PRIOR`) and
+a rebuild of `receiving.json` (DuckDB read-only, seconds, the app up); a draw-time power on
+the multiplier and the blocking ratio (`SIM_CATCHER_RECEIVING_POWER`, 1 = the measured
+ratio, 0 = neutral) as the sweep's knob; `SIM_CATCHER_RECEIVING=1` in the compose file and
+the lane's flag table with a parity test; the probe, then one 45 × 130 lane with the ratio
+ON, read as "no band moves beyond its floor between the 2026-09-22 lane and this one".
+Seven tests. No pool rebuild, no recompute, no matrix. Nothing is built.
+
+**Owner decision 2026-09-25.** The design stays as proposed, with its four decisions open. The ticket moves to P3 and waits. Nothing is built.
+
 # Build — the live betting pages read a run line by its shape: /edges and /signals price two separate bets as two, the line-movement series refuses a CLV across a moved spread, and the game page says which it is — SIM-549 follow-on, 2026-09-25
 
 **What changed.** The accuracy comparison learned on 2026-09-25 that a run line is either one
