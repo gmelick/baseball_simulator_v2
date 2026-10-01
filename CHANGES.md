@@ -1,3 +1,45 @@
+# CLOSED — every book's prices stored one row per book, one graded book, a load guard, the event matcher fixed, every season 2019-2026 re-loaded, the old rows retired — SIM-555, 2026-10-01
+
+**Why it matters.** The closing prices the accuracy comparison grades against used to mix books: every
+row said `consensus`, and each side's price came from whichever book updated last. Some rows described a
+bet nobody could place, and some belonged to another game. Every stored price now comes from one book,
+names that book, carries the vendor's own time stamp, and passed a guard against impossible rows.
+
+**What landed** (commits `ca998dd`, `3a1d4c9`, `9401438`, `aa3b999` and this one):
+- **One row per book** (`bp:<id>`, stamp `book_line_at`, Alembic 0028). Each market grades one book: the
+  first on a fixed preference list (DraftKings, BetMGM, FanDuel, theScore, ...) with a valid row. The live
+  pages show the best sportsbook price.
+- **The load guard** refuses a row that cannot be one bet: a side missing, mixed spreads, a first-five
+  row carrying first-inning prices, a placeholder team total, three-way prices that do not add up, a
+  closing price stamped more than 15 minutes after the start, a price stamped up to 15 minutes after a
+  postponed game's original start (the voided game's price).
+- **The event matcher** reads the game that was played: a made-up game's real start, a suspended game's
+  resume date, a re-timed game's only event that day, and game 2 of a straight double-header (the old
+  matcher gave it game 1's prices).
+- **The loader** retries a failed vendor read, keeps an incomplete game off its done-list, and resumes
+  after a crash (the host blue-screened several times during the loads).
+
+**What ran.** Every season 2019-2026 was re-loaded (2019-2020 game odds only). The census reads zero on
+every rule in every season. Moved to the archive along the way: 883 placeholder team totals, 9,288 mixed
+three-way rows, ten double-header game 2s that held game 1's prices, and 780 game rows and 6,195 prop rows
+of the vendor's snapshot of voided games. The retirement archived and deleted every old `consensus` row:
+359,524 game-odds rows and 4,035,864 prop rows. Two games were exempted by name: 567323 has no closing
+moneyline before first pitch, and the vendor holds no sportsbook price for 745659. Both tables were
+vacuumed with `PARALLEL 0`, because the database container's shared memory is too small for parallel
+workers.
+
+**Found in the close-out.** The vendor also snapshots a voided game at its original start, 20-80
+seconds after it. So the postponement rule now refuses up to 15 minutes after that start, and the stored
+snapshots moved to the archive. Six 2026 made-up games are left with no sportsbook close, or one.
+
+**Left open.** 2022's first-five moneyline is nearly gone: 231 of 2,335 old games are still graded (2023:
+1,821 of 2,424; 2025: 2,137 of 2,440). The old rows there were wrong, a first-inning tie or a mixed price.
+Most books post only the two-way bet, which nothing scores yet (a follow-on, not filed). In 2019 and 2022
+DraftKings' graded closing run line or total is sometimes an alternate or stale line; 2024 is clean (a
+main-line rule is a follow-on, not filed). The full accuracy baseline and the calibration refit moved to
+the draw-weight fit (SIM-548). The live closing prices moved to the segment-markets surface ticket
+(SIM-546). The SIM-555 row is deleted from `BACKLOG.xlsx`. Ten July register rows are annotated as closed. The plan and its build record: `docs/audit/2026-09-25-sim555-one-book-per-odds-row-plan.md`.
+
 # BUILT — every book's prices stored, one book per row, one graded book, a load guard; the census passed and every season 2019-2026 is re-loaded and checked — SIM-555, 2026-09-28 (re-load complete 2026-09-30)
 
 **Status at the commit (2026-10-01).** Every season from 2019 to 2026 is re-loaded one row per book

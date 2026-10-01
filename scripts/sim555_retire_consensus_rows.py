@@ -56,22 +56,35 @@ EXIT CODES
   (that season rolled back).
 
 After a real run, VACUUM the two live tables (VACUUM cannot run inside a
-transaction, so the script does not).
+transaction, so the script does not). Use ``PARALLEL 0``: the database
+container's shared memory (64 MB) is too small for the parallel index workers,
+and a plain ``VACUUM (ANALYZE)`` fails with "could not resize shared memory
+segment ... No space left on device":
 
-Before step 8, re-load games 745169, 745175, 746572, 746773 and 746755 with
-the fixed matcher (SIM-555, 2026-10-01), and confirm that each holds a ``bp:``
-closing moneyline. Otherwise step 8 refuses 2024: the first load found no
-event for those five games.
+    docker compose exec -T db psql -U baseball_user -d baseball_sim -c "VACUUM (ANALYZE, PARALLEL 0) raw.game_odds;" -c "VACUUM (ANALYZE, PARALLEL 0) raw.prop_odds;"
+
+(Historical: before step 8, games 745169, 745175, 746572, 746773 and 746755
+had to be re-loaded with the fixed matcher, or step 8 refused 2024. They were
+re-loaded on 2026-10-01 and hold ``bp:`` closing moneylines.)
 
 The commands for the step-8 run (the dry run first). The mount makes the
 container read this copy of the script, not the copy baked into the image:
 
-    MSYS_NO_PATHCONV=1 docker compose run --rm -v "$PWD/scripts:/app/scripts:ro" app python scripts/sim555_retire_consensus_rows.py --seasons 2019 2020 2021 2022 2023 2024 2025 2026 --allow-missing 567323 --dry-run
-    MSYS_NO_PATHCONV=1 docker compose run --rm -v "$PWD/scripts:/app/scripts:ro" app python scripts/sim555_retire_consensus_rows.py --seasons 2019 2020 2021 2022 2023 2024 2025 2026 --allow-missing 567323
+    MSYS_NO_PATHCONV=1 docker compose run --rm -v "$PWD/scripts:/app/scripts:ro" app python scripts/sim555_retire_consensus_rows.py --seasons 2019 2020 2021 2022 2023 2024 2025 2026 --allow-missing 567323 745659 --dry-run
+    MSYS_NO_PATHCONV=1 docker compose run --rm -v "$PWD/scripts:/app/scripts:ro" app python scripts/sim555_retire_consensus_rows.py --seasons 2019 2020 2021 2022 2023 2024 2025 2026 --allow-missing 567323 745659
 
-Game 567323 (2019) is named because it has no pre-game close. The vendor's
-event matches it, but every book's closing price is stamped 68-206 minutes
-after its first pitch, so the load guard refuses each one.
+(From the Windows Command Prompt, write ``-v "%CD%\\scripts:/app/scripts"`` and drop
+``MSYS_NO_PATHCONV=1``: cmd.exe does not expand ``$PWD``.) The real run ran on
+2026-10-01 with these two names and archived and deleted 359,524 game-odds rows
+and 4,035,864 prop rows.
+
+Game 567323 (2019) is named because it has no closing moneyline before first
+pitch. The vendor's event matches it, but every book's moneyline close is
+stamped 68-206 minutes after its first pitch, so the load guard refuses each
+one. Game 745659 (2024) is game 2 of a straight double-header: its old rows
+held game 1's prices (the old matcher's defect), and the vendor's own event for
+it carries no sportsbook offer (only a pick'em app's props and the vendor's
+blend of them).
 
 The plan: docs/audit/2026-09-25-sim555-one-book-per-odds-row-plan.md §4 and §8 step 8.
 """
@@ -344,7 +357,10 @@ async def run(
         if result.refused and code == EXIT_OK:
             code = EXIT_REFUSED
     if archived_any:
-        print("Next: VACUUM (ANALYZE) raw.game_odds; VACUUM (ANALYZE) raw.prop_odds;")
+        print(
+            "Next: VACUUM (ANALYZE, PARALLEL 0) raw.game_odds; "
+            "VACUUM (ANALYZE, PARALLEL 0) raw.prop_odds;"
+        )
     return code
 
 

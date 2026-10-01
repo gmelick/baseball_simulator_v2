@@ -397,7 +397,8 @@ BOOK_IDS_BY_NAME: dict[str, int] = {
 #: The prefix of every stored book label (``'bp:12'``).
 BOOK_LABEL_PREFIX = "bp:"
 
-#: The filter every reader appends until the old ``consensus`` rows are gone.
+#: The filter every reader appends. The old ``consensus`` rows were retired on 2026-10-01
+#: (SIM-555); the filter stays, so no other label is ever graded.
 STORED_BOOK_FILTER_SQL = "book LIKE 'bp:%'"
 
 #: SIM-555 (decision 1): the graded book, in order. A reader grades against the

@@ -1,9 +1,11 @@
 # Build plan — every book's prices stored, one book per row, one graded book, and a guard against impossible rows (SIM-555)
 
-> **STATUS 2026-10-01 — BUILT AND COMMITTED; the census PASSED (after three rule changes it found); every
-> season 2019-2026 is re-loaded and checked (run book steps 1-7 done; the re-load survived several host blue
-> screens caused by the Riot Vanguard driver `vgk.sys`); step 8, retiring the old rows, and the close-out
-> remain — §12.** VERSION 2 was
+> **STATUS 2026-10-01 — CLOSED.** Built, reviewed and committed; the census passed in every season;
+> every season 2019-2026 re-loaded one row per book; the event matcher fixed for postponed, re-timed,
+> suspended and double-header game-2 games; the old `consensus` rows retired (archived, then deleted) and
+> the two tables vacuumed. By owner ruling (2026-10-01) the full accuracy baseline and the calibration
+> refit moved to the draw-weight fit (SIM-548), and the live closing prices to the segment-markets surface
+> ticket (SIM-546). §12 is the build record. VERSION 2 was
 > APPROVED the same day: all six decisions of §10 taken as recommended by the owner ("accept your
 > recommendations for all of the open decisions"). §12 records the build: what landed, where it departs
 > from this plan and why, and the state of the run book. The readable page is https://claude.ai/artifact/M2Rv8uM3M9zt5Yc21kFCC1 (v3, approved); this
@@ -34,7 +36,7 @@
 > readers apply, and a re-load of eight seasons.
 
 **Date:** 2026-09-25 (version 1); 2026-09-28 (version 2)
-**Ticket:** SIM-555 (P1) in `BACKLOG.xlsx`. Next free ID: SIM-556.
+**Ticket:** SIM-555 (P1), CLOSED 2026-10-01; its row is deleted from `BACKLOG.xlsx`.
 **Evidence:** the scope note `docs/audit/2026-09-25-sim555-odds-book-mixing-scope.md` (the
 census of every stored row, a 40-game payload sample, the code audit); the provider, the
 loader, the live cycle, the accuracy comparison and the line-movement reader at commit
@@ -1305,7 +1307,8 @@ double-header with no listed start (MLB's placeholder sits 5 minutes after game 
 of exactly two same-team events. That last rule came from the build's adversarial review: the old
 matcher gave such a game 2 game 1's event. A new guard rule, `stamped_before_postponement`, refuses a price
 stamped at or before a made-up game's original start (the price of the game that was not played; on game
-716597 it refused 210 such rows). `forget_game()` lets the live pipeline read a postponement it learns of
+716597 it refused 210 such rows). The close-out check widened it the same day to 15 minutes after that
+start (below). `forget_game()` lets the live pipeline read a postponement it learns of
 later. Reviewed by three adversarial passes (eight findings, all fixed); unit lane 5,058 passed.
 *The data run.* A read-only check compared the old and the new matcher's event on every postponed,
 suspended or double-header game with `bp:` rows (340 games): 321 the same, 10 changed - each a
@@ -1317,14 +1320,83 @@ exited 0; 2023's game 716597 had two failed reads, stayed off the done-list, and
 second attempt, as the retry option intends. The loader logs show the made-up, suspended and game-2
 matches by name. The census reads zero on every rule in all eight seasons; the coverage findings are the
 three explained first-five moneyline ones. Nine of the ten re-matched game 2s now hold their own prices;
-745659's vendor event (92774) carries no offer in any market, so that game has no odds.
+745659's vendor event (92774) carries no sportsbook price in any market (only a pick'em app's props for
+five players and the vendor's blend of them, 15 rows that nothing grades).
 *The retirement's dry run* (`--allow-missing 567323 745659`) passes every season: 359,524 game rows and
-4,035,864 prop rows to archive and delete. 567323 has no close before first pitch; 745659's only old
-rows are game 1's prices. One 2021 game (633417) has old closing props and no new ones; its old props go
+4,035,864 prop rows to archive and delete. 567323 has no closing moneyline before first pitch; 745659's
+only old rows are game 1's prices. One 2021 game (633417) has old closing props and no new ones; its old props go
 to the archive like the rest. The real run waits for the owner: the session's permission check refused
 the delete.
 
-**A trap for step 8.** The retirement script refuses a season while any game with a `consensus`
+**Run book step 8 done: the old rows retired (2026-10-01).** The owner ran the retirement
+(`--allow-missing 567323 745659`): every season archived and deleted in its own checked transaction -
+359,524 `consensus` game-odds rows and 4,035,864 `consensus` prop rows. No `consensus` row is left in
+`raw.game_odds` or `raw.prop_odds`; the archive tables hold 370,206 and 4,038,908 rows (these plus the
+earlier moves: 883 placeholder team totals, 9,288 mixed three-way rows, and the ten double-header game 2s'
+511 game rows and 3,044 prop rows). Then `VACUUM (ANALYZE)` on both tables: a plain run fails with "could
+not resize shared memory segment ... No space left on device" (the database container's /dev/shm is
+64 MB, too small for the parallel index workers), so it ran with `PARALLEL 0` (1 min 47 s; zero dead rows
+after). The live tables then held 1,469,599 game-odds rows and 15,017,135 prop rows, every one `bp:`.
+The database restarted uncleanly about ten minutes after the vacuum (a host crash at 19:33 UTC): it
+recovered with the data intact, and the crash reset its statistics counters.
+
+**The postponement rule widened; the voided snapshots moved (2026-10-01).** The close-out check found
+four 2026 made-up games (823539, 824514, 824589, 824766) whose closing prices were stamped 20-80 seconds
+after the ORIGINAL start, months before the game was played. The vendor takes its game-time snapshot at
+the original start too, and the rule refused only a stamp at or before it. Game 823539 (postponed from
+2026-06-06 23:35 UTC, played 2026-08-29): 16 of 17 books' closes are stamped 23:35:20. The rule now
+refuses a row stamped no later than 15 minutes after the original start (`CLOSING_STAMP_GRACE`, the
+late-stamp rule's grace); unit lane 5,059 passed. A measurement over every made-up game of 2019-2026 (365
+games, MLB's schedules) set the cutoff: 763 closing rows (16 games) sit within those 15 minutes, while
+8,268 closing rows (167 games) are stamped 6 hours to a day after the original start, the makeup's own
+prices. `scripts/sim555_archive_voided_snapshot.sql` moved the stored rows the widened rule refuses to the
+archive: 780 game rows (763 closing, 17 opening) and 6,195 prop rows, in 20 games. Six 2026 made-up games
+keep no sportsbook closing moneyline, or one: 823357, 824490, 824514, 824589 and 824766 none, 823539 Hard
+Rock's only. The vendor kept only its original-date snapshot for them, so the honest state is no close.
+Kept, and ambiguous: 197 closing rows (39 games) stamped 15 minutes to 6 hours after an original start.
+A rain delay before the call would make them the voided game's prices; the store cannot tell. The live
+tables now hold 1,468,819 game-odds rows and 15,010,940 prop rows; the archive 370,986 and 4,045,103.
+
+**Closed (2026-10-01).** Run book step 9: the closing `CHANGES.md` entry; the SIM-555 row deleted from
+`BACKLOG.xlsx` (the next free ID stays SIM-557); the seven July register rows (1.8 twice,
+SIM-bettingpros-1, SIM-oddsprovider-1, B-N5 twice, 1.EX.devig-books) annotated FIXED-MASTER, and
+three more this ticket's later work closes (B-N7 twice: rescheduled and suspended games dropped; audit-DE-7:
+no retry); the technical docs current; the loader wrappers and done-lists removed (the load logs stay,
+ignored by git).
+Left open, by design or elsewhere:
+- **The first-five moneyline grades far fewer of the old games.** Of the old games, 231 of 2,335 are
+  still graded in 2022 (2,104 lost: 2022's first-five moneyline is nearly gone), 1,821 of 2,424 in 2023
+  and 2,137 of 2,440 in 2025. Almost every lost game's old row carried a first-inning tie or a mixed
+  price. Most books post only the two-way first-five bet (a tie refunds it), which nothing scores yet.
+  A scorer for the two-way bet is the natural follow-on; it is not filed.
+- **Two games have no closing moneyline.** 567323: every book's moneyline close is stamped 68-206 minutes
+  after first pitch. Its run line and total are graded on Fanatics prices stamped 0-14 minutes after first
+  pitch, and its opening moneyline is an in-play price (the late-stamp rule checks closing rows only).
+  745659: the vendor's event carries no sportsbook price, only a pick'em app's props and the vendor's
+  blend of them, which nothing grades.
+- **Games with no odds at all:** 2019: 220, 2020: 84, 2021: 164, 2022: 16, 2023-2026: 1-2 a season,
+  almost all because the vendor has no event for them.
+- **DraftKings' closing run line or total is sometimes an alternate or stale line, mostly in 2022 and
+  2019.** In 2022 its closing run line sits at 2.5-8.5 runs on 133 games, some stamped up to 23 days early,
+  and its closing total is 1.5 runs or more from FanDuel's on 91 of 2,333 games (2019: 62 totals; 188 run
+  lines at 1). The graded reader has no main-line check and DraftKings leads the list, so those rows are
+  graded. 2024, the baseline season, is clean on both checks. A main-line rule is a follow-on; it is not
+  filed.
+- **The triples prop** has no row where the vendor listed only the "yes" price (one-sided; by design).
+- **The census after the retirement:** its coverage and archive-count sections (13 and 20) read the old
+  rows from the live table, so they now read zero. To repeat the coverage read, point them at
+  `raw.game_odds_archive`.
+- **The re-load's refusal warnings:** each season's 2026-10-01 re-load logged the guard refusing 15-44% of
+  its rows, above the loader's 5% alert line. Almost all were the postponement rule on made-up games'
+  original-date prices (2021: 12,068 of 12,319 refusals), as expected for those games.
+- **Elsewhere:** the live closing prices (nothing in production marks them) belong to the segment-markets
+  surface ticket (SIM-546); the accuracy baseline and the calibration refit on these rows to the
+  draw-weight fit (SIM-548). A live price that moves A, then B, then back to A is stored once (the
+  live-slate epic, SIM-519). The provider's retries must stay off in the API container: its waits would
+  block the app.
+
+*(Historical: the matcher fix and `--allow-missing` resolved the trap below on 2026-10-01; 746572 now
+holds its own prices.)* **A trap for step 8.** The retirement script refuses a season while any game with a `consensus`
 closing moneyline lacks a `bp:` one. A game the event matcher now declines (746572 above: its
 old row predates the two-hour limit) can never get a `bp:` row, so it blocks its season. Before
 step 8, list those games from the loader logs ("no event for game_pk") and decide: retire with an
