@@ -1297,6 +1297,33 @@ lists the game as done (game 717171 lost every row to one schedule time-out). No
   fixed), then the full unit lane: 4,981 passed, 1 skipped; ruff, ruff format and mypy clean. New tests:
   `tests/unit/test_sim555_provider_retry.py`, `tests/unit/test_sim555_loader_retry.py`.
 
+**The matcher fixed, the games re-matched and re-loaded (2026-10-01; commit 9401438).** By owner
+decision ("Fix the matcher"). The provider reads the PLAYED schedule entry; a suspended game keeps its
+original first pitch and also searches the resume date's slate; the single-event rule takes the only
+same-team event on a day without a double-header within 12 hours of the start; and game 2 of a straight
+double-header with no listed start (MLB's placeholder sits 5 minutes after game 1's start) takes the later
+of exactly two same-team events. That last rule came from the build's adversarial review: the old
+matcher gave such a game 2 game 1's event. A new guard rule, `stamped_before_postponement`, refuses a price
+stamped at or before a made-up game's original start (the price of the game that was not played; on game
+716597 it refused 210 such rows). `forget_game()` lets the live pipeline read a postponement it learns of
+later. Reviewed by three adversarial passes (eight findings, all fixed); unit lane 5,058 passed.
+*The data run.* A read-only check compared the old and the new matcher's event on every postponed,
+suspended or double-header game with `bp:` rows (340 games): 321 the same, 10 changed - each a
+double-header game 2 that had game 1's prices (566734; 630973, 630984, 631152, 631426; 661233, 662199,
+662459; 745310, 745659). Their `bp:` rows (511 game rows, 3,044 prop rows) moved to the archive
+(`scripts/sim555_archive_wrong_dh_game2.sql`). Then every Final game with no `bp:` row, 839 in all, was
+re-loaded through the fixed matcher, one crash-safe loader per season (with `--retries 3`): every season
+exited 0; 2023's game 716597 had two failed reads, stayed off the done-list, and loaded on the wrapper's
+second attempt, as the retry option intends. The loader logs show the made-up, suspended and game-2
+matches by name. The census reads zero on every rule in all eight seasons; the coverage findings are the
+three explained first-five moneyline ones. Nine of the ten re-matched game 2s now hold their own prices;
+745659's vendor event (92774) carries no offer in any market, so that game has no odds.
+*The retirement's dry run* (`--allow-missing 567323 745659`) passes every season: 359,524 game rows and
+4,035,864 prop rows to archive and delete. 567323 has no close before first pitch; 745659's only old
+rows are game 1's prices. One 2021 game (633417) has old closing props and no new ones; its old props go
+to the archive like the rest. The real run waits for the owner: the session's permission check refused
+the delete.
+
 **A trap for step 8.** The retirement script refuses a season while any game with a `consensus`
 closing moneyline lacks a `bp:` one. A game the event matcher now declines (746572 above: its
 old row predates the two-hour limit) can never get a `bp:` row, so it blocks its season. Before

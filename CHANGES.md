@@ -29,6 +29,16 @@ so the crash-safe loop loads just those games again a minute later. Three advers
 eight defects, all fixed (among them a remembered player-lookup failure that skipped later games'
 props without a count). Unit lane 4,981 passed.
 
+**The matcher fixed and the games re-loaded (2026-10-01).** The event matcher now reads the game that
+was played: a postponed game's played start, a suspended game's resume-date slate, a re-timed game's
+only same-team event within 12 hours, and game 2 of a straight double-header with no listed start
+(the later of the day's two events - the old matcher gave it game 1's event). A new guard rule refuses
+a price stamped before a made-up game's original start. Ten game 2s held game 1's prices; their rows
+moved to the archive. The 839 games with no new row were re-loaded: every season clean, nine of the ten
+game 2s now hold their own prices, and the census reads zero on every rule in all eight seasons. The
+retirement's dry run passes every season with two named exemptions (567323: no close before first
+pitch; 745659: the vendor holds no prices for that game 2); the real run waits for the owner.
+
 **Why it matters.** Every stored odds row said `consensus`, and the provider picked each
 side's closing price on its own: the newest stamp across every book, ties to the last-listed
 book. So a closing row could hold two books' prices — a bet nobody could place — and the
