@@ -10,6 +10,25 @@ and most books post only the two-way first-five bet, which nothing scores yet. S
 old `consensus` rows (step 8; six games can never get a new row and need a named list) and the
 close-out. The plan's §12 has the detail.
 
+**The six games that blocked the retirement (2026-10-01).** Five of the six can be loaded: three are
+postponed games made up later, one had its start moved, one was suspended and resumed. The provider
+reads the postponed schedule entry and only the original date's slate, so its two-hour limit declines
+the vendor's event; read with the played start, each has 6-10 books' valid closing prices. Across the
+seasons the matcher declined a same-team event on about 350 games, which have no odds at all; the fix
+and their re-load wait for the owner. Game 567323 (2019) has no closing price before first pitch at any
+book. **Owner rulings:** the full baseline re-run and the calibration refit move to the draw-weight fit
+(SIM-548); the live closing-price defect joins the segment-markets surface ticket (SIM-546).
+
+**The loader's retry option (2026-10-01).** A failed vendor read used to leave a silent gap: the
+provider returned an empty result and the loader marked the game done. The provider now retries a
+passing failure (an HTTP 429 or 5xx, a time-out, a dropped connection) with a doubling wait capped at
+60 s, and counts every read it gives up on (`read_failures`); the default stays one attempt, so the live
+app is unchanged. The loader takes `--retries` (default 3) and `--retry-wait` (default 5 s); a game
+whose reads or writes still failed stays off the done-list, is listed at the end, and the run exits 1,
+so the crash-safe loop loads just those games again a minute later. Three adversarial reviews found
+eight defects, all fixed (among them a remembered player-lookup failure that skipped later games'
+props without a count). Unit lane 4,981 passed.
+
 **Why it matters.** Every stored odds row said `consensus`, and the provider picked each
 side's closing price on its own: the newest stamp across every book, ties to the last-listed
 book. So a closing row could hold two books' prices — a bet nobody could place — and the

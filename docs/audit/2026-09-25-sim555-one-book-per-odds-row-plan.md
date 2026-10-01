@@ -1235,6 +1235,68 @@ the run-line and total rows (the old mixed row); 2021's first-team-to-score rows
 2022's first-five run lines hold spreads with no prices. None of the 19 has a valid new row to find.
 All loader containers are removed.
 
+**The six games re-examined: five are a matcher defect, one has no close (2026-10-01).** The step-8
+list (games with an old closing moneyline and no `bp:` one) holds six games. A read-only probe of the
+MLB schedule and the vendor (`six_games_probe.py` / `two_games_probe.py` in the session scratchpad)
+found that only one of them truly has no price to load:
+- **745175, 746572, 746773 (2024): postponed games made up later.** The MLB schedule lists such a game
+  twice: the postponed entry (the original date and start) and the played entry. The provider reads
+  `data["dates"][0]["games"][0]`, the POSTPONED entry, so it measures the vendor's events against the
+  original start (49 days, 42 hours and 18 hours away) and the two-hour limit declines them. Measured
+  against the played start, each has a vendor event at exactly that start, and 9-10 books' closing
+  moneylines pass the guard. (bet365's row on 745175 and 746572 is stamped at the ORIGINAL date: a price
+  of the game that was never played; the guard has no rule for a close stamped weeks early.)
+- **745169 (2024): a start moved earlier.** The game was played at 1:15 pm (18:15 UTC); the vendor kept
+  the original 7:15 pm on its event. It is the only Rockies-Cardinals event that day. Read through that
+  event, six books' closes are stamped before the real first pitch and pass; four are later (in play)
+  and the guard refuses them.
+- **746755 (2024): a suspended game.** It started on 08-27 and resumed on 08-28; the vendor moved its
+  event to the resume time on the 08-28 slate, which the provider never reads for an 08-27 game. Read
+  through that event, seven books' closes are stamped before the original first pitch and pass.
+- **567323 (2019): no close before first pitch.** The event matches exactly (game 1 of a double-header,
+  first pitch on time, 20:40 UTC), but every book's closing stamp is 68-206 minutes after it, as late as
+  the end of the game. No pre-game close exists at the vendor, so this game alone needs a named
+  exemption in step 8.
+The defect reaches well beyond these five: the loaders' logs show the matcher declining a same-team
+event on 24-69 games a season (350 in 2019-2026; 2024: 35, against 34 postponed-and-made-up games on
+MLB's 2024 schedule). Those games had no odds before SIM-555 either. A fix (read the played schedule
+entry; for a suspended game also read the resume date's slate; accept the only same-team event on the
+day when the schedule shows no double-header) and a re-load of those games are the owner's decision.
+
+**Owner rulings of 2026-10-01.** The full 1,000-game baseline re-run and the calibration layer's refit on
+the new odds move to the draw-weight fit (SIM-548), which measures its baseline on these rows anyway;
+the SIM-555 definition of done no longer carries them. The live closing-price defect (nothing in
+production marks a live game's closing prices, and the marker picks one row per game across every
+market and book) joins the segment-markets surface ticket (SIM-546). The loader gains a retry option
+(next paragraph).
+
+**The loader's retry option (built 2026-10-01).** The re-load showed that one failed vendor read left a
+silent, permanent gap: the provider logs the failure and returns an empty result, and the loader then
+lists the game as done (game 717171 lost every row to one schedule time-out). Now:
+- **The provider retries a passing failure.** Every vendor and MLB read goes through
+  `_http_get_json`, which retries an HTTP 429 or 5xx, a time-out and a refused, dropped or unreachable
+  connection; the wait doubles from `retry_wait_s` and stops at 60 s, and a 429 or 503 waits at least
+  its `Retry-After`. Any other failure (another 4xx, a body that is not JSON) raises at once, as before.
+  Each retry logs one INFO line with the host and path only, never the query or the key. The policy
+  comes from `set_retry_policy` or the environment (`BETTINGPROS_MAX_RETRIES`, default 0, and
+  `BETTINGPROS_RETRY_WAIT_S`, default 2.0); it must stay unset in the API container, because the live
+  pipeline and the opening-line job call the provider on the app's event loop and a retry's wait would
+  block it.
+- **The provider counts every read it gives up on** (`read_failures`), at each of its eight places that
+  catch a failed read and carry on, never for a real absence (no event, a matcher decline, empty offers,
+  a player with no offer, a first-five exclusion). `forget_failed_lookups()` clears the remembered
+  failed lookups, so a player whose lookup failed in one game is read again in the next.
+- **The loader** takes `--retries` (default 3) and `--retry-wait` (default 5 s) and hands them to the
+  provider. A game whose reads failed after the retries, or whose fetch or database write failed inside
+  the loader, is INCOMPLETE: its rows so far stay, it stays off the done-list, a WARNING names it, and
+  the run lists it at the end and exits 1. The crash-safe loop runs the loader again a minute later on
+  exit 1, so only the incomplete games load again (at most 30 runs in all). A run with
+  `--skip-loaded-since` warns that it skips an incomplete game that holds rows.
+- **Built and checked** by a workflow: two builders in parallel, an integration pass, three adversarial
+  reviewers (retry correctness, failure counting and the done-list, tests and docs; eight findings, all
+  fixed), then the full unit lane: 4,981 passed, 1 skipped; ruff, ruff format and mypy clean. New tests:
+  `tests/unit/test_sim555_provider_retry.py`, `tests/unit/test_sim555_loader_retry.py`.
+
 **A trap for step 8.** The retirement script refuses a season while any game with a `consensus`
 closing moneyline lacks a `bp:` one. A game the event matcher now declines (746572 above: its
 old row predates the two-hour limit) can never get a `bp:` row, so it blocks its season. Before

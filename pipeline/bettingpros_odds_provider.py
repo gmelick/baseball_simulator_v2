@@ -133,15 +133,45 @@ HTTP is stdlib ``urllib`` (sync — the protocol methods are sync; the module
 stays importable without aiohttp). The two ``_bp_get`` / ``_mlb_get`` seams are
 the only network surface and are stubbed in unit tests (fixtures captured under
 ``tests/fixtures/bettingpros/``); no live call is made in tests.
+
+Retries and failed reads (SIM-555, 2026-10-01)
+----------------------------------------------
+Every vendor and MLB read goes through :meth:`BettingProsOddsProvider._http_get_json`.
+That method retries a transient failure: an HTTP 429 or 5xx, a time-out, a
+refused or dropped connection, an unreachable network, a TLS error. The wait
+before retry k is ``retry_wait_s`` times 2 to the power k − 1, at most 60
+seconds; a 429 or 503 with a numeric ``Retry-After`` waits at least that long.
+Any other failure (an HTTP 4xx, a body that is not JSON) raises at once. After
+the last retry the original error reaches the caller. The default is no retry
+(``BETTINGPROS_MAX_RETRIES`` unset = 0), so the live pipeline and the
+opening-line job keep their single attempt; the historical loader turns
+retries on (:meth:`set_retry_policy`).
+
+Retries are for offline jobs only. Leave ``BETTINGPROS_MAX_RETRIES`` unset in
+the API container. The live pipeline and the opening-line job call this
+provider on the app's event loop, and a retry waits with ``time.sleep``. One
+wait stops the whole app: the WebSocket fan-out, ``/simulate``, the health
+checks.
+
+A read that still fails is caught by the caller, logged and turned into an
+empty or partial result. The provider counts each such catch in
+``read_failures``, so the loader can tell a game a vendor error cut short
+from a game with nothing to load, and keep the first off its done-list. The
+loader also calls :meth:`BettingProsOddsProvider.forget_failed_lookups`
+before each game, so a failure stored in one game never cuts the next one
+short without a count.
 """
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
+import math
 import os
 import time
 import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -475,6 +505,59 @@ def _normalize_name(name: str) -> str:
     return " ".join(kept.lower().split())
 
 
+#: SIM-555: the error types a read may retry. ``OSError`` is the base of
+#: ``URLError`` (a time-out or a refused connection inside ``urlopen``; also
+#: the base of ``HTTPError``, whose status :func:`_is_transient` checks), of
+#: ``TimeoutError`` (``socket.timeout`` since Python 3.10) and of
+#: ``ConnectionError``. ``OSError`` also covers what urllib does not wrap.
+#: urllib wraps an ``OSError`` in ``URLError`` only around the request. An
+#: error raised while the status line or the body is read comes through bare:
+#: an ``ssl.SSLError``, or an ``EHOSTUNREACH``, ``ENETUNREACH`` or ``ENETDOWN``.
+#: ``HTTPException`` covers ``RemoteDisconnected`` and ``IncompleteRead``.
+_RETRYABLE_ERRORS: tuple[type[Exception], ...] = (OSError, http.client.HTTPException)
+
+#: SIM-555: the statuses whose numeric ``Retry-After`` sets a floor on the wait.
+_RETRY_AFTER_STATUSES = frozenset({429, 503})
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """True when a failed read may succeed on a later attempt (SIM-555).
+
+    An HTTP 429 or 5xx, a time-out, a refused or dropped connection, an
+    unreachable network, a TLS error. Any other HTTP status (a 4xx) is the
+    server's final answer.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        code = exc.code if isinstance(exc.code, int) else 0
+        return code == 429 or code >= 500
+    return isinstance(exc, _RETRYABLE_ERRORS)
+
+
+def _retry_after_s(exc: BaseException) -> float | None:
+    """The numeric ``Retry-After`` of a 429 or 503, in seconds, or ``None`` (SIM-555).
+
+    ``None`` when the status is another one, or the header is absent, an
+    HTTP date, negative or not finite.
+    """
+    if not isinstance(exc, urllib.error.HTTPError) or exc.code not in _RETRY_AFTER_STATUSES:
+        return None
+    headers = exc.headers
+    raw = headers.get("Retry-After") if headers is not None else None
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and value >= 0 else None
+
+
+def _log_target(url: str) -> str:
+    """The host and path of a URL, for a log line: no query string, no user part (SIM-555)."""
+    parts = urllib.parse.urlsplit(url)
+    return f"{parts.hostname or ''}{parts.path}"
+
+
 class BettingProsOddsProvider:
     """Real odds provider backed by BettingPros v3 (SIM-405).
 
@@ -484,9 +567,43 @@ class BettingProsOddsProvider:
     cadence, so a cycle never persists a stale snapshot (see the module
     docstring). ``0`` disables the caches. ``clock`` is the monotonic time
     source, injectable for tests.
+
+    ``max_retries`` and ``retry_wait_s`` (SIM-555) set how often a read that
+    fails for a transient reason is retried, and the first wait in seconds
+    (see :meth:`_http_get_json`). ``None`` reads ``BETTINGPROS_MAX_RETRIES``
+    (default 0: one attempt, no retry) and ``BETTINGPROS_RETRY_WAIT_S``
+    (default 2.0). :meth:`set_retry_policy` changes both later. ``sleep`` is
+    the wait function, injectable for tests. Set retries for an offline job
+    only. The live pipeline and the opening-line job call this provider on the
+    API's event loop, and a retry's ``sleep`` blocks that loop. So leave
+    ``BETTINGPROS_MAX_RETRIES`` unset in the API container.
+
+    ``read_failures`` (SIM-555) counts the reads that failed after their
+    retries and that the provider caught, to go on with an empty or partial
+    result: a game, event or player lookup, an offers read, a later offers
+    page, the first-inning read of the twin check. It grows by one per caught
+    failure. A legitimate absence does not count: no event on the slate, a
+    matcher decline, a slate the matcher cannot read (a retry reads the same
+    answer), a schedule or people answer without the game or the player, an
+    empty offer list, a player with no offer, a first-five exclusion, a
+    failed lookup still inside its time-to-live (counted once, when it
+    failed). The historical loader reads the count before and after a game; a
+    game whose count grew stays off the done-list. The loader calls
+    :meth:`forget_failed_lookups` before each game, so a failure stored in one
+    game is read again, and counted again, in the next.
     """
 
     API_KEY_ENV = "ODDS_API_KEY"
+    #: SIM-555: env var that sets how many times a transient read failure is retried.
+    MAX_RETRIES_ENV = "BETTINGPROS_MAX_RETRIES"
+    #: SIM-555: env var that sets the wait before the first retry (seconds).
+    RETRY_WAIT_ENV = "BETTINGPROS_RETRY_WAIT_S"
+    #: SIM-555: no retry by default; the live pipeline keeps its single attempt.
+    DEFAULT_MAX_RETRIES = 0
+    #: SIM-555: the default wait before the first retry (seconds); it doubles per retry.
+    DEFAULT_RETRY_WAIT_S = 2.0
+    #: SIM-555: the longest wait before one retry, a ``Retry-After`` included (seconds).
+    RETRY_WAIT_CAP_S = 60.0
     #: SIM-421: env var that sets the offers-cache time-to-live (seconds).
     OFFERS_CACHE_TTL_ENV = "ODDS_OFFERS_CACHE_TTL_S"
     #: SIM-421: the default time-to-live — half PROP_FETCH_CADENCE_S (60 s).
@@ -500,6 +617,9 @@ class BettingProsOddsProvider:
         timeout: float = 15.0,
         offers_cache_ttl_s: float | None = None,
         clock: Callable[[], float] | None = None,
+        max_retries: int | None = None,
+        retry_wait_s: float | None = None,
+        sleep: Callable[[float], None] | None = None,
     ) -> None:
         self._api_key = api_key or os.environ.get(self.API_KEY_ENV)
         self._prefer_book_id = prefer_book_id
@@ -510,6 +630,17 @@ class BettingProsOddsProvider:
             )
         self._offers_cache_ttl_s = float(offers_cache_ttl_s)
         self._clock: Callable[[], float] = clock or time.monotonic
+        # SIM-555: the retry policy of _http_get_json and the count of caught read failures.
+        if max_retries is None:
+            max_retries = int(os.environ.get(self.MAX_RETRIES_ENV, self.DEFAULT_MAX_RETRIES))
+        if retry_wait_s is None:
+            retry_wait_s = float(os.environ.get(self.RETRY_WAIT_ENV, self.DEFAULT_RETRY_WAIT_S))
+        self._max_retries: int = self.DEFAULT_MAX_RETRIES
+        self._retry_wait_s: float = self.DEFAULT_RETRY_WAIT_S
+        self.set_retry_policy(max_retries, retry_wait_s)
+        # Not _sleep: the census probe's subclass uses that name for its rate limit.
+        self._retry_sleep: Callable[[float], None] = sleep or time.sleep
+        self.read_failures = 0
         # Per-instance caches (cleared by constructing a new provider).
         # SIM-555: the game, event and player-name caches hold a found value
         # for the process lifetime. A failed lookup goes to _failed_lookups for
@@ -529,10 +660,72 @@ class BettingProsOddsProvider:
         self._f5_logged: set[tuple[int, int, str]] = set()
 
     # ----------------------------------------------------------------- HTTP
+    def set_retry_policy(self, max_retries: int, retry_wait_s: float) -> None:
+        """Set the retries of a transient read failure and the first wait (SIM-555).
+
+        ``max_retries`` is a whole number 0 or more (0 = one attempt);
+        ``retry_wait_s`` is 0 or more seconds. Raises ``ValueError`` otherwise.
+        """
+        if max_retries < 0 or int(max_retries) != max_retries:
+            raise ValueError(f"max_retries must be a whole number >= 0, not {max_retries!r}")
+        if not retry_wait_s >= 0:  # a NaN fails this test too
+            raise ValueError(f"retry_wait_s must be >= 0 seconds, not {retry_wait_s!r}")
+        self._max_retries = int(max_retries)
+        self._retry_wait_s = float(retry_wait_s)
+
+    def _retry_wait(self, retry: int, exc: BaseException) -> float:
+        """The wait in seconds before retry ``retry`` (1, 2, ...) after ``exc`` (SIM-555).
+
+        ``retry_wait_s`` doubles per retry. A 429 or 503 with a numeric
+        ``Retry-After`` waits at least that long. Both stop at
+        :attr:`RETRY_WAIT_CAP_S`.
+        """
+        # The exponent stops at 64: a larger one adds nothing under the cap.
+        wait = self._retry_wait_s * 2.0 ** min(retry - 1, 64)
+        retry_after = _retry_after_s(exc)
+        if retry_after is not None:
+            wait = max(wait, retry_after)
+        return min(wait, self.RETRY_WAIT_CAP_S)
+
+    def _describe_error(self, exc: BaseException, url: str) -> str:
+        """The error for a log line, with the URL's query and the API key taken out (SIM-555)."""
+        text = f"{type(exc).__name__}: {exc}".replace(url, _log_target(url))
+        if self._api_key:
+            text = text.replace(self._api_key, "<api key>")
+        return text
+
     def _http_get_json(self, url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
-        req = urllib.request.Request(url, headers=headers or {})
-        with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310 — fixed hosts
-            return json.loads(resp.read().decode("utf-8"))
+        """GET ``url`` and decode its JSON body; the one read of every vendor and MLB call.
+
+        SIM-555: a transient failure (an HTTP 429 or 5xx, a time-out, a refused
+        or dropped connection) is retried up to ``max_retries`` times, after
+        the wait of :meth:`_retry_wait`. Each retry logs one INFO line with the
+        attempt, the error, the host and path (no query, no key) and the wait.
+        Any other failure raises at once. After the last retry the original
+        error propagates unchanged, so the callers' handlers still catch it.
+        """
+        retry = 0
+        while True:
+            try:
+                req = urllib.request.Request(url, headers=headers or {})
+                with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310 — fixed hosts
+                    return json.loads(resp.read().decode("utf-8"))
+            except _RETRYABLE_ERRORS as exc:
+                if retry >= self._max_retries or not _is_transient(exc):
+                    raise
+                retry += 1
+                wait = self._retry_wait(retry, exc)
+                log.info(
+                    "BettingPros: %s failed on attempt %d of %d (%s); retrying in %.1f s",
+                    _log_target(url),
+                    retry,
+                    self._max_retries + 1,
+                    self._describe_error(exc, url),
+                    wait,
+                )
+                if isinstance(exc, urllib.error.HTTPError):
+                    exc.close()  # free the error response's connection before the next attempt
+                self._retry_sleep(wait)
 
     def _bp_get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         """GET a BettingPros v3 endpoint (the network seam stubbed in tests)."""
@@ -574,15 +767,18 @@ class BettingProsOddsProvider:
         SIM-555: a resolved game is cached for the process lifetime. A failed
         read returns ``None`` and is kept for one time-to-live
         (:meth:`_failed_recently`); the first call after that reads the
-        schedule again.
+        schedule again. A read that raised counts in ``read_failures``; a
+        schedule answer without the game does not (the game is absent).
         """
         if game_pk in self._game_meta_cache:
             return self._game_meta_cache[game_pk]
         if self._failed_recently("game", game_pk):
             return None
         meta: tuple[str, str, str, datetime | None] | None = None
+        read_done = False
         try:
             data = self._mlb_get("schedule", {"sportId": 1, "gamePk": game_pk})
+            read_done = True
             game = data["dates"][0]["games"][0]
             date_str = str(game["officialDate"])
             home = str(game["teams"]["home"]["team"]["name"])
@@ -591,6 +787,8 @@ class BettingProsOddsProvider:
             meta = (date_str, home, away, game_dt)
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: could not resolve game_pk %s: %s", game_pk, exc)
+            if not read_done:
+                self.read_failures += 1  # SIM-555: the schedule read failed
         if meta is not None:
             self._game_meta_cache[game_pk] = meta
         else:
@@ -614,7 +812,9 @@ class BettingProsOddsProvider:
         SIM-555: a matched event is cached for the process lifetime. No match
         (or a failed read) is kept for one time-to-live
         (:meth:`_failed_recently`), so a repeat call inside that window reads
-        nothing, and the first call after it looks again.
+        nothing, and the first call after it looks again. A failed slate read
+        counts in ``read_failures``; no match does not, nor does a slate the
+        matcher cannot read (a retry would read the same answer).
         """
         if game_pk in self._event_cache:
             return self._event_cache[game_pk]
@@ -625,9 +825,12 @@ class BettingProsOddsProvider:
         if meta is not None:
             date_str, home_name, away_name, game_dt = meta
             home_n, away_n = _normalize_name(home_name), _normalize_name(away_name)
+            read_done = False
             try:
+                slate = self._events_for_date(date_str)
+                read_done = True
                 candidates = []
-                for e in self._events_for_date(date_str):
+                for e in slate:
                     parts = {p["id"]: _normalize_name(p["name"]) for p in e.get("participants", [])}
                     home_nick = parts.get(e.get("home"), "")
                     away_nick = parts.get(e.get("visitor"), "")
@@ -679,6 +882,8 @@ class BettingProsOddsProvider:
                     )
             except Exception as exc:  # noqa: BLE001
                 log.warning("BettingPros: event lookup failed for game_pk %s: %s", game_pk, exc)
+                if not read_done:
+                    self.read_failures += 1  # SIM-555: the events read failed
         if event is not None:
             self._event_cache[game_pk] = event
         else:
@@ -703,6 +908,19 @@ class BettingProsOddsProvider:
     def _note_failed_lookup(self, kind: str, key: int) -> None:
         """Keep a failed lookup for one time-to-live (SIM-555; see :meth:`_failed_recently`)."""
         self._store(self._failed_lookups, (kind, int(key)), None)
+
+    def forget_failed_lookups(self) -> None:
+        """Drop every stored failed lookup, so the next call reads again (SIM-555).
+
+        The historical loader calls this before each game. A failed player
+        lookup is stored for one time-to-live (600 s in the loader, about 33
+        games) and counted once, in the game where it failed. Without this
+        call, a later game that names the same player inside that window gets
+        the stored failure: no read, no count, no props for the player, and
+        the game goes on the done-list. The cost is one more read per failed
+        player per game. A found game, event or name stays cached.
+        """
+        self._failed_lookups.clear()
 
     def _store(self, cache: dict[_K, tuple[float, _V]], key: _K, payload: _V) -> None:
         """Put ``payload`` in ``cache`` under ``key`` after dropping every stale entry.
@@ -793,6 +1011,7 @@ class BettingProsOddsProvider:
                     len(offers),
                     exc,
                 )
+                self.read_failures += 1  # SIM-555: the market comes back partial
                 return offers, False
             offers.extend(more.get("offers", []))
         return offers, True
@@ -804,19 +1023,25 @@ class BettingProsOddsProvider:
         lifetime. A failed lookup is kept for one time-to-live only
         (:meth:`_failed_recently`); it used to be cached as ``None`` for the
         process lifetime, so one timeout cost the player every prop for the
-        rest of a season's load or of the live pipeline's day.
+        rest of a season's load or of the live pipeline's day. A read that
+        raised counts in ``read_failures``; an answer without the player does
+        not (SIM-555).
         """
         if player_id in self._player_name_cache:
             return self._player_name_cache[player_id]
         if self._failed_recently("player", player_id):
             return None
         name: str | None = None
+        read_done = False
         try:
             data = self._mlb_get(f"people/{player_id}", {})
+            read_done = True
             full = data["people"][0]["fullName"]
             name = _normalize_name(str(full))
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: could not resolve player_id %s: %s", player_id, exc)
+            if not read_done:
+                self.read_failures += 1  # SIM-555: the people read failed
         if name is None:
             self._note_failed_lookup("player", player_id)
         else:
@@ -1289,6 +1514,7 @@ class BettingProsOddsProvider:
                 market_type,
                 exc,
             )
+            self.read_failures += 1  # SIM-555: the first-inning read failed
             return base, []
         rows = self._rows(
             base, kind, sides, line_type, excluded=excluded, opener_is_twin=opener_is_twin
@@ -1440,6 +1666,7 @@ class BettingProsOddsProvider:
             offers = self._offers(event_id, market_id)  # SIM-421: cached per (event, market)
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: offers fetch failed (market %s): %s", market_id, exc)
+            self.read_failures += 1  # SIM-555
             return []
         return offers[0].get("selections", []) if offers else []
 
@@ -1457,6 +1684,7 @@ class BettingProsOddsProvider:
             offers = self._offers(event_id, market_id)
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: team offers fetch failed (market %s): %s", market_id, exc)
+            self.read_failures += 1  # SIM-555
             return []
         if not team_abbrev:
             return []
@@ -1476,6 +1704,7 @@ class BettingProsOddsProvider:
             offers = self._offers(event_id, market_id)  # SIM-421: cached per (event, market)
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: prop offers fetch failed (market %s): %s", market_id, exc)
+            self.read_failures += 1  # SIM-555
             return None
         for offer in offers:
             for part in offer.get("participants", []):

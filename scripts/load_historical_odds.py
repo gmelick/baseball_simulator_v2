@@ -55,6 +55,45 @@ than 5% of the rows it saw.
 that one book's rows (a smoke run, or a top-up of one book). An unknown name
 stops the run before any fetch.
 
+RETRIES AND INCOMPLETE GAMES
+----------------------------
+SIM-555 (2026-10-01). A vendor read can fail for a passing reason: a time-out,
+or a burst of HTTP 502 / 503 answers. The BettingPros provider catches such a
+failure, logs a WARNING and goes on with an empty or partial result. The loader
+used to list that game in its done-file anyway, so the gap was silent and
+permanent (game 717171 lost every row to one schedule time-out). Two defences
+now close the gap:
+
+  * The loader hands the provider a retry policy. ``--retries`` (default 3)
+    sets the retries per read; ``--retry-wait`` (default 5 s) sets the wait
+    before the first retry, and each later wait is twice as long (the provider
+    caps one wait at 60 s). The provider's own default stays one attempt, so
+    the live pipeline and the opening-line job keep their behaviour. The mock
+    does not retry, and the loader logs that once.
+  * The provider counts each read it caught and gave up on
+    (``read_failures``). The loader counts each fetch error and each write
+    error it caught itself. A game whose counts grew is INCOMPLETE: its rows
+    so far stay written, the loader does NOT list it in the done-file, and one
+    WARNING names it. The run ends with the number of incomplete games and up
+    to 20 of their game_pks. A legitimate absence (no event on the vendor's
+    slate, no offer for a player) is not a failed read: that game is finished.
+    Before each game the loader calls the provider's
+    ``forget_failed_lookups``. A failed player lookup is stored for the cache
+    time-to-live (600 s here) and counted once; without the call, a later game
+    with the same player got the stored failure with no count.
+
+Exit codes: 0 = every game loaded; 1 = at least one game is incomplete
+(``EXIT_INCOMPLETE``; an uncaught exception also exits 1); 2 = a usage error
+(a bad flag, or the mock without ``--provider mock``). The SIM-555 re-load ran
+the loader inside a crash-safe shell loop, one per season, with
+``--done-file``. The loop runs the loader at most 30 times in all, a minute
+apart, and stops on exit 0 or 2. Each later run skips the finished games, so
+it loads only the incomplete ones again. A game whose read fails on every run
+stays on the list after the last one. A run without ``--done-file`` only
+reports the list. ``--skip-loaded-since`` drops a game that already holds
+rows before the done-file is read, so it skips an incomplete game with rows
+too; resume with ``--done-file`` alone to load those again.
+
 Persistence reuses ``LiveIngestionPipeline._persist_odds_many`` /
 ``_persist_prop_odds_many`` (so the SIM-092/SIM-340 ``odds_hash`` dedup + the
 ``raw.prop_odds`` CHECK constraint apply unchanged). The pipeline is constructed
@@ -68,6 +107,13 @@ USAGE
     MSYS_NO_PATHCONV=1 docker compose run -d --name sim555_load_2024 \
         -v "$PWD/scripts:/app/scripts" app \
         python scripts/load_historical_odds.py --seasons 2024 --provider bettingpros
+
+    # SIM-555: the crash-safe form the wrapper runs. --done-file skips the
+    # games the file lists and appends each game once it is complete;
+    # --retries / --retry-wait set the vendor-read retry policy (the values
+    # shown are the defaults). Exit 1 = some game is incomplete (see above).
+    python scripts/load_historical_odds.py --seasons 2024 --provider bettingpros
+        --done-file scripts/sim555_load_2024.done --retries 3 --retry-wait 5
 
     # In the app container, with a real provider configured:
     ODDS_PROVIDER=bettingpros ODDS_API_KEY=… \
@@ -128,6 +174,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import math
 import os
 import sys
 from collections import Counter
@@ -197,6 +244,22 @@ REFUSAL_WARN_SHARE = 0.05
 
 #: SIM-555: the odds fields of a prop row; a row with all three empty is not a quote.
 _PROP_ODDS_FIELDS: tuple[str, ...] = ("line", "over_ml", "under_ml")
+
+#: SIM-555: the vendor-read retry policy this job hands the provider
+#: (``--retries`` / ``--retry-wait``). The provider's own default is one
+#: attempt, so the live pipeline keeps it; this offline job can afford to wait.
+DEFAULT_RETRIES = 3
+DEFAULT_RETRY_WAIT_S = 5.0
+
+#: SIM-555: the exit code of a run that left a game incomplete (a vendor read
+#: failed after its retries). Before SIM-555, 1 meant only an uncaught
+#: exception (Python's exit status after a traceback). The crash-safe wrapper
+#: runs the loader again a minute later on both. 0 = every game loaded;
+#: 2 = a usage error (the parser's, or the refused mock), never run again.
+EXIT_INCOMPLETE = 1
+
+#: SIM-555: the end-of-run summary names at most this many incomplete games.
+INCOMPLETE_LIST_MAX = 20
 
 #: SIM-555: the writers the load functions take. A game writer gets
 #: ``(game_pk, rows)``, a prop writer ``(rows)``; both persist one offer's rows
@@ -274,6 +337,124 @@ def _select_book(requested: str | None) -> int | None:
             " (or a label such as bp:12)."
         )
     return book_id
+
+
+def _select_retry_policy(retries: int, retry_wait_s: float) -> tuple[int, float]:
+    """SIM-555: the ``(retries, first wait)`` pair this run hands the provider.
+
+    ``retries`` must be 0 or more (0 = one attempt per read). The wait must be
+    a positive, finite number of seconds. A bad value raises ``ValueError``,
+    so the run stops before any fetch.
+    """
+    if int(retries) < 0:
+        raise ValueError(f"--retries must be 0 or more, not {retries}.")
+    wait = float(retry_wait_s)
+    if not (math.isfinite(wait) and wait > 0):
+        raise ValueError(f"--retry-wait must be a positive number of seconds, not {retry_wait_s}.")
+    return int(retries), wait
+
+
+def _hand_over_retry_policy(provider: Any, retries: int, retry_wait_s: float) -> None:
+    """SIM-555: give the provider this run's retry policy, when it takes one.
+
+    The BettingPros provider takes it through ``set_retry_policy``. The mock
+    and the test fakes have no such method; the loader logs that once and
+    goes on.
+    """
+    set_policy = getattr(provider, "set_retry_policy", None)
+    if not callable(set_policy):
+        log.info(
+            "provider %s does not retry a failed read (it has no set_retry_policy)",
+            type(provider).__name__,
+        )
+        return
+    set_policy(retries, retry_wait_s)
+    log.info(
+        "vendor reads: up to %d retries each, the first after %.1f s, each later wait doubled",
+        retries,
+        retry_wait_s,
+    )
+
+
+def _read_failures(provider: Any) -> int:
+    """SIM-555: the provider's count of the failed reads it caught (0 if it keeps none).
+
+    The BettingPros provider adds 1 to ``read_failures`` each time it catches a
+    failed read and goes on with an empty or partial result. The mock keeps no
+    count. A value that is not a whole number (a ``MagicMock`` attribute)
+    counts as 0.
+    """
+    value = getattr(provider, "read_failures", 0)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return value
+
+
+def _forget_failed_lookups(provider: Any) -> None:
+    """SIM-555: drop the provider's stored failed lookups before a game.
+
+    The BettingPros provider stores a failed player lookup for one cache
+    time-to-live (600 s here) and counts it once. A later game that names the
+    same player inside that window would get the stored failure with no new
+    count, and go on the done-list without the player's props. The mock and
+    the test fakes have no such method.
+    """
+    forget = getattr(provider, "forget_failed_lookups", None)
+    if callable(forget):
+        forget()
+
+
+def _count_failure(failures: Counter[str] | None, step: str) -> None:
+    """SIM-555: count one fetch or write the loader caught (``None`` counts nothing)."""
+    if failures is not None:
+        failures[step] += 1
+
+
+def _incomplete_reasons(failed_reads: int, caught: Mapping[str, int]) -> str:
+    """SIM-555: why a game is incomplete, or ``""`` when it is complete.
+
+    ``failed_reads`` is the growth of the provider's ``read_failures`` over
+    the game. ``caught`` holds the fetches and the writes the loader itself
+    caught over the game (keys ``fetch`` and ``write``).
+    """
+    parts = []
+    if failed_reads > 0:
+        parts.append(f"failed vendor reads: {failed_reads}")
+    if caught.get("fetch", 0) > 0:
+        parts.append(f"failed fetches: {caught['fetch']}")
+    if caught.get("write", 0) > 0:
+        parts.append(f"failed writes: {caught['write']}")
+    return "; ".join(parts)
+
+
+def _incomplete_summary(
+    incomplete: list[int], *, done_file: str | None, skip_loaded_since: bool = False
+) -> str:
+    """SIM-555: one line that counts the incomplete games and names up to 20 of them.
+
+    A run with ``--skip-loaded-since`` drops a game that holds rows before the
+    done-file is read, so its next run skips an incomplete game with rows; the
+    line says so.
+    """
+    if not incomplete:
+        return "incomplete games: none (no vendor read, fetch or write failed)"
+    shown = ", ".join(str(pk) for pk in incomplete[:INCOMPLETE_LIST_MAX])
+    more = len(incomplete) - INCOMPLETE_LIST_MAX
+    if more > 0:
+        shown = f"{shown} and {more} more"
+    if skip_loaded_since:
+        then = (
+            "a run with --skip-loaded-since skips a game that holds rows, "
+            "so re-run without it (with --done-file) to fill them"
+        )
+    elif done_file:
+        then = "they stay off the done-list, so the next run loads them again"
+    else:
+        then = "this run keeps no done-file; re-run the season to fill them"
+    return (
+        f"incomplete games: {len(incomplete)} (a vendor read failed after its retries, "
+        f"or a fetch or a write failed): {shown}; {then}"
+    )
 
 
 #: SIM-555: the registry name of the deterministic mock provider.
@@ -389,7 +570,10 @@ def append_done(path: str, game_pk: int) -> None:
 
     The loader calls this only after the game's last row is written, so a
     game that a crash cuts off is never recorded and the next run loads it
-    again in full (the odds_hash dedup keeps its rows single).
+    again in full (the odds_hash dedup keeps its rows single). It does not
+    call it for an incomplete game either: a vendor read failed after its
+    retries, or the loader caught a failed fetch or write (see the module
+    docstring).
     """
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(f"{int(game_pk)}\n")
@@ -554,6 +738,7 @@ async def _load_game_odds(
     tally: RefusalTally | None = None,
     written_by_book: Counter[str] | None = None,
     book_id: int | None = None,
+    failures: Counter[str] | None = None,
 ) -> int:
     """Fetch + persist the game lines (opening & closing by default) for one game.
 
@@ -562,6 +747,8 @@ async def _load_game_odds(
     the empty rows and runs the load guard; the kept rows go to
     ``persist_many(game_pk, rows)`` in ONE call. ``tally`` counts the guard's
     refusals and ``written_by_book`` the rows written per book (both optional).
+    ``failures`` counts the fetches (``fetch``) and the writes (``write``) that
+    raised and were skipped; ``run()`` keeps such a game off the done-list.
 
     ``game_markets`` is the market subset (``--game-markets``); the default is
     every market the book posts. Returns the rows written (sent to the
@@ -582,6 +769,7 @@ async def _load_game_odds(
                     market_type,
                     exc,
                 )
+                _count_failure(failures, "fetch")
                 continue
             kept = _keep_rows(rows, game_pk=game_pk, tally=tally, book_id=book_id)
             if not kept:
@@ -597,6 +785,7 @@ async def _load_game_odds(
                     len(kept),
                     exc,
                 )
+                _count_failure(failures, "write")
                 continue
             written += len(kept)
             _count_by_book(kept, written_by_book)
@@ -624,12 +813,14 @@ async def _load_prop_odds(
     tally: RefusalTally | None = None,
     written_by_book: Counter[str] | None = None,
     book_id: int | None = None,
+    failures: Counter[str] | None = None,
 ) -> int:
     """Fetch + persist the prop lines (opening & closing by default) for one game.
 
     SIM-555: each (player, prop_stat, line type) is one offer: every book's row
     (``prop_rows_by_book``), filtered and guarded as in :func:`_load_game_odds`,
-    persisted in ONE ``persist_many(rows)`` call.
+    persisted in ONE ``persist_many(rows)`` call. ``failures`` counts the
+    skipped fetches and writes, as in :func:`_load_game_odds`.
 
     ``prop_stats`` narrows the markets (``--prop-stats``); each player is asked
     only for the markets of his role. An unknown prop_stat raises
@@ -654,6 +845,7 @@ async def _load_prop_odds(
                         line_type,
                         exc,
                     )
+                    _count_failure(failures, "fetch")
                     continue
                 kept = _keep_rows(rows, game_pk=game_pk, tally=tally, book_id=book_id)
                 if not kept:
@@ -670,6 +862,7 @@ async def _load_prop_odds(
                         len(kept),
                         exc,
                     )
+                    _count_failure(failures, "write")
                     continue
                 written += len(kept)
                 _count_by_book(kept, written_by_book)
@@ -722,6 +915,11 @@ async def run(args: argparse.Namespace) -> int:
     no_game_odds = bool(getattr(args, "no_game_odds", False))
     # SIM-555: --book restricts the run to one book's rows.
     book_id = _select_book(getattr(args, "book", None))
+    # SIM-555: the vendor-read retry policy (--retries / --retry-wait).
+    retries, retry_wait_s = _select_retry_policy(
+        getattr(args, "retries", DEFAULT_RETRIES),
+        getattr(args, "retry_wait", DEFAULT_RETRY_WAIT_S),
+    )
     # SIM-421: the long offline time-to-live must be in the environment BEFORE
     # the provider is built — it reads the variable in its constructor.
     try:
@@ -744,6 +942,7 @@ async def run(args: argparse.Namespace) -> int:
         "every book" if book_id is None else book_display_name(book_label(book_id)),
         cache_ttl,
     )
+    _hand_over_retry_policy(provider, retries, retry_wait_s)
 
     skip_since = parse_skip_loaded_since(getattr(args, "skip_loaded_since", None))
     # SIM-555: a --no-props run writes no prop rows; its resume reads the game rows.
@@ -763,6 +962,12 @@ async def run(args: argparse.Namespace) -> int:
             "game-odds" if resume_on_game_odds else "prop",
             ", ".join(line_types),
             skip_since.isoformat(),
+        )
+        # SIM-555: the SQL drops a game with rows before the done-file is read,
+        # so a game an earlier run left incomplete is skipped when it holds rows.
+        log.warning(
+            "resume: --skip-loaded-since also skips a game an earlier run left "
+            "incomplete if it holds rows; resume with --done-file alone to load it again"
         )
     # SIM-555: a crash-safe run skips the games its done-file lists.
     done_file = getattr(args, "done_file", None)
@@ -788,12 +993,21 @@ async def run(args: argparse.Namespace) -> int:
     # SIM-555: the guard's refusals and the rows written, per book, for the run.
     tally = RefusalTally()
     written_by_book: Counter[str] = Counter()
+    # SIM-555: the games a failed vendor read, fetch or write left incomplete,
+    # in load order, and the fetches and writes the loader itself caught.
+    incomplete: list[int] = []
+    load_failures: Counter[str] = Counter()
     try:
         pool = await asyncpg.create_pool(args.dsn, min_size=1, max_size=4)
         persist_game_many, persist_prop_many = _build_persisters(args.dsn, pool)
 
         for g in games:
             game_pk = g["game_pk"]
+            # SIM-555: a lookup that failed in an earlier game is read again in
+            # this one, so it counts here too; then the counts before this game.
+            _forget_failed_lookups(provider)
+            failures_before = _read_failures(provider)
+            load_failures_before = load_failures.copy()
             if not no_game_odds:
                 n_game_rows += await _load_game_odds(
                     provider,
@@ -804,6 +1018,7 @@ async def run(args: argparse.Namespace) -> int:
                     tally=tally,
                     written_by_book=written_by_book,
                     book_id=book_id,
+                    failures=load_failures,
                 )
 
             if not args.no_props:
@@ -821,10 +1036,34 @@ async def run(args: argparse.Namespace) -> int:
                         tally=tally,
                         written_by_book=written_by_book,
                         book_id=book_id,
+                        failures=load_failures,
                     )
 
             n_done += 1
-            if done_file:
+            # SIM-555: a read the provider gave up on, or a fetch or a write the
+            # loader caught, leaves the game incomplete. Its rows so far stay
+            # written; the done-file does not list it, so the next run loads it
+            # again in full.
+            reasons = _incomplete_reasons(
+                _read_failures(provider) - failures_before,
+                load_failures - load_failures_before,
+            )
+            if reasons:
+                incomplete.append(int(game_pk))
+                if done_file:
+                    log.warning(
+                        "game %s is incomplete (%s); "
+                        "it stays off the done-list, so the next run loads it again",
+                        game_pk,
+                        reasons,
+                    )
+                else:
+                    log.warning(
+                        "game %s is incomplete (%s); the run lists it at the end",
+                        game_pk,
+                        reasons,
+                    )
+            elif done_file:
                 append_done(done_file, game_pk)
             if n_done % 25 == 0:
                 log.info(
@@ -840,9 +1079,10 @@ async def run(args: argparse.Namespace) -> int:
             await pool.close()
 
     log.info(
-        "SIM-435 backfill complete: %d games, %d game-odds rows, %d prop-odds rows written "
-        "(re-runs are idempotent via odds_hash ON CONFLICT).",
+        "SIM-435 backfill complete: %d games (%d incomplete), %d game-odds rows, "
+        "%d prop-odds rows written (re-runs are idempotent via odds_hash ON CONFLICT).",
         n_done,
+        len(incomplete),
         n_game_rows,
         n_prop_rows,
     )
@@ -850,6 +1090,14 @@ async def run(args: argparse.Namespace) -> int:
     log.info("%s", tally.summary())
     log.info("%s", _written_by_book_summary(written_by_book))
     tally.warn_if_share_above(REFUSAL_WARN_SHARE, log)
+    # SIM-555: the incomplete games, and the exit code the wrapper reads.
+    summary = _incomplete_summary(
+        incomplete, done_file=done_file, skip_loaded_since=skip_since is not None
+    )
+    if incomplete:
+        log.warning("%s", summary)
+        return EXIT_INCOMPLETE
+    log.info("%s", summary)
     return 0
 
 
@@ -908,8 +1156,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         metavar="PATH",
         help="SIM-555 crash-safe resume: skip the games this file lists and append each "
-        "game once its last row is written. A game a crash cuts off is not listed, so "
-        "the next run loads it again in full.",
+        "game once its last row is written. A game a crash cuts off, or a game a failed "
+        "vendor read, fetch or write left incomplete, is not listed, so the next run "
+        "loads it again in full.",
+    )
+    p.add_argument(
+        "--retries",
+        type=int,
+        default=DEFAULT_RETRIES,
+        metavar="N",
+        help="SIM-555: retry a vendor read that fails for a passing reason (a time-out, "
+        "HTTP 429 or 5xx) up to N times; 0 = one attempt. Default: %(default)s.",
+    )
+    p.add_argument(
+        "--retry-wait",
+        type=float,
+        default=DEFAULT_RETRY_WAIT_S,
+        metavar="SECONDS",
+        help="SIM-555: the wait before the first retry; each later wait is twice as long "
+        "(the provider caps one wait at 60 s). Default: %(default)s.",
     )
     p.add_argument(
         "--provider",
@@ -926,12 +1191,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     args = p.parse_args(argv)
     # SIM-421 / SIM-555: fail loudly on an unknown market, line type or book,
-    # before any work.
+    # or a bad retry policy, before any work.
     try:
         _select_prop_stats(args.prop_stats)
         _select_game_markets(args.game_markets)
         _select_line_types(args.line_types)
         _select_book(args.book)
+        _select_retry_policy(args.retries, args.retry_wait)
     except ValueError as exc:
         p.error(str(exc))
     return args
