@@ -1,6 +1,6 @@
 # MLB Baseball Simulation Platform — End-to-End Workflow
 
-*Last updated: 2026-09-28 (Alembic head 0028; the 2026-06-04 Phase-7 refresh: Python 3.13 · DuckDB v30 · full API surface live)*
+*Last updated: 2026-10-01 (Alembic head 0028; DuckDB migration 0031; the 2026-06-04 Phase-7 refresh: Python 3.13 · DuckDB v31 · full API surface live)*
 
 This document is the operator's manual.  It describes how to run the
 platform end-to-end from a clean checkout, and how to confirm each
@@ -16,7 +16,7 @@ exited zero.
 
 > **Phase note.** As of 2026-06-06 the platform is at **Phase 7 — live
 > bring-up (largely complete)**; Phases 1–6 are COMPLETE and CI-green
-> (Python 3.13 / numpy 2.x; 89% coverage; DuckDB v30 / Alembic 0028).  The
+> (Python 3.13 / numpy 2.x; 89% coverage; DuckDB v31 / Alembic 0028).  The
 > full API surface (games, simulate, betting, WebSocket, odds, similarity,
 > metrics) is live.  Calibration is LIVE (SIM-432; win-prob map = fitted
 > reliability-curve), the full-pool sampler + all realism flags are ON in
@@ -177,6 +177,7 @@ them ad hoc — they are a validated set.
 | `SIM_PITCH_RESULT_SPLIT` + `SIM_PITCH_PITCHER_POWER` / `SIM_RESULT_PITCHER_POWER` / `SIM_RESULT_BATTER_POWER` | SIM-523 | `0` + `1.0` / `1.0` / `1.0` | The pitch draw and the pitch-result draw as two draws with the pitcher and batter powers. Built and fitted (16 / 16 / 8) but OFF: at those powers the balanced lane reds strikeouts −2.4% (SIM-527). |
 | `SIM_CATCHER_RECEIVING` | SIM-523 | `0` | The catcher receiving ratio on taken pitches (enable = SIM-526). |
 | `SIM_GOT_AWAY` | SIM-517 | `1` | Honor the drawn pitch row's got-away fact (passed ball / wild pitch / uncaught third strike). |
+| `SIM_STEAL_PITCH_CLASS` | SIM-554 | `1` | The running game on the pitch: the pickoff draw before the pitch, the steal draw after it among real pitches of the same class. `0` = the single pre-pitch draw. A bundle exported before DuckDB migration 0031, or one with any pitch row that has no class, also runs the single draw. Not pinned in `tests/conftest.py`: the unit lane's samplers run the new order. |
 
 The old post-draw flips (`SIM_PARK_FACTOR`, `SIM_FIELDER_RBF`,
 `SIM_FRAMING`, `SIM_HOME_FIELD_BIAS`) and the `SIM_FULL_POOL` switch no
@@ -265,7 +266,7 @@ echo %ERRORLEVEL%
 
 ```bat
 type db\schemas\duckdb_schema_version.txt
-:: Expected: 30
+:: Expected: 31
 
 duckdb db\schemas\baseball_simulator.duckdb -c "SELECT * FROM migration_history ORDER BY applied_at;"
 
@@ -428,7 +429,7 @@ echo %BASEBALL_DB_DSN%
 | Live pipeline misses pitches | Check `raw.etl_errors` — SIM-093 audits skipped rows. |
 | Vig flake | Fixed in SIM-159; check `_VIG_LOWER`/`_VIG_UPPER` in `test_live_pipeline_bugs.py`. |
 | Mock odds returns NULL hash | Run `python scripts\backfill_odds_hash.py`. |
-| DuckDB schema mismatch | Re-apply `db\migrations\duckdb\*.sql` in numbered order (through `0030_*`) and bump `duckdb_schema_version.txt` to match the latest migration (currently `30`). |
+| DuckDB schema mismatch | Re-apply `db\migrations\duckdb\*.sql` in numbered order (through `0031_*`) and bump `duckdb_schema_version.txt` to match the latest migration (currently `31`). On the live DuckDB, apply 0031 only through `scripts/sim554_rebuild_steal_pool.py --apply-migration` (app stopped): it applies the migration inside the steal-pool rebuild's transaction, and the old pool builder fails on a migrated table. |
 | `curl` truncates URL | Escape `&` as `^&` or wrap the URL in double quotes. |
 | `set VAR=value` doesn't persist | Use `setx VAR "value"` and open a new cmd window. |
 | `make test` shows 21 errors | Integration tests can't reach Docker daemon — fixed in conftest.py; rebuild image with `make build`. |

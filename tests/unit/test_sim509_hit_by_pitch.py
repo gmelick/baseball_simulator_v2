@@ -134,5 +134,7 @@ class TestTheBuilderMapping:
         bump this assertion with every pool-formula change. SIM-523 part G
         superseded sim518 when the outcome pool gained the fielding chain
         (migration 0024). SIM-553 superseded sim523g when the pitch pool coded
-        a two-strike foul tip or foul bunt as strike three."""
-        assert "sim553" in ppc.POOL_BUILDER_VERSION
+        a two-strike foul tip or foul bunt as strike three. SIM-554 superseded
+        sim553 when the steal opportunity pool gained the pitch class and the
+        pickoff rows (migration 0031)."""
+        assert "sim554" in ppc.POOL_BUILDER_VERSION

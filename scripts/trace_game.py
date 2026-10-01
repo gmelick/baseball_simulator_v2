@@ -2,7 +2,9 @@
 scripts/trace_game.py — per-pitch sim trace (SIM-408 path-A diagnostic).
 
 Runs ONE game through the PRODUCTION sim loop (the full-pool sampler) and
-emits a CSV with one row per pitch:
+emits a CSV with one row per pitch. (SIM-554: a pickoff before the pitch that
+makes the third out is a row too; its ``pitch_outcome`` reads "no_pitch", and
+the summary's pitch count leaves it out.) Each row holds:
 
   * game state BEFORE the pitch (inning/half/outs/count/baserunners/score/batter/pitcher)
   * box-score totals BEFORE (AB/H/HR/RBI aggregated across all batters)
@@ -36,6 +38,7 @@ if str(_ROOT) not in sys.path:
 import asyncpg  # noqa: E402
 
 from simulation.batch_runner import GameSpec  # noqa: E402
+from simulation.game_state import NO_PITCH  # noqa: E402
 from simulation.lineup_resolver import resolve_game_state  # noqa: E402
 from simulation.production_factory import production_machine_factory  # noqa: E402
 from simulation.sim_loop import simulate_game  # noqa: E402
@@ -68,6 +71,17 @@ def _box_totals(box) -> tuple[int, int, int, int]:
         hr += int(getattr(ln, "hr", 0) or 0)
         rbi += int(getattr(ln, "rbi", 0) or 0)
     return (ab, h, hr, rbi)
+
+
+def _pitches_thrown(rows: list[dict]) -> int:
+    """The pitches thrown in the trace (SIM-554).
+
+    The trace writes one row per ``step_pitch``. A pickoff before the pitch
+    that makes the third out is a step with no pitch thrown: its row reads
+    ``pitch_outcome`` "no_pitch". The row stays in the CSV, and this count
+    leaves it out.
+    """
+    return sum(r.get("pitch_outcome") != NO_PITCH for r in rows)
 
 
 def _state_snap(s) -> dict:
@@ -158,7 +172,7 @@ def main() -> None:
     final_box = result.boxscore
     fh = _box_totals(final_box)[1] if final_box is not None else h
     print(
-        f"\n[trace] game={args.game_pk} pitches={len(rows)} | "
+        f"\n[trace] game={args.game_pk} pitches={_pitches_thrown(rows)} | "
         f"final box AB={ab} H={h} HR={hr} RBI={rbi} | "
         f"final score away={getattr(result, 'away_score', '?')} "
         f"home={getattr(result, 'home_score', '?')} | box_H_check={fh}",

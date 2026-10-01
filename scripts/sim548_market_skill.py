@@ -134,6 +134,10 @@ def _provenance_key(report: dict[str, Any]) -> dict[str, Any]:
         "fatigue_tto_sigma": prov.get("fatigue_tto_sigma"),
         "manager": prov.get("manager"),
         "split": prov.get("split"),
+        # SIM-554: the order of the running game (the flag and whether the
+        # steal pool carries the pitch class). Chunks run in two orders on one
+        # bundle carry the same manifest times; never merge them.
+        "running_game": prov.get("running_game"),
         # SIM-549: a run line scored as two bets and one scored as a pair are
         # two different market probabilities; never merge them unknowingly.
         "run_line_scoring": p.get("run_line_scoring"),

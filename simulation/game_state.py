@@ -86,6 +86,11 @@ STRIKES_FOR_STRIKEOUT = 3
 PITCH_OUTCOMES = ("ball", "called_strike", "swinging_strike", "foul", "in_play", "hit_by_pitch")
 #: The single pitch outcome that means the ball was put in play (spec §5.1).
 CONTACT_PITCH_OUTCOME = "in_play"
+#: SIM-554: the ``pitch_outcome`` of a result on which no pitch was thrown — a
+#: pickoff before the pitch made the third out and ended the half-inning. It is
+#: NOT one of :data:`PITCH_OUTCOMES`: every reader that counts pitches, plate
+#: appearances or count transitions must skip it. Read :attr:`PlayResult.no_pitch`.
+NO_PITCH = "no_pitch"
 
 # Base bitmask helpers (shared encoding with run_resolution).
 _BIT_1B = 0b001
@@ -771,11 +776,25 @@ class PlayResult:
     pickoff_out: bool = False
     #: SIM-507: an errant pickoff throw advanced a runner on this pitch.
     pickoff_error: bool = False
+    #: SIM-554: why this result holds no plate appearance, or None. Today the
+    #: one reason is ``"pickoff_third_out"``: a pickoff before the pitch made
+    #: the third out, so no pitch was thrown, no event is credited and the
+    #: same batter leads off the next inning (``pitch_outcome`` is NO_PITCH).
+    pa_voided: str | None = None
+    #: SIM-554: why a steal staged for this pitch did not happen, or None. The
+    #: one reason is ``"third_out_first"``: with two outs a third strike the
+    #: catcher held is the third out before any throw, so the steal is void.
+    steal_voided: str | None = None
 
     # ---- step 8: next-state pointer (the committed GameState) ----------------
     #: The ``GameState`` after this play is committed (spec step 8 'next state').
     #: Optional so a PlayResult can be constructed before the commit.
     next_state: GameState | None = None
+
+    @property
+    def no_pitch(self) -> bool:
+        """SIM-554: True when no pitch was thrown on this result (see NO_PITCH)."""
+        return self.pitch_outcome == NO_PITCH
 
 
 __all__ = [
@@ -794,4 +813,5 @@ __all__ = [
     "STRIKES_FOR_STRIKEOUT",
     "PITCH_OUTCOMES",
     "CONTACT_PITCH_OUTCOME",
+    "NO_PITCH",
 ]

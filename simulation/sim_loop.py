@@ -43,6 +43,7 @@ import numpy as np
 from simulation.constants import resolve_event_to_canonical
 from simulation.game_state import (
     BALLS_FOR_WALK,
+    NO_PITCH,
     OUTS_PER_INNING,
     PITCH_OUTCOMES,
     STRIKES_FOR_STRIKEOUT,
@@ -305,6 +306,34 @@ class StealResolution:
     pickoff_advancing: bool = False
 
 
+@dataclass(slots=True)
+class RunningGameTally:
+    """SIM-554: what the running game's paths did in one machine's games.
+
+    It counts and changes no play. The running-game census
+    (``scripts/sim554_running_game_census.py``) reads it. A pickoff counts
+    where it is drawn: before the pitch in the new order, at the pre-pitch
+    draw in the old one, with the count it was drawn at.
+    """
+
+    #: Pickoff draws made before a pitch (the new order only).
+    pickoff_draws: int = 0
+    #: Pickoff outs, a picked-off caught stealing included.
+    pickoff_outs: int = 0
+    #: Pickoff throws that got away and moved the runner up.
+    pickoff_errors: int = 0
+    #: Pickoff outcomes by the (balls, strikes) count they were drawn at.
+    pickoffs_by_count: dict[tuple[int, int], int] = field(default_factory=dict)
+    #: Pickoffs that made the third out before the pitch: no pitch thrown.
+    no_pitch_third_outs: int = 0
+    #: Staged steals voided, by reason ("third_out_first": decision 3).
+    voided: dict[str, int] = field(default_factory=dict)
+    #: Dropped-third-strike reaches (the batter took first).
+    d3k_reaches: int = 0
+    #: Runners the got-away advance moved on those reaches (decision 4).
+    d3k_runners_moved: int = 0
+
+
 # ---------------------------------------------------------------------------
 # Count machine — the §5.1 terminal classification (pure, side-effect-free)
 # ---------------------------------------------------------------------------
@@ -520,6 +549,9 @@ class StateMachine:
         # Steal decision made in the pre-pitch hook, resolved in step 7.  Reset
         # each pitch in step_pitch.
         self._pending_steal: StealResolution | None = None
+        #: SIM-554: the running game's counts (pickoffs, no-pitch third outs,
+        #: voided steals, dropped-third-strike advances). It changes no play.
+        self.running_game_tally = RunningGameTally()
         # SIM-328: per-game boxscore accumulator.  Populated INSIDE the PA loop
         # (:meth:`_accumulate_pa`, called from :meth:`_end_of_pa`) on every
         # terminal PA — the batter on offense, the pitcher on defense.  Lazily
@@ -549,11 +581,25 @@ class StateMachine:
 
         Flow:
           1. **Read** the GameState and validate the live (in-play) invariants.
-          2. **Pre-pitch hook** (§3): manager decisions — a no-op stub here,
-             SIM-323 owns the logic.
-          3. **Draw** the pitch outcome from the full-pool sampler (the live
+          2. **Pre-pitch hook** (§3): the manager decisions — the pitching
+             change at a plate appearance's first pitch, the intentional walk.
+          3. **SIM-554, the pickoff draw** (the running game on the pitch, when
+             the sampler's steal pool carries the pitch class and
+             ``steal_pitch_class`` is on): a pickoff throw is drawn BEFORE the
+             pitch and resolved at once. A pickoff that makes the third out
+             ends the half-inning with NO pitch thrown: the result's
+             ``pitch_outcome`` is :data:`NO_PITCH`, ``pa_voided`` reads
+             ``"pickoff_third_out"``: no pitch, no event and no plate
+             appearance are credited, the pickoff's out counts for the pitcher
+             on the mound (a picked-off caught stealing also charges the runner
+             a CS), and the same batter leads off his team's next inning.
+          4. **Draw** the pitch outcome from the full-pool sampler (the live
              count is the draw's bucket) unless the caller supplied
-             ``pitch_outcome`` directly (count-machine-only mode).
+             ``pitch_outcome`` directly (count-machine-only mode). Then
+             (SIM-554) the steal draw, among real pitches of the same count
+             and the same class as the pitch that came out. Without the class
+             the steal (and the pickoff) is the single pre-pitch draw of the
+             hook (SIM-474).
           4. **Outcome determination (§5.1)** — classify the count advance /
              PA-terminal via :func:`advance_count` (incl. the SIM-056
              two-strike-foul absorbing rule).
@@ -569,6 +615,10 @@ class StateMachine:
         """
         # --- Step 1: read + validate the incoming (live) state -------------
         state.assert_invariants(in_play=True)
+        # SIM-554: refuse an unknown injected outcome before any hook or draw
+        # runs, so a refused pitch leaves nothing staged and no count moved.
+        if pitch_outcome is not None and pitch_outcome not in PITCH_OUTCOMES:
+            raise ValueError(f"pitch_outcome {pitch_outcome!r} is not one of {PITCH_OUTCOMES}.")
         # SIM-517: the got-away fact belongs to ONE drawn pitch; clear any
         # stale carry before this pitch samples (an injected outcome never
         # sets it).
@@ -599,6 +649,37 @@ class StateMachine:
         if state.manager.intentional_walk_signalled:
             return self._issue_intentional_walk(state)
 
+        # --- SIM-554: the running game on the pitch, step ④a ---------------
+        # The pickoff is its own draw, BEFORE the pitch, from the count group
+        # of the steal opportunity pool (the pitch rows and the pickoff rows).
+        # It resolves now, so the pitch draw sees the bases it left. The result
+        # exists before the pitch: the pickoff's out and run value commit to
+        # it, and the pitch's fields are filled in once a pitch is thrown.
+        result = PlayResult(pitch_outcome=NO_PITCH)
+        on_the_pitch = self._steal_order_active()
+        picked = False
+        if on_the_pitch and self._pending_steal is None:
+            picked = self._pickoff_before_the_pitch(state, result)
+            if picked and state.is_half_inning_over():
+                # The pickoff made the third out. No pitch is thrown: no pitch
+                # count, no event, no plate appearance. The batting order does
+                # not move, so the same batter leads off the next inning with a
+                # fresh count.
+                result.pa_voided = "pickoff_third_out"
+                self.running_game_tally.no_pitch_third_outs += 1
+                # The out is the pitcher's: it counts toward his outs (his
+                # innings pitched and the pitcher-outs prop). _accumulate_pa,
+                # the usual writer, never sees a result with no plate
+                # appearance, so the credit lands here, while state.pitcher_id
+                # still names the fielding side's pitcher. (A caught stealing or
+                # a pickoff out on a pitch that does not end the plate
+                # appearance has the same gap; that older case is SIM-557.)
+                if state.pitcher_id is not None and result.outs_recorded:
+                    self._box_line(int(state.pitcher_id)).outs_recorded += int(result.outs_recorded)
+                self.advance_half_inning(state)
+                result.next_state = state
+                return result
+
         # --- SIM-434: count this pitch ------------------------------------
         # The current pitcher's pitch count was NEVER incremented (the
         # ``state.pitcher_pitch_count = 0`` reset on a pull existed, but nothing
@@ -621,8 +702,15 @@ class StateMachine:
             # SIM-424: full-pool similarity-weighted draw (Situation+Pitcher+
             # Batter); the live count is the draw's bucket (SIM-429).
             pitch_outcome = self._full_pool_outcome(state)
-        elif pitch_outcome not in PITCH_OUTCOMES:
-            raise ValueError(f"pitch_outcome {pitch_outcome!r} is not one of {PITCH_OUTCOMES}.")
+
+        # --- SIM-554: the running game on the pitch, step ④b ---------------
+        # The steal draw runs AFTER the pitch, among the real pitches of the
+        # same base, outs and count whose class is the class of the pitch that
+        # came out: "went or stayed, safe or caught". The batter's result was
+        # drawn with no knowledge of the steal, and the steal never changes it.
+        # No steal draw on a pitch that already carried a pickoff outcome.
+        if on_the_pitch and not picked:
+            self._steal_opportunity_draw(state, pitch_class=pitch_outcome)
 
         # --- Step 4: outcome determination (§5.1 count machine) ------------
         # advance_count applies the §5.1 terminal mechanics incl. the
@@ -630,12 +718,10 @@ class StateMachine:
         # taken verbatim.
         adv = advance_count(state.balls, state.strikes, pitch_outcome)
 
-        result = PlayResult(
-            pitch_outcome=pitch_outcome,
-            is_contact=adv.is_contact,
-            pa_terminal=adv.terminal,
-            event=adv.event if adv.event != EVENT_IN_PROGRESS else None,
-        )
+        result.pitch_outcome = pitch_outcome
+        result.is_contact = adv.is_contact
+        result.pa_terminal = adv.terminal
+        result.event = adv.event if adv.event != EVENT_IN_PROGRESS else None
 
         # --- Step 7 (steal outcome) on a NON-terminal pitch ----------------
         # A steal resolves on the pitch regardless of whether the PA ended.  On
@@ -676,6 +762,27 @@ class StateMachine:
         # a caught-stealing 3rd out pre-empts the PA result, then roll over.
         state.balls = adv.balls
         state.strikes = adv.strikes
+
+        # SIM-554 (decision 3, owner 2026-10-01): with two outs, a third strike
+        # the catcher HOLDS is the third out before any throw, so a steal
+        # staged on that pitch is void — no stolen base, no caught stealing.
+        # The real pool holds no attempt there, so a class draw never stages
+        # one; the rule guards a staged steal (a test, the old order). A
+        # pickoff is thrown before the pitch and is never voided. A third
+        # strike that got away keeps the SIM-484 order below.
+        pending = self._pending_steal
+        if (
+            adv.event == EVENT_STRIKEOUT
+            and int(state.outs) == OUTS_PER_INNING - 1
+            and not self._last_pitch_got_away
+            and pending is not None
+            and pending.attempted
+            and not pending.pickoff
+        ):
+            self._pending_steal = None
+            result.steal_voided = "third_out_first"
+            voided = self.running_game_tally.voided
+            voided["third_out_first"] = voided.get("third_out_first", 0) + 1
 
         # SIM-484: the dropped-third-strike rule reads first base and the outs
         # AT THE PITCH. A steal runs on the pitch, and the loop resolves it
@@ -1826,14 +1933,23 @@ class StateMachine:
         # steal or a pickoff already resolved this pitch's baserunning, the
         # got-away moves nobody. Without the guard, a runner who stole second
         # on a called third strike that got away went on to third.
+        #
+        # SIM-554 (decision 4, owner 2026-10-01): the advance runs on the
+        # dropped-third-strike reach too, BEFORE the batter takes first. Every
+        # runner moves up one base while the ball is loose (28 of 32 real
+        # unforced runners moved, 2023-2026); a runner on third scores with no
+        # RBI. First base is then open, so the reach below pushes nobody.
         if (
-            not d3k
-            and self._last_pitch_got_away
+            self._last_pitch_got_away
             and not result.steal_attempted
             and not result.pickoff_out
             and not result.pickoff_error
         ):
+            b = state.bases
+            on_base = sum(x is not None for x in (b.first, b.second, b.third))
             self._resolve_got_away_advance(state, result)
+            if d3k:
+                self.running_game_tally.d3k_runners_moved += on_base
         # SIM-499: measure the base-out state before _force_on_reach can push
         # anyone.  ``_force_on_reach`` mutates ``state.bases`` in place.
         pre_outs = int(state.outs)
@@ -1841,6 +1957,10 @@ class StateMachine:
         if d3k:
             # Uncaught K3: batter reaches 1B (no out recorded), pushing forced
             # runners exactly like a walk does.  resolve_runs scores any force.
+            # SIM-554: after the got-away advance above first base is open, so
+            # the push moves nobody unless a steal or a pickoff on this pitch
+            # skipped the advance.
+            self.running_game_tally.d3k_reaches += 1
             forced_run = self._force_on_reach(state, result)
             # SIM-484: the forced run scores on the wild pitch or the passed
             # ball, not on the batter, so it pays no RBI. The got-away advance
@@ -2503,7 +2623,107 @@ class StateMachine:
         # rows — never a gate in front of the draw.
         if self._pending_steal is not None:
             return
+        # SIM-554: in the running game on the pitch the pickoff draw runs in
+        # step_pitch before the pitch and the steal draw after it, in the
+        # pitch's class group. The single draw here runs only without it.
+        if self._steal_order_active():
+            return
         self._steal_opportunity_draw(state)
+
+    def _steal_order_active(self) -> bool:
+        """SIM-554: True when the loop runs the running game on the pitch —
+        the sampler's ``steal_pitch_class`` is on (``SIM_STEAL_PITCH_CLASS``)
+        and its steal pool carries the pitch class (a bundle exported after
+        migration 0031). Otherwise the steal and the pickoff stay one pre-pitch
+        draw (SIM-474). Both reads must be exactly ``True``, so a duck-typed
+        or mocked sampler keeps the old order."""
+        fp = self.full_pool_sampler
+        if fp is None or getattr(fp, "steal_pitch_class", False) is not True:
+            return False
+        has = getattr(fp, "has_steal_classes", None)
+        return callable(has) and has() is True
+
+    @staticmethod
+    def _lead_stealable_runner(state: GameState) -> tuple[Any, int, int] | None:
+        """The lead stealable runner -> (runner id, his base, the target
+        base), or None. On 1B with 2B open (target 2), or on 2B with 3B open
+        (target 3, including 1B+2B — the lead runner drives)."""
+        b = state.bases
+        if b.first is not None and b.second is None:
+            return b.first, 1, 2
+        if b.second is not None and b.third is None:
+            return b.second, 2, 3
+        return None
+
+    @staticmethod
+    def _running_game_keys(state: GameState, runner_id: Any) -> tuple[str, str, str | None]:
+        """The (runner, pitcher, catcher) keys the steal and pickoff draws
+        read, as ``"{player id}:{season}"``; the catcher is the FIELDING
+        side's, None when unknown."""
+        season = int(getattr(state, "season", 2024) or 2024)
+        pitcher = state.pitcher_id
+        catcher = state.away_catcher_id if state.offense == Team.HOME else state.home_catcher_id
+        return (
+            f"{int(runner_id)}:{season}",
+            f"{int(pitcher)}:{season}" if pitcher is not None else "",
+            f"{int(catcher)}:{season}" if catcher is not None else None,
+        )
+
+    def _tally_pickoff(self, state: GameState, out: bool, error: bool) -> None:
+        """SIM-554: count one pickoff outcome at the count it was drawn at."""
+        t = self.running_game_tally
+        if out:
+            t.pickoff_outs += 1
+        elif error:
+            t.pickoff_errors += 1
+        key = (int(state.balls), int(state.strikes))
+        t.pickoffs_by_count[key] = t.pickoffs_by_count.get(key, 0) + 1
+
+    def _pickoff_before_the_pitch(self, state: GameState, result: PlayResult) -> bool:
+        """SIM-554: draw the pickoff for the lead stealable runner and
+        resolve it now, before the pitch. True when a pickoff outcome
+        happened — an out (a caught stealing when he was breaking) or a throw
+        that got away and moved him up. One row of the count group answers;
+        :meth:`_resolve_pickoff` commits it, with no steal credit either way."""
+        fp = self.full_pool_sampler
+        if fp is None or not fp.has_steal_pool():
+            return False
+        lead = self._lead_stealable_runner(state)
+        if lead is None or lead[0] is None:
+            return False
+        runner_id, from_base, target = lead
+        runner_key, pitcher_key, catcher_key = self._running_game_keys(state, runner_id)
+        self.running_game_tally.pickoff_draws += 1
+        drawn = fp.pickoff_draw(
+            target,
+            runner_key,
+            pitcher_key,
+            catcher_key,
+            outs=int(state.outs),
+            balls=int(state.balls),
+            strikes=int(state.strikes),
+            score_diff=int(state.score_diff),
+        )
+        if drawn is None:
+            return False
+        po_out, po_adv, po_err = drawn
+        if not (po_out or po_err):
+            return False
+        self._tally_pickoff(state, bool(po_out), bool(po_err))
+        self._resolve_pickoff(
+            state,
+            result,
+            StealResolution(
+                attempted=True,
+                runner_id=runner_id,
+                from_base=from_base,
+                to_base=_NEXT_BASE.get(from_base, 4),
+                safe=bool(po_err and not po_out),
+                pickoff=True,
+                pickoff_advancing=bool(po_adv),
+            ),
+        )
+        return True
 
     def _should_issue_ibb(self, state: GameState, li: float) -> bool:
         """Decide an intentional walk (§3 item 2) — SIM-515.
@@ -2587,9 +2807,15 @@ class StateMachine:
             return 1.0
         return float(min(max(float(rate) / float(mean), 0.05), 4.0))
 
-    def _steal_opportunity_draw(self, state: GameState) -> None:
+    def _steal_opportunity_draw(self, state: GameState, *, pitch_class: str | None = None) -> None:
         """SIM-474: stage a steal by drawing ONE row from the SIM-468 steal
         OPPORTUNITY pool — a similarity-weighted draw, never a formula.
+
+        SIM-554: ``pitch_class`` is the class of the pitch that came out. With
+        it (the running game on the pitch) the draw runs AFTER the pitch among
+        the real pitches of that count and that class, and stages a steal only
+        (the pickoff was drawn before the pitch). Without it the draw runs
+        before the pitch and its row may carry a pickoff outcome (SIM-507).
 
         Fires every pitch with a stealable lead runner: on 1B with 2B open
         (target 2), or on 2B with 3B open (target 3, including 1B+2B — the
@@ -2607,18 +2833,11 @@ class StateMachine:
             return
         if not fp.has_steal_pool():
             return
-        b = state.bases
-        if b.first is not None and b.second is None:
-            runner_id, from_base, target = b.first, 1, 2
-        elif b.second is not None and b.third is None:
-            runner_id, from_base, target = b.second, 2, 3
-        else:
+        lead = self._lead_stealable_runner(state)
+        if lead is None or lead[0] is None:
             return
-        if runner_id is None:
-            return
-        season = int(getattr(state, "season", 2024) or 2024)
-        pitcher = state.pitcher_id
-        catcher = state.away_catcher_id if state.offense == Team.HOME else state.home_catcher_id
+        runner_id, from_base, target = lead
+        runner_key, pitcher_key, catcher_key = self._running_game_keys(state, runner_id)
         # Manager aggression: the manager's tendency over the league mean,
         # clamped so even a never-runs manager only DAMPS the draw (a weight,
         # not a gate — SIM-474). No manager -> neutral.
@@ -2641,16 +2860,20 @@ class StateMachine:
         # row) — a ratio near 1, clamped; no leverage term (SIM-476 step 0).
         # Without a profile or a league mean on the state it is exactly 1.0.
         aggression = self._steal_aggression(state)
+        # SIM-554: the class keyword is passed only in the new order, so a
+        # duck-typed sampler with the SIM-474 signature keeps working.
+        by_class: dict[str, Any] = {} if pitch_class is None else {"pitch_class": pitch_class}
         drawn = fp.steal_draw(
             target,
-            f"{int(runner_id)}:{season}",
-            f"{int(pitcher)}:{season}" if pitcher is not None else "",
-            f"{int(catcher)}:{season}" if catcher is not None else None,
+            runner_key,
+            pitcher_key,
+            catcher_key,
             outs=int(state.outs),
             balls=int(state.balls),
             strikes=int(state.strikes),
             score_diff=int(state.score_diff),
             aggression=aggression,
+            **by_class,
         )
         if drawn is None:
             return
@@ -2665,6 +2888,7 @@ class StateMachine:
             # pre-pitch decision resolves in step 7) and resolved by
             # _resolve_pickoff: an out retires the runner (a CS only when he
             # was advancing), an errant throw advances him.
+            self._tally_pickoff(state, bool(po_out), bool(po_err))
             self._pending_steal = StealResolution(
                 attempted=True,
                 runner_id=runner_id,
@@ -3305,8 +3529,12 @@ def simulate_game(
         # --- one pitch (the machine owns steps 1-8) ----------------------
         prev_inning, prev_half = state.inning, state.half
         last_played_inning = prev_inning
-        state_machine.step_pitch(state)
-        total_pitches += 1
+        step = state_machine.step_pitch(state)
+        # SIM-554: a pickoff that made the third out before the pitch threw no
+        # pitch (its result reads NO_PITCH); it rolls the half, so the inning
+        # pointer still bounds the loop.
+        if getattr(step, "no_pitch", False) is not True:
+            total_pitches += 1
 
         # The committed state is always invariant-valid (guards held in step 8).
         state.assert_invariants(in_play=True)
@@ -3371,6 +3599,7 @@ __all__ = [
     # SIM-319 fielding / baserunning / steal resolution (steps 6/7 + §5.4)
     "FieldingSignal",
     "StealResolution",
+    "RunningGameTally",
     "STEAL_SAFE",
     "STEAL_CAUGHT",
     # PA-event markers

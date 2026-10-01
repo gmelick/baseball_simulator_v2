@@ -1,8 +1,10 @@
 # The simulation loop on one page — every draw, its weights, and the similarity scores behind them
 
 *Written 2026-09-14 for the owner. Values are what production runs today (`docker-compose.yml`,
-the `app` service) after the manager-draw flip of 2026-09-13. Code: `simulation/sim_loop.py`
-(the loop), `simulation/full_pool_sampler.py` (the draws), `similarity/engines/` (the scores).*
+the `app` service) after the manager-draw flip of 2026-09-13. Updated 2026-10-01 for the running
+game on the pitch (SIM-554): the pickoff draw before the pitch, the steal draw after it. Code:
+`simulation/sim_loop.py` (the loop), `simulation/full_pool_sampler.py` (the draws),
+`similarity/engines/` (the scores).*
 
 ## How to read this
 
@@ -28,15 +30,28 @@ For each half-inning, for each plate appearance, for each pitch:
 plate appearance starts ─► ① pitching change?  (the fielding manager)
                            ② which reliever?    (if a change was drawn)
                            ③ intentional walk?
-each pitch ──────────────► ④ steal / pickoff?   (a runner on first with second open, or on second with third open)
+each pitch ──────────────► ④a pickoff?         (BEFORE the pitch; a runner on first with second open,
+                                                  or on second with third open)
+   if the third out ─────► the half-inning ends with NO pitch thrown; the same batter leads off the next inning
                            ⑤a the pitch thrown  (weighted toward the pitcher's look-alikes, power 1; was 16)
                            ⑤b the pitch's result (ON since 2026-09-14: a second, batter-weighted draw among rows whose
                                                   pitch resembles ⑤a's; ball, called strike, whiff, foul, in play, hit by pitch)
+                           ④b steal?            (AFTER the result: real pitches of the same count and the same class;
+                                                  no draw when ④a gave a pickoff outcome on this pitch)
    if in play ───────────► ⑥ the batted ball's fate: the fence stage, then the fielding draw
                            ⑦ the runners' extra bases (up to five discretionary decisions)
    if the pitch got away ► ⑧ runners advance one base (wild pitch / passed ball / dropped third strike),
-                                                  unless a steal or pickoff already moved them on that pitch
+                                                  unless a steal or pickoff already moved them on that pitch;
+                                                  on a dropped-third-strike reach they move first, then the batter takes first
 ```
+
+The order ④a → ⑤a → ⑤b → ④b is the running game on the pitch (SIM-554, built 2026-10-01).
+Each step is a draw of real rows. The batter's result is drawn with no knowledge of the steal,
+and the steal never changes it. The switch is `SIM_STEAL_PITCH_CLASS` (default 1). The order
+needs a bundle whose steal pool carries the pitch class (DuckDB migration 0031). An older
+bundle, or the switch at 0, runs the single pre-pitch draw of 2026-08-17 (SIM-474): one row
+of the count group answers the steal and the pickoff together, before the pitch. Production
+runs the new order once the run book rebuilds the steal pool and exports it into the bundle.
 
 ## 2. The draws, one by one
 
@@ -63,14 +78,43 @@ each pitch ──────────────► ④ steal / pickoff?   
 A coin flip at the **real rate** of the plate appearance's cell: runners × outs × late (7th inning
 or later) × close (within one run), from `sim.ibb_rates`. No similarity weight.
 
-### ④ The steal / pickoff — `steal_draw`
+### ④a The pickoff — `pickoff_draw` (before the pitch; SIM-554)
 
 | | |
 |---|---|
-| pool | one row per real pitch on which a steal was possible, attempted or not (~2.4 million) |
-| hard filter | the target base (second or third) and the exact outs-balls-strikes count |
+| pool | the **steal opportunity pool**: one row per real pitch on which a steal was possible, attempted or not (~2.4 million), plus the **pickoff rows** — one per real pickoff outcome thrown before the plate appearance had any pitch with that runner situation (about 394 for 2023–2026; migration 0031) |
+| hard filter | the target base (second or third) and the exact outs-balls-strikes count. Every row of that **count group** is a candidate: the pitch rows and the pickoff rows |
+| weights | the steal draw's own (recency · the score-margin Gaussian · the steal-runner, pitcher-steal and catcher-throwing similarities, below) with **no manager weight**: the manager's weight acts on the steal's attempted rows only |
+| the row answers | picked off (an out; a caught stealing when the runner was breaking) · a pickoff throw that got away (the runner moves up one base) · neither. No steal credit either way |
+| when it resolves | at once, before the pitch: the pitch draw sees the bases the pickoff left. A count group with no pickoff outcome skips the draw (no random number) |
+| the third out | a pickoff that makes the third out ends the half-inning with **no pitch thrown**: no pitch count, no event, no plate appearance. The result reads `pitch_outcome = "no_pitch"` (`NO_PITCH`; `PlayResult.no_pitch` is True) and `pa_voided = "pickoff_third_out"`. The batting order does not move, so the same batter leads off the next inning at 0-0. Every reader of a per-pitch result must skip a no-pitch result; the game driver's pitch total and the served play-by-play do |
+| the timing | the count at a real throw is not stored. The pickoff rows sit at 0-0, and 97% of the tagged pitch rows are a plate appearance's first pitch, so the simulator's pickoffs happen at 0-0. The number per plate appearance is right; the count is not |
+
+**Why the pickoff rows.** The pool tags a real pickoff to one pitch row of its plate
+appearance. A throw before the plate appearance's first pitch has no such row, so the pool
+dropped it. The pool held about 72% of real pickoff outcomes: 22% of those with a stealable
+runner came before the first pitch, and 7% had no stealable runner (a runner held at third, a
+throw to first with first and second occupied) and stay out by design. The pickoff rows bring
+the dropped ones back, so the pool's pickoff outcomes rise from about 0.15 to about 0.19 a game.
+
+### ④b The steal — `steal_draw` (after the pitch's result; SIM-554)
+
+| | |
+|---|---|
+| pool | the steal opportunity pool's pitch rows; the pickoff rows are never candidates |
+| hard filter | the target base (second or third), the exact outs-balls-strikes count, and the **class of the pitch ⑤b just drew** (ball, called strike, swinging strike, foul, in play, hit by pitch). A class group answers from its own rows however few; a group with no row stages no steal. Nothing falls back to the count group |
 | weights | recency · a Gaussian on the score margin (**bandwidth 2 runs**) · the live runner's **steal-runner similarity** to the row's runner (**power 1**; fitted 12) · the live pitcher's **pitcher-steal similarity** (**power 1**; fitted 12) · the live catcher's **catcher-throwing similarity** (**power 1**; fitted 2) · the batting manager's **aggression** on attempted rows only: his measured steal rate over the league mean, clamped 0.05–4 (a weight, never a gate) |
-| the row answers | went or stayed; safe or caught; picked off; a pickoff throw that got away |
+| the row answers | went or stayed; safe or caught |
+| no draw | on a pitch whose pickoff draw gave an outcome (one mover per pitch) |
+| the third out first | with two outs, a third strike the catcher holds is the third out before any throw: a steal staged on that pitch is void — no stolen base, no caught stealing, `steal_voided = "third_out_first"` (the plan's decision 3, taken by the owner 2026-10-01; it holds in both orders). The real pool holds no attempt on such a pitch, so the class draw never stages one; the rule guards a steal that a test or the old order staged. With two outs, a caught stealing on ball four keeps today's path: the walk is credited and the caught stealing is the third out |
+
+**Why the class.** The old single draw read only the count, so 36% of its attempts landed on
+a foul, a ball in play or a hit by pitch, where real runners never earn one. Real attempts
+ride a ball 64% of the time, a called strike 25%, a swinging strike 10%, a foul 1%, and never
+a ball in play or a hit by pitch. Summed over the loop's own pitch mix, the class rates give
+the old attempt volume, so the change moves where the attempts land, not how many there are.
+A replay of 74,296 real pitches of 2026 picked this design among eleven (2026-09-30;
+`docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md`, §11).
 
 ### ⑤ The pitch — two draws by design (`draw` through the cell index; `_result_draw`)
 
@@ -127,13 +171,23 @@ uncaught third strike), the runners advance one base and a striking-out batter m
 
 - **The rule reads the bases at the pitch.** A steal runs on the pitch, so the loop reads
   first base and the outs from before the steal resolved; a pickoff comes before the pitch,
-  so the loop reads the state after it.
+  so the loop reads the state after it. The steal is drawn after the result (④b), but it
+  still runs on the pitch.
 - **One mover per pitch.** When a steal or a pickoff resolved the pitch's baserunning, the
-  got-away moves nobody (the same rule on every pitch, terminal or not).
+  got-away moves nobody (the same rule on every pitch, terminal or not). A pickoff outcome
+  before the pitch also means no steal draw on that pitch.
+- **The runners on a dropped-third-strike reach (SIM-554; the plan's decision 4, taken by the
+  owner 2026-10-01).**
+  The got-away advance runs first: every runner moves up one base while the ball is loose,
+  and a runner on third scores. The batter then takes first, which is now open, so the reach
+  pushes nobody. Real runners moved on 28 of 32 such unforced chances (2023–2026). A steal or
+  a pickoff on the same pitch skips the advance; the reach then pushes forced runners, as a
+  walk does.
 - **The credits on a batter who reaches (SIM-484, 2026-09-23).** The play commits as a
   strikeout: the pitcher's `k` and the batter's `so` (the batter's own strikeouts, on every
-  strikeout; `k` stays the pitcher's field). A run the reach forces home pays no RBI. The run
-  stays earned, because the pool's got-away flag does not say wild pitch or passed ball.
+  strikeout; `k` stays the pitcher's field). A run that scores on the reach — on the advance,
+  or forced home when a steal or a pickoff skipped the advance — pays no RBI. The run stays
+  earned, because the pool's got-away flag does not say wild pitch or passed ball.
 
 ### Summary of the fitted values in production
 
@@ -146,18 +200,19 @@ replace, because the sweep starts from them). The bandwidths and mismatch weight
 | pitcher similarity | pitch draw / result draw | power 1 / 1 (fitted 16 / 16) | the pool's own per-pitcher conditionals (redesign part F; flipped 2026-09-14 on the accuracy comparison) |
 | batter similarity | pitch draw / result draw / fielding draw | power 1 / 1 / 1 (fitted 1 / 8 / 4) | the pool's mix by batter |
 | fielder similarity (per position) | fielding + advancement | power 1 (fitted 1.2) | the pool's per-opportunity conditionals |
-| steal-runner / pitcher-steal / catcher-throwing | steal draw | 1 / 1 / 1 (fitted 12 / 12 / 2) | the pool's steal conditionals |
+| steal-runner / pitcher-steal / catcher-throwing | pickoff + steal draws | 1 / 1 / 1 (fitted 12 / 12 / 2) | the pool's steal conditionals |
 | advancement-runner | advancement draws | 1 (fitted 20) | the pool's advancement conditionals |
 | manager-usage | pitching change | 1 (fitted 4) | the managers' own pull depth by tercile (2026-09-13) |
 | reliever weights | reliever draw | role 0.1 · rest 0.5 · two-day 0.25 · three-day 10 | the pool's entering arms (2026-09-13) |
-| situation Gaussians | pitch / fielding / change / steal / advancement | 2.0 / 2.0 / 1.0 / 2.0 / 1.0 | code defaults (the change draw's fitted 1.0) |
+| situation Gaussians | pitch / fielding / change / pickoff + steal / advancement | 2.0 / 2.0 / 1.0 / 2.0 / 1.0 | code defaults (the change draw's fitted 1.0) |
 | born-ball Gaussian | fielding draw | 1.0 | the pool's conditionals (redesign part F) |
 | park Gaussian | fielding draw, wall zone only | 0.02 | SIM-476 |
 | platoon (pitcher hand) | fielding draw | opposite-hand rows × 0.6 | SIM-413 default |
 | batting side | fielding draw | hard (weight 0.0) | owner ruling 2026-08-30 |
 | fatigue (times through the order) | pitch draw | bandwidth 0.5; the pitch-count term OFF | the pool's own within-pitcher effect at the third time through (fitted 0.7; the owner landed 0.5 on 2026-09-14 — the accuracy comparison reads both flat) |
 | recency | every pool | 2.0 / ×0.75 per season / floor 0.25 | SIM-076 |
-| cell minimum | pitch draw / change draw | 20 rows / 20 rows | the SIM-451 census |
+| cell minimum | pitch draw / change draw / steal class group | 20 rows / 20 rows / none | the SIM-451 census; a steal class group answers from its own rows (SIM-554) |
+| the running game on the pitch (`SIM_STEAL_PITCH_CLASS`) | pickoff before the pitch, steal after it in the class group | 1 (0 = the single pre-pitch draw) | the replay of 74,296 real pitches of 2026, eleven designs (SIM-554, 2026-09-30) |
 | pitch-to-pitch Gaussian + density correction | result draw | bandwidth 1.0 / power 1.0 | the pool's conditionals (redesign part F) |
 | reliever stuff (pitcher similarity in the reliever draw) | reliever draw | power 1 since 2026-09-16 (was OFF at 0) | — |
 | OFF | the fatigue weight's pitch-count term, catcher receiving, pitch-similarity on the fielding draw, reliever hand | | |
@@ -249,7 +304,7 @@ into a matrix the draws look up.
   range components; the jump at 0.80 to 0.92.*
 - Shrinkage prior 15; never scored across positions.
 
-### Catcher — `catcher_similarity.py` (the throwing sub-score feeds the steal draw at power 1 — fitted 2; the full score fed the retired receiving kernel)
+### Catcher — `catcher_similarity.py` (the throwing sub-score feeds the pickoff and steal draws at power 1 — fitted 2; the full score fed the retired receiving kernel)
 
 - **Framing 0.53** (σ 0.92): called-strike rate above expected, framing runs, shadow-zone
   strike rate, heart-zone strike rate.
@@ -258,7 +313,7 @@ into a matrix the draws look up.
 - **Deterrence 0.09** (σ 1.00): the steal-attempt rate against him.
 - Shrinkage prior 15.
 
-### Steal runner — `baserunner_steal_similarity.py` (the steal draw at power 1 — fitted 12)
+### Steal runner — `baserunner_steal_similarity.py` (the pickoff and steal draws at power 1 — fitted 12)
 
 *SIM-531 landed on 2026-09-16, code and data: the boards loaded, the profiles rebuilt, the
 bandwidths fitted (lead 0.9836), the `runner_steal` matrix rebuilt at 2,585 profiles.*
@@ -280,7 +335,7 @@ bandwidths fitted (lead 0.9836), the `runner_steal` matrix rebuilt at 2,585 prof
   normalizer). The `baserunner_steal` league-average row the shrinkage needs never
   existed before the SIM-531 recompute of 2026-09-16 wrote it.
 
-### Pitcher against the run — `pitcher_steal_similarity.py` (the steal draw at power 1 — fitted 12)
+### Pitcher against the run — `pitcher_steal_similarity.py` (the pickoff and steal draws at power 1 — fitted 12)
 
 *SIM-531 landed on 2026-09-16, code and data: the hold bandwidth fitted (0.9897), the
 `pitcher_steal` matrix rebuilt at 2,390 profiles.*
@@ -346,7 +401,10 @@ pitch ⑤a drew and each candidate row's pitch, inside a Gaussian of bandwidth 1
   each was set, in the comments).
 - The acceptance lane runs the same values: `tests/acceptance/conftest.py` `PRODUCTION_FLAGS`
   (a test holds it equal to the compose file).
-- The unit lane pins every factor OFF: `tests/conftest.py`.
+- The unit lane pins every factor OFF: `tests/conftest.py`. The one exception is the running
+  game on the pitch (`SIM_STEAL_PITCH_CLASS`): the unit lane builds its samplers directly, and
+  they run the new order by default; a test that wants the single pre-pitch draw sets
+  `sampler.steal_pitch_class = False` or builds a steal pool with no class.
 - How each value was fitted: `docs/audit/2026-08-28-sim476-fit-plan.md` (the kernels),
   `docs/audit/2026-09-08-sim523-play-picker-redesign-plan.md` (the powers),
   `docs/audit/2026-09-13-sim427-build-plan.md` (the manager and reliever weights),

@@ -59,6 +59,8 @@ CREATE TABLE sim.steal_opportunity_pool (
     pickoff_out BOOLEAN DEFAULT FALSE,
     pickoff_advancing BOOLEAN DEFAULT FALSE,
     pickoff_error BOOLEAN DEFAULT FALSE,
+    pitch_class VARCHAR(20),
+    is_pickoff_row BOOLEAN DEFAULT FALSE,
     PRIMARY KEY (pitch_id)
 )
 """
@@ -67,18 +69,28 @@ CREATE TABLE sim.steal_opportunity_pool (
 def _add_play_events(c) -> None:
     """SIM-507: the builder probes pg.raw.play_events; absent (the default
     here) it degrades to all-FALSE pickoff labels. Tests that exercise the
-    pickoff attribution create the table with this."""
+    pickoff attribution create the table with this. SIM-554: the columns
+    the builder reads to write a pickoff row join the table."""
     c.execute(
         "CREATE TABLE pg.raw.play_events ("
-        "game_pk INTEGER, at_bat_number INTEGER, season SMALLINT, "
-        "event_type VARCHAR, is_out BOOLEAN, base SMALLINT, runners_state SMALLINT)"
+        "id BIGINT, game_pk INTEGER, at_bat_number INTEGER, game_date DATE, "
+        "season SMALLINT, event_type VARCHAR, inning SMALLINT, inning_topbot VARCHAR, "
+        "outs_before SMALLINT, runners_state SMALLINT, bat_score SMALLINT, "
+        "fld_score SMALLINT, pitcher_id INTEGER, runner_id INTEGER, base SMALLINT, "
+        "is_out BOOLEAN)"
     )
 
 
-def _pickoff(c, pk, ab, *, event_type="pickoff", is_out=True, base=1, runners_state=1):
+def _pickoff(
+    c, pk, ab, *, event_type="pickoff", is_out=True, base=1, runners_state=1, runner_id=11
+):
+    n = c.execute("SELECT COUNT(*) FROM pg.raw.play_events").fetchone()[0]
     c.execute(
-        "INSERT INTO pg.raw.play_events VALUES (?,?,2024,?,?,?,?)",
-        [pk, ab, event_type, is_out, base, runners_state],
+        "INSERT INTO pg.raw.play_events (id, game_pk, at_bat_number, game_date, season, "
+        "event_type, inning, inning_topbot, outs_before, runners_state, bat_score, "
+        "fld_score, pitcher_id, runner_id, base, is_out) "
+        "VALUES (?,?,?,DATE '2024-06-01',2024,?,1,'Top',0,?,3,1,901,?,?,?)",
+        [n + 1, pk, ab, event_type, runners_state, runner_id, base, is_out],
     )
 
 
@@ -95,12 +107,14 @@ def _conn() -> duckdb.DuckDBPyConnection:
         "on_1b INTEGER, on_2b INTEGER, on_3b INTEGER, "
         "sb_attempt_2b BOOLEAN, sb_attempt_3b BOOLEAN, "
         "sb_success_2b BOOLEAN, sb_success_3b BOOLEAN, "
-        "data_quality_flag BOOLEAN, events VARCHAR)"
+        "data_quality_flag BOOLEAN, events VARCHAR, inning_topbot VARCHAR)"
     )
     c.execute("CREATE SCHEMA sim")
+    # SIM-554: the pitch pool's class is the steal row's pitch_class.
     c.execute(
         "CREATE TABLE sim.pitch_pool ("
-        "pitch_id BIGINT, game_pk INTEGER, at_bat_number INTEGER, pitch_number INTEGER)"
+        "pitch_id BIGINT, game_pk INTEGER, at_bat_number INTEGER, pitch_number INTEGER, "
+        "outcome_type VARCHAR)"
     )
     c.execute(_POOL_DDL)
     c.execute(
@@ -132,14 +146,15 @@ def _pitch(
     strikes=0,
     flag=False,
     ev=None,
+    pitch_class="ball",
 ):
     pid = pk * 10000 + ab * 100 + pn
     c.execute(
         "INSERT INTO pg.raw.pitches VALUES (?,?,?,DATE '2024-06-01',2024,901,902,1,?,?,?,3,1,"
-        "?,?,?,?,?,?,?,?,?)",
+        "?,?,?,?,?,?,?,?,?,'Top')",
         [pk, ab, pn, outs, balls, strikes, on_1b, on_2b, on_3b, att2, att3, suc2, suc3, flag, ev],
     )
-    c.execute("INSERT INTO sim.pitch_pool VALUES (?,?,?,?)", [pid, pk, ab, pn])
+    c.execute("INSERT INTO sim.pitch_pool VALUES (?,?,?,?,?)", [pid, pk, ab, pn, pitch_class])
     return pid
 
 
@@ -677,6 +692,18 @@ class TestTheLoopWiring:
         assert s.offense == Team.HOME
         m._steal_opportunity_draw(s)
         assert fp.calls[0]["catcher"] == "903:2024"
+
+    def test_the_pitch_class_reaches_the_draw_only_when_given(self):
+        """SIM-554: the loop names the class of the pitch that came out, and
+        the steal draw reads its class group. A call without a class (today's
+        single pre-pitch draw) sends no pitch_class key at all, so a sampler
+        without the keyword still works."""
+        fp = _FakeStealFP((False, False))
+        m = _machine_with_fp(fp)
+        m._steal_opportunity_draw(_state(first=11), pitch_class="ball")
+        assert fp.calls[0]["pitch_class"] == "ball"
+        m._steal_opportunity_draw(_state(first=11))
+        assert "pitch_class" not in fp.calls[1]
 
 
 class TestThePickoffChannel:

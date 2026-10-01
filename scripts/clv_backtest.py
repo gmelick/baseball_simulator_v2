@@ -1851,13 +1851,68 @@ def bundle_provenance(calibration_path: str) -> dict[str, Any]:
     )
     stamps: dict[str, float | None] = {}
     # SIM-427: the change pool (manager_pool) is part of the frozen bundle too.
-    for sub in ("pitch_pool", "battedball_pool", "actor_sim", "manager_pool"):
+    # SIM-554: so is the steal pool. Its rebuild exports steal_pool/ alone and
+    # leaves every other file byte-identical, so without this stamp a report
+    # from before that export pairs with one from after it.
+    for sub in ("pitch_pool", "battedball_pool", "actor_sim", "manager_pool", "steal_pool"):
         mp = os.path.join(art_dir, sub, "manifest.json")
         stamps[sub] = os.path.getmtime(mp) if os.path.exists(mp) else None
     cal_hash: str | None = None
     if os.path.exists(calibration_path):
         with open(calibration_path, "rb") as fh:
             cal_hash = hashlib.sha256(fh.read()).hexdigest()
+
+    def _steal_pool_classed() -> bool | None:
+        """SIM-554: True when every pitch row of the exported steal pool carries
+        its pitch class, the condition of the sampler's ``has_steal_classes``.
+        None when the bundle has no steal pool or a file cannot be read; False
+        on a pool exported before migration 0031 or with an unclassed season.
+        A pickoff row is told apart by ``is_pickoff_row`` (by an empty class
+        when the column is missing), as the sampler does. An empty target is
+        skipped, as the sampler skips it."""
+        sp_dir = os.path.join(art_dir, "steal_pool")
+        if not os.path.exists(os.path.join(sp_dir, "manifest.json")):
+            return None
+        import duckdb
+
+        con = duckdb.connect()
+        try:
+            live = 0
+            for target in ("2", "3"):
+                path = os.path.join(sp_dir, f"{target}.meta.parquet").replace("'", "''")
+                src = f"read_parquet('{path}')"
+                cols = {row[0] for row in con.execute(f"DESCRIBE SELECT * FROM {src}").fetchall()}
+                if "pitch_class" not in cols:
+                    if con.execute(f"SELECT COUNT(*) FROM {src}").fetchone()[0] == 0:
+                        continue
+                    return False
+                pickoff = (
+                    "COALESCE(is_pickoff_row, FALSE)"
+                    if "is_pickoff_row" in cols
+                    else "COALESCE(pitch_class, '') = ''"
+                )
+                n_rows, n_pitch, n_unclassed = con.execute(
+                    f"SELECT COUNT(*), COUNT(*) FILTER (WHERE NOT {pickoff}), "
+                    f"COUNT(*) FILTER (WHERE NOT {pickoff} AND COALESCE(pitch_class, '') = '') "
+                    f"FROM {src}"
+                ).fetchone()
+                if n_rows == 0:
+                    continue
+                if n_pitch == 0 or n_unclassed > 0:
+                    return False
+                live += 1
+            return live > 0
+        except duckdb.Error:
+            return None
+        finally:
+            con.close()
+
+    from types import SimpleNamespace
+
+    from simulation.production_factory import apply_running_game_env
+
+    flag = SimpleNamespace()
+    apply_running_game_env(flag)
     return {
         "artifact_dir": art_dir,
         "manifest_mtimes": stamps,
@@ -1881,6 +1936,17 @@ def bundle_provenance(calibration_path: str) -> dict[str, Any]:
                 "SIM_RELIEF_PITCHES3D_SIGMA",
                 "SIM_RELIEF_HAND_OFF_WEIGHT",
             )
+        },
+        # SIM-554: which order of the running game this report measured. The
+        # new order (the pickoff draw before the pitch, the steal draw after
+        # it) runs only when both entries are True: the flag
+        # SIM_STEAL_PITCH_CLASS as the factory reads it (unset = on), and a
+        # steal pool whose every pitch row carries its class. Otherwise the
+        # single pre-pitch draw runs. The market-skill merge refuses chunks
+        # that differ here; a pair that flips this on purpose is still allowed.
+        "running_game": {
+            "flag": bool(flag.steal_pitch_class),
+            "classed_bundle": _steal_pool_classed(),
         },
         # SIM-548: which arm of the pitch / pitch-result split this report
         # measured — the switch, the pitch draw's pitcher power and the result

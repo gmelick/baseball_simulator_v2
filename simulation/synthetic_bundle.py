@@ -46,6 +46,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from pipeline.batch.engine_artifacts import (
+    STEAL_PITCH_CLASS_CODE,
+    STEAL_PITCH_CLASSES,
     AdvancementPool,
     BattedBallPool,
     ChangePool,
@@ -67,6 +69,7 @@ __all__ = [
     "battedball_pool",
     "advancement_pools",
     "steal_pools",
+    "STEALABLE_CLASSES",
     "synthetic_artifacts",
     "league_artifacts",
     "fixed_play_artifacts",
@@ -363,24 +366,103 @@ def advancement_pools(
     return out
 
 
+#: SIM-554: the pitch classes real runners steal on (2023-2026: 64% of
+#: attempts ride a ball, 25% a called strike, 10% a swinging strike, 1% a
+#: foul, none a ball in play or a hit by pitch). The synthetic pool's default
+#: attempt rate applies to these three and is zero on the other three.
+STEALABLE_CLASSES: tuple[str, ...] = ("ball", "called_strike", "swinging_strike")
+
+
 def steal_pools(
     attempt_rate: float,
     success_rate: float = 0.78,
     *,
     targets: tuple[str, ...] = ("2", "3"),
     season: int = 2024,
+    by_class: bool = True,
+    class_rates: dict[str, float] | None = None,
+    pickoff_rows: int = 0,
+    pickoff_weight: float = 0.01,
+    pickoff_kind: str = "out",
+    pickoff_counts: tuple[tuple[int, int], ...] | None = None,
 ) -> dict[str, StealPool]:
-    """A steal-opportunity pool per target base with three rows in every
-    (outs, balls, strikes) cell, weighted to the attempt and success rates."""
+    """A steal-opportunity pool per target base.
+
+    ``by_class=False`` builds the SIM-474 shape: three rows in every
+    (outs, balls, strikes) cell — (went, safe), (went, out), (stayed) —
+    weighted to the attempt and success rates, with no pitch class.
+
+    SIM-554, the default (``by_class=True``): three such rows in every
+    (outs, balls, strikes, class) group, for each of the six pitch classes.
+    The attempt rate applies to :data:`STEALABLE_CLASSES` and is zero on the
+    foul, the ball in play and the hit by pitch; ``class_rates`` overrides
+    it per class. Each class's three rows weigh 1/6 in all, so a count
+    group's pitch rows weigh 1.
+
+    ``pickoff_rows`` adds that many PICKOFF ROWS (no class, never attempted)
+    to every count group named by ``pickoff_counts`` (default: every count),
+    each weighing ``pickoff_weight``; ``pickoff_kind`` is "out", "advancing"
+    (an out scored as a caught stealing) or "error" (a throw that got away).
+    A group then answers "picked off" with probability
+    ``k*w / (1 + k*w)``. Pickoff rows need ``by_class=True``.
+    """
     cells = [(o, b, s) for o in range(3) for b in range(4) for s in range(3)]
-    attempted, success, weight = _rate_pool_rows(attempt_rate, success_rate)
-    n = len(cells) * attempted.size
+    sit_rows: list[tuple[float, float, float]] = []
+    att_col: list[int] = []
+    suc_col: list[int] = []
+    w_col: list[float] = []
+    cls_col: list[int] = []
+    po_out: list[int] = []
+    po_adv: list[int] = []
+    po_err: list[int] = []
+    if pickoff_rows and not by_class:
+        raise ValueError("pickoff rows need a pool with classes (by_class=True)")
+    if pickoff_kind not in ("out", "advancing", "error"):
+        raise ValueError(f"pickoff_kind {pickoff_kind!r} is not out / advancing / error")
+    rates = {c: (attempt_rate if c in STEALABLE_CLASSES else 0.0) for c in STEAL_PITCH_CLASSES}
+    if class_rates:
+        unknown = set(class_rates) - set(STEAL_PITCH_CLASSES)
+        if unknown:
+            raise ValueError(f"unknown pitch classes {sorted(unknown)}")
+        rates.update(class_rates)
+    po_cells = set(pickoff_counts) if pickoff_counts is not None else None
+
+    def _add(cell, attempted, success, weight, code, out=0, adv=0, err=0):
+        o, b, s_ = cell
+        sit_rows.append((b, s_, o))
+        att_col.append(int(attempted))
+        suc_col.append(int(success))
+        w_col.append(float(weight))
+        cls_col.append(int(code))
+        po_out.append(int(out))
+        po_adv.append(int(adv))
+        po_err.append(int(err))
+
+    for cell in cells:
+        if not by_class:
+            attempted, success, weight = _rate_pool_rows(attempt_rate, success_rate)
+            for a_, s_, w_ in zip(attempted, success, weight, strict=True):
+                _add(cell, a_, s_, w_, 0)
+            continue
+        for c in STEAL_PITCH_CLASSES:
+            attempted, success, weight = _rate_pool_rows(rates[c], success_rate)
+            for a_, s_, w_ in zip(attempted, success, weight, strict=True):
+                _add(cell, a_, s_, w_ / len(STEAL_PITCH_CLASSES), STEAL_PITCH_CLASS_CODE[c])
+        if pickoff_rows and (po_cells is None or (cell[1], cell[2]) in po_cells):
+            for _ in range(int(pickoff_rows)):
+                _add(
+                    cell,
+                    0,
+                    0,
+                    pickoff_weight,
+                    0,
+                    out=pickoff_kind in ("out", "advancing"),
+                    adv=pickoff_kind == "advancing",
+                    err=pickoff_kind == "error",
+                )
+    n = len(sit_rows)
     sit = np.zeros((n, 4), dtype=np.float32)
-    for i, (o, b, s) in enumerate(cells):
-        sl = slice(i * attempted.size, (i + 1) * attempted.size)
-        sit[sl, 0] = b
-        sit[sl, 1] = s
-        sit[sl, 2] = o
+    sit[:, :3] = np.asarray(sit_rows, dtype=np.float32)
     out: dict[str, StealPool] = {}
     for target in targets:
         out[str(target)] = StealPool(
@@ -389,9 +471,17 @@ def steal_pools(
             pitcher_id=np.zeros(n, dtype=np.int64),
             catcher_id=np.zeros(n, dtype=np.int64),
             season=np.full(n, int(season), dtype=np.int64),
-            attempted=np.tile(attempted, len(cells)),
-            success=np.tile(success, len(cells)),
-            recency=np.tile(weight, len(cells)),
+            attempted=np.asarray(att_col, dtype=np.int8),
+            success=np.asarray(suc_col, dtype=np.int8),
+            recency=np.asarray(w_col, dtype=np.float32),
+            pickoff_out=np.asarray(po_out, dtype=np.int8),
+            pickoff_advancing=np.asarray(po_adv, dtype=np.int8),
+            pickoff_error=np.asarray(po_err, dtype=np.int8),
+            pitch_class=np.asarray(cls_col, dtype=np.int8) if by_class else None,
+            # Every row with no class here is a pickoff row.
+            is_pickoff_row=(
+                (np.asarray(cls_col, dtype=np.int8) == 0).astype(np.int8) if by_class else None
+            ),
         )
     return out
 
@@ -482,6 +572,7 @@ def synthetic_artifacts(
     bb_rows: list[PlayRow] | None = None,
     advancement: dict[str, tuple[float, float]] | bool = False,
     steal: tuple[float, float] | None = None,
+    steal_kw: dict | None = None,
     hands: tuple[str, ...] = ("R", "L"),
     got_away: bool = False,
     air_share: float = 0.45,
@@ -494,7 +585,9 @@ def synthetic_artifacts(
     a hand to its own mix (a platoon skew). ``inplay_model`` drives
     :func:`inplay_rows` unless explicit ``bb_rows`` are given. ``advancement``
     is ``True`` for the default rates, a mapping for custom ones, ``False``
-    for station-to-station. ``steal`` is an ``(attempt, success)`` pair.
+    for station-to-station. ``steal`` is an ``(attempt, success)`` pair;
+    ``steal_kw`` passes :func:`steal_pools`' keywords (SIM-554: the classes,
+    the class rates, the pickoff rows).
     """
     pools: dict[str, HandPool] = {}
     for hand in hands:
@@ -508,7 +601,7 @@ def synthetic_artifacts(
         adv = advancement_pools(season=season)
     elif advancement:
         adv = advancement_pools(advancement, season=season)
-    stl = steal_pools(*steal, season=season) if steal is not None else {}
+    stl = steal_pools(*steal, season=season, **(steal_kw or {})) if steal is not None else {}
     return EngineArtifacts(
         pools=pools,
         bb_pools=bb_pools,
@@ -551,6 +644,8 @@ def fixed_play_artifacts(
     pitch_model: dict[str, float] | None = None,
     got_away: bool = False,
     season: int = 2024,
+    steal: tuple[float, float] | None = None,
+    steal_kw: dict | None = None,
     **overrides: int,
 ) -> EngineArtifacts:
     """ONE event in every base-out cell, with its canonical transition, and
@@ -559,6 +654,8 @@ def fixed_play_artifacts(
     ``overrides`` (``batter_dest`` / ``r1_dest`` / ``r2_dest`` / ``r3_dest`` /
     ``result_hits`` / ``result_outs``) replace the canonical values in every
     cell. Cells where the event is impossible fall back to a ground out.
+    ``steal`` / ``steal_kw`` add a steal pool (SIM-554), as in
+    :func:`synthetic_artifacts`.
     """
     rows: list[PlayRow] = []
     for outs in range(3):
@@ -576,6 +673,8 @@ def fixed_play_artifacts(
         advancement=False,
         got_away=got_away,
         season=season,
+        steal=steal,
+        steal_kw=steal_kw,
     )
 
 

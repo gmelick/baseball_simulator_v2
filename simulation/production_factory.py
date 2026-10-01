@@ -191,6 +191,21 @@ def apply_result_split_env(sampler: Any, env: Mapping[str, str] | None = None) -
             setattr(sampler, attr, default)
 
 
+def apply_running_game_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
+    """SIM-554: read ``SIM_STEAL_PITCH_CLASS`` — the running game on the pitch.
+
+    Default ON ("1"), unlike the other sampler flags: the change landed on at
+    its best-known default (the owner's ruling of 2026-09-16). On, and on a
+    bundle whose steal pool carries the pitch class, the loop draws the
+    pickoff before the pitch and the steal after it, among real pitches of the
+    pitch's class. "0", "false", "no", "off" or "" turn it off: the single
+    pre-pitch draw of SIM-474, row for row.
+    """
+    src = os.environ if env is None else env
+    raw = src.get("SIM_STEAL_PITCH_CLASS", "1").strip().lower()
+    sampler.steal_pitch_class = raw not in ("", "0", "false", "no", "off")
+
+
 def apply_fielding_env(sampler: Any, env: Mapping[str, str] | None = None) -> None:
     """SIM-523 part C: read the fielding draw's class filter, the batter power
     and the park wall-zone rule.
@@ -359,6 +374,7 @@ def _build_full_pool_sampler(spec: GameSpec, seed: int | None):
     apply_result_split_env(sampler)
     apply_fielding_env(sampler)
     apply_manager_env(sampler)
+    apply_running_game_env(sampler)  # SIM-554
     _CACHED_FULL_POOL_SAMPLER = sampler
     _CACHED_FULL_POOL_ART_DIR = art_dir
     return sampler

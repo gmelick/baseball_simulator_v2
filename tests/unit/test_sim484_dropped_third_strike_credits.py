@@ -145,7 +145,10 @@ class TestAnOrdinaryStrikeout:
 
 
 class TestTheForcedRunPaysNoRbi:
-    """Bases loaded, two outs: the reach forces the runner on third home."""
+    """Bases loaded, two outs: the runner on third scores on the loose ball.
+    Since SIM-554 (decision 4) every runner moves up one base before the
+    batter takes first, so the run scores on that advance, not on the
+    reach's push. The bases and the score are the ones the push gave."""
 
     def test_the_run_scores_with_no_rbi_and_the_strikeout_credited(self):
         sm = _machine("swinging_strike")

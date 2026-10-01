@@ -23,7 +23,7 @@
 
 - **▶ STATE AS OF 2026-06-06 — SUPERSEDED where §2b (2026-08-16) says otherwise: data foundation rebuilt, the runs band PASSES, CI all-green.**
   - **Phases 1–6 COMPLETE and CI-green** on **Python 3.13 / numpy 2.x** (SIM-431). Frontend shipped as
-    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v30**, Alembic head **0028** (2026-09-28; was 0027).
+    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v31**, Alembic head **0028** (2026-09-28; was 0027).
   - **Calibration is LIVE, REFIT 2026-08-16 on the rebuilt data** (SIM-432/459): `/data/calibration.json`
     fitted + applied at boot; win-prob map = fitted reliability-curve. 120-game validation: win-prob
     **ECE 0.0377** (was 0.047); batter **H/HR/TB 0.066/0.024/0.060** (bettable); pitcher **BB 0.044 —
@@ -211,7 +211,8 @@ standing owner rulings that govern all new work:
   under that constraint; every actor factor is its engine's 0-to-1 score, emitted nightly as a
   matrix and looked up at draw time; the loop is manager decisions per plate appearance, then
   per pitch the steal draw, the pitch draw, the pitch-result draw (the batted ball is born
-  there), then park geometry, the fielding draw and the advancement draws; catcher receiving
+  there; since SIM-554 the pickoff draw comes before the pitch and the steal draw after its
+  result), then park geometry, the fielding draw and the advancement draws; catcher receiving
   is a mass-preserving ball-strike ratio on taken pitches that ships OFF (enable = SIM-526);
   a concentration check (no factor may put more than its natural share of a draw on the live
   player's own team) joins the grade. **COMPLETE 2026-09-09:** production runs the certified
@@ -262,9 +263,58 @@ standing owner rulings that govern all new work:
   before the next nightly pool build**, or that build rebuilds the current season on the old
   coding. The steal and advancement pools in DuckDB are AHEAD of the bundle (the 2026 games of
   08-14 to 08-29, never exported); the next `--what pool` export ships that refresh.
+- **The running game on the pitch (SIM-554, BUILT 2026-10-01 on the branch
+  `sim554-running-game-impl`; the run book has not run).** On every pitch with a runner who
+  could steal, the loop now makes four draws in the order things happen. (1) The pickoff
+  draw, BEFORE the pitch: one row of the steal opportunity pool's count group (target base,
+  outs, balls, strikes), pitch rows and pickoff rows alike, with the steal draw's weights
+  and no manager weight. An outcome resolves at once. A pickoff that makes the third out
+  ends the half-inning with no pitch thrown: the result reads `pitch_outcome = NO_PITCH` and
+  `pa_voided = "pickoff_third_out"`, no pitch, event or plate appearance is credited (the
+  out counts for the pitcher; a picked-off caught stealing charges the runner a CS), and the
+  same batter leads off his team's next inning. Every reader of a per-pitch result must skip a no-pitch result
+  (`PlayResult.no_pitch`). (2) The pitch and (3) its result, as before, on the bases the
+  pickoff left. (4) The steal draw, AFTER the result, among real pitches of the same base,
+  outs, count and CLASS (ball, called strike, swinging strike, foul, in play, hit by pitch).
+  A class group answers from its own rows however few; nothing falls back and nothing is
+  cancelled. The old single pre-pitch draw read only the count, so 36% of its attempts
+  landed on a pitch that never carries a real one. Two rules of baseball land with it, in
+  both orders (the plan's decisions 3 and 4, taken by the owner 2026-10-01). With two outs,
+  a third strike the catcher holds is the third out first, so a staged steal is void
+  (`steal_voided = "third_out_first"`). On a dropped-third-strike reach the got-away advance
+  runs first: every runner moves up one base, a run from third pays no RBI, and then the
+  batter takes first; a steal or a pickoff on the same pitch skips the advance. The switch
+  is `SIM_STEAL_PITCH_CLASS` (default 1; 0 = the single pre-pitch draw of SIM-474). A bundle
+  exported before migration 0031, or one with any unclassed pitch row, also runs the single draw. **The data:**
+  DuckDB migration 0031 (schema v31) adds two columns to `sim.steal_opportunity_pool`:
+  `pitch_class` (the class of the pitch the row rode; NULL on a pickoff row) and
+  `is_pickoff_row`. A pickoff row is a pickoff throw with an outcome before the plate
+  appearance had any pitch with that runner situation: `pitch_id` = minus the
+  `raw.play_events` id, the count 0-0, the catcher of the nearest pitch of the half-inning.
+  The pool held about 72% of real pickoff outcomes: 22% of those with a stealable runner
+  came before the first pitch and were dropped, and 7% had no stealable runner. The pickoff
+  rows raise the pool's pickoff outcomes from about 0.15 to about 0.19 a game. Builder
+  `sim554.1`. The export carries `pitch_id`, `pitch_class` and `is_pickoff_row`, in
+  `pitch_id` order; `StealPool.pitch_class` holds codes 1-6 (0 = no class; None = an old
+  bundle) and `StealPool.is_pickoff_row` marks the pickoff rows. `RunningGameTally` (`machine.running_game_tally`) counts the pickoffs, the
+  no-pitch third outs, the voided steals and the dropped-third-strike advances; it changes
+  no play. **The run book still to run:** with the app stopped (the app's forkserver holds
+  the DuckDB writer lock, SIM-524), run `scripts/sim554_rebuild_steal_pool.py
+  --apply-migration`. It applies 0031 INSIDE the rebuild's one transaction, so a failed
+  rebuild rolls the two columns back with the rows; do not apply 0031 as a separate step. It
+  rebuilds the steal pool for the four window seasons and exports it alone. Then the census
+  of both arms
+  (`scripts/sim554_running_game_census.py`, the balanced 45 games × 20); the ten-game smoke;
+  one 45 × 130 lane. The export ships the steal pool's half of the 08-14 to 08-29 refresh;
+  the advancement pool stays ahead of the bundle. **Merge the code before the next nightly
+  pool build once 0031 is on the live DuckDB.** The builder version marks every pool stale for the current
+  season. The old code on a migrated table runs its positional INSERT two columns short: the
+  INSERT fails after its DELETE has removed the current season's steal rows. The new code
+  refuses an un-migrated table before it deletes anything (`_require_steal_pool_0031`). The
+  plan (version 3): `docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md`.
 - **The pool window (2026-08-20):** the last three COMPLETED seasons plus the current one
-  (`RECENCY_FLOOR_SEASONS = 4`; full 2023-2026 today). Schema v20, `POOL_BUILDER_VERSION`
-  sim515.1.
+  (`RECENCY_FLOOR_SEASONS = 4`; full 2023-2026 today). Schema v20 and `POOL_BUILDER_VERSION`
+  sim515.1 then; v31 and sim554.1 since the running game on the pitch (SIM-554).
 - **The slate is schedule-driven (2026-08-29):** the frontend day slate reads the MLB Stats
   API for which games exist (preview / live / final cards); the DB supplies our sims,
   projections and odds on top (→ SIM-519).
@@ -588,7 +638,7 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   → Core sim loop (simulation/sim_loop.py) : 8-step pitch-by-pitch state machine + manager/situational
     decisions → GameSimResult                                     [Phase 4]
   → Runner + API (simulation/batch_runner.py, api/) : 100-iteration ProcessPool runner (forkserver
-    workers — SIM-430), REST + WebSocket, Redis cache, persistence (DuckDB v30 / Alembic 0028),
+    workers — SIM-430), REST + WebSocket, Redis cache, persistence (DuckDB v31 / Alembic 0028),
     betting/CLV surface, auth/rate-limit/CORS, nginx, Prometheus/Grafana   [Phase 5 — COMPLETE]
   → Frontend (frontend/) : React 18 + Vite + TypeScript, Playwright e2e   [Phase 6 — COMPLETE]
 ```
@@ -601,7 +651,7 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   advancement/steal/framing live here; also the SIM-434 manager fatigue/rest/TTO + reliever-selection
   helpers, all gated `SIM_MANAGER`), `full_pool_sampler.py` (SIM-423 full-pool similarity sampler:
   count-bucket CDFs over the pitch-draw cell index, the actor score-matrix factors, the
-  fielding draw with the fence stage, the steal and advancement draws; reads the SIM-430 dense
+  fielding draw with the fence stage, the pickoff, steal and advancement draws; reads the SIM-430 dense
   `pitcher_sim_matrix` fast path), `synthetic_bundle.py` (SIM-486: the in-memory bundle every
   no-DB test and the batch runner's no-DB factory draw from — the same loop, the same sampler),
   `game_market_distributions.py` (SIM-421, 2026-09-12: per-iteration segment runs from the
@@ -643,7 +693,8 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   `docker compose run --rm -v "$PWD/scripts:/app/scripts" app python scripts/<x>.py`.)*
 - `db/` — `migrations/` (Alembic, head **0028** — 0028 = the SIM-555 odds stamp column `book_line_at` on `raw.game_odds` / `raw.prop_odds`, two per-book read indexes and the two archive tables `raw.game_odds_archive` / `raw.prop_odds_archive` (2026-09-28); 0027 = the two Savant fielding landing tables `raw.savant_outs_above_average` + `raw.savant_outfield_jump` (SIM-532, 2026-09-17); 0026 = the two Savant running-game landing tables `raw.savant_basestealing` + `raw.savant_pitcher_running_game` (SIM-531, 2026-09-16); 0022 = the 15-market `raw.prop_odds` CHECK constraint,
   0023 = `raw.game_player_stats`, 0024 = the 15-market `raw.game_odds` CHECK + `draw_ml`; all three applied to the live DB on 2026-09-12; 0025 = `raw.game_bullpen`, the MLB box's per-game bullpen listing for the SIM-427 real pen, applied 2026-09-13) + `migrations/duckdb/`
-  (numbered SQL, schema **v30**) +
+  (numbered SQL, schema **v31**; 0031 = the SIM-554 steal pool's `pitch_class` and
+  `is_pickoff_row` columns) +
   `schemas/duckdb_schema_version.txt`.
 - `tests/` — `unit/`, `regression/` (engine invariant gate), `integration/` (E2E TestClient),
   `performance/` (pytest-benchmark). `conftest.py` has shared fixtures + the event-loop guard.
@@ -896,7 +947,9 @@ never a gate. The 600-sim smoke: **SB 0.70 + CS 0.09 = 0.79 attempts/team-game v
 The certifying lane has since run (2026-09-09, 45 × 130 on the balanced set): steal attempts
 at second +0.4% against the pool's own rate, the safe share 0.812 against 0.799, every steal
 band green; the runner factors are the steal and advancement engines' score matrices at
-their fitted powers (12 / 20), not bandwidths.
+their fitted powers (12 / 20), not bandwidths. Since the running game on the pitch (SIM-554,
+built 2026-10-01) the pickoff is its own draw before the pitch, and the steal draw reads the
+class of the pitch that came out (§2b).
 
 ## 12. Phase roadmap
 

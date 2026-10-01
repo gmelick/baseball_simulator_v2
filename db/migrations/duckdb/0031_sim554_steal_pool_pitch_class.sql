@@ -1,0 +1,44 @@
+-- 0031 — SIM-554: the pitch class and the pickoff rows on the steal opportunity pool (schema v30 -> v31)
+--
+-- WHY
+-- ---
+-- The steal draw runs before the pitch today and reads only the count, so a
+-- drawn attempt can land on a pitch the runner never ran on: a ball in play,
+-- a hit by pitch, a third strike with two outs. The loop now draws the pitch
+-- first and then the steal from the rows whose pitch had the same class. The
+-- pool must carry that class for each row.
+--
+-- The pickoff draw stays before the pitch and reads the count. The pool tags a
+-- pickoff outcome to one pitch of its plate appearance. Measured 2026-09-30
+-- (2023-2026): 22% of the pickoff outcomes that fit a pair (394 of 1,788) had
+-- no pitch of that pair in the plate appearance, because the throw came
+-- before the first pitch. The pool dropped them. Each one now becomes a row of
+-- its own: the throw, in the situation before it.
+-- Plan: docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md §4.
+--
+-- WHAT
+-- ----
+-- Two columns on sim.steal_opportunity_pool.
+--
+--   pitch_class     — the pitch pool's outcome_type for the pitch the row rode:
+--                     ball, called_strike, swinging_strike, foul, in_play or
+--                     hit_by_pitch. NULL on a pickoff row, and on a row an old
+--                     builder wrote.
+--   is_pickoff_row  — TRUE on a row that is a pickoff outcome thrown before
+--                     any pitch of its pair in the plate appearance. It is not
+--                     a pitch: pitch_id is the negative of raw.play_events.id,
+--                     pitch_number is 0 and the count is 0-0 (the count at the
+--                     throw is not stored). FALSE on every pitch row.
+--
+-- POSITIONAL-INSERT TRAP: the pool INSERT carries no column list. The two
+-- columns are appended LAST (after pickoff_error), and the builder SELECT
+-- appends them in exactly this order. Keep in sync with
+-- db/schemas/02_duckdb_schema.sql.
+--
+-- Non-destructive: ADD COLUMN IF NOT EXISTS only. Existing rows hold NULL
+-- (pitch_class) and FALSE (is_pickoff_row) until the pool rebuild fills the
+-- window seasons. The builder refuses to run on a table without the two
+-- columns, so apply this file BEFORE the next pool build.
+
+ALTER TABLE sim.steal_opportunity_pool ADD COLUMN IF NOT EXISTS pitch_class VARCHAR(20);
+ALTER TABLE sim.steal_opportunity_pool ADD COLUMN IF NOT EXISTS is_pickoff_row BOOLEAN DEFAULT FALSE;

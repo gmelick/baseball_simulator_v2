@@ -1050,3 +1050,117 @@ async def test_score_one_game_skips_when_the_cutoff_cannot_be_resolved(monkeypat
     assert accuracy == []
     assert park_factor == pytest.approx(1.05)
     assert ground_truth_source is None
+
+
+def _steal_pool_bundle(tmp_path, targets: dict[str, list[tuple] | None]):
+    """SIM-554: an artifact dir with a steal pool. ``targets`` maps "2" / "3"
+    to the meta rows: ``(pitch_class, is_pickoff_row)`` pairs, ``(pitch_class,)``
+    for a pool without the mark, or None for a pool without either column
+    (exported before migration 0031)."""
+    import duckdb
+
+    sp = tmp_path / "engine_artifacts" / "steal_pool"
+    sp.mkdir(parents=True)
+    (sp / "manifest.json").write_text("{}", encoding="utf-8")
+    con = duckdb.connect()
+    try:
+        for target, rows in targets.items():
+            out = (sp / f"{target}.meta.parquet").as_posix()
+            if rows is None:
+                con.execute(f"COPY (SELECT 1::BIGINT AS runner_id) TO '{out}' (FORMAT parquet)")
+                continue
+            width = len(rows[0]) if rows else 2
+            cols = "runner_id BIGINT, pitch_class VARCHAR" + (
+                ", is_pickoff_row BOOLEAN" if width == 2 else ""
+            )
+            con.execute(f"CREATE OR REPLACE TABLE t ({cols})")
+            if rows:
+                marks = ", ?" if width == 2 else ""
+                con.executemany(f"INSERT INTO t VALUES (1, ?{marks})", [list(r) for r in rows])
+            con.execute(f"COPY t TO '{out}' (FORMAT parquet)")
+    finally:
+        con.close()
+    return tmp_path
+
+
+def _provenance(tmp_path, monkeypatch, flag: str | None = "1") -> dict:
+    monkeypatch.setenv("BASEBALL_PLAY_POOL_DIR", str(tmp_path))
+    if flag is None:
+        monkeypatch.delenv("SIM_STEAL_PITCH_CLASS", raising=False)
+    else:
+        monkeypatch.setenv("SIM_STEAL_PITCH_CLASS", flag)
+    return clv_backtest.bundle_provenance(str(tmp_path / "no_calibration.json"))
+
+
+_CLASSED = [("ball", False), ("called_strike", False), ("", True)]
+
+
+def test_the_provenance_stamps_the_steal_pool(tmp_path, monkeypatch):
+    """SIM-554: the steal-pool rebuild exports steal_pool/ alone, so the
+    provenance must see that directory, or a report from before the export
+    pairs with one from after it."""
+    _steal_pool_bundle(tmp_path, {"2": _CLASSED, "3": _CLASSED})
+    (tmp_path / "engine_artifacts" / "pitch_pool").mkdir()
+    (tmp_path / "engine_artifacts" / "pitch_pool" / "manifest.json").write_text("{}")
+    prov = _provenance(tmp_path, monkeypatch)
+    assert prov["manifest_mtimes"]["steal_pool"] is not None
+    assert prov["manifest_mtimes"]["battedball_pool"] is None
+
+
+@pytest.mark.parametrize(
+    ("flag", "want"),
+    [(None, True), ("1", True), ("0", False), ("off", False), ("", False)],
+)
+def test_the_running_game_stamp_reads_the_flag_as_the_factory_does(
+    tmp_path, monkeypatch, flag, want
+):
+    """SIM-554: the flag as the factory reads it. Unset is on (the default),
+    so an unset variable records True, not None."""
+    _steal_pool_bundle(tmp_path, {"2": _CLASSED, "3": _CLASSED})
+    assert _provenance(tmp_path, monkeypatch, flag)["running_game"] == {
+        "flag": want,
+        "classed_bundle": True,
+    }
+
+
+def test_the_running_game_stamp_reads_none_without_a_steal_pool(tmp_path, monkeypatch):
+    (tmp_path / "engine_artifacts").mkdir()
+    assert _provenance(tmp_path, monkeypatch)["running_game"] == {
+        "flag": True,
+        "classed_bundle": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("targets", "want"),
+    [
+        # every pitch row classed; the pickoff rows are told apart by the mark
+        ({"2": _CLASSED, "3": [("foul", False)]}, True),
+        # a pool without the mark: an empty class is a pickoff row
+        ({"2": [("ball",), ("",)], "3": [("in_play",)]}, True),
+        # an empty target is skipped, as the sampler skips it
+        ({"2": _CLASSED, "3": []}, True),
+        # partly classed: one pitch row of target 3 has no class (a season no
+        # builder rebuilt), so both targets run the single pre-pitch draw
+        ({"2": _CLASSED, "3": [("ball", False), ("", False)]}, False),
+        # a pool exported before migration 0031: no class column at all
+        ({"2": None, "3": None}, False),
+        # a target with pickoff rows only holds no pitch row to class
+        ({"2": _CLASSED, "3": [("", True)]}, False),
+        # both targets empty: no live pool, so no class groups
+        ({"2": [], "3": []}, False),
+    ],
+)
+def test_the_running_game_stamp_reads_whether_the_bundle_is_classed(
+    tmp_path, monkeypatch, targets, want
+):
+    """SIM-554: the new order runs only on a bundle whose every pitch row
+    carries its class. The flag alone does not say which order ran."""
+    _steal_pool_bundle(tmp_path, targets)
+    assert _provenance(tmp_path, monkeypatch)["running_game"]["classed_bundle"] is want
+
+
+def test_the_running_game_stamp_reads_none_on_a_missing_meta_file(tmp_path, monkeypatch):
+    """A missing file reads None rather than failing the run."""
+    _steal_pool_bundle(tmp_path, {"2": _CLASSED})
+    assert _provenance(tmp_path, monkeypatch)["running_game"]["classed_bundle"] is None

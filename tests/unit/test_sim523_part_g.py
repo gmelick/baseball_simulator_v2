@@ -90,7 +90,8 @@ class TestCreditMask:
     def test_the_builder_version_moved(self):
         # sim518.1 -> sim523g.1 (SIM-523 part G: the fielding chain on the outcome pool)
         # sim523g.1 -> sim553.1 (SIM-553: a two-strike foul tip / foul bunt is strike three)
-        assert POOL_BUILDER_VERSION == "sim553.1"
+        # sim553.1 -> sim554.1 (SIM-554: the steal pool's pitch class and pickoff rows)
+        assert POOL_BUILDER_VERSION == "sim554.1"
 
 
 _DDL = """

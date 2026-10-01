@@ -53,19 +53,22 @@ def test_record_game_plays_returns_ordered_play_results():
     assert len(plays) > 0
     assert all(isinstance(p, PlayResult) for p in plays)
     # The recorded count matches the game's pitch tally (the wrapper saw every
-    # step_pitch the loop drove).
-    assert len(plays) == result.total_pitches
+    # step_pitch the loop drove). SIM-554: a no-pitch result (a pickoff that
+    # made the third out before the pitch) is a step but no pitch thrown, so
+    # the tally counts the thrown pitches.
+    assert sum(not p.no_pitch for p in plays) == result.total_pitches
 
 
 def test_recorded_plays_feed_playbyplay_with_terminals():
     _result, plays = record_game_plays(seed=7, sim_kwargs=dict(SIM_KWARGS))
     pbp = PlayByPlay.from_play_results(plays)
-    assert pbp.n_pitches == len(plays)
+    # SIM-554: one entry per THROWN pitch (a no-pitch result makes none).
+    assert pbp.n_pitches == sum(not p.no_pitch for p in plays)
     # At least one PA resolved (a terminal pitch), so PAs are inferable.
     assert pbp.n_plate_appearances > 0
     assert any(e.is_pa_end for e in pbp.entries)
     # Entry sequence is the global pitch index in order.
-    assert [e.sequence for e in pbp.entries] == list(range(len(plays)))
+    assert [e.sequence for e in pbp.entries] == list(range(pbp.n_pitches))
 
 
 def test_record_game_plays_is_deterministic_for_fixed_seed():

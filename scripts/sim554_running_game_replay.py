@@ -360,6 +360,9 @@ class RunningData:
             self.sp_cls[str(tb)] = np.concatenate(parts["cls"])
         fp.a.steal_pools = pools
         fp._steal_meta_cache.clear()
+        # The new pools carry no pitch class: forget the cached answer, so the
+        # sampler reads these pools and not the bundle's.
+        fp._steal_classes = None
         self.seconds = time.time() - t0
 
     def _emb_rows(

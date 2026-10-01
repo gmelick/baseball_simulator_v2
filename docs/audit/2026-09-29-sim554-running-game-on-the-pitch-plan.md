@@ -1,17 +1,12 @@
 # Build plan — the running game on the pitch: the pickoff before the pitch, the steal on the pitch it rides, the third out, and the runners on a dropped third strike (SIM-554)
 
-> **STATUS 2026-10-01 — VERSION 3. All four decisions are taken (§10); the design is ready to
-> build.** Decision 1 (the
-> steal is its own draw and reads the class of the pitch that came out) was taken on 2026-09-30 by
-> the replay the owner ordered (§11). Decision 2 (the pickoff is its own draw BEFORE the pitch,
-> and the pickoffs the pool drops come back as rows of their own) was taken by the owner on
-> 2026-10-01 (§12); it replaces version 2's fallback for a thin class cell and its cancel rule.
-> Decisions 3 (the two-out held third strike: the strikeout is the third out, a staged steal is
-> void) and 4 (the runners on a dropped third strike: every runner moves up one base first) were
-> taken by the owner on 2026-10-01, as recommended (§12.6). Built
-> on the branch: the replay instrument, its sampler seam and their tests. The design itself is
-> not built. The readable page is https://claude.ai/artifact/UP5z7ErWR9cgTnKwYENc8Y (v3); this file is the
-> record. The work lives on the branch `sim554-baserunning-defects` (a git worktree).
+> **STATUS 2026-10-01 — BUILT on the branch `sim554-running-game-impl`; the run book (§8 steps
+> 2-7) has NOT run.** All four decisions are taken (§10). The code of §4 to §7 is built, two
+> review rounds ran (six reviewers, then three; two skeptics checked every finding), and every
+> confirmed defect is fixed. The unit, regression and band-arithmetic lanes are green. §13 is the
+> build record: what was built, where it departs from this plan and why, and what is left. The
+> design history (versions 1 to 3, the replay, the decisions) follows unchanged; the readable
+> page is https://claude.ai/artifact/UP5z7ErWR9cgTnKwYENc8Y (v3).
 >
 > **The order version 3 plans, on every pitch with a runner who could steal.** (1) The pickoff
 > draw, before the pitch. (2) The pitch. (3) Its result. (4) The steal draw, among real pitches
@@ -748,6 +743,8 @@ SIM-517 got-away consumers, the run-credit ledger.
    regression lane; the band-arithmetic lane.
 2. **The migration.** `db/migrations/duckdb/0031_...sql` applied to the live DuckDB with the app
    stopped (`docker compose stop app`; the writer lock is SIM-524's). The version file 31.
+   *Built differently (§13.2 item 5): step 3's script applies 0031 inside its transaction with
+   `--apply-migration`; do not apply it as a separate step.*
 3. **The rebuild and the export** (`scripts/sim554_rebuild_steal_pool.py`, the app still down):
    the four window seasons, one transaction, the checks of §5.8, the export of `steal_pool/`
    alone, the round-trip check, the band centres printed. Minutes, not hours; the script prints
@@ -1103,3 +1100,105 @@ The owner, 2026-10-01: "Approve decisions 3 and 4 as recommended."
 All four decisions are taken. §12.4's "two decisions stay open" and §11.7's "decisions 2 to 4
 stay open" are the record of their dates. Nothing in §4 to §9 changes: the text already describes
 both rules. The design is ready to build; nothing is built by this record.
+
+
+---
+
+## 13. Build record (2026-10-01)
+
+### 13.1 What is built
+
+On the branch `sim554-running-game-impl` (from master 3a1d4c9; the first commit holds this
+plan, the replay and its seam).
+
+- **The loop** (`simulation/sim_loop.py`). The order of §5.1 behind `_steal_order_active()`:
+  the pickoff draw before the pitch (`_pickoff_before_the_pitch`), the pitch, the steal draw
+  after it with the pitch's class (`_steal_opportunity_draw(state, pitch_class=...)`). A pickoff
+  third out returns a no-pitch result (`NO_PITCH`, `pa_voided = "pickoff_third_out"`). Decision 3
+  sits before `_resolve_steal_outcome` on the terminal branch (`steal_voided =
+  "third_out_first"`); decision 4 runs the got-away advance on the reach branch of
+  `_resolve_strikeout`. `RunningGameTally` counts the paths. `simulate_game` leaves a no-pitch
+  step out of `total_pitches`.
+- **The sampler** (`simulation/full_pool_sampler.py`). `_steal_meta` builds three indexes
+  (§5.3); `pickoff_draw`; `steal_draw(..., pitch_class=)`; `steal_weights(rows=)`;
+  `has_steal_classes()`; the attribute `steal_pitch_class`, which
+  `production_factory.apply_running_game_env` sets from `SIM_STEAL_PITCH_CLASS` (default 1).
+- **The data.** Migration 0031 (schema v31); builder `sim554.1` with the pickoff rows and a
+  guard that refuses an un-migrated table before its DELETE; the export of `pitch_id`,
+  `pitch_class` and `is_pickoff_row`; `StealPool.pitch_class` and `StealPool.is_pickoff_row`.
+- **The synthetic pool** (`simulation/synthetic_bundle.steal_pools`): rows per (count, class),
+  `class_rates`, pickoff rows on request.
+- **The readers of a pitch result.** The play-by-play and the per-pitch snapshots skip a
+  no-pitch result (`simulation/snapshots.thrown_pitches`, `api/routes/games._record_and_build`);
+  the linescore and the pitcher decisions read the whole stream; the game's pitch total, the
+  trace script, the smoke's flag list and the acceptance lane's probes and flag table.
+- **The run-book scripts.** `scripts/sim554_rebuild_steal_pool.py` (§5.8) and
+  `scripts/sim554_running_game_census.py` (§5.9), with unit tests on planted data. Neither has
+  run against the live stack.
+- **The docs** of §5.10, the schema-version prose (v31) and a §2b bullet in `CLAUDE.md`.
+- **Tests.** The twenty-five of §7 and more, in four new files:
+  `test_sim554_running_game_on_the_pitch.py`, `test_sim554_steal_pool_data.py`,
+  `test_sim554_no_pitch_readers.py`, `test_sim554_run_book_scripts.py`; plus additions to the
+  SIM-474, SIM-421, play-recorder, band-arithmetic and accuracy-comparison suites. One older
+  test changed its expected values by design: a dropped third strike with first base open now
+  moves the runners on second and third up a base (decision 4).
+
+### 13.2 Where the build departs from this plan, and why
+
+1. **The flag-off draw reads pitch rows only.** On a classed bundle the single pre-pitch draw
+   leaves the pickoff rows out, so `SIM_STEAL_PITCH_CLASS=0` reproduces the draw before
+   migration 0031 and the census's two arms compare the recovered pickoffs.
+2. **The pickoff rows carry their own mark through to the sampler.** §4.3-§4.4 planned the class
+   alone (code 0 = a pickoff row). A pitch row an old builder wrote also has no class, so the
+   export carries `is_pickoff_row` and the loader reads it. A pool where any pitch row has no
+   class keeps the single draw over every pitch row and logs it; the new order runs only when
+   every target is fully classed (review finding, round 1).
+3. **The pickoff third out credits the pitcher with the out.** §0 said the pickoff third out
+   credits no pitch event. It still credits no pitch, no event and no plate appearance, but the
+   out counts toward the pitcher's outs (innings pitched, the pitcher-outs prop), as the official
+   box counts it. Without it the new path would have lost outs the old path credited (review
+   finding, round 1). The older gap, a caught stealing or pickoff out on a pitch that does not
+   end the plate appearance, is filed as SIM-557.
+4. **The export is staged and ordered.** Both files are written in `pitch_id` order (before, two
+   unsorted scans happened to agree), under temporary names, and moved into place only when
+   both targets succeed; a table without migration 0031 is refused before any write. The loader
+   refuses a target whose two files disagree on the row count (review finding, round 1).
+5. **The rebuild applies migration 0031 inside its transaction** (`--apply-migration`), so a
+   failed rebuild rolls the two columns back with the rows. §8 steps 2 and 3 become one command;
+   do not apply 0031 separately (review finding, round 1).
+6. **The rebuild's re-run check compares pitch rows only.** A pickoff row's id is the play
+   record's database id, which a game reload changes; check c proves every pickoff row of the
+   build against the play records instead (review finding, round 1).
+7. **The pickoff draw skips a count group with no pickoff outcome** and uses no random number
+   there.
+8. **The census reads expected rates, not only counts.** At 45 × 20 the pickoff counts cannot
+   resolve the §8 step-5 window (about ±0.15 on 1.28). At every draw the census adds the
+   weighted share of pickoff rows from the rng-free `steal_weights`, which gives a near-noiseless
+   ratio of the two arms.
+9. **Guards beyond the plan.** The acceptance lane fails when `SIM_STEAL_PITCH_CLASS` asks for
+   the new order and the bundle cannot run it (the fence stage ran inert in two weeks of lanes
+   in September). The accuracy comparison's provenance stamps the steal pool and the running
+   game's order, so reports from before and after the steal-pool export do not pair. An
+   injected pitch outcome is checked before any hook or draw.
+10. **The play-by-play closes an at-bat on any pitch that ends the half.** A caught stealing
+    that made the third out on a pitch that did not end the plate appearance merged the next
+    half's leadoff pitches into the previous at-bat; the fix covers the no-pitch case and this
+    older one in the same rule (review finding, round 2).
+
+### 13.3 The reviews
+
+Round 1: six reviewers (the loop, the sampler, the data layer, the readers, the scripts, the
+docs against this plan), two skeptics per finding. Seven defects confirmed and fixed (13.2 items
+2-6, 9 and the "nothing is credited" wording); three findings refuted (the class draw's weights
+at a power other than 1, the outs of a pickoff row, the missing changelog entry before the
+close). Round 2: the seven fixes, the production paths (shared memory, the workers, speed) and
+the strength of the tests by mutation. Eleven smaller findings confirmed and fixed: two in the
+rebuild script, the run-book wording, the provenance stamp, the play-by-play at-bat break, and
+six tests that could not fail.
+
+### 13.4 Left
+
+The run book of §8 has not run: migration 0031 and the steal-pool rebuild and export with the
+app stopped (one command), the census of both arms, the ten-game smoke, one 45 × 130 lane, then
+the close. Once 0031 is on the live DuckDB, merge before the next nightly pool build. SIM-557
+(the pitcher's out on a non-terminal caught stealing or pickoff) is filed, P2.

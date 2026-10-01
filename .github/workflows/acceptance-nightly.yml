@@ -8,7 +8,8 @@
 # and asserts each box-score channel against a band around the real MLB rate.
 # Every other test lane in this repository pins those flags OFF
 # (tests/conftest.py), so this is the only job that measures the simulator users
-# get.
+# get. (SIM-554: SIM_STEAL_PITCH_CLASS, the running game on the pitch, is the
+# exception: it defaults ON and the unit lane leaves it unpinned.)
 #
 # THE BAND ARITHMETIC IS NOT TESTED HERE
 # --------------------------------------

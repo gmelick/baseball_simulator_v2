@@ -241,6 +241,36 @@ def test_a_stamped_and_an_unstamped_report_do_not_merge(tmp_path: Path):
     assert any("run_line_scoring" in p for p in problems)
 
 
+def test_chunks_run_in_two_running_game_orders_do_not_merge(tmp_path: Path):
+    """SIM-554: two chunks of one baseline on one bundle carry the same
+    manifest times. One ran the running game's new order, one the single
+    pre-pitch draw (SIM_STEAL_PITCH_CLASS=0), so the merge must refuse them.
+    The paired read still allows the flip: a pair that flips it on purpose
+    measures that flip."""
+    rng = np.random.default_rng(13)
+    prov = {"artifact_dir": "/data/play_pool/engine_artifacts", "manifest_mtimes": {"x": 1.0}}
+
+    def _report(flag: bool, offset: int) -> dict:
+        running_game = {"flag": flag, "classed_bundle": True}
+        return {
+            "params": {"base_seed": 0, "provenance": {**prov, "running_game": running_game}},
+            "accuracy_records": [
+                dict(r, game_pk=r["game_pk"] + offset) for r in _records(10, "H", rng)
+            ],
+        }
+
+    on, off, on2 = _report(True, 0), _report(False, 100), _report(True, 200)
+    a, b, c = tmp_path / "on.json", tmp_path / "off.json", tmp_path / "on2.json"
+    for path, rep in ((a, on), (b, off), (c, on2)):
+        path.write_text(json.dumps(rep), encoding="utf-8")
+    with pytest.raises(SystemExit, match="running_game"):
+        skill.load_reports([str(a), str(b)], force=False)
+    records, _ = skill.load_reports([str(a), str(c)], force=False)
+    assert len(records) == 20
+    pair = _load("sim518_pair_accuracy")
+    assert not any("running_game" in p for p in pair.provenance_mismatches(on, off))
+
+
 def test_auc_is_half_for_a_flat_forecast_and_one_for_a_perfect_one():
     y = np.array([0, 1, 0, 1, 1, 0])
     assert skill.auc(np.full(6, 0.5), y) == pytest.approx(0.5)

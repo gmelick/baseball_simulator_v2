@@ -137,6 +137,9 @@ _REALISM_FLAGS = (
     "SIM_RELIEF_PITCHED2D_OFF_WEIGHT",
     "SIM_RELIEF_PITCHES3D_SIGMA",
     "SIM_RELIEF_HAND_OFF_WEIGHT",
+    # SIM-554: the running game on the pitch (the pickoff draw before the pitch,
+    # the steal draw after it in the pitch's class); 0 = the single pre-pitch draw.
+    "SIM_STEAL_PITCH_CLASS",
 )
 
 

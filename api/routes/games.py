@@ -132,6 +132,7 @@ from simulation.snapshots import (
     PlayByPlayEntry,
     PlayerRef,
     StateAtPitch,
+    thrown_pitches,
 )
 
 log = logging.getLogger("api.routes.games")
@@ -764,6 +765,12 @@ def _record_and_build(
     ``(half, fielding-side)`` key across the game.  With no ``resolved`` lineup the
     9 slots stay present-but-empty (the prior behaviour).
 
+    SIM-554 -- A RESULT WITH NO PITCH: a pickoff before the pitch that makes
+    the third out returns a result with no pitch thrown (``NO_PITCH``).  The
+    play-by-play and the per-pitch snapshots hold the thrown pitches only.  The
+    linescore and the decisions read the whole stream, because the pickoff's
+    out lives on that result.
+
     Returns ``(play_by_play, state_snapshot_dicts, linescore_json, decisions_json)``.
     A pitch whose ``next_state`` is missing is skipped for the state stream (its
     /plays entry still persists).  Pure + sync so the caller can run it in the
@@ -775,10 +782,12 @@ def _record_and_build(
         sim_kwargs=sim_kwargs,
     )
     pbp = PlayByPlay.from_play_results(plays)
+    pitched = thrown_pitches(plays)
 
     # SIM-362 / SIM-364: derive the game card from the recorded PlayResult list
     # (these read PlayResult.next_state, dropped by the persisted entries, so they
-    # MUST be computed here at record time).
+    # MUST be computed here at record time). Both read the WHOLE stream: a
+    # no-pitch result carries the pickoff's out (SIM-554).
     linescore = linescore_from_plays(plays)
     decisions = decisions_from_plays(plays)
 
@@ -798,10 +807,12 @@ def _record_and_build(
                 defense_cache[key] = None
         return defense_cache[key]
 
-    # plays and pbp.entries are 1:1 in order, so zip pairs each PlayResult with
-    # its entry's (at_bat, pitch, sequence) indices.
+    # The thrown pitches and pbp.entries are 1:1 in order (SIM-554: a no-pitch
+    # result makes no entry), so zip pairs each PlayResult with its entry's
+    # (at_bat, pitch, sequence) indices. strict=True fails loudly on a slip
+    # rather than storing every later snapshot one pitch off.
     snapshots: list[dict] = []
-    for play, entry in zip(plays, pbp.entries, strict=False):
+    for play, entry in zip(pitched, pbp.entries, strict=True):
         next_state = getattr(play, "next_state", None)
         if next_state is None:
             continue

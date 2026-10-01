@@ -25,9 +25,12 @@ the sampler runs with a partial bundle (e.g. before the pitcher-sim nightly buil
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 from pipeline.batch.engine_artifacts import (
+    STEAL_PITCH_CLASS_CODE,
     EngineArtifacts,
     HandPool,
     StealPool,
@@ -48,6 +51,8 @@ from simulation.filter_cells import (
 
 _OUTCOMES = ("ball", "called_strike", "swinging_strike", "foul", "in_play", "hit_by_pitch")
 
+log = logging.getLogger(__name__)
+
 #: SIM-523 part B: the pitch-to-pitch engine's feature weights, in the pitch
 #: pool's ``_GEOM_COLS`` order (velo, ivb, hb, spin_rate, spin_axis, release_x,
 #: release_z, release_ext, plate_x, plate_z). Copied so the sampler never
@@ -55,6 +60,24 @@ _OUTCOMES = ("ball", "called_strike", "swinging_strike", "foul", "in_play", "hit
 _PITCH_FEATURE_WEIGHTS = np.array(
     [1.20, 1.10, 1.00, 0.70, 0.50, 0.60, 0.60, 0.40, 0.90, 0.90], dtype=np.float32
 )
+
+
+def _group_rows(key: np.ndarray, rows: np.ndarray) -> dict[int, np.ndarray]:
+    """SIM-554: the ``rows`` of a pool grouped by ``key`` (one int per pool
+    row) -> {key: the group's row indices}. A stable sort keeps the rows of a
+    group in pool order, so with ``rows`` = every row it rebuilds the SIM-474
+    count index exactly."""
+    k = key[rows]
+    order = np.argsort(k, kind="stable")
+    ks = k[order]
+    uniq, starts = np.unique(ks, return_index=True)
+    ends = np.append(starts[1:], len(ks))
+    return {int(u): rows[order[a:b]] for u, a, b in zip(uniq, starts, ends, strict=True)}
+
+
+def _count_cell(k: int) -> tuple[int, int, int]:
+    """Decode the steal pool's count key ``outs*100 + balls*10 + strikes``."""
+    return (k // 100, (k % 100) // 10, k % 10)
 
 
 def _repower(w: np.ndarray, f: np.ndarray, power: float) -> np.ndarray:
@@ -509,6 +532,15 @@ class FullPoolSampler:
         #: runner, pitcher, catcher and fielder factors are their engines' score
         #: matrices at fitted powers.
         self.steal_score_sigma = 2.0
+        #: SIM-554: the running game on the pitch (``SIM_STEAL_PITCH_CLASS``,
+        #: default on; ``production_factory`` wires it). On a bundle whose steal
+        #: pool carries the pitch class, the loop draws the pickoff BEFORE the
+        #: pitch (:meth:`pickoff_draw`, the count group) and the steal AFTER it
+        #: among real pitches of the same class (:meth:`steal_draw` with
+        #: ``pitch_class``). False, or a bundle without classes: the single
+        #: pre-pitch draw of SIM-474, row for row.
+        self.steal_pitch_class = True
+        self._steal_classes: bool | None = None
 
     # ---- per-pool one-time precompute ------------------------------------
     def _pool_meta(self, hand: str) -> dict:
@@ -3161,8 +3193,26 @@ class FullPoolSampler:
         return z
 
     def _steal_meta(self, target: str) -> dict | None:
-        """Per-target one-time precompute: the (outs, balls, strikes) cell index
-        plus per-row embedding-row gathers for the three actors."""
+        """Per-target one-time precompute: the group indexes plus per-row
+        embedding-row gathers for the three actors.
+
+        SIM-554: up to three indexes over the pool's rows.
+
+          * ``cells``: (outs, balls, strikes) -> the PITCH rows. The single
+            pre-pitch draw reads it (the flag off, or a bundle without
+            classes). On a bundle with classes the pickoff rows are left out,
+            so that draw reads the rows it read before migration 0031.
+          * ``pickoff_cells``: (outs, balls, strikes) -> EVERY row, the pitch
+            rows and the pickoff rows. The pickoff draw's count group.
+          * ``class_cells``: (outs, balls, strikes, class code) -> the pitch
+            rows of one class. The steal draw's group.
+
+        The last two exist only when EVERY pitch row of the pool carries a
+        class. A pickoff row is told apart by ``is_pickoff_row`` (by class code
+        0 on a pool built without that column). A pool where some pitch rows
+        have no class (a season no builder rebuilt since migration 0031) keeps
+        the single pre-pitch draw over all its pitch rows, and says so once.
+        """
         meta = self._steal_meta_cache.get(target)
         if meta is not None:
             return meta
@@ -3170,18 +3220,32 @@ class FullPoolSampler:
         if pool is None or pool.n == 0:
             return None
         sit = pool.sit  # cols: count_balls, count_strikes, outs, score_diff
-        cells: dict[tuple[int, int, int], np.ndarray] = {}
         key = (sit[:, 2].astype(np.int64) * 100 + sit[:, 0].astype(np.int64) * 10) + sit[
             :, 1
         ].astype(np.int64)
-        order = np.argsort(key, kind="stable")
-        sorted_keys = key[order]
-        bounds = np.searchsorted(sorted_keys, np.unique(sorted_keys))
-        uniq = np.unique(sorted_keys)
-        for i, k in enumerate(uniq):
-            lo = bounds[i]
-            hi = bounds[i + 1] if i + 1 < len(bounds) else len(order)
-            cells[(int(k) // 100, (int(k) % 100) // 10, int(k) % 10)] = order[lo:hi]
+        every = np.arange(pool.n, dtype=np.int64)
+        pc = getattr(pool, "pitch_class", None)
+        code = np.asarray(pc, dtype=np.int64) if pc is not None else None
+        mark = getattr(pool, "is_pickoff_row", None)
+        if mark is not None:
+            pickoff = np.asarray(mark).astype(bool)
+        elif code is not None:
+            pickoff = code == 0  # a pool built without the mark: code 0 is a pickoff row
+        else:
+            pickoff = np.zeros(pool.n, dtype=bool)
+        # A pickoff row is never a pitch: it leaves the pitch groups.
+        pitch_rows = every[~pickoff]
+        classes = code is not None and pitch_rows.size > 0 and bool(np.all(code[pitch_rows] > 0))
+        if code is not None and not classes and pitch_rows.size > 0:
+            log.warning(
+                "steal_pool[%s]: %d of %d pitch rows carry no pitch class; this bundle "
+                "keeps the single pre-pitch steal draw (rebuild those seasons with "
+                "builder sim554.1, SIM-554)",
+                target,
+                int(np.count_nonzero(code[pitch_rows] <= 0)),
+                int(pitch_rows.size),
+            )
+        cells = {_count_cell(k): r for k, r in _group_rows(key, pitch_rows).items()}
 
         def _rows(actor: str, ids: np.ndarray) -> np.ndarray | None:
             emb = self.a.actor_emb.get(actor)
@@ -3203,8 +3267,35 @@ class FullPoolSampler:
             "pitcher_rows": _rows("pitcher_steal", pool.pitcher_id),
             "catcher_rows": _rows("catcher", pool.catcher_id),
         }
+        if classes and code is not None:
+            pickoff_cells = {_count_cell(k): r for k, r in _group_rows(key, every).items()}
+            meta["pickoff_cells"] = pickoff_cells
+            # The count groups that hold at least one pickoff outcome: in any
+            # other group the pickoff draw cannot answer "picked off", so it
+            # skips the weights (and the random number).
+            po = np.asarray(pool.pickoff_out, dtype=bool) | np.asarray(
+                pool.pickoff_error, dtype=bool
+            )
+            meta["pickoff_live"] = {c for c, r in pickoff_cells.items() if bool(po[r].any())}
+            meta["class_cells"] = {
+                (*_count_cell(k // 10), k % 10): r
+                for k, r in _group_rows(key * 10 + code, pitch_rows).items()
+            }
         self._steal_meta_cache[target] = meta
         return meta
+
+    def has_steal_classes(self) -> bool:
+        """SIM-554: True when every steal pool carries the pitch class on every
+        pitch row (a bundle exported after migration 0031 from rebuilt
+        seasons). The loop's new order needs it: the pickoff draw before the
+        pitch, the steal draw in the class group. One unclassed target keeps
+        the single pre-pitch draw for both, so the two targets never run
+        different orders."""
+        if self._steal_classes is None:
+            metas = [self._steal_meta(t) for t in self.a.steal_pools]
+            live = [m for m in metas if m is not None]
+            self._steal_classes = bool(live) and all("class_cells" in m for m in live)
+        return self._steal_classes
 
     def _steal_feat_cols(self, actor: str, names: tuple[str, ...]) -> np.ndarray | None:
         emb = self.a.actor_emb.get(actor)
@@ -3235,6 +3326,16 @@ class FullPoolSampler:
             return None
         return self._matrix_gather(matrix, live_key, emb_rows_all[rows])
 
+    def _steal_pick(self, w: np.ndarray, rows: np.ndarray) -> int | None:
+        """One random number -> one row of ``rows`` drawn by its weight ``w``;
+        None (no random number used) when every weight is zero."""
+        total = float(w.sum())
+        if not np.isfinite(total) or total <= 0.0:
+            return None
+        cdf = np.cumsum(w, dtype=np.float64)
+        i = int(np.searchsorted(cdf, self.rng.random() * cdf[-1]))
+        return int(rows[min(i, len(rows) - 1)])
+
     def steal_draw(
         self,
         target_base: int,
@@ -3247,6 +3348,7 @@ class FullPoolSampler:
         strikes: int,
         score_diff: int,
         aggression: float = 1.0,
+        pitch_class: str | None = None,
     ) -> tuple[bool, bool, bool, bool, bool] | None:
         """Draw ONE steal-opportunity row -> (attempted, success, pickoff_out,
         pickoff_advancing, pickoff_error), or None when the pool/cell is
@@ -3266,7 +3368,47 @@ class FullPoolSampler:
         say whether a pickoff retired the runner (`pickoff_advancing` marks a
         picked-off caught stealing) or an errant throw advanced him. On a
         pre-0017 bundle the pickoff labels are all-zero and nothing changes.
+
+        SIM-554: with ``pitch_class`` (the class of the pitch that came out)
+        on a bundle with classes and ``steal_pitch_class`` on, the hard filter
+        adds the class: the rows are the real pitches of that count AND that
+        class, and the group answers from its own rows however few. A group
+        with no row stages no steal; nothing falls back to the count group.
+        The pickoff was drawn before the pitch (:meth:`pickoff_draw`), so the
+        three pickoff fields read False.
         """
+        if pitch_class is not None and self.steal_pitch_class:
+            meta = self._steal_meta(str(int(target_base)))
+            if meta is not None and "class_cells" in meta:
+                group = meta["class_cells"].get(
+                    (
+                        int(outs),
+                        int(balls),
+                        int(strikes),
+                        STEAL_PITCH_CLASS_CODE.get(pitch_class, 0),
+                    )
+                )
+                if group is None or len(group) == 0:
+                    return None  # no real pitch like it: no steal
+                got = self.steal_weights(
+                    target_base,
+                    runner_key,
+                    pitcher_key,
+                    catcher_key,
+                    outs=outs,
+                    balls=balls,
+                    strikes=strikes,
+                    score_diff=score_diff,
+                    aggression=aggression,
+                    rows=group,
+                )
+                if got is None:
+                    return None
+                pool, rows, w = got
+                r = self._steal_pick(w, rows)
+                if r is None:
+                    return None
+                return (bool(pool.attempted[r]), bool(pool.success[r]), False, False, False)
         got = self.steal_weights(
             target_base,
             runner_key,
@@ -3281,16 +3423,67 @@ class FullPoolSampler:
         if got is None:
             return None
         pool, rows, w = got
-        total = float(w.sum())
-        if not np.isfinite(total) or total <= 0.0:
+        r = self._steal_pick(w, rows)
+        if r is None:
             return None
-        cdf = np.cumsum(w, dtype=np.float64)
-        i = int(np.searchsorted(cdf, self.rng.random() * cdf[-1]))
-        i = min(i, len(rows) - 1)
-        r = rows[i]
         return (
             bool(pool.attempted[r]),
             bool(pool.success[r]),
+            bool(pool.pickoff_out[r]),
+            bool(pool.pickoff_advancing[r]),
+            bool(pool.pickoff_error[r]),
+        )
+
+    def pickoff_draw(
+        self,
+        target_base: int,
+        runner_key: str,
+        pitcher_key: str,
+        catcher_key: str | None,
+        *,
+        outs: int,
+        balls: int,
+        strikes: int,
+        score_diff: int,
+    ) -> tuple[bool, bool, bool] | None:
+        """SIM-554: the pickoff draw BEFORE the pitch -> (out, advancing,
+        error) of ONE row of the count group, or None when the group is absent
+        or holds no pickoff outcome at all (no random number is then used).
+
+        Every row of the (target, outs, balls, strikes) group is a candidate:
+        the pitch rows (a pickoff the builder tagged to the plate appearance's
+        first pitch of the pair) and the pickoff rows (a pickoff thrown before
+        any pitch of the pair, migration 0031). The weights are
+        :meth:`steal_weights`' own — recency, the score-margin curve, the
+        runner, pitcher-hold and catcher look-alike weights — with no manager
+        weight: the manager's weight acts on the steal's attempted rows.
+        ``out`` retires the runner (a caught stealing when ``advancing``);
+        ``error`` is a throw that got away and moves him up a base.
+        """
+        meta = self._steal_meta(str(int(target_base)))
+        if meta is None or "pickoff_cells" not in meta:
+            return None
+        cell = (int(outs), int(balls), int(strikes))
+        if cell not in meta["pickoff_live"]:
+            return None
+        got = self.steal_weights(
+            target_base,
+            runner_key,
+            pitcher_key,
+            catcher_key,
+            outs=outs,
+            balls=balls,
+            strikes=strikes,
+            score_diff=score_diff,
+            rows=meta["pickoff_cells"][cell],
+        )
+        if got is None:
+            return None
+        pool, rows, w = got
+        r = self._steal_pick(w, rows)
+        if r is None:
+            return None
+        return (
             bool(pool.pickoff_out[r]),
             bool(pool.pickoff_advancing[r]),
             bool(pool.pickoff_error[r]),
@@ -3308,19 +3501,24 @@ class FullPoolSampler:
         strikes: int,
         score_diff: int,
         aggression: float = 1.0,
+        rows: np.ndarray | None = None,
     ) -> tuple[StealPool, np.ndarray, np.ndarray] | None:
         """SIM-554: the steal draw's candidate rows and their weights —
         ``(pool, rows, w)`` — or None when the pool or the cell is absent.
 
-        The one code path :meth:`steal_draw` samples from and the running-game
-        replay (``scripts/sim554_running_game_replay.py``) reads whole, so the
-        two cannot disagree. It consumes no random number.
+        The one code path :meth:`steal_draw` and :meth:`pickoff_draw` sample
+        from and the running-game replay (``scripts/sim554_running_game_replay.py``)
+        reads whole, so they cannot disagree. It consumes no random number.
+        ``rows`` names the candidate rows (the pickoff draw's count group, the
+        steal draw's class group); None = the (outs, balls, strikes) group of
+        pitch rows.
         """
         pool = self.a.steal_pools.get(str(int(target_base)))
         meta = self._steal_meta(str(int(target_base)))
         if pool is None or meta is None:
             return None
-        rows = meta["cells"].get((int(outs), int(balls), int(strikes)))
+        if rows is None:
+            rows = meta["cells"].get((int(outs), int(balls), int(strikes)))
         if rows is None or len(rows) == 0:
             return None
         w = pool.recency[rows].astype(np.float32).copy()

@@ -113,6 +113,14 @@ os.environ["SIM_RELIEF_PITCHED2D_OFF_WEIGHT"] = "1.0"
 os.environ["SIM_RELIEF_PITCHES3D_SIGMA"] = "0"
 os.environ["SIM_RELIEF_HAND_OFF_WEIGHT"] = "1.0"
 
+# SIM-554: the running game on the pitch (SIM_STEAL_PITCH_CLASS) is NOT pinned,
+# on purpose. The flag defaults ON, in the sampler and in the factory. The unit
+# lane builds its samplers directly, so the environment never reaches them, and
+# a pin here would change nothing. The no-database tests run the new order on
+# purpose (plan §4.5): the pickoff draw before the pitch, the steal draw after
+# it in the pitch's class. A test that wants the old single pre-pitch draw sets
+# ``sampler.steal_pitch_class = False``, or builds a steal pool with no class.
+
 # ---------------------------------------------------------------------------
 # Shared lightweight fixtures
 # ---------------------------------------------------------------------------

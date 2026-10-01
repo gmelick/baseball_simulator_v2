@@ -1282,7 +1282,8 @@ CREATE TABLE IF NOT EXISTS sim.steal_opportunity_pool (
     recency_weight  FLOAT       NOT NULL DEFAULT 1.0,
     -- SIM-507 (migration 0017): pickoff outcomes from raw.play_events,
     -- attributed to ONE opportunity pitch of the plate appearance (the first
-    -- non-attempted pitch of the pair) so per-pitch outcome rates stay exact.
+    -- non-attempted pitch of the pair). An outcome whose plate appearance has
+    -- no pitch of the pair gets a pickoff row of its own (SIM-554, below).
     -- `pickoff_advancing` marks the out as a picked-off CAUGHT STEALING (the
     -- runner was tagged at the NEXT base — MLB scores it as a CS); a plain
     -- pickoff is an out but NOT a CS. `pickoff_error` advances the runner.
@@ -1291,6 +1292,14 @@ CREATE TABLE IF NOT EXISTS sim.steal_opportunity_pool (
     pickoff_out       BOOLEAN   DEFAULT FALSE,
     pickoff_advancing BOOLEAN   DEFAULT FALSE,
     pickoff_error     BOOLEAN   DEFAULT FALSE,
+    -- SIM-554 (migration 0031): `pitch_class` is the pitch pool's
+    -- outcome_type for the pitch the row rode; the steal draw filters on it.
+    -- `is_pickoff_row` marks a pickoff outcome thrown before any pitch of its
+    -- pair in the plate appearance: pitch_id is the negative of
+    -- raw.play_events.id, the count is 0-0 and pitch_class is NULL. Appended
+    -- last, like the 0017 columns.
+    pitch_class       VARCHAR(20),
+    is_pickoff_row    BOOLEAN   DEFAULT FALSE,
     PRIMARY KEY (pitch_id)
 );
 

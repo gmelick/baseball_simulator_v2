@@ -1397,3 +1397,156 @@ def test_the_lane_flag_overrides_are_named_sim427() -> None:
         "SIM427_LANE_RELIEF_HAND_OFF_WEIGHT",
     ):
         assert f'os.environ.get("{name}"' in src or f'"{name}",' in src, name
+
+
+# ---------------------------------------------------------------------------
+# SIM-554 — the running game on the pitch: the lane's flag and its probes
+# ---------------------------------------------------------------------------
+
+
+def _running_game_lane_machine(**steal_kw: object) -> tuple[object, dict, dict, dict]:
+    """A real loop through the lane's probes (the synthetic bundle, no
+    database). Every drawn pitch is a ball; the steal pool carries the pitch
+    class, and on a ball the runner always goes and is always safe."""
+    import numpy as np
+
+    from simulation.sim_loop import StateMachine
+    from simulation.synthetic_bundle import fixed_play_artifacts, synthetic_sampler
+    from tests.acceptance.conftest import _blank_tally, _install_probes
+
+    art = fixed_play_artifacts(
+        "field_out", pitch_model={"ball": 1.0}, steal=(1.0, 1.0), steal_kw=dict(steal_kw)
+    )
+    machine = StateMachine(synthetic_sampler(art, 0), rng=np.random.default_rng(0))
+    tally = _blank_tally()
+    calls = {
+        "_full_pool_outcome": 0,
+        "_full_pool_fielding": 0,
+        "_resolve_in_play_transition": 0,
+        "_steal_opportunity_draw": 0,
+        "_commit_run_delta": 0,
+    }
+    pool_counts: dict[str, int] = {}
+    _install_probes(machine, tally, calls, pool_counts)
+    return machine, tally, calls, pool_counts
+
+
+def _runner_on_first(outs: int = 0) -> object:
+    from simulation.game_state import Bases, GameState
+
+    return GameState(
+        pitcher_id=477132,
+        bat_hand="R",
+        season=2024,
+        batter_id=900,
+        outs=outs,
+        bases=Bases(first=101),
+    )
+
+
+def test_the_lane_grades_the_running_game_on_the_pitch_sim554() -> None:
+    """The lane grades production: the pickoff draw before the pitch and the
+    steal draw after it, in the pitch's class (landed ON 2026-10-01)."""
+    from tests.acceptance.conftest import PRODUCTION_FLAGS
+
+    assert PRODUCTION_FLAGS["SIM_STEAL_PITCH_CLASS"] == "1"
+
+
+def test_the_compose_file_carries_the_same_running_game_flag_sim554() -> None:
+    """The lane's flag and the production environment must agree, or the lane
+    certifies a simulator users do not get."""
+    import yaml
+
+    from tests.acceptance.conftest import PRODUCTION_FLAGS
+
+    compose = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "docker-compose.yml").read_text(encoding="utf-8")
+    )
+    env = compose["services"]["app"]["environment"]
+    assert str(env["SIM_STEAL_PITCH_CLASS"]) == PRODUCTION_FLAGS["SIM_STEAL_PITCH_CLASS"]
+
+
+def test_the_lane_flag_override_is_named_sim554() -> None:
+    """The other arm (the single pre-pitch draw) is one variable away, under
+    the SIM554_LANE_ name."""
+    src = (Path(__file__).parent / "conftest.py").read_text(encoding="utf-8")
+    assert 'os.environ.get("SIM554_LANE_STEAL_PITCH_CLASS", "1")' in src
+
+
+def test_the_lane_refuses_a_bundle_that_cannot_run_the_new_order_sim554() -> None:
+    """The flag alone does not run the running game on the pitch: the bundle's
+    steal pool must carry the classes. The lane fails rather than grade the
+    single pre-pitch draw under the new order's name (the fence stage ran
+    inert for two weeks of lanes, 2026-09; the same class of defect)."""
+    import numpy as np
+
+    from simulation.full_pool_sampler import FullPoolSampler
+    from simulation.sim_loop import StateMachine
+    from simulation.synthetic_bundle import fixed_play_artifacts
+    from tests.acceptance.conftest import (
+        check_running_game_order,
+        running_game_on_the_pitch_wanted,
+    )
+
+    assert running_game_on_the_pitch_wanted({}) is True
+    for off in ("0", "false", "off", "no", ""):
+        assert running_game_on_the_pitch_wanted({"SIM_STEAL_PITCH_CLASS": off}) is False
+    assert running_game_on_the_pitch_wanted({"SIM_STEAL_PITCH_CLASS": "1"}) is True
+    # Four machines: a classed pool and an unclassed one, each under the flag
+    # on and off. The guard passes the two that agree and fails the two that
+    # do not.
+    for by_class in (True, False):
+        art = fixed_play_artifacts("field_out", steal=(0.1, 0.8), steal_kw={"by_class": by_class})
+        machine = StateMachine(FullPoolSampler(art, np.random.default_rng(0)))
+        assert machine._steal_order_active() is by_class
+        for flag in ("1", "0"):
+            env = {"SIM_STEAL_PITCH_CLASS": flag}
+            if (flag == "1") == by_class:
+                check_running_game_order(machine, env)
+            else:
+                with pytest.raises(pytest.fail.Exception, match="SIM_STEAL_PITCH_CLASS="):
+                    check_running_game_order(machine, env)
+
+
+def test_the_steal_probe_passes_the_pitch_class_through_sim554() -> None:
+    """The loop calls ``_steal_opportunity_draw(state, pitch_class=...)`` after
+    the pitch. The probe used to take the state alone, so the lane's first
+    pitch raised a TypeError. It now passes every argument through, and the
+    steal draw reads the class of the pitch that came out."""
+    machine, _tally, calls, pc = _running_game_lane_machine()
+    fp = machine.full_pool_sampler
+    seen: list[object] = []
+    inner = fp.steal_draw
+
+    def spy(*a: object, **kw: object) -> object:
+        seen.append(kw.get("pitch_class"))
+        return inner(*a, **kw)
+
+    fp.steal_draw = spy
+    state = _runner_on_first()
+    result = machine.step_pitch(state)
+
+    assert result.pitch_outcome == "ball"
+    assert calls["_steal_opportunity_draw"] == 1
+    assert seen == ["ball"]
+    assert (pc["STEAL_OPP_2"], pc["STEAL_ATT_2"], pc["STEAL_SAFE_2"]) == (1, 1, 1)
+    assert result.steal_attempted and state.bases.second == 101
+
+
+def test_the_lane_counters_skip_a_no_pitch_third_out_sim554() -> None:
+    """A pickoff that makes the third out before the pitch throws no pitch.
+    No lane counter may read it as a pitch, a plate appearance or a steal
+    opportunity: the pitch draw, the steal draw and the plate-appearance
+    tally never run."""
+    machine, tally, calls, pc = _running_game_lane_machine(
+        pickoff_rows=1, pickoff_weight=1e6, pickoff_counts=((0, 0),)
+    )
+    state = _runner_on_first(outs=2)
+    result = machine.step_pitch(state)
+
+    assert result.no_pitch and result.pa_voided == "pickoff_third_out"
+    assert calls["_full_pool_outcome"] == 0
+    assert calls["_steal_opportunity_draw"] == 0
+    assert pc["PA"] == 0 and pc["TAKEN"] == 0 and pc["GOT_AWAY"] == 0
+    assert pc["STEAL_OPP_2"] == 0 and pc["STEAL_OPP_3"] == 0
+    assert all(v == [0, 0] for v in tally.values()), tally

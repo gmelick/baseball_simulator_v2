@@ -34,6 +34,10 @@ DESIGN
   * One entry per pitch, terminal event on the last pitch.  The PA's resolved
     event lives on the terminal pitch (pa_terminal / is_pa_end); entries group
     into PAs by an at_bat index so the scroll collapses a PA / expands to pitches.
+  * SIM-554: no entry for a result with no pitch thrown.  A pickoff before the
+    pitch that makes the third out returns a result whose ``pitch_outcome`` is
+    ``NO_PITCH``.  The play-by-play skips it; :func:`thrown_pitches` gives the
+    results that DO hold a pitch, one per entry, in order.
 """
 
 from __future__ import annotations
@@ -42,7 +46,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from simulation.game_state import GameState, Half, PlayResult
+from simulation.game_state import NO_PITCH, GameState, Half, PlayResult
 
 # ---------------------------------------------------------------------------
 # Vocabulary
@@ -256,7 +260,8 @@ class PlayByPlay:
 
     @property
     def n_pitches(self) -> int:
-        """Total pitches in the play-by-play."""
+        """Total pitches in the play-by-play (thrown pitches only: a no-pitch
+        result makes no entry)."""
         return len(self.entries)
 
     @property
@@ -283,23 +288,55 @@ class PlayByPlay:
     ) -> PlayByPlay:
         """Build a PlayByPlay from a flat, ordered sequence of pitches.
 
-        PAs are inferred from the pa_terminal flag: a new PA begins after each
-        terminal pitch, and the within-PA pitch counter resets to 1.
+        A new at-bat begins after each pitch that ends the plate appearance
+        (``pa_terminal``) or ends the half-inning, and the within-PA pitch
+        counter resets to 1.
+
+        SIM-554: a thrown pitch can end the half and leave the plate appearance
+        open. Example: with two outs, the runner is caught stealing on ball
+        two. The next pitch belongs to the other team's batter, so it starts a
+        new at-bat. The test for the end of the half is the linescore's: the
+        pitch records an out and the committed state is back to 0 outs. The
+        caught runner's teammate leads off his team's next inning later with a
+        fresh count.
+
+        SIM-554: a no-pitch result (a pickoff before the pitch made the third
+        out) makes no entry, so ``sequence`` stays contiguous over the thrown
+        pitches. That pickoff voids the plate appearance and rolls the half.
+        When the voided PA already holds pitches, the next thrown pitch starts a
+        new at-bat, by the same rule.
         """
         entries: list[PlayByPlayEntry] = []
         at_bat = 0
         pitch_in_pa = 0
-        for seq, res in enumerate(results):
+        for res in results:
+            if res.pitch_outcome == NO_PITCH:
+                if pitch_in_pa > 0:
+                    at_bat += 1
+                    pitch_in_pa = 0
+                continue
             pitch_in_pa += 1
             entries.append(
                 PlayByPlayEntry.from_play_result(
-                    res, sequence=seq, at_bat=at_bat, pitch=pitch_in_pa
+                    res, sequence=len(entries), at_bat=at_bat, pitch=pitch_in_pa
                 )
             )
-            if res.pa_terminal:
+            ns = res.next_state
+            ends_half = int(res.outs_recorded) > 0 and ns is not None and int(ns.outs) == 0
+            if res.pa_terminal or ends_half:
                 at_bat += 1
                 pitch_in_pa = 0
         return cls(entries=entries)
+
+
+def thrown_pitches(results: Iterable[PlayResult]) -> list[PlayResult]:
+    """SIM-554: the results that hold a thrown pitch, in order.
+
+    These pair one-to-one with ``PlayByPlay.from_play_results(results).entries``.
+    A no-pitch result (``pitch_outcome == NO_PITCH``) is left out. A reader that
+    needs every result, such as the linescore, reads ``results`` itself.
+    """
+    return [res for res in results if res.pitch_outcome != NO_PITCH]
 
 
 # ---------------------------------------------------------------------------
@@ -416,6 +453,7 @@ __all__ = [
     "FieldSnapshot",
     "PlayByPlayEntry",
     "PlayByPlay",
+    "thrown_pitches",
     "StateAtPitch",
     "OverrideDelta",
     "MetricDelta",

@@ -309,9 +309,13 @@ class TestStealOnAScoringPitch:
 
 class TestDroppedThirdStrikeForcesARunHome:
     """The uncaught third strike with the bases loaded and two outs: the batter
-    reaches first, the runner on 3B is forced home. The forced run is the
-    runner's ``r`` and the pitcher's run allowed; it pays no RBI (SIM-484,
-    Rule 9.04(a): the run scores on the wild pitch / passed ball)."""
+    reaches first and the runner on 3B scores. Since SIM-554 (decision 4,
+    owner 2026-10-01) every runner moves up one base on the loose ball BEFORE
+    the batter takes first. The run scores on that advance, and the reach
+    pushes nobody. The bases and the score are the ones the reach's push gave.
+    The run is the runner's ``r`` and the pitcher's run allowed. It pays no
+    RBI (SIM-484, Rule 9.04(a): the run scores on the wild pitch / passed
+    ball)."""
 
     def _bases_loaded_two_out_d3k(self) -> tuple[StateMachine, GameState, object]:
         sm = _got_away_machine("swinging_strike")
@@ -359,14 +363,24 @@ class TestDroppedThirdStrikeForcesARunHome:
         dist = props.get(303, "R")
         assert dist is not None and dist.prob(1) == 1.0
 
-    def test_a_dropped_third_strike_with_first_base_open_forces_nobody(self):
+    def test_a_dropped_third_strike_with_first_base_open_moves_every_runner_up(self):
+        # SIM-554 (decision 4): the ball is loose, so the runners on second
+        # and third move up one base before the batter takes first. The
+        # runner on third scores. Until 2026-10-01 nobody was forced, so both
+        # runners held and nobody scored (real runners moved on 28 of 32
+        # such chances, 2023-2026).
         sm = _got_away_machine("swinging_strike")
         state = _state()
         state.bases = Bases(second=202, third=303)
         state.strikes = 2
         result = sm.step_pitch(state)
-        assert result.pa_terminal
-        assert result.runs_scored == 0 and state.away_score == 0
-        assert result.baserunner_advances.get(BATTER) == 1
-        assert 303 not in result.baserunner_advances or result.baserunner_advances[303] != 0
-        assert sm.boxscore.line(303).r == 0
+        assert result.pa_terminal and result.canonical_event == "strikeout"
+        assert result.runs_scored == 1 and state.away_score == 1
+        assert result.baserunner_advances == {202: 3, 303: 0, BATTER: 1}
+        assert (state.bases.first, state.bases.second, state.bases.third) == (BATTER, None, 202)
+        assert state.outs == 0
+        assert sm.boxscore.line(303).r == 1  # credited once
+        bat = sm.boxscore.line(BATTER)
+        assert bat.rbi == 0 and bat.so == 1  # no RBI on a wild pitch / passed ball
+        pit = sm.boxscore.line(PITCHER)
+        assert pit.k == 1 and pit.r_allowed == 1 and pit.er == 1  # the run is earned

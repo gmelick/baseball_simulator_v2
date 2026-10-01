@@ -65,6 +65,7 @@ from __future__ import annotations
 import os
 import time
 import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -76,8 +77,9 @@ from tests.acceptance import bands
 # The production configuration
 # ---------------------------------------------------------------------------
 
-#: The exact inverse of the flags ``tests/conftest.py`` pins off — the lane
-#: states the whole production configuration so a reader of the log sees it.
+#: The whole production configuration, stated so a reader of the log sees it:
+#: the inverse of the flags ``tests/conftest.py`` pins off, plus the flags it
+#: leaves unpinned on purpose (SIM-554's ``SIM_STEAL_PITCH_CLASS`` defaults ON).
 PRODUCTION_FLAGS: dict[str, str] = {
     "SIM_MANAGER": "1",  # SIM-434 manager pull / reliever decisions
     "SIM_BB_PLATOON": "1",  # SIM-413 batted-ball platoon
@@ -192,6 +194,13 @@ PRODUCTION_FLAGS: dict[str, str] = {
     "SIM_SIT_SIGMA": os.environ.get("SIM548_LANE_SIT_SIGMA", "2.0"),
     "SIM_PITCH_HOME_OFF_WEIGHT": "1.0",
     "SIM_BB_PITCH_SIGMA": "0",
+    # SIM-554 (2026-10-01): the running game on the pitch — the pickoff draw
+    # before the pitch, the steal draw after it among real pitches of the same
+    # count and class. ON in production (the compose file carries the same
+    # value; a test holds them together). It needs a bundle whose steal pool
+    # carries the pitch class; on an older bundle the loop keeps the single
+    # pre-pitch draw. Set SIM554_LANE_STEAL_PITCH_CLASS=0 to measure that arm.
+    "SIM_STEAL_PITCH_CLASS": os.environ.get("SIM554_LANE_STEAL_PITCH_CLASS", "1"),
 }
 
 
@@ -683,9 +692,13 @@ def _install_probes(
         calls["_resolve_in_play_transition"] += 1
         return _o(state, result, sig, pre_outs, pre_bases)
 
-    def steal(state: Any, _o: Any = orig_steal) -> Any:
+    def steal(state: Any, *a: Any, _o: Any = orig_steal, **kw: Any) -> Any:
+        # SIM-554: the loop passes the drawn pitch's class (``pitch_class=``)
+        # in the running game on the pitch. The probe passes every argument
+        # through and never re-states the loop's signature (the commit probe's
+        # rule below).
         calls["_steal_opportunity_draw"] += 1
-        return _o(state)
+        return _o(state, *a, **kw)
 
     def accumulate(state: Any, result: Any, _o: Any = orig_accumulate) -> Any:
         side = int(state.offense)
@@ -752,6 +765,38 @@ def _install_probes(
     machine._steal_opportunity_draw = steal
     machine._accumulate_pa = accumulate
     machine._commit_run_delta = commit
+
+
+def running_game_on_the_pitch_wanted(env: Mapping[str, str] | None = None) -> bool:
+    """SIM-554: True when SIM_STEAL_PITCH_CLASS asks for the running game on
+    the pitch — the parse of ``production_factory.apply_running_game_env``."""
+    src = os.environ if env is None else env
+    raw = src.get("SIM_STEAL_PITCH_CLASS", "1").strip().lower()
+    return raw not in ("", "0", "false", "no", "off")
+
+
+def check_running_game_order(machine: Any, env: Mapping[str, str] | None = None) -> None:
+    """SIM-554: fail the lane when the flag and the order the loop runs differ.
+
+    The flag alone does not run the running game on the pitch: the bundle's
+    steal pool must carry the pitch class on every pitch row (migration 0031
+    and the steal-pool rebuild). On an older bundle the loop keeps the single
+    pre-pitch draw, and the lane would grade that draw under the new order's
+    name. The reverse also fails: a lane that asks for the single pre-pitch
+    draw must not grade the new order.
+    """
+    src = os.environ if env is None else env
+    wanted = running_game_on_the_pitch_wanted(src)
+    if wanted != bool(machine._steal_order_active()):
+        pytest.fail(
+            "SIM-554: SIM_STEAL_PITCH_CLASS="
+            f"{src.get('SIM_STEAL_PITCH_CLASS', '1')!r} but the loop "
+            f"{'does not run' if wanted else 'runs'} "
+            "the running game on the pitch. Export the steal pool with its pitch "
+            "classes (scripts/sim554_rebuild_steal_pool.py), or set "
+            "SIM554_LANE_STEAL_PITCH_CLASS=0 to grade the single pre-pitch draw.",
+            pytrace=False,
+        )
 
 
 @pytest.fixture(scope="package")
@@ -869,6 +914,10 @@ def acceptance_run(production_flags: dict[str, str], preconditions: None) -> Acc
 
             spec = GameSpec(machine_factory=_FACTORY, sim_kwargs=dict(kwargs))
             machine = production_machine_factory(0, spec)
+            # SIM-554 guard, on the first game's machine (every game reads the
+            # same bundle and the same flag).
+            if not run.per_game:
+                check_running_game_order(machine)
             tally = _blank_tally()
             _install_probes(machine, tally, run.calls, run.pool_counts)
 

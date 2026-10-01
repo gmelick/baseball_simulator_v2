@@ -1337,7 +1337,10 @@ def _label_component(mean: list[float], fi: dict[str, int]) -> str | None:
 # sim553.1 = a two-strike foul tip / foul bunt is strike three in
 # sim.pitch_pool.outcome_type; 'O' / 'Q' / 'R' / 'P' coded explicitly; no ELSE
 # (SIM-553 — SQL_OUTCOME_TYPE).
-POOL_BUILDER_VERSION = "sim553.1"
+# sim554.1 = pitch_class + is_pickoff_row on sim.steal_opportunity_pool: the
+# class of the pitch each row rode, and a row of its own for each pickoff
+# outcome thrown before any pitch of its pair (SIM-554 / migration 0031).
+POOL_BUILDER_VERSION = "sim554.1"
 
 #: SIM-523 part G: the loader's fielding-credit slot columns on raw.pitches.
 _PUTOUT_SLOTS: tuple[str, ...] = ("field_putout_1", "field_putout_2", "field_putout_3")
@@ -1544,6 +1547,41 @@ def _table_exists(conn, schema: str, table: str) -> bool:
     return bool(row and row[0])
 
 
+#: SIM-554: the two columns migration 0031 appends to sim.steal_opportunity_pool,
+#: and the file that adds them.
+STEAL_POOL_0031_COLUMNS: tuple[str, ...] = ("pitch_class", "is_pickoff_row")
+MIGRATION_0031 = "db/migrations/duckdb/0031_sim554_steal_pool_pitch_class.sql"
+
+
+def _require_steal_pool_0031(conn) -> None:
+    """SIM-554: raise unless sim.steal_opportunity_pool carries migration 0031.
+
+    The nightly job applies no DuckDB migration. The steal-pool builder deletes
+    a season's rows, then runs a positional INSERT. On an un-migrated table the
+    INSERT fails AFTER the delete, and the season's steal rows are gone. The
+    builder calls this probe first, so the build fails with the rows intact.
+
+    A database with no such table has no rows to lose: the probe passes, and
+    the DELETE then fails on the missing table by itself.
+    """
+    have = {
+        r[0]
+        for r in conn.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_catalog = current_database() AND table_schema = 'sim' "
+            "AND table_name = 'steal_opportunity_pool'"
+        ).fetchall()
+    }
+    if not have:
+        return
+    missing = [c for c in STEAL_POOL_0031_COLUMNS if c not in have]
+    if missing:
+        raise RuntimeError(
+            f"sim.steal_opportunity_pool has no {', '.join(missing)} column: apply "
+            f"{MIGRATION_0031} before the pool build (SIM-554). No row was deleted."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Index-recreate hardening (SIM-419)
 # ---------------------------------------------------------------------------
@@ -1685,18 +1723,34 @@ class PlayerProfileComputor:
         2B runner). Together ~0.006/team-game — documented residual, with
         steals of home. Falls back to an empty relation when the table is
         absent (a pre-0018 database or a unit-test fixture).
+
+        SIM-554: the relation also carries each event's own facts (its id, the
+        runner, the thrower, the half-inning, the outs and the score before the
+        throw). The builder tags an outcome to one pitch of its pair in the
+        plate appearance; measured 2026-09-30, 22% of the outcomes that fit a
+        pair (394 of 1,788 in 2023-2026) had no such pitch, because the throw
+        came before the first pitch. The builder writes each of those as a
+        pickoff row of its own from these columns. Every row of this relation
+        is a throw; most have no outcome (``is_out_i`` and ``is_err_i`` both 0).
         """
         try:
             self._conn.execute("SELECT 1 FROM pg.raw.play_events LIMIT 0")
         except Exception:
             return (
-                "SELECT NULL::INTEGER AS game_pk, NULL::INTEGER AS at_bat_number, "
+                "SELECT NULL::BIGINT AS id, NULL::INTEGER AS game_pk, "
+                "NULL::INTEGER AS at_bat_number, NULL::DATE AS game_date, "
+                "NULL::SMALLINT AS season, NULL::INTEGER AS runner_id, "
+                "NULL::INTEGER AS pitcher_id, NULL::SMALLINT AS inning, "
+                "NULL::VARCHAR AS inning_topbot, NULL::SMALLINT AS outs_before, "
+                "NULL::SMALLINT AS bat_score, NULL::SMALLINT AS fld_score, "
                 "NULL::SMALLINT AS target_base, 0 AS is_out_i, 0 AS is_adv_i, "
                 "0 AS is_err_i WHERE FALSE"
             )
         return f"""
                 SELECT
-                    game_pk, at_bat_number,
+                    id, game_pk, at_bat_number, game_date, season,
+                    runner_id, pitcher_id, inning, inning_topbot,
+                    outs_before, bat_score, fld_score,
                     CASE
                         WHEN base = 1 AND (runners_state & 1) = 1
                              AND (runners_state & 2) = 0 THEN 2
@@ -7287,8 +7341,22 @@ class PlayerProfileComputor:
         trustworthy ONLY after the SIM-488 re-sweep — the pre-sweep `outs`
         column was stale-by-one-play on 46% of plate appearances.
 
+        SIM-554: each pitch row carries the class of its pitch (`pitch_class`,
+        the pitch pool's outcome_type); the steal draw after the pitch filters
+        on it. A pickoff outcome whose plate appearance holds no pitch of its
+        pair (the throw came before the first pitch) becomes a PICKOFF ROW of
+        its own: `is_pickoff_row` TRUE, `pitch_id` the negative of the play
+        record's id, `pitch_number` 0, the count 0-0 (the count at the throw is
+        not stored), the outs and the score before the throw, never attempted,
+        `pitch_class` NULL. An outcome that has a pitch of its pair keeps its
+        tag on that pitch and makes no row, so no outcome counts twice. The
+        catcher is the one on the nearest pitch of the same half-inning (the
+        earlier plate appearance on a tie); with none, he is unknown.
+
         ⚠ The INSERT is positional (no column list): the SELECT order MUST match
-        the DDL column order in db/schemas/02_duckdb_schema.sql (migration 0015).
+        the DDL column order in db/schemas/02_duckdb_schema.sql (migrations
+        0015 + 0017 + 0031). The builder refuses a table without the 0031
+        columns BEFORE it deletes anything.
         """
         ref_season = _canonical_ref_season(self._conn, seasons)
         if incremental:
@@ -7299,7 +7367,12 @@ class PlayerProfileComputor:
         log.info("Building sim.steal_opportunity_pool … (seasons=%s)", seasons)
         season_list = ", ".join(str(s) for s in seasons)
         recency_expr = _recency_weight_sql("f.season", ref_season)
+        pickoff_recency_expr = _recency_weight_sql("e.season", ref_season)  # SIM-554
         pickoff_cte = self._pickoff_outcomes_cte(season_list)  # SIM-507
+
+        # SIM-554: probe before the DELETE (a failed positional INSERT would
+        # leave the season with no steal rows).
+        _require_steal_pool_0031(self._conn)
 
         self._conn.execute(
             f"DELETE FROM sim.steal_opportunity_pool WHERE season IN ({season_list})"
@@ -7308,7 +7381,10 @@ class PlayerProfileComputor:
         self._conn.execute(f"""
             INSERT INTO sim.steal_opportunity_pool
 
-            WITH opportunities AS (
+            -- SIM-554: MATERIALIZED, so the Postgres pitch rows are read once.
+            -- Two CTEs read this one (f and the pickoff rows' anti-join); an
+            -- inlined CTE would read the season's pitches once for each.
+            WITH opportunities AS MATERIALIZED (
                 SELECT
                     pp.pitch_id,
                     rp.game_pk,
@@ -7355,7 +7431,9 @@ class PlayerProfileComputor:
                         WHEN rp.on_1b IS NOT NULL AND rp.on_2b IS NULL
                             THEN {sql_steal_success("2b", "rp.")}
                         ELSE {sql_steal_success("3b", "rp.")}
-                    END                             AS success
+                    END                             AS success,
+                    -- SIM-554: the class of the pitch the row rode.
+                    pp.outcome_type                 AS pitch_class
                 FROM pg.raw.pitches rp
                 JOIN sim.pitch_pool pp
                     ON pp.game_pk       = rp.game_pk
@@ -7404,6 +7482,55 @@ class PlayerProfileComputor:
                    AND po.target_base   = o.target_base
                 WHERE o.runner_id IS NOT NULL
                   AND o.pitcher_id IS NOT NULL
+            ),
+            -- SIM-554: the pickoff OUTCOMES (an out or an error; most throws
+            -- have neither) with a pair, a runner and a thrower, whose plate
+            -- appearance holds no pitch of that pair among the rows f keeps.
+            -- Each becomes one pickoff row. An outcome with such a pitch is
+            -- tagged on it above and makes no row: never both.
+            pickoff_events AS (
+                SELECT e.*
+                FROM pickoffs e
+                WHERE (e.is_out_i = 1 OR e.is_err_i = 1)
+                  AND e.target_base IS NOT NULL
+                  AND e.runner_id IS NOT NULL
+                  AND e.pitcher_id IS NOT NULL
+                  AND NOT EXISTS (
+                        SELECT 1 FROM opportunities o
+                        WHERE o.game_pk       = e.game_pk
+                          AND o.at_bat_number = e.at_bat_number
+                          AND o.target_base   = e.target_base
+                          AND o.runner_id  IS NOT NULL
+                          AND o.pitcher_id IS NOT NULL
+                  )
+            ),
+            -- SIM-554: the play record names no catcher. Take the catcher of
+            -- the nearest pitch of the same half-inning: the fewest plate
+            -- appearances away, the earlier one on a tie, its first pitch.
+            -- Only the pickoff rows' games are read. A half-inning with no
+            -- pitch leaves the catcher NULL; the sampler's catcher weight is
+            -- then neutral.
+            half_pitches AS (
+                SELECT rp.game_pk, rp.inning, rp.inning_topbot,
+                       rp.at_bat_number, rp.pitch_number,
+                       rp.fielder_2::INTEGER AS catcher_id
+                FROM pg.raw.pitches rp
+                WHERE rp.season IN ({season_list})
+                  AND rp.game_pk IN (SELECT game_pk FROM pickoff_events)
+                  AND rp.fielder_2 IS NOT NULL
+            ),
+            pickoff_catcher AS (
+                SELECT e.id AS event_id, h.catcher_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY e.id
+                           ORDER BY ABS(h.at_bat_number - e.at_bat_number),
+                                    h.at_bat_number, h.pitch_number
+                       ) AS rn
+                FROM pickoff_events e
+                JOIN half_pitches h
+                    ON h.game_pk       = e.game_pk
+                   AND h.inning        = e.inning
+                   AND h.inning_topbot = e.inning_topbot
             )
             SELECT
                 f.pitch_id, f.game_pk, f.at_bat_number, f.pitch_number,
@@ -7416,8 +7543,42 @@ class PlayerProfileComputor:
                 (f.rn = 1 AND COALESCE(f.po_out, 0) = 1)  AS pickoff_out,
                 (f.rn = 1 AND COALESCE(f.po_adv, 0) = 1)  AS pickoff_advancing,
                 (f.rn = 1 AND COALESCE(f.po_err, 0) = 1
-                    AND COALESCE(f.po_out, 0) = 0)        AS pickoff_error
+                    AND COALESCE(f.po_out, 0) = 0)        AS pickoff_error,
+                -- SIM-554 (migration 0031): appended last, in the DDL's order.
+                f.pitch_class,
+                FALSE AS is_pickoff_row
             FROM f
+            UNION ALL
+            -- SIM-554: the pickoff rows, the same 23 columns in the same order.
+            SELECT
+                (-e.id)::BIGINT                           AS pitch_id,
+                e.game_pk::INTEGER                        AS game_pk,
+                e.at_bat_number::INTEGER                  AS at_bat_number,
+                0                                         AS pitch_number,
+                e.game_date                               AS game_date,
+                e.season::SMALLINT                        AS season,
+                e.runner_id::INTEGER                      AS runner_id,
+                e.pitcher_id::INTEGER                     AS pitcher_id,
+                pc.catcher_id                             AS catcher_id,
+                e.target_base                             AS target_base,
+                e.inning::SMALLINT                        AS inning,
+                e.outs_before::SMALLINT                   AS outs,
+                0::SMALLINT                               AS count_balls,
+                0::SMALLINT                               AS count_strikes,
+                GREATEST(-5, LEAST(5, e.bat_score - e.fld_score))::SMALLINT
+                                                          AS score_diff,
+                FALSE                                     AS attempted,
+                FALSE                                     AS success,
+                {pickoff_recency_expr}                    AS recency_weight,
+                (e.is_out_i = 1)                          AS pickoff_out,
+                (e.is_adv_i = 1)                          AS pickoff_advancing,
+                (e.is_err_i = 1 AND e.is_out_i = 0)       AS pickoff_error,
+                NULL::VARCHAR                             AS pitch_class,
+                TRUE                                      AS is_pickoff_row
+            FROM pickoff_events e
+            LEFT JOIN pickoff_catcher pc
+                ON pc.event_id = e.id
+               AND pc.rn       = 1
         """)
         log.info("  sim.steal_opportunity_pool done.")
         _record_pool_build(self._conn, "steal_opportunity_pool", seasons, ref_season)

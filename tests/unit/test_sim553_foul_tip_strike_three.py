@@ -193,7 +193,8 @@ class TestThePoolBuildUsesTheConstant:
 
     def test_the_builder_version_moved(self):
         # sim523g.1 -> sim553.1 (SIM-553: a two-strike foul tip / foul bunt is strike three)
-        assert POOL_BUILDER_VERSION == "sim553.1"
+        # sim553.1 -> sim554.1 (SIM-554: the steal pool's pitch class and pickoff rows)
+        assert POOL_BUILDER_VERSION == "sim554.1"
 
 
 class TestTheCountMachineEndsThePlateAppearance:

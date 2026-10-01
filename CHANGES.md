@@ -1,3 +1,71 @@
+# BUILT — the running game on the pitch: the pickoff drawn before the pitch, the steal drawn after it among real pitches of the same class, the two-out third strike first, the runners up a base on a dropped third strike; two review rounds; the run book not yet run — SIM-554, 2026-10-01
+
+**Why it matters.** The steal draw ran before the pitch and knew only the count, so about 36% of
+the simulator's steal attempts landed on a foul, a ball in play or a hit by pitch, where real
+runners almost never earn one. A fifth of real pickoffs never reached the steal pool at all,
+because they came before a plate appearance's first pitch. Both defects shape the stolen-base
+prop and the runs a runner's speed is worth.
+
+**What the loop does now** (the flag `SIM_STEAL_PITCH_CLASS`, default 1, on a bundle whose steal
+pool carries the pitch class). On every pitch with a runner who could steal there are four
+draws, in the order things happen.
+1. The pickoff draw, before the pitch: one row of the steal pool's count group (base, outs,
+   balls, strikes), with the steal draw's weights. A pickoff that makes the third out ends the
+   half-inning with no pitch thrown: the result reads `NO_PITCH`, no event or plate appearance
+   is credited, the out counts for the pitcher, and the same batter leads off his team's next
+   inning.
+2. The pitch.
+3. Its result.
+4. The steal draw, among real pitches of the same count AND the same class (ball, called strike,
+   swinging strike, foul, in play, hit by pitch). A class group answers from its own rows; no
+   fallback.
+
+Two rules of baseball apply in both orders. With two outs, a third strike the catcher holds is
+the third out before any throw, so a steal staged on it is void (decision 3). On a
+dropped-third-strike reach every runner moves up one base first, then the batter takes first
+(decision 4; 28 of 32 real unforced runners moved). With the flag at 0, or on a bundle without
+classes, the loop keeps the single pre-pitch draw of SIM-474.
+
+**The data.** DuckDB migration 0031 (schema v31) adds `pitch_class` and `is_pickoff_row` to
+`sim.steal_opportunity_pool`; builder `sim554.1` writes one PICKOFF ROW for each real pickoff
+outcome that came before any pitch of its pair (394 in 2023-2026, so the pool's pickoff outcomes
+go from about 0.15 to about 0.19 a game). The builder refuses an un-migrated table before it
+deletes anything. The export carries `pitch_id`, `pitch_class` and `is_pickoff_row`, writes both
+files in `pitch_id` order under temporary names, and moves them into place only when both
+targets succeed.
+
+**The build.** The design is version 3 of
+`docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md`; its new §13 is the build
+record, with ten departures and their reasons. In short: the pickoff rows carry their own mark
+through to the sampler, so a partly rebuilt pool keeps the single draw over every pitch row
+instead of dropping some; the pickoff third out credits the pitcher with the out; the rebuild
+script applies migration 0031 inside its one transaction (`--apply-migration`); the acceptance
+lane refuses a bundle that cannot run the order its flag names; the accuracy comparison's
+provenance stamps the steal pool and the running game's order; the play-by-play closes an
+at-bat on any pitch that ends the half, which also fixes an older merge of two batters' pitches
+after a caught stealing for the third out.
+
+**The reviews.** Round 1: six reviewers, two skeptics per finding; seven defects confirmed and
+fixed, three refuted. Round 2: the fixes, the production paths and the tests' strength by
+mutation; eleven smaller findings confirmed and fixed, among them six tests that could not fail.
+
+**The gates.** The unit lane (the host for most files, the app image for the files that import
+the API), the regression lane, the band-arithmetic lane, ruff check and format, and mypy over
+the CI scope: all green. Unit lane 5,276 passed, 0 failed (4,061 on the host, 1,215 in the app
+image); the regression and band-arithmetic lanes 91 passed.
+
+**Filed.** SIM-557 (P2): a caught stealing or a pickoff out on a pitch that does not end the
+plate appearance never reaches the pitcher's box line (his outs, the pitcher-outs prop). It is
+older than this change; the change credits its own new case. Next free ID SIM-558.
+
+**Not done: the run book.** With the app stopped, `scripts/sim554_rebuild_steal_pool.py
+--apply-migration` (migration 0031, the window seasons rebuilt in one transaction, the steal
+pool exported alone, the round-trip, the band centres); then the census of both arms
+(`scripts/sim554_running_game_census.py`), the ten-game smoke and one 45 × 130 lane. Once 0031
+is on the live DuckDB, merge before the next nightly pool build: the old code's positional
+INSERT is two columns short on the migrated table.
+
+
 # Design — the running game on the pitch: decisions 3 and 4 TAKEN, all four decisions closed, the design ready to build — SIM-554, 2026-10-01
 
 **The decision.** The owner, 2026-10-01: "Approve decisions 3 and 4 as recommended."
