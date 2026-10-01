@@ -61,11 +61,17 @@ What the guard refuses (the evidence is the scope note and the plan,
     the scheduled start. Since 2025 the vendor stamps a snapshot at game time,
     0-5 minutes after the scheduled start; a later stamp is an in-play line.
   * ``stamped_before_postponement`` (SIM-555, 2026-10-01): a row of a game
-    postponed and made up later, stamped at or before the postponed original
-    start. That price is for the game that was not played: bet365's closing
-    price of game 745175 is stamped 2024-05-24 23:46, before the original
-    start of 2024-05-25 00:15 UTC; the game was played on 2024-07-13. Opening
-    and closing rows alike. The provider sets ``postponed_start`` on every row
+    postponed and made up later, stamped no later than 15 minutes after the
+    postponed original start (``CLOSING_STAMP_GRACE``). That price is for the
+    game that was not played: bet365's closing price of game 745175 is
+    stamped 2024-05-24 23:46, before the original start of 2024-05-25 00:15
+    UTC; the game was played on 2024-07-13. The grace covers the vendor's
+    game-time snapshot, which it takes at the ORIGINAL start too: 16 of 17
+    books' closes of game 823539 (postponed from 2026-06-06 23:35 UTC, played
+    2026-08-29) are stamped 2026-06-06 23:35:20. Across the made-up games of
+    2019-2026, 763 closing game rows sit in those 15 minutes (16 games);
+    prices stamped hours later belong to the makeup and pass. Opening and
+    closing rows alike. The provider sets ``postponed_start`` on every row
     of a made-up game whose schedule it read after the postponement; a row
     without it is not checked. The live pipeline's provider lives for days, so
     its schedule poll drops a postponed game's cached facts (``forget_game``),
@@ -306,19 +312,21 @@ def _check_stamp(row: Mapping[str, Any]) -> Refusal | None:
 
 
 def _check_postponement(row: Mapping[str, Any]) -> Refusal | None:
-    """SIM-555: refuse a made-up game's row stamped at or before its postponed original start.
+    """SIM-555: refuse a made-up game's row stamped up to 15 minutes after its postponed start.
 
-    Opening and closing rows alike. A row without ``postponed_start`` or
-    without a stamp is not checked.
+    The 15 minutes (``CLOSING_STAMP_GRACE``) cover the vendor's game-time
+    snapshot at the original start. Opening and closing rows alike. A row
+    without ``postponed_start`` or without a stamp is not checked.
     """
     postponed = _aware(row.get("postponed_start"))
     stamp = _aware(row.get("book_line_at"))
-    if postponed is None or stamp is None or stamp > postponed:
+    if postponed is None or stamp is None or stamp > postponed + CLOSING_STAMP_GRACE:
         return None
     return Refusal(
         "stamped_before_postponement",
-        f"stamped {stamp:%Y-%m-%d %H:%M} UTC, before the postponed original start "
-        f"{postponed:%Y-%m-%d %H:%M} UTC: the price of the game that was not played",
+        f"stamped {stamp:%Y-%m-%d %H:%M} UTC, no later than 15 minutes after the postponed "
+        f"original start {postponed:%Y-%m-%d %H:%M} UTC: the price of the game that was not "
+        "played",
     )
 
 

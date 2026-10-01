@@ -1071,8 +1071,8 @@ class TestTheGuardRule:
         refusal = check_row(rows["bp:24"])
         assert refusal is not None and refusal.rule == "stamped_before_postponement"
         assert refusal.message == (
-            "stamped 2024-05-24 23:46 UTC, before the postponed original start "
-            "2024-05-25 00:15 UTC: the price of the game that was not played"
+            "stamped 2024-05-24 23:46 UTC, no later than 15 minutes after the postponed "
+            "original start 2024-05-25 00:15 UTC: the price of the game that was not played"
         )
         # Stamped AT the original start: refused too.
         at = check_row(rows["bp:12"])
@@ -1129,7 +1129,30 @@ class TestTheGuardRule:
         )
         naive = {**row, "postponed_start": datetime(2024, 7, 14, 0, 12)}
         assert check_row(naive) is not None  # stamped AT the start, both read as UTC
-        assert check_row({**row, "postponed_start": datetime(2024, 7, 14, 0, 11)}) is None
+        # Inside the 15-minute grace: refused; one minute past it: kept.
+        assert check_row({**row, "postponed_start": datetime(2024, 7, 13, 23, 57)}) is not None
+        assert check_row({**row, "postponed_start": datetime(2024, 7, 13, 23, 56)}) is None
+
+    def test_the_vendor_snapshot_at_the_original_start_is_refused(self) -> None:
+        """Game 823539 (postponed from 2026-06-06 23:35 UTC, played 2026-08-29): the
+        vendor's game-time snapshot of 16 of 17 books is stamped 20 seconds after the
+        ORIGINAL start. Those are the voided game's prices."""
+        base = {
+            "game_pk": 823539,
+            "market_type": "moneyline",
+            "line_type": "closing",
+            "book": "bp:12",
+            "home_ml": -118,
+            "away_ml": -102,
+            "scheduled_start": _utc("2026-08-29 17:05:00"),
+            "postponed_start": _utc("2026-06-06 23:35:00"),
+        }
+        snapshot = check_row({**base, "book_line_at": _utc("2026-06-06 23:35:20")})
+        assert snapshot is not None and snapshot.rule == "stamped_before_postponement"
+        edge = check_row({**base, "book_line_at": _utc("2026-06-06 23:50:00")})
+        assert edge is not None and edge.rule == "stamped_before_postponement"
+        # A price posted for the makeup, hours later, passes.
+        assert check_row({**base, "book_line_at": _utc("2026-06-07 05:00:00")}) is None
 
     def test_the_tally_counts_and_orders_the_rule(self) -> None:
         provider = _Stub(_745175, _745175_EVENTS, offers=_745175_OFFERS)
