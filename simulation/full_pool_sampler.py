@@ -30,6 +30,7 @@ import numpy as np
 from pipeline.batch.engine_artifacts import (
     EngineArtifacts,
     HandPool,
+    StealPool,
     carry_predict,
     parse_group_key,
     recv_block_cell,
@@ -3266,6 +3267,55 @@ class FullPoolSampler:
         picked-off caught stealing) or an errant throw advanced him. On a
         pre-0017 bundle the pickoff labels are all-zero and nothing changes.
         """
+        got = self.steal_weights(
+            target_base,
+            runner_key,
+            pitcher_key,
+            catcher_key,
+            outs=outs,
+            balls=balls,
+            strikes=strikes,
+            score_diff=score_diff,
+            aggression=aggression,
+        )
+        if got is None:
+            return None
+        pool, rows, w = got
+        total = float(w.sum())
+        if not np.isfinite(total) or total <= 0.0:
+            return None
+        cdf = np.cumsum(w, dtype=np.float64)
+        i = int(np.searchsorted(cdf, self.rng.random() * cdf[-1]))
+        i = min(i, len(rows) - 1)
+        r = rows[i]
+        return (
+            bool(pool.attempted[r]),
+            bool(pool.success[r]),
+            bool(pool.pickoff_out[r]),
+            bool(pool.pickoff_advancing[r]),
+            bool(pool.pickoff_error[r]),
+        )
+
+    def steal_weights(
+        self,
+        target_base: int,
+        runner_key: str,
+        pitcher_key: str,
+        catcher_key: str | None,
+        *,
+        outs: int,
+        balls: int,
+        strikes: int,
+        score_diff: int,
+        aggression: float = 1.0,
+    ) -> tuple[StealPool, np.ndarray, np.ndarray] | None:
+        """SIM-554: the steal draw's candidate rows and their weights —
+        ``(pool, rows, w)`` — or None when the pool or the cell is absent.
+
+        The one code path :meth:`steal_draw` samples from and the running-game
+        replay (``scripts/sim554_running_game_replay.py``) reads whole, so the
+        two cannot disagree. It consumes no random number.
+        """
         pool = self.a.steal_pools.get(str(int(target_base)))
         meta = self._steal_meta(str(int(target_base)))
         if pool is None or meta is None:
@@ -3313,20 +3363,7 @@ class FullPoolSampler:
             att = pool.attempted[rows].astype(bool)
             w = np.where(att, w * np.float32(aggression), w)
         w = self._apply_asof(w, pool, rows)
-        total = float(w.sum())
-        if not np.isfinite(total) or total <= 0.0:
-            return None
-        cdf = np.cumsum(w, dtype=np.float64)
-        i = int(np.searchsorted(cdf, self.rng.random() * cdf[-1]))
-        i = min(i, len(rows) - 1)
-        r = rows[i]
-        return (
-            bool(pool.attempted[r]),
-            bool(pool.success[r]),
-            bool(pool.pickoff_out[r]),
-            bool(pool.pickoff_advancing[r]),
-            bool(pool.pickoff_error[r]),
-        )
+        return pool, rows, w
 
     # ---- SIM-512: the five-scenario advancement draw -----------------------
 

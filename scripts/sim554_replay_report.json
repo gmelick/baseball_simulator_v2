@@ -1,0 +1,4038 @@
+{
+ "tune_season": 2025,
+ "test_season": 2026,
+ "levels": [
+  [
+   0.0,
+   0.0,
+   0.0
+  ],
+  [
+   1.0,
+   1.0,
+   1.0
+  ],
+  [
+   4.0,
+   4.0,
+   2.0
+  ],
+  [
+   12.0,
+   12.0,
+   2.0
+  ]
+ ],
+ "configs": {
+  "neutral": {},
+  "split_fit": {
+   "pitch_pitcher_power": 16,
+   "result_pitcher_power": 16,
+   "result_batter_power": 8
+  },
+  "single_fit": {
+   "pitch_pitcher_power": 16,
+   "pitch_batter_power": 8
+  }
+ },
+ "pitches_tune": 89877,
+ "pitches_test": 74296,
+ "rule": [
+  "The score that decides is the Brier score of the whole table: the odds each design gave to (the pitch's result) x (no steal / stolen base / caught stealing), against what happened. Lower is better. It is bounded, so a design that says 'impossible' for something that then happens pays a fixed price.",
+  "1. Designs are compared inside the family of their pitch draw, against that family's own baseline (today's separate steal draw). The question here is the running game; which pitch draw to use is the weight-fitting ticket's question.",
+  "2. Production runs the two-step pitch draw, so that family's winner is the pick. A difference of two standard errors or less is a tie.",
+  "3. A tie goes to the design whose per-runner expected steals track the real ones best (a gap in that correlation of two standard errors or less is again a tie), then to the simpler build, in this order: today < steal_reads_class < steal_first < pitch_steal_no_contact < pitch_steal < result_steal_2step < result_steal.",
+  "Each design's strength is the one with the lowest whole-table score on the tuning season."
+ ],
+ "sections": {
+  "neutral": {
+   "title": "AT TODAY'S NEUTRAL WEIGHTS (what production runs)",
+   "families": {
+    "split": {
+     "family": "split",
+     "title": "the two-step pitch draw (what production runs)",
+     "designs": {
+      "today": {
+       "config": "neutral",
+       "level": "4/4/2",
+       "tune_grid": [
+        {
+         "config": "neutral",
+         "level": "4/4/2",
+         "whole_table": 0.7731248533364008
+        },
+        {
+         "config": "neutral",
+         "level": "off",
+         "whole_table": 0.7732066893657747
+        },
+        {
+         "config": "neutral",
+         "level": "1/1/1",
+         "whole_table": 0.773209965548808
+        },
+        {
+         "config": "neutral",
+         "level": "12/12/2",
+         "whole_table": 0.773920261295701
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.02736379047677665,
+        "brier_joint": 0.7681975889373535,
+        "brier_result": 0.7599323497261163,
+        "brier_steal": 0.02736497875205977,
+        "log_floor_1e6": 1.628899882853025,
+        "log_floor_1e3": 1.6036320030889524,
+        "said_impossible_share_of_steals": 0.0,
+        "said_impossible_share_of_pitches": 0.0028977215049695,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.1365142735582523,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.3700217054710278,
+         0.15247176855438782,
+         0.11546097490991511,
+         0.18676513135341985,
+         0.17201309886086152,
+         0.003267320850388017
+        ],
+        "steal_mix_distance": 0.37371152110919353,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.7821909599522103
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.1245157373670749,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.10990399719234639
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.1710903418631953,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.11520784095170866
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.1164500468720762,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.12190694766425517
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 0.648331082108225,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.11980932913018566
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 0.8983552171243008,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.11831293335993273
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.7720501520909893,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.11256434205918016
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": 0.8449597075544658,
+        "slope_real_on_predicted": 1.9204887388546172,
+        "mean_abs_error_per_100": 0.7174540215826402
+       },
+       "test_all_levels": {
+        "neutral:off": {
+         "whole_table": 0.7682381163757801,
+         "how_many_steals": 0.027892161390157297,
+         "steals_per_100_predicted": 1.5235589410532082,
+         "runner_correlation": -0.19735451640992552
+        },
+        "neutral:1/1/1": {
+         "whole_table": 0.7682521606465406,
+         "how_many_steals": 0.02764806970011368,
+         "steals_per_100_predicted": 1.2253497525840158,
+         "runner_correlation": 0.7097669344593547
+        },
+        "neutral:4/4/2": {
+         "whole_table": 0.7681975889373535,
+         "how_many_steals": 0.02736497875205977,
+         "steals_per_100_predicted": 1.1365142735582523,
+         "runner_correlation": 0.8449597075544658
+        },
+        "neutral:12/12/2": {
+         "whole_table": 0.768747620303824,
+         "how_many_steals": 0.029806513239861124,
+         "steals_per_100_predicted": 1.3375550848711906,
+         "runner_correlation": 0.9262537682010902
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_result": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_steal": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_running": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_best": {
+        "difference": 0.0002061745203094587,
+        "standard_error": 3.435103810105331e-05
+       }
+      },
+      "steal_reads_class": {
+       "config": "neutral",
+       "level": "4/4/2",
+       "tune_grid": [
+        {
+         "config": "neutral",
+         "level": "4/4/2",
+         "whole_table": 0.77297439361611
+        },
+        {
+         "config": "neutral",
+         "level": "1/1/1",
+         "whole_table": 0.7730591711821132
+        },
+        {
+         "config": "neutral",
+         "level": "off",
+         "whole_table": 0.7731312749955804
+        },
+        {
+         "config": "neutral",
+         "level": "12/12/2",
+         "whole_table": 0.7742354024246323
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.02665776524543224,
+        "brier_joint": 0.7679914144170439,
+        "brier_result": 0.7599323497261163,
+        "brier_steal": 0.027372034666837682,
+        "log_floor_1e6": 1.6227242678401352,
+        "log_floor_1e3": 1.5966869763052385,
+        "said_impossible_share_of_steals": 0.0,
+        "said_impossible_share_of_pitches": 0.00296232039202296,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.1459265901465336,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.6456378733536955,
+         0.23282805537760923,
+         0.10929324913464326,
+         0.012014514686417012,
+         0.0,
+         0.00022630744763502228
+        ],
+        "steal_mix_distance": 0.017739066403304415,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.78259240378111
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.1285245110743398,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.1037929818275096
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.180781560395793,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.10989991457990396
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.1307484339927885,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.1154094817207792
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 0.6567398272361021,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.11759695137000915
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 0.9111171508056601,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.11648749487742481
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.778583446666786,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.10281757893618008
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": 0.8433257944565296,
+        "slope_real_on_predicted": 1.9266063842718626,
+        "mean_abs_error_per_100": 0.7187930572477411
+       },
+       "test_all_levels": {
+        "neutral:off": {
+         "whole_table": 0.7680822402455957,
+         "how_many_steals": 0.027897049566267335,
+         "steals_per_100_predicted": 1.5338620355538397,
+         "runner_correlation": -0.19255080702611513
+        },
+        "neutral:1/1/1": {
+         "whole_table": 0.7680487471481353,
+         "how_many_steals": 0.027649289416229336,
+         "steals_per_100_predicted": 1.2365263009589835,
+         "runner_correlation": 0.7069130126199692
+        },
+        "neutral:4/4/2": {
+         "whole_table": 0.7679914144170439,
+         "how_many_steals": 0.027372034666837682,
+         "steals_per_100_predicted": 1.1459265901465336,
+         "runner_correlation": 0.8433257944565296
+        },
+        "neutral:12/12/2": {
+         "whole_table": 0.7689700367447675,
+         "how_many_steals": 0.028146867858127384,
+         "steals_per_100_predicted": 1.3053564618843065,
+         "runner_correlation": 0.9316917373597864
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": -0.0002061745203094587,
+        "standard_error": 3.451011510313978e-05
+       },
+       "vs_baseline_result": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_steal": {
+        "difference": 7.055914777923713e-06,
+        "standard_error": 6.497259612948968e-06
+       },
+       "vs_baseline_running": {
+        "difference": -0.0007060252313444132,
+        "standard_error": 4.096164100511165e-05
+       },
+       "runner_correlation_gap_to_the_best": {
+        "difference": 0.0016339135747789335,
+        "standard_error": 0.001404250264118888
+       }
+      },
+      "steal_first": {
+       "config": "neutral",
+       "level": "4/4/2",
+       "tune_grid": [
+        {
+         "config": "neutral",
+         "level": "4/4/2",
+         "whole_table": 0.7732314211669411
+        },
+        {
+         "config": "neutral",
+         "level": "1/1/1",
+         "whole_table": 0.7733239709780958
+        },
+        {
+         "config": "neutral",
+         "level": "off",
+         "whole_table": 0.7733574851039599
+        },
+        {
+         "config": "neutral",
+         "level": "12/12/2",
+         "whole_table": 0.7754654404337198
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.02864070665919159,
+        "brier_joint": 0.768082344703816,
+        "brier_result": 0.7597826760160771,
+        "brier_steal": 0.027364978752844948,
+        "log_floor_1e6": 1.6227095820791901,
+        "log_floor_1e3": 1.5967752417597152,
+        "said_impossible_share_of_steals": 0.0,
+        "said_impossible_share_of_pitches": 0.002957706185804856,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.1365142738580067,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.6414443827587227,
+         0.23582684661830516,
+         0.11037166769230088,
+         0.012357102930671429,
+         0.0,
+         0.0
+        ],
+        "steal_mix_distance": 0.018933765757581333,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.7821909597459085
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.1245157377608026,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.1086877434900089
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.1710903424013226,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.11184799914291682
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.1164500471055987,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.11142837624980596
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 0.6483310823333328,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.12153160272544483
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 0.8983552172113296,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.11753986771707571
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.7720501526410553,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.10304563501567637
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": 0.8449597080313085,
+        "slope_real_on_predicted": 1.9204887397105002,
+        "mean_abs_error_per_100": 0.7174540216115269
+       },
+       "test_all_levels": {
+        "neutral:off": {
+         "whole_table": 0.7681724362707415,
+         "how_many_steals": 0.027892161390133362,
+         "steals_per_100_predicted": 1.5235589411577646,
+         "runner_correlation": -0.19735451604718104
+        },
+        "neutral:1/1/1": {
+         "whole_table": 0.7681509034498123,
+         "how_many_steals": 0.027648069700769908,
+         "steals_per_100_predicted": 1.2253497528961974,
+         "runner_correlation": 0.7097669341980534
+        },
+        "neutral:4/4/2": {
+         "whole_table": 0.768082344703816,
+         "how_many_steals": 0.027364978752844948,
+         "steals_per_100_predicted": 1.1365142738580067,
+         "runner_correlation": 0.8449597080313085
+        },
+        "neutral:12/12/2": {
+         "whole_table": 0.7697128976152744,
+         "how_many_steals": 0.029806513229679667,
+         "steals_per_100_predicted": 1.3375550847739963,
+         "runner_correlation": 0.926253768351145
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": -0.00011524423353728048,
+        "standard_error": 5.653645519113027e-05
+       },
+       "vs_baseline_result": {
+        "difference": -0.0001496737100394206,
+        "standard_error": 5.276892352387099e-05
+       },
+       "vs_baseline_steal": {
+        "difference": 7.851742705417469e-13,
+        "standard_error": 6.742676062308671e-13
+       },
+       "vs_baseline_running": {
+        "difference": 0.0012769161824149377,
+        "standard_error": 0.0002463388655400662
+       },
+       "vs_best": {
+        "difference": 9.093028677217821e-05,
+        "standard_error": 4.802240086166751e-05
+       }
+      },
+      "pitch_steal": {
+       "config": "neutral",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "neutral",
+         "level": "off",
+         "whole_table": 0.7736363498190961
+        },
+        {
+         "config": "neutral",
+         "level": "1/1/1",
+         "whole_table": 0.7745864361489051
+        },
+        {
+         "config": "neutral",
+         "level": "4/4/2",
+         "whole_table": 0.7764888828293812
+        },
+        {
+         "config": "neutral",
+         "level": "12/12/2",
+         "whole_table": 0.7820397484818811
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.028646991911294058,
+        "brier_joint": 0.7684156806413173,
+        "brier_result": 0.7599378378976432,
+        "brier_steal": 0.02823663668111212,
+        "log_floor_1e6": 1.6514163954763614,
+        "log_floor_1e3": 1.606791564212485,
+        "said_impossible_share_of_steals": 0.07168342523516055,
+        "said_impossible_share_of_pitches": 0.0054724485746716995,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.4455501711564216,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.6513457915632253,
+         0.2384057169419791,
+         0.09865926551295201,
+         0.011589225981843835,
+         0.0,
+         0.0
+        ],
+        "steal_mix_distance": 0.011351013515367776,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8028069373943093
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.4555322503778836,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.09300456111379246
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.4581070747343725,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.10269256094176571
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.4270273317818967,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.10250860696683482
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.472388978734798,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.10067513174460971
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.472998544075814,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.09992819043070474
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.3890631330958585,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.0962339556234064
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.12310318921388241,
+        "slope_real_on_predicted": -0.8327859282678172,
+        "mean_abs_error_per_100": 1.2047669473692466
+       },
+       "test_all_levels": {
+        "neutral:off": {
+         "whole_table": 0.7684156806413173,
+         "how_many_steals": 0.02823663668111212,
+         "steals_per_100_predicted": 1.4455501711564216,
+         "runner_correlation": -0.12310318921388241
+        },
+        "neutral:1/1/1": {
+         "whole_table": 0.7691896398929656,
+         "how_many_steals": 0.028154628663589486,
+         "steals_per_100_predicted": 1.1795998822491547,
+         "runner_correlation": 0.5959570162739898
+        },
+        "neutral:4/4/2": {
+         "whole_table": 0.7709015876778881,
+         "how_many_steals": 0.028991203194067314,
+         "steals_per_100_predicted": 1.1010957731641162,
+         "runner_correlation": 0.7919267024889187
+        },
+        "neutral:12/12/2": {
+         "whole_table": 0.7753282847841204,
+         "how_many_steals": 0.03377632176018933,
+         "steals_per_100_predicted": 1.1780176016839015,
+         "runner_correlation": 0.7960949912830412
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.00021809170396382125,
+        "standard_error": 5.9873170762295106e-05
+       },
+       "vs_baseline_result": {
+        "difference": 5.488171526701196e-06,
+        "standard_error": 1.5498949343652714e-05
+       },
+       "vs_baseline_steal": {
+        "difference": 0.0008716579290523522,
+        "standard_error": 3.377418868646642e-05
+       },
+       "vs_baseline_running": {
+        "difference": 0.001283201434517406,
+        "standard_error": 9.768252953141784e-05
+       },
+       "vs_best": {
+        "difference": 0.0004242662242732799,
+        "standard_error": 6.062089772623066e-05
+       }
+      },
+      "pitch_steal_no_contact": {
+       "config": "neutral",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "neutral",
+         "level": "off",
+         "whole_table": 0.7733580477967053
+        },
+        {
+         "config": "neutral",
+         "level": "1/1/1",
+         "whole_table": 0.774289332099836
+        },
+        {
+         "config": "neutral",
+         "level": "4/4/2",
+         "whole_table": 0.7759468964325091
+        },
+        {
+         "config": "neutral",
+         "level": "12/12/2",
+         "whole_table": 0.7806491330604612
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.028012592508254535,
+        "brier_joint": 0.7683349310526185,
+        "brier_result": 0.7600432044508446,
+        "brier_steal": 0.02823663668071096,
+        "log_floor_1e6": 1.6449541197204907,
+        "log_floor_1e3": 1.606689156970971,
+        "said_impossible_share_of_steals": 0.07168342523516055,
+        "said_impossible_share_of_pitches": 0.00464650566163103,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.445550171123795,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.5899062597908789,
+         0.2309908517017508,
+         0.17910288850737036,
+         0.0,
+         0.0,
+         0.0
+        ],
+        "steal_mix_distance": 0.08568738412851856,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8028069374124289
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.455532250653797,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.17016588479499395
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.4581070756259966,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.180640794699969
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.4270273306334438,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.18771936182551627
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.4723889790160545,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.18308996120238705
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.4729985442079145,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.17987499684215535
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.389063132727063,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.17502522430310818
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.12310319143349477,
+        "slope_real_on_predicted": -0.8327859423336567,
+        "mean_abs_error_per_100": 1.2047669477600977
+       },
+       "test_all_levels": {
+        "neutral:off": {
+         "whole_table": 0.7683349310526185,
+         "how_many_steals": 0.02823663668071096,
+         "steals_per_100_predicted": 1.445550171123795,
+         "runner_correlation": -0.12310319143349477
+        },
+        "neutral:1/1/1": {
+         "whole_table": 0.7690973451745655,
+         "how_many_steals": 0.02815462866316109,
+         "steals_per_100_predicted": 1.1795998820825457,
+         "runner_correlation": 0.5959570154080979
+        },
+        "neutral:4/4/2": {
+         "whole_table": 0.7706302766300186,
+         "how_many_steals": 0.028991203192859024,
+         "steals_per_100_predicted": 1.1010957729772541,
+         "runner_correlation": 0.7919267030244541
+        },
+        "neutral:12/12/2": {
+         "whole_table": 0.7743625989259524,
+         "how_many_steals": 0.033776321762974085,
+         "steals_per_100_predicted": 1.1780176012837302,
+         "runner_correlation": 0.7960949913166695
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.00013734211526507292,
+        "standard_error": 2.955763670164791e-05
+       },
+       "vs_baseline_result": {
+        "difference": 0.00011085472472821534,
+        "standard_error": 3.6276421945066936e-05
+       },
+       "vs_baseline_steal": {
+        "difference": 0.0008716579286511873,
+        "standard_error": 3.719965490986963e-05
+       },
+       "vs_baseline_running": {
+        "difference": 0.0006488020314778823,
+        "standard_error": 5.0009761845653595e-05
+       },
+       "vs_best": {
+        "difference": 0.0003435166355745316,
+        "standard_error": 4.8337441673931195e-05
+       }
+      },
+      "result_steal": {
+       "config": "neutral",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "neutral",
+         "level": "off",
+         "whole_table": 0.7736594612335214
+        },
+        {
+         "config": "neutral",
+         "level": "1/1/1",
+         "whole_table": 0.7831987097948354
+        },
+        {
+         "config": "neutral",
+         "level": "4/4/2",
+         "whole_table": 0.8255123346997425
+        },
+        {
+         "config": "neutral",
+         "level": "12/12/2",
+         "whole_table": 0.9796298716453621
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.02870048626459306,
+        "brier_joint": 0.7684386107417924,
+        "brier_result": 0.7599323497261163,
+        "brier_steal": 0.028286030574122538,
+        "log_floor_1e6": 1.6539171526332526,
+        "log_floor_1e3": 1.6069151021747734,
+        "said_impossible_share_of_steals": 0.07168342523516055,
+        "said_impossible_share_of_pitches": 0.005915412371609712,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.4450478770074535,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.6466578009969342,
+         0.24269746594910085,
+         0.09870109497265392,
+         0.011943638081311046,
+         0.0,
+         0.0
+        ],
+        "steal_mix_distance": 0.007059264508245906,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8043415178456741
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.4543326216151822,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.09353078093827497
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.4618583951775193,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.10280409115104709
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.4245479683608222,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.10200611716476561
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.472402327920335,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.10074596708222242
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.4754715569750956,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.10008786586494733
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.3839946318715177,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.09613623138941912
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.13131362212279474,
+        "slope_real_on_predicted": -0.873992041440028,
+        "mean_abs_error_per_100": 1.2072737104243376
+       },
+       "test_all_levels": {
+        "neutral:off": {
+         "whole_table": 0.7684386107417924,
+         "how_many_steals": 0.028286030574122538,
+         "steals_per_100_predicted": 1.4450478770074535,
+         "runner_correlation": -0.13131362212279474
+        },
+        "neutral:1/1/1": {
+         "whole_table": 0.7761528380930681,
+         "how_many_steals": 0.028193998365187354,
+         "steals_per_100_predicted": 1.1814398587098858,
+         "runner_correlation": 0.5881379432392347
+        },
+        "neutral:4/4/2": {
+         "whole_table": 0.8114281709752428,
+         "how_many_steals": 0.02901860814189365,
+         "steals_per_100_predicted": 1.1012373845242571,
+         "runner_correlation": 0.7895803436010677
+        },
+        "neutral:12/12/2": {
+         "whole_table": 0.9466818694185098,
+         "how_many_steals": 0.03359059030503457,
+         "steals_per_100_predicted": 1.1749949499311645,
+         "runner_correlation": 0.7922626204745351
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.00024102180443909033,
+        "standard_error": 6.430397368822846e-05
+       },
+       "vs_baseline_result": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_steal": {
+        "difference": 0.0009210518220627744,
+        "standard_error": 3.7558961665820356e-05
+       },
+       "vs_baseline_running": {
+        "difference": 0.0013366957878164086,
+        "standard_error": 9.802150063817022e-05
+       },
+       "vs_best": {
+        "difference": 0.00044719632474854903,
+        "standard_error": 6.077745340810202e-05
+       }
+      },
+      "result_steal_2step": {
+       "config": "neutral",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "neutral",
+         "level": "off",
+         "whole_table": 0.7736594612335214
+        },
+        {
+         "config": "neutral",
+         "level": "1/1/1",
+         "whole_table": 0.7737081776158783
+        },
+        {
+         "config": "neutral",
+         "level": "4/4/2",
+         "whole_table": 0.774477196686566
+        },
+        {
+         "config": "neutral",
+         "level": "12/12/2",
+         "whole_table": 0.7780667149816325
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.02870048626459306,
+        "brier_joint": 0.7684386107417924,
+        "brier_result": 0.7599323497261163,
+        "brier_steal": 0.028286030574122538,
+        "log_floor_1e6": 1.6539171526332526,
+        "log_floor_1e3": 1.6069151021747734,
+        "said_impossible_share_of_steals": 0.07168342523516055,
+        "said_impossible_share_of_pitches": 0.005915412371609712,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.4450478770074535,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.6466578009969342,
+         0.24269746594910085,
+         0.09870109497265392,
+         0.011943638081311046,
+         0.0,
+         0.0
+        ],
+        "steal_mix_distance": 0.007059264508245906,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8043415178456741
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.4543326216151822,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.09353078093827497
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.4618583951775193,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.10280409115104709
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.4245479683608222,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.10200611716476561
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.472402327920335,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.10074596708222242
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.4754715569750956,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.10008786586494733
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.3839946318715177,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.09613623138941912
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.13131362212279474,
+        "slope_real_on_predicted": -0.873992041440028,
+        "mean_abs_error_per_100": 1.2072737104243376
+       },
+       "test_all_levels": {
+        "neutral:off": {
+         "whole_table": 0.7684386107417924,
+         "how_many_steals": 0.028286030574122538,
+         "steals_per_100_predicted": 1.4450478770074535,
+         "runner_correlation": -0.13131362212279474
+        },
+        "neutral:1/1/1": {
+         "whole_table": 0.7684952330309147,
+         "how_many_steals": 0.028193998365187354,
+         "steals_per_100_predicted": 1.1814398587098858,
+         "runner_correlation": 0.5881379432392347
+        },
+        "neutral:4/4/2": {
+         "whole_table": 0.7691176676712413,
+         "how_many_steals": 0.02901860814189365,
+         "steals_per_100_predicted": 1.1012373845242571,
+         "runner_correlation": 0.7895803436010677
+        },
+        "neutral:12/12/2": {
+         "whole_table": 0.7720457927885287,
+         "how_many_steals": 0.03359059030503457,
+         "steals_per_100_predicted": 1.1749949499311645,
+         "runner_correlation": 0.7922626204745351
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.00024102180443909033,
+        "standard_error": 6.398519164215374e-05
+       },
+       "vs_baseline_result": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_steal": {
+        "difference": 0.0009210518220627744,
+        "standard_error": 3.9312433246319346e-05
+       },
+       "vs_baseline_running": {
+        "difference": 0.0013366957878164086,
+        "standard_error": 9.62152189042421e-05
+       },
+       "vs_best": {
+        "difference": 0.00044719632474854903,
+        "standard_error": 6.016943664817638e-05
+       }
+      }
+     },
+     "ranking": [
+      "steal_reads_class",
+      "steal_first",
+      "today",
+      "pitch_steal_no_contact",
+      "pitch_steal",
+      "result_steal",
+      "result_steal_2step"
+     ],
+     "tied_with_the_best": [
+      "steal_reads_class",
+      "steal_first"
+     ],
+     "tied_on_who_steals": [
+      "steal_first",
+      "steal_reads_class"
+     ],
+     "pick": "steal_reads_class"
+    },
+    "single": {
+     "family": "single",
+     "title": "the single pitch draw (its own baseline)",
+     "designs": {
+      "single_today": {
+       "config": "neutral",
+       "level": "4/4/2",
+       "tune_grid": [
+        {
+         "config": "neutral",
+         "level": "4/4/2",
+         "whole_table": 0.7712643611633399
+        },
+        {
+         "config": "neutral",
+         "level": "1/1/1",
+         "whole_table": 0.7713503803695609
+        },
+        {
+         "config": "neutral",
+         "level": "off",
+         "whole_table": 0.7713575538874288
+        },
+        {
+         "config": "neutral",
+         "level": "12/12/2",
+         "whole_table": 0.7720615512687863
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.027363790476567194,
+        "brier_joint": 0.7667176448749227,
+        "brier_result": 0.7584563100636337,
+        "brier_steal": 0.027364978751488953,
+        "log_floor_1e6": 1.6246786441047936,
+        "log_floor_1e3": 1.5997386636774384,
+        "said_impossible_share_of_steals": 0.0,
+        "said_impossible_share_of_pitches": 0.0028977215049695,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.1365142736569487,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.3674112401440556,
+         0.1528941979856116,
+         0.11558199443336764,
+         0.18828272186516656,
+         0.17274325789553957,
+         0.003086587676259144
+        ],
+        "steal_mix_distance": 0.375899557004942,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.782190959884284
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.1245157375017305,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.11002100164330018
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.171090342184515,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.1153909655285853
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.116450046718108,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.12193882522156477
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 0.6483310822876601,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.11975215363323036
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 0.8983552168656089,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.1184937298154031
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.7720501523284276,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.11269467150125435
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": 0.8449597079357335,
+        "slope_real_on_predicted": 1.9204887400302422,
+        "mean_abs_error_per_100": 0.7174540217195443
+       },
+       "test_all_levels": {
+        "neutral:off": {
+         "whole_table": 0.766770853383577,
+         "how_many_steals": 0.027892161390495284,
+         "steals_per_100_predicted": 1.5235589409602441,
+         "runner_correlation": -0.19735451705504403
+        },
+        "neutral:1/1/1": {
+         "whole_table": 0.7667750819592996,
+         "how_many_steals": 0.027648069700504468,
+         "steals_per_100_predicted": 1.225349752497614,
+         "runner_correlation": 0.7097669349199056
+        },
+        "neutral:4/4/2": {
+         "whole_table": 0.7667176448749227,
+         "how_many_steals": 0.027364978751488953,
+         "steals_per_100_predicted": 1.1365142736569487,
+         "runner_correlation": 0.8449597079357335
+        },
+        "neutral:12/12/2": {
+         "whole_table": 0.7672692636747843,
+         "how_many_steals": 0.029806513241382136,
+         "steals_per_100_predicted": 1.337555085182172,
+         "runner_correlation": 0.9262537682291866
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_result": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_steal": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_running": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_best": {
+        "difference": 0.00017779925703237878,
+        "standard_error": 3.5733326445696035e-05
+       }
+      },
+      "single_reads_class": {
+       "config": "neutral",
+       "level": "4/4/2",
+       "tune_grid": [
+        {
+         "config": "neutral",
+         "level": "4/4/2",
+         "whole_table": 0.7711569051046344
+        },
+        {
+         "config": "neutral",
+         "level": "1/1/1",
+         "whole_table": 0.7712434016784714
+        },
+        {
+         "config": "neutral",
+         "level": "off",
+         "whole_table": 0.7713323112145171
+        },
+        {
+         "config": "neutral",
+         "level": "12/12/2",
+         "whole_table": 0.7724092900127768
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.026657765242042507,
+        "brier_joint": 0.7665398456178903,
+        "brier_result": 0.7584563100636337,
+        "brier_steal": 0.027372308087872207,
+        "log_floor_1e6": 1.618502419503402,
+        "log_floor_1e3": 1.5927859590387783,
+        "said_impossible_share_of_steals": 0.0,
+        "said_impossible_share_of_pitches": 0.00296232039202296,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.1414701350489835,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.6434118298064795,
+         0.234346246260307,
+         0.10987406524807712,
+         0.012169425450097266,
+         0.0,
+         0.00019843323503889457
+        ],
+        "steal_mix_distance": 0.018446919067822524,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.7823045790574791
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.1242797046381015,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.10446672350747135
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.176125955712145,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.11045080961350771
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.1258031005656008,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.11588638286220929
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 0.6540017060683675,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.11800715902047344
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 0.9073950979858089,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.11727230787946562
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.7718279304118578,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.10335640060668462
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": 0.8437746727963668,
+        "slope_real_on_predicted": 1.9352726436052907,
+        "mean_abs_error_per_100": 0.7202704784685683
+       },
+       "test_all_levels": {
+        "neutral:off": {
+         "whole_table": 0.7666522938727506,
+         "how_many_steals": 0.027895476427019103,
+         "steals_per_100_predicted": 1.5276024406134907,
+         "runner_correlation": -0.19186688060072396
+        },
+        "neutral:1/1/1": {
+         "whole_table": 0.7666022920676981,
+         "how_many_steals": 0.02764975272016183,
+         "steals_per_100_predicted": 1.231599014904975,
+         "runner_correlation": 0.7068294531828483
+        },
+        "neutral:4/4/2": {
+         "whole_table": 0.7665398456178903,
+         "how_many_steals": 0.027372308087872207,
+         "steals_per_100_predicted": 1.1414701350489835,
+         "runner_correlation": 0.8437746727963668
+        },
+        "neutral:12/12/2": {
+         "whole_table": 0.7675156080870659,
+         "how_many_steals": 0.028123226347994756,
+         "steals_per_100_predicted": 1.2998072679615713,
+         "runner_correlation": 0.9319245819258253
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": -0.00017779925703237878,
+        "standard_error": 3.332424393647446e-05
+       },
+       "vs_baseline_result": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_steal": {
+        "difference": 7.329336383257264e-06,
+        "standard_error": 6.069193072147665e-06
+       },
+       "vs_baseline_running": {
+        "difference": -0.0007060252345246834,
+        "standard_error": 3.998702685824082e-05
+       }
+      },
+      "one_draw": {
+       "config": "neutral",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "neutral",
+         "level": "off",
+         "whole_table": 0.7717953779740694
+        },
+        {
+         "config": "neutral",
+         "level": "1/1/1",
+         "whole_table": 0.7817645318900428
+        },
+        {
+         "config": "neutral",
+         "level": "4/4/2",
+         "whole_table": 0.8259148886330183
+        },
+        {
+         "config": "neutral",
+         "level": "12/12/2",
+         "whole_table": 0.9862136121023606
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.028654891099431437,
+        "brier_joint": 0.7669658955560494,
+        "brier_result": 0.7584563100636337,
+        "brier_steal": 0.028236636680685205,
+        "log_floor_1e6": 1.6495801201879894,
+        "log_floor_1e3": 1.6029330181264514,
+        "said_impossible_share_of_steals": 0.07168342523516055,
+        "said_impossible_share_of_pitches": 0.005915412371609712,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.445550170987322,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.6440461181990362,
+         0.24426641829775014,
+         0.09984893842969897,
+         0.011838525073514851,
+         0.0,
+         0.0
+        ],
+        "steal_mix_distance": 0.00789245863782285,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8028069374882211
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.4555322501064076,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.09399625236935019
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.4581070747817657,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.10411502752854399
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.427027331430951,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.10368112685202827
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.472388978588196,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.10184701117987484
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.4729985435845172,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.10106845969024483
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.3890631331428367,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.09745604786579605
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.12310318906293594,
+        "slope_real_on_predicted": -0.8327859265144526,
+        "mean_abs_error_per_100": 1.2047669473038227
+       },
+       "test_all_levels": {
+        "neutral:off": {
+         "whole_table": 0.7669658955560494,
+         "how_many_steals": 0.028236636680685205,
+         "steals_per_100_predicted": 1.445550170987322,
+         "runner_correlation": -0.12310318906293594
+        },
+        "neutral:1/1/1": {
+         "whole_table": 0.7749651153649887,
+         "how_many_steals": 0.02815462866360422,
+         "steals_per_100_predicted": 1.1795998822115095,
+         "runner_correlation": 0.5959570159166511
+        },
+        "neutral:4/4/2": {
+         "whole_table": 0.8112759058189629,
+         "how_many_steals": 0.028991203196072565,
+         "steals_per_100_predicted": 1.1010957731374673,
+         "runner_correlation": 0.7919267035572589
+        },
+        "neutral:12/12/2": {
+         "whole_table": 0.9520532279587982,
+         "how_many_steals": 0.03377632176849842,
+         "steals_per_100_predicted": 1.1780176021816846,
+         "runner_correlation": 0.7960949914971444
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.0002482506811266635,
+        "standard_error": 6.213334906847135e-05
+       },
+       "vs_baseline_result": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_steal": {
+        "difference": 0.0008716579291962453,
+        "standard_error": 3.589518626031771e-05
+       },
+       "vs_baseline_running": {
+        "difference": 0.0012911006228642425,
+        "standard_error": 9.486340430574039e-05
+       },
+       "vs_best": {
+        "difference": 0.0004260499381590423,
+        "standard_error": 5.656378724053867e-05
+       }
+      },
+      "one_draw_2step": {
+       "config": "neutral",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "neutral",
+         "level": "off",
+         "whole_table": 0.7717953779740694
+        },
+        {
+         "config": "neutral",
+         "level": "1/1/1",
+         "whole_table": 0.7718523146862357
+        },
+        {
+         "config": "neutral",
+         "level": "4/4/2",
+         "whole_table": 0.7726823813982463
+        },
+        {
+         "config": "neutral",
+         "level": "12/12/2",
+         "whole_table": 0.7764493627581054
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.028654891099431437,
+        "brier_joint": 0.7669658955560494,
+        "brier_result": 0.7584563100636337,
+        "brier_steal": 0.028236636680685205,
+        "log_floor_1e6": 1.6495801201879894,
+        "log_floor_1e3": 1.6029330181264514,
+        "said_impossible_share_of_steals": 0.07168342523516055,
+        "said_impossible_share_of_pitches": 0.005915412371609712,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.445550170987322,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.6440461181990362,
+         0.24426641829775014,
+         0.09984893842969897,
+         0.011838525073514851,
+         0.0,
+         0.0
+        ],
+        "steal_mix_distance": 0.00789245863782285,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8028069374882211
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.4555322501064076,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.09399625236935019
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.4581070747817657,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.10411502752854399
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.427027331430951,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.10368112685202827
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.472388978588196,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.10184701117987484
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.4729985435845172,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.10106845969024483
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.3890631331428367,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.09745604786579605
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.12310318906293594,
+        "slope_real_on_predicted": -0.8327859265144526,
+        "mean_abs_error_per_100": 1.2047669473038227
+       },
+       "test_all_levels": {
+        "neutral:off": {
+         "whole_table": 0.7669658955560494,
+         "how_many_steals": 0.028236636680685205,
+         "steals_per_100_predicted": 1.445550170987322,
+         "runner_correlation": -0.12310318906293594
+        },
+        "neutral:1/1/1": {
+         "whole_table": 0.7670232733683007,
+         "how_many_steals": 0.02815462866360422,
+         "steals_per_100_predicted": 1.1795998822115095,
+         "runner_correlation": 0.5959570159166511
+        },
+        "neutral:4/4/2": {
+         "whole_table": 0.7676525522169056,
+         "how_many_steals": 0.028991203196072565,
+         "steals_per_100_predicted": 1.1010957731374673,
+         "runner_correlation": 0.7919267035572589
+        },
+        "neutral:12/12/2": {
+         "whole_table": 0.7707168432742543,
+         "how_many_steals": 0.03377632176849842,
+         "steals_per_100_predicted": 1.1780176021816846,
+         "runner_correlation": 0.7960949914971444
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.0002482506811266635,
+        "standard_error": 6.0721255904187445e-05
+       },
+       "vs_baseline_result": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_steal": {
+        "difference": 0.0008716579291962453,
+        "standard_error": 3.4351898888474895e-05
+       },
+       "vs_baseline_running": {
+        "difference": 0.0012911006228642425,
+        "standard_error": 9.019408431798167e-05
+       },
+       "vs_best": {
+        "difference": 0.0004260499381590423,
+        "standard_error": 6.187378463407848e-05
+       }
+      }
+     },
+     "ranking": [
+      "single_reads_class",
+      "single_today",
+      "one_draw",
+      "one_draw_2step"
+     ],
+     "tied_with_the_best": [
+      "single_reads_class"
+     ],
+     "tied_on_who_steals": [
+      "single_reads_class"
+     ],
+     "pick": "single_reads_class"
+    }
+   }
+  },
+  "fitted": {
+   "title": "AT THE EARLIER FITTED PITCHER AND BATTER WEIGHTS",
+   "families": {
+    "split": {
+     "family": "split",
+     "title": "the two-step pitch draw (what production runs)",
+     "designs": {
+      "today": {
+       "config": "split_fit",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "split_fit",
+         "level": "off",
+         "whole_table": 0.8906317236579083
+        },
+        {
+         "config": "split_fit",
+         "level": "1/1/1",
+         "whole_table": 0.89124888203583
+        },
+        {
+         "config": "split_fit",
+         "level": "4/4/2",
+         "whole_table": 0.891304337481536
+        },
+        {
+         "config": "split_fit",
+         "level": "12/12/2",
+         "whole_table": 0.8921542783598443
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.027891668342023886,
+        "brier_joint": 0.8707773599412584,
+        "brier_result": 0.86526739509889,
+        "brier_steal": 0.027892161390720132,
+        "log_floor_1e6": 1.968514175863324,
+        "log_floor_1e3": 1.920005374273647,
+        "said_impossible_share_of_steals": 0.0,
+        "said_impossible_share_of_pitches": 0.0030084624542040033,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.5235589412373443,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.37307351331483385,
+         0.15803441590745648,
+         0.11421452802039096,
+         0.1793194641556125,
+         0.17214243012968786,
+         0.003215648472018409
+        ],
+        "steal_mix_distance": 0.36509706591231883,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8035021653855121
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.5232786272444783,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.09601839373010826
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.5305798522066998,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.11354520210268125
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.5209729878406943,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.13556105223162546
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.5713149254293846,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.11619685435969866
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.5402207383098916,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.11378496430887322
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.4603987952663033,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.11239417991452821
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.19735451624470626,
+        "slope_real_on_predicted": -1.816602585274429,
+        "mean_abs_error_per_100": 1.2211770328875746
+       },
+       "test_all_levels": {
+        "split_fit:off": {
+         "whole_table": 0.8707773599412584,
+         "how_many_steals": 0.027892161390720132,
+         "steals_per_100_predicted": 1.5235589412373443,
+         "runner_correlation": -0.19735451624470626
+        },
+        "split_fit:1/1/1": {
+         "whole_table": 0.8713861074857132,
+         "how_many_steals": 0.02764806970043156,
+         "steals_per_100_predicted": 1.2253497526548982,
+         "runner_correlation": 0.7097669346278073
+        },
+        "split_fit:4/4/2": {
+         "whole_table": 0.8715191600068304,
+         "how_many_steals": 0.027364978752775833,
+         "steals_per_100_predicted": 1.1365142736588882,
+         "runner_correlation": 0.8449597076798032
+        },
+        "split_fit:12/12/2": {
+         "whole_table": 0.8720752564856387,
+         "how_many_steals": 0.02980651324371104,
+         "steals_per_100_predicted": 1.3375550854489804,
+         "runner_correlation": 0.9262537684149033
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_result": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_steal": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_running": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_best": {
+        "difference": 6.619467982796615e-05,
+        "standard_error": 4.411133720400144e-05
+       },
+       "runner_correlation_gap_to_the_best": {
+        "difference": 0.019770922536998137,
+        "standard_error": 0.01940335733715352
+       }
+      },
+      "steal_reads_class": {
+       "config": "split_fit",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "split_fit",
+         "level": "off",
+         "whole_table": 0.8907175756902834
+        },
+        {
+         "config": "split_fit",
+         "level": "1/1/1",
+         "whole_table": 0.891221971455359
+        },
+        {
+         "config": "split_fit",
+         "level": "4/4/2",
+         "whole_table": 0.8913437463990511
+        },
+        {
+         "config": "split_fit",
+         "level": "12/12/2",
+         "whole_table": 0.8929474254926175
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.027433720327099776,
+        "brier_joint": 0.8707111652614306,
+        "brier_result": 0.86526739509889,
+        "brier_steal": 0.02796864112484603,
+        "log_floor_1e6": 1.9612143190866171,
+        "log_floor_1e3": 1.913091957919176,
+        "said_impossible_share_of_steals": 0.0,
+        "said_impossible_share_of_pitches": 0.0030592187226031508,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.5442168699849474,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.6525971469098613,
+         0.23894189194125023,
+         0.09842476346919714,
+         0.00984121781772399,
+         0.0,
+         0.0001949798619674117
+        ],
+        "steal_mix_distance": 0.011353121184911653,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8040709658759737
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.532670130511597,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.08331131868618985
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.549153082621555,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.0975804124612115
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.5538232758240365,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.116711516803172
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.5877530648234748,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.10121187277973942
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.5673915913612482,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.09753201637282524
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.4802166819420943,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.0955943886272161
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.17758359370770813,
+        "slope_real_on_predicted": -1.5289495939509241,
+        "mean_abs_error_per_100": 1.2284172656775862
+       },
+       "test_all_levels": {
+        "split_fit:off": {
+         "whole_table": 0.8707111652614306,
+         "how_many_steals": 0.02796864112484603,
+         "steals_per_100_predicted": 1.5442168699849474,
+         "runner_correlation": -0.17758359370770813
+        },
+        "split_fit:1/1/1": {
+         "whole_table": 0.8712277931062082,
+         "how_many_steals": 0.027701778188113174,
+         "steals_per_100_predicted": 1.2456686079154062,
+         "runner_correlation": 0.7031638228358641
+        },
+        "split_fit:4/4/2": {
+         "whole_table": 0.8713717131811685,
+         "how_many_steals": 0.027450411444083823,
+         "steals_per_100_predicted": 1.155311446041193,
+         "runner_correlation": 0.8436364899245179
+        },
+        "split_fit:12/12/2": {
+         "whole_table": 0.8724859148236871,
+         "how_many_steals": 0.028646969502699845,
+         "steals_per_100_predicted": 1.3189768328492624,
+         "runner_correlation": 0.9280023285280277
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": -6.619467982796615e-05,
+        "standard_error": 4.358378712170848e-05
+       },
+       "vs_baseline_result": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_steal": {
+        "difference": 7.647973412589993e-05,
+        "standard_error": 9.443564216092891e-06
+       },
+       "vs_baseline_running": {
+        "difference": -0.0004579480149241181,
+        "standard_error": 2.7117449527597825e-05
+       }
+      },
+      "steal_first": {
+       "config": "split_fit",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "split_fit",
+         "level": "off",
+         "whole_table": 0.89176023785871
+        },
+        {
+         "config": "split_fit",
+         "level": "1/1/1",
+         "whole_table": 0.8923544289792056
+        },
+        {
+         "config": "split_fit",
+         "level": "4/4/2",
+         "whole_table": 0.8923885164482862
+        },
+        {
+         "config": "split_fit",
+         "level": "12/12/2",
+         "whole_table": 0.8944058195857649
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.041026247503305024,
+        "brier_joint": 0.8713698151699308,
+        "brier_result": 0.8628308411753135,
+        "brier_steal": 0.027892161390133362,
+        "log_floor_1e6": 1.9598375851281677,
+        "log_floor_1e3": 1.9130450138457613,
+        "said_impossible_share_of_steals": 0.0,
+        "said_impossible_share_of_pitches": 0.0030776755474755677,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.5235589411577646,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.6454351869392851,
+         0.24386874864908134,
+         0.10024955307643503,
+         0.010446511335198534,
+         0.0,
+         0.0
+        ],
+        "steal_mix_distance": 0.006901059546242668,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8035021654274812
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.5232786265618277,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.0996955905883628
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.5305798528576937,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.10103719402105381
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.520972987748857,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.10094339988588748
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.5713149253564043,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.10058403180042942
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.5402207379114328,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.09995477908250208
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.4603987955748001,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.09994975233927267
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.19735451604718104,
+        "slope_real_on_predicted": -1.8166025826828756,
+        "mean_abs_error_per_100": 1.2211770328133
+       },
+       "test_all_levels": {
+        "split_fit:off": {
+         "whole_table": 0.8713698151699308,
+         "how_many_steals": 0.027892161390133362,
+         "steals_per_100_predicted": 1.5235589411577646,
+         "runner_correlation": -0.19735451604718104
+        },
+        "split_fit:1/1/1": {
+         "whole_table": 0.8719571188979339,
+         "how_many_steals": 0.027648069700769908,
+         "steals_per_100_predicted": 1.2253497528961974,
+         "runner_correlation": 0.7097669341980534
+        },
+        "split_fit:4/4/2": {
+         "whole_table": 0.8720701025413243,
+         "how_many_steals": 0.027364978752844948,
+         "steals_per_100_predicted": 1.1365142738580067,
+         "runner_correlation": 0.8449597080313085
+        },
+        "split_fit:12/12/2": {
+         "whole_table": 0.8735117850158232,
+         "how_many_steals": 0.029806513229679667,
+         "steals_per_100_predicted": 1.3375550847739963,
+         "runner_correlation": 0.926253768351145
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.000592455228672579,
+        "standard_error": 0.00015900208030611624
+       },
+       "vs_baseline_result": {
+        "difference": -0.0024365539235764564,
+        "standard_error": 0.00016127435394564752
+       },
+       "vs_baseline_steal": {
+        "difference": -5.867728812279457e-13,
+        "standard_error": 4.3357177185875346e-13
+       },
+       "vs_baseline_running": {
+        "difference": 0.013134579161281133,
+        "standard_error": 0.0005214047280638237
+       },
+       "vs_best": {
+        "difference": 0.0006586499085005452,
+        "standard_error": 0.00015452480837914565
+       }
+      },
+      "pitch_steal": {
+       "config": "split_fit",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "split_fit",
+         "level": "off",
+         "whole_table": 0.8942060810349421
+        },
+        {
+         "config": "split_fit",
+         "level": "1/1/1",
+         "whole_table": 0.8954034465579545
+        },
+        {
+         "config": "split_fit",
+         "level": "4/4/2",
+         "whole_table": 0.8997457497188558
+        },
+        {
+         "config": "split_fit",
+         "level": "12/12/2",
+         "whole_table": 0.9050263523227908
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.03386983119060455,
+        "brier_joint": 0.8734780907392201,
+        "brier_result": 0.864312549185394,
+        "brier_steal": 0.03004882786915515,
+        "log_floor_1e6": 1.9976707237049744,
+        "log_floor_1e3": 1.9233885031710345,
+        "said_impossible_share_of_steals": 0.0720077846253649,
+        "said_impossible_share_of_pitches": 0.00566624523583208,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.4142143525116695,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.6469073245870516,
+         0.2417411912936861,
+         0.09996570637277634,
+         0.011385777746485888,
+         0.0,
+         0.0
+        ],
+        "steal_mix_distance": 0.00801553916366063,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8082453756114585
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.4271024229533096,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.09192994575765766
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.4002121129746663,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.0937192198125963
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.4053677935630364,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.11489863858981435
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.4714410931231647,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.10368632858484116
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.4014494686869066,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.10144088723720548
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.356455277755842,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.09446339817274886
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.06939773952397012,
+        "slope_real_on_predicted": -0.302296593024181,
+        "mean_abs_error_per_100": 1.2077772550817414
+       },
+       "test_all_levels": {
+        "split_fit:off": {
+         "whole_table": 0.8734780907392201,
+         "how_many_steals": 0.03004882786915515,
+         "steals_per_100_predicted": 1.4142143525116695,
+         "runner_correlation": -0.06939773952397012
+        },
+        "split_fit:1/1/1": {
+         "whole_table": 0.8747866914636926,
+         "how_many_steals": 0.02980014749265224,
+         "steals_per_100_predicted": 1.167509264578034,
+         "runner_correlation": 0.4751806554317152
+        },
+        "split_fit:4/4/2": {
+         "whole_table": 0.8787419235352123,
+         "how_many_steals": 0.03124380734224563,
+         "steals_per_100_predicted": 1.0835778547520318,
+         "runner_correlation": 0.7079108786260456
+        },
+        "split_fit:12/12/2": {
+         "whole_table": 0.883646541436565,
+         "how_many_steals": 0.035601944876316814,
+         "steals_per_100_predicted": 1.1645160763205848,
+         "runner_correlation": 0.7485721672647583
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.0027007307979618677,
+        "standard_error": 0.00016678537392534714
+       },
+       "vs_baseline_result": {
+        "difference": -0.0009548459134959419,
+        "standard_error": 0.0001128279717416069
+       },
+       "vs_baseline_steal": {
+        "difference": 0.0021566664784350206,
+        "standard_error": 0.00012731793444476928
+       },
+       "vs_baseline_running": {
+        "difference": 0.005978162848580662,
+        "standard_error": 0.0002844577596359591
+       },
+       "vs_best": {
+        "difference": 0.0027669254777898345,
+        "standard_error": 0.00016267297255484467
+       }
+      },
+      "pitch_steal_no_contact": {
+       "config": "split_fit",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "split_fit",
+         "level": "off",
+         "whole_table": 0.8926557628914714
+        },
+        {
+         "config": "split_fit",
+         "level": "1/1/1",
+         "whole_table": 0.893791821939738
+        },
+        {
+         "config": "split_fit",
+         "level": "4/4/2",
+         "whole_table": 0.89778778609783
+        },
+        {
+         "config": "split_fit",
+         "level": "12/12/2",
+         "whole_table": 0.9024454021741728
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.03053982078900235,
+        "brier_joint": 0.8724079703414578,
+        "brier_result": 0.8648827103412334,
+        "brier_steal": 0.03004882786667343,
+        "log_floor_1e6": 1.986921232062013,
+        "log_floor_1e3": 1.9205948361637732,
+        "said_impossible_share_of_steals": 0.0720077846253649,
+        "said_impossible_share_of_pitches": 0.004784931848174159,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.4142143517879442,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.5983437521793977,
+         0.23500034970750724,
+         0.16665589811309503,
+         0.0,
+         0.0,
+         0.0
+        ],
+        "steal_mix_distance": 0.07324039373424324,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8082453760250787
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.4271024225240532,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.1447137708753922
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.4002121118916966,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.1643131532708084
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.4053677927010793,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.19310479231816344
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.4714410924384864,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.16956499438369338
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.4014494677224854,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.1673949995020925
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.356455276612802,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.16458648088046385
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.06939774084982514,
+        "slope_real_on_predicted": -0.3022965987124222,
+        "mean_abs_error_per_100": 1.2077772553511528
+       },
+       "test_all_levels": {
+        "split_fit:off": {
+         "whole_table": 0.8724079703414578,
+         "how_many_steals": 0.03004882786667343,
+         "steals_per_100_predicted": 1.4142143517879442,
+         "runner_correlation": -0.06939774084982514
+        },
+        "split_fit:1/1/1": {
+         "whole_table": 0.8737505404186554,
+         "how_many_steals": 0.029800147492460363,
+         "steals_per_100_predicted": 1.167509264604807,
+         "runner_correlation": 0.475180652615134
+        },
+        "split_fit:4/4/2": {
+         "whole_table": 0.8774383054116945,
+         "how_many_steals": 0.031243807340526782,
+         "steals_per_100_predicted": 1.0835778541865115,
+         "runner_correlation": 0.7079108779445348
+        },
+        "split_fit:12/12/2": {
+         "whole_table": 0.881704486815044,
+         "how_many_steals": 0.03560194489525871,
+         "steals_per_100_predicted": 1.164516076576777,
+         "runner_correlation": 0.7485721678396001
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.0016306104001994432,
+        "standard_error": 9.573950346505475e-05
+       },
+       "vs_baseline_result": {
+        "difference": -0.00038468475765670803,
+        "standard_error": 6.29242590597935e-05
+       },
+       "vs_baseline_steal": {
+        "difference": 0.0021566664759533026,
+        "standard_error": 0.00012754578339276706
+       },
+       "vs_baseline_running": {
+        "difference": 0.002648152446978455,
+        "standard_error": 0.0001791982986203869
+       },
+       "vs_best": {
+        "difference": 0.0016968050800274092,
+        "standard_error": 0.00010297947059767243
+       }
+      },
+      "result_steal": {
+       "config": "split_fit",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "split_fit",
+         "level": "off",
+         "whole_table": 0.8962360764243238
+        },
+        {
+         "config": "split_fit",
+         "level": "1/1/1",
+         "whole_table": 0.9113177941905567
+        },
+        {
+         "config": "split_fit",
+         "level": "4/4/2",
+         "whole_table": 0.9699300443094778
+        },
+        {
+         "config": "split_fit",
+         "level": "12/12/2",
+         "whole_table": 1.08209106463747
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.03396492251631607,
+        "brier_joint": 0.8750103020977033,
+        "brier_result": 0.86526739509889,
+        "brier_steal": 0.03193097408594099,
+        "log_floor_1e6": 2.006738501118059,
+        "log_floor_1e3": 1.926969292561836,
+        "said_impossible_share_of_steals": 0.07395394096659098,
+        "said_impossible_share_of_pitches": 0.006104594826551988,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.4058449971611529,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.653623738403999,
+         0.24105510512854184,
+         0.09309605341865872,
+         0.012225103048800355,
+         0.0,
+         0.0
+        ],
+        "steal_mix_distance": 0.009021076288997948,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8108894930377728
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.4650037009426815,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.07812235719155047
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.3767285245850105,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.0933881419193587
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.358264918072201,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.10870403970583292
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.431209497448398,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.09748289556199187
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.3992639305151564,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.09439833278751072
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.3763698223667968,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.08790954693073091
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.038297065452944604,
+        "slope_real_on_predicted": -0.13576868302234163,
+        "mean_abs_error_per_100": 1.208805848982197
+       },
+       "test_all_levels": {
+        "split_fit:off": {
+         "whole_table": 0.8750103020977033,
+         "how_many_steals": 0.03193097408594099,
+         "steals_per_100_predicted": 1.4058449971611529,
+         "runner_correlation": -0.038297065452944604
+        },
+        "split_fit:1/1/1": {
+         "whole_table": 0.8888351788560629,
+         "how_many_steals": 0.031409839746573916,
+         "steals_per_100_predicted": 1.1826623977118207,
+         "runner_correlation": 0.36319895001277086
+        },
+        "split_fit:4/4/2": {
+         "whole_table": 0.9434530987950772,
+         "how_many_steals": 0.032676427348930955,
+         "steals_per_100_predicted": 1.0964692770148767,
+         "runner_correlation": 0.6513723837540573
+        },
+        "split_fit:12/12/2": {
+         "whole_table": 1.0510931957912688,
+         "how_many_steals": 0.036431112062559834,
+         "steals_per_100_predicted": 1.1576732682975457,
+         "runner_correlation": 0.7176400126511463
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.004232942156444639,
+        "standard_error": 0.00016530424782659097
+       },
+       "vs_baseline_result": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_steal": {
+        "difference": 0.004038812695220864,
+        "standard_error": 0.00020843130595476207
+       },
+       "vs_baseline_running": {
+        "difference": 0.0060732541742921815,
+        "standard_error": 0.0003065311660623338
+       },
+       "vs_best": {
+        "difference": 0.004299136836272606,
+        "standard_error": 0.00017068893306558202
+       }
+      },
+      "result_steal_2step": {
+       "config": "split_fit",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "split_fit",
+         "level": "off",
+         "whole_table": 0.8962360764243238
+        },
+        {
+         "config": "split_fit",
+         "level": "1/1/1",
+         "whole_table": 0.8962722300535972
+        },
+        {
+         "config": "split_fit",
+         "level": "4/4/2",
+         "whole_table": 0.8973464470652238
+        },
+        {
+         "config": "split_fit",
+         "level": "12/12/2",
+         "whole_table": 0.899787010537884
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.03396492251631607,
+        "brier_joint": 0.8750103020977033,
+        "brier_result": 0.86526739509889,
+        "brier_steal": 0.03193097408594099,
+        "log_floor_1e6": 2.006738501118059,
+        "log_floor_1e3": 1.926969292561836,
+        "said_impossible_share_of_steals": 0.07395394096659098,
+        "said_impossible_share_of_pitches": 0.006104594826551988,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.4058449971611529,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.653623738403999,
+         0.24105510512854184,
+         0.09309605341865872,
+         0.012225103048800355,
+         0.0,
+         0.0
+        ],
+        "steal_mix_distance": 0.009021076288997948,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8108894930377728
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.4650037009426815,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.07812235719155047
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.3767285245850105,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.0933881419193587
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.358264918072201,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.10870403970583292
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.431209497448398,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.09748289556199187
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.3992639305151564,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.09439833278751072
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.3763698223667968,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.08790954693073091
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.038297065452944604,
+        "slope_real_on_predicted": -0.13576868302234163,
+        "mean_abs_error_per_100": 1.208805848982197
+       },
+       "test_all_levels": {
+        "split_fit:off": {
+         "whole_table": 0.8750103020977033,
+         "how_many_steals": 0.03193097408594099,
+         "steals_per_100_predicted": 1.4058449971611529,
+         "runner_correlation": -0.038297065452944604
+        },
+        "split_fit:1/1/1": {
+         "whole_table": 0.8749809534508959,
+         "how_many_steals": 0.031409839746573916,
+         "steals_per_100_predicted": 1.1826623977118207,
+         "runner_correlation": 0.36319895001277086
+        },
+        "split_fit:4/4/2": {
+         "whole_table": 0.8760193420656404,
+         "how_many_steals": 0.032676427348930955,
+         "steals_per_100_predicted": 1.0964692770148767,
+         "runner_correlation": 0.6513723837540573
+        },
+        "split_fit:12/12/2": {
+         "whole_table": 0.8784338823754249,
+         "how_many_steals": 0.036431112062559834,
+         "steals_per_100_predicted": 1.1576732682975457,
+         "runner_correlation": 0.7176400126511463
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.004232942156444639,
+        "standard_error": 0.00017006028993148063
+       },
+       "vs_baseline_result": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_steal": {
+        "difference": 0.004038812695220864,
+        "standard_error": 0.00021157765689909562
+       },
+       "vs_baseline_running": {
+        "difference": 0.0060732541742921815,
+        "standard_error": 0.0002897231961201698
+       },
+       "vs_best": {
+        "difference": 0.004299136836272606,
+        "standard_error": 0.00016357982489818281
+       }
+      }
+     },
+     "ranking": [
+      "steal_reads_class",
+      "today",
+      "steal_first",
+      "pitch_steal_no_contact",
+      "pitch_steal",
+      "result_steal",
+      "result_steal_2step"
+     ],
+     "tied_with_the_best": [
+      "steal_reads_class",
+      "today"
+     ],
+     "tied_on_who_steals": [
+      "steal_reads_class",
+      "today"
+     ],
+     "pick": "today"
+    },
+    "single": {
+     "family": "single",
+     "title": "the single pitch draw (its own baseline)",
+     "designs": {
+      "single_today": {
+       "config": "split_fit",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "split_fit",
+         "level": "off",
+         "whole_table": 0.8348891226113277
+        },
+        {
+         "config": "split_fit",
+         "level": "4/4/2",
+         "whole_table": 0.8351935964097792
+        },
+        {
+         "config": "split_fit",
+         "level": "1/1/1",
+         "whole_table": 0.8351981411532559
+        },
+        {
+         "config": "split_fit",
+         "level": "12/12/2",
+         "whole_table": 0.8360428359907508
+        },
+        {
+         "config": "single_fit",
+         "level": "off",
+         "whole_table": 0.8828343889677084
+        },
+        {
+         "config": "single_fit",
+         "level": "1/1/1",
+         "whole_table": 0.8834076949112697
+        },
+        {
+         "config": "single_fit",
+         "level": "4/4/2",
+         "whole_table": 0.8834534895327375
+        },
+        {
+         "config": "single_fit",
+         "level": "12/12/2",
+         "whole_table": 0.8843092735034443
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.027891717265763758,
+        "brier_joint": 0.8225726600438057,
+        "brier_result": 0.8157343112978465,
+        "brier_steal": 0.02789216139052718,
+        "log_floor_1e6": 1.801122730282443,
+        "log_floor_1e3": 1.7674299391304513,
+        "said_impossible_share_of_steals": 0.0,
+        "said_impossible_share_of_pitches": 0.002911564123623813,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.5235589410957269,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.3673460801903032,
+         0.15944012846617206,
+         0.1150254719682178,
+         0.18358333251850814,
+         0.17158976674272874,
+         0.003015220114069974
+        ],
+        "steal_mix_distance": 0.36941878647813386,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8035021654601989
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.5232786270591099,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.11053959355357525
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.530579852415543,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.11372415951920282
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.5209729874112532,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.12157962857623515
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.5713149254061491,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.1160285731111141
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.5402207378508126,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.1153557789815854
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.4603987954312834,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.11352629401925209
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.19735451561174808,
+        "slope_real_on_predicted": -1.8166025788001963,
+        "mean_abs_error_per_100": 1.2211770326928366
+       },
+       "test_all_levels": {
+        "split_fit:off": {
+         "whole_table": 0.8225726600438057,
+         "how_many_steals": 0.02789216139052718,
+         "steals_per_100_predicted": 1.5235589410957269,
+         "runner_correlation": -0.19735451561174808
+        },
+        "split_fit:1/1/1": {
+         "whole_table": 0.8228849597191181,
+         "how_many_steals": 0.02764806970076133,
+         "steals_per_100_predicted": 1.2253497525913024,
+         "runner_correlation": 0.7097669339340774
+        },
+        "split_fit:4/4/2": {
+         "whole_table": 0.8229225884614298,
+         "how_many_steals": 0.027364978752989967,
+         "steals_per_100_predicted": 1.1365142735881006,
+         "runner_correlation": 0.8449597079139419
+        },
+        "split_fit:12/12/2": {
+         "whole_table": 0.8234309847356202,
+         "how_many_steals": 0.02980651324324594,
+         "steals_per_100_predicted": 1.337555085030304,
+         "runner_correlation": 0.9262537682428715
+        },
+        "single_fit:off": {
+         "whole_table": 0.8631400836393964,
+         "how_many_steals": 0.027892161390240807,
+         "steals_per_100_predicted": 1.5235589410896102,
+         "runner_correlation": -0.19735451582799837
+        },
+        "single_fit:1/1/1": {
+         "whole_table": 0.8637025088003393,
+         "how_many_steals": 0.027648069700918133,
+         "steals_per_100_predicted": 1.2253497526929182,
+         "runner_correlation": 0.7097669347143826
+        },
+        "single_fit:4/4/2": {
+         "whole_table": 0.8638222963245907,
+         "how_many_steals": 0.027364978753016477,
+         "steals_per_100_predicted": 1.1365142736309504,
+         "runner_correlation": 0.8449597077338917
+        },
+        "single_fit:12/12/2": {
+         "whole_table": 0.8643802170752029,
+         "how_many_steals": 0.02980651324653797,
+         "steals_per_100_predicted": 1.3375550852954148,
+         "runner_correlation": 0.9262537682187884
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_result": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_steal": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_running": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_best": {
+        "difference": 4.001288703287419e-05,
+        "standard_error": 3.696059331128749e-05
+       },
+       "runner_correlation_gap_to_the_best": {
+        "difference": 0.008487815211272315,
+        "standard_error": 0.013791380814032627
+       }
+      },
+      "single_reads_class": {
+       "config": "split_fit",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "split_fit",
+         "level": "off",
+         "whole_table": 0.8350194002289026
+        },
+        {
+         "config": "split_fit",
+         "level": "1/1/1",
+         "whole_table": 0.8352114219751505
+        },
+        {
+         "config": "split_fit",
+         "level": "4/4/2",
+         "whole_table": 0.8352221386978111
+        },
+        {
+         "config": "split_fit",
+         "level": "12/12/2",
+         "whole_table": 0.8366114927545676
+        },
+        {
+         "config": "single_fit",
+         "level": "off",
+         "whole_table": 0.8829938897206075
+        },
+        {
+         "config": "single_fit",
+         "level": "1/1/1",
+         "whole_table": 0.8834429142921975
+        },
+        {
+         "config": "single_fit",
+         "level": "4/4/2",
+         "whole_table": 0.8835469601408158
+        },
+        {
+         "config": "single_fit",
+         "level": "12/12/2",
+         "whole_table": 0.8851195570144744
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.02743374909772112,
+        "brier_joint": 0.8225326471567727,
+        "brier_result": 0.8157343112978465,
+        "brier_steal": 0.027932472101681267,
+        "log_floor_1e6": 1.7938211728982496,
+        "log_floor_1e3": 1.7602310316306755,
+        "said_impossible_share_of_steals": 0.0,
+        "said_impossible_share_of_pitches": 0.00296232039202296,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.5313836275983794,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.6471601194537298,
+         0.2435069629388971,
+         0.0989809443455206,
+         0.01017288653722843,
+         0.0,
+         0.0001790867246240751
+        ],
+        "steal_mix_distance": 0.006456381467760314,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8039843871179172
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.5289522459617193,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.09586111098163322
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.5380913593049796,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.09706358594659549
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.5297891390568217,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.10501865327229756
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.5744502932637137,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.09970559881537525
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.5550087352602253,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.09911566654181171
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.4663413107501924,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.09730579056526155
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.18886670040047576,
+        "slope_real_on_predicted": -1.7007087431482697,
+        "mean_abs_error_per_100": 1.2261346238903585
+       },
+       "test_all_levels": {
+        "split_fit:off": {
+         "whole_table": 0.8225326471567727,
+         "how_many_steals": 0.027932472101681267,
+         "steals_per_100_predicted": 1.5313836275983794,
+         "runner_correlation": -0.18886670040047576
+        },
+        "split_fit:1/1/1": {
+         "whole_table": 0.8227619801692279,
+         "how_many_steals": 0.027678242003737582,
+         "steals_per_100_predicted": 1.2350123693938382,
+         "runner_correlation": 0.7045058532402851
+        },
+        "split_fit:4/4/2": {
+         "whole_table": 0.822805715547104,
+         "how_many_steals": 0.02741662251210862,
+         "steals_per_100_predicted": 1.1442861968611149,
+         "runner_correlation": 0.8419635120651349
+        },
+        "split_fit:12/12/2": {
+         "whole_table": 0.8238003970449191,
+         "how_many_steals": 0.028382534583167786,
+         "steals_per_100_predicted": 1.3052255355406388,
+         "runner_correlation": 0.9294250586148731
+        },
+        "single_fit:off": {
+         "whole_table": 0.863145400296176,
+         "how_many_steals": 0.027961542339796176,
+         "steals_per_100_predicted": 1.5340348445230734,
+         "runner_correlation": -0.17642573322981636
+        },
+        "single_fit:1/1/1": {
+         "whole_table": 0.8636047480136535,
+         "how_many_steals": 0.027698418352022827,
+         "steals_per_100_predicted": 1.2373871308304167,
+         "runner_correlation": 0.7041449480382992
+        },
+        "single_fit:4/4/2": {
+         "whole_table": 0.8637254916731361,
+         "how_many_steals": 0.027445255518573422,
+         "steals_per_100_predicted": 1.147921611011898,
+         "runner_correlation": 0.8439360275816555
+        },
+        "single_fit:12/12/2": {
+         "whole_table": 0.8648178412843825,
+         "how_many_steals": 0.02858415353146354,
+         "steals_per_100_predicted": 1.3110886863356304,
+         "runner_correlation": 0.9273460578650475
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": -4.001288703287419e-05,
+        "standard_error": 3.9742674257375335e-05
+       },
+       "vs_baseline_result": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_steal": {
+        "difference": 4.031071115408392e-05,
+        "standard_error": 7.204364745734776e-06
+       },
+       "vs_baseline_running": {
+        "difference": -0.00045796816804263325,
+        "standard_error": 2.600661918492916e-05
+       }
+      },
+      "one_draw": {
+       "config": "split_fit",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "split_fit",
+         "level": "off",
+         "whole_table": 0.8379668047236866
+        },
+        {
+         "config": "split_fit",
+         "level": "1/1/1",
+         "whole_table": 0.8531607077377933
+        },
+        {
+         "config": "single_fit",
+         "level": "off",
+         "whole_table": 0.888113232480212
+        },
+        {
+         "config": "single_fit",
+         "level": "1/1/1",
+         "whole_table": 0.9049797660207916
+        },
+        {
+         "config": "split_fit",
+         "level": "4/4/2",
+         "whole_table": 0.9174128189325846
+        },
+        {
+         "config": "single_fit",
+         "level": "4/4/2",
+         "whole_table": 0.9688879854878779
+        },
+        {
+         "config": "split_fit",
+         "level": "12/12/2",
+         "whole_table": 1.0489634936078676
+        },
+        {
+         "config": "single_fit",
+         "level": "12/12/2",
+         "whole_table": 1.086873970118746
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.031800307189668274,
+        "brier_joint": 0.8249568243990059,
+        "brier_result": 0.8157343112978465,
+        "brier_steal": 0.03004882786764813,
+        "log_floor_1e6": 1.831010918532395,
+        "log_floor_1e3": 1.7701871121147477,
+        "said_impossible_share_of_steals": 0.0720077846253649,
+        "said_impossible_share_of_pitches": 0.005943097608918338,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.4142143517988917,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.6432164087983342,
+         0.2446195850078109,
+         0.10084081396657556,
+         0.011323192227279382,
+         0.0,
+         0.0
+        ],
+        "steal_mix_distance": 0.008369001328464055,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8082453760188222
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.4271024224531863,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.09664561346729723
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.4002121124744134,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.09522268235745862
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.4053677917747263,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.11077228215368772
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.4714410925259829,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.10315508063889832
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.401449467581004,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.1038799602823423
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.3564552770451275,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.09559168719017806
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.06939774032954316,
+        "slope_real_on_predicted": -0.3022965974255315,
+        "mean_abs_error_per_100": 1.2077772548984849
+       },
+       "test_all_levels": {
+        "split_fit:off": {
+         "whole_table": 0.8249568243990059,
+         "how_many_steals": 0.03004882786764813,
+         "steals_per_100_predicted": 1.4142143517988917,
+         "runner_correlation": -0.06939774032954316
+        },
+        "split_fit:1/1/1": {
+         "whole_table": 0.8394133396186446,
+         "how_many_steals": 0.02980014749648541,
+         "steals_per_100_predicted": 1.1675092649480028,
+         "runner_correlation": 0.47518065217677474
+        },
+        "split_fit:4/4/2": {
+         "whole_table": 0.8972924139913001,
+         "how_many_steals": 0.031243807335598728,
+         "steals_per_100_predicted": 1.083577854378841,
+         "runner_correlation": 0.7079108787068298
+        },
+        "split_fit:12/12/2": {
+         "whole_table": 1.0191738502219823,
+         "how_many_steals": 0.03560194489930769,
+         "steals_per_100_predicted": 1.164516077118896,
+         "runner_correlation": 0.748572168451313
+        },
+        "single_fit:off": {
+         "whole_table": 0.8670995262390356,
+         "how_many_steals": 0.031589305105416896,
+         "steals_per_100_predicted": 1.395487663308574,
+         "runner_correlation": -0.03892374957287514
+        },
+        "single_fit:1/1/1": {
+         "whole_table": 0.8820461630379329,
+         "how_many_steals": 0.031142475386165755,
+         "steals_per_100_predicted": 1.170611025191091,
+         "runner_correlation": 0.3755137919781071
+        },
+        "single_fit:4/4/2": {
+         "whole_table": 0.9412978292499624,
+         "how_many_steals": 0.032597369647428404,
+         "steals_per_100_predicted": 1.0926620133934835,
+         "runner_correlation": 0.6587955907652704
+        },
+        "single_fit:12/12/2": {
+         "whole_table": 1.0547604508866535,
+         "how_many_steals": 0.0366956194358291,
+         "steals_per_100_predicted": 1.1666622493286907,
+         "runner_correlation": 0.7200422965229057
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.0023841643552003225,
+        "standard_error": 0.00014575894748963125
+       },
+       "vs_baseline_result": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_steal": {
+        "difference": 0.002156666477120952,
+        "standard_error": 0.0001318514221150323
+       },
+       "vs_baseline_running": {
+        "difference": 0.003908589923904519,
+        "standard_error": 0.00023352705289206592
+       },
+       "vs_best": {
+        "difference": 0.0024241772422331966,
+        "standard_error": 0.00013003658529303326
+       }
+      },
+      "one_draw_2step": {
+       "config": "split_fit",
+       "level": "off",
+       "tune_grid": [
+        {
+         "config": "split_fit",
+         "level": "off",
+         "whole_table": 0.8379668047236866
+        },
+        {
+         "config": "split_fit",
+         "level": "1/1/1",
+         "whole_table": 0.8380811227875842
+        },
+        {
+         "config": "split_fit",
+         "level": "4/4/2",
+         "whole_table": 0.839344631674565
+        },
+        {
+         "config": "split_fit",
+         "level": "12/12/2",
+         "whole_table": 0.8421513033225165
+        },
+        {
+         "config": "single_fit",
+         "level": "off",
+         "whole_table": 0.888113232480212
+        },
+        {
+         "config": "single_fit",
+         "level": "1/1/1",
+         "whole_table": 0.8881744730652261
+        },
+        {
+         "config": "single_fit",
+         "level": "4/4/2",
+         "whole_table": 0.8893739071411894
+        },
+        {
+         "config": "single_fit",
+         "level": "12/12/2",
+         "whole_table": 0.8919800807078617
+        }
+       ],
+       "test": {
+        "pitches": 74296,
+        "steals": 3083,
+        "brier_running": 0.031800307189668274,
+        "brier_joint": 0.8249568243990059,
+        "brier_result": 0.8157343112978465,
+        "brier_steal": 0.03004882786764813,
+        "log_floor_1e6": 1.831010918532395,
+        "log_floor_1e3": 1.7701871121147477,
+        "said_impossible_share_of_steals": 0.0720077846253649,
+        "said_impossible_share_of_pitches": 0.005943097608918338,
+        "steals_per_100_real": 1.4225597770415555,
+        "steals_per_100_predicted": 1.4142143517988917,
+        "steal_mix_real": [
+         0.6464482646772624,
+         0.24975673045734675,
+         0.09341550437885177,
+         0.010379500486539085,
+         0.0,
+         0.0
+        ],
+        "steal_mix_predicted": [
+         0.6432164087983342,
+         0.2446195850078109,
+         0.10084081396657556,
+         0.011323192227279382,
+         0.0,
+         0.0
+        ],
+        "steal_mix_distance": 0.008369001328464055,
+        "safe_share_real": 0.7881933181965618,
+        "safe_share_predicted": 0.8082453760188222
+       },
+       "test_by_batter": [
+        {
+         "tier": 1,
+         "pitches": 25158,
+         "steals": 1034,
+         "steals_per_100_real": 1.4086042012914475,
+         "steals_per_100_predicted": 1.4271024224531863,
+         "whiff_share_real": 0.06673114119922631,
+         "whiff_share_predicted": 0.09664561346729723
+        },
+        {
+         "tier": 2,
+         "pitches": 22560,
+         "steals": 966,
+         "steals_per_100_real": 1.469246212812557,
+         "steals_per_100_predicted": 1.4002121124744134,
+         "whiff_share_real": 0.10559006211180125,
+         "whiff_share_predicted": 0.09522268235745862
+        },
+        {
+         "tier": 3,
+         "pitches": 22286,
+         "steals": 895,
+         "steals_per_100_real": 1.375484108932194,
+         "steals_per_100_predicted": 1.4053677917747263,
+         "whiff_share_real": 0.10726256983240223,
+         "whiff_share_predicted": 0.11077228215368772
+        }
+       ],
+       "test_by_runner": [
+        {
+         "tier": 1,
+         "pitches": 23003,
+         "steals": 133,
+         "steals_per_100_real": 0.1934742446503644,
+         "steals_per_100_predicted": 1.4714410925259829,
+         "whiff_share_real": 0.10526315789473684,
+         "whiff_share_predicted": 0.10315508063889832
+        },
+        {
+         "tier": 2,
+         "pitches": 23135,
+         "steals": 663,
+         "steals_per_100_real": 0.97386859383951,
+         "steals_per_100_predicted": 1.401449467581004,
+         "whiff_share_real": 0.10105580693815988,
+         "whiff_share_predicted": 0.1038799602823423
+        },
+        {
+         "tier": 3,
+         "pitches": 25722,
+         "steals": 2196,
+         "steals_per_100_real": 3.0175612169181303,
+         "steals_per_100_predicted": 1.3564552770451275,
+         "whiff_share_real": 0.08925318761384335,
+         "whiff_share_predicted": 0.09559168719017806
+        }
+       ],
+       "test_runners": {
+        "runners": 417,
+        "correlation": -0.06939774032954316,
+        "slope_real_on_predicted": -0.3022965974255315,
+        "mean_abs_error_per_100": 1.2077772548984849
+       },
+       "test_all_levels": {
+        "split_fit:off": {
+         "whole_table": 0.8249568243990059,
+         "how_many_steals": 0.03004882786764813,
+         "steals_per_100_predicted": 1.4142143517988917,
+         "runner_correlation": -0.06939774032954316
+        },
+        "split_fit:1/1/1": {
+         "whole_table": 0.8250619100315648,
+         "how_many_steals": 0.02980014749648541,
+         "steals_per_100_predicted": 1.1675092649480028,
+         "runner_correlation": 0.47518065217677474
+        },
+        "split_fit:4/4/2": {
+         "whole_table": 0.8261499245742151,
+         "how_many_steals": 0.031243807335598728,
+         "steals_per_100_predicted": 1.083577854378841,
+         "runner_correlation": 0.7079108787068298
+        },
+        "split_fit:12/12/2": {
+         "whole_table": 0.8289270746003641,
+         "how_many_steals": 0.03560194489930769,
+         "steals_per_100_predicted": 1.164516077118896,
+         "runner_correlation": 0.748572168451313
+        },
+        "single_fit:off": {
+         "whole_table": 0.8670995262390356,
+         "how_many_steals": 0.031589305105416896,
+         "steals_per_100_predicted": 1.395487663308574,
+         "runner_correlation": -0.03892374957287514
+        },
+        "single_fit:1/1/1": {
+         "whole_table": 0.8671244403075932,
+         "how_many_steals": 0.031142475386165755,
+         "steals_per_100_predicted": 1.170611025191091,
+         "runner_correlation": 0.3755137919781071
+        },
+        "single_fit:4/4/2": {
+         "whole_table": 0.8682972026070784,
+         "how_many_steals": 0.032597369647428404,
+         "steals_per_100_predicted": 1.0926620133934835,
+         "runner_correlation": 0.6587955907652704
+        },
+        "single_fit:12/12/2": {
+         "whole_table": 0.8709121688262338,
+         "how_many_steals": 0.0366956194358291,
+         "steals_per_100_predicted": 1.1666622493286907,
+         "runner_correlation": 0.7200422965229057
+        }
+       },
+       "vs_baseline_joint": {
+        "difference": 0.0023841643552003225,
+        "standard_error": 0.00013877884128425796
+       },
+       "vs_baseline_result": {
+        "difference": 0.0,
+        "standard_error": 0.0
+       },
+       "vs_baseline_steal": {
+        "difference": 0.002156666477120952,
+        "standard_error": 0.000124129447874935
+       },
+       "vs_baseline_running": {
+        "difference": 0.003908589923904519,
+        "standard_error": 0.00022001505624684873
+       },
+       "vs_best": {
+        "difference": 0.0024241772422331966,
+        "standard_error": 0.0001294251777317847
+       }
+      }
+     },
+     "ranking": [
+      "single_reads_class",
+      "single_today",
+      "one_draw",
+      "one_draw_2step"
+     ],
+     "tied_with_the_best": [
+      "single_reads_class",
+      "single_today"
+     ],
+     "tied_on_who_steals": [
+      "single_reads_class",
+      "single_today"
+     ],
+     "pick": "single_today"
+    }
+   }
+  }
+ },
+ "pick": "steal_reads_class"
+}

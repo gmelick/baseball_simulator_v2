@@ -1,0 +1,270 @@
+THE RUNNING-GAME REPLAY — each design's strength picked on 2025 (89877 pitches), scored on 2026 (74296 pitches)
+
+THE RULE
+  The score that decides is the Brier score of the whole table: the odds each design gave to (the pitch's result) x (no steal / stolen base / caught stealing), against what happened. Lower is better. It is bounded, so a design that says 'impossible' for something that then happens pays a fixed price.
+  1. Designs are compared inside the family of their pitch draw, against that family's own baseline (today's separate steal draw). The question here is the running game; which pitch draw to use is the weight-fitting ticket's question.
+  2. Production runs the two-step pitch draw, so that family's winner is the pick. A difference of two standard errors or less is a tie.
+  3. A tie goes to the design whose per-runner expected steals track the real ones best (a gap in that correlation of two standard errors or less is again a tie), then to the simpler build, in this order: today < steal_reads_class < steal_first < pitch_steal_no_contact < pitch_steal < result_steal_2step < result_steal.
+  Each design's strength is the one with the lowest whole-table score on the tuning season.
+
+=================== AT TODAY'S NEUTRAL WEIGHTS (what production runs) ===================
+
+--- the two-step pitch draw (what production runs); baseline = today ---
+    3083 recorded steals, 1.423 per 100 pitches
+design                   strength            whole table   vs baseline x1e4   of which result   how many steals    steal | result  log 1e-3  log 1e-6  said impossible
+steal_reads_class        neutral 4/4/2          0.767991     -2.06±0.35        +0.00±0.00       +0.07±0.06       -7.06±0.41     1.59669   1.62272            0.0%
+steal_first              neutral 4/4/2          0.768082     -1.15±0.57        -1.50±0.53       +0.00±0.00      +12.77±2.46     1.59678   1.62271            0.0%
+today                    neutral 4/4/2          0.768198     +0.00±0.00        +0.00±0.00       +0.00±0.00       +0.00±0.00     1.60363   1.62890            0.0%
+pitch_steal_no_contact   neutral off            0.768335     +1.37±0.30        +1.11±0.36       +8.72±0.37       +6.49±0.50     1.60669   1.64495            7.2%
+pitch_steal              neutral off            0.768416     +2.18±0.60        +0.05±0.15       +8.72±0.34      +12.83±0.98     1.60679   1.65142            7.2%
+result_steal             neutral off            0.768439     +2.41±0.64        +0.00±0.00       +9.21±0.38      +13.37±0.98     1.60692   1.65392            7.2%
+result_steal_2step       neutral off            0.768439     +2.41±0.64        +0.00±0.00       +9.21±0.39      +13.37±0.96     1.60692   1.65392            7.2%
+    (Brier scores, lower is better; differences against the baseline x 10,000.
+     'of which result' = the pitch's result alone; 'how many steals' = no steal /
+     stolen base / caught before the result is known; 'steal | result' = the same
+     given the real result; 'said impossible' = real steals given no chance)
+
+  WHO STEALS — steals per 100 pitches, real / predicted, by runner (1 seldom, 3 most)
+    steal_reads_class        t1 0.19/0.66  t2 0.97/0.91  t3 3.02/1.78   417 runners: corr 0.843, slope 1.93, error 0.72 per 100
+    steal_first              t1 0.19/0.65  t2 0.97/0.90  t3 3.02/1.77   417 runners: corr 0.845, slope 1.92, error 0.72 per 100
+    today                    t1 0.19/0.65  t2 0.97/0.90  t3 3.02/1.77   417 runners: corr 0.845, slope 1.92, error 0.72 per 100
+    pitch_steal_no_contact   t1 0.19/1.47  t2 0.97/1.47  t3 3.02/1.39   417 runners: corr -0.123, slope -0.83, error 1.20 per 100
+    pitch_steal              t1 0.19/1.47  t2 0.97/1.47  t3 3.02/1.39   417 runners: corr -0.123, slope -0.83, error 1.20 per 100
+    result_steal             t1 0.19/1.47  t2 0.97/1.48  t3 3.02/1.38   417 runners: corr -0.131, slope -0.87, error 1.21 per 100
+    result_steal_2step       t1 0.19/1.47  t2 0.97/1.48  t3 3.02/1.38   417 runners: corr -0.131, slope -0.87, error 1.21 per 100
+
+  WHAT THE STEAL RIDES — by batter (1 contact, 3 swing-and-miss):
+  steals per 100 real/predicted; share of steals on a swing and miss real/predicted
+    steal_reads_class        t1 1.41/1.13 whiff 6.7/10.4%  t2 1.47/1.18 whiff 10.6/11.0%  t3 1.38/1.13 whiff 10.7/11.5%   mix error 1.8 pts; safe 78.8/78.3%
+    steal_first              t1 1.41/1.12 whiff 6.7/10.9%  t2 1.47/1.17 whiff 10.6/11.2%  t3 1.38/1.12 whiff 10.7/11.1%   mix error 1.9 pts; safe 78.8/78.2%
+    today                    t1 1.41/1.12 whiff 6.7/11.0%  t2 1.47/1.17 whiff 10.6/11.5%  t3 1.38/1.12 whiff 10.7/12.2%   mix error 37.4 pts; safe 78.8/78.2%
+    pitch_steal_no_contact   t1 1.41/1.46 whiff 6.7/17.0%  t2 1.47/1.46 whiff 10.6/18.1%  t3 1.38/1.43 whiff 10.7/18.8%   mix error 8.6 pts; safe 78.8/80.3%
+    pitch_steal              t1 1.41/1.46 whiff 6.7/9.3%  t2 1.47/1.46 whiff 10.6/10.3%  t3 1.38/1.43 whiff 10.7/10.3%   mix error 1.1 pts; safe 78.8/80.3%
+    result_steal             t1 1.41/1.45 whiff 6.7/9.4%  t2 1.47/1.46 whiff 10.6/10.3%  t3 1.38/1.42 whiff 10.7/10.2%   mix error 0.7 pts; safe 78.8/80.4%
+    result_steal_2step       t1 1.41/1.45 whiff 6.7/9.4%  t2 1.47/1.46 whiff 10.6/10.3%  t3 1.38/1.42 whiff 10.7/10.2%   mix error 0.7 pts; safe 78.8/80.4%
+    real steals ride: ball 64.6%, called_strike 25.0%, swinging_strike 9.3%, foul 1.0%, in_play 0.0%, hit_by_pitch 0.0%
+
+  EVERY STRENGTH on the test season — the whole-table score; steals per 100
+  predicted; the per-runner correlation; the 'how many steals' score x 10,000:
+    steal_reads_class        neutral:off        0.768082   1.534  -0.193    278.97
+    steal_reads_class        neutral:1/1/1      0.768049   1.237  +0.707    276.49
+    steal_reads_class        neutral:4/4/2      0.767991   1.146  +0.843    273.72
+    steal_reads_class        neutral:12/12/2    0.768970   1.305  +0.932    281.47
+    steal_first              neutral:off        0.768172   1.524  -0.197    278.92
+    steal_first              neutral:1/1/1      0.768151   1.225  +0.710    276.48
+    steal_first              neutral:4/4/2      0.768082   1.137  +0.845    273.65
+    steal_first              neutral:12/12/2    0.769713   1.338  +0.926    298.07
+    today                    neutral:off        0.768238   1.524  -0.197    278.92
+    today                    neutral:1/1/1      0.768252   1.225  +0.710    276.48
+    today                    neutral:4/4/2      0.768198   1.137  +0.845    273.65
+    today                    neutral:12/12/2    0.768748   1.338  +0.926    298.07
+    pitch_steal_no_contact   neutral:off        0.768335   1.446  -0.123    282.37
+    pitch_steal_no_contact   neutral:1/1/1      0.769097   1.180  +0.596    281.55
+    pitch_steal_no_contact   neutral:4/4/2      0.770630   1.101  +0.792    289.91
+    pitch_steal_no_contact   neutral:12/12/2    0.774363   1.178  +0.796    337.76
+    pitch_steal              neutral:off        0.768416   1.446  -0.123    282.37
+    pitch_steal              neutral:1/1/1      0.769190   1.180  +0.596    281.55
+    pitch_steal              neutral:4/4/2      0.770902   1.101  +0.792    289.91
+    pitch_steal              neutral:12/12/2    0.775328   1.178  +0.796    337.76
+    result_steal             neutral:off        0.768439   1.445  -0.131    282.86
+    result_steal             neutral:1/1/1      0.776153   1.181  +0.588    281.94
+    result_steal             neutral:4/4/2      0.811428   1.101  +0.790    290.19
+    result_steal             neutral:12/12/2    0.946682   1.175  +0.792    335.91
+    result_steal_2step       neutral:off        0.768439   1.445  -0.131    282.86
+    result_steal_2step       neutral:1/1/1      0.768495   1.181  +0.588    281.94
+    result_steal_2step       neutral:4/4/2      0.769118   1.101  +0.790    290.19
+    result_steal_2step       neutral:12/12/2    0.772046   1.175  +0.792    335.91
+
+  TIED WITH THE BEST ON THE WHOLE TABLE: steal_reads_class, steal_first
+  OF THOSE, TIED ON WHO STEALS: steal_first, steal_reads_class
+  THIS FAMILY'S PICK (the simpler build of those): steal_reads_class
+
+--- the single pitch draw (its own baseline); baseline = single_today ---
+    3083 recorded steals, 1.423 per 100 pitches
+design                   strength            whole table   vs baseline x1e4   of which result   how many steals    steal | result  log 1e-3  log 1e-6  said impossible
+single_reads_class       neutral 4/4/2          0.766540     -1.78±0.33        +0.00±0.00       +0.07±0.06       -7.06±0.40     1.59279   1.61850            0.0%
+single_today             neutral 4/4/2          0.766718     +0.00±0.00        +0.00±0.00       +0.00±0.00       +0.00±0.00     1.59974   1.62468            0.0%
+one_draw                 neutral off            0.766966     +2.48±0.62        +0.00±0.00       +8.72±0.36      +12.91±0.95     1.60293   1.64958            7.2%
+one_draw_2step           neutral off            0.766966     +2.48±0.61        +0.00±0.00       +8.72±0.34      +12.91±0.90     1.60293   1.64958            7.2%
+    (Brier scores, lower is better; differences against the baseline x 10,000.
+     'of which result' = the pitch's result alone; 'how many steals' = no steal /
+     stolen base / caught before the result is known; 'steal | result' = the same
+     given the real result; 'said impossible' = real steals given no chance)
+
+  WHO STEALS — steals per 100 pitches, real / predicted, by runner (1 seldom, 3 most)
+    single_reads_class       t1 0.19/0.65  t2 0.97/0.91  t3 3.02/1.77   417 runners: corr 0.844, slope 1.94, error 0.72 per 100
+    single_today             t1 0.19/0.65  t2 0.97/0.90  t3 3.02/1.77   417 runners: corr 0.845, slope 1.92, error 0.72 per 100
+    one_draw                 t1 0.19/1.47  t2 0.97/1.47  t3 3.02/1.39   417 runners: corr -0.123, slope -0.83, error 1.20 per 100
+    one_draw_2step           t1 0.19/1.47  t2 0.97/1.47  t3 3.02/1.39   417 runners: corr -0.123, slope -0.83, error 1.20 per 100
+
+  WHAT THE STEAL RIDES — by batter (1 contact, 3 swing-and-miss):
+  steals per 100 real/predicted; share of steals on a swing and miss real/predicted
+    single_reads_class       t1 1.41/1.12 whiff 6.7/10.4%  t2 1.47/1.18 whiff 10.6/11.0%  t3 1.38/1.13 whiff 10.7/11.6%   mix error 1.8 pts; safe 78.8/78.2%
+    single_today             t1 1.41/1.12 whiff 6.7/11.0%  t2 1.47/1.17 whiff 10.6/11.5%  t3 1.38/1.12 whiff 10.7/12.2%   mix error 37.6 pts; safe 78.8/78.2%
+    one_draw                 t1 1.41/1.46 whiff 6.7/9.4%  t2 1.47/1.46 whiff 10.6/10.4%  t3 1.38/1.43 whiff 10.7/10.4%   mix error 0.8 pts; safe 78.8/80.3%
+    one_draw_2step           t1 1.41/1.46 whiff 6.7/9.4%  t2 1.47/1.46 whiff 10.6/10.4%  t3 1.38/1.43 whiff 10.7/10.4%   mix error 0.8 pts; safe 78.8/80.3%
+    real steals ride: ball 64.6%, called_strike 25.0%, swinging_strike 9.3%, foul 1.0%, in_play 0.0%, hit_by_pitch 0.0%
+
+  EVERY STRENGTH on the test season — the whole-table score; steals per 100
+  predicted; the per-runner correlation; the 'how many steals' score x 10,000:
+    single_reads_class       neutral:off        0.766652   1.528  -0.192    278.95
+    single_reads_class       neutral:1/1/1      0.766602   1.232  +0.707    276.50
+    single_reads_class       neutral:4/4/2      0.766540   1.141  +0.844    273.72
+    single_reads_class       neutral:12/12/2    0.767516   1.300  +0.932    281.23
+    single_today             neutral:off        0.766771   1.524  -0.197    278.92
+    single_today             neutral:1/1/1      0.766775   1.225  +0.710    276.48
+    single_today             neutral:4/4/2      0.766718   1.137  +0.845    273.65
+    single_today             neutral:12/12/2    0.767269   1.338  +0.926    298.07
+    one_draw                 neutral:off        0.766966   1.446  -0.123    282.37
+    one_draw                 neutral:1/1/1      0.774965   1.180  +0.596    281.55
+    one_draw                 neutral:4/4/2      0.811276   1.101  +0.792    289.91
+    one_draw                 neutral:12/12/2    0.952053   1.178  +0.796    337.76
+    one_draw_2step           neutral:off        0.766966   1.446  -0.123    282.37
+    one_draw_2step           neutral:1/1/1      0.767023   1.180  +0.596    281.55
+    one_draw_2step           neutral:4/4/2      0.767653   1.101  +0.792    289.91
+    one_draw_2step           neutral:12/12/2    0.770717   1.178  +0.796    337.76
+
+  TIED WITH THE BEST ON THE WHOLE TABLE: single_reads_class
+  OF THOSE, TIED ON WHO STEALS: single_reads_class
+  THIS FAMILY'S PICK (the simpler build of those): single_reads_class
+
+=================== AT THE EARLIER FITTED PITCHER AND BATTER WEIGHTS ===================
+
+--- the two-step pitch draw (what production runs); baseline = today ---
+    3083 recorded steals, 1.423 per 100 pitches
+design                   strength            whole table   vs baseline x1e4   of which result   how many steals    steal | result  log 1e-3  log 1e-6  said impossible
+steal_reads_class        split_fit off          0.870711     -0.66±0.44        +0.00±0.00       +0.76±0.09       -4.58±0.27     1.91309   1.96121            0.0%
+today                    split_fit off          0.870777     +0.00±0.00        +0.00±0.00       +0.00±0.00       +0.00±0.00     1.92001   1.96851            0.0%
+steal_first              split_fit off          0.871370     +5.92±1.59       -24.37±1.61       -0.00±0.00     +131.35±5.21     1.91305   1.95984            0.0%
+pitch_steal_no_contact   split_fit off          0.872408    +16.31±0.96        -3.85±0.63      +21.57±1.28      +26.48±1.79     1.92059   1.98692            7.2%
+pitch_steal              split_fit off          0.873478    +27.01±1.67        -9.55±1.13      +21.57±1.27      +59.78±2.84     1.92339   1.99767            7.2%
+result_steal             split_fit off          0.875010    +42.33±1.65        +0.00±0.00      +40.39±2.08      +60.73±3.07     1.92697   2.00674            7.4%
+result_steal_2step       split_fit off          0.875010    +42.33±1.70        +0.00±0.00      +40.39±2.12      +60.73±2.90     1.92697   2.00674            7.4%
+    (Brier scores, lower is better; differences against the baseline x 10,000.
+     'of which result' = the pitch's result alone; 'how many steals' = no steal /
+     stolen base / caught before the result is known; 'steal | result' = the same
+     given the real result; 'said impossible' = real steals given no chance)
+
+  WHO STEALS — steals per 100 pitches, real / predicted, by runner (1 seldom, 3 most)
+    steal_reads_class        t1 0.19/1.59  t2 0.97/1.57  t3 3.02/1.48   417 runners: corr -0.178, slope -1.53, error 1.23 per 100
+    today                    t1 0.19/1.57  t2 0.97/1.54  t3 3.02/1.46   417 runners: corr -0.197, slope -1.82, error 1.22 per 100
+    steal_first              t1 0.19/1.57  t2 0.97/1.54  t3 3.02/1.46   417 runners: corr -0.197, slope -1.82, error 1.22 per 100
+    pitch_steal_no_contact   t1 0.19/1.47  t2 0.97/1.40  t3 3.02/1.36   417 runners: corr -0.069, slope -0.30, error 1.21 per 100
+    pitch_steal              t1 0.19/1.47  t2 0.97/1.40  t3 3.02/1.36   417 runners: corr -0.069, slope -0.30, error 1.21 per 100
+    result_steal             t1 0.19/1.43  t2 0.97/1.40  t3 3.02/1.38   417 runners: corr -0.038, slope -0.14, error 1.21 per 100
+    result_steal_2step       t1 0.19/1.43  t2 0.97/1.40  t3 3.02/1.38   417 runners: corr -0.038, slope -0.14, error 1.21 per 100
+
+  WHAT THE STEAL RIDES — by batter (1 contact, 3 swing-and-miss):
+  steals per 100 real/predicted; share of steals on a swing and miss real/predicted
+    steal_reads_class        t1 1.41/1.53 whiff 6.7/8.3%  t2 1.47/1.55 whiff 10.6/9.8%  t3 1.38/1.55 whiff 10.7/11.7%   mix error 1.1 pts; safe 78.8/80.4%
+    today                    t1 1.41/1.52 whiff 6.7/9.6%  t2 1.47/1.53 whiff 10.6/11.4%  t3 1.38/1.52 whiff 10.7/13.6%   mix error 36.5 pts; safe 78.8/80.4%
+    steal_first              t1 1.41/1.52 whiff 6.7/10.0%  t2 1.47/1.53 whiff 10.6/10.1%  t3 1.38/1.52 whiff 10.7/10.1%   mix error 0.7 pts; safe 78.8/80.4%
+    pitch_steal_no_contact   t1 1.41/1.43 whiff 6.7/14.5%  t2 1.47/1.40 whiff 10.6/16.4%  t3 1.38/1.41 whiff 10.7/19.3%   mix error 7.3 pts; safe 78.8/80.8%
+    pitch_steal              t1 1.41/1.43 whiff 6.7/9.2%  t2 1.47/1.40 whiff 10.6/9.4%  t3 1.38/1.41 whiff 10.7/11.5%   mix error 0.8 pts; safe 78.8/80.8%
+    result_steal             t1 1.41/1.47 whiff 6.7/7.8%  t2 1.47/1.38 whiff 10.6/9.3%  t3 1.38/1.36 whiff 10.7/10.9%   mix error 0.9 pts; safe 78.8/81.1%
+    result_steal_2step       t1 1.41/1.47 whiff 6.7/7.8%  t2 1.47/1.38 whiff 10.6/9.3%  t3 1.38/1.36 whiff 10.7/10.9%   mix error 0.9 pts; safe 78.8/81.1%
+    real steals ride: ball 64.6%, called_strike 25.0%, swinging_strike 9.3%, foul 1.0%, in_play 0.0%, hit_by_pitch 0.0%
+
+  EVERY STRENGTH on the test season — the whole-table score; steals per 100
+  predicted; the per-runner correlation; the 'how many steals' score x 10,000:
+    steal_reads_class        split_fit:off      0.870711   1.544  -0.178    279.69
+    steal_reads_class        split_fit:1/1/1    0.871228   1.246  +0.703    277.02
+    steal_reads_class        split_fit:4/4/2    0.871372   1.155  +0.844    274.50
+    steal_reads_class        split_fit:12/12/2  0.872486   1.319  +0.928    286.47
+    today                    split_fit:off      0.870777   1.524  -0.197    278.92
+    today                    split_fit:1/1/1    0.871386   1.225  +0.710    276.48
+    today                    split_fit:4/4/2    0.871519   1.137  +0.845    273.65
+    today                    split_fit:12/12/2  0.872075   1.338  +0.926    298.07
+    steal_first              split_fit:off      0.871370   1.524  -0.197    278.92
+    steal_first              split_fit:1/1/1    0.871957   1.225  +0.710    276.48
+    steal_first              split_fit:4/4/2    0.872070   1.137  +0.845    273.65
+    steal_first              split_fit:12/12/2  0.873512   1.338  +0.926    298.07
+    pitch_steal_no_contact   split_fit:off      0.872408   1.414  -0.069    300.49
+    pitch_steal_no_contact   split_fit:1/1/1    0.873751   1.168  +0.475    298.00
+    pitch_steal_no_contact   split_fit:4/4/2    0.877438   1.084  +0.708    312.44
+    pitch_steal_no_contact   split_fit:12/12/2  0.881704   1.165  +0.749    356.02
+    pitch_steal              split_fit:off      0.873478   1.414  -0.069    300.49
+    pitch_steal              split_fit:1/1/1    0.874787   1.168  +0.475    298.00
+    pitch_steal              split_fit:4/4/2    0.878742   1.084  +0.708    312.44
+    pitch_steal              split_fit:12/12/2  0.883647   1.165  +0.749    356.02
+    result_steal             split_fit:off      0.875010   1.406  -0.038    319.31
+    result_steal             split_fit:1/1/1    0.888835   1.183  +0.363    314.10
+    result_steal             split_fit:4/4/2    0.943453   1.096  +0.651    326.76
+    result_steal             split_fit:12/12/2  1.051093   1.158  +0.718    364.31
+    result_steal_2step       split_fit:off      0.875010   1.406  -0.038    319.31
+    result_steal_2step       split_fit:1/1/1    0.874981   1.183  +0.363    314.10
+    result_steal_2step       split_fit:4/4/2    0.876019   1.096  +0.651    326.76
+    result_steal_2step       split_fit:12/12/2  0.878434   1.158  +0.718    364.31
+
+  TIED WITH THE BEST ON THE WHOLE TABLE: steal_reads_class, today
+  OF THOSE, TIED ON WHO STEALS: steal_reads_class, today
+  THIS FAMILY'S PICK (the simpler build of those): today
+
+--- the single pitch draw (its own baseline); baseline = single_today ---
+    3083 recorded steals, 1.423 per 100 pitches
+design                   strength            whole table   vs baseline x1e4   of which result   how many steals    steal | result  log 1e-3  log 1e-6  said impossible
+single_reads_class       split_fit off          0.822533     -0.40±0.40        +0.00±0.00       +0.40±0.07       -4.58±0.26     1.76023   1.79382            0.0%
+single_today             split_fit off          0.822573     +0.00±0.00        +0.00±0.00       +0.00±0.00       +0.00±0.00     1.76743   1.80112            0.0%
+one_draw                 split_fit off          0.824957    +23.84±1.46        +0.00±0.00      +21.57±1.32      +39.09±2.34     1.77019   1.83101            7.2%
+one_draw_2step           split_fit off          0.824957    +23.84±1.39        +0.00±0.00      +21.57±1.24      +39.09±2.20     1.77019   1.83101            7.2%
+    (Brier scores, lower is better; differences against the baseline x 10,000.
+     'of which result' = the pitch's result alone; 'how many steals' = no steal /
+     stolen base / caught before the result is known; 'steal | result' = the same
+     given the real result; 'said impossible' = real steals given no chance)
+
+  WHO STEALS — steals per 100 pitches, real / predicted, by runner (1 seldom, 3 most)
+    single_reads_class       t1 0.19/1.57  t2 0.97/1.56  t3 3.02/1.47   417 runners: corr -0.189, slope -1.70, error 1.23 per 100
+    single_today             t1 0.19/1.57  t2 0.97/1.54  t3 3.02/1.46   417 runners: corr -0.197, slope -1.82, error 1.22 per 100
+    one_draw                 t1 0.19/1.47  t2 0.97/1.40  t3 3.02/1.36   417 runners: corr -0.069, slope -0.30, error 1.21 per 100
+    one_draw_2step           t1 0.19/1.47  t2 0.97/1.40  t3 3.02/1.36   417 runners: corr -0.069, slope -0.30, error 1.21 per 100
+
+  WHAT THE STEAL RIDES — by batter (1 contact, 3 swing-and-miss):
+  steals per 100 real/predicted; share of steals on a swing and miss real/predicted
+    single_reads_class       t1 1.41/1.53 whiff 6.7/9.6%  t2 1.47/1.54 whiff 10.6/9.7%  t3 1.38/1.53 whiff 10.7/10.5%   mix error 0.6 pts; safe 78.8/80.4%
+    single_today             t1 1.41/1.52 whiff 6.7/11.1%  t2 1.47/1.53 whiff 10.6/11.4%  t3 1.38/1.52 whiff 10.7/12.2%   mix error 36.9 pts; safe 78.8/80.4%
+    one_draw                 t1 1.41/1.43 whiff 6.7/9.7%  t2 1.47/1.40 whiff 10.6/9.5%  t3 1.38/1.41 whiff 10.7/11.1%   mix error 0.8 pts; safe 78.8/80.8%
+    one_draw_2step           t1 1.41/1.43 whiff 6.7/9.7%  t2 1.47/1.40 whiff 10.6/9.5%  t3 1.38/1.41 whiff 10.7/11.1%   mix error 0.8 pts; safe 78.8/80.8%
+    real steals ride: ball 64.6%, called_strike 25.0%, swinging_strike 9.3%, foul 1.0%, in_play 0.0%, hit_by_pitch 0.0%
+
+  EVERY STRENGTH on the test season — the whole-table score; steals per 100
+  predicted; the per-runner correlation; the 'how many steals' score x 10,000:
+    single_reads_class       split_fit:off      0.822533   1.531  -0.189    279.32
+    single_reads_class       split_fit:1/1/1    0.822762   1.235  +0.705    276.78
+    single_reads_class       split_fit:4/4/2    0.822806   1.144  +0.842    274.17
+    single_reads_class       split_fit:12/12/2  0.823800   1.305  +0.929    283.83
+    single_reads_class       single_fit:off     0.863145   1.534  -0.176    279.62
+    single_reads_class       single_fit:1/1/1   0.863605   1.237  +0.704    276.98
+    single_reads_class       single_fit:4/4/2   0.863725   1.148  +0.844    274.45
+    single_reads_class       single_fit:12/12/2 0.864818   1.311  +0.927    285.84
+    single_today             split_fit:off      0.822573   1.524  -0.197    278.92
+    single_today             split_fit:1/1/1    0.822885   1.225  +0.710    276.48
+    single_today             split_fit:4/4/2    0.822923   1.137  +0.845    273.65
+    single_today             split_fit:12/12/2  0.823431   1.338  +0.926    298.07
+    single_today             single_fit:off     0.863140   1.524  -0.197    278.92
+    single_today             single_fit:1/1/1   0.863703   1.225  +0.710    276.48
+    single_today             single_fit:4/4/2   0.863822   1.137  +0.845    273.65
+    single_today             single_fit:12/12/2 0.864380   1.338  +0.926    298.07
+    one_draw                 split_fit:off      0.824957   1.414  -0.069    300.49
+    one_draw                 split_fit:1/1/1    0.839413   1.168  +0.475    298.00
+    one_draw                 split_fit:4/4/2    0.897292   1.084  +0.708    312.44
+    one_draw                 split_fit:12/12/2  1.019174   1.165  +0.749    356.02
+    one_draw                 single_fit:off     0.867100   1.395  -0.039    315.89
+    one_draw                 single_fit:1/1/1   0.882046   1.171  +0.376    311.42
+    one_draw                 single_fit:4/4/2   0.941298   1.093  +0.659    325.97
+    one_draw                 single_fit:12/12/2 1.054760   1.167  +0.720    366.96
+    one_draw_2step           split_fit:off      0.824957   1.414  -0.069    300.49
+    one_draw_2step           split_fit:1/1/1    0.825062   1.168  +0.475    298.00
+    one_draw_2step           split_fit:4/4/2    0.826150   1.084  +0.708    312.44
+    one_draw_2step           split_fit:12/12/2  0.828927   1.165  +0.749    356.02
+    one_draw_2step           single_fit:off     0.867100   1.395  -0.039    315.89
+    one_draw_2step           single_fit:1/1/1   0.867124   1.171  +0.376    311.42
+    one_draw_2step           single_fit:4/4/2   0.868297   1.093  +0.659    325.97
+    one_draw_2step           single_fit:12/12/2 0.870912   1.167  +0.720    366.96
+
+  TIED WITH THE BEST ON THE WHOLE TABLE: single_reads_class, single_today
+  OF THOSE, TIED ON WHO STEALS: single_reads_class, single_today
+  THIS FAMILY'S PICK (the simpler build of those): single_today
+
+THE PICK (the two-step pitch draw, today's weights): steal_reads_class
+
+wrote scripts/sim554_replay_report.json

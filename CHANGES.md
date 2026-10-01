@@ -1,3 +1,205 @@
+# Design — the running game on the pitch: decisions 3 and 4 TAKEN, all four decisions closed, the design ready to build — SIM-554, 2026-10-01
+
+**The decision.** The owner, 2026-10-01: "Approve decisions 3 and 4 as recommended."
+
+- **The two-out held third strike (decision 3).** With two outs, a third strike the catcher
+  holds is the third out before any throw. The loop resolves the strikeout first and voids a
+  steal staged on that pitch: no stolen base, no caught stealing. In production the steal draw's
+  class group holds no attempted row there, so the rule is not expected to fire; the census
+  prints its count.
+- **The runners on a dropped third strike (decision 4).** When the batter reaches on a dropped
+  third strike, every runner moves up one base first, and a runner on third scores with no RBI;
+  then the batter takes first. 28 of 32 real unforced runners moved. A steal or a pickoff on the
+  same pitch skips the advance.
+
+**The record.** The plan (`docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md`): the
+status block, §0, the headings of §5.4 and §5.5, §10 and a new §12.6. The page
+(https://claude.ai/artifact/UP5z7ErWR9cgTnKwYENc8Y): the same. Decisions 1 (the steal is its own draw and reads the pitch's
+class; the replay, 2026-09-30) and 2 (the pickoff is its own draw before the pitch; the owner,
+2026-10-01) were taken before. §4 to §9 do not change.
+
+**Nothing built by this entry.** The design is ready to build: migration 0031, the pool builder,
+the pickoff draw, the loop order, the two rules, twenty-five tests, the run book of §8.
+
+# Design — the running game on the pitch, version 3: the pickoff is its own draw before the pitch, and the pickoffs the pool drops come back as rows of their own; the steal draw loses its fallback and its cancel rule — SIM-554, 2026-10-01
+
+**Why.** Version 2 kept the pickoff on the steal row. Its fallback for a thin class group and its
+cancel rule existed to protect the pickoff rate there. The owner asked how pickoffs enter the
+draw, then put the case that breaks a tag on the pitch after the throw: runners on first and
+second, nobody out, the runner on second picked off; the next pitch has a runner on first and
+one out, so a tag there fires in the wrong situation on the wrong runner.
+
+**The check** (read-only, 2026-09-30; the play records against `sim.steal_opportunity_pool`,
+2023-2026; plan §2.8). The builder does not tag the pitch after the throw. It tags the first
+pitch of the plate appearance thrown in the situation BEFORE the throw, and those tags are right:
+the row's runner is the runner picked off on 99.4%, the outs match on 99.7%. But a throw that
+comes before the plate appearance's first pitch has no such pitch, and the builder drops the
+outcome.
+
+| | Count | Share |
+|---|---|---|
+| Pickoff outcomes that fit a pair (first-to-second or second-to-third) | 1,788 | 100% |
+| Tagged to a pitch row | 1,394 | 78.0% |
+| Dropped: no pitch of that pair in the plate appearance | 394 | 22.0% |
+
+The dropped ones by season: 91 / 108 / 95 / 100, about 95 a season. Another 7% of all outcomes
+(143 of 1,931) fit no pair and stay out by design (SIM-507). So the pool holds about 72% of real
+pickoff outcomes. 97.4% of the tagged rows are 0-0 pitches: the count at a throw is not stored.
+**A correction:** version 2's text, and my first answer to the owner, said the tagged share
+equals the real rate. That repeated the note in migration 0017 without checking it.
+
+**The decision (owner, 2026-10-01: "Yes, write this in as version 3").** On every pitch with a
+runner who could steal, four draws in the order things happen:
+
+1. **The pickoff draw**, before the pitch, from the pool's rows for this base, outs and count
+   (every row a candidate; the steal draw's own weights; no manager weight). A pickoff resolves
+   at once. A third out ends the half-inning there: no pitch is drawn, nothing is credited, the
+   same batter leads off.
+2. **The pitch**, on the bases the pickoff left.
+3. **Its result.**
+4. **The steal draw**, among real pitches with the same base, outs, count and result. A group
+   answers from its own rows however few; nothing falls back, nothing is cancelled. No steal
+   draw on a pitch that carried a pickoff outcome.
+
+**What changed in the plan** (`docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md`,
+now version 3, §12 is the record; the page https://claude.ai/artifact/UP5z7ErWR9cgTnKwYENc8Y, v3):
+
+- Migration 0031 adds two columns to the steal pool: `pitch_class` and `is_pickoff_row`. The
+  builder writes one pickoff row per dropped outcome, in the situation before the throw (0-0
+  count; the catcher of the nearest pitch of the half-inning). The pool's pickoff outcomes rise
+  from 1,394 to 1,788, about 0.15 to 0.19 a game.
+- The loop order is pickoff, pitch, result, steal. `pickoff_draw` is new. The pickoff's third
+  out is the order itself, with a no-pitch result; version 2 reversed a pitch already drawn.
+- The thin-group fallback, the dead-ball cancel rule and the flag `SIM_STEAL_MIN_CELL` are gone.
+  One flag stays: `SIM_STEAL_PITCH_CLASS` (default 1; 0 = today's single pre-pitch draw).
+- Twenty-five tests (version 2: twenty-four). The first risk is now a reader that counts a
+  no-pitch result as a pitch; the build greps every reader of a per-pitch result.
+- Decisions: 1 taken (the replay), 2 taken (the pickoff draw; it replaces the thin-group
+  decision), 3 open (the two-out held third strike), 4 open (the runners on a dropped third
+  strike).
+
+**Limits.** No replay scored the pickoff: the 22% is a count of records, and the census of the
+run book reads the draw's rate. Pickoffs stay first-pitch events. A throw with no outcome and a
+step-off are still not drawn. The replay scored the steal with version 2's fallback under 20
+rows; dropping it touches at most 400 of a million rows, and the replay was not re-run.
+
+**Nothing built by this entry.** The design (the migration, the builder, the loop order, the two
+open rules) is not built. On the branch, uncommitted: the replay instrument, its sampler seam
+and their tests, from the entry below.
+
+# Sim — the running-game replay BUILT and RUN: eleven ways of sampling the steal scored on 74,296 real pitches; the steal stays its own draw and reads the pitch's class; merging the steal into the pitch row loses who steals — SIM-554, 2026-09-30
+
+**Why.** The owner put three questions to the design of 2026-09-29 (the pitch first, then a
+steal draw that reads the pitch's class): should the runner's decision come first and condition
+the batter's result; can the pitch and the steal be one draw; and does the batter of a drawn
+"swing and miss plus steal" row not differ from ours? The instruction: "build the replay test
+and let it pick the design". The plan is version 2
+(`docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md`, §11; the page https://claude.ai/artifact/UP5z7ErWR9cgTnKwYENc8Y, v2).
+
+**The instrument** (`scripts/sim554_running_game_replay.py`, modelled on the offline replay of
+the weight fitting). It plays no games. For every real pitch on which a steal was possible it
+sets the point-in-time cutoff to the day before the game, builds the draw as the loop does, and
+reads the whole jar of candidate rows and weights as a probability table over (the pitch's
+result) x (no steal / stolen base / caught stealing). It drives the production sampler and
+re-implements no weight: a new seam, `FullPoolSampler.steal_weights`, is what `steal_draw` now
+samples from (one code path, no random number consumed). The steal facts are joined to the pitch
+rows in memory by pitch id (the bundle's pitch-pool file + `sim.steal_opportunity_pool`,
+read-only; every opportunity-shaped row matched: 442,133 + 562,489 rows, 14,577 attempts), so no
+table was rebuilt and the app stayed up. Eleven designs: on the two-step pitch draw, today's
+separate steal draw, the steal draw reading the class (the plan), the runner deciding first, the
+steal on the pitch row (two variants), the steal on the result row (plain and a protected
+two-step read); on the single pitch draw, its two baselines and one row for everything (plain
+and two-step). Four strengths of the runner / pitcher-hold / catcher look-alike weights (off,
+1/1/1, 4/4/2, 12/12/2) and three base settings. 2025 picks each design's strength (89,881
+pitches, 3,835 recorded steals); 2026 gives the score (74,296 pitches, 3,083 steals). 17 ms a
+pitch; 82 minutes for both seasons in two containers.
+
+**The rule.** The bounded Brier score of the whole table decides, inside the family of the
+pitch draw production runs, at today's weights; two standard errors or less (resampling whole
+pitcher-games) is a tie; a tie goes to the per-runner read, then to the simpler build. Two trial
+runs on 2,000 pitches a season set it: the log score cannot decide, because the merged designs
+give 7.2% of real steals no chance and their log score is then whatever floor one picks. One
+clause was completed after the full run: the first script stopped the tie-break at the raw
+correlation and printed the runner-first design on a gap of 0.0017 +/- 0.0014; the rule as
+written ends on the simpler build, and the script now applies it and records both ties.
+
+**The result** (differences against today's draw, in 1/10,000 of the score; lower is better).
+The steal draw reading the class: -2.06 +/- 0.35, the pitch result untouched, the mix of results
+real steals ride off by 1.8 points (today: 37.4), each runner's expected steals against his real
+ones correlated 0.843 over 417 runners. The runner-first design: -1.15 +/- 0.57, a tie with it
+(head to head +0.91 +/- 0.50) and a tie on the per-runner read; worse given the real result
+(+12.77 +/- 2.46, its steal odds and result odds come from two pools), no say for the batter in
+what the steal rides, worse than today at the earlier fitted weights (+5.92 +/- 1.54), and the
+larger build. Every design that puts the steal on a pitch row is WORSE than today (+1.37 to
++2.41, four standard errors): its best strength is "off", where it cannot tell runners apart
+(correlation -0.12); with the runner weight on it does (0.79 at 4/4/2 against the steal pool's
+0.85) but the odds get noisier faster than sharper (the how-many-steals score 289.9 against 273.7).
+The pitch draw's bucket holds about five steal rows; the steal pool's cell holds hundreds. The
+unprotected merged designs also wreck the pitch result with the look-alike weights on (0.7599 ->
+0.9361 at 12/12/2). The single-pitch-draw family reads the same (-1.78 +/- 0.35 for the
+class-reading steal draw, +2.48 +/- 0.62 for one row). **The pick: the plan's own design.**
+Decision 1 of the plan is taken; decisions 2 to 4 stay open.
+
+**Two findings outside the ticket.** (1) The look-alike weights cut the number of steals in
+every design: 1.52 per 100 opportunity pitches with no weight, 1.23 at today's strength (14%
+under the real 1.42), 1.14 at 4/4/2. That matches the lane's red steal-attempt bands (-9.1% /
+-17.9%, 2026-09-21) and belongs to the weight fitting or a ticket of its own; not filed. (2) At
+neutral weights the single pitch draw scores better on the pitch's result (0.7585 against
+0.7599), the offline fit's read of 2026-09-16; part of the gap is the replay's eight-anchor
+estimate of the two-step draw.
+
+**Files (the branch `sim554-baserunning-defects`, uncommitted).**
+`simulation/full_pool_sampler.py` (`steal_weights`; `steal_draw` samples from it),
+`scripts/sim554_running_game_replay.py` (new), `scripts/sim554_replay_report.txt` / `.json` (the
+record), `tests/unit/test_sim554_steal_weights_seam.py` (new, 6),
+`tests/unit/test_sim554_replay_instrument.py` (new, 13), the plan (version 2, §11). Gates run on
+the host: ruff check and format clean on the four touched files; the two new test files and the
+steal suites around them (SIM-474, SIM-483, SIM-484, SIM-506, the SIM-523 actor matrices) pass,
+113 tests. The container lanes and mypy have not run on this branch. The design itself is not
+built.
+
+# Design — the running game on the pitch: the steal draw reads the pitch it rides, the third out before the pitch, the runners on a dropped third strike: PROPOSED with four owner decisions — SIM-554, 2026-09-29
+
+**What the ticket asks.** A steal attempt never resolves on a ball in play or on a two-out third
+strike the catcher holds, and the steal bands stay green; a pickoff or caught stealing that
+makes the third out before the pitch leaves the batter's turn unused and credits no pitch
+event; a dropped-third-strike reach moves the unforced runners the way a got-away pitch moves
+them elsewhere; a unit test pins each case and the ten-game smoke shows no collapse.
+
+**What the code and the data say** (the plan is
+`docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md` on the branch
+`sim554-baserunning-defects`; the page is https://claude.ai/artifact/UP5z7ErWR9cgTnKwYENc8Y). The loop draws the steal before the pitch
+from a cell of (target base, outs, balls, strikes), so the attempt lands on whatever the pitch
+draw produces. On 2023-2026 (1,004,622 opportunity pitches, 14,577 real attempts) real attempts
+ride balls 64%, called strikes 25%, swings and misses 10%, fouls 1% (mostly foul tips, a live
+ball), balls in play and hit by pitches never; the loop's land on balls 36%, fouls 19%, balls in
+play 17%. So 36% of the loop's attempts (about 0.29 per team-game) sit on a pitch that never
+carries a real one. Real data hold zero attempts on a two-out third strike (all 412
+strikeout-plus-caught-stealing rows sit at none or one out) and zero on ball four, so two of the
+four defects vanish once the draw knows the class. The third out before the pitch is a pickoff
+(a caught stealing is on the pitch): 130 / 126 / 140 / 121 real pickoff third outs a season; the
+loop's defect needs the drawn pitch to end the plate appearance too, about one in 190 games. On
+a dropped-third-strike reach an unforced runner moved on 28 of 32 real chances (2023-2026).
+
+**Recommendation.** One column and one reorder: migration 0031 adds `pitch_class` to the steal
+opportunity pool, filled from the pitch pool's own `outcome_type` at build time (builder
+sim554.1; the bundle's steal pool carries a one-byte code, shared across workers); the loop
+draws the pitch first and the steal draw hard-filters on its class, a cell under 20 rows
+widening to the count cell (counted; only the hit-by-pitch class is thin). The volume is
+unchanged in expectation, so the attempt bands do not move by construction. Two rules of
+baseball stand behind the draw as tripwires: a steal staged on a ball in play or a hit by pitch
+is void, and with two outs a held third strike is the third out before any throw. A pickoff
+that makes the third out on a terminal pitch ends the half with the batter's turn unused, no
+event credited and the pitch count reversed (the non-terminal path's rule). The
+dropped-third-strike reach runs the got-away advance first, then seats the batter on first. No
+weight, bandwidth or power changes; two flags (`SIM_STEAL_PITCH_CLASS` on, `SIM_STEAL_MIN_CELL`
+20). The steal pool is rebuilt for the four window seasons and exported alone into the bundle
+(the app stopped for the write; the export ships the pool's 2026 refresh). Twenty-four tests, a
+two-arm running-game census on the balanced 45 games x 20, the ten-game smoke, one 45 x 130
+lane. Recorded: the steal attempt bands read red on the 2026-09-21 lane for a reason outside
+this ticket; this change moves placement, not volume. No random stream keeps its order, so no
+seeded game is byte-identical. Nothing is built. Four decisions in §10.
+
 # BUILT — every book's prices stored, one book per row, one graded book, a load guard; the census passed and every season 2019-2026 is re-loaded and checked — SIM-555, 2026-09-28 (re-load complete 2026-09-30)
 
 **Status at the commit (2026-10-01).** Every season from 2019 to 2026 is re-loaded one row per book
