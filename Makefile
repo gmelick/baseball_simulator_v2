@@ -94,11 +94,13 @@ validate-props: _require_env_file
 	docker compose run --rm app python scripts/validate_props.py $(FLAGS)
 
 ## Offline (SIM-435): backfill OPENING + CLOSING odds for Final games into
-## raw.game_odds / raw.prop_odds so the CLV backtest (SIM-429) has entry+closing
-## lines to score against.  Network-bound (one provider request per game/market) —
-## set ODDS_PROVIDER=bettingpros + ODDS_API_KEY, or leave unset for the
-## deterministic MockOddsAPI.  Cap a smoke run with
-## FLAGS="--seasons 2024 --max-games 200".
+## raw.game_odds / raw.prop_odds so the accuracy comparison has closing lines
+## to score against.  SIM-555: one row per book (`bp:<id>`), guarded, batched.
+## Network-bound.  FLAGS must name the provider: --provider bettingpros (the
+## app container carries ODDS_API_KEY; ODDS_PROVIDER is not set there), or
+## --provider mock for the deterministic wiring smoke; the loader refuses to
+## run the mock unasked.  --book NAME loads one book's rows.  Example:
+## FLAGS="--seasons 2024 --max-games 5 --provider bettingpros".
 load-historical-odds: _require_env_file
 	docker compose run --rm app python scripts/load_historical_odds.py $(FLAGS)
 

@@ -23,7 +23,10 @@ const PAD = 18
 
 export function LineMovementChart({ movement }: LineMovementChartProps): React.ReactElement {
   const series = movement.implied_prob_series
-  const sideTitle = `${movement.side}${movement.book ? ` · ${movement.book}` : ''}`
+  // SIM-555: the title names the book ("home · FanDuel"); the stored label
+  // (bp:10) is the fallback when the API sends no name.
+  const bookTitle = movement.book_name || movement.book
+  const sideTitle = `${movement.side}${bookTitle ? ` · ${bookTitle}` : ''}`
 
   if (series.length < 2) {
     return (

@@ -103,6 +103,17 @@ be de-vigged against each other. So on a run line:
     same way: each price over the book's margin on the game's total, then its
     moneyline, at that time (:func:`betting.clv_engine.devig_one_sided`).
     :attr:`LineMovement.clv_basis` says which way the CLV was priced.
+
+ONE BOOK PER ROW (SIM-555)
+--------------------------
+Every new ``raw.game_odds`` row holds one book's prices for all its sides and
+names the book as ``bp:<id>`` (the vendor's book id). The old rows say
+``consensus`` and can mix two books inside one row, so every read here keeps
+only the ``bp:`` rows (:data:`pipeline.odds_provider.STORED_BOOK_FILTER_SQL`).
+Each quote and each series also carries the book's display name
+(``book_name``, e.g. "FanDuel") for the chart title. Nothing else on this
+surface changed: closing line value is not a metric the model is judged by
+(owner ruling, 2026-09-28).
 """
 
 from __future__ import annotations
@@ -121,6 +132,7 @@ from betting.clv_engine import (
     reference_margin_from_prices,
     run_line_is_pair,
 )
+from pipeline.odds_provider import STORED_BOOK_FILTER_SQL, book_display_name
 
 # ===========================================================================
 # Market -> (this-side column, other-side column, line column) mapping
@@ -222,6 +234,9 @@ class LineQuote:
     implied_prob: float = 0.0
     #: SIM-549: the OTHER side's own line at the same snapshot (run lines only).
     other_line: float | None = None
+    #: SIM-555: the book's display name ("FanDuel" for ``bp:10``). A label the
+    #: vocabulary does not name keeps the label (``consensus``, ``bp:999``).
+    book_name: str = ""
 
     @property
     def is_run_line_pair(self) -> bool:
@@ -245,12 +260,14 @@ class LineQuote:
 
         The convenience constructor used everywhere internally: it fills
         ``implied_prob`` via :func:`~betting.clv_engine.implied_prob_from_american`
-        so callers never have to.
+        so callers never have to. SIM-555: it also fills ``book_name`` from the
+        book vocabulary.
         """
         return LineQuote(
             fetched_at=fetched_at,
             line_type=str(line_type),
             book=str(book),
+            book_name=book_display_name(str(book)),
             is_sharp_book=bool(is_sharp_book),
             american=float(american),
             other_american=None if other_american is None else float(other_american),
@@ -336,6 +353,9 @@ class LineMovement:
     clv_basis: str | None = None
     #: Run lines only: why there is no CLV, or a caveat on it, in plain words.
     clv_note: str | None = None
+    #: SIM-555: the display name of ``book`` ("FanDuel" for ``bp:10``); an
+    #: empty string when the series names no book.
+    book_name: str = ""
 
     @property
     def has_movement(self) -> bool:
@@ -459,6 +479,7 @@ def line_movement_from_quotes(
             book=book,
             quotes=(),
             sharp_consensus=sharp_consensus,
+            book_name=book_display_name(book),
         )
 
     implied_series = tuple(q.implied_prob for q in quotes)
@@ -525,6 +546,7 @@ def line_movement_from_quotes(
         run_line_shape=run_line_shape,
         clv_basis=clv_basis,
         clv_note=clv_note,
+        book_name=book_display_name(book),
     )
 
 
@@ -594,35 +616,36 @@ def _run_line_clv(
 
 #: All columns a line-movement series needs, ordered by the time axis. We pull
 #: every market's side columns in one read and let the pure builder slice per
-#: (market, side). ORDER BY fetched_at ASC == opening -> closing.
-_SQL_FETCH_GAME_ODDS = """
+#: (market, side). ORDER BY fetched_at ASC == opening -> closing. SIM-555: only
+#: the one-book rows (``bp:<id>``); an old ``consensus`` row can mix two books.
+_SQL_FETCH_GAME_ODDS = f"""
     SELECT fetched_at, line_type, book, is_sharp_book, market_type,
            home_ml, away_ml,
            home_spread, home_spread_ml, away_spread, away_spread_ml,
            total_line, over_ml, under_ml
     FROM raw.game_odds
-    WHERE game_pk = $1 AND market_type = $2
+    WHERE game_pk = $1 AND market_type = $2 AND {STORED_BOOK_FILTER_SQL}
     ORDER BY fetched_at ASC
 """
 
 #: Same, restricted to a single book (book filter appended).
-_SQL_FETCH_GAME_ODDS_BOOK = """
+_SQL_FETCH_GAME_ODDS_BOOK = f"""
     SELECT fetched_at, line_type, book, is_sharp_book, market_type,
            home_ml, away_ml,
            home_spread, home_spread_ml, away_spread, away_spread_ml,
            total_line, over_ml, under_ml
     FROM raw.game_odds
-    WHERE game_pk = $1 AND market_type = $2 AND book = $3
+    WHERE game_pk = $1 AND market_type = $2 AND book = $3 AND {STORED_BOOK_FILTER_SQL}
     ORDER BY fetched_at ASC
 """
 
 
 #: SIM-549: the same game's two-way reference markets, for a run line whose
-#: rows are two separate bets.
-_SQL_FETCH_REFERENCE_ODDS = """
+#: rows are two separate bets. SIM-555: the one-book rows only.
+_SQL_FETCH_REFERENCE_ODDS = f"""
     SELECT fetched_at, line_type, book, market_type, home_ml, away_ml, over_ml, under_ml
     FROM raw.game_odds
-    WHERE game_pk = $1 AND market_type IN ('total', 'moneyline')
+    WHERE game_pk = $1 AND market_type IN ('total', 'moneyline') AND {STORED_BOOK_FILTER_SQL}
     ORDER BY fetched_at ASC
 """
 
@@ -713,9 +736,9 @@ async def fetch_line_movement(
 
     Duck-typed ``conn`` (a real asyncpg connection or a test stub exposing an
     async ``fetch(sql, *args)``), exactly like the :mod:`db.sim_store` readers.
-    Issues ONE query: every ``raw.game_odds`` row for ``(game_pk, market_type)``
-    (optionally narrowed to one ``book``), ordered by ``fetched_at`` ascending
-    (opening -> closing).  The rows are then grouped per (side, book) and each
+    Issues ONE query: every one-book ``raw.game_odds`` row (``bp:<id>``,
+    SIM-555) for ``(game_pk, market_type)`` (optionally narrowed to one
+    ``book``), ordered by ``fetched_at`` ascending (opening -> closing).  The rows are then grouped per (side, book) and each
     group is handed to the pure :func:`line_movement_from_quotes`.
 
     Returns one :class:`LineMovement` per (side, book) present in the data

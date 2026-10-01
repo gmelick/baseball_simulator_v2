@@ -147,37 +147,42 @@ class TestVocabulary:
 
 class TestProviderSegmentMarkets:
     """Every expected number below is the selection's ``opening_line`` in the
-    captured payload — the one price that does not depend on which book the
-    current-line pick prefers — or, for the current line, the provider's own
-    ``_pick_line`` on the named selection, so each test checks WHICH selection
-    landed in WHICH column."""
+    captured payload, or, for the current and closing lines, one named book's
+    own line on the named selection (SIM-555: one row per book), so each test
+    checks WHICH selection landed in WHICH column."""
 
     @staticmethod
-    def _current(p, market_id: int, *, offer: int = 0, participant=None, selection=None):
-        sel_list = _load(_FIXTURE_BY_MARKET[market_id])["offers"][offer]["selections"]
+    def _book_cost(market_id: int, book_id: int, *, participant=None, selection=None):
+        from pipeline.bettingpros_odds_provider import _book_line
+
+        sel_list = _load(_FIXTURE_BY_MARKET[market_id])["offers"][0]["selections"]
         for sel in sel_list:
             if participant is not None and sel.get("participant") == participant:
-                return p._pick_line(sel, "current")
+                return _book_line(sel, book_id)["cost"]
             if selection is not None and (sel.get("selection") or "").lower() == selection:
-                return p._pick_line(sel, "current")
+                return _book_line(sel, book_id)["cost"]
         raise AssertionError("selection not in fixture")
 
     def test_first_inning_moneyline_is_three_way_opening(self):
         odds = _SegmentFixtureProvider().get_odds(
             1, market_type="f1_moneyline", line_type="opening"
         )
-        # ATL is home, TB away; the tie is its own price.
+        # ATL is home, TB away; Caesars opened both. SIM-555: the tie opened at
+        # FanDuel, another book, so the Caesars opening row carries no tie.
+        assert odds["book"] == "bp:13"
         assert odds["home_ml"] == -120.0 and odds["away_ml"] == -110.0
-        assert odds["draw_ml"] == -120.0
+        assert odds["draw_ml"] is None
         assert odds["total_line"] is None and odds["home_spread"] is None
         assert odds["market_type"] == "f1_moneyline"
 
     def test_first_inning_moneyline_current_routes_each_selection(self):
         p = _SegmentFixtureProvider()
         odds = p.get_odds(1, market_type="f1_moneyline")
-        assert odds["home_ml"] == self._current(p, 278, participant="ATL")[0]
-        assert odds["away_ml"] == self._current(p, 278, participant="TB")[0]
-        assert odds["draw_ml"] == self._current(p, 278, selection="draw")[0]
+        # FanDuel is the first book on the preference with a row; every side is its own.
+        assert odds["book"] == "bp:10"
+        assert odds["home_ml"] == self._book_cost(278, 10, participant="ATL")
+        assert odds["away_ml"] == self._book_cost(278, 10, participant="TB")
+        assert odds["draw_ml"] == self._book_cost(278, 10, selection="draw")
 
     def test_first_five_moneyline_ignores_the_folded_yes_no_pair(self):
         # The live payload carries Yes / No selections beside Home / Away / Draw;
@@ -241,13 +246,20 @@ class TestProviderSegmentMarkets:
         assert odds["under_ml"] == 100.0  # No
         assert odds["home_ml"] is None
 
-    def test_closing_line_is_the_latest_update_across_books(self):
+    def test_closing_is_one_row_per_book(self):
+        # SIM-555: the closing line is one row per book, each side from that book
+        # (it was the newest stamp across every book, per side).
         p = _SegmentFixtureProvider()
+        rows = p.get_odds_by_book(1, market_type="f1_total", line_type="closing")
+        assert [r["book"] for r in rows] == ["bp:0", "bp:12", "bp:14"]
+        for row in rows:
+            book_id = row["book_id"]
+            assert row["over_ml"] == self._book_cost(280, book_id, selection="over")
+            assert row["under_ml"] == self._book_cost(280, book_id, selection="under")
+            assert row["total_line"] == 1.5
         odds = p.get_odds(1, market_type="f1_total", line_type="closing")
-        sels = _load(_FIXTURE_BY_MARKET[280])["offers"][0]["selections"]
-        over = next(s for s in sels if s["selection"] == "over")
-        assert odds["over_ml"] == p._pick_line(over, "closing")[0]
-        assert odds["total_line"] == 1.5
+        assert odds["book"] == "bp:12"  # DraftKings: first on the preference
+        assert (odds["total_line"], odds["over_ml"], odds["under_ml"]) == (1.5, 205.0, -275.0)
 
     def test_a_segment_market_never_fills_another_market_field(self):
         p = _SegmentFixtureProvider()
@@ -352,39 +364,53 @@ class TestHashAndPersist:
         args = pipeline._db.execute.await_args.args[1:]
         assert "draw_ml" in sql
         assert args[-1] == LiveIngestionPipeline._odds_hash(odds)
-        assert args[-2] == odds["draw_ml"]
+        # SIM-555 moved this pin on purpose: book_line_at now sits between the
+        # tie price and the hash (the mock carries no stamp).
+        assert args[-2] is None
+        assert args[-3] == odds["draw_ml"]
         assert args[5] == "f5_moneyline"  # market_type keeps its slot
 
 
 # ===========================================================================
-# The live cycle
+# The live cycle (SIM-555: every game market, every book, on the cadence)
 # ===========================================================================
 
 
-class TestLiveSegmentCycle:
+class TestLiveGameMarketCycle:
+    """SIM-555 rewrote this class on purpose. The live cycle used to persist the
+    twelve segment markets on the cadence and the full-game row on every pitch;
+    it now persists every book's row of all fifteen markets on the cadence, one
+    batch per market, and the per-pitch row is no longer stored."""
+
     def _pipeline(self) -> LiveIngestionPipeline:
         p = LiveIngestionPipeline.__new__(LiveIngestionPipeline)
         p._db = AsyncMock()
         p._odds = MockOddsAPI()
-        p._last_segment_fetch = {}
+        p._last_game_odds_fetch = {}
         return p
 
-    def test_segment_market_list_is_every_non_legacy_market(self):
-        assert LiveIngestionPipeline.SEGMENT_MARKET_TYPES == SEGMENT_MARKETS
-        assert len(LiveIngestionPipeline.SEGMENT_MARKET_TYPES) == 12
+    def test_the_segment_only_names_are_gone(self):
+        assert not hasattr(LiveIngestionPipeline, "SEGMENT_MARKET_TYPES")
+        assert not hasattr(LiveIngestionPipeline, "_persist_segment_odds_cycle")
+        assert not hasattr(LiveIngestionPipeline, "_fetch_segment_odds")
 
-    def test_fetch_returns_one_quote_per_segment_market(self):
-        quotes = self._pipeline()._fetch_segment_odds(745000)
-        assert [q["market_type"] for q in quotes] == list(SEGMENT_MARKETS)
+    def test_fetch_returns_one_row_per_market_from_the_one_book_mock(self):
+        quotes = self._pipeline()._fetch_game_market_odds(745000)
+        assert [q["market_type"] for q in quotes] == list(GAME_MARKET_TYPES)
+        assert {q["line_type"] for q in quotes} == {"current"}
 
     @pytest.mark.asyncio
-    async def test_cycle_persists_twelve_rows_then_respects_the_cadence(self):
+    async def test_cycle_persists_every_market_then_respects_the_cadence(self):
         p = self._pipeline()
-        assert await p._persist_segment_odds_cycle(745000) == 12
-        assert p._db.execute.await_count == 12
+        assert await p._persist_game_odds_cycle(745000) == 15
+        # One executemany per market; no single-row insert.
+        assert p._db.executemany.await_count == 15
+        p._db.execute.assert_not_awaited()
+        markets = [call.args[1][0][5] for call in p._db.executemany.await_args_list]
+        assert markets == list(GAME_MARKET_TYPES)
         # The gate is closed until the cadence elapses: nothing more is written.
-        assert await p._persist_segment_odds_cycle(745000) == 0
-        assert p._db.execute.await_count == 12
+        assert await p._persist_game_odds_cycle(745000) == 0
+        assert p._db.executemany.await_count == 15
 
     @pytest.mark.asyncio
     async def test_a_failing_market_does_not_stop_the_others(self):
@@ -397,8 +423,23 @@ class TestLiveSegmentCycle:
                     raise RuntimeError("boom")
                 return MockOddsAPI.get_odds(game_pk, line_type=line_type, market_type=market_type)
 
+        # The mock's by-book method reads self.get_odds, so the override applies.
         p._odds = _Flaky()
-        assert await p._persist_segment_odds_cycle(745000) == 11
+        assert await p._persist_game_odds_cycle(745000) == 14
+
+    @pytest.mark.asyncio
+    async def test_a_failing_batch_does_not_stop_the_others(self):
+        p = self._pipeline()
+        calls = {"n": 0}
+
+        async def _executemany(sql, params):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("db hiccup")
+
+        p._db.executemany = _executemany
+        assert await p._persist_game_odds_cycle(745000) == 14
+        assert calls["n"] == 15
 
 
 # ===========================================================================
@@ -439,14 +480,19 @@ class TestLoaderGameMarkets:
     async def test_load_game_odds_writes_one_row_per_market_and_line_type(self):
         loader = self._loader()
         persisted = []
+        batches = []
 
-        async def persist(game_pk, odds):
-            persisted.append(odds)
+        # SIM-555: the loader hands one offer's kept rows to a batch writer.
+        async def persist(game_pk, rows):
+            batches.append(rows)
+            persisted.extend(rows)
+            return len(rows)
 
         written = await loader._load_game_odds(
             MockOddsAPI(), persist, 745000, line_types=("opening", "closing")
         )
         assert written == 30
+        assert len(batches) == 30  # the one-book mock: one row per offer
         assert {o["market_type"] for o in persisted} == set(GAME_MARKET_TYPES)
         assert {o["line_type"] for o in persisted} == {"opening", "closing"}
 
@@ -455,8 +501,9 @@ class TestLoaderGameMarkets:
         loader = self._loader()
         persisted = []
 
-        async def persist(game_pk, odds):
-            persisted.append(odds)
+        async def persist(game_pk, rows):
+            persisted.extend(rows)
+            return len(rows)
 
         written = await loader._load_game_odds(
             MockOddsAPI(),
@@ -520,4 +567,8 @@ class TestLoaderResume:
         since = loader.parse_skip_loaded_since("2026-09-12T23:40:00")
         await loader._fetch_final_games("dsn", [2025], None, skip_loaded_since=since)
         assert "NOT EXISTS" in seen[-1][0] and "raw.prop_odds" in seen[-1][0]
-        assert seen[-1][1] == (since,)
+        # SIM-555: the run's line types are bound as $2 (the live cycle's
+        # 'current' rows never mark a game as loaded).
+        assert seen[-1][1] == (since, ["opening", "closing"])
+        # SIM-555: an old consensus row never marks a game as loaded.
+        assert "p.book LIKE 'bp:%'" in seen[-1][0]

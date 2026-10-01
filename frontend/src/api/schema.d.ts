@@ -200,7 +200,7 @@ export interface paths {
         };
         /**
          * Entry-vs-close CLV snapshot per side/book
-         * @description A thin projection of /line-movement: the line-movement series that carry an entry-vs-close CLV (>= 2 quotes and both ends priceable). Each model's clv.clv_prob / clv.beat_close answers 'did the opening price beat the close' for that side/book. A run-line series has a CLV only when its spread was the same at both ends (SIM-549). clv_basis says whether it was priced as a pair or as two separate bets. numpy-free. 503 if no DB pool, 422 on a bad market_type.
+         * @description A thin projection of /line-movement: the line-movement series that carry an entry-vs-close CLV (>= 2 quotes and both ends priceable). Each model's clv.clv_prob / clv.beat_close answers 'did the opening price beat the close' for that side/book. A run-line series has a CLV only when its spread was the same at both ends (SIM-549). clv_basis says whether it was priced as a pair or as two separate bets. SIM-555: the one-book rows only (book = bp:<id>). numpy-free. 503 if no DB pool, 422 on a bad market_type.
          */
         get: operations["get_game_clv_api_betting_games__game_pk__clv_get"];
         put?: never;
@@ -220,7 +220,7 @@ export interface paths {
         };
         /**
          * Per-market edge reports (moneyline / total / run-line)
-         * @description Run (or reuse, via the SIM-359 cache) a Monte-Carlo sim for the game and build the EdgeReports for the requested markets (moneyline / total / runline, both sides each) off the GameSimSummary + market odds. Odds come from the injected query params when supplied, else the deterministic mock provider (flagged per market in odds_source). numpy-free EdgeReportModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market.
+         * @description Run (or reuse, via the SIM-359 cache) a Monte-Carlo sim for the game and build the EdgeReports for the requested markets (moneyline / total / runline, both sides each) off the GameSimSummary + market odds. Odds come from the injected query params when supplied; else (SIM-555) the stored lines of the game, one row per book: the closing lines, plus the current lines while the game has not started (raw.games status Preview; an in-play line is never read). The fair probability comes from one book's row (the graded book, named in fair_book) and each side's offered price, and so its EV, from the best stored price at that line (its book named in price_book); else the deterministic mock provider. odds_source flags each market: injected, stored or mock. numpy-free EdgeReportModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market.
          */
         get: operations["get_game_edges_api_betting_games__game_pk__edges_get"];
         put?: never;
@@ -240,7 +240,7 @@ export interface paths {
         };
         /**
          * Opening->closing line-movement time-series per side/book
-         * @description Read the persisted raw.game_odds history for the (game_pk, market_type[, book]) and build the SIM-368 line-movement time-series: one series per (side, book) with the ordered quotes, the per-step + opening->closing deltas, the running implied-prob surface, the steam direction, the sharp-consensus flag, and the entry-vs-close CLV. A run line (SIM-549) carries run_line_shape: pair, two_bets or mixed. When either end is two separate bets, both ends are priced on their own price over the game's two-way margin. A side whose spread moved gets no CLV; clv_note says why. numpy-free LineMovementModel list. 503 if no DB pool, 422 on a bad market_type.
+         * @description Read the persisted raw.game_odds history for the (game_pk, market_type[, book]) and build the SIM-368 line-movement time-series: one series per (side, book) with the ordered quotes, the per-step + opening->closing deltas, the running implied-prob surface, the steam direction, the sharp-consensus flag, and the entry-vs-close CLV. A run line (SIM-549) carries run_line_shape: pair, two_bets or mixed. When either end is two separate bets, both ends are priced on their own price over the game's two-way margin. A side whose spread moved gets no CLV; clv_note says why. SIM-555: only the one-book rows are read (book = bp:<id>); each series and each quote carries the book's display name in book_name. numpy-free LineMovementModel list. 503 if no DB pool, 422 on a bad market_type.
          */
         get: operations["get_game_line_movement_api_betting_games__game_pk__line_movement_get"];
         put?: never;
@@ -260,7 +260,7 @@ export interface paths {
         };
         /**
          * Ranked +EV bet-signal recommendations
-         * @description Build the per-market EdgeReports (as /edges), gate them to the +EV set (strictly positive edge >= min_edge AND ev > min_ev), size each via fractional Kelly (kelly_fraction, capped at max_stake_fraction), and return them RANKED by EV descending. min_edge / kelly_fraction are tunable via query params. numpy-free BetSignalModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market.
+         * @description Build the per-market EdgeReports (as /edges, with the same injected / stored / mock odds sources), gate them to the +EV set (strictly positive edge >= min_edge AND ev > min_ev), size each via fractional Kelly (kelly_fraction, capped at max_stake_fraction), and return them RANKED by EV descending. A signal priced from the stored lines names the book of its offered price (price_book). min_edge / kelly_fraction are tunable via query params. numpy-free BetSignalModel list. 503 if no DB pool, 404 if the lineup cannot be resolved, 422 on a bad market.
          */
         get: operations["get_game_signals_api_betting_games__game_pk__signals_get"];
         put?: never;
@@ -907,6 +907,10 @@ export interface components {
             line?: number | null;
             /** Offered American */
             offered_american: number;
+            /** Price Book */
+            price_book?: string | null;
+            /** Price Book Name */
+            price_book_name?: string | null;
             /** Rank */
             rank: number;
             report: components["schemas"]["EdgeReportModel"];
@@ -1088,6 +1092,14 @@ export interface components {
          *     is the MarketSide enum's ``.value`` (a JSON-native string, e.g. "home" /
          *     "over"); ``clv`` is present only when a closing quote was supplied.
          *     ``positive_edge`` mirrors the source's derived property (edge > 0).
+         *
+         *     SIM-555: when the betting routes price a market from the stored lines (the
+         *     closing line; before the game starts, also the current line),
+         *     ``price_book`` names the book whose price is ``offered_american`` (the best
+         *     price a bettor can take at this line, e.g. ``bp:10``) and
+         *     ``price_book_name`` its display name ("FanDuel"). Both are None for an
+         *     injected or mock price. The source dataclass carries no book, so the route
+         *     sets them.
          */
         EdgeReportModel: {
             clv?: components["schemas"]["CLVModel"] | null;
@@ -1105,6 +1117,10 @@ export interface components {
             offered_american: number;
             /** Positive Edge */
             positive_edge: boolean;
+            /** Price Book */
+            price_book?: string | null;
+            /** Price Book Name */
+            price_book_name?: string | null;
             /** Side */
             side: string;
             /** Sim Fair American */
@@ -1118,13 +1134,26 @@ export interface components {
          *
          *     Carries the per-market :class:`EdgeReportModel` list plus the run metadata
          *     (n_iterations / base_seed) and the per-market ``odds_source`` flags
-         *     ("injected" / "mock") so a consumer knows where each market's prices came from.
+         *     ("injected" / "stored" / "mock") so a consumer knows where each market's
+         *     prices came from. SIM-555: "stored" = each book's stored closing line, or,
+         *     before the game starts, its latest stored current line. A stored market
+         *     names its graded book in
+         *     ``fair_book`` (the book whose row gave the fair probability), and each
+         *     report names the book of its offered price (``price_book``).
          */
         EdgesResponse: {
             /** Base Seed */
             base_seed?: number | null;
             /** Edges */
             edges?: components["schemas"]["EdgeReportModel"][];
+            /** Fair Book */
+            fair_book?: {
+                [key: string]: string;
+            };
+            /** Fair Book Name */
+            fair_book_name?: {
+                [key: string]: string;
+            };
             /** Game Pk */
             game_pk: number;
             /** Markets */
@@ -1536,6 +1565,11 @@ export interface components {
             beat_close: boolean;
             /** Book */
             book?: string | null;
+            /**
+             * Book Name
+             * @default
+             */
+            book_name: string;
             /** Closing American */
             closing_american?: number | null;
             /** Closing Implied Prob */
@@ -1619,6 +1653,11 @@ export interface components {
             american: number;
             /** Book */
             book: string;
+            /**
+             * Book Name
+             * @default
+             */
+            book_name: string;
             /** Fetched At */
             fetched_at?: string | null;
             /** Implied Prob */
@@ -2107,7 +2146,9 @@ export interface components {
          *
          *     Carries the ranked (+EV, EV descending) :class:`BetSignalModel` list plus the
          *     run metadata, the gate config that produced them (min_edge / min_ev /
-         *     kelly_fraction / max_stake_fraction), and the per-market ``odds_source`` flags.
+         *     kelly_fraction / max_stake_fraction), and the per-market ``odds_source`` flags
+         *     ("injected" / "stored" / "mock"). SIM-555: ``fair_book`` as on /edges; each
+         *     signal names the book of its offered price (``price_book``).
          */
         SignalsResponse: {
             /** Base Seed */
@@ -2115,6 +2156,14 @@ export interface components {
             /** Config */
             config?: {
                 [key: string]: number;
+            };
+            /** Fair Book */
+            fair_book?: {
+                [key: string]: string;
+            };
+            /** Fair Book Name */
+            fair_book_name?: {
+                [key: string]: string;
             };
             /** Game Pk */
             game_pk: number;
@@ -2898,7 +2947,7 @@ export interface operations {
             query?: {
                 /** @description moneyline | runline | total */
                 market_type?: string;
-                /** @description Restrict to one book (else all books) */
+                /** @description Restrict to one stored book label, e.g. bp:12 (else all books) */
                 book?: string | null;
             };
             header?: never;
@@ -2992,7 +3041,7 @@ export interface operations {
             query?: {
                 /** @description moneyline | runline | total */
                 market_type?: string;
-                /** @description Restrict to one book (else all books) */
+                /** @description Restrict to one stored book label, e.g. bp:12 (else all books) */
                 book?: string | null;
             };
             header?: never;

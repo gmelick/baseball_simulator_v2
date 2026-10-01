@@ -63,7 +63,7 @@ import json
 import logging
 import os
 import random
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from typing import Any
@@ -90,7 +90,13 @@ from pipeline.odds_provider import (
     PROP_STATS,
     OddsProvider,
     get_odds_provider,
+    odds_rows_by_book,
+    prop_rows_by_book,
 )
+
+# SIM-555: the load guard. Every writer shows it each non-empty row before the
+# row is persisted; a refused row is logged, counted and never written.
+from pipeline.odds_row_guard import RefusalTally, check_row
 
 # SIM-106: Type alias for the simulation callback. It MUST be an async
 # function — passing a sync function would either raise TypeError when the
@@ -118,6 +124,10 @@ log = logging.getLogger("live_ingestion")
 MLB_BASE = "https://statsapi.mlb.com"
 MLB_WS_TEMPLATE = "wss://ws.statsapi.mlb.com/api/v1/game/push/subscribe/gameday/{game_pk}"
 SCHEDULE_URL = f"{MLB_BASE}/api/v1/schedule"
+#: SIM-555: the schedule poll asks for each game's probable pitchers and posted
+#: lineups, so the pre-game odds cycle knows whose props to store before a game
+#: has a live feed (``teams.<side>.probablePitcher``, ``lineups.<side>Players``).
+SCHEDULE_HYDRATE = "probablePitcher,lineups"
 
 SCHEDULE_POLL_S = 30  # how often to check for newly-live games
 WS_RECONNECT_BASE = 2.0  # base seconds for WS reconnect backoff
@@ -138,26 +148,18 @@ RESIM_COOLDOWN_S = 10
 GAME_TYPES = ["R", "F", "D", "L", "W", "C", "P"]
 
 # ---------------------------------------------------------------------------
-# SIM-340: Prop-odds ingestion config (multi-book, sharp flag, cadence)
+# SIM-340: Prop-odds ingestion config (cadence)
 # ---------------------------------------------------------------------------
-# PROP_BOOKS — the set of books polled for player props on every prop-fetch
-# cycle.  Each entry is (book_name, is_sharp_book).  Sharp books (Pinnacle,
-# Circa) provide the CLV reference line; soft books (DraftKings, FanDuel)
-# capture the line the public actually bets into.  Capturing both lets the
-# CLV engine (SIM-339) measure soft-vs-sharp divergence per prop.
+# SIM-555 (2026-09-28): the provider names the books. Each odds cycle asks the
+# provider for every book's row of a market (``odds_rows_by_book`` /
+# ``prop_rows_by_book``) and persists every row the load guard keeps, each
+# under its own label (``'bp:<id>'`` from BettingPros; the mock's one row keeps
+# ``'consensus'``). The old fixed book list (PROP_BOOKS) is gone: it wrote one
+# price set four times under four names, two of which the vendor never carried.
 #
-# The provider behind _fetch_prop_odds() is selected by ODDS_PROVIDER (via the
-# SIM-370 get_odds_provider() seam): the deterministic MockOddsAPI is the
-# default, and ODDS_PROVIDER=bettingpros switches to the real
-# BettingProsOddsProvider, which returns one quote per (book, player,
-# prop_stat).  The is_sharp_book classification stays here so it survives the
-# provider switch.
-PROP_BOOKS: list[tuple[str, bool]] = [
-    ("pinnacle", True),  # sharp — CLV reference
-    ("circa", True),  # sharp — CLV reference
-    ("draftkings", False),  # soft — retail line
-    ("fanduel", False),  # soft — retail line
-]
+# The provider is selected by ODDS_PROVIDER (via the SIM-370
+# get_odds_provider() seam): the deterministic MockOddsAPI is the default, and
+# ODDS_PROVIDER=bettingpros switches to the real BettingProsOddsProvider.
 
 # The 15 prop markets live in pipeline/odds_provider.py (PROP_STATS, split into
 # PITCHER_PROP_STATS / BATTER_PROP_STATS — SIM-421). This module imports them
@@ -181,8 +183,194 @@ _PITCHER_POSITION_CODES = frozenset({"P", "SP", "RP", "TWP"})
 # player × prop on every WS signal would issue thousands of redundant writes
 # per game.  We therefore gate prop fetches to at most once per
 # PROP_FETCH_CADENCE_S seconds per game; the dedup hash (migration 0013)
-# collapses any identical snapshot that still slips through.
+# collapses any identical snapshot that still slips through.  SIM-555: the
+# game markets (all fifteen, every book) ride the same cadence.
 PROP_FETCH_CADENCE_S = 60
+
+#: SIM-555: the cadence of the pre-game odds cycle, per game. The schedule poll
+#: runs every 30 seconds for every game of the day. Pre-game lines move slowly,
+#: so a game in the ``Preview`` state reads the vendor at most once every ten
+#: minutes. The in-play cycle keeps PROP_FETCH_CADENCE_S.
+PREGAME_ODDS_CADENCE_S = 600
+
+# ---------------------------------------------------------------------------
+# SIM-555: odds rows, JSON and the database
+# ---------------------------------------------------------------------------
+
+#: The by-book row keys that serve the load guard and the logs only. They are
+#: never stored and never sent to a browser: the scheduled start (a datetime)
+#: and the official date.
+_GUARD_ONLY_KEYS = frozenset({"scheduled_start", "game_date"})
+
+#: The odds fields of a prop row; a row with all three empty is not a quote.
+_PROP_ODDS_FIELDS: tuple[str, ...] = ("line", "over_ml", "under_ml")
+
+
+def _json_default(value: Any) -> str:
+    """The ``json.dumps`` fallback: a date or a datetime as ISO-8601 text (SIM-555).
+
+    The BettingPros rows carry ``book_line_at`` as a datetime; a bare
+    ``json.dumps`` raises ``TypeError`` on it. Any other unknown type still
+    raises, so a real bug stays loud.
+    """
+    if isinstance(value, date):  # a datetime is a date too
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _jsonable_odds(odds: Mapping[str, Any] | None) -> dict[str, Any]:
+    """An odds row made safe for ``json.dumps`` (SIM-555).
+
+    The row loses the guard-only keys (``scheduled_start``, ``game_date``) and
+    sends a date or a datetime (``book_line_at``) as ISO-8601 text. Every other
+    key passes through unchanged. ``None`` gives an empty dict.
+    """
+    out: dict[str, Any] = {}
+    for key, value in (odds or {}).items():
+        if key in _GUARD_ONLY_KEYS:
+            continue
+        out[key] = value.isoformat() if isinstance(value, date) else value
+    return out
+
+
+def _stamp_param(value: Any) -> datetime | None:
+    """A row's ``book_line_at`` as an aware datetime for the TIMESTAMPTZ column (SIM-555).
+
+    A naive datetime is read as UTC (the vendor stamps in UTC); ISO-8601 text is
+    parsed; anything else (``None``, a mock row without the key) gives ``None``.
+    """
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.strip())
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    return None
+
+
+def _game_row_has_odds(row: Mapping[str, Any]) -> bool:
+    """True when a game-odds row carries at least one price or line."""
+    return any(row.get(f) is not None for f in GAME_ODDS_FIELDS)
+
+
+def _prop_row_has_odds(row: Mapping[str, Any]) -> bool:
+    """True when a prop-odds row carries a line or a price."""
+    return any(row.get(f) is not None for f in _PROP_ODDS_FIELDS)
+
+
+#: The raw.game_odds INSERT. SIM-555 adds ``book_line_at``; ``odds_hash`` stays
+#: the LAST parameter (two pinned tests read the hash as the final argument).
+_GAME_ODDS_INSERT_SQL = """
+            INSERT INTO raw.game_odds
+                (game_pk, source, is_mock,
+                 book, line_type, market_type, is_sharp_book,
+                 home_ml, away_ml,
+                 home_spread, home_spread_ml, away_spread, away_spread_ml,
+                 total_line, over_ml, under_ml,
+                 draw_ml, book_line_at, odds_hash)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+            ON CONFLICT (game_pk, source, odds_hash)
+              WHERE odds_hash IS NOT NULL
+              DO NOTHING
+            """
+
+#: The raw.prop_odds INSERT. SIM-555 adds ``book_line_at``; ``odds_hash`` stays last.
+_PROP_ODDS_INSERT_SQL = """
+            INSERT INTO raw.prop_odds
+                (game_pk, player_id, source, is_mock,
+                 prop_stat, line, over_ml, under_ml,
+                 book, line_type, is_sharp_book, book_line_at, odds_hash)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+            ON CONFLICT (game_pk, player_id, source, odds_hash)
+              WHERE odds_hash IS NOT NULL
+              DO NOTHING
+            """
+
+
+def game_odds_insert_args(game_pk: int, odds: Mapping[str, Any]) -> tuple[Any, ...]:
+    """The bind values of one raw.game_odds INSERT, in ``_GAME_ODDS_INSERT_SQL`` order.
+
+    SIM-555: ``book_line_at`` (the vendor's stamp on the row's line) sits just
+    before ``odds_hash``, which stays LAST: two pinned tests read the hash as
+    the final argument. The stamp is not in the hash, so an unchanged line
+    re-fetched later still deduplicates. The live pipeline, the historical
+    loader and the opening-line job all bind through this one function, so
+    every writer sends the hash the live schema requires (``odds_hash`` is
+    NOT NULL on raw.game_odds since migration 0012).
+    """
+    return (
+        game_pk,
+        odds.get("source", "mock"),
+        odds.get("is_mock", True),
+        odds.get("book", "consensus"),
+        odds.get("line_type", "current"),
+        odds.get("market_type", "moneyline"),
+        odds.get("is_sharp_book", False),
+        odds.get("home_ml"),
+        odds.get("away_ml"),
+        odds.get("home_spread"),
+        odds.get("home_spread_ml"),
+        odds.get("away_spread"),
+        odds.get("away_spread_ml"),
+        odds.get("total_line"),
+        odds.get("over_ml"),
+        odds.get("under_ml"),
+        odds.get("draw_ml"),  # SIM-421: the tie price of a three-way segment moneyline
+        _stamp_param(odds.get("book_line_at")),  # SIM-555: the vendor's stamp
+        LiveIngestionPipeline._odds_hash(dict(odds)),  # stays LAST: two pinned tests read it last
+    )
+
+
+def prop_odds_insert_args(prop: Mapping[str, Any]) -> tuple[Any, ...]:
+    """The bind values of one raw.prop_odds INSERT, in ``_PROP_ODDS_INSERT_SQL`` order.
+
+    SIM-555: ``book_line_at`` sits just before ``odds_hash``, which stays last;
+    the stamp is not in the hash. Every prop writer binds through this function.
+    """
+    return (
+        prop["game_pk"],
+        prop["player_id"],
+        prop.get("source", "mock"),
+        prop.get("is_mock", True),
+        prop["prop_stat"],
+        prop["line"],
+        prop.get("over_ml"),
+        prop.get("under_ml"),
+        prop.get("book", "consensus"),
+        prop.get("line_type", "current"),
+        prop.get("is_sharp_book", False),
+        _stamp_param(prop.get("book_line_at")),  # SIM-555: the vendor's stamp
+        LiveIngestionPipeline._prop_odds_hash(dict(prop)),  # stays LAST
+    )
+
+
+async def insert_game_odds_rows(conn: Any, game_pk: int, rows: Sequence[Mapping[str, Any]]) -> int:
+    """SIM-555: insert game-odds rows in one ``executemany``, with the dedup.
+
+    ``conn`` is an asyncpg pool or connection. The SQL is the live writer's
+    (``odds_hash`` last, ``ON CONFLICT ... DO NOTHING``). Returns the number of
+    rows sent (the dedup may insert fewer). An empty list sends nothing.
+    """
+    if not rows:
+        return 0
+    await conn.executemany(
+        _GAME_ODDS_INSERT_SQL, [game_odds_insert_args(game_pk, row) for row in rows]
+    )
+    return len(rows)
+
+
+async def insert_prop_odds_rows(conn: Any, rows: Sequence[Mapping[str, Any]]) -> int:
+    """SIM-555: insert prop-odds rows in one ``executemany``, with the dedup.
+
+    The prop analogue of :func:`insert_game_odds_rows`. Returns the rows sent.
+    """
+    if not rows:
+        return 0
+    await conn.executemany(_PROP_ODDS_INSERT_SQL, [prop_odds_insert_args(row) for row in rows])
+    return len(rows)
+
 
 # ---------------------------------------------------------------------------
 # DDL helpers
@@ -486,6 +674,38 @@ class MockOddsAPI:
             "source": "mock",
             "is_mock": True,
         }
+
+    def get_odds_by_book(
+        self,
+        game_pk: int,
+        *,
+        line_type: str = "current",
+        market_type: str = "moneyline",
+    ) -> list[dict[str, Any]]:
+        """SIM-555: the by-book protocol method. The mock has one book: its one row.
+
+        The row keeps the mock's ``consensus`` label and, for the three
+        full-game markets, its all-three-markets shape. The method reads
+        ``self.get_odds``, so a subclass that overrides the one-row method (a
+        test fake that raises on one market) answers here too. Call it on an
+        instance, as the pipeline does.
+        """
+        return [self.get_odds(game_pk, line_type=line_type, market_type=market_type)]
+
+    def get_prop_odds_by_book(
+        self,
+        game_pk: int,
+        player_id: int,
+        prop_stat: str,
+        *,
+        line_type: str = "current",
+    ) -> list[dict[str, Any]]:
+        """SIM-555: the by-book protocol method. The mock has one book: its one row.
+
+        Reads ``self.get_prop_odds``, as :meth:`get_odds_by_book` reads
+        ``self.get_odds``.
+        """
+        return [self.get_prop_odds(game_pk, player_id, prop_stat, line_type=line_type)]
 
 
 # FastAPI router — mounts at /api/odds
@@ -1131,13 +1351,17 @@ class ConnectionManager:
         mid-loop and raise ``RuntimeError: Set changed size during iteration``.
         Copy is O(N); the receive set rarely exceeds a few dozen connections.
         Dead-connection cleanup still applies to the live underlying set.
+
+        SIM-555: a date or a datetime in the payload goes out as ISO-8601 text
+        (the by-book odds rows carry ``book_line_at`` as a datetime); the
+        refresh loop also strips the odds row before it gets here.
         """
         live_subs = self._subscriptions.get(game_pk, set())
         if not live_subs:
             return
         subs_snapshot = set(live_subs)  # SIM-103: iteration-safe snapshot
         dead: set[WebSocket] = set()
-        message = json.dumps(payload)
+        message = json.dumps(payload, default=_json_default)
         for ws in subs_snapshot:
             try:
                 await ws.send_text(message)
@@ -1257,8 +1481,12 @@ class LiveIngestionPipeline:
         # _persist_prop_odds_cycle() consults this map and skips the fetch
         # unless PROP_FETCH_CADENCE_S seconds have elapsed for this game.
         self._last_prop_fetch: dict[int, datetime] = {}
-        # SIM-421: the same cadence clock for the segment / team game markets.
-        self._last_segment_fetch: dict[int, datetime] = {}
+        # SIM-421 / SIM-555: the same cadence clock for every game market.
+        self._last_game_odds_fetch: dict[int, datetime] = {}
+        # SIM-555: the pre-game cycle's own clock per game (PREGAME_ODDS_CADENCE_S).
+        self._last_pregame_fetch: dict[int, datetime] = {}
+        # SIM-555: the load guard's refusals, counted by rule, market and book.
+        self._odds_refusals: RefusalTally = RefusalTally()
 
         self._schedule_task: asyncio.Task | None = None
         self._running = False
@@ -1344,8 +1572,19 @@ class LiveIngestionPipeline:
             await asyncio.sleep(SCHEDULE_POLL_S)
 
     async def _sync_live_games(self) -> None:
+        """Poll today's schedule: watch the live games, close the finished ones.
+
+        SIM-555: a game that has not started (``Preview``) gets the pre-game
+        odds cycle (:meth:`_persist_pregame_odds`), so every book's current
+        line is stored before first pitch, not only once the game is live.
+        """
         today = date.today().strftime("%Y-%m-%d")
-        params = {"sportId": 1, "gameTypes": GAME_TYPES, "date": today}
+        params = {
+            "sportId": 1,
+            "gameTypes": GAME_TYPES,
+            "date": today,
+            "hydrate": SCHEDULE_HYDRATE,
+        }
 
         async with self._http.get(SCHEDULE_URL, params=params) as resp:
             data = await resp.json()
@@ -1381,6 +1620,14 @@ class LiveIngestionPipeline:
                         # SIM-105: mark the game completed AFTER the final
                         # upsert fires.  All future polls will skip this game.
                         self._completed_games.add(game_pk)
+
+                elif status == "Preview":
+                    # SIM-555: store every book's current line before first
+                    # pitch. The pre-game cycle keeps its own ten-minute clock
+                    # per game (PREGAME_ODDS_CADENCE_S), so most polls read
+                    # nothing from the vendor. The task upserts the game row
+                    # itself before its first odds INSERT (the foreign key).
+                    asyncio.create_task(self._persist_pregame_odds(game_pk, game))
 
                 # SIM-105: skip _upsert_game_record() for games that have
                 # already transitioned to Final.  For a 15-game slate with
@@ -1425,6 +1672,12 @@ class LiveIngestionPipeline:
           5. Fetch odds
           6. Broadcast to frontend WS clients
           7. Signal re-simulation if warranted
+
+        SIM-555: the one odds row fetched here goes to the broadcast only. The
+        stored odds come from :meth:`_persist_game_odds_cycle` (every book's
+        row of every game market, on the cadence) and
+        :meth:`_persist_prop_odds_cycle`. Before first pitch the same two
+        cycles run from the schedule poll (:meth:`_persist_pregame_odds`).
         """
         lock = self._refresh_locks.setdefault(game_pk, asyncio.Lock())
         if lock.locked():
@@ -1452,11 +1705,11 @@ class LiveIngestionPipeline:
                     game_state,
                     feed["gameData"]["status"]["abstractGameState"],
                 )
-                await self._persist_odds(game_pk, odds)
                 # SIM-421 (owner ruling 2026-09-12): every market the book posts
-                # goes into the odds table. The twelve segment and team markets
-                # ride the prop cadence gate (60 s), never the per-pitch signal.
-                await self._persist_segment_odds_cycle(game_pk)
+                # goes into the odds table. SIM-555: every book's row of all
+                # fifteen game markets, on the prop cadence gate (60 s), never
+                # the per-pitch signal. The ``odds`` row above is not persisted.
+                await self._persist_game_odds_cycle(game_pk)
                 # SIM-340: persist player-prop odds on the same refresh cycle.
                 # _persist_prop_odds_cycle() self-throttles to PROP_FETCH_CADENCE_S
                 # per game so it does not fire on every WS pitch signal.  This is
@@ -1472,11 +1725,13 @@ class LiveIngestionPipeline:
                 # Broadcast full payload to all frontend subscribers.
                 # resim_triggered=True tells the frontend to show a loading
                 # indicator while it waits for new simulation results.
+                # SIM-555: the odds row goes out JSON-safe (no guard-only keys;
+                # the stamp as ISO-8601 text).
                 broadcast_payload = {
                     "type": "game_state_update",
                     "game_pk": game_pk,
                     "game_state": game_state,
-                    "odds": odds,
+                    "odds": _jsonable_odds(odds),
                     "resim_triggered": pa_ended,
                 }
                 await connection_manager.broadcast(game_pk, broadcast_payload)
@@ -1532,8 +1787,57 @@ class LiveIngestionPipeline:
         Returns odds from the configured provider (SIM-370).  Defaults to the
         deterministic MockOddsAPI; set ODDS_PROVIDER=bettingpros to use the real
         BettingProsOddsProvider feed without touching this code.
+
+        SIM-555: the refresh loop sends this one row to the browser and no
+        longer persists it; :meth:`_persist_game_odds_cycle` stores every
+        book's row. With BettingPros the row is the graded book's moneyline.
         """
         return self._odds_provider().get_odds(game_pk)
+
+    # ------------------------------------------------------------------
+    # SIM-555: the load guard on the live writers
+    # ------------------------------------------------------------------
+
+    def _refusal_tally(self) -> RefusalTally:
+        """The pipeline's refusal tally, created on first use.
+
+        Tests build the pipeline with ``__new__`` (no ``__init__``), so the
+        tally cannot rely on the constructor.
+        """
+        tally = getattr(self, "_odds_refusals", None)
+        if tally is None:
+            tally = RefusalTally()
+            self._odds_refusals = tally
+        return tally
+
+    def _guard_rows(self, game_pk: int, rows: list[dict]) -> list[dict]:
+        """The rows of one offer that the load guard keeps.
+
+        The caller passes non-empty rows only. Each refused row is logged at
+        INFO and counted in :meth:`_refusal_tally` by rule, market and book.
+        """
+        tally = self._refusal_tally()
+        kept: list[dict] = []
+        for row in rows:
+            tally.offered()
+            refusal = check_row(row)
+            if refusal is None:
+                kept.append(row)
+                continue
+            prop_stat = row.get("prop_stat")
+            market = str(prop_stat if prop_stat is not None else row.get("market_type"))
+            book = str(row.get("book"))
+            tally.add(refusal, market, book)
+            shown = market if prop_stat is None else f"{market} (player {row.get('player_id')})"
+            log.info(
+                "refused game %s %s/%s %s: %s",
+                game_pk,
+                row.get("line_type"),
+                shown,
+                book,
+                refusal.message,
+            )
+        return kept
 
     @staticmethod
     def _collect_prop_player_roles(game_state: dict) -> dict[int, str]:
@@ -1577,6 +1881,54 @@ class LiveIngestionPipeline:
                 roles[pid] = role
         return roles
 
+    @staticmethod
+    def _pregame_prop_player_roles(game: Mapping[str, Any]) -> dict[int, str]:
+        """
+        SIM-555: player_id → role for a game that has not started, read from
+        the hydrated schedule entry (see ``SCHEDULE_HYDRATE``).
+
+        A game before first pitch has no live feed, so the roles come from the
+        schedule:
+          * each side's probable pitcher (``teams.<side>.probablePitcher``)
+            → PROP_ROLE_PITCHER;
+          * each posted lineup player (``lineups.homePlayers`` /
+            ``lineups.awayPlayers``) → PROP_ROLE_BATTER, or PROP_ROLE_BOTH when
+            the player's primary position is a pitcher code or is missing.
+
+        A player seen in two roles is PROP_ROLE_BOTH, as in
+        :meth:`_collect_prop_player_roles`. Before the lineups are posted the
+        map holds the probable pitchers only; it is empty when neither is
+        known. The order is fixed (home pitcher, away pitcher, home lineup,
+        away lineup), so a fixed entry always gives the same ids.
+        """
+        roles: dict[int, str] = {}
+
+        def _add(pid: Any, role: str) -> None:
+            if not pid:
+                return
+            pid = int(pid)
+            if pid in roles and roles[pid] != role:
+                role = PROP_ROLE_BOTH
+            roles[pid] = role
+
+        teams = game.get("teams") or {}
+        for side in ("home", "away"):
+            pitcher = (teams.get(side) or {}).get("probablePitcher") or {}
+            _add(pitcher.get("id"), PROP_ROLE_PITCHER)
+        lineups = game.get("lineups") or {}
+        for key in ("homePlayers", "awayPlayers"):
+            for player in lineups.get(key) or []:
+                position = str(
+                    ((player or {}).get("primaryPosition") or {}).get("abbreviation") or ""
+                ).upper()
+                role = (
+                    PROP_ROLE_BOTH
+                    if not position or position in _PITCHER_POSITION_CODES
+                    else PROP_ROLE_BATTER
+                )
+                _add((player or {}).get("id"), role)
+        return roles
+
     @classmethod
     def _collect_prop_player_ids(cls, game_state: dict) -> list[int]:
         """
@@ -1603,86 +1955,122 @@ class LiveIngestionPipeline:
             return tuple(s for s in prop_stats if s in BATTER_PROP_STATS)
         return prop_stats
 
+    def _prop_offers(
+        self,
+        game_pk: int,
+        player_ids: list[int],
+        *,
+        line_type: str = "current",
+        prop_stats: tuple[str, ...] = PROP_STATS,
+        roles: Mapping[int, str] | None = None,
+    ) -> list[tuple[int, str, list[dict]]]:
+        """SIM-555: every book's prop rows, one entry per offer.
+
+        An offer is one (player, prop_stat) at one line type. Each entry is
+        ``(player_id, prop_stat, rows)``: the provider's by-book rows through
+        ``prop_rows_by_book`` (one row for the mock or a provider with only the
+        one-row method), empty rows dropped. An offer with no row is left out.
+
+        SIM-421: ``roles`` (player_id → PROP_ROLE_*) splits the markets by role;
+        a player missing from ``roles``, or ``roles=None``, is asked for every
+        market in ``prop_stats``. An unknown prop_stat is logged and skipped.
+        """
+        provider = self._odds_provider()  # SIM-370: env-selected, mock by default
+        offers: list[tuple[int, str, list[dict]]] = []
+        for player_id in player_ids:
+            role = roles.get(player_id, PROP_ROLE_BOTH) if roles else PROP_ROLE_BOTH
+            for prop_stat in self._prop_stats_for_role(role, prop_stats):
+                try:
+                    rows = prop_rows_by_book(
+                        provider, game_pk, player_id, prop_stat, line_type=line_type
+                    )
+                except ValueError:
+                    # Unknown prop_stat — skip rather than abort the cycle.
+                    log.warning(
+                        "skipping unknown prop_stat '%s' for player %s game %s",
+                        prop_stat,
+                        player_id,
+                        game_pk,
+                    )
+                    continue
+                kept = [row for row in rows if _prop_row_has_odds(row)]
+                if kept:
+                    offers.append((player_id, prop_stat, kept))
+        return offers
+
     def _fetch_prop_odds(
         self,
         game_pk: int,
         player_ids: list[int],
         *,
         line_type: str = "current",
-        books: list[tuple[str, bool]] | None = None,
         prop_stats: tuple[str, ...] = PROP_STATS,
         roles: Mapping[int, str] | None = None,
     ) -> list[dict]:
         """
-        SIM-340: Returns a flat list of prop-odds quotes for the given players.
+        SIM-340 / SIM-555: a flat list of every book's prop rows for the players.
 
-        Multi-book + sharp flag: iterates over PROP_BOOKS (each a
-        ``(book, is_sharp_book)`` pair) so every prop is captured at every book,
-        with the sharp-book flag carried through to raw.prop_odds.  Capturing
-        both sharp (Pinnacle, Circa) and soft (DraftKings, FanDuel) quotes lets
-        the CLV engine (SIM-339) measure soft-vs-sharp divergence per prop.
+        SIM-555 (2026-09-28): the provider names the books. The method reads
+        every book's row of each (player, prop_stat) through
+        ``prop_rows_by_book`` — BettingPros gives one row per book, labelled
+        ``'bp:<id>'``; the mock gives its one ``'consensus'`` row. Empty rows
+        are dropped; the load guard runs later, in the persisting cycle. The
+        old fixed book list (PROP_BOOKS) and its ``books`` argument are gone.
 
-        SIM-421: ``roles`` (player_id → PROP_ROLE_*) splits the markets by
-        role — a pitcher is asked only for the pitcher markets and a hitter
-        only for the batter markets (see :meth:`_prop_stats_for_role`).  A
-        player missing from ``roles``, or ``roles=None``, is asked for every
-        market in ``prop_stats`` (the safe default).
-
-        The provider's get_prop_odds() is resolved via the SIM-370 seam
-        (mock by default, the real BettingProsOddsProvider under
-        ODDS_PROVIDER=bettingpros) and returns one quote per
-        (book, player, prop_stat).  The book list and is_sharp_book
-        classification live in PROP_BOOKS so they survive the provider switch
-        untouched.
+        SIM-421: ``roles`` splits the markets by role (see
+        :meth:`_prop_offers`).
         """
-        books = books if books is not None else PROP_BOOKS
-        provider = self._odds_provider()  # SIM-370: env-selected, mock by default
-        quotes: list[dict] = []
-        for player_id in player_ids:
-            role = roles.get(player_id, PROP_ROLE_BOTH) if roles else PROP_ROLE_BOTH
-            for prop_stat in self._prop_stats_for_role(role, prop_stats):
-                for book, is_sharp in books:
-                    try:
-                        quote = provider.get_prop_odds(
-                            game_pk,
-                            player_id,
-                            prop_stat,
-                            line_type=line_type,
-                            book=book,
-                            is_sharp_book=is_sharp,
-                        )
-                    except ValueError:
-                        # Unknown prop_stat — skip rather than abort the cycle.
-                        log.warning(
-                            "skipping unknown prop_stat '%s' for player %s game %s",
-                            prop_stat,
-                            player_id,
-                            game_pk,
-                        )
-                        continue
-                    quotes.append(quote)
-        return quotes
+        return [
+            row
+            for _player_id, _prop_stat, rows in self._prop_offers(
+                game_pk, player_ids, line_type=line_type, prop_stats=prop_stats, roles=roles
+            )
+            for row in rows
+        ]
 
-    #: SIM-421: the segment and team markets the live cycle persists beside the
-    #: full-game row — every ``GAME_MARKET_TYPES`` value except the three the
-    #: full-game row already carries.
-    SEGMENT_MARKET_TYPES: tuple[str, ...] = tuple(
-        m for m in GAME_MARKET_TYPES if m not in LEGACY_GAME_MARKET_TYPES
-    )
+    async def _persist_prop_offers(
+        self, game_pk: int, offers: list[tuple[int, str, list[dict]]]
+    ) -> int:
+        """SIM-555: guard and persist each offer's rows in one batch; return the rows sent.
 
-    def _fetch_segment_odds(self, game_pk: int, *, line_type: str = "current") -> list[dict]:
-        """SIM-421: one ``get_odds`` dict per segment / team market for a game.
+        One ``executemany`` per offer. A failed batch is logged and the next
+        offer still runs.
+        """
+        written = 0
+        for player_id, prop_stat, rows in offers:
+            kept = self._guard_rows(game_pk, rows)
+            if not kept:
+                continue
+            try:
+                written += await self._persist_prop_odds_many(kept)
+            except Exception as exc:  # noqa: BLE001 — one offer must not stop the rest
+                log.warning(
+                    "prop persist failed game %s player %s %s (%d rows): %s",
+                    game_pk,
+                    player_id,
+                    prop_stat,
+                    len(kept),
+                    exc,
+                )
+        return written
 
-        A market the provider cannot resolve (no event, no offer) comes back
-        with every odds field ``None``; it is dropped here so no empty row is
-        written. An unknown market_type is a programming error and is logged,
-        not raised, so one bad entry cannot stop the cycle.
+    def _game_market_offers(
+        self, game_pk: int, *, line_type: str = "current"
+    ) -> list[tuple[str, list[dict]]]:
+        """SIM-555: every book's rows of each ``GAME_MARKET_TYPES`` market, one entry per market.
+
+        Each entry is ``(market_type, rows)``, empty rows dropped; a market with
+        no row is left out. An unknown market_type is a programming error and a
+        failed fetch is a network error: both are logged, not raised, so one
+        bad market cannot stop the cycle.
         """
         provider = self._odds_provider()
-        quotes: list[dict] = []
-        for market_type in self.SEGMENT_MARKET_TYPES:
+        offers: list[tuple[str, list[dict]]] = []
+        for market_type in GAME_MARKET_TYPES:
             try:
-                odds = provider.get_odds(game_pk, line_type=line_type, market_type=market_type)
+                rows = odds_rows_by_book(
+                    provider, game_pk, line_type=line_type, market_type=market_type
+                )
             except ValueError as exc:
                 log.warning("skipping game market %r for game %s: %s", market_type, game_pk, exc)
                 continue
@@ -1691,39 +2079,60 @@ class LiveIngestionPipeline:
                     "game market %r fetch failed for game %s: %s", market_type, game_pk, exc
                 )
                 continue
-            if any(odds.get(f) is not None for f in GAME_ODDS_FIELDS):
-                quotes.append(odds)
-        return quotes
+            kept = [row for row in rows if _game_row_has_odds(row)]
+            if kept:
+                offers.append((market_type, kept))
+        return offers
 
-    async def _persist_segment_odds_cycle(self, game_pk: int) -> int:
-        """SIM-421: persist the segment / team game markets on the prop cadence.
+    def _fetch_game_market_odds(self, game_pk: int, *, line_type: str = "current") -> list[dict]:
+        """SIM-421 / SIM-555: every book's row of every game market, in market order.
 
-        Gated by its own clock (``_last_segment_fetch``) at ``PROP_FETCH_CADENCE_S``
-        so the twelve extra markets are fetched once a minute per game, not on
-        every pitch signal. Returns the rows written this cycle (0 while the gate
-        is closed).
+        The rename of the old segment-only fetch: the three full-game markets
+        now come through here too (SIM-555), one row per book and market. A
+        market the provider cannot resolve (no event, no offer) gives no row,
+        so no empty row is ever written.
+        """
+        return [
+            row
+            for _market, rows in self._game_market_offers(game_pk, line_type=line_type)
+            for row in rows
+        ]
+
+    async def _persist_game_odds_cycle(self, game_pk: int) -> int:
+        """SIM-421 / SIM-555: persist every book's row of every game market, on the cadence.
+
+        The rename of the old segment cycle. Gated by its own clock
+        (``_last_game_odds_fetch``) at ``PROP_FETCH_CADENCE_S``, so the fifteen
+        markets are fetched once a minute per game, not on every pitch signal.
+        Each market's kept rows go to the database in one batch. Returns the
+        rows sent this cycle (0 while the gate is closed).
         """
         now = datetime.now(UTC)
-        last = getattr(self, "_last_segment_fetch", {}).get(game_pk)
+        clock = getattr(self, "_last_game_odds_fetch", None)
+        if clock is None:
+            clock = {}
+            self._last_game_odds_fetch = clock
+        last = clock.get(game_pk)
         if last is not None and (now - last).total_seconds() < PROP_FETCH_CADENCE_S:
             return 0
-        if not hasattr(self, "_last_segment_fetch"):
-            self._last_segment_fetch = {}
-        self._last_segment_fetch[game_pk] = now
+        clock[game_pk] = now
         written = 0
-        for odds in self._fetch_segment_odds(game_pk, line_type="current"):
+        for market_type, rows in self._game_market_offers(game_pk, line_type="current"):
+            kept = self._guard_rows(game_pk, rows)
+            if not kept:
+                continue
             try:
-                await self._persist_odds(game_pk, odds)
-                written += 1
-            except Exception as exc:  # noqa: BLE001
+                written += await self._persist_odds_many(game_pk, kept)
+            except Exception as exc:  # noqa: BLE001 — one market must not stop the rest
                 log.warning(
-                    "game market persist failed game %s %s: %s",
+                    "game market persist failed game %s %s (%d rows): %s",
                     game_pk,
-                    odds.get("market_type"),
+                    market_type,
+                    len(kept),
                     exc,
                 )
         if written:
-            log.info("SIM-421: persisted %d segment/team market rows for game %s", written, game_pk)
+            log.info("SIM-555: persisted %d game-market rows for game %s", written, game_pk)
         return written
 
     async def _persist_prop_odds_cycle(self, game_pk: int, game_state: dict) -> int:
@@ -1736,54 +2145,112 @@ class LiveIngestionPipeline:
         it:
           1. Collects prop-eligible players + their roles from the game_state
              (SIM-421: pitcher / batter / both).
-          2. Fetches multi-book prop quotes (sharp + soft) via _fetch_prop_odds(),
-             the pitcher markets for pitchers and the batter markets for hitters.
-          3. Persists each quote via _persist_prop_odds() (the previously-unwired
-             method this ticket activates).
+          2. Fetches every book's rows of each offer via _prop_offers()
+             (SIM-555), the pitcher markets for pitchers and the batter markets
+             for hitters.
+          3. Runs the load guard on each row and persists each offer's kept
+             rows in one batch via _persist_prop_odds_many() (SIM-555).
 
-        Returns the number of prop rows written this cycle (0 when the cadence
+        Returns the number of prop rows sent this cycle (0 when the cadence
         gate is closed or no eligible players were found).
         """
+        return await self._persist_prop_roles_cycle(
+            game_pk, self._collect_prop_player_roles(game_state)
+        )
+
+    async def _persist_prop_roles_cycle(self, game_pk: int, roles: Mapping[int, str]) -> int:
+        """SIM-555: the prop cycle for a given role map (player_id → PROP_ROLE_*).
+
+        The body of :meth:`_persist_prop_odds_cycle`, shared with the pre-game
+        cycle (:meth:`_persist_pregame_odds`), whose roles come from the
+        schedule. The same per-game cadence clock (``_last_prop_fetch``) gates
+        both, so a game never pays the prop reads twice in one minute.
+        """
         now = datetime.now(UTC)
-        last = self._last_prop_fetch.get(game_pk)
+        clock = getattr(self, "_last_prop_fetch", None)
+        if clock is None:
+            clock = {}
+            self._last_prop_fetch = clock
+        last = clock.get(game_pk)
         if last is not None and (now - last).total_seconds() < PROP_FETCH_CADENCE_S:
             # Cadence gate closed — too soon since the last prop fetch.
             return 0
 
-        roles = self._collect_prop_player_roles(game_state)
+        roles = dict(roles)
         player_ids = list(roles)
         if not player_ids:
             # Nothing to price yet (e.g. lineups not posted) — don't stamp the
             # cadence clock so the next signal retries promptly.
             return 0
 
-        self._last_prop_fetch[game_pk] = now
-        quotes = self._fetch_prop_odds(game_pk, player_ids, line_type="current", roles=roles)
-        written = 0
-        for quote in quotes:
-            try:
-                await self._persist_prop_odds(quote)
-                written += 1
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "prop persist failed game %s player %s %s @ %s: %s",
-                    game_pk,
-                    quote.get("player_id"),
-                    quote.get("prop_stat"),
-                    quote.get("book"),
-                    exc,
-                )
+        clock[game_pk] = now
+        offers = self._prop_offers(game_pk, player_ids, line_type="current", roles=roles)
+        written = await self._persist_prop_offers(game_pk, offers)
         if written:
-            # SIM-421: the stat count varies per player (pitcher markets for
-            # pitchers, batter markets for hitters), so log the quote count.
             log.info(
-                "SIM-340: persisted %d of %d prop quotes for game %s (%d players × %d books)",
+                "SIM-555: persisted %d prop rows from %d offers for game %s (%d players)",
                 written,
-                len(quotes),
+                len(offers),
                 game_pk,
                 len(player_ids),
-                len(PROP_BOOKS),
             )
+        return written
+
+    async def _persist_pregame_odds(self, game_pk: int, game: Mapping[str, Any]) -> int:
+        """SIM-555: store every book's current lines for a game before first pitch.
+
+        ``_sync_live_games`` calls this on every schedule poll (every 30
+        seconds) for each game in the ``Preview`` state; ``game`` is the
+        game's hydrated schedule entry. The method has its own clock per game
+        (``_last_pregame_fetch``): inside PREGAME_ODDS_CADENCE_S (ten minutes)
+        of the last pass it returns 0 and calls neither cycle, so a game reads
+        the vendor at most once every ten minutes before first pitch. The
+        clock is set before the cycles run, so a failed pass also waits the
+        full cadence, and a second poll that arrives while a pass is still
+        running reads nothing.
+
+        When the gate opens, the method runs the two cycles the live refresh
+        runs: :meth:`_persist_game_odds_cycle` (every book's row of every game
+        market) and the prop cycle, whose players come from
+        :meth:`_pregame_prop_player_roles` (the probable pitchers, then the
+        posted lineups). The rows are ``line_type='current'``, exactly as the
+        live cycle writes them.
+
+        The method runs as a detached task, so it logs a failure instead of
+        raising it. Returns the rows sent (0 while the gate is closed).
+
+        Review fix (2026-09-28): once the gate opens, the method first upserts
+        the game's ``raw.games`` row and waits for it. ``raw.game_odds.game_pk``
+        references ``raw.games``, and the schedule poll starts this task
+        before its own upsert task, so on a game's first poll of the day the
+        odds INSERT reached Postgres before the game row and failed the
+        foreign key, and the ten-minute clock kept the moneyline from a retry.
+        A failed upsert is logged and the cycles still run (the game row may
+        exist already).
+        """
+        now = datetime.now(UTC)
+        # Created lazily: the tests build the pipeline with __new__.
+        clock = getattr(self, "_last_pregame_fetch", None)
+        if clock is None:
+            clock = {}
+            self._last_pregame_fetch = clock
+        last = clock.get(game_pk)
+        if last is not None and (now - last).total_seconds() < PREGAME_ODDS_CADENCE_S:
+            return 0
+        clock[game_pk] = now
+        if game.get("gamePk") is not None:
+            try:
+                await self._upsert_game_record(dict(game))
+            except Exception as exc:  # noqa: BLE001 — a detached task must not raise
+                log.warning("pre-game game-row upsert failed for game %s: %s", game_pk, exc)
+        written = 0
+        try:
+            written += await self._persist_game_odds_cycle(game_pk)
+            written += await self._persist_prop_roles_cycle(
+                game_pk, self._pregame_prop_player_roles(game)
+            )
+        except Exception as exc:  # noqa: BLE001 — a detached task must not raise
+            log.warning("pre-game odds cycle failed for game %s: %s", game_pk, exc)
         return written
 
     async def capture_opening_prop_lines(
@@ -1791,18 +2258,22 @@ class LiveIngestionPipeline:
         game_pk: int,
         player_ids: list[int],
         *,
-        books: list[tuple[str, bool]] | None = None,
         prop_stats: tuple[str, ...] = PROP_STATS,
         roles: Mapping[int, str] | None = None,
     ) -> int:
         """
         SIM-340 / SIM-138: Opening-line capture hook for player props.
 
-        Writes one raw.prop_odds row per (player, prop_stat, book) with
+        Writes the raw.prop_odds rows of each (player, prop_stat) with
         line_type='opening'.  This is the prop analogue of the nightly opening
         game-line capture (opening_line_job.py / SIM-138): it records the FIRST
-        line posted so opening→closing movement (and therefore CLV) is
-        recoverable for props, not just game markets.
+        line posted so opening→closing movement is recoverable for props, not
+        just game markets.
+
+        SIM-555: the rows are the provider's by-book opening rows (BettingPros:
+        the opener's one row, labelled ``'bp:<id>'``); each passes the load
+        guard and each offer's rows go to the database in one batch. The old
+        ``books`` argument is gone with PROP_BOOKS.
 
         SIM-421: pass ``roles`` (player_id → PROP_ROLE_*) to split the markets
         by role; without it every player is asked for every market.
@@ -1810,29 +2281,16 @@ class LiveIngestionPipeline:
         Idempotent by virtue of the dedup hash (migration 0013): re-running with
         an unchanged opening line is a no-op via ON CONFLICT DO NOTHING.
 
-        Returns the number of opening prop rows written.
+        Returns the number of opening prop rows sent.
         """
-        quotes = self._fetch_prop_odds(
+        offers = self._prop_offers(
             game_pk,
             player_ids,
             line_type="opening",
-            books=books,
             prop_stats=prop_stats,
             roles=roles,
         )
-        written = 0
-        for quote in quotes:
-            try:
-                await self._persist_prop_odds(quote)
-                written += 1
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "opening prop persist failed game %s player %s %s: %s",
-                    game_pk,
-                    quote.get("player_id"),
-                    quote.get("prop_stat"),
-                    exc,
-                )
+        written = await self._persist_prop_offers(game_pk, offers)
         if written:
             log.info("SIM-340: captured %d opening prop lines for game %s", written, game_pk)
         return written
@@ -2044,6 +2502,10 @@ class LiveIngestionPipeline:
             payload += f"|draw_ml={_fmt(odds.get('draw_ml'))}"
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
+    def _odds_params(self, game_pk: int, odds: Mapping[str, Any]) -> tuple[Any, ...]:
+        """The bind values of one raw.game_odds INSERT (see :func:`game_odds_insert_args`)."""
+        return game_odds_insert_args(game_pk, odds)
+
     async def _persist_odds(self, game_pk: int, odds: dict) -> None:
         """
         Inserts a fresh odds snapshot into raw.game_odds.
@@ -2056,44 +2518,25 @@ class LiveIngestionPipeline:
           so successive identical snapshots are deduplicated at write time.
           Backed by the partial unique index ``idx_game_odds_dedup``.
 
+        SIM-555: also writes ``book_line_at`` (migration 0028). The live cycle
+        and the historical loader persist one offer's rows at a time through
+        :meth:`_persist_odds_many`; this one-row method stays for single rows.
+
         The live pipeline always writes line_type='current'.  Opening lines are
         captured by the nightly opening line job (SIM-138).  Closing lines are
         designated by mark_closing_lines() which runs post-game.
         """
-        odds_hash = self._odds_hash(odds)
-        await self._db.execute(
-            """
-            INSERT INTO raw.game_odds
-                (game_pk, source, is_mock,
-                 book, line_type, market_type, is_sharp_book,
-                 home_ml, away_ml,
-                 home_spread, home_spread_ml, away_spread, away_spread_ml,
-                 total_line, over_ml, under_ml,
-                 draw_ml, odds_hash)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-            ON CONFLICT (game_pk, source, odds_hash)
-              WHERE odds_hash IS NOT NULL
-              DO NOTHING
-            """,
-            game_pk,
-            odds.get("source", "mock"),
-            odds.get("is_mock", True),
-            odds.get("book", "consensus"),
-            odds.get("line_type", "current"),
-            odds.get("market_type", "moneyline"),
-            odds.get("is_sharp_book", False),
-            odds.get("home_ml"),
-            odds.get("away_ml"),
-            odds.get("home_spread"),
-            odds.get("home_spread_ml"),
-            odds.get("away_spread"),
-            odds.get("away_spread_ml"),
-            odds.get("total_line"),
-            odds.get("over_ml"),
-            odds.get("under_ml"),
-            odds.get("draw_ml"),  # SIM-421: the tie price of a three-way segment moneyline
-            odds_hash,  # stays LAST: two pinned tests read the hash as the final argument
-        )
+        await self._db.execute(_GAME_ODDS_INSERT_SQL, *self._odds_params(game_pk, odds))
+
+    async def _persist_odds_many(self, game_pk: int, rows: list[dict]) -> int:
+        """SIM-555: insert one offer's game-odds rows in one ``executemany``.
+
+        The same SQL and the same dedup as :meth:`_persist_odds` (the
+        ``odds_hash`` ``ON CONFLICT DO NOTHING``), one database round trip for
+        the offer's books instead of one per book. Returns the number of rows
+        sent (the dedup may insert fewer). An empty list sends nothing.
+        """
+        return await insert_game_odds_rows(self._db, game_pk, rows)
 
     @staticmethod
     def _prop_odds_hash(prop: dict) -> str:
@@ -2163,35 +2606,27 @@ class LiveIngestionPipeline:
         Backed by the partial unique index ``idx_prop_odds_dedup`` (migration
         0013).
 
+        SIM-555: also writes ``book_line_at`` (migration 0028). The cycles
+        persist one offer's rows at a time through
+        :meth:`_persist_prop_odds_many`.
+
         The DB enforces prop_stat values via CHECK constraint (migration 0004).
         Any unknown prop_stat will fail here with a clear IntegrityError before
         the invalid value reaches the application layer.
         """
-        odds_hash = self._prop_odds_hash(prop)
-        await self._db.execute(
-            """
-            INSERT INTO raw.prop_odds
-                (game_pk, player_id, source, is_mock,
-                 prop_stat, line, over_ml, under_ml,
-                 book, line_type, is_sharp_book, odds_hash)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-            ON CONFLICT (game_pk, player_id, source, odds_hash)
-              WHERE odds_hash IS NOT NULL
-              DO NOTHING
-            """,
-            prop["game_pk"],
-            prop["player_id"],
-            prop.get("source", "mock"),
-            prop.get("is_mock", True),
-            prop["prop_stat"],
-            prop["line"],
-            prop.get("over_ml"),
-            prop.get("under_ml"),
-            prop.get("book", "consensus"),
-            prop.get("line_type", "current"),
-            prop.get("is_sharp_book", False),
-            odds_hash,
-        )
+        await self._db.execute(_PROP_ODDS_INSERT_SQL, *self._prop_odds_params(prop))
+
+    def _prop_odds_params(self, prop: Mapping[str, Any]) -> tuple[Any, ...]:
+        """The bind values of one raw.prop_odds INSERT (see :func:`prop_odds_insert_args`)."""
+        return prop_odds_insert_args(prop)
+
+    async def _persist_prop_odds_many(self, rows: list[dict]) -> int:
+        """SIM-555: insert one offer's prop rows in one ``executemany``.
+
+        The same SQL and dedup as :meth:`_persist_prop_odds`. Returns the number
+        of rows sent (the dedup may insert fewer). An empty list sends nothing.
+        """
+        return await insert_prop_odds_rows(self._db, rows)
 
     async def mark_closing_lines(self, game_pk: int, first_pitch_at: datetime) -> int:
         """

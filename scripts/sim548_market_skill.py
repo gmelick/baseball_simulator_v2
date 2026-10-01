@@ -21,6 +21,12 @@ baseline runs as four 250-game chunks) and prints, per market:
                   (0.5 = no discrimination; sim and mkt)
   reliability     the outcome rate inside six probability bins
 
+Several reports merge only when their provenance agrees, the odds rows they were
+graded against included (SIM-555: ``odds_row_version``, the graded-book
+preference list and the benchmark book; a report without them was graded on the
+old mixed rows). ``--compare`` refuses a second read graded against other odds
+rows for the same reason.
+
 With ``--compare`` (a second read of another configuration on the SAME games and
 seeds) it also prints the plan's composite objective: per market the paired
 Brier change Δ with its standard error s from the game-clustered bootstrap, and
@@ -96,6 +102,23 @@ GAME_MARKET_ORDER = [
 # ---------------------------------------------------------------------------
 
 
+#: SIM-555: the three report stamps that say which odds rows a report was
+#: graded against (``scripts/clv_backtest.py`` writes them into ``params``).
+ODDS_ROW_KEYS: tuple[str, ...] = ("odds_row_version", "graded_book_preference", "benchmark_book")
+
+
+def odds_row_key(params: dict[str, Any]) -> dict[str, Any]:
+    """SIM-555: the odds-row stamps of one report's ``params``. A missing
+    key reads ``None``: the report was graded before SIM-555."""
+    return {k: params.get(k) for k in ODDS_ROW_KEYS}
+
+
+def odds_row_mismatches(a: dict[str, Any], b: dict[str, Any]) -> list[str]:
+    """SIM-555: the odds-row stamps on which two provenance keys (from
+    :func:`load_reports`) differ; [] when the two reads may be paired."""
+    return [k for k in (*ODDS_ROW_KEYS, "odds_rows_rescored") if a.get(k) != b.get(k)]
+
+
 def _provenance_key(report: dict[str, Any]) -> dict[str, Any]:
     p = report.get("params", {}) or {}
     prov = p.get("provenance", {}) or {}
@@ -118,6 +141,15 @@ def _provenance_key(report: dict[str, Any]) -> dict[str, Any]:
         # holds the away bets too. Merged, the away rows would cover some
         # games and the home rows all of them.
         "run_line_rescored": bool(p.get("rescored")),
+        # SIM-555: the odds rows a report was graded against. A report graded
+        # against another book, another preference list or the old mixed rows
+        # (no stamp: before SIM-555) prices other lines; never merge them.
+        **odds_row_key(p),
+        # A report re-scored onto the graded book (scripts/sim555_rescore_reports.py,
+        # which writes ``rescored_from``) re-prices its fixed-line records only;
+        # its totals, run lines and props keep the old rows' prices. A fresh run
+        # prices every record from the graded book.
+        "odds_rows_rescored": bool(p.get("rescored_from")),
     }
 
 
@@ -450,7 +482,9 @@ def print_table(rows: list[dict[str, Any]], prov: dict[str, Any], min_n: int) ->
         f"result batter {(prov.get('split') or {}).get('SIM_RESULT_BATTER_POWER')}); "
         f"manager draw={(prov.get('manager') or {}).get('SIM_MANAGER_DRAW')}; "
         f"run lines scored {prov.get('run_line_scoring') or 'as pairs (before SIM-549)'}"
-        f"{' (re-scored: the home bets only)' if prov.get('run_line_rescored') else ''}"
+        f"{' (re-scored: the home bets only)' if prov.get('run_line_rescored') else ''}; "
+        f"odds rows {prov.get('odds_row_version') or 'mixed books (before SIM-555)'}"
+        f"{' benchmark ' + str(prov.get('benchmark_book')) if prov.get('benchmark_book') else ''}"
     )
     print(
         "  Brier: lower is better. base = a forecast that always says the market's outcome rate. "
@@ -562,6 +596,15 @@ def main(argv: list[str] | None = None) -> int:
     out: dict[str, Any] = {"provenance": prov, "records": len(records), "markets": rows}
     if args.compare:
         arm, prov_b = load_reports(args.compare, args.force)
+        # SIM-555: two reads graded against different odds rows score other
+        # lines on the same game; their paired difference measures the rows,
+        # not the configuration.
+        diffs = odds_row_mismatches(prov, prov_b)
+        if diffs:
+            msg = f"the compared read was graded against other odds rows ({diffs})"
+            if not args.force:
+                sys.exit("REFUSED — " + msg + " (pass --force to pair anyway)")
+            print("WARNING — " + msg, file=sys.stderr)
         weights = json.loads(args.weights) if args.weights else None
         c = composite(
             records, arm, args.min_n, args.bootstrap_samples, args.bootstrap_seed, weights

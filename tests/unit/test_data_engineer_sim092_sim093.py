@@ -188,7 +188,8 @@ class TestSim092OddsDedup:
     def test_persist_odds_writes_hash_and_uses_on_conflict(self) -> None:
         """
         Regression: _persist_odds() must compute odds_hash and pass it as the
-        17th positional argument; INSERT SQL must use ON CONFLICT … DO NOTHING.
+        LAST positional argument (SIM-555 added book_line_at just before it);
+        INSERT SQL must use ON CONFLICT … DO NOTHING.
         """
         from pipeline.live.live_ingestion_pipeline import LiveIngestionPipeline
 

@@ -879,9 +879,16 @@ CREATE TABLE IF NOT EXISTS raw.game_odds (
     -- SIM-092: SHA-256 of the concatenated odds payload.  Application code
     -- (_persist_odds) computes this and uses
     --   ON CONFLICT (game_pk, source, odds_hash) DO NOTHING
-    -- so identical successive snapshots are no-ops.  Pre-SIM-092 rows have
-    -- NULL hashes; backfill is left to a future cleanup ticket.
-    odds_hash       VARCHAR(64)
+    -- so identical successive snapshots are no-ops.  SIM-157 (migration 0012)
+    -- backfilled the pre-SIM-092 NULL hashes and made the column NOT NULL
+    -- (no default: every writer must send the hash). SIM-555: this file showed
+    -- the column nullable until 2026-09-28; the live table has been NOT NULL
+    -- since 0012.
+    odds_hash       VARCHAR(64)     NOT NULL,
+    -- SIM-555 (migration 0028): the vendor's stamp on the row's line (the
+    -- opener's 'created' on an opening row, the newest 'updated' of the row's
+    -- sides otherwise). Not in odds_hash. NULL on the pre-SIM-555 rows.
+    book_line_at    TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_game_odds_game_pk
@@ -895,6 +902,15 @@ CREATE INDEX IF NOT EXISTS idx_game_odds_line_type
 CREATE UNIQUE INDEX IF NOT EXISTS idx_game_odds_dedup
     ON raw.game_odds(game_pk, source, odds_hash)
     WHERE odds_hash IS NOT NULL;
+
+-- SIM-157 (migration 0012): the full unique index on the same columns, added
+-- when the column became NOT NULL. The live table carries both indexes.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_game_odds_dedup_full
+    ON raw.game_odds(game_pk, source, odds_hash);
+
+-- SIM-555 (migration 0028): one row per book; the graded-row and best-price reads.
+CREATE INDEX IF NOT EXISTS idx_game_odds_market_book
+    ON raw.game_odds(game_pk, market_type, line_type, book);
 
 COMMENT ON TABLE raw.game_odds IS
     'Odds snapshots per game. source=mock until Phase 7 real provider integration.';
@@ -953,8 +969,12 @@ CREATE TABLE IF NOT EXISTS raw.prop_odds (
                         CHECK (line_type IN ('opening','current','closing','bet_placement')),
     is_sharp_book   BOOLEAN         NOT NULL DEFAULT FALSE,
     -- SIM-340: SHA-256 fingerprint of the prop payload for write-time dedup.
-    -- Applied via Alembic migration 0013. Mirrors raw.game_odds.odds_hash.
-    odds_hash       VARCHAR(64)
+    -- Applied via Alembic migration 0013. Unlike raw.game_odds.odds_hash, the
+    -- live column stays NULLABLE (no migration made it NOT NULL); the writers
+    -- always send it.
+    odds_hash       VARCHAR(64),
+    -- SIM-555 (migration 0028): the vendor's stamp on the row's line. Not in odds_hash.
+    book_line_at    TIMESTAMPTZ
 );
 
 -- SIM-134: compound index supports per-player-per-prop time-series queries
@@ -969,9 +989,25 @@ CREATE INDEX IF NOT EXISTS idx_prop_odds_line_type
 CREATE UNIQUE INDEX IF NOT EXISTS idx_prop_odds_dedup
     ON raw.prop_odds(game_pk, player_id, source, odds_hash)
     WHERE odds_hash IS NOT NULL;
+-- SIM-555 (migration 0028): one row per book; the graded-row and best-price reads.
+CREATE INDEX IF NOT EXISTS idx_prop_odds_market_book
+    ON raw.prop_odds(game_pk, player_id, prop_stat, line_type, book);
 
 COMMENT ON TABLE raw.prop_odds IS
     'Player prop odds snapshots. Opening lines captured nightly when starter is announced (SIM-138). prop_stat CHECK constraint enforces the 15 known markets (SIM-134 + SIM-421).';
+
+-- =============================================================================
+-- RAW.GAME_ODDS_ARCHIVE / RAW.PROP_ODDS_ARCHIVE
+-- SIM-555 (migration 0028): the retired 'consensus' odds rows. Copies of the
+-- two odds tables' columns and defaults; the id default is dropped so an
+-- archive never draws from the live table's sequence. Filled season by season
+-- by scripts/sim555_retire_consensus_rows.py once the census passes.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS raw.game_odds_archive (LIKE raw.game_odds INCLUDING DEFAULTS);
+ALTER TABLE raw.game_odds_archive ALTER COLUMN id DROP DEFAULT;
+CREATE TABLE IF NOT EXISTS raw.prop_odds_archive (LIKE raw.prop_odds INCLUDING DEFAULTS);
+ALTER TABLE raw.prop_odds_archive ALTER COLUMN id DROP DEFAULT;
 
 -- =============================================================================
 -- RAW.GAME_PLAYER_STATS

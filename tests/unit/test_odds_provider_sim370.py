@@ -41,7 +41,6 @@ if str(_ROOT) not in sys.path:
 
 from pipeline.bettingpros_odds_provider import BettingProsOddsProvider  # noqa: E402
 from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
-    PROP_BOOKS,
     PROP_STATS,
     LiveIngestionPipeline,
     MockOddsAPI,
@@ -62,10 +61,12 @@ from pipeline.odds_provider import (  # noqa: E402
 
 
 class _FakeProvider:
-    """A minimal OddsProvider that tags every quote ``source='fake'``.
+    """A minimal provider that tags every quote ``source='fake'``.
 
-    Structurally conforms to ``OddsProvider`` so it is a drop-in source; used to
-    prove env selection and pipeline-lookup routing without the mock.
+    It has only the two one-row methods, so it proves env selection and the
+    pipeline's lookup without the mock. SIM-555: the pipeline reaches it
+    through the by-book helpers' fallback (one row per offer), and a prop
+    quote carries a line and prices, because an all-empty row is not a quote.
     """
 
     def get_odds(self, game_pk, **kwargs):  # type: ignore[no-untyped-def]
@@ -76,7 +77,10 @@ class _FakeProvider:
             "game_pk": game_pk,
             "player_id": player_id,
             "prop_stat": prop_stat,
-            "book": kwargs.get("book"),
+            "line": 1.5,
+            "over_ml": -110,
+            "under_ml": -110,
+            "book": kwargs.get("book", "fakebook"),
             "is_sharp_book": kwargs.get("is_sharp_book", False),
             "source": "fake",
             "is_mock": False,
@@ -259,8 +263,11 @@ class TestPipelineLookup:
         quotes = pipeline._fetch_prop_odds(745000, [101], line_type="current")
         assert quotes, "expected at least one quote"
         assert all(q["source"] == "fake" for q in quotes)
-        # books still iterate through PROP_BOOKS even with a fake provider
-        assert {q["book"] for q in quotes} == {b for b, _ in PROP_BOOKS}
+        # SIM-555 changed this on purpose: the pipeline no longer iterates a
+        # fixed PROP_BOOKS list. A provider without the by-book method is read
+        # through its one-row method: one quote per market, its own book label.
+        assert len(quotes) == len(PROP_STATS)
+        assert {q["book"] for q in quotes} == {"fakebook"}
 
     def test_injected_fake_routes_game_odds(self) -> None:
         pipeline = _make_pipeline_via_new()
@@ -274,8 +281,8 @@ class TestPipelineLookup:
         pipeline = _make_pipeline_via_new()
         assert not hasattr(pipeline, "_odds")
         quotes = pipeline._fetch_prop_odds(745000, [101], line_type="current")
-        # 1 player * len(PROP_STATS) props * len(PROP_BOOKS) books
-        assert len(quotes) == len(PROP_STATS) * len(PROP_BOOKS)
+        # 1 player * len(PROP_STATS) props; SIM-555: the mock is one book.
+        assert len(quotes) == len(PROP_STATS)
         assert all(q["source"] == "mock" for q in quotes)
         # provider was memoised onto the instance after first lookup
         assert isinstance(pipeline._odds, MockOddsAPI)

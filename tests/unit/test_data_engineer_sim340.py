@@ -5,11 +5,14 @@ SIM-340 — Real odds provider + prop ingestion (multi-book, sharp flag, cadence
 
 Permanent regression suite for the SIM-340 wiring:
 
-  1. ``_persist_prop_odds`` is actually invoked on a simulated live fetch cycle
-     (it existed but was NEVER called before this ticket).
+  1. The prop persist path is actually invoked on a simulated live fetch cycle
+     (it existed but was NEVER called before this ticket). SIM-555: the cycle
+     persists each offer's rows in one batch (``_persist_prop_odds_many``).
   2. ``mark_closing_prop_lines`` stamps the closing prop line (mirror of the
      game-level ``mark_closing_lines``).
-  3. Multi-book ingestion + an ``is_sharp_book`` flag are persisted.
+  3. Multi-book ingestion + an ``is_sharp_book`` flag are persisted. SIM-555
+     changed this on purpose: the books come from the provider (one row per
+     book, each under its own label), not from a fixed PROP_BOOKS list.
   4. Opening-line capture (the SIM-138 nightly hook) writes line_type='opening'.
   5. The fetch cadence throttles prop fetches to PROP_FETCH_CADENCE_S per game.
   6. Dedup hash collapses identical snapshots (ON CONFLICT DO NOTHING).
@@ -39,10 +42,10 @@ _ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from pipeline.live import live_ingestion_pipeline as live  # noqa: E402
 from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
     BATTER_PROP_STATS,
     PITCHER_PROP_STATS,
-    PROP_BOOKS,
     PROP_STATS,
     LiveIngestionPipeline,
     MockOddsAPI,
@@ -52,6 +55,31 @@ from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
 # Helpers
 # ===========================================================================
 
+#: SIM-555: the labels the three-book fake provider names.
+_THREE_BOOKS = ("bp:12", "bp:10", "bp:0")
+
+
+class _ThreeBookProvider(MockOddsAPI):
+    """The mock with three books: each by-book call gives one row per label.
+
+    Every row is the mock's quote relabelled, so the prices are real mock
+    prices. ``bp:0`` (the vendor's blend) carries ``is_sharp_book=True`` to
+    prove the pipeline keeps the provider's flag.
+    """
+
+    def get_prop_odds_by_book(self, game_pk, player_id, prop_stat, *, line_type="current"):
+        return [
+            MockOddsAPI.get_prop_odds(
+                game_pk,
+                player_id,
+                prop_stat,
+                line_type=line_type,
+                book=label,
+                is_sharp_book=(label == "bp:0"),
+            )
+            for label in _THREE_BOOKS
+        ]
+
 
 def _make_pipeline() -> LiveIngestionPipeline:
     """Construct a pipeline without running __init__ (no DSN/Redis needed)."""
@@ -59,6 +87,16 @@ def _make_pipeline() -> LiveIngestionPipeline:
     p._db = AsyncMock()
     p._last_prop_fetch = {}
     return p
+
+
+def _batch_writer() -> AsyncMock:
+    """A stand-in for ``_persist_prop_odds_many``: returns the rows it was sent."""
+    return AsyncMock(side_effect=lambda rows: len(rows))
+
+
+def _rows_sent(mock: AsyncMock) -> list[dict]:
+    """Every row a mocked ``_persist_prop_odds_many`` received, in call order."""
+    return [row for call in mock.await_args_list for row in call.args[0]]
 
 
 def _make_game_state(
@@ -82,13 +120,14 @@ def _make_game_state(
     }
 
 
-#: SIM-421: the quote count the default fixture yields — one pitcher × the
-#: pitcher markets + three hitters × the batter markets, at every book.
-_DEFAULT_FIXTURE_QUOTES = (len(PITCHER_PROP_STATS) + 3 * len(BATTER_PROP_STATS)) * len(PROP_BOOKS)
+#: SIM-421: the offer count the default fixture yields — one pitcher × the
+#: pitcher markets + three hitters × the batter markets. SIM-555: the mock is
+#: one book, so each offer is one row.
+_DEFAULT_FIXTURE_OFFERS = len(PITCHER_PROP_STATS) + 3 * len(BATTER_PROP_STATS)
 
 
 # ===========================================================================
-# AC#1 — _persist_prop_odds is invoked on a simulated fetch cycle
+# AC#1 — the prop persist path is invoked on a simulated fetch cycle
 # ===========================================================================
 
 
@@ -96,46 +135,47 @@ class TestSIM340PersistPropOddsWired:
     @pytest.mark.asyncio
     async def test_cycle_calls_persist_prop_odds(self) -> None:
         """
-        The previously-unwired _persist_prop_odds MUST be called when the live
-        cycle runs.  This is the core SIM-340 regression: before the ticket the
-        method existed but was never invoked anywhere.
+        The live cycle MUST persist its prop rows.  This is the core SIM-340
+        regression: before the ticket the persist method existed but was never
+        invoked anywhere.
         """
         pipeline = _make_pipeline()
-        pipeline._persist_prop_odds = AsyncMock()
+        pipeline._persist_prop_odds_many = _batch_writer()
 
         written = await pipeline._persist_prop_odds_cycle(745000, _make_game_state())
 
-        assert pipeline._persist_prop_odds.await_count > 0, (
-            "_persist_prop_odds was never called — the SIM-340 live wiring is broken."
+        assert pipeline._persist_prop_odds_many.await_count > 0, (
+            "the prop cycle persisted nothing — the SIM-340 live wiring is broken."
         )
-        # SIM-421 changed this pin deliberately. It was players(4) × stats(7) ×
-        # books(4) = 112; the cycle now asks the pitcher for the 5 pitcher
-        # markets and each of the 3 hitters for the 10 batter markets:
-        # (5 + 3 × 10) × 4 books = 140.
-        assert _DEFAULT_FIXTURE_QUOTES == 140
-        assert pipeline._persist_prop_odds.await_count == _DEFAULT_FIXTURE_QUOTES
-        assert written == _DEFAULT_FIXTURE_QUOTES
+        # SIM-555 changed this pin deliberately. It was (5 + 3 × 10) markets ×
+        # 4 PROP_BOOKS = 140 single-row writes; the mock is one book, so the 35
+        # offers give 35 rows, one batch per offer.
+        assert _DEFAULT_FIXTURE_OFFERS == 35
+        assert pipeline._persist_prop_odds_many.await_count == _DEFAULT_FIXTURE_OFFERS
+        assert len(_rows_sent(pipeline._persist_prop_odds_many)) == _DEFAULT_FIXTURE_OFFERS
+        assert written == _DEFAULT_FIXTURE_OFFERS
 
     @pytest.mark.asyncio
     async def test_cycle_writes_to_prop_odds_table(self) -> None:
-        """End-to-end through the real _persist_prop_odds: the INSERT targets
+        """End-to-end through the real batch writer: the INSERT targets
         raw.prop_odds and carries the odds_hash dedup column."""
         pipeline = _make_pipeline()
 
         await pipeline._persist_prop_odds_cycle(745000, _make_game_state())
 
-        assert pipeline._db.execute.await_count > 0
-        sql = pipeline._db.execute.await_args_list[0].args[0]
+        assert pipeline._db.executemany.await_count > 0
+        sql = pipeline._db.executemany.await_args_list[0].args[0]
         assert "raw.prop_odds" in sql
         assert "odds_hash" in sql, "SIM-340 dedup column not written"
         assert "ON CONFLICT" in sql, "SIM-340 dedup ON CONFLICT not used"
+        assert "book_line_at" in sql, "SIM-555 stamp column not written"
 
     @pytest.mark.asyncio
     async def test_cycle_noop_when_no_players(self) -> None:
         """No eligible players (lineups not posted) → no prop writes, cadence
         clock NOT stamped so the next signal retries promptly."""
         pipeline = _make_pipeline()
-        pipeline._persist_prop_odds = AsyncMock()
+        pipeline._persist_prop_odds_many = AsyncMock()
         empty_state = {
             "game_pk": 745000,
             "current_pitcher_id": None,
@@ -146,40 +186,60 @@ class TestSIM340PersistPropOddsWired:
         written = await pipeline._persist_prop_odds_cycle(745000, empty_state)
 
         assert written == 0
-        pipeline._persist_prop_odds.assert_not_awaited()
+        pipeline._persist_prop_odds_many.assert_not_awaited()
         assert 745000 not in pipeline._last_prop_fetch
 
 
 # ===========================================================================
-# AC#3 — Multi-book + sharp flag persisted
+# AC#3 — Multi-book + sharp flag persisted (SIM-555: the provider's books)
 # ===========================================================================
 
 
 class TestSIM340MultiBookSharpFlag:
-    def test_prop_books_include_sharp_and_soft(self) -> None:
-        """PROP_BOOKS must contain at least one sharp and one soft book."""
-        sharp = [b for b, is_sharp in PROP_BOOKS if is_sharp]
-        soft = [b for b, is_sharp in PROP_BOOKS if not is_sharp]
-        assert sharp, "no sharp books configured — CLV reference line missing"
-        assert soft, "no soft books configured — retail line missing"
+    def test_the_fixed_book_list_is_gone(self) -> None:
+        """SIM-555 rewrote this on purpose. It pinned a sharp and a soft book on
+        PROP_BOOKS; that list wrote one price set four times under four names.
+        The provider now names the books, so the list must not come back."""
+        assert not hasattr(live, "PROP_BOOKS")
 
-    def test_fetch_prop_odds_covers_all_books(self) -> None:
-        """Every (player, stat, book) combination is quoted."""
+    def test_fetch_prop_odds_covers_every_book_the_provider_names(self) -> None:
+        """Every (player, stat) is quoted at every book the provider names."""
+        pipeline = _make_pipeline()
+        pipeline._odds = _ThreeBookProvider()
+        quotes = pipeline._fetch_prop_odds(745000, [101], line_type="current")
+        assert {q["book"] for q in quotes} == set(_THREE_BOOKS)
+        # One row per stat per book for the single player. No ``roles`` were
+        # passed, so the player gets every market (the SIM-421 safe default).
+        assert len(quotes) == len(PROP_STATS) * len(_THREE_BOOKS)
+
+    def test_the_one_book_mock_gives_one_row_per_market(self) -> None:
         pipeline = _make_pipeline()
         quotes = pipeline._fetch_prop_odds(745000, [101], line_type="current")
-        books_seen = {q["book"] for q in quotes}
-        assert books_seen == {b for b, _ in PROP_BOOKS}
-        # One quote per stat per book for the single player. No ``roles`` were
-        # passed, so the player gets every market (the SIM-421 safe default).
-        assert len(quotes) == len(PROP_STATS) * len(PROP_BOOKS)
+        assert len(quotes) == len(PROP_STATS)
+        assert {q["book"] for q in quotes} == {"consensus"}
+
+    @pytest.mark.asyncio
+    async def test_the_cycle_persists_every_book_in_one_batch_per_offer(self) -> None:
+        pipeline = _make_pipeline()
+        pipeline._odds = _ThreeBookProvider()
+        pipeline._persist_prop_odds_many = _batch_writer()
+
+        written = await pipeline._persist_prop_odds_cycle(745000, _make_game_state())
+
+        assert written == _DEFAULT_FIXTURE_OFFERS * len(_THREE_BOOKS)
+        assert pipeline._persist_prop_odds_many.await_count == _DEFAULT_FIXTURE_OFFERS
+        for call in pipeline._persist_prop_odds_many.await_args_list:
+            batch = call.args[0]
+            assert [r["book"] for r in batch] == list(_THREE_BOOKS)
+            assert len({(r["player_id"], r["prop_stat"]) for r in batch}) == 1
 
     def test_sharp_flag_propagates_to_quotes(self) -> None:
-        """is_sharp_book on each quote matches the PROP_BOOKS classification."""
+        """is_sharp_book on each quote is the provider's flag, carried unchanged."""
         pipeline = _make_pipeline()
+        pipeline._odds = _ThreeBookProvider()
         quotes = pipeline._fetch_prop_odds(745000, [101], line_type="current")
-        classification = dict(PROP_BOOKS)
         for q in quotes:
-            assert q["is_sharp_book"] == classification[q["book"]], (
+            assert q["is_sharp_book"] == (q["book"] == "bp:0"), (
                 f"book {q['book']} sharp flag mismatch"
             )
 
@@ -248,16 +308,14 @@ class TestSIM340OpeningLineCapture:
     async def test_capture_opening_writes_opening_line_type(self) -> None:
         """capture_opening_prop_lines must persist rows with line_type='opening'."""
         pipeline = _make_pipeline()
-        captured_quotes: list[dict] = []
-
-        async def _spy(prop: dict) -> None:
-            captured_quotes.append(prop)
-
-        pipeline._persist_prop_odds = AsyncMock(side_effect=_spy)
+        pipeline._persist_prop_odds_many = _batch_writer()
 
         written = await pipeline.capture_opening_prop_lines(745000, [999])
 
-        assert written == len(PROP_STATS) * len(PROP_BOOKS)
+        captured_quotes = _rows_sent(pipeline._persist_prop_odds_many)
+        # SIM-555: the one-book mock gives one opening row per market (was × 4
+        # PROP_BOOKS).
+        assert written == len(PROP_STATS)
         assert captured_quotes, "no opening quotes captured"
         assert all(q["line_type"] == "opening" for q in captured_quotes), (
             "opening capture wrote a non-opening line_type"
@@ -265,14 +323,22 @@ class TestSIM340OpeningLineCapture:
 
     @pytest.mark.asyncio
     async def test_capture_opening_multi_book(self) -> None:
-        """Opening capture also fans out across all books (multi-book opening)."""
+        """Opening capture persists every book the provider names, under its label."""
         pipeline = _make_pipeline()
-        captured: list[dict] = []
-        pipeline._persist_prop_odds = AsyncMock(
-            side_effect=lambda prop: captured.append(prop)  # type: ignore[func-returns-value]
-        )
+        pipeline._odds = _ThreeBookProvider()
+        pipeline._persist_prop_odds_many = _batch_writer()
         await pipeline.capture_opening_prop_lines(745000, [999])
-        assert {q["book"] for q in captured} == {b for b, _ in PROP_BOOKS}
+        captured = _rows_sent(pipeline._persist_prop_odds_many)
+        assert {q["book"] for q in captured} == set(_THREE_BOOKS)
+
+    @pytest.mark.asyncio
+    async def test_capture_opening_takes_no_books_argument(self) -> None:
+        """SIM-555: the ``books`` argument left with PROP_BOOKS."""
+        pipeline = _make_pipeline()
+        with pytest.raises(TypeError):
+            await pipeline.capture_opening_prop_lines(  # type: ignore[call-arg]
+                745000, [999], books=[("x", False)]
+            )
 
 
 # ===========================================================================
@@ -285,22 +351,22 @@ class TestSIM340FetchCadence:
     async def test_cadence_skips_second_immediate_call(self) -> None:
         """A second cycle within PROP_FETCH_CADENCE_S must be a no-op."""
         pipeline = _make_pipeline()
-        pipeline._persist_prop_odds = AsyncMock()
+        pipeline._persist_prop_odds_many = _batch_writer()
         state = _make_game_state()
 
         first = await pipeline._persist_prop_odds_cycle(745000, state)
         assert first > 0
-        calls_after_first = pipeline._persist_prop_odds.await_count
+        calls_after_first = pipeline._persist_prop_odds_many.await_count
 
         second = await pipeline._persist_prop_odds_cycle(745000, state)
         assert second == 0, "cadence gate did not throttle the immediate re-fetch"
-        assert pipeline._persist_prop_odds.await_count == calls_after_first
+        assert pipeline._persist_prop_odds_many.await_count == calls_after_first
 
     @pytest.mark.asyncio
     async def test_cadence_allows_call_after_window(self) -> None:
         """Once PROP_FETCH_CADENCE_S has elapsed, the next cycle fetches again."""
         pipeline = _make_pipeline()
-        pipeline._persist_prop_odds = AsyncMock()
+        pipeline._persist_prop_odds_many = _batch_writer()
         state = _make_game_state()
 
         await pipeline._persist_prop_odds_cycle(745000, state)

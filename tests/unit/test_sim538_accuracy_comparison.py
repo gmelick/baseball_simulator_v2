@@ -223,6 +223,10 @@ def test_accuracy_record_to_from_jsonable_roundtrip():
         # SIM-548: the raw (pre-calibration) probability; None where no map
         # applies — every market but the moneyline today.
         "sim_prob_raw": None,
+        # SIM-555: the best sportsbook price at the graded line and its book;
+        # None on a record built without the other books' rows.
+        "market_best_price": None,
+        "market_best_book": None,
     }
     assert AccuracyRecord.from_jsonable(d) == rec
 
@@ -1013,7 +1017,8 @@ async def test_score_one_game_skips_when_the_cutoff_cannot_be_resolved(monkeypat
     async def fake_asof(pool, game_pk):
         return None  # the lookup failed for this game
 
-    async def fake_fetch_game_odds(pool, game_pk):
+    async def fake_fetch_game_odds(pool, game_pk, **_kw):
+        # SIM-555: the reader also takes the benchmark book (a keyword).
         return {"moneyline": {"opening": {"home_ml": -120}, "closing": {"home_ml": -130}}}
 
     def replay_must_not_run(*args, **kwargs):

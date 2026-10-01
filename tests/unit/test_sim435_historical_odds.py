@@ -11,8 +11,9 @@ No network and no live DB:
     (records every INSERT) so the per-game opening+closing persist calls are
     asserted without Postgres.
 
-Closing line = the most-recently-``updated`` line (the last line posted before
-game time). Expected values are computed straight off the captured fixtures.
+Closing line (SIM-555, 2026-09-28): one row per book, each side from that book;
+the one-row ``get_odds`` returns the first book on ``GRADED_BOOK_PREFERENCE``.
+Expected values are computed straight off the captured fixtures.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from pipeline.bettingpros_odds_provider import BettingProsOddsProvider
+from pipeline.odds_provider import graded_book_labels, is_bettable
 
 _FIX = Path(__file__).resolve().parent.parent / "fixtures" / "bettingpros"
 
@@ -63,59 +65,95 @@ class _FixtureProvider(BettingProsOddsProvider):
 # ===========================================================================
 # (1) CLOSING-line parsing on the provider
 # ===========================================================================
-def test_closing_moneyline_picks_latest_updated_line():
-    # DET/SEA: the two latest-updated books tie at 2024-08-15 17:07:24
-    # (DET book13 cost=122, SEA book13 cost=-145) — the closing line, distinct
-    # from the *best* current price (DET 125 / SEA -135).
-    odds = _FixtureProvider().get_odds(746437, line_type="closing", market_type="moneyline")
+# SIM-555 (2026-09-28) rewrote these pins on purpose. The closing line used to be
+# picked per side: the line with the newest stamp across EVERY book, ties to the
+# last-listed book, so the two sides of one row could come from two books. The
+# provider now returns one closing row per book, each side from that book;
+# get_odds returns the first book on GRADED_BOOK_PREFERENCE (DraftKings here).
+def test_closing_moneyline_is_one_row_per_book():
+    prov = _FixtureProvider()
+    rows = {
+        r["book"]: r
+        for r in prov.get_odds_by_book(746437, line_type="closing", market_type="moneyline")
+    }
+    assert len(rows) == 10  # nine sportsbooks and the vendor's blend (bp:0)
+    # Caesars (13), the old rule's pick, is one book's row: both sides its own.
+    assert (rows["bp:13"]["home_ml"], rows["bp:13"]["away_ml"]) == (122, -145)
+    odds = prov.get_odds(746437, line_type="closing", market_type="moneyline")
     assert odds["line_type"] == "closing"
-    assert odds["home_ml"] == 122
-    assert odds["away_ml"] == -145
+    assert odds["book"] == "bp:12"
+    assert odds["home_ml"] == 120
+    assert odds["away_ml"] == -142
 
 
 def test_closing_total_and_runline():
     total = _FixtureProvider().get_odds(746437, line_type="closing", market_type="total")
+    assert total["book"] == "bp:12"
     assert total["total_line"] == 8.5
     assert total["over_ml"] == -105
     assert total["under_ml"] == -115
 
     runline = _FixtureProvider().get_odds(746437, line_type="closing", market_type="runline")
+    assert runline["book"] == "bp:12"
     assert runline["home_spread"] == 1.5
-    assert runline["home_spread_ml"] == -135
+    assert runline["home_spread_ml"] == -142
     assert runline["away_spread"] == -1.5
-    assert runline["away_spread_ml"] == 115
+    assert runline["away_spread_ml"] == 120
 
 
-def test_closing_differs_from_current_and_opening():
+def test_closing_and_current_read_the_same_book_and_opening_reads_the_opener():
     prov = _FixtureProvider()
     opening = prov.get_odds(746437, line_type="opening", market_type="moneyline")
     current = prov.get_odds(746437, line_type="current", market_type="moneyline")
     closing = prov.get_odds(746437, line_type="closing", market_type="moneyline")
-    # opening (126) != current best (125) != closing latest-updated (122).
-    assert opening["home_ml"] == 126
-    assert current["home_ml"] == 125
-    assert closing["home_ml"] == 122
+    # The opener's row (FanDuel, 126); current and closing are DraftKings' one line (120).
+    assert (opening["book"], opening["home_ml"]) == ("bp:10", 126)
+    assert (current["book"], current["home_ml"]) == ("bp:12", 120)
+    assert (closing["book"], closing["home_ml"]) == ("bp:12", 120)
 
 
-def test_closing_prop_picks_latest_updated_per_selection():
-    # K prop: Over closes at book18 17:01:41 cost=-108; Under closes at
-    # book15 16:41:42 cost=-127. (Both at line 5.5.)
-    quote = _FixtureProvider(player_full_name="Bryce Miller").get_prop_odds(
-        746437, 682243, "strikeouts", line_type="closing"
-    )
+#: The strikeout prop's closing (line, over, under) per sportsbook in the
+#: captured fixture. DraftKings has no offer. BetMGM and PartyCasino post one
+#: price; so do BetRivers and SugarHouse.
+_K_CLOSES = {
+    "bp:10": (5.5, 100, -128),  # FanDuel
+    "bp:15": (5.5, -108, -127),  # SugarHouse
+    "bp:18": (5.5, -108, -127),  # BetRivers
+    "bp:19": (5.5, 100, -135),  # BetMGM
+    "bp:27": (5.5, 100, -135),  # PartyCasino
+}
+
+
+def test_closing_prop_is_one_row_per_book():
+    # K prop: each row's two sides come from its own book (all at line 5.5).
+    # The default row is the first book on GRADED_BOOK_PREFERENCE with a row
+    # (no DraftKings offer here).
+    prov = _FixtureProvider(player_full_name="Bryce Miller")
+    rows = {
+        r["book"]: r
+        for r in prov.get_prop_odds_by_book(746437, 682243, "strikeouts", line_type="closing")
+    }
+    closes = {
+        book: (row["line"], row["over_ml"], row["under_ml"])
+        for book, row in rows.items()
+        if is_bettable(book)
+    }
+    assert closes == _K_CLOSES
+    quote = prov.get_prop_odds(746437, 682243, "strikeouts", line_type="closing")
     assert quote["line_type"] == "closing"
-    assert quote["line"] == 5.5
-    assert quote["over_ml"] == -108
-    assert quote["under_ml"] == -127
+    graded = next(label for label in graded_book_labels() if label in closes)
+    assert quote["book"] == graded
+    assert (quote["line"], quote["over_ml"], quote["under_ml"]) == _K_CLOSES[graded]
     assert quote["is_mock"] is False
 
 
-def test_closing_prefer_book_id_scopes_the_scan():
-    # prefer_book_id restricts closing to that book's lines: book 15 prices DET
-    # at 125 / SEA at -148 (vs the all-books closing of 122 / -145).
-    odds = _FixtureProvider(prefer_book_id=15).get_odds(
-        746437, line_type="closing", market_type="moneyline"
-    )
+def test_closing_prefer_book_id_pins_the_book():
+    # prefer_book_id pins every call to that book: SugarHouse (15) prices DET at
+    # 125 / SEA at -148.
+    prov = _FixtureProvider(prefer_book_id=15)
+    rows = prov.get_odds_by_book(746437, line_type="closing", market_type="moneyline")
+    assert [r["book"] for r in rows] == ["bp:15"]
+    odds = prov.get_odds(746437, line_type="closing", market_type="moneyline")
     assert odds["home_ml"] == 125
     assert odds["away_ml"] == -148
 
@@ -129,16 +167,19 @@ def test_closing_prefer_book_id_absent_yields_none():
     assert odds["source"] == "bettingpros"  # shape preserved
 
 
-def test_closing_handles_empty_books_via_pick_line_directly():
-    prov = _FixtureProvider()
-    # No books at all → (None, None), not an exception.
-    assert prov._pick_line({"books": []}, "closing") == (None, None)
-    # A line missing its 'updated' stamp is still selectable (empty-string key).
-    cost, line = prov._pick_line(
-        {"books": [{"id": 1, "lines": [{"cost": -110, "line": 1.5}]}]}, "closing"
-    )
-    assert cost == -110
-    assert line == 1.5
+def test_book_line_handles_empty_books_and_unstamped_lines():
+    from pipeline.bettingpros_odds_provider import _book_line
+
+    # No books at all → None, not an exception.
+    assert _book_line({"books": []}, 1) is None
+    # A line missing its 'updated' stamp is still a quote.
+    line = _book_line({"books": [{"id": 1, "lines": [{"cost": -110, "line": 1.5}]}]}, 1)
+    assert line is not None
+    assert line["cost"] == -110
+    assert line["line"] == 1.5
+    # A line flagged is_off is not a quote.
+    off = {"books": [{"id": 1, "lines": [{"cost": -110, "line": 1.5, "is_off": True}]}]}
+    assert _book_line(off, 1) is None
 
 
 # ===========================================================================
@@ -148,15 +189,27 @@ import scripts.load_historical_odds as loader  # noqa: E402
 
 
 class _RecordingConn:
-    """Mock asyncpg connection: records every execute()/fetch() (no DB)."""
+    """Mock asyncpg connection: records every execute()/executemany()/fetch() (no DB).
+
+    SIM-555: the loader writes one offer's rows in one ``executemany``; each
+    row's bind tuple is recorded in ``executes`` as if it were its own
+    ``execute``, and ``batches`` counts the executemany calls.
+    """
 
     def __init__(self, lineup_rows: list[dict] | None = None):
         self.executes: list[tuple] = []
+        self.batches: list[tuple[str, int]] = []
         self._lineup_rows = lineup_rows or []
 
     async def execute(self, sql: str, *args):
         self.executes.append((sql, args))
         return "INSERT 0 1"
+
+    async def executemany(self, sql: str, params):
+        params = list(params)
+        self.batches.append((sql, len(params)))
+        for args in params:
+            self.executes.append((sql, tuple(args)))
 
     async def fetch(self, sql: str, *args):
         return self._lineup_rows
@@ -210,17 +263,24 @@ class _FakeProvider:
         }
 
 
+async def _batch(sink: list, game_pk: int, rows: list[dict]) -> int:
+    """SIM-555: a game batch writer stand-in — one entry per row, returns the count."""
+    sink.extend((game_pk, odds) for odds in rows)
+    return len(rows)
+
+
 @pytest.mark.asyncio
 async def test_load_game_odds_persists_opening_and_closing_each_market():
     provider = _FakeProvider()
     persisted: list[tuple[int, dict]] = []
 
-    async def persist(game_pk, odds):
-        persisted.append((game_pk, odds))
+    async def persist(game_pk, rows):
+        return await _batch(persisted, game_pk, rows)
 
     written = await loader._load_game_odds(provider, persist, 746437)
 
-    # 2 line_types × 3 market_types = 6 rows (all resolve in the fake).
+    # 2 line_types × 3 market_types = 6 rows (all resolve in the fake; the
+    # twelve segment markets come back empty from it and are skipped).
     assert written == 6
     assert len(persisted) == 6
     line_types = {odds["line_type"] for _, odds in persisted}
@@ -253,14 +313,17 @@ async def test_load_game_odds_skips_empty_quotes():
             return base
 
     provider = _EmptyProvider()
-    persisted = []
+    persisted: list = []
+    tally = loader.RefusalTally()
 
-    async def persist(game_pk, odds):
-        persisted.append((game_pk, odds))
+    async def persist(game_pk, rows):
+        return await _batch(persisted, game_pk, rows)
 
-    written = await loader._load_game_odds(provider, persist, 1)
+    written = await loader._load_game_odds(provider, persist, 1, tally=tally)
     assert written == 0
     assert persisted == []  # an all-null quote is never persisted
+    # SIM-555: an empty row is skipped before the guard, never counted as refused.
+    assert tally.n_offered == 0 and tally.refused == 0
 
 
 @pytest.mark.asyncio
@@ -268,8 +331,9 @@ async def test_load_prop_odds_routes_pitcher_vs_batter_markets():
     provider = _FakeProvider()
     persisted: list[dict] = []
 
-    async def persist(quote):
-        persisted.append(quote)
+    async def persist(rows):
+        persisted.extend(rows)
+        return len(rows)
 
     players = [(111, True), (222, False)]  # one pitcher, one batter
     written = await loader._load_prop_odds(provider, persist, 999, players)
@@ -296,14 +360,39 @@ async def test_load_prop_odds_skips_null_line():
             return {**q, "line": None}
 
     provider = _NullLineProvider()
-    persisted = []
+    persisted: list[dict] = []
+    tally = loader.RefusalTally()
 
-    async def persist(quote):
-        persisted.append(quote)
+    async def persist(rows):
+        persisted.extend(rows)
+        return len(rows)
 
-    written = await loader._load_prop_odds(provider, persist, 1, [(111, True)])
+    written = await loader._load_prop_odds(provider, persist, 1, [(111, True)], tally=tally)
     assert written == 0
     assert persisted == []
+    # SIM-555: a quote with prices but no line is not empty, so the load guard
+    # sees it and refuses it (the line is missing): 5 pitcher markets × 2 line types.
+    assert tally.refused == 10
+    assert {rule for rule, _market, _book in tally.counts()} == {"missing_side"}
+
+
+@pytest.mark.asyncio
+async def test_load_prop_odds_skips_an_all_empty_quote_silently():
+    class _EmptyPropProvider(_FakeProvider):
+        def get_prop_odds(self, game_pk, player_id, prop_stat, *, line_type="current"):
+            q = super().get_prop_odds(game_pk, player_id, prop_stat, line_type=line_type)
+            return {**q, "line": None, "over_ml": None, "under_ml": None}
+
+    tally = loader.RefusalTally()
+
+    async def persist(rows):  # pragma: no cover - never reached
+        raise AssertionError("an empty quote must never reach the writer")
+
+    written = await loader._load_prop_odds(
+        _EmptyPropProvider(), persist, 1, [(111, True)], tally=tally
+    )
+    assert written == 0
+    assert tally.n_offered == 0 and tally.refused == 0
 
 
 @pytest.mark.asyncio
@@ -346,8 +435,10 @@ def test_build_persisters_attaches_pool_without_starting_pipeline():
     # i.e. the real persist path, never started (no Redis/HTTP/WS).
     assert persist_game.__self__ is persist_prop.__self__
     assert persist_game.__self__._db is sentinel_pool
-    assert persist_game.__name__ == "_persist_odds"
-    assert persist_prop.__name__ == "_persist_prop_odds"
+    # SIM-555 changed these names on purpose: the loader writes one offer's
+    # rows in one batch.
+    assert persist_game.__name__ == "_persist_odds_many"
+    assert persist_prop.__name__ == "_persist_prop_odds_many"
 
 
 @pytest.mark.asyncio
@@ -370,3 +461,5 @@ async def test_persisters_emit_game_and_prop_inserts_against_mock_conn():
     # the game-odds INSERT; assert both appear across the recorded executes).
     game_line_types = {args[4] for sql, args in conn.executes if "raw.game_odds" in sql}
     assert game_line_types == {"opening", "closing"}
+    # SIM-555: every write went through executemany (one batch per offer).
+    assert len(conn.batches) == len(conn.executes)

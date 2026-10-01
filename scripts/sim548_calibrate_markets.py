@@ -35,6 +35,11 @@ place only when it improves the CHECK set.
 ``--write-calibration /data/calibration.json`` merges the fitted maps into the
 calibration report under ``market_calibration`` (the app does not read that key
 yet — the wiring is a separate step; nothing changes at boot).
+
+SIM-555: every fit and check report must be graded against the same odds rows
+(the ``odds_row_version`` / ``graded_book_preference`` / ``benchmark_book``
+stamps and the re-score mark). The script refuses a mix: two books' lines give
+the same game two market probabilities.
 """
 
 from __future__ import annotations
@@ -57,12 +62,91 @@ DEFAULT_MIN_N = 150
 # ---------------------------------------------------------------------------
 
 
-def load_records(paths: list[str]) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
+#: SIM-555: the report stamps that say which odds rows a report was graded
+#: against (``scripts/clv_backtest.py`` writes them into ``params``). The same
+#: tuple as ``ODDS_ROW_KEYS`` in ``scripts/sim548_market_skill.py``.
+ODDS_ROW_KEYS: tuple[str, ...] = ("odds_row_version", "graded_book_preference", "benchmark_book")
+
+
+def odds_row_key(params: dict[str, Any]) -> dict[str, Any]:
+    """SIM-555: the odds rows one report was graded against, from its ``params``.
+
+    The three stamps of :data:`ODDS_ROW_KEYS` (a missing key reads ``None``:
+    the report was graded before SIM-555), plus ``odds_rows_rescored``: a
+    report re-scored onto the graded book (``scripts/sim555_rescore_reports.py``
+    writes ``rescored_from``) re-prices its fixed-line records only, so its
+    totals, run lines and props keep the old rows' prices. The same key as
+    ``scripts/sim548_market_skill.py`` builds for its merge."""
+    return {
+        **{k: params.get(k) for k in ODDS_ROW_KEYS},
+        "odds_rows_rescored": bool(params.get("rescored_from")),
+    }
+
+
+def _describe(value: Any) -> str:
+    """A stamp's value for the refusal message; ``None`` = the stamp is missing."""
+    return "missing (before SIM-555)" if value is None else repr(value)
+
+
+def refuse_mixed_odds_rows(reports: list[tuple[str, dict[str, Any]]]) -> None:
+    """SIM-555: refuse reports graded against different odds rows.
+
+    ``reports`` is (path, report) pairs. Every report must carry the same
+    :func:`odds_row_key` as the first: the map's before / after gap to the
+    closing line reads each record's market probability, and two reports
+    graded against two books, two preference lists, a benchmark book, the old
+    mixed rows or a partial re-score price the same game differently. Raises
+    ``SystemExit`` ("REFUSED — ...") naming the report and the stamps that
+    differ, as the market-skill table's merge does."""
+    if not reports:
+        return
+    path0, rep0 = reports[0]
+    key0 = odds_row_key(rep0.get("params", {}) or {})
+    for path, rep in reports[1:]:
+        key = odds_row_key(rep.get("params", {}) or {})
+        diffs = [k for k in key if key[k] != key0[k]]
+        if diffs:
+            detail = "; ".join(f"{k}: {_describe(key[k])} vs {_describe(key0[k])}" for k in diffs)
+            sys.exit(
+                f"REFUSED — {path} was graded against other odds rows than {path0} "
+                f"({detail}); re-run one of them so both read the same rows"
+            )
+
+
+def _read_reports(paths: list[str]) -> list[tuple[str, dict[str, Any]]]:
+    reports: list[tuple[str, dict[str, Any]]] = []
     for path in paths:
-        rep = json.load(open(path, encoding="utf-8"))
+        with open(path, encoding="utf-8") as fh:
+            reports.append((path, json.load(fh)))
+    return reports
+
+
+def _records(reports: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for _path, rep in reports:
         out.extend(rep.get("accuracy_records", []))
     return out
+
+
+def load_records(paths: list[str]) -> list[dict[str, Any]]:
+    """The accuracy records of several reports, merged.
+
+    SIM-555: refuses (:func:`refuse_mixed_odds_rows`) when the reports were
+    graded against different odds rows."""
+    reports = _read_reports(paths)
+    refuse_mixed_odds_rows(reports)
+    return _records(reports)
+
+
+def load_fit_and_check(
+    fit_paths: list[str], check_paths: list[str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(the fit records, the check records). SIM-555: every report of BOTH sets
+    must be graded against the same odds rows: the map is fitted on one set
+    and read on the other against the same closing lines."""
+    fit_reports, check_reports = _read_reports(fit_paths), _read_reports(check_paths)
+    refuse_mixed_odds_rows([*fit_reports, *check_reports])
+    return _records(fit_reports), _records(check_reports)
 
 
 def by_market(records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -429,8 +513,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
 
-    fit = by_market(load_records(args.fit))
-    chk = by_market(load_records(args.check))
+    fit_records, check_records = load_fit_and_check(args.fit, args.check)
+    fit = by_market(fit_records)
+    chk = by_market(check_records)
     fit_games = {int(r["game_pk"]) for recs in fit.values() for r in recs}
     chk_games = {int(r["game_pk"]) for recs in chk.values() for r in recs}
     overlap = fit_games & chk_games

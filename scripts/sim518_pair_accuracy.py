@@ -11,9 +11,10 @@ that pairing (plan: docs/audit/2026-09-12-sim518-fit-plan.md §6):
 
   * it REFUSES to pair reports whose provenance differs — the bundle's
     manifest timestamps, the calibration file's hash, the base seed, the
-    iteration count, the game list, or (SIM-549) the run lines' scoring stamp
-    and whether a report was re-scored — unless ``--force`` says the operator
-    accepts the confound;
+    iteration count, the game list, (SIM-549) the run lines' scoring stamp
+    and whether a report was re-scored, or (SIM-555) the odds rows a report
+    was graded against — unless ``--force`` says the operator accepts the
+    confound;
   * per market it reports the records, the games, the mean paired Brier and
     log-loss difference, the game-clustered bootstrap range and the SIM-539
     minimum sample at the floor asked for, and each arm's own mean lead over
@@ -72,6 +73,9 @@ DEFAULT_ALPHA = 0.05
 DEFAULT_BOOTSTRAP = 2000
 #: A start of at least this many real pitches is a DEEP start (the subset run).
 DEEP_START_PITCHES = 90
+#: SIM-555: the report stamps that say which odds rows a report was graded
+#: against (``scripts/clv_backtest.py`` writes them into ``params``).
+ODDS_ROW_KEYS: tuple[str, ...] = ("odds_row_version", "graded_book_preference", "benchmark_book")
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +89,9 @@ def provenance_mismatches(a: dict[str, Any], b: dict[str, Any]) -> list[str]:
     out: list[str] = []
     # SIM-549: "run_line_scoring" too — a run line scored as two bets and one
     # scored as a pair carry different market probabilities.
+    # SIM-555: the three odds-row stamps too — a report graded against another
+    # book, another preference list or the old mixed rows (no stamp: before
+    # SIM-555) scores other lines on the same game.
     for key in (
         "base_seed",
         "iterations",
@@ -92,6 +99,7 @@ def provenance_mismatches(a: dict[str, Any], b: dict[str, Any]) -> list[str]:
         "markets",
         "calibration_applied",
         "run_line_scoring",
+        *ODDS_ROW_KEYS,
     ):
         if pa.get(key) != pb.get(key):
             out.append(f"params.{key}: {pa.get(key)!r} vs {pb.get(key)!r}")
@@ -101,6 +109,15 @@ def provenance_mismatches(a: dict[str, Any], b: dict[str, Any]) -> list[str]:
         out.append(
             f"params.rescored: {bool(pa.get('rescored'))} vs {bool(pb.get('rescored'))} "
             "(a re-scored report has no run-line away bets)"
+        )
+    # SIM-555: a report re-scored onto the graded book
+    # (scripts/sim555_rescore_reports.py writes ``rescored_from``) keeps its
+    # totals, run lines and props on the old rows' prices; a fresh run does not.
+    if bool(pa.get("rescored_from")) != bool(pb.get("rescored_from")):
+        out.append(
+            f"params.rescored_from: {pa.get('rescored_from')!r} vs {pb.get('rescored_from')!r} "
+            "(a report re-scored onto the graded book keeps its line-carrying records "
+            "on the old rows)"
         )
     prov_a, prov_b = pa.get("provenance") or {}, pb.get("provenance") or {}
     if not prov_a or not prov_b:

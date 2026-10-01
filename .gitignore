@@ -175,5 +175,10 @@ scripts/sim548_accuracy_split.sim549.json
 scripts/sim548_baseline_2024_chunk2.sim549.json
 scripts/sim548_baseline_2024_chunk3.sim549.json
 scripts/sim548_baseline_2024_chunk4.sim549.json
+# SIM-555: the re-scored copy of the split report (11 MB; it carries the run's DSN) and the
+# 300-game book probe's outputs (6.6 MB each; regenerable with scripts/sim555_book_probe.py).
+scripts/sim548_accuracy_split.sim549.sim555.json
+scripts/sim555_probe_300.json
+scripts/sim555_probe_300_regated.json
 scripts/*.npz
 scripts/sim548_design_*/

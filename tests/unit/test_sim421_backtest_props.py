@@ -566,7 +566,8 @@ def _wire_score_one_game(monkeypatch, pset: PropDistributionSet, prop_odds: dict
     async def _asof(pool, game_pk):
         return "2024-08-14"
 
-    async def _prop_odds(pool, game_pk):
+    async def _prop_odds(pool, game_pk, **_kw):
+        # SIM-555: the reader also takes the benchmark book (a keyword).
         return prop_odds
 
     monkeypatch.setattr(sk, "resolve_park_factor_onto_state", _park)
@@ -623,7 +624,7 @@ async def test_score_one_game_has_no_source_when_props_are_off(monkeypatch):
     pset, prop_odds, _ = _every_market_case()
     _wire_score_one_game(monkeypatch, pset, prop_odds)
 
-    async def _game_odds(pool, game_pk):
+    async def _game_odds(pool, game_pk, **_kw):
         return {"moneyline": {"closing": {"home_ml": -120, "away_ml": 100}}}
 
     async def _final_score(pool, game_pk):

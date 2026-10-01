@@ -23,8 +23,13 @@ same scoring without re-running the simulator:
     joins from the next backtest run.
 
 The spreads are not in a report's records, so the script reads the closing
-rows from ``raw.game_odds`` (the latest ``fetched_at`` per game and market,
-the backtest's own rule). It checks every stored price against the store. It
+rows from ``raw.game_odds``. SIM-555: the row per game and market is the
+graded book's, the backtest's own rule, and the reference margin is the
+run-line row's own book's (every sportsbook's closing row of the reference
+markets is read for it). A report priced on the old mixed
+``consensus`` rows then reads its run-line prices as problems; re-score such a
+report with ``scripts/sim555_rescore_reports.py``. The script checks every
+stored price against the store. It
 refuses to write a report with a missing closing row or a price the store does
 not hold, unless ``--accept-problems``; then ``params.rescored.problems`` lists
 them, because those records keep their old pair-priced number. It uses the backtest's own
@@ -63,7 +68,11 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from pipeline.odds_provider import GAME_MARKET_SEGMENT  # noqa: E402
+from pipeline.odds_provider import (  # noqa: E402
+    GAME_MARKET_SEGMENT,
+    bettable_labels,
+    graded_row_order_sql,
+)
 
 #: The suffix of a re-scored report, beside its original.
 OUTPUT_SUFFIX = ".sim549.json"
@@ -109,18 +118,14 @@ def run_line_games(report: dict[str, Any]) -> set[int]:
     }
 
 
-async def fetch_closing_rows(dsn: str, game_pks: set[int]) -> dict[int, dict[str, Any]]:
-    """``{game_pk: {market_type: {"closing": row}}}`` — the backtest's own odds
-    shape — for the run lines and the reference markets of ``game_pks``."""
-    import asyncpg
-
-    markets = list(bt.RUN_LINE_MARKET_TYPES) + list(_REFERENCE_MARKETS)
-    conn = await asyncpg.connect(dsn, timeout=60)
-    try:
-        rows = await conn.fetch(
-            """
+#: SIM-555: the graded closing row per (game, market) of many games — the
+#: backtest's graded-row rule (the stored book label, no blend or other
+#: non-sportsbook row, the first book on the preference list, then the newest
+#: fetch). ``$1`` the games, ``$2`` the markets, ``$3`` the labels to keep
+#: (the listed sportsbooks), ``$4`` the preference list.
+CLOSING_ROWS_SQL = f"""
             SELECT DISTINCT ON (game_pk, market_type)
-                   game_pk, market_type,
+                   game_pk, market_type, book,
                    home_ml, away_ml, draw_ml,
                    home_spread, home_spread_ml, away_spread, away_spread_ml,
                    total_line, over_ml, under_ml
@@ -128,21 +133,72 @@ async def fetch_closing_rows(dsn: str, game_pks: set[int]) -> dict[int, dict[str
             WHERE line_type = 'closing'
               AND game_pk = ANY($1::bigint[])
               AND market_type = ANY($2::text[])
-            ORDER BY game_pk, market_type, fetched_at DESC
-            """,
-            sorted(game_pks),
-            markets,
+              AND {bt.graded_book_filter_sql("$3")}
+            ORDER BY game_pk, market_type, {graded_row_order_sql("$4")}
+            """
+
+#: SIM-555: every sportsbook's latest closing row of the reference markets of
+#: many games. Each market's graded row is chosen on its own, so the graded
+#: total can be another book's than the graded run line.
+#: :func:`clv_backtest.reference_margin` reads the run-line row's OWN book's
+#: margin from these rows, as the backtest does. ``$1`` the games, ``$2`` the
+#: markets, ``$3`` the labels to keep (the listed sportsbooks).
+BOOK_CLOSES_SQL = f"""
+            SELECT DISTINCT ON (game_pk, market_type, book)
+                   game_pk, market_type, book,
+                   home_ml, away_ml, total_line, over_ml, under_ml
+            FROM raw.game_odds
+            WHERE line_type = 'closing'
+              AND game_pk = ANY($1::bigint[])
+              AND market_type = ANY($2::text[])
+              AND {bt.graded_book_filter_sql("$3")}
+            ORDER BY game_pk, market_type, book, fetched_at DESC
+            """
+
+
+def _odds_row(r: Any) -> dict[str, Any]:
+    """One stored row as the backtest's odds shape: the prices as floats, the
+    book label as it is."""
+    row: dict[str, Any] = {
+        k: (None if v is None else float(v))
+        for k, v in dict(r).items()
+        if k not in ("game_pk", "market_type", "book")
+    }
+    row["book"] = r["book"]
+    return row
+
+
+async def fetch_closing_rows(dsn: str, game_pks: set[int]) -> dict[int, dict[str, Any]]:
+    """``{game_pk: {market_type: {"closing": row, BETTABLE_CLOSING: [row, ...]}}}``
+    — the backtest's own odds shape — for the run lines and the reference
+    markets of ``game_pks``.
+
+    SIM-555: each ``closing`` row is the graded book's
+    (:data:`CLOSING_ROWS_SQL`), the row the backtest scores today. A report
+    priced on the old mixed ``consensus`` rows then reads its run-line prices
+    as problems. Each reference market also carries every sportsbook's
+    closing row (:data:`BOOK_CLOSES_SQL`), so the margin comes from the
+    run-line row's own book, as in the backtest.
+    """
+    import asyncpg
+
+    markets = list(bt.RUN_LINE_MARKET_TYPES) + list(_REFERENCE_MARKETS)
+    games = sorted(game_pks)
+    conn = await asyncpg.connect(dsn, timeout=60)
+    try:
+        rows = await conn.fetch(CLOSING_ROWS_SQL, games, markets, *bt.graded_query_args(None))
+        book_rows = await conn.fetch(
+            BOOK_CLOSES_SQL, games, list(_REFERENCE_MARKETS), bettable_labels()
         )
     finally:
         await conn.close()
     out: dict[int, dict[str, Any]] = {}
     for r in rows:
-        row = {
-            k: (None if v is None else float(v))
-            for k, v in dict(r).items()
-            if k not in ("game_pk", "market_type")
-        }
-        out.setdefault(int(r["game_pk"]), {})[str(r["market_type"])] = {"closing": row}
+        by_market = out.setdefault(int(r["game_pk"]), {})
+        by_market.setdefault(str(r["market_type"]), {})["closing"] = _odds_row(r)
+    for r in book_rows:
+        by_lt = out.setdefault(int(r["game_pk"]), {}).setdefault(str(r["market_type"]), {})
+        by_lt.setdefault(bt.BETTABLE_CLOSING, []).append(_odds_row(r))
     return out
 
 
@@ -248,9 +304,19 @@ def rescore_report(
             kept.append(r)
             continue
         segment = GAME_MARKET_SEGMENT[market]
-        margin, margin_source = bt.reference_margin(odds, segment)
+        # SIM-555: the margin of the run-line row's own book, as the backtest
+        # reads it
+        margin, margin_source = bt.reference_margin(odds, segment, book=row.get("book"))
         sources[margin_source] += 1
-        own = _report_margin(by_key, game_pk, margin_source)
+        # the report's record of the reference market was priced on that
+        # market's graded row; it checks the margin only when that row is the
+        # run-line row's own book's
+        ref_row = (odds.get(margin_source) or {}).get("closing") or {}
+        own = (
+            _report_margin(by_key, game_pk, margin_source)
+            if ref_row.get("book") == row.get("book")
+            else None
+        )
         if own is not None:
             tally["margin_checked_against_the_report"] += 1
             if abs(own - margin) > 1e-9:

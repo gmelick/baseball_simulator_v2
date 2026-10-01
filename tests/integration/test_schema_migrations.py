@@ -85,6 +85,8 @@ _RAW_TABLES = {
     "savant_pitcher_running_game",  # 0026 (SIM-531)
     "savant_outs_above_average",  # 0027 (SIM-532)
     "savant_outfield_jump",  # 0027 (SIM-532)
+    "game_odds_archive",  # 0028 (SIM-555) — the retired consensus game-odds rows
+    "prop_odds_archive",  # 0028 (SIM-555) — the retired consensus prop-odds rows
 }
 
 _SIM_TABLES = {
@@ -402,6 +404,81 @@ class TestSchemaMigrations:
         is_nullable, data_type = row
         assert is_nullable == "YES", "draw_ml must accept NULL — two-way markets have no tie price"
         assert data_type == "integer", f"draw_ml must be an integer American price, got {data_type}"
+
+    def test_sim555_stamp_indexes_and_archives(self, pg_connection: sa.Connection) -> None:
+        """0028: the two stamp columns, the two by-book indexes and the two archives.
+
+        The table-name list above sees only that the archives exist. This test
+        reads what the migration's SQL built: ``book_line_at`` is a nullable
+        TIMESTAMPTZ on both odds tables (every pre-SIM-555 row stays NULL); each
+        index covers the columns the graded-row read sorts on; each archive has
+        the live table's columns in the same order (the retirement script copies
+        with ``INSERT ... SELECT *``); and an archive's ``id`` has no default, so
+        it never draws from the live table's sequence.
+        """
+        for table in ("game_odds", "prop_odds"):
+            row = pg_connection.execute(
+                text("""
+                    SELECT is_nullable, data_type
+                    FROM   information_schema.columns
+                    WHERE  table_schema = 'raw' AND table_name = :t
+                    AND    column_name  = 'book_line_at'
+                """),
+                {"t": table},
+            ).fetchone()
+            assert row is not None, f"raw.{table}.book_line_at is missing (migration 0028)"
+            assert row[0] == "YES", f"raw.{table}.book_line_at must accept NULL (the old rows)"
+            assert row[1] == "timestamp with time zone", f"raw.{table}.book_line_at is {row[1]}"
+
+        for index, table, columns in (
+            ("idx_game_odds_market_book", "game_odds", "game_pk, market_type, line_type, book"),
+            (
+                "idx_prop_odds_market_book",
+                "prop_odds",
+                "game_pk, player_id, prop_stat, line_type, book",
+            ),
+        ):
+            row = pg_connection.execute(
+                text(
+                    "SELECT tablename, indexdef FROM pg_indexes "
+                    "WHERE schemaname = 'raw' AND indexname = :i"
+                ),
+                {"i": index},
+            ).fetchone()
+            assert row is not None, f"index {index} is missing (migration 0028)"
+            assert row[0] == table, f"{index} is on raw.{row[0]}, not raw.{table}"
+            assert f"({columns})" in row[1], f"{index} covers the wrong columns: {row[1]}"
+
+        def columns_of(table: str) -> list[tuple[str, str, str | None]]:
+            return [
+                (r[0], r[1], r[2])
+                for r in pg_connection.execute(
+                    text("""
+                        SELECT column_name, data_type, column_default
+                        FROM   information_schema.columns
+                        WHERE  table_schema = 'raw' AND table_name = :t
+                        ORDER  BY ordinal_position
+                    """),
+                    {"t": table},
+                ).fetchall()
+            ]
+
+        for table in ("game_odds", "prop_odds"):
+            live, archive = columns_of(table), columns_of(f"{table}_archive")
+            assert [(c, t) for c, t, _ in archive] == [(c, t) for c, t, _ in live], (
+                f"raw.{table}_archive does not copy raw.{table}'s columns in order"
+            )
+            defaults = {c: d for c, _, d in archive}
+            assert defaults["id"] is None, (
+                f"raw.{table}_archive.id still has a default ({defaults['id']}): an "
+                "archive must never draw from the live table's id sequence"
+            )
+            live_id_default = next(d for c, _, d in live if c == "id")
+            assert live_id_default is not None and "nextval" in live_id_default, (
+                f"raw.{table}.id lost its sequence default: {live_id_default}"
+            )
+            # The other defaults are copied (LIKE ... INCLUDING DEFAULTS).
+            assert defaults["fetched_at"] is not None, f"raw.{table}_archive lost its defaults"
 
     def test_raw_etl_freshness_table_exists(self, pg_connection: sa.Connection) -> None:
         """SIM-083: raw.etl_data_freshness must exist.

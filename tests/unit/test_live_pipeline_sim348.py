@@ -51,7 +51,6 @@ if str(_ROOT) not in sys.path:
 
 from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
     PITCHER_PROP_STATS,
-    PROP_BOOKS,
     PROP_STATS,
     RESIM_COOLDOWN_S,
     ConnectionManager,
@@ -458,6 +457,8 @@ class TestRefreshGameState:
         assert payload["type"] == "game_state_update"
         assert "game_state" in payload
         assert "odds" in payload
+        # SIM-555: the payload survives a bare json.dumps (the WS wire format).
+        json.dumps(payload)
         # The sample feed's currentPlay is complete → resim triggered.
         assert payload["resim_triggered"] is True
 
@@ -651,9 +652,13 @@ class TestPropOddsCycle:
         roles = LiveIngestionPipeline._collect_prop_player_roles(sample_game_state)
         assert roles[999] == "pitcher"
         assert all(roles[pid] == "both" for pid in (401, 402, 501, 502))
-        expected = (len(PITCHER_PROP_STATS) + 4 * len(PROP_STATS)) * len(PROP_BOOKS)
+        # SIM-555 changed this deliberately: there is no PROP_BOOKS multiplier.
+        # The one-book mock gives one row per offer, and each offer goes to the
+        # database in one executemany batch.
+        expected = len(PITCHER_PROP_STATS) + 4 * len(PROP_STATS)
         assert written == expected
-        assert mock_db_pool.execute.await_count == expected
+        assert mock_db_pool.executemany.await_count == expected
+        mock_db_pool.execute.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_prop_cycle_throttled_within_cadence(
@@ -665,6 +670,7 @@ class TestPropOddsCycle:
         written = await pipeline._persist_prop_odds_cycle(745000, sample_game_state)
         assert written == 0
         mock_db_pool.execute.assert_not_awaited()
+        mock_db_pool.executemany.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_prop_cycle_no_players_does_not_stamp_clock(self, mock_db_pool) -> None:
@@ -680,8 +686,13 @@ class TestPropOddsCycle:
         pipeline = _bare_pipeline(_db=mock_db_pool)
         written = await pipeline.capture_opening_prop_lines(745000, [100001])
         # No ``roles`` passed → every market for the player (SIM-421 safe default).
-        expected = 1 * len(PROP_STATS) * len(PROP_BOOKS)
+        # SIM-555: one row per market from the one-book mock (no PROP_BOOKS).
+        expected = 1 * len(PROP_STATS)
         assert written == expected
+        sent = [row for call in mock_db_pool.executemany.await_args_list for row in call.args[1]]
+        assert len(sent) == expected
+        # line_type is the tenth bind of the prop INSERT.
+        assert {params[9] for params in sent} == {"opening"}
 
 
 # ===========================================================================

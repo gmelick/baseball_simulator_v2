@@ -89,13 +89,34 @@ five innings) and :data:`GAME_MARKET_SIDE` the team a team total counts
 parses the market name.
 
 Multi-book / sharp-flag / line_type rules the provider MUST preserve:
-  * ``book`` is echoed through verbatim — the pipeline iterates ``PROP_BOOKS``
-    (and per-game book lists) and expects one quote per (book, player, prop).
-  * ``is_sharp_book`` is carried through unchanged so the CLV engine can split
-    sharp (Pinnacle, Circa) vs. soft (DraftKings, FanDuel) lines.
+  * ``book`` names the book a row's prices come from (see "The book
+    vocabulary" below). The mock echoes the requested ``book`` verbatim.
+  * ``is_sharp_book`` is carried through unchanged.
   * ``line_type`` is one of ``opening | current | closing | bet_placement`` and
     is echoed through so opening/closing-line capture stamps the right value.
   * Real providers should set ``source=<provider-name>`` and ``is_mock=False``.
+
+The book vocabulary (SIM-555, 2026-09-28)
+-----------------------------------------
+A row holds ONE book's prices for every side of one market, and names the book
+in ``book`` as ``'bp:<id>'`` (the id is BettingPros', from ``/v3/books``).
+:data:`BOOK_NAMES` gives each id its display name; :data:`BOOK_KIND` says what
+the id is: a sportsbook, the vendor's blended line (``blend``, id 0), a
+daily-fantasy app (``dfs``), an exchange or a prediction market. An id the
+table does not list is ``unknown``. Every kind is stored; :data:`BETTABLE_KINDS`
+says which kinds count as a price a bettor can take, so an unlisted id is never
+bettable: the readers keep the listed sportsbooks (:func:`bettable_labels`), a
+list of what may be graded, not a list of what may not. The readers grade against ONE book: the first book on
+:data:`GRADED_BOOK_PREFERENCE` that has a row for the market, the same list on
+every game. :data:`ODDS_ROW_VERSION` stamps the reports built on this scheme.
+
+A provider that stores every book implements two more methods:
+``get_odds_by_book(game_pk, *, line_type, market_type) -> list[dict]`` and
+``get_prop_odds_by_book(game_pk, player_id, prop_stat, *, line_type) ->
+list[dict]``, one dict per book in the ``get_odds`` / ``get_prop_odds`` shape.
+A writer calls them through :func:`odds_rows_by_book` /
+:func:`prop_rows_by_book`, which fall back to the one-row methods for a
+provider (a test fake) that has only those.
 
 Owned by Data Engineer (Agent 4) with Betting Analyst (Agent 8) input.
 """
@@ -181,11 +202,14 @@ PROP_STAT_TO_MODEL_PROP: dict[str, str] = {
 # the book posts on a game, in one row layout (see the module docstring)
 # ---------------------------------------------------------------------------
 
-#: The three full-game markets the platform stored before 2026-09-12. A row for
-#: one of these carries ALL three markets' columns (the provider fills every
-#: full-game field it can resolve), which is what the stored dedup hashes
-#: expect; keep that behaviour for these three.
-LEGACY_GAME_MARKET_TYPES: tuple[str, ...] = ("moneyline", "runline", "total")
+#: The three full-game markets (moneyline, run line, total).
+FULL_GAME_MARKET_TYPES: tuple[str, ...] = ("moneyline", "runline", "total")
+
+#: SIM-555: an alias of :data:`FULL_GAME_MARKET_TYPES`, kept for the readers
+#: that name it. Before SIM-555 a row for one of these three markets carried all
+#: three markets' columns. The mock still fills all three on one row; the
+#: BettingPros provider no longer does: each market fills only its own columns.
+LEGACY_GAME_MARKET_TYPES: tuple[str, ...] = FULL_GAME_MARKET_TYPES
 
 #: Every ``raw.game_odds.market_type`` value, in the canonical order: the three
 #: full-game markets first, then the twelve segment and team markets.
@@ -274,6 +298,247 @@ GAME_ODDS_FIELDS: tuple[str, ...] = (
 )
 
 # ---------------------------------------------------------------------------
+# SIM-555 (2026-09-28): the book vocabulary — one source, as for the markets
+# ---------------------------------------------------------------------------
+
+#: The books the platform names. The ids are BettingPros' (``/v3/books``).
+BOOK_NAMES: dict[int, str] = {
+    0: "BettingPros Consensus",
+    10: "FanDuel",
+    12: "DraftKings",
+    13: "Caesars",
+    14: "Fanatics",
+    15: "SugarHouse",
+    18: "BetRivers",
+    19: "BetMGM",
+    24: "bet365",
+    27: "PartyCasino",
+    33: "theScore Bet",
+    36: "Underdog",
+    37: "PrizePicks",
+    38: "ProphetX",
+    39: "Fliff",
+    49: "Hard Rock",
+    60: "Novig",
+    63: "Sleeper",
+    68: "Kalshi",
+    73: "Polymarket",
+    75: "Polymarket US",
+    # Review fix (2026-09-28): the pick'em apps and prediction markets of the
+    # vendor's /v3/books catalogue, so none of them passes as a sportsbook.
+    44: "ThriveFantasy",
+    45: "Betr",
+    53: "Dabble",
+    69: "FanDuel Picks",
+    70: "DraftKings Pick6",
+    74: "DraftKings Predictions",
+    76: "Underdog Predict",
+    78: "Plus500",
+}
+
+#: What a book id is. The vendor's blend (0) is a mix of other books' prices
+#: that nobody can bet. Every sportsbook is listed by name. An id this table does
+#: not list is ``unknown`` (see :func:`book_kind`), so a book the vendor adds
+#: later is never taken as a price a bettor can use until someone classifies it
+#: here. The vendor's ``/v3/books`` catalogue (read 2026-09-28) flags 60, 38,
+#: 74, 68, 73, 75 and 78 as prediction markets; 36, 37, 39, 44, 45, 53, 63, 69
+#: and 70 are daily-fantasy pick'em apps.
+BOOK_KIND: dict[int, str] = {
+    0: "blend",
+    10: "sportsbook",
+    12: "sportsbook",
+    13: "sportsbook",
+    14: "sportsbook",
+    15: "sportsbook",
+    18: "sportsbook",
+    19: "sportsbook",
+    24: "sportsbook",
+    27: "sportsbook",
+    33: "sportsbook",
+    49: "sportsbook",
+    36: "dfs",
+    37: "dfs",
+    39: "dfs",
+    44: "dfs",
+    45: "dfs",
+    53: "dfs",
+    63: "dfs",
+    69: "dfs",
+    70: "dfs",
+    38: "exchange",
+    60: "exchange",
+    68: "prediction",
+    73: "prediction",
+    74: "prediction",
+    75: "prediction",
+    76: "prediction",
+    78: "prediction",
+}
+
+#: A book's short name (lower case, no spaces) → its id, for ``--book NAME``.
+#: Every sportsbook's display name in :data:`BOOK_NAMES`, lower-cased with its
+#: spaces removed, is a key too, so ``resolve_book(book_display_name(label))``
+#: gives the label's id back (``'theScore Bet'`` → ``'thescorebet'``).
+BOOK_IDS_BY_NAME: dict[str, int] = {
+    "fanduel": 10,
+    "draftkings": 12,
+    "caesars": 13,
+    "fanatics": 14,
+    "sugarhouse": 15,
+    "betrivers": 18,
+    "betmgm": 19,
+    "bet365": 24,
+    "partycasino": 27,
+    "thescore": 33,
+    "thescorebet": 33,
+    "hardrock": 49,
+}
+
+#: The prefix of every stored book label (``'bp:12'``).
+BOOK_LABEL_PREFIX = "bp:"
+
+#: The filter every reader appends until the old ``consensus`` rows are gone.
+STORED_BOOK_FILTER_SQL = "book LIKE 'bp:%'"
+
+#: SIM-555 (decision 1): the graded book, in order. A reader grades against the
+#: first book on the list with a valid closing row for the market, the same list
+#: on every game. Set 2026-09-29 from the sharpness read on 2024-2025
+#: (scripts/sim555_book_sharpness.txt) and its verification (the plan's §12):
+#:   1. DraftKings: the sharpest closing line; no view ranks any book ahead of it.
+#:   2. BetMGM: a sharper benchmark than theScore on the player props DraftKings
+#:      lacks (home runs, doubles, runs, RBIs; gaps outside their 90% ranges).
+#:   3. FanDuel, 4. theScore: a tie on sharpness; FanDuel's 2024 closes are fresh
+#:      (a median 24 minutes before the latest book's), theScore's stale (140).
+#:   5-8. BetRivers, bet365, Caesars, Hard Rock: ties, ordered by coverage (Hard
+#:      Rock after Caesars: resolved behind it in 2025). 9. Fanatics: unranked.
+#:   10. SugarHouse (BetRivers' lines), 11. PartyCasino (BetMGM's lines): copies last.
+#: Positions 3-11 are near-ties; re-read the order once 2023 and 2026 are loaded.
+GRADED_BOOK_PREFERENCE: tuple[int, ...] = (12, 19, 10, 33, 18, 24, 13, 49, 14, 15, 27)
+
+#: SIM-555 (decision 6): the kinds whose rows count as a price a bettor can take.
+BETTABLE_KINDS: frozenset[str] = frozenset({"sportsbook"})
+
+#: The report stamp of this odds-row scheme. The readers write it into a
+#: report's provenance; the skill table refuses to merge reports across it.
+ODDS_ROW_VERSION = "sim555.2"
+
+
+def book_label(book_id: int) -> str:
+    """The stored label of a book id: ``12`` → ``'bp:12'``."""
+    return f"{BOOK_LABEL_PREFIX}{int(book_id)}"
+
+
+def book_id_from_label(label: str | None) -> int | None:
+    """The book id in a stored label: ``'bp:12'`` → ``12``.
+
+    ``'consensus'``, ``None`` and any label that is not ``bp:<digits>`` give
+    ``None``. The digits must be ASCII: ``str.isdigit`` also accepts ``'²'``
+    (which ``int`` refuses) and other scripts' digits (which ``int`` reads).
+    """
+    if not isinstance(label, str) or not label.startswith(BOOK_LABEL_PREFIX):
+        return None
+    digits = label[len(BOOK_LABEL_PREFIX) :]
+    if not (digits.isascii() and digits.isdigit()):
+        return None
+    return int(digits)
+
+
+def book_kind(label: str | None) -> str:
+    """The kind of the book a label names.
+
+    ``'bp:0'`` → ``'blend'``; ``'bp:12'`` → ``'sportsbook'``; an id that
+    :data:`BOOK_KIND` does not list (``'bp:999'``) → ``'unknown'``, as does a
+    label that is not a ``bp:`` label (``'consensus'``, ``None``). An unknown
+    book is never bettable.
+    """
+    book_id = book_id_from_label(label)
+    if book_id is None:
+        return "unknown"
+    return BOOK_KIND.get(book_id, "unknown")
+
+
+def is_bettable(label: str | None) -> bool:
+    """True when the label's book is a kind a bettor can take a price at."""
+    return book_kind(label) in BETTABLE_KINDS
+
+
+def book_display_name(label: str | None) -> str:
+    """The book's display name: ``'bp:10'`` → ``'FanDuel'``.
+
+    An id :data:`BOOK_NAMES` does not list keeps its label (``'bp:999'``); a
+    label that is not a ``bp:`` label comes back as it is (``'consensus'``);
+    ``None`` gives an empty string.
+    """
+    if label is None:
+        return ""
+    book_id = book_id_from_label(label)
+    if book_id is not None and book_id in BOOK_NAMES:
+        return BOOK_NAMES[book_id]
+    return label
+
+
+def resolve_book(book: str | int | None) -> int | None:
+    """A book id from a label, a short name or an id.
+
+    ``'bp:12'``, ``'draftkings'``, ``'DraftKings'`` and ``12`` all give ``12``.
+    A name is matched lower-cased with its spaces removed against
+    :data:`BOOK_IDS_BY_NAME`. ``'consensus'``, ``None`` and an unknown name give
+    ``None``; a caller treats ``None`` as "no such book".
+    """
+    if book is None or isinstance(book, bool):
+        return None
+    if isinstance(book, int):
+        return book
+    book_id = book_id_from_label(book)
+    if book_id is not None:
+        return book_id
+    return BOOK_IDS_BY_NAME.get(book.lower().replace(" ", ""))
+
+
+def graded_book_labels(preference: tuple[int, ...] = GRADED_BOOK_PREFERENCE) -> list[str]:
+    """The preference list as stored labels: ``['bp:12', 'bp:19', ...]``."""
+    return [book_label(book_id) for book_id in preference]
+
+
+def bettable_labels() -> list[str]:
+    """The labels of every listed book whose kind is bettable, by id.
+
+    ``['bp:10', 'bp:12', 'bp:13', ...]``: the listed sportsbooks. A reader
+    keeps only these rows for the graded row and the best price
+    (``book = ANY($n)``), so a book the vendor adds later, which
+    :data:`BOOK_KIND` does not list, is never graded or offered.
+    """
+    return [
+        book_label(book_id) for book_id, kind in sorted(BOOK_KIND.items()) if kind in BETTABLE_KINDS
+    ]
+
+
+def non_bettable_labels() -> list[str]:
+    """The labels of every listed book whose kind is not bettable, by id.
+
+    ``['bp:0', 'bp:36', 'bp:37', ...]``: the blend, the daily-fantasy apps, the
+    exchanges and the prediction markets. An unlisted id is not bettable
+    either, but no list can name it: a reader filters with
+    :func:`bettable_labels` instead.
+    """
+    return [
+        book_label(book_id)
+        for book_id, kind in sorted(BOOK_KIND.items())
+        if kind not in BETTABLE_KINDS
+    ]
+
+
+def graded_row_order_sql(param: str) -> str:
+    """The ORDER BY tail that puts the graded book's row first.
+
+    ``param`` is the query parameter that carries :func:`graded_book_labels`
+    (``'$3'``): the book earliest on the list sorts first, a book not on the
+    list sorts last, and a tie goes to the newest fetch.
+    """
+    return f"array_position({param}::varchar[], book) NULLS LAST, fetched_at DESC"
+
+
+# ---------------------------------------------------------------------------
 # Provider interface
 # ---------------------------------------------------------------------------
 
@@ -286,8 +551,14 @@ class OddsProvider(Protocol):
     ``@runtime_checkable`` so ``isinstance(obj, OddsProvider)`` works as a
     duck-typed presence check (it verifies the methods exist, not their
     signatures — the return-shape contract is enforced by tests).  ``MockOddsAPI``
-    satisfies this implicitly: its ``get_odds`` / ``get_prop_odds`` staticmethods
-    are callable on an *instance*, which is how the pipeline invokes them.
+    satisfies this implicitly: its staticmethods are callable on an *instance*,
+    which is how the pipeline invokes them.
+
+    SIM-555: the two ``*_by_book`` methods return one row per book. A structural
+    protocol cannot give a non-subclass a default body, so a writer calls them
+    through :func:`odds_rows_by_book` / :func:`prop_rows_by_book`; those fall
+    back to the one-row methods for a test fake that has only ``get_odds`` /
+    ``get_prop_odds``.
     """
 
     def get_odds(
@@ -314,6 +585,69 @@ class OddsProvider(Protocol):
     ) -> dict[str, Any]:
         """Return a single player-prop quote (see module docstring)."""
         ...
+
+    def get_odds_by_book(
+        self,
+        game_pk: int,
+        *,
+        line_type: str = "current",
+        market_type: str = "moneyline",
+    ) -> list[dict[str, Any]]:
+        """SIM-555: one ``get_odds``-shaped row per book for one market and line type."""
+        ...
+
+    def get_prop_odds_by_book(
+        self,
+        game_pk: int,
+        player_id: int,
+        prop_stat: str,
+        *,
+        line_type: str = "current",
+    ) -> list[dict[str, Any]]:
+        """SIM-555: one ``get_prop_odds``-shaped row per book for one player and market."""
+        ...
+
+
+def odds_rows_by_book(
+    provider: Any,
+    game_pk: int,
+    *,
+    line_type: str = "current",
+    market_type: str = "moneyline",
+) -> list[dict[str, Any]]:
+    """SIM-555: every book's row of one game market, from any provider.
+
+    The provider's ``get_odds_by_book`` when it has one; otherwise its one
+    ``get_odds`` row in a list (a test fake with only the one-row method). A
+    by-book result that is not a list or a tuple (an unconfigured mock object)
+    counts as "no by-book method", so the one-row method answers.
+    """
+    by_book = getattr(provider, "get_odds_by_book", None)
+    if callable(by_book):
+        rows = by_book(game_pk, line_type=line_type, market_type=market_type)
+        if isinstance(rows, (list, tuple)):
+            return list(rows)
+    return [provider.get_odds(game_pk, line_type=line_type, market_type=market_type)]
+
+
+def prop_rows_by_book(
+    provider: Any,
+    game_pk: int,
+    player_id: int,
+    prop_stat: str,
+    *,
+    line_type: str = "current",
+) -> list[dict[str, Any]]:
+    """SIM-555: every book's row of one player's prop market, from any provider.
+
+    The same fallback as :func:`odds_rows_by_book`, over ``get_prop_odds``.
+    """
+    by_book = getattr(provider, "get_prop_odds_by_book", None)
+    if callable(by_book):
+        rows = by_book(game_pk, player_id, prop_stat, line_type=line_type)
+        if isinstance(rows, (list, tuple)):
+            return list(rows)
+    return [provider.get_prop_odds(game_pk, player_id, prop_stat, line_type=line_type)]
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +714,25 @@ class RealOddsAPIProvider:
         book: str = "consensus",
         is_sharp_book: bool = False,
     ) -> dict[str, Any]:
+        raise self._not_configured()
+
+    def get_odds_by_book(
+        self,
+        game_pk: int,
+        *,
+        line_type: str = "current",
+        market_type: str = "moneyline",
+    ) -> list[dict[str, Any]]:
+        raise self._not_configured()
+
+    def get_prop_odds_by_book(
+        self,
+        game_pk: int,
+        player_id: int,
+        prop_stat: str,
+        *,
+        line_type: str = "current",
+    ) -> list[dict[str, Any]]:
         raise self._not_configured()
 
 
@@ -482,10 +835,32 @@ __all__ = [
     "PROP_STAT_TO_MODEL_PROP",
     # SIM-421 (2026-09-12): the game-market vocabulary
     "GAME_MARKET_TYPES",
+    "FULL_GAME_MARKET_TYPES",
     "LEGACY_GAME_MARKET_TYPES",
     "GAME_MARKET_KIND",
     "GAME_MARKET_SEGMENT",
     "GAME_MARKET_SIDE",
     "THREE_WAY_GAME_MARKET_TYPES",
     "GAME_ODDS_FIELDS",
+    # SIM-555 (2026-09-28): the book vocabulary and the by-book seam
+    "BOOK_NAMES",
+    "BOOK_KIND",
+    "BOOK_IDS_BY_NAME",
+    "BOOK_LABEL_PREFIX",
+    "STORED_BOOK_FILTER_SQL",
+    "GRADED_BOOK_PREFERENCE",
+    "BETTABLE_KINDS",
+    "ODDS_ROW_VERSION",
+    "book_label",
+    "book_id_from_label",
+    "book_kind",
+    "is_bettable",
+    "book_display_name",
+    "resolve_book",
+    "graded_book_labels",
+    "bettable_labels",
+    "non_bettable_labels",
+    "graded_row_order_sql",
+    "odds_rows_by_book",
+    "prop_rows_by_book",
 ]

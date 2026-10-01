@@ -1,0 +1,3196 @@
+{
+  "markets": {
+    "moneyline": {
+      "n_units": 4877,
+      "books": {
+        "bp:12": {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 4872,
+          "brier": 0.2409185038399453,
+          "log_loss": 0.6745033178600421,
+          "coverage": 0.9989747795776092,
+          "brier_range90": [
+            0.23890776688955634,
+            0.24304296967234393
+          ]
+        },
+        "bp:10": {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 4873,
+          "brier": 0.24103334256304945,
+          "log_loss": 0.6747386517687287,
+          "coverage": 0.9991798236620874,
+          "brier_range90": [
+            0.23888238672723885,
+            0.24312839359503927
+          ]
+        },
+        "bp:19": {
+          "book": "bp:19",
+          "name": "BetMGM",
+          "kind": "sportsbook",
+          "n": 4824,
+          "brier": 0.24107365457634655,
+          "log_loss": 0.6748015831674925,
+          "coverage": 0.9891326635226574,
+          "brier_range90": [
+            0.2390387949643871,
+            0.2432184004146146
+          ]
+        },
+        "bp:13": {
+          "book": "bp:13",
+          "name": "Caesars",
+          "kind": "sportsbook",
+          "n": 4208,
+          "brier": 0.2404567852570653,
+          "log_loss": 0.6735481071620666,
+          "coverage": 0.8628255074841091,
+          "brier_range90": [
+            0.2380700144954605,
+            0.24278670674830577
+          ]
+        },
+        "bp:14": {
+          "book": "bp:14",
+          "name": "Fanatics",
+          "kind": "sportsbook",
+          "n": 750,
+          "brier": 0.24123884459319023,
+          "log_loss": 0.6751845627881754,
+          "coverage": 0.1537830633586221,
+          "brier_range90": [
+            0.23598864686057813,
+            0.24607387846292272
+          ]
+        },
+        "bp:18": {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 2635,
+          "brier": 0.24009565326582438,
+          "log_loss": 0.6729170631000823,
+          "coverage": 0.540291162599959,
+          "brier_range90": [
+            0.23711605707231292,
+            0.24284392494016563
+          ]
+        },
+        "bp:15": {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 2636,
+          "brier": 0.24003107783348665,
+          "log_loss": 0.6727812510203468,
+          "coverage": 0.5404962066844372,
+          "brier_range90": [
+            0.23723329930359108,
+            0.24287213413797873
+          ]
+        },
+        "bp:24": {
+          "book": "bp:24",
+          "name": "bet365",
+          "kind": "sportsbook",
+          "n": 4755,
+          "brier": 0.2412819657205508,
+          "log_loss": 0.6752435248527556,
+          "coverage": 0.9749846216936642,
+          "brier_range90": [
+            0.23917141045945994,
+            0.24338698671940218
+          ]
+        },
+        "bp:33": {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 4731,
+          "brier": 0.24146457363991689,
+          "log_loss": 0.6756277996870631,
+          "coverage": 0.9700635636661882,
+          "brier_range90": [
+            0.23930469749633404,
+            0.24368880953766883
+          ]
+        },
+        "bp:49": {
+          "book": "bp:49",
+          "name": "Hard Rock",
+          "kind": "sportsbook",
+          "n": 2415,
+          "brier": 0.24174452981512404,
+          "log_loss": 0.6761195754611673,
+          "coverage": 0.49518146401476315,
+          "brier_range90": [
+            0.238850904173735,
+            0.24491463658047083
+          ]
+        },
+        "bp:27": {
+          "book": "bp:27",
+          "name": "PartyCasino",
+          "kind": "sportsbook",
+          "n": 4826,
+          "brier": 0.2411058196088094,
+          "log_loss": 0.6748720699673557,
+          "coverage": 0.9895427516916137,
+          "brier_range90": [
+            0.239069894408661,
+            0.24324232941502705
+          ]
+        }
+      },
+      "compared": [
+        "bp:12",
+        "bp:10",
+        "bp:19",
+        "bp:13",
+        "bp:18",
+        "bp:15",
+        "bp:24",
+        "bp:33",
+        "bp:27"
+      ],
+      "excluded": {
+        "bp:14": "coverage below 50% (coverage 15%)",
+        "bp:49": "coverage below 50% (coverage 50%)"
+      },
+      "n_common_units": 2419,
+      "n_common_games": 2419,
+      "ranking": [
+        {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 2419,
+          "brier": 0.24044723021378364,
+          "log_loss": 0.6736260317447407,
+          "rank": 1,
+          "brier_gap_to_leader": 0.0,
+          "gap_range90": null
+        },
+        {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 2419,
+          "brier": 0.24044928713468017,
+          "log_loss": 0.6736321938289133,
+          "rank": 2,
+          "brier_gap_to_leader": 2.0569208964380225e-06,
+          "gap_range90": [
+            -6.412125817701922e-05,
+            6.392882376684239e-05
+          ]
+        },
+        {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 2419,
+          "brier": 0.24055639709125717,
+          "log_loss": 0.6738670547943493,
+          "rank": 3,
+          "brier_gap_to_leader": 0.00010916687747350356,
+          "gap_range90": [
+            -0.00021211430152647255,
+            0.0004178413719626885
+          ]
+        },
+        {
+          "book": "bp:19",
+          "name": "BetMGM",
+          "kind": "sportsbook",
+          "n": 2419,
+          "brier": 0.24057095878115184,
+          "log_loss": 0.6738993725258855,
+          "rank": 4,
+          "brier_gap_to_leader": 0.00012372856736814919,
+          "gap_range90": [
+            -0.00023667099574639188,
+            0.000476458723640622
+          ]
+        },
+        {
+          "book": "bp:27",
+          "name": "PartyCasino",
+          "kind": "sportsbook",
+          "n": 2419,
+          "brier": 0.24059333589407755,
+          "log_loss": 0.6739449452658274,
+          "rank": 5,
+          "brier_gap_to_leader": 0.0001461056802938825,
+          "gap_range90": [
+            -0.00021195481345602233,
+            0.0004960338398925718
+          ]
+        },
+        {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 2419,
+          "brier": 0.24061589472621486,
+          "log_loss": 0.6740006865719511,
+          "rank": 6,
+          "brier_gap_to_leader": 0.00016866451243114765,
+          "gap_range90": [
+            -0.00017928735466259745,
+            0.0005060647706995774
+          ]
+        },
+        {
+          "book": "bp:24",
+          "name": "bet365",
+          "kind": "sportsbook",
+          "n": 2419,
+          "brier": 0.24065471112947018,
+          "log_loss": 0.6740729210193663,
+          "rank": 7,
+          "brier_gap_to_leader": 0.00020748091568651656,
+          "gap_range90": [
+            -0.00016201988998417195,
+            0.000571308853903284
+          ]
+        },
+        {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 2419,
+          "brier": 0.24072426520288082,
+          "log_loss": 0.6742057014238402,
+          "rank": 8,
+          "brier_gap_to_leader": 0.00027703498909712734,
+          "gap_range90": [
+            -6.534093611529327e-05,
+            0.0006014875028107598
+          ]
+        },
+        {
+          "book": "bp:13",
+          "name": "Caesars",
+          "kind": "sportsbook",
+          "n": 2419,
+          "brier": 0.2408708791295408,
+          "log_loss": 0.6745404279174932,
+          "rank": 9,
+          "brier_gap_to_leader": 0.00042364891575712177,
+          "gap_range90": [
+            4.294615454713489e-05,
+            0.000800307417568303
+          ]
+        }
+      ],
+      "blend": {
+        "book": "bp:0",
+        "name": "BettingPros Consensus",
+        "kind": "blend",
+        "n": 2419,
+        "brier": 0.2405044566538995,
+        "log_loss": 0.6737543999811358,
+        "all_units": {
+          "n": 4873,
+          "brier": 0.24094630495748015,
+          "log_loss": 0.6745448725673756
+        },
+        "brier_gap_to_leader": 5.7226440115815006e-05,
+        "gap_range90": [
+          -0.0002478747186279947,
+          0.0003363527957208083
+        ]
+      }
+    },
+    "f1_moneyline": {
+      "n_units": 4871,
+      "books": {
+        "bp:12": {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 2442,
+          "brier": 0.18957045360090632,
+          "log_loss": 0.5661451001074361,
+          "coverage": 0.5013344282488196,
+          "brier_range90": [
+            0.18227582109445384,
+            0.19699286611596953
+          ]
+        },
+        "bp:10": {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 4862,
+          "brier": 0.1841216042615498,
+          "log_loss": 0.5542116290296989,
+          "coverage": 0.9981523301170191,
+          "brier_range90": [
+            0.17917729149458791,
+            0.18938811767800948
+          ]
+        },
+        "bp:19": {
+          "book": "bp:19",
+          "name": "BetMGM",
+          "kind": "sportsbook",
+          "n": 2015,
+          "brier": 0.18962842407124145,
+          "log_loss": 0.5663984296749744,
+          "coverage": 0.4136727571340587,
+          "brier_range90": [
+            0.18139305551323612,
+            0.197631462069445
+          ]
+        },
+        "bp:18": {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 4817,
+          "brier": 0.1842340267398139,
+          "log_loss": 0.5544963774571494,
+          "coverage": 0.9889139807021146,
+          "brier_range90": [
+            0.17934692823582074,
+            0.18949286961339268
+          ]
+        },
+        "bp:15": {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 4820,
+          "brier": 0.18442783013919348,
+          "log_loss": 0.5549059851117365,
+          "coverage": 0.9895298706631082,
+          "brier_range90": [
+            0.17917071422164435,
+            0.18945700645890112
+          ]
+        },
+        "bp:24": {
+          "book": "bp:24",
+          "name": "bet365",
+          "kind": "sportsbook",
+          "n": 4674,
+          "brier": 0.18386783170457768,
+          "log_loss": 0.553770656714367,
+          "coverage": 0.9595565592280846,
+          "brier_range90": [
+            0.17877649157598668,
+            0.18894686584069065
+          ]
+        },
+        "bp:33": {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 2432,
+          "brier": 0.1919284323947591,
+          "log_loss": 0.5721765278189177,
+          "coverage": 0.4992814617121741,
+          "brier_range90": [
+            0.18498281098464178,
+            0.19867110331448481
+          ]
+        },
+        "bp:27": {
+          "book": "bp:27",
+          "name": "PartyCasino",
+          "kind": "sportsbook",
+          "n": 2015,
+          "brier": 0.18959346872066557,
+          "log_loss": 0.5663070388830733,
+          "coverage": 0.4136727571340587,
+          "brier_range90": [
+            0.18135096714009882,
+            0.19758208735416224
+          ]
+        }
+      },
+      "compared": [
+        "bp:12",
+        "bp:10",
+        "bp:18",
+        "bp:15",
+        "bp:24"
+      ],
+      "excluded": {
+        "bp:19": "coverage below 50% (coverage 41%)",
+        "bp:33": "coverage below 50% (coverage 50%)",
+        "bp:27": "coverage below 50% (coverage 41%)"
+      },
+      "n_common_units": 2369,
+      "n_common_games": 2369,
+      "ranking": [
+        {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 2369,
+          "brier": 0.190024534404776,
+          "log_loss": 0.567362020270049,
+          "rank": 1,
+          "brier_gap_to_leader": 0.0,
+          "gap_range90": null
+        },
+        {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 2369,
+          "brier": 0.1900472532707773,
+          "log_loss": 0.5672341528707622,
+          "rank": 2,
+          "brier_gap_to_leader": 2.2718866001246034e-05,
+          "gap_range90": [
+            -0.00040556631973762705,
+            0.0004522506624613651
+          ]
+        },
+        {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 2369,
+          "brier": 0.19005638738301353,
+          "log_loss": 0.5674431271879492,
+          "rank": 3,
+          "brier_gap_to_leader": 3.185297823753736e-05,
+          "gap_range90": [
+            -2.207961702217983e-05,
+            8.24672883026939e-05
+          ]
+        },
+        {
+          "book": "bp:24",
+          "name": "bet365",
+          "kind": "sportsbook",
+          "n": 2369,
+          "brier": 0.1900735860618627,
+          "log_loss": 0.5673960340641419,
+          "rank": 4,
+          "brier_gap_to_leader": 4.905165708668427e-05,
+          "gap_range90": [
+            -0.00036455216682020286,
+            0.0004527632744398923
+          ]
+        },
+        {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 2369,
+          "brier": 0.19019922167070044,
+          "log_loss": 0.5677824126386541,
+          "rank": 5,
+          "brier_gap_to_leader": 0.0001746872659244207,
+          "gap_range90": [
+            -0.0003066762374273526,
+            0.0006179237247891488
+          ]
+        }
+      ],
+      "blend": {
+        "book": "bp:0",
+        "name": "BettingPros Consensus",
+        "kind": "blend",
+        "n": 2369,
+        "brier": 0.19054612638765062,
+        "log_loss": 0.5683358597058478,
+        "all_units": {
+          "n": 4871,
+          "brier": 0.18450191065301946,
+          "log_loss": 0.5550752071896387
+        },
+        "brier_gap_to_leader": 0.0005215919828746148,
+        "gap_range90": [
+          -0.00026699528015436,
+          0.0012897675520425903
+        ]
+      }
+    },
+    "f5_moneyline": {
+      "n_units": 4871,
+      "books": {
+        "bp:10": {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 3249,
+          "brier": 0.24160535652929682,
+          "log_loss": 0.6763423446072455,
+          "coverage": 0.6670088277561076,
+          "brier_range90": [
+            0.2389125913714797,
+            0.24434530605452776
+          ]
+        },
+        "bp:13": {
+          "book": "bp:13",
+          "name": "Caesars",
+          "kind": "sportsbook",
+          "n": 1900,
+          "brier": 0.24514884795883385,
+          "log_loss": 0.6833654874522053,
+          "coverage": 0.390063641962636,
+          "brier_range90": [
+            0.24177273741095678,
+            0.24849152840796607
+          ]
+        },
+        "bp:18": {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 2376,
+          "brier": 0.24150561597728604,
+          "log_loss": 0.6759700308128997,
+          "coverage": 0.4877848491069596,
+          "brier_range90": [
+            0.23870034206805954,
+            0.24433708792067874
+          ]
+        },
+        "bp:15": {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 2374,
+          "brier": 0.24146961278430407,
+          "log_loss": 0.675901773931797,
+          "coverage": 0.48737425579963045,
+          "brier_range90": [
+            0.2383579891273899,
+            0.24438718885983987
+          ]
+        },
+        "bp:33": {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 2435,
+          "brier": 0.24444574370623454,
+          "log_loss": 0.6819848266574773,
+          "coverage": 0.49989735167316773,
+          "brier_range90": [
+            0.24156617413647496,
+            0.24731325688296474
+          ]
+        }
+      },
+      "compared": [
+        "bp:10"
+      ],
+      "excluded": {
+        "bp:13": "coverage below 50% (coverage 39%)",
+        "bp:18": "coverage below 50% (coverage 49%)",
+        "bp:15": "coverage below 50% (coverage 49%)",
+        "bp:33": "coverage below 50% (coverage 50%)"
+      },
+      "n_common_units": 3249,
+      "n_common_games": 3249,
+      "ranking": [
+        {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 3249,
+          "brier": 0.24160535652929682,
+          "log_loss": 0.6763423446072455,
+          "rank": 1,
+          "brier_gap_to_leader": 0.0,
+          "gap_range90": null
+        }
+      ],
+      "blend": {
+        "book": "bp:0",
+        "name": "BettingPros Consensus",
+        "kind": "blend",
+        "n": 3246,
+        "brier": 0.24184238684022788,
+        "log_loss": 0.6767029900760598,
+        "all_units": {
+          "n": 4703,
+          "brier": 0.2431285676376981,
+          "log_loss": 0.6792836827974904
+        },
+        "brier_gap_to_leader": 0.0002617083453247991,
+        "gap_range90": [
+          -0.000448699548266193,
+          0.0009182373739669618
+        ]
+      }
+    },
+    "first_to_score": {
+      "n_units": 2443,
+      "books": {
+        "bp:18": {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 2441,
+          "brier": 0.24620290796296262,
+          "log_loss": 0.6855059912503514,
+          "coverage": 0.9991813344248874,
+          "brier_range90": [
+            0.24345827912342483,
+            0.24886091628857623
+          ]
+        },
+        "bp:15": {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 2441,
+          "brier": 0.24621814094751956,
+          "log_loss": 0.6855372524801339,
+          "coverage": 0.9991813344248874,
+          "brier_range90": [
+            0.24346214811648792,
+            0.24888571041801957
+          ]
+        },
+        "bp:24": {
+          "book": "bp:24",
+          "name": "bet365",
+          "kind": "sportsbook",
+          "n": 2371,
+          "brier": 0.24606744783877552,
+          "log_loss": 0.6852005695376985,
+          "coverage": 0.9705280392959476,
+          "brier_range90": [
+            0.24393519863561025,
+            0.24823984621113895
+          ]
+        },
+        "bp:33": {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 2404,
+          "brier": 0.2455924658922876,
+          "log_loss": 0.6842437973033384,
+          "coverage": 0.984036021285305,
+          "brier_range90": [
+            0.24310256634966498,
+            0.24807278490531137
+          ]
+        }
+      },
+      "compared": [
+        "bp:18",
+        "bp:15",
+        "bp:24",
+        "bp:33"
+      ],
+      "excluded": {},
+      "n_common_units": 2337,
+      "n_common_games": 2337,
+      "ranking": [
+        {
+          "book": "bp:24",
+          "name": "bet365",
+          "kind": "sportsbook",
+          "n": 2337,
+          "brier": 0.2459251862208778,
+          "log_loss": 0.6849123552681909,
+          "rank": 1,
+          "brier_gap_to_leader": 0.0,
+          "gap_range90": null
+        },
+        {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 2337,
+          "brier": 0.2460589225291245,
+          "log_loss": 0.685182235527298,
+          "rank": 2,
+          "brier_gap_to_leader": 0.00013373630824671734,
+          "gap_range90": [
+            -0.0005405346914238475,
+            0.0008080981631287106
+          ]
+        },
+        {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 2337,
+          "brier": 0.24649785618688927,
+          "log_loss": 0.686096911252106,
+          "rank": 3,
+          "brier_gap_to_leader": 0.0005726699660114482,
+          "gap_range90": [
+            -0.0002947974659121802,
+            0.001464780805633857
+          ]
+        },
+        {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 2337,
+          "brier": 0.24651376706207265,
+          "log_loss": 0.6861295636534321,
+          "rank": 4,
+          "brier_gap_to_leader": 0.0005885808411948178,
+          "gap_range90": [
+            -0.000274025256331365,
+            0.0014769581592658347
+          ]
+        }
+      ],
+      "blend": {
+        "book": "bp:0",
+        "name": "BettingPros Consensus",
+        "kind": "blend",
+        "n": 2337,
+        "brier": 0.24614975862900945,
+        "log_loss": 0.6853726955029569,
+        "all_units": {
+          "n": 2443,
+          "brier": 0.24587987339244083,
+          "log_loss": 0.6848337513453797
+        },
+        "brier_gap_to_leader": 0.0002245724081316307,
+        "gap_range90": [
+          -0.0003253335062611214,
+          0.0007639938238387417
+        ]
+      }
+    },
+    "first_inning_run": {
+      "n_units": 4515,
+      "books": {
+        "bp:12": {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 3486,
+          "brier": 0.2474750256947057,
+          "log_loss": 0.688067106758457,
+          "coverage": 0.772093023255814,
+          "brier_range90": [
+            0.24647866339978208,
+            0.2484347677862844
+          ]
+        },
+        "bp:10": {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 2391,
+          "brier": 0.2489564113365321,
+          "log_loss": 0.691179006624528,
+          "coverage": 0.5295681063122923,
+          "brier_range90": [
+            0.24753638998813676,
+            0.2503561960419244
+          ]
+        },
+        "bp:19": {
+          "book": "bp:19",
+          "name": "BetMGM",
+          "kind": "sportsbook",
+          "n": 4333,
+          "brier": 0.2484974320776048,
+          "log_loss": 0.6901259100647216,
+          "coverage": 0.9596899224806201,
+          "brier_range90": [
+            0.24760708286176275,
+            0.24940259488045927
+          ]
+        },
+        "bp:13": {
+          "book": "bp:13",
+          "name": "Caesars",
+          "kind": "sportsbook",
+          "n": 1982,
+          "brier": 0.24852365887531186,
+          "log_loss": 0.690201177871538,
+          "coverage": 0.43898117386489477,
+          "brier_range90": [
+            0.2470830200714455,
+            0.2499923413637751
+          ]
+        },
+        "bp:14": {
+          "book": "bp:14",
+          "name": "Fanatics",
+          "kind": "sportsbook",
+          "n": 13,
+          "brier": 0.2608846725295528,
+          "log_loss": 0.7158962865540791,
+          "coverage": 0.0028792912513842745,
+          "brier_range90": [
+            0.17146001887304682,
+            0.35322002031886196
+          ]
+        },
+        "bp:18": {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 3432,
+          "brier": 0.2484747486805917,
+          "log_loss": 0.6900935494572814,
+          "coverage": 0.7601328903654485,
+          "brier_range90": [
+            0.24749908479753982,
+            0.24942003191716003
+          ]
+        },
+        "bp:15": {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 3432,
+          "brier": 0.24848606058732406,
+          "log_loss": 0.690114253328143,
+          "coverage": 0.7601328903654485,
+          "brier_range90": [
+            0.24752175916312472,
+            0.2494464464058671
+          ]
+        },
+        "bp:24": {
+          "book": "bp:24",
+          "name": "bet365",
+          "kind": "sportsbook",
+          "n": 3947,
+          "brier": 0.24828756670776173,
+          "log_loss": 0.6896902270895315,
+          "coverage": 0.8741971207087487,
+          "brier_range90": [
+            0.2473039713411085,
+            0.24924947331915345
+          ]
+        },
+        "bp:33": {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 2396,
+          "brier": 0.24772381655939638,
+          "log_loss": 0.688582218188669,
+          "coverage": 0.5306755260243632,
+          "brier_range90": [
+            0.24650492105890992,
+            0.24903305076273982
+          ]
+        },
+        "bp:49": {
+          "book": "bp:49",
+          "name": "Hard Rock",
+          "kind": "sportsbook",
+          "n": 884,
+          "brier": 0.24665384048644992,
+          "log_loss": 0.6864063342941462,
+          "coverage": 0.1957918050941307,
+          "brier_range90": [
+            0.24487268284904792,
+            0.24841202747311758
+          ]
+        },
+        "bp:27": {
+          "book": "bp:27",
+          "name": "PartyCasino",
+          "kind": "sportsbook",
+          "n": 4333,
+          "brier": 0.24846037264847176,
+          "log_loss": 0.6900511061893324,
+          "coverage": 0.9596899224806201,
+          "brier_range90": [
+            0.24756597238465894,
+            0.2493578290705813
+          ]
+        }
+      },
+      "compared": [
+        "bp:12",
+        "bp:10",
+        "bp:19",
+        "bp:18",
+        "bp:15",
+        "bp:24",
+        "bp:33",
+        "bp:27"
+      ],
+      "excluded": {
+        "bp:13": "coverage below 50% (coverage 44%)",
+        "bp:14": "coverage below 50% (coverage 0%)",
+        "bp:49": "coverage below 50% (coverage 20%)"
+      },
+      "n_common_units": 2177,
+      "n_common_games": 2177,
+      "ranking": [
+        {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 2177,
+          "brier": 0.24739554833163158,
+          "log_loss": 0.6879286994506323,
+          "rank": 1,
+          "brier_gap_to_leader": 0.0,
+          "gap_range90": null
+        },
+        {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 2177,
+          "brier": 0.24759557978882357,
+          "log_loss": 0.6883276439752668,
+          "rank": 2,
+          "brier_gap_to_leader": 0.00020003145719204584,
+          "gap_range90": [
+            -0.0004236391972733893,
+            0.0008135219229687133
+          ]
+        },
+        {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 2177,
+          "brier": 0.248058950858159,
+          "log_loss": 0.6892612026685894,
+          "rank": 3,
+          "brier_gap_to_leader": 0.0006634025265274434,
+          "gap_range90": [
+            1.3533743517978507e-06,
+            0.0012755612770952644
+          ]
+        },
+        {
+          "book": "bp:19",
+          "name": "BetMGM",
+          "kind": "sportsbook",
+          "n": 2177,
+          "brier": 0.24819744110137743,
+          "log_loss": 0.6895378465917097,
+          "rank": 4,
+          "brier_gap_to_leader": 0.0008018927697458901,
+          "gap_range90": [
+            0.00021251989467690118,
+            0.0014169405501260853
+          ]
+        },
+        {
+          "book": "bp:27",
+          "name": "PartyCasino",
+          "kind": "sportsbook",
+          "n": 2177,
+          "brier": 0.2481982029942683,
+          "log_loss": 0.6895391211350007,
+          "rank": 5,
+          "brier_gap_to_leader": 0.0008026546626367947,
+          "gap_range90": [
+            0.00021403027098889821,
+            0.0014109198493269131
+          ]
+        },
+        {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 2177,
+          "brier": 0.24842864168612638,
+          "log_loss": 0.6900022270889824,
+          "rank": 6,
+          "brier_gap_to_leader": 0.0010330933544947765,
+          "gap_range90": [
+            0.00037352393491225087,
+            0.0016715491880955793
+          ]
+        },
+        {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 2177,
+          "brier": 0.24844336087391317,
+          "log_loss": 0.690032331793028,
+          "rank": 7,
+          "brier_gap_to_leader": 0.0010478125422815798,
+          "gap_range90": [
+            0.0003915297318458213,
+            0.0016747295995864118
+          ]
+        },
+        {
+          "book": "bp:24",
+          "name": "bet365",
+          "kind": "sportsbook",
+          "n": 2177,
+          "brier": 0.24865293629575555,
+          "log_loss": 0.6904380417181449,
+          "rank": 8,
+          "brier_gap_to_leader": 0.0012573879641239543,
+          "gap_range90": [
+            0.0006237097633862192,
+            0.0018660205386326378
+          ]
+        }
+      ],
+      "blend": {
+        "book": "bp:0",
+        "name": "BettingPros Consensus",
+        "kind": "blend",
+        "n": 2177,
+        "brier": 0.24766190967581164,
+        "log_loss": 0.6884623331138068,
+        "all_units": {
+          "n": 4515,
+          "brier": 0.24786672472039534,
+          "log_loss": 0.6888564044082116
+        },
+        "brier_gap_to_leader": 0.0002663613441801169,
+        "gap_range90": [
+          -0.00017268465884373477,
+          0.000697598049797949
+        ]
+      }
+    },
+    "total": {
+      "n_units": 4684,
+      "books": {
+        "bp:12": {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 3869,
+          "brier": 0.2500904790147147,
+          "log_loss": 0.6933282020865631,
+          "coverage": 0.82600341588386,
+          "brier_range90": [
+            0.24971571675537502,
+            0.25047206256437465
+          ]
+        },
+        "bp:10": {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 3912,
+          "brier": 0.24999921045371423,
+          "log_loss": 0.6931456934106147,
+          "coverage": 0.8351836037574722,
+          "brier_range90": [
+            0.2495878842184344,
+            0.2503945706958835
+          ]
+        },
+        "bp:19": {
+          "book": "bp:19",
+          "name": "BetMGM",
+          "kind": "sportsbook",
+          "n": 3854,
+          "brier": 0.24993128632592393,
+          "log_loss": 0.6930097038896622,
+          "coverage": 0.822801024765158,
+          "brier_range90": [
+            0.24955777942124438,
+            0.25030281986181113
+          ]
+        },
+        "bp:13": {
+          "book": "bp:13",
+          "name": "Caesars",
+          "kind": "sportsbook",
+          "n": 3499,
+          "brier": 0.24977808439604157,
+          "log_loss": 0.6927026407925009,
+          "coverage": 0.7470111016225448,
+          "brier_range90": [
+            0.24934366817146053,
+            0.2502244170434108
+          ]
+        },
+        "bp:14": {
+          "book": "bp:14",
+          "name": "Fanatics",
+          "kind": "sportsbook",
+          "n": 485,
+          "brier": 0.2491263467310943,
+          "log_loss": 0.691399846648324,
+          "coverage": 0.10354397950469683,
+          "brier_range90": [
+            0.24817725801964363,
+            0.250040149071507
+          ]
+        },
+        "bp:18": {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 3673,
+          "brier": 0.2499829103418095,
+          "log_loss": 0.6931130344999041,
+          "coverage": 0.7841588385994877,
+          "brier_range90": [
+            0.24962282634523983,
+            0.25035658668644867
+          ]
+        },
+        "bp:15": {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 3671,
+          "brier": 0.24997172622984845,
+          "log_loss": 0.69309065659027,
+          "coverage": 0.783731853116994,
+          "brier_range90": [
+            0.24959999424973012,
+            0.25033194361719274
+          ]
+        },
+        "bp:24": {
+          "book": "bp:24",
+          "name": "bet365",
+          "kind": "sportsbook",
+          "n": 3986,
+          "brier": 0.24995795113579566,
+          "log_loss": 0.6930631843130496,
+          "coverage": 0.8509820666097353,
+          "brier_range90": [
+            0.24953766354843332,
+            0.2503916547647291
+          ]
+        },
+        "bp:33": {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 2715,
+          "brier": 0.24978867796495566,
+          "log_loss": 0.6927236626407796,
+          "coverage": 0.5796327924850555,
+          "brier_range90": [
+            0.24916321584177725,
+            0.2503969598353169
+          ]
+        },
+        "bp:49": {
+          "book": "bp:49",
+          "name": "Hard Rock",
+          "kind": "sportsbook",
+          "n": 1411,
+          "brier": 0.24945250500627883,
+          "log_loss": 0.6920498462171042,
+          "coverage": 0.3012382578992314,
+          "brier_range90": [
+            0.24863497736612825,
+            0.25028877266067784
+          ]
+        },
+        "bp:27": {
+          "book": "bp:27",
+          "name": "PartyCasino",
+          "kind": "sportsbook",
+          "n": 3857,
+          "brier": 0.2499127093430106,
+          "log_loss": 0.6929725304472838,
+          "coverage": 0.8234415029888984,
+          "brier_range90": [
+            0.24954087038697992,
+            0.2503000068700304
+          ]
+        }
+      },
+      "compared": [
+        "bp:12",
+        "bp:10",
+        "bp:19",
+        "bp:13",
+        "bp:18",
+        "bp:15",
+        "bp:24",
+        "bp:33",
+        "bp:27"
+      ],
+      "excluded": {
+        "bp:14": "coverage below 50% (coverage 10%)",
+        "bp:49": "coverage below 50% (coverage 30%)"
+      },
+      "n_common_units": 1040,
+      "n_common_games": 1040,
+      "ranking": [
+        {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 1040,
+          "brier": 0.24971951628508834,
+          "log_loss": 0.6925862243064864,
+          "rank": 1,
+          "brier_gap_to_leader": 0.0,
+          "gap_range90": null
+        },
+        {
+          "book": "bp:27",
+          "name": "PartyCasino",
+          "kind": "sportsbook",
+          "n": 1040,
+          "brier": 0.24991018568028894,
+          "log_loss": 0.692967466428434,
+          "rank": 2,
+          "brier_gap_to_leader": 0.0001906693952005698,
+          "gap_range90": [
+            -0.0003541077584355885,
+            0.0007259223422133304
+          ]
+        },
+        {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 1040,
+          "brier": 0.24991441293843944,
+          "log_loss": 0.6929761513644332,
+          "rank": 3,
+          "brier_gap_to_leader": 0.00019489665335105074,
+          "gap_range90": [
+            -0.0003614049081813508,
+            0.0007905488294891918
+          ]
+        },
+        {
+          "book": "bp:19",
+          "name": "BetMGM",
+          "kind": "sportsbook",
+          "n": 1040,
+          "brier": 0.2499259555088716,
+          "log_loss": 0.692999018090067,
+          "rank": 4,
+          "brier_gap_to_leader": 0.00020643922378322637,
+          "gap_range90": [
+            -0.0003376779596927096,
+            0.0007462114591033221
+          ]
+        },
+        {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 1040,
+          "brier": 0.24994603283859876,
+          "log_loss": 0.6930394984326773,
+          "rank": 5,
+          "brier_gap_to_leader": 0.00022651655351046162,
+          "gap_range90": [
+            -0.00031982241162360195,
+            0.000811870186050506
+          ]
+        },
+        {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 1040,
+          "brier": 0.24996845511053464,
+          "log_loss": 0.6930835425854973,
+          "rank": 6,
+          "brier_gap_to_leader": 0.0002489388254462995,
+          "gap_range90": [
+            -0.0002673551104420657,
+            0.0007841869188739999
+          ]
+        },
+        {
+          "book": "bp:13",
+          "name": "Caesars",
+          "kind": "sportsbook",
+          "n": 1040,
+          "brier": 0.2500899404429098,
+          "log_loss": 0.6933266853057656,
+          "rank": 7,
+          "brier_gap_to_leader": 0.00037042415782141366,
+          "gap_range90": [
+            -0.00024630057158848636,
+            0.0009581944078760536
+          ]
+        },
+        {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 1040,
+          "brier": 0.2501990678647404,
+          "log_loss": 0.693545816898945,
+          "rank": 8,
+          "brier_gap_to_leader": 0.0004795515796520413,
+          "gap_range90": [
+            -3.546484043821231e-05,
+            0.0009762003892077715
+          ]
+        },
+        {
+          "book": "bp:24",
+          "name": "bet365",
+          "kind": "sportsbook",
+          "n": 1040,
+          "brier": 0.25022925736054125,
+          "log_loss": 0.6936066983705872,
+          "rank": 9,
+          "brier_gap_to_leader": 0.000509741075452903,
+          "gap_range90": [
+            1.0874470470657134e-05,
+            0.0010055212275820883
+          ]
+        }
+      ],
+      "blend": {
+        "book": "bp:0",
+        "name": "BettingPros Consensus",
+        "kind": "blend",
+        "n": 1040,
+        "brier": 0.24994597869597324,
+        "log_loss": 0.6930391822332687,
+        "all_units": {
+          "n": 4462,
+          "brier": 0.24979789007854328,
+          "log_loss": 0.6927427686533996
+        },
+        "brier_gap_to_leader": 0.00022646241088487447,
+        "gap_range90": [
+          -0.00014740101368714278,
+          0.0006045373902228813
+        ]
+      }
+    },
+    "f1_total": {
+      "n_units": 2640,
+      "books": {
+        "bp:12": {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 2335,
+          "brier": 0.22256683440165245,
+          "log_loss": 0.6362819717617024,
+          "coverage": 0.884469696969697,
+          "brier_range90": [
+            0.21753614067802224,
+            0.22755495173272972
+          ]
+        },
+        "bp:10": {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 1272,
+          "brier": 0.2009952772051002,
+          "log_loss": 0.5916115893173748,
+          "coverage": 0.4818181818181818,
+          "brier_range90": [
+            0.19188960683338796,
+            0.21016342710132968
+          ]
+        },
+        "bp:19": {
+          "book": "bp:19",
+          "name": "BetMGM",
+          "kind": "sportsbook",
+          "n": 257,
+          "brier": 0.24856689853635047,
+          "log_loss": 0.6902796286297526,
+          "coverage": 0.09734848484848485,
+          "brier_range90": [
+            0.24578177106061777,
+            0.2513734238824335
+          ]
+        },
+        "bp:18": {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 1364,
+          "brier": 0.24897406811864173,
+          "log_loss": 0.6910826347696172,
+          "coverage": 0.5166666666666667,
+          "brier_range90": [
+            0.2474640071498571,
+            0.2504881597204094
+          ]
+        },
+        "bp:15": {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 1364,
+          "brier": 0.2489680964634071,
+          "log_loss": 0.6910705010544038,
+          "coverage": 0.5166666666666667,
+          "brier_range90": [
+            0.2474546159784864,
+            0.2504738923307954
+          ]
+        },
+        "bp:33": {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 1077,
+          "brier": 0.24882579864245108,
+          "log_loss": 0.6907818897964807,
+          "coverage": 0.40795454545454546,
+          "brier_range90": [
+            0.24707602646806184,
+            0.2507639450805711
+          ]
+        },
+        "bp:49": {
+          "book": "bp:49",
+          "name": "Hard Rock",
+          "kind": "sportsbook",
+          "n": 1076,
+          "brier": 0.2481784582233101,
+          "log_loss": 0.6894744510690206,
+          "coverage": 0.4075757575757576,
+          "brier_range90": [
+            0.24641957824272204,
+            0.24990104449901224
+          ]
+        },
+        "bp:27": {
+          "book": "bp:27",
+          "name": "PartyCasino",
+          "kind": "sportsbook",
+          "n": 257,
+          "brier": 0.24854815829402313,
+          "log_loss": 0.690242139019938,
+          "coverage": 0.09734848484848485,
+          "brier_range90": [
+            0.24577415816018952,
+            0.251364616094892
+          ]
+        }
+      },
+      "compared": [
+        "bp:12",
+        "bp:18",
+        "bp:15"
+      ],
+      "excluded": {
+        "bp:10": "coverage below 50% (coverage 48%)",
+        "bp:19": "coverage below 50% (coverage 10%)",
+        "bp:33": "coverage below 50% (coverage 41%)",
+        "bp:49": "coverage below 50% (coverage 41%)",
+        "bp:27": "coverage below 50% (coverage 10%)"
+      },
+      "n_common_units": 1060,
+      "n_common_games": 1060,
+      "ranking": [
+        {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 1060,
+          "brier": 0.24872565260356327,
+          "log_loss": 0.690583305367393,
+          "rank": 1,
+          "brier_gap_to_leader": 0.0,
+          "gap_range90": null
+        },
+        {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 1060,
+          "brier": 0.24940793166883254,
+          "log_loss": 0.691955066750886,
+          "rank": 2,
+          "brier_gap_to_leader": 0.000682279065269261,
+          "gap_range90": [
+            -0.00018697970422252043,
+            0.0015342191260250034
+          ]
+        },
+        {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 1060,
+          "brier": 0.24941683965338532,
+          "log_loss": 0.6919727266981883,
+          "rank": 3,
+          "brier_gap_to_leader": 0.0006911870498220369,
+          "gap_range90": [
+            -0.000179893799068432,
+            0.001534218777954823
+          ]
+        }
+      ],
+      "blend": {
+        "book": "bp:0",
+        "name": "BettingPros Consensus",
+        "kind": "blend",
+        "n": 1017,
+        "brier": 0.24880742892793084,
+        "log_loss": 0.6907457239470796,
+        "all_units": {
+          "n": 2355,
+          "brier": 0.2225476913839359,
+          "log_loss": 0.6362574409961541
+        },
+        "brier_gap_to_leader": 0.00019679733576751256,
+        "gap_range90": [
+          -0.0002588174559086662,
+          0.0006452757233051296
+        ]
+      }
+    },
+    "f5_total": {
+      "n_units": 4683,
+      "books": {
+        "bp:19": {
+          "book": "bp:19",
+          "name": "BetMGM",
+          "kind": "sportsbook",
+          "n": 3745,
+          "brier": 0.24993945310160737,
+          "log_loss": 0.6930261527698804,
+          "coverage": 0.7997010463378177,
+          "brier_range90": [
+            0.24946228159844636,
+            0.2504269815907391
+          ]
+        },
+        "bp:13": {
+          "book": "bp:13",
+          "name": "Caesars",
+          "kind": "sportsbook",
+          "n": 3259,
+          "brier": 0.2500658538304443,
+          "log_loss": 0.6932796464370041,
+          "coverage": 0.6959214178945121,
+          "brier_range90": [
+            0.24937733472266516,
+            0.25076818660859984
+          ]
+        },
+        "bp:14": {
+          "book": "bp:14",
+          "name": "Fanatics",
+          "kind": "sportsbook",
+          "n": 651,
+          "brier": 0.25034711527309994,
+          "log_loss": 0.6938433438919144,
+          "coverage": 0.13901345291479822,
+          "brier_range90": [
+            0.24855660261545157,
+            0.25215873907986774
+          ]
+        },
+        "bp:18": {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 3320,
+          "brier": 0.24971671958014083,
+          "log_loss": 0.6925801766215005,
+          "coverage": 0.7089472560324578,
+          "brier_range90": [
+            0.2489068582247845,
+            0.2504997465042118
+          ]
+        },
+        "bp:15": {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 3310,
+          "brier": 0.24982427427339932,
+          "log_loss": 0.6927958419979154,
+          "coverage": 0.7068118727311552,
+          "brier_range90": [
+            0.24905327860762236,
+            0.25066443810044625
+          ]
+        },
+        "bp:24": {
+          "book": "bp:24",
+          "name": "bet365",
+          "kind": "sportsbook",
+          "n": 3713,
+          "brier": 0.2500645490730182,
+          "log_loss": 0.6932771457000414,
+          "coverage": 0.7928678197736494,
+          "brier_range90": [
+            0.24953408025902288,
+            0.25059873812605155
+          ]
+        },
+        "bp:33": {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 1937,
+          "brier": 0.24980700202640332,
+          "log_loss": 0.6927633378947212,
+          "coverage": 0.4136237454623105,
+          "brier_range90": [
+            0.24891496715635994,
+            0.25075677724424406
+          ]
+        },
+        "bp:49": {
+          "book": "bp:49",
+          "name": "Hard Rock",
+          "kind": "sportsbook",
+          "n": 1789,
+          "brier": 0.24996515822163753,
+          "log_loss": 0.6930745825073434,
+          "coverage": 0.3820200726030322,
+          "brier_range90": [
+            0.2488780983956566,
+            0.2510350315922026
+          ]
+        },
+        "bp:27": {
+          "book": "bp:27",
+          "name": "PartyCasino",
+          "kind": "sportsbook",
+          "n": 3742,
+          "brier": 0.24994884416491525,
+          "log_loss": 0.6930449458940386,
+          "coverage": 0.7990604313474269,
+          "brier_range90": [
+            0.24946796115121314,
+            0.25042853870108794
+          ]
+        }
+      },
+      "compared": [
+        "bp:19",
+        "bp:13",
+        "bp:18",
+        "bp:15",
+        "bp:24",
+        "bp:27"
+      ],
+      "excluded": {
+        "bp:14": "coverage below 50% (coverage 14%)",
+        "bp:33": "coverage below 50% (coverage 41%)",
+        "bp:49": "coverage below 50% (coverage 38%)"
+      },
+      "n_common_units": 1634,
+      "n_common_games": 1634,
+      "ranking": [
+        {
+          "book": "bp:13",
+          "name": "Caesars",
+          "kind": "sportsbook",
+          "n": 1634,
+          "brier": 0.24995953837264095,
+          "log_loss": 0.6930653778986544,
+          "rank": 1,
+          "brier_gap_to_leader": 0.0,
+          "gap_range90": null
+        },
+        {
+          "book": "bp:19",
+          "name": "BetMGM",
+          "kind": "sportsbook",
+          "n": 1634,
+          "brier": 0.25019327399344166,
+          "log_loss": 0.6935337796683507,
+          "rank": 2,
+          "brier_gap_to_leader": 0.0002337356208007625,
+          "gap_range90": [
+            -0.00045024020982607906,
+            0.0009469716364272449
+          ]
+        },
+        {
+          "book": "bp:27",
+          "name": "PartyCasino",
+          "kind": "sportsbook",
+          "n": 1634,
+          "brier": 0.250234181401933,
+          "log_loss": 0.693615647173896,
+          "rank": 3,
+          "brier_gap_to_leader": 0.0002746430292920927,
+          "gap_range90": [
+            -0.0004333554399545403,
+            0.0010003842109957701
+          ]
+        },
+        {
+          "book": "bp:24",
+          "name": "bet365",
+          "kind": "sportsbook",
+          "n": 1634,
+          "brier": 0.2502905898371609,
+          "log_loss": 0.6937300650511904,
+          "rank": 4,
+          "brier_gap_to_leader": 0.00033105146452004473,
+          "gap_range90": [
+            -0.00023772540955455335,
+            0.0008791385549002324
+          ]
+        },
+        {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 1634,
+          "brier": 0.2504160529772581,
+          "log_loss": 0.6939795209682983,
+          "rank": 5,
+          "brier_gap_to_leader": 0.00045651460461723067,
+          "gap_range90": [
+            -0.0003525408881108851,
+            0.0012818379116798263
+          ]
+        },
+        {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 1634,
+          "brier": 0.25043333857696276,
+          "log_loss": 0.6940142789619935,
+          "rank": 6,
+          "brier_gap_to_leader": 0.0004738002043218887,
+          "gap_range90": [
+            -0.00034020261760007227,
+            0.0012851534335854473
+          ]
+        }
+      ],
+      "blend": {
+        "book": "bp:0",
+        "name": "BettingPros Consensus",
+        "kind": "blend",
+        "n": 1634,
+        "brier": 0.2501965465078321,
+        "log_loss": 0.6935398951262105,
+        "all_units": {
+          "n": 4402,
+          "brier": 0.24980197018590408,
+          "log_loss": 0.6927504985614852
+        },
+        "brier_gap_to_leader": 0.00023700813519118147,
+        "gap_range90": [
+          -0.0002482420804788329,
+          0.0007333765811247964
+        ]
+      }
+    },
+    "team_total_home": {
+      "n_units": 4793,
+      "books": {
+        "bp:12": {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 4482,
+          "brier": 0.24825149019465975,
+          "log_loss": 0.6896433087218005,
+          "coverage": 0.9351137074900897,
+          "brier_range90": [
+            0.24736291294939847,
+            0.2491698231552787
+          ]
+        },
+        "bp:10": {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 4520,
+          "brier": 0.24829383372447927,
+          "log_loss": 0.6897252818540768,
+          "coverage": 0.9430419361568955,
+          "brier_range90": [
+            0.24727442424801982,
+            0.24925592866346788
+          ]
+        },
+        "bp:19": {
+          "book": "bp:19",
+          "name": "BetMGM",
+          "kind": "sportsbook",
+          "n": 1427,
+          "brier": 0.2491092264976397,
+          "log_loss": 0.691360849210565,
+          "coverage": 0.29772585019820574,
+          "brier_range90": [
+            0.24739469444738751,
+            0.25071317906413043
+          ]
+        },
+        "bp:14": {
+          "book": "bp:14",
+          "name": "Fanatics",
+          "kind": "sportsbook",
+          "n": 699,
+          "brier": 0.2484472925592584,
+          "log_loss": 0.6900354780901629,
+          "coverage": 0.14583767994992697,
+          "brier_range90": [
+            0.24644589204716022,
+            0.25052022495914184
+          ]
+        },
+        "bp:18": {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 4137,
+          "brier": 0.24894638157456137,
+          "log_loss": 0.6910368475949867,
+          "coverage": 0.8631337366993532,
+          "brier_range90": [
+            0.24796607769486834,
+            0.24992109642288024
+          ]
+        },
+        "bp:15": {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 4127,
+          "brier": 0.2489248815094272,
+          "log_loss": 0.6909937627722711,
+          "coverage": 0.8610473607344044,
+          "brier_range90": [
+            0.2479417790338813,
+            0.2498982854928333
+          ]
+        },
+        "bp:33": {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 4118,
+          "brier": 0.2484418719549121,
+          "log_loss": 0.6900245350112951,
+          "coverage": 0.8591696223659503,
+          "brier_range90": [
+            0.24750174978261333,
+            0.249350530530775
+          ]
+        },
+        "bp:49": {
+          "book": "bp:49",
+          "name": "Hard Rock",
+          "kind": "sportsbook",
+          "n": 2246,
+          "brier": 0.24888824237039578,
+          "log_loss": 0.6909209543698147,
+          "coverage": 0.4686000417275193,
+          "brier_range90": [
+            0.24761877272141924,
+            0.25009234959144555
+          ]
+        },
+        "bp:27": {
+          "book": "bp:27",
+          "name": "PartyCasino",
+          "kind": "sportsbook",
+          "n": 1426,
+          "brier": 0.24908671284473105,
+          "log_loss": 0.6913153570698528,
+          "coverage": 0.2975172126017108,
+          "brier_range90": [
+            0.24734350407664776,
+            0.25079112694718003
+          ]
+        }
+      },
+      "compared": [
+        "bp:12",
+        "bp:10",
+        "bp:18",
+        "bp:15",
+        "bp:33"
+      ],
+      "excluded": {
+        "bp:19": "coverage below 50% (coverage 30%)",
+        "bp:14": "coverage below 50% (coverage 15%)",
+        "bp:49": "coverage below 50% (coverage 47%)",
+        "bp:27": "coverage below 50% (coverage 30%)"
+      },
+      "n_common_units": 3627,
+      "n_common_games": 3627,
+      "ranking": [
+        {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 3627,
+          "brier": 0.24865966720123725,
+          "log_loss": 0.6904590035859477,
+          "rank": 1,
+          "brier_gap_to_leader": 0.0,
+          "gap_range90": null
+        },
+        {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 3627,
+          "brier": 0.24877204143245565,
+          "log_loss": 0.690687411109373,
+          "rank": 2,
+          "brier_gap_to_leader": 0.00011237423121844847,
+          "gap_range90": [
+            -0.0002598275417264385,
+            0.00048266583576058293
+          ]
+        },
+        {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 3627,
+          "brier": 0.24902367078845972,
+          "log_loss": 0.6911942065950933,
+          "rank": 3,
+          "brier_gap_to_leader": 0.00036400358722246684,
+          "gap_range90": [
+            1.8629122853330826e-06,
+            0.0007519894673950254
+          ]
+        },
+        {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 3627,
+          "brier": 0.2491087337544072,
+          "log_loss": 0.6913629310971358,
+          "rank": 4,
+          "brier_gap_to_leader": 0.0004490665531699821,
+          "gap_range90": [
+            9.545268766594065e-05,
+            0.0008000695852021126
+          ]
+        },
+        {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 3627,
+          "brier": 0.24913687529570883,
+          "log_loss": 0.6914195084126963,
+          "rank": 5,
+          "brier_gap_to_leader": 0.0004772080944715867,
+          "gap_range90": [
+            0.00011930515562445708,
+            0.0008332132625137703
+          ]
+        }
+      ],
+      "blend": {
+        "book": "bp:0",
+        "name": "BettingPros Consensus",
+        "kind": "blend",
+        "n": 3624,
+        "brier": 0.24898854049847643,
+        "log_loss": 0.6911215843496442,
+        "all_units": {
+          "n": 4678,
+          "brier": 0.24889251728209555,
+          "log_loss": 0.6909308510502107
+        },
+        "brier_gap_to_leader": 0.0003274627730100919,
+        "gap_range90": [
+          4.939068640771745e-06,
+          0.0006489697127296751
+        ]
+      }
+    },
+    "team_total_away": {
+      "n_units": 4790,
+      "books": {
+        "bp:12": {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 4442,
+          "brier": 0.24863458388822765,
+          "log_loss": 0.690410022885459,
+          "coverage": 0.9273486430062631,
+          "brier_range90": [
+            0.2477779171669579,
+            0.24949349340050123
+          ]
+        },
+        "bp:10": {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 4475,
+          "brier": 0.24834240620713055,
+          "log_loss": 0.6898253172793412,
+          "coverage": 0.9342379958246346,
+          "brier_range90": [
+            0.24737873852046965,
+            0.24925997485777815
+          ]
+        },
+        "bp:19": {
+          "book": "bp:19",
+          "name": "BetMGM",
+          "kind": "sportsbook",
+          "n": 1411,
+          "brier": 0.24796817602219318,
+          "log_loss": 0.6890744587433119,
+          "coverage": 0.29457202505219204,
+          "brier_range90": [
+            0.246399588269226,
+            0.24954638007009597
+          ]
+        },
+        "bp:14": {
+          "book": "bp:14",
+          "name": "Fanatics",
+          "kind": "sportsbook",
+          "n": 718,
+          "brier": 0.24892219816859243,
+          "log_loss": 0.6909856074533581,
+          "coverage": 0.1498956158663883,
+          "brier_range90": [
+            0.2470008847332629,
+            0.25088433226529455
+          ]
+        },
+        "bp:18": {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 4170,
+          "brier": 0.24847613144875658,
+          "log_loss": 0.6900921074043638,
+          "coverage": 0.8705636743215032,
+          "brier_range90": [
+            0.24753236625971364,
+            0.2494015188333927
+          ]
+        },
+        "bp:15": {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 4160,
+          "brier": 0.24843921076193262,
+          "log_loss": 0.6900181039212282,
+          "coverage": 0.8684759916492694,
+          "brier_range90": [
+            0.24750316406674713,
+            0.2493695561996553
+          ]
+        },
+        "bp:33": {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 4071,
+          "brier": 0.24858120178937906,
+          "log_loss": 0.6903047518791464,
+          "coverage": 0.8498956158663883,
+          "brier_range90": [
+            0.2476732266352249,
+            0.24949691412373803
+          ]
+        },
+        "bp:49": {
+          "book": "bp:49",
+          "name": "Hard Rock",
+          "kind": "sportsbook",
+          "n": 2241,
+          "brier": 0.24932113649763904,
+          "log_loss": 0.6917902787462169,
+          "coverage": 0.46784968684759914,
+          "brier_range90": [
+            0.24811874189776048,
+            0.2504644783527395
+          ]
+        },
+        "bp:27": {
+          "book": "bp:27",
+          "name": "PartyCasino",
+          "kind": "sportsbook",
+          "n": 1409,
+          "brier": 0.24802734293045198,
+          "log_loss": 0.6891934581913053,
+          "coverage": 0.2941544885177453,
+          "brier_range90": [
+            0.24644603862282569,
+            0.24960452395764007
+          ]
+        }
+      },
+      "compared": [
+        "bp:12",
+        "bp:10",
+        "bp:18",
+        "bp:15",
+        "bp:33"
+      ],
+      "excluded": {
+        "bp:19": "coverage below 50% (coverage 29%)",
+        "bp:14": "coverage below 50% (coverage 15%)",
+        "bp:49": "coverage below 50% (coverage 47%)",
+        "bp:27": "coverage below 50% (coverage 29%)"
+      },
+      "n_common_units": 3563,
+      "n_common_games": 3563,
+      "ranking": [
+        {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 3563,
+          "brier": 0.24882490110799885,
+          "log_loss": 0.690792559663514,
+          "rank": 1,
+          "brier_gap_to_leader": 0.0,
+          "gap_range90": null
+        },
+        {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 3563,
+          "brier": 0.2488766249167001,
+          "log_loss": 0.690897969182227,
+          "rank": 2,
+          "brier_gap_to_leader": 5.1723808701226196e-05,
+          "gap_range90": [
+            -0.0003222143447292722,
+            0.00043679076761453373
+          ]
+        },
+        {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 3563,
+          "brier": 0.24893026477021957,
+          "log_loss": 0.6910020914094833,
+          "rank": 3,
+          "brier_gap_to_leader": 0.00010536366222066843,
+          "gap_range90": [
+            -0.00023513631518263966,
+            0.0004422390245337186
+          ]
+        },
+        {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 3563,
+          "brier": 0.2489376433967573,
+          "log_loss": 0.6910184715889345,
+          "rank": 4,
+          "brier_gap_to_leader": 0.00011274228875845852,
+          "gap_range90": [
+            -0.0002555030620866331,
+            0.0004926697735725982
+          ]
+        },
+        {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 3563,
+          "brier": 0.24894207677068173,
+          "log_loss": 0.6910272183210655,
+          "rank": 5,
+          "brier_gap_to_leader": 0.00011717566268286941,
+          "gap_range90": [
+            -0.00024829001444788584,
+            0.0004989137046819676
+          ]
+        }
+      ],
+      "blend": {
+        "book": "bp:0",
+        "name": "BettingPros Consensus",
+        "kind": "blend",
+        "n": 3560,
+        "brier": 0.24875855333941366,
+        "log_loss": 0.6906581843399909,
+        "all_units": {
+          "n": 4661,
+          "brier": 0.24853121552284702,
+          "log_loss": 0.6902040821121049
+        },
+        "brier_gap_to_leader": -5.5911352090933686e-05,
+        "gap_range90": [
+          -0.0003247130113714005,
+          0.00021321178652379462
+        ]
+      }
+    },
+    "f5_team_total_home": {
+      "n_units": 932,
+      "books": {
+        "bp:12": {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 862,
+          "brier": 0.24705192042655144,
+          "log_loss": 0.6872376696228591,
+          "coverage": 0.924892703862661,
+          "brier_range90": [
+            0.2443638561308927,
+            0.24975675421243224
+          ]
+        },
+        "bp:13": {
+          "book": "bp:13",
+          "name": "Caesars",
+          "kind": "sportsbook",
+          "n": 872,
+          "brier": 0.24764416385178398,
+          "log_loss": 0.6884352918425511,
+          "coverage": 0.9356223175965666,
+          "brier_range90": [
+            0.24487538702641012,
+            0.250307613284281
+          ]
+        },
+        "bp:33": {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 504,
+          "brier": 0.249739888623781,
+          "log_loss": 0.6926351349943708,
+          "coverage": 0.5407725321888412,
+          "brier_range90": [
+            0.24644698015161245,
+            0.25299155672515194
+          ]
+        },
+        "bp:49": {
+          "book": "bp:49",
+          "name": "Hard Rock",
+          "kind": "sportsbook",
+          "n": 853,
+          "brier": 0.24762840167786992,
+          "log_loss": 0.6883970391995972,
+          "coverage": 0.9152360515021459,
+          "brier_range90": [
+            0.24502103788225152,
+            0.2501925299241504
+          ]
+        }
+      },
+      "compared": [
+        "bp:12",
+        "bp:13",
+        "bp:33",
+        "bp:49"
+      ],
+      "excluded": {},
+      "n_common_units": 424,
+      "n_common_games": 424,
+      "ranking": [
+        {
+          "book": "bp:13",
+          "name": "Caesars",
+          "kind": "sportsbook",
+          "n": 424,
+          "brier": 0.24814099720986785,
+          "log_loss": 0.6894267091462006,
+          "rank": 1,
+          "brier_gap_to_leader": 0.0,
+          "gap_range90": null
+        },
+        {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 424,
+          "brier": 0.24935457984964193,
+          "log_loss": 0.691872933125555,
+          "rank": 2,
+          "brier_gap_to_leader": 0.0012135826397740898,
+          "gap_range90": [
+            -0.0005553448297210582,
+            0.0029039991304756632
+          ]
+        },
+        {
+          "book": "bp:49",
+          "name": "Hard Rock",
+          "kind": "sportsbook",
+          "n": 424,
+          "brier": 0.24952141510017495,
+          "log_loss": 0.6922063512296904,
+          "rank": 3,
+          "brier_gap_to_leader": 0.0013804178903070751,
+          "gap_range90": [
+            -0.00044093127732736895,
+            0.0032134723106173007
+          ]
+        },
+        {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 424,
+          "brier": 0.24953470392339355,
+          "log_loss": 0.6922167299552994,
+          "rank": 4,
+          "brier_gap_to_leader": 0.0013937067135256938,
+          "gap_range90": [
+            -0.00030665079561831006,
+            0.003110950000079952
+          ]
+        }
+      ],
+      "blend": {
+        "book": "bp:0",
+        "name": "BettingPros Consensus",
+        "kind": "blend",
+        "n": 424,
+        "brier": 0.24860728241193658,
+        "log_loss": 0.69036144259095,
+        "all_units": {
+          "n": 869,
+          "brier": 0.24763476984832147,
+          "log_loss": 0.688413579876797
+        },
+        "brier_gap_to_leader": 0.0004662852020687259,
+        "gap_range90": [
+          -0.0006771237849299529,
+          0.0015963927544807334
+        ]
+      }
+    },
+    "f5_team_total_away": {
+      "n_units": 932,
+      "books": {
+        "bp:12": {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 874,
+          "brier": 0.24838659110023045,
+          "log_loss": 0.6899047745616348,
+          "coverage": 0.9377682403433476,
+          "brier_range90": [
+            0.24557647571874497,
+            0.2510730408938198
+          ]
+        },
+        "bp:13": {
+          "book": "bp:13",
+          "name": "Caesars",
+          "kind": "sportsbook",
+          "n": 858,
+          "brier": 0.2462908313533644,
+          "log_loss": 0.6856916019962818,
+          "coverage": 0.9206008583690987,
+          "brier_range90": [
+            0.24362776381137397,
+            0.2489580816095262
+          ]
+        },
+        "bp:33": {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 515,
+          "brier": 0.24737496226663178,
+          "log_loss": 0.6878737837925664,
+          "coverage": 0.5525751072961373,
+          "brier_range90": [
+            0.24403113268698445,
+            0.2508397258468667
+          ]
+        },
+        "bp:49": {
+          "book": "bp:49",
+          "name": "Hard Rock",
+          "kind": "sportsbook",
+          "n": 867,
+          "brier": 0.24661069541438563,
+          "log_loss": 0.6863229861295982,
+          "coverage": 0.9302575107296137,
+          "brier_range90": [
+            0.24392814820196754,
+            0.24919235067525614
+          ]
+        }
+      },
+      "compared": [
+        "bp:12",
+        "bp:13",
+        "bp:33",
+        "bp:49"
+      ],
+      "excluded": {},
+      "n_common_units": 427,
+      "n_common_games": 427,
+      "ranking": [
+        {
+          "book": "bp:13",
+          "name": "Caesars",
+          "kind": "sportsbook",
+          "n": 427,
+          "brier": 0.24808154198575508,
+          "log_loss": 0.6893093592472164,
+          "rank": 1,
+          "brier_gap_to_leader": 0.0,
+          "gap_range90": null
+        },
+        {
+          "book": "bp:49",
+          "name": "Hard Rock",
+          "kind": "sportsbook",
+          "n": 427,
+          "brier": 0.2484890174633224,
+          "log_loss": 0.6901033997298979,
+          "rank": 2,
+          "brier_gap_to_leader": 0.0004074754775673235,
+          "gap_range90": [
+            -0.0012802750103810734,
+            0.002185426838670802
+          ]
+        },
+        {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 427,
+          "brier": 0.24889897311332554,
+          "log_loss": 0.6909393188700729,
+          "rank": 3,
+          "brier_gap_to_leader": 0.0008174311275705064,
+          "gap_range90": [
+            -0.0007325976485676608,
+            0.0023017018199805992
+          ]
+        },
+        {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 427,
+          "brier": 0.24931775511933232,
+          "log_loss": 0.6917782385334845,
+          "rank": 4,
+          "brier_gap_to_leader": 0.0012362131335772529,
+          "gap_range90": [
+            -0.000301998290767186,
+            0.0027848351676818257
+          ]
+        }
+      ],
+      "blend": {
+        "book": "bp:0",
+        "name": "BettingPros Consensus",
+        "kind": "blend",
+        "n": 427,
+        "brier": 0.24805509294303552,
+        "log_loss": 0.6892423052545436,
+        "all_units": {
+          "n": 875,
+          "brier": 0.24751485883337362,
+          "log_loss": 0.6881543961055918
+        },
+        "brier_gap_to_leader": -2.644904271953349e-05,
+        "gap_range90": [
+          -0.0010355248830683482,
+          0.0009434238527338573
+        ]
+      }
+    },
+    "strikeouts": {
+      "n_units": 9524,
+      "books": {
+        "bp:12": {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 8580,
+          "brier": 0.247852458988428,
+          "log_loss": 0.6888405872695436,
+          "coverage": 0.9008819823603528,
+          "brier_range90": [
+            0.2469075919771355,
+            0.24880267847901044
+          ]
+        },
+        "bp:10": {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 8189,
+          "brier": 0.24811161600427994,
+          "log_loss": 0.6893664441341374,
+          "coverage": 0.8598278034439312,
+          "brier_range90": [
+            0.24712716933403678,
+            0.24906027484110058
+          ]
+        },
+        "bp:19": {
+          "book": "bp:19",
+          "name": "BetMGM",
+          "kind": "sportsbook",
+          "n": 7645,
+          "brier": 0.24775478294098993,
+          "log_loss": 0.6886385792327462,
+          "coverage": 0.8027089458210835,
+          "brier_range90": [
+            0.24675602238745303,
+            0.24874911773268116
+          ]
+        },
+        "bp:13": {
+          "book": "bp:13",
+          "name": "Caesars",
+          "kind": "sportsbook",
+          "n": 1701,
+          "brier": 0.24854546827706733,
+          "log_loss": 0.6902126511380173,
+          "coverage": 0.17860142797144057,
+          "brier_range90": [
+            0.24646950053898647,
+            0.2506322026358955
+          ]
+        },
+        "bp:14": {
+          "book": "bp:14",
+          "name": "Fanatics",
+          "kind": "sportsbook",
+          "n": 1249,
+          "brier": 0.2508091937225169,
+          "log_loss": 0.6948056123831263,
+          "coverage": 0.13114237715245694,
+          "brier_range90": [
+            0.24843149186087746,
+            0.2531562068519974
+          ]
+        },
+        "bp:18": {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 4450,
+          "brier": 0.24812262575904329,
+          "log_loss": 0.6893863684228198,
+          "coverage": 0.4672406551868963,
+          "brier_range90": [
+            0.2468712427112927,
+            0.24936315705629272
+          ]
+        },
+        "bp:15": {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 4451,
+          "brier": 0.24807620605725,
+          "log_loss": 0.689293663504214,
+          "coverage": 0.46734565308693826,
+          "brier_range90": [
+            0.2468385882163041,
+            0.24940625475415368
+          ]
+        },
+        "bp:33": {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 4113,
+          "brier": 0.2467164340429107,
+          "log_loss": 0.6865492668188852,
+          "coverage": 0.43185636287274254,
+          "brier_range90": [
+            0.24541593569197548,
+            0.24800653761804684
+          ]
+        },
+        "bp:49": {
+          "book": "bp:49",
+          "name": "Hard Rock",
+          "kind": "sportsbook",
+          "n": 4464,
+          "brier": 0.2475555270353381,
+          "log_loss": 0.6882477438212787,
+          "coverage": 0.46871062578748424,
+          "brier_range90": [
+            0.24625070801980342,
+            0.24888380561744158
+          ]
+        },
+        "bp:27": {
+          "book": "bp:27",
+          "name": "PartyCasino",
+          "kind": "sportsbook",
+          "n": 7639,
+          "brier": 0.24767457878904348,
+          "log_loss": 0.6884770505620134,
+          "coverage": 0.8020789584208315,
+          "brier_range90": [
+            0.24663632221555795,
+            0.24868094016373912
+          ]
+        }
+      },
+      "compared": [
+        "bp:12",
+        "bp:10",
+        "bp:19",
+        "bp:27"
+      ],
+      "excluded": {
+        "bp:13": "coverage below 50% (coverage 18%)",
+        "bp:14": "coverage below 50% (coverage 13%)",
+        "bp:18": "coverage below 50% (coverage 47%)",
+        "bp:15": "coverage below 50% (coverage 47%)",
+        "bp:33": "coverage below 50% (coverage 43%)",
+        "bp:49": "coverage below 50% (coverage 47%)"
+      },
+      "n_common_units": 6183,
+      "n_common_games": 3798,
+      "ranking": [
+        {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 6183,
+          "brier": 0.24878746906949423,
+          "log_loss": 0.6907203866461334,
+          "rank": 1,
+          "brier_gap_to_leader": 0.0,
+          "gap_range90": null
+        },
+        {
+          "book": "bp:27",
+          "name": "PartyCasino",
+          "kind": "sportsbook",
+          "n": 6183,
+          "brier": 0.2489629475023874,
+          "log_loss": 0.6910730563344943,
+          "rank": 2,
+          "brier_gap_to_leader": 0.00017547843289316304,
+          "gap_range90": [
+            -0.0002176401020103971,
+            0.0005880446226288439
+          ]
+        },
+        {
+          "book": "bp:19",
+          "name": "BetMGM",
+          "kind": "sportsbook",
+          "n": 6183,
+          "brier": 0.24902243787439965,
+          "log_loss": 0.6911925740715769,
+          "rank": 3,
+          "brier_gap_to_leader": 0.0002349688049054094,
+          "gap_range90": [
+            -0.00015772930095890345,
+            0.0006526053851129214
+          ]
+        },
+        {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 6183,
+          "brier": 0.24917547767238576,
+          "log_loss": 0.6915063921822111,
+          "rank": 4,
+          "brier_gap_to_leader": 0.00038800860289155587,
+          "gap_range90": [
+            -6.77013538983563e-05,
+            0.0008679155357803109
+          ]
+        }
+      ],
+      "blend": {
+        "book": "bp:0",
+        "name": "BettingPros Consensus",
+        "kind": "blend",
+        "n": 6181,
+        "brier": 0.2488169222997314,
+        "log_loss": 0.6907768212012176,
+        "all_units": {
+          "n": 9124,
+          "brier": 0.2475391634847769,
+          "log_loss": 0.6882084434704601
+        },
+        "brier_gap_to_leader": 1.4668002390116648e-05,
+        "gap_range90": [
+          -0.00024921107380655044,
+          0.00028093957901467574
+        ]
+      }
+    }
+  },
+  "pooled_fixed_line": {
+    "markets": [
+      "moneyline",
+      "f1_moneyline",
+      "f5_moneyline",
+      "first_to_score",
+      "first_inning_run"
+    ],
+    "anchor": "moneyline",
+    "books": [
+      "bp:12",
+      "bp:10",
+      "bp:19",
+      "bp:13",
+      "bp:18",
+      "bp:15",
+      "bp:24",
+      "bp:33",
+      "bp:27"
+    ],
+    "units_by_market": {
+      "moneyline": 2419,
+      "f1_moneyline": 0,
+      "f5_moneyline": 0,
+      "first_to_score": 0,
+      "first_inning_run": 1840
+    },
+    "dropped_markets": {
+      "f1_moneyline": "never quoted by bp:13",
+      "f5_moneyline": "never quoted by bp:12, bp:19, bp:24, bp:27",
+      "first_to_score": "never quoted by bp:12, bp:10, bp:19, bp:13, bp:27"
+    },
+    "left_out": {},
+    "read": {
+      "n_units": 21577,
+      "books": {
+        "bp:12": {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 10800,
+          "brier": 0.23142443870123805,
+          "log_loss": 0.6543804104848578,
+          "coverage": 0.5005329749270057,
+          "brier_range90": [
+            0.22953389621963285,
+            0.2334153972054596
+          ]
+        },
+        "bp:10": {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 15375,
+          "brier": 0.2243892878763401,
+          "log_loss": 0.639520238886478,
+          "coverage": 0.7125643045835843,
+          "brier_range90": [
+            0.22235208667316533,
+            0.22650693653400106
+          ]
+        },
+        "bp:19": {
+          "book": "bp:19",
+          "name": "BetMGM",
+          "kind": "sportsbook",
+          "n": 11172,
+          "brier": 0.2346741816480585,
+          "log_loss": 0.6611932725837357,
+          "coverage": 0.5177735551744913,
+          "brier_range90": [
+            0.23284473669864159,
+            0.23636980709123248
+          ]
+        },
+        "bp:13": {
+          "book": "bp:13",
+          "name": "Caesars",
+          "kind": "sportsbook",
+          "n": 8090,
+          "brier": 0.24353508719090025,
+          "log_loss": 0.6799336953817743,
+          "coverage": 0.3749362747369885,
+          "brier_range90": [
+            0.24192206726076693,
+            0.2451596771855334
+          ]
+        },
+        "bp:18": {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 15701,
+          "brier": 0.22595193506990285,
+          "log_loss": 0.6427597918012071,
+          "coverage": 0.7276729851230477,
+          "brier_range90": [
+            0.2239324010620082,
+            0.22795517700896042
+          ]
+        },
+        "bp:15": {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 15703,
+          "brier": 0.2259909294516024,
+          "log_loss": 0.6428426152944332,
+          "coverage": 0.7277656764147008,
+          "brier_range90": [
+            0.2239767233111035,
+            0.2280455802624519
+          ]
+        },
+        "bp:24": {
+          "book": "bp:24",
+          "name": "bet365",
+          "kind": "sportsbook",
+          "n": 15747,
+          "brier": 0.22671689445670207,
+          "log_loss": 0.6443084325175633,
+          "coverage": 0.7298048848310701,
+          "brier_range90": [
+            0.22494349910744296,
+            0.22849522989144747
+          ]
+        },
+        "bp:33": {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 14398,
+          "brier": 0.23533232281431826,
+          "log_loss": 0.6628230707308889,
+          "coverage": 0.667284608611021,
+          "brier_range90": [
+            0.2335285397911885,
+            0.23713189624549516
+          ]
+        },
+        "bp:27": {
+          "book": "bp:27",
+          "name": "PartyCasino",
+          "kind": "sportsbook",
+          "n": 11174,
+          "brier": 0.23466854479954208,
+          "log_loss": 0.6611806636952058,
+          "coverage": 0.5178662464661445,
+          "brier_range90": [
+            0.23283234650416107,
+            0.23644947551032963
+          ]
+        }
+      },
+      "compared": [
+        "bp:12",
+        "bp:10",
+        "bp:19",
+        "bp:13",
+        "bp:18",
+        "bp:15",
+        "bp:24",
+        "bp:33",
+        "bp:27"
+      ],
+      "excluded": {},
+      "n_common_units": 4259,
+      "n_common_games": 2424,
+      "ranking": [
+        {
+          "book": "bp:12",
+          "name": "DraftKings",
+          "kind": "sportsbook",
+          "n": 4259,
+          "brier": 0.24365500897403722,
+          "log_loss": 0.6802414044731028,
+          "rank": 1,
+          "brier_gap_to_leader": 0.0,
+          "gap_range90": null
+        },
+        {
+          "book": "bp:33",
+          "name": "theScore Bet",
+          "kind": "sportsbook",
+          "n": 4259,
+          "brier": 0.24392106313417014,
+          "log_loss": 0.6807689275541527,
+          "rank": 2,
+          "brier_gap_to_leader": 0.00026605416013292726,
+          "gap_range90": [
+            -7.371184751393054e-05,
+            0.0006116260999100698
+          ]
+        },
+        {
+          "book": "bp:15",
+          "name": "SugarHouse",
+          "kind": "sportsbook",
+          "n": 4259,
+          "brier": 0.24408963856229265,
+          "log_loss": 0.6810947604091123,
+          "rank": 3,
+          "brier_gap_to_leader": 0.00043462958825539515,
+          "gap_range90": [
+            6.547182053581781e-05,
+            0.0008004077704734991
+          ]
+        },
+        {
+          "book": "bp:18",
+          "name": "BetRivers",
+          "kind": "sportsbook",
+          "n": 4259,
+          "brier": 0.24409869376586038,
+          "log_loss": 0.6811119650810075,
+          "rank": 4,
+          "brier_gap_to_leader": 0.000443684791823149,
+          "gap_range90": [
+            7.972278985054655e-05,
+            0.0008028040422757997
+          ]
+        },
+        {
+          "book": "bp:13",
+          "name": "Caesars",
+          "kind": "sportsbook",
+          "n": 4259,
+          "brier": 0.24416686698436046,
+          "log_loss": 0.6812906770883547,
+          "rank": 5,
+          "brier_gap_to_leader": 0.000511858010323207,
+          "gap_range90": [
+            0.00012612436174969801,
+            0.0008918903067478161
+          ]
+        },
+        {
+          "book": "bp:10",
+          "name": "FanDuel",
+          "kind": "sportsbook",
+          "n": 4259,
+          "brier": 0.2441684244855916,
+          "log_loss": 0.6812648578242565,
+          "rank": 6,
+          "brier_gap_to_leader": 0.0005134155115543776,
+          "gap_range90": [
+            0.00018327705004456517,
+            0.0008379990143158022
+          ]
+        },
+        {
+          "book": "bp:19",
+          "name": "BetMGM",
+          "kind": "sportsbook",
+          "n": 4259,
+          "brier": 0.24421335417530973,
+          "log_loss": 0.6813583522685704,
+          "rank": 7,
+          "brier_gap_to_leader": 0.0005583452012725078,
+          "gap_range90": [
+            0.00022984263498064428,
+            0.0009043838134845751
+          ]
+        },
+        {
+          "book": "bp:27",
+          "name": "PartyCasino",
+          "kind": "sportsbook",
+          "n": 4259,
+          "brier": 0.24423142893420324,
+          "log_loss": 0.6813948360135039,
+          "rank": 8,
+          "brier_gap_to_leader": 0.0005764199601659965,
+          "gap_range90": [
+            0.00024146723331829967,
+            0.0009171599434652613
+          ]
+        },
+        {
+          "book": "bp:24",
+          "name": "bet365",
+          "kind": "sportsbook",
+          "n": 4259,
+          "brier": 0.24439827685238036,
+          "log_loss": 0.6817273939090297,
+          "rank": 9,
+          "brier_gap_to_leader": 0.0007432678783431641,
+          "gap_range90": [
+            0.0003973861441152424,
+            0.0010744356740259055
+          ]
+        }
+      ],
+      "blend": {
+        "book": "bp:0",
+        "name": "BettingPros Consensus",
+        "kind": "blend",
+        "n": 4259,
+        "brier": 0.24383249957204592,
+        "log_loss": 0.6805853010721791,
+        "all_units": {
+          "n": 21405,
+          "brier": 0.23060390550147492,
+          "log_loss": 0.6525921597233351
+        },
+        "brier_gap_to_leader": 0.00017749059800868156,
+        "gap_range90": [
+          -5.5450480208010264e-05,
+          0.000416714967818718
+        ]
+      }
+    }
+  },
+  "suggested_preference": [
+    12,
+    33,
+    15,
+    18,
+    13,
+    10,
+    19,
+    27,
+    24,
+    14,
+    49
+  ],
+  "suggestion_note": "the pooled ranking, then bp:14, bp:49 (too few quotes to rank) in today's order",
+  "skipped": {
+    "did_not_pitch": 2,
+    "no_line_or_result:f5_total": 10,
+    "not_scored_kind:bp:38": 3321,
+    "not_scored_kind:bp:39": 2261,
+    "not_scored_kind:bp:60": 1506,
+    "off_shared_line:f1_total:bp:0": 285,
+    "off_shared_line:f1_total:bp:10": 321,
+    "off_shared_line:f1_total:bp:12": 258,
+    "off_shared_line:f1_total:bp:13": 250,
+    "off_shared_line:f1_total:bp:15": 1,
+    "off_shared_line:f1_total:bp:18": 1,
+    "off_shared_line:f1_total:bp:19": 141,
+    "off_shared_line:f1_total:bp:24": 338,
+    "off_shared_line:f1_total:bp:27": 141,
+    "off_shared_line:f1_total:bp:33": 1,
+    "off_shared_line:f1_total:bp:49": 2,
+    "off_shared_line:f5_team_total_away:bp:0": 55,
+    "off_shared_line:f5_team_total_away:bp:12": 53,
+    "off_shared_line:f5_team_total_away:bp:13": 61,
+    "off_shared_line:f5_team_total_away:bp:33": 24,
+    "off_shared_line:f5_team_total_away:bp:49": 37,
+    "off_shared_line:f5_team_total_home:bp:0": 61,
+    "off_shared_line:f5_team_total_home:bp:12": 62,
+    "off_shared_line:f5_team_total_home:bp:13": 44,
+    "off_shared_line:f5_team_total_home:bp:33": 36,
+    "off_shared_line:f5_team_total_home:bp:49": 51,
+    "off_shared_line:f5_total:bp:0": 280,
+    "off_shared_line:f5_total:bp:13": 718,
+    "off_shared_line:f5_total:bp:14": 92,
+    "off_shared_line:f5_total:bp:15": 1297,
+    "off_shared_line:f5_total:bp:18": 1296,
+    "off_shared_line:f5_total:bp:19": 861,
+    "off_shared_line:f5_total:bp:24": 792,
+    "off_shared_line:f5_total:bp:27": 862,
+    "off_shared_line:f5_total:bp:33": 428,
+    "off_shared_line:f5_total:bp:49": 545,
+    "off_shared_line:strikeouts:bp:0": 397,
+    "off_shared_line:strikeouts:bp:10": 912,
+    "off_shared_line:strikeouts:bp:12": 630,
+    "off_shared_line:strikeouts:bp:13": 82,
+    "off_shared_line:strikeouts:bp:14": 136,
+    "off_shared_line:strikeouts:bp:15": 331,
+    "off_shared_line:strikeouts:bp:18": 332,
+    "off_shared_line:strikeouts:bp:19": 311,
+    "off_shared_line:strikeouts:bp:27": 318,
+    "off_shared_line:strikeouts:bp:33": 300,
+    "off_shared_line:strikeouts:bp:49": 257,
+    "off_shared_line:team_total_away:bp:0": 125,
+    "off_shared_line:team_total_away:bp:10": 284,
+    "off_shared_line:team_total_away:bp:12": 266,
+    "off_shared_line:team_total_away:bp:14": 29,
+    "off_shared_line:team_total_away:bp:15": 176,
+    "off_shared_line:team_total_away:bp:18": 165,
+    "off_shared_line:team_total_away:bp:19": 78,
+    "off_shared_line:team_total_away:bp:27": 80,
+    "off_shared_line:team_total_away:bp:33": 280,
+    "off_shared_line:team_total_away:bp:49": 169,
+    "off_shared_line:team_total_home:bp:0": 111,
+    "off_shared_line:team_total_home:bp:10": 250,
+    "off_shared_line:team_total_home:bp:12": 228,
+    "off_shared_line:team_total_home:bp:14": 48,
+    "off_shared_line:team_total_home:bp:15": 213,
+    "off_shared_line:team_total_home:bp:18": 207,
+    "off_shared_line:team_total_home:bp:19": 76,
+    "off_shared_line:team_total_home:bp:27": 77,
+    "off_shared_line:team_total_home:bp:33": 231,
+    "off_shared_line:team_total_home:bp:49": 167,
+    "off_shared_line:total:bp:0": 207,
+    "off_shared_line:total:bp:10": 743,
+    "off_shared_line:total:bp:12": 779,
+    "off_shared_line:total:bp:13": 518,
+    "off_shared_line:total:bp:14": 236,
+    "off_shared_line:total:bp:15": 965,
+    "off_shared_line:total:bp:18": 963,
+    "off_shared_line:total:bp:19": 779,
+    "off_shared_line:total:bp:24": 555,
+    "off_shared_line:total:bp:27": 776,
+    "off_shared_line:total:bp:33": 1918,
+    "off_shared_line:total:bp:49": 916,
+    "push_or_no_grid:f5_total": 183,
+    "push_or_no_grid:total": 189,
+    "unpriced:f1_moneyline:bp:0": 4,
+    "unpriced:f1_moneyline:bp:13": 4179,
+    "unpriced:f1_moneyline:bp:33": 3,
+    "unpriced:f1_moneyline:bp:49": 1963,
+    "unpriced:f5_moneyline:bp:0": 3,
+    "unpriced:f5_moneyline:bp:12": 4695,
+    "unpriced:f5_moneyline:bp:13": 2018,
+    "unpriced:f5_moneyline:bp:14": 748,
+    "unpriced:f5_moneyline:bp:15": 2443,
+    "unpriced:f5_moneyline:bp:18": 2443,
+    "unpriced:f5_moneyline:bp:19": 4619,
+    "unpriced:f5_moneyline:bp:24": 2384,
+    "unpriced:f5_moneyline:bp:27": 4618,
+    "unpriced:f5_moneyline:bp:33": 2372,
+    "unpriced:f5_moneyline:bp:49": 1949
+  },
+  "params": {
+    "seasons": [
+      2024,
+      2025
+    ],
+    "min_coverage": 0.5,
+    "bootstrap_samples": 2000,
+    "bootstrap_seed": 555,
+    "range_level": 0.9,
+    "odds_row_version": "sim555.2",
+    "graded_book_preference": [
+      12,
+      10,
+      19,
+      13,
+      14,
+      18,
+      15,
+      24,
+      33,
+      49
+    ],
+    "n_game_rows": 371081,
+    "n_prop_rows": 86558,
+    "n_games_with_result": 4949
+  }
+}

@@ -70,6 +70,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.serialization import to_jsonable
+from pipeline.odds_provider import book_display_name
 
 # ---------------------------------------------------------------------------
 # Base
@@ -981,6 +982,14 @@ class EdgeReportModel(_ApiModel):
     is the MarketSide enum's ``.value`` (a JSON-native string, e.g. "home" /
     "over"); ``clv`` is present only when a closing quote was supplied.
     ``positive_edge`` mirrors the source's derived property (edge > 0).
+
+    SIM-555: when the betting routes price a market from the stored lines (the
+    closing line; before the game starts, also the current line),
+    ``price_book`` names the book whose price is ``offered_american`` (the best
+    price a bettor can take at this line, e.g. ``bp:10``) and
+    ``price_book_name`` its display name ("FanDuel"). Both are None for an
+    injected or mock price. The source dataclass carries no book, so the route
+    sets them.
     """
 
     label: str
@@ -1000,9 +1009,18 @@ class EdgeReportModel(_ApiModel):
     clv: CLVModel | None = None
     positive_edge: bool
 
+    #: SIM-555: the stored book label of the offered price (None: injected or mock).
+    price_book: str | None = None
+    #: SIM-555: that book's display name ("FanDuel").
+    price_book_name: str | None = None
+
     @classmethod
-    def from_dataclass(cls, report: Any) -> EdgeReportModel:
-        """Build from a :class:`betting.clv_engine.EdgeReport`."""
+    def from_dataclass(cls, report: Any, *, price_book: str | None = None) -> EdgeReportModel:
+        """Build from a :class:`betting.clv_engine.EdgeReport`.
+
+        SIM-555: ``price_book`` is the stored label of the offered price's book;
+        the display name follows from it.
+        """
         side = report.side
         side_value = side.value if hasattr(side, "value") else str(side)
         return cls(
@@ -1017,6 +1035,8 @@ class EdgeReportModel(_ApiModel):
             sim_fair_american=float(report.sim_fair_american),
             clv=None if report.clv is None else CLVModel.from_dataclass(report.clv),
             positive_edge=bool(report.positive_edge),
+            price_book=price_book,
+            price_book_name=None if price_book is None else book_display_name(price_book),
         )
 
 
@@ -1147,9 +1167,18 @@ class BetSignalModel(_ApiModel):
     #: The full source EdgeReport (sim_prob, market fair prob, sim_fair_american, CLV).
     report: EdgeReportModel
 
+    #: SIM-555: the stored book label of the offered price (None: injected or mock).
+    price_book: str | None = None
+    #: SIM-555: that book's display name ("FanDuel").
+    price_book_name: str | None = None
+
     @classmethod
-    def from_dataclass(cls, signal: Any) -> BetSignalModel:
-        """Build from a :class:`betting.bet_signal.BetSignal`."""
+    def from_dataclass(cls, signal: Any, *, price_book: str | None = None) -> BetSignalModel:
+        """Build from a :class:`betting.bet_signal.BetSignal`.
+
+        SIM-555: ``price_book`` is the stored label of the offered price's book.
+        The nested report carries it too.
+        """
         side = signal.side
         side_value = side.value if hasattr(side, "value") else str(side)
         return cls(
@@ -1162,7 +1191,9 @@ class BetSignalModel(_ApiModel):
             stake_fraction=float(signal.stake_fraction),
             confidence=float(signal.confidence),
             rank=int(signal.rank),
-            report=EdgeReportModel.from_dataclass(signal.report),
+            report=EdgeReportModel.from_dataclass(signal.report, price_book=price_book),
+            price_book=price_book,
+            price_book_name=None if price_book is None else book_display_name(price_book),
         )
 
 
@@ -1192,6 +1223,8 @@ class LineQuoteModel(_ApiModel):
     #: SIM-549: the other side's own line (run lines only). A run-line quote is
     #: a pair when it is the negative of ``line``; otherwise two separate bets.
     other_line: float | None = None
+    #: SIM-555: the book's display name ("FanDuel" for ``bp:10``).
+    book_name: str = ""
 
     @classmethod
     def from_dataclass(cls, quote: Any) -> LineQuoteModel:
@@ -1210,6 +1243,10 @@ class LineQuoteModel(_ApiModel):
             other_line=(
                 None if getattr(quote, "other_line", None) is None else float(quote.other_line)
             ),
+            # SIM-555: the running app imports betting/ from its image, whose
+            # LineQuote may predate book_name, so the name falls back to the
+            # vocabulary here.
+            book_name=getattr(quote, "book_name", None) or book_display_name(str(quote.book)),
         )
 
 
@@ -1230,6 +1267,9 @@ class LineMovementModel(_ApiModel):
     #: The MarketSide enum value as a string ("home"/"away"/"over"/"under").
     side: str
     book: str | None = None
+    #: SIM-555: the book's display name ("FanDuel" for ``bp:10``); the chart
+    #: title shows it. An empty string when the series names no book.
+    book_name: str = ""
 
     quotes: list[LineQuoteModel] = Field(default_factory=list)
 
@@ -1279,6 +1319,9 @@ class LineMovementModel(_ApiModel):
             market_type=str(mv.market_type),
             side=str(side_value),
             book=None if mv.book is None else str(mv.book),
+            # SIM-555: the same image fallback as LineQuoteModel.book_name.
+            book_name=getattr(mv, "book_name", None)
+            or book_display_name(None if mv.book is None else str(mv.book)),
             quotes=[LineQuoteModel.from_dataclass(q) for q in mv.quotes],
             opening_american=_of(mv.opening_american),
             closing_american=_of(mv.closing_american),

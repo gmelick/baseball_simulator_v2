@@ -72,6 +72,12 @@ for _p in (str(_ROOT), str(_ROOT / "scripts")):
 import numpy as np  # noqa: E402
 from sim_stats import _FACTORY, _resolve, open_sim_duckdb, sim_kwargs_from_state  # noqa: E402
 
+from pipeline.odds_provider import (  # noqa: E402
+    STORED_BOOK_FILTER_SQL,
+    bettable_labels,
+    graded_book_labels,
+    graded_row_order_sql,
+)
 from simulation.batch_runner import GameSpec  # noqa: E402
 from simulation.game_state import Team  # noqa: E402
 from simulation.production_factory import production_machine_factory  # noqa: E402
@@ -334,24 +340,31 @@ async def _box_reference(seasons: list[int]) -> dict[str, Any]:
         await conn.close()
 
 
+#: SIM-555: the graded closing strikeout line per (game, pitcher): the stored
+#: book label, the listed sportsbooks only, the first book on the preference
+#: list, then the newest fetch (the accuracy comparison's rule).
+#: ``$1`` the games, ``$2`` the labels to keep, ``$3`` the preference list.
+K_LINES_SQL = f"""
+            SELECT DISTINCT ON (game_pk, player_id) game_pk, player_id, line
+            FROM raw.prop_odds
+            WHERE game_pk = ANY($1::int[]) AND prop_stat = 'strikeouts'
+              AND line_type = 'closing'
+              AND {STORED_BOOK_FILTER_SQL} AND book = ANY($2::varchar[])
+            ORDER BY game_pk, player_id, {graded_row_order_sql("$3")}
+            """
+
+
 async def _k_lines(game_pks: list[int]) -> dict[tuple[int, int], float]:
-    """The closing strikeout line per (game, pitcher), when loaded."""
+    """The closing strikeout line per (game, pitcher), when loaded.
+
+    SIM-555: the graded book's line (:data:`K_LINES_SQL`)."""
     try:
         conn = await _pg_connect()
     except Exception as exc:  # noqa: BLE001 — the line is optional
         print(f"  strikeout lines unavailable ({type(exc).__name__}: {exc})")
         return {}
     try:
-        rows = await conn.fetch(
-            """
-            SELECT DISTINCT ON (game_pk, player_id) game_pk, player_id, line
-            FROM raw.prop_odds
-            WHERE game_pk = ANY($1::int[]) AND prop_stat = 'strikeouts'
-              AND line_type = 'closing'
-            ORDER BY game_pk, player_id, fetched_at DESC
-            """,
-            game_pks,
-        )
+        rows = await conn.fetch(K_LINES_SQL, game_pks, bettable_labels(), graded_book_labels())
         return {(int(r["game_pk"]), int(r["player_id"])): float(r["line"]) for r in rows}
     finally:
         await conn.close()

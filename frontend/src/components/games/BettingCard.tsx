@@ -4,6 +4,9 @@
  * The betting surface for a game: per-market (moneyline / total / run-line)
  * edge reports with the favored side highlighted, +EV signal badges (stake% +
  * offered price), and a mock-vs-real `odds_source` indicator per market.
+ * SIM-555: a market priced from the stored lines (the closing line; before the game
+ * starts, also the latest current line) names the book of the fair price and, per
+ * side, the book with the best price at that line.
  *
  * Gated behind a "Load betting" button (the /edges + /signals endpoints run a
  * sim). Edges + signals are fetched together; signals are matched onto their
@@ -112,6 +115,9 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
       {markets.map((market) => {
         const sides = byMarket.get(market) ?? []
         const source = edges.odds_source[SOURCE_KEY[market] ?? market]
+        // SIM-555: a market priced from the stored lines names the one book whose
+        // row gave the fair price.
+        const fairBook = edges.fair_book_name?.[SOURCE_KEY[market] ?? market]
         const pricing = edges.run_line_pricing
         return (
           <section key={market} className={styles.market}>
@@ -119,9 +125,10 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
               <h4 className={styles.marketTitle}>{MARKET_LABELS[market] ?? market}</h4>
               {source && (
                 <Badge variant={source === 'mock' ? 'warning' : 'info'}>
-                  {source === 'mock' ? 'mock odds' : 'live odds'}
+                  {source === 'mock' ? 'mock odds' : source === 'stored' ? 'stored odds' : 'live odds'}
                 </Badge>
               )}
+              {fairBook && <span className={styles.stake}>fair price from {fairBook}</span>}
             </div>
 
             {market === 'run_line' && pricing?.shape === 'two_bets' && (
@@ -153,6 +160,8 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
                       <span className={e.edge > 0 ? styles.edgePos : styles.edgeNeg}>
                         edge {fmtSignedPct(e.edge)}
                       </span>
+                      {/* SIM-555: the book with the best price at this line. */}
+                      {e.price_book_name && <span>best at {e.price_book_name}</span>}
                     </div>
                     {signal && (
                       <div className={styles.signal}>

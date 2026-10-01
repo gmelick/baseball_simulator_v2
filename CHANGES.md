@@ -1,3 +1,245 @@
+# BUILT — every book's prices stored, one book per row, one graded book, a load guard; the census passed and every season 2019-2026 is re-loaded and checked — SIM-555, 2026-09-28 (re-load complete 2026-09-30)
+
+**Status at the commit (2026-10-01).** Every season from 2019 to 2026 is re-loaded one row per book
+(2019 and 2020 game odds only) and its census reads zero on every rule. The owner moved 883 placeholder
+team totals and 9,288 mixed three-way rows to `raw.game_odds_archive`. A gap sweep re-loaded the games
+a vendor error cut off (game 717171 and 35 more); the games still without a new row hold defective old
+rows. The first-five moneyline now grades 238 of 2,335 games in 2022, 1,822 of 2,424 in 2023 and
+2,140 of 2,440 in 2025: the vendor's first-five tie on most of the lost games is the first-inning one,
+and most books post only the two-way first-five bet, which nothing scores yet. Still open: retiring the
+old `consensus` rows (step 8; six games can never get a new row and need a named list) and the
+close-out. The plan's §12 has the detail.
+
+**Why it matters.** Every stored odds row said `consensus`, and the provider picked each
+side's closing price on its own: the newest stamp across every book, ties to the last-listed
+book. So a closing row could hold two books' prices — a bet nobody could place — and the
+accuracy comparison graded the simulator against such rows. Now every row holds ONE book's
+prices for all its sides and names the book (`bp:10` = FanDuel); every book the vendor lists
+is stored; the comparison grades against one book chosen by a fixed preference list; a load
+guard refuses a row no single book could have posted. The plan is
+`docs/audit/2026-09-25-sim555-one-book-per-odds-row-plan.md`; its §12 records the build.
+
+**What changed.**
+- **The provider** (`pipeline/bettingpros_odds_provider.py`) returns one row per book
+  (`get_odds_by_book` / `get_prop_odds_by_book`) from the payload it already fetched — no
+  extra vendor read. The opening row is the opener's (one book per market); the closing rows
+  are every book's, the vendor's blend stored as `bp:0` and never graded. A line flagged
+  `is_off` or inactive is not a quote. Each row carries the vendor's stamp (`book_line_at`).
+  The first-five rules drop a book whose first-five entry copies its own first-inning entry
+  (identical prices on the moneyline, within 0.03 implied on the run line and total) and
+  DraftKings' first-five run line and total from 2025-03-01. The old per-side scan, the
+  all-three-markets full-game row and `PROP_BOOKS` are gone.
+- **The vocabulary** (`pipeline/odds_provider.py`): the book names, the kinds (sportsbook,
+  blend, pick'em app, exchange, prediction market; an unlisted id is `unknown` and never
+  bettable), `GRADED_BOOK_PREFERENCE` (DraftKings, FanDuel, BetMGM, Caesars, Fanatics,
+  BetRivers, SugarHouse, bet365, theScore, Hard Rock — until the sharpness read ranks the
+  books), `ODDS_ROW_VERSION = "sim555.2"`.
+- **The load guard** (`pipeline/odds_row_guard.py`, new) refuses: a missing side; run-line
+  spreads of different size; equal spreads priced like a pair (the 2025 '+1 / +1' rows); a
+  first-five 'both +0.5' pair adding above 1.40; an over and an under at two lines; a
+  first-five total at 1.5 or below; a first-five tie above 0.35 implied; a three-way row
+  adding below 0.98; a closing line stamped more than 15 minutes after the scheduled start.
+- **The writers** — the historical loader, the live pipeline's odds cycles and the nightly
+  opening-line job — share one batched, guarded write path that carries the stamp; the
+  loader refuses the mock provider unasked, gains `--book`, and resumes by its own line
+  types and books. The live pipeline now also stores every book's line before first pitch
+  (every ten minutes per game; it is off in the app today). The opening-line job could not
+  write at all before (the hash column is NOT NULL since migration 0012).
+- **The readers** — the accuracy comparison grades the first preferred book's row (a tie-less
+  three-way row last), carries the best sportsbook price at the graded line on every record,
+  prices a run line listed as two bets over its own book's margin, and stamps its report;
+  the skill table, the paired read and the calibration layer refuse to mix reports graded
+  against different rows; the three probe scripts read the same row.
+- **The live pages** — the line-movement and CLV pages read the one-book rows and name the
+  book; `/edges` and `/signals` price from the stored lines (closing rows, and current rows
+  only while the game has not started): the fair probability from one book, the offered
+  price the best sportsbook price at that line, both books named.
+- **New scripts:** the census (`sim555_book_probe.py`, with an offline `--regate`), the
+  sharpness read, the retirement of the old rows, the report re-score, the census SQL.
+- **Migration 0028** (applied 2026-09-28): `book_line_at` on both odds tables, two per-book
+  indexes, two archive tables. No DuckDB change; no simulator change.
+
+**How it was built and checked.** Five parts built in parallel against one contract, each
+reviewed adversarially and fixed; then one review across the parts (four lenses, two skeptics
+per finding) and its fixes. The reviews found, among others: a failed first-inning read let
+unchecked first-five rows through; the twin rule dropped real near-even first-five moneylines;
+unlisted vendor ids (pick'em apps, prediction markets) defaulted to bettable; one failed game
+lookup cost ~410 vendor retries per game; the loader silently used the mock provider; the live
+broadcast crashed on the rows' datetimes; pre-game odds raced their game row's foreign key.
+Tests: 297 new (`tests/unit/test_sim555_*.py`), the old pins rewritten on purpose; the unit lane
+reads 4,864 passed; the regression lane, ruff and mypy are clean; an integration test runs 0028
+on real Postgres.
+
+**The census (run-book step 3, 300 games, 3,303 read-only vendor reads).** As first run, the
+gate FAILED, and reading the rows found three real defects the plan had not seen: FanDuel's 2025
+first-five moneylines pair first-inning team prices with a first-five tie (three prices adding
+to 0.67-0.94); several books post first-inning totals under the first-five label (the old store
+holds 112); and DraftKings' dated exclusion was too wide on the moneyline (66 of its 71 rows are
+real). The two new guard rules and the per-market exclusion above are the fixes. The re-grade of
+the same payloads passes: no bettable book keeps a first-inning-shaped first-five row, and the
+exclusion is borne out on both markets it names. The stamp read confirms the design: through
+2024 every newest closing stamp sits before the scheduled start, in 2025-2026 every one sits
+0-5.2 minutes after it (the vendor's game-time snapshot), inside the 15-minute grace. The three
+defects of unknown cause are explained: the 2022-2024 team totals at a line of 1 are Caesars'
+`is_off` lines, and the first-five rows priced like the first inning are FanDuel's `is_off` lines
+and copied openers, DraftKings' 2025-2026 entries and the books above.
+
+**Run.** A two-game smoke wrote 175 game rows and 1,913 prop rows (0 refused); the census SQL
+reads zero rows on every rule. **The 2024 and 2025 re-loads started 2026-09-29 02:06 UTC**,
+detached, about 11 hours each. At 02:16 UTC the host blue-screened (a driver fault; 32
+unexpected reboots in the prior 30 days) and the loader containers stayed down; the database
+and the working tree came through intact. The loads were relaunched at 02:52 UTC restart-safe
+(`scripts/_sim555_load_<season>.sh`, the Docker restart policy `unless-stopped`, a restart
+skips the games already loaded; the plan's §12 has the top-up rule for the game in flight).
+At 03:02 UTC the host blue-screened again, and the restart failed (the loaders started while
+Postgres was still recovering, and the first wrapper idled instead of retrying). Windows Error
+Reporting names the driver in both crashes and in every named blue screen of the month (28 of
+28): `vgk.sys`, Riot Vanguard, the anti-cheat of Valorant / League of Legends. The loader gained
+`--done-file` (a game is listed only once its last row is written, so a cut-off game reloads in
+full; 4 tests), and the wrappers now wait for the database and retry. **The loads are on hold**
+(48 games of 2024 and 33 of 2025 written) until the owner removes or disables Vanguard, or
+chooses to run through the crashes; the relaunch command is in the plan's §12. **The owner
+chose to run through them: both seasons relaunched 2026-09-29 03:34 UTC** with the fixed
+wrappers (done-lists `scripts/sim555_load_<season>.done`). **2024 finished** at 13:05 UTC
+(2,472 games; 120 of 2.94 M rows refused) and its census reads clean but for one finding: 883
+full-game team totals at a line of 1 (every Caesars opening team total of 2024, prices such as
+-182 / -1200; the opener field carries no `is_off` flag). The guard gained
+`team_total_placeholder_line` (a full-game team total at 1 or below; 1.5 is a real alternate
+line), the 2025 and 2026 loaders were restarted onto it, and moving the 883 rows to the archive
+waits for the owner (the session's permission check refused the delete). **2026 started** at
+13:12 UTC in 2024's slot. **2025 finished** at 15:19 UTC (all
+2,477 games) and its census reads clean on every rule; a user-initiated Windows restart at 13:47 UTC
+was absorbed by the wrapper (it waited for the database and resumed from its done-list). The owner
+moved the 883 placeholder team-total rows of 2024 into `raw.game_odds_archive` (0 left in the live
+table). **2023 started** at 17:48 UTC in 2025's slot; the guard refuses Caesars' 2023 opening team
+totals at 1 as it loads. **The book order and the re-score (run book steps 5 and 7):** the sharpness
+read on 2024-2025 and a verification workflow set `GRADED_BOOK_PREFERENCE = (12, 19, 10, 33, 18, 24, 13,
+49, 14, 15, 27)` — DraftKings first on solid evidence, BetMGM second (a better benchmark than theScore on
+the props DraftKings lacks), the rest near-ties ordered by freshness and coverage, the copies last. The
+verification also found three-way moneylines pairing two-way team prices with a tie; two guard rules
+refuse them (`three_way_two_way_team_prices`, `three_way_sum_above_max`), the running loaders were
+restarted onto them, and the 9,288 stored rows of that shape were moved to `raw.game_odds_archive` on
+2026-09-30 at the owner's instruction (`scripts/sim555_archive_mixed_three_way.sql`). The
+1,000-game baseline was re-scored (`--drop-not-reloaded`, a new flag, drops two games the matcher
+declines): the moneyline, first-five moneyline and first-inning run barely move; the first-inning
+moneyline goes from level with the line to behind it (+0.0075), the old mixed row's artefact removed.
+The line-carrying markets keep their old prices until the full re-run (the graded line moved on 15-35%
+of totals, team totals, first-five markets and strikeouts); the plan's §12 has the table. Next: the census SQL per season, the sharpness read and the
+owner's preference list, the other six seasons (~49 h), the re-score of the stored reports, the
+retirement of the `consensus` rows (a trap for that step is in the plan's §12), the close.
+**Known limits, left for later** (plan §12): a `current` price that returns A → B → A is not
+recorded (a last-seen stamp; the live-slate epic, SIM-519); the live pipeline's vendor reads block
+its event loop (SIM-519); the loader has no retry with backoff.
+
+# Design APPROVED — every book's prices stored, one book per row, one graded book: all six decisions taken as recommended — SIM-555, 2026-09-28
+
+The owner accepted every recommendation of the version-2 design
+(`docs/audit/2026-09-25-sim555-one-book-per-odds-row-plan.md`; the page https://claude.ai/artifact/M2Rv8uM3M9zt5Yc21kFCC1): (1) the graded
+book is the first on a fixed preference list with a valid closing row, the same list on every
+game, DraftKings first until the no-simulator sharpness read on 2024-2025 ranks the books; (2)
+the line's stamp is stored (`book_line_at`, migration 0028) and a closing line stamped more than
+15 minutes after the scheduled start is refused; (3) the first-five twin and tie rules plus
+DraftKings' first-five entries excluded from 2025-03-01, with the 300-game read-only census as
+the gate before the re-load; (4) one row per book for the game markets and the props on all
+eight seasons (8-10 GB, the inserts batched), 2024 and 2025 first, the stored reports re-scored
+for the fixed-line markets and the full 16-hour re-run only on the owner's call; (5) the
+`consensus` rows archived into `raw.game_odds_archive` / `raw.prop_odds_archive` and deleted
+after the census passes; (6) the sportsbooks only count as a bettable price (the blend, the
+daily-fantasy apps, the exchange and the prediction markets are stored and told apart by kind).
+Nothing is built; the build follows the plan's §8 run book.
+
+# Design v2 — every book's prices stored, one book per row, one graded book chosen by preference: PROPOSED with six owner decisions — SIM-555, 2026-09-28
+
+**Two owner rulings on 2026-09-28** reshaped the design of 2026-09-25 (the plan is
+`docs/audit/2026-09-25-sim555-one-book-per-odds-row-plan.md`, §11 lists the changes; the page
+is https://claude.ai/artifact/M2Rv8uM3M9zt5Yc21kFCC1, v2). First, closing line value (whether the opening price beat the close) is not
+a metric the model is judged by. So the opening and closing rows need no longer share a
+book, the line-movement page gets the label filter and the book name and nothing more, and
+the two CLV lines of the ticket's definition of done are struck. Second, the platform tracks
+every book's price. The payload the provider already downloads lists every book's line on
+every side (8-11 sportsbooks on the full-game markets, 6-9 on the first-five run line, 4-9
+on a strikeout prop, plus the vendor's blend and, since 2025, daily-fantasy apps, an
+exchange and three prediction markets) and the provider keeps one line per side.
+
+**What changed.** The provider returns one labelled row per book (`get_odds_by_book` /
+`get_prop_odds_by_book`; the single-row methods return the first preferred book); the
+loader and the live cycle persist every kept row, batched per offer; the vendor's blend is
+stored as `bp:0` and never graded; the kinds (sportsbook, blend, daily fantasy, exchange,
+prediction market) are a lookup in the vocabulary. The accuracy comparison grades against
+ONE book, the first on a fixed preference list with a valid closing row for the market, the
+same list on every game (`GRADED_BOOK_PREFERENCE`, DraftKings first), and a new pure
+odds-versus-outcome read (`scripts/sim555_book_sharpness.py`, no simulator) ranks the books
+on 2024-2025 so the owner sets the list from a measurement. Each accuracy record carries the
+best sportsbook price at the graded line and its book; `/edges` and `/signals` price from
+the best stored row and name the book. Measured on the 15 probe games: the best sportsbook
+price beats DraftKings' by 1.0 (moneyline), 1.3 (run line), 0.9 (total) and 1.5 (strikeouts)
+points of implied probability on average, up to 3.5 (10 on strikeouts); the two-side margin
+falls from 4.4-4.7% at one book to 1.9-3.0% at the best of the market (strikeouts 6.3% to
+3.5%). Storage: about 2 million game rows and 20 million prop rows, 8-10 GB against 1.9 GB
+today; the database volume has 926 GB free; no extra vendor read. Migration 0028 gains two
+indexes. Version 1's opener anchor, its fallback list and its two-label rule are gone.
+Unchanged: the guard, the stamp and its 15-minute grace, the first-five twin and tie rules
+with DraftKings' dated exclusion, the 300-game census gate, the re-load's order (2024 and
+2025 first, ~73 h), the retirement of the `consensus` rows, the readers' filter and the
+report stamp. Seventeen tests. Six decisions in §10 (a sixth asks which kinds count as a
+bettable price; sportsbooks only recommended). Nothing is built.
+
+# Design — one book's prices per odds row, named on the row, with a guard against impossible rows: PROPOSED with five owner decisions — SIM-555, 2026-09-25
+
+**What the ticket asks.** Every new odds row holds one sportsbook's prices for all its sides
+and names the book; a market's opening and closing rows come from the same book; a load
+guard refuses a row that cannot be one bet; no first-five row carries first-inning prices;
+every closing line is stamped before first pitch or the ticket records why not; the
+2019-2026 odds re-load and the old `consensus` rows go; the live line-movement page and
+CLV read one book at a time.
+
+**What the code and the data say** (the plan is
+`docs/audit/2026-09-25-sim555-one-book-per-odds-row-plan.md`; the page is https://claude.ai/artifact/M2Rv8uM3M9zt5Yc21kFCC1). The
+provider picks each side's closing price on its own (the newest update stamp across every
+book, ties to the last-listed book) and the loader never passes a book, so every stored row
+says `consensus`. A read-only probe of 15 games (2023-2026, six markets, 107 vendor reads)
+found: the feed names one opener book on both sides of all 90 offers (FanDuel 63,
+DraftKings 14, Fanatics 7, BetMGM 4, bet365 2) and that book still quotes every side at the
+close on 84 of 90 — the six misses are all first-five run lines FanDuel opened and closes
+flagged `is_off`; the old rule split a full-game closing row across two books on 7 of 45
+rows and took bet365 on 13 of 15 moneylines of 2025-2026 because bet365 is listed last.
+The update stamp changed meaning in 2025: in 2023-2024 an offer's newest stamp sits 0.1-45
+minutes BEFORE the scheduled start with 7-13 distinct stamps (the times the lines changed);
+in 2025-2026 it sits 0.1-5.0 minutes AFTER the start on all 42 offers, one shared stamp on
+19 (a snapshot at game time), so a guard at the scheduled start drops every 2025-2026
+close and a 15-minute grace drops none. Our market ids are the vendor's (283 "Fifth Inning
+Run Line", period inning-5; 282 "First Inning Run Line"); the first-inning prices inside
+first-five rows sit in two books' entries within the vendor's market: FanDuel's first-five
+closing lines are `is_off` on all 15 games and its 2025-06-01 first-five OPENER copies its
+first-inning opener; DraftKings' first-five entries are real in 2024 and first-inning bets
+on all six 2025-2026 games (both teams +0.5 at -380/-500; both -1.5 at +750/+550). The
+real inning grids of 17,810 Final games say which shapes are impossible: tied after one
+inning 53.3%, after five 15.2%; a two-run lead after five 33.0% home / 27.3% away, never
+below 13.6% in any favourite bucket; after one inning 12.1% / 9.4% — so a first-five
+"both +0.5" pair adding above 1.40 or a first-five tie above 0.35 is a first-inning bet,
+while a -1.5 at +400 to +650 can be either segment (no price band separates the ±1.5
+rows; the book census does). The store: first-five run-line opening rows priced like the
+first inning 1,552 of 2,439 in 2025 and 1,294 of 2,322 in 2022; first-five moneyline ties
+above 0.35 on 2,125 closing rows of 2022; the +1/+1 rows 1,186 + 12; 3,575 + 39,572
+duplicate 2024 rows.
+
+**Recommendation.** The opener's book on every side of both rows, the first book of a
+fixed retail list when the opener cannot quote the close (never book 0, never a prediction
+market), the label `bp:<id>` and the line's stamp on the row (`book_line_at`, migration
+0028, plus two archive tables); a pure guard module both writers call (spreads of
+different size, equal non-zero spreads priced like a pair 1.00-1.10, an over and an under
+at different lines, a missing side, a first-five win-or-tie pair above 1.40 or tie above
+0.35, a closing line stamped more than 15 minutes after the scheduled start), the
+first-five twin rule (a book's entry copying its own first-inning entry) and a dated
+exclusion of DraftKings' first-five entries from 2025-03-01, confirmed by a 300-game
+read-only census before the re-load; every reader filters to the label and the accuracy
+reports carry `odds_row_version`; the line-movement series orders by line type and refuses
+a total's CLV across a moved line; the live prop cycle asks DraftKings and FanDuel by id;
+the re-load detached, 2024 and 2025 first (~24 h), then 2026 and 2023, then 2019-2022
+(~73 h in all, the app up); the stored reports re-scored for the fixed-line markets; the
+`consensus` rows archived and deleted after the census passes. Sixteen tests. No
+simulator change. Nothing is built. Five decisions in §10.
+
 # Design — turn on the catcher pitch-receiving factor: PROPOSED with four owner decisions — SIM-526, 2026-09-25
 
 **What the ticket asks.** The catcher pitch-receiving factor (the ratio the play-picker

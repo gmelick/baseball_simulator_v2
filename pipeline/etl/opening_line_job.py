@@ -17,10 +17,32 @@ What it does
 ------------
 1. Queries the MLB schedule for all games in the next 7 days.
 2. For each game_pk, checks raw.game_odds for an existing line_type='opening' row.
-3. If none exists, fetches the current market line and stores it as line_type='opening'.
+3. If none exists, fetches the moneyline's opening rows and stores them as
+   line_type='opening'.
 4. When a starting pitcher has been announced (status = 'Preview' and lineup posted),
    also stores player prop lines as line_type='opening' in raw.prop_odds.
 5. Logs a raw.pipeline_run_log row with opening_line_games_captured count.
+
+SIM-555 (2026-09-28): one row per book
+--------------------------------------
+The job reads the provider's by-book rows (``odds_rows_by_book`` /
+``prop_rows_by_book``). BettingPros gives at most one opening row per market:
+the opener's, labelled ``book = 'bp:<id>'`` and stamped ``book_line_at``. The
+opener can be any kind of book (a sportsbook, the blend, an exchange, a
+prediction market); the job stores it under its label, as the historical
+loader does, and the readers keep only the bettable books. When the two sides
+name two openers the provider gives an empty row, and the job writes nothing:
+an empty row would break the NOT NULL ``raw.prop_odds.line`` and abort the
+run, or store an all-empty game row that blocks tomorrow's retry. Every
+non-empty row passes the load guard (``pipeline/odds_row_guard.py``) first; a
+refused row is logged and counted. The mock provider keeps its behaviour: its
+one ``consensus`` row per market.
+
+The rows go to the database through the live pipeline's writers
+(``insert_game_odds_rows`` / ``insert_prop_odds_rows``): the same SQL, the
+``odds_hash`` the live schema requires (NOT NULL on ``raw.game_odds`` since
+migration 0012; before SIM-555 this job sent none, so every game-row INSERT
+failed), and the ``ON CONFLICT ... DO NOTHING`` dedup.
 
 Acceptance gate
 ---------------
@@ -63,11 +85,23 @@ _PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+# SIM-555: the live pipeline's writers: the one INSERT, the odds_hash, the dedup.
+from pipeline.live.live_ingestion_pipeline import (  # noqa: E402
+    insert_game_odds_rows,
+    insert_prop_odds_rows,
+)
 from pipeline.odds_provider import (  # noqa: E402
     BATTER_PROP_STATS,
+    GAME_ODDS_FIELDS,
     PITCHER_PROP_STATS,
+    OddsProvider,
     get_odds_provider,
+    odds_rows_by_book,
+    prop_rows_by_book,
 )
+
+# SIM-555: the load guard (pure; no I/O).
+from pipeline.odds_row_guard import RefusalTally, check_row  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -102,6 +136,15 @@ BATTER_PROP_TYPES: tuple[str, ...] = BATTER_PROP_STATS
 # get_prop_odds() (the default mock keeps the vig model, RNG seeding, and line
 # centres in a single place) — the provider is selected via the SIM-370 seam.
 
+#: SIM-555: the odds fields of a prop row; a row with all three empty is not a quote.
+_PROP_ODDS_FIELDS: tuple[str, ...] = ("line", "over_ml", "under_ml")
+
+
+def _has_odds(row: dict[str, Any]) -> bool:
+    """SIM-555: True when a game or prop row carries at least one price or line."""
+    fields = _PROP_ODDS_FIELDS if row.get("prop_stat") is not None else GAME_ODDS_FIELDS
+    return any(row.get(f) is not None for f in fields)
+
 
 # ---------------------------------------------------------------------------
 # Main job class
@@ -113,8 +156,9 @@ class OpeningLineJob:
     Nightly job that captures opening lines for all games in the 7-day lookahead.
 
     Designed to be idempotent: calling it multiple times on the same date does
-    not duplicate rows (uses "already exists" checks rather than INSERT … ON CONFLICT
-    to keep the logic explicit and auditable).
+    not duplicate rows. The "already exists" checks skip a game or a pitcher
+    that already has an opening row; SIM-555: the writes also carry the
+    ``odds_hash`` dedup (INSERT … ON CONFLICT DO NOTHING) of the live writers.
 
     Parameters
     ----------
@@ -136,6 +180,10 @@ class OpeningLineJob:
         self._lookahead = lookahead_days
         self._dry_run = dry_run
         self._db: asyncpg.Pool | None = None
+        # SIM-555: one provider per run (its offers cache then serves the game
+        # and prop reads of one event), and the guard's refusals for the run.
+        self._provider: OddsProvider | None = None
+        self.refusals = RefusalTally()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -192,11 +240,21 @@ class OpeningLineJob:
                     log.debug("game %s: opening line already captured", game_pk)
                     continue
 
-                # Capture game-level opening line
-                odds = self._fetch_current_odds(game_pk)
-                await self._store_opening_line(game_pk, odds)
-                summary["opening_line_games_captured"] += 1
-                log.info("game %s: opening line captured (mock=%s)", game_pk, odds["is_mock"])
+                # Capture the game-level opening rows (SIM-555: one per book the
+                # provider gives; none when it has no one-book opening row).
+                rows = self._fetch_opening_rows(game_pk)
+                for odds in rows:
+                    await self._store_opening_line(game_pk, odds)
+                if rows:
+                    summary["opening_line_games_captured"] += 1
+                    log.info(
+                        "game %s: %d opening row(s) captured (books %s)",
+                        game_pk,
+                        len(rows),
+                        ", ".join(str(r.get("book")) for r in rows),
+                    )
+                else:
+                    log.info("game %s: no opening line to capture yet", game_pk)
 
                 # Capture prop opening lines if starting pitcher announced
                 if game.get("home_pitcher_id") or game.get("away_pitcher_id"):
@@ -212,6 +270,8 @@ class OpeningLineJob:
                 "Opening line job complete: %s",
                 dict(summary.items()),
             )
+            if self.refusals.refused:
+                log.info("%s", self.refusals.summary())
 
         except Exception as exc:
             log.error("Opening line job failed: %s", exc, exc_info=True)
@@ -299,19 +359,54 @@ class OpeningLineJob:
     # Odds fetch  (via the SIM-370 provider seam; ODDS_PROVIDER selects source)
     # ------------------------------------------------------------------
 
-    def _fetch_current_odds(self, game_pk: int) -> dict[str, Any]:
+    def _odds_provider(self) -> OddsProvider:
+        """The configured provider (the SIM-370 seam), built once per job."""
+        if self._provider is None:
+            self._provider = get_odds_provider()
+        return self._provider
+
+    def _keep(self, game_pk: int, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """SIM-555: the rows worth storing: non-empty, and kept by the load guard.
+
+        A row with no price or line is dropped silently. A refused row is
+        logged at INFO and counted in ``self.refusals``.
         """
-        Returns the game-level odds dict for ``game_pk`` from the configured
-        provider (the SIM-370 seam; defaults to the deterministic mock when
-        ODDS_PROVIDER is unset).
+        kept: list[dict[str, Any]] = []
+        for row in rows:
+            if not _has_odds(row):
+                continue
+            self.refusals.offered()
+            refusal = check_row(row)
+            if refusal is None:
+                kept.append(row)
+                continue
+            prop_stat = row.get("prop_stat")
+            market = str(prop_stat if prop_stat is not None else row.get("market_type"))
+            self.refusals.add(refusal, market, str(row.get("book")))
+            log.info(
+                "refused game %s %s/%s %s: %s",
+                game_pk,
+                row.get("line_type"),
+                market,
+                row.get("book"),
+                refusal.message,
+            )
+        return kept
+
+    def _fetch_opening_rows(self, game_pk: int) -> list[dict[str, Any]]:
         """
-        return get_odds_provider().get_odds(
-            game_pk,
-            line_type="opening",
-            market_type="moneyline",
-            book="consensus",
-            is_sharp_book=False,
+        SIM-555: the moneyline's opening rows for ``game_pk`` that are worth storing.
+
+        Read through ``odds_rows_by_book`` from the configured provider (the
+        SIM-370 seam; the deterministic mock when ODDS_PROVIDER is unset, which
+        gives its one ``consensus`` row). Empty rows are dropped and the load
+        guard checks the rest, so the list is empty when the provider has no
+        one-book opening row.
+        """
+        rows = odds_rows_by_book(
+            self._odds_provider(), game_pk, line_type="opening", market_type="moneyline"
         )
+        return self._keep(game_pk, rows)
 
     # ------------------------------------------------------------------
     # Database writes
@@ -321,38 +416,20 @@ class OpeningLineJob:
         """
         Inserts a single raw.game_odds row with line_type='opening'.
         Skips the write if dry_run=True.
+
+        SIM-555: the row keeps its book label and writes ``book_line_at``
+        (migration 0028). It goes through the live writer
+        (``insert_game_odds_rows``), so it carries the ``odds_hash`` the live
+        schema requires and the ``ON CONFLICT`` dedup. A row with no
+        ``line_type`` key is stored as ``'opening'``, as before.
         """
         if self._dry_run:
-            log.info("[DRY RUN] Would insert opening line for game %s", game_pk)
+            log.info(
+                "[DRY RUN] Would insert opening line for game %s (%s)", game_pk, odds.get("book")
+            )
             return
 
-        await self._db.execute(
-            """
-            INSERT INTO raw.game_odds
-                (game_pk, source, is_mock,
-                 book, line_type, market_type, is_sharp_book,
-                 home_ml, away_ml,
-                 home_spread, home_spread_ml, away_spread, away_spread_ml,
-                 total_line, over_ml, under_ml)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-            """,
-            game_pk,
-            odds.get("source", "mock"),
-            odds.get("is_mock", True),
-            odds.get("book", "consensus"),
-            odds.get("line_type", "opening"),
-            odds.get("market_type", "moneyline"),
-            odds.get("is_sharp_book", False),
-            odds.get("home_ml"),
-            odds.get("away_ml"),
-            odds.get("home_spread"),
-            odds.get("home_spread_ml"),
-            odds.get("away_spread"),
-            odds.get("away_spread_ml"),
-            odds.get("total_line"),
-            odds.get("over_ml"),
-            odds.get("under_ml"),
-        )
+        await insert_game_odds_rows(self._db, game_pk, [{"line_type": "opening", **odds}])
 
     async def _capture_prop_opening_lines(
         self,
@@ -370,13 +447,19 @@ class OpeningLineJob:
           - Batter props deferred: lineup order not reliably known this far
             in advance; captured intraday once lineup is posted.
 
-        Prop generation is delegated to the configured provider's
-        get_prop_odds() via the SIM-370 seam (the default mock keeps the vig
-        model and RNG seeding in a single canonical place — SIM-134).
+        Prop generation is delegated to the configured provider via the SIM-370
+        seam (the default mock keeps the vig model and RNG seeding in a single
+        canonical place — SIM-134).
 
-        Returns the number of prop rows inserted.
+        SIM-555: each (pitcher, market) stores every by-book opening row the
+        provider gives that the load guard keeps, with its book label and
+        ``book_line_at``, in one batch through the live writer
+        (``insert_prop_odds_rows``: the ``odds_hash`` and the dedup); a market
+        with no such row stores nothing.
+
+        Returns the number of prop rows sent (the dedup may insert fewer).
         """
-        provider = get_odds_provider()
+        provider = self._odds_provider()
         inserted = 0
 
         for pitcher_id in filter(None, [home_pitcher_id, away_pitcher_id]):
@@ -400,47 +483,43 @@ class OpeningLineJob:
                 continue
 
             for prop_stat in PITCHER_PROP_TYPES:
-                # SIM-370 seam: delegate to the configured provider's
-                # get_prop_odds() (the default mock is the single source of
-                # truth for line centres, vig, and RNG seeding — SIM-134).
-                prop = provider.get_prop_odds(game_pk, pitcher_id, prop_stat, line_type="opening")
-                if not self._dry_run:
-                    await self._db.execute(
-                        """
-                        INSERT INTO raw.prop_odds
-                            (game_pk, player_id, source, is_mock,
-                             prop_stat, line, over_ml, under_ml,
-                             book, line_type, is_sharp_book)
-                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-                        """,
-                        game_pk,
-                        pitcher_id,
-                        prop.get("source", "mock"),
-                        prop.get("is_mock", True),
-                        prop["prop_stat"],  # SIM-134: was prop["prop_type"]
-                        prop["line"],
-                        prop.get("over_ml"),
-                        prop.get("under_ml"),
-                        prop.get("book", "consensus"),
-                        prop.get("line_type", "opening"),
-                        prop.get("is_sharp_book", False),
-                    )
-                    inserted += 1
-                    log.debug(
-                        "Inserted opening prop %s=%.1f for pitcher %s game %s",
-                        prop_stat,
-                        prop["line"],
-                        pitcher_id,
-                        game_pk,
-                    )
-                else:
-                    log.info(
-                        "[DRY RUN] Would insert opening prop %s=%.1f for pitcher %s game %s",
-                        prop_stat,
-                        prop["line"],
-                        pitcher_id,
-                        game_pk,
-                    )
+                # SIM-370 seam: delegate to the configured provider (the default
+                # mock is the single source of truth for line centres, vig, and
+                # RNG seeding — SIM-134). SIM-555: every book's opening row.
+                rows = prop_rows_by_book(
+                    provider, game_pk, pitcher_id, prop_stat, line_type="opening"
+                )
+                # SIM-555: the row is keyed to this game and pitcher, and a row
+                # with no line_type key is stored as 'opening', as before.
+                kept = [
+                    {"line_type": "opening", **prop, "game_pk": game_pk, "player_id": pitcher_id}
+                    for prop in self._keep(game_pk, rows)
+                ]
+                if not kept:
+                    continue
+                if self._dry_run:
+                    for prop in kept:
+                        log.info(
+                            "[DRY RUN] Would insert opening prop %s=%.1f for pitcher %s "
+                            "game %s (%s)",
+                            prop_stat,
+                            prop["line"],
+                            pitcher_id,
+                            game_pk,
+                            prop.get("book"),
+                        )
+                    continue
+                # SIM-555: one batch per market, through the live writer (the
+                # odds_hash and the ON CONFLICT dedup).
+                inserted += await insert_prop_odds_rows(self._db, kept)
+                log.debug(
+                    "Inserted %d opening prop row(s) %s for pitcher %s game %s (%s)",
+                    len(kept),
+                    prop_stat,
+                    pitcher_id,
+                    game_pk,
+                    ", ".join(str(prop.get("book")) for prop in kept),
+                )
 
         return inserted
 

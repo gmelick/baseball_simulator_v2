@@ -26,6 +26,10 @@ export interface BetSignal {
   confidence: number
   rank: number
   report: EdgeReport
+  /** SIM-555: the stored book label of the offered price (null: injected or mock). */
+  price_book?: string | null
+  /** SIM-555: that book's display name (e.g. "FanDuel"). */
+  price_book_name?: string | null
 }
 
 /**
@@ -47,10 +51,17 @@ export interface EdgesResponse {
   n_iterations: number
   base_seed: number | null
   markets: string[]
-  /** market → "injected" | "mock" (where each market's prices came from). */
+  /** market → "injected" | "stored" | "mock" (where each market's prices came from). */
   odds_source: Record<string, string>
   edges: EdgeReport[]
   run_line_pricing?: RunLinePricing | null
+  /**
+   * SIM-555: market → the stored label of the graded book, the one book whose
+   * row gave the fair probability (stored markets only).
+   */
+  fair_book?: Record<string, string>
+  /** SIM-555: market → that book's display name (e.g. "DraftKings"). */
+  fair_book_name?: Record<string, string>
 }
 
 export interface SignalsResponse {
@@ -58,9 +69,14 @@ export interface SignalsResponse {
   n_iterations: number
   base_seed: number | null
   config: Record<string, number>
+  /** market → "injected" | "stored" | "mock". */
   odds_source: Record<string, string>
   signals: BetSignal[]
   run_line_pricing?: RunLinePricing | null
+  /** SIM-555: market → the graded book's stored label (stored markets only). */
+  fair_book?: Record<string, string>
+  /** SIM-555: market → that book's display name. */
+  fair_book_name?: Record<string, string>
 }
 
 // --- line-movement / CLV (SIM-396) ----------------------------------------
@@ -77,13 +93,18 @@ export interface LineQuote {
   implied_prob: number
   /** SIM-549: the other side's own spread (run lines only). */
   other_line?: number | null
+  /** SIM-555: the book's display name (e.g. "FanDuel" for `bp:10`). */
+  book_name?: string
 }
 
 export interface LineMovement {
   game_pk: number
   market_type: string
   side: string
+  /** SIM-555: the stored book label, `bp:<id>`. */
   book: string | null
+  /** SIM-555: the book's display name (e.g. "FanDuel"); empty with no book. */
+  book_name?: string
   quotes: LineQuote[]
   opening_american: number | null
   closing_american: number | null

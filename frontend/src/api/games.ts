@@ -208,6 +208,13 @@ export interface EdgeReport {
   sim_fair_american: number
   clv: Record<string, unknown> | null
   positive_edge: boolean
+  /**
+   * SIM-555: the stored book label of the offered price (e.g. `bp:10`), when
+   * the market was priced from the stored lines; null for an injected or mock price.
+   */
+  price_book?: string | null
+  /** SIM-555: that book's display name (e.g. "FanDuel"). */
+  price_book_name?: string | null
 }
 
 export interface PropEdge {

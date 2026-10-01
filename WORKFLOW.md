@@ -1,6 +1,6 @@
 # MLB Baseball Simulation Platform — End-to-End Workflow
 
-*Last updated: 2026-09-17 (Alembic head 0027; the 2026-06-04 Phase-7 refresh: Python 3.13 · DuckDB v30 · full API surface live)*
+*Last updated: 2026-09-28 (Alembic head 0028; the 2026-06-04 Phase-7 refresh: Python 3.13 · DuckDB v30 · full API surface live)*
 
 This document is the operator's manual.  It describes how to run the
 platform end-to-end from a clean checkout, and how to confirm each
@@ -16,7 +16,7 @@ exited zero.
 
 > **Phase note.** As of 2026-06-06 the platform is at **Phase 7 — live
 > bring-up (largely complete)**; Phases 1–6 are COMPLETE and CI-green
-> (Python 3.13 / numpy 2.x; 89% coverage; DuckDB v30 / Alembic 0027).  The
+> (Python 3.13 / numpy 2.x; 89% coverage; DuckDB v30 / Alembic 0028).  The
 > full API surface (games, simulate, betting, WebSocket, odds, similarity,
 > metrics) is live.  Calibration is LIVE (SIM-432; win-prob map = fitted
 > reliability-curve), the full-pool sampler + all realism flags are ON in
@@ -72,7 +72,7 @@ make test
 ```
 
 **What good looks like.**
-- `make migrate` ends with `alembic current` printing the head revision — the newest file under `db/migrations/versions/` (`0027` as of 2026-09-17).
+- `make migrate` ends with `alembic current` printing the head revision — the newest file under `db/migrations/versions/` (`0028` as of 2026-09-28).
 - `make test` exits 0 (unit suite green at 89% coverage; ~22 slow/skipped).
 
 ### 1.3 Local Python development (without Docker)
@@ -199,12 +199,15 @@ make calibrate
 :: fits the win-prob reliability curve back into the report.
 make validate-props FLAGS="--seasons 2024 --max-games 50"
 
-:: SIM-435: backfill OPENING + CLOSING odds for Final games into
-:: raw.game_odds / raw.prop_odds (the entry+closing lines the CLV backtest
-:: scores against). Network-bound: set ODDS_PROVIDER=bettingpros + ODDS_API_KEY
-:: for real lines, or leave unset for the deterministic MockOddsAPI.
-make load-historical-odds
-::   smoke run:  make load-historical-odds FLAGS="--seasons 2024 --max-games 200"
+:: SIM-435 / SIM-555: backfill OPENING + CLOSING odds for Final games into
+:: raw.game_odds / raw.prop_odds, one row per book ('bp:<id>'), each row checked
+:: by the load guard (the closing lines the accuracy comparison scores against).
+:: Network-bound. Name the provider in FLAGS: --provider bettingpros for real
+:: lines (ODDS_API_KEY is in the app container; an ODDS_PROVIDER set on the host
+:: never reaches it), --provider mock for the wiring smoke (the loader refuses
+:: the mock unasked). --book NAME (draftkings, bp:12, ...) loads one book.
+make load-historical-odds FLAGS="--seasons 2024 --provider bettingpros"
+::   smoke run:  make load-historical-odds FLAGS="--seasons 2024 --max-games 5 --provider bettingpros --book draftkings"
 ```
 
 **SIM-429 CLV backtest (`scripts/clv_backtest.py`).**  Scores the model's
@@ -256,7 +259,7 @@ python scripts\check_bat_side_coverage.py --out docs\data_quality\2026-05-20-bat
 echo %ERRORLEVEL%
 ```
 
-**What good looks like.**  ~700 000 rows per fully-loaded season; `alembic current` prints the newest revision under `db/migrations/versions/` (`0027` as of 2026-09-17); `check_bat_side_coverage.py` exits 0.
+**What good looks like.**  ~700 000 rows per fully-loaded season; `alembic current` prints the newest revision under `db/migrations/versions/` (`0028` as of 2026-09-28); `check_bat_side_coverage.py` exits 0.
 
 ### 2.2 DuckDB analytical layer
 
