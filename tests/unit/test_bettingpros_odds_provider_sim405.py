@@ -326,7 +326,11 @@ def test_resolve_event_picks_the_doubleheader_game_actually_requested():
 
 def test_resolve_event_rejects_a_match_far_from_the_real_start_time():
     """The single team-name match exists, but its scheduled time is hours away
-    from the real game's start -- that must not be silently accepted."""
+    from the real game's start -- that must not be silently accepted.
+
+    SIM-555 (2026-10-01): the game is game 1 of a double-header, and the vendor
+    lists only game 2. Without the double-header, the single-event rule takes a
+    lone event up to 12 hours away (tests/unit/test_sim555_matcher.py)."""
     schedule = _schedule_for(
         999003,
         game_date_utc="2024-08-15T17:10:00Z",
@@ -334,6 +338,7 @@ def test_resolve_event_rejects_a_match_far_from_the_real_start_time():
         home="Detroit Tigers",
         away="Seattle Mariners",
     )
+    schedule["dates"][0]["games"][0]["doubleHeader"] = "S"
     far_off_event = {
         "id": 333,
         "home": "DET",

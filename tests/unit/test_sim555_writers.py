@@ -1230,6 +1230,96 @@ class TestPregameCycle:
         p._persist_pregame_odds.assert_awaited_once_with(11, preview)
         assert p._upsert_game_record.await_count == 2
 
+    @pytest.mark.asyncio
+    async def test_the_poll_makes_the_provider_forget_a_postponed_game(self) -> None:
+        """SIM-555 (2026-10-01): the provider keeps a found game for the process
+        lifetime. Each entry of a postponed, suspended or made-up game makes it forget
+        the game, so the made-up game is matched from its new schedule."""
+        postponed = {  # the original date's entry, rescheduled
+            "gamePk": 21,
+            "rescheduleGameDate": "2024-07-13",
+            "status": {"abstractGameState": "Final", "detailedState": "Postponed"},
+        }
+        not_yet_rescheduled = {
+            "gamePk": 22,
+            "status": {"abstractGameState": "Final", "codedGameState": "D"},
+        }
+        made_up = {
+            "gamePk": 23,
+            "rescheduledFrom": "2024-05-25T00:15:00Z",
+            "status": {"abstractGameState": "Preview", "detailedState": "Scheduled"},
+        }
+        made_up_final = {  # after its first pitch the game keeps its facts
+            "gamePk": 24,
+            "rescheduledFrom": "2024-05-25T00:15:00Z",
+            "status": {"abstractGameState": "Final", "detailedState": "Final"},
+        }
+        regular = {"gamePk": 25, "status": {"abstractGameState": "Preview"}}
+        suspended = {
+            "gamePk": 26,
+            "resumeGameDate": "2024-08-28",
+            "status": {"abstractGameState": "Live", "detailedState": "Suspended"},
+        }
+        resumed = {
+            "gamePk": 27,
+            "resumedFrom": "2024-08-28T00:10:00Z",
+            "status": {"abstractGameState": "Preview", "detailedState": "Scheduled"},
+        }
+        schedule = {
+            "dates": [
+                {
+                    "games": [
+                        postponed,
+                        not_yet_rescheduled,
+                        made_up,
+                        made_up_final,
+                        regular,
+                        suspended,
+                        resumed,
+                    ]
+                }
+            ]
+        }
+
+        class _Resp:
+            async def json(self) -> dict:
+                return schedule
+
+            async def __aenter__(self) -> _Resp:
+                return self
+
+            async def __aexit__(self, *exc: Any) -> bool:
+                return False
+
+        class _Http:
+            def get(self, url: str, params: dict | None = None) -> _Resp:
+                return _Resp()
+
+        provider = MagicMock(spec=BettingProsOddsProvider)
+        p = _bare_pipeline(_http=_Http(), _odds=provider)
+        p._upsert_game_record = AsyncMock()
+        p._persist_pregame_odds = AsyncMock(return_value=0)
+        await p._sync_live_games()
+        for _ in range(3):  # let the created tasks run
+            await asyncio.sleep(0)
+        assert [c.args for c in provider.forget_game.call_args_list] == [
+            (21,),
+            (22,),
+            (23,),
+            (26,),
+            (27,),
+        ]
+        # The rescheduled and suspended entries are still skipped; the Preview ones
+        # (the made-up, the regular and the resumed game) get the pre-game cycle.
+        assert [c.args[0] for c in p._persist_pregame_odds.await_args_list] == [23, 25, 27]
+
+    @pytest.mark.asyncio
+    async def test_a_provider_without_forget_game_is_skipped(self) -> None:
+        p = _bare_pipeline(_odds=MockOddsAPI())
+        p._forget_odds_game(21)  # MockOddsAPI keeps nothing: no call, no error
+        p._forget_odds_game(None)
+        assert not live._odds_facts_may_be_stale({"gamePk": 1, "status": {}})
+
 
 class TestRefreshLoop:
     @pytest.mark.asyncio
@@ -1257,6 +1347,7 @@ class TestRefreshLoop:
         assert odds["book"] == "bp:12"  # the graded book's moneyline
         assert odds["book_line_at"] == "2025-09-03T20:05:00+00:00"
         assert "scheduled_start" not in odds and "game_date" not in odds
+        assert "postponed_start" not in odds  # SIM-555: a guard-only key too
         # SIM-555: the per-pitch row is not persisted; the cycle writes batches.
         p._persist_odds.assert_not_awaited()
         assert mock_db_pool.executemany.await_count >= 1
@@ -1346,6 +1437,7 @@ class TestJsonSafety:
         decoded = json.loads(json.dumps(safe))
         assert decoded["book_line_at"] == "2025-09-03T20:05:00+00:00"
         assert "scheduled_start" not in decoded and "game_date" not in decoded
+        assert "postponed_start" in row and "postponed_start" not in decoded  # SIM-555
         assert decoded["home_ml"] == row["home_ml"]
         assert _jsonable_odds(None) == {}
 

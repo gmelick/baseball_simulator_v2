@@ -198,9 +198,9 @@ PREGAME_ODDS_CADENCE_S = 600
 # ---------------------------------------------------------------------------
 
 #: The by-book row keys that serve the load guard and the logs only. They are
-#: never stored and never sent to a browser: the scheduled start (a datetime)
-#: and the official date.
-_GUARD_ONLY_KEYS = frozenset({"scheduled_start", "game_date"})
+#: never stored and never sent to a browser: the scheduled start (a datetime),
+#: the official date and, SIM-555, a made-up game's postponed original start.
+_GUARD_ONLY_KEYS = frozenset({"scheduled_start", "game_date", "postponed_start"})
 
 #: The odds fields of a prop row; a row with all three empty is not a quote.
 _PROP_ODDS_FIELDS: tuple[str, ...] = ("line", "over_ml", "under_ml")
@@ -221,9 +221,10 @@ def _json_default(value: Any) -> str:
 def _jsonable_odds(odds: Mapping[str, Any] | None) -> dict[str, Any]:
     """An odds row made safe for ``json.dumps`` (SIM-555).
 
-    The row loses the guard-only keys (``scheduled_start``, ``game_date``) and
-    sends a date or a datetime (``book_line_at``) as ISO-8601 text. Every other
-    key passes through unchanged. ``None`` gives an empty dict.
+    The row loses the guard-only keys (``scheduled_start``, ``game_date``,
+    ``postponed_start``) and sends a date or a datetime (``book_line_at``) as
+    ISO-8601 text. Every other key passes through unchanged. ``None`` gives an
+    empty dict.
     """
     out: dict[str, Any] = {}
     for key, value in (odds or {}).items():
@@ -231,6 +232,37 @@ def _jsonable_odds(odds: Mapping[str, Any] | None) -> dict[str, Any]:
             continue
         out[key] = value.isoformat() if isinstance(value, date) else value
     return out
+
+
+def _odds_facts_may_be_stale(game: Mapping[str, Any]) -> bool:
+    """True when the odds provider's cached facts of a schedule entry's game may be old (SIM-555).
+
+    The provider keeps a found game's schedule facts and vendor event for the
+    process lifetime. A game looked up before a postponement keeps its
+    original start and event. Three kinds of entry say the facts changed:
+
+      * the original date's entry of a postponed or suspended game
+        (``rescheduleGameDate`` / ``resumeGameDate``);
+      * a postponed entry not yet rescheduled (``detailedState`` starting
+        "Postponed", or ``codedGameState`` "D", as the provider reads it);
+      * a made-up or resumed game before its first pitch (``rescheduledFrom`` /
+        ``resumedFrom`` while ``Preview``). The poll reads one calendar date's
+        schedule (``date.today()``, UTC in the container), so it misses the
+        original date's entry of a game postponed after midnight UTC; this
+        entry catches that game on its new date.
+
+    The poll drops the cached facts on each such entry. A live game keeps
+    them, so the per-pitch refresh reads nothing again.
+    """
+    if "rescheduleGameDate" in game or "resumeGameDate" in game:
+        return True
+    status = game.get("status") or {}
+    if str(status.get("detailedState") or "").startswith("Postponed"):
+        return True
+    if status.get("codedGameState") == "D":
+        return True
+    made_up = "rescheduledFrom" in game or "resumedFrom" in game
+    return made_up and status.get("abstractGameState") == "Preview"
 
 
 def _stamp_param(value: Any) -> datetime | None:
@@ -1576,7 +1608,9 @@ class LiveIngestionPipeline:
 
         SIM-555: a game that has not started (``Preview``) gets the pre-game
         odds cycle (:meth:`_persist_pregame_odds`), so every book's current
-        line is stored before first pitch, not only once the game is live.
+        line is stored before first pitch, not only once the game is live. An
+        entry of a postponed, suspended or made-up game first drops the odds
+        provider's cached facts of that game (:func:`_odds_facts_may_be_stale`).
         """
         today = date.today().strftime("%Y-%m-%d")
         params = {
@@ -1593,6 +1627,8 @@ class LiveIngestionPipeline:
 
         for date_entry in data.get("dates", []):
             for game in date_entry.get("games", []):
+                if _odds_facts_may_be_stale(game):
+                    self._forget_odds_game(game.get("gamePk"))
                 if "rescheduleGameDate" in game or "resumeGameDate" in game:
                     continue
 
@@ -1766,6 +1802,17 @@ class LiveIngestionPipeline:
 
         log.error("No state available for game %s", game_pk)
         return None
+
+    def _forget_odds_game(self, game_pk: Any) -> None:
+        """Make the odds provider read one game's schedule and event again (SIM-555).
+
+        The BettingPros provider keeps a found game for the process lifetime
+        (``forget_game``); a provider without that method keeps nothing, so
+        the call is skipped.
+        """
+        forget = getattr(self._odds_provider(), "forget_game", None)
+        if game_pk is not None and callable(forget):
+            forget(int(game_pk))
 
     def _odds_provider(self) -> OddsProvider:
         """

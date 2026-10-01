@@ -584,7 +584,8 @@ class TestReadFailures:
 
     def test_a_matcher_decline_counts_nothing(self) -> None:
         # The real start five hours after the vendor's event: over the two-hour limit.
-        provider = _Counted(schedule=_schedule(gameDate="2024-08-15T22:10:00Z"))
+        # The game is a double-header, so the single-event rule does not apply.
+        provider = _Counted(schedule=_schedule(gameDate="2024-08-15T22:10:00Z", doubleHeader="S"))
         assert provider._resolve_event(746437) is None
         assert provider.get_odds_by_book(746437) == []
         assert provider.read_failures == 0

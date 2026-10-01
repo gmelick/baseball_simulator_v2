@@ -15,7 +15,8 @@ How it bridges identifiers (the provider only receives ``game_pk`` / MLB
     the MLB schedule, then match the BettingPros ``events?date=…`` entry whose
     home/visitor nicknames suffix-match the MLB team names (double-headers
     disambiguated by scheduled time). Nickname-suffix matching avoids
-    abbreviation-convention drift between the two APIs.
+    abbreviation-convention drift between the two APIs. See "Postponed,
+    made-up and suspended games" below for the schedule's other entries.
   * MLB ``player_id`` → prop offer: resolve the player's name from the MLB
     people endpoint, then match the BettingPros prop offer participant by
     normalized first+last name.
@@ -59,8 +60,9 @@ row's line in ``book_line_at`` (a timezone-aware UTC datetime).
   * Each market fills only its own columns (the three full-game markets no
     longer share one row). A total-kind or yes / no row also carries
     ``over_line`` / ``under_line``, the two sides' own lines, for the load
-    guard (``pipeline/odds_row_guard.py``); ``scheduled_start`` and
-    ``game_date`` ride along for the guard and the logs, and are never stored.
+    guard (``pipeline/odds_row_guard.py``); ``scheduled_start``,
+    ``game_date`` and ``postponed_start`` (a made-up game's original start,
+    else ``None``) ride along for the guard and the logs, and are never stored.
   * The first-five markets (283 run line, 281 total, 279 moneyline) drop two
     kinds of book entry that carry first-inning prices: a book on
     :data:`F5_EXCLUDED_BOOKS` from its date, on the markets
@@ -129,6 +131,30 @@ the process lifetime. So the live pipeline finds a game that BettingPros lists
 later, and one failed lookup costs one read per time-to-live, not one read per
 market and player (the loader asks about 410 times per game).
 
+Postponed, made-up and suspended games (SIM-555, 2026-10-01)
+-------------------------------------------------------------
+MLB lists a game once per date it touched. A game postponed and made up later
+has a postponed entry (its ``gameDate`` the original start) and a played
+entry. A suspended game has two "Final" entries: the original first pitch and
+the resumption. The matcher reads the PLAYED entry (the first one not
+postponed) and searches the vendor's slate of each later entry too, because
+the vendor may move a suspended game to its resumption date. An event's gap
+is its distance to the nearest start of the game. A gap of 2 hours or less
+matches. The single-event rule takes a larger gap, up to 12 hours, when the
+event is the two teams' only event on the played date and the game is not a
+double-header: the vendor kept another start time. Before this, the matcher
+compared the vendor's events with a made-up game's ORIGINAL start and declined
+them. The loader's logs show a same-team event declined on about 350 games of
+2019-2026, the main cause of a game with no odds at all. Every row of a
+made-up game carries ``postponed_start``; the load guard refuses a price
+stamped at or before it (bet365 kept the price of the unplayed game).
+
+Game 2 of a straight double-header has no listed start: MLB sets
+``startTimeTBD`` and a placeholder start 5 minutes after game 1's, which sits
+nearer game 1's event than game 2's. The matcher takes the later of the two
+teams' two events on the played date, and the rows measure their stamps from
+that event's start. Before this, game 2 got game 1's event and game 1's prices.
+
 HTTP is stdlib ``urllib`` (sync — the protocol methods are sync; the module
 stays importable without aiohttp). The two ``_bp_get`` / ``_mlb_get`` seams are
 the only network surface and are stubbed in unit tests (fixtures captured under
@@ -176,7 +202,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, TypeVar
+from typing import Any, NamedTuple, TypeVar
 
 from pipeline.odds_provider import (
     GAME_MARKET_KIND,
@@ -203,6 +229,13 @@ _MLB_BASE = "https://statsapi.mlb.com/api/v1"
 #: BettingPros event we matched it to. A match beyond this is treated as no
 #: match at all, rather than silently priced against the wrong game.
 _MAX_EVENT_TIME_DELTA = timedelta(hours=2)
+
+#: SIM-555: the largest gap the single-event rule accepts. The vendor sometimes
+#: keeps a game's first start time after MLB moves it (game 745169: MLB moved
+#: it to 18:15Z, the vendor's only event of the two teams that day kept
+#: 00:15Z, six hours later). The rule takes such an event only when it is the
+#: two teams' one event on the played date and the game is not a double-header.
+_MAX_SINGLE_EVENT_DELTA = timedelta(hours=12)
 
 #: SIM-421: the most ``/offers`` pages read for one (event, market). The API
 #: pages at 10 offers; a batter market lists every hitter in the game (two to
@@ -442,6 +475,132 @@ def _parse_utc(value: str) -> datetime | None:
     return None
 
 
+class _ScheduleInfo(NamedTuple):
+    """SIM-555: the MLB schedule facts the matcher reads beyond the meta 4-tuple.
+
+    Every time is naive UTC, as :func:`_parse_utc` gives it.
+    """
+
+    #: The vendor slates to search: the played date first, then each date of
+    #: a later entry that is not postponed (the resumption of a suspended game).
+    slate_dates: tuple[str, ...]
+    #: The played entry's start, then each later start that is not postponed.
+    anchor_starts: tuple[datetime, ...]
+    #: The played entry's ``doubleHeader`` code ('N', 'Y', 'S'), or ``None``.
+    double_header: str | None
+    #: The start of the last postponed entry before the played one, or ``None``.
+    postponed_start: datetime | None
+    #: The played entry's position among the game's schedule entries (0 = first).
+    played_entry: int = 0
+    #: The number of schedule entries the game has.
+    n_entries: int = 1
+    #: True when every entry is postponed: the game was never played.
+    never_played: bool = False
+    #: The played entry's ``gameNumber`` (1, or 2 on a double-header), or ``None``.
+    game_number: int | None = None
+    #: The played entry's ``status.startTimeTBD``: MLB lists no real start.
+    start_tbd: bool = False
+
+    @property
+    def start_unknown(self) -> bool:
+        """True for game 2 of a straight double-header with no listed start (SIM-555).
+
+        MLB sets ``startTimeTBD`` on such a game and gives it a placeholder
+        ``gameDate``: game 1's start plus 5 minutes (game 746773: 18:15Z
+        beside game 1 at 18:10Z). Every straight double-header's game 2 of
+        2019-2026 has this layout.
+        """
+        return self.double_header == "Y" and self.game_number == 2 and self.start_tbd
+
+
+def _lone_schedule(date_str: str, game_dt: datetime | None) -> _ScheduleInfo:
+    """The schedule facts of a game with one entry (SIM-555).
+
+    The matcher uses it when the schedule cache holds nothing for a game (a
+    subclass that resolves the meta another way).
+    """
+    anchors = () if game_dt is None else (game_dt,)
+    return _ScheduleInfo((date_str,), anchors, None, None)
+
+
+def _is_postponed(game: Mapping[str, Any]) -> bool:
+    """True when an MLB schedule entry is a postponed game (SIM-555).
+
+    The test reads two status fields. ``detailedState`` starts with
+    "Postponed"; ``codedGameState`` "D" is MLB's postponed code (the ETL's
+    ``_map_game_status`` reads the same code; the live payloads of 2024 carry
+    both, with ``statusCode`` "DI" or "DR"). A suspended game is not
+    postponed: MLB marks both of its entries "Final".
+    """
+    status = game.get("status") or {}
+    detailed = str(status.get("detailedState") or "")
+    return detailed.startswith("Postponed") or status.get("codedGameState") == "D"
+
+
+def _read_schedule(
+    data: Mapping[str, Any],
+) -> tuple[tuple[str, str, str, datetime | None], _ScheduleInfo]:
+    """The meta 4-tuple and the schedule facts of one ``schedule?gamePk=`` answer (SIM-555).
+
+    MLB lists a game once per date it touched. A game postponed and made up
+    later has two entries: the postponed one (its ``gameDate`` the original
+    start) and the played one. A suspended game has two entries, both
+    "Final": the first at the original first pitch, the second at the
+    resumption. The PLAYED entry is the first entry that is not postponed;
+    when every entry is postponed (a game never played), it is the first
+    entry. The meta comes from the played entry, so a suspended game's start
+    is its ORIGINAL first pitch (the load guard's stamp rules need it). The
+    played entry's ``gameNumber`` and ``status.startTimeTBD`` tell a straight
+    double-header's game 2, whose ``gameDate`` is a placeholder
+    (:attr:`_ScheduleInfo.start_unknown`).
+    Raises ``LookupError`` when the answer lists no entry, and ``KeyError``
+    when the played entry lacks a field the meta needs.
+    """
+    entries: list[tuple[Any, Mapping[str, Any]]] = [
+        (day.get("date"), game)
+        for day in data.get("dates") or []
+        for game in day.get("games") or []
+    ]
+    if not entries:
+        raise LookupError("the schedule lists no entry for the game")
+    played_i = next((i for i, (_d, g) in enumerate(entries) if not _is_postponed(g)), 0)
+    played = entries[played_i][1]
+    date_str = str(played["officialDate"])
+    home = str(played["teams"]["home"]["team"]["name"])
+    away = str(played["teams"]["away"]["team"]["name"])
+    game_dt = _parse_utc(str(played.get("gameDate", "")))
+    slate_dates = [date_str]
+    anchors = [] if game_dt is None else [game_dt]
+    for day_date, game in entries[played_i + 1 :]:
+        if _is_postponed(game):
+            continue
+        for value in (day_date, game.get("officialDate")):
+            if value and str(value) not in slate_dates:
+                slate_dates.append(str(value))
+        resumed = _parse_utc(str(game.get("gameDate", "")))
+        if resumed is not None and resumed not in anchors:
+            anchors.append(resumed)
+    postponed_start: datetime | None = None
+    for _day_date, game in entries[:played_i]:
+        parsed = _parse_utc(str(game.get("gameDate", "")))
+        if parsed is not None:
+            postponed_start = parsed
+    double_header = played.get("doubleHeader")
+    game_number = played.get("gameNumber")
+    info = _ScheduleInfo(
+        slate_dates=tuple(slate_dates),
+        anchor_starts=tuple(anchors),
+        double_header=None if double_header is None else str(double_header),
+        postponed_start=postponed_start,
+        played_entry=played_i,
+        n_entries=len(entries),
+        never_played=_is_postponed(played),
+        game_number=game_number if isinstance(game_number, int) else None,
+        start_tbd=(played.get("status") or {}).get("startTimeTBD") is True,
+    )
+    return (date_str, home, away, game_dt), info
+
+
 #: market_type (the GAME_MARKET_TYPES vocabulary) → BettingPros market id.
 #: ``run_line`` is a legacy alias of ``runline``. Both team-total markets of a
 #: side pair share one BettingPros market: the response holds one offer per
@@ -580,14 +739,14 @@ class BettingProsOddsProvider:
 
     ``read_failures`` (SIM-555) counts the reads that failed after their
     retries and that the provider caught, to go on with an empty or partial
-    result: a game, event or player lookup, an offers read, a later offers
-    page, the first-inning read of the twin check. It grows by one per caught
-    failure. A legitimate absence does not count: no event on the slate, a
-    matcher decline, a slate the matcher cannot read (a retry reads the same
-    answer), a schedule or people answer without the game or the player, an
-    empty offer list, a player with no offer, a first-five exclusion, a
-    failed lookup still inside its time-to-live (counted once, when it
-    failed). The historical loader reads the count before and after a game; a
+    result: a game, event or player lookup, the extra slate of a resumed game,
+    an offers read, a later offers page, the first-inning read of the twin
+    check. It grows by one per caught failure. A legitimate absence does not
+    count: no event on the slate, a matcher decline, a slate the matcher
+    cannot read (a retry reads the same answer), a schedule or people answer
+    without the game or the player, an empty offer list, a player with no
+    offer, a first-five exclusion, a failed lookup still inside its
+    time-to-live (counted once, when it failed). The historical loader reads the count before and after a game; a
     game whose count grew stays off the done-list. The loader calls
     :meth:`forget_failed_lookups` before each game, so a failure stored in one
     game is read again, and counted again, in the next.
@@ -650,6 +809,9 @@ class BettingProsOddsProvider:
         # (the loader asks about 410 times per game).
         self._event_cache: dict[int, dict[str, Any]] = {}
         self._game_meta_cache: dict[int, tuple[str, str, str, datetime | None]] = {}
+        # SIM-555: the schedule facts of a resolved game (the played entry, the
+        # resume slates, the postponed start), filled in the same read as the meta.
+        self._game_schedule_cache: dict[int, _ScheduleInfo] = {}
         self._player_name_cache: dict[int, str] = {}
         self._failed_lookups: dict[tuple[str, int], tuple[float, None]] = {}
         # SIM-421: time-stamped caches — (stored_at, payload), served while
@@ -769,6 +931,13 @@ class BettingProsOddsProvider:
         (:meth:`_failed_recently`); the first call after that reads the
         schedule again. A read that raised counts in ``read_failures``; a
         schedule answer without the game does not (the game is absent).
+
+        SIM-555 (2026-10-01): the meta comes from the PLAYED schedule entry,
+        not the first one (see :func:`_read_schedule`). A game postponed and
+        made up later used to resolve to its postponed entry, whose start is
+        the original one, so the matcher declined the vendor's event at the
+        real start. The same read fills ``_game_schedule_cache`` with the
+        facts the matcher and the rows need (:class:`_ScheduleInfo`).
         """
         if game_pk in self._game_meta_cache:
             return self._game_meta_cache[game_pk]
@@ -779,12 +948,14 @@ class BettingProsOddsProvider:
         try:
             data = self._mlb_get("schedule", {"sportId": 1, "gamePk": game_pk})
             read_done = True
-            game = data["dates"][0]["games"][0]
-            date_str = str(game["officialDate"])
-            home = str(game["teams"]["home"]["team"]["name"])
-            away = str(game["teams"]["away"]["team"]["name"])
-            game_dt = _parse_utc(str(game.get("gameDate", "")))
-            meta = (date_str, home, away, game_dt)
+            meta, info = _read_schedule(data)
+            self._game_schedule_cache[game_pk] = info
+            if info.never_played:
+                log.info(
+                    "BettingPros: every schedule entry of game_pk %s is postponed "
+                    "(the game was not played); matching on its first entry",
+                    game_pk,
+                )
         except Exception as exc:  # noqa: BLE001
             log.warning("BettingPros: could not resolve game_pk %s: %s", game_pk, exc)
             if not read_done:
@@ -815,6 +986,13 @@ class BettingProsOddsProvider:
         nothing, and the first call after it looks again. A failed slate read
         counts in ``read_failures``; no match does not, nor does a slate the
         matcher cannot read (a retry would read the same answer).
+
+        SIM-555 (2026-10-01): with a known start, :meth:`_match_by_start`
+        picks the event. It searches the slate of a suspended game's
+        resumption too, measures each event against every start of the game,
+        and adds the single-event rule for a start the vendor did not move.
+        Game 2 of a straight double-header, whose MLB start is a placeholder,
+        takes the later of the two teams' two events (:meth:`_match_game_two`).
         """
         if game_pk in self._event_cache:
             return self._event_cache[game_pk]
@@ -829,43 +1007,14 @@ class BettingProsOddsProvider:
             try:
                 slate = self._events_for_date(date_str)
                 read_done = True
-                candidates = []
-                for e in slate:
-                    parts = {p["id"]: _normalize_name(p["name"]) for p in e.get("participants", [])}
-                    home_nick = parts.get(e.get("home"), "")
-                    away_nick = parts.get(e.get("visitor"), "")
-                    # Nickname suffix-matches the MLB full name ("Tigers" ⊂ "Detroit Tigers").
-                    if home_n.endswith(home_nick) and away_n.endswith(away_nick) and home_nick:
-                        candidates.append(e)
-                if candidates and game_dt is not None:
-
-                    def _delta(candidate: dict[str, Any]) -> timedelta:
-                        c_dt = _parse_utc(str(candidate.get("scheduled", "")))
-                        return timedelta.max if c_dt is None else abs(c_dt - game_dt)
-
-                    best = min(candidates, key=_delta)
-                    best_delta = _delta(best)
-                    if best_delta > _MAX_EVENT_TIME_DELTA:
-                        log.warning(
-                            "BettingPros: closest event (scheduled=%s) for game_pk %s is "
-                            "%s from the real start time — over the %s sanity limit, "
-                            "treating as unmatched rather than risk the wrong game",
-                            best.get("scheduled"),
-                            game_pk,
-                            best_delta,
-                            _MAX_EVENT_TIME_DELTA,
-                        )
-                    else:
-                        event = best
-                        if len(candidates) > 1:
-                            log.info(
-                                "BettingPros: %d events matched game_pk %s (double-header); "
-                                "picked scheduled=%s (%s from the real start time)",
-                                len(candidates),
-                                game_pk,
-                                event.get("scheduled"),
-                                best_delta,
-                            )
+                candidates = self._same_team_events(slate, home_n, away_n)
+                if game_dt is not None:
+                    info = self._game_schedule_cache.get(game_pk) or _lone_schedule(
+                        date_str, game_dt
+                    )
+                    event = self._match_by_start(
+                        game_pk, candidates, info, date_str, game_dt, home_n, away_n
+                    )
                 elif len(candidates) == 1:
                     # No usable start time to sanity-check against (gameDate was
                     # missing/unparseable) but only one name match anyway — accept it,
@@ -888,6 +1037,228 @@ class BettingProsOddsProvider:
             self._event_cache[game_pk] = event
         else:
             self._note_failed_lookup("event", game_pk)
+        return event
+
+    @staticmethod
+    def _same_team_events(
+        slate: list[dict[str, Any]], home_n: str, away_n: str
+    ) -> list[dict[str, Any]]:
+        """The slate's events whose home and visitor nicknames match the two MLB teams.
+
+        A nickname suffix-matches the MLB full name ("Tigers" ⊂ "Detroit
+        Tigers"). An event without a participant id raises ``KeyError``: the
+        slate is malformed, and the caller treats it as no match.
+        """
+        candidates = []
+        for e in slate:
+            parts = {p["id"]: _normalize_name(p["name"]) for p in e.get("participants", [])}
+            home_nick = parts.get(e.get("home"), "")
+            away_nick = parts.get(e.get("visitor"), "")
+            if home_n.endswith(home_nick) and away_n.endswith(away_nick) and home_nick:
+                candidates.append(e)
+        return candidates
+
+    def _match_by_start(
+        self,
+        game_pk: int,
+        played: list[dict[str, Any]],
+        info: _ScheduleInfo,
+        date_str: str,
+        game_dt: datetime,
+        home_n: str,
+        away_n: str,
+    ) -> dict[str, Any] | None:
+        """The vendor event of a game with a known start, or ``None`` (SIM-536; SIM-555).
+
+        ``played`` holds the same-team events of the played date's slate. The
+        method adds the same-team events of every other slate of
+        ``info.slate_dates`` (a suspended game's resumption date), each event
+        once. An event's gap is its smallest distance to any start of the
+        game: the played start, then each resumption. The event with the
+        smallest gap wins (the played slate first on a tie).
+
+        * A gap of :data:`_MAX_EVENT_TIME_DELTA` (2 h) or less is a match. On a
+          double-header this picks the right game (SIM-536).
+        * The single-event rule: a larger gap still matches when the event is
+          the ONLY same-team event on the played date's slate, the played
+          entry is not a double-header (``doubleHeader`` 'N' or absent), and
+          the event sits at most :data:`_MAX_SINGLE_EVENT_DELTA` (12 h) from
+          the played start. The vendor kept another start time for the game.
+          The load guard's closing-stamp rule drops a closing price stamped
+          more than 15 minutes after the real first pitch
+          (``CLOSING_STAMP_GRACE``); a price inside those 15 minutes stays. A
+          WARNING names the event.
+        * Any other gap is no match (a WARNING).
+
+        Game 2 of a straight double-header with no listed start
+        (:attr:`_ScheduleInfo.start_unknown`) skips the gaps: its start is a
+        placeholder 5 minutes after game 1's, so the nearest event is game
+        1's. :meth:`_match_game_two` picks the event.
+
+        A failed read of an extra slate counts in ``read_failures`` and the
+        match goes on with the slates read, by the 2-hour rule only. A match
+        that close to a start is the game whatever the missing slate holds.
+        The single-event rule needs every slate: the missing one may hold a
+        closer event. The count keeps the game off the loader's done-list,
+        so the next run reads the slate again.
+        """
+        if info.start_unknown:
+            return self._match_game_two(game_pk, played, info)
+        candidates = list(played)
+        slate_of = {id(e): date_str for e in played}
+        seen = {e.get("id") for e in played if e.get("id") is not None}
+        extra_failed = False
+        for extra_date in info.slate_dates[1:]:
+            if extra_date == date_str:
+                continue
+            try:
+                extra = self._events_for_date(extra_date)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "BettingPros: the %s slate (a later date of game_pk %s) could not be "
+                    "read; matching on the slates read, by the two-hour rule only: %s",
+                    extra_date,
+                    game_pk,
+                    exc,
+                )
+                self.read_failures += 1  # SIM-555: the extra slate read failed
+                extra_failed = True
+                continue
+            for e in self._same_team_events(extra, home_n, away_n):
+                key = e.get("id")
+                if key is not None and key in seen:
+                    continue
+                if key is not None:
+                    seen.add(key)
+                candidates.append(e)
+                slate_of[id(e)] = extra_date
+        if not candidates:
+            return None
+        anchors = (game_dt, *(a for a in info.anchor_starts if a != game_dt))
+
+        def _gap(candidate: dict[str, Any]) -> tuple[timedelta, int]:
+            """(the smallest gap to a start, the index of that start)."""
+            c_dt = _parse_utc(str(candidate.get("scheduled", "")))
+            if c_dt is None:
+                return timedelta.max, 0
+            gaps = [abs(c_dt - a) for a in anchors]
+            nearest = min(range(len(gaps)), key=gaps.__getitem__)
+            return gaps[nearest], nearest
+
+        best = min(candidates, key=lambda c: _gap(c)[0])
+        best_gap, anchor_i = _gap(best)
+        from_played = slate_of[id(best)] == date_str
+        event: dict[str, Any] | None = None
+        if best_gap <= _MAX_EVENT_TIME_DELTA:
+            event = best
+            if len(candidates) > 1:
+                log.info(
+                    "BettingPros: %d events matched game_pk %s (double-header); "
+                    "picked scheduled=%s (%s from the real start time)",
+                    len(candidates),
+                    game_pk,
+                    event.get("scheduled"),
+                    best_gap,
+                )
+        else:
+            best_dt = _parse_utc(str(best.get("scheduled", "")))
+            played_gap = None if best_dt is None else abs(best_dt - game_dt)
+            if (
+                from_played
+                and len(played) == 1
+                and info.double_header in (None, "N")
+                and not extra_failed
+                and played_gap is not None
+                and played_gap <= _MAX_SINGLE_EVENT_DELTA
+            ):
+                event = best
+                log.warning(
+                    "BettingPros: game_pk %s matched event %s (scheduled=%s) by the "
+                    "single-event rule. The event is %s from the real start %s, over the "
+                    "%s limit. It is the two teams' only event that day, so the vendor "
+                    "kept another start time for the game. The load guard drops a "
+                    "closing price stamped more than 15 minutes after the real first pitch",
+                    game_pk,
+                    best.get("id"),
+                    best.get("scheduled"),
+                    played_gap,
+                    game_dt,
+                    _MAX_EVENT_TIME_DELTA,
+                )
+            else:
+                log.warning(
+                    "BettingPros: closest event (scheduled=%s) for game_pk %s is "
+                    "%s from the real start time — over the %s sanity limit, "
+                    "treating as unmatched rather than risk the wrong game",
+                    best.get("scheduled"),
+                    game_pk,
+                    best_gap,
+                    _MAX_EVENT_TIME_DELTA,
+                )
+        if event is not None and (info.played_entry > 0 or not from_played or anchor_i > 0):
+            notes = []
+            if info.played_entry > 0:
+                notes.append(
+                    f"the game was postponed from {info.postponed_start} and made up "
+                    f"(schedule entry {info.played_entry + 1} of {info.n_entries})"
+                )
+            if anchor_i > 0:
+                notes.append(f"the event matches the resumption at {anchors[anchor_i]}")
+            if not from_played:
+                notes.append(f"the event sits on a later date's slate, not on {date_str}'s")
+            log.info(
+                "BettingPros: game_pk %s matched event %s (scheduled=%s) on the %s slate: %s",
+                game_pk,
+                event.get("id"),
+                event.get("scheduled"),
+                slate_of[id(event)],
+                "; ".join(notes),
+            )
+        return event
+
+    def _match_game_two(
+        self, game_pk: int, played: list[dict[str, Any]], info: _ScheduleInfo
+    ) -> dict[str, Any] | None:
+        """The vendor event of game 2 of a straight double-header with no listed start (SIM-555).
+
+        MLB lists no real start for such a game (``startTimeTBD``); its
+        ``gameDate`` is game 1's start plus 5 minutes. The event nearest that
+        placeholder is game 1's: game 746773's placeholder is 18:15Z, game 1's
+        event 18:10Z, game 2's event about three hours later. The loader's
+        logs show such a game 2 matched 5 minutes off, to game 1's event, and
+        no event at a placeholder. So the method takes the LATER of
+        exactly two same-team events on the played date's slate. Any other
+        count, or two events at one time, is no match (a WARNING): game 1's
+        event is never game 2's. The rows then measure their stamps from the
+        vendor event's start (:meth:`_game_meta_fields`).
+        """
+        starts = [(_parse_utc(str(e.get("scheduled", ""))), e) for e in played]
+        timed = [(start, e) for start, e in starts if start is not None]
+        if len(played) != 2 or len(timed) != 2 or timed[0][0] == timed[1][0]:
+            log.warning(
+                "BettingPros: game_pk %s is game 2 of a straight double-header with no "
+                "listed start; the played slate holds %d same-team events (%s), not two at "
+                "two times, so treating it as unmatched rather than take game 1's event",
+                game_pk,
+                len(played),
+                ", ".join(str(e.get("scheduled")) for e in played) or "none",
+            )
+            return None
+        event = max(timed, key=lambda pair: pair[0])[1]
+        made_up = ""
+        if info.played_entry > 0:
+            made_up = (
+                f"; the game was postponed from {info.postponed_start} and made up "
+                f"(schedule entry {info.played_entry + 1} of {info.n_entries})"
+            )
+        log.info(
+            "BettingPros: game_pk %s matched event %s (scheduled=%s): game 2 of a straight "
+            "double-header with no listed start, the later of the two events%s",
+            game_pk,
+            event.get("id"),
+            event.get("scheduled"),
+            made_up,
+        )
         return event
 
     # ------------------------------------------------------- SIM-421 caches
@@ -921,6 +1292,24 @@ class BettingProsOddsProvider:
         player per game. A found game, event or name stays cached.
         """
         self._failed_lookups.clear()
+
+    def forget_game(self, game_pk: int) -> None:
+        """Drop every cached fact of one game, so the next call reads it again (SIM-555).
+
+        The provider keeps a found game's meta, its schedule facts and its
+        vendor event for the process lifetime. A game postponed or suspended
+        after its lookup keeps its first entry's facts: the original start,
+        the original event, no ``postponed_start``. The live pipeline is the
+        one long-lived caller: its schedule poll calls this method for a
+        postponed or suspended entry and for a made-up game before its first
+        pitch. A stored failed lookup of the game goes too.
+        """
+        key = int(game_pk)
+        self._game_meta_cache.pop(key, None)
+        self._game_schedule_cache.pop(key, None)
+        self._event_cache.pop(key, None)
+        self._failed_lookups.pop(("game", key), None)
+        self._failed_lookups.pop(("event", key), None)
 
     def _store(self, cache: dict[_K, tuple[float, _V]], key: _K, payload: _V) -> None:
         """Put ``payload`` in ``cache`` under ``key`` after dropping every stale entry.
@@ -1049,23 +1438,52 @@ class BettingProsOddsProvider:
         return name
 
     # ------------------------------------------------ SIM-555: one row per book
-    def _game_meta_fields(self, game_pk: int) -> tuple[datetime | None, date | None, str | None]:
+    def _game_meta_fields(
+        self, game_pk: int, event: Mapping[str, Any] | None = None
+    ) -> tuple[datetime | None, date | None, str | None]:
         """(scheduled start as aware UTC, official date, official date text) for a game.
 
         Read from :meth:`_resolve_game_meta` (cached; :meth:`_resolve_event`
         fills it first). The start is for the load guard only; the date drives
         the dated first-five exclusion.
+
+        SIM-555: game 2 of a straight double-header with no listed start
+        (:attr:`_ScheduleInfo.start_unknown`) takes ``event``'s start instead.
+        MLB's placeholder sits 5 minutes after game 1's start, so the guard
+        would refuse every closing price of game 2 as late. The vendor's start
+        is an estimate: when game 1 ends early, game 2 starts before it, and an
+        in-play price stamped before the vendor's start plus 15 minutes then
+        passes the guard.
         """
         meta = self._resolve_game_meta(game_pk)
         if meta is None:
             return None, None, None
         date_str, _home, _away, game_dt = meta
+        info = self._game_schedule_cache.get(game_pk)
+        if event is not None and info is not None and info.start_unknown:
+            vendor_start = _parse_utc(str(event.get("scheduled", "")))
+            if vendor_start is not None:
+                game_dt = vendor_start
         start = None if game_dt is None else game_dt.replace(tzinfo=UTC)
         try:
             official = date.fromisoformat(date_str)
         except (TypeError, ValueError):
             official = None
         return start, official, date_str
+
+    def _postponed_start(self, game_pk: int) -> datetime | None:
+        """The original start of a game postponed and made up later, as aware UTC (SIM-555).
+
+        ``None`` for any other game, and for a game whose schedule facts the
+        provider did not read (a subclass that resolves the meta another
+        way). Every row of a made-up game carries it as ``postponed_start``:
+        the load guard refuses a price stamped at or before it (the price of
+        the game that was not played).
+        """
+        info = self._game_schedule_cache.get(game_pk)
+        if info is None or info.postponed_start is None:
+            return None
+        return info.postponed_start.replace(tzinfo=UTC)
 
     @staticmethod
     def _game_sides(
@@ -1476,11 +1894,17 @@ class BettingProsOddsProvider:
         base.update({"book_id": None, "book_line_at": None})
         event = self._resolve_event(game_pk)
         if event is None:
-            base.update({"scheduled_start": None, "game_date": None})
+            base.update({"scheduled_start": None, "game_date": None, "postponed_start": None})
             log.warning("BettingPros: no event for game_pk %s — returning empty odds", game_pk)
             return base, []
-        start, official, date_str = self._game_meta_fields(game_pk)
-        base.update({"scheduled_start": start, "game_date": date_str})
+        start, official, date_str = self._game_meta_fields(game_pk, event)
+        base.update(
+            {
+                "scheduled_start": start,
+                "game_date": date_str,
+                "postponed_start": self._postponed_start(game_pk),  # SIM-555: for the guard
+            }
+        )
         event_id = event["id"]
         home_abbrev, away_abbrev = event.get("home"), event.get("visitor")
         market_id = _GAME_MARKET_IDS[canonical]
@@ -1538,9 +1962,10 @@ class BettingProsOddsProvider:
         any other line type gives one row per book quoting every side, the
         vendor's blend (``bp:0``) included, the excluded first-five books left
         out. Each row carries every ``get_odds`` key plus ``book_id``,
-        ``book_line_at``, ``scheduled_start`` and ``game_date`` (and
-        ``over_line`` / ``under_line`` on a total-kind or yes / no market). An
-        unresolvable game gives an empty list.
+        ``book_line_at``, ``scheduled_start``, ``game_date`` and
+        ``postponed_start`` (SIM-555: a made-up game's original start, else
+        ``None``), and ``over_line`` / ``under_line`` on a total-kind or
+        yes / no market. An unresolvable game gives an empty list.
         """
         _base, rows = self._game_market_rows(game_pk, line_type, market_type)
         return rows
@@ -1602,13 +2027,20 @@ class BettingProsOddsProvider:
             "over_line": None,
             "under_line": None,
             "game_date": None,
+            "postponed_start": None,  # SIM-555: a made-up game's original start, for the guard
         }
         event = self._resolve_event(game_pk)
         player_name = self._resolve_player_name(player_id)
         if event is None or player_name is None:
             return base, []
-        start, _official, date_str = self._game_meta_fields(game_pk)
-        base.update({"scheduled_start": start, "game_date": date_str})
+        start, _official, date_str = self._game_meta_fields(game_pk, event)
+        base.update(
+            {
+                "scheduled_start": start,
+                "game_date": date_str,
+                "postponed_start": self._postponed_start(game_pk),
+            }
+        )
         offer = self._find_player_offer(event["id"], _PROP_MARKET_IDS[prop_stat], player_name)
         if offer is None:
             return base, []

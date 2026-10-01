@@ -16,9 +16,11 @@ deletion also removes the 2024 duplicate rows of the two old loads.
 WHAT IT DOES, PER SEASON, IN ONE TRANSACTION
 --------------------------------------------
 1. It counts the Final games of the season that have a ``consensus`` closing
-   moneyline but no ``bp:`` closing moneyline. When that count is not zero, the
-   season is not re-loaded yet: the script refuses the season, prints the count
-   and a few of the games, and touches nothing.
+   moneyline but no ``bp:`` closing moneyline, less the games named with
+   ``--allow-missing``. When that count is not zero, the season is not
+   re-loaded yet: the script refuses the season, prints the count and a few of
+   the games, and touches nothing. It prints the named games it let through,
+   with their count.
 2. It also counts the Final games that have ``consensus`` closing props but no
    ``bp:`` closing prop, and prints a WARNING with the count. It does not refuse
    on that count: the vendor may no longer serve an old game's props, and the
@@ -30,6 +32,17 @@ WHAT IT DOES, PER SEASON, IN ONE TRANSACTION
 
 The transaction reads one snapshot (repeatable read), so a row written by a
 concurrent load after the start is neither archived nor deleted.
+
+THE NAMED GAMES (``--allow-missing``)
+-------------------------------------
+A few games can never get a ``bp:`` closing moneyline, so each would refuse its
+season for good. ``--allow-missing GAME_PK ...`` names them. A named game does
+not refuse its season, and its ``consensus`` rows go to the archive with the
+season's other rows. Before the seasons, the script reads the season of each
+named game. A name that refuses nothing is a stale name: the game has a ``bp:``
+closing moneyline, has no ``consensus`` closing moneyline, is not Final, or sits
+in no named season. The script prints a WARNING for each stale name and runs on.
+Any other missing game still refuses its season.
 
 ``--dry-run`` runs steps 1 and 2 and the counts in a read-only transaction and writes
 nothing. The script writes only when it runs without ``--dry-run``; no test runs
@@ -43,10 +56,22 @@ EXIT CODES
   (that season rolled back).
 
 After a real run, VACUUM the two live tables (VACUUM cannot run inside a
-transaction, so the script does not):
+transaction, so the script does not).
 
-    docker compose run --rm app python scripts/sim555_retire_consensus_rows.py --seasons 2024 --dry-run
-    docker compose run --rm app python scripts/sim555_retire_consensus_rows.py --seasons 2019 2020 2021 2022 2023 2024 2025 2026
+Before step 8, re-load games 745169, 745175, 746572, 746773 and 746755 with
+the fixed matcher (SIM-555, 2026-10-01), and confirm that each holds a ``bp:``
+closing moneyline. Otherwise step 8 refuses 2024: the first load found no
+event for those five games.
+
+The commands for the step-8 run (the dry run first). The mount makes the
+container read this copy of the script, not the copy baked into the image:
+
+    MSYS_NO_PATHCONV=1 docker compose run --rm -v "$PWD/scripts:/app/scripts:ro" app python scripts/sim555_retire_consensus_rows.py --seasons 2019 2020 2021 2022 2023 2024 2025 2026 --allow-missing 567323 --dry-run
+    MSYS_NO_PATHCONV=1 docker compose run --rm -v "$PWD/scripts:/app/scripts:ro" app python scripts/sim555_retire_consensus_rows.py --seasons 2019 2020 2021 2022 2023 2024 2025 2026 --allow-missing 567323
+
+Game 567323 (2019) is named because it has no pre-game close. The vendor's
+event matches it, but every book's closing price is stamped 68-206 minutes
+after its first pitch, so the load guard refuses each one.
 
 The plan: docs/audit/2026-09-25-sim555-one-book-per-odds-row-plan.md §4 and §8 step 8.
 """
@@ -57,6 +82,7 @@ import argparse
 import asyncio
 import os
 import sys
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -108,6 +134,10 @@ WHERE g.season = $1 AND g.status = 'Final'
 ORDER BY g.game_pk
 """
 
+#: SIM-555: the season of each game named with --allow-missing (read once, before
+#: the seasons; a name raw.games lacks returns no row).
+NAMED_GAMES_SQL = "SELECT game_pk, season FROM raw.games WHERE game_pk = ANY($1::int[])"
+
 #: The season's games: every status, because a consensus row may sit on a game
 #: that never went Final (a postponement).
 _SEASON_GAMES = "SELECT game_pk FROM raw.games WHERE season = $1"
@@ -142,9 +172,14 @@ class SeasonResult:
 
     season: int
     dry_run: bool
-    #: Final games with a consensus closing moneyline and no bp: one.
+    #: Final games with a consensus closing moneyline and no bp: one, less the named games.
     missing_games: int = 0
     examples: list[int] = field(default_factory=list)
+    #: SIM-555: the named games (--allow-missing) with a consensus closing moneyline and
+    #: no bp: one. They do not refuse the season.
+    allowed: list[int] = field(default_factory=list)
+    #: SIM-555: the named games of this season that are not missing (a warning only).
+    stale_names: list[int] = field(default_factory=list)
     #: Final games with consensus closing props and no bp: closing prop (a warning only).
     missing_prop_games: int = 0
     prop_examples: list[int] = field(default_factory=list)
@@ -186,17 +221,36 @@ async def archive_columns(conn: Any, table: str, archive: str) -> list[str]:
     return live
 
 
-async def retire_season(conn: Any, season: int, *, dry_run: bool) -> SeasonResult:
+async def named_game_seasons(conn: Any, games: Collection[int]) -> dict[int, int]:
+    """SIM-555: the season of each named game that raw.games holds (no query for no names)."""
+    if not games:
+        return {}
+    rows = await conn.fetch(NAMED_GAMES_SQL, sorted({int(g) for g in games}))
+    return {int(r["game_pk"]): int(r["season"]) for r in rows}
+
+
+async def retire_season(
+    conn: Any, season: int, *, dry_run: bool, allow_missing: Collection[int] = ()
+) -> SeasonResult:
     """Check, count and (unless ``dry_run``) archive and delete one season's consensus rows.
 
     One transaction. A refused season and a dry run write nothing. A count that
     disagrees raises :class:`RetireError`, which rolls the season back.
+
+    SIM-555: ``allow_missing`` holds this season's named games. A named game that
+    lacks a bp: closing moneyline does not refuse the season; its consensus rows
+    go to the archive with the rest. A named game that is not missing is a
+    stale name, which the result lists.
     """
     result = SeasonResult(season=int(season), dry_run=dry_run)
+    named = {int(g) for g in allow_missing}
     async with conn.transaction(isolation="repeatable_read", readonly=dry_run):
         missing = [int(r["game_pk"]) for r in await conn.fetch(MISSING_SQL, int(season))]
-        result.missing_games = len(missing)
-        result.examples = missing[:EXAMPLE_GAMES]
+        unnamed = [g for g in missing if g not in named]
+        result.missing_games = len(unnamed)
+        result.examples = unnamed[:EXAMPLE_GAMES]
+        result.allowed = [g for g in missing if g in named]
+        result.stale_names = sorted(named.difference(missing))
         no_props = [int(r["game_pk"]) for r in await conn.fetch(MISSING_PROPS_SQL, int(season))]
         result.missing_prop_games = len(no_props)
         result.prop_examples = no_props[:EXAMPLE_GAMES]
@@ -239,6 +293,17 @@ def format_result(result: SeasonResult) -> str:
     else:
         done = ", ".join(f"raw.{t} {n:,}" for t, n in result.archived.items())
         line = f"season {result.season}: archived and deleted {done}."
+    if result.allowed:
+        line += (
+            f"\n  ALLOWED by --allow-missing ({len(result.allowed)}): {result.allowed}. Each has "
+            "a consensus closing moneyline and no bp: one; none refuses the season."
+        )
+    if result.stale_names:
+        line += (
+            f"\n  WARNING: stale --allow-missing names {result.stale_names}. Each has a bp: "
+            "closing moneyline, no consensus closing moneyline, or is not Final; the name "
+            "changes nothing."
+        )
     if result.missing_prop_games:
         line += (
             f"\n  WARNING: {result.missing_prop_games} Final games have consensus closing props "
@@ -248,13 +313,28 @@ def format_result(result: SeasonResult) -> str:
     return line
 
 
-async def run(conn: Any, seasons: list[int], *, dry_run: bool) -> int:
-    """Every season in order; a refused season does not stop the others. Returns the exit code."""
+async def run(
+    conn: Any, seasons: list[int], *, dry_run: bool, allow_missing: Collection[int] = ()
+) -> int:
+    """Every season in order; a refused season does not stop the others. Returns the exit code.
+
+    SIM-555: each season gets its own named games from ``allow_missing``. A named
+    game in no named season is a stale name: a WARNING, never a stop.
+    """
     code = EXIT_OK
     archived_any = False
+    named = sorted({int(g) for g in allow_missing})
+    season_of = await named_game_seasons(conn, named)
+    outside = [g for g in named if season_of.get(g) not in seasons]
+    if outside:
+        print(
+            f"WARNING: stale --allow-missing names {outside}. Each is in no named season "
+            "(or not in raw.games); the name changes nothing."
+        )
     for season in seasons:
+        mine = [g for g in named if season_of.get(g) == season]
         try:
-            result = await retire_season(conn, season, dry_run=dry_run)
+            result = await retire_season(conn, season, dry_run=dry_run, allow_missing=mine)
         except RetireError as exc:
             print(f"season {season}: ERROR — {exc}")
             code = EXIT_ERROR
@@ -273,9 +353,25 @@ async def _main_async(args: argparse.Namespace) -> int:
 
     conn = await asyncpg.connect(args.dsn, timeout=60)
     try:
-        return await run(conn, list(args.seasons), dry_run=bool(args.dry_run))
+        return await run(
+            conn,
+            list(args.seasons),
+            dry_run=bool(args.dry_run),
+            allow_missing=list(args.allow_missing),
+        )
     finally:
         await conn.close()
+
+
+def _game_pk(text: str) -> int:
+    """SIM-555: one --allow-missing value, a game_pk (a whole number above zero)."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a game_pk: {text!r}") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"not a game_pk: {text!r}")
+    return value
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -284,6 +380,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     ap.add_argument("--seasons", type=int, nargs="+", required=True, help="the seasons to retire")
     ap.add_argument("--dry-run", action="store_true", help="check and count only; write nothing")
+    ap.add_argument(
+        "--allow-missing",
+        type=_game_pk,
+        nargs="+",
+        default=[],
+        metavar="GAME_PK",
+        help="games that may lack a bp: closing moneyline; they do not refuse their season",
+    )
     ap.add_argument("--dsn", default=os.environ.get("BASEBALL_DB_DSN", ""))
     args = ap.parse_args(argv)
     if not args.dsn:

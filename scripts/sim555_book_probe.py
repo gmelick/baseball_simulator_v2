@@ -555,11 +555,15 @@ def row_record(row: Mapping[str, Any], refusal: Refusal | None) -> dict[str, Any
     ``stamp_minus_start_min`` is the row's vendor stamp minus the scheduled
     start, in minutes. A field with no value is left out, so a reader uses
     ``.get``; ``book`` is always present. 300 games write about 60,000 rows.
+    SIM-555: a made-up game's row keeps ``postponed_start``, so a re-grade
+    applies the guard's postponement rule.
     """
     out: dict[str, Any] = {k: row.get(k) for k in _ROW_KEYS if k in row}
     stamp, start = _aware(row.get("book_line_at")), _aware(row.get("scheduled_start"))
+    postponed = _aware(row.get("postponed_start"))
     out["book_line_at"] = None if stamp is None else stamp.isoformat()
     out["scheduled_start"] = None if start is None else start.isoformat()
+    out["postponed_start"] = None if postponed is None else postponed.isoformat()
     out["stamp_minus_start_min"] = (
         None if stamp is None or start is None else (stamp - start).total_seconds() / 60.0
     )
@@ -1505,14 +1509,17 @@ def _parse_stamp(value: Any) -> datetime | None:
 def guard_view(record: Mapping[str, Any]) -> dict[str, Any]:
     """PURE: a saved row as the load guard reads it.
 
-    :func:`row_record` wrote the two stamps as ISO text; the guard's stamp
-    rule needs datetimes, so they come back as aware datetimes. It also left
-    out every field with no value: a total that kept one side's line gets the
-    other side's back as ``None``, so the guard still compares the two.
+    :func:`row_record` wrote the stamps as ISO text (the vendor stamp, the
+    scheduled start and, SIM-555, a made-up game's postponed start); the
+    guard's stamp rules need datetimes, so they come back as aware datetimes.
+    It also left out every field with no value: a total that kept one side's
+    line gets the other side's back as ``None``, so the guard still compares
+    the two.
     """
     row = {k: v for k, v in record.items() if k not in _VERDICT_KEYS}
     row["book_line_at"] = _parse_stamp(record.get("book_line_at"))
     row["scheduled_start"] = _parse_stamp(record.get("scheduled_start"))
+    row["postponed_start"] = _parse_stamp(record.get("postponed_start"))
     if "over_line" in row or "under_line" in row:
         row.setdefault("over_line", None)
         row.setdefault("under_line", None)
