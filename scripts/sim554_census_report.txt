@@ -1,0 +1,71 @@
+SIM-554 running-game census: OFF = the single pre-pitch draw, ON = the new order
+  games 45 x 20 iterations; game-sims OFF 900, ON 900
+  read                                                         OFF                ON          pool
+  seconds per game-sim                                        1.19              1.18              
+  target 2: opportunities                                   59,294            59,438              
+  target 2: attempts                                         1,130             1,158              
+  target 2: attempts per opportunity                0.0191+-0.0006    0.0195+-0.0006        0.0214
+  target 2: expected attempts per opportunity               0.0193            0.0192              
+  target 2: safe share                                       0.808             0.787         0.796
+  target 3: opportunities                                   38,051            40,097              
+  target 3: attempts                                           120               143              
+  target 3: attempts per opportunity                0.0032+-0.0003    0.0036+-0.0003        0.0044
+  target 3: expected attempts per opportunity               0.0035            0.0035              
+  target 3: safe share                                       0.842             0.839         0.851
+  attempts by the class of the pitch they rode (share; the pool's own, recency-weighted, pitch rows; real 2023-2026):
+    ball                                                     0.368             0.630 0.645 / 0.644
+    called_strike                                            0.151             0.251 0.246 / 0.246
+    swinging_strike                                          0.093             0.110 0.099 / 0.100
+    foul                                                     0.200             0.008 0.010 / 0.011
+    in_play                                                  0.186             0.000 0.000 / 0.000
+    hit_by_pitch                                             0.002             0.000 0.000 / 0.000
+  misplaced share (foul + in play + HBP)                     0.388             0.008              
+  expected attempt share by class (the weights at each steal draw):
+    ball                                                     0.363             0.646              
+    called_strike                                            0.152             0.238              
+    swinging_strike                                          0.116             0.105              
+    foul                                                     0.193             0.011              
+    in_play                                                  0.172             0.000              
+    hit_by_pitch                                             0.003             0.000              
+  stolen bases per team-game                          0.563+-0.019      0.573+-0.020              
+  caught stealings per team-game                      0.161+-0.009      0.168+-0.010              
+  pickoff outcomes per game                                 0.1711            0.1711              
+  expected pickoffs per draw                              0.001338          0.001663        x1.283
+  expected pickoffs per game                                0.1448            0.1840              
+  pickoff kind at the seam: out                                 60                68              
+  pickoff kind at the seam: out_advancing                       53                33              
+  pickoff kind at the seam: error                               41                53              
+  pickoffs at 0-0                                              153               153              
+  pickoffs at 1-0                                                1                 0              
+  pickoffs at 2-2                                                0                 1              
+  pickoff third outs                                            39                41              
+    of which credited a plate appearance                         0                 0              
+  no-pitch steps: n                                              0                41              
+  no-pitch steps: half_rolled                                    0                41              
+  no-pitch steps: labelled                                       0                41              
+  leadoff after a no-pitch third out: same                       0                35              
+  leadoff after a no-pitch third out: other                      0                 0              
+  leadoff after a no-pitch third out: unchecked                  0                 6              
+  steals voided: third_out_first                                33                 0              
+  dropped third strike: reaches                                 22                16              
+  dropped third strike: runners_on                               5                 6              
+  dropped third strike: runners_moved                            5                 6              
+  dropped third strike: unforced_chances                         3                 4              
+  dropped third strike: unforced_moved                           3                 4              
+  dropped third strike: with_running_play                        1                 0              
+  the loop's RunningGameTally, summed over the machines:
+    d3k_reaches                                                 22                16              
+    d3k_runners_moved                                            5                 6              
+    no_pitch_third_outs                                          0                41              
+    pickoff_draws                                                0             99576              
+    pickoff_errors                                              41                53              
+    pickoff_outs                                               113               101              
+    pickoffs_by_count                           {'0-0': 153, '1-0': 1}{'0-0': 153, '2-2': 1}              
+    voided                                      {'third_out_first': 33}                {}              
+STOP RULES (the run book, design §8 step 5):
+  PASS  misplaced: the new arm's attempts on a foul, a ball in play or a hit by pitch: 0.85% of 1,301 (stop above 5%; no attempt at all stops)
+  PASS  pickoff_ratio: the expected pickoffs per draw, new over old: 1.242 (0.001663 / 0.001338); window 1.15-1.40, the pool's own 1.28
+  PASS  volume_2: target 2: attempts per opportunity 0.0191 -> 0.0195, moved 0.0004 against 2 unpaired standard errors 0.0017
+  PASS  volume_3: target 3: attempts per opportunity 0.0032 -> 0.0036, moved 0.0004 against 2 unpaired standard errors 0.0008
+  PASS  third_out_first: steals voided as the third out first on the new arm: 0 (the old arm: 33); the class group holds no attempt there
+VERDICT: every stop rule passes; go to the ten-game smoke

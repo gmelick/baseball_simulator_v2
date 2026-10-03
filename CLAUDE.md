@@ -263,8 +263,8 @@ standing owner rulings that govern all new work:
   before the next nightly pool build**, or that build rebuilds the current season on the old
   coding. The steal and advancement pools in DuckDB are AHEAD of the bundle (the 2026 games of
   08-14 to 08-29, never exported); the next `--what pool` export ships that refresh.
-- **The running game on the pitch (SIM-554, BUILT 2026-10-01 on the branch
-  `sim554-running-game-impl`; the run book has not run).** On every pitch with a runner who
+- **The running game on the pitch (SIM-554, CLOSED 2026-10-03: built 2026-10-01, the run
+  book RAN 2026-10-03, production runs it).** On every pitch with a runner who
   could steal, the loop now makes four draws in the order things happen. (1) The pickoff
   draw, BEFORE the pitch: one row of the steal opportunity pool's count group (target base,
   outs, balls, strikes), pitch rows and pickoff rows alike, with the steal draw's weights
@@ -298,20 +298,21 @@ standing owner rulings that govern all new work:
   `pitch_id` order; `StealPool.pitch_class` holds codes 1-6 (0 = no class; None = an old
   bundle) and `StealPool.is_pickoff_row` marks the pickoff rows. `RunningGameTally` (`machine.running_game_tally`) counts the pickoffs, the
   no-pitch third outs, the voided steals and the dropped-third-strike advances; it changes
-  no play. **The run book still to run:** with the app stopped (the app's forkserver holds
-  the DuckDB writer lock, SIM-524), run `scripts/sim554_rebuild_steal_pool.py
-  --apply-migration`. It applies 0031 INSIDE the rebuild's one transaction, so a failed
-  rebuild rolls the two columns back with the rows; do not apply 0031 as a separate step. It
-  rebuilds the steal pool for the four window seasons and exports it alone. Then the census
-  of both arms
-  (`scripts/sim554_running_game_census.py`, the balanced 45 games × 20); the ten-game smoke;
-  one 45 × 130 lane. The export ships the steal pool's half of the 08-14 to 08-29 refresh;
-  the advancement pool stays ahead of the bundle. **Merge the code before the next nightly
-  pool build once 0031 is on the live DuckDB.** The builder version marks every pool stale for the current
-  season. The old code on a migrated table runs its positional INSERT two columns short: the
-  INSERT fails after its DELETE has removed the current season's steal rows. The new code
+  no play. **The run book RAN 2026-10-03** (the app stopped; the writer lock is SIM-524's):
+  `scripts/sim554_rebuild_steal_pool.py --apply-migration` applied 0031 inside its one
+  transaction, wrote the 394 pickoff rows (91 / 108 / 95 / 100 for 2023-2026) and passed
+  every check; the export round-tripped row for row. The census (both arms, 45 × 20,
+  `scripts/sim554_census_report.txt`) moved the steals' share on a foul, a ball in play or a
+  hit by pitch from 38.8% to 0.85% (real 1.0%), the pickoffs per draw ×1.24 (the pool's
+  ×1.28), the attempt volume within noise; the 45 × 130 lane (`scripts/sim554_lane.txt`)
+  reads the same six non-passes as before the change (walks +3.4%, hit by pitch +8.5%,
+  doubles +5.0%, steal attempts −10.0% / −21.3% — the steal-weight volume ticket, SIM-556 —
+  and the underpowered home-win share), runs 4.47 a team-game. To rerun the rebuild on
+  another database, use the one command; never apply 0031 as a separate step. The builder
+  version `sim554.1` marks every pool stale for the current season, and the new code
   refuses an un-migrated table before it deletes anything (`_require_steal_pool_0031`). The
-  plan (version 3): `docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md`.
+  plan (version 3, §13 the build and run record):
+  `docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md`.
 - **The pool window (2026-08-20):** the last three COMPLETED seasons plus the current one
   (`RECENCY_FLOOR_SEASONS = 4`; full 2023-2026 today). Schema v20 and `POOL_BUILDER_VERSION`
   sim515.1 then; v31 and sim554.1 since the running game on the pitch (SIM-554).

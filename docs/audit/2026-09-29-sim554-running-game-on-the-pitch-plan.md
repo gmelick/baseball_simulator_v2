@@ -1,10 +1,10 @@
 # Build plan — the running game on the pitch: the pickoff before the pitch, the steal on the pitch it rides, the third out, and the runners on a dropped third strike (SIM-554)
 
-> **STATUS 2026-10-01 — BUILT on the branch `sim554-running-game-impl`; the run book (§8 steps
-> 2-7) has NOT run.** All four decisions are taken (§10). The code of §4 to §7 is built, two
-> review rounds ran (six reviewers, then three; two skeptics checked every finding), and every
-> confirmed defect is fixed. The unit, regression and band-arithmetic lanes are green. §13 is the
-> build record: what was built, where it departs from this plan and why, and what is left. The
+> **STATUS 2026-10-03 — CLOSED. Built 2026-10-01; the run book RAN 2026-10-03; production runs
+> the new order.** All four decisions are taken (§10). The code of §4 to §7 is built, two review
+> rounds ran (six reviewers, then three; two skeptics checked every finding), and every
+> confirmed defect is fixed. §13 is the build and run record: what was built, where it departs
+> from this plan and why, and what the run book read (§13.4). The
 > design history (versions 1 to 3, the replay, the decisions) follows unchanged; the readable
 > page is https://claude.ai/artifact/UP5z7ErWR9cgTnKwYENc8Y (v3).
 >
@@ -1196,9 +1196,38 @@ the strength of the tests by mutation. Eleven smaller findings confirmed and fix
 rebuild script, the run-book wording, the provenance stamp, the play-by-play at-bat break, and
 six tests that could not fail.
 
-### 13.4 Left
+### 13.4 The run book (2026-10-03)
 
-The run book of §8 has not run: migration 0031 and the steal-pool rebuild and export with the
-app stopped (one command), the census of both arms, the ten-game smoke, one 45 × 130 lane, then
-the close. Once 0031 is on the live DuckDB, merge before the next nightly pool build. SIM-557
-(the pitcher's out on a non-terminal caught stealing or pickoff) is filed, P2.
+Master had moved four commits (the odds work, SIM-555) and was merged into the branch first; the
+unit lanes on the merged code read 5,354 passed, 0 failed.
+
+1. **The rebuild** (`scripts/sim554_rebuild_steal_pool.py --apply-migration`, the app stopped,
+   1.1 minutes). The read-only pre-flight passed every check but the migration. The run applied
+   0031 inside its transaction, rebuilt 2023-2026 and passed checks a-h: 1,004,622 snapshot pitch
+   rows back unchanged; 394 new rows, all pickoff rows (91 / 108 / 95 / 100, the counts of §4.6);
+   tagged rows + pickoff rows = the 1,788 outcomes that fit a pair; every pitch row classed and
+   equal to its pitch-pool class; no attempted row on a ball in play or a hit by pitch. COMMIT;
+   the bundle's old steal pool copied to `engine_artifacts.pre_sim554_steal_pool`; the export
+   round-tripped row for row and left the rest of the bundle byte-identical. The steal pool now
+   holds the 2026 games of 08-14 to 08-29 too, so the safe share at second moved at the fourth
+   decimal (0.7989 -> 0.7982, `tests/acceptance/bands.py` updated); the attempt centres held.
+   Pickoff outcomes per pitch row x1.271.
+2. **The census** (45 x 20 a side, the app stopped for memory; `scripts/sim554_census_report.txt`,
+   the two JSON files beside it). Every stop rule passed. The new order's attempts on a foul, a
+   ball in play or a hit by pitch: 0.85% (the old order 38.8%; real 1.0%); the class mix ball /
+   called strike / swinging strike 0.630 / 0.251 / 0.110 (the pool's 0.645 / 0.246 / 0.099).
+   Expected pickoffs per draw x1.242 (the pool's x1.28). Attempts per opportunity within noise
+   (target 2: 0.0191 -> 0.0195; target 3: 0.0032 -> 0.0036). 41 no-pitch third outs, every one with
+   the half rolled and no plate appearance credited. Steals voided as the third out first: 0 (the
+   old order staged 33 such steals in 900 games, which decision 3 voided).
+3. **The ten-game smoke** (10 x 50, `scripts/sim554_smoke.txt`): no collapse; runs +2.5%, hits
+   +1.9%, home runs +3.1%, strikeouts +2.5%, walks +3.0% against MLB 2023; stolen bases -8.8%.
+4. **The lane** (45 x 130, 1 h 29 m, `scripts/sim554_lane.txt`): 36 passed, 6 failed, the six
+   channels red before this change at like sizes (walks +3.4%, hit by pitch +8.5%, doubles +5.0%,
+   steal attempts -10.0% at second and -21.3% at third, the home-win share underpowered). The
+   steal-attempt bands sit where the last lane left them, as §8 step 7 expected; their deficit is
+   the look-alike weights' (SIM-556). Strikeouts -0.9%, the safe share at second -0.1%, runs 4.47
+   a team-game.
+5. **The close.** The branch merged into master; the app restarted on the merged code; the
+   SIM-554 row deleted from `BACKLOG.xlsx`; SIM-557 (the pitcher's out on a caught stealing or
+   pickoff that does not end the plate appearance) filed, P2; next free ID SIM-558.

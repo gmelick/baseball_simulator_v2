@@ -51,7 +51,8 @@ and the steal never changes it. The switch is `SIM_STEAL_PITCH_CLASS` (default 1
 needs a bundle whose steal pool carries the pitch class (DuckDB migration 0031). An older
 bundle, or the switch at 0, runs the single pre-pitch draw of 2026-08-17 (SIM-474): one row
 of the count group answers the steal and the pickoff together, before the pitch. Production
-runs the new order once the run book rebuilds the steal pool and exports it into the bundle.
+runs the new order since 2026-10-03, when the run book rebuilt the steal pool (builder
+`sim554.1`, 394 pickoff rows) and exported it into the bundle.
 
 ## 2. The draws, one by one
 

@@ -1394,8 +1394,11 @@ POOL_REFERENCES: dict[str, PoolReference] = {
         ),
     ),
     "STEAL_SAFE_2B": PoolReference(
-        0.7989,
-        "the W1 artifact steal pool [2B] safe share (sim476_steal_probe)",
+        # SIM-554 (2026-10-03): 0.7989 -> 0.7982, read by the steal-pool
+        # rebuild over pitch rows only; the export added the 2026 games of
+        # 08-14 to 08-29. The two attempt centres held at the fourth decimal.
+        0.7982,
+        "the W1 artifact steal pool [2B] safe share (sim554_rebuild_steal_pool)",
         rel_floor=0.03,
         floor_rationale=(
             "The split was calibrated before SIM-476 (0.804 vs 0.795 measured); "

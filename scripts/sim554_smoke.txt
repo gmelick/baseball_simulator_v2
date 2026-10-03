@@ -1,0 +1,61 @@
+SIM-554 the ten-game smoke, 2026-10-03: the first ten games of the balanced set x 50 iterations (scripts/sim_stats.py),
+on the rebuilt steal pool (builder sim554.1, migration 0031), the new order ON (SIM_STEAL_PITCH_CLASS unset = its default 1;
+the main checkout's compose file does not carry the flag until the merge). Verdict: no collapse.
+
+sim_stats: 10 games × 50 sims = 500 total sims
+  flags: SIM_MANAGER=1  SIM_BB_PLATOON=1  SIM_HOME_OFF_WEIGHT=0.0  SIM_PARK_KERNEL_SIGMA=0.02  SIM_CATCHER_RECEIVING=0  SIM_GOT_AWAY=1  SIM_PITCH_RESULT_SPLIT=1  SIM_PITCH_PITCHER_POWER=1  SIM_RESULT_PITCHER_POWER=1  SIM_RESULT_BATTER_POWER=1  SIM_BB_BORN_SIGMA=1.0  SIM_BB_CLASS_FILTER=1  SIM_PARK_WALL_ZONE_ONLY=1  SIM_FENCE_STAGE=1  SIM_CARRY_OFFSET=1  SIM_BB_BORN_PER_FEATURE=1  SIM_BB_MARGIN_BAND=15  SIM_MANAGER_DRAW=1  SIM_BULLPEN_SOURCE=box  SIM_ACTOR_POWER_MANAGER_USAGE=1  SIM_RELIEF_ROLE_SIGMA=0.1  SIM_RELIEF_PITCHER_POWER=1  SIM_RELIEF_REST_SIGMA=0.5  SIM_RELIEF_PITCHED2D_OFF_WEIGHT=0.25  SIM_RELIEF_PITCHES3D_SIGMA=10  SIM_RELIEF_HAND_OFF_WEIGHT=1.0  SIM_STEAL_PITCH_CLASS=<unset>
+  sim DuckDB: open (read-only) — the harness resolves a park factor per game.
+  game 776151: park_run_factor=0.9937   defense home=8/9 away=9/9
+  game 776151: R=8.56  H=16.52  HR=2.56  BB=6.80  K=17.66   (h_R=4.88/a_R=3.68)
+  game 776142: park_run_factor=0.9922   defense home=7/9 away=9/9
+  game 776142: R=9.16  H=16.54  HR=2.66  BB=6.12  K=16.20   (h_R=4.70/a_R=4.46)
+  game 776149: park_run_factor=0.9985   defense home=9/9 away=8/9
+  game 776149: R=8.76  H=16.90  HR=2.16  BB=6.34  K=17.32   (h_R=4.94/a_R=3.82)
+  game 745938: park_run_factor=0.9914   defense home=9/9 away=8/9
+  game 745938: R=8.42  H=16.18  HR=2.32  BB=5.76  K=17.56   (h_R=4.10/a_R=4.32)
+  game 824590: park_run_factor=1.0022   defense home=9/9 away=9/9
+  game 824590: R=10.18  H=17.42  HR=2.62  BB=6.90  K=17.54   (h_R=4.36/a_R=5.82)
+  game 746990: park_run_factor=1.0032   defense home=9/9 away=8/9
+  game 746990: R=9.32  H=16.50  HR=2.32  BB=6.90  K=16.58   (h_R=5.24/a_R=4.08)
+  game 823618: park_run_factor=0.9658   defense home=9/9 away=9/9
+  game 823618: R=9.62  H=17.46  HR=2.20  BB=6.70  K=16.98   (h_R=4.54/a_R=5.08)
+  game 746178: park_run_factor=1.0037   defense home=9/9 away=8/9
+  game 746178: R=9.38  H=17.24  HR=2.58  BB=5.98  K=17.26   (h_R=4.88/a_R=4.50)
+  game 824831: park_run_factor=0.9878   defense home=9/9 away=9/9
+  game 824831: R=9.36  H=17.32  HR=2.26  BB=6.68  K=18.00   (h_R=5.00/a_R=4.36)
+  game 822970: park_run_factor=0.9991   defense home=8/9 away=9/9
+  game 822970: R=8.38  H=16.24  HR=2.30  BB=7.00  K=16.10   (h_R=4.60/a_R=3.78)
+
+========================================================================
+ SIM_STATS — n_games=10  n_iters_total=500  R sd=4.548  R se=0.2034
+========================================================================
+
+--- Both-teams per game ---
+  R=  9.11  H= 16.83  HR=  2.40  2B=  3.41  3B=  0.26  BB=  6.52  K= 17.12  SB=  1.14  CS=  0.34
+
+--- Per-team (both-teams / 2) vs MLB-2023 ---
+  R   sim=  4.56   mlb=  4.45   delta=  +2.5%
+  H   sim=  8.42   mlb=  8.26   delta=  +1.9%
+  HR  sim=  1.20   mlb=  1.16   delta=  +3.1%
+  2B  sim=  1.70   mlb=  1.59   delta=  +6.9%
+  3B  sim=  0.13   mlb=  0.13   delta=  +0.6%
+  BB  sim=  3.26   mlb=  3.17   delta=  +3.0%
+  K   sim=  8.56   mlb=  8.35   delta=  +2.5%
+  SB  sim=  0.57   mlb=  0.63   delta=  -8.8%
+  CS  sim=  0.17   mlb=  0.19   delta= -11.0%
+
+--- SIM-412 home-field validation ---
+  home_win_pct = 0.594   (target MLB ~0.543)
+  home R/g     =  4.72   away R/g =  4.39   delta = +0.334  (target +0.13)
+  home H/g     =  8.46   away H/g =  8.37   delta = +0.084
+  home HR/g    =  1.25   away HR/g =  1.15  (no bias here — should be ~0)
+
+--- precision: R standard error = 0.2034  (NOISY — bump iters above this read) ---
+
+--- SIM-478 the fence stage ---
+  fence stage: over 1187 (9.2% of air balls) · short 24318 · band 0 · passed 0 (0.00%) · no matching rows 0 (0.00%) · not an air ball 12579
+  D: passed 0.00% (<= 0.1%), no rows 0.00% (<= 0.5%), over share 9.2% (9 ± 1%) — PASS
+  wall-margin band: applied 4495 (34.8% of air balls) · fallback 13 · skipped 20997
+
+elapsed: 522.4s
+wrote /app/scripts/sim554_smoke.json

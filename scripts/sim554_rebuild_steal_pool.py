@@ -195,7 +195,7 @@ MEASURED_FIT = 1_788
 FALLBACK_CENTRES: dict[str, float] = {
     "STEAL_ATT_OPP_2B": 0.0214,
     "STEAL_ATT_OPP_3B": 0.0044,
-    "STEAL_SAFE_2B": 0.7989,
+    "STEAL_SAFE_2B": 0.7982,
 }
 
 SNAP = "_sim554_before"

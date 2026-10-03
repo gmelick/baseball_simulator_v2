@@ -1,0 +1,117 @@
+SIM-554 — the running game on the pitch: the lane, 2026-10-03. 45 games × 130 iterations (the balanced set,
+scripts/sim523_game_set.json; tests/acceptance/test_production_config_bands_sim450.py), 5,850 game-sims, 1 h 29 m.
+The record written by SIM_ACCEPTANCE_JSON_OUT is scripts/sim554_lane.json. The steal pool rebuilt by
+scripts/sim554_rebuild_steal_pool.py the same morning (builder sim554.1, migration 0031, 394 pickoff rows);
+SIM_STEAL_PITCH_CLASS=1 and the lane's guard confirmed the loop runs the new order on this bundle.
+
+36 passed, 6 failed. The six are the channels that were red before this change, at like sizes:
+  BB_PA        +3.4%  (2026-09-21: +4.0%)        HBP_PA      +8.5%  (+6.7%)
+  DOUBLES_BIP  +5.0%  (2026-09-22: +5.8%)
+  STEAL_ATT_OPP_2B −10.0% (−9.1%)               STEAL_ATT_OPP_3B −21.3% (−17.9%)
+  home_win_pct UNDERPOWERED (5,831 of the 13,365 game-sims it needs)
+The steal-attempt bands sit where the last lane left them (the differences are under one combined standard
+error): the look-alike weights' volume deficit is the steal-weight balance ticket (SIM-556), and the census
+read the new order's volume equal to the old order's (target 2: 0.0191 -> 0.0195; target 3: 0.0032 -> 0.0036,
+both inside two unpaired standard errors). Fewer steal opportunities than the 2026-09-21 lane (382,498 vs
+398,637) follow the foul-tip fix's extra strikeouts (SIM-553, 2026-09-25), which left fewer runners on base.
+
+The other pool bands pass. From the record: K_PA 0.22408 (−0.9%; the foul-tip fix predicted about −1.8%),
+IBB_PA +2.9%, DP_OPP −4.8%, CALLED_STRIKE_TAKEN −0.8%, STEAL_SAFE_2B 0.7977 (−0.1% against the moved centre
+0.7982), the safe share at third 0.839. Game-graded: runs 4.47 a team-game (MLB 4.45), hits 8.18, home runs
+1.18 a team-game, HR/BIP 0.04614.
+
+The pytest output follows.
+
+============================= test session starts ==============================
+platform linux -- Python 3.13.15, pytest-8.4.2, pluggy-1.6.0
+benchmark: 4.0.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /app
+configfile: pyproject.toml
+plugins: benchmark-4.0.0, cov-5.0.0, mock-3.16.0, asyncio-0.26.0, hypothesis-6.168.3, timeout-2.4.0, anyio-4.15.1
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 42 items
+
+tests/acceptance/test_production_config_bands_sim450.py ................ [ 38%]
+.......FF..F..F...FF......                                               [100%]
+
+=================================== FAILURES ===================================
+________________________ test_home_win_pct_band_sim450 _________________________
+tests/acceptance/test_production_config_bands_sim450.py:701: in test_home_win_pct_band_sim450
+    _assert_band(acceptance_run, "home_win_pct")
+tests/acceptance/test_production_config_bands_sim450.py:505: in _assert_band
+    assert result.passed, result.explain()
+E   AssertionError: 
+E       channel      home_win_pct
+E       verdict      UNDERPOWERED
+E       sim mean     0.5337   (n=5831, sd=0.4989)
+E       MLB centre   0.5428   [scripts/sim_stats.py:104 _MLB_HOME_WIN_PCT]
+E       delta        -0.0091   (-1.7%)
+E       half-width   0.0261   = max(Z*sd/sqrt(n)=0.0261, floor=0.0173) -> SE-driven
+E       band         [0.5167, 0.5689]  (Z=4.0)
+E       why          This run is too short for this channel to say ANYTHING.
+E                    It has 5831 observations and the floor needs
+E                    13365. This is not a pass and it is not a
+E                    failure — it is a missing measurement.
+E       fix          Run 13365 game-sims for this channel
+E                    (7534 more than this run). Raise
+E                    SIM_ACCEPTANCE_ITERS, and SIM_ACCEPTANCE_TIMEOUT with it.
+E       Read tests/acceptance/bands.py 'MOVING A BAND' before touching a floor.
+E   assert False
+E    +  where False = BandResult(channel='home_win_pct', centre=0.5428, mean=0.5336991939632996, sd=0.49890585402575544, n=5831, se_term=0.0...='scripts/sim_stats.py:104 _MLB_HOME_WIN_PCT', required_obs=13365, required_sims=13365, obs_per_sim=1, n_matchups=None).passed
+______________________ test_pool_band_walks_per_pa_sim450 ______________________
+tests/acceptance/test_production_config_bands_sim450.py:729: in test_pool_band_walks_per_pa_sim450
+    _assert_pool_band("BB_PA", pc["BB_pitched"], pc["PA"])
+tests/acceptance/test_production_config_bands_sim450.py:528: in _assert_pool_band
+    assert result.passed, result.explain()
+E   AssertionError: BB_PA: rate 0.08568 = 38067/444292 vs pool centre 0.08290 (delta +0.00278 = +3.4%), half-width 0.00166 (floor 0.00166, Z*se 0.00165) -> RED   [scripts/pool_window_census.py (2026-09-25, the W1 block, pitch pool sim553.1 — the chain over every pool row; label check vs real PAs K +0.09% BB -0.25% HBP +0.08% pitches +0.07%): chain(pool per-count rates) BB/PA]
+E   assert False
+E    +  where False = PoolBandResult(channel='BB_PA', numerator=38067.0, denominator=444292.0, rate=0.0856801382874326, centre=0.0829, floor...ry pool row; label check vs real PAs K +0.09% BB -0.25% HBP +0.08% pitches +0.07%): chain(pool per-count rates) BB/PA').passed
+----------------------------- Captured stdout call -----------------------------
+BB_PA: rate 0.08568 = 38067/444292 vs pool centre 0.08290 (delta +0.00278 = +3.4%), half-width 0.00166 (floor 0.00166, Z*se 0.00165) -> RED   [scripts/pool_window_census.py (2026-09-25, the W1 block, pitch pool sim553.1 — the chain over every pool row; label check vs real PAs K +0.09% BB -0.25% HBP +0.08% pitches +0.07%): chain(pool per-count rates) BB/PA]
+_______________________ test_pool_band_hbp_per_pa_sim450 _______________________
+tests/acceptance/test_production_config_bands_sim450.py:748: in test_pool_band_hbp_per_pa_sim450
+    _assert_pool_band("HBP_PA", pc["HBP"], pc["PA"])
+tests/acceptance/test_production_config_bands_sim450.py:528: in _assert_pool_band
+    assert result.passed, result.explain()
+E   AssertionError: HBP_PA: rate 0.01216 = 5401/444292 vs pool centre 0.01120 (delta +0.00096 = +8.5%), half-width 0.00067 (floor 0.00067, Z*se 0.00063) -> RED   [scripts/pool_window_census.py (2026-09-25, the W1 block, pitch pool sim553.1 — the chain over every pool row; label check vs real PAs K +0.09% BB -0.25% HBP +0.08% pitches +0.07%): chain(pool per-count rates) HBP/PA]
+E   assert False
+E    +  where False = PoolBandResult(channel='HBP_PA', numerator=5401.0, denominator=444292.0, rate=0.012156419651940616, centre=0.0112, flo...y pool row; label check vs real PAs K +0.09% BB -0.25% HBP +0.08% pitches +0.07%): chain(pool per-count rates) HBP/PA').passed
+----------------------------- Captured stdout call -----------------------------
+HBP_PA: rate 0.01216 = 5401/444292 vs pool centre 0.01120 (delta +0.00096 = +8.5%), half-width 0.00067 (floor 0.00067, Z*se 0.00063) -> RED   [scripts/pool_window_census.py (2026-09-25, the W1 block, pitch pool sim553.1 — the chain over every pool row; label check vs real PAs K +0.09% BB -0.25% HBP +0.08% pitches +0.07%): chain(pool per-count rates) HBP/PA]
+____________________ test_pool_band_doubles_per_bip_sim450 _____________________
+tests/acceptance/test_production_config_bands_sim450.py:765: in test_pool_band_doubles_per_bip_sim450
+    _assert_pool_band("DOUBLES_BIP", _pool_hits(acceptance_run)["2B"], pc["BIP"])
+tests/acceptance/test_production_config_bands_sim450.py:528: in _assert_pool_band
+    assert result.passed, result.explain()
+E   AssertionError: DOUBLES_BIP: rate 0.06561 = 19680/299955 vs pool centre 0.06250 (delta +0.00311 = +5.0%), half-width 0.00187 (floor 0.00187, Z*se 0.00177) -> RED   [scripts/pool_window_census.py (2026-08-20, the W1 block): doubles / consistent BIP]
+E   assert False
+E    +  where False = PoolBandResult(channel='DOUBLES_BIP', numerator=19680.0, denominator=299955.0, rate=0.06560984147622144, centre=0.0625...4762214394, verdict='RED', source='scripts/pool_window_census.py (2026-08-20, the W1 block): doubles / consistent BIP').passed
+----------------------------- Captured stdout call -----------------------------
+DOUBLES_BIP: rate 0.06561 = 19680/299955 vs pool centre 0.06250 (delta +0.00311 = +5.0%), half-width 0.00187 (floor 0.00187, Z*se 0.00177) -> RED   [scripts/pool_window_census.py (2026-08-20, the W1 block): doubles / consistent BIP]
+___________________ test_pool_band_steal_attempts_2b_sim450 ____________________
+tests/acceptance/test_production_config_bands_sim450.py:790: in test_pool_band_steal_attempts_2b_sim450
+    _assert_pool_band("STEAL_ATT_OPP_2B", pc["STEAL_ATT_2"], pc["STEAL_OPP_2"])
+tests/acceptance/test_production_config_bands_sim450.py:528: in _assert_pool_band
+    assert result.passed, result.explain()
+E   AssertionError: STEAL_ATT_OPP_2B: rate 0.01927 = 7369/382498 vs pool centre 0.02140 (delta -0.00213 = -10.0%), half-width 0.00128 (floor 0.00128, Z*se 0.00094) -> RED   [the W1 artifact steal pool [2B], recency-weighted (sim476_steal_probe)]
+E   assert False
+E    +  where False = PoolBandResult(channel='STEAL_ATT_OPP_2B', numerator=7369.0, denominator=382498.0, rate=0.019265460211556663, centre=0...=-0.002134539788443336, verdict='RED', source='the W1 artifact steal pool [2B], recency-weighted (sim476_steal_probe)').passed
+----------------------------- Captured stdout call -----------------------------
+STEAL_ATT_OPP_2B: rate 0.01927 = 7369/382498 vs pool centre 0.02140 (delta -0.00213 = -10.0%), half-width 0.00128 (floor 0.00128, Z*se 0.00094) -> RED   [the W1 artifact steal pool [2B], recency-weighted (sim476_steal_probe)]
+___________________ test_pool_band_steal_attempts_3b_sim450 ____________________
+tests/acceptance/test_production_config_bands_sim450.py:795: in test_pool_band_steal_attempts_3b_sim450
+    _assert_pool_band("STEAL_ATT_OPP_3B", pc["STEAL_ATT_3"], pc["STEAL_OPP_3"])
+tests/acceptance/test_production_config_bands_sim450.py:528: in _assert_pool_band
+    assert result.passed, result.explain()
+E   AssertionError: STEAL_ATT_OPP_3B: rate 0.00346 = 896/258702 vs pool centre 0.00440 (delta -0.00094 = -21.3%), half-width 0.00066 (floor 0.00066, Z*se 0.00052) -> RED   [the W1 artifact steal pool [3B], recency-weighted (sim476_steal_probe)]
+E   assert False
+E    +  where False = PoolBandResult(channel='STEAL_ATT_OPP_3B', numerator=896.0, denominator=258702.0, rate=0.0034634444264056716, centre=0...-0.0009365555735943287, verdict='RED', source='the W1 artifact steal pool [3B], recency-weighted (sim476_steal_probe)').passed
+----------------------------- Captured stdout call -----------------------------
+STEAL_ATT_OPP_3B: rate 0.00346 = 896/258702 vs pool centre 0.00440 (delta -0.00094 = -21.3%), half-width 0.00066 (floor 0.00066, Z*se 0.00052) -> RED   [the W1 artifact steal pool [3B], recency-weighted (sim476_steal_probe)]
+=============================== warnings summary ===============================
+tests/acceptance/test_production_config_bands_sim450.py::test_production_flags_are_on_sim450
+  /app/tests/conftest.py:354: DeprecationWarning: There is no current event loop
+    loop = asyncio.get_event_loop_policy().get_event_loop()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+============= 6 failed, 36 passed, 1 warning in 5348.26s (1:29:08) =============

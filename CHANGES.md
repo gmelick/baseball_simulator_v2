@@ -1,3 +1,42 @@
+# CLOSED — the running game on the pitch: the steal pool rebuilt with the pitch class and the pickoff rows, the census and the lane read as the design expected, production runs the new order — SIM-554, 2026-10-03
+
+**Why it matters.** The simulator now decides a steal after the pitch, among real pitches of the
+same count and the same kind (a ball, a called strike, a swinging strike, a foul, a ball in play,
+a hit by pitch). Its steals used to land on a foul, a ball in play or a hit by pitch 39% of the
+time; now 0.85%, against 1.0% in real games. The pickoffs that real pitchers throw before a plate
+appearance's first pitch, a fifth of all pickoffs, are back in the pool. The build is the entry
+below (2026-10-01).
+
+**What ran (the run book, design §8).**
+1. **The merge.** Master had moved four commits (the odds work, SIM-555) and was merged into the
+   branch; the unit lanes on the merged code read 5,354 passed, 0 failed.
+2. **The rebuild** (`scripts/sim554_rebuild_steal_pool.py --apply-migration`, the app stopped,
+   1.1 minutes). It applied migration 0031 inside its one transaction and rebuilt 2023-2026. Every
+   check passed: the 1,004,622 pitch rows back unchanged; 394 new rows, all pickoff rows (91 / 108
+   / 95 / 100 by season, the counts the design measured); tagged rows plus pickoff rows equal the
+   1,788 pickoff outcomes; every pitch row carries its pitch-pool class; no steal attempt on a ball
+   in play or a hit by pitch. The bundle's old steal pool is kept at
+   `/data/play_pool/engine_artifacts.pre_sim554_steal_pool`; the export round-tripped row for row
+   and left the rest of the bundle byte-identical. The steal pool now also holds the 2026 games of
+   08-14 to 08-29; the safe share at second moved 0.7989 -> 0.7982 (`tests/acceptance/bands.py`).
+3. **The census** (both arms, the balanced 45 games × 20; `scripts/sim554_census_report.txt`).
+   Every stop rule passed: misplaced attempts 0.85% (old order 38.8%); the class mix 0.630 /
+   0.251 / 0.110 against the pool's 0.645 / 0.246 / 0.099; expected pickoffs per draw ×1.242 (the
+   pool's ×1.28); attempt volume within noise; 41 no-pitch third outs, none credited a plate
+   appearance; no steal voided as the third out first (the old order staged 33 in 900 games).
+4. **The ten-game smoke** (`scripts/sim554_smoke.txt`): no collapse; runs +2.5% against MLB 2023.
+5. **The lane** (45 × 130, 1 h 29 m; `scripts/sim554_lane.txt`, `scripts/sim554_lane.json`): 36
+   passed, 6 failed, the six that were red before the change at like sizes: walks +3.4%, hit by
+   pitch +8.5%, doubles +5.0%, steal attempts −10.0% at second and −21.3% at third (the look-alike
+   weights' volume deficit, SIM-556), and the home-win share, which needs 13,365 game-sims.
+   Strikeouts −0.9%, the safe share at second −0.1%, runs 4.47 a team-game.
+
+**The close.** The branch is merged into master and the app restarted on the merged code. The
+SIM-554 row is deleted from `BACKLOG.xlsx`; SIM-557 (P2: a caught stealing or pickoff out on a
+pitch that does not end the plate appearance never reaches the pitcher's box line) stays open.
+Next free ID SIM-558. The plan's §13 is the build and run record.
+
+
 # CLOSED — every book's prices stored one row per book, one graded book, a load guard, the event matcher fixed, every season 2019-2026 re-loaded, the old rows retired — SIM-555, 2026-10-01
 
 **Why it matters.** The closing prices the accuracy comparison grades against used to mix books: every
