@@ -19,6 +19,7 @@
 --     date, not its scheduled start. Section 7 uses a loose bound (the stamp
 --     more than 36 hours after the start of the game's local date), which only
 --     catches a stamp far past any game.
+--   * The guard's postponement rule: the store keeps no postponed original start.
 --
 -- READ-ONLY
 --   The whole script runs inside BEGIN READ ONLY ... ROLLBACK. It writes nothing.

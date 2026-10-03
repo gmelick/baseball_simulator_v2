@@ -1002,6 +1002,7 @@ class TestGuard:
             "three_way_two_way_team_prices",
             "three_way_sum_above_max",
             "late_closing_stamp",
+            "stamped_before_postponement",
         )
 
     def test_the_guard_refuses_equal_spreads_priced_like_a_pair(self) -> None:

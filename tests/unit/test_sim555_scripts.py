@@ -717,6 +717,145 @@ class TestRetire:
         assert args.seasons == [2024, 2025] and args.dry_run
 
 
+class _NamedStub(_StubConn):
+    """SIM-555: the stub, plus a missing list per season and the season of each named game."""
+
+    def __init__(
+        self, *, missing_by_season: dict[int, list[int]], season_of: dict[int, int], **kw: Any
+    ) -> None:
+        super().__init__(missing=[], **kw)
+        self.missing_by_season = missing_by_season
+        self.season_of = season_of
+        self.named_args: list[tuple[Any, ...]] = []
+
+    async def fetch(self, sql: str, *args: Any):
+        if sql == retire.NAMED_GAMES_SQL:
+            self.calls.append(("fetch", sql))
+            self.named_args.append(args)
+            return [
+                {"game_pk": g, "season": self.season_of[g]} for g in args[0] if g in self.season_of
+            ]
+        if sql == retire.MISSING_SQL:
+            self.calls.append(("fetch", sql))
+            return [{"game_pk": g} for g in self.missing_by_season.get(args[0], [])]
+        return await super().fetch(sql, *args)
+
+
+class TestRetireAllowMissing:
+    """SIM-555: ``--allow-missing`` lets named games through the refusal, nothing else."""
+
+    _COUNTS = {"game_odds": 5, "prop_odds": 9}
+
+    def test_a_named_missing_game_lets_its_season_through_and_is_printed(self, capsys):
+        conn = _NamedStub(
+            missing_by_season={2019: [567323]}, season_of={567323: 2019}, counts=self._COUNTS
+        )
+        code = _run(retire.run(conn, [2019], dry_run=False, allow_missing=[567323]))
+        assert code == retire.EXIT_OK
+        # The named game's rows are archived and deleted with the season: the same
+        # four statements, with no game left out of them.
+        sqls = conn.executed()
+        assert [s.split()[0] for s in sqls] == ["INSERT", "DELETE", "INSERT", "DELETE"]
+        assert not any("567323" in s or "ANY(" in s for s in sqls)
+        assert conn.outcomes == ["commit"]
+        out = capsys.readouterr().out
+        assert "REFUSED" not in out and "archived and deleted" in out
+        assert "ALLOWED by --allow-missing (1): [567323]" in out
+        assert "stale" not in out
+
+    def test_the_result_carries_the_named_game_apart_from_the_refusal(self):
+        conn = _NamedStub(
+            missing_by_season={2019: [567323]}, season_of={567323: 2019}, counts=self._COUNTS
+        )
+        result = _run(retire.retire_season(conn, 2019, dry_run=False, allow_missing=[567323]))
+        assert not result.refused and result.missing_games == 0 and result.examples == []
+        assert result.allowed == [567323] and result.stale_names == []
+        assert result.archived == self._COUNTS and result.deleted == self._COUNTS
+
+    def test_an_unnamed_missing_game_still_refuses(self, capsys):
+        conn = _NamedStub(
+            missing_by_season={2024: [745169, 746755, 745175]},
+            season_of={745175: 2024},
+            counts=self._COUNTS,
+        )
+        code = _run(retire.run(conn, [2024], dry_run=False, allow_missing=[745175]))
+        assert code == retire.EXIT_REFUSED
+        assert conn.executed() == []
+        out = capsys.readouterr().out
+        assert "REFUSED — 2 Final games" in out and "[745169, 746755]" in out
+        assert "ALLOWED by --allow-missing (1): [745175]" in out
+
+    def test_a_named_game_that_is_not_missing_is_a_stale_name(self, capsys):
+        # 745175 sits in 2024 but has a bp: closing moneyline (it is not missing).
+        conn = _NamedStub(
+            missing_by_season={2024: []}, season_of={745175: 2024}, counts=self._COUNTS
+        )
+        code = _run(retire.run(conn, [2024], dry_run=False, allow_missing=[745175]))
+        assert code == retire.EXIT_OK
+        assert len(conn.executed()) == 4
+        out = capsys.readouterr().out
+        assert "WARNING: stale --allow-missing names [745175]" in out
+        assert "ALLOWED" not in out
+
+    def test_a_named_game_in_no_named_season_is_a_stale_name(self, capsys):
+        # 567323 is a 2019 game, 999999999 is in no season; only 2024 runs.
+        conn = _NamedStub(
+            missing_by_season={2024: []}, season_of={567323: 2019}, counts=self._COUNTS
+        )
+        code = _run(retire.run(conn, [2024], dry_run=False, allow_missing=[999999999, 567323]))
+        assert code == retire.EXIT_OK
+        assert len(conn.executed()) == 4
+        assert conn.named_args == [([567323, 999999999],)]
+        out = capsys.readouterr().out
+        assert "WARNING: stale --allow-missing names [567323, 999999999]" in out
+        assert "in no named season" in out
+
+    def test_each_season_gets_only_its_own_named_games(self, capsys):
+        conn = _NamedStub(
+            missing_by_season={2019: [567323], 2024: [745175]},
+            season_of={567323: 2019, 745175: 2024},
+            counts=self._COUNTS,
+        )
+        code = _run(retire.run(conn, [2019, 2024], dry_run=False, allow_missing=[745175, 567323]))
+        assert code == retire.EXIT_OK
+        assert len(conn.executed()) == 8
+        out = capsys.readouterr().out
+        assert "ALLOWED by --allow-missing (1): [567323]" in out
+        assert "ALLOWED by --allow-missing (1): [745175]" in out
+        assert "stale" not in out
+
+    def test_the_dry_run_writes_nothing(self, capsys):
+        conn = _NamedStub(
+            missing_by_season={2019: [567323]}, season_of={567323: 2019}, counts=self._COUNTS
+        )
+        code = _run(retire.run(conn, [2019], dry_run=True, allow_missing=[567323]))
+        assert code == retire.EXIT_OK
+        assert conn.executed() == []
+        assert conn.transactions == [{"isolation": "repeatable_read", "readonly": True}]
+        out = capsys.readouterr().out
+        assert "dry run" in out and "ALLOWED by --allow-missing (1): [567323]" in out
+
+    def test_no_names_means_no_named_games_query(self, capsys):
+        conn = _NamedStub(missing_by_season={2024: []}, season_of={}, counts=self._COUNTS)
+        code = _run(retire.run(conn, [2024], dry_run=True))
+        assert code == retire.EXIT_OK
+        assert conn.named_args == []
+        assert "WARNING" not in capsys.readouterr().out
+
+    def test_the_cli_accepts_game_pks(self):
+        base = ["--seasons", "2019", "--dsn", "postgresql://x"]
+        assert retire.parse_args(base).allow_missing == []
+        args = retire.parse_args([*base, "--allow-missing", "567323", "745175"])
+        assert args.allow_missing == [567323, 745175]
+
+    @pytest.mark.parametrize("values", [[], ["abc"], ["0"], ["-5"], ["567323", "1.5"]], ids=str)
+    def test_the_cli_rejects_a_value_that_is_not_a_game_pk(self, values):
+        with pytest.raises(SystemExit):
+            retire.parse_args(
+                ["--seasons", "2019", "--dsn", "postgresql://x", "--allow-missing", *values]
+            )
+
+
 # ===========================================================================
 # The re-score of stored reports
 # ===========================================================================
@@ -2129,6 +2268,31 @@ class TestProbeRegate:
 
         refusal = check_row(view)
         assert refusal is not None and refusal.rule == "total_line_mismatch"
+
+    def test_the_guard_view_keeps_a_made_up_games_postponed_start(self):
+        """SIM-555: a saved row of a made-up game keeps its postponed start, so a
+        re-grade refuses a price stamped before it; any other row saves no such key."""
+        from pipeline.odds_row_guard import check_row
+
+        # The game was postponed 50 days before it was played; bet365 stamped its
+        # price 29 minutes before the postponed start.
+        postponed = _START - timedelta(days=50)
+        rec = _saved_row(
+            "bp:24",
+            "moneyline",
+            minutes=-(50 * 24 * 60) - 29,
+            postponed_start=postponed,
+            home_ml=-150,
+            away_ml=130,
+        )
+        assert rec["postponed_start"] == postponed.isoformat()
+        view = probe.guard_view(rec)
+        assert view["postponed_start"] == postponed
+        refusal = check_row(view)
+        assert refusal is not None and refusal.rule == "stamped_before_postponement"
+        plain = _saved_row("bp:24", "moneyline", home_ml=-150, away_ml=130)
+        assert "postponed_start" not in plain
+        assert check_row(probe.guard_view(plain)) is None
 
     def test_the_cli_regrades_a_saved_file_without_a_dsn(self, tmp_path, monkeypatch, capsys):
         monkeypatch.delenv("BASEBALL_DB_DSN", raising=False)

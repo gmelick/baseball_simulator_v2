@@ -146,7 +146,7 @@ The SIM-538 sim-vs-closing-line accuracy comparison, the platform's gold-standar
 
 ### `scripts/sim555_retire_consensus_rows.py`
 
-**Purpose:** SIM-555 run book step 8 — retire the old `consensus` rows, season by season, each in ONE transaction: it refuses (exit 2) while any Final game of the season that has a `consensus` closing moneyline lacks a `bp:` one; else it copies every `consensus` row of the season into `raw.game_odds_archive` / `raw.prop_odds_archive` (migration 0028) and deletes them. `--dry-run` checks and counts only. Run it only after the census passes on every season.
+**Purpose:** SIM-555 run book step 8 — retire the old `consensus` rows, season by season, each in ONE transaction: it refuses (exit 2) while any Final game of the season that has a `consensus` closing moneyline lacks a `bp:` one; else it copies every `consensus` row of the season into `raw.game_odds_archive` / `raw.prop_odds_archive` (migration 0028) and deletes them. `--dry-run` checks and counts only. `--allow-missing GAME_PK ...` lets named games through that check (a game with no pre-game close, or whose only old rows belong to another game); a named game that is not missing earns a WARNING. A second WARNING (it does not refuse) counts the Final games with old closing props and no `bp:` closing prop; their old props go to the archive all the same. Run it only after the census passes on every season, then `VACUUM (ANALYZE, PARALLEL 0)` the two live tables (the database container's 64 MB of shared memory is too small for parallel vacuum workers). Ran 2026-10-01 with `--allow-missing 567323 745659`: 359,524 game-odds rows and 4,035,864 prop rows archived and deleted.
 
 ---
 
