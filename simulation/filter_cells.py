@@ -58,9 +58,12 @@ DEFAULT_MIN_CELLS: tuple[int, ...] = (20, 50, 100, 200)
 
 #: SIM-467: the minimum sub-cell size below which the widening ladder steps
 #: (decision #19, 2026-08-10: score band first, then the batting side, then the
-#: count). 20 is the plan's starting arm — about the p10 cell on the W1 window
-#: (docs/audit/2026-09-04-sim467-518-plan.md §5.1); the certified value follows
-#: the lane's draw-weighted widening share. ``SIM_PITCH_MIN_CELL`` overrides it.
+#: count). 20 is the MEASURED minimum (SIM-451, closed 2026-10-03): on the W1
+#: window at 2,880 cells, 0.25% of left-handed and 0.17% of right-handed draws
+#: land in a cell under 20 rows, and the score-band step recovers 99% of them
+#: (docs/audit/2026-10-03-sim451-filter-cell-occupancy-w1.json; the census of
+#: 2026-09-13 reads the same). Re-run ``scripts/measure_filter_cells.py`` when
+#: the cell definition changes. ``SIM_PITCH_MIN_CELL`` overrides the value.
 DEFAULT_MIN_CELL = 20
 
 #: The human-readable encode formula, carried into the JSON so a later reader can

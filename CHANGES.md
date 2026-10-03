@@ -37,6 +37,52 @@ pitch that does not end the plate appearance never reaches the pitcher's box lin
 Next free ID SIM-558. The plan's §13 is the build and run record.
 
 
+# CLOSED — the bucket-size check for the pitch draw: the confirming run reads the same as the census of 2026-09-13, and the minimum of 20 rows stands — SIM-451, 2026-10-03
+
+**Why it matters.** The pitch draw first keeps only the real pitches thrown in the same
+situation as the live one. That group is a **cell**: runners (8) × outs (3) × count (12) × score
+band (5) × batting side (2) = 2,880 cells for each batter hand. A cell with too few rows makes
+its draw unreliable, so the draw widens a cell under a minimum number of rows. The ticket asked
+for the cell sizes to be measured again after the batting side doubled the number of cells, and
+for a documented minimum.
+
+**What was already done.** The census ran on 2026-09-13 at 2,880 cells
+(`docs/audit/2026-09-13-sim451-filter-cell-occupancy-w1.json`; the entry of that date). The
+backlog row was never deleted.
+
+**The confirming run (2026-10-03).** `scripts/measure_filter_cells.py --half-inning-source duckdb
+--min-cells 10 20 40`, read-only, with the app running; exit code 0; the join covers 100% of
+every season. The record is `docs/audit/2026-10-03-sim451-filter-cell-occupancy-w1.json`. The
+pitch pool was rebuilt on 2026-09-25 (the foul-tip strike three, SIM-553). That rebuild changed
+labels, not the cell of any pitch: all twelve configurations read the same as on 2026-09-13,
+row for row.
+
+| The pitch pool, 2023-2026 | Left-handed batters | Right-handed batters |
+|---|---|---|
+| Rows | 1,231,122 | 1,540,100 |
+| Rows in the median cell | 124 | 163 |
+| Draws that land in a cell under 10 rows | 0.04% | 0.02% |
+| Draws that land in a cell under 20 rows | 0.25% | 0.17% |
+| Draws that land in a cell under 40 rows | 1.03% | 0.69% |
+
+Relaxing the score band, the first widening step, recovers 99% of the draws under 20 rows.
+On the ten-season pool the share under 20 rows is 0.03% / 0.02%, so the pool-window test of the
+weight-fitting plan (SIM-548) needs no new census.
+
+**The decision the numbers support.** The minimum stays at 20 rows (`DEFAULT_MIN_CELL`;
+`SIM_PITCH_MIN_CELL` overrides it). The batter's hand stays a hard filter: 0.25% is far under
+the 5% gate that would make the hand a weight.
+
+**Not a finding for this ticket.** The script also measures the plate-appearance outcome pool
+at the same 2,880 cells (5.1% / 3.1% of draws under 20 rows). No draw uses that pool with this
+cell: the fielding draw filters on the base-out state and the born ball's class.
+
+**What changed.** The comment on `DEFAULT_MIN_CELL` in `simulation/filter_cells.py` (it called
+20 "the starting arm"); the open-board sentence in `CLAUDE.md`; the note in
+`docs/technical/scripts-frontend.md`; the row deleted from `BACKLOG.xlsx` (the next free ID is
+unchanged). No behaviour changes. **When to run the census again:** when the cell definition
+changes (a new dimension, new score-band edges).
+
 # CLOSED — every book's prices stored one row per book, one graded book, a load guard, the event matcher fixed, every season 2019-2026 re-loaded, the old rows retired — SIM-555, 2026-10-01
 
 **Why it matters.** The closing prices the accuracy comparison grades against used to mix books: every

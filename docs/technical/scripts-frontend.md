@@ -669,7 +669,7 @@ SIM-451 -- measures how full the 2,880 pitch-draw hard-filter cells (base occupa
 
 **Environment flags read here:** `BASEBALL_DUCKDB_PATH`, `BASEBALL_DB_DSN`
 
-> **Notes for anyone changing this file:** Per CLAUDE.md's open-work board, the cell-occupancy census re-run (SIM-451) is still an open item -- this is the tool that re-run would use. The cell algebra lives in simulation/filter_cells.py specifically so this script and the production sampler can never drift apart; per that module's own comment, a cell id computed under different edges is NOT comparable with a prior SIM-451 report, so nothing in the shared algebra may change without re-running this measurement. Heavily unit-tested (tests/unit/test_sim451_filter_cells.py, 1000+ lines) despite being a measurement rather than a rebuild script.
+> **Notes for anyone changing this file:** The cell-occupancy census (SIM-451) is CLOSED (2026-10-03): the re-run at 2,880 cells reads 0.25% / 0.17% of draws under 20 rows, so the minimum of 20 stands. Run this tool again when the cell definition changes. The cell algebra lives in simulation/filter_cells.py specifically so this script and the production sampler can never drift apart; per that module's own comment, a cell id computed under different edges is NOT comparable with a prior SIM-451 report, so nothing in the shared algebra may change without re-running this measurement. Heavily unit-tested (tests/unit/test_sim451_filter_cells.py, 1000+ lines) despite being a measurement rather than a rebuild script.
 
 ---
 

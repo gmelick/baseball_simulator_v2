@@ -363,7 +363,7 @@ fit (SIM-547, P3; the parent, each team's real manager for the pitching change, 
 CLOSED 2026-09-13 — see the bullet below); the
 fielding chain factor (the credits are
 on the pool, the consumer is not built); the fielder arm features (SIM-521); the
-cell-occupancy census re-run (SIM-451 — RE-RAN 2026-09-13 at 2,880 cells: 0.25% / 0.17% of
+cell-occupancy census re-run (SIM-451 — CLOSED 2026-10-03; RE-RAN 2026-09-13 and again 2026-10-03 at 2,880 cells: 0.25% / 0.17% of
 draws widen at MIN_CELL 20, so 20 stands and hand-as-a-weight has no case); the sim-loop
 decomposition (SIM-493, P3); the
 twelve segment markets' API / game-page surface (SIM-546, P2 — the prop-market work itself,
