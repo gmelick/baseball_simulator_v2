@@ -1,3 +1,36 @@
+# CLOSED — every game gets its real starting pitcher on both sides: the lane on the fixed code moved no band, the row deleted — SIM-558, 2026-10-07
+
+**Why it matters.** The simulator now starts the right pitcher on both sides of every game; the
+392 games (1.7%) that ran with a missing or wrong starter are repaired, and the acceptance lane
+confirms the repair moved no pool-level rate. The fix has been on master since 2026-10-06
+(commit 6303580) and in the running app since the restart that followed.
+
+**What closed the definition of done.**
+1. The count: `scripts/sim558_starter_census.py` reads 0 missing and 0 different on all 45,484
+   team-games of 2017-2026 (before the fix: 80 missing, 317 wrong), and 1,000 games resolve end to
+   end against Postgres (`scripts/sim558_starter_census.txt`, 2026-10-05).
+2. The refusal on both paths, with 22 unit tests; the unit lane green.
+3. The code on master and in the app: the live box-score card of game 823372 shows the away
+   starter's pitching line (15 outs a game) and a one-team line for the home starter.
+4. The 45 x 130 lane on the fixed code. It ran on 2026-10-07 as the lane of the starting-position
+   repair (SIM-559, `scripts/sim559_lane.txt`); master held this fix by then. It reads the same six
+   non-passes as the 2026-10-03 lane at like sizes and no band moved — what the paired read of game
+   823372 predicted (every band total within 0.11%).
+
+**The leftovers from the build entry, all resolved or re-homed.**
+- The fielders' starting positions: fixed by SIM-559 (the loader stores `allPositions[0]`; the
+  backfill repaired 17,279 lineup rows; CLOSED 2026-10-07). The two-way starter's lineup row in
+  game 823372 now reads `P`.
+- The API's 404 for a known game with no pitcher: SIM-559 made it 503 with Retry-After.
+- `scripts/sim523_game_set.py` finds the starters by the position code: SIM-559 moved it to the
+  official box. The balanced set is fixed by the owner's ruling and was not re-selected.
+- A game with no box yet (the live slate) needs the schedule's probable pitcher: stays with the
+  live-slate epic (SIM-519).
+
+**The close.** The SIM-558 row is deleted from `BACKLOG.xlsx`; the subtitle stays at the next free
+ID, SIM-560. The entries of 2026-10-05 and 2026-10-06 below are the build record.
+
+
 # CLOSED — the starting position of each starter: the API answers 503, not 404, for a known game whose lineup has no pitcher; the ticket's last item built, the row deleted — SIM-559, 2026-10-07
 
 **Why it matters.** A real game whose lineup rows do not yet make a playable game — a side with
