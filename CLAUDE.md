@@ -550,6 +550,21 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   current season). The batter table was rebuilt at one date with
   `scripts/sim551_batter_recompute.py` (11 s, the app stopped); the batter matrix came back
   byte-identical.
+- **The lineup table's position is the LAST one each starter held (SIM-559, FOUND + BUILT
+  2026-10-06; the backfill is NOT RUN).** The loader wrote `raw.game_lineups.position_code`
+  from the box feed's `position`; the feed's `allPositions[0]` is the starting position. 26% of
+  team-games (10,802 + 1,091 of 45,484) have a fielding hole in the defense map and 301 have no
+  catcher; the balanced set has 29 defective team-games in 90; the box-score table carries the
+  same last-position value and keeps it (the official box shows it). The loader now stores
+  `allPositions[0]` (a two-way starter who pitches and bats as the designated hitter is 'P');
+  `scripts/sim559_backfill_start_positions.py` repairs the loaded games (one UPDATE per game,
+  about 3.5 hours, Postgres only, the app may keep serving; `--dry-run` first). **Merge the
+  loader before the next nightly load**, or the nightly writes new games with the old coding.
+  The ten-game smoke (`scripts/sim559_smoke.txt`): the fielder factor read a missing or wrong
+  defender on 7.4% of balls in play, the steal and pickoff draws had no catcher on 4.9% of their
+  reads, no channel moved beyond noise (every power is 1). `scripts/sim523_game_set.py` reads the
+  starters from the box now (89 of 90 before). Plan and run book:
+  `docs/audit/2026-10-06-sim559-starting-position-plan.md`. Next free ID SIM-560.
 - **Sample hundreds of games when validating ETL work, never dozens.** Two adversarial review rounds
   found four defects each, all from real payloads at scale, none from reading code. A 70-game sample
   reported "100%" on a metric that 950 games disproved.

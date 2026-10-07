@@ -612,6 +612,31 @@ SIM-553 (2026-09-25): the pool-only rebuild that coded a two-strike foul tip or 
 > **Notes for anyone changing this file:** The ROLLBACK does not last on its own: DuckDB keeps the new coding, so any later pool export (`make engine-artifacts`, the nightly chain) writes it back. Hold every export until the table is rebuilt on the coding you keep. Run on 2026-09-25: 3.5 minutes, every check passed.
 ---
 
+### `scripts/sim559_backfill_start_positions.py`
+
+Repairs the starters' positions in `raw.game_lineups` (SIM-559). The historical loader wrote each starter's `position_code` from the box feed's `position` field, the LAST position the player held in the game; `allPositions[0]` is where he started. A fielder who moved mid-game therefore held his final slot in the simulator's defense map, his starting slot was empty, and the player who really started at his final slot lost his glove — one team-game in four (10,802 + 1,091 of 45,484 team-games with a hole, 301 with no catcher; 29 defective team-games in the balanced set's 90). The script fetches each Final game's box (`/api/v1/game/{pk}/boxscore`, the same request the box-score backfill makes), compares the parsed starting positions with the stored lineup codes, and writes one UPDATE per game over the rows that differ. The box-score table keeps the last position (what the official box shows).
+
+    python scripts/sim559_backfill_start_positions.py --dry-run --max-games 200
+    python scripts/sim559_backfill_start_positions.py --done-file /data/sim559_done.txt
+
+| Function / class | What it does | Called from | Depends on |
+|---|---|---|---|
+| `final_games_sql(seasons, max_games, game_pks)` | Final games that HAVE lineup rows, by game_pk; `--seasons` / `--game-pks` / `--max-games` as literal ints. | `_fetch_games` | `raw.games`, `raw.game_lineups` |
+| `read_done_file(path) / append_done(path, game_pk)` | The `--done-file` pair (the SIM-555 pattern): a game is appended, forced to disk, once its UPDATE is committed; a later run skips the games listed. A dry run appends nothing. | `run` | — |
+| `planned_changes(rows, current)` | PURE: the parsed starters whose stored lineup code differs from the starting position, each paired with the stored code (the run's `moves` report counts the pairs). A starter the lineup lacks is not a change. | `repair_game` | — |
+| `repair_game(ingest, conn, ref, *, dry_run, summary)` | Fetch one box, parse the starters (`parse_starting_positions`), read the game's stored starter codes, compare; write through `persist_starting_positions` unless `--dry-run`. Returns the rows changed (dry: the rows that would). | `run` | `pipeline.etl.boxscore_ingest.BoxscoreIngest / parse_starting_positions / persist_starting_positions` |
+| `run(args)` | The loop: the games minus the done-file's, `--sleep` between MLB calls (default 0.25 s), five consecutive failures stop the run (`--max-consecutive-failures`; 0 = never), progress every 100 games, a summary with the stored→starting move counts. Exit 1 when the run stopped early or fetched nothing with a failure. Postgres only — no DuckDB lock, the app may keep serving. About 3.5 hours for the 22,742 Final games at the default sleep. | `main` | `asyncpg` |
+
+**Depends on:** `pipeline/etl/boxscore_ingest.py (BoxscoreIngest, StartingPosition, parse_starting_positions, persist_starting_positions)`, `raw.games / raw.game_lineups (via asyncpg)`, `MLB Stats API (/api/v1/game/{game_pk}/boxscore)`
+
+**Environment flags read here:** `BASEBALL_DB_DSN`
+
+> **Notes for anyone changing this file:** The lineup insert in the historical loader is `ON CONFLICT DO NOTHING`, so a re-load of a game never repairs its lineup rows — this UPDATE is the only repair path. Only a row whose code differs is written, so `raw.game_lineups.updated_at > created_at` marks exactly the repaired rows; re-run the hole census (`tests/unit/test_sim559_starting_position.py` documents the defect; the census SQL is in the plan, `docs/audit/2026-10-06-sim559-starting-position-plan.md`) after the run.
+
+**Companion instruments (SIM-559).** `scripts/sim559_defense_map_compare.py` rebuilds each team-game's defense map exactly as production does (`resolve_lineup_from_rows` + `build_team_defense_map`) and compares it slot by slot with the box feed's `allPositions[0]` (`--balanced` the 45 certifying games, `--random N --seed`, `--game-pks`; `--expect-clean` exits 1 on any missing or wrong slot: the definition of done). It sees the swaps the hole census cannot. `scripts/sim559_smoke_arm.py` is the two-arm ten-game smoke (`--arm stored` = the maps production builds today, `--arm true` = the slots and the catcher rebuilt from the box feed, the same seeds): it tallies, per fielding draw, a missing or wrong live defender at the drawn position and, per pickoff or steal draw, a missing or wrong catcher, and prints `sim_stats.py`'s channel report. The record of 2026-10-06 is `scripts/sim559_smoke.txt` (+ `sim559_smoke_stored.json` / `sim559_smoke_true.json`).
+
+---
+
 ### `scripts/sim523_game_set.py`
 
 Generates the BALANCED certifying game set (owner ruling 2026-09-09) used by the acceptance test lane: picks whole-day slates from real MLB schedule dates (every team appears once per date) whose starting pitchers' and batters' own pool rates sit within 0.6 percent of the full pool's own totals across 8 outcome channels, so the certification lane grades on games that are statistically representative rather than hand-picked.
@@ -619,12 +644,13 @@ Generates the BALANCED certifying game set (owner ruling 2026-09-09) used by the
 | Function / class | What it does | Called from | Depends on |
 |---|---|---|---|
 | `_slates(conn)` | Finds every regular-season date in the pool window with exactly 15 Final games, every home team distinct, and ingested starting lineups. | — | — |
+| `_lineups(conn, game_pks)` | Each game's eighteen starting batters (the lineup rows with a batting slot) and two starting pitchers — the official box's `p_started` (SIM-558), with the lineup's 'P' rows as the fallback for a game without box rows. The lineup row alone missed a two-way starter (coded as the designated hitter) and named a position player who finished the game pitching (coded 'P' before SIM-559), so the old read scored 89 of the balanced set's 90 starters. | `main` | `raw.game_lineups`, `raw.game_player_stats` |
 | `PoolRates (class)` | Holds the pool's own recency-weighted per-channel rates (K/BB/HBP per plate appearance; singles/doubles/triples/home-runs/reach-on-error per ball in play) that candidate slates are scored against. | — | — |
 | `_game_expectation(...)` | Computes one game's actor-matched expected rate per channel from its two starting pitchers' and eighteen starting batters' own pool rows, weighted by expected plate appearances. | — | — |
 | `_balanced_order(games)` | Orders the picked games so extremes are paired, matching what tests/acceptance/bands.py requires for a stable, low-variance-per-block lane ordering. | — | — |
 | `main()` | CLI entry: scores every candidate date, picks the best --slates dates from distinct seasons minimizing the largest relative channel deviation (ties broken on park balance), and prints/writes the game keys plus the expectation table, ready to paste into bands.py. | `an operator running it to regenerate the certifying set; its output is embedded as constants in tests/acceptance/bands.py` | — |
 
-**Depends on:** `raw.games / raw.game_lineups tables (via asyncpg)`, `sim.pitch_pool / sim.outcome_pool (via duckdb)`, `derived.park_factors (regressed run factor)`
+**Depends on:** `raw.games / raw.game_lineups / raw.game_player_stats tables (via asyncpg)`, `sim.pitch_pool / sim.outcome_pool (via duckdb)`, `derived.park_factors (regressed run factor)`
 
 **Used by:** `tests/acceptance/bands.py -- the 45-game balanced set constant (around line 810) cites this script as its generator`
 

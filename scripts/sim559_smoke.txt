@@ -1,0 +1,99 @@
+SIM-559 the ten-game smoke, 2026-10-06: the first ten games of the balanced set x 40 iterations, two arms with the same seeds.
+arm stored = the defense maps production builds from raw.game_lineups today (the LAST position each starter held);
+arm true   = the eight fielding slots and the catcher rebuilt from the box feed's allPositions[0] (the pitcher and the lineups unchanged).
+Harness: scripts/sim559_smoke_arm.py (the production flags of docker-compose's app service, OPENBLAS_NUM_THREADS=1, in-process).
+Verdict: no collapse; no channel moves beyond what ten games resolve; the stored maps make the fielder factor read a missing or wrong
+defender on 7.4% of balls in play (5.1% missing, 2.2% wrong) and leave the steal and pickoff draws without a catcher on 4.9% of reads.
+Two of the seven defective games (776151, 822970) are byte-identical across arms: the true starter has no fielder profile at that slot.
+
+===== arm stored =====
+  game 776151 arm=stored: diff={'home': {'missing': ['3B'], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=7.97  (78s)
+  game 776142 arm=stored: diff={'home': {'missing': ['C', '3B'], 'wrong': ['2B', 'SS']}, 'away': {'missing': [], 'wrong': []}}  R=9.18  (140s)
+  game 776149 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': ['CF'], 'wrong': []}}  R=9.07  (198s)
+  game 745938 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': ['RF'], 'wrong': ['3B']}}  R=8.45  (267s)
+  game 824590 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=9.72  (329s)
+  game 746990 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': ['RF'], 'wrong': []}}  R=8.90  (393s)
+  game 823618 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=9.93  (465s)
+  game 746178 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': ['CF'], 'wrong': ['SS']}}  R=9.10  (529s)
+  game 824831 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=9.68  (597s)
+  game 822970 arm=stored: diff={'home': {'missing': ['LF'], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=8.30  (663s)
+
+========================================================================
+ SIM_STATS — n_games=10  n_iters_total=400  R sd=4.421  R se=0.2210
+========================================================================
+
+--- Both-teams per game ---
+  R=  9.03  H= 16.82  HR=  2.36  2B=  3.37  3B=  0.26  BB=  6.56  K= 17.21  SB=  1.17  CS=  0.36
+
+--- Per-team (both-teams / 2) vs MLB-2023 ---
+  R   sim=  4.51   mlb=  4.45   delta=  +1.5%
+  H   sim=  8.41   mlb=  8.26   delta=  +1.8%
+  HR  sim=  1.18   mlb=  1.16   delta=  +1.5%
+  2B  sim=  1.68   mlb=  1.59   delta=  +5.7%
+  3B  sim=  0.13   mlb=  0.13   delta=  +1.6%
+  BB  sim=  3.28   mlb=  3.17   delta=  +3.6%
+  K   sim=  8.61   mlb=  8.35   delta=  +3.0%
+  SB  sim=  0.58   mlb=  0.63   delta=  -6.4%
+  CS  sim=  0.18   mlb=  0.19   delta=  -5.0%
+
+--- SIM-412 home-field validation ---
+  home_win_pct = 0.606   (target MLB ~0.543)
+  home R/g     =  4.69   away R/g =  4.34   delta = +0.345  (target +0.13)
+  home H/g     =  8.41   away H/g =  8.41   delta = +0.002
+  home HR/g    =  1.21   away HR/g =  1.15  (no bias here — should be ~0)
+
+--- precision: R standard error = 0.2210  (NOISY — bump iters above this read) ---
+TALLY {"bip_draws": 36507, "run_draws": 88326, "bip_no_position": 3374, "bip_live_missing": 1876, "run_catcher_missing": 4318, "bip_live_wrong": 821}
+SIM559-ARM-stored-OK elapsed 663s
+
+===== arm true =====
+  game 776151 arm=true: diff={'home': {'missing': ['3B'], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=7.97  (76s)
+  game 776142 arm=true: diff={'home': {'missing': ['C', '3B'], 'wrong': ['2B', 'SS']}, 'away': {'missing': [], 'wrong': []}}  R=9.47  (139s)
+  game 776149 arm=true: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': ['CF'], 'wrong': []}}  R=7.72  (197s)
+  game 745938 arm=true: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': ['RF'], 'wrong': ['3B']}}  R=9.18  (264s)
+  game 824590 arm=true: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=9.72  (326s)
+  game 746990 arm=true: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': ['RF'], 'wrong': []}}  R=10.12  (392s)
+  game 823618 arm=true: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=9.93  (463s)
+  game 746178 arm=true: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': ['CF'], 'wrong': ['SS']}}  R=8.72  (528s)
+  game 824831 arm=true: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=9.68  (595s)
+  game 822970 arm=true: diff={'home': {'missing': ['LF'], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=8.30  (661s)
+
+========================================================================
+ SIM_STATS — n_games=10  n_iters_total=400  R sd=4.394  R se=0.2197
+========================================================================
+
+--- Both-teams per game ---
+  R=  9.08  H= 16.72  HR=  2.42  2B=  3.33  3B=  0.28  BB=  6.86  K= 17.19  SB=  1.11  CS=  0.38
+
+--- Per-team (both-teams / 2) vs MLB-2023 ---
+  R   sim=  4.54   mlb=  4.45   delta=  +2.1%
+  H   sim=  8.36   mlb=  8.26   delta=  +1.2%
+  HR  sim=  1.21   mlb=  1.16   delta=  +3.9%
+  2B  sim=  1.66   mlb=  1.59   delta=  +4.4%
+  3B  sim=  0.14   mlb=  0.13   delta=  +7.4%
+  BB  sim=  3.43   mlb=  3.17   delta=  +8.3%
+  K   sim=  8.60   mlb=  8.35   delta=  +2.9%
+  SB  sim=  0.56   mlb=  0.63   delta= -11.0%
+  CS  sim=  0.19   mlb=  0.19   delta=  -0.5%
+
+--- SIM-412 home-field validation ---
+  home_win_pct = 0.590   (target MLB ~0.543)
+  home R/g     =  4.67   away R/g =  4.41   delta = +0.258  (target +0.13)
+  home H/g     =  8.42   away H/g =  8.30   delta = +0.113
+  home HR/g    =  1.24   away HR/g =  1.18  (no bias here — should be ~0)
+
+--- precision: R standard error = 0.2197  (NOISY — bump iters above this read) ---
+TALLY {"bip_draws": 36354, "run_draws": 89401, "bip_no_position": 3501}
+SIM559-ARM-true-OK elapsed 661s
+
+===== paired read (true - stored), per game, mean over the ten games, the standard error across games =====
+  r   stored  9.030/game  diff +0.053 +/- 0.212 (+0.6%)
+  h   stored 16.822/game  diff -0.100 +/- 0.247 (-0.6%)
+  b2  stored  3.368/game  diff -0.040 +/- 0.132 (-1.2%)
+  b3  stored  0.263/game  diff +0.015 +/- 0.023 (+5.7%)
+  hr  stored  2.360/game  diff +0.055 +/- 0.053 (+2.3%)
+  bb  stored  3.462/game  diff +0.117 +/- 0.052 (+3.4%)
+  k   stored  9.675/game  diff -0.145 +/- 0.091 (-1.5%)
+  sb  stored  1.170/game  diff -0.057 +/- 0.066 (-4.9%)
+  cs  stored  0.365/game  diff +0.017 +/- 0.031 (+4.8%)
+  games byte-identical across arms: ['776151', '824590', '823618', '824831', '822970']

@@ -1,3 +1,63 @@
+# FOUND + BUILT — the lineup table stores each starter's LAST position, so one team-game in four runs with a hole in the defense; the loader now stores the starting position, the backfill is written and NOT RUN — SIM-559, 2026-10-06
+
+**Why it matters.** The simulator puts each team's real fielders in the field from the lineup
+table, `raw.game_lineups`. That table records, for each starter, the last position he held in
+the game, not the one he started at, because the loader read the box feed's `position` field;
+the feed's `allPositions[0]` is where he started. A fielder who moved mid-game therefore holds
+his final slot in the defense map, his starting slot is empty, and the player who really started
+at his final slot has no glove. The fielder factor of the fielding draw, the catcher factor of
+the steal and pickoff draws, the fielder named on the play record and the arm factor of the
+advancement draw all read that map. Found 2026-10-05 during the starting-pitcher fix (SIM-558).
+
+**What was found (read-only SQL over all 22,742 Final games, 45,484 team-games).** 33,591
+team-games carry all eight fielding codes among their nine batting rows; 10,802 have one code
+missing, 1,091 two or more, 301 no catcher: 26% with a hole (20.5% in 2017, 25-30% every season
+since 2019). CF is the code most often missing (3,278 team-games); LF (2,712) and RF (2,450) are
+most often held twice. The hole census cannot see a swap, so the stored map was rebuilt exactly
+as production builds it and compared slot by slot with the box feed: the balanced certifying set
+has 29 defective team-games in 90 (37 slots missing, 21 wrong, 2 without a catcher); 300 random
+games read 175 of 600 (188 missing + 141 wrong of 4,800 slots, 3 catchers missing, 4 wrong, 4
+swaps the census cannot see). The box-score table (`raw.game_player_stats.position_code`) carries
+the same last-position value on all 444,877 joined rows. Every feed from 2017 on carries
+`allPositions`.
+
+**What it costs (the ten-game smoke, `scripts/sim559_smoke.txt`: the balanced set's first ten
+games × 40, the production flags, seeds 0-39 in two arms).** With the stored maps the fielder
+factor read a missing (5.1%) or wrong (2.2%) live defender on 7.4% of 36,507 balls in play, and
+the steal and pickoff draws read no catcher on 4.9% of 88,326 key reads (all in the one game
+whose side has no 'C' row). Against the same games with the slots rebuilt from `allPositions[0]`
+no channel moved beyond what ten games resolve (runs +0.05 ± 0.21, hits −0.10 ± 0.25, doubles
+−0.04 ± 0.13, walks +0.12 ± 0.05 and strikeouts −0.15 ± 0.09 — the last two are random-stream
+divergence in the no-catcher game, the receiving factor is OFF). Two of the seven defective games
+came back byte-identical: the true starter has no fielder-engine profile at that slot and season,
+so the factor is neutral either way. No acceptance band is expected to move: the fielder factor
+is mean-1 within a position and every power is 1; the steal bands are touched through 2 of 90
+team-games.
+
+**What is built (ruff + mypy clean; 103 tests pass in the four lineup / box / resolver files,
+24 of them new in `tests/unit/test_sim559_starting_position.py`).** `starting_position()` in
+`pipeline/etl/boxscore_ingest.py` (`allPositions[0]`, fallback `position`); the loader's
+`_build_starting_lineup_rows` uses it — a two-way starter who pitches and bats as the
+designated hitter is 'P', a position player who pitched the ninth keeps his glove.
+`parse_starting_positions()` + `persist_starting_positions()` (one `UPDATE ... FROM unnest`
+per game over the starters whose code differs, so `updated_at` marks the repaired rows) and the
+backfill `scripts/sim559_backfill_start_positions.py` (`--dry-run`, `--done-file`, Postgres only,
+about 3.5 hours for every Final game). `scripts/sim559_defense_map_compare.py` (the box-feed
+comparison; `--expect-clean` is the definition of done) and `scripts/sim559_smoke_arm.py` (the
+two-arm smoke). `scripts/sim523_game_set.py` now reads the starters from the official box's
+`p_started` with the lineup 'P' row as the fallback (it scored 89 of 90 before; the SIM-558
+leftover). The box-score table keeps the last position (decision: the official box shows it; no
+schema change). The engine-artifact bundle holds no lineups, so no rebuild follows.
+
+**Not done.** The backfill has NOT RUN. **Merge the loader before the next nightly load**, or the
+nightly writes the new games with the old coding. The API maps a known game's missing-starter
+refusal to 404 (should be 503 with Retry-After; needs an error subclass in the resolver file the
+SIM-558 worktree is editing). The first 45 × 130 lane after the backfill records whether any
+band moved. The plan with the run book, the census SQL and three owner decisions:
+`docs/audit/2026-10-06-sim559-starting-position-plan.md`. The ticket is SIM-559 (P2); next free
+ID SIM-560.
+
+
 # CLOSED — the running game on the pitch: the steal pool rebuilt with the pitch class and the pickoff rows, the census and the lane read as the design expected, production runs the new order — SIM-554, 2026-10-03
 
 **Why it matters.** The simulator now decides a steal after the pitch, among real pitches of the

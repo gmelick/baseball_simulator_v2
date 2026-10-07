@@ -107,6 +107,16 @@ async def _slates(conn: asyncpg.Connection) -> list[dict[str, Any]]:
 
 
 async def _lineups(conn: asyncpg.Connection, game_pks: list[int]) -> dict[int, dict[str, list]]:
+    """Each game's eighteen starting batters and two starting pitchers.
+
+    The batters are the lineup rows with a batting slot. The pitchers are the
+    official box's starters (``raw.game_player_stats.p_started``, SIM-558); a
+    game with no box rows falls back to the lineup's 'P' rows. The lineup row
+    alone misses a two-way starter (he is coded as the designated hitter) and
+    names a position player who finished the game pitching (he is coded 'P'
+    before SIM-559), so the old read scored 89 of the balanced set's 90
+    starters.
+    """
     rows = await conn.fetch(
         """
         SELECT game_pk, team_id, player_id, position_code, batting_order
@@ -114,12 +124,25 @@ async def _lineups(conn: asyncpg.Connection, game_pks: list[int]) -> dict[int, d
         """,
         game_pks,
     )
+    box = await conn.fetch(
+        """
+        SELECT game_pk, player_id
+        FROM raw.game_player_stats WHERE game_pk = ANY($1::int[]) AND p_started
+        """,
+        game_pks,
+    )
     out: dict[int, dict[str, list]] = defaultdict(lambda: {"batters": [], "pitchers": []})
+    for r in box:
+        out[int(r["game_pk"])]["pitchers"].append(int(r["player_id"]))
+    lineup_pitchers: dict[int, list[int]] = defaultdict(list)
     for r in rows:
-        if r["position_code"] == "P":
-            out[int(r["game_pk"])]["pitchers"].append(int(r["player_id"]))
-        elif r["batting_order"] is not None:
+        if r["batting_order"] is not None:
             out[int(r["game_pk"])]["batters"].append(int(r["player_id"]))
+        if r["position_code"] == "P":
+            lineup_pitchers[int(r["game_pk"])].append(int(r["player_id"]))
+    for pk, pitchers in lineup_pitchers.items():
+        if not out[pk]["pitchers"]:
+            out[pk]["pitchers"] = pitchers
     return out
 
 

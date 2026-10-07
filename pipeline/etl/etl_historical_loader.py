@@ -97,6 +97,7 @@ from pipeline.etl.boxscore_ingest import (
     parse_bullpen_listing,
     persist_bullpen_sync,
     persist_sync,
+    starting_position,
 )
 from pipeline.etl.coercion import to_bool, to_float, to_int, to_str
 from pipeline.etl.play_events import extract_play_events
@@ -1749,6 +1750,13 @@ def _build_starting_lineup_rows(game_pk: int, season: int, game_dict: dict) -> l
     order (AL / DH games). Substitutions (sequence > 1, pinch roles) are out of
     scope — this ingests the opening lineup the sim resolves from.
 
+    ``position_code`` is the position the starter held at first pitch (SIM-559):
+    the feed's ``allPositions[0]``. The feed's ``position`` is the LAST position
+    he held, and the rows loaded before SIM-559 carry that value, so a fielder
+    who moved mid-game left his starting slot empty in the defense map and a
+    second player at his final one. A two-way starter who pitches and bats as
+    the designated hitter is coded 'P'.
+
     Returns tuples in the raw.game_lineups insert column order:
     ``(game_pk, season, team_id, player_id, batting_order, position_code,
     is_starter, sequence)``.
@@ -1775,7 +1783,7 @@ def _build_starting_lineup_rows(game_pk: int, season: int, game_dict: dict) -> l
             pid = pdata.get("person", {}).get("id")
             if pid is None:
                 continue
-            pos = (pdata.get("position") or {}).get("abbreviation") or "UT"
+            pos = starting_position(pdata) or "UT"
             rows.append((game_pk, season, int(team_id), int(pid), bo_int // 100, pos[:5], True, 1))
             seen.add(int(pid))
         # Starting pitcher — not in the batting order for AL/DH games.
