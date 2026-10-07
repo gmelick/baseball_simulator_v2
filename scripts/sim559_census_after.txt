@@ -1,0 +1,39 @@
+SIM-559 the hole census AFTER the backfill, 2026-10-07 (all Final games of 2017-2026; the SQL is in docs/audit/2026-10-06-sim559-starting-position-plan.md, section 6).
+Before (2026-10-06): all_eight 33,591 / one_missing 10,802 / two_plus_missing 1,091 / no_catcher 301 of 45,484 team-games.
+
+Timing is off.
+ team_games | all_eight | one_missing | two_plus_missing | no_catcher | p_in_order_with_dh | two_p_in_order 
+------------+-----------+-------------+------------------+------------+--------------------+----------------
+      45484 |     45484 |           0 |                0 |          0 |                  0 |              0
+(1 row)
+
+ game_pk | team_id | season | n_codes | codes 
+---------+---------+--------+---------+-------
+(0 rows)
+
+ repaired_rows | games_repaired 
+---------------+----------------
+         17279 |          10415
+(1 row)
+
+ joined |  same  | moved 
+--------+--------+-------
+ 444877 | 427598 | 17279
+(1 row)
+
+ started | finished | count 
+---------+----------+-------
+ CF      | RF       |  1618
+ CF      | LF       |  1516
+ RF      | LF       |  1152
+ LF      | RF       |  1107
+ LF      | CF       |   795
+ 2B      | 3B       |   793
+ 2B      | SS       |   756
+ RF      | CF       |   720
+(8 rows)
+
+
+===== the box-feed comparison after the backfill (scripts/sim559_defense_map_compare.py --balanced --random 300 --expect-clean) =====
+  balanced: 45 games, 90 team-games, defective 0, slots missing 0, wrong 0, catcher missing 0 wrong 0
+  random300: 300 games, 600 team-games, defective 0, slots missing 0, wrong 0, catcher missing 0 wrong 0

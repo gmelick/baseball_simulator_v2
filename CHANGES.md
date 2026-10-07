@@ -1,3 +1,41 @@
+# RAN — the starting-position backfill repaired 17,279 lineup rows in 10,415 games; every team-game now holds eight gloves and a catcher; the loader change is on master — SIM-559, 2026-10-07
+
+**Why it matters.** The simulator's defense maps were wrong on one team-game in four because the
+lineup table held each starter's LAST position (the entry below, 2026-10-06). The loader fix is
+merged and the loaded games are repaired, so every game the simulator resolves now puts the real
+starters at the positions they started at.
+
+**The merge.** The branch (581c120) was merged with master's starting-pitcher fix (SIM-558,
+6303580) as 8728a4a; master is fast-forwarded to it. Lint clean; 132 tests pass in the lineup,
+box-score, resolver and starter files (24 new).
+
+**The run (`scripts/sim559_backfill_run.txt`).** The dry run on 200 games read 63 games with a
+move and 88 rows (LF→RF 14, RF→CF 10, 3B→SS 8), zero failures, 0.27 s a game. The full run
+(`scripts/sim559_backfill_start_positions.py --sleep 0.1 --done-file ...`, the app serving
+throughout, Postgres only) started 04:08 UTC and finished 05:52: **22,742 games fetched, 10,415
+games with a change, 17,279 rows changed, 0 failures.** The moves, stored → starting: RF→CF
+1,618, LF→CF 1,516, LF→RF 1,152, RF→LF 1,107, CF→LF 795, 3B→2B 793, SS→2B 756, CF→RF 720, 1B→3B
+634, 2B→3B 625, 2B→SS 550, 1B→2B 457. A spot check of the first repaired rows against the live
+box feed read right on every one (Springer started in center and finished in right: now CF).
+
+**The census after (`scripts/sim559_census_after.txt`).** All 45,484 team-games hold eight
+distinct fielding codes and a catcher (was 33,591 / 10,802 one missing / 1,091 two or more / 301
+no catcher); zero 'P' rows beside a designated hitter (was 195) and zero double 'P' rows (was
+55). 17,279 starters' lineup codes now differ from the box-score table's last position: 3.9% of
+the 444,877 starters moved during their game, CF→RF and CF→LF the most. The box-feed comparison
+(`scripts/sim559_defense_map_compare.py --balanced --random 300 --expect-clean`) reads zero
+missing and zero wrong slots and zero catcher defects on the 45 certifying games (90 team-games)
+and on 300 random games (600 team-games); it read 29 and 175 defective team-games before.
+The ten-game smoke on the repaired maps (`scripts/sim559_smoke_after.txt`, the same ten games × 40, the production flags) tallied 0 missing and 0 wrong live defenders over 36,354 balls in play (was 1,876 and 821 over 36,507) and 0 missing / 0 wrong catchers over 89,401 pickoff and steal reads (was 4,318 missing).
+
+**Not done.** The first 45 × 130 lane since the repair records whether any band moved (none
+expected: every power is 1 and the fielder factor is mean-1 within a position). The API still
+maps a known game's missing-starter refusal to 404 (503 with Retry-After is the proposal). A
+game the nightly loaded between the merge and the moment the backfill passed its game_pk keeps
+the old coding: `--seasons 2026` repairs it. The ticket stays open for those; the row carries
+the status.
+
+
 # FOUND + BUILT — the lineup table stores each starter's LAST position, so one team-game in four runs with a hole in the defense; the loader now stores the starting position, the backfill is written and NOT RUN — SIM-559, 2026-10-06
 
 **Why it matters.** The simulator puts each team's real fielders in the field from the lineup

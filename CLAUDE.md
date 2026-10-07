@@ -550,16 +550,20 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   current season). The batter table was rebuilt at one date with
   `scripts/sim551_batter_recompute.py` (11 s, the app stopped); the batter matrix came back
   byte-identical.
-- **The lineup table's position is the LAST one each starter held (SIM-559, FOUND + BUILT
-  2026-10-06; the backfill is NOT RUN).** The loader wrote `raw.game_lineups.position_code`
+- **The lineup table's position is the one each starter STARTED at (SIM-559, FOUND + BUILT
+  2026-10-06; MERGED and the backfill RAN 2026-10-07: 17,279 rows repaired in 10,415 games, zero
+  failures; every team-game now holds eight gloves and a catcher).** The loader wrote `raw.game_lineups.position_code`
   from the box feed's `position`; the feed's `allPositions[0]` is the starting position. 26% of
   team-games (10,802 + 1,091 of 45,484) have a fielding hole in the defense map and 301 have no
   catcher; the balanced set has 29 defective team-games in 90; the box-score table carries the
   same last-position value and keeps it (the official box shows it). The loader now stores
   `allPositions[0]` (a two-way starter who pitches and bats as the designated hitter is 'P');
-  `scripts/sim559_backfill_start_positions.py` repairs the loaded games (one UPDATE per game,
-  about 3.5 hours, Postgres only, the app may keep serving; `--dry-run` first). **Merge the
-  loader before the next nightly load**, or the nightly writes new games with the old coding.
+  `scripts/sim559_backfill_start_positions.py` repaired the loaded games (one UPDATE per game,
+  1 h 44 min at `--sleep 0.1`, Postgres only, the app served throughout; the record is
+  `scripts/sim559_backfill_run.txt`, the census after `scripts/sim559_census_after.txt`). A game
+  the nightly loaded between the merge and the backfill's pass keeps the old coding: `--seasons
+  2026` repairs it. Open: the first 45 × 130 lane's read and the API's 503 for a known game
+  with no pitcher.
   The ten-game smoke (`scripts/sim559_smoke.txt`): the fielder factor read a missing or wrong
   defender on 7.4% of balls in play, the steal and pickoff draws had no catcher on 4.9% of their
   reads, no channel moved beyond noise (every power is 1). `scripts/sim523_game_set.py` reads the

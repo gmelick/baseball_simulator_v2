@@ -1,7 +1,10 @@
 # The starting position of each starter (SIM-559): the finding, its cost, the fix — 2026-10-06
 
-**Status:** FOUND + MEASURED + CODE BUILT 2026-10-06. The backfill is NOT RUN. The ticket is
-SIM-559 (P2) in `BACKLOG.xlsx`. Found during the starting-pitcher fix (SIM-558) on 2026-10-05.
+**Status:** FOUND + MEASURED + CODE BUILT 2026-10-06; **MERGED (master 8728a4a) AND THE BACKFILL RAN
+2026-10-07** — 22,742 games, 17,279 rows repaired in 10,415 games, zero failures, 1 h 44 min; the
+census after reads every team-game with eight gloves and a catcher, the box-feed comparison zero
+defects (§11). The ticket is SIM-559 (P2) in `BACKLOG.xlsx`, open for the lane read and the API
+follow-on. Found during the starting-pitcher fix (SIM-558) on 2026-10-05.
 
 ## 1. Why it matters
 
@@ -272,3 +275,19 @@ pass unchanged (103 in the four files).
 2. When to run the backfill: it needs no stop of the app. It can run tonight.
 3. The box table keeps the last position (recommended, §5); say so if you want the starting
    position on the box row too (a migration and a second column).
+
+## 11. The run record (2026-10-07)
+
+| Step | Result |
+|---|---|
+| the merge | 581c120 merged with master's SIM-558 as 8728a4a; master fast-forwarded; lint clean; 132 tests pass |
+| the dry run, 200 games | 63 games with a move, 88 rows, 0 failures, 0.27 s a game |
+| the full run, 04:08-05:52 UTC | 22,742 games fetched, 10,415 games changed, 17,279 rows changed, 0 failures |
+| the census after | 45,484 of 45,484 team-games with eight codes and a catcher; 0 'P' rows beside a DH; 0 double 'P' |
+| the move census | 17,279 of 444,877 starters (3.9%) ended at another position; RF←CF 1,618, LF←CF 1,516 lead |
+| the box-feed comparison | 0 missing, 0 wrong, 0 catcher defects on the 45 certifying games and on 300 random games |
+| the smoke on the repaired maps | 0 missing / 0 wrong defenders over 36,354 balls in play; 0 / 0 catchers over 89,401 reads |
+
+Records: `scripts/sim559_backfill_run.txt`, `scripts/sim559_census_after.txt`,
+`scripts/sim559_smoke_after.txt`. Open after the run: the first 45 × 130 lane's read, and the
+API's 503 for a known game with no pitcher (§9).

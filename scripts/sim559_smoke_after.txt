@@ -1,0 +1,41 @@
+SIM-559 the ten-game smoke AFTER the backfill, 2026-10-07: the first ten games of the balanced set x 40 iterations, arm stored = the defense maps production now builds from the repaired raw.game_lineups (scripts/sim559_smoke_arm.py, the production flags, OPENBLAS_NUM_THREADS=1).
+Before the backfill (scripts/sim559_smoke.txt): 1,876 missing + 821 wrong live defenders over 36,507 balls in play; 4,318 missing catchers over 88,326 reads.
+
+  game 776151 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=7.97  (61s)
+  game 776142 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=9.47  (110s)
+  game 776149 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=7.72  (158s)
+  game 745938 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=9.18  (213s)
+  game 824590 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=9.72  (262s)
+  game 746990 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=10.12  (313s)
+  game 823618 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=9.93  (367s)
+  game 746178 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=8.72  (417s)
+  game 824831 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=9.68  (462s)
+  game 822970 arm=stored: diff={'home': {'missing': [], 'wrong': []}, 'away': {'missing': [], 'wrong': []}}  R=8.30  (507s)
+
+========================================================================
+ SIM_STATS — n_games=10  n_iters_total=400  R sd=4.394  R se=0.2197
+========================================================================
+
+--- Both-teams per game ---
+  R=  9.08  H= 16.72  HR=  2.42  2B=  3.33  3B=  0.28  BB=  6.86  K= 17.19  SB=  1.11  CS=  0.38
+
+--- Per-team (both-teams / 2) vs MLB-2023 ---
+  R   sim=  4.54   mlb=  4.45   delta=  +2.1%
+  H   sim=  8.36   mlb=  8.26   delta=  +1.2%
+  HR  sim=  1.21   mlb=  1.16   delta=  +3.9%
+  2B  sim=  1.66   mlb=  1.59   delta=  +4.4%
+  3B  sim=  0.14   mlb=  0.13   delta=  +7.4%
+  BB  sim=  3.43   mlb=  3.17   delta=  +8.3%
+  K   sim=  8.60   mlb=  8.35   delta=  +2.9%
+  SB  sim=  0.56   mlb=  0.63   delta= -11.0%
+  CS  sim=  0.19   mlb=  0.19   delta=  -0.5%
+
+--- SIM-412 home-field validation ---
+  home_win_pct = 0.590   (target MLB ~0.543)
+  home R/g     =  4.67   away R/g =  4.41   delta = +0.258  (target +0.13)
+  home H/g     =  8.42   away H/g =  8.30   delta = +0.113
+  home HR/g    =  1.24   away HR/g =  1.18  (no bias here — should be ~0)
+
+--- precision: R standard error = 0.2197  (NOISY — bump iters above this read) ---
+TALLY {"bip_draws": 36354, "run_draws": 89401, "bip_no_position": 3501}
+SIM559-ARM-stored-OK elapsed 507s
