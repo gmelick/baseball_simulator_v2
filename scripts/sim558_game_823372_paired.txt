@@ -1,0 +1,31 @@
+SIM-558 - the starter fix in game 823372 (2026-06-10, one of the 45 games of the balanced certifying set):
+the paired read, 2026-10-05. 390 game-sims an arm, the production flags and bundle, seeds 0-389.
+BEFORE = the code at master 15d1ddf (the away starter missing). FIXED = the same code with the SIM-558 change.
+Written by: python scripts/sim558_game_probe.py compare scripts/sim558_game_823372_old.json scripts/sim558_game_823372_fixed.json
+
+Game 823372: 390 game-sims an arm, the same seeds.
+
+BEFORE the fix: {'pitcher_id': 683003, 'home_pitcher_id': 683003, 'away_pitcher_id': None}
+  faced the AWAY batters (top halves):    {'683003': 5655, '670990': 1819, '642701': 1493, '681895': 1169, '669387': 1154, '682254': 1149, '696062': 1145, '684049': 948}
+  faced the HOME batters (bottom halves): {'683003': 3864, '676263': 1767, '683618': 1380, '669165': 1169, '694361': 1032, '670990': 798, '696062': 552, '669387': 514}
+  away_batting  PA/game 39.33  K/PA 0.2245  BB/PA 0.0934  HBP/PA 0.0117  H/PA 0.2131  HR/BIP 0.0463
+  home_batting  PA/game 36.96  K/PA 0.2240  BB/PA 0.0898  HBP/PA 0.0108  H/PA 0.2144  HR/BIP 0.0436
+  runs/game away 4.562  home 4.364   home win share 0.510
+
+FIXED: {'pitcher_id': 683003, 'home_pitcher_id': 683003, 'away_pitcher_id': 660271}
+  faced the AWAY batters (top halves):    {'683003': 8390, '670990': 1529, '642701': 1117, '669387': 892, '696062': 814, '682254': 778, '681895': 672, '684049': 549}
+  faced the HOME batters (bottom halves): {'660271': 8660, '669165': 1258, '683618': 1147, '694361': 1106, '676263': 919, '681911': 465, '642546': 399, '656945': 364}
+  away_batting  PA/game 39.18  K/PA 0.2313  BB/PA 0.0917  HBP/PA 0.0121  H/PA 0.2097  HR/BIP 0.0457
+  home_batting  PA/game 37.45  K/PA 0.2217  BB/PA 0.0935  HBP/PA 0.0112  H/PA 0.2150  HR/BIP 0.0489
+  runs/game away 4.587  home 4.556   home win share 0.492
+
+The move in the 45 x 130 lane's totals (2026-10-03 lane):
+  K/PA   0.22408 -> 0.22413  (+0.02%, one standard error 0.04%)   against the centre: -0.94% -> -0.91%
+  BB/PA   0.08568 -> 0.08570  (+0.03%, one standard error 0.06%)   against the centre: +3.35% -> +3.38%
+  HBP/PA   0.01216 -> 0.01216  (+0.07%, one standard error 0.16%)   against the centre: +8.54% -> +8.62%
+  single   per game-sim 10.17 -> 10.02   (the lane's total moves about -0.03%)
+  double   per game-sim 3.46 -> 3.48   (the lane's total moves about +0.01%)
+  triple   per game-sim 0.37 -> 0.35   (the lane's total moves about -0.09%)
+  home_run per game-sim 2.30 -> 2.42   (the lane's total moves about +0.11%)
+  runs per game (both teams) 8.926 -> 9.144 (one standard error 0.315); the lane's runs per team-game move +0.0024 (one standard error 0.0035)
+  home win share of this game 0.510 -> 0.492; the lane's share moves -0.0004
