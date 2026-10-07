@@ -562,7 +562,8 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   1 h 44 min at `--sleep 0.1`, Postgres only, the app served throughout; the record is
   `scripts/sim559_backfill_run.txt`, the census after `scripts/sim559_census_after.txt`). A game
   the nightly loaded between the merge and the backfill's pass keeps the old coding: `--seasons
-  2026` repairs it. Open: the first 45 × 130 lane's read and the API's 503 for a known game
+  2026` repairs it. The 45 × 130 lane of 2026-10-07 (`scripts/sim559_lane.txt`) reads the same six
+  non-passes as 2026-10-03 at like sizes; no band moved. Open: the API's 503 for a known game
   with no pitcher.
   The ten-game smoke (`scripts/sim559_smoke.txt`): the fielder factor read a missing or wrong
   defender on 7.4% of balls in play, the steal and pickoff draws had no catcher on 4.9% of their

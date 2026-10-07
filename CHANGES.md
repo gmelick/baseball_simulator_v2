@@ -1,3 +1,26 @@
+# LANE — the first 45 × 130 lane since the starting-position repair reads the same six non-passes at like sizes; no band moved — SIM-559, 2026-10-07
+
+**Why it matters.** The repair put the true starting fielders and catchers in every defense map
+(the entry below). The certifying lane says the simulator's frequencies did not shift with them:
+the fielder factor is rescaled to a mean of 1 within each position and every power is 1, so the
+repair fixes WHO the factors read without moving the pool-level rates. Production is where it was,
+with correct maps.
+
+**The read (`scripts/sim559_lane.txt`, the record `scripts/sim559_lane.json`; 45 × 130 = 5,850
+game-sims, 2 h 36 m, the same flag table as 2026-10-03).** 36 passed, 6 failed — the six that were
+red on 2026-10-03, at like sizes: walks per plate appearance +3.3% (was +3.4%), hit by pitch +8.4%
+(+8.5%), doubles per ball in play +5.0% (+5.0%), steal attempts at second −11.2% (−10.0%) and at
+third −20.5% (−21.3%) — the look-alike weights' volume deficit, SIM-556 — and the home-win share,
+underpowered below 13,365 game-sims (0.5250 against 0.5428 on 5,830). Strikeouts −1.2% (−0.9%),
+double plays −4.8% (−4.8%), the safe share at second −0.6% (−0.1%), called strikes on taken pitches
+−0.9% (−0.8%), runs 4.46 a team-game (4.47), hits 8.21 (8.18), home runs 1.18 (1.18). Every
+difference sits inside one standard error of the earlier lane.
+
+**Open on the ticket.** One item: the API maps a known game's missing-starter refusal to 404; the
+proposal is 503 with Retry-After, like the unpublished lineup (the resolver error subclass can be
+added now that SIM-558 is on master).
+
+
 # RAN — the starting-position backfill repaired 17,279 lineup rows in 10,415 games; every team-game now holds eight gloves and a catcher; the loader change is on master — SIM-559, 2026-10-07
 
 **Why it matters.** The simulator's defense maps were wrong on one team-game in four because the

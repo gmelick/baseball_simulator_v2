@@ -3,8 +3,8 @@
 **Status:** FOUND + MEASURED + CODE BUILT 2026-10-06; **MERGED (master 8728a4a) AND THE BACKFILL RAN
 2026-10-07** — 22,742 games, 17,279 rows repaired in 10,415 games, zero failures, 1 h 44 min; the
 census after reads every team-game with eight gloves and a catcher, the box-feed comparison zero
-defects (§11). The ticket is SIM-559 (P2) in `BACKLOG.xlsx`, open for the lane read and the API
-follow-on. Found during the starting-pitcher fix (SIM-558) on 2026-10-05.
+defects (§11). The 45 × 130 lane RAN the same day: the same six non-passes as 2026-10-03, no band moved. The
+ticket is SIM-559 (P2) in `BACKLOG.xlsx`, open for the API follow-on. Found during the starting-pitcher fix (SIM-558) on 2026-10-05.
 
 ## 1. Why it matters
 
@@ -287,7 +287,8 @@ pass unchanged (103 in the four files).
 | the move census | 17,279 of 444,877 starters (3.9%) ended at another position; RF←CF 1,618, LF←CF 1,516 lead |
 | the box-feed comparison | 0 missing, 0 wrong, 0 catcher defects on the 45 certifying games and on 300 random games |
 | the smoke on the repaired maps | 0 missing / 0 wrong defenders over 36,354 balls in play; 0 / 0 catchers over 89,401 reads |
+| the 45 × 130 lane, 2026-10-07 | 36 passed, 6 failed: the same six as 2026-10-03 at like sizes (walks +3.3%, hit by pitch +8.4%, doubles +5.0%, steal attempts −11.2% / −20.5%, the home-win share underpowered); no band moved; 2 h 36 m; `scripts/sim559_lane.txt` |
 
 Records: `scripts/sim559_backfill_run.txt`, `scripts/sim559_census_after.txt`,
-`scripts/sim559_smoke_after.txt`. Open after the run: the first 45 × 130 lane's read, and the
-API's 503 for a known game with no pitcher (§9).
+`scripts/sim559_smoke_after.txt`, `scripts/sim559_lane.txt`. Open after the run: the API's 503
+for a known game with no pitcher (§9).
