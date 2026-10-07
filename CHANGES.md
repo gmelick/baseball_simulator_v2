@@ -1,3 +1,33 @@
+# RULING + CLEAN-UP — the branch lifecycle is written into the guide, and 32 merged branches are deleted (13 on GitHub, 19 local), 2026-10-07
+
+**Why it matters.** Branches were created and merged but never deleted, so GitHub listed 13
+finished branches and the laptop held 19 more. Some work also sat uncommitted in worktrees. The
+owner ruled one lifecycle for every branch: create it for one ticket, commit as you go, push it
+when the work outlives the session, merge it within days, and delete it on the day it merges.
+The rule is in `CLAUDE.md` §7 (with a pointer in §15).
+
+**What was deleted.** Each branch was checked first: every commit is in `master`.
+- On GitHub (13): the play-picker redesign's nine branches (`sim523-*`, `docs-sim523-redesign-plan`),
+  `sim-467-518-play-picker`, `ops-flip-receiving-off-cell-index-on`,
+  `docs-ruling-no-clv-until-green` and `docs-sweep-2-sim517-close`. GitHub now holds only `master`.
+- On the laptop (19): the local copies of those 13, plus `claude/dazzling-davinci-5ed055`,
+  `sim554-baserunning-defects`, `sim-438-live-game-season`, `fix-weekly-integration`,
+  `feat/sim-realism-and-engine-wiring` and `fix/sim402-live-bringup`. The last one held four
+  commits whose changes reached `master` by another route (`git cherry` read `-` on all four).
+  Its tip was `5395fd4`, recoverable from the reflog for about 90 days.
+
+**What stays, and why.**
+- `wave1-remediation`: 8 commits not on `master`, retired as a merge candidate on 2026-07-27.
+  It exists only on this laptop.
+- Three merged branches owned by open Code sessions (`claude/unruffled-payne-dcfb87`,
+  `claude/infallible-khorana-1ab91e`, `claude/nifty-hermann-57ff18`). They go when their sessions
+  are archived.
+- Four worktrees with uncommitted work: the pitcher-outs design (SIM-557, `sim554-running-game-impl`),
+  the steal-weight finding (SIM-556, `claude/pensive-taussig-ec2f7e`), the crash-sweep record
+  (SIM-445, `claude/dazzling-wilson-6f4f84`) and a stale draft of the run-line rescore (SIM-549,
+  `worktree-wf_4b916679-d22-3`). Each waits on an owner decision: commit or discard.
+
+
 # CLOSED — every game gets its real starting pitcher on both sides: the lane on the fixed code moved no band, the row deleted — SIM-558, 2026-10-07
 
 **Why it matters.** The simulator now starts the right pitcher on both sides of every game; the

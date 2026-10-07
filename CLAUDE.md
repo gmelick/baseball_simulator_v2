@@ -753,6 +753,28 @@ consolidates; QA cross-validates and never self-certifies its own work.
   runs the full suite. Document in `CHANGES.md` (grows, per-agent detail); mark closed tickets done and
   add any newly-filed ones in `BACKLOG.xlsx` (see §2b — this replaced `BACKLOG.md` on 2026-09-10); add
   `docs/SPRINT_<date>_<name>.md` for the sprint narrative as before.
+- **Branches (owner ruling 2026-10-07).** A branch is a named line of work off `master`. A
+  **local branch** exists only in the repository on this laptop. A **GitHub branch** is a copy
+  that exists only after a push; the two copies sync only on a push or a fetch. A **worktree**
+  (`.claude/worktrees/<name>`) is a second folder with its own branch checked out. Uncommitted
+  changes in a worktree are in neither git's history nor GitHub. Every branch has one lifecycle:
+  1. Create one branch off `master` for one ticket.
+  2. Commit as you go. Do not end a session with uncommitted work in a worktree.
+  3. Push the branch to GitHub when the work outlives the session. The push is the backup,
+     and this host blue-screens often.
+  4. Merge into `master` within days. A branch that must wait takes in `master` regularly.
+  5. Delete the branch on the day it merges: the local copy, the GitHub copy and its worktree.
+     A merged branch loses nothing when you delete it, because its commits live in `master`.
+
+  Abandoned or superseded work: delete the branch. To keep it for reference, tag it first
+  (`git tag archive/<branch> <branch>`). Two counts give a branch's state. **Ahead**
+  (`git rev-list --count master..<branch>`) counts the commits `master` lacks: the real work.
+  **Behind** counts the commits the branch lacks. A merged branch is 0 ahead, and its behind
+  count means nothing. When every line of `git cherry master <branch>` starts with `-`, each
+  commit is already on `master` by another route, so the branch is merged in content. An
+  unmerged branch that falls far behind is a risk: `wave1-remediation` sat 11 weeks and then
+  conflicted with `master` in 12 files. A Code session owns its worktree and its branch. Archive
+  the session first; do not delete the branch of a session that is not archived.
 - **TDD:** tests first, then implementation (Backend Developer convention). Unit tests use the `__new__`
   constructor-bypass + in-memory mock pattern (no live DB) — see `tests/conftest.py`.
 - **Ticketing:** every change maps to a `SIM-NNN` ticket. The next free ID lives in the SUBTITLE
@@ -1076,3 +1098,5 @@ ticket description, docstring, and inline comment.
   after any engine/model change. Target Python 3.13 to match CI (SIM-431; numpy 2.x).
 - Don't commit credentials; honor the migration + regression conventions above.
 - Prefer surgical edits to `simulation/sim_loop.py` (it's the largest, most-touched file).
+- Follow the branch lifecycle in §7: one branch per ticket, commit before the session ends, and
+  delete the branch on the day it merges.
