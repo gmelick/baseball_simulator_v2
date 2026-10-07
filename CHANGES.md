@@ -58,6 +58,98 @@ band moved. The plan with the run book, the census SQL and three owner decisions
 ID SIM-560.
 
 
+# LANDED — every game gets its real starting pitcher on both sides, and a game with a starter missing is refused — SIM-558, built 2026-10-05, merged 2026-10-06
+
+**Why it matters.** In 392 of the 22,742 Final games (1.7%) the simulator started the wrong
+pitcher for one side, or none. Game 823372 (2026-06-10), one of the 45 games of the balanced
+certifying set, ran with no away starter: the home starter pitched to both teams. The fix reads
+the starter from the official box score. It changes who pitches in those games; it changes no
+verdict of the acceptance lane.
+
+**The cause.** The resolver (`simulation/lineup_resolver.py`) found the starter in
+`raw.game_lineups`, by the pitcher position code. The loader writes one row for each player and
+gives it the box feed's `position`, which is the LAST position the player held. Three kinds of
+game break that:
+
+| The lineup's pitcher row | Team-games, 2017-2026 | What the simulator did |
+|---|---|---|
+| Missing: a two-way starter, coded DH (76) or RF (4), all one player | 80 (41 home, 39 away) | home: the game was refused with a "not found" error; away: the game ran with the home pitcher on the mound in both halves |
+| Wrong: a position player who finished the game pitching is coded P and is picked ahead of the real starter | 308 | he started the game on the mound |
+| Wrong: an announced starter who was scratched before his first pitch | 9 | he started; the real starter never appeared |
+
+The count is every Final game (45,484 team-games), not a sample; the real resolver run over the
+same games gives the same numbers. 192 of the 392 games are in the 2023-2026 pool window. The
+MLB box of game 823372 confirms the first case: the away starter's `position` is DH, his
+`allPositions` is P then DH, and he is `pitchers[0]`; the loader skips the pitcher row for a
+starter who is already in the batting order.
+
+**What the loop did with one starter missing.** `build_game_state` checked only the side that
+pitches first. `_set_half_matchup` swaps the pitcher at each half from the two starter ids and
+changes nothing when the id is `None`. So the home pitcher stayed on the mound for the bottom
+half. In 390 simulations of game 823372 home-team pitchers threw about 40% of the plate
+appearances to their own batters (the home starter alone 27%), his pitch count ran through both
+halves (14.5 away batters faced a game against 21.5 after the fix), his box line held both
+teams' outs, and the real away starter had no line and no prop.
+
+**The fix.**
+- `simulation/lineup_resolver.py`: `fetch_box_starters` reads `raw.game_player_stats.p_started`.
+  The box's starter replaces the lineup's sequence-1 pitcher row. A recorded pitching change (a
+  pitcher row with `sequence` above 1) still wins. A side the box does not name keeps the lineup
+  row, so a game with no box yet resolves as before. The starter's throwing hand is fetched when
+  the lineup does not list him. `build_game_state` refuses a game when EITHER side has no pitcher.
+- `simulation/sim_loop.py`: `simulate_game` refuses, before the first pitch, a game that names one
+  side's starter and not the other's. A game with neither id is the fixed matchup of the
+  no-database tests and still plays.
+- `tests/unit/test_sim558_starter_resolution.py`: 22 tests (the three cases, the pitching change,
+  the refusal on both paths, a failed box read, each half opens with the fielding side's pitcher).
+- No migration and no data run: the box rows are already loaded for every Final game.
+
+**The checks.**
+- `scripts/sim558_starter_census.py --async-sample 1000` (`scripts/sim558_starter_census.txt`): on
+  all 45,484 team-games the fixed resolver's starter equals the box's (0 missing, 0 different, 0
+  refused). Through the real path against Postgres, 1,000 games (the 392 and a random 608): both
+  starters equal the box in every one, each has a throwing hand, none is listed in his own pen.
+- The container unit lane: 5,334 passed, 19 failed, 4 skipped. The 19 read repository documents
+  (`CLAUDE.md`, `WORKFLOW.md`, `docs/`, `deploy/`, `docker-compose.yml`) that the image holds as
+  stale copies; with those files mounted they pass (114 of 114 with the new tests). `ruff` and
+  `mypy` are clean on the changed files.
+
+**What it changes for the certifying set's grade.** The paired read of game 823372, 390
+game-sims an arm, the production flags (`scripts/sim558_game_probe.py`,
+`scripts/sim558_game_823372_paired.txt`), scaled to the 45 x 130 lane of 2026-10-03:
+
+| Band | Move in the lane's total | Against its centre |
+|---|---|---|
+| Strikeouts per plate appearance | +0.02% | -0.94% to -0.91% (passes) |
+| Walks per plate appearance | +0.03% | +3.35% to +3.38% (red before and after) |
+| Hit by pitch per plate appearance | +0.07% | +8.54% to +8.62% (red before and after) |
+| Singles / doubles / triples / home runs | -0.03% / +0.01% / -0.09% / +0.11% | no verdict changes |
+| Runs per team-game | +0.002 on 4.47 | passes |
+| Home-win share | -0.0004 | underpowered before and after |
+
+Every move is inside its own standard error. The game is one of 45, and at similarity power 1
+the pitcher's identity moves the draws little (the home batters' strikeout rate read 0.2240
+against the wrong pitchers and 0.2217 against the right ones). Expect the same error to cost
+more once the sweep raises the powers. The lane was not re-run.
+
+**Found on the way, not fixed here.**
+- The fielders' codes in `raw.game_lineups` have the same last-position flaw: a starter who moved
+  from centre field to left field is coded LF. 11,893 of 45,484 team-games (26%) have a fielding
+  position missing from the defense map, 29 of the certifying set's 90, and 301 have no catcher.
+  The fix is in the loader (`_build_starting_lineup_rows` should read `allPositions[0]`) plus a
+  re-load of the lineups. Not filed.
+- A game with no box yet (the live slate, SIM-519) still depends on the lineup row; a two-way
+  starter there is now refused, not simulated wrong. It needs the schedule's probable pitcher.
+- `scripts/sim523_game_set.py` finds starters by the same position code, so the balanced set's
+  expectation was scored with 89 of its 90 starters. Not recomputed.
+- The API maps the missing-starter refusal to 404, the "game not found" answer.
+
+**The state.** Committed on 2026-10-06 and merged into master; the app restarted on the merged
+code. The SIM-558 row in `BACKLOG.xlsx` (P2) stays open for one item of its definition of done:
+the next 45 x 130 acceptance lane, which the owner holds until another fix is in. Next free ID
+SIM-559.
+
+
 # CLOSED — the running game on the pitch: the steal pool rebuilt with the pitch class and the pickoff rows, the census and the lane read as the design expected, production runs the new order — SIM-554, 2026-10-03
 
 **Why it matters.** The simulator now decides a steal after the pitch, among real pitches of the

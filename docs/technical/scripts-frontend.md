@@ -132,6 +132,18 @@ The SIM-538 sim-vs-closing-line accuracy comparison, the platform's gold-standar
 
 ---
 
+### `scripts/sim558_starter_census.py`
+
+**Purpose:** SIM-558 — does every game resolve its real starters? A READ-ONLY count over every Final game. For each side it compares the lineup's pitcher row alone (`raw.game_lineups`, the resolver before SIM-558), the official box (`raw.game_player_stats.p_started`) and the resolver as it runs now. It sorts each disagreement into its cause: `missing` (a two-way starter, coded by his batting position), `on the mound` (a position player who finished the game pitching; the lineup stores the LAST position a player held) and `scratched` (an announced starter who threw no pitch). `--async-sample N` resolves N games through the real path (`resolve_game_state` against Postgres): every game with a disagreement plus a random rest. Exit 1 when the resolver leaves any side missing or different from the box. The record of 2026-10-05 is `scripts/sim558_starter_census.txt` (80 missing, 308 on the mound, 9 scratched in 392 of 22,742 games before the fix; 0 after).
+
+---
+
+### `scripts/sim558_game_probe.py`
+
+**Purpose:** SIM-558 — what the starter fix changes in one game. `run GAME N OUT.json` simulates one game N times through the production machine and counts, for each batting side, the plate appearances, strikeouts, walks, hit by pitches, hits by type, balls in play and runs, and which pitcher faced each side. `compare OLD.json FIXED.json` prints the paired read and the size of the move in the 45 x 130 lane's totals. The records of 2026-10-05 for game 823372 are `scripts/sim558_game_823372_old.json`, `..._fixed.json` and `..._paired.txt`.
+
+---
+
 ### `scripts/sim555_book_probe.py`
 
 **Purpose:** SIM-555 run book step 3 — the gate before the re-load. A READ-ONLY census of N games (default 300, stratified by season 2019-2026 and month, from Final games with a stored closing moneyline) read from the vendor through the provider's by-book methods at `--rate` reads a second (default 1.0): the moneyline, run line, total, the first-inning and first-five moneyline / run line / total, and one strikeout prop per game. It reports, per market: the offers, the books quoting, the opener's coverage and the rows by book; the stamp's distance from the scheduled start by season; the guard's refusals by rule, market and book; the first-five exclusions (dated / twin) by book; and the GATE: (a) every two-way offer quoted by a book on `GRADED_BOOK_PREFERENCE`; (b) per (market, line type, book), the kept first-five rows that still look first-inning-shaped (a price more than 0.15 implied probability from the other books' median at the same line, a copy of the book's own first-inning row, or a shape the guard names) under 0.5%; (c) no book fails (b) — a failing book off the list, or a listed book flagged before its date, names the fix (add it to `F5_EXCLUDED_BOOKS`, or move its date). Gates (b) and (c) grade the bettable books only; the blend's, the pick'em apps', the exchanges' and the prediction markets' flags are printed beside the gate (`non_bettable_flags`), and the rows the load guard refuses are counted, not graded (they are never stored). A read that failed makes an item UNKNOWN; `--game-pks` re-reads the listed games. `--regate FILE` re-applies the CURRENT guard and dated exclusion to a saved census JSON without a vendor or database read (a rule change needs no second hour of vendor reads). Writes nothing to the database. `--out` writes every row, the summary and the gate as JSON.

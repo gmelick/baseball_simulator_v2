@@ -2485,7 +2485,10 @@ class StateMachine:
         pitcher swaps to the fielding team's starter (away pitches when home bats,
         and vice versa), refreshing the ``throw_hand`` + ``bat_hand`` pre-filters.
         Each step is guarded so the count-machine test path (no lineups / no
-        pitcher map) is a no-op and keeps its fixed matchup.
+        pitcher map) is a no-op and keeps its fixed matchup.  A game that starts
+        with only ONE side's pitcher never reaches here: ``simulate_game`` and the
+        lineup resolver both refuse it (SIM-558), because the ``None`` guard
+        below would leave the other side's pitcher on the mound.
         """
         if state.offense == Team.HOME:
             lineup, slot = state.home_lineup, state.home_lineup_slot
@@ -3339,7 +3342,8 @@ def simulate_game(
     or let the driver build a fresh "top of the 1st" GameState from
     ``pitcher_id`` / ``bat_hand`` / ``season`` / the two lineups.  The driver
     needs both lineups.  It raises ``ValueError`` before the first pitch when
-    either side has no batting order (SIM-552).
+    either side has no batting order (SIM-552), or when the game names one
+    side's starting pitcher and not the other's (SIM-558).
 
     SIM-434 manager passthrough (GATED by ``SIM_MANAGER``): ``manager`` /
     ``bullpen`` / ``pitcher_rest_days`` are wired ONLY when supplied
@@ -3456,6 +3460,22 @@ def simulate_game(
             "simulate_game needs a batting order on each side: pass away_lineup "
             "and home_lineup, or an initial_state that carries them (got "
             f"{away_batters} away and {home_batters} home batters)."
+        )
+
+    # --- A game that names one starter names both (SIM-558) -------------------
+    # ``_set_half_matchup`` swaps the pitcher at each half from the two ids.
+    # With one id missing it changes nothing, so the other side's pitcher stays
+    # on the mound and pitches to his own team.  A two-way starter resolved
+    # that way: one pitcher's box line held both teams' outs.  A game with
+    # neither id is the fixed-matchup seam of the no-DB tests (one pitcher id
+    # for the whole game) and still plays.
+    if (state.home_pitcher_id is None) != (state.away_pitcher_id is None):
+        missing = "away" if state.away_pitcher_id is None else "home"
+        raise ValueError(
+            f"simulate_game needs a starting pitcher on each side: the {missing} "
+            "side has none (got home_pitcher_id="
+            f"{state.home_pitcher_id!r}, away_pitcher_id={state.away_pitcher_id!r}). "
+            "Without it the other side's pitcher pitches both halves."
         )
 
     # --- SIM-434: seed the bullpen + per-pitcher rest onto the state ---------

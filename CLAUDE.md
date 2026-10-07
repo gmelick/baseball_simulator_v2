@@ -677,7 +677,7 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   rest / pitch-count fields), `results.py`, `batch_runner.py` (ProcessPool runner — `mp_context=forkserver`
   per SIM-430), `production_factory.py` (builds the full-pool sampler from disk per worker, and
   RAISES when the bundle is missing — no fallback; `_manager_enabled()` + synthetic-bullpen builder gate SIM-434), `lineup_resolver.py`
-  (also resolves the per-team catcher via the SIM-363 defense map), `linescore.py`, `pitcher_decisions.py`
+  (also resolves the per-team catcher via the SIM-363 defense map; since SIM-558 each side's starter comes from the official box, `raw.game_player_stats.p_started`, and a game with a starter missing on either side is refused), `linescore.py`, `pitcher_decisions.py`
   (W/L/S + the manager pull model), `play_recorder.py`, `prop_distributions.py` (the per-player prop
   PMFs — fifteen props since SIM-421: pitchers K/BB/ER/OUTS/H_ALLOWED, batters H/HR/RBI/TB/1B/2B/3B/R/SB/HRR),
   `prop_validation.py` (the prop ground-truth readers: the official box score, SIM-545, and the

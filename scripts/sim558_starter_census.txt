@@ -1,0 +1,40 @@
+SIM-558 - the starter census, 2026-10-05. Read-only, the live database, the fixed code.
+Written by: python scripts/sim558_starter_census.py --async-sample 1000
+
+Final games: 22,742  sides (team-games) with lineup rows: 45,484
+
+The lineup's pitcher row alone, against the official box:
+  ok              45,087
+  missing             80
+  on the mound       308
+  scratched            9
+  no box               0
+  games with a disagreement on either side: 392
+    missing        home   41  away   39
+    on the mound   home  185  away  123
+    scratched      home    1  away    8
+
+  season   games  missing  on the mound  scratched
+  2017      12        0            12          0
+  2018      23        0            21          2
+  2019      38        0            38          0
+  2020      13        0            13          0
+  2021      38        4            33          1
+  2022      76       27            49          3
+  2023      60       22            38          0
+  2024      34        0            33          1
+  2025      46       18            27          1
+  2026      52        9            44          1
+  the pool window 2023-2026: 192 of 9,457 games
+
+The resolver as it runs now (the box first, the lineup row second):
+  equals the box                45,484
+  missing                            0
+  differs from the box               0
+  refused by build_game_state        0
+  no lineup rows                     0
+
+The real path (resolve_game_state against Postgres), 1,000 games (every game with a disagreement and a random rest, seed 558):
+  both starters equal the box         1,000
+
+VERDICT: PASS
