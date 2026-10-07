@@ -100,6 +100,7 @@ from simulation.batch_runner import (
 )
 from simulation.linescore import linescore_from_plays
 from simulation.lineup_resolver import (
+    LineupIncompleteError,
     LineupNotIngestedError,
     LineupResolutionError,
     build_defense_map_for_state,
@@ -615,9 +616,13 @@ async def _resolve_state_or_error(pool: Any, game_pk: int) -> Any:
     pool.acquire()``); a pool that IS a connection (the mock-pool test idiom)
     is used directly.
 
-    Error mapping (SIM-409):
+    Error mapping (SIM-409, SIM-559):
     * ``LineupNotIngestedError`` (game exists, lineups not yet published by MLB)
       → 503 Service Unavailable with a Retry-After: 900 hint.
+    * ``LineupIncompleteError`` (game exists, its lineup rows do not make a
+      playable game: a side with no pitcher, an empty batting order)
+      → 503 with the same Retry-After hint. The gap is data a later lineup
+      publish or the box backfill fills; the game is not missing (SIM-559).
     * ``LineupResolutionError`` (game not found in raw.games) → 404 Not Found.
 
     SIM-452: every state this factory returns leaves stamped with
@@ -636,8 +641,9 @@ async def _resolve_state_or_error(pool: Any, game_pk: int) -> Any:
             state = await resolve_game_state(pool, game_pk)
         mark_park_factor_unresolved(state)
         return state
-    except LineupNotIngestedError as exc:
-        # Transient: lineup not published yet. Suggest retry in 15 min.
+    except (LineupNotIngestedError, LineupIncompleteError) as exc:
+        # Transient: the lineup is not published yet, or its rows do not yet
+        # make a playable game (SIM-559). Suggest a retry in 15 min.
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
@@ -1700,8 +1706,8 @@ def _build_prop_set(
         "K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's other lines) "
         "-- the means-only projection of the run's PropDistributionSet (SIM-329). "
         "numpy-free JSON "
-        "(SIM-350). 503 if no DB pool is attached; 404 if the lineup cannot be "
-        "resolved."
+        "(SIM-350). 503 if no DB pool is attached or the game's lineup is not yet "
+        "usable (Retry-After); 404 if the game is unknown."
     ),
 )
 async def get_game_boxscore(

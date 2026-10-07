@@ -1,3 +1,30 @@
+# CLOSED — the starting position of each starter: the API answers 503, not 404, for a known game whose lineup has no pitcher; the ticket's last item built, the row deleted — SIM-559, 2026-10-07
+
+**Why it matters.** A real game whose lineup rows do not yet make a playable game — a side with
+no pitcher, an empty batting order — used to answer 404 Not Found, the answer for a game that
+does not exist. A caller then dropped the game. The gap is data that a later lineup publish or the
+box backfill fills, so the API now says so: 503 Service Unavailable with `Retry-After: 900`, the
+same answer as an unpublished lineup (SIM-409).
+
+**What is built.** `LineupIncompleteError` in `simulation/lineup_resolver.py`, a
+`LineupResolutionError` subclass and a sibling of `LineupNotIngestedError` ("no rows yet" and
+"rows that do not resolve" stay distinct findings for an operator). The resolver raises it at its
+three "rows exist but do not resolve" sites: a side with no resolvable pitcher
+(`_require_pitcher`, the SIM-558 refusal), an empty offense batting order, and rows that resolve
+to no batting slot. `_resolve_state_or_error` in `api/routes/games.py` — the one state factory
+every sim endpoint uses — catches the two subclasses before the base class and answers 503 with
+the Retry-After hint; a game not in `raw.games` still answers 404. 12 tests in
+`tests/unit/test_sim559_incomplete_lineup_api.py` pin the class, the three resolver sites, the
+two unchanged errors and the mapping on the simulate and boxscore routes; the SIM-558, SIM-409,
+API and resolver tests pass unchanged. Ruff and mypy clean.
+
+**The close.** Every item of the ticket is done: the loader stores the starting position, the
+17,279 rows are repaired, the census and the box-feed comparison read clean, the balanced-set
+script reads the starters from the box, the 45 × 130 lane read no band moved, and the API answers
+503. The SIM-559 row is deleted from `BACKLOG.xlsx`; the next free ID stays SIM-560. The plan
+(`docs/audit/2026-10-06-sim559-starting-position-plan.md`, §11) is the build and run record.
+
+
 # LANE — the first 45 × 130 lane since the starting-position repair reads the same six non-passes at like sizes; no band moved — SIM-559, 2026-10-07
 
 **Why it matters.** The repair put the true starting fielders and catchers in every defense map

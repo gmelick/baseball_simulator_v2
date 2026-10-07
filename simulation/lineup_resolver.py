@@ -90,7 +90,8 @@ A recorded pitching change (a pitcher row with ``sequence`` above 1) still wins:
 the box names the starter, not the current pitcher.  :func:`build_game_state`
 refuses a game when EITHER side has no pitcher.  It used to check only the side
 that pitches first, and the loop then kept that side's pitcher on the mound for
-both halves.
+both halves.  The refusal is a :class:`LineupIncompleteError` (SIM-559): the
+game is known, so the API answers 503 with ``Retry-After``, not 404.
 
 This module is owned by the Data Engineer (SIM-353).  It does NOT mutate
 ``GameState`` after construction (the SIM-316 state machine owns mutation) and it
@@ -168,6 +169,19 @@ class LineupNotIngestedError(LineupResolutionError):
     "game not found in raw.games") so callers can distinguish a permanent
     failure (game unknown → 404) from a transient one (lineup not yet
     published by MLB → 503 Retry-After, typically 15 min before first pitch).
+    """
+
+
+class LineupIncompleteError(LineupResolutionError):
+    """Raised when a KNOWN game has lineup rows that do not make a playable game (SIM-559).
+
+    Three cases: a side with no resolvable pitcher (no 'P' row and no official
+    box starter), a side with an empty batting order, or rows that resolve to
+    no batting slot at all. The game exists, so 404 is the wrong answer; the
+    gap is data that a later lineup publish or the box backfill fills, so the
+    API answers 503 with ``Retry-After``, as it does for an unpublished lineup.
+    A sibling of :class:`LineupNotIngestedError`, not a subclass: "no rows yet"
+    and "rows that do not resolve" are different findings for an operator.
     """
 
 
@@ -408,7 +422,7 @@ def resolve_lineup_from_rows(
     )
 
     if not home_slots and not away_slots:
-        raise LineupResolutionError(
+        raise LineupIncompleteError(
             f"no batting-order rows resolved for game_pk={game_pk} "
             f"(home_team_id={home_team_id}, away_team_id={away_team_id}); "
             "raw.game_lineups has no usable lineup for this game."
@@ -439,11 +453,12 @@ def _require_pitcher(resolved: ResolvedLineup, team: TeamLineup, side: str) -> i
     side is missing.
     """
     if team.pitcher_id is None:
-        raise LineupResolutionError(
+        raise LineupIncompleteError(
             f"the {side} team ({team.team_id}) has no resolvable pitcher for "
             f"game_pk={resolved.game_pk}: raw.game_lineups has no pitcher row for "
             "it and the official box (raw.game_player_stats.p_started) names no "
-            "starter; cannot start a plate appearance."
+            "starter; cannot start a plate appearance. A later lineup publish or "
+            "the box backfill fills it."
         )
     return int(team.pitcher_id)
 
@@ -475,10 +490,11 @@ def build_game_state(
 
     Raises
     ------
-    LineupResolutionError
+    LineupIncompleteError
         If the offense (the side batting in ``half``) has no batting order, or
         EITHER side has no resolvable pitcher (SIM-558) — the loop swaps the
-        pitcher at each half, so it needs both.
+        pitcher at each half, so it needs both. A ``LineupResolutionError``
+        subclass; the API answers it with 503 and ``Retry-After`` (SIM-559).
     """
     offense_team = Team.AWAY if half == Half.TOP else Team.HOME
 
@@ -487,7 +503,7 @@ def build_game_state(
     offense_ids = away_ids if offense_team == Team.AWAY else home_ids
 
     if not offense_ids:
-        raise LineupResolutionError(
+        raise LineupIncompleteError(
             f"offense ({offense_team.name}) has an empty batting order for "
             f"game_pk={resolved.game_pk}; cannot put a leadoff batter up."
         )
@@ -956,6 +972,7 @@ __all__ = [
     "ResolvedLineup",
     "LineupResolutionError",
     "LineupNotIngestedError",
+    "LineupIncompleteError",
     # pure assembly + building
     "resolve_lineup_from_rows",
     "build_game_state",

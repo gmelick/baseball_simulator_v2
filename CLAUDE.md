@@ -552,7 +552,7 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   byte-identical.
 - **The lineup table's position is the one each starter STARTED at (SIM-559, FOUND + BUILT
   2026-10-06; MERGED and the backfill RAN 2026-10-07: 17,279 rows repaired in 10,415 games, zero
-  failures; every team-game now holds eight gloves and a catcher).** The loader wrote `raw.game_lineups.position_code`
+  failures; every team-game now holds eight gloves and a catcher; CLOSED 2026-10-07).** The loader wrote `raw.game_lineups.position_code`
   from the box feed's `position`; the feed's `allPositions[0]` is the starting position. 26% of
   team-games (10,802 + 1,091 of 45,484) have a fielding hole in the defense map and 301 have no
   catcher; the balanced set has 29 defective team-games in 90; the box-score table carries the
@@ -563,8 +563,10 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   `scripts/sim559_backfill_run.txt`, the census after `scripts/sim559_census_after.txt`). A game
   the nightly loaded between the merge and the backfill's pass keeps the old coding: `--seasons
   2026` repairs it. The 45 × 130 lane of 2026-10-07 (`scripts/sim559_lane.txt`) reads the same six
-  non-passes as 2026-10-03 at like sizes; no band moved. Open: the API's 503 for a known game
-  with no pitcher.
+  non-passes as 2026-10-03 at like sizes; no band moved. The API answers 503 with Retry-After,
+  not 404, for a known game whose lineup has no pitcher or no batting order
+  (`LineupIncompleteError`, a sibling of the unpublished-lineup error; a game not in `raw.games`
+  still answers 404).
   The ten-game smoke (`scripts/sim559_smoke.txt`): the fielder factor read a missing or wrong
   defender on 7.4% of balls in play, the steal and pickoff draws had no catcher on 4.9% of their
   reads, no channel moved beyond noise (every power is 1). `scripts/sim523_game_set.py` reads the

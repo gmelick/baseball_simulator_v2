@@ -4,7 +4,8 @@
 2026-10-07** — 22,742 games, 17,279 rows repaired in 10,415 games, zero failures, 1 h 44 min; the
 census after reads every team-game with eight gloves and a catcher, the box-feed comparison zero
 defects (§11). The 45 × 130 lane RAN the same day: the same six non-passes as 2026-10-03, no band moved. The
-ticket is SIM-559 (P2) in `BACKLOG.xlsx`, open for the API follow-on. Found during the starting-pitcher fix (SIM-558) on 2026-10-05.
+API's 503 for a known game with no pitcher is BUILT (§9). **The ticket is CLOSED 2026-10-07**; the
+row is deleted from `BACKLOG.xlsx`. Found during the starting-pitcher fix (SIM-558) on 2026-10-05.
 
 ## 1. Why it matters
 
@@ -262,11 +263,13 @@ pass unchanged (103 in the four files).
   starters by `position_code == 'P'` and scored 89 of the set's 90 starters. It now reads the
   official box's `p_started` with the lineup's 'P' rows as the fallback, and counts every row
   with a batting slot as a batter. The set itself is an owner ruling and is not regenerated.
-- **The API's missing-starter refusal (not built; in the ticket).** `_resolve_state_or_error`
-  maps every `LineupResolutionError` to 404. A known game whose lineup names no pitcher is a
-  data gap, not a missing game; it should answer 503 with `Retry-After`, like the unpublished
-  lineup (SIM-409), because the box backfill can fill it. That needs an error subclass in
-  `simulation/lineup_resolver.py`, which the SIM-558 worktree is editing: do it after that merge.
+- **The API's missing-starter refusal (BUILT 2026-10-07).** `_resolve_state_or_error` mapped every
+  `LineupResolutionError` to 404. A known game whose lineup names no pitcher is a data gap, not a
+  missing game. The resolver now raises `LineupIncompleteError` (a `LineupResolutionError`
+  subclass, a sibling of `LineupNotIngestedError`) for a side with no resolvable pitcher, an
+  empty batting order, or rows that resolve to no slot, and the API answers it with 503 and
+  `Retry-After: 900`, like the unpublished lineup (SIM-409). A game not in `raw.games` still
+  answers 404. Tests: `tests/unit/test_sim559_incomplete_lineup_api.py`.
 
 ## 10. Decisions for the owner
 
@@ -290,5 +293,5 @@ pass unchanged (103 in the four files).
 | the 45 × 130 lane, 2026-10-07 | 36 passed, 6 failed: the same six as 2026-10-03 at like sizes (walks +3.3%, hit by pitch +8.4%, doubles +5.0%, steal attempts −11.2% / −20.5%, the home-win share underpowered); no band moved; 2 h 36 m; `scripts/sim559_lane.txt` |
 
 Records: `scripts/sim559_backfill_run.txt`, `scripts/sim559_census_after.txt`,
-`scripts/sim559_smoke_after.txt`, `scripts/sim559_lane.txt`. Open after the run: the API's 503
-for a known game with no pitcher (§9).
+`scripts/sim559_smoke_after.txt`, `scripts/sim559_lane.txt`. The API's 503 for a known game with no
+pitcher is built (§9). Nothing is open; the ticket is closed.
