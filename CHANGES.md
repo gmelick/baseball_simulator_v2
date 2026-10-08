@@ -134,6 +134,13 @@ The rule is in `CLAUDE.md` §7 (with a pointer in §15).
   hold the old uncommitted copies; they go when those sessions are archived. The run-line draft
   waits for the owner's approval to discard it, because the discard deletes files permanently.
 
+**Third pass, the same day.** The owner approved the discard and archived the two sessions.
+Archiving cleared each folder's uncommitted edits (no stash, no commit); everything worth keeping
+was on `master` already. The probe's two input caches, `scripts/steal_weight_volume_probe_2025/2026.npz`
+(ignored, 140 MB), are copied to the main checkout. All three folders and their branches are
+deleted. What remains: `master`, and `sim554-running-game-impl` with the uncommitted
+pitcher-outs design (SIM-557), by owner decision.
+
 
 # CLOSED — every game gets its real starting pitcher on both sides: the lane on the fixed code moved no band, the row deleted — SIM-558, 2026-10-07
 
