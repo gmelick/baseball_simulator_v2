@@ -320,7 +320,7 @@ export interface paths {
         };
         /**
          * Per-player boxscore-average card (prop means over N iterations)
-         * @description Resolve the game's lineup, run an N-iteration boxscore batch, and return each player's prop MEANS as a boxscore card (SIM-366): for a batter the H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means, for a pitcher the K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's other lines) -- the means-only projection of the run's PropDistributionSet (SIM-329). numpy-free JSON (SIM-350). 503 if no DB pool is attached; 404 if the lineup cannot be resolved.
+         * @description Resolve the game's lineup, run an N-iteration boxscore batch, and return each player's prop MEANS as a boxscore card (SIM-366): for a batter the H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means, for a pitcher the K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's other lines) -- the means-only projection of the run's PropDistributionSet (SIM-329). Each row also carries the player's name, side, batting-order slot and starting-pitcher flag (SIM-560). The games run on the worker pool, and a seeded run is cached, so /props with the same seed and N reads this run. numpy-free JSON (SIM-350). 503 if no DB pool is attached or the game's lineup is not yet usable (Retry-After); 404 if the game is unknown.
          */
         get: operations["get_game_boxscore_api_games__game_pk__boxscore_get"];
         put?: never;
@@ -933,6 +933,8 @@ export interface components {
          *     :class:`PropDistributionSetModel` instead).  numpy-free.
          */
         BoxscoreCardModel: {
+            /** Base Seed */
+            base_seed?: number | null;
             /** N Iterations */
             n_iterations: number;
             /** Players */
@@ -953,12 +955,23 @@ export interface components {
          *     (plain floats).
          */
         BoxscoreCardRowModel: {
+            /** Lineup Slot */
+            lineup_slot?: number | null;
             /** Means */
             means?: {
                 [key: string]: number;
             };
+            /** Name */
+            name?: string | null;
             /** Player Id */
             player_id: number;
+            /** Side */
+            side?: string | null;
+            /**
+             * Starting Pitcher
+             * @default false
+             */
+            starting_pitcher: boolean;
         };
         /**
          * CLVModel

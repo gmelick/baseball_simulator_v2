@@ -218,7 +218,7 @@ export function GamePage(): React.ReactElement {
           )}
 
           <Panel label="Projections">
-            <BoxscorePanel gamePk={gamePk} />
+            <BoxscorePanel gamePk={gamePk} awayLabel={away} homeLabel={home} />
           </Panel>
 
           <Panel label="Betting">

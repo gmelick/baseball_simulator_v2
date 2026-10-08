@@ -902,13 +902,37 @@ class BoxscoreCardRowModel(_ApiModel):
     #: "OUTS": 17.0, "H_ALLOWED": 5.2}`` for a pitcher).  Whichever props the
     #: player owns in the prop set.
     means: dict[str, float] = Field(default_factory=dict)
+    #: SIM-560: the player's full name (``raw.players``); None when unknown.
+    name: str | None = None
+    #: SIM-560: 'away' or 'home'; None for a player the game's kwargs do not name.
+    side: str | None = None
+    #: SIM-560: the 1-9 batting-order slot; None for a player who does not bat.
+    lineup_slot: int | None = None
+    #: SIM-560: True for each side's starting pitcher.
+    starting_pitcher: bool = False
 
     @classmethod
-    def from_prop_map(cls, player_id: int, props: Mapping[str, Any]) -> BoxscoreCardRowModel:
-        """Build one row from a ``{prop_name -> PropDistribution}`` map."""
+    def from_prop_map(
+        cls,
+        player_id: int,
+        props: Mapping[str, Any],
+        *,
+        name: str | None = None,
+        tag: Mapping[str, Any] | None = None,
+    ) -> BoxscoreCardRowModel:
+        """Build one row from a ``{prop_name -> PropDistribution}`` map.
+
+        ``tag`` is the player's ``{side, lineup_slot, starting_pitcher}`` map
+        (SIM-560); absent, the row carries no side.
+        """
+        tag = tag or {}
         return cls(
             player_id=int(player_id),
             means={str(prop): float(dist.mean) for prop, dist in props.items()},
+            name=name,
+            side=tag.get("side"),
+            lineup_slot=tag.get("lineup_slot"),
+            starting_pitcher=bool(tag.get("starting_pitcher", False)),
         )
 
 
@@ -926,16 +950,35 @@ class BoxscoreCardModel(_ApiModel):
     """
 
     n_iterations: int
+    #: SIM-560: the seed the run used (None = an unseeded, fresh draw).  A
+    #: ``/props`` call with this seed and N reads the same run.
+    base_seed: int | None = None
     #: ``str(player_id) -> BoxscoreCardRowModel`` of prop means.
     players: dict[str, BoxscoreCardRowModel] = Field(default_factory=dict)
 
     @classmethod
-    def from_prop_set(cls, pset: Any) -> BoxscoreCardModel:
-        """Build from a :class:`simulation.prop_distributions.PropDistributionSet`."""
+    def from_prop_set(
+        cls,
+        pset: Any,
+        *,
+        base_seed: int | None = None,
+        names: Mapping[int, str] | None = None,
+        tags: Mapping[int, Mapping[str, Any]] | None = None,
+    ) -> BoxscoreCardModel:
+        """Build from a :class:`simulation.prop_distributions.PropDistributionSet`.
+
+        ``names`` and ``tags`` are keyed by player id (SIM-560); a player
+        missing from either gets an empty name or no side.
+        """
+        names = names or {}
+        tags = tags or {}
         return cls(
             n_iterations=int(pset.n_iterations),
+            base_seed=base_seed,
             players={
-                str(pid): BoxscoreCardRowModel.from_prop_map(pid, props)
+                str(pid): BoxscoreCardRowModel.from_prop_map(
+                    pid, props, name=names.get(int(pid)), tag=tags.get(int(pid))
+                )
                 for pid, props in pset.by_player.items()
             },
         )

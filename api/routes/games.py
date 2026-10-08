@@ -96,7 +96,6 @@ from simulation.batch_runner import (
     POOL_QUERY_TTL_S,
     BatchRunner,
     GameSpec,
-    derive_seed,
 )
 from simulation.linescore import linescore_from_plays
 from simulation.lineup_resolver import (
@@ -1656,43 +1655,128 @@ async def get_game_card(
 
 def _build_prop_set(
     *,
-    factory_ref: str,
-    base_seed: int | None,
-    sim_kwargs: dict[str, Any],
+    runner: BatchRunner,
+    spec: GameSpec,
     n_iterations: int,
+    base_seed: int | None,
 ) -> PropDistributionSet:
-    """Build a :class:`PropDistributionSet` from a fresh N-game boxscore batch.
+    """Build the run's :class:`PropDistributionSet` on the batch runner (SIM-560).
 
-    The SIM-366 boxscore card needs the per-game :class:`BoxScore` for every
-    iteration, but the :class:`~simulation.batch_runner.BatchResult` retains only
-    the aggregate :class:`GameSimSummary` (the per-game results are not kept) -- so
-    this records N representative games via
-    :func:`simulation.play_recorder.record_game_plays` (which DOES return a
-    populated ``GameSimResult.boxscore`` per game), derived at the SAME per-game
-    seeds the batch uses (``derive_seed(base_seed, i)``) for reproducibility, and
-    aggregates their boxscores into the prop-PMF set.  Sync + CPU-bound so the
-    caller offloads it to a worker thread.
+    The runner fans the N games out to its worker pool, the same pool
+    ``/simulate`` uses, and caches a seeded set.  So the projections card and
+    every prop the user then clicks read ONE run.  Before SIM-560 this replayed
+    the N games one after another in the API process through the play recorder:
+    about 2.5 minutes for the card's 100 games, and again for every click.
 
-    THE SEAM (documented): this re-runs the game under the no-DB factory rather
-    than reusing the /simulate batch's per-game results, because the batch summary
-    does not carry them.  For a small ``n_iterations`` (the 100-iteration boxscore
-    average) this is cheap; a future change that has the runner retain per-game
-    boxscores could feed them straight in here instead.
+    Sync and CPU-bound; the caller offloads it to a worker thread.
     """
-    from simulation.results import BoxScore  # local import: keep module light
+    return runner.run_prop_set(spec, n_iterations=n_iterations, base_seed=base_seed)
 
-    boxscores = []
-    for i in range(int(n_iterations)):
-        seed = derive_seed(base_seed, i)
-        result, _plays = record_game_plays(
-            factory_ref=factory_ref,
-            seed=seed,
-            sim_kwargs=sim_kwargs,
-        )
-        # A game that did not accumulate a boxscore contributes an empty one (it
-        # still counts toward N so the means denominator stays the full count).
-        boxscores.append(result.boxscore if result.boxscore is not None else BoxScore())
-    return PropDistributionSet.from_boxscores(boxscores)
+
+@dataclasses.dataclass
+class _PlayerTag:
+    """Where one player sits in the simulated game (SIM-560).
+
+    ``side`` is 'away' or 'home'.  ``lineup_slot`` is the 1-9 batting-order
+    slot, or None for a player who does not bat.  ``starting_pitcher`` marks
+    each side's starter; a pitcher who also bats keeps his slot.
+    """
+
+    side: str
+    lineup_slot: int | None = None
+    starting_pitcher: bool = False
+
+
+def _placeholder_pens(sim_kwargs: Mapping[str, Any]) -> dict[int, list[int]]:
+    """The factory's placeholder pen for this game, keyed 0 = away and 1 = home.
+
+    A game with no pen in the box (a scheduled game: only the historical loader
+    writes ``raw.game_bullpen``) pitches these arms.  Their ids are negative and
+    built from each starter's id, so this asks the factory's own builder.
+    """
+    from simulation.production_factory import _default_bullpen_for_spec
+
+    return _default_bullpen_for_spec(GameSpec(sim_kwargs=dict(sim_kwargs)))
+
+
+def _placeholder_names(sim_kwargs: Mapping[str, Any]) -> dict[int, str]:
+    """A label for each placeholder arm: 'Generic reliever 1' to '6' per side."""
+    return {
+        pid: f"Generic reliever {n}"
+        for pen in _placeholder_pens(sim_kwargs).values()
+        for n, pid in enumerate(pen, start=1)
+    }
+
+
+def _player_tags(sim_kwargs: Mapping[str, Any]) -> dict[int, _PlayerTag]:
+    """Tag every player the sim can use with a side, a slot and a role (SIM-560).
+
+    The sim kwargs already name the game's players: the two batting orders,
+    the two starters, and each side's pen (``bullpen``, keyed 0 = away and
+    1 = home).  A game with no pen in the box pitches the factory's placeholder
+    arms instead (:func:`_placeholder_pens`).  The loop pinch-hits nobody, so
+    these are every player a box score can hold.
+    """
+    tags: dict[int, _PlayerTag] = {}
+
+    def _tag(pid: Any, side: str) -> _PlayerTag | None:
+        if pid is None:
+            return None
+        return tags.setdefault(int(pid), _PlayerTag(side=side))
+
+    for side in ("away", "home"):
+        for slot, pid in enumerate(sim_kwargs.get(f"{side}_lineup") or [], start=1):
+            tag = _tag(pid, side)
+            if tag is not None:
+                tag.lineup_slot = slot
+        starter = _tag(sim_kwargs.get(f"{side}_pitcher_id"), side)
+        if starter is not None:
+            starter.starting_pitcher = True
+    pens = list((sim_kwargs.get("bullpen") or {}).items())
+    pens += list(_placeholder_pens(sim_kwargs).items())
+    for team, pen in pens:
+        side = "home" if int(team) == 1 else "away"
+        for pid in pen or []:
+            _tag(pid, side)
+    return tags
+
+
+_PLAYER_NAMES_SQL = """
+    SELECT player_id, full_name
+    FROM   raw.players
+    WHERE  player_id = ANY($1::int[])
+"""
+
+
+async def _query_player_names(pool: Any, player_ids: list[int]) -> dict[int, str]:
+    """Read each player's full name from ``raw.players``."""
+    acquire = getattr(pool, "acquire", None)
+    if acquire is not None:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(_PLAYER_NAMES_SQL, player_ids)
+    else:
+        rows = await pool.fetch(_PLAYER_NAMES_SQL, player_ids)
+    names: dict[int, str] = {}
+    for row in rows:
+        name = _row_get(row, "full_name")
+        if name:
+            names[int(_row_get(row, "player_id"))] = str(name)
+    return names
+
+
+async def _player_names(pool: Any, player_ids: list[int]) -> dict[int, str]:
+    """The players' names, or an empty map when the lookup fails (SIM-560).
+
+    A name is a label.  A failed lookup leaves the card's names empty and the
+    panel shows the player id instead; it never fails the card.
+    """
+    if not player_ids:
+        return {}
+    try:
+        return await _query_player_names(pool, player_ids)
+    except Exception as exc:  # noqa: BLE001 -- a label must not break the card
+        log.warning("player-name lookup failed: %s", exc)
+        return {}
 
 
 @router.get(
@@ -1705,6 +1789,9 @@ def _build_prop_set(
         "H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means, for a pitcher the "
         "K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's other lines) "
         "-- the means-only projection of the run's PropDistributionSet (SIM-329). "
+        "Each row also carries the player's name, side, batting-order slot and "
+        "starting-pitcher flag (SIM-560). The games run on the worker pool, and a "
+        "seeded run is cached, so /props with the same seed and N reads this run. "
         "numpy-free JSON "
         "(SIM-350). 503 if no DB pool is attached or the game's lineup is not yet "
         "usable (Retry-After); 404 if the game is unknown."
@@ -1719,18 +1806,26 @@ async def get_game_boxscore(
     pool = _get_pool(request)
     state = await _resolve_state_or_error(pool, game_pk)
 
-    factory_ref = resolve_factory_ref(request)
     # SIM-452: this route was one of the five park-blind callers. It resolves now.
-    sim_kwargs = await _resolved_sim_kwargs(request, pool, state, game_pk)
-
+    spec = GameSpec(
+        machine_factory=resolve_factory_ref(request),
+        sim_kwargs=await _resolved_sim_kwargs(request, pool, state, game_pk),
+    )
     pset = await asyncio.to_thread(
         _build_prop_set,
-        factory_ref=factory_ref,
-        base_seed=base_seed,
-        sim_kwargs=sim_kwargs,
+        runner=_build_runner(request),
+        spec=spec,
         n_iterations=n_iterations,
+        base_seed=base_seed,
     )
-    return BoxscoreCardModel.from_prop_set(pset)
+    names = _placeholder_names(spec.sim_kwargs)
+    names.update(await _player_names(pool, sorted(pid for pid in pset.by_player if pid > 0)))
+    return BoxscoreCardModel.from_prop_set(
+        pset,
+        base_seed=base_seed,
+        names=names,
+        tags={pid: dataclasses.asdict(tag) for pid, tag in _player_tags(spec.sim_kwargs).items()},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1790,19 +1885,20 @@ async def get_player_prop_edge(
             detail="over_ml/under_ml require a line to be supplied",
         )
 
-    # ---- build prop set (same path as /boxscore) ----
+    # ---- build prop set (same path as /boxscore; SIM-560: a seeded run is cached) ----
     pool = _get_pool(request)
     state = await _resolve_state_or_error(pool, game_pk)
-    factory_ref = resolve_factory_ref(request)
     # SIM-452: this route was one of the five park-blind callers. It resolves now.
-    sim_kwargs = await _resolved_sim_kwargs(request, pool, state, game_pk)
-
+    spec = GameSpec(
+        machine_factory=resolve_factory_ref(request),
+        sim_kwargs=await _resolved_sim_kwargs(request, pool, state, game_pk),
+    )
     pset = await asyncio.to_thread(
         _build_prop_set,
-        factory_ref=factory_ref,
-        base_seed=base_seed,
-        sim_kwargs=sim_kwargs,
+        runner=_build_runner(request),
+        spec=spec,
         n_iterations=n_iterations,
+        base_seed=base_seed,
     )
 
     # ---- look up the requested player + prop ----

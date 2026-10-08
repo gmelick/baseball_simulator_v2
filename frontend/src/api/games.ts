@@ -184,10 +184,20 @@ export interface BoxscoreRow {
   player_id: number
   /** prop_name → mean over the run (e.g. {"K": 6.4} pitcher, {"H": 1.2} batter). */
   means: Record<string, number>
+  /** SIM-560: the player's full name; null when the lookup has none. */
+  name?: string | null
+  /** SIM-560: 'away' or 'home'; null for a player the game does not name. */
+  side?: 'away' | 'home' | null
+  /** SIM-560: the 1-9 batting-order slot; null for a player who does not bat. */
+  lineup_slot?: number | null
+  /** SIM-560: true for each side's starting pitcher. */
+  starting_pitcher?: boolean
 }
 
 export interface BoxscoreCard {
   n_iterations: number
+  /** SIM-560: the run's seed; pass it to fetchPropEdge to read the same run. */
+  base_seed?: number | null
   /** str(player_id) → row. */
   players: Record<string, BoxscoreRow>
 }
@@ -360,10 +370,19 @@ export function postWithOverride(
   )
 }
 
-/** GET /api/games/{game_pk}/boxscore — per-player prop means over N iterations. */
-export function fetchBoxscore(gamePk: number, nIterations?: number): Promise<BoxscoreCard> {
-  const q = nIterations != null ? `?n_iterations=${nIterations}` : ''
-  return getJson<BoxscoreCard>(`/api/games/${gamePk}/boxscore${q}`)
+/** GET /api/games/{game_pk}/boxscore — per-player prop means over N iterations.
+ *  SIM-560: a seeded run is cached, so fetchPropEdge with the same seed and N
+ *  reads the same run. */
+export function fetchBoxscore(
+  gamePk: number,
+  nIterations?: number,
+  baseSeed?: number,
+): Promise<BoxscoreCard> {
+  const params = new URLSearchParams()
+  if (nIterations != null) params.set('n_iterations', String(nIterations))
+  if (baseSeed != null) params.set('base_seed', String(baseSeed))
+  const qs = params.toString()
+  return getJson<BoxscoreCard>(`/api/games/${gamePk}/boxscore${qs ? `?${qs}` : ''}`)
 }
 
 /** GET /api/games/{game_pk}/props/{player_id}/{prop} — full PMF (+ optional

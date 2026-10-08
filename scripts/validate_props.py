@@ -277,8 +277,9 @@ async def _pair_game_props(
 def _collect_game_results(state, n_iter: int, base_seed: int | None) -> list:
     """Replay one already-resolved game N times; return the per-iteration results.
 
-    Uses the SIM-356 ``record_game_plays`` seam (the SAME one ``/api/.../boxscore``
-    uses to materialise per-game boxscores, which ``BatchRunner`` does not retain):
+    Uses the SIM-356 ``record_game_plays`` seam (``/api/.../boxscore`` used it too
+    until SIM-560 moved that route onto ``BatchRunner.run_prop_set``; this script
+    still needs each game's score next to its boxscore, so it replays the games):
     builds the live machine from the production ``factory_ref`` + the resolved
     GameState's sim_kwargs, runs ``simulate_game`` at each derived seed, and
     collects the :class:`GameSimResult` (carrying ``.boxscore`` + the score) per

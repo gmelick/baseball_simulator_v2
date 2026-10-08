@@ -91,7 +91,8 @@ from typing import Any
 
 import numpy as np
 
-from simulation.results import GameSimResult, GameSimSummary
+from simulation.prop_distributions import PropDistributionSet
+from simulation.results import BoxScore, GameSimResult, GameSimSummary
 from simulation.sim_loop import simulate_game
 
 # ---------------------------------------------------------------------------
@@ -103,6 +104,16 @@ from simulation.sim_loop import simulate_game
 #: (spec + base seed + N) is deterministic, so the cache is purely a recompute
 #: dodge for a hot key, not a correctness store.
 SIM_RESULT_TTL_S = 60
+#: Prop-set cache TTL, in seconds (SIM-560).  The game page's projections panel
+#: reads ONE run many times: the means first, then one distribution per prop the
+#: user clicks, then that distribution again for each line typed.  A seeded run is
+#: deterministic, so the set lives 15 minutes, long enough to review a game.
+SIM_PROP_SET_TTL_S = 900
+#: This process's token in the prop-set cache key (SIM-560).  Redis outlives an
+#: app restart, and a restart can bring a new bundle or a flipped flag; neither is
+#: in the key.  A new process draws a new token, so it never reads a set an
+#: earlier process cached.
+_PROP_SET_CACHE_EPOCH = os.urandom(8).hex()
 #: Pool-query cache TTL, in seconds: the read-only play-pool / engine query
 #: results live 5 minutes (they change only on the nightly build).
 POOL_QUERY_TTL_S = 300
@@ -810,6 +821,10 @@ class BatchRunner:
         """
         return repr(("sim", spec.cache_key_fields(), base_seed, int(n)))
 
+    def _prop_set_cache_key(self, spec: GameSpec, base_seed: int | None, n: int) -> str:
+        """Key a prop set on the summary's inputs plus this process's token (SIM-560)."""
+        return repr(("props", _PROP_SET_CACHE_EPOCH, spec.cache_key_fields(), base_seed, int(n)))
+
     def _ensure_shared_published(self) -> dict[str, SharedArrayDescriptor]:
         """Publish the read-only arrays into shared memory ONCE (idempotent).
 
@@ -1040,6 +1055,43 @@ class BatchRunner:
             base_seed=base_seed,
         )
 
+    def run_prop_set(
+        self,
+        spec: GameSpec,
+        *,
+        n_iterations: int = 100,
+        base_seed: int | None = None,
+        use_cache: bool = True,
+    ) -> PropDistributionSet:
+        """Run the batch and return every player's prop distributions (SIM-560).
+
+        The games run exactly as in :meth:`run` (the same per-game seeds, the same
+        worker pool), and the per-game box scores feed
+        :meth:`PropDistributionSet.from_boxscores`.  A game with no box score
+        counts as an empty one, so the denominator stays ``n_iterations``.
+
+        The cache holds a SEEDED set for :data:`SIM_PROP_SET_TTL_S`.  An unseeded
+        call asks for a fresh draw, so it always runs the games.
+        """
+        if n_iterations < 1:
+            raise ValueError(f"n_iterations must be >= 1, got {n_iterations}")
+
+        cacheable = use_cache and base_seed is not None
+        key = self._prop_set_cache_key(spec, base_seed, n_iterations)
+        if cacheable:
+            cached = self.cache.get(key)
+            if cached is not None:
+                return cached
+
+        seeds = [derive_seed(base_seed, i) for i in range(n_iterations)]
+        results = self._execute(spec, seeds, self.resolve_max_workers(n_iterations))
+        prop_set = PropDistributionSet.from_boxscores(
+            [r.boxscore if r.boxscore is not None else BoxScore() for r in results]
+        )
+        if cacheable:
+            self.cache.set(key, prop_set, SIM_PROP_SET_TTL_S)
+        return prop_set
+
     def _execute(
         self, spec: GameSpec, seeds: list[int | None], max_workers: int
     ) -> list[GameSimResult]:
@@ -1147,6 +1199,7 @@ def rng_driven_machine_factory(seed: int | None, spec: GameSpec):
 __all__ = [
     # tuning constants
     "SIM_RESULT_TTL_S",
+    "SIM_PROP_SET_TTL_S",
     "POOL_QUERY_TTL_S",
     "MAX_WORKER_CEILING",
     # worker-count + seed helpers

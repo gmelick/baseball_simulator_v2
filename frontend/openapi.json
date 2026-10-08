@@ -156,6 +156,17 @@
         "additionalProperties": false,
         "description": "Response model for the SIM-366 per-player boxscore-average card.\n\nThe boxscore-card payload for one Monte-Carlo run: every player's prop\n**means** (the 100-iteration boxscore average) keyed\n``str(player_id) -> BoxscoreCardRowModel`` (JSON object keys must be strings).\nBuilt from a :class:`simulation.prop_distributions.PropDistributionSet` via\n:meth:`from_prop_set`, iterating ``by_player`` and reading each\n:attr:`PropDistribution.mean` -- so the card is the means-only projection of\nthe full PMF set (a consumer that needs the full PMF reads the heavier\n:class:`PropDistributionSetModel` instead).  numpy-free.",
         "properties": {
+          "base_seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Seed"
+          },
           "n_iterations": {
             "title": "N Iterations",
             "type": "integer"
@@ -178,6 +189,17 @@
         "additionalProperties": false,
         "description": "One player's row in the SIM-366 boxscore card.\n\nA compact per-player payload exposing that player's prop **means** over a\nMonte-Carlo run -- for a batter the H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means,\nfor a pitcher the K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's\nother lines) -- as a ``{prop_name -> mean}`` map.  Built from a\n:class:`simulation.prop_distributions.PropDistribution` map (one player's\n``by_player`` entry), reading each :attr:`PropDistribution.mean`.  numpy-free\n(plain floats).",
         "properties": {
+          "lineup_slot": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lineup Slot"
+          },
           "means": {
             "additionalProperties": {
               "type": "number"
@@ -185,9 +207,36 @@
             "title": "Means",
             "type": "object"
           },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
           "player_id": {
             "title": "Player Id",
             "type": "integer"
+          },
+          "side": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Side"
+          },
+          "starting_pitcher": {
+            "default": false,
+            "title": "Starting Pitcher",
+            "type": "boolean"
           }
         },
         "required": [
@@ -5489,7 +5538,7 @@
     },
     "/api/games/{game_pk}/boxscore": {
       "get": {
-        "description": "Resolve the game's lineup, run an N-iteration boxscore batch, and return each player's prop MEANS as a boxscore card (SIM-366): for a batter the H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means, for a pitcher the K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's other lines) -- the means-only projection of the run's PropDistributionSet (SIM-329). numpy-free JSON (SIM-350). 503 if no DB pool is attached; 404 if the lineup cannot be resolved.",
+        "description": "Resolve the game's lineup, run an N-iteration boxscore batch, and return each player's prop MEANS as a boxscore card (SIM-366): for a batter the H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means, for a pitcher the K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's other lines) -- the means-only projection of the run's PropDistributionSet (SIM-329). Each row also carries the player's name, side, batting-order slot and starting-pitcher flag (SIM-560). The games run on the worker pool, and a seeded run is cached, so /props with the same seed and N reads this run. numpy-free JSON (SIM-350). 503 if no DB pool is attached or the game's lineup is not yet usable (Retry-After); 404 if the game is unknown.",
         "operationId": "get_game_boxscore_api_games__game_pk__boxscore_get",
         "parameters": [
           {

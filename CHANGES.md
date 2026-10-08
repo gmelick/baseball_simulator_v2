@@ -1,3 +1,105 @@
+# CLOSED — the game page's projections run on the worker pool, every click reads the same run, and the panel names each player and groups the players by team; 100 games take 33–36 s (were about 150 s), a click 0.1 s (was the 100 games again) — SIM-560, 2026-10-08
+
+**Why it matters.** The owner reviews simulated games on the game page. "Load projections"
+took about 2.5 minutes. Each click on a stat ran the 100 games again, another 2.5 minutes,
+and so did each line typed under the chart. The panel sent no seed, so a click drew a fresh
+run, and its distribution did not match the chip the user clicked. The panel listed players
+as ID numbers ("Player 500779"), sorted by ID, with both teams mixed.
+
+**The cause.** Both routes (`/boxscore` and `/props`) built the prop set in
+`_build_prop_set` (`api/routes/games.py`). It replayed the N games one after another inside
+the API process, through the play recorder, which deep-copies the game state on every pitch.
+`/simulate` runs the same games on the worker pool. The worker pool already returns each
+game's box score, so the replay was never needed.
+
+**What was built.**
+
+- **The runner builds the prop set (`simulation/batch_runner.py`).**
+  `BatchRunner.run_prop_set(spec, n_iterations, base_seed, use_cache)` runs the games like
+  `run` (the same per-game seeds, the same worker pool) and feeds the per-game box scores to
+  `PropDistributionSet.from_boxscores`. It caches a seeded set for `SIM_PROP_SET_TTL_S`
+  (900 s) under its own key. An unseeded call asks for a fresh draw, so it always runs the
+  games.
+- **Both routes use it.** `_build_prop_set(runner, spec, n_iterations, base_seed)` calls the
+  app's shared runner. A `/props` call with the card's seed and N reads the cached run.
+- **Each row says who the player is.** The card rows carry `name` (from `raw.players`),
+  `side` ('away' / 'home'), `lineup_slot` (1–9) and `starting_pitcher`; the card carries
+  `base_seed`. `_player_tags` reads the side, slot and role from the sim kwargs: the two
+  batting orders, the two starters and each side's pen. `_player_names` is best-effort: a
+  failed lookup leaves the names empty and never fails the card. All new fields are
+  optional, so older callers read the card unchanged.
+- **The panel (`frontend/src/components/games/BoxscorePanel.tsx`).** One random seed per
+  load, sent with every distribution request. One section per team: batters in batting
+  order, then pitchers, starter first and relievers by projected outs. Names replace the
+  ID numbers, and three codes read as box-score labels (`H_ALLOWED` → H, `OUTS` → Outs,
+  `HRR` → H+R+RBI). `GamePage` passes the two team names.
+- **The API mirror.** `frontend/openapi.json` gets the two card schemas and the `/boxscore`
+  path from the live API, and `npm run gen:api` regenerates `schema.d.ts`. The snapshot
+  already differed from the live API in four other schemas (`AuthStatusResponse`,
+  `GameCardAggregateResponse`, `RosterOverride`, `SubstitutionSlot`). This change leaves
+  them for a full regenerate.
+- **Docs.** `docs/technical/api.md` (the card, the two routes, three new helper rows);
+  `docs/technical/simulation.md` (`BatchRunner.run_prop_set`).
+
+**The evidence.**
+
+- **The numbers did not move.** Before the change, I captured `/boxscore` and `/props` from
+  the running app for game 744834 (Mets at Nationals, 2024-07-04) at seed 123, 10 games.
+  After the change and an app restart, the same requests matched: all 34 players' means were
+  identical, and the starter's strikeout distribution (support, probabilities, mean, median,
+  spread, over/under at 4.5) was identical. A unit test makes the same check on synthetic
+  games, and a second test checks that two workers give the same set as one.
+- **The time.**
+
+  | Request (game 744834, live app, 6 workers) | Before | After |
+  |---|---|---|
+  | Load projections, 100 games | ≈ 150 s | 33–36 s |
+  | Click a stat, 100 games | ≈ 150 s (a fresh run) | 0.13 s (the cached run) |
+  | `/boxscore`, 10 games, seed 123 | 13.1 s | 9.1 s (first request after the restart) |
+  | `/props`, 10 games, seed 123 | 12.3 s | 0.11 s |
+
+- **The page.** In the browser: the panel shows the Mets and the Nationals in batting order
+  with names, then each pitching staff, starter first. A click on Jose Quintana's K chip
+  (4.27) opened his distribution with mean 4.27, and the line 4.5 read P(over) 46%. Both
+  distribution requests carried the card's seed. The console shows no new errors; the
+  503s are the linescore and play-by-play panels, whose replay store is off.
+
+**The gates.**
+
+| Gate | Result |
+|---|---|
+| Unit lane, the app image (current `tests/`, `scripts/`, `betting/`, `pyproject.toml` mounted) | 5,475 passed, 4 skipped, 19 failed: every failure reads a file the container does not mount (`CLAUDE.md`, `WORKFLOW.md`, `docs/`, `docker-compose.yml`, `deploy/`) from the 2026-09-29 image |
+| Those 19 tests' four files, host Python, the current files | 65 passed, 0 failed |
+| The touched files after the review fixes, host Python 3.13 (`test_sim560_projections_pool.py` 19, the SIM-366 card, the games API, the warm pool) | 106 passed |
+| `ruff check .` / `ruff format --check .` | clean |
+| `mypy similarity/ pipeline/ api/` | no issues in 62 files |
+| Frontend `npm run type-check` / `npm run lint` | clean |
+
+**The independent review** (a separate agent, read-only; 175 tests on host Python). It found
+no defect in the numbers: the loop never reads a play's recorded state, so the old replay and
+the pool give the same games by construction. It found one gap and two risks, now fixed:
+
+- **Placeholder relievers had no team.** A scheduled game has no pen in the box (only the
+  historical loader writes `raw.game_bullpen`), so the factory pitches six placeholder arms
+  per side with negative ids built from the starter's id. They landed in "Other players" as
+  "Player -9…". `_player_tags` now tags them from the factory's own builder
+  (`_placeholder_pens`), and `_placeholder_names` labels them "Generic reliever 1" to "6".
+- **A restart could read an old process's set.** Redis outlives an app restart, and a
+  restart can bring a new bundle or a flipped flag, which the key does not carry. The key now
+  carries a token each process draws at start (`_PROP_SET_CACHE_EPOCH`).
+- **Tests could write to a live Redis.** The new route tests give each app an in-memory cache.
+- **A stale docstring.** `scripts/validate_props.py` said `/boxscore` uses `record_game_plays`.
+
+Two risks stay, both older than this change. A request with N below the worker count makes
+the runner rebuild its pool, which can fail a `/simulate` running at the same moment; the
+panel always sends 100. Two identical seeded requests at the same moment both run the games.
+
+**Not changed.** The distribution still opens below both teams' lists, so a click near the
+top needs a scroll; showing it under the clicked row would read better. The linescore and
+play-by-play panels stay empty: the API's replay store is off on purpose, a separate piece of
+work. A cached set lives 15 minutes, so a bundle rebuilt in that window serves the old set
+until it expires.
+
 # CLOSED — every out goes on a pitcher's line: one writer at the place the out is recorded, the outs played on the game result, each play names its own pitcher for the win module, batters faced on the box line; the smoke reads the credited outs equal to the outs played in all 500 game-sims and no play changed — SIM-557, 2026-10-07
 
 **Why it matters.** A pitcher's outs on the simulated box score are his innings pitched and
