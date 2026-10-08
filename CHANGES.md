@@ -121,6 +121,19 @@ The rule is in `CLAUDE.md` §7 (with a pointer in §15).
   (SIM-445, `claude/dazzling-wilson-6f4f84`) and a stale draft of the run-line rescore (SIM-549,
   `worktree-wf_4b916679-d22-3`). Each waits on an owner decision: commit or discard.
 
+**Second pass, the same day (owner decisions).**
+- The owner archived the three finished sessions. Their folders and branches are deleted. The
+  foul-tip session's folder held one ignored file, the SIM-553 rebuild log; it is copied to
+  `scripts/sim553_rebuild.log` in the main checkout (still ignored, not committed).
+- `wave1-remediation` is deleted, not tagged: a separate refactoring ticket covers what it tried
+  to do. Its tip was `a21308a`, recoverable from the reflog for about 90 days.
+- The steal-weight finding (SIM-556) and the crash-class record (SIM-445) are committed; see the
+  two entries above. The crash session's code sweep is dropped.
+- Left as they are: the pitcher-outs design (SIM-557) in the `sim554` worktree, by owner
+  decision. The steal-weight and crash sessions still own their branches and folders, which
+  hold the old uncommitted copies; they go when those sessions are archived. The run-line draft
+  waits for the owner's approval to discard it, because the discard deletes files permanently.
+
 
 # CLOSED — every game gets its real starting pitcher on both sides: the lane on the fixed code moved no band, the row deleted — SIM-558, 2026-10-07
 
