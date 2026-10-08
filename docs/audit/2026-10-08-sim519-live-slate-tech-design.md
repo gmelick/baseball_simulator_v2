@@ -3,6 +3,7 @@
 > **STATUS 2026-10-08 — PROPOSED, not built.** This document is the technical design for the
 > live-slate epic (SIM-519, P2 in `BACKLOG.xlsx`). It has eight parts, each closable on its own.
 > Seven decisions wait for the owner (§16). Nothing in this document changes production.
+> The readable page is https://claude.ai/artifact/6McDv3bmQBxoRZZ3QS5NCQ.
 >
 > **What the owner ruled on 2026-08-29.** The day slate is schedule-driven: Major League
 > Baseball's own public schedule says which games exist, when they start and what state they
