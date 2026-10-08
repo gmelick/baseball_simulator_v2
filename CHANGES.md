@@ -1,3 +1,36 @@
+# Design — the twelve segment and team markets on the edge endpoint and the betting card, and a closing row for every live game: PROPOSED, five owner decisions open — SIM-546, 2026-10-08
+
+**Why it matters.** The odds tables hold every game market the book posts and the accuracy
+comparison grades all fifteen, but the edge endpoint and the game page still price three: the
+cache keeps each simulated game's final score and nothing per inning, so the pricing code for
+the other twelve has no input on the request path. And a live game never gets a closing row:
+the step that marks one has no caller in production and promotes one row per game across every
+market and book. So the live edge, line-movement and CLV pages see only current prices.
+
+**What is proposed** (`docs/audit/2026-10-08-sim546-segment-markets-and-closing-prices-tech-design.md`).
+(A) The loop writes each team's runs per inning onto the per-game result at each half-inning
+roll, from the score delta; the summary carries the cells per iteration through the cache. No
+play is recorded and no draw changes. (B) The edge and signal endpoints price all fifteen
+markets from one market table driven by the vocabulary: a two-way market through the existing
+builders, the first-inning and first-five moneylines through a new three-way builder with the
+three-way de-vig, prices from the stored rows else the mock. (C) The betting card renders the
+markets the response carries, in vocabulary order, with names the API supplies. (D) The closing
+marker is rewritten: per (market, book) it promotes the latest pre-pitch row through the load
+guard's closing-stamp rule, idempotent on a restart, and rewrites the row's dedup hash so the
+historical loader's identical closing row deduplicates against it; the schedule poll calls it
+the first time it sees a game Live; a separate nightly scheduler job runs the loader's closing
+pass over the previous day's games as the fallback and the reconciliation. Twenty-two unit
+tests are specified; no acceptance lane is needed (no channel moves).
+
+**Open for the owner** (the design's §10): the grid from the loop rather than a recorder; no
+injected prices for the twelve markets; the pre-game odds cadence tightened to 60 seconds inside
+15 minutes of the start; the bet-signal gate firing on the twelve; the nightly pass as its own
+scheduler job. **Known limits** (§9): the segment moneylines and every total read the raw
+simulated frequency (the full-game moneyline alone is calibrated); a delayed game's closing row
+can predate the delay (the guard's standing definition); the vendor's later snapshot can add a
+second closing row per (market, book), which the readers resolve by the latest fetch. The
+line-movement and CLV pages for the twelve markets are a follow-on. Nothing is built.
+
 # CLOSED — every out goes on a pitcher's line: one writer at the place the out is recorded, the outs played on the game result, each play names its own pitcher for the win module, batters faced on the box line; the smoke reads the credited outs equal to the outs played in all 500 game-sims and no play changed — SIM-557, 2026-10-07
 
 **Why it matters.** A pitcher's outs on the simulated box score are his innings pitched and
