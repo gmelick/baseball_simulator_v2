@@ -1926,11 +1926,12 @@ _ENGINE_LOADER = _default_actor_engine_loader
 
 
 def _key_of(result, key_attrs: tuple[str, ...]) -> str:
-    # A list comprehension, not a generator expression: the interpreter (3.13.15)
-    # segfaults inside a ``str.join(genexpr)`` after ~1.3 million evaluations —
-    # the SIM-445 crash class — and the steal-runner matrix makes 6.7 million
-    # of them since SIM-531 widened the driver to every runner with a chance
-    # (reproduced 3/3 on 2026-09-16; the comprehension form runs clean).
+    # A list comprehension, not ``str.join(<generator>)``. The steal-runner
+    # matrix build (6.7 million calls since SIM-531) segfaulted three times out
+    # of three inside the generator on 2026-09-16 and ran clean in this form.
+    # The same generator form then ran clean 8 of 8 that evening, so the fault
+    # is stochastic (the SIM-445 crash class). This form is a precaution, not a
+    # proven fix (scripts/genexpr_crash_probe.py).
     return ":".join([str(getattr(result, a)) for a in key_attrs])
 
 

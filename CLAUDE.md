@@ -634,6 +634,21 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
     --write-calibration`), and the app applies both at boot. SIM-432 was the schema-reconciliation
     that unblocked it (see §2 top bullet + §11). *(The earlier "scripts never run / identity
     calibration" wording here described the pre-2026-06-01 state.)*
+- **The stochastic segfault (the SIM-445 crash class), as known on 2026-09-16.** A process in
+  the app image dies now and then with `Fatal Python error: Segmentation fault` (exit 139). It
+  dies at a random point in plain Python code. Known sites: the ETL sweep of 2026-07 (closed by
+  the HTTP-transport swap, SIM-446), the container unit lane (a rerun passes), the batter
+  actor-matrix build (2026-09-13) and the steal-runner matrix build (three of three on
+  2026-09-16, inside a generator expression that `str.join` pulled item by item). That build
+  passed once `_key_of` took a list comprehension. **The shape is NOT the trigger.** The same
+  evening the original reproduction ran clean eight times out of eight, and every synthetic
+  shape ran clean over 6.7 million evaluations (`scripts/genexpr_crash_probe.py`; the record is
+  `CHANGES.md`, 2026-09-16). A sweep that rewrote the other hot-path generators was written
+  and NOT landed (owner decision 2026-10-07): it fixes nothing proven. The one pattern in the
+  record: the crashes cluster on rebuild days, minutes after a DuckDB write, on a file that
+  later reads clean. Treat a segfault as a retry, not a failure. On the day it recurs, run the
+  probe first: it tells you whether the shape matters that day. The root cause is open, and
+  no ticket tracks it (the ETL tickets SIM-445/446 are closed).
 - Canonical git repo: this directory. Primary shell: **Windows Command Prompt (cmd.exe)**;
   development + tests run through Docker (`docker compose run --rm app ...`).
 

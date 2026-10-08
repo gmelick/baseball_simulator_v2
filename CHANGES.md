@@ -1,3 +1,75 @@
+# Sim — the stochastic segfault (the SIM-445 crash class): the generator-expression shape is NOT the trigger — the original reproduction ran clean 8 of 8 the same evening; a probe re-tests it on the day it recurs; the hot-path sweep was written and NOT landed — 2026-09-16, committed 2026-10-07
+
+> **Committed 2026-10-07, three weeks late.** The session of 2026-09-16 left this record, the
+> probe and a code sweep uncommitted in a worktree. The owner landed the record and the probe,
+> and dropped the sweep: it fixes nothing proven. The record below says so where it describes
+> the sweep. The only code change is the `_key_of` comment, which named the disproven cause.
+
+**What was asked.** The SIM-531 run book of 2026-09-16 found the steal-runner
+score-matrix build segfaulting three times out of three inside
+`pipeline/batch/engine_artifacts._key_of`, a `str.join` over a GENERATOR EXPRESSION (the
+lazy `(... for a in key_attrs)` that a C builtin pulls one item at a time), called 6.7
+million times; the build passed once the join took a LIST COMPREHENSION (the eager
+`[... for a in key_attrs]`, which the compiler inlines so no generator object exists). The
+task: sweep the hot paths for the same shape, write a database-free reproduction, run the
+unit lane three times, and update the record.
+
+**The finding: the shape is not what decides a crash.** I ran the workload that crashed,
+on the same image (CPython 3.13.15, numpy 2.5.3, DuckDB 1.5.5):
+
+- the ORIGINAL reproduction — the live steal engine over the live DuckDB, every profile
+  against every other, the generator form of `_key_of` — ran clean **8 of 8** (four on the
+  committed engine, three on the SIM-531 engine that had crashed, one through the probe's
+  `--engine` mode), 6,679,640 results each — and the batter matrix, the 2026-09-13 crash
+  site, ran clean once more that night in another session (`--matrix batter`, 1,807
+  profiles, the committed generator form);
+- every synthetic shape ran clean over 6,679,640 evaluations: `str.join`, `sum`, `tuple`
+  and `any` over one short generator per result (the shapes the sweep rewrote), their
+  replacements, and one long generator pulled by `sum` and by `np.fromiter` (the
+  pool-column shape).
+
+The DuckDB file was the same bytes at the crashes and at the passes (its modification
+time is the recompute's, 00:04 UTC; the app booted at 01:06 without writing), so the
+file's content is not the condition either. The one pattern the record holds: the crashes
+cluster on rebuild days, minutes after a DuckDB write — the full actor build on the batter
+engine on 2026-09-13, three steal-runner builds in two minutes and the standalone probe on
+2026-09-16 — and the same workload passes on a quiet day. The ETL crash of 2026-07 sits
+in `_build_row_dict`, which has no generator shape at all (checked at its July revision
+too). **The root cause stays open.**
+
+**The sweep — written, NOT landed.** The session rewrote the per-pitch, per-play and
+per-ball-in-play generators that a C builtin pulls: `simulation/filter_cells.score_band`,
+`simulation/game_state.Bases.runner_ids`, `simulation/full_pool_sampler._fielder_matrices_on`
+and `_f_born_similarity`, `simulation/pitcher_decisions.decisions_from_plays`,
+`simulation/game_market_distributions._segment_runs` and the two totals in
+`simulation/linescore.linescore_from_plays`. Each rewrite was checked against its old
+expression. The owner dropped all of them on 2026-10-07: they save one heap allocation per
+call and fix nothing proven. `_key_of` keeps the list form it took in the SIM-531 build fix;
+only its comment changed, to say the form is a precaution. Revisit the sweep only if the
+probe shows, on a day the fault recurs, that the shape matters.
+
+**The probe.** `scripts/genexpr_crash_probe.py` runs each shape in its own subprocess and
+prints one line per shape (exit code, how far it got). It builds both the generator form
+(OLD) and the rewritten form (NEW) of each shape itself, so it does not depend on the sweep.
+Synthetic mode needs no database (the six-field result object is rebuilt in the script);
+`--engine /data/baseball_sim.duckdb` runs the original reproduction. Exit 0 unless a NEW
+shape crashes. Run it on the day the fault recurs: old shapes crash and new ones pass → the
+shape matters that day; both crash → it does not.
+
+**The unit lane, three runs in the container, on the sweep's code** (`pytest tests/unit/ -q
+-p no:cacheprovider --timeout=120`, one container at a time): **3,852 passed, 3 skipped, 8
+failed, no segfault, every time** (8 min 15 s, 8 min 5 s, 6 min 39 s). The eight failures
+are the same eight each run and are file-not-found: `test_docs_alembic_head` reads
+`WORKFLOW.md`, `CLAUDE.md` and `docs/technical/pipeline-betting-db.md`, and
+`test_metrics_sim374` reads `deploy/monitoring/*`; none of those paths is baked into the
+image or mounted by the compose file, so they fail in any container run of the lane (mount
+them to make the lane green).
+
+**The record.** `CLAUDE.md` §2a carries the class: what is known, the retry rule and the
+probe. The SIM-531 entry calls the shape "the first reproducible lead on the crash class";
+it did not hold up, and that wording stands as history. No ticket tracks the root cause.
+
+
 # COMMITTED — the steal-weight finding: the look-alike weights cut steal attempts about 20%, and a balance weight fixes it; the finding, the probe and its tests reach `master` — SIM-556, written 2026-09-30, committed 2026-10-07
 
 **Why it matters.** The steal draw gives too few steal attempts: the lane reads steal attempts at
