@@ -271,7 +271,8 @@ standing owner rulings that govern all new work:
   and no manager weight. An outcome resolves at once. A pickoff that makes the third out
   ends the half-inning with no pitch thrown: the result reads `pitch_outcome = NO_PITCH` and
   `pa_voided = "pickoff_third_out"`, no pitch, event or plate appearance is credited (the
-  out counts for the pitcher; a picked-off caught stealing charges the runner a CS), and the
+  ledger credits the out to the pitcher when it records it, SIM-557; a picked-off caught
+  stealing charges the runner a CS), and the
   same batter leads off his team's next inning. Every reader of a per-pitch result must skip a no-pitch result
   (`PlayResult.no_pitch`). (2) The pitch and (3) its result, as before, on the bases the
   pickoff left. (4) The steal draw, AFTER the result, among real pitches of the same base,
@@ -313,6 +314,14 @@ standing owner rulings that govern all new work:
   refuses an un-migrated table before it deletes anything (`_require_steal_pool_0031`). The
   plan (version 3, §13 the build and run record):
   `docs/audit/2026-09-29-sim554-running-game-on-the-pitch-plan.md`.
+- **Every out on a pitcher's line (SIM-557, CLOSED 2026-10-07).** A caught stealing or a
+  pickoff out on a pitch that does not end the plate appearance reached no pitcher's line
+  (0.32 outs a game). The ledger (`_record_outs`) is now the ONE writer of a pitcher's outs.
+  `GameSimResult.outs_played` counts the outs played; a unit test and the smoke's gate
+  (`scripts/sim_stats.py` exits 1) hold the pitchers' outs equal to it. Each play result names
+  its own pitcher and side (`PlayResult.pitcher_id`, `fielding_team`) for the win module; the
+  box line counts batters faced (`bf`). The 10 × 50 smoke: credited outs 52.94 → 53.25 a game,
+  equal to the outs played in all 500 (125 differed before); no play changed.
 - **The pool window (2026-08-20):** the last three COMPLETED seasons plus the current one
   (`RECENCY_FLOOR_SEASONS = 4`; full 2023-2026 today). Schema v20 and `POOL_BUILDER_VERSION`
   sim515.1 then; v31 and sim554.1 since the running game on the pitch (SIM-554).

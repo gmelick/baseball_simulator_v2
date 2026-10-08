@@ -725,9 +725,16 @@ class TestThePickoffChannel:
         assert result.pickoff_out and not result.steal_attempted
         assert result.steal_outcome is None
         assert s.bases.first is None
-        # An out, NOT a caught stealing: no box credit of any kind was
-        # written, so the lazy boxscore was never even created.
-        assert m.boxscore is None
+        # An out, NOT a caught stealing: the runner gets no box line and no
+        # CS. SIM-557: the out itself is the pitcher's, so the box holds one
+        # line, the pitcher's, with this one out and nothing else.
+        assert m.boxscore is not None
+        assert 11 not in m.boxscore.lines
+        assert s.pitcher_id is not None
+        assert set(m.boxscore.lines) == {int(s.pitcher_id)}
+        pit = m.boxscore.lines[int(s.pitcher_id)]
+        assert pit.outs_recorded == 1
+        assert (pit.cs, pit.bf, pit.k, pit.bb) == (0, 0, 0, 0)
 
     def test_an_advancing_pickoff_out_is_charged_as_a_cs(self):
         m = _machine_with_fp(_FakeStealFP((False, False, True, True, False)))

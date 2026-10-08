@@ -1,3 +1,197 @@
+# CLOSED — every out goes on a pitcher's line: one writer at the place the out is recorded, the outs played on the game result, each play names its own pitcher for the win module, batters faced on the box line; the smoke reads the credited outs equal to the outs played in all 500 game-sims and no play changed — SIM-557, 2026-10-07
+
+**Why it matters.** A pitcher's outs on the simulated box score are his innings pitched and
+the number the pitcher-outs prop pays on. Before this change, a caught stealing or a pickoff
+out on a pitch that did not end the plate appearance reached no pitcher's line: about 0.3 outs
+a game, and 9.3% of starts were short at least one out. That moved "over 14.5 outs" from 66.3%
+to 64.1% on the design's probe. The win module had a second defect: it gave the last out of
+each half-inning to the other side's pitcher, so the win went to the wrong pitcher in about 4%
+of decided games. Both are fixed. No play changes: every seeded game plays the same pitches.
+
+**What was built** (the plan's §5; `docs/audit/2026-10-04-sim557-pitcher-outs-credit-plan.md`).
+
+- **The one writer (§5.1).** `StateMachine._record_outs` (`simulation/sim_loop.py`) credits
+  every out it records to `state.pitcher_id`, before the half-inning rolls. A caught stealing
+  or a pickoff out on any pitch gets the same credit as any other out.
+- **The two old writers go (§5.2).** `_accumulate_pa` no longer adds the outs; its local
+  `outs` stays for the earned-run rule. The no-pitch return of the running game on the pitch
+  (SIM-554) no longer credits the pickoff's out; its comment says the ledger credited it.
+- **The outs played (§5.3).** `GameSimResult.outs_played: int = 0`. `simulate_game` adds each
+  step's `outs_recorded`, so the field is the play stream's own count.
+- **The play names its pitcher (§5.4).** `PlayResult.pitcher_id` and `PlayResult.fielding_team`.
+  `step_pitch` sets both after the manager's hooks, so a reliever who enters on this pitch is
+  the one named; the intentional walk sets them too. `decisions_from_plays`
+  (`simulation/pitcher_decisions.py`) reads them for the pitcher of record and for the
+  starter's out count. A play without them reads the next state, as before.
+- **Batters faced and the pitcher list (§5.5).** `PlayerStatLine.bf`: one batter faced on every
+  completed plate appearance, the intentional walk included. `BoxScore.pitchers` lists a line
+  with an out or a batter faced (K / BB / ER stay in the test). The prop builder's "did he
+  pitch" test (`PropDistributionSet.from_boxscores`) gains the same field. The API does not
+  serve `bf`.
+- **The smoke's gate (§5.6).** `scripts/sim_stats.py`: each game summary carries the pitchers'
+  outs (`p_outs`) and `outs_played`. `outs_credit_check` returns the credited and played outs
+  a game and the count of game-sims where they differ. The report prints one line; the JSON
+  record carries the three numbers. The script exits 1 when the two counts differ, and names
+  up to five such game-sims by game and seed. This is the script's one gate; its other reads
+  stay reads. On a simulator that predates the outs count, the line reads "played: not
+  available".
+- **The docs (§5.7).** The cheat sheet's credits list; `docs/technical/simulation.md` (the
+  rows of `step_pitch`, `_record_outs`, `_accumulate_pa`, `PlayerStatLine` / `BoxScore.pitchers`,
+  `simulate_game`, `PlayResult`, `decisions_from_plays`, `from_boxscores`); `CLAUDE.md` (the
+  running-game bullet's credit clause, and a new bullet); the plan's build record (§12).
+- **Tests.** 78 collected in four new files (some parametrized; the plan's §7 listed thirty):
+  `test_sim557_pitcher_outs_credit.py` (20: every path of an out, the
+  one-writer source check, the list), `test_sim557_outs_identity.py` (18: the identity on
+  synthetic games with steals and pickoffs), `test_sim557_play_pitcher_decisions.py` (24: the
+  play's own pitcher and the win module), `test_sim557_smoke_gate.py` (16: the gate). One
+  existing test changed: `test_sim474_steal_draw.py` asserted that a pickoff out made no box
+  line; the out is now the pitcher's, so the test asserts one line, his, with one out.
+
+**The gates.**
+
+| Gate | Result |
+|---|---|
+| Unit lane, the app image (FastAPI 0.115.14 / Starlette 0.41.3, the worktree mounted) | 5,502 passed, 2 skipped, 0 failed |
+| The four new files and the steal-draw suite, host Python 3.13 | 116 passed, 0 failed |
+| Regression lane (`tests/regression`) | 33 passed |
+| Band arithmetic (`tests/acceptance/test_band_arithmetic_sim450.py`) | 58 passed |
+| `ruff check` / `ruff format --check` | clean / 443 files formatted |
+| `mypy similarity/ pipeline/ api/` | no issues in 62 files |
+
+The full unit lane does not run on host Python. The host has Starlette 1.6.0, and
+`requirements.txt` pins `starlette>=0.41,<0.42`. 109 tests fail at `APIRouter()` on import of
+`api/routes/games.py` and `pipeline/live/live_ingestion_pipeline.py`; this build touches
+neither file. One more, the 30-worker stress test of `test_qa_sim347.py`, fails on the host
+when the Windows spawn workers fail to import numpy. All of them pass in the image. I did not
+change the host environment.
+
+**The review.** An independent review found eight defects; all eight were confirmed and fixed.
+
+- A batter faced was credited on a plate appearance that a third out on the bases cut short.
+  This happens only in the single pre-pitch steal draw (`SIM_STEAL_PITCH_CLASS=0`, not
+  production). The batter's at-bat and the loop's own count have the same flaw, so the fix
+  of all three needs its own ticket. The code now says so at the write.
+- Four findings were on the win module's new starter fallback. The fix made the away side's
+  starter its pitcher of record before he fields a play. That changed the result of an old
+  stream without the two fields (the away side leading for good from the top of the 1st). The
+  fallback now runs only on a stream whose plays name their sides, so an old stream reads
+  exactly as before.
+- Three findings were on the tests and the gate. The test that compares the module's count
+  with the box line did not call the win module. No test isolated the prop builder's
+  batters-faced clause. No test checked that `_game_summary` writes the two keys the gate
+  reads. And the gate's failure did not name the game-sim that differs. Each now has its
+  test, and the gate names up to five game-sims by game and seed.
+
+**The smokes side by side** (`scripts/sim_stats.py`, ten games × 50, seeds 0–49; before =
+master a51ba87, after = this worktree; both mounted the worktree's `scripts/` and `pipeline/`,
+which has no diff against master).
+
+| metric | before (master a51ba87) | after (the worktree) |
+|---|---|---|
+| batting and scoring values compared (500 game-sims × 19 keys) | 9,500 | 9,500, all equal |
+| aggregate means compared | 21 | 21, all equal |
+| R a team-game | 4.58 | 4.58 |
+| pitcher outs credited a game-sim | 52.94 | 53.25 |
+| outs played a game-sim | not available (the simulator predates the outs count) | 53.25 |
+| game-sims where credited and played outs differ | 125 of 500 (against the after run's played outs) | 0 |
+| outs gate (exit code) | not available, exit 0 | 0 mismatches, exit 0 |
+| elapsed | 520.6 s | 515.6 s |
+
+The credited outs rose by 0.304 a game-sim (by game, +0.10 to +0.44), against the design's
+0.32 on the balanced set. Apart from the outs-check line, the elapsed time and the "wrote"
+line, the two console logs are identical line for line: the per-game runs, hits, home runs,
+walks and strikeouts, the per-team means, the home-field read and the fence counters. No play
+changed.
+
+**Not done.**
+- The merge, the app restart and the one n=100 `/simulate` read (the run book's step 4) wait
+  for the merge. `simulation/` is mounted, so a `docker compose restart app` after the merge
+  puts the code in production.
+- The batter-faced flaw of the single pre-pitch draw (above) is not filed.
+- The stored accuracy baselines read the pitcher-outs rows about 0.1 outs a start higher on
+  the next run; no calibration map is fitted on that market.
+
+**The state.** The row is deleted from `BACKLOG.xlsx`; the subtitle still reads
+SIM-560 as the next free ID. Uncommitted in the worktree on branch
+`sim557-pitcher-outs-credit`; the orchestrator commits.
+
+# Design — every out goes on a pitcher's line: all three decisions TAKEN, the design is ready to build — SIM-557, 2026-10-07
+
+**The decision.** The owner, 2026-10-07: "Go with your recommendations for all the open items."
+
+1. **Where the credit is written:** in `_record_outs`, the one place an out is recorded; the two
+   existing writers (`_accumulate_pa`, the no-pitch return of SIM-554) are removed.
+2. **The win module's count:** fixed in this ticket. Every play result names its pitcher and its
+   fielding side (`PlayResult.pitcher_id`, `PlayResult.fielding_team`), and `decisions_from_plays`
+   reads them for the out count and for the pitcher of record. A play without them reads as
+   today.
+3. **The pitcher list:** `PlayerStatLine.bf` (batters faced); `BoxScore.pitchers` and the prop
+   builder list a pitcher with an out or a batter faced.
+
+**The record.** The plan (`docs/audit/2026-10-04-sim557-pitcher-outs-credit-plan.md`): the status
+block, §0, §2.7, §10 and a new §11. The page (https://claude.ai/artifact/CGxPvHoJH84yKdtoukBcjL):
+the same. The game with no away starter that the design found (§2.7) was filed and closed by
+another session as SIM-558 on 2026-10-07.
+
+**Nothing built by this entry.** The build is the plan's §5 (thirty tests, §7; the run book, §8).
+
+# Design — every out goes on a pitcher's line: the caught stealing and the pickoff that do not end the plate appearance; one writer at the place the out is recorded; PROPOSED with three owner decisions — SIM-557, 2026-10-04
+
+**Why it matters.** A pitcher's outs on the simulated box score are his innings pitched and the
+number the pitcher-outs prop pays on. The simulator records every out, and it credits one to a
+pitcher only when a pitch ends the plate appearance (a walk, a strikeout, a hit by pitch, a ball
+in play). A caught stealing or a pickoff out on any other pitch never reaches a pitcher's line.
+
+**The measurement** (three read-only probes on the production bundle, the 45 games of the
+balanced certifying set, 2026-10-04; they wrap three methods and change no play).
+
+| | |
+|---|---|
+| Outs played, 1,800 game-simulations | 95,813 (53.23 a game; the official box holds 53.2) |
+| Outs not credited to a pitcher | 575: 0.32 a game, 0.60% |
+| a caught stealing, not the third out / the third out | 271 / 177 |
+| a pickoff out before a pitch that does not end the plate appearance | 127 |
+| A starter's box line, short by | 0.10 outs a start; 9.3% of starts miss an out |
+| "Over 14.5 outs" / "over 17.5 outs", all starts | 64.1% → 66.3% / 31.0% → 32.9% |
+
+Real games hold about 0.43 such outs a game (the official caught stealings, the pickoff outs of
+the play records, less the strikeout-and-caught-stealing double plays). The shift is largest
+just under 15 and 18 outs, because 63% of starts end on an inning boundary.
+
+**The design** (`docs/audit/2026-10-04-sim557-pitcher-outs-credit-plan.md`; the page
+https://claude.ai/artifact/CGxPvHoJH84yKdtoukBcjL).
+Credit the out in `_record_outs`, the one place an out is recorded, and remove the two existing
+writers (`_accumulate_pa` and the no-pitch return of SIM-554). One writer covers every exit of a
+pitch and cannot double count. The game result gains `outs_played`; a test holds the pitchers'
+outs equal to it on full games, and the ten-game smoke exits 1 when they differ. No play
+changes: every seeded game plays the same pitches. No data change, no flag, no lane. Thirty
+tests.
+
+**Two defects found by reading every reader of the outs.**
+
+- **The win module miscounts a starter's outs.** `decisions_from_plays` gives each play's outs
+  to the pitcher named by the play's next state; the play that ends a half-inning has a next
+  state in the other half. Its count of the winning starter's outs differs from the truth in
+  298 of 538 decided games, and with the count and the pitcher of record corrected the win goes
+  to another pitcher in 36 of 897 decided games (4.0%). The module's tests build plays by hand
+  in their own half, so they pass.
+- **The box score's pitcher list leaves out a reliever who retires nobody** and allows no
+  strikeout, walk or earned run: 25 relievers in 1,800 game-simulations (real play: 1 in 93
+  games).
+
+**The three decisions.** (1) Where the credit is written: at the recorder (recommended), or a
+credit on each of the two uncovered exits (the backlog row's proposal; four writers). (2) The
+win module: fix it here through two new fields on the play result, its pitcher and its fielding
+side (recommended), or file it. (3) The pitcher list: a batters-faced count on the box line
+(recommended), or leave it.
+
+**Found outside the ticket.** Game 823372 of the balanced set resolves with no away starter, and
+the home starter pitches for both sides in every simulation of it; the real away starter was a
+two-way player who also batted. Flagged as a separate task, not filed. 3 of 900
+game-simulations end tied at the 12-inning cap.
+
+**Nothing built by this entry.** The plan and this entry are uncommitted in the worktree.
+
 # Sim — the stochastic segfault (the SIM-445 crash class): the generator-expression shape is NOT the trigger — the original reproduction ran clean 8 of 8 the same evening; a probe re-tests it on the day it recurs; the hot-path sweep was written and NOT landed — 2026-09-16, committed 2026-10-07
 
 > **Committed 2026-10-07, three weeks late.** The session of 2026-09-16 left this record, the

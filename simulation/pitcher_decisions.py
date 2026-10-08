@@ -30,6 +30,15 @@ substitution shows up naturally as a changed ``pitcher_id`` on a later play for
 the same fielding side (``sim_loop`` sets ``state.pitcher_id = new_arm`` on a
 bullpen move, line ~2120).
 
+The next state has one flaw: on the play that ends a half-inning, it already
+shows the NEXT half. Its ``half`` names the other fielding side, and its
+``pitcher_id`` names the other side's pitcher. Read alone, it gives the last out
+of each half to the wrong pitcher. So since SIM-557 each play result names its
+own pitcher (``PlayResult.pitcher_id``) and his side
+(``PlayResult.fielding_team``). The module reads those two fields first, for the
+pitcher of record and for the out count of the starter rule below. A play
+without the two fields (a hand-built stream) reads the next state, as before.
+
 ATTRIBUTION RULES IMPLEMENTED
 =============================
 We track, after each play, the running score (from ``next_state``), which team
@@ -47,7 +56,12 @@ empty stream).
   the moment the decisive lead-taking run scored*.  Because the lead-taking run
   is scored by the offense against the losing team, the winning team's pitcher
   of record at that instant is the one carried from its most recent fielding
-  play (its half-inning).
+  play (its half-inning). A side that has fielded no play yet has its first
+  pitcher (its starter) on record: the away side can take the lead for good
+  in the top of the 1st, before its starter throws a pitch (SIM-557). The
+  module applies this rule only to a stream whose plays name their fielding
+  side. A stream without the two fields keeps the old answer: no winning
+  pitcher in that case.
 
   **SIM-414 — MLB Rule 9.17(b) starter exception.**  If the candidate winner is
   the winning team's **starter** and that starter did NOT record at least 15
@@ -133,6 +147,46 @@ def _defending_team(state: GameState) -> Team:
     return Team.HOME if state.half == Half.TOP else Team.AWAY
 
 
+def _play_side_and_pitcher(r: PlayResult, st: GameState) -> tuple[Team, int | None, bool]:
+    """The fielding side and the pitcher of one play, and whether the play named them.
+
+    SIM-557: a play that names its own fielding side and pitcher is read
+    first. The next state names the NEXT half's pitcher on the play that ends
+    a half-inning, so it credits that play to the wrong pitcher. A play
+    without the two fields reads the next state, as before.
+    """
+    play_side = getattr(r, "fielding_team", None)
+    if play_side is not None:
+        return play_side, getattr(r, "pitcher_id", None), True
+    return _defending_team(st), st.pitcher_id, False
+
+
+def _side_pitcher_outs(
+    results: Sequence[PlayResult], side: Team
+) -> tuple[dict[int, int], list[int]]:
+    """Each pitcher's outs for one side, and the order the pitchers first appear.
+
+    The win module's five-inning starter rule (SIM-414) reads these counts for
+    the winning side. The first pitcher in the order is the side's starter.
+    Plays without a next state are skipped, as in ``decisions_from_plays``.
+    """
+    outs: dict[int, int] = {}
+    order: list[int] = []
+    for r in results:
+        st = r.next_state
+        if st is None:
+            continue
+        defending, pid, _own = _play_side_and_pitcher(r, st)
+        if defending != side or pid is None:
+            continue
+        pid = int(pid)
+        if pid not in outs:
+            outs[pid] = 0
+            order.append(pid)
+        outs[pid] += int(getattr(r, "outs_recorded", 0) or 0)
+    return outs, order
+
+
 def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
     """Derive (winning, losing, save) pitchers from an ordered play stream.
 
@@ -168,9 +222,8 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
     # SIM-414: per-pitcher outs recorded for the WINNING team's pitchers, plus
     # the order in which they first appeared (for tie-breaking the most-effective
     # reliever choice when the starter doesn't reach 5 IP).
-    winner_pitcher_outs: dict[int, int] = {}
-    winner_pitcher_order: list[int] = []
-    winner_starter_id: int | None = None
+    winner_pitcher_outs, winner_pitcher_order = _side_pitcher_outs([r for r, _ in paired], winner)
+    winner_starter_id: int | None = winner_pitcher_order[0] if winner_pitcher_order else None
 
     # Build a per-state view: (winner_score, loser_score, winner_poR, loser_poR).
     # winner_poR/loser_poR are the pitchers of record *as of* that play, given
@@ -178,25 +231,28 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
     def _score_for(team: Team, st: GameState) -> int:
         return st.home_score if team == Team.HOME else st.away_score
 
+    # SIM-557: each side's first pitcher in the stream (its starter). A side
+    # has no pitcher of record until it fields a play. The away side bats
+    # first, so its lead can come before its starter fields. The decisive
+    # play then reads the side's first pitcher (see below). The module uses
+    # this fallback only when the stream names its own sides (any_own), so a
+    # stream without the two fields reads exactly as before SIM-557.
+    first_pitcher: dict[Team, int] = {}
+    any_own = False
+
     snapshots: list[tuple[int, int, int | None, int | None]] = []
     for r, st in paired:
-        defending = _defending_team(st)
+        # SIM-557: the play's own side and pitcher, when it names them.
+        defending, pid, own = _play_side_and_pitcher(r, st)
+        any_own = any_own or own
         if defending == Team.HOME:
-            home_poR = st.pitcher_id
+            home_poR = pid
         else:
-            away_poR = st.pitcher_id
+            away_poR = pid
+        if pid is not None and defending not in first_pitcher:
+            first_pitcher[defending] = int(pid)
         winner_poR = home_poR if winner == Team.HOME else away_poR
         loser_poR = home_poR if loser == Team.HOME else away_poR
-        # SIM-414: tally outs for whichever winning-team pitcher is on the mound.
-        if defending == winner and st.pitcher_id is not None:
-            pid = int(st.pitcher_id)
-            if pid not in winner_pitcher_outs:
-                winner_pitcher_outs[pid] = 0
-                winner_pitcher_order.append(pid)
-                if winner_starter_id is None:
-                    winner_starter_id = pid
-            outs_on_play = int(getattr(r, "outs_recorded", 0) or 0)
-            winner_pitcher_outs[pid] += outs_on_play
         snapshots.append(
             (
                 _score_for(winner, st),
@@ -225,6 +281,16 @@ def decisions_from_plays(results: Sequence[PlayResult]) -> PitcherDecisions:
         return PitcherDecisions(home_score=home_final, away_score=away_final)
 
     _, _, win_poR_at_lead, lose_poR_at_lead = snapshots[decisive_idx]
+    # SIM-557: a side that has fielded no play by the decisive play has its
+    # starter on record. Example: the away side scores in the top of the 1st
+    # and never trails. Its starter has thrown no pitch yet, but he is its
+    # pitcher of record, so the win is his (or a reliever's, by the rule below).
+    # A stream whose plays carry no fielding side skips this fallback: it reads
+    # exactly as before SIM-557 (no winning pitcher in that case).
+    if any_own and win_poR_at_lead is None:
+        win_poR_at_lead = first_pitcher.get(winner)
+    if any_own and lose_poR_at_lead is None:
+        lose_poR_at_lead = first_pitcher.get(loser)
     winning_pitcher_id = win_poR_at_lead
     losing_pitcher_id = lose_poR_at_lead
 

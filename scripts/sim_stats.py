@@ -202,8 +202,9 @@ def _game_summary(result, *, home_ids: set[int], away_ids: set[int]) -> dict:
     away_R = int(getattr(result, "away_score", 0))
     # Both-teams totals (sum across box lines, since the boxscore covers everyone).
     box = result.boxscore
-    h = hr = b2 = b3 = ab = k = bb = sb = cs = 0
+    h = hr = b2 = b3 = ab = k = bb = sb = cs = p_outs = 0
     for ln in box.lines.values():
+        p_outs += int(getattr(ln, "outs_recorded", 0) or 0)
         h += ln.h
         hr += ln.hr
         b2 += ln.b2
@@ -235,7 +236,105 @@ def _game_summary(result, *, home_ids: set[int], away_ids: set[int]) -> dict:
         "home_win": int(home_R > away_R),
         "away_win": int(away_R > home_R),
         "tie": int(home_R == away_R),
+        # SIM-557: the outs on the pitchers' lines, and the outs the game
+        # played.  An older simulator has no played count: None.
+        "p_outs": p_outs,
+        "outs_played": getattr(result, "outs_played", None),
     }
+
+
+#: SIM-557: the outs check names at most this many differing game-simulations.
+MAX_NAMED_MISMATCHES = 5
+
+
+def outs_credit_check(per_game: list[list[dict]]) -> dict[str, Any]:
+    """Compare the pitchers' credited outs with the outs each game played (SIM-557).
+
+    ``per_game`` is the list of per-game lists of game summaries that
+    ``_game_summary`` builds.  The check returns the mean credited outs a
+    game-simulation, the mean played outs, and the count of game-simulations
+    where the two differ.  The check is available only when every summary
+    carries a played count.  An older simulator carries none: then the played
+    mean is None, the mismatch count is 0 and ``available`` is False.
+
+    The two counts are an identity, so this check is the script's one gate:
+    ``main`` exits 1 when the check is available and any game-simulation
+    differs.  The script's other reads stay reads.  (The module docstring does
+    not list this check: a line added there moves ``_MLB_2025``, which
+    ``tests/acceptance/bands.py`` cites by line number.)
+
+    ``first_mismatches`` names up to ``MAX_NAMED_MISMATCHES`` game-simulations
+    that differ, in run order: the game's index in ``per_game``, the
+    iteration's index in that game (the seed in ``main``) and both counts.
+    The operator replays a named game-simulation from these.
+    """
+    flat = [s for game in per_game for s in game]
+    first_mismatches: list[dict[str, int]] = []
+    for gi, game in enumerate(per_game):
+        for it, s in enumerate(game):
+            played_it = s.get("outs_played")
+            credited_it = int(s.get("p_outs", 0) or 0)
+            if played_it is None or credited_it == int(played_it):
+                continue
+            if len(first_mismatches) < MAX_NAMED_MISMATCHES:
+                first_mismatches.append(
+                    {
+                        "game_index": gi,
+                        "iteration": it,
+                        "credited": credited_it,
+                        "played": int(played_it),
+                    }
+                )
+    credited = [float(s.get("p_outs", 0) or 0) for s in flat]
+    played_raw = [s.get("outs_played") for s in flat]
+    available = bool(flat) and all(p is not None for p in played_raw)
+    credited_mean = statistics.mean(credited) if credited else 0.0
+    if not available:
+        return {
+            "credited_per_game": credited_mean,
+            "played_per_game": None,
+            "mismatch_game_sims": 0,
+            "available": False,
+            "first_mismatches": [],
+        }
+    played = [int(p) for p in played_raw if p is not None]
+    mismatch = sum(
+        1 for s, p in zip(flat, played, strict=True) if int(s.get("p_outs", 0) or 0) != p
+    )
+    return {
+        "credited_per_game": credited_mean,
+        "played_per_game": statistics.mean(played),
+        "mismatch_game_sims": mismatch,
+        "available": True,
+        "first_mismatches": first_mismatches,
+    }
+
+
+def _outs_credit_line(check: dict[str, Any]) -> str:
+    """The report line of the outs check."""
+    credited = f"pitcher outs a game: credited {check['credited_per_game']:.2f}, "
+    if not check["available"]:
+        return credited + "played: not available (the simulator predates SIM-557)"
+    return (
+        credited + f"played {check['played_per_game']:.2f}; "
+        f"game-sims where they differ: {check['mismatch_game_sims']}"
+    )
+
+
+def _outs_mismatch_lines(check: dict[str, Any], game_pks: list[int]) -> list[str]:
+    """One line for each differing game-simulation the check names (SIM-557).
+
+    ``game_pks`` maps the check's game index to the game_pk.  The iteration
+    index is the seed that ``main`` passes to ``simulate_game``.
+    """
+    lines = []
+    for m in check.get("first_mismatches", []):
+        gi = int(m["game_index"])
+        gp = game_pks[gi] if 0 <= gi < len(game_pks) else gi
+        lines.append(
+            f"  game {gp} seed {m['iteration']}: credited {m['credited']}, played {m['played']}"
+        )
+    return lines
 
 
 def _mean_sd(xs: list[float]) -> tuple[float, float]:
@@ -523,6 +622,11 @@ def main() -> None:
             margin_counts, fence_record.get("fence_air_balls")
         )
         print("  " + margin_text)
+    # SIM-557: the outs check.  The credited and played outs are an identity,
+    # so this line is the script's one gate (the exit comes after the record).
+    outs_check = outs_credit_check(per_game)
+    print("\n--- SIM-557 the outs check ---")
+    print("  " + _outs_credit_line(outs_check))
     print(f"\nelapsed: {elapsed:.1f}s")
 
     if args.json_out:
@@ -542,9 +646,28 @@ def main() -> None:
             # wall-margin band's when the sampler has them.
             **fence_record,
             **margin_record,
+            # SIM-557: the outs check's three numbers (played is None on an
+            # older simulator).
+            "outs_credited_per_game": outs_check["credited_per_game"],
+            "outs_played_per_game": outs_check["played_per_game"],
+            "outs_mismatch_game_sims": outs_check["mismatch_game_sims"],
+            "outs_first_mismatches": [
+                {**m, "game_pk": args.game_pks[m["game_index"]]}
+                for m in outs_check["first_mismatches"]
+            ],
         }
         Path(args.json_out).write_text(json.dumps(out, indent=2))
         print(f"wrote {args.json_out}")
+
+    if outs_check["available"] and outs_check["mismatch_game_sims"] > 0:
+        print(
+            f"FAIL: the pitchers' outs differ from the outs played in "
+            f"{outs_check['mismatch_game_sims']} game-sims"
+        )
+        # Name the game-simulations to replay: the first few, in run order.
+        for line in _outs_mismatch_lines(outs_check, args.game_pks):
+            print(line)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

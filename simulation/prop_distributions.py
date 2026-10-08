@@ -416,10 +416,13 @@ class PropDistributionSet:
         so a pure batter never gets a (meaningless) all-zero K PMF.  Batting
         activity is an AB, a hit, an RBI, a run, a steal, a double or a triple.
         So a pinch runner who only scores or steals owns the batter props
-        (SIM-421).  Pitching activity is an out, a K, a BB, an ER or a hit
-        allowed (SIM-421).  This net is wider than :attr:`BoxScore.batters` /
-        :attr:`BoxScore.pitchers`.  Those two still read the original SIM-328
-        fields only.
+        (SIM-421).  Pitching activity is an out, a batter faced, a K, a BB, an
+        ER or a hit allowed (SIM-421; the batter faced since SIM-557).  So a
+        reliever who faces one batter and records no out owns the pitcher
+        props.  This net is wider than :attr:`BoxScore.batters` /
+        :attr:`BoxScore.pitchers`.  The batter list reads the original SIM-328
+        fields only; the pitcher list reads an out, a batter faced, a K, a BB
+        or an ER, but not a hit allowed.
         """
         games = list(boxscores)
         n = len(games)
@@ -437,8 +440,16 @@ class PropDistributionSet:
             per_game_lines.append(lines)
             for pid, ln in lines.items():
                 all_ids.add(int(pid))
-                # SIM-421: a hit allowed is pitching activity too.
-                if ln.outs_recorded or ln.k or ln.bb or ln.er or ln.h_allowed:
+                # SIM-421: a hit allowed is pitching activity too. SIM-557: so
+                # is a batter faced, which lists a reliever with no out.
+                if (
+                    ln.outs_recorded
+                    or getattr(ln, "bf", 0)
+                    or ln.k
+                    or ln.bb
+                    or ln.er
+                    or ln.h_allowed
+                ):
                     pitched.add(int(pid))
                 # SIM-421: a run, a steal, a double or a triple is batting
                 # activity too, so a pinch-runner-only game owns batter props.

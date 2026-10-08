@@ -786,6 +786,17 @@ class PlayResult:
     #: catcher held is the third out before any throw, so the steal is void.
     steal_voided: str | None = None
 
+    # ---- SIM-557: who was on the mound for this result ----------------------
+    #: The pitcher on the mound for this result, or None. ``step_pitch`` sets
+    #: it after the manager's hooks, so a reliever who enters on this pitch is
+    #: the one named. A reader of the play stream reads it here. The next
+    #: state names the NEXT half's pitcher on the play that ends a half-inning.
+    pitcher_id: int | None = None
+    #: The pitcher's side (the fielding team) for this result, or None. A
+    #: result built by hand without it reads as before: the reader falls back
+    #: to the next state.
+    fielding_team: Team | None = None
+
     # ---- step 8: next-state pointer (the committed GameState) ----------------
     #: The ``GameState`` after this play is committed (spec step 8 'next state').
     #: Optional so a PlayResult can be constructed before the commit.

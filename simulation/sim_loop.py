@@ -590,9 +590,11 @@ class StateMachine:
              ends the half-inning with NO pitch thrown: the result's
              ``pitch_outcome`` is :data:`NO_PITCH`, ``pa_voided`` reads
              ``"pickoff_third_out"``: no pitch, no event and no plate
-             appearance are credited, the pickoff's out counts for the pitcher
-             on the mound (a picked-off caught stealing also charges the runner
-             a CS), and the same batter leads off his team's next inning.
+             appearance are credited. The ledger (:meth:`_record_outs`)
+             credits the pickoff's out to the pitcher on the mound when it
+             records the out (SIM-557); a picked-off caught stealing also
+             charges the runner a CS. The same batter leads off his team's
+             next inning.
           4. **Draw** the pitch outcome from the full-pool sampler (the live
              count is the draw's bucket) unless the caller supplied
              ``pitch_outcome`` directly (count-machine-only mode). Then
@@ -655,7 +657,14 @@ class StateMachine:
         # It resolves now, so the pitch draw sees the bases it left. The result
         # exists before the pitch: the pickoff's out and run value commit to
         # it, and the pitch's fields are filled in once a pitch is thrown.
-        result = PlayResult(pitch_outcome=NO_PITCH)
+        # SIM-557: the result names the pitcher on the mound and his side. The
+        # manager's hooks ran above, so a reliever who enters on this pitch is
+        # the one named.
+        result = PlayResult(
+            pitch_outcome=NO_PITCH,
+            pitcher_id=state.pitcher_id,
+            fielding_team=state.defense,
+        )
         on_the_pitch = self._steal_order_active()
         picked = False
         if on_the_pitch and self._pending_steal is None:
@@ -667,15 +676,9 @@ class StateMachine:
                 # fresh count.
                 result.pa_voided = "pickoff_third_out"
                 self.running_game_tally.no_pitch_third_outs += 1
-                # The out is the pitcher's: it counts toward his outs (his
-                # innings pitched and the pitcher-outs prop). _accumulate_pa,
-                # the usual writer, never sees a result with no plate
-                # appearance, so the credit lands here, while state.pitcher_id
-                # still names the fielding side's pitcher. (A caught stealing or
-                # a pickoff out on a pitch that does not end the plate
-                # appearance has the same gap; that older case is SIM-557.)
-                if state.pitcher_id is not None and result.outs_recorded:
-                    self._box_line(int(state.pitcher_id)).outs_recorded += int(result.outs_recorded)
+                # The pickoff's out is already on the pitcher's line:
+                # _record_outs credited it when the ledger recorded it
+                # (SIM-557). This return only rolls the half-inning.
                 self.advance_half_inning(state)
                 result.next_state = state
                 return result
@@ -1880,6 +1883,9 @@ class StateMachine:
             is_contact=False,
             pa_terminal=True,
             event=EVENT_INTENTIONAL_WALK,
+            # SIM-557: the walk names the pitcher who issues it and his side.
+            pitcher_id=state.pitcher_id,
+            fielding_team=state.defense,
         )
         # Consume the signal so it never carries to the next pitch / PA.
         state.manager.intentional_walk_signalled = False
@@ -2261,8 +2267,10 @@ class StateMachine:
             ball.
 
         PITCHER:
-          * IP  — ``result.outs_recorded`` (thirds of an inning; accumulated as
-            outs on the line, rendered x.0/x.1/x.2 via ``PlayerStatLine.ip``).
+          * IP  — written by :meth:`_record_outs` when the out is recorded
+            (SIM-557); not here.
+          * BF  — one batter faced on every completed plate appearance, the
+            intentional walk included (SIM-557).
           * K   — a strikeout PA (canonical 'strikeout'); credited even on a
             dropped-third-strike reach (no out) per the scoring rule.
           * BB  — a walk / IBB.
@@ -2363,7 +2371,19 @@ class StateMachine:
         # ---- pitcher (defense) ----
         if state.pitcher_id is not None:
             pit = box.line(int(state.pitcher_id))
-            pit.outs_recorded += outs
+            # SIM-557: one batter faced per completed plate appearance. The
+            # outs are not written here: _record_outs credits each out when
+            # it is recorded.
+            # The batters faced follow the loop's own count (state.pitcher_bf,
+            # bumped in _end_of_pa). A known limit: in the single pre-pitch
+            # steal draw (SIM_STEAL_PITCH_CLASS=0, not production), a pickoff
+            # or caught stealing can make the third out before the pitch's
+            # result, and the loop still ends this plate appearance. The
+            # pitcher then gets a batter faced and the batter an at-bat. Both
+            # the batter's line and state.pitcher_bf had this flaw before the
+            # batters faced existed; its fix changes the batter's line too, so
+            # it needs its own ticket.
+            pit.bf += 1
             if canonical == "strikeout":
                 pit.k += 1
             if canonical in self._BB_CANONICAL:
@@ -2443,18 +2463,29 @@ class StateMachine:
     # ===================================================================
 
     def _record_outs(self, state: GameState, n: int) -> None:
-        """Record ``n`` outs, guarding against an impossible (>3) total.
+        """Record ``n`` outs and credit them to the pitcher on the mound.
 
         Uses the SIM-311 mutator + the lightweight ``assert_outs_valid`` guard:
         during live play outs may transiently reach 3 (the third out, which the
         half-inning roll then clears), so this validates with ``in_play=False``
         to allow the terminal 3 but reject 4+.
+
+        SIM-557: this method is the one writer of a pitcher's outs on his box
+        line (his innings pitched and the pitcher-outs prop).
         """
         if n < 0:
             raise ValueError("cannot record a negative number of outs.")
         state.record_out(n)
         # Allow the transient third out; the half-inning roll resets it.
         state.assert_outs_valid(in_play=False)
+        # SIM-557: the ONE writer of a pitcher's outs. Every out the defense
+        # records passes here once, before the half-inning rolls. So
+        # ``state.pitcher_id`` still names the pitcher on the mound. A caught
+        # stealing or a pickoff out on a pitch that does not end the plate
+        # appearance gets the same credit as any other out. No other code may
+        # add to ``outs_recorded`` on a box line, or an out counts twice.
+        if n and state.pitcher_id is not None:
+            self._box_line(int(state.pitcher_id)).outs_recorded += int(n)
 
     def _advance_batting_order(self, state: GameState) -> None:
         """Advance the batting team's lineup-slot pointer by one, wrapping at the
@@ -3080,10 +3111,14 @@ class PlayerStatLine:
     Batting:  ``ab`` / ``h`` / ``hr`` / ``rbi``, plus ``so`` (SIM-484: the
               batter's own strikeouts — the official box's batting ``k``).
     Pitching: ``outs_recorded`` (the raw thirds-of-an-inning the pitcher retired)
-              plus ``k`` / ``bb`` / ``er``.  Innings are represented internally as
-              an integer count of OUTS (thirds) so accumulation is exact; the
-              human-readable x.0 / x.1 / x.2 form and the decimal thirds are
-              derived on demand (:attr:`ip` / :attr:`ip_outs`).
+              plus ``bf`` / ``k`` / ``bb`` / ``er``.  Innings are represented
+              internally as an integer count of OUTS (thirds) so accumulation is
+              exact; the human-readable x.0 / x.1 / x.2 form and the decimal
+              thirds are derived on demand (:attr:`ip` / :attr:`ip_outs`).
+              SIM-557: ``StateMachine._record_outs`` writes ``outs_recorded``
+              when each out is recorded; ``StateMachine._accumulate_pa`` writes
+              ``bf`` and the other pitching fields at the end of a plate
+              appearance.
 
     ``k`` is the PITCHER's strikeouts (the official box's ``p_k``). Readers
     treat it that way. :attr:`BoxScore.pitchers` and the prop builder
@@ -3113,6 +3148,9 @@ class PlayerStatLine:
 
     # --- pitching (IP stored as outs == thirds of an inning) ---
     outs_recorded: int = 0
+    # SIM-557: batters faced as a pitcher (one per completed plate appearance,
+    # the intentional walk included; a no-pitch result adds none).
+    bf: int = 0
     k: int = 0
     bb: int = 0
     er: int = 0
@@ -3149,8 +3187,10 @@ class BoxScore:
 
     Populated INSIDE the PA loop (:meth:`StateMachine._accumulate_pa`) on every
     terminal plate appearance: the batting team's current batter is credited on
-    offense, the fielding team's current pitcher is charged on defense.  A
-    downstream Monte-Carlo aggregator (SIM-329 props) sums these across N games.
+    offense, the fielding team's current pitcher is charged on defense.  The one
+    exception is a pitcher's outs: :meth:`StateMachine._record_outs` credits
+    each out when it is recorded, on any pitch (SIM-557).  A downstream
+    Monte-Carlo aggregator (SIM-329 props) sums these across N games.
 
     Two views over the SAME line store so the keyspace stays simple:
       * :attr:`batters` / :attr:`pitchers` are convenience filters;
@@ -3174,9 +3214,16 @@ class BoxScore:
 
     @property
     def pitchers(self) -> dict[int, PlayerStatLine]:
-        """Lines with any pitching activity (outs recorded / K / BB / ER)."""
+        """Lines with any pitching activity (outs recorded / batters faced / K /
+        BB / ER).
+
+        SIM-557: an out or a batter faced is the direct test that a pitcher
+        pitched. K / BB / ER stay in the test for lines built by hand.
+        """
         return {
-            pid: ln for pid, ln in self.lines.items() if ln.outs_recorded or ln.k or ln.bb or ln.er
+            pid: ln
+            for pid, ln in self.lines.items()
+            if ln.outs_recorded or ln.bf or ln.k or ln.bb or ln.er
         }
 
 
@@ -3201,6 +3248,9 @@ class GameSimResult:
     seed: int | None = None
     #: Total pitches thrown across the game (a cheap sanity / perf signal).
     total_pitches: int = 0
+    #: SIM-557: the outs the play stream recorded (the sum of every step's
+    #: ``outs_recorded``). The outs on the pitchers' box lines must equal it.
+    outs_played: int = 0
     #: SIM-328 per-game boxscore: per-player AB/H/HR/RBI + IP/K/BB/ER, keyed by
     #: player_id.  ADDITIVE/optional so SIM-320/327 returns + tests are
     #: unaffected; ``None`` when no boxscore was accumulated (the loop attaches a
@@ -3518,6 +3568,7 @@ def simulate_game(
 
     # --- The game loop -------------------------------------------------------
     total_pitches = 0
+    outs_played = 0
     walk_off = False
     # A pitch-count ceiling so a pathological machine that never records an out
     # (e.g. a degenerate injected outcome) cannot spin forever: a real inning is
@@ -3555,6 +3606,8 @@ def simulate_game(
         # pointer still bounds the loop.
         if getattr(step, "no_pitch", False) is not True:
             total_pitches += 1
+        # SIM-557: the play stream's outs; the pitchers' box lines must sum to it.
+        outs_played += int(getattr(step, "outs_recorded", 0) or 0)
 
         # The committed state is always invariant-valid (guards held in step 8).
         state.assert_invariants(in_play=True)
@@ -3595,6 +3648,7 @@ def simulate_game(
         extra_innings=extra_innings,
         seed=seed,
         total_pitches=total_pitches,
+        outs_played=outs_played,
         # SIM-328: the per-game boxscore the machine accumulated across the loop
         # (per-player AB/H/HR/RBI + IP/K/BB/ER).  Additive/optional — None if no
         # terminal PA ever resolved a scored outcome (the machine never created

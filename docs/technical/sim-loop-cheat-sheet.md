@@ -189,6 +189,15 @@ uncaught third strike), the runners advance one base and a striking-out batter m
   strikeout; `k` stays the pitcher's field). A run that scores on the reach — on the advance,
   or forced home when a steal or a pickoff skipped the advance — pays no RBI. The run stays
   earned, because the pool's got-away flag does not say wild pitch or passed ball.
+- **The outs on the pitcher's line (SIM-557, 2026-10-07).** The ledger (`_record_outs`) is
+  the one writer of a pitcher's outs. It credits every out when it records it, to the
+  pitcher on the mound. A caught stealing or a pickoff out on a pitch that does not end the
+  plate appearance is credited like any other out. The game result counts the outs played
+  (`outs_played`), and the pitchers' outs equal it on every game. Each play result names its
+  own pitcher and fielding side (`pitcher_id`, `fielding_team`); the win module reads them,
+  so the last out of a half goes to the pitcher who recorded it. The box line counts batters
+  faced (`bf`), and the box score lists a pitcher who records an out or faces a batter. No
+  play changes.
 
 ### Summary of the fitted values in production
 
