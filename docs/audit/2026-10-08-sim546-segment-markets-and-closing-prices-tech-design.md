@@ -2,7 +2,7 @@
 
 > **STATUS 2026-10-08 — DESIGN, PROPOSED. Nothing is built.** Five decisions wait for the
 > owner (§10). The build order and the run book are in §8. The ticket is P2 in `BACKLOG.xlsx`;
-> the next free ID is SIM-560.
+> the next free ID is SIM-560. The readable page is https://claude.ai/artifact/3192dt3Z27A8YHAZfp8MRL.
 
 **Date:** 2026-10-08
 **Ticket:** SIM-546 (P2). The row asks for two things: the twelve segment and team markets on
