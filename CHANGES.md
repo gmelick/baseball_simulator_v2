@@ -1,3 +1,25 @@
+# COMMITTED — the steal-weight finding: the look-alike weights cut steal attempts about 20%, and a balance weight fixes it; the finding, the probe and its tests reach `master` — SIM-556, written 2026-09-30, committed 2026-10-07
+
+**Why it matters.** The steal draw gives too few steal attempts: the lane reads steal attempts at
+second about 10% low and at third about 21% low. This finding names the cause and a fix, and it
+reproduces the shortfall without playing a game. It sat uncommitted in a worktree for a week; it
+is now on `master`.
+
+**The finding** (`docs/audit/2026-09-30-steal-weight-volume-finding.md`). The steal draw weighs
+each row by how much its runner, pitcher and catcher resemble the live ones. Frequent base
+stealers are few and resemble few other runners, so their rows lose weight for most live runners.
+On 74,296 real pitches of 2026, production reads 1.225 steals per 100 pitches against 1.524 with
+no look-alike weight: 20% under (2025: 17% under). The runner weight carries three quarters of
+the loss. The recommended fix is a balance weight, one number per player-season, fitted so each
+player's rows keep their share of the draw. On the replay it brings the volume within 0.2% of the
+pool's rate in both seasons.
+
+**What was committed.** The finding; the probe, `scripts/steal_weight_volume_probe.py` (it plays
+no games, and it matches production's steal weights to 1e-8); its 10 unit tests (all pass); and
+its four records, `scripts/steal_weight_volume_probe_2025/2026.txt/.json`. No production code
+changes. The ticket stays open at P3; the owner's decision to build the fix is open.
+
+
 # RULING + CLEAN-UP — the branch lifecycle is written into the guide, and 32 merged branches are deleted (13 on GitHub, 19 local), 2026-10-07
 
 **Why it matters.** Branches were created and merged but never deleted, so GitHub listed 13

@@ -1,0 +1,205 @@
+THE STEAL DRAW'S VOLUME — 74296 real opportunity pitches of 2026, 3083 recorded steals
+  real: 1.423 per 100 pitches (second 2.127, third 0.385); the draw with no look-alike weight: 1.524
+  the production rule re-composed here against steal_weights itself, largest gap in the attempt odds over 500 pitches: prod 1/1/1 3.34e-10, prod 4/4/2 1.81e-09, prod 12/12/2 1.49e-08
+
+1. THE POOL'S OWN RATE BY SEASON (steals per 100 opportunity pitches; mean recency weight)
+  target 2: 2023: 2.017 (w 1.12)  2024: 2.227 (w 1.50)  2025: 2.159 (w 2.00)  2026: 2.107 (w 2.00)  all: 2.128
+  target 3: 2023: 0.496 (w 1.12)  2024: 0.464 (w 1.50)  2025: 0.436 (w 2.00)  2026: 0.387 (w 2.00)  all: 0.448
+
+2. ROWS WITH NO SCORE (the pool; then the draw's own mass on the real pitches)
+  runner   target 2: unscored 0.19% of rows; 0.06% of attempted rows, 0.19% of the others; attempt rate 0.714 on unscored rows against 2.131 on scored
+  runner   target 3: unscored 0.13% of rows; 0.00% of attempted rows, 0.13% of the others; attempt rate 0.000 on unscored rows against 0.449 on scored
+  runner   in the draw (live actor scored on 100.0% of pitches): unscored 0.01% of the attempted mass, 0.12% of the rest; unscored pairs 0.00% / 0.00%
+  pitcher  target 2: unscored 3.88% of rows; 3.81% of attempted rows, 3.88% of the others; attempt rate 2.091 on unscored rows against 2.130 on scored
+  pitcher  target 3: unscored 4.09% of rows; 4.19% of attempted rows, 4.09% of the others; attempt rate 0.459 on unscored rows against 0.448 on scored
+  pitcher  in the draw (live actor scored on 95.4% of pitches): unscored 3.45% of the attempted mass, 3.34% of the rest; unscored pairs 0.00% / 0.00%
+  catcher  target 2: unscored 2.75% of rows; 2.29% of attempted rows, 2.76% of the others; attempt rate 1.769 on unscored rows against 2.138 on scored
+  catcher  target 3: unscored 2.81% of rows; 2.75% of attempted rows, 2.81% of the others; attempt rate 0.440 on unscored rows against 0.449 on scored
+  catcher  in the draw (live actor scored on 95.6% of pitches): unscored 2.18% of the attempted mass, 2.56% of the rest; unscored pairs 0.00% / 0.00%
+
+3. THE MEAN SCORE ON ATTEMPTED ROWS AGAINST THE OTHER ROWS (scored rows, base-weighted)
+  runner   attempted 0.3735   others 0.4463   ratio 0.8368
+  pitcher  attempted 0.4589   others 0.4806   ratio 0.9548
+  catcher  attempted 0.4980   others 0.5021   ratio 0.9919
+
+4. THE CLOSED FORM — the pool replayed through ONE factor alone (no cells, scored rows):
+   the attempts the draw predicts over the attempts the pool holds
+  runner   target 2: 2456 actor-seasons; scores 5/25/50/75/95% = 0.11/0.25/0.38/0.50/0.68; unscored pairs 0.00%
+      power  1: prod 0.883   noconf 0.881   density 1.030   balanced 1.000   noconf balanced 1.000   (balance miss 2.5e-09 in 9 steps; d 1/50/99% = 0.75/0.98/3.53)
+                only 2025's actors live: prod 0.877   balanced 1.003   season balanced 1.000   (miss 2.7e-09 in 9 steps; d 1/50/99% = 0.74/0.98/3.68)
+                only 2026's actors live: prod 0.871   balanced 0.980   season balanced 1.000   (miss 2.0e-09 in 9 steps; d 1/50/99% = 0.74/0.96/3.84)
+                mass received / held by runner tier (none,1,2,3): prod 0.703/1.044/1.087/0.883   noconf 1.074/1.042/1.076/0.870
+      power  2: prod 0.855   noconf 0.846   density 1.075   balanced 1.000   noconf balanced 1.000   (balance miss 4.9e-09 in 15 steps; d 1/50/99% = 0.60/0.96/9.54)
+                only 2025's actors live: prod 0.847   balanced 1.002   season balanced 1.000   (miss 5.1e-09 in 15 steps; d 1/50/99% = 0.58/0.96/9.96)
+                only 2026's actors live: prod 0.838   balanced 0.971   season balanced 1.000   (miss 4.3e-09 in 15 steps; d 1/50/99% = 0.56/0.92/10.12)
+                mass received / held by runner tier (none,1,2,3): prod 0.510/1.058/1.118/0.851   noconf 1.131/1.059/1.098/0.824
+      power  4: prod 0.865   noconf 0.841   density 1.114   balanced 1.000   noconf balanced 1.000   (balance miss 8.1e-09 in 60 steps; d 1/50/99% = 0.41/0.93/36.57)
+                only 2025's actors live: prod 0.860   balanced 0.999   season balanced 1.000   (miss 6.6e-09 in 31 steps; d 1/50/99% = 0.38/0.89/34.46)
+                only 2026's actors live: prod 0.842   balanced 0.966   season balanced 1.000   (miss 5.2e-09 in 30 steps; d 1/50/99% = 0.33/0.78/41.04)
+                mass received / held by runner tier (none,1,2,3): prod 0.302/1.057/1.124/0.861   noconf 1.218/1.076/1.093/0.806
+      power 12: prod 0.982   noconf 0.922   density 1.027   balanced 1.000   noconf balanced 1.000   (balance miss 1.9e-03 in 500 steps; d 1/50/99% = 0.28/1.21/10.91)
+                only 2025's actors live: prod 0.980   balanced 0.995   season balanced 1.000   (miss 9.8e-09 in 186 steps; d 1/50/99% = 0.00/0.04/155.04)
+                only 2026's actors live: prod 0.957   balanced 0.976   season balanced 1.000   (miss 9.0e-09 in 132 steps; d 1/50/99% = 0.00/0.01/93.76)
+                mass received / held by runner tier (none,1,2,3): prod 0.741/0.995/1.057/0.964   noconf 1.278/1.081/1.021/0.873
+      rows of runners with under 25 chances :   1.3% of rows,   1.4% of attempts, 2.295 per 100
+      rows of runners with 25 to 50         :   3.0% of rows,   2.9% of attempts, 2.040 per 100
+      rows of runners with 50 to 150        :  18.9% of rows,  18.5% of attempts, 2.101 per 100
+      rows of runners with 150 and over     :  76.8% of rows,  77.2% of attempts, 2.149 per 100
+  runner   target 3: 2438 actor-seasons; scores 5/25/50/75/95% = 0.11/0.26/0.38/0.51/0.69; unscored pairs 0.00%
+      power  1: prod 0.805   noconf 0.797   density 1.044   balanced 1.000   noconf balanced 1.000   (balance miss 5.2e-09 in 9 steps; d 1/50/99% = 0.74/0.97/3.04)
+                only 2025's actors live: prod 0.797   balanced 1.002   season balanced 1.000   (miss 6.2e-09 in 9 steps; d 1/50/99% = 0.73/0.96/3.09)
+                only 2026's actors live: prod 0.776   balanced 0.955   season balanced 1.000   (miss 3.4e-09 in 9 steps; d 1/50/99% = 0.72/0.94/3.36)
+                mass received / held by runner tier (none,1,2,3): prod 0.708/1.042/1.092/0.902   noconf 1.085/1.039/1.081/0.888
+      power  2: prod 0.752   noconf 0.733   density 1.110   balanced 1.000   noconf balanced 1.000   (balance miss 3.1e-09 in 16 steps; d 1/50/99% = 0.59/0.94/6.96)
+                only 2025's actors live: prod 0.740   balanced 0.997   season balanced 1.000   (miss 3.7e-09 in 16 steps; d 1/50/99% = 0.57/0.92/7.09)
+                only 2026's actors live: prod 0.707   balanced 0.929   season balanced 1.000   (miss 8.5e-09 in 15 steps; d 1/50/99% = 0.54/0.88/8.36)
+                mass received / held by runner tier (none,1,2,3): prod 0.514/1.054/1.124/0.876   noconf 1.148/1.055/1.105/0.849
+      power  4: prod 0.763   noconf 0.720   density 1.180   balanced 1.000   noconf balanced 1.000   (balance miss 9.0e-09 in 102 steps; d 1/50/99% = 0.41/0.89/26.18)
+                only 2025's actors live: prod 0.750   balanced 0.982   season balanced 1.000   (miss 6.4e-09 in 33 steps; d 1/50/99% = 0.37/0.83/24.65)
+                only 2026's actors live: prod 0.692   balanced 0.900   season balanced 1.000   (miss 5.5e-09 in 31 steps; d 1/50/99% = 0.30/0.71/29.63)
+                mass received / held by runner tier (none,1,2,3): prod 0.305/1.052/1.127/0.890   noconf 1.239/1.072/1.099/0.834
+      power 12: prod 0.968   noconf 0.880   density 1.031   balanced 1.000   noconf balanced 1.000   (balance miss 1.7e-03 in 500 steps; d 1/50/99% = 0.29/1.16/12.05)
+                only 2025's actors live: prod 0.927   balanced 0.950   season balanced 1.000   (miss 9.5e-09 in 172 steps; d 1/50/99% = 0.00/0.01/31.38)
+                only 2026's actors live: prod 0.850   balanced 0.881   season balanced 1.000   (miss 9.3e-09 in 128 steps; d 1/50/99% = 0.00/0.00/54.68)
+                mass received / held by runner tier (none,1,2,3): prod 0.755/0.989/1.054/0.976   noconf 1.286/1.078/1.025/0.893
+      rows of runners with under 25 chances :   1.4% of rows,   1.0% of attempts, 0.313 per 100
+      rows of runners with 25 to 50         :   3.1% of rows,   2.9% of attempts, 0.401 per 100
+      rows of runners with 50 to 150        :  19.0% of rows,  17.5% of attempts, 0.407 per 100
+      rows of runners with 150 and over     :  76.5% of rows,  78.6% of attempts, 0.454 per 100
+  pitcher  target 2: 2390 actor-seasons; scores 5/25/50/75/95% = 0.12/0.31/0.46/0.61/0.77; unscored pairs 0.00%
+      power  1: prod 0.972   noconf 0.972   density 1.004   balanced 1.000   noconf balanced 1.000   (balance miss 4.8e-09 in 9 steps; d 1/50/99% = 0.76/0.96/2.10)
+                only 2025's actors live: prod 0.971   balanced 1.000   season balanced 1.000   (miss 7.0e-09 in 8 steps; d 1/50/99% = 0.76/0.95/2.11)
+                only 2026's actors live: prod 0.955   balanced 0.977   season balanced 1.000   (miss 1.6e-09 in 10 steps; d 1/50/99% = 0.75/0.95/2.31)
+      power  2: prod 0.965   noconf 0.965   density 1.013   balanced 1.000   noconf balanced 1.000   (balance miss 3.8e-09 in 15 steps; d 1/50/99% = 0.63/0.94/3.11)
+                only 2025's actors live: prod 0.964   balanced 0.999   season balanced 1.000   (miss 6.1e-09 in 15 steps; d 1/50/99% = 0.63/0.92/3.01)
+                only 2026's actors live: prod 0.938   balanced 0.964   season balanced 1.000   (miss 8.0e-09 in 18 steps; d 1/50/99% = 0.61/0.90/3.64)
+      power  4: prod 0.964   noconf 0.963   density 1.024   balanced 1.000   noconf balanced 1.000   (balance miss 6.6e-09 in 38 steps; d 1/50/99% = 0.48/0.92/4.94)
+                only 2025's actors live: prod 0.963   balanced 0.997   season balanced 1.000   (miss 6.4e-09 in 36 steps; d 1/50/99% = 0.50/0.87/5.32)
+                only 2026's actors live: prod 0.926   balanced 0.952   season balanced 1.000   (miss 7.8e-09 in 39 steps; d 1/50/99% = 0.42/0.81/7.05)
+      power 12: prod 0.984   noconf 0.977   density 1.019   balanced 1.000   noconf balanced 1.000   (balance miss 4.1e-06 in 500 steps; d 1/50/99% = 0.30/0.98/5.75)
+                only 2025's actors live: prod 0.981   balanced 0.994   season balanced 1.000   (miss 9.7e-09 in 198 steps; d 1/50/99% = 0.09/0.50/17.15)
+                only 2026's actors live: prod 0.940   balanced 0.955   season balanced 1.000   (miss 9.8e-09 in 150 steps; d 1/50/99% = 0.01/0.11/10.72)
+  pitcher  target 3: 2390 actor-seasons; scores 5/25/50/75/95% = 0.12/0.31/0.46/0.61/0.77; unscored pairs 0.00%
+      power  1: prod 0.960   noconf 0.960   density 1.008   balanced 1.000   noconf balanced 1.000   (balance miss 1.9e-09 in 9 steps; d 1/50/99% = 0.75/0.94/2.01)
+                only 2025's actors live: prod 0.964   balanced 1.004   season balanced 1.000   (miss 9.8e-09 in 8 steps; d 1/50/99% = 0.75/0.94/2.06)
+                only 2026's actors live: prod 0.957   balanced 0.992   season balanced 1.000   (miss 5.5e-09 in 10 steps; d 1/50/99% = 0.74/0.93/2.18)
+      power  2: prod 0.950   noconf 0.950   density 1.022   balanced 1.000   noconf balanced 1.000   (balance miss 3.8e-09 in 19 steps; d 1/50/99% = 0.62/0.92/2.94)
+                only 2025's actors live: prod 0.958   balanced 1.006   season balanced 1.000   (miss 6.4e-09 in 16 steps; d 1/50/99% = 0.62/0.90/2.93)
+                only 2026's actors live: prod 0.946   balanced 0.989   season balanced 1.000   (miss 8.4e-09 in 20 steps; d 1/50/99% = 0.60/0.87/3.27)
+      power  4: prod 0.949   noconf 0.947   density 1.031   balanced 1.000   noconf balanced 1.000   (balance miss 7.5e-09 in 46 steps; d 1/50/99% = 0.48/0.90/4.38)
+                only 2025's actors live: prod 0.960   balanced 1.008   season balanced 1.000   (miss 8.7e-09 in 37 steps; d 1/50/99% = 0.48/0.84/5.28)
+                only 2026's actors live: prod 0.945   balanced 0.989   season balanced 1.000   (miss 9.2e-09 in 43 steps; d 1/50/99% = 0.39/0.74/5.83)
+      power 12: prod 0.972   noconf 0.964   density 1.024   balanced 1.000   noconf balanced 1.000   (balance miss 1.5e-05 in 500 steps; d 1/50/99% = 0.30/0.97/6.06)
+                only 2025's actors live: prod 0.978   balanced 0.993   season balanced 1.000   (miss 9.5e-09 in 180 steps; d 1/50/99% = 0.05/0.21/8.80)
+                only 2026's actors live: prod 0.953   balanced 0.975   season balanced 1.000   (miss 9.8e-09 in 155 steps; d 1/50/99% = 0.00/0.04/4.22)
+  catcher  target 2: 322 actor-seasons; scores 5/25/50/75/95% = 0.04/0.25/0.48/0.71/0.91; unscored pairs 0.00%
+      power  1: prod 0.999   noconf 0.999   density 1.000   balanced 1.000   noconf balanced 1.000   (balance miss 5.5e-09 in 11 steps; d 1/50/99% = 0.73/0.93/3.43)
+                only 2025's actors live: prod 0.994   balanced 0.996   season balanced 1.000   (miss 3.0e-09 in 12 steps; d 1/50/99% = 0.70/0.90/5.06)
+                only 2026's actors live: prod 0.992   balanced 0.991   season balanced 1.000   (miss 3.1e-09 in 14 steps; d 1/50/99% = 0.71/0.92/3.15)
+      power  2: prod 0.999   noconf 0.999   density 1.000   balanced 1.000   noconf balanced 1.000   (balance miss 7.9e-09 in 63 steps; d 1/50/99% = 0.63/0.88/6.14)
+                only 2025's actors live: prod 0.991   balanced 0.993   season balanced 1.000   (miss 5.3e-09 in 22 steps; d 1/50/99% = 0.55/0.83/4.87)
+                only 2026's actors live: prod 0.988   balanced 0.987   season balanced 1.000   (miss 8.0e-09 in 25 steps; d 1/50/99% = 0.52/0.83/6.33)
+      power  4: prod 0.999   noconf 0.999   density 0.999   balanced 1.000   noconf balanced 1.000   (balance miss 7.9e-04 in 500 steps; d 1/50/99% = 0.54/0.84/7.37)
+                only 2025's actors live: prod 0.987   balanced 0.989   season balanced 1.000   (miss 6.7e-09 in 43 steps; d 1/50/99% = 0.38/0.66/10.88)
+                only 2026's actors live: prod 0.985   balanced 0.984   season balanced 1.000   (miss 7.8e-09 in 50 steps; d 1/50/99% = 0.08/0.25/4.72)
+      power 12: prod 0.996   noconf 0.996   density 1.002   balanced 1.000   noconf balanced 1.000   (balance miss 1.1e-07 in 500 steps; d 1/50/99% = 0.46/0.87/4.72)
+                only 2025's actors live: prod 0.982   balanced 0.990   season balanced 1.000   (miss 9.3e-09 in 138 steps; d 1/50/99% = 0.01/0.05/18.77)
+                only 2026's actors live: prod 0.976   balanced 0.979   season balanced 1.000   (miss 9.4e-09 in 156 steps; d 1/50/99% = 0.00/0.00/0.00)
+  catcher  target 3: 322 actor-seasons; scores 5/25/50/75/95% = 0.04/0.25/0.48/0.71/0.91; unscored pairs 0.00%
+      power  1: prod 0.991   noconf 0.991   density 1.001   balanced 1.000   noconf balanced 1.000   (balance miss 9.1e-09 in 11 steps; d 1/50/99% = 0.73/0.92/3.46)
+                only 2025's actors live: prod 0.984   balanced 0.997   season balanced 1.000   (miss 2.7e-09 in 12 steps; d 1/50/99% = 0.69/0.90/5.12)
+                only 2026's actors live: prod 0.986   balanced 0.992   season balanced 1.000   (miss 3.4e-09 in 14 steps; d 1/50/99% = 0.71/0.92/3.17)
+      power  2: prod 0.988   noconf 0.988   density 1.004   balanced 1.000   noconf balanced 1.000   (balance miss 8.9e-09 in 70 steps; d 1/50/99% = 0.63/0.87/5.98)
+                only 2025's actors live: prod 0.979   balanced 0.995   season balanced 1.000   (miss 5.4e-09 in 22 steps; d 1/50/99% = 0.55/0.82/5.10)
+                only 2026's actors live: prod 0.979   balanced 0.987   season balanced 1.000   (miss 8.8e-09 in 25 steps; d 1/50/99% = 0.52/0.81/6.43)
+      power  4: prod 0.987   noconf 0.987   density 1.003   balanced 1.000   noconf balanced 1.000   (balance miss 9.9e-04 in 500 steps; d 1/50/99% = 0.54/0.84/7.09)
+                only 2025's actors live: prod 0.978   balanced 0.991   season balanced 1.000   (miss 8.8e-09 in 42 steps; d 1/50/99% = 0.36/0.63/10.77)
+                only 2026's actors live: prod 0.972   balanced 0.983   season balanced 1.000   (miss 8.6e-09 in 50 steps; d 1/50/99% = 0.07/0.21/4.31)
+      power 12: prod 0.988   noconf 0.988   density 1.008   balanced 1.000   noconf balanced 1.000   (balance miss 7.9e-08 in 500 steps; d 1/50/99% = 0.46/0.87/5.12)
+                only 2025's actors live: prod 0.969   balanced 0.980   season balanced 1.000   (miss 1.0e-08 in 139 steps; d 1/50/99% = 0.01/0.04/17.05)
+                only 2026's actors live: prod 0.963   balanced 0.978   season balanced 1.000   (miss 9.2e-09 in 158 steps; d 1/50/99% = 0.00/0.00/0.00)
+  the score-margin bell curve alone (sigma 2 runs), the pool replayed inside every count cell:
+  margin   target 2: prod 1.042   balanced 1.000 by construction; by margin -5..5, share of rows % / steals per 100:
+      8/0.22  4/0.67  6/0.95  8/1.37  12/2.39  25/2.47  12/2.87  8/3.07  6/3.27  4/3.04  7/1.51
+  margin   target 3: prod 1.033   balanced 1.000 by construction; by margin -5..5, share of rows % / steals per 100:
+      7/0.09  3/0.14  5/0.26  8/0.38  11/0.47  25/0.47  13/0.48  9/0.66  6/0.63  4/0.64  8/0.33
+
+5. THE DRAW'S MASS BY THE POOL ROW'S RUNNER TIER, on the real pitches (1 seldom, 3 most;
+   'none' = a runner-season under 100 opportunity pitches): share of all mass, and the
+   attempted mass as steals per 100
+  off                        none  2.42% -> 0.038  t1 30.79% -> 0.061  t2 33.76% -> 0.340  t3 33.03% -> 1.084
+  prod runner only 1         none  1.89% -> 0.022  t1 32.40% -> 0.065  t2 37.02% -> 0.372  t3 28.68% -> 0.840
+  prod 1/1/1                 none  1.91% -> 0.020  t1 32.42% -> 0.060  t2 36.92% -> 0.349  t3 28.75% -> 0.796
+  prod 4/4/2                 none  0.85% -> 0.009  t1 32.94% -> 0.060  t2 38.53% -> 0.352  t3 27.68% -> 0.716
+  neutral 1/1/1              none  1.72% -> 0.020  t1 32.51% -> 0.060  t2 36.98% -> 0.349  t3 28.79% -> 0.801
+  balanced runner only 1     none  2.43% -> 0.037  t1 31.16% -> 0.062  t2 34.08% -> 0.343  t3 32.32% -> 1.045
+  balanced 1/1/1             none  2.45% -> 0.036  t1 31.15% -> 0.060  t2 34.02% -> 0.331  t3 32.38% -> 1.019
+  balanced 4/4/2             none  2.64% -> 0.036  t1 31.26% -> 0.058  t2 34.26% -> 0.325  t3 31.84% -> 0.953
+  noconf runner only 1       none  2.58% -> 0.032  t1 32.36% -> 0.065  t2 36.71% -> 0.369  t3 28.35% -> 0.832
+  noconf 1/1/1               none  2.57% -> 0.031  t1 32.41% -> 0.059  t2 36.61% -> 0.346  t3 28.42% -> 0.792
+  noconf balanced 1/1/1      none  2.43% -> 0.036  t1 31.14% -> 0.060  t2 34.03% -> 0.332  t3 32.39% -> 1.019
+  margin balanced: balanced 1/1/1 none  2.50% -> 0.035  t1 31.23% -> 0.057  t2 33.98% -> 0.316  t3 32.29% -> 0.979
+
+6. EVERY VARIANT ON THE REAL PITCHES
+  variant                            per 100  vs real   vs off  second   third   corr  slope   t1    t2    t3   none   Brier   vs prod 1/1/1
+  off                                 1.524    +7.1%    +0.0%   2.245   0.463  -0.197  -1.82  1.57  1.54  1.46  1.55   278.92   +2.44±0.07
+  prod 1/1/1                          1.225   -13.9%   -19.6%   1.830   0.335  +0.710   3.84  1.03  1.15  1.45  1.48   276.48   +0.00±0.00
+  prod 4/4/2                          1.137   -20.1%   -25.4%   1.710   0.292  +0.845   1.92  0.65  0.90  1.77  1.63   273.65   -2.83±0.18
+  prod 12/12/2                        1.338    -6.0%   -12.2%   1.994   0.372  +0.926   1.05  0.47  0.86  2.55  1.87   298.07  +21.58±2.00
+  prod runner only 1                  1.299    -8.7%   -14.7%   1.941   0.355  +0.725   3.80  1.10  1.22  1.54  1.57   277.13   +0.65±0.04
+  prod pitcher only 1                 1.458    +2.5%    -4.3%   2.147   0.445  -0.196  -1.81  1.50  1.48  1.39  1.48   278.20   +1.72±0.05
+  prod catcher only 1                 1.505    +5.8%    -1.2%   2.217   0.457  -0.199  -1.84  1.55  1.52  1.44  1.53   278.87   +2.39±0.07
+  prod runner only 4                  1.239   -12.9%   -18.7%   1.868   0.313  +0.866   1.86  0.71  0.98  1.93  1.75   275.09   -1.39±0.11
+  prod pitcher only 4                 1.409    -0.9%    -7.5%   2.069   0.439  -0.172  -1.50  1.45  1.43  1.35  1.45   277.44   +0.96±0.08
+  prod catcher only 2                 1.505    +5.8%    -1.2%   2.219   0.453  -0.201  -1.84  1.55  1.52  1.44  1.53   278.86   +2.38±0.07
+  prod runner only 12                 1.435    +0.9%    -5.8%   2.145   0.389  +0.945   1.04  0.50  0.92  2.76  1.90   286.87  +10.39±1.34
+  prod pitcher only 12                1.424    +0.1%    -6.5%   2.089   0.446  -0.088  -0.64  1.46  1.44  1.37  1.47   278.76   +2.28±0.49
+  neutral 1/1/1                       1.230   -13.5%   -19.3%   1.838   0.336  +0.708   3.81  1.04  1.15  1.46  1.49   276.42   -0.06±0.01
+  neutral runner only 1               1.301    -8.5%   -14.6%   1.944   0.355  +0.726   3.79  1.10  1.22  1.55  1.58   277.12   +0.63±0.04
+  neutral pitcher only 1              1.454    +2.2%    -4.6%   2.141   0.443  -0.199  -1.84  1.50  1.47  1.39  1.48   278.16   +1.68±0.05
+  neutral catcher only 1              1.510    +6.2%    -0.9%   2.226   0.456  -0.199  -1.84  1.56  1.53  1.45  1.53   278.87   +2.39±0.07
+  density 1/1/1                       1.497    +5.3%    -1.7%   2.205   0.456  +0.743   2.81  1.23  1.38  1.83  1.84   275.26   -1.22±0.09
+  density 4/4/2                       1.566   +10.0%    +2.8%   2.300   0.485  +0.894   1.32  0.85  1.21  2.51  2.20   273.21   -3.27±0.48
+  density 12/12/2                     1.464    +2.9%    -3.9%   2.176   0.418  +0.928   0.99  0.53  0.96  2.80  1.58   307.78  +31.30±2.45
+  balanced 1/1/1                      1.446    +1.6%    -5.1%   2.134   0.434  +0.742   2.94  1.19  1.34  1.76  1.77   275.41   -1.07±0.07
+  balanced 4/4/2                      1.372    -3.5%    -9.9%   2.034   0.398  +0.896   1.51  0.74  1.05  2.21  1.92   272.76   -3.72±0.36
+  balanced 12/12/2                    1.395    -1.9%    -8.4%   2.074   0.396  +0.929   1.01  0.49  0.90  2.68  1.67   303.62  +27.14±2.27
+  balanced runner only 1              1.487    +4.6%    -2.4%   2.199   0.440  +0.765   3.02  1.22  1.37  1.82  1.82   276.56   +0.08±0.05
+  balanced pitcher only 1             1.491    +4.8%    -2.1%   2.193   0.458  -0.191  -1.70  1.54  1.51  1.43  1.52   277.98   +1.49±0.06
+  balanced catcher only 1             1.512    +6.3%    -0.8%   2.226   0.460  -0.200  -1.84  1.56  1.53  1.45  1.54   278.86   +2.38±0.07
+  balanced runner only 4              1.448    +1.8%    -5.0%   2.153   0.409  +0.913   1.47  0.78  1.10  2.35  2.02   274.23   -2.25±0.22
+  balanced runner only 12             1.474    +3.6%    -3.2%   2.201   0.405  +0.946   1.00  0.49  0.94  2.88  1.65   289.66  +13.18±1.55
+  runner balanced, rest prod 1/1/1    1.406    -1.2%    -7.7%   2.078   0.417  +0.751   3.05  1.15  1.30  1.72  1.72   275.75   -0.73±0.05
+  runner noconf, rest prod 1/1/1      1.224   -13.9%   -19.6%   1.831   0.332  +0.709   3.83  1.03  1.15  1.45  1.49   276.48   -0.00±0.00
+  noconf 1/1/1                        1.228   -13.7%   -19.4%   1.837   0.332  +0.705   3.80  1.04  1.15  1.45  1.50   276.43   -0.05±0.01
+  noconf 4/4/2                        1.106   -22.3%   -27.4%   1.669   0.276  +0.835   1.95  0.64  0.88  1.71  1.62   273.70   -2.78±0.17
+  noconf 12/12/2                      1.232   -13.4%   -19.2%   1.847   0.326  +0.922   1.16  0.46  0.78  2.32  1.90   284.65   +8.17±1.31
+  noconf runner only 1                1.298    -8.7%   -14.8%   1.941   0.352  +0.724   3.79  1.10  1.21  1.54  1.58   277.12   +0.64±0.04
+  noconf runner only 4                1.206   -15.2%   -20.8%   1.825   0.296  +0.857   1.89  0.70  0.96  1.86  1.74   275.18   -1.30±0.11
+  noconf pitcher only 1               1.455    +2.3%    -4.5%   2.142   0.443  -0.198  -1.83  1.50  1.47  1.39  1.48   278.16   +1.68±0.05
+  noconf balanced 1/1/1               1.446    +1.7%    -5.1%   2.134   0.434  +0.742   2.94  1.19  1.34  1.76  1.78   275.42   -1.06±0.07
+  noconf balanced 4/4/2               1.375    -3.3%    -9.7%   2.036   0.402  +0.888   1.50  0.75  1.05  2.20  2.05   272.48   -4.00±0.33
+  noconf balanced 12/12/2             1.396    -1.9%    -8.4%   2.077   0.394  +0.927   1.05  0.52  0.90  2.61  2.22   290.29  +13.81±1.68
+  noconf balanced runner only 1       1.487    +4.6%    -2.4%   2.199   0.440  +0.764   3.01  1.22  1.37  1.82  1.83   276.56   +0.08±0.05
+  noconf balanced runner only 4       1.451    +2.0%    -4.7%   2.159   0.410  +0.907   1.47  0.78  1.11  2.34  2.15   274.15   -2.33±0.20
+  season balanced 1/1/1               1.521    +6.9%    -0.2%   2.241   0.460  +0.746   2.75  1.24  1.40  1.86  1.87   275.23   -1.25±0.09
+  season balanced 4/4/2               1.512    +6.3%    -0.7%   2.230   0.456  +0.894   1.32  0.80  1.15  2.46  2.17   272.16   -4.32±0.39
+  season balanced 12/12/2             1.523    +7.1%    -0.0%   2.247   0.457  +0.934   0.96  0.53  0.99  2.90  2.06   287.18  +10.70±1.51
+  season balanced runner only 1       1.522    +7.0%    -0.1%   2.244   0.461  +0.769   2.89  1.24  1.40  1.87  1.87   276.49   +0.01±0.06
+  no margin curve: off                1.462    +2.8%    -4.0%   2.151   0.449  -0.250  -2.80  1.50  1.47  1.41  1.51   279.53   +3.05±0.08
+  no margin curve: prod 1/1/1         1.178   -17.2%   -22.7%   1.758   0.324  +0.727   4.32  0.99  1.10  1.40  1.44   277.41   +0.93±0.04
+  no margin curve: balanced 1/1/1     1.388    -2.4%    -8.9%   2.046   0.420  +0.758   3.27  1.14  1.28  1.69  1.72   276.43   -0.06±0.06
+  no margin curve: balanced 4/4/2     1.320    -7.2%   -13.3%   1.954   0.388  +0.903   1.61  0.71  1.01  2.13  1.84   273.93   -2.55±0.31
+  no margin curve: balanced 12/12/2   1.345    -5.4%   -11.7%   2.001   0.381  +0.925   1.05  0.47  0.86  2.60  1.55   301.86  +25.38±2.12
+  no margin curve: season balanced 1/1/1  1.460    +2.6%    -4.2%   2.149   0.446  +0.761   3.05  1.19  1.34  1.79  1.82   276.24   -0.24±0.07
+  no margin curve: season balanced 4/4/2  1.455    +2.2%    -4.5%   2.142   0.442  +0.901   1.41  0.77  1.10  2.37  2.08   273.33   -3.15±0.33
+  no margin curve: season balanced 12/12/2  1.459    +2.6%    -4.2%   2.149   0.444  +0.937   1.03  0.51  0.95  2.79  1.87   284.96   +8.48±1.32
+  margin balanced: off                1.463    +2.8%    -4.0%   2.152   0.448  -0.185  -1.71  1.51  1.48  1.40  1.48   278.85   +2.37±0.07
+  margin balanced: prod 1/1/1         1.175   -17.4%   -22.9%   1.754   0.324  +0.706   3.94  0.99  1.10  1.39  1.42   276.56   +0.08±0.01
+  margin balanced: balanced 1/1/1     1.388    -2.4%    -8.9%   2.045   0.420  +0.739   3.03  1.14  1.28  1.69  1.70   275.45   -1.03±0.06
+  margin balanced: balanced 4/4/2     1.317    -7.4%   -13.5%   1.950   0.387  +0.894   1.56  0.71  1.01  2.13  1.83   272.80   -3.68±0.34
+  margin balanced: balanced 12/12/2   1.345    -5.5%   -11.7%   1.995   0.387  +0.928   1.05  0.47  0.86  2.60  1.61   302.57  +26.09±2.23
+  margin balanced: season balanced 1/1/1  1.460    +2.6%    -4.2%   2.148   0.446  +0.743   2.82  1.19  1.35  1.78  1.79   275.25   -1.23±0.08
+  margin balanced: season balanced 4/4/2  1.451    +2.0%    -4.7%   2.137   0.443  +0.892   1.37  0.77  1.10  2.36  2.07   272.15   -4.34±0.37
+  margin balanced: season balanced 12/12/2  1.464    +2.9%    -3.9%   2.157   0.444  +0.933   1.00  0.51  0.95  2.80  1.98   286.36   +9.88±1.48
+  real by tier: t1 0.19 (32% of pitches)  t2 0.97 (31% of pitches)  t3 3.02 (34% of pitches)  none 1.28 (3% of pitches); 417 runners in the correlation
