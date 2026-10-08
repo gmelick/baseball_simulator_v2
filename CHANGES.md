@@ -131,7 +131,8 @@ that does must run one process or give each its own file).
 A sample game records on the worker pool, so it waits behind a running 100-game batch.
 `/simulate` still stores its batch summary in the history and the replay of game 0, as
 before. The 15 one-game rows the first build wrote to `sim.sim_runs` during this session's
-live tests stay until the owner removes them (`DELETE FROM sim.sim_runs WHERE n_iterations = 1`).
+live tests were deleted at the owner's word the same day; the table is empty again, as it
+was before.
 
 # CLOSED — the game page's projections run on the worker pool, every click reads the same run, and the panel names each player and groups the players by team; 100 games take 33–36 s (were about 150 s), a click 0.1 s (was the 100 games again) — SIM-560, 2026-10-08
 
