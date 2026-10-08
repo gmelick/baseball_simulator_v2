@@ -1,6 +1,6 @@
 # MLB Baseball Simulation Platform — End-to-End Workflow
 
-*Last updated: 2026-10-01 (Alembic head 0028; DuckDB migration 0031; the 2026-06-04 Phase-7 refresh: Python 3.13 · DuckDB v31 · full API surface live)*
+*Last updated: 2026-10-08 (Alembic head 0028; DuckDB migration 0032; the 2026-06-04 Phase-7 refresh: Python 3.13 · DuckDB v32 · full API surface live)*
 
 This document is the operator's manual.  It describes how to run the
 platform end-to-end from a clean checkout, and how to confirm each
@@ -16,7 +16,7 @@ exited zero.
 
 > **Phase note.** As of 2026-06-06 the platform is at **Phase 7 — live
 > bring-up (largely complete)**; Phases 1–6 are COMPLETE and CI-green
-> (Python 3.13 / numpy 2.x; 89% coverage; DuckDB v31 / Alembic 0028).  The
+> (Python 3.13 / numpy 2.x; 89% coverage; DuckDB v32 / Alembic 0028).  The
 > full API surface (games, simulate, betting, WebSocket, odds, similarity,
 > metrics) is live.  Calibration is LIVE (SIM-432; win-prob map = fitted
 > reliability-curve), the full-pool sampler + all realism flags are ON in
@@ -149,11 +149,29 @@ run for a game:
 
 ```bat
 curl "http://localhost:8000/api/games/745000/simulate"
-:: Returns win probabilities, per-player prop PMFs, boxscore + linescore.
+:: Returns win probabilities, the score spread and every iteration's score.
 ```
 
 At 6 workers (forkserver + a 10 GB app `mem_limit`, SIM-430), an n=100
 batch runs in ~38 s with no OOM.
+
+**One game, pitch by pitch (SIM-561).** The game page's "Simulate a game"
+button, or this call, plays ONE game and stores it in the replay file
+(`/data/replay.duckdb`, which only the app opens):
+
+```bat
+curl -X POST "http://localhost:8000/api/games/745000/sample-game"
+:: Returns {game_pk, run_id, base_seed}; add ?base_seed=N to replay a game.
+curl "http://localhost:8000/api/games/745000/linescore"
+curl "http://localhost:8000/api/games/745000/plays"
+:: Each play carries its inning, half, outs, batter, pitcher and the score after;
+:: "names" maps the player ids to names.
+```
+
+Loading projections (`/boxscore`) also stores its run's first game. The replay
+reads serve the newest stored game, and the file keeps the newest 5 per game.
+**What good looks like:** the boot log says `SIM-561: replay store OPEN at
+/data/replay.duckdb`; a sample game takes about 5 s.
 
 ### 1.8 Production simulation flags
 
@@ -266,7 +284,7 @@ echo %ERRORLEVEL%
 
 ```bat
 type db\schemas\duckdb_schema_version.txt
-:: Expected: 31
+:: Expected: 32
 
 duckdb db\schemas\baseball_simulator.duckdb -c "SELECT * FROM migration_history ORDER BY applied_at;"
 
@@ -429,7 +447,7 @@ echo %BASEBALL_DB_DSN%
 | Live pipeline misses pitches | Check `raw.etl_errors` — SIM-093 audits skipped rows. |
 | Vig flake | Fixed in SIM-159; check `_VIG_LOWER`/`_VIG_UPPER` in `test_live_pipeline_bugs.py`. |
 | Mock odds returns NULL hash | Run `python scripts\backfill_odds_hash.py`. |
-| DuckDB schema mismatch | Re-apply `db\migrations\duckdb\*.sql` in numbered order (through `0031_*`) and bump `duckdb_schema_version.txt` to match the latest migration (currently `31`). On the live DuckDB, apply 0031 only through `scripts/sim554_rebuild_steal_pool.py --apply-migration` (app stopped): it applies the migration inside the steal-pool rebuild's transaction, and the old pool builder fails on a migrated table. |
+| DuckDB schema mismatch | Re-apply `db\migrations\duckdb\*.sql` in numbered order (through `0032_*`) and bump `duckdb_schema_version.txt` to match the latest migration (currently `32`). On the live DuckDB, apply 0031 only through `scripts/sim554_rebuild_steal_pool.py --apply-migration` (app stopped): it applies the migration inside the steal-pool rebuild's transaction, and the old pool builder fails on a migrated table. |
 | `curl` truncates URL | Escape `&` as `^&` or wrap the URL in double quotes. |
 | `set VAR=value` doesn't persist | Use `setx VAR "value"` and open a new cmd window. |
 | `make test` shows 21 errors | Integration tests can't reach Docker daemon — fixed in conftest.py; rebuild image with `make build`. |

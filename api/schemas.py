@@ -508,6 +508,16 @@ class PlayByPlayEntryModel(_ApiModel):
     runs: float = 0.0
     canonical_event: str | None = None
 
+    # SIM-561: the inning, half, outs and batter BEFORE the pitch; the pitcher
+    # who threw it; the score AFTER it.  None on a stream stored without them.
+    inning: int | None = None
+    half: str | None = None
+    outs_before: int | None = None
+    batter_id: int | None = None
+    pitcher_id: int | None = None
+    away_score: int | None = None
+    home_score: int | None = None
+
     @classmethod
     def from_dataclass(cls, entry: Any) -> PlayByPlayEntryModel:
         """Build from a :class:`simulation.snapshots.PlayByPlayEntry`."""
@@ -526,7 +536,22 @@ class PlayByPlayEntryModel(_ApiModel):
             spray_angle=(None if entry.spray_angle is None else float(entry.spray_angle)),
             runs=float(entry.runs),
             canonical_event=(None if entry.canonical_event is None else str(entry.canonical_event)),
+            inning=_opt_int(getattr(entry, "inning", None)),
+            half=_opt_str(getattr(entry, "half", None)),
+            outs_before=_opt_int(getattr(entry, "outs_before", None)),
+            batter_id=_opt_int(getattr(entry, "batter_id", None)),
+            pitcher_id=_opt_int(getattr(entry, "pitcher_id", None)),
+            away_score=_opt_int(getattr(entry, "away_score", None)),
+            home_score=_opt_int(getattr(entry, "home_score", None)),
         )
+
+
+def _opt_int(value: Any) -> int | None:
+    return None if value is None else int(value)
+
+
+def _opt_str(value: Any) -> str | None:
+    return None if value is None else str(value)
 
 
 class PlayByPlayModel(_ApiModel):
@@ -552,6 +577,13 @@ class PlayByPlayModel(_ApiModel):
     page_limit: int | None = None
     #: Number of entries actually returned in this page (len(entries)).
     returned_entries: int | None = None
+    #: SIM-561: the stored run these plays belong to (the newest complete run,
+    #: unless the request named one) and the seed it was played at.
+    run_id: int | None = None
+    base_seed: int | None = None
+    #: SIM-561: ``str(player_id) -> name`` for every batter and pitcher in the
+    #: returned entries; a placeholder reliever reads "Generic reliever N".
+    names: dict[str, str] = Field(default_factory=dict)
 
     @classmethod
     def from_dataclass(cls, pbp: Any) -> PlayByPlayModel:

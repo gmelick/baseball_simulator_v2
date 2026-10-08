@@ -63,12 +63,14 @@ import asyncio
 import dataclasses
 import logging
 import os
+import secrets
+import threading
 import time
 from collections.abc import Mapping
 from datetime import date as _date
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
@@ -107,7 +109,11 @@ from simulation.lineup_resolver import (
     resolve_lineup,
 )
 from simulation.pitcher_decisions import decisions_from_plays
-from simulation.play_recorder import record_game_plays
+from simulation.play_recorder import RecordedGame, record_game
+from simulation.production_factory import (
+    _default_bullpen_for_spec,
+    placeholder_reliever_number,
+)
 from simulation.prop_distributions import ALL_PROPS, PropDistributionSet
 from simulation.sim_kwargs import (
     build_sim_kwargs as _build_sim_kwargs,
@@ -198,6 +204,31 @@ def _get_sim_duckdb(request: Request) -> Any:
     return getattr(request.app.state, "sim_duckdb", None)
 
 
+def _get_replay_store(request: Request) -> Any:
+    """The replay file's DuckDB connection on app.state, or None (SIM-561).
+
+    The lifespan opens it when ``REPLAY_PERSISTENCE_ENABLED`` is on: a file of its
+    own (``REPLAY_DUCKDB_PATH``, default ``/data/replay.duckdb``) that only the app
+    writes.  It is NOT the analytics connection (:func:`_get_sim_duckdb`), so the
+    app never holds a write lock on the analytics file.  ``None`` means the store
+    is off: the replay reads answer 503 and the writes skip.
+    """
+    return getattr(request.app.state, "replay_duckdb", None)
+
+
+def _replay_call(con: Any, fn: Any, /, **kwargs: Any) -> Any:
+    """Run ``fn(cursor, **kwargs)`` on a cursor of its own, then close it (SIM-561).
+
+    A DuckDB connection is not safe to share across threads; a cursor per call
+    is.  The routes run every replay read and write in a worker thread.
+    """
+    cur = con.cursor()
+    try:
+        return fn(cur, **kwargs)
+    finally:
+        cur.close()
+
+
 def _build_runner(request: Request) -> BatchRunner:
     """The BatchRunner for this request -- the shared one if present (SIM-360).
 
@@ -270,6 +301,18 @@ class GamesOnDateResponse(BaseModel):
     date: str
     count: int
     games: list[GameCard] = Field(default_factory=list)
+
+
+class SampleGameResponse(BaseModel):
+    """The ``POST /api/games/{game_pk}/sample-game`` envelope (SIM-561).
+
+    The stored game's run id and seed.  The page then reads the game through
+    /linescore, /decisions and /plays, which serve this run until a newer one.
+    """
+
+    game_pk: int
+    run_id: int
+    base_seed: int
 
 
 class SimulateResponse(BaseModel):
@@ -737,18 +780,41 @@ def _state_at_pitch_model_from_snapshot(snapshot: Mapping[str, Any]) -> StateAtP
 # ---------------------------------------------------------------------------
 
 
+class ReplayArtifacts(NamedTuple):
+    """One recorded game, built for the replay store (SIM-357; SIM-561 adds ``result``)."""
+
+    play_by_play: PlayByPlay
+    snapshots: list[dict]
+    linescore: dict
+    decisions: dict
+    result: Any  # the recorded GameSimResult
+
+
 def _record_and_build(
     *,
     factory_ref: str,
     base_seed: int | None,
     sim_kwargs: dict[str, Any],
     resolved: Any = None,
-) -> tuple[PlayByPlay, list[dict], dict, dict]:
-    """Record ONE representative game and build the replay artifacts (sync).
+) -> ReplayArtifacts:
+    """Record one game in THIS process and build its replay artifacts (sync).
 
-    Replays a single game at the run's ``base_seed`` via
-    :func:`simulation.play_recorder.record_game_plays` (the no-DB rng path under
-    the test/factory seam), then derives:
+    The routes record on the worker pool instead (SIM-561,
+    ``BatchRunner.record_game``) and call :func:`_build_replay_artifacts`.
+    """
+    recorded = record_game(
+        factory_ref=factory_ref,
+        seed=base_seed,
+        sim_kwargs=sim_kwargs,
+    )
+    return _build_replay_artifacts(recorded, resolved=resolved)
+
+
+def _build_replay_artifacts(recorded: RecordedGame, *, resolved: Any = None) -> ReplayArtifacts:
+    """Build the replay artifacts of ONE recorded game (sync).
+
+    From a :class:`~simulation.play_recorder.RecordedGame` (the game, its plays
+    and the state before each), this derives:
 
       * a :class:`~simulation.snapshots.PlayByPlay` (the /plays scroll),
       * one jsonable :class:`~simulation.snapshots.StateAtPitch` per pitch (the
@@ -776,17 +842,18 @@ def _record_and_build(
     linescore and the decisions read the whole stream, because the pickoff's
     out lives on that result.
 
-    Returns ``(play_by_play, state_snapshot_dicts, linescore_json, decisions_json)``.
+    SIM-561 -- WHO, WHEN, THE SCORE: the recorder also captures the state before
+    each pitch, so every play-by-play entry carries its inning, half, outs,
+    batter, pitcher and the score after it.
+
+    Returns a :class:`ReplayArtifacts` (the play-by-play, the state-snapshot
+    dicts, the linescore and decisions JSON, and the recorded game result).
     A pitch whose ``next_state`` is missing is skipped for the state stream (its
-    /plays entry still persists).  Pure + sync so the caller can run it in the
-    same worker thread as the batch.
+    /plays entry still persists).  Pure + sync so the caller can run it in a
+    worker thread.
     """
-    _result, plays = record_game_plays(
-        factory_ref=factory_ref,
-        seed=base_seed,
-        sim_kwargs=sim_kwargs,
-    )
-    pbp = PlayByPlay.from_play_results(plays)
+    plays = recorded.plays
+    pbp = PlayByPlay.from_play_results(plays, recorded.contexts)
     pitched = thrown_pitches(plays)
 
     # SIM-362 / SIM-364: derive the game card from the recorded PlayResult list
@@ -829,7 +896,13 @@ def _record_and_build(
             defense_positions=_defense_for(next_state),
         )
         snapshots.append(to_jsonable(sap))
-    return pbp, snapshots, to_jsonable(linescore), to_jsonable(decisions)
+    return ReplayArtifacts(
+        play_by_play=pbp,
+        snapshots=snapshots,
+        linescore=to_jsonable(linescore),
+        decisions=to_jsonable(decisions),
+        result=recorded.result,
+    )
 
 
 async def _persist_replay_artifacts(
@@ -839,29 +912,30 @@ async def _persist_replay_artifacts(
     factory_ref: str,
     base_seed: int | None,
     sim_kwargs: dict[str, Any],
-    batch: Any,
-) -> None:
-    """Best-effort persist of the /plays + /state replay artifacts (SIM-357).
+    batch: Any = None,
+) -> int | None:
+    """Record one game and store it in the replay file; return its run id (SIM-357).
 
-    After a batch runs, this records ONE representative game (at the run's
-    ``base_seed``), persists its play-stream + per-pitch state snapshots to the
-    DuckDB store, and persists the run's GameSimSummary to the Postgres sim-run
-    history (SIM-356) so /plays + /state have something to read.
+    Records ONE game at ``base_seed`` on the warm worker pool and stores its
+    play-stream, per-pitch state snapshots and game card in the replay file
+    (SIM-561: a DuckDB file of its own, which numbers its own runs).  ``batch``
+    is the /simulate batch: its summary goes to the Postgres sim-run history
+    (SIM-356).  A sample game or the projections' first game (``batch`` None)
+    writes no history row: a one-game summary is not a Monte-Carlo run.
 
-    EVERYTHING here is wrapped so a persistence failure NEVER breaks the
-    /simulate response: a missing DuckDB store skips the DuckDB writes silently,
-    a missing pg pool skips the history write, and any exception is swallowed
-    (logged at warning).  The cross-store ``run_id`` is taken from the Postgres
-    insert when available; without a pool we fall back to a synthetic run_id so
-    the DuckDB stream is still self-consistent and queryable by game_pk.
+    Best-effort: a missing replay store returns None at once, and any failure
+    logs a warning and returns None.  It never raises, so a store failure never
+    breaks /simulate or /boxscore; the sample-game route checks for None.  After
+    a store, the game keeps only its newest :data:`db.sim_store.REPLAY_RUNS_KEPT`
+    runs.
     """
-    con = _get_sim_duckdb(request)
+    con = _get_replay_store(request)
     pool = getattr(request.app.state, "pg_pool", None)
 
-    # Nothing to write the replay stream to -> skip entirely (the /plays + /state
-    # reads will 404, which is the documented "nothing persisted" behaviour).
+    # Nothing to write the replay stream to -> skip entirely (the replay reads
+    # answer 503 "replay store unavailable").
     if con is None:
-        return
+        return None
 
     try:
         # SIM-363: resolve the lineup ONCE (best-effort) so the recorded snapshots
@@ -871,64 +945,101 @@ async def _persist_replay_artifacts(
         # positions, so this is strictly additive.
         resolved = await _resolve_lineup_best_effort(pool, game_pk)
 
-        # 1) Record the representative game + build artifacts (CPU-bound: thread).
-        #    Also derives the SIM-362 linescore + SIM-364 decisions game card.
-        pbp, snapshots, linescore_json, decisions_json = await asyncio.to_thread(
-            _record_and_build,
-            factory_ref=factory_ref,
-            base_seed=base_seed,
-            sim_kwargs=sim_kwargs,
-            resolved=resolved,
+        # 1) Record the game on the warm worker pool (SIM-561: the API process
+        #    never loads the sim bundle), then build the artifacts here.  The
+        #    build also derives the SIM-362 linescore + SIM-364 decisions card.
+        runner = _build_runner(request)
+        spec = GameSpec(machine_factory=factory_ref, sim_kwargs=sim_kwargs)
+        recorded = await asyncio.to_thread(runner.record_game, spec, base_seed)
+        built = await asyncio.to_thread(_build_replay_artifacts, recorded, resolved=resolved)
+
+        # 2) Store the game in the replay file under the file's own next run id.
+        run_id = await asyncio.to_thread(
+            _replay_call, con, _store_replay_run, game_pk=game_pk, built=built, base_seed=base_seed
         )
 
-        # 2) Persist the run summary to Postgres (SIM-356) to get a durable
-        #    run_id; without a pool, use a synthetic run_id so the DuckDB stream
-        #    is still grouped + queryable by game_pk.
-        run_id: int
-        if pool is not None:
-            try:
-                summary_json = to_jsonable(batch.summary)
-                acquire = getattr(pool, "acquire", None)
-                if acquire is not None:
-                    async with pool.acquire() as conn:
-                        run_id = await sim_store.store_sim_run(
-                            conn,
-                            game_pk=game_pk,
-                            summary=summary_json,
-                            n_iterations=int(batch.n_iterations),
-                            base_seed=base_seed,
-                        )
-                else:
-                    run_id = await sim_store.store_sim_run(
-                        pool,
-                        game_pk=game_pk,
-                        summary=summary_json,
-                        n_iterations=int(batch.n_iterations),
-                        base_seed=base_seed,
-                    )
-            except Exception as exc:  # noqa: BLE001 -- history write is optional
-                log.warning("sim-run history persist failed for game %s: %s", game_pk, exc)
-                run_id = 0 if base_seed is None else int(base_seed)
-        else:
-            run_id = 0 if base_seed is None else int(base_seed)
-
-        # 3) Persist the DuckDB play-stream + state snapshots (sync calls).
-        play_rows = [dataclasses.asdict(e) for e in pbp.entries]
-        sim_store.store_play_stream(con, game_pk=game_pk, run_id=run_id, play_entries=play_rows)
-        sim_store.store_state_snapshots(con, game_pk=game_pk, run_id=run_id, snapshots=snapshots)
-
-        # 4) Persist the SIM-362/364 game card (linescore + decisions).  These were
-        #    derived at record time (they need PlayResult.next_state) and are stored
-        #    keyed on the same run_id so /linescore + /decisions can read them back.
-        sim_store.store_game_card(
-            con,
-            game_pk=game_pk,
-            run_id=run_id,
-            linescore=linescore_json,
-            decisions=decisions_json,
-        )
+        # 3) A /simulate batch also keeps its summary in the Postgres history.
+        if batch is not None and pool is not None:
+            await _store_history_run(pool, game_pk=game_pk, batch=batch, base_seed=base_seed)
+        return run_id
     except Exception as exc:  # noqa: BLE001 -- persistence must never break /simulate
         log.warning("replay-artifact persist failed for game %s: %s", game_pk, exc)
+        return None
+
+
+async def _store_history_run(pool: Any, *, game_pk: int, batch: Any, base_seed: int | None) -> None:
+    """Keep a /simulate batch's summary in the Postgres sim-run history (SIM-356).
+
+    Best-effort: a failure logs a warning.  Since SIM-561 the history row's id is
+    its own; the replay file numbers its runs apart.
+    """
+    try:
+        summary_json = to_jsonable(batch.summary)
+        acquire = getattr(pool, "acquire", None)
+        if acquire is not None:
+            async with pool.acquire() as conn:
+                await sim_store.store_sim_run(
+                    conn,
+                    game_pk=game_pk,
+                    summary=summary_json,
+                    n_iterations=int(batch.n_iterations),
+                    base_seed=base_seed,
+                )
+        else:
+            await sim_store.store_sim_run(
+                pool,
+                game_pk=game_pk,
+                summary=summary_json,
+                n_iterations=int(batch.n_iterations),
+                base_seed=base_seed,
+            )
+    except Exception as exc:  # noqa: BLE001 -- history write is optional
+        log.warning("sim-run history persist failed for game %s: %s", game_pk, exc)
+
+
+#: SIM-561: one replay write at a time in this process.  The run id is the file's
+#: max + 1, and two prunes of the same game conflict in DuckDB ("Conflict on
+#: tuple deletion"), so the id draw, the store and the prune run under it.
+_REPLAY_WRITE_LOCK = threading.Lock()
+
+
+def _store_replay_run(
+    cur: Any, *, game_pk: int, built: ReplayArtifacts, base_seed: int | None
+) -> int:
+    """Write one recorded game to the replay file on ``cur``; return its run id.
+
+    Sync (SIM-561).  The play stream, the snapshots and the game card go in one
+    transaction under the file's next run id.  The prune of the game's older runs
+    follows; a prune failure logs a warning and keeps the stored game.
+    """
+    play_rows = [dataclasses.asdict(e) for e in built.play_by_play.entries]
+    with _REPLAY_WRITE_LOCK:
+        run_id = sim_store.next_replay_run_id(cur)
+        cur.execute("BEGIN TRANSACTION")
+        try:
+            sim_store.store_play_stream(cur, game_pk=game_pk, run_id=run_id, play_entries=play_rows)
+            sim_store.store_state_snapshots(
+                cur, game_pk=game_pk, run_id=run_id, snapshots=built.snapshots
+            )
+            # SIM-362/364: the game card (linescore + decisions), derived at record
+            # time (they need PlayResult.next_state) and keyed on the same run_id.
+            sim_store.store_game_card(
+                cur,
+                game_pk=game_pk,
+                run_id=run_id,
+                linescore=built.linescore,
+                decisions=built.decisions,
+                base_seed=base_seed,
+            )
+            cur.execute("COMMIT")
+        except Exception:
+            cur.execute("ROLLBACK")
+            raise
+        try:
+            sim_store.prune_replay_runs(cur, game_pk=game_pk)
+        except Exception as exc:  # noqa: BLE001 -- the game is stored; pruning can wait
+            log.warning("replay prune failed for game %s: %s", game_pk, exc)
+    return run_id
 
 
 async def _resolve_lineup_best_effort(pool: Any, game_pk: int) -> Any:
@@ -1360,6 +1471,56 @@ async def simulate_game_endpoint(
 
 
 # ===========================================================================
+# SIM-561 -- POST /api/games/{game_pk}/sample-game
+# ===========================================================================
+
+
+@router.post(
+    "/{game_pk}/sample-game",
+    response_model=SampleGameResponse,
+    summary="Simulate and store one game for the game page",
+    dependencies=[Depends(require_auth)],
+    description=(
+        "Resolve the game's lineup, simulate ONE game at ``base_seed`` (a random "
+        "seed when omitted), and store it in the replay file: its play-by-play, "
+        "per-pitch states, linescore and pitcher decisions (SIM-561). /linescore, "
+        "/decisions, /card, /plays and /state then serve this game. Returns the "
+        "stored run's id and seed. 503 if the replay store is off or the lineup "
+        "is not yet usable (Retry-After); 404 if the game is unknown; 500 if the "
+        "game could not be stored (the app log says why)."
+    ),
+)
+async def simulate_sample_game(
+    game_pk: int,
+    request: Request,
+    base_seed: int | None = Query(None, description="The game's seed; random when omitted"),
+) -> SampleGameResponse:
+    if _get_replay_store(request) is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="replay store unavailable",
+        )
+    pool = _get_pool(request)
+    state = await _resolve_state_or_error(pool, game_pk)
+    sim_kwargs = await _resolved_sim_kwargs(request, pool, state, game_pk)
+    seed = int(base_seed) if base_seed is not None else secrets.randbelow(1_000_000_000)
+
+    run_id = await _persist_replay_artifacts(
+        request,
+        game_pk=int(game_pk),
+        factory_ref=resolve_factory_ref(request),
+        base_seed=seed,
+        sim_kwargs=sim_kwargs,
+    )
+    if run_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="the simulated game was not stored; the app log says why",
+        )
+    return SampleGameResponse(game_pk=int(game_pk), run_id=int(run_id), base_seed=seed)
+
+
+# ===========================================================================
 # SIM-358 -- POST /api/games/{game_pk}/simulate/with_override
 # ===========================================================================
 
@@ -1433,6 +1594,58 @@ async def simulate_with_override_endpoint(
 
 
 # ===========================================================================
+# SIM-561 -- the replay reads: the newest complete run, and the players' names
+# ===========================================================================
+
+
+def _read_newest_plays(
+    cur: Any, *, game_pk: int, run_id: int | None = None
+) -> tuple[int | None, int | None, list[dict]]:
+    """A complete run's id, seed and play stream (sync; SIM-561).
+
+    ``run_id`` None reads the newest complete run.  A run with no game card is
+    not complete and reads as empty.
+    """
+    card = sim_store.load_game_card(cur, game_pk=game_pk, run_id=run_id)
+    if card is None:
+        return None, None, []
+    rows = sim_store.load_play_stream(cur, game_pk=game_pk, run_id=card["run_id"])
+    return card["run_id"], card.get("base_seed"), rows
+
+
+def _read_newest_state(cur: Any, *, game_pk: int, at_bat: int, pitch: int) -> dict | None:
+    """One pitch's stored state in the newest complete run (sync; SIM-561)."""
+    run_id = sim_store.latest_replay_run_id(cur, game_pk=game_pk)
+    if run_id is None:
+        return None
+    return sim_store.load_state_at(cur, game_pk=game_pk, at_bat=at_bat, pitch=pitch, run_id=run_id)
+
+
+def _play_player_ids(rows: list[dict]) -> list[int]:
+    """Every batter and pitcher id in a stored play stream, sorted."""
+    ids = {row.get(key) for row in rows for key in ("batter_id", "pitcher_id")}
+    return sorted(int(pid) for pid in ids if pid is not None)
+
+
+async def _replay_player_names(request: Request, player_ids: list[int]) -> dict[int, str]:
+    """Names for the ids in a replay: ``raw.players`` and the placeholder arms.
+
+    A placeholder reliever (a game with no pen in the box) reads "Generic
+    reliever N".  Best-effort like :func:`_player_names`: with no pool, or a
+    failed lookup, the real players stay unnamed.
+    """
+    names = {
+        pid: f"Generic reliever {n}"
+        for pid in player_ids
+        if (n := placeholder_reliever_number(pid)) is not None
+    }
+    pool = getattr(request.app.state, "pg_pool", None)
+    if pool is not None:
+        names.update(await _player_names(pool, [pid for pid in player_ids if pid > 0]))
+    return names
+
+
+# ===========================================================================
 # SIM-357 -- GET /api/games/{game_pk}/plays
 # ===========================================================================
 
@@ -1449,7 +1662,10 @@ async def simulate_with_override_endpoint(
         "JSON (SIM-350). SIM-415: optional ``limit``/``offset`` page the entries "
         "(a full game is ~300 pitches); ``n_pitches``/``n_plate_appearances`` stay "
         "full-game totals and ``total_entries``/``page_*`` describe the slice. "
-        "Omitting ``limit`` returns the whole stream (unchanged shape). 404 if "
+        "Omitting ``limit`` returns the whole stream (unchanged shape). SIM-561: "
+        "the entries come from the newest stored run only (``run_id``), each "
+        "carries its inning, half, outs, batter, pitcher and the score after it, "
+        "and ``names`` maps every batter and pitcher id to a name. 404 if "
         "nothing has been persisted for the game, 503 if no replay store is wired."
     ),
 )
@@ -1460,15 +1676,22 @@ async def get_game_plays(
         None, ge=1, le=2000, description="Page size; omit to return all entries"
     ),
     offset: int = Query(0, ge=0, description="0-based offset of the entry slice"),
+    run_id: int | None = Query(
+        None, description="SIM-561: the stored run to read; omit for the newest"
+    ),
 ) -> PlayByPlayModel:
-    con = _get_sim_duckdb(request)
+    con = _get_replay_store(request)
     if con is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="replay store unavailable",
         )
 
-    rows = await asyncio.to_thread(sim_store.load_play_stream, con, game_pk=int(game_pk))
+    # SIM-561: one complete run only (the newest, unless the caller names one);
+    # the store keeps several per game.
+    stored_run, base_seed, rows = await asyncio.to_thread(
+        _replay_call, con, _read_newest_plays, game_pk=int(game_pk), run_id=run_id
+    )
     if not rows:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1479,6 +1702,12 @@ async def get_game_plays(
     # the whole game regardless of paging (SIM-415).
     pbp = PlayByPlay(entries=[PlayByPlayEntry(**row) for row in rows])
     model = PlayByPlayModel.from_dataclass(pbp)
+    model.run_id = stored_run
+    model.base_seed = base_seed
+    model.names = {
+        str(pid): name
+        for pid, name in (await _replay_player_names(request, _play_player_ids(rows))).items()
+    }
 
     if limit is None:
         return model  # unchanged full-collection response
@@ -1515,7 +1744,7 @@ async def get_game_state_at_pitch(
     pitch: int,
     request: Request,
 ) -> StateAtPitchModel:
-    con = _get_sim_duckdb(request)
+    con = _get_replay_store(request)
     if con is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1523,8 +1752,9 @@ async def get_game_state_at_pitch(
         )
 
     row = await asyncio.to_thread(
-        sim_store.load_state_at,
+        _replay_call,
         con,
+        _read_newest_state,
         game_pk=int(game_pk),
         at_bat=int(at_bat),
         pitch=int(pitch),
@@ -1559,6 +1789,9 @@ class GameCardResponse(BaseModel):
     game_pk: int
     linescore: LinescoreModel
     decisions: PitcherDecisionsModel
+    #: SIM-561: the stored run and its seed; /plays?run_id= reads the same game.
+    run_id: int | None = None
+    base_seed: int | None = None
 
 
 async def _load_game_card_or_error(request: Request, game_pk: int) -> dict:
@@ -1569,13 +1802,16 @@ async def _load_game_card_or_error(request: Request, game_pk: int) -> dict:
     or the card persist was skipped).  Returns the parsed
     ``{run_id, game_pk, linescore, decisions}`` dict on success.
     """
-    con = _get_sim_duckdb(request)
+    con = _get_replay_store(request)
     if con is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="replay store unavailable",
         )
-    card = await asyncio.to_thread(sim_store.load_game_card, con, game_pk=int(game_pk))
+    # The newest card: the same run /plays and /state read (SIM-561).
+    card = await asyncio.to_thread(
+        _replay_call, con, sim_store.load_game_card, game_pk=int(game_pk)
+    )
     if card is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1645,6 +1881,8 @@ async def get_game_card(
         game_pk=int(game_pk),
         linescore=LinescoreModel.from_jsonable(card["linescore"]),
         decisions=PitcherDecisionsModel.from_jsonable(card["decisions"]),
+        run_id=card.get("run_id"),
+        base_seed=card.get("base_seed"),
     )
 
 
@@ -1694,8 +1932,6 @@ def _placeholder_pens(sim_kwargs: Mapping[str, Any]) -> dict[int, list[int]]:
     writes ``raw.game_bullpen``) pitches these arms.  Their ids are negative and
     built from each starter's id, so this asks the factory's own builder.
     """
-    from simulation.production_factory import _default_bullpen_for_spec
-
     return _default_bullpen_for_spec(GameSpec(sim_kwargs=dict(sim_kwargs)))
 
 
@@ -1792,6 +2028,8 @@ async def _player_names(pool: Any, player_ids: list[int]) -> dict[int, str]:
         "Each row also carries the player's name, side, batting-order slot and "
         "starting-pitcher flag (SIM-560). The games run on the worker pool, and a "
         "seeded run is cached, so /props with the same seed and N reads this run. "
+        "With the replay store on, the run's first game is stored for /linescore "
+        "and /plays (SIM-561). "
         "numpy-free JSON "
         "(SIM-350). 503 if no DB pool is attached or the game's lineup is not yet "
         "usable (Retry-After); 404 if the game is unknown."
@@ -1811,12 +2049,25 @@ async def get_game_boxscore(
         machine_factory=resolve_factory_ref(request),
         sim_kwargs=await _resolved_sim_kwargs(request, pool, state, game_pk),
     )
-    pset = await asyncio.to_thread(
-        _build_prop_set,
-        runner=_build_runner(request),
-        spec=spec,
-        n_iterations=n_iterations,
-        base_seed=base_seed,
+    # SIM-561: store the run's first game for the linescore and play-by-play
+    # panels, while the pool runs the batch.  Game 0's seed is base_seed itself
+    # (derive_seed(base_seed, 0)), so the panels show one of these games.  A store
+    # failure never breaks the card; with the replay store off it returns at once.
+    pset, _run_id = await asyncio.gather(
+        asyncio.to_thread(
+            _build_prop_set,
+            runner=_build_runner(request),
+            spec=spec,
+            n_iterations=n_iterations,
+            base_seed=base_seed,
+        ),
+        _persist_replay_artifacts(
+            request,
+            game_pk=int(game_pk),
+            factory_ref=str(spec.machine_factory),
+            base_seed=base_seed,
+            sim_kwargs=spec.sim_kwargs,
+        ),
     )
     names = _placeholder_names(spec.sim_kwargs)
     names.update(await _player_names(pool, sorted(pid for pid in pset.by_player if pid > 0)))

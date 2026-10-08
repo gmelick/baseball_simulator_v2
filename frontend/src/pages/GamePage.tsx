@@ -12,20 +12,27 @@
  * /linescore + /plays (need a persisted sim run — a 404 is treated as
  * "no data yet", not an error). Per-player projections (SIM-394) and the
  * betting card (SIM-395) mount into the marked slots in later tickets.
+ *
+ * SIM-561: the linescore and the play-by-play show ONE simulated game. The
+ * "Simulate a game" button stores a new one (POST /sample-game), and loading
+ * projections stores the projections' first game; either one reloads both. The
+ * page reads the stored game's card (linescore, run id, seed) first and then
+ * that run's plays, so the two panels always show the same game.
  */
 import React, { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
 import {
   fetchGameCard,
-  fetchLinescore,
   fetchLiveState,
   fetchPlays,
+  fetchReplayCard,
   GamesApiError,
+  postSampleGame,
   type GameCardAggregate,
-  type Linescore,
   type LiveState,
   type PlayByPlay,
+  type ReplayCard,
 } from '@/api/games'
 import { BaseballFieldGraphic, LinescoreGraphic } from '@/components/graphics'
 import { BettingCard } from '@/components/games/BettingCard'
@@ -98,8 +105,38 @@ export function GamePage(): React.ReactElement {
     () => (isLive ? fetchLiveState(gamePk) : Promise.resolve(null as unknown as LiveState)),
     [gamePk, isLive],
   )
-  const linescore = useOptionalResource<Linescore>(() => fetchLinescore(gamePk), [gamePk])
-  const plays = useOptionalResource<PlayByPlay>(() => fetchPlays(gamePk), [gamePk])
+  // SIM-561: a newly stored simulated game bumps the version, which reloads the
+  // card; the card's run id then loads that run's plays.
+  const [replayVersion, setReplayVersion] = useState(0)
+  const [simulating, setSimulating] = useState(false)
+  const [simError, setSimError] = useState<string | null>(null)
+  const replay = useOptionalResource<ReplayCard>(
+    () => fetchReplayCard(gamePk),
+    [gamePk, replayVersion],
+  )
+  const replayRun = replay.data?.run_id ?? null
+  const plays = useOptionalResource<PlayByPlay>(
+    () =>
+      replayRun != null
+        ? fetchPlays(gamePk, replayRun)
+        : Promise.reject(new GamesApiError(404, 'no stored game')),
+    [gamePk, replayRun],
+  )
+
+  const showStoredGame = (): void => {
+    setReplayVersion((v) => v + 1)
+  }
+
+  const simulateOneGame = (): void => {
+    setSimulating(true)
+    setSimError(null)
+    postSampleGame(gamePk)
+      .then(() => showStoredGame())
+      .catch((err: unknown) =>
+        setSimError(err instanceof Error ? err.message : 'The simulation failed.'),
+      )
+      .finally(() => setSimulating(false))
+  }
 
   // Live WS — only connect for an in-progress game.
   const socket = useGameSocket(gamePk, isLive)
@@ -132,7 +169,20 @@ export function GamePage(): React.ReactElement {
   const half = wsState?.half ?? live.data?.half ?? null
   const outs = wsState?.outs ?? live.data?.outs ?? null
 
-  const ls = linescore.data
+  const ls = replay.data?.linescore ?? null
+  const replaySeed = replay.data?.base_seed ?? null
+  const awayShort = c?.away_team_abbrev ?? away
+  const homeShort = c?.home_team_abbrev ?? home
+  const simButton = (
+    <button
+      type="button"
+      className={styles.simButton}
+      onClick={simulateOneGame}
+      disabled={simulating || !valid}
+    >
+      {simulating ? 'Simulating…' : ls ? 'Simulate another' : 'Simulate a game'}
+    </button>
+  )
 
   return (
     <div className={styles.page}>
@@ -184,26 +234,39 @@ export function GamePage(): React.ReactElement {
       {/* Main grid */}
       <div className={styles.grid}>
         <div className={styles.leftCol}>
-          <Card title="Linescore">
+          <Card title="Simulated game" headerActions={simButton}>
             {ls ? (
-              <LinescoreGraphic
-                away={{
-                  name: c?.away_team_abbrev ?? away,
-                  byInning: ls.away_by_inning,
-                  runs: ls.away_runs,
-                  hits: ls.away_hits,
-                  errors: ls.away_errors,
-                }}
-                home={{
-                  name: c?.home_team_abbrev ?? home,
-                  byInning: ls.home_by_inning,
-                  runs: ls.home_runs,
-                  hits: ls.home_hits,
-                  errors: ls.home_errors,
-                }}
-              />
+              <>
+                <LinescoreGraphic
+                  away={{
+                    name: awayShort,
+                    byInning: ls.away_by_inning,
+                    runs: ls.away_runs,
+                    hits: ls.away_hits,
+                    errors: ls.away_errors,
+                  }}
+                  home={{
+                    name: homeShort,
+                    byInning: ls.home_by_inning,
+                    runs: ls.home_runs,
+                    hits: ls.home_hits,
+                    errors: ls.home_errors,
+                  }}
+                />
+                <p className={styles.caption}>
+                  One simulated game{replaySeed != null ? ` (seed ${replaySeed})` : ''}, not the
+                  real result. Its play-by-play is on the right.
+                </p>
+              </>
             ) : (
-              <p className={styles.muted}>No linescore yet — run a simulation to populate it.</p>
+              <p className={styles.muted}>
+                No simulated game yet. Press “Simulate a game”, or load projections below.
+              </p>
+            )}
+            {simError && (
+              <p className={styles.error} role="alert">
+                {simError}
+              </p>
             )}
           </Card>
 
@@ -218,7 +281,12 @@ export function GamePage(): React.ReactElement {
           )}
 
           <Panel label="Projections">
-            <BoxscorePanel gamePk={gamePk} awayLabel={away} homeLabel={home} />
+            <BoxscorePanel
+              gamePk={gamePk}
+              awayLabel={away}
+              homeLabel={home}
+              onLoaded={showStoredGame}
+            />
           </Panel>
 
           <Panel label="Betting">
@@ -236,7 +304,14 @@ export function GamePage(): React.ReactElement {
 
         <div className={styles.rightCol}>
           <Card title="Play-by-play" count={plays.data?.n_plate_appearances}>
-            <PlayByPlayList entries={plays.data?.entries ?? []} />
+            <PlayByPlayList
+              key={plays.data?.run_id ?? 'none'}
+              entries={plays.data?.entries ?? []}
+              names={plays.data?.names}
+              awayLabel={awayShort}
+              homeLabel={homeShort}
+              emptyText="No simulated game yet. Press “Simulate a game” on the left."
+            />
           </Card>
         </div>
       </div>

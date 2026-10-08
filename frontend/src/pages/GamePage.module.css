@@ -129,3 +129,31 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* SIM-561: the linescore card's "Simulate a game" button and its caption. */
+.simButton {
+  padding: var(--sim-space-1) var(--sim-space-3);
+  font-family: var(--sim-font-sans);
+  font-size: var(--sim-text-xs);
+  font-weight: var(--sim-font-medium);
+  color: var(--sim-color-text-inverse);
+  background: var(--sim-color-interactive);
+  border: none;
+  border-radius: var(--sim-radius-md);
+  cursor: pointer;
+}
+
+.simButton:hover:not(:disabled) {
+  background: var(--sim-color-interactive-hover);
+}
+
+.simButton:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.caption {
+  margin: var(--sim-space-2) 0 0;
+  font-size: var(--sim-text-xs);
+  color: var(--sim-color-text-muted);
+}

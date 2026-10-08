@@ -320,7 +320,7 @@ export interface paths {
         };
         /**
          * Per-player boxscore-average card (prop means over N iterations)
-         * @description Resolve the game's lineup, run an N-iteration boxscore batch, and return each player's prop MEANS as a boxscore card (SIM-366): for a batter the H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means, for a pitcher the K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's other lines) -- the means-only projection of the run's PropDistributionSet (SIM-329). Each row also carries the player's name, side, batting-order slot and starting-pitcher flag (SIM-560). The games run on the worker pool, and a seeded run is cached, so /props with the same seed and N reads this run. numpy-free JSON (SIM-350). 503 if no DB pool is attached or the game's lineup is not yet usable (Retry-After); 404 if the game is unknown.
+         * @description Resolve the game's lineup, run an N-iteration boxscore batch, and return each player's prop MEANS as a boxscore card (SIM-366): for a batter the H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means, for a pitcher the K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's other lines) -- the means-only projection of the run's PropDistributionSet (SIM-329). Each row also carries the player's name, side, batting-order slot and starting-pitcher flag (SIM-560). The games run on the worker pool, and a seeded run is cached, so /props with the same seed and N reads this run. With the replay store on, the run's first game is stored for /linescore and /plays (SIM-561). numpy-free JSON (SIM-350). 503 if no DB pool is attached or the game's lineup is not yet usable (Retry-After); 404 if the game is unknown.
          */
         get: operations["get_game_boxscore_api_games__game_pk__boxscore_get"];
         put?: never;
@@ -420,7 +420,7 @@ export interface paths {
         };
         /**
          * Play-by-play scroll for a simulated game
-         * @description Return the persisted pitch-level play-by-play (one entry per pitch, the resolved PA event on the terminal pitch) for the game's most-recent persisted run -- the durable backing populated by /simulate (SIM-357). Served straight from the DuckDB play-stream store (SIM-356); numpy-free JSON (SIM-350). SIM-415: optional ``limit``/``offset`` page the entries (a full game is ~300 pitches); ``n_pitches``/``n_plate_appearances`` stay full-game totals and ``total_entries``/``page_*`` describe the slice. Omitting ``limit`` returns the whole stream (unchanged shape). 404 if nothing has been persisted for the game, 503 if no replay store is wired.
+         * @description Return the persisted pitch-level play-by-play (one entry per pitch, the resolved PA event on the terminal pitch) for the game's most-recent persisted run -- the durable backing populated by /simulate (SIM-357). Served straight from the DuckDB play-stream store (SIM-356); numpy-free JSON (SIM-350). SIM-415: optional ``limit``/``offset`` page the entries (a full game is ~300 pitches); ``n_pitches``/``n_plate_appearances`` stay full-game totals and ``total_entries``/``page_*`` describe the slice. Omitting ``limit`` returns the whole stream (unchanged shape). SIM-561: the entries come from the newest stored run only (``run_id``), each carries its inning, half, outs, batter, pitcher and the score after it, and ``names`` maps every batter and pitcher id to a name. 404 if nothing has been persisted for the game, 503 if no replay store is wired.
          */
         get: operations["get_game_plays_api_games__game_pk__plays_get"];
         put?: never;
@@ -445,6 +445,26 @@ export interface paths {
         get: operations["get_player_prop_edge_api_games__game_pk__props__player_id___prop__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/games/{game_pk}/sample-game": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Simulate and store one game for the game page
+         * @description Resolve the game's lineup, simulate ONE game at ``base_seed`` (a random seed when omitted), and store it in the replay file: its play-by-play, per-pitch states, linescore and pitcher decisions (SIM-561). /linescore, /decisions, /card, /plays and /state then serve this game. Returns the stored run's id and seed. 503 if the replay store is off or the lineup is not yet usable (Retry-After); 404 if the game is unknown; 500 if the game could not be stored (the app log says why).
+         */
+        post: operations["simulate_sample_game_api_games__game_pk__sample_game_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1392,10 +1412,14 @@ export interface components {
          *     :class:`~api.schemas.PitcherDecisionsModel` (W/L/Save).
          */
         GameCardResponse: {
+            /** Base Seed */
+            base_seed?: number | null;
             decisions: components["schemas"]["PitcherDecisionsModel"];
             /** Game Pk */
             game_pk: number;
             linescore: components["schemas"]["LinescoreModel"];
+            /** Run Id */
+            run_id?: number | null;
         };
         /**
          * GameSimSummaryLite
@@ -1916,18 +1940,30 @@ export interface components {
         PlayByPlayEntryModel: {
             /** At Bat */
             at_bat: number;
+            /** Away Score */
+            away_score?: number | null;
+            /** Batter Id */
+            batter_id?: number | null;
             /** Canonical Event */
             canonical_event?: string | null;
             /** Event */
             event?: string | null;
             /** Exit Velo */
             exit_velo?: number | null;
+            /** Half */
+            half?: string | null;
+            /** Home Score */
+            home_score?: number | null;
+            /** Inning */
+            inning?: number | null;
             /** Is Contact */
             is_contact: boolean;
             /** Is Pa End */
             is_pa_end: boolean;
             /** Launch Angle */
             launch_angle?: number | null;
+            /** Outs Before */
+            outs_before?: number | null;
             /**
              * Outs Recorded
              * @default 0
@@ -1937,6 +1973,8 @@ export interface components {
             pitch: number;
             /** Pitch Outcome */
             pitch_outcome: string;
+            /** Pitcher Id */
+            pitcher_id?: number | null;
             /**
              * Runs
              * @default 0
@@ -1960,6 +1998,8 @@ export interface components {
          *     source's derived counts (``n_pitches`` / ``n_plate_appearances``).
          */
         PlayByPlayModel: {
+            /** Base Seed */
+            base_seed?: number | null;
             /** Entries */
             entries?: components["schemas"]["PlayByPlayEntryModel"][];
             /**
@@ -1972,12 +2012,18 @@ export interface components {
              * @default 0
              */
             n_plate_appearances: number;
+            /** Names */
+            names?: {
+                [key: string]: string;
+            };
             /** Page Limit */
             page_limit?: number | null;
             /** Page Offset */
             page_offset?: number | null;
             /** Returned Entries */
             returned_entries?: number | null;
+            /** Run Id */
+            run_id?: number | null;
             /** Total Entries */
             total_entries?: number | null;
         };
@@ -2128,6 +2174,21 @@ export interface components {
             reference_source?: string | null;
             /** Shape */
             shape: string;
+        };
+        /**
+         * SampleGameResponse
+         * @description The ``POST /api/games/{game_pk}/sample-game`` envelope (SIM-561).
+         *
+         *     The stored game's run id and seed.  The page then reads the game through
+         *     /linescore, /decisions and /plays, which serve this run until a newer one.
+         */
+        SampleGameResponse: {
+            /** Base Seed */
+            base_seed: number;
+            /** Game Pk */
+            game_pk: number;
+            /** Run Id */
+            run_id: number;
         };
         /** SchemaInfo */
         SchemaInfo: {
@@ -3372,6 +3433,8 @@ export interface operations {
                 limit?: number | null;
                 /** @description 0-based offset of the entry slice */
                 offset?: number;
+                /** @description SIM-561: the stored run to read; omit for the newest */
+                run_id?: number | null;
             };
             header?: never;
             path: {
@@ -3434,6 +3497,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PropEdgeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    simulate_sample_game_api_games__game_pk__sample_game_post: {
+        parameters: {
+            query?: {
+                /** @description The game's seed; random when omitted */
+                base_seed?: number | null;
+            };
+            header?: never;
+            path: {
+                game_pk: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SampleGameResponse"];
                 };
             };
             /** @description Validation Error */

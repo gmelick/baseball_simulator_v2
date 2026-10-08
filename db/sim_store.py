@@ -65,6 +65,13 @@ straight from a ``PlayByPlayEntry`` (e.g. ``dataclasses.asdict(entry)``) or a
     spray_angle     float | None   default None
     runs            float          default 0.0   RE24 / linear-weight run value
     canonical_event str | None     default None   canonical outcome key
+    inning          int | None     default None   SIM-561: inning of the pitch (1-based)
+    half            str | None     default None   SIM-561: 'top' / 'bottom'
+    outs_before     int | None     default None   SIM-561: outs before the pitch
+    batter_id       int | None     default None   SIM-561: the batter at the plate
+    pitcher_id      int | None     default None   SIM-561: the pitcher who threw it
+    away_score      int | None     default None   SIM-561: away runs after the pitch
+    home_score      int | None     default None   SIM-561: home runs after the pitch
 
 ``load_play_stream`` returns dicts with ALL of these keys (defaults filled),
 ordered by ``sequence`` ascending. ``run_id`` / ``game_pk`` are NOT in the entry
@@ -98,6 +105,24 @@ PLAY_ROW_FIELDS: tuple[str, ...] = (
     "spray_angle",
     "runs",
     "canonical_event",
+    # SIM-561 (DuckDB 0032): the pitch's context, for the game page play-by-play.
+    "inning",
+    "half",
+    "outs_before",
+    "batter_id",
+    "pitcher_id",
+    "away_score",
+    "home_score",
+)
+
+#: SIM-561: the context fields -- all nullable ints except ``half`` (a str).
+_PLAY_CONTEXT_INT_FIELDS: tuple[str, ...] = (
+    "inning",
+    "outs_before",
+    "batter_id",
+    "pitcher_id",
+    "away_score",
+    "home_score",
 )
 
 #: Per-field default applied when a play-entry dict omits an optional key. The
@@ -115,6 +140,13 @@ _PLAY_ROW_DEFAULTS: dict[str, Any] = {
     "spray_angle": None,
     "runs": 0.0,
     "canonical_event": None,
+    "inning": None,
+    "half": None,
+    "outs_before": None,
+    "batter_id": None,
+    "pitcher_id": None,
+    "away_score": None,
+    "home_score": None,
 }
 
 #: Fields with no default -- a play entry MUST carry these.
@@ -154,12 +186,47 @@ def _normalize_play_row(entry: Mapping[str, Any]) -> dict[str, Any]:
     row["runs"] = float(entry.get("runs", _PLAY_ROW_DEFAULTS["runs"]))
     _canon = entry.get("canonical_event", _PLAY_ROW_DEFAULTS["canonical_event"])
     row["canonical_event"] = None if _canon is None else str(_canon)
+    _fill_context(row, entry)
     return row
+
+
+def _fill_context(row: dict[str, Any], source: Mapping[str, Any]) -> None:
+    """Copy the SIM-561 context fields onto ``row``, each nullable and cast."""
+    for f in _PLAY_CONTEXT_INT_FIELDS:
+        row[f] = _opt_int(source.get(f))
+    _half = source.get("half")
+    row["half"] = None if _half is None else str(_half)
 
 
 def _opt_float(value: Any) -> float | None:
     """Cast to float, preserving None (the 'no batted-ball stat' sentinel)."""
     return None if value is None else float(value)
+
+
+def _opt_int(value: Any) -> int | None:
+    """Cast to int, preserving None (a context field an older writer left empty)."""
+    return None if value is None else int(value)
+
+
+#: Rows per multi-row INSERT (SIM-561).
+_INSERT_CHUNK_ROWS = 200
+
+
+def _insert_rows(con: Any, insert_head: str, params: list[tuple]) -> None:
+    """Insert ``params`` with a few multi-row INSERTs (SIM-561).
+
+    ``insert_head`` is ``"INSERT INTO <table> (<cols>) VALUES "``.  DuckDB's
+    ``executemany`` runs one statement per row: about 7 ms a row, 4 s for one
+    game's ~300 pitches and ~300 snapshots.  One statement per
+    :data:`_INSERT_CHUNK_ROWS` rows does the same write in milliseconds.
+    """
+    if not params:
+        return
+    row = "(" + ", ".join("?" for _ in params[0]) + ")"
+    for start in range(0, len(params), _INSERT_CHUNK_ROWS):
+        chunk = params[start : start + _INSERT_CHUNK_ROWS]
+        flat = [value for p in chunk for value in p]
+        con.execute(insert_head + ", ".join(row for _ in chunk), flat)
 
 
 # ===========================================================================
@@ -325,14 +392,9 @@ def _sim_run_row_to_dict(row: Mapping[str, Any]) -> dict:
 
 #: Bulk INSERT one pitch row. Column order == PLAY_ROW_FIELDS preceded by the
 #: two lookup keys (run_id, game_pk).
-_DUCK_INSERT_PLAY = """
-    INSERT INTO sim.play_stream (
-        run_id, game_pk,
-        sequence, at_bat, pitch, pitch_outcome, is_contact, is_pa_end, event,
-        runs_scored, outs_recorded, exit_velo, launch_angle, spray_angle,
-        runs, canonical_event
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-"""
+_DUCK_INSERT_PLAY = (
+    "INSERT INTO sim.play_stream (run_id, game_pk, " + ", ".join(PLAY_ROW_FIELDS) + ") VALUES "
+)
 
 #: Load a whole stream for a (game_pk[, run_id]), ordered by sequence. The
 #: SELECT list == PLAY_ROW_FIELDS so a positional fetch maps back by index.
@@ -367,7 +429,7 @@ def store_play_stream(
         )
         for r in rows
     ]
-    con.executemany(_DUCK_INSERT_PLAY, params)
+    _insert_rows(con, _DUCK_INSERT_PLAY, params)
 
 
 def load_play_stream(
@@ -417,6 +479,7 @@ def load_play_stream(
         row["canonical_event"] = (
             None if row["canonical_event"] is None else str(row["canonical_event"])
         )
+        _fill_context(row, row)
         out.append(row)
     return out
 
@@ -444,11 +507,9 @@ def load_play_stream(
 
 #: INSERT one snapshot row. Column order: the two lookup keys (run_id, game_pk),
 #: the index columns (at_bat, pitch, sequence), then the JSON snapshot text.
-_DUCK_INSERT_STATE = """
-    INSERT INTO sim.state_snapshots (
-        run_id, game_pk, at_bat, pitch, sequence, snapshot
-    ) VALUES (?, ?, ?, ?, ?, ?)
-"""
+_DUCK_INSERT_STATE = (
+    "INSERT INTO sim.state_snapshots (run_id, game_pk, at_bat, pitch, sequence, snapshot) VALUES "
+)
 
 
 def store_state_snapshots(
@@ -490,9 +551,7 @@ def store_state_snapshots(
                 json.dumps(snap),
             )
         )
-    if not params:
-        return
-    con.executemany(_DUCK_INSERT_STATE, params)
+    _insert_rows(con, _DUCK_INSERT_STATE, params)
 
 
 def _state_row_to_dict(rec: Any) -> dict:
@@ -606,8 +665,8 @@ def load_state_snapshots(
 #: INSERT one game-card row. Column order: the two lookup keys (run_id, game_pk),
 #: then the two JSON blobs (linescore, decisions).
 _DUCK_INSERT_GAME_CARD = """
-    INSERT INTO sim.game_cards (run_id, game_pk, linescore, decisions)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO sim.game_cards (run_id, game_pk, linescore, decisions, base_seed)
+    VALUES (?, ?, ?, ?, ?)
 """
 
 
@@ -618,8 +677,11 @@ def store_game_card(
     run_id: int,
     linescore: Mapping[str, Any],
     decisions: Mapping[str, Any],
+    base_seed: int | None = None,
 ) -> None:
     """Persist one game's derived loop card (linescore + decisions) for a run.
+
+    SIM-561: ``base_seed`` is the seed the game was played at (DuckDB 0032).
 
     ``linescore`` / ``decisions`` are the already-jsonable dicts
     (``api.serialization.to_jsonable(linescore)`` /
@@ -638,6 +700,7 @@ def store_game_card(
             int(game_pk),
             json.dumps(linescore),
             json.dumps(decisions),
+            None if base_seed is None else int(base_seed),
         ],
     )
 
@@ -651,7 +714,7 @@ def _game_card_row_to_dict(rec: Any) -> dict:
     """
     import json
 
-    run_id, game_pk, linescore, decisions = rec
+    run_id, game_pk, linescore, decisions, base_seed = rec
     if isinstance(linescore, str | bytes | bytearray):
         linescore = json.loads(linescore)
     if isinstance(decisions, str | bytes | bytearray):
@@ -661,6 +724,7 @@ def _game_card_row_to_dict(rec: Any) -> dict:
         "game_pk": int(game_pk),
         "linescore": linescore,
         "decisions": decisions,
+        "base_seed": None if base_seed is None else int(base_seed),
     }
 
 
@@ -681,18 +745,138 @@ def load_game_card(
     """
     if run_id is None:
         sql = (
-            "SELECT run_id, game_pk, linescore, decisions FROM sim.game_cards "
+            "SELECT run_id, game_pk, linescore, decisions, base_seed FROM sim.game_cards "
             "WHERE game_pk = ? ORDER BY run_id DESC LIMIT 1"
         )
         cur = con.execute(sql, [int(game_pk)])
     else:
         sql = (
-            "SELECT run_id, game_pk, linescore, decisions FROM sim.game_cards "
+            "SELECT run_id, game_pk, linescore, decisions, base_seed FROM sim.game_cards "
             "WHERE game_pk = ? AND run_id = ? LIMIT 1"
         )
         cur = con.execute(sql, [int(game_pk), int(run_id)])
     rec = cur.fetchone()
     return None if rec is None else _game_card_row_to_dict(rec)
+
+
+# ===========================================================================
+# DuckDB -- the replay file (SIM-561)
+# ===========================================================================
+#
+# The three replay tables live in their own DuckDB file, which only the app
+# writes. Keeping them out of the analytics file means the app never holds a
+# write lock on it, so the nightly rebuilds and the read-only scripts run as
+# before. The file's schema is the replay migrations, applied in order.
+
+#: The migrations that make the replay file's schema, in order: the play stream,
+#: the state snapshots, the game cards and the pitch context.
+REPLAY_MIGRATIONS: tuple[str, ...] = (
+    "0008_sim356_play_stream.sql",
+    "0009_sim357_state_snapshots.sql",
+    "0010_sim362_364_game_card.sql",
+    "0032_sim561_play_stream_context.sql",
+)
+
+#: How many runs per game the replay file keeps. The page reads the newest.
+REPLAY_RUNS_KEPT = 5
+
+_REPLAY_MIGRATION_HISTORY_DDL = """
+    CREATE TABLE IF NOT EXISTS migration_history (
+        migration_id    VARCHAR     PRIMARY KEY,
+        applied_at      TIMESTAMP   NOT NULL DEFAULT now(),
+        description     VARCHAR     NOT NULL
+    )
+"""
+
+
+def _replay_migrations_dir() -> Any:
+    from pathlib import Path
+
+    return Path(__file__).resolve().parent / "migrations" / "duckdb"
+
+
+def ensure_replay_schema(con: Any) -> None:
+    """Create the replay tables on ``con`` (idempotent).
+
+    Runs each file in :data:`REPLAY_MIGRATIONS` as written, after creating the
+    ``migration_history`` table the files record themselves in. Every statement
+    in those files is ``IF NOT EXISTS`` or ``OR IGNORE``, so a second call
+    changes nothing.
+    """
+    con.execute(_REPLAY_MIGRATION_HISTORY_DDL)
+    root = _replay_migrations_dir()
+    for name in REPLAY_MIGRATIONS:
+        con.execute((root / name).read_text(encoding="utf-8"))
+
+
+def open_replay_store(path: str) -> Any:
+    """Open the replay file writable at ``path`` and ensure its schema.
+
+    The caller owns the connection: it closes it at shutdown. Raises whatever
+    ``duckdb.connect`` raises (a lock held by another process, a bad path).
+    """
+    import duckdb
+
+    con = duckdb.connect(path)
+    try:
+        ensure_replay_schema(con)
+    except Exception:
+        con.close()
+        raise
+    return con
+
+
+def next_replay_run_id(con: Any) -> int:
+    """The next run id in the replay file: one above every stored run, any game.
+
+    SIM-561: the replay file numbers its own runs.  Its primary keys do not
+    carry ``game_pk``, so a run id is unique across games.  The caller holds the
+    app's replay write lock, so two stores never draw the same id.
+    """
+    rec = con.execute(
+        "SELECT greatest("
+        "(SELECT coalesce(max(run_id), 0) FROM sim.game_cards), "
+        "(SELECT coalesce(max(run_id), 0) FROM sim.play_stream), "
+        "(SELECT coalesce(max(run_id), 0) FROM sim.state_snapshots))"
+    ).fetchone()
+    return int(rec[0]) + 1
+
+
+def latest_replay_run_id(con: Any, *, game_pk: int) -> int | None:
+    """The newest run stored for ``game_pk`` whose game card exists, or None.
+
+    The card is the last write of a stored run, so a run with a card is
+    complete. /plays, /state and /linescore all read this one run, so the
+    panels never mix two simulated games.
+    """
+    rec = con.execute(
+        "SELECT max(run_id) FROM sim.game_cards WHERE game_pk = ?", [int(game_pk)]
+    ).fetchone()
+    return None if rec is None or rec[0] is None else int(rec[0])
+
+
+def prune_replay_runs(con: Any, *, game_pk: int, keep: int = REPLAY_RUNS_KEPT) -> int:
+    """Delete all but the ``keep`` newest runs of ``game_pk``; return how many went.
+
+    The newest runs are those with the highest ``run_id`` among the game's
+    cards. A play or snapshot row with no card (a store that failed half way)
+    and an older run id goes too.
+    """
+    rows = con.execute(
+        "SELECT run_id FROM sim.game_cards WHERE game_pk = ? ORDER BY run_id DESC",
+        [int(game_pk)],
+    ).fetchall()
+    kept = [int(r[0]) for r in rows[: max(int(keep), 0)]]
+    dropped = len(rows) - len(kept)
+    if not kept:
+        return 0
+    floor = min(kept)
+    for table in ("sim.play_stream", "sim.state_snapshots", "sim.game_cards"):
+        con.execute(
+            f"DELETE FROM {table} WHERE game_pk = ? AND run_id < ?",
+            [int(game_pk), floor],
+        )
+    return dropped
 
 
 __all__ = [
@@ -713,4 +897,12 @@ __all__ = [
     # DuckDB -- game cards (SIM-362/364)
     "store_game_card",
     "load_game_card",
+    # DuckDB -- the replay file (SIM-561)
+    "REPLAY_MIGRATIONS",
+    "REPLAY_RUNS_KEPT",
+    "ensure_replay_schema",
+    "open_replay_store",
+    "next_replay_run_id",
+    "latest_replay_run_id",
+    "prune_replay_runs",
 ]

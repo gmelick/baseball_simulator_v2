@@ -44,22 +44,15 @@ DUCKDB_VERSION_FILE = REPO_ROOT / "db" / "schemas" / "duckdb_schema_version.txt"
 
 @pytest.fixture()
 def duck_con():
-    """A real in-memory DuckDB with migration 0008 applied."""
+    """A real in-memory DuckDB with the replay file's schema applied."""
     import duckdb
 
     con = duckdb.connect(":memory:")
-    # The migration's final statement does INSERT ... INTO migration_history,
-    # which 0001 creates. Pre-create it so the 0008 file applies stand-alone.
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS migration_history (
-            migration_id VARCHAR PRIMARY KEY,
-            applied_at   TIMESTAMP NOT NULL DEFAULT now(),
-            description  VARCHAR NOT NULL
-        )
-        """
-    )
-    con.execute(DUCKDB_MIGRATION.read_text())
+    # SIM-561: the app's own schema setup for the replay file (0008, 0009,
+    # 0010 and 0032), so the test and the app read one source.
+    from db.sim_store import ensure_replay_schema
+
+    ensure_replay_schema(con)
     yield con
     con.close()
 
@@ -359,7 +352,7 @@ class TestMigrationSanity:
         assert "def downgrade()" in text
         assert "sim.sim_runs" in text
 
-    def test_duckdb_schema_version_is_31(self):
+    def test_duckdb_schema_version_is_32(self):
         # SIM-357 bumped 8 -> 9 (0009); SIM-362/364 -> 10 (0010);
         # SIM-408 -> 11 (0011 engine ↔ schema reconciliation);
         # SIM-411/413/425b -> 12 (0012 batted-ball realism columns);
@@ -400,7 +393,9 @@ class TestMigrationSanity:
         # SIM-554 -> 31 (0031 the steal opportunity pool's pitch_class — the
         # class of the pitch each row rode — and is_pickoff_row, a row for each
         # pickoff outcome thrown before any pitch of its pair).
-        assert DUCKDB_VERSION_FILE.read_text().strip() == "31"
+        # SIM-561 -> 32 (0032 the inning, half, outs before, batter, pitcher and
+        # score after on each replay play-stream pitch, for the game page).
+        assert DUCKDB_VERSION_FILE.read_text().strip() == "32"
 
     def test_duckdb_version_matches_latest_migration(self):
         """The version file must equal the highest-numbered DuckDB migration.

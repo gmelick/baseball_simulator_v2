@@ -291,7 +291,7 @@ def no_serial_replay(monkeypatch):
     def _boom(**_kwargs):
         raise AssertionError("the projections must not replay games one by one")
 
-    monkeypatch.setattr(games_mod, "record_game_plays", _boom)
+    monkeypatch.setattr(games_mod, "record_game", _boom)
 
 
 class TestBoxscoreRoute:

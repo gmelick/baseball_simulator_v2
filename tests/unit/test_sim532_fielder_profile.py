@@ -452,13 +452,14 @@ class TestMigration0030:
         cols = [r[0] for r in c.execute("DESCRIBE derived.fielder_season_metrics").fetchall()]
         assert tuple(cols[-len(FIELDER_TAIL_COLUMNS) :]) == FIELDER_TAIL_COLUMNS
 
-    def test_the_version_file_reads_31(self) -> None:
-        # 30 = this migration; 31 = SIM-554 (the steal pool's pitch class).
-        assert VERSION_FILE.read_text(encoding="utf-8").strip() == "31"
+    def test_the_version_file_reads_32(self) -> None:
+        # 30 = this migration; 31 = SIM-554 (the steal pool's pitch class);
+        # 32 = SIM-561 (the replay play stream's pitch context).
+        assert VERSION_FILE.read_text(encoding="utf-8").strip() == "32"
 
     def test_the_version_file_equals_the_newest_migration(self) -> None:
         newest = max(int(p.name[:4]) for p in MIGRATIONS.glob("[0-9][0-9][0-9][0-9]_*.sql"))
-        assert newest == 31
+        assert newest == 32  # SIM-561 (0032) came after this ticket's 0030
         assert int(VERSION_FILE.read_text(encoding="utf-8").strip()) == newest
 
 

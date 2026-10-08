@@ -1092,6 +1092,37 @@ class BatchRunner:
             self.cache.set(key, prop_set, SIM_PROP_SET_TTL_S)
         return prop_set
 
+    def record_game(self, spec: GameSpec, seed: int | None) -> Any:
+        """Record ONE game with its plays on the warm pool (SIM-561).
+
+        Returns :class:`simulation.play_recorder.RecordedGame`.  The game runs on
+        a worker, whose full-pool cache is warm, so the API process never loads
+        the sim bundle (that cost about 2 GB and 15 s on the first call).  It
+        reuses the live pool at whatever size it has, and submits under the pool
+        lock, so a batch that resizes the pool cannot shut it down between the
+        read and the submit (a shutdown waits for the submitted game).  With no
+        pool (one worker, or ``reuse_pool=False``) it records in this process.
+        """
+        # Local import: simulation.play_recorder imports this module.
+        from simulation.play_recorder import record_spec
+
+        target = max(
+            1,
+            int(
+                self._max_workers_override
+                if self._max_workers_override is not None
+                else default_max_workers()
+            ),
+        )
+        if target <= 1 or not self._reuse_pool:
+            return record_spec(spec, seed)
+        with self._pool_lock:
+            if self._pool is None:
+                self._pool = ProcessPoolExecutor(max_workers=target, **self._pool_kwargs())
+                self._pool_workers = target
+            future = self._pool.submit(record_spec, spec, seed)
+        return future.result()
+
     def _execute(
         self, spec: GameSpec, seeds: list[int | None], max_workers: int
     ) -> list[GameSimResult]:

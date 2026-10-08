@@ -13,6 +13,9 @@
  * SIM-560: the panel picks one seed per load and sends it with every request,
  * so each click reads the cached run the chips show. The players are grouped by
  * team: batters in batting order, then pitchers, starter first.
+ *
+ * SIM-561: the API stores the run's first game for the linescore and the
+ * play-by-play; `onLoaded` tells the page, which reloads both.
  */
 import React, { useEffect, useState } from 'react'
 
@@ -58,6 +61,8 @@ export interface BoxscorePanelProps {
   awayLabel?: string
   /** The home team's display name (falls back to "Home"). */
   homeLabel?: string
+  /** Called once the card loads; the API stored the run's first game (SIM-561). */
+  onLoaded?: () => void
 }
 
 interface Selection {
@@ -124,6 +129,7 @@ export function BoxscorePanel({
   gamePk,
   awayLabel = 'Away',
   homeLabel = 'Home',
+  onLoaded,
 }: BoxscorePanelProps): React.ReactElement {
   const [box, setBox] = useState<BoxscoreCard | null>(null)
   const [loading, setLoading] = useState(false)
@@ -138,7 +144,10 @@ export function BoxscorePanel({
     setLoading(true)
     setError(null)
     fetchBoxscore(gamePk, N_GAMES, newSeed())
-      .then((b) => setBox(b))
+      .then((b) => {
+        setBox(b)
+        onLoaded?.()
+      })
       .catch((err: unknown) =>
         setError(err instanceof Error ? err.message : 'Failed to load projections.'),
       )

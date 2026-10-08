@@ -1,3 +1,138 @@
+# CLOSED — the game page shows a simulated game: a "Simulate a game" button, the projections' first game, a linescore and an inning-by-inning play-by-play that names the batter and the pitcher; the replay data lives in a DuckDB file of its own, so the analytics file is never locked — SIM-561, 2026-10-08
+
+**Why it matters.** The owner reviews simulated games on the game page, to confirm the
+simulator plays baseball the way it should. The page has a Linescore panel and a
+Play-by-play panel, but both always said "run a simulation to populate it", and nothing on
+the page filled them. The API stores a simulated game only when the replay store is on, and
+the store was off: it would have opened the main analytics file writable, which holds no
+replay tables and whose write lock would block the nightly rebuilds. A stored game's
+play-by-play also carried no inning, batter, pitcher or score, so it read "PA 12: single".
+
+**The owner's decisions (2026-10-08).** A separate replay file; a "Simulate a game" button
+plus the projections' first game; plays grouped by inning with the batter, the pitcher and
+the score (a schema change).
+
+**What was built.**
+
+- **The replay file (`db/sim_store.py`, `api/main.py`, `docker-compose.yml`).**
+  `REPLAY_PERSISTENCE_ENABLED=1` and `REPLAY_DUCKDB_PATH=/data/replay.duckdb` in compose. At
+  start, `open_replay_store` opens that file writable and `ensure_replay_schema` runs the
+  replay migrations (0008, 0009, 0010, 0032) on it, idempotent. The connection is
+  `app.state.replay_duckdb`. `app.state.sim_duckdb`, the analytics handle the sim kwargs
+  read, is never set by the app any more, and the park-factor source always opens read-only.
+  Only the app opens the replay file; a reload closes and reopens it cleanly.
+- **The pitch context and the seed (DuckDB 0032, schema v32).** Seven nullable columns on
+  `sim.play_stream`: `inning`, `half`, `outs_before`, `batter_id`, `pitcher_id`,
+  `away_score`, `home_score`. The play recorder captures a `PitchContext` (inning, half,
+  outs, batter) from the state BEFORE each step; the pitcher is the play's own
+  `pitcher_id` (the arm that threw, after any change); the score is the play's
+  `next_state`. `record_game` returns a `RecordedGame(result, plays, contexts)`;
+  `record_game_plays` keeps its two-value form. `PlayByPlay.from_play_results` takes the
+  contexts. One more column, `sim.game_cards.base_seed`, keeps the seed each stored game
+  was played at. The ALTERs are `IF EXISTS`, so 0032 is a no-op on the analytics file.
+- **The routes (`api/routes/games.py`).** `POST /api/games/{pk}/sample-game` simulates and
+  stores ONE game (a random seed unless `base_seed` is given) and returns its run id and
+  seed. `/boxscore` stores its run's first game while the pool runs the batch, so the panels
+  show one of the projected games. `/plays`, `/state`, `/linescore`, `/decisions` and
+  `/card` read the newest COMPLETE run (the newest with a game card); before, `/plays`
+  concatenated every stored run of the game, which nobody saw because nothing stored more
+  than one. `/card` and `/plays` return the run id and its seed, and `/plays?run_id=` reads
+  a named run, so the page reads the card and then that run's plays: the two panels always
+  show one game. `/plays` also returns a `names` map (raw.players; a placeholder reliever
+  reads "Generic reliever N"). Every replay read and write runs on a cursor of its own in a
+  worker thread.
+- **The replay file numbers its own runs.** A store draws `next_replay_run_id` (one above
+  every stored run, any game), writes the plays, snapshots and card in ONE transaction,
+  then prunes the game to its newest 5 runs, all under one process-wide lock. A prune
+  failure logs a warning and keeps the game. Only a `/simulate` batch writes a Postgres
+  `sim.sim_runs` row, as SIM-356 intended; a sample game or the projections' first game
+  writes none.
+- **The game is recorded on the worker pool (`BatchRunner.record_game`).** The first build
+  recorded it in the API process, which then loaded the sim bundle itself: the API process
+  grew from about 6.7 to 8.5 GB and the first call took 20 s. On a worker the API process
+  stays at 7.5 GB and a call takes 4-7 s.
+- **The writes are multi-row INSERTs (`_insert_rows`).** DuckDB's `executemany` runs one
+  statement per row: 4.4-8.7 s to store one game's ~290 pitches and ~290 snapshots. A
+  multi-row INSERT stores them in about 0.1 s.
+- **The page (`GamePage.tsx`, `PlayByPlayList.tsx`, `BoxscorePanel.tsx`).** The Linescore
+  card is "Simulated game", with a "Simulate a game" / "Simulate another" button and a
+  caption from the stored game: "One simulated game (seed N), not the real result."
+  Loading projections tells the page, which reloads both panels; a new game resets the
+  opened plate appearances. The play-by-play groups the plate appearances under
+  a pinned header per half-inning ("TOP 1ST · NYM batting"), names the batter and the
+  pitcher, and shows the score after a scoring play ("+1 R · NYM 1, WSH 0").
+- **The tests that changed.** Four tests attached the replay store as `sim_duckdb`; they
+  attach `replay_duckdb` and build its schema with `ensure_replay_schema`. The end-to-end
+  reproducibility test reads the replay file's own run ids instead of the history ids. The SIM-453
+  guard that the compose file never sets `REPLAY_PERSISTENCE_ENABLED` now guards the real
+  danger: the replay path must never be the analytics path. The pinned count of
+  park-resolving routes went 5 → 6 (the sample-game route). Two tests pinned the DuckDB
+  version at 31; they read 32. The recorder test passes a real `GameState`.
+- **Docs.** CLAUDE.md (§2a the replay file's lock, §2b a bullet, the v32 citations),
+  WORKFLOW.md §1.7, agent_team.md, docs/HANDOFF_PHASE6.md, the technical reference
+  (`api.md`, `simulation.md`, `pipeline-betting-db.md`), the API mirror
+  (`frontend/openapi.json`: the new route, the two play-by-play models, two route
+  descriptions; `schema.d.ts` regenerated).
+
+**The evidence (live, game 744834, Mets at Nationals, 2024-07-04).**
+
+- The boot log: `SIM-561: replay store OPEN at /data/replay.duckdb`, and the park-factor
+  source OPEN read-only on the analytics file (2,961 rows). A second process opens the
+  analytics file read-only while the app runs; the replay file refuses it (the app holds it).
+- `POST /sample-game?base_seed=2024`: a 7-6 Nationals win, 292 pitches, 71 plate
+  appearances, 26 names. The first plate appearance reads "top 1, 0 outs, Francisco Lindor
+  vs Jake Irvin"; the bottom of the first, "CJ Abrams vs Jose Quintana"; eight pitchers
+  used; the last row's score equals the linescore.
+- Timing after the fixes: 4.3-6.7 s a game (record 4.0-4.8 s, store 0.1 s).
+- In the browser: both panels filled; "Simulate another" showed "Simulating…", then a new
+  game (seed 961462875, Mets 4-3) in both panels; "Load projections" replaced them with the
+  projections' first game (seed 714846696). No new console errors.
+- After the review fixes: run ids 16, 17 from the file's own counter; `/card` and `/plays`
+  agree on run and seed; the Postgres history stayed at 15 rows over every sample game. Three
+  sample games and a 100-game projections load for one game at once: all four 200, no store
+  or prune error (one sample game waited 34 s behind the batch on the pool). The page reads
+  `/card`, then `/plays?run_id=22`.
+
+**The gates.**
+
+| Gate | Result |
+|---|---|
+| Unit lane, the app image with the whole current checkout mounted, after the review fixes | 5,534 passed, 1 skipped, 0 failed (5,528 before them) |
+| `test_sim561_replay_store.py` (34) and the touched replay, route, recorder and version files, host Python | pass |
+| `ruff check .` / `ruff format --check` | clean |
+| `mypy similarity/ pipeline/ api/`; the five touched `simulation/` and `db/` modules | no issues in 62 files; no issues in 5 |
+| Frontend `npm run type-check` / `npm run lint` | clean |
+
+**The independent review** (a separate agent, read-only, on the first build). It confirmed
+the context capture on a live run (every half opens at 0 outs; no plate appearance spans two
+halves, batters or pitchers; the final score matches the card), the seeds, the auth, the
+migration and the writes. It found three defects, now fixed:
+
+- **Concurrent stores failed.** Two stores of one game at once could both prune the same
+  rows; DuckDB raised "Conflict on tuple deletion" (5 of 120 in its stress run) and the button
+  answered 500. Fixed by the write lock and a prune that cannot fail the store.
+- **A fallback run id broke "newest".** When the history write failed, the run id fell back
+  to the random seed, which then stayed "newest" for that game forever, and a fallback 0
+  could collide across games. Fixed by the file's own run ids.
+- **One-game summaries filled `sim.sim_runs`.** Every sample game and projections load wrote
+  a one-game history row. Fixed: only `/simulate` writes history.
+
+It also raised six risks. Fixed: the two panels could show different runs, and the caption's
+seed could name the wrong game (the page now reads one run by id); `record_game` read the pool
+outside its lock and could submit to a pool a batch was shutting down (it now submits under
+the lock); `placeholder_reliever_number(-1)` returned 1 (bounded); opened plate appearances
+stayed open on a new game (the list resets per run). Not changed: `outs_before` on the pitch
+after a mid-step pickoff out shows the count before the pickoff (the page does not show it);
+several uvicorn processes would contend for the one writable file (nothing starts the app that
+way today; the staging and production example files list several workers, so a deployment
+that does must run one process or give each its own file).
+
+**Not changed.** The pitcher decisions (W/L/S) are stored but the page does not show them.
+A sample game records on the worker pool, so it waits behind a running 100-game batch.
+`/simulate` still stores its batch summary in the history and the replay of game 0, as
+before. The 15 one-game rows the first build wrote to `sim.sim_runs` during this session's
+live tests stay until the owner removes them (`DELETE FROM sim.sim_runs WHERE n_iterations = 1`).
+
 # CLOSED — the game page's projections run on the worker pool, every click reads the same run, and the panel names each player and groups the players by team; 100 games take 33–36 s (were about 150 s), a click 0.1 s (was the 100 games again) — SIM-560, 2026-10-08
 
 **Why it matters.** The owner reviews simulated games on the game page. "Load projections"

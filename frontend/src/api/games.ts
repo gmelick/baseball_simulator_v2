@@ -138,12 +138,35 @@ export interface PlayByPlayEntry {
   spray_angle: number | null
   runs: number
   canonical_event: string | null
+  /** SIM-561: the inning, half, outs and batter BEFORE the pitch; null on an
+   *  older stored stream. */
+  inning?: number | null
+  half?: 'top' | 'bottom' | null
+  outs_before?: number | null
+  batter_id?: number | null
+  /** SIM-561: the pitcher who threw it. */
+  pitcher_id?: number | null
+  /** SIM-561: the score AFTER the pitch. */
+  away_score?: number | null
+  home_score?: number | null
 }
 
 export interface PlayByPlay {
   entries: PlayByPlayEntry[]
   n_pitches: number
   n_plate_appearances: number
+  /** SIM-561: the stored run these plays belong to, and its seed. */
+  run_id?: number | null
+  base_seed?: number | null
+  /** SIM-561: str(player_id) → name, for every batter and pitcher. */
+  names?: Record<string, string>
+}
+
+/** SIM-561: POST /{game_pk}/sample-game — the stored game's run id and seed. */
+export interface SampleGame {
+  game_pk: number
+  run_id: number
+  base_seed: number
 }
 
 // ---------------------------------------------------------------------------
@@ -344,9 +367,25 @@ export function fetchLinescore(gamePk: number): Promise<Linescore> {
   return getJson<Linescore>(`/api/games/${gamePk}/linescore`)
 }
 
-/** GET /api/games/{game_pk}/plays — pitch-by-pitch scroll (needs a persisted sim). */
-export function fetchPlays(gamePk: number): Promise<PlayByPlay> {
-  return getJson<PlayByPlay>(`/api/games/${gamePk}/plays`)
+/** GET /api/games/{game_pk}/plays — pitch-by-pitch scroll (needs a persisted sim).
+ *  SIM-561: `runId` reads that stored game; omit it for the newest. */
+export function fetchPlays(gamePk: number, runId?: number | null): Promise<PlayByPlay> {
+  const qs = runId != null ? `?run_id=${runId}` : ''
+  return getJson<PlayByPlay>(`/api/games/${gamePk}/plays${qs}`)
+}
+
+/** SIM-561: GET /api/games/{game_pk}/card — the newest stored simulated game's
+ *  linescore, its run id and seed. Read the plays with that run id, so the two
+ *  panels always show one game. */
+export interface ReplayCard {
+  game_pk: number
+  linescore: Linescore
+  run_id: number | null
+  base_seed: number | null
+}
+
+export function fetchReplayCard(gamePk: number): Promise<ReplayCard> {
+  return getJson<ReplayCard>(`/api/games/${gamePk}/card`)
 }
 
 /** GET /api/games/{game_pk}/live — live in-progress state (404 when not live). */
@@ -368,6 +407,13 @@ export function postWithOverride(
     `/api/games/${gamePk}/simulate/with_override${qs ? `?${qs}` : ''}`,
     override,
   )
+}
+
+/** POST /api/games/{game_pk}/sample-game — simulate and store one game (SIM-561).
+ *  The linescore, decisions and play-by-play endpoints then serve it. */
+export function postSampleGame(gamePk: number, baseSeed?: number): Promise<SampleGame> {
+  const qs = baseSeed != null ? `?base_seed=${baseSeed}` : ''
+  return postJson<SampleGame>(`/api/games/${gamePk}/sample-game${qs}`, {})
 }
 
 /** GET /api/games/{game_pk}/boxscore — per-player prop means over N iterations.

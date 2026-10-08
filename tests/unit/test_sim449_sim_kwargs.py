@@ -537,8 +537,9 @@ async def test_the_pre_fix_and_post_fix_kwargs_actually_differ(monkeypatch):
 #: replay runs in a worker thread with no event loop. Both counts are pinned, so
 #: adding a call site of either kind is a deliberate edit here, not silent drift.
 _SIM_KWARGS_CALL_SITES: dict[str, dict[str, int]] = {
-    # 4 routes -> _resolved_sim_kwargs -> build_sim_kwargs. No bare call at all.
-    "api/routes/games.py": {"bare": 0, "resolving": 5},
+    # The routes -> _resolved_sim_kwargs -> build_sim_kwargs. No bare call at all.
+    # SIM-561 added the sample-game route (5 -> 6).
+    "api/routes/games.py": {"bare": 0, "resolving": 6},
     # _summary_and_winprob -> _resolved_sim_kwargs.
     "api/routes/betting.py": {"bare": 0, "resolving": 1},
     # _score_one_game resolves; _collect_game_results builds in the worker thread.
@@ -1319,26 +1320,39 @@ def test_the_park_factor_source_is_primed_OUTSIDE_the_replay_gate():
     )
 
 
-def test_docker_compose_does_not_reach_for_the_replay_flag():
-    """The alternative we rejected, pinned so nobody quietly takes it.
-
-    Setting REPLAY_PERSISTENCE_ENABLED=true would open a WRITABLE DuckDB
-    connection, and the file has no sim.play_stream / sim.state_snapshots tables —
-    /plays, /state, /linescore and /card would 500 instead of a clean 503.
-    """
-    compose = _repo_file_or_skip("docker-compose.yml").read_text(encoding="utf-8")
+def _compose_env_value(compose: str, name: str) -> str | None:
+    """The value docker-compose.yml gives ``name`` on an uncommented line, or None."""
     for line in compose.splitlines():
         stripped = line.strip()
-        if stripped.startswith("#"):
+        if stripped.startswith("#") or not stripped.startswith(f"{name}:"):
             continue
-        assert not stripped.startswith("REPLAY_PERSISTENCE_ENABLED"), (
-            "SIM-453: docker-compose.yml sets REPLAY_PERSISTENCE_ENABLED. That is "
-            "the rejected fix — it opens a writable connection and breaks the "
-            "replay routes' 503 contract. The park-factor source is opened "
-            "read-only in api/main.py instead."
-        )
-    assert "BASEBALL_DUCKDB_PATH" in compose, (
-        "SIM-453: docker-compose.yml no longer names the park-factor source path."
+        return stripped.split(":", 1)[1].split("#", 1)[0].strip().strip('"').strip("'")
+    return None
+
+
+def test_docker_compose_keeps_the_replay_store_off_the_analytics_file():
+    """The writable replay store never opens the analytics file (SIM-453, SIM-561).
+
+    Before SIM-561, REPLAY_PERSISTENCE_ENABLED opened the analytics file WRITABLE,
+    and that file has no replay tables, so SIM-453 kept the flag out of the
+    compose file. SIM-561 gave the replay store a file of its own
+    (REPLAY_DUCKDB_PATH), so the flag is on. The danger SIM-453 guarded is now a
+    replay path equal to the analytics path: that write lock would block the
+    nightly rebuilds and every read-only script.
+    """
+    compose = _repo_file_or_skip("docker-compose.yml").read_text(encoding="utf-8")
+    analytics = _compose_env_value(compose, "BASEBALL_DUCKDB_PATH")
+    assert analytics, "SIM-453: docker-compose.yml no longer names the park-factor source path."
+    if _compose_env_value(compose, "REPLAY_PERSISTENCE_ENABLED") in (None, "", "0", "false", "no"):
+        return
+    replay = _compose_env_value(compose, "REPLAY_DUCKDB_PATH")
+    assert replay, (
+        "SIM-561: docker-compose.yml turns the replay store on without naming its "
+        "file (REPLAY_DUCKDB_PATH). Name it, so the store is not a default by accident."
+    )
+    assert replay != analytics, (
+        "SIM-561: the replay store points at the analytics file. The app would hold "
+        "a write lock on it and block the nightly rebuilds."
     )
 
 

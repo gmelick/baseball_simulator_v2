@@ -320,9 +320,18 @@ services:
       # This line just makes the path explicit instead of an implicit code default,
       # so the compose file names the source the simulator reads.
       #
-      # REPLAY_PERSISTENCE_ENABLED stays UNSET on purpose. It is a write path and is
-      # no longer the gate on park factors.
+      # REPLAY_PERSISTENCE_ENABLED stayed UNSET until SIM-561. It is a write path and
+      # is no longer the gate on park factors.
       BASEBALL_DUCKDB_PATH: /data/baseball_sim.duckdb
+      # SIM-561: the replay store -- the game page's linescore, play-by-play and
+      # pitcher decisions for a simulated game. It is a DuckDB file of its OWN,
+      # which only the app opens (writable); the analytics file above stays
+      # read-only, so the nightly rebuilds and the scripts are not blocked. The app
+      # creates the file and its tables at start (db/sim_store.py
+      # ensure_replay_schema). Unset or "0" = the store is off: the replay reads
+      # answer 503 and nothing is stored.
+      REPLAY_PERSISTENCE_ENABLED: "1"
+      REPLAY_DUCKDB_PATH: /data/replay.duckdb
       # SIM-406: the fitted CalibrationReport the lifespan loads to calibrate every
       # similarity engine + the win-prob map. Produced by `make calibrate` /
       # scripts/fit_calibration.py (and the nightly chain) into the /data volume.
