@@ -249,6 +249,16 @@ _SQL_LOAD_LATEST_SIM_RUN = """
     LIMIT 1
 """
 
+#: The newest FINISHED run of the game's own simulation (Alembic 0030: not a
+#: what-if run; a queued run has no summary yet).
+_SQL_LOAD_LATEST_PREGAME_RUN = """
+    SELECT run_id, game_pk, n_iterations, base_seed, summary, created_at
+    FROM sim.sim_runs
+    WHERE game_pk = $1 AND kind = 'pregame' AND summary IS NOT NULL
+    ORDER BY created_at DESC
+    LIMIT 1
+"""
+
 #: A specific run by id.
 _SQL_LOAD_SIM_RUN = """
     SELECT run_id, game_pk, n_iterations, base_seed, summary, created_at
@@ -294,8 +304,14 @@ async def store_sim_run(
 
 
 async def load_latest_sim_run(conn: Any, game_pk: int) -> dict | None:
-    """Load the most-recent run for ``game_pk`` (None if the game has none)."""
-    row = await conn.fetchrow(_SQL_LOAD_LATEST_SIM_RUN, int(game_pk))
+    """Load the most-recent finished run of the game's own simulation (None if
+    the game has none). Before Alembic 0030 (no ``kind``): the newest run."""
+    try:
+        row = await conn.fetchrow(_SQL_LOAD_LATEST_PREGAME_RUN, int(game_pk))
+    except Exception as exc:  # noqa: BLE001 -- the pre-0030 read
+        if "kind" not in str(exc) and "does not exist" not in str(exc):
+            raise
+        row = await conn.fetchrow(_SQL_LOAD_LATEST_SIM_RUN, int(game_pk))
     return None if row is None else _sim_run_row_to_dict(row)
 
 

@@ -52,8 +52,12 @@ class LeagueFeed:
         return await self._get_json(SCHEDULE_URL, schedule_params(start, end, hydrate))
 
     async def game_feed_payload(self, game_pk: int) -> Any:
-        """The raw live feed of one game. Raises on any failure."""
-        return await self._get_json(GAME_FEED_URL.format(game_pk=int(game_pk)))
+        """The raw live feed of one game, with each pitch's defensive alignment
+        (``hydrate=alignment``: the what-if reads the fielders at every plate
+        appearance). Raises on any failure."""
+        return await self._get_json(
+            GAME_FEED_URL.format(game_pk=int(game_pk)), {"hydrate": "alignment"}
+        )
 
     async def close(self) -> None:
         if self._session is not None and not self._session.closed:

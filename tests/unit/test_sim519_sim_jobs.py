@@ -146,6 +146,8 @@ class _Conn:
                 "replay_run_id": None,
                 "created_at": datetime.now(UTC),
                 "prop_set": None,
+                "kind": a[7] if len(a) > 7 else "pregame",
+                "start_at_bat": a[8] if len(a) > 8 else None,
             }
             return dict(t.rows[rid])
         if sql is sj._SQL_ACTIVE_BY_KEY:

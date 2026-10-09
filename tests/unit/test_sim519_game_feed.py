@@ -186,7 +186,7 @@ def test_ttl_by_state() -> None:
 def test_error_serves_the_last_good_copy() -> None:
     cache = InMemoryCache()
     _client(_Feed(_as_live("final_home_win_2024-08-15")), cache).get("/api/games/746437/feed")
-    cache._store.pop("feed:v1:746437")  # noqa: SLF001 -- the 10-second TTL ran out
+    cache._store.pop("feed:raw:v1:746437")  # noqa: SLF001 -- the 10-second TTL ran out
     body = _client(_Feed(error=TimeoutError("slow")), cache).get("/api/games/746437/feed").json()
     assert body["source"] == "feed_cached"
     assert "TimeoutError" in body["feed_error"]
