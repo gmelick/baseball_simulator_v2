@@ -496,6 +496,18 @@ class GameCardAggregateResponse(BaseModel):
     sim_summary: GameSimSummaryLite | None = None
     # Odds (Phase 6 Sprint 4+ -- SIM-405/SIM-395)
     odds: None = None
+    # SIM-519 Part A: the schedule's fields for the game page header (best
+    # effort; None when the league feed has no entry for the game).
+    detailed_state: str | None = None
+    start_utc: str | None = None
+    start_time_tbd: bool | None = None
+    game_number: int | None = None
+    double_header: str | None = None
+    series_description: str | None = None
+    away_probable_pitcher_name: str | None = None
+    home_probable_pitcher_name: str | None = None
+    away_score: int | None = None
+    home_score: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1591,7 +1603,34 @@ async def get_game_status_card(
     gd = _row_get(row, "game_date")
     game_date = gd.isoformat() if hasattr(gd, "isoformat") else str(gd)
 
+    # SIM-519: the schedule's view of the game (state, start, probables), from
+    # the slate's cached schedule for the date. Best effort.
+    sched = await _schedule_game_for(request, gd, int(game_pk))
+    extra: dict[str, Any] = {}
+    if sched is not None:
+        from pipeline.mlb_schedule import card_state
+
+        game_status = card_state(sched)
+        played = game_status in ("live", "final")
+        extra = {
+            "detailed_state": sched.detailed_state or None,
+            "start_utc": _iso(sched.start_utc),
+            "start_time_tbd": sched.start_time_tbd,
+            "game_number": sched.game_number,
+            "double_header": sched.double_header,
+            "series_description": sched.series_description,
+            "away_probable_pitcher_name": sched.away.probable_pitcher.name
+            if sched.away.probable_pitcher
+            else None,
+            "home_probable_pitcher_name": sched.home.probable_pitcher.name
+            if sched.home.probable_pitcher
+            else None,
+            "away_score": sched.away.score if played else None,
+            "home_score": sched.home.score if played else None,
+        }
+
     return GameCardAggregateResponse(
+        **extra,
         game_pk=int(_row_get(row, "game_pk")),
         game_status=game_status,
         game_date=game_date,
@@ -1813,6 +1852,21 @@ async def get_game_feed(game_pk: int, request: Request, use_cache: bool = Query(
         },
         headers={"Retry-After": "30"},
     )
+
+
+async def _schedule_game_for(request: Request, game_date: Any, game_pk: int) -> Any:
+    """The schedule entry of one game (the slate's cached read), or None."""
+    from pipeline.mlb_schedule import parse_schedule
+
+    try:
+        day = game_date if isinstance(game_date, _date) else _parse_date(str(game_date)[:10])
+        payload, _source, _err = await _slate_schedule_payload(request, day, use_cache=True)
+        if payload is None:
+            return None
+        return next((g for g in parse_schedule(payload) if g.game_pk == game_pk), None)
+    except Exception as exc:  # noqa: BLE001 -- the header degrades to the stored fields
+        log.debug("schedule entry unavailable for %s: %s", game_pk, exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -2099,16 +2153,25 @@ async def start_simulation_run(game_pk: int, request: Request, body: SimRunReque
             sim_kwargs=spec.sim_kwargs,
         )
 
-    run, existing = await jobs.submit(
-        game_pk=int(game_pk),
-        spec=spec,
-        runner=runner,
-        n_iterations=body.n_iterations,
-        base_seed=body.base_seed,
-        lineup_source=await _lineup_source(pool, game_pk),
-        bullpen_source=getattr(state, "bullpen_source", None),
-        record_game=record_game,
-    )
+    try:
+        run, existing = await jobs.submit(
+            game_pk=int(game_pk),
+            spec=spec,
+            runner=runner,
+            n_iterations=body.n_iterations,
+            base_seed=body.base_seed,
+            lineup_source=await _lineup_source(pool, game_pk),
+            bullpen_source=getattr(state, "bullpen_source", None),
+            record_game=record_game,
+        )
+    except Exception as exc:
+        # Before Alembic 0029 the run table has no job columns.
+        if "does not exist" in str(exc) and "column" in str(exc):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="simulation runs need database migration 0029 (make migrate)",
+            ) from exc
+        raise
     return _run_model(run, existing=existing)
 
 

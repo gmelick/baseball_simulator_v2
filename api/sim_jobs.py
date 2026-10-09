@@ -163,20 +163,29 @@ class SimJobRegistry:
         async with self._pool.acquire() as conn:
             return await conn.execute(sql, *args)
 
+    async def _read(self, sql: str, *args: Any) -> Any:
+        """A read that answers None before Alembic 0029 (no job columns yet)."""
+        try:
+            return await self._fetchrow(sql, *args)
+        except Exception as exc:
+            if "does not exist" in str(exc):
+                return None
+            raise
+
     async def get(self, game_pk: int, run_id: int) -> dict[str, Any] | None:
         return self._with_position(
-            row_dict(await self._fetchrow(_SQL_BY_ID, int(run_id), int(game_pk)))
+            row_dict(await self._read(_SQL_BY_ID, int(run_id), int(game_pk)))
         )
 
     async def latest(self, game_pk: int) -> dict[str, Any] | None:
-        return self._with_position(row_dict(await self._fetchrow(_SQL_LATEST, int(game_pk))))
+        return self._with_position(row_dict(await self._read(_SQL_LATEST, int(game_pk))))
 
     async def prop_set_row(self, game_pk: int, run_id: int | None) -> dict[str, Any] | None:
         """The prop set of a run (``run_id``) or of the game's newest done run."""
         row = (
-            await self._fetchrow(_SQL_PROPS_BY_ID, int(run_id), int(game_pk))
+            await self._read(_SQL_PROPS_BY_ID, int(run_id), int(game_pk))
             if run_id is not None
-            else await self._fetchrow(_SQL_LATEST_DONE_PROPS, int(game_pk))
+            else await self._read(_SQL_LATEST_DONE_PROPS, int(game_pk))
         )
         if row is None:
             return None

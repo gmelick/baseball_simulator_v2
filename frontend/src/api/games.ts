@@ -226,6 +226,17 @@ export interface GameCardAggregate {
   /** Most-recent persisted Monte-Carlo summary; null when none run yet. */
   sim_summary: Record<string, unknown> | null
   odds: null
+  // SIM-519: the schedule's fields (absent when the league feed has no entry).
+  detailed_state?: string | null
+  start_utc?: string | null
+  start_time_tbd?: boolean | null
+  game_number?: number | null
+  double_header?: string | null
+  series_description?: string | null
+  away_probable_pitcher_name?: string | null
+  home_probable_pitcher_name?: string | null
+  away_score?: number | null
+  home_score?: number | null
 }
 
 // ---------------------------------------------------------------------------

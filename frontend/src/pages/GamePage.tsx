@@ -38,6 +38,8 @@ import { BaseballFieldGraphic, LinescoreGraphic } from '@/components/graphics'
 import { BettingCard } from '@/components/games/BettingCard'
 import { BoxscorePanel } from '@/components/games/BoxscorePanel'
 import { SimulationCard } from '@/components/games/SimulationCard'
+import { TeamBlock } from '@/components/slate/TeamBlock'
+import { localStartTime, shortName } from '@/components/slate/format'
 import { LineMovementPanel } from '@/components/games/LineMovementPanel'
 import { OverridePanelV2 } from '@/components/games/OverridePanelV2'
 import { PlayByPlayList } from '@/components/games/PlayByPlayList'
@@ -171,9 +173,9 @@ export function GamePage(): React.ReactElement {
   // Score precedence: live WS > REST live > final scores from the card.
   const wsState = socket.liveState
   const awayScore =
-    wsState?.away_score ?? live.data?.away_score ?? c?.away_score_final ?? null
+    wsState?.away_score ?? live.data?.away_score ?? c?.away_score ?? c?.away_score_final ?? null
   const homeScore =
-    wsState?.home_score ?? live.data?.home_score ?? c?.home_score_final ?? null
+    wsState?.home_score ?? live.data?.home_score ?? c?.home_score ?? c?.home_score_final ?? null
 
   // Baserunner state for the field graphic (WS first, then REST live).
   const on1 = wsState?.on_1b ?? live.data?.on_1b ?? null
@@ -205,20 +207,54 @@ export function GamePage(): React.ReactElement {
       </Link>
 
       {/* Header */}
+      {/* SIM-519: the slate card's team block, so the two pages read as one. */}
       <header className={styles.header}>
-        <div className={styles.matchup}>
-          <span className={styles.team}>{away}</span>
-          {awayScore != null && <span className={styles.score}>{awayScore}</span>}
-          <span className={styles.at}>@</span>
-          {homeScore != null && <span className={styles.score}>{homeScore}</span>}
-          <span className={styles.team}>{home}</span>
+        <div className={styles.matchupDD}>
+          <TeamBlock
+            side="away"
+            teamId={c?.away_team_id ?? null}
+            abbr={c?.away_team_abbrev ?? null}
+            name={c?.away_team_name ?? away}
+            wins={c?.away_wins ?? null}
+            losses={c?.away_losses ?? null}
+            dim={c?.game_status === 'final' && awayScore != null && homeScore != null && awayScore < homeScore}
+          />
+          <div className={styles.center}>
+            <div className={styles.bigScore}>
+              {awayScore != null && homeScore != null ? `${awayScore} – ${homeScore}` : 'vs'}
+            </div>
+            <div className={styles.centerSub}>
+              {isLive && inning != null
+                ? `${half ?? ''} ${inning}${outs != null ? ` · ${outs} out` : ''}`
+                : c?.game_status === 'scheduled'
+                  ? c.start_time_tbd
+                    ? 'Time TBD'
+                    : localStartTime(c.start_utc) ?? 'Pregame'
+                  : (c?.detailed_state ?? '')}
+            </div>
+          </div>
+          <TeamBlock
+            side="home"
+            teamId={c?.home_team_id ?? null}
+            abbr={c?.home_team_abbrev ?? null}
+            name={c?.home_team_name ?? home}
+            wins={c?.home_wins ?? null}
+            losses={c?.home_losses ?? null}
+            dim={c?.game_status === 'final' && awayScore != null && homeScore != null && homeScore < awayScore}
+          />
         </div>
         <div className={styles.statusLine}>
           {c && <StatusBadge status={c.game_status} />}
-          {isLive && inning != null && (
+          {c?.series_description && c.series_description !== 'Regular Season' && (
+            <span className={styles.inning}>{c.series_description}</span>
+          )}
+          {c?.double_header && c.double_header !== 'N' && c.game_number === 2 && (
+            <span className={styles.inning}>Game 2</span>
+          )}
+          {(c?.away_probable_pitcher_name || c?.home_probable_pitcher_name) && (
             <span className={styles.inning}>
-              {half ?? ''} {inning}
-              {outs != null ? ` · ${outs} out` : ''}
+              SP {shortName(c?.away_probable_pitcher_name) || 'TBD'} vs{' '}
+              {shortName(c?.home_probable_pitcher_name) || 'TBD'}
             </span>
           )}
         </div>

@@ -27,30 +27,6 @@
   margin: var(--sim-space-4) 0;
 }
 
-.matchup {
-  display: flex;
-  align-items: center;
-  gap: var(--sim-space-3);
-}
-
-.team {
-  font-size: var(--sim-text-xl);
-  font-weight: var(--sim-font-bold);
-  color: var(--sim-color-text);
-}
-
-.score {
-  font-size: var(--sim-text-2xl);
-  font-weight: var(--sim-font-bold);
-  color: var(--sim-color-text);
-  font-variant-numeric: tabular-nums;
-}
-
-.at {
-  color: var(--sim-color-text-muted);
-  font-size: var(--sim-text-sm);
-}
-
 .statusLine {
   display: flex;
   align-items: center;
@@ -156,4 +132,37 @@
   margin: var(--sim-space-2) 0 0;
   font-size: var(--sim-text-xs);
   color: var(--sim-color-text-muted);
+}
+
+/* SIM-519: the header in the Daily Diamond card's layout. */
+.matchupDD {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 640px;
+}
+
+.center {
+  text-align: center;
+  line-height: 1;
+}
+
+.bigScore {
+  font-family: var(--dd-font-display);
+  font-weight: 800;
+  font-size: 48px;
+  white-space: nowrap;
+}
+
+.centerSub {
+  font-family: var(--sim-font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sim-color-text-muted);
+  margin-top: 6px;
+  white-space: nowrap;
 }

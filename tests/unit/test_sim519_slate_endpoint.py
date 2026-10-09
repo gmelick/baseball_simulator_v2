@@ -339,3 +339,55 @@ def test_before_0029_the_plain_enrichment_read_serves() -> None:
         if g["game_pk"] == pk
     )
     assert card["lineup_ready"] is True and card["lineup_source"] is None
+
+
+def test_status_carries_the_schedule_fields() -> None:
+    sched = _payload("normal_2024-08-15")
+    entry = next(g for g in sched["dates"][0]["games"] if g["gamePk"] == 746437)
+
+    class _StatusPool:
+        async def fetchrow(self, sql, *args):
+            return {
+                "game_pk": 746437,
+                "season": 2024,
+                "game_date": date(2024, 8, 15),
+                "status": "Final",
+                "home_team_id": entry["teams"]["home"]["team"]["id"],
+                "away_team_id": entry["teams"]["away"]["team"]["id"],
+            }
+
+        async def fetch(self, sql, *args):
+            return []
+
+    app = FastAPI()
+    app.include_router(games_router)
+    app.state.league_feed = _Feed(sched)
+    app.state.pg_pool = _StatusPool()
+    app.state.sim_cache = None
+    body = TestClient(app).get("/api/games/746437/status").json()
+    assert body["game_status"] == "final"
+    assert body["start_utc"] is not None
+    assert (
+        body["home_probable_pitcher_name"] == entry["teams"]["home"]["probablePitcher"]["fullName"]
+    )
+    assert (body["away_score"], body["home_score"]) == (
+        entry["teams"]["away"]["score"],
+        entry["teams"]["home"]["score"],
+    )
+
+
+def test_status_without_a_feed_keeps_the_stored_fields() -> None:
+    class _StatusPool:
+        async def fetchrow(self, sql, *args):
+            return {"game_pk": 1, "season": 2024, "game_date": "2024-08-15", "status": "Final"}
+
+        async def fetch(self, sql, *args):
+            return []
+
+    app = FastAPI()
+    app.include_router(games_router)
+    app.state.league_feed = None
+    app.state.pg_pool = _StatusPool()
+    app.state.sim_cache = None
+    body = TestClient(app).get("/api/games/1/status").json()
+    assert body["game_status"] == "final" and body["start_utc"] is None
