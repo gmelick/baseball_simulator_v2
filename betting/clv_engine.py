@@ -334,12 +334,17 @@ def clv_from_odds(
 
 
 class MarketSide(Enum):
-    """Which side of a two-way market a report is about."""
+    """Which side of a market a report is about.
+
+    SIM-546, the three-way markets: ``DRAW`` is the tie of a first-inning or
+    first-five moneyline. A segment can end tied, so the book prices the tie
+    as a third outcome."""
 
     HOME = "home"
     AWAY = "away"
     OVER = "over"
     UNDER = "under"
+    DRAW = "draw"
 
 
 @dataclass(frozen=True, slots=True)
@@ -526,26 +531,97 @@ def total_over_under_edge_report(
 
     ``market.entry.line`` is the total line; ``market.entry.side`` the chosen side's
     price (over_ml for OVER, under_ml for UNDER); ``.other`` the opposite price.
+
+    SIM-546: the arithmetic lives in :func:`samples_over_under_edge_report`; this
+    function hands it ``summary.total_scores`` and the label ``"total"``.
+    """
+    if market.entry.line is not None and np.asarray(summary.total_scores).size == 0:
+        raise ValueError("GameSimSummary has no total_scores to price a total")
+    return samples_over_under_edge_report(summary.total_scores, market, side=side, label="total")
+
+
+def samples_over_under_edge_report(
+    samples: Sequence[float] | np.ndarray,
+    market: TwoWayMarket,
+    *,
+    side: MarketSide = MarketSide.OVER,
+    label: str,
+) -> EdgeReport:
+    """Edge / EV / CLV for one side of any over / under market, from raw samples.
+
+    SIM-546, the segment and team totals: ``samples`` holds one number per
+    simulated game, the number the market settles on (the first-five runs, one
+    team's runs, the first-inning runs). The over is the strict
+    ``P(sample > line)`` and the under the strict ``P(sample < line)``; a sample
+    on a whole-number line is a push and counts for neither side, as on the
+    full-game total. ``label`` names the market on the report (``"f5_total"``).
+
+    ``market.entry.line`` is the line; ``market.entry.side`` the chosen side's
+    price and ``.other`` the opposite price.
     """
     line = market.entry.line
     if line is None:
         raise ValueError("a total market must carry a line (market.entry.line)")
-    totals = np.asarray(summary.total_scores, dtype=np.float64)
-    n = totals.size
+    values = np.asarray(samples, dtype=np.float64)
+    n = values.size
     if n == 0:
-        raise ValueError("GameSimSummary has no total_scores to price a total")
+        raise ValueError("no samples to price an over / under market")
     if side is MarketSide.OVER:
-        sim_p = float(np.count_nonzero(totals > float(line))) / n
+        sim_p = float(np.count_nonzero(values > float(line))) / n
     elif side is MarketSide.UNDER:
-        sim_p = float(np.count_nonzero(totals < float(line))) / n
+        sim_p = float(np.count_nonzero(values < float(line))) / n
     else:
         raise ValueError("total side must be OVER or UNDER")
     return _build_edge_report(
-        label="total",
+        label=label,
         side=side,
         line=float(line),
         sim_prob=sim_p,
         market=market,
+    )
+
+
+def three_way_edge_report(
+    p_home: float,
+    p_away: float,
+    p_draw: float,
+    *,
+    label: str,
+    side: MarketSide,
+    home_ml: float,
+    away_ml: float,
+    draw_ml: float,
+) -> EdgeReport:
+    """Edge / EV for one side of a THREE-way market (home, away or the tie).
+
+    SIM-546: the first-inning and first-five moneylines can end tied, so the
+    book prices three outcomes. The fair probability of the chosen side is its
+    entry of :func:`devig_multiway` over the three implied probabilities: the
+    book's margin is shared across all three. ``p_home`` / ``p_away`` /
+    ``p_draw`` are the simulator's probabilities of the three outcomes. The EV
+    reads the side's own price. There is no CLV (no closing quote on this
+    path). Like every report, a simulator probability of exactly 0 or 1 raises
+    ``ValueError`` (it has no fair price).
+    """
+    order = (MarketSide.HOME, MarketSide.AWAY, MarketSide.DRAW)
+    if side not in order:
+        raise ValueError("a three-way side must be HOME, AWAY or DRAW")
+    index = order.index(side)
+    prices = (float(home_ml), float(away_ml), float(draw_ml))
+    fair = devig_multiway([implied_prob_from_american(a) for a in prices])[index]
+    p = float((p_home, p_away, p_draw)[index])
+    own = prices[index]
+    return EdgeReport(
+        label=label,
+        side=side,
+        line=None,
+        sim_prob=p,
+        market_fair_prob=fair,
+        edge=edge(p, fair),
+        ev=expected_value(p, own),
+        offered_american=own,
+        sim_fair_american=prob_to_american(p),
+        clv=None,
     )
 
 
@@ -808,6 +884,9 @@ __all__ = [
     "moneyline_edge_report",
     "prop_edge_report",
     "total_over_under_edge_report",
+    # SIM-546: the segment and team markets
+    "samples_over_under_edge_report",
+    "three_way_edge_report",
     "spread_cover_prob",
     "run_line_edge_report",
     # SIM-549: run lines as a pair or two separate bets
