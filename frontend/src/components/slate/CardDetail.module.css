@@ -1,0 +1,414 @@
+/**
+ * CardDetail.module.css — the open card's sections (SIM-519 Part I).
+ * The values copy the design's inline styles onto the tokens.
+ */
+
+.section {
+  min-width: 0;
+}
+
+.sectionTitle {
+  font-family: var(--sim-font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--sim-color-text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.rule {
+  flex: 1;
+  height: 1px;
+  background: var(--sim-gray-300);
+}
+
+.note,
+.text {
+  font-size: 13px;
+  color: var(--sim-color-text-muted);
+}
+
+.text { color: var(--sim-color-text); }
+
+.mono { font-family: var(--sim-font-mono); font-size: 11px; }
+
+/* ---------- Lineups ---------- */
+
+.lineups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.lineupCol { min-width: 0; }
+
+.lineupTeam {
+  font-family: var(--dd-font-display);
+  font-weight: 700;
+  font-size: 16px;
+  margin-bottom: 2px;
+}
+
+.lineupSp {
+  font-size: 12.5px;
+  color: var(--sim-color-text-muted);
+  margin-bottom: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lineupSp strong { color: var(--sim-color-text); font-weight: 600; }
+
+.lineupEmpty {
+  font-size: 12.5px;
+  color: var(--sim-color-text-muted);
+  font-style: italic;
+  padding: 8px 0;
+}
+
+.lineupList { list-style: none; }
+
+.lineupRow {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: baseline;
+  padding: 3px 0;
+  border-bottom: 1px dotted var(--sim-gray-300);
+  font-size: 13px;
+}
+
+.lineupN,
+.lineupPos {
+  font-family: var(--sim-font-mono);
+  font-size: 11px;
+  color: var(--sim-color-text-muted);
+}
+
+.lineupPos { font-size: 10.5px; }
+
+.lineupName {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+/* ---------- Linescore ---------- */
+
+.board {
+  overflow-x: auto;
+  background: var(--dd-board);
+  color: var(--sim-gray-100);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.lsTable {
+  border-collapse: collapse;
+  font-family: var(--sim-font-mono);
+  font-size: 12.5px;
+  min-width: max-content;
+}
+
+.lsHead {
+  width: 21px;
+  text-align: center;
+  font-weight: 400;
+  color: var(--dd-board-muted);
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--dd-board-rule);
+}
+
+.lsTeam {
+  width: 46px;
+  text-align: left;
+  font-weight: 700;
+  border-bottom: none;
+}
+
+thead .lsTeam { border-bottom: 1px solid var(--dd-board-rule); }
+
+.lsRHead { color: var(--sim-gray-100); font-weight: 700; }
+
+.lsCell {
+  width: 21px;
+  text-align: center;
+  border-radius: 3px;
+  padding-top: 5px;
+}
+
+.lsOn {
+  background: var(--dd-gold);
+  color: var(--sim-gray-900);
+}
+
+.lsGap { width: 8px; border-bottom: none; }
+thead .lsGap { border-bottom: 1px solid var(--dd-board-rule); }
+
+.lsTot {
+  width: 24px;
+  text-align: center;
+  padding-top: 5px;
+}
+
+.lsRuns { font-weight: 700; color: var(--dd-gold); }
+
+/* ---------- Count / pitcher / last play ---------- */
+
+.countRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-top: 10px;
+}
+
+.count { display: flex; gap: 16px; }
+
+.countGroup { display: flex; align-items: center; gap: 5px; }
+
+.countLabel {
+  font-family: var(--sim-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  width: 12px;
+}
+
+.countDot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid var(--sim-gray-400);
+}
+
+.pitcher { font-size: 12.5px; color: var(--sim-color-text-muted); }
+.pitcher strong { color: var(--sim-color-text); font-weight: 600; }
+
+.lastPlay {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--dd-red);
+  background: var(--sim-gray-100);
+  border-radius: 0 6px 6px 0;
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+
+.lastPlayLabel {
+  font-family: var(--sim-font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dd-red);
+  white-space: nowrap;
+}
+
+/* ---------- Box score ---------- */
+
+.tabs {
+  display: flex;
+  border: 1.5px solid var(--sim-gray-900);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.tab {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 8px;
+  border: none;
+  background: transparent;
+  color: var(--sim-color-text);
+  font-family: var(--dd-font-display);
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tabOn {
+  background: var(--sim-primary-600);
+  color: var(--sim-gray-100);
+}
+
+.role {
+  text-align: right;
+  padding: 0 4px 2px;
+  font-family: var(--sim-font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sim-color-text-muted);
+}
+
+.roleBat { color: var(--dd-red); }
+
+.boxGrid { margin-top: 6px; }
+
+.boxHead,
+.boxRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(7, 28px) 40px;
+  column-gap: 3px;
+  align-items: baseline;
+  padding: 3px 4px;
+  border-radius: 4px;
+}
+
+.boxHead {
+  font-family: var(--sim-font-mono);
+  font-size: 10px;
+  color: var(--sim-color-text-muted);
+  background: var(--sim-gray-200);
+}
+
+.boxHead > div:not(:first-child),
+.boxRow > div:not(:first-child) {
+  text-align: right;
+}
+
+.boxRow {
+  border-bottom: 1px dotted var(--sim-gray-300);
+  font-family: var(--sim-font-mono);
+  font-size: 12px;
+}
+
+.boxTitle {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sim-color-text);
+}
+
+.boxName {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--sim-font-sans);
+  font-size: 13px;
+}
+
+.boxSub { padding-left: 10px; color: var(--sim-color-text-muted); }
+
+.boxPos {
+  font-family: var(--sim-font-mono);
+  font-size: 10px;
+  color: var(--sim-color-text-muted);
+}
+
+.boxCur {
+  background: var(--dd-gold);
+  font-weight: 700;
+}
+
+@media (max-width: 420px) {
+  .boxHead,
+  .boxRow {
+    grid-template-columns: minmax(0, 1fr) repeat(7, 22px) 36px;
+    column-gap: 2px;
+    font-size: 11px;
+  }
+}
+
+/* ---------- Odds ---------- */
+
+.odds {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--sim-gray-300);
+  border: 1px solid var(--sim-gray-300);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.oddsCol {
+  background: var(--sim-color-surface);
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.oddsMkt {
+  font-family: var(--dd-font-display);
+  font-weight: 700;
+  font-size: 15px;
+  text-align: center;
+}
+
+.oddsCell {
+  font-family: var(--sim-font-mono);
+  font-size: 11.5px;
+  padding: 4px;
+  border-radius: 5px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.oddsWin {
+  background: var(--sim-success-100);
+  color: var(--sim-success-700);
+}
+
+.results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.result {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 20px;
+  background: var(--sim-primary-600);
+  color: var(--sim-gray-100);
+}
+
+.oddsSource {
+  margin-top: 6px;
+  font-family: var(--sim-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sim-color-text-muted);
+}
+
+/* ---------- Footer ---------- */
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.openLink {
+  font-family: var(--dd-font-display);
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sim-primary-600);
+}
+
+.openLink:hover { color: var(--dd-red); text-decoration: none; }

@@ -1,0 +1,4350 @@
+{
+ "copyright": "Copyright 2026 MLB Advanced Media, L.P.  Use of any content on this page acknowledges agreement to the terms posted here http://gdx.mlb.com/components/copyright.txt",
+ "dates": [
+  {
+   "date": "2024-04-04",
+   "events": [],
+   "games": [
+    {
+     "calendarEventID": "14-745844-2024-04-04",
+     "content": {
+      "link": "/api/v1/game/745844/content"
+     },
+     "dayNight": "day",
+     "description": "Makeup of 4/2 PPD",
+     "doubleHeader": "Y",
+     "gameDate": "2024-04-04T16:10:00Z",
+     "gameGuid": "717d86bb-9d8f-40bb-8925-7c2bbb31f17d",
+     "gameNumber": 1,
+     "gamePk": 745844,
+     "gameType": "R",
+     "gamedayType": "P",
+     "gamesInSeries": 3,
+     "ifNecessary": "N",
+     "ifNecessaryDescription": "Normal Game",
+     "inningBreakLength": 120,
+     "isTie": false,
+     "linescore": {
+      "balls": 2,
+      "currentInning": 11,
+      "currentInningOrdinal": "11th",
+      "defense": {
+       "batter": {
+        "fullName": "Andy Ib\u00e1\u00f1ez",
+        "id": 628451,
+        "link": "/api/v1/people/628451"
+       },
+       "battingOrder": 3,
+       "catcher": {
+        "fullName": "Carson Kelly",
+        "id": 608348,
+        "link": "/api/v1/people/608348"
+       },
+       "center": {
+        "fullName": "Matt Vierling",
+        "id": 663837,
+        "link": "/api/v1/people/663837"
+       },
+       "first": {
+        "fullName": "Spencer Torkelson",
+        "id": 679529,
+        "link": "/api/v1/people/679529"
+       },
+       "inHole": {
+        "fullName": "Matt Vierling",
+        "id": 663837,
+        "link": "/api/v1/people/663837"
+       },
+       "left": {
+        "fullName": "Mark Canha",
+        "id": 592192,
+        "link": "/api/v1/people/592192"
+       },
+       "onDeck": {
+        "fullName": "Riley Greene",
+        "id": 682985,
+        "link": "/api/v1/people/682985"
+       },
+       "pitcher": {
+        "fullName": "Shelby Miller",
+        "id": 571946,
+        "link": "/api/v1/people/571946"
+       },
+       "right": {
+        "fullName": "Riley Greene",
+        "id": 682985,
+        "link": "/api/v1/people/682985"
+       },
+       "second": {
+        "fullName": "Colt Keith",
+        "id": 690993,
+        "link": "/api/v1/people/690993"
+       },
+       "shortstop": {
+        "fullName": "Zach McKinstry",
+        "id": 656716,
+        "link": "/api/v1/people/656716"
+       },
+       "team": {
+        "id": 116,
+        "link": "/api/v1/teams/116",
+        "name": "Detroit Tigers"
+       },
+       "third": {
+        "fullName": "Gio Urshela",
+        "id": 570482,
+        "link": "/api/v1/people/570482"
+       }
+      },
+      "inningHalf": "Bottom",
+      "inningState": "Bottom",
+      "innings": [
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 2,
+         "runs": 0
+        },
+        "num": 1,
+        "ordinalNum": "1st"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "num": 2,
+        "ordinalNum": "2nd"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 2,
+         "leftOnBase": 2,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 2,
+         "leftOnBase": 2,
+         "runs": 2
+        },
+        "num": 3,
+        "ordinalNum": "3rd"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 4,
+        "ordinalNum": "4th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 2,
+         "leftOnBase": 1,
+         "runs": 1
+        },
+        "num": 5,
+        "ordinalNum": "5th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 1,
+         "runs": 1
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 2,
+         "runs": 0
+        },
+        "num": 6,
+        "ordinalNum": "6th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 2,
+         "runs": 1
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 7,
+        "ordinalNum": "7th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 0,
+         "runs": 1
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "num": 8,
+        "ordinalNum": "8th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 9,
+        "ordinalNum": "9th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 2,
+         "runs": 0
+        },
+        "num": 10,
+        "ordinalNum": "10th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 4,
+         "leftOnBase": 3,
+         "runs": 3
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 2,
+         "runs": 0
+        },
+        "num": 11,
+        "ordinalNum": "11th"
+       }
+      ],
+      "isTopInning": false,
+      "offense": {
+       "batter": {
+        "fullName": "Pete Alonso",
+        "id": 624413,
+        "link": "/api/v1/people/624413"
+       },
+       "battingOrder": 3,
+       "inHole": {
+        "fullName": "Brett Baty",
+        "id": 683146,
+        "link": "/api/v1/people/683146"
+       },
+       "onDeck": {
+        "fullName": "Omar Narv\u00e1ez",
+        "id": 553882,
+        "link": "/api/v1/people/553882"
+       },
+       "pitcher": {
+        "fullName": "Michael Tonkin",
+        "id": 543859,
+        "link": "/api/v1/people/543859"
+       },
+       "second": {
+        "fullName": "Francisco Lindor",
+        "id": 596019,
+        "link": "/api/v1/people/596019"
+       },
+       "team": {
+        "id": 121,
+        "link": "/api/v1/teams/121",
+        "name": "New York Mets"
+       },
+       "third": {
+        "fullName": "Tyrone Taylor",
+        "id": 621438,
+        "link": "/api/v1/people/621438"
+       }
+      },
+      "outs": 3,
+      "scheduledInnings": 9,
+      "strikes": 3,
+      "teams": {
+       "away": {
+        "errors": 0,
+        "hits": 9,
+        "isWinner": true,
+        "leftOnBase": 10,
+        "runs": 6
+       },
+       "home": {
+        "errors": 0,
+        "hits": 6,
+        "isWinner": false,
+        "leftOnBase": 14,
+        "runs": 3
+       }
+      }
+     },
+     "lineups": {
+      "awayPlayers": [
+       {
+        "firstName": "Parker",
+        "fullName": "Parker Meadows",
+        "id": 678009,
+        "lastName": "Meadows",
+        "link": "/api/v1/people/678009",
+        "primaryPosition": {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Parker"
+       },
+       {
+        "firstName": "Spencer",
+        "fullName": "Spencer Torkelson",
+        "id": 679529,
+        "lastName": "Torkelson",
+        "link": "/api/v1/people/679529",
+        "primaryPosition": {
+         "abbreviation": "1B",
+         "code": "3",
+         "name": "First Base",
+         "type": "Infielder"
+        },
+        "useName": "Spencer"
+       },
+       {
+        "firstName": "Kerry",
+        "fullName": "Kerry Carpenter",
+        "id": 681481,
+        "lastName": "Carpenter",
+        "link": "/api/v1/people/681481",
+        "primaryPosition": {
+         "abbreviation": "DH",
+         "code": "10",
+         "name": "Designated Hitter",
+         "type": "Hitter"
+        },
+        "useName": "Kerry"
+       },
+       {
+        "firstName": "Riley",
+        "fullName": "Riley Greene",
+        "id": 682985,
+        "lastName": "Greene",
+        "link": "/api/v1/people/682985",
+        "primaryPosition": {
+         "abbreviation": "LF",
+         "code": "7",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Riley"
+       },
+       {
+        "firstName": "Matthew",
+        "fullName": "Matt Vierling",
+        "id": 663837,
+        "lastName": "Vierling",
+        "link": "/api/v1/people/663837",
+        "primaryPosition": {
+         "abbreviation": "RF",
+         "code": "9",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Matt"
+       },
+       {
+        "firstName": "Colten",
+        "fullName": "Colt Keith",
+        "id": 690993,
+        "lastName": "Keith",
+        "link": "/api/v1/people/690993",
+        "primaryPosition": {
+         "abbreviation": "2B",
+         "code": "4",
+         "name": "Second Base",
+         "type": "Infielder"
+        },
+        "useName": "Colt"
+       },
+       {
+        "firstName": "Carson",
+        "fullName": "Carson Kelly",
+        "id": 608348,
+        "lastName": "Kelly",
+        "link": "/api/v1/people/608348",
+        "primaryPosition": {
+         "abbreviation": "C",
+         "code": "2",
+         "name": "Catcher",
+         "type": "Catcher"
+        },
+        "useName": "Carson"
+       },
+       {
+        "firstName": "Giovanny",
+        "fullName": "Gio Urshela",
+        "id": 570482,
+        "lastName": "Urshela",
+        "link": "/api/v1/people/570482",
+        "primaryPosition": {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        },
+        "useName": "Gio"
+       },
+       {
+        "firstName": "Zachary",
+        "fullName": "Zach McKinstry",
+        "id": 656716,
+        "lastName": "McKinstry",
+        "link": "/api/v1/people/656716",
+        "primaryPosition": {
+         "abbreviation": "SS",
+         "code": "6",
+         "name": "Shortstop",
+         "type": "Infielder"
+        },
+        "useName": "Zach"
+       }
+      ],
+      "homePlayers": [
+       {
+        "firstName": "Brandon",
+        "fullName": "Brandon Nimmo",
+        "id": 607043,
+        "lastName": "Nimmo",
+        "link": "/api/v1/people/607043",
+        "primaryPosition": {
+         "abbreviation": "LF",
+         "code": "7",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Brandon"
+       },
+       {
+        "firstName": "Francisco",
+        "fullName": "Francisco Lindor",
+        "id": 596019,
+        "lastName": "Lindor",
+        "link": "/api/v1/people/596019",
+        "primaryPosition": {
+         "abbreviation": "SS",
+         "code": "6",
+         "name": "Shortstop",
+         "type": "Infielder"
+        },
+        "useName": "Francisco"
+       },
+       {
+        "firstName": "Peter",
+        "fullName": "Pete Alonso",
+        "id": 624413,
+        "lastName": "Alonso",
+        "link": "/api/v1/people/624413",
+        "primaryPosition": {
+         "abbreviation": "1B",
+         "code": "3",
+         "name": "First Base",
+         "type": "Infielder"
+        },
+        "useName": "Pete"
+       },
+       {
+        "firstName": "Francisco",
+        "fullName": "Francisco Alvarez",
+        "id": 682626,
+        "lastName": "Alvarez",
+        "link": "/api/v1/people/682626",
+        "primaryPosition": {
+         "abbreviation": "C",
+         "code": "2",
+         "name": "Catcher",
+         "type": "Catcher"
+        },
+        "useName": "Francisco"
+       },
+       {
+        "firstName": "Brett",
+        "fullName": "Brett Baty",
+        "id": 683146,
+        "lastName": "Baty",
+        "link": "/api/v1/people/683146",
+        "primaryPosition": {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        },
+        "useName": "Brett"
+       },
+       {
+        "firstName": "Starling",
+        "fullName": "Starling Marte",
+        "id": 516782,
+        "lastName": "Marte",
+        "link": "/api/v1/people/516782",
+        "primaryPosition": {
+         "abbreviation": "RF",
+         "code": "9",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Starling"
+       },
+       {
+        "firstName": "Jeffrey",
+        "fullName": "Jeff McNeil",
+        "id": 643446,
+        "lastName": "McNeil",
+        "link": "/api/v1/people/643446",
+        "primaryPosition": {
+         "abbreviation": "2B",
+         "code": "4",
+         "name": "Second Base",
+         "type": "Infielder"
+        },
+        "useName": "Jeff"
+       },
+       {
+        "firstName": "Tyrone",
+        "fullName": "Tyrone Taylor",
+        "id": 621438,
+        "lastName": "Taylor",
+        "link": "/api/v1/people/621438",
+        "primaryPosition": {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Tyrone"
+       },
+       {
+        "firstName": "Demetrius",
+        "fullName": "DJ Stewart",
+        "id": 621466,
+        "lastName": "Stewart",
+        "link": "/api/v1/people/621466",
+        "primaryPosition": {
+         "abbreviation": "DH",
+         "code": "10",
+         "name": "Designated Hitter",
+         "type": "Hitter"
+        },
+        "useName": "DJ"
+       }
+      ]
+     },
+     "link": "/api/v1.1/game/745844/feed/live",
+     "officialDate": "2024-04-04",
+     "publicFacing": true,
+     "recordSource": "S",
+     "rescheduledFrom": "2024-04-02T23:10:00Z",
+     "rescheduledFromDate": "2024-04-02",
+     "reverseHomeAwayStatus": false,
+     "scheduledInnings": 9,
+     "season": "2024",
+     "seasonDisplay": "2024",
+     "seriesDescription": "Regular Season",
+     "seriesGameNumber": 2,
+     "status": {
+      "abstractGameCode": "F",
+      "abstractGameState": "Final",
+      "codedGameState": "F",
+      "detailedState": "Final",
+      "startTimeTBD": false,
+      "statusCode": "F"
+     },
+     "teams": {
+      "away": {
+       "isWinner": true,
+       "leagueRecord": {
+        "losses": 0,
+        "pct": "1.000",
+        "ties": 0,
+        "wins": 5
+       },
+       "probablePitcher": {
+        "fullName": "Casey Mize",
+        "id": 663554,
+        "link": "/api/v1/people/663554"
+       },
+       "score": 6,
+       "seriesNumber": 2,
+       "splitSquad": false,
+       "springLeague": {
+        "abbreviation": "GL",
+        "id": 115,
+        "link": "/api/v1/league/115",
+        "name": "Grapefruit League"
+       },
+       "team": {
+        "abbreviation": "DET",
+        "active": true,
+        "allStarStatus": "N",
+        "clubName": "Tigers",
+        "division": {
+         "id": 202,
+         "link": "/api/v1/divisions/202",
+         "name": "American League Central"
+        },
+        "fileCode": "det",
+        "firstYearOfPlay": "1901",
+        "franchiseName": "Detroit",
+        "id": 116,
+        "league": {
+         "id": 103,
+         "link": "/api/v1/league/103",
+         "name": "American League"
+        },
+        "link": "/api/v1/teams/116",
+        "locationName": "Detroit",
+        "name": "Detroit Tigers",
+        "season": 2024,
+        "shortName": "Detroit",
+        "sport": {
+         "id": 1,
+         "link": "/api/v1/sports/1",
+         "name": "Major League Baseball"
+        },
+        "springLeague": {
+         "abbreviation": "GL",
+         "id": 115,
+         "link": "/api/v1/league/115",
+         "name": "Grapefruit League"
+        },
+        "springVenue": {
+         "id": 2511,
+         "link": "/api/v1/venues/2511"
+        },
+        "teamCode": "det",
+        "teamName": "Tigers",
+        "venue": {
+         "id": 2394,
+         "link": "/api/v1/venues/2394",
+         "name": "Comerica Park"
+        }
+       }
+      },
+      "home": {
+       "isWinner": false,
+       "leagueRecord": {
+        "losses": 5,
+        "pct": ".000",
+        "ties": 0,
+        "wins": 0
+       },
+       "probablePitcher": {
+        "fullName": "Adrian Houser",
+        "id": 605288,
+        "link": "/api/v1/people/605288"
+       },
+       "score": 3,
+       "seriesNumber": 2,
+       "splitSquad": false,
+       "springLeague": {
+        "abbreviation": "GL",
+        "id": 115,
+        "link": "/api/v1/league/115",
+        "name": "Grapefruit League"
+       },
+       "team": {
+        "abbreviation": "NYM",
+        "active": true,
+        "allStarStatus": "N",
+        "clubName": "Mets",
+        "division": {
+         "id": 204,
+         "link": "/api/v1/divisions/204",
+         "name": "National League East"
+        },
+        "fileCode": "nym",
+        "firstYearOfPlay": "1962",
+        "franchiseName": "New York",
+        "id": 121,
+        "league": {
+         "id": 104,
+         "link": "/api/v1/league/104",
+         "name": "National League"
+        },
+        "link": "/api/v1/teams/121",
+        "locationName": "Flushing",
+        "name": "New York Mets",
+        "season": 2024,
+        "shortName": "NY Mets",
+        "sport": {
+         "id": 1,
+         "link": "/api/v1/sports/1",
+         "name": "Major League Baseball"
+        },
+        "springLeague": {
+         "abbreviation": "GL",
+         "id": 115,
+         "link": "/api/v1/league/115",
+         "name": "Grapefruit League"
+        },
+        "springVenue": {
+         "id": 2856,
+         "link": "/api/v1/venues/2856"
+        },
+        "teamCode": "nyn",
+        "teamName": "Mets",
+        "venue": {
+         "id": 3289,
+         "link": "/api/v1/venues/3289",
+         "name": "Citi Field"
+        }
+       }
+      }
+     },
+     "tiebreaker": "N",
+     "venue": {
+      "id": 3289,
+      "link": "/api/v1/venues/3289",
+      "name": "Citi Field"
+     }
+    },
+    {
+     "calendarEventID": "14-745843-2024-04-04",
+     "content": {
+      "link": "/api/v1/game/745843/content"
+     },
+     "dayNight": "day",
+     "description": "Makeup of 4/3 PPD",
+     "doubleHeader": "Y",
+     "gameDate": "2024-04-04T16:15:00Z",
+     "gameGuid": "74a85d51-35e9-451b-9964-5a94170dcf9d",
+     "gameNumber": 2,
+     "gamePk": 745843,
+     "gameType": "R",
+     "gamedayType": "P",
+     "gamesInSeries": 3,
+     "ifNecessary": "N",
+     "ifNecessaryDescription": "Normal Game",
+     "inningBreakLength": 120,
+     "isTie": false,
+     "linescore": {
+      "balls": 3,
+      "currentInning": 9,
+      "currentInningOrdinal": "9th",
+      "defense": {
+       "batter": {
+        "fullName": "Javier B\u00e1ez",
+        "id": 595879,
+        "link": "/api/v1/people/595879"
+       },
+       "battingOrder": 8,
+       "catcher": {
+        "fullName": "Jake Rogers",
+        "id": 668670,
+        "link": "/api/v1/people/668670"
+       },
+       "center": {
+        "fullName": "Parker Meadows",
+        "id": 678009,
+        "link": "/api/v1/people/678009"
+       },
+       "first": {
+        "fullName": "Spencer Torkelson",
+        "id": 679529,
+        "link": "/api/v1/people/679529"
+       },
+       "inHole": {
+        "fullName": "Parker Meadows",
+        "id": 678009,
+        "link": "/api/v1/people/678009"
+       },
+       "left": {
+        "fullName": "Mark Canha",
+        "id": 592192,
+        "link": "/api/v1/people/592192"
+       },
+       "onDeck": {
+        "fullName": "Jake Rogers",
+        "id": 668670,
+        "link": "/api/v1/people/668670"
+       },
+       "pitcher": {
+        "fullName": "Alex Faedo",
+        "id": 656412,
+        "link": "/api/v1/people/656412"
+       },
+       "right": {
+        "fullName": "Kerry Carpenter",
+        "id": 681481,
+        "link": "/api/v1/people/681481"
+       },
+       "second": {
+        "fullName": "Colt Keith",
+        "id": 690993,
+        "link": "/api/v1/people/690993"
+       },
+       "shortstop": {
+        "fullName": "Javier B\u00e1ez",
+        "id": 595879,
+        "link": "/api/v1/people/595879"
+       },
+       "team": {
+        "id": 116,
+        "link": "/api/v1/teams/116",
+        "name": "Detroit Tigers"
+       },
+       "third": {
+        "fullName": "Zach McKinstry",
+        "id": 656716,
+        "link": "/api/v1/people/656716"
+       }
+      },
+      "inningHalf": "Bottom",
+      "inningState": "Bottom",
+      "innings": [
+       {
+        "away": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 2,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 1,
+        "ordinalNum": "1st"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 2,
+         "runs": 1
+        },
+        "home": {
+         "errors": 1,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 2,
+        "ordinalNum": "2nd"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 3,
+        "ordinalNum": "3rd"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "num": 4,
+        "ordinalNum": "4th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "num": 5,
+        "ordinalNum": "5th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 6,
+        "ordinalNum": "6th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "num": 7,
+        "ordinalNum": "7th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 8,
+        "ordinalNum": "8th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 2,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 2,
+         "leftOnBase": 1,
+         "runs": 2
+        },
+        "num": 9,
+        "ordinalNum": "9th"
+       }
+      ],
+      "isTopInning": false,
+      "note": "One out when winning run scored.",
+      "offense": {
+       "batter": {
+        "fullName": "Tyrone Taylor",
+        "id": 621438,
+        "link": "/api/v1/people/621438"
+       },
+       "battingOrder": 6,
+       "first": {
+        "fullName": "Tyrone Taylor",
+        "id": 621438,
+        "link": "/api/v1/people/621438"
+       },
+       "inHole": {
+        "fullName": "Harrison Bader",
+        "id": 664056,
+        "link": "/api/v1/people/664056"
+       },
+       "onDeck": {
+        "fullName": "Francisco Alvarez",
+        "id": 682626,
+        "link": "/api/v1/people/682626"
+       },
+       "pitcher": {
+        "fullName": "Reed Garrett",
+        "id": 657585,
+        "link": "/api/v1/people/657585"
+       },
+       "team": {
+        "id": 121,
+        "link": "/api/v1/teams/121",
+        "name": "New York Mets"
+       }
+      },
+      "outs": 1,
+      "scheduledInnings": 9,
+      "strikes": 2,
+      "teams": {
+       "away": {
+        "errors": 0,
+        "hits": 5,
+        "isWinner": false,
+        "leftOnBase": 6,
+        "runs": 1
+       },
+       "home": {
+        "errors": 1,
+        "hits": 3,
+        "isWinner": true,
+        "leftOnBase": 6,
+        "runs": 2
+       }
+      }
+     },
+     "lineups": {
+      "awayPlayers": [
+       {
+        "firstName": "Parker",
+        "fullName": "Parker Meadows",
+        "id": 678009,
+        "lastName": "Meadows",
+        "link": "/api/v1/people/678009",
+        "primaryPosition": {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Parker"
+       },
+       {
+        "firstName": "Spencer",
+        "fullName": "Spencer Torkelson",
+        "id": 679529,
+        "lastName": "Torkelson",
+        "link": "/api/v1/people/679529",
+        "primaryPosition": {
+         "abbreviation": "1B",
+         "code": "3",
+         "name": "First Base",
+         "type": "Infielder"
+        },
+        "useName": "Spencer"
+       },
+       {
+        "firstName": "Kerry",
+        "fullName": "Kerry Carpenter",
+        "id": 681481,
+        "lastName": "Carpenter",
+        "link": "/api/v1/people/681481",
+        "primaryPosition": {
+         "abbreviation": "RF",
+         "code": "9",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Kerry"
+       },
+       {
+        "firstName": "Riley",
+        "fullName": "Riley Greene",
+        "id": 682985,
+        "lastName": "Greene",
+        "link": "/api/v1/people/682985",
+        "primaryPosition": {
+         "abbreviation": "DH",
+         "code": "10",
+         "name": "Designated Hitter",
+         "type": "Hitter"
+        },
+        "useName": "Riley"
+       },
+       {
+        "firstName": "Mark",
+        "fullName": "Mark Canha",
+        "id": 592192,
+        "lastName": "Canha",
+        "link": "/api/v1/people/592192",
+        "primaryPosition": {
+         "abbreviation": "LF",
+         "code": "7",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Mark"
+       },
+       {
+        "firstName": "Colten",
+        "fullName": "Colt Keith",
+        "id": 690993,
+        "lastName": "Keith",
+        "link": "/api/v1/people/690993",
+        "primaryPosition": {
+         "abbreviation": "2B",
+         "code": "4",
+         "name": "Second Base",
+         "type": "Infielder"
+        },
+        "useName": "Colt"
+       },
+       {
+        "firstName": "Andy",
+        "fullName": "Andy Ib\u00e1\u00f1ez",
+        "id": 628451,
+        "lastName": "Ib\u00e1\u00f1ez",
+        "link": "/api/v1/people/628451",
+        "primaryPosition": {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        },
+        "useName": "Andy"
+       },
+       {
+        "firstName": "Ednel",
+        "fullName": "Javier B\u00e1ez",
+        "id": 595879,
+        "lastName": "B\u00e1ez",
+        "link": "/api/v1/people/595879",
+        "primaryPosition": {
+         "abbreviation": "SS",
+         "code": "6",
+         "name": "Shortstop",
+         "type": "Infielder"
+        },
+        "useName": "Javier"
+       },
+       {
+        "firstName": "Jacob",
+        "fullName": "Jake Rogers",
+        "id": 668670,
+        "lastName": "Rogers",
+        "link": "/api/v1/people/668670",
+        "primaryPosition": {
+         "abbreviation": "C",
+         "code": "2",
+         "name": "Catcher",
+         "type": "Catcher"
+        },
+        "useName": "Jake"
+       }
+      ],
+      "homePlayers": [
+       {
+        "firstName": "Brandon",
+        "fullName": "Brandon Nimmo",
+        "id": 607043,
+        "lastName": "Nimmo",
+        "link": "/api/v1/people/607043",
+        "primaryPosition": {
+         "abbreviation": "DH",
+         "code": "10",
+         "name": "Designated Hitter",
+         "type": "Hitter"
+        },
+        "useName": "Brandon"
+       },
+       {
+        "firstName": "Francisco",
+        "fullName": "Francisco Lindor",
+        "id": 596019,
+        "lastName": "Lindor",
+        "link": "/api/v1/people/596019",
+        "primaryPosition": {
+         "abbreviation": "SS",
+         "code": "6",
+         "name": "Shortstop",
+         "type": "Infielder"
+        },
+        "useName": "Francisco"
+       },
+       {
+        "firstName": "Peter",
+        "fullName": "Pete Alonso",
+        "id": 624413,
+        "lastName": "Alonso",
+        "link": "/api/v1/people/624413",
+        "primaryPosition": {
+         "abbreviation": "1B",
+         "code": "3",
+         "name": "First Base",
+         "type": "Infielder"
+        },
+        "useName": "Pete"
+       },
+       {
+        "firstName": "Brett",
+        "fullName": "Brett Baty",
+        "id": 683146,
+        "lastName": "Baty",
+        "link": "/api/v1/people/683146",
+        "primaryPosition": {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        },
+        "useName": "Brett"
+       },
+       {
+        "firstName": "Starling",
+        "fullName": "Starling Marte",
+        "id": 516782,
+        "lastName": "Marte",
+        "link": "/api/v1/people/516782",
+        "primaryPosition": {
+         "abbreviation": "RF",
+         "code": "9",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Starling"
+       },
+       {
+        "firstName": "Tyrone",
+        "fullName": "Tyrone Taylor",
+        "id": 621438,
+        "lastName": "Taylor",
+        "link": "/api/v1/people/621438",
+        "primaryPosition": {
+         "abbreviation": "LF",
+         "code": "7",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Tyrone"
+       },
+       {
+        "firstName": "Omar",
+        "fullName": "Omar Narv\u00e1ez",
+        "id": 553882,
+        "lastName": "Narv\u00e1ez",
+        "link": "/api/v1/people/553882",
+        "primaryPosition": {
+         "abbreviation": "C",
+         "code": "2",
+         "name": "Catcher",
+         "type": "Catcher"
+        },
+        "useName": "Omar"
+       },
+       {
+        "firstName": "Harrison",
+        "fullName": "Harrison Bader",
+        "id": 664056,
+        "lastName": "Bader",
+        "link": "/api/v1/people/664056",
+        "primaryPosition": {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Harrison"
+       },
+       {
+        "firstName": "Joseph",
+        "fullName": "Joey Wendle",
+        "id": 621563,
+        "lastName": "Wendle",
+        "link": "/api/v1/people/621563",
+        "primaryPosition": {
+         "abbreviation": "2B",
+         "code": "4",
+         "name": "Second Base",
+         "type": "Infielder"
+        },
+        "useName": "Joey"
+       }
+      ]
+     },
+     "link": "/api/v1.1/game/745843/feed/live",
+     "officialDate": "2024-04-04",
+     "publicFacing": true,
+     "recordSource": "S",
+     "rescheduledFrom": "2024-04-03T23:10:00Z",
+     "rescheduledFromDate": "2024-04-03",
+     "reverseHomeAwayStatus": false,
+     "scheduledInnings": 9,
+     "season": "2024",
+     "seasonDisplay": "2024",
+     "seriesDescription": "Regular Season",
+     "seriesGameNumber": 3,
+     "status": {
+      "abstractGameCode": "F",
+      "abstractGameState": "Final",
+      "codedGameState": "F",
+      "detailedState": "Final",
+      "startTimeTBD": true,
+      "statusCode": "F"
+     },
+     "teams": {
+      "away": {
+       "isWinner": false,
+       "leagueRecord": {
+        "losses": 1,
+        "pct": ".833",
+        "ties": 0,
+        "wins": 5
+       },
+       "probablePitcher": {
+        "fullName": "Matt Manning",
+        "id": 666159,
+        "link": "/api/v1/people/666159"
+       },
+       "score": 1,
+       "seriesNumber": 2,
+       "splitSquad": false,
+       "springLeague": {
+        "abbreviation": "GL",
+        "id": 115,
+        "link": "/api/v1/league/115",
+        "name": "Grapefruit League"
+       },
+       "team": {
+        "abbreviation": "DET",
+        "active": true,
+        "allStarStatus": "N",
+        "clubName": "Tigers",
+        "division": {
+         "id": 202,
+         "link": "/api/v1/divisions/202",
+         "name": "American League Central"
+        },
+        "fileCode": "det",
+        "firstYearOfPlay": "1901",
+        "franchiseName": "Detroit",
+        "id": 116,
+        "league": {
+         "id": 103,
+         "link": "/api/v1/league/103",
+         "name": "American League"
+        },
+        "link": "/api/v1/teams/116",
+        "locationName": "Detroit",
+        "name": "Detroit Tigers",
+        "season": 2024,
+        "shortName": "Detroit",
+        "sport": {
+         "id": 1,
+         "link": "/api/v1/sports/1",
+         "name": "Major League Baseball"
+        },
+        "springLeague": {
+         "abbreviation": "GL",
+         "id": 115,
+         "link": "/api/v1/league/115",
+         "name": "Grapefruit League"
+        },
+        "springVenue": {
+         "id": 2511,
+         "link": "/api/v1/venues/2511"
+        },
+        "teamCode": "det",
+        "teamName": "Tigers",
+        "venue": {
+         "id": 2394,
+         "link": "/api/v1/venues/2394",
+         "name": "Comerica Park"
+        }
+       }
+      },
+      "home": {
+       "isWinner": true,
+       "leagueRecord": {
+        "losses": 5,
+        "pct": ".167",
+        "ties": 0,
+        "wins": 1
+       },
+       "probablePitcher": {
+        "fullName": "Jos\u00e9 Butt\u00f3",
+        "id": 676130,
+        "link": "/api/v1/people/676130"
+       },
+       "score": 2,
+       "seriesNumber": 2,
+       "splitSquad": false,
+       "springLeague": {
+        "abbreviation": "GL",
+        "id": 115,
+        "link": "/api/v1/league/115",
+        "name": "Grapefruit League"
+       },
+       "team": {
+        "abbreviation": "NYM",
+        "active": true,
+        "allStarStatus": "N",
+        "clubName": "Mets",
+        "division": {
+         "id": 204,
+         "link": "/api/v1/divisions/204",
+         "name": "National League East"
+        },
+        "fileCode": "nym",
+        "firstYearOfPlay": "1962",
+        "franchiseName": "New York",
+        "id": 121,
+        "league": {
+         "id": 104,
+         "link": "/api/v1/league/104",
+         "name": "National League"
+        },
+        "link": "/api/v1/teams/121",
+        "locationName": "Flushing",
+        "name": "New York Mets",
+        "season": 2024,
+        "shortName": "NY Mets",
+        "sport": {
+         "id": 1,
+         "link": "/api/v1/sports/1",
+         "name": "Major League Baseball"
+        },
+        "springLeague": {
+         "abbreviation": "GL",
+         "id": 115,
+         "link": "/api/v1/league/115",
+         "name": "Grapefruit League"
+        },
+        "springVenue": {
+         "id": 2856,
+         "link": "/api/v1/venues/2856"
+        },
+        "teamCode": "nyn",
+        "teamName": "Mets",
+        "venue": {
+         "id": 3289,
+         "link": "/api/v1/venues/3289",
+         "name": "Citi Field"
+        }
+       }
+      }
+     },
+     "tiebreaker": "N",
+     "venue": {
+      "id": 3289,
+      "link": "/api/v1/venues/3289",
+      "name": "Citi Field"
+     }
+    },
+    {
+     "calendarEventID": "14-744870-2024-04-04",
+     "content": {
+      "link": "/api/v1/game/744870/content"
+     },
+     "dayNight": "day",
+     "doubleHeader": "N",
+     "gameDate": "2024-04-04T20:05:00Z",
+     "gameGuid": "cae02db8-3844-47aa-9fa9-7840641496e5",
+     "gameNumber": 1,
+     "gamePk": 744870,
+     "gameType": "R",
+     "gamedayType": "P",
+     "gamesInSeries": 3,
+     "ifNecessary": "N",
+     "ifNecessaryDescription": "Normal Game",
+     "inningBreakLength": 120,
+     "isTie": false,
+     "linescore": {
+      "balls": 0,
+      "currentInning": 9,
+      "currentInningOrdinal": "9th",
+      "defense": {
+       "batter": {
+        "fullName": "Michael A. Taylor",
+        "id": 572191,
+        "link": "/api/v1/people/572191"
+       },
+       "battingOrder": 9,
+       "catcher": {
+        "fullName": "Henry Davis",
+        "id": 680779,
+        "link": "/api/v1/people/680779"
+       },
+       "center": {
+        "fullName": "Michael A. Taylor",
+        "id": 572191,
+        "link": "/api/v1/people/572191"
+       },
+       "first": {
+        "fullName": "Rowdy Tellez",
+        "id": 642133,
+        "link": "/api/v1/people/642133"
+       },
+       "inHole": {
+        "fullName": "Bryan Reynolds",
+        "id": 668804,
+        "link": "/api/v1/people/668804"
+       },
+       "left": {
+        "fullName": "Jack Suwinski",
+        "id": 669261,
+        "link": "/api/v1/people/669261"
+       },
+       "onDeck": {
+        "fullName": "Oneil Cruz",
+        "id": 665833,
+        "link": "/api/v1/people/665833"
+       },
+       "pitcher": {
+        "fullName": "David Bednar",
+        "id": 670280,
+        "link": "/api/v1/people/670280"
+       },
+       "right": {
+        "fullName": "Bryan Reynolds",
+        "id": 668804,
+        "link": "/api/v1/people/668804"
+       },
+       "second": {
+        "fullName": "Jared Triolo",
+        "id": 669707,
+        "link": "/api/v1/people/669707"
+       },
+       "shortstop": {
+        "fullName": "Oneil Cruz",
+        "id": 665833,
+        "link": "/api/v1/people/665833"
+       },
+       "team": {
+        "id": 134,
+        "link": "/api/v1/teams/134",
+        "name": "Pittsburgh Pirates"
+       },
+       "third": {
+        "fullName": "Ke'Bryan Hayes",
+        "id": 663647,
+        "link": "/api/v1/people/663647"
+       }
+      },
+      "inningHalf": "Bottom",
+      "inningState": "Bottom",
+      "innings": [
+       {
+        "away": {
+         "errors": 0,
+         "hits": 3,
+         "leftOnBase": 1,
+         "runs": 4
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "num": 1,
+        "ordinalNum": "1st"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 2,
+         "leftOnBase": 0,
+         "runs": 1
+        },
+        "home": {
+         "errors": 0,
+         "hits": 2,
+         "leftOnBase": 1,
+         "runs": 1
+        },
+        "num": 2,
+        "ordinalNum": "2nd"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 3,
+        "ordinalNum": "3rd"
+       },
+       {
+        "away": {
+         "errors": 1,
+         "hits": 2,
+         "leftOnBase": 2,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 4,
+        "ordinalNum": "4th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 2,
+         "leftOnBase": 1,
+         "runs": 2
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 0,
+         "runs": 1
+        },
+        "num": 5,
+        "ordinalNum": "5th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 2,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 6,
+        "ordinalNum": "6th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 2,
+         "runs": 0
+        },
+        "num": 7,
+        "ordinalNum": "7th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 2,
+         "leftOnBase": 3,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 2,
+         "leftOnBase": 2,
+         "runs": 2
+        },
+        "num": 8,
+        "ordinalNum": "8th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 2,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "num": 9,
+        "ordinalNum": "9th"
+       }
+      ],
+      "isTopInning": false,
+      "offense": {
+       "batter": {
+        "fullName": "Joey Meneses",
+        "id": 608841,
+        "link": "/api/v1/people/608841"
+       },
+       "battingOrder": 3,
+       "inHole": {
+        "fullName": "Riley Adams",
+        "id": 656180,
+        "link": "/api/v1/people/656180"
+       },
+       "onDeck": {
+        "fullName": "Joey Gallo",
+        "id": 608336,
+        "link": "/api/v1/people/608336"
+       },
+       "pitcher": {
+        "fullName": "Dylan Floro",
+        "id": 571670,
+        "link": "/api/v1/people/571670"
+       },
+       "team": {
+        "id": 120,
+        "link": "/api/v1/teams/120",
+        "name": "Washington Nationals"
+       }
+      },
+      "outs": 3,
+      "scheduledInnings": 9,
+      "strikes": 3,
+      "teams": {
+       "away": {
+        "errors": 1,
+        "hits": 11,
+        "isWinner": true,
+        "leftOnBase": 10,
+        "runs": 7
+       },
+       "home": {
+        "errors": 0,
+        "hits": 8,
+        "isWinner": false,
+        "leftOnBase": 8,
+        "runs": 4
+       }
+      }
+     },
+     "lineups": {
+      "awayPlayers": [
+       {
+        "firstName": "Oneil",
+        "fullName": "Oneil Cruz",
+        "id": 665833,
+        "lastName": "Cruz",
+        "link": "/api/v1/people/665833",
+        "primaryPosition": {
+         "abbreviation": "SS",
+         "code": "6",
+         "name": "Shortstop",
+         "type": "Infielder"
+        },
+        "useName": "Oneil"
+       },
+       {
+        "firstName": "Bryan",
+        "fullName": "Bryan Reynolds",
+        "id": 668804,
+        "lastName": "Reynolds",
+        "link": "/api/v1/people/668804",
+        "primaryPosition": {
+         "abbreviation": "RF",
+         "code": "9",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Bryan"
+       },
+       {
+        "firstName": "Ke'Bryan",
+        "fullName": "Ke'Bryan Hayes",
+        "id": 663647,
+        "lastName": "Hayes",
+        "link": "/api/v1/people/663647",
+        "primaryPosition": {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        },
+        "useName": "Ke'Bryan"
+       },
+       {
+        "firstName": "Jack",
+        "fullName": "Jack Suwinski",
+        "id": 669261,
+        "lastName": "Suwinski",
+        "link": "/api/v1/people/669261",
+        "primaryPosition": {
+         "abbreviation": "LF",
+         "code": "7",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Jack"
+       },
+       {
+        "firstName": "Connor",
+        "fullName": "Connor Joe",
+        "id": 656582,
+        "lastName": "Joe",
+        "link": "/api/v1/people/656582",
+        "primaryPosition": {
+         "abbreviation": "DH",
+         "code": "10",
+         "name": "Designated Hitter",
+         "type": "Hitter"
+        },
+        "useName": "Connor"
+       },
+       {
+        "firstName": "Ryan",
+        "fullName": "Rowdy Tellez",
+        "id": 642133,
+        "lastName": "Tellez",
+        "link": "/api/v1/people/642133",
+        "primaryPosition": {
+         "abbreviation": "1B",
+         "code": "3",
+         "name": "First Base",
+         "type": "Infielder"
+        },
+        "useName": "Rowdy"
+       },
+       {
+        "firstName": "Henry",
+        "fullName": "Henry Davis",
+        "id": 680779,
+        "lastName": "Davis",
+        "link": "/api/v1/people/680779",
+        "primaryPosition": {
+         "abbreviation": "C",
+         "code": "2",
+         "name": "Catcher",
+         "type": "Catcher"
+        },
+        "useName": "Henry"
+       },
+       {
+        "firstName": "Jared",
+        "fullName": "Jared Triolo",
+        "id": 669707,
+        "lastName": "Triolo",
+        "link": "/api/v1/people/669707",
+        "primaryPosition": {
+         "abbreviation": "2B",
+         "code": "4",
+         "name": "Second Base",
+         "type": "Infielder"
+        },
+        "useName": "Jared"
+       },
+       {
+        "firstName": "Michael",
+        "fullName": "Michael A. Taylor",
+        "id": 572191,
+        "lastName": "Taylor",
+        "link": "/api/v1/people/572191",
+        "primaryPosition": {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Michael A."
+       }
+      ],
+      "homePlayers": [
+       {
+        "firstName": "Paul",
+        "fullName": "CJ Abrams",
+        "id": 682928,
+        "lastName": "Abrams",
+        "link": "/api/v1/people/682928",
+        "primaryPosition": {
+         "abbreviation": "SS",
+         "code": "6",
+         "name": "Shortstop",
+         "type": "Infielder"
+        },
+        "useName": "CJ"
+       },
+       {
+        "firstName": "Lane",
+        "fullName": "Lane Thomas",
+        "id": 657041,
+        "lastName": "Thomas",
+        "link": "/api/v1/people/657041",
+        "primaryPosition": {
+         "abbreviation": "RF",
+         "code": "9",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Lane"
+       },
+       {
+        "firstName": "Joey",
+        "fullName": "Joey Meneses",
+        "id": 608841,
+        "lastName": "Meneses",
+        "link": "/api/v1/people/608841",
+        "primaryPosition": {
+         "abbreviation": "DH",
+         "code": "10",
+         "name": "Designated Hitter",
+         "type": "Hitter"
+        },
+        "useName": "Joey"
+       },
+       {
+        "firstName": "Joseph",
+        "fullName": "Joey Gallo",
+        "id": 608336,
+        "lastName": "Gallo",
+        "link": "/api/v1/people/608336",
+        "primaryPosition": {
+         "abbreviation": "1B",
+         "code": "3",
+         "name": "First Base",
+         "type": "Infielder"
+        },
+        "useName": "Joey"
+       },
+       {
+        "firstName": "Riley",
+        "fullName": "Riley Adams",
+        "id": 656180,
+        "lastName": "Adams",
+        "link": "/api/v1/people/656180",
+        "primaryPosition": {
+         "abbreviation": "C",
+         "code": "2",
+         "name": "Catcher",
+         "type": "Catcher"
+        },
+        "useName": "Riley"
+       },
+       {
+        "firstName": "Jesse",
+        "fullName": "Jesse Winker",
+        "id": 608385,
+        "lastName": "Winker",
+        "link": "/api/v1/people/608385",
+        "primaryPosition": {
+         "abbreviation": "LF",
+         "code": "7",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Jesse"
+       },
+       {
+        "firstName": "LaVictor",
+        "fullName": "Trey Lipscomb",
+        "id": 702358,
+        "lastName": "Lipscomb",
+        "link": "/api/v1/people/702358",
+        "primaryPosition": {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        },
+        "useName": "Trey"
+       },
+       {
+        "firstName": "Ildemaro",
+        "fullName": "Ildemaro Vargas",
+        "id": 545121,
+        "lastName": "Vargas",
+        "link": "/api/v1/people/545121",
+        "primaryPosition": {
+         "abbreviation": "2B",
+         "code": "4",
+         "name": "Second Base",
+         "type": "Infielder"
+        },
+        "useName": "Ildemaro"
+       },
+       {
+        "firstName": "Jacob",
+        "fullName": "Jacob Young",
+        "id": 696285,
+        "lastName": "Young",
+        "link": "/api/v1/people/696285",
+        "primaryPosition": {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Jacob"
+       }
+      ]
+     },
+     "link": "/api/v1.1/game/744870/feed/live",
+     "officialDate": "2024-04-04",
+     "publicFacing": true,
+     "recordSource": "S",
+     "reverseHomeAwayStatus": false,
+     "scheduledInnings": 9,
+     "season": "2024",
+     "seasonDisplay": "2024",
+     "seriesDescription": "Regular Season",
+     "seriesGameNumber": 3,
+     "status": {
+      "abstractGameCode": "F",
+      "abstractGameState": "Final",
+      "codedGameState": "F",
+      "detailedState": "Final",
+      "startTimeTBD": false,
+      "statusCode": "F"
+     },
+     "teams": {
+      "away": {
+       "isWinner": true,
+       "leagueRecord": {
+        "losses": 1,
+        "pct": ".857",
+        "ties": 0,
+        "wins": 6
+       },
+       "probablePitcher": {
+        "fullName": "Mart\u00edn P\u00e9rez",
+        "id": 527048,
+        "link": "/api/v1/people/527048"
+       },
+       "score": 7,
+       "seriesNumber": 5,
+       "splitSquad": false,
+       "springLeague": {
+        "abbreviation": "GL",
+        "id": 115,
+        "link": "/api/v1/league/115",
+        "name": "Grapefruit League"
+       },
+       "team": {
+        "abbreviation": "PIT",
+        "active": true,
+        "allStarStatus": "N",
+        "clubName": "Pirates",
+        "division": {
+         "id": 205,
+         "link": "/api/v1/divisions/205",
+         "name": "National League Central"
+        },
+        "fileCode": "pit",
+        "firstYearOfPlay": "1882",
+        "franchiseName": "Pittsburgh",
+        "id": 134,
+        "league": {
+         "id": 104,
+         "link": "/api/v1/league/104",
+         "name": "National League"
+        },
+        "link": "/api/v1/teams/134",
+        "locationName": "Pittsburgh",
+        "name": "Pittsburgh Pirates",
+        "season": 2024,
+        "shortName": "Pittsburgh",
+        "sport": {
+         "id": 1,
+         "link": "/api/v1/sports/1",
+         "name": "Major League Baseball"
+        },
+        "springLeague": {
+         "abbreviation": "GL",
+         "id": 115,
+         "link": "/api/v1/league/115",
+         "name": "Grapefruit League"
+        },
+        "springVenue": {
+         "id": 2526,
+         "link": "/api/v1/venues/2526"
+        },
+        "teamCode": "pit",
+        "teamName": "Pirates",
+        "venue": {
+         "id": 31,
+         "link": "/api/v1/venues/31",
+         "name": "PNC Park"
+        }
+       }
+      },
+      "home": {
+       "isWinner": false,
+       "leagueRecord": {
+        "losses": 4,
+        "pct": ".333",
+        "ties": 0,
+        "wins": 2
+       },
+       "probablePitcher": {
+        "fullName": "Josiah Gray",
+        "id": 680686,
+        "link": "/api/v1/people/680686"
+       },
+       "score": 4,
+       "seriesNumber": 3,
+       "splitSquad": false,
+       "springLeague": {
+        "abbreviation": "GL",
+        "id": 115,
+        "link": "/api/v1/league/115",
+        "name": "Grapefruit League"
+       },
+       "team": {
+        "abbreviation": "WSH",
+        "active": true,
+        "allStarStatus": "N",
+        "clubName": "Nationals",
+        "division": {
+         "id": 204,
+         "link": "/api/v1/divisions/204",
+         "name": "National League East"
+        },
+        "fileCode": "was",
+        "firstYearOfPlay": "1968",
+        "franchiseName": "Washington",
+        "id": 120,
+        "league": {
+         "id": 104,
+         "link": "/api/v1/league/104",
+         "name": "National League"
+        },
+        "link": "/api/v1/teams/120",
+        "locationName": "Washington",
+        "name": "Washington Nationals",
+        "season": 2024,
+        "shortName": "Washington",
+        "sport": {
+         "id": 1,
+         "link": "/api/v1/sports/1",
+         "name": "Major League Baseball"
+        },
+        "springLeague": {
+         "abbreviation": "GL",
+         "id": 115,
+         "link": "/api/v1/league/115",
+         "name": "Grapefruit League"
+        },
+        "springVenue": {
+         "id": 5000,
+         "link": "/api/v1/venues/5000"
+        },
+        "teamCode": "was",
+        "teamName": "Nationals",
+        "venue": {
+         "id": 3309,
+         "link": "/api/v1/venues/3309",
+         "name": "Nationals Park"
+        }
+       }
+      }
+     },
+     "tiebreaker": "N",
+     "venue": {
+      "id": 3309,
+      "link": "/api/v1/venues/3309",
+      "name": "Nationals Park"
+     }
+    },
+    {
+     "calendarEventID": "14-745928-2024-04-04",
+     "content": {
+      "link": "/api/v1/game/745928/content"
+     },
+     "dayNight": "day",
+     "description": "Twins home opener",
+     "doubleHeader": "N",
+     "gameDate": "2024-04-04T20:10:00Z",
+     "gameGuid": "185303f1-5ef9-40f4-83e7-72d25c9f59df",
+     "gameNumber": 1,
+     "gamePk": 745928,
+     "gameType": "R",
+     "gamedayType": "P",
+     "gamesInSeries": 2,
+     "ifNecessary": "N",
+     "ifNecessaryDescription": "Normal Game",
+     "inningBreakLength": 120,
+     "isTie": false,
+     "linescore": {
+      "balls": 1,
+      "currentInning": 9,
+      "currentInningOrdinal": "9th",
+      "defense": {
+       "batter": {
+        "fullName": "Josh Naylor",
+        "id": 647304,
+        "link": "/api/v1/people/647304"
+       },
+       "battingOrder": 4,
+       "catcher": {
+        "fullName": "Bo Naylor",
+        "id": 666310,
+        "link": "/api/v1/people/666310"
+       },
+       "center": {
+        "fullName": "Tyler Freeman",
+        "id": 671289,
+        "link": "/api/v1/people/671289"
+       },
+       "first": {
+        "fullName": "Josh Naylor",
+        "id": 647304,
+        "link": "/api/v1/people/647304"
+       },
+       "inHole": {
+        "fullName": "David Fry",
+        "id": 681807,
+        "link": "/api/v1/people/681807"
+       },
+       "left": {
+        "fullName": "Steven Kwan",
+        "id": 680757,
+        "link": "/api/v1/people/680757"
+       },
+       "onDeck": {
+        "fullName": "Tyler Freeman",
+        "id": 671289,
+        "link": "/api/v1/people/671289"
+       },
+       "pitcher": {
+        "fullName": "Emmanuel Clase",
+        "id": 661403,
+        "link": "/api/v1/people/661403"
+       },
+       "right": {
+        "fullName": "Ram\u00f3n Laureano",
+        "id": 657656,
+        "link": "/api/v1/people/657656"
+       },
+       "second": {
+        "fullName": "Andr\u00e9s Gim\u00e9nez",
+        "id": 665926,
+        "link": "/api/v1/people/665926"
+       },
+       "shortstop": {
+        "fullName": "Brayan Rocchio",
+        "id": 677587,
+        "link": "/api/v1/people/677587"
+       },
+       "team": {
+        "id": 114,
+        "link": "/api/v1/teams/114",
+        "name": "Cleveland Guardians"
+       },
+       "third": {
+        "fullName": "Jos\u00e9 Ram\u00edrez",
+        "id": 608070,
+        "link": "/api/v1/people/608070"
+       }
+      },
+      "inningHalf": "Bottom",
+      "inningState": "Bottom",
+      "innings": [
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 1,
+        "ordinalNum": "1st"
+       },
+       {
+        "away": {
+         "errors": 1,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 3,
+         "runs": 0
+        },
+        "num": 2,
+        "ordinalNum": "2nd"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "num": 3,
+        "ordinalNum": "3rd"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 4,
+         "leftOnBase": 1,
+         "runs": 3
+        },
+        "home": {
+         "errors": 0,
+         "hits": 2,
+         "leftOnBase": 2,
+         "runs": 0
+        },
+        "num": 4,
+        "ordinalNum": "4th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 2,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 0,
+         "runs": 1
+        },
+        "num": 5,
+        "ordinalNum": "5th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 2,
+         "runs": 1
+        },
+        "home": {
+         "errors": 1,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "num": 6,
+        "ordinalNum": "6th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 2,
+         "runs": 1
+        },
+        "num": 7,
+        "ordinalNum": "7th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 8,
+        "ordinalNum": "8th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 2,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "num": 9,
+        "ordinalNum": "9th"
+       }
+      ],
+      "isTopInning": false,
+      "offense": {
+       "batter": {
+        "fullName": "Alex Kirilloff",
+        "id": 666135,
+        "link": "/api/v1/people/666135"
+       },
+       "battingOrder": 2,
+       "inHole": {
+        "fullName": "Max Kepler",
+        "id": 596146,
+        "link": "/api/v1/people/596146"
+       },
+       "onDeck": {
+        "fullName": "Byron Buxton",
+        "id": 621439,
+        "link": "/api/v1/people/621439"
+       },
+       "pitcher": {
+        "fullName": "Cole Sands",
+        "id": 663485,
+        "link": "/api/v1/people/663485"
+       },
+       "team": {
+        "id": 142,
+        "link": "/api/v1/teams/142",
+        "name": "Minnesota Twins"
+       }
+      },
+      "outs": 3,
+      "scheduledInnings": 9,
+      "strikes": 0,
+      "teams": {
+       "away": {
+        "errors": 1,
+        "hits": 7,
+        "isWinner": true,
+        "leftOnBase": 8,
+        "runs": 4
+       },
+       "home": {
+        "errors": 1,
+        "hits": 7,
+        "isWinner": false,
+        "leftOnBase": 9,
+        "runs": 2
+       }
+      }
+     },
+     "lineups": {
+      "awayPlayers": [
+       {
+        "firstName": "Steven",
+        "fullName": "Steven Kwan",
+        "id": 680757,
+        "lastName": "Kwan",
+        "link": "/api/v1/people/680757",
+        "primaryPosition": {
+         "abbreviation": "LF",
+         "code": "7",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Steven"
+       },
+       {
+        "firstName": "Andr\u00e9s",
+        "fullName": "Andr\u00e9s Gim\u00e9nez",
+        "id": 665926,
+        "lastName": "Gim\u00e9nez",
+        "link": "/api/v1/people/665926",
+        "primaryPosition": {
+         "abbreviation": "2B",
+         "code": "4",
+         "name": "Second Base",
+         "type": "Infielder"
+        },
+        "useName": "Andr\u00e9s"
+       },
+       {
+        "firstName": "Jos\u00e9",
+        "fullName": "Jos\u00e9 Ram\u00edrez",
+        "id": 608070,
+        "lastName": "Ram\u00edrez",
+        "link": "/api/v1/people/608070",
+        "primaryPosition": {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        },
+        "useName": "Jos\u00e9"
+       },
+       {
+        "firstName": "Joshua-Douglas",
+        "fullName": "Josh Naylor",
+        "id": 647304,
+        "lastName": "Naylor",
+        "link": "/api/v1/people/647304",
+        "primaryPosition": {
+         "abbreviation": "1B",
+         "code": "3",
+         "name": "First Base",
+         "type": "Infielder"
+        },
+        "useName": "Josh"
+       },
+       {
+        "firstName": "Tyler",
+        "fullName": "Tyler Freeman",
+        "id": 671289,
+        "lastName": "Freeman",
+        "link": "/api/v1/people/671289",
+        "primaryPosition": {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Tyler"
+       },
+       {
+        "firstName": "William",
+        "fullName": "Will Brennan",
+        "id": 686823,
+        "lastName": "Brennan",
+        "link": "/api/v1/people/686823",
+        "primaryPosition": {
+         "abbreviation": "DH",
+         "code": "10",
+         "name": "Designated Hitter",
+         "type": "Hitter"
+        },
+        "useName": "Will"
+       },
+       {
+        "firstName": "Ram\u00f3n",
+        "fullName": "Ram\u00f3n Laureano",
+        "id": 657656,
+        "lastName": "Laureano",
+        "link": "/api/v1/people/657656",
+        "primaryPosition": {
+         "abbreviation": "RF",
+         "code": "9",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Ram\u00f3n"
+       },
+       {
+        "firstName": "Noah",
+        "fullName": "Bo Naylor",
+        "id": 666310,
+        "lastName": "Naylor",
+        "link": "/api/v1/people/666310",
+        "primaryPosition": {
+         "abbreviation": "C",
+         "code": "2",
+         "name": "Catcher",
+         "type": "Catcher"
+        },
+        "useName": "Bo"
+       },
+       {
+        "firstName": "Brayan",
+        "fullName": "Brayan Rocchio",
+        "id": 677587,
+        "lastName": "Rocchio",
+        "link": "/api/v1/people/677587",
+        "primaryPosition": {
+         "abbreviation": "SS",
+         "code": "6",
+         "name": "Shortstop",
+         "type": "Infielder"
+        },
+        "useName": "Brayan"
+       }
+      ],
+      "homePlayers": [
+       {
+        "firstName": "Edouard",
+        "fullName": "Edouard Julien",
+        "id": 666397,
+        "lastName": "Julien",
+        "link": "/api/v1/people/666397",
+        "primaryPosition": {
+         "abbreviation": "2B",
+         "code": "4",
+         "name": "Second Base",
+         "type": "Infielder"
+        },
+        "useName": "Edouard"
+       },
+       {
+        "firstName": "Alexander",
+        "fullName": "Alex Kirilloff",
+        "id": 666135,
+        "lastName": "Kirilloff",
+        "link": "/api/v1/people/666135",
+        "primaryPosition": {
+         "abbreviation": "DH",
+         "code": "10",
+         "name": "Designated Hitter",
+         "type": "Hitter"
+        },
+        "useName": "Alex"
+       },
+       {
+        "firstName": "Byron",
+        "fullName": "Byron Buxton",
+        "id": 621439,
+        "lastName": "Buxton",
+        "link": "/api/v1/people/621439",
+        "primaryPosition": {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Byron"
+       },
+       {
+        "firstName": "Maximilian",
+        "fullName": "Max Kepler",
+        "id": 596146,
+        "lastName": "Kepler",
+        "link": "/api/v1/people/596146",
+        "primaryPosition": {
+         "abbreviation": "RF",
+         "code": "9",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Max"
+       },
+       {
+        "firstName": "Carlos",
+        "fullName": "Carlos Correa",
+        "id": 621043,
+        "lastName": "Correa",
+        "link": "/api/v1/people/621043",
+        "primaryPosition": {
+         "abbreviation": "SS",
+         "code": "6",
+         "name": "Shortstop",
+         "type": "Infielder"
+        },
+        "useName": "Carlos"
+       },
+       {
+        "firstName": "Carlos",
+        "fullName": "Carlos Santana",
+        "id": 467793,
+        "lastName": "Santana",
+        "link": "/api/v1/people/467793",
+        "primaryPosition": {
+         "abbreviation": "1B",
+         "code": "3",
+         "name": "First Base",
+         "type": "Infielder"
+        },
+        "useName": "Carlos"
+       },
+       {
+        "firstName": "Matthew",
+        "fullName": "Matt Wallner",
+        "id": 670242,
+        "lastName": "Wallner",
+        "link": "/api/v1/people/670242",
+        "primaryPosition": {
+         "abbreviation": "LF",
+         "code": "7",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Matt"
+       },
+       {
+        "firstName": "Willi",
+        "fullName": "Willi Castro",
+        "id": 650489,
+        "lastName": "Castro",
+        "link": "/api/v1/people/650489",
+        "primaryPosition": {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        },
+        "useName": "Willi"
+       },
+       {
+        "firstName": "Christian",
+        "fullName": "Christian V\u00e1zquez",
+        "id": 543877,
+        "lastName": "V\u00e1zquez",
+        "link": "/api/v1/people/543877",
+        "primaryPosition": {
+         "abbreviation": "C",
+         "code": "2",
+         "name": "Catcher",
+         "type": "Catcher"
+        },
+        "useName": "Christian"
+       }
+      ]
+     },
+     "link": "/api/v1.1/game/745928/feed/live",
+     "officialDate": "2024-04-04",
+     "publicFacing": true,
+     "recordSource": "S",
+     "reverseHomeAwayStatus": false,
+     "scheduledInnings": 9,
+     "season": "2024",
+     "seasonDisplay": "2024",
+     "seriesDescription": "Regular Season",
+     "seriesGameNumber": 1,
+     "status": {
+      "abstractGameCode": "F",
+      "abstractGameState": "Final",
+      "codedGameState": "F",
+      "detailedState": "Final",
+      "startTimeTBD": false,
+      "statusCode": "F"
+     },
+     "teams": {
+      "away": {
+       "isWinner": true,
+       "leagueRecord": {
+        "losses": 2,
+        "pct": ".750",
+        "ties": 0,
+        "wins": 6
+       },
+       "probablePitcher": {
+        "fullName": "Tanner Bibee",
+        "id": 676440,
+        "link": "/api/v1/people/676440"
+       },
+       "score": 4,
+       "seriesNumber": 3,
+       "splitSquad": false,
+       "springLeague": {
+        "abbreviation": "CL",
+        "id": 114,
+        "link": "/api/v1/league/114",
+        "name": "Cactus League"
+       },
+       "team": {
+        "abbreviation": "CLE",
+        "active": true,
+        "allStarStatus": "N",
+        "clubName": "Guardians",
+        "division": {
+         "id": 202,
+         "link": "/api/v1/divisions/202",
+         "name": "American League Central"
+        },
+        "fileCode": "cle",
+        "firstYearOfPlay": "1901",
+        "franchiseName": "Cleveland",
+        "id": 114,
+        "league": {
+         "id": 103,
+         "link": "/api/v1/league/103",
+         "name": "American League"
+        },
+        "link": "/api/v1/teams/114",
+        "locationName": "Cleveland",
+        "name": "Cleveland Guardians",
+        "season": 2024,
+        "shortName": "Cleveland",
+        "sport": {
+         "id": 1,
+         "link": "/api/v1/sports/1",
+         "name": "Major League Baseball"
+        },
+        "springLeague": {
+         "abbreviation": "CL",
+         "id": 114,
+         "link": "/api/v1/league/114",
+         "name": "Cactus League"
+        },
+        "springVenue": {
+         "id": 3834,
+         "link": "/api/v1/venues/3834"
+        },
+        "teamCode": "cle",
+        "teamName": "Guardians",
+        "venue": {
+         "id": 5,
+         "link": "/api/v1/venues/5",
+         "name": "Progressive Field"
+        }
+       }
+      },
+      "home": {
+       "isWinner": false,
+       "leagueRecord": {
+        "losses": 3,
+        "pct": ".500",
+        "ties": 0,
+        "wins": 3
+       },
+       "probablePitcher": {
+        "fullName": "Pablo L\u00f3pez",
+        "id": 641154,
+        "link": "/api/v1/people/641154"
+       },
+       "score": 2,
+       "seriesNumber": 3,
+       "splitSquad": false,
+       "springLeague": {
+        "abbreviation": "GL",
+        "id": 115,
+        "link": "/api/v1/league/115",
+        "name": "Grapefruit League"
+       },
+       "team": {
+        "abbreviation": "MIN",
+        "active": true,
+        "allStarStatus": "N",
+        "clubName": "Twins",
+        "division": {
+         "id": 202,
+         "link": "/api/v1/divisions/202",
+         "name": "American League Central"
+        },
+        "fileCode": "min",
+        "firstYearOfPlay": "1901",
+        "franchiseName": "Minnesota",
+        "id": 142,
+        "league": {
+         "id": 103,
+         "link": "/api/v1/league/103",
+         "name": "American League"
+        },
+        "link": "/api/v1/teams/142",
+        "locationName": "Minneapolis",
+        "name": "Minnesota Twins",
+        "season": 2024,
+        "shortName": "Minnesota",
+        "sport": {
+         "id": 1,
+         "link": "/api/v1/sports/1",
+         "name": "Major League Baseball"
+        },
+        "springLeague": {
+         "abbreviation": "GL",
+         "id": 115,
+         "link": "/api/v1/league/115",
+         "name": "Grapefruit League"
+        },
+        "springVenue": {
+         "id": 2862,
+         "link": "/api/v1/venues/2862"
+        },
+        "teamCode": "min",
+        "teamName": "Twins",
+        "venue": {
+         "id": 3312,
+         "link": "/api/v1/venues/3312",
+         "name": "Target Field"
+        }
+       }
+      }
+     },
+     "tiebreaker": "N",
+     "venue": {
+      "id": 3312,
+      "link": "/api/v1/venues/3312",
+      "name": "Target Field"
+     }
+    },
+    {
+     "calendarEventID": "14-745200-2024-04-04",
+     "content": {
+      "link": "/api/v1/game/745200/content"
+     },
+     "dayNight": "day",
+     "description": "Cardinals home opener",
+     "doubleHeader": "N",
+     "gameDate": "2024-04-04T20:15:00Z",
+     "gameGuid": "1329b606-76ac-4ea7-aed1-f1eb7113bf1b",
+     "gameNumber": 1,
+     "gamePk": 745200,
+     "gameType": "R",
+     "gamedayType": "P",
+     "gamesInSeries": 3,
+     "ifNecessary": "N",
+     "ifNecessaryDescription": "Normal Game",
+     "inningBreakLength": 120,
+     "isTie": false,
+     "linescore": {
+      "balls": 0,
+      "currentInning": 9,
+      "currentInningOrdinal": "9th",
+      "defense": {
+       "batter": {
+        "fullName": "Nolan Gorman",
+        "id": 669357,
+        "link": "/api/v1/people/669357"
+       },
+       "battingOrder": 5,
+       "catcher": {
+        "fullName": "Iv\u00e1n Herrera",
+        "id": 671056,
+        "link": "/api/v1/people/671056"
+       },
+       "center": {
+        "fullName": "Victor Scott II",
+        "id": 687363,
+        "link": "/api/v1/people/687363"
+       },
+       "first": {
+        "fullName": "Paul Goldschmidt",
+        "id": 502671,
+        "link": "/api/v1/people/502671"
+       },
+       "inHole": {
+        "fullName": "Alec Burleson",
+        "id": 676475,
+        "link": "/api/v1/people/676475"
+       },
+       "left": {
+        "fullName": "Michael Siani",
+        "id": 672279,
+        "link": "/api/v1/people/672279"
+       },
+       "onDeck": {
+        "fullName": "Jordan Walker",
+        "id": 691023,
+        "link": "/api/v1/people/691023"
+       },
+       "pitcher": {
+        "fullName": "Ryan Helsley",
+        "id": 664854,
+        "link": "/api/v1/people/664854"
+       },
+       "right": {
+        "fullName": "Jordan Walker",
+        "id": 691023,
+        "link": "/api/v1/people/691023"
+       },
+       "second": {
+        "fullName": "Nolan Gorman",
+        "id": 669357,
+        "link": "/api/v1/people/669357"
+       },
+       "shortstop": {
+        "fullName": "Masyn Winn",
+        "id": 691026,
+        "link": "/api/v1/people/691026"
+       },
+       "team": {
+        "id": 138,
+        "link": "/api/v1/teams/138",
+        "name": "St. Louis Cardinals"
+       },
+       "third": {
+        "fullName": "Nolan Arenado",
+        "id": 571448,
+        "link": "/api/v1/people/571448"
+       }
+      },
+      "inningHalf": "Top",
+      "inningState": "Top",
+      "innings": [
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "num": 1,
+        "ordinalNum": "1st"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 1,
+         "runs": 1
+        },
+        "num": 2,
+        "ordinalNum": "2nd"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 3,
+        "ordinalNum": "3rd"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 3,
+         "leftOnBase": 2,
+         "runs": 1
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 2,
+         "runs": 0
+        },
+        "num": 4,
+        "ordinalNum": "4th"
+       },
+       {
+        "away": {
+         "errors": 1,
+         "hits": 4,
+         "leftOnBase": 1,
+         "runs": 3
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 1,
+         "runs": 2
+        },
+        "num": 5,
+        "ordinalNum": "5th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 0,
+         "runs": 1
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 6,
+        "ordinalNum": "6th"
+       },
+       {
+        "away": {
+         "errors": 1,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 5,
+         "leftOnBase": 1,
+         "runs": 5
+        },
+        "num": 7,
+        "ordinalNum": "7th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 8,
+        "ordinalNum": "8th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0
+        },
+        "num": 9,
+        "ordinalNum": "9th"
+       }
+      ],
+      "isTopInning": true,
+      "offense": {
+       "batter": {
+        "fullName": "Josh Bell",
+        "id": 605137,
+        "link": "/api/v1/people/605137"
+       },
+       "battingOrder": 2,
+       "inHole": {
+        "fullName": "Jazz Chisholm Jr.",
+        "id": 665862,
+        "link": "/api/v1/people/665862"
+       },
+       "onDeck": {
+        "fullName": "Jake Burger",
+        "id": 669394,
+        "link": "/api/v1/people/669394"
+       },
+       "pitcher": {
+        "fullName": "George Soriano",
+        "id": 666277,
+        "link": "/api/v1/people/666277"
+       },
+       "team": {
+        "id": 146,
+        "link": "/api/v1/teams/146",
+        "name": "Miami Marlins"
+       }
+      },
+      "outs": 3,
+      "scheduledInnings": 9,
+      "strikes": 1,
+      "teams": {
+       "away": {
+        "errors": 2,
+        "hits": 9,
+        "isWinner": false,
+        "leftOnBase": 6,
+        "runs": 5
+       },
+       "home": {
+        "errors": 0,
+        "hits": 10,
+        "isWinner": true,
+        "leftOnBase": 8,
+        "runs": 8
+       }
+      }
+     },
+     "lineups": {
+      "awayPlayers": [
+       {
+        "firstName": "Luis",
+        "fullName": "Luis Arraez",
+        "id": 650333,
+        "lastName": "Arraez",
+        "link": "/api/v1/people/650333",
+        "primaryPosition": {
+         "abbreviation": "2B",
+         "code": "4",
+         "name": "Second Base",
+         "type": "Infielder"
+        },
+        "useName": "Luis"
+       },
+       {
+        "firstName": "Joshua",
+        "fullName": "Josh Bell",
+        "id": 605137,
+        "lastName": "Bell",
+        "link": "/api/v1/people/605137",
+        "primaryPosition": {
+         "abbreviation": "1B",
+         "code": "3",
+         "name": "First Base",
+         "type": "Infielder"
+        },
+        "useName": "Josh"
+       },
+       {
+        "firstName": "Jacob",
+        "fullName": "Jake Burger",
+        "id": 669394,
+        "lastName": "Burger",
+        "link": "/api/v1/people/669394",
+        "primaryPosition": {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        },
+        "useName": "Jake"
+       },
+       {
+        "firstName": "Jasrado",
+        "fullName": "Jazz Chisholm",
+        "id": 665862,
+        "lastName": "Chisholm",
+        "link": "/api/v1/people/665862",
+        "primaryPosition": {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Jazz"
+       },
+       {
+        "firstName": "Bryan",
+        "fullName": "Bryan De La Cruz",
+        "id": 650559,
+        "lastName": "De La Cruz",
+        "link": "/api/v1/people/650559",
+        "primaryPosition": {
+         "abbreviation": "DH",
+         "code": "10",
+         "name": "Designated Hitter",
+         "type": "Hitter"
+        },
+        "useName": "Bryan"
+       },
+       {
+        "firstName": "Jes\u00fas",
+        "fullName": "Jes\u00fas S\u00e1nchez",
+        "id": 660821,
+        "lastName": "S\u00e1nchez",
+        "link": "/api/v1/people/660821",
+        "primaryPosition": {
+         "abbreviation": "RF",
+         "code": "9",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Jes\u00fas"
+       },
+       {
+        "firstName": "Timothy",
+        "fullName": "Tim Anderson",
+        "id": 641313,
+        "lastName": "Anderson",
+        "link": "/api/v1/people/641313",
+        "primaryPosition": {
+         "abbreviation": "SS",
+         "code": "6",
+         "name": "Shortstop",
+         "type": "Infielder"
+        },
+        "useName": "Tim"
+       },
+       {
+        "firstName": "Nicholas",
+        "fullName": "Nick Gordon",
+        "id": 624503,
+        "lastName": "Gordon",
+        "link": "/api/v1/people/624503",
+        "primaryPosition": {
+         "abbreviation": "LF",
+         "code": "7",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Nick"
+       },
+       {
+        "firstName": "Christian",
+        "fullName": "Christian Bethancourt",
+        "id": 542194,
+        "lastName": "Bethancourt",
+        "link": "/api/v1/people/542194",
+        "primaryPosition": {
+         "abbreviation": "C",
+         "code": "2",
+         "name": "Catcher",
+         "type": "Catcher"
+        },
+        "useName": "Christian"
+       }
+      ],
+      "homePlayers": [
+       {
+        "firstName": "Victor",
+        "fullName": "Victor Scott",
+        "id": 687363,
+        "lastName": "Scott",
+        "link": "/api/v1/people/687363",
+        "primaryPosition": {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Victor"
+       },
+       {
+        "firstName": "Paul",
+        "fullName": "Paul Goldschmidt",
+        "id": 502671,
+        "lastName": "Goldschmidt",
+        "link": "/api/v1/people/502671",
+        "primaryPosition": {
+         "abbreviation": "1B",
+         "code": "3",
+         "name": "First Base",
+         "type": "Infielder"
+        },
+        "useName": "Paul"
+       },
+       {
+        "firstName": "Nolan",
+        "fullName": "Nolan Arenado",
+        "id": 571448,
+        "lastName": "Arenado",
+        "link": "/api/v1/people/571448",
+        "primaryPosition": {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        },
+        "useName": "Nolan"
+       },
+       {
+        "firstName": "Ivan",
+        "fullName": "Iv\u00e1n Herrera",
+        "id": 671056,
+        "lastName": "Herrera",
+        "link": "/api/v1/people/671056",
+        "primaryPosition": {
+         "abbreviation": "C",
+         "code": "2",
+         "name": "Catcher",
+         "type": "Catcher"
+        },
+        "useName": "Iv\u00e1n"
+       },
+       {
+        "firstName": "Nolan",
+        "fullName": "Nolan Gorman",
+        "id": 669357,
+        "lastName": "Gorman",
+        "link": "/api/v1/people/669357",
+        "primaryPosition": {
+         "abbreviation": "2B",
+         "code": "4",
+         "name": "Second Base",
+         "type": "Infielder"
+        },
+        "useName": "Nolan"
+       },
+       {
+        "firstName": "Jordan",
+        "fullName": "Jordan Walker",
+        "id": 691023,
+        "lastName": "Walker",
+        "link": "/api/v1/people/691023",
+        "primaryPosition": {
+         "abbreviation": "RF",
+         "code": "9",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Jordan"
+       },
+       {
+        "firstName": "Alec",
+        "fullName": "Alec Burleson",
+        "id": 676475,
+        "lastName": "Burleson",
+        "link": "/api/v1/people/676475",
+        "primaryPosition": {
+         "abbreviation": "DH",
+         "code": "10",
+         "name": "Designated Hitter",
+         "type": "Hitter"
+        },
+        "useName": "Alec"
+       },
+       {
+        "firstName": "Masyn",
+        "fullName": "Masyn Winn",
+        "id": 691026,
+        "lastName": "Winn",
+        "link": "/api/v1/people/691026",
+        "primaryPosition": {
+         "abbreviation": "SS",
+         "code": "6",
+         "name": "Shortstop",
+         "type": "Infielder"
+        },
+        "useName": "Masyn"
+       },
+       {
+        "firstName": "Michael",
+        "fullName": "Michael Siani",
+        "id": 672279,
+        "lastName": "Siani",
+        "link": "/api/v1/people/672279",
+        "primaryPosition": {
+         "abbreviation": "LF",
+         "code": "7",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Michael"
+       }
+      ]
+     },
+     "link": "/api/v1.1/game/745200/feed/live",
+     "officialDate": "2024-04-04",
+     "publicFacing": true,
+     "recordSource": "S",
+     "reverseHomeAwayStatus": false,
+     "scheduledInnings": 9,
+     "season": "2024",
+     "seasonDisplay": "2024",
+     "seriesDescription": "Regular Season",
+     "seriesGameNumber": 1,
+     "status": {
+      "abstractGameCode": "F",
+      "abstractGameState": "Final",
+      "codedGameState": "F",
+      "detailedState": "Final",
+      "startTimeTBD": false,
+      "statusCode": "F"
+     },
+     "teams": {
+      "away": {
+       "isWinner": false,
+       "leagueRecord": {
+        "losses": 8,
+        "pct": ".000",
+        "ties": 0,
+        "wins": 0
+       },
+       "probablePitcher": {
+        "fullName": "Ryan Weathers",
+        "id": 677960,
+        "link": "/api/v1/people/677960"
+       },
+       "score": 5,
+       "seriesNumber": 3,
+       "splitSquad": false,
+       "springLeague": {
+        "abbreviation": "GL",
+        "id": 115,
+        "link": "/api/v1/league/115",
+        "name": "Grapefruit League"
+       },
+       "team": {
+        "abbreviation": "MIA",
+        "active": true,
+        "allStarStatus": "N",
+        "clubName": "Marlins",
+        "division": {
+         "id": 204,
+         "link": "/api/v1/divisions/204",
+         "name": "National League East"
+        },
+        "fileCode": "mia",
+        "firstYearOfPlay": "1991",
+        "franchiseName": "Miami",
+        "id": 146,
+        "league": {
+         "id": 104,
+         "link": "/api/v1/league/104",
+         "name": "National League"
+        },
+        "link": "/api/v1/teams/146",
+        "locationName": "Miami",
+        "name": "Miami Marlins",
+        "season": 2024,
+        "shortName": "Miami",
+        "sport": {
+         "id": 1,
+         "link": "/api/v1/sports/1",
+         "name": "Major League Baseball"
+        },
+        "springLeague": {
+         "abbreviation": "GL",
+         "id": 115,
+         "link": "/api/v1/league/115",
+         "name": "Grapefruit League"
+        },
+        "springVenue": {
+         "id": 2520,
+         "link": "/api/v1/venues/2520"
+        },
+        "teamCode": "mia",
+        "teamName": "Marlins",
+        "venue": {
+         "id": 4169,
+         "link": "/api/v1/venues/4169",
+         "name": "loanDepot park"
+        }
+       }
+      },
+      "home": {
+       "isWinner": true,
+       "leagueRecord": {
+        "losses": 4,
+        "pct": ".500",
+        "ties": 0,
+        "wins": 4
+       },
+       "probablePitcher": {
+        "fullName": "Lance Lynn",
+        "id": 458681,
+        "link": "/api/v1/people/458681"
+       },
+       "score": 8,
+       "seriesNumber": 3,
+       "splitSquad": false,
+       "springLeague": {
+        "abbreviation": "GL",
+        "id": 115,
+        "link": "/api/v1/league/115",
+        "name": "Grapefruit League"
+       },
+       "team": {
+        "abbreviation": "STL",
+        "active": true,
+        "allStarStatus": "N",
+        "clubName": "Cardinals",
+        "division": {
+         "id": 205,
+         "link": "/api/v1/divisions/205",
+         "name": "National League Central"
+        },
+        "fileCode": "stl",
+        "firstYearOfPlay": "1892",
+        "franchiseName": "St. Louis",
+        "id": 138,
+        "league": {
+         "id": 104,
+         "link": "/api/v1/league/104",
+         "name": "National League"
+        },
+        "link": "/api/v1/teams/138",
+        "locationName": "St. Louis",
+        "name": "St. Louis Cardinals",
+        "season": 2024,
+        "shortName": "St. Louis",
+        "sport": {
+         "id": 1,
+         "link": "/api/v1/sports/1",
+         "name": "Major League Baseball"
+        },
+        "springLeague": {
+         "abbreviation": "GL",
+         "id": 115,
+         "link": "/api/v1/league/115",
+         "name": "Grapefruit League"
+        },
+        "springVenue": {
+         "id": 2520,
+         "link": "/api/v1/venues/2520"
+        },
+        "teamCode": "sln",
+        "teamName": "Cardinals",
+        "venue": {
+         "id": 2889,
+         "link": "/api/v1/venues/2889",
+         "name": "Busch Stadium"
+        }
+       }
+      }
+     },
+     "tiebreaker": "N",
+     "venue": {
+      "id": 2889,
+      "link": "/api/v1/venues/2889",
+      "name": "Busch Stadium"
+     }
+    },
+    {
+     "calendarEventID": "14-746327-2024-04-04",
+     "content": {
+      "link": "/api/v1/game/746327/content"
+     },
+     "dayNight": "night",
+     "doubleHeader": "N",
+     "gameDate": "2024-04-04T23:40:00Z",
+     "gameGuid": "2d3489d9-0471-440c-8ddf-8b17f5ee8691",
+     "gameNumber": 1,
+     "gamePk": 746327,
+     "gameType": "R",
+     "gamedayType": "P",
+     "gamesInSeries": 4,
+     "ifNecessary": "N",
+     "ifNecessaryDescription": "Normal Game",
+     "inningBreakLength": 120,
+     "isTie": false,
+     "linescore": {
+      "balls": 3,
+      "currentInning": 9,
+      "currentInningOrdinal": "9th",
+      "defense": {
+       "batter": {
+        "fullName": "Garrett Hampson",
+        "id": 641658,
+        "link": "/api/v1/people/641658"
+       },
+       "battingOrder": 2,
+       "catcher": {
+        "fullName": "Salvador Perez",
+        "id": 521692,
+        "link": "/api/v1/people/521692"
+       },
+       "center": {
+        "fullName": "Kyle Isbel",
+        "id": 664728,
+        "link": "/api/v1/people/664728"
+       },
+       "first": {
+        "fullName": "Vinnie Pasquantino",
+        "id": 686469,
+        "link": "/api/v1/people/686469"
+       },
+       "inHole": {
+        "fullName": "Salvador Perez",
+        "id": 521692,
+        "link": "/api/v1/people/521692"
+       },
+       "left": {
+        "fullName": "Dairon Blanco",
+        "id": 680118,
+        "link": "/api/v1/people/680118"
+       },
+       "onDeck": {
+        "fullName": "Vinnie Pasquantino",
+        "id": 686469,
+        "link": "/api/v1/people/686469"
+       },
+       "pitcher": {
+        "fullName": "Jordan Lyles",
+        "id": 543475,
+        "link": "/api/v1/people/543475"
+       },
+       "right": {
+        "fullName": "Hunter Renfroe",
+        "id": 592669,
+        "link": "/api/v1/people/592669"
+       },
+       "second": {
+        "fullName": "Adam Frazier",
+        "id": 624428,
+        "link": "/api/v1/people/624428"
+       },
+       "shortstop": {
+        "fullName": "Garrett Hampson",
+        "id": 641658,
+        "link": "/api/v1/people/641658"
+       },
+       "team": {
+        "id": 118,
+        "link": "/api/v1/teams/118",
+        "name": "Kansas City Royals"
+       },
+       "third": {
+        "fullName": "Maikel Garcia",
+        "id": 672580,
+        "link": "/api/v1/people/672580"
+       }
+      },
+      "inningHalf": "Top",
+      "inningState": "Top",
+      "innings": [
+       {
+        "away": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "num": 1,
+        "ordinalNum": "1st"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 3,
+         "leftOnBase": 1,
+         "runs": 1
+        },
+        "num": 2,
+        "ordinalNum": "2nd"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 2,
+         "leftOnBase": 2,
+         "runs": 0
+        },
+        "home": {
+         "errors": 1,
+         "hits": 1,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 3,
+        "ordinalNum": "3rd"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 2,
+         "leftOnBase": 2,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 0,
+         "runs": 1
+        },
+        "num": 4,
+        "ordinalNum": "4th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "num": 5,
+        "ordinalNum": "5th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 2,
+         "leftOnBase": 1,
+         "runs": 1
+        },
+        "home": {
+         "errors": 0,
+         "hits": 1,
+         "leftOnBase": 0,
+         "runs": 0
+        },
+        "num": 6,
+        "ordinalNum": "6th"
+       },
+       {
+        "away": {
+         "errors": 1,
+         "hits": 1,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 4,
+         "leftOnBase": 0,
+         "runs": 8
+        },
+        "num": 7,
+        "ordinalNum": "7th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "num": 8,
+        "ordinalNum": "8th"
+       },
+       {
+        "away": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 1,
+         "runs": 0
+        },
+        "home": {
+         "errors": 0,
+         "hits": 0,
+         "leftOnBase": 0
+        },
+        "num": 9,
+        "ordinalNum": "9th"
+       }
+      ],
+      "isTopInning": true,
+      "offense": {
+       "batter": {
+        "fullName": "Korey Lee",
+        "id": 686676,
+        "link": "/api/v1/people/686676"
+       },
+       "battingOrder": 9,
+       "first": {
+        "fullName": "Braden Shewmake",
+        "id": 669699,
+        "link": "/api/v1/people/669699"
+       },
+       "inHole": {
+        "fullName": "Yo\u00e1n Moncada",
+        "id": 660162,
+        "link": "/api/v1/people/660162"
+       },
+       "onDeck": {
+        "fullName": "Andrew Benintendi",
+        "id": 643217,
+        "link": "/api/v1/people/643217"
+       },
+       "pitcher": {
+        "fullName": "Bryan Shaw",
+        "id": 543766,
+        "link": "/api/v1/people/543766"
+       },
+       "team": {
+        "id": 145,
+        "link": "/api/v1/teams/145",
+        "name": "Chicago White Sox"
+       }
+      },
+      "outs": 3,
+      "scheduledInnings": 9,
+      "strikes": 2,
+      "teams": {
+       "away": {
+        "errors": 1,
+        "hits": 8,
+        "isWinner": false,
+        "leftOnBase": 8,
+        "runs": 1
+       },
+       "home": {
+        "errors": 1,
+        "hits": 10,
+        "isWinner": true,
+        "leftOnBase": 3,
+        "runs": 10
+       }
+      }
+     },
+     "lineups": {
+      "awayPlayers": [
+       {
+        "firstName": "Andrew",
+        "fullName": "Andrew Benintendi",
+        "id": 643217,
+        "lastName": "Benintendi",
+        "link": "/api/v1/people/643217",
+        "primaryPosition": {
+         "abbreviation": "LF",
+         "code": "7",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Andrew"
+       },
+       {
+        "firstName": "Yo\u00e1n",
+        "fullName": "Yo\u00e1n Moncada",
+        "id": 660162,
+        "lastName": "Moncada",
+        "link": "/api/v1/people/660162",
+        "primaryPosition": {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        },
+        "useName": "Yo\u00e1n"
+       },
+       {
+        "firstName": "Luis",
+        "fullName": "Luis Robert",
+        "id": 673357,
+        "lastName": "Robert",
+        "link": "/api/v1/people/673357",
+        "primaryPosition": {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Luis"
+       },
+       {
+        "firstName": "Gavin",
+        "fullName": "Gavin Sheets",
+        "id": 657757,
+        "lastName": "Sheets",
+        "link": "/api/v1/people/657757",
+        "primaryPosition": {
+         "abbreviation": "DH",
+         "code": "10",
+         "name": "Designated Hitter",
+         "type": "Hitter"
+        },
+        "useName": "Gavin"
+       },
+       {
+        "firstName": "Andrew",
+        "fullName": "Andrew Vaughn",
+        "id": 683734,
+        "lastName": "Vaughn",
+        "link": "/api/v1/people/683734",
+        "primaryPosition": {
+         "abbreviation": "1B",
+         "code": "3",
+         "name": "First Base",
+         "type": "Infielder"
+        },
+        "useName": "Andrew"
+       },
+       {
+        "firstName": "Braden",
+        "fullName": "Braden Shewmake",
+        "id": 669699,
+        "lastName": "Shewmake",
+        "link": "/api/v1/people/669699",
+        "primaryPosition": {
+         "abbreviation": "SS",
+         "code": "6",
+         "name": "Shortstop",
+         "type": "Infielder"
+        },
+        "useName": "Braden"
+       },
+       {
+        "firstName": "Dominic",
+        "fullName": "Dominic Fletcher",
+        "id": 666150,
+        "lastName": "Fletcher",
+        "link": "/api/v1/people/666150",
+        "primaryPosition": {
+         "abbreviation": "RF",
+         "code": "9",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Dominic"
+       },
+       {
+        "firstName": "Nicholas",
+        "fullName": "Nicky Lopez",
+        "id": 670032,
+        "lastName": "Lopez",
+        "link": "/api/v1/people/670032",
+        "primaryPosition": {
+         "abbreviation": "2B",
+         "code": "4",
+         "name": "Second Base",
+         "type": "Infielder"
+        },
+        "useName": "Nicky"
+       },
+       {
+        "firstName": "Korey",
+        "fullName": "Korey Lee",
+        "id": 686676,
+        "lastName": "Lee",
+        "link": "/api/v1/people/686676",
+        "primaryPosition": {
+         "abbreviation": "C",
+         "code": "2",
+         "name": "Catcher",
+         "type": "Catcher"
+        },
+        "useName": "Korey"
+       }
+      ],
+      "homePlayers": [
+       {
+        "firstName": "Maikel",
+        "fullName": "Maikel Garcia",
+        "id": 672580,
+        "lastName": "Garcia",
+        "link": "/api/v1/people/672580",
+        "primaryPosition": {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        },
+        "useName": "Maikel"
+       },
+       {
+        "firstName": "Robert",
+        "fullName": "Bobby Witt",
+        "id": 677951,
+        "lastName": "Witt",
+        "link": "/api/v1/people/677951",
+        "primaryPosition": {
+         "abbreviation": "SS",
+         "code": "6",
+         "name": "Shortstop",
+         "type": "Infielder"
+        },
+        "useName": "Bobby"
+       },
+       {
+        "firstName": "Vincent",
+        "fullName": "Vinnie Pasquantino",
+        "id": 686469,
+        "lastName": "Pasquantino",
+        "link": "/api/v1/people/686469",
+        "primaryPosition": {
+         "abbreviation": "1B",
+         "code": "3",
+         "name": "First Base",
+         "type": "Infielder"
+        },
+        "useName": "Vinnie"
+       },
+       {
+        "firstName": "Salvador",
+        "fullName": "Salvador Perez",
+        "id": 521692,
+        "lastName": "Perez",
+        "link": "/api/v1/people/521692",
+        "primaryPosition": {
+         "abbreviation": "C",
+         "code": "2",
+         "name": "Catcher",
+         "type": "Catcher"
+        },
+        "useName": "Salvador"
+       },
+       {
+        "firstName": "Mervyl",
+        "fullName": "MJ Melendez",
+        "id": 669004,
+        "lastName": "Melendez",
+        "link": "/api/v1/people/669004",
+        "primaryPosition": {
+         "abbreviation": "LF",
+         "code": "7",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "MJ"
+       },
+       {
+        "firstName": "Nelson",
+        "fullName": "Nelson Vel\u00e1zquez",
+        "id": 676369,
+        "lastName": "Vel\u00e1zquez",
+        "link": "/api/v1/people/676369",
+        "primaryPosition": {
+         "abbreviation": "DH",
+         "code": "10",
+         "name": "Designated Hitter",
+         "type": "Hitter"
+        },
+        "useName": "Nelson"
+       },
+       {
+        "firstName": "Dustin",
+        "fullName": "Hunter Renfroe",
+        "id": 592669,
+        "lastName": "Renfroe",
+        "link": "/api/v1/people/592669",
+        "primaryPosition": {
+         "abbreviation": "RF",
+         "code": "9",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Hunter"
+       },
+       {
+        "firstName": "Nicholas",
+        "fullName": "Nick Loftin",
+        "id": 679845,
+        "lastName": "Loftin",
+        "link": "/api/v1/people/679845",
+        "primaryPosition": {
+         "abbreviation": "2B",
+         "code": "4",
+         "name": "Second Base",
+         "type": "Infielder"
+        },
+        "useName": "Nick"
+       },
+       {
+        "firstName": "Kyle",
+        "fullName": "Kyle Isbel",
+        "id": 664728,
+        "lastName": "Isbel",
+        "link": "/api/v1/people/664728",
+        "primaryPosition": {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        "useName": "Kyle"
+       }
+      ]
+     },
+     "link": "/api/v1.1/game/746327/feed/live",
+     "officialDate": "2024-04-04",
+     "publicFacing": true,
+     "recordSource": "S",
+     "reverseHomeAwayStatus": false,
+     "scheduledInnings": 9,
+     "season": "2024",
+     "seasonDisplay": "2024",
+     "seriesDescription": "Regular Season",
+     "seriesGameNumber": 1,
+     "status": {
+      "abstractGameCode": "F",
+      "abstractGameState": "Final",
+      "codedGameState": "F",
+      "detailedState": "Final",
+      "startTimeTBD": false,
+      "statusCode": "F"
+     },
+     "teams": {
+      "away": {
+       "isWinner": false,
+       "leagueRecord": {
+        "losses": 5,
+        "pct": ".167",
+        "ties": 0,
+        "wins": 1
+       },
+       "probablePitcher": {
+        "fullName": "Michael Soroka",
+        "id": 647336,
+        "link": "/api/v1/people/647336"
+       },
+       "score": 1,
+       "seriesNumber": 3,
+       "splitSquad": false,
+       "springLeague": {
+        "abbreviation": "CL",
+        "id": 114,
+        "link": "/api/v1/league/114",
+        "name": "Cactus League"
+       },
+       "team": {
+        "abbreviation": "CWS",
+        "active": true,
+        "allStarStatus": "N",
+        "clubName": "White Sox",
+        "division": {
+         "id": 202,
+         "link": "/api/v1/divisions/202",
+         "name": "American League Central"
+        },
+        "fileCode": "cws",
+        "firstYearOfPlay": "1901",
+        "franchiseName": "Chicago",
+        "id": 145,
+        "league": {
+         "id": 103,
+         "link": "/api/v1/league/103",
+         "name": "American League"
+        },
+        "link": "/api/v1/teams/145",
+        "locationName": "Chicago",
+        "name": "Chicago White Sox",
+        "season": 2024,
+        "shortName": "Chi White Sox",
+        "sport": {
+         "id": 1,
+         "link": "/api/v1/sports/1",
+         "name": "Major League Baseball"
+        },
+        "springLeague": {
+         "abbreviation": "CL",
+         "id": 114,
+         "link": "/api/v1/league/114",
+         "name": "Cactus League"
+        },
+        "springVenue": {
+         "id": 3809,
+         "link": "/api/v1/venues/3809"
+        },
+        "teamCode": "cha",
+        "teamName": "White Sox",
+        "venue": {
+         "id": 4,
+         "link": "/api/v1/venues/4",
+         "name": "Guaranteed Rate Field"
+        }
+       }
+      },
+      "home": {
+       "isWinner": true,
+       "leagueRecord": {
+        "losses": 4,
+        "pct": ".429",
+        "ties": 0,
+        "wins": 3
+       },
+       "probablePitcher": {
+        "fullName": "Seth Lugo",
+        "id": 607625,
+        "link": "/api/v1/people/607625"
+       },
+       "score": 10,
+       "seriesNumber": 3,
+       "splitSquad": false,
+       "springLeague": {
+        "abbreviation": "CL",
+        "id": 114,
+        "link": "/api/v1/league/114",
+        "name": "Cactus League"
+       },
+       "team": {
+        "abbreviation": "KC",
+        "active": true,
+        "allStarStatus": "N",
+        "clubName": "Royals",
+        "division": {
+         "id": 202,
+         "link": "/api/v1/divisions/202",
+         "name": "American League Central"
+        },
+        "fileCode": "kc",
+        "firstYearOfPlay": "1968",
+        "franchiseName": "Kansas City",
+        "id": 118,
+        "league": {
+         "id": 103,
+         "link": "/api/v1/league/103",
+         "name": "American League"
+        },
+        "link": "/api/v1/teams/118",
+        "locationName": "Kansas City",
+        "name": "Kansas City Royals",
+        "season": 2024,
+        "shortName": "Kansas City",
+        "sport": {
+         "id": 1,
+         "link": "/api/v1/sports/1",
+         "name": "Major League Baseball"
+        },
+        "springLeague": {
+         "abbreviation": "CL",
+         "id": 114,
+         "link": "/api/v1/league/114",
+         "name": "Cactus League"
+        },
+        "springVenue": {
+         "id": 2603,
+         "link": "/api/v1/venues/2603"
+        },
+        "teamCode": "kca",
+        "teamName": "Royals",
+        "venue": {
+         "id": 7,
+         "link": "/api/v1/venues/7",
+         "name": "Kauffman Stadium"
+        }
+       }
+      }
+     },
+     "tiebreaker": "N",
+     "venue": {
+      "id": 7,
+      "link": "/api/v1/venues/7",
+      "name": "Kauffman Stadium"
+     }
+    }
+   ],
+   "totalEvents": 0,
+   "totalGames": 6,
+   "totalGamesInProgress": 0,
+   "totalItems": 6
+  }
+ ],
+ "totalEvents": 0,
+ "totalGames": 6,
+ "totalGamesInProgress": 0,
+ "totalItems": 6
+}

@@ -1,119 +1,121 @@
 /**
- * DaySummaryPage.module.css — SIM-391
+ * DaySummaryPage.module.css — the Daily Diamond slate (SIM-519; design 2026-10-08).
  */
 
 .page {
   max-width: var(--sim-max-width);
   margin: 0 auto;
-  padding: var(--sim-space-6) var(--sim-space-4);
+  padding: 20px 20px 60px;
 }
 
 .header {
   display: flex;
-  flex-direction: column;
-  gap: var(--sim-space-4);
-  margin-bottom: var(--sim-space-6);
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 16px;
+  margin-bottom: 16px;
 }
 
-.titleRow {
+.headerRight {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--sim-space-3);
+  gap: 10px 14px;
+}
+
+.kicker {
+  font-family: var(--sim-font-mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dd-red);
+  margin-bottom: 2px;
 }
 
 .title {
-  font-size: var(--sim-text-2xl);
-  font-weight: var(--sim-font-bold);
-  color: var(--sim-color-text);
-  margin: 0;
+  font-family: var(--dd-font-display);
+  font-weight: 800;
+  font-size: 34px;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+  text-wrap: balance;
 }
 
-.dateNav {
+.tags {
   display: flex;
-  align-items: center;
-  gap: var(--sim-space-2);
   flex-wrap: wrap;
+  gap: 6px;
 }
 
-.navButton {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  font-size: var(--sim-text-xl);
-  line-height: 1;
-  background: var(--sim-color-surface);
-  color: var(--sim-color-text);
-  border: 1px solid var(--sim-color-border);
-  border-radius: var(--sim-radius-md);
-  cursor: pointer;
-  transition: background var(--sim-transition-fast), border-color var(--sim-transition-fast);
+.tag {
+  font-family: var(--sim-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 4px 9px;
+  border-radius: 5px;
+  white-space: nowrap;
 }
 
-.navButton:hover {
-  background: var(--sim-color-surface-alt);
-  border-color: var(--sim-color-border-strong);
+.tagCount { background: var(--sim-gray-200); color: var(--sim-gray-900); }
+.tagLive { background: var(--sim-danger-100); color: var(--sim-danger-700); }
+.tagFinal { background: var(--sim-success-100); color: var(--sim-success-700); }
+
+.banner {
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--sim-warning-500);
+  background: var(--sim-warning-100);
+  color: var(--sim-warning-700);
+  border-radius: 0 6px 6px 0;
+  font-size: 13.5px;
 }
 
-.datePicker {
-  height: 32px;
-  padding: 0 var(--sim-space-2);
-  font-family: var(--sim-font-sans);
-  font-size: var(--sim-text-sm);
-  color: var(--sim-color-text);
-  background: var(--sim-color-surface);
-  border: 1px solid var(--sim-color-border);
-  border-radius: var(--sim-radius-md);
-}
-
-.todayButton {
-  height: 32px;
-  padding: 0 var(--sim-space-3);
-  font-family: var(--sim-font-sans);
-  font-size: var(--sim-text-sm);
-  font-weight: var(--sim-font-medium);
-  color: var(--sim-color-interactive);
-  background: var(--sim-color-surface);
-  border: 1px solid var(--sim-color-border);
-  border-radius: var(--sim-radius-md);
-  cursor: pointer;
-  transition: background var(--sim-transition-fast);
-}
-
-.todayButton:hover {
-  background: var(--sim-color-surface-alt);
-}
-
-.prettyDate {
-  margin-left: auto;
-  font-size: var(--sim-text-sm);
-  color: var(--sim-color-text-muted);
+.bannerDetail {
+  font-family: var(--sim-font-mono);
+  font-size: 11px;
 }
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: var(--sim-space-4);
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr));
+  gap: 16px;
+  align-items: start;
 }
 
 .message {
-  color: var(--sim-color-text-muted);
-  font-size: var(--sim-text-base);
-  padding: var(--sim-space-8) 0;
+  padding: 40px 0;
   text-align: center;
+  color: var(--sim-color-text-muted);
+}
+
+.empty {
+  padding: 60px 20px;
+  text-align: center;
+  border: 1.5px dashed var(--sim-gray-400);
+  border-radius: 12px;
+  color: var(--sim-color-text-muted);
+  font-family: var(--dd-font-display);
+  font-size: 22px;
+  font-weight: 600;
 }
 
 .error {
-  padding: var(--sim-space-5);
+  padding: 16px;
+  border-radius: 8px;
   background: var(--sim-danger-100);
-  border: 1px solid var(--sim-danger-500);
-  border-radius: var(--sim-radius-lg);
   color: var(--sim-danger-700);
 }
 
 .errorHint {
-  margin-top: var(--sim-space-2);
-  font-size: var(--sim-text-sm);
-  color: var(--sim-color-text-muted);
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+@media (max-width: 640px) {
+  .page { padding: 16px 16px 48px; }
+  .title { font-size: 28px; }
 }

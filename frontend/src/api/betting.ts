@@ -163,6 +163,34 @@ async function getJson<T>(url: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
+// ---------------------------------------------------------------------------
+// The slate card's lines (GET /games/{pk}/card-odds — CardOddsResponse, SIM-519 Part I)
+// ---------------------------------------------------------------------------
+
+export interface CardOdds {
+  game_pk: number
+  moneyline: { book: string; line_type: string; away: number; home: number } | null
+  runline: {
+    book: string
+    line_type: string
+    away: { line: number; price: number }
+    home: { line: number; price: number }
+  } | null
+  total: { book: string; line_type: string; line: number; over: number; under: number } | null
+  settled: {
+    away_score: number
+    home_score: number
+    moneyline: 'away' | 'home' | null
+    runline: 'away' | 'home' | 'push' | null
+    total: 'over' | 'under' | 'push' | null
+  } | null
+}
+
+/** GET /api/betting/games/{game_pk}/card-odds — 404 when the game has no stored line. */
+export function fetchCardOdds(gamePk: number): Promise<CardOdds> {
+  return getJson<CardOdds>(`/api/betting/games/${gamePk}/card-odds`)
+}
+
 /** GET /api/betting/games/{game_pk}/edges */
 export function fetchEdges(gamePk: number, nIterations = 200): Promise<EdgesResponse> {
   return getJson<EdgesResponse>(`/api/betting/games/${gamePk}/edges?n_iterations=${nIterations}`)

@@ -942,6 +942,9 @@ class BoxscoreCardRowModel(_ApiModel):
     lineup_slot: int | None = None
     #: SIM-560: True for each side's starting pitcher.
     starting_pitcher: bool = False
+    #: SIM-519 Part F: True for the one summed row of a side's generic bullpen
+    #: (the placeholder relievers a game with no listed pen runs with).
+    synthetic: bool = False
 
     @classmethod
     def from_prop_map(
@@ -966,6 +969,10 @@ class BoxscoreCardRowModel(_ApiModel):
             lineup_slot=tag.get("lineup_slot"),
             starting_pitcher=bool(tag.get("starting_pitcher", False)),
         )
+
+
+#: SIM-519 Part F: the row ids of each side's summed generic bullpen.
+GENERIC_PEN_IDS: dict[str, int] = {"away": -1, "home": -2}
 
 
 class BoxscoreCardModel(_ApiModel):
@@ -1004,16 +1011,31 @@ class BoxscoreCardModel(_ApiModel):
         """
         names = names or {}
         tags = tags or {}
-        return cls(
-            n_iterations=int(pset.n_iterations),
-            base_seed=base_seed,
-            players={
-                str(pid): BoxscoreCardRowModel.from_prop_map(
-                    pid, props, name=names.get(int(pid)), tag=tags.get(int(pid))
-                )
-                for pid, props in pset.by_player.items()
-            },
-        )
+        players: dict[str, BoxscoreCardRowModel] = {}
+        # SIM-519 Part F: a placeholder reliever (a negative id) is folded into
+        # its side's one "Bullpen (generic)" row: the sum of their means.
+        pen: dict[str, dict[str, float]] = {}
+        for pid, props in pset.by_player.items():
+            tag = tags.get(int(pid)) or {}
+            side = tag.get("side")
+            if int(pid) < 0 and side in ("away", "home") and not tag.get("starting_pitcher"):
+                sums = pen.setdefault(side, {})
+                for prop, dist in props.items():
+                    sums[prop] = sums.get(prop, 0.0) + float(dist.mean)
+                continue
+            players[str(pid)] = BoxscoreCardRowModel.from_prop_map(
+                pid, props, name=names.get(int(pid)), tag=tag or None
+            )
+        for side, means in pen.items():
+            pid = GENERIC_PEN_IDS[side]
+            players[str(pid)] = BoxscoreCardRowModel(
+                player_id=pid,
+                means=means,
+                name="Bullpen (generic)",
+                side=side,
+                synthetic=True,
+            )
+        return cls(n_iterations=int(pset.n_iterations), base_seed=base_seed, players=players)
 
 
 # ===========================================================================
@@ -1192,6 +1214,8 @@ class PropEdgeResponse(_ApiModel):
     player_id: int
     prop: str
     n: int
+    #: SIM-519 Part F: the player's name, when known ("Gerrit Cole — K").
+    player_name: str | None = None
     #: The compact PMF support (sorted distinct integer outcomes).
     support: list[int]
     #: Aligned probabilities (sums to 1.0).

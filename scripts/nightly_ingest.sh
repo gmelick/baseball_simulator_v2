@@ -9,9 +9,12 @@
 #   3. engine_artifacts             — rebuild the engine-artifact bundle the
 #                                     full-pool sampler reads (SIM-422/486)
 #
-# Invoked by the Ofelia scheduler (docker-compose `scheduler` profile) as a
-# fresh container off the app image; see deploy/ofelia/config.ini. Safe to run
-# by hand:  docker compose run --rm app sh /app/scripts/nightly_ingest.sh
+# SIM-519 Part D: the scheduler no longer runs this chain. It runs
+# scripts/nightly_finals.sh (step 1's job, a three-day window) nightly and
+# scripts/weekly_refresh.sh on Sunday; steps 2 and 3 are
+# scripts/nightly_rebuild.sh, by hand with the app stopped (SIM-524). This
+# script stays as the whole chain for a by-hand run with the app stopped:
+#   docker compose run --rm app sh /app/scripts/nightly_ingest.sh
 #
 # BASEBALL_DB_DSN must point at the in-container DB (db:5432); a default is set
 # below so the job works even if the env only carries the host-side DSN.

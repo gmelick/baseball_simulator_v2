@@ -1223,11 +1223,13 @@ class TestPregameCycle:
         p = _bare_pipeline(_http=_Http())
         p._upsert_game_record = AsyncMock()
         p._persist_pregame_odds = AsyncMock(return_value=0)
+        p._write_preview_lineup = AsyncMock()  # SIM-519 Part B; its own tests cover it
         await p._sync_live_games()
         for _ in range(3):  # let the created tasks run
             await asyncio.sleep(0)
         assert seen_params[0]["hydrate"] == live.SCHEDULE_HYDRATE == "probablePitcher,lineups"
         p._persist_pregame_odds.assert_awaited_once_with(11, preview)
+        p._write_preview_lineup.assert_awaited_once_with(preview)
         assert p._upsert_game_record.await_count == 2
 
     @pytest.mark.asyncio
@@ -1364,6 +1366,7 @@ class TestPersistMany:
     @pytest.mark.asyncio
     async def test_one_executemany_per_call_with_the_single_row_sql(self) -> None:
         p = _bare_pipeline()
+        p._last_seen_column = False  # a database before Alembic 0029 (SIM-519 Part G)
         rows = [MockOddsAPI.get_odds(9, market_type="f5_total", book=b) for b in ("a", "b")]
         assert await p._persist_odds_many(9, rows) == 2
         (call,) = p._db.executemany.await_args_list

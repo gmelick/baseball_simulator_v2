@@ -16,8 +16,12 @@
  *
  * SIM-561: the API stores the run's first game for the linescore and the
  * play-by-play; `onLoaded` tells the page, which reloads both.
+ *
+ * SIM-519 Part E: the panel reads the game's stored run (`runId`, from the
+ * Simulation card) and runs no batch of its own; each click reads the same run.
  */
 import React, { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import {
   fetchBoxscore,
@@ -63,6 +67,8 @@ export interface BoxscorePanelProps {
   homeLabel?: string
   /** Called once the card loads; the API stored the run's first game (SIM-561). */
   onLoaded?: () => void
+  /** SIM-519 Part E: the stored run to read; null shows the "run a simulation" prompt. */
+  runId?: number | null
 }
 
 interface Selection {
@@ -105,7 +111,11 @@ function groupByTeam(box: BoxscoreCard, awayLabel: string, homeLabel: string): T
       group.batters.push({ row, props: batting, marker: slot != null ? String(slot) : '–' })
     }
     if (pitching.length > 0) {
-      group.pitchers.push({ row, props: pitching, marker: row.starting_pitcher ? 'SP' : 'RP' })
+      group.pitchers.push({
+        row,
+        props: pitching,
+        marker: row.synthetic ? 'BP' : row.starting_pitcher ? 'SP' : 'RP',
+      })
     }
   }
 
@@ -130,6 +140,7 @@ export function BoxscorePanel({
   awayLabel = 'Away',
   homeLabel = 'Home',
   onLoaded,
+  runId = null,
 }: BoxscorePanelProps): React.ReactElement {
   const [box, setBox] = useState<BoxscoreCard | null>(null)
   const [loading, setLoading] = useState(false)
@@ -154,6 +165,22 @@ export function BoxscorePanel({
       .finally(() => setLoading(false))
   }
 
+  // SIM-519 Part E: a new stored run replaces the card.
+  useEffect(() => {
+    if (runId == null) return
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    setSelection(null)
+    fetchBoxscore(gamePk, undefined, undefined, runId)
+      .then((b) => !cancelled && setBox(b))
+      .catch((err: unknown) => !cancelled && setError(err instanceof Error ? err.message : 'Failed to load projections.'))
+      .finally(() => !cancelled && setLoading(false))
+    return () => {
+      cancelled = true
+    }
+  }, [gamePk, runId])
+
   // Fetch the selected prop's distribution (re-runs when the line changes). The
   // card's seed and N make the server read the cached run, not simulate again.
   const runSeed = box?.base_seed ?? undefined
@@ -171,6 +198,7 @@ export function BoxscorePanel({
       line,
       baseSeed: runSeed,
       nIterations: runGames,
+      runId,
     })
       .then((d) => !cancelled && setDist(d))
       .catch(() => !cancelled && setDist(null))
@@ -178,13 +206,21 @@ export function BoxscorePanel({
     return () => {
       cancelled = true
     }
-  }, [gamePk, selection, lineInput, runSeed, runGames])
+  }, [gamePk, selection, lineInput, runSeed, runGames, runId])
 
   if (!box) {
+    if (runId != null || loading) {
+      return (
+        <div className={styles.gate}>
+          <p aria-busy={loading}>{loading ? 'Loading the run…' : error ?? ''}</p>
+        </div>
+      )
+    }
     return (
       <div className={styles.gate}>
+        <p>Run a simulation above to see each player's projections.</p>
         <button type="button" className={styles.loadButton} onClick={loadBoxscore} disabled={loading}>
-          {loading ? `Simulating ${N_GAMES} games…` : 'Load projections'}
+          Quick look ({N_GAMES} games, not stored)
         </button>
         {error && <p className={styles.error} role="alert">{error}</p>}
       </div>
@@ -197,9 +233,24 @@ export function BoxscorePanel({
   const renderLine = (line: PlayerLine): React.ReactElement => (
     <li key={`${line.row.player_id}-${line.marker}`} className={styles.playerRow}>
       <span className={styles.marker}>{line.marker}</span>
-      <span className={styles.playerName}>{playerName(line.row)}</span>
+      <span className={styles.playerName}>
+        {line.row.player_id > 0 ? (
+          <Link to={`/player/${line.row.player_id}`}>{playerName(line.row)}</Link>
+        ) : (
+          playerName(line.row)
+        )}
+      </span>
       <span className={styles.chips}>
         {line.props.map(([prop, mean]) => {
+          if (line.row.synthetic) {
+            // The summed pen has no single distribution to open.
+            return (
+              <span key={prop} className={styles.chip}>
+                <span className={styles.chipProp}>{propLabel(prop)}</span>
+                <span className={styles.chipMean}>{mean.toFixed(2)}</span>
+              </span>
+            )
+          }
           const active = selection?.playerId === line.row.player_id && selection?.prop === prop
           return (
             <button
@@ -238,6 +289,11 @@ export function BoxscorePanel({
             <>
               <h4 className={styles.groupLabel}>Pitching</h4>
               <ul className={styles.playerList}>{g.pitchers.map(renderLine)}</ul>
+              {g.pitchers.some((l) => l.row.synthetic) && (
+                <p className={styles.caption}>
+                  This game&apos;s bullpen is not listed yet; the relievers are a generic pen, shown as one row.
+                </p>
+              )}
             </>
           )}
         </section>
@@ -247,7 +303,7 @@ export function BoxscorePanel({
         <div className={styles.detail}>
           <div className={styles.detailHeader}>
             <strong>
-              {selectedRow ? playerName(selectedRow) : `Player ${selection.playerId}`} —{' '}
+              {dist?.player_name ?? (selectedRow ? playerName(selectedRow) : `Player ${selection.playerId}`)} —{' '}
               {propLabel(selection.prop)}
             </strong>
             <label className={styles.lineLabel}>

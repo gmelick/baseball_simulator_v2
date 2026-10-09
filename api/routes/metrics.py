@@ -54,6 +54,11 @@ without touching this file's contract:
                                                               since the last live re-sim
                                                               signal (app.state.last_resim_signal),
                                                               else -1 (no data yet).
+    baseball_sim_finals_age_hours           gauge      SIM-519 Part D — hours since the
+                                                              newest final game of the
+                                                              current season loaded; -1 when
+                                                              unknown. A background task reads
+                                                              it at most every 10 minutes.
 
 The values are read from ``request.app.state`` where available (so no DB / Redis
 connection is required — this module is fully import-safe and the endpoint never
@@ -147,6 +152,12 @@ if _PROM_AVAILABLE:
         registry=_REGISTRY,
     )
 
+    _FINALS_AGE = Gauge(
+        "baseball_sim_finals_age_hours",
+        "Hours since the newest final game of the current season loaded; -1 when unknown.",
+        registry=_REGISTRY,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Public instrumentation helpers — import-safe no-ops when prometheus is absent.
@@ -196,11 +207,89 @@ def _pipeline_freshness_seconds(app_state: Any) -> float:
     may set) when present; otherwise reports -1 (no data) so the gauge exists for
     the dashboard without fabricating a freshness reading.
     """
-    ts = getattr(app_state, "last_resim_signal_ts", None)
+    # SIM-519 Part C: the live service's heartbeat, when the background read has one.
+    hb = getattr(app_state, "live_heartbeat_ts", None)
+    ts = hb if hb is not None else getattr(app_state, "last_resim_signal_ts", None)
     if ts is None:
         return -1.0
     try:
         return max(0.0, time.time() - float(ts))
+    except Exception:  # noqa: BLE001
+        return -1.0
+
+
+#: SIM-519 Part D: the newest final game's date is read at most this often.
+FINALS_AGE_REFRESH_S = 600
+
+_SQL_NEWEST_FINAL = """
+    SELECT MAX(game_date) AS newest FROM raw.games
+     WHERE status = 'Final' AND season = EXTRACT(YEAR FROM NOW())::int
+"""
+
+
+async def _refresh_newest_final(app_state: Any) -> None:
+    """Read the newest final game's date into ``app.state`` (best effort)."""
+    pool = getattr(app_state, "pg_pool", None)
+    if pool is None:
+        return
+    try:
+        rows = await pool.fetch(_SQL_NEWEST_FINAL)
+        newest = rows[0]["newest"] if rows else None
+        app_state.finals_newest_date = newest
+    except Exception:  # noqa: BLE001 -- a metric must never fail the app
+        return
+
+
+async def _refresh_live_heartbeat(app_state: Any) -> None:
+    """Read the live service's heartbeat stamp into ``app.state`` (best effort)."""
+    redis = getattr(app_state, "redis_client", None)
+    if redis is None:
+        return
+    try:
+        from pipeline.live.broadcast import HEARTBEAT_KEY
+
+        raw = await redis.get(HEARTBEAT_KEY)
+        app_state.live_heartbeat_ts = float(raw) if raw is not None else None
+    except Exception:  # noqa: BLE001 -- a metric must never fail the app
+        return
+
+
+#: SIM-519 Part C: the heartbeat stamp is read at most this often.
+HEARTBEAT_REFRESH_S = 15
+
+
+def _schedule_finals_refresh(app_state: Any) -> None:
+    """Start the refresh in the background when the stored date is stale.
+
+    The scrape itself never waits on the database: it reads the last stored
+    value, and the next scrape sees the new one.
+    """
+    now = time.time()
+    try:
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    if now - float(getattr(app_state, "finals_checked_at", 0.0) or 0.0) >= FINALS_AGE_REFRESH_S:
+        app_state.finals_checked_at = now
+        # Keep a reference until the task ends.
+        app_state.finals_refresh_task = loop.create_task(_refresh_newest_final(app_state))
+    if now - float(getattr(app_state, "heartbeat_checked_at", 0.0) or 0.0) >= HEARTBEAT_REFRESH_S:
+        app_state.heartbeat_checked_at = now
+        app_state.heartbeat_refresh_task = loop.create_task(_refresh_live_heartbeat(app_state))
+
+
+def _finals_age_hours(app_state: Any) -> float:
+    """Hours from the start (UTC) of the newest final game's date to now; -1 if unknown."""
+    newest = getattr(app_state, "finals_newest_date", None)
+    if newest is None:
+        return -1.0
+    try:
+        from datetime import UTC, datetime
+
+        start = datetime(newest.year, newest.month, newest.day, tzinfo=UTC).timestamp()
+        return max(0.0, (time.time() - start) / 3600.0)
     except Exception:  # noqa: BLE001
         return -1.0
 
@@ -212,6 +301,7 @@ def _collect(app_state: Any) -> dict[str, float]:
         "sim_latency_last": float(getattr(app_state, "sim_latency_last_seconds", 0.0) or 0.0),
         "api_p95": float(getattr(app_state, "api_p95_seconds", 0.0) or 0.0),
         "pipeline_freshness": _pipeline_freshness_seconds(app_state),
+        "finals_age": _finals_age_hours(app_state),
     }
 
 
@@ -268,6 +358,12 @@ def _render_fallback(app_state: Any, scrape_count: int) -> str:
             "gauge",
             [f"baseball_sim_pipeline_freshness_seconds {vals['pipeline_freshness']:g}"],
         ),
+        _metric_block(
+            "baseball_sim_finals_age_hours",
+            "Hours since the newest final game of the current season loaded; -1 when unknown.",
+            "gauge",
+            [f"baseball_sim_finals_age_hours {vals['finals_age']:g}"],
+        ),
     ]
     return "".join(blocks)
 
@@ -296,6 +392,7 @@ async def metrics(request: Request) -> Response:
     Redis, or DuckDB and never 5xxs on a cold app.
     """
     app_state = request.app.state
+    _schedule_finals_refresh(app_state)
 
     if _PROM_AVAILABLE:
         # Refresh the gauges from app.state at scrape time, bump the scrape
@@ -306,6 +403,7 @@ async def metrics(request: Request) -> Response:
         _SIM_LATENCY_LAST.set(vals["sim_latency_last"])
         _API_P95.set(vals["api_p95"])
         _PIPELINE_FRESHNESS.set(vals["pipeline_freshness"])
+        _FINALS_AGE.set(vals["finals_age"])
         body = generate_latest(_REGISTRY)
         return Response(content=body, media_type=CONTENT_TYPE_LATEST)
 

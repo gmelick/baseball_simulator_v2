@@ -1,0 +1,146 @@
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+}
+
+.step {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--sim-primary-700);
+  border: 1px solid var(--sim-primary-400);
+  color: var(--sim-gray-100);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.step:hover { background: var(--sim-primary-500); }
+
+.dateButton {
+  height: 40px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 8px;
+  background: var(--sim-gray-100);
+  border: 1.5px solid var(--sim-gray-900);
+  color: var(--sim-color-text);
+  font-family: var(--dd-font-display);
+  font-weight: 700;
+  font-size: 19px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.caret { font-size: 11px; color: var(--sim-color-text-muted); }
+
+.today {
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--sim-primary-300);
+  background: transparent;
+  color: var(--sim-primary-600);
+  font-family: var(--sim-font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.today:hover { background: var(--sim-primary-50); }
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.popup {
+  position: absolute;
+  top: 48px;
+  right: 0;
+  z-index: 41;
+  width: 288px;
+  max-width: calc(100vw - 32px);
+  background: var(--sim-color-surface);
+  color: var(--sim-color-text);
+  border: 1.5px solid var(--sim-gray-900);
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: 0 10px 30px rgb(20 30 25 / 0.25);
+}
+
+.monthRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.monthStep {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 18px;
+}
+
+.monthStep:hover { background: var(--sim-gray-200); }
+
+.monthTitle {
+  font-family: var(--dd-font-display);
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: 0.03em;
+}
+
+.weekdays,
+.grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.weekdays {
+  font-family: var(--sim-font-mono);
+  font-size: 10px;
+  color: var(--sim-color-text-muted);
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.day {
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--sim-color-text);
+  font-family: var(--sim-font-mono);
+  font-size: 13px;
+}
+
+.day:hover { background: var(--sim-gray-200); }
+
+.selected,
+.selected:hover {
+  background: var(--sim-primary-600);
+  color: var(--sim-gray-100);
+}
+
+.isToday { box-shadow: inset 0 0 0 2px var(--sim-success-500); }
+
+@media (max-width: 640px) {
+  .popup { right: auto; left: 0; }
+}

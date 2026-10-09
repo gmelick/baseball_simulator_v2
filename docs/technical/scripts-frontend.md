@@ -4,6 +4,18 @@ The scripts that are still run operationally (not one-off probes), plus a map of
 
 *20 files documented — use the page outline (right sidebar) to jump to one.*
 
+### `scripts/nightly_finals.sh`, `scripts/with_retry.sh`, `scripts/weekly_refresh.sh`, `scripts/nightly_rebuild.sh`
+
+SIM-519 Part D. `nightly_finals.sh` loads the final games of the last `DAYS` days (default 3; Eastern dates; Postgres only, safe while the app runs). `with_retry.sh <max> <command...>` reruns a command after exit 139 or a "Fatal Python error" (the SIM-445 crash class) and stops at once on any other failure; Ofelia runs the finals job nightly at 07:00 UTC and `weekly_refresh.sh` (the whole current season) on Sunday, both through it. `nightly_rebuild.sh` is the old chain's steps 2 and 3 (profiles, engine artifacts); its scheduler job stays disabled until SIM-524, so run it by hand with the app stopped. `make ingest-catch-up DAYS=n` runs the finals window by hand.
+
+---
+
+### The Daily Diamond frontend (SIM-519)
+
+The slate (`frontend/src/pages/DaySummaryPage.tsx`) and its card (`components/games/GameCard.tsx`, `components/slate/*`) are the owner's Claude Design: `DatePicker` (the month calendar), `TeamBlock` (logo, colour chip, name, record), `CardDetail` (the open card: lineups, linescore, `CardField` with the fielders and runners, the count, the last play, the box score with team tabs, the book's lines and their settlement), `cardText.ts` (the state tag and the sim line), `slate.ts` (the sort and the 30-second poll), `format.ts`. `src/teams.ts` maps the 30 clubs to a colour and a bundled logo (`public/logos/`, fetched once by `frontend/scripts/fetch-logos.mjs`). The theme is in `styles/tokens.css` (the `--sim-*` names with the design's values, plus `--dd-*`); the fonts come from `@fontsource`. The game page adds `components/games/SimulationCard.tsx` (Part E) and the slate card's header. `vite.config.ts` reads `API_TARGET` for the dev proxy. Playwright: `e2e/slate.spec.ts`, `e2e/simulation.spec.ts`.
+
+---
+
 ### `scripts/nightly_ingest.sh`
 
 Nightly data-ingestion chain: loads newly-Final games for the current season, rebuilds the DuckDB derived profiles and sim pools, then rebuilds the engine-artifact bundle the production simulator reads. Runs as a fresh container off the app image, scheduled by the Ofelia cron service.

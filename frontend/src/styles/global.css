@@ -30,6 +30,7 @@ html {
 
 body {
   font-family: var(--sim-font-sans);
+  font-variant-numeric: tabular-nums;
   font-size: var(--sim-text-base);
   line-height: var(--sim-leading-normal);
   color: var(--sim-color-text);
@@ -45,6 +46,13 @@ body {
 h1, h2, h3, h4, h5, h6 {
   font-weight: var(--sim-font-semibold);
   line-height: var(--sim-leading-tight);
+}
+
+/* SIM-519 Part T: headings take the condensed display face of the design. */
+h1, h2, h3 {
+  font-family: var(--dd-font-display);
+  font-weight: var(--sim-font-bold);
+  letter-spacing: 0.01em;
 }
 
 a {
@@ -115,35 +123,65 @@ button {
   min-height: 100dvh;
 }
 
+/* SIM-519 Part T: the Daily Diamond header — a forest bar, the stitched-ball
+ * mark, the condensed wordmark and a red stitch rule under it. */
 .app-header {
   position: sticky;
   top: 0;
   z-index: var(--sim-z-sticky);
-  height: var(--sim-header-height);
-  background-color: var(--sim-primary-900);
+  background-color: var(--sim-primary-600);
   color: var(--sim-color-text-inverse);
+  box-shadow: 0 2px 0 var(--sim-primary-800);
+}
+
+.app-header__bar {
+  max-width: var(--sim-max-width);
+  margin: 0 auto;
+  min-height: var(--sim-header-height);
+  padding: var(--sim-space-3) var(--sim-space-5);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--sim-space-6);
-  box-shadow: var(--sim-shadow-md);
+  gap: var(--sim-space-3);
+}
+
+.app-header__stitch {
+  height: 3px;
+  background: repeating-linear-gradient(90deg, var(--dd-stitch) 0 8px, transparent 8px 14px);
+  opacity: 0.9;
 }
 
 .app-header__brand {
   display: flex;
   align-items: center;
-  gap: var(--sim-space-2);
+  gap: 10px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-header__brand:hover {
+  color: inherit;
+  text-decoration: none;
 }
 
 .app-header__logo {
-  font-size: var(--sim-text-xl);
-  line-height: 1;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--dd-line);
+  border: 2px dashed var(--dd-stitch);
 }
 
 .app-header__title {
-  font-size: var(--sim-text-lg);
-  font-weight: var(--sim-font-semibold);
-  letter-spacing: -0.01em;
+  white-space: nowrap;
+  font-family: var(--dd-font-display);
+  font-weight: 800;
+  font-size: 26px;
+  line-height: 1;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
 .app-header__nav {
@@ -159,21 +197,31 @@ button {
   gap: var(--sim-space-6);
   min-width: 0;
 }
-.app-header__nav a {
-  color: rgba(255, 255, 255, 0.7);
-  font-size: var(--sim-text-sm);
+.app-header__nav a,
+.app-header__logout {
+  color: var(--sim-primary-200);
+  font-family: var(--dd-font-display);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   text-decoration: none;
   padding: var(--sim-space-1) 0;
   white-space: nowrap;
 }
-.app-header__nav a:hover {
-  color: #fff;
+.app-header__logout {
+  background: none;
+  border: none;
+  padding: 0 var(--sim-space-2);
+}
+.app-header__nav a:hover,
+.app-header__logout:hover {
+  color: var(--sim-gray-100);
   text-decoration: none;
 }
 .app-header__nav a[aria-current='page'] {
-  color: #fff;
-  font-weight: var(--sim-font-medium);
-  border-bottom: 2px solid var(--sim-primary-400);
+  color: var(--sim-gray-100);
+  border-bottom: 2px solid var(--dd-stitch);
 }
 
 /* The routed pages (.page) own their own max-width + padding, so the shell
@@ -185,12 +233,32 @@ button {
 
 /* Tighter header on small screens; let the title truncate rather than overflow. */
 @media (max-width: 640px) {
-  .app-header {
-    padding: 0 var(--sim-space-4);
+  .app-header__bar {
+    padding: var(--sim-space-2) var(--sim-space-4);
   }
 
   .app-header__title {
-    font-size: var(--sim-text-base);
+    font-size: 20px;
+  }
+
+  .app-header__logo {
+    width: 24px;
+    height: 24px;
+  }
+
+  .app-header__left {
+    flex-wrap: wrap;
+    gap: var(--sim-space-1) var(--sim-space-3);
+  }
+
+  .app-header__nav {
+    flex-wrap: wrap;
+    gap: var(--sim-space-1) var(--sim-space-3);
+  }
+
+  .app-header__nav a,
+  .app-header__logout {
+    font-size: 15px;
   }
 }
 

@@ -1,0 +1,213 @@
+{
+ "copyright": "Copyright 2026 MLB Advanced Media, L.P.  Use of any content on this page acknowledges agreement to the terms posted here http://gdx.mlb.com/components/copyright.txt",
+ "dates": [
+  {
+   "date": "2026-10-10",
+   "events": [],
+   "games": [
+    {
+     "calendarEventID": "14-849831-2026-10-10",
+     "content": {
+      "link": "/api/v1/game/849831/content"
+     },
+     "dayNight": "night",
+     "description": "ALDS 'B' Game 5",
+     "doubleHeader": "N",
+     "gameDate": "2026-10-11T00:00:00Z",
+     "gameGuid": "053e2f7c-db94-4a06-a2b6-a27937d20169",
+     "gameNumber": 1,
+     "gamePk": 849831,
+     "gameType": "D",
+     "gamedayType": "P",
+     "gamesInSeries": 5,
+     "ifNecessary": "N",
+     "ifNecessaryDescription": "Normal Game",
+     "inningBreakLength": 175,
+     "linescore": {
+      "defense": {
+       "team": {
+        "id": 114,
+        "link": "/api/v1/teams/114",
+        "name": "Cleveland Guardians"
+       }
+      },
+      "innings": [],
+      "offense": {
+       "team": {
+        "id": 145,
+        "link": "/api/v1/teams/145",
+        "name": "Chicago White Sox"
+       }
+      },
+      "scheduledInnings": 9,
+      "teams": {
+       "away": {},
+       "home": {}
+      }
+     },
+     "lineups": {},
+     "link": "/api/v1.1/game/849831/feed/live",
+     "officialDate": "2026-10-10",
+     "publicFacing": true,
+     "recordSource": "S",
+     "reverseHomeAwayStatus": false,
+     "scheduledInnings": 9,
+     "season": "2026",
+     "seasonDisplay": "2026",
+     "seriesDescription": "AL Division Series",
+     "seriesGameNumber": 5,
+     "status": {
+      "abstractGameCode": "P",
+      "abstractGameState": "Preview",
+      "codedGameState": "S",
+      "detailedState": "Scheduled",
+      "startTimeTBD": false,
+      "statusCode": "S"
+     },
+     "teams": {
+      "away": {
+       "leagueRecord": {
+        "losses": 2,
+        "pct": ".500",
+        "ties": 0,
+        "wins": 2
+       },
+       "seriesNumber": 2,
+       "splitSquad": false,
+       "springLeague": {
+        "abbreviation": "CL",
+        "id": 114,
+        "link": "/api/v1/league/114",
+        "name": "Cactus League"
+       },
+       "team": {
+        "abbreviation": "CWS",
+        "active": true,
+        "allStarStatus": "N",
+        "clubName": "White Sox",
+        "division": {
+         "id": 202,
+         "link": "/api/v1/divisions/202",
+         "name": "American League Central"
+        },
+        "fileCode": "cws",
+        "firstYearOfPlay": "1901",
+        "franchiseName": "Chicago",
+        "id": 145,
+        "league": {
+         "id": 103,
+         "link": "/api/v1/league/103",
+         "name": "American League"
+        },
+        "link": "/api/v1/teams/145",
+        "locationName": "Chicago",
+        "name": "Chicago White Sox",
+        "season": 2026,
+        "shortName": "Chi White Sox",
+        "sport": {
+         "id": 1,
+         "link": "/api/v1/sports/1",
+         "name": "Major League Baseball"
+        },
+        "springLeague": {
+         "abbreviation": "CL",
+         "id": 114,
+         "link": "/api/v1/league/114",
+         "name": "Cactus League"
+        },
+        "springVenue": {
+         "id": 3809,
+         "link": "/api/v1/venues/3809"
+        },
+        "teamCode": "cha",
+        "teamName": "White Sox",
+        "venue": {
+         "id": 4,
+         "link": "/api/v1/venues/4",
+         "name": "Rate Field"
+        }
+       }
+      },
+      "home": {
+       "leagueRecord": {
+        "losses": 2,
+        "pct": ".500",
+        "ties": 0,
+        "wins": 2
+       },
+       "seriesNumber": 2,
+       "splitSquad": false,
+       "springLeague": {
+        "abbreviation": "CL",
+        "id": 114,
+        "link": "/api/v1/league/114",
+        "name": "Cactus League"
+       },
+       "team": {
+        "abbreviation": "CLE",
+        "active": true,
+        "allStarStatus": "N",
+        "clubName": "Guardians",
+        "division": {
+         "id": 202,
+         "link": "/api/v1/divisions/202",
+         "name": "American League Central"
+        },
+        "fileCode": "cle",
+        "firstYearOfPlay": "1901",
+        "franchiseName": "Cleveland",
+        "id": 114,
+        "league": {
+         "id": 103,
+         "link": "/api/v1/league/103",
+         "name": "American League"
+        },
+        "link": "/api/v1/teams/114",
+        "locationName": "Cleveland",
+        "name": "Cleveland Guardians",
+        "season": 2026,
+        "shortName": "Cleveland",
+        "sport": {
+         "id": 1,
+         "link": "/api/v1/sports/1",
+         "name": "Major League Baseball"
+        },
+        "springLeague": {
+         "abbreviation": "CL",
+         "id": 114,
+         "link": "/api/v1/league/114",
+         "name": "Cactus League"
+        },
+        "springVenue": {
+         "id": 3834,
+         "link": "/api/v1/venues/3834"
+        },
+        "teamCode": "cle",
+        "teamName": "Guardians",
+        "venue": {
+         "id": 5,
+         "link": "/api/v1/venues/5",
+         "name": "Progressive Field"
+        }
+       }
+      }
+     },
+     "tiebreaker": "N",
+     "venue": {
+      "id": 5,
+      "link": "/api/v1/venues/5",
+      "name": "Progressive Field"
+     }
+    }
+   ],
+   "totalEvents": 0,
+   "totalGames": 1,
+   "totalGamesInProgress": 0,
+   "totalItems": 1
+  }
+ ],
+ "totalEvents": 0,
+ "totalGames": 1,
+ "totalGamesInProgress": 0,
+ "totalItems": 1
+}

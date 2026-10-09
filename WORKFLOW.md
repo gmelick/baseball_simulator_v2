@@ -1,6 +1,6 @@
 # MLB Baseball Simulation Platform — End-to-End Workflow
 
-*Last updated: 2026-10-08 (Alembic head 0028; DuckDB migration 0032; the 2026-06-04 Phase-7 refresh: Python 3.13 · DuckDB v32 · full API surface live)*
+*Last updated: 2026-10-08 (Alembic head 0029; DuckDB migration 0032; the 2026-06-04 Phase-7 refresh: Python 3.13 · DuckDB v32 · full API surface live)*
 
 This document is the operator's manual.  It describes how to run the
 platform end-to-end from a clean checkout, and how to confirm each
@@ -16,7 +16,7 @@ exited zero.
 
 > **Phase note.** As of 2026-06-06 the platform is at **Phase 7 — live
 > bring-up (largely complete)**; Phases 1–6 are COMPLETE and CI-green
-> (Python 3.13 / numpy 2.x; 89% coverage; DuckDB v32 / Alembic 0028).  The
+> (Python 3.13 / numpy 2.x; 89% coverage; DuckDB v32 / Alembic 0029).  The
 > full API surface (games, simulate, betting, WebSocket, odds, similarity,
 > metrics) is live.  Calibration is LIVE (SIM-432; win-prob map = fitted
 > reliability-curve), the full-pool sampler + all realism flags are ON in
@@ -72,7 +72,7 @@ make test
 ```
 
 **What good looks like.**
-- `make migrate` ends with `alembic current` printing the head revision — the newest file under `db/migrations/versions/` (`0028` as of 2026-09-28).
+- `make migrate` ends with `alembic current` printing the head revision — the newest file under `db/migrations/versions/` (`0029` as of 2026-10-09).
 - `make test` exits 0 (unit suite green at 89% coverage; ~22 slow/skipped).
 
 ### 1.3 Local Python development (without Docker)
@@ -278,7 +278,7 @@ python scripts\check_bat_side_coverage.py --out docs\data_quality\2026-05-20-bat
 echo %ERRORLEVEL%
 ```
 
-**What good looks like.**  ~700 000 rows per fully-loaded season; `alembic current` prints the newest revision under `db/migrations/versions/` (`0028` as of 2026-09-28); `check_bat_side_coverage.py` exits 0.
+**What good looks like.**  ~700 000 rows per fully-loaded season; `alembic current` prints the newest revision under `db/migrations/versions/` (`0029` as of 2026-10-09); `check_bat_side_coverage.py` exits 0.
 
 ### 2.2 DuckDB analytical layer
 

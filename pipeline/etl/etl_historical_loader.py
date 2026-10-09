@@ -2996,6 +2996,23 @@ class HistoricalDataLoader:
         if not rows:
             return
         with self._get_conn() as conn, conn.cursor() as cur:
+            # SIM-519 Part B: the live service writes a game's published (or
+            # projected) lineup before first pitch. The final box is the
+            # authority: those rows go first, in this transaction, or a
+            # pre-game row would win the unique slot below and a player
+            # scratched after the last pre-game poll would stay in the lineup.
+            if self._lineup_source_column_exists is None:
+                cur.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_schema = 'raw' AND table_name = 'game_lineups' "
+                    "AND column_name = 'source'"
+                )
+                self._lineup_source_column_exists = cur.fetchone() is not None
+            if self._lineup_source_column_exists:
+                cur.execute(
+                    "DELETE FROM raw.game_lineups WHERE game_pk = %s AND source <> 'box'",
+                    (game_pk,),
+                )
             cur.executemany(
                 """
                 INSERT INTO raw.game_lineups
@@ -3009,6 +3026,9 @@ class HistoricalDataLoader:
             conn.commit()
         log.info("  Inserted %d starting-lineup rows for game %s", len(rows), game_pk)
 
+    #: SIM-519: tri-state cache of "does ``raw.game_lineups.source`` exist"
+    #: (Alembic 0029). ``None`` means not yet probed.
+    _lineup_source_column_exists: bool | None = None
     #: SIM-545: tri-state cache of "does ``raw.game_player_stats`` exist" (Alembic
     #: 0023). ``None`` means not yet probed. Same reasoning as
     #: ``_play_events_table_exists``: one catalogue lookup per run, not per game.

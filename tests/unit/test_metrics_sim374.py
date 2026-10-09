@@ -44,6 +44,7 @@ EXPECTED_METRICS = [
     "baseball_sim_latency_seconds",
     "baseball_sim_api_p95_seconds",
     "baseball_sim_pipeline_freshness_seconds",
+    "baseball_sim_finals_age_hours",
 ]
 
 
@@ -173,3 +174,45 @@ def test_grafana_dashboard_json_parses() -> None:
     assert "baseball_sim_latency_seconds" in exprs
     assert "baseball_sim_api_p95_seconds" in exprs
     assert "baseball_sim_pipeline_freshness_seconds" in exprs
+
+
+# ---------------------------------------------------------------------------
+# SIM-519 Part D — the finals-age gauge
+# ---------------------------------------------------------------------------
+
+
+def test_finals_age_is_minus_one_when_unknown(client: TestClient) -> None:
+    body = client.get("/metrics").text
+    assert "baseball_sim_finals_age_hours -1" in body
+
+
+def test_finals_age_reads_the_stored_date() -> None:
+    from datetime import date, timedelta
+
+    state = type("S", (), {})()
+    state.finals_newest_date = date.today() - timedelta(days=2)
+    hours = metrics_mod._finals_age_hours(state)  # noqa: SLF001
+    assert 24 <= hours <= 96
+
+
+def test_the_scrape_starts_one_refresh_per_window() -> None:
+    import asyncio
+
+    class _Pool:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def fetch(self, sql):
+            self.calls += 1
+            return [{"newest": __import__("datetime").date(2026, 9, 27)}]
+
+    app = FastAPI()
+    app.include_router(metrics_router)
+    pool = _Pool()
+    app.state.pg_pool = pool
+    with TestClient(app) as c:
+        c.get("/metrics")
+        c.get("/metrics")
+        asyncio.run(asyncio.sleep(0))
+    assert pool.calls == 1
+    assert str(app.state.finals_newest_date) == "2026-09-27"

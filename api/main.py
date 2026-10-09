@@ -165,8 +165,25 @@ async def lifespan(app: FastAPI):
     app.state.pg_pool = await open_pg_pool(dsn)
     app.state.player_name_resolver = make_pg_name_resolver(app.state.pg_pool)
 
+    # SIM-519 Part E: the run jobs. A queued or running row left by a previous
+    # process can never finish, so it is marked failed('restart') at boot.
+    from api.sim_jobs import SimJobRegistry
+
+    app.state.sim_jobs = SimJobRegistry(app.state.pg_pool)
+    orphans = await app.state.sim_jobs.recover_orphans()
+    if orphans:
+        log.info("SIM-519: %d unfinished simulation run(s) marked failed('restart')", orphans)
+
     log.info("Opening Redis cache ...")
     app.state.redis_client, app.state.similarity_cache = await open_redis_cache(redis_url)
+
+    # SIM-519 Part A: the league reader the slate (schedule) and the card detail
+    # (per-game feed) share. SLATE_SCHEDULE_ENABLED=0 leaves it off, and the
+    # slate then serves the stored listing (source "db").
+    if os.environ.get("SLATE_SCHEDULE_ENABLED", "1") != "0":
+        from api.league_feed import LeagueFeed
+
+        app.state.league_feed = LeagueFeed()
 
     # Dev-onboarding escape hatch: SIMILARITY_ENGINE_ENABLED=false skips the
     # engine build entirely so the stack can boot before the DuckDB profile
@@ -353,6 +370,14 @@ async def lifespan(app: FastAPI):
             "LIVE_PIPELINE_ENABLED is false — ws_router/odds_router are mounted "
             "but the background live ingestion pipeline is NOT started."
         )
+        # SIM-519 Part C (decision D2): the live service runs in its own
+        # container and publishes on Redis; this bridge forwards a game's
+        # messages to the browsers watching it. Never set LIVE_PIPELINE_ENABLED
+        # on the compose stack: the `live` service is the one publisher.
+        from pipeline.live.broadcast import RedisBridge
+        from pipeline.live.live_ingestion_pipeline import connection_manager
+
+        app.state.live_bridge = RedisBridge(app.state.redis_client, connection_manager.broadcast)
 
     # ----------------------------------------------------------------
     # Phase 5 (SIM-357) / SIM-561: the replay store -- a DuckDB file of its own.
@@ -559,6 +584,27 @@ async def lifespan(app: FastAPI):
     if getattr(app.state, "sim_runner", None) is not None:
         try:
             app.state.sim_runner.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # SIM-519 Part E: stop the run jobs (their rows are recovered at next boot).
+    if getattr(app.state, "sim_jobs", None) is not None:
+        try:
+            await app.state.sim_jobs.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # SIM-519 Part C: stop the live bridge's subscriptions.
+    if getattr(app.state, "live_bridge", None) is not None:
+        try:
+            await app.state.live_bridge.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # SIM-519: close the league reader's HTTP session.
+    if getattr(app.state, "league_feed", None) is not None:
+        try:
+            await app.state.league_feed.close()
         except Exception:  # noqa: BLE001
             pass
 
@@ -854,6 +900,12 @@ def create_app() -> FastAPI:
             except Exception as exc:  # noqa: BLE001
                 checks["redis"] = f"error: {type(exc).__name__}"
                 all_ok = False
+
+        # SIM-519 Part C: the live service's heartbeat (informational only).
+        if redis_client is not None:
+            from pipeline.live.broadcast import heartbeat_status
+
+            checks["live_service"] = await heartbeat_status(redis_client)
 
         # Pitcher engine (informational only — not a readiness blocker)
         checks["pitcher_engine"] = (

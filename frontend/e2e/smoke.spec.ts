@@ -130,21 +130,32 @@ test('day summary renders the slate with a game count', async ({ page }) => {
   await mockSlate(page)
   await page.goto(`/date/${DATE}`)
 
-  await expect(page.getByRole('heading', { name: 'Day Summary' })).toBeVisible()
+  // SIM-519: the Daily Diamond slate. An old payload (no game_status) still
+  // maps its stored status to a card state.
+  await expect(page.getByRole('heading', { name: 'Thursday, August 15' })).toBeVisible()
   await expect(page.getByText('2 games')).toBeVisible()
   await expect(page.getByText('Yankees')).toBeVisible()
   await expect(page.getByText('Dodgers')).toBeVisible()
-  await expect(page.getByText('FINAL')).toBeVisible()
-  await expect(page.getByText('SCHEDULED')).toBeVisible()
+  await expect(page.getByTestId('game-card-745001').getByText('Final', { exact: true }).first()).toBeVisible()
+  await expect(page.getByTestId('game-card-745002').getByText('Pregame')).toBeVisible()
 })
 
-test('clicking a game card navigates to the game page', async ({ page }) => {
+test('an open card links to the game page', async ({ page }) => {
   await mockAuthed(page)
   await mockSlate(page)
   await mockGame(page)
+  // SIM-519: the open card reads the feed and the card odds; none here.
+  await page.route('**/api/games/745001/feed', (route) =>
+    route.fulfill({ status: 503, contentType: 'application/json', body: '{"detail":"down"}' }),
+  )
+  await page.route('**/api/betting/games/745001/card-odds', (route) =>
+    route.fulfill({ status: 404, contentType: 'application/json', body: '{"detail":"none"}' }),
+  )
   await page.goto(`/date/${DATE}`)
 
-  await page.getByRole('link', { name: /Red Sox at Yankees/i }).click()
+  // A click opens the card in place; its "Open game" link goes to the game page.
+  await page.getByRole('button', { name: /Red Sox at Yankees/i }).click()
+  await page.getByRole('link', { name: /Open game/i }).click()
   await expect(page).toHaveURL(/\/game\/745001/)
   await expect(page.getByText('FINAL')).toBeVisible()
   await expect(page.getByRole('link', { name: /Back to slate/i })).toBeVisible()
@@ -164,7 +175,7 @@ test('date navigation advances the day', async ({ page }) => {
   await page.goto(`/date/${DATE}`)
   await page.getByRole('button', { name: 'Next day' }).click()
   await expect(page).toHaveURL(/\/date\/2024-08-16/)
-  await expect(page.getByText(/No games scheduled/i)).toBeVisible()
+  await expect(page.getByText(/No MLB games on/i)).toBeVisible()
 })
 
 /**

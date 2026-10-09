@@ -65,8 +65,10 @@ import os
 import random
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
+from functools import partial
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import aiohttp
 import asyncpg
@@ -130,6 +132,8 @@ SCHEDULE_URL = f"{MLB_BASE}/api/v1/schedule"
 SCHEDULE_HYDRATE = "probablePitcher,lineups"
 
 SCHEDULE_POLL_S = 30  # how often to check for newly-live games
+#: SIM-519 Part C: the league's day turns over in Eastern time.
+_EASTERN = ZoneInfo("America/New_York")
 WS_RECONNECT_BASE = 2.0  # base seconds for WS reconnect backoff
 WS_RECONNECT_MAX = 60.0  # cap on WS reconnect backoff
 HTTP_TIMEOUT_S = 10  # aiohttp request timeout
@@ -356,6 +360,17 @@ _PROP_ODDS_INSERT_SQL = """
             """
 
 
+#: SIM-519 Part G: the live writers' form. A row the book still posts (the same
+#: hash) is re-stamped instead of skipped, so the pre-game read knows the
+#: price is current. Needs Alembic 0029 (``last_seen_at``).
+_GAME_ODDS_RESTAMP_SQL = _GAME_ODDS_INSERT_SQL.replace(
+    "DO NOTHING", "DO UPDATE SET last_seen_at = NOW()"
+)
+_PROP_ODDS_RESTAMP_SQL = _PROP_ODDS_INSERT_SQL.replace(
+    "DO NOTHING", "DO UPDATE SET last_seen_at = NOW()"
+)
+
+
 def game_odds_insert_args(game_pk: int, odds: Mapping[str, Any]) -> tuple[Any, ...]:
     """The bind values of one raw.game_odds INSERT, in ``_GAME_ODDS_INSERT_SQL`` order.
 
@@ -413,29 +428,35 @@ def prop_odds_insert_args(prop: Mapping[str, Any]) -> tuple[Any, ...]:
     )
 
 
-async def insert_game_odds_rows(conn: Any, game_pk: int, rows: Sequence[Mapping[str, Any]]) -> int:
+async def insert_game_odds_rows(
+    conn: Any, game_pk: int, rows: Sequence[Mapping[str, Any]], *, restamp: bool = False
+) -> int:
     """SIM-555: insert game-odds rows in one ``executemany``, with the dedup.
 
     ``conn`` is an asyncpg pool or connection. The SQL is the live writer's
     (``odds_hash`` last, ``ON CONFLICT ... DO NOTHING``). Returns the number of
     rows sent (the dedup may insert fewer). An empty list sends nothing.
+    SIM-519 Part G: ``restamp`` re-stamps ``last_seen_at`` on a row already
+    stored (the live writers, once Alembic 0029 is applied).
     """
     if not rows:
         return 0
-    await conn.executemany(
-        _GAME_ODDS_INSERT_SQL, [game_odds_insert_args(game_pk, row) for row in rows]
-    )
+    sql = _GAME_ODDS_RESTAMP_SQL if restamp else _GAME_ODDS_INSERT_SQL
+    await conn.executemany(sql, [game_odds_insert_args(game_pk, row) for row in rows])
     return len(rows)
 
 
-async def insert_prop_odds_rows(conn: Any, rows: Sequence[Mapping[str, Any]]) -> int:
+async def insert_prop_odds_rows(
+    conn: Any, rows: Sequence[Mapping[str, Any]], *, restamp: bool = False
+) -> int:
     """SIM-555: insert prop-odds rows in one ``executemany``, with the dedup.
 
     The prop analogue of :func:`insert_game_odds_rows`. Returns the rows sent.
     """
     if not rows:
         return 0
-    await conn.executemany(_PROP_ODDS_INSERT_SQL, [prop_odds_insert_args(row) for row in rows])
+    sql = _PROP_ODDS_RESTAMP_SQL if restamp else _PROP_ODDS_INSERT_SQL
+    await conn.executemany(sql, [prop_odds_insert_args(row) for row in rows])
     return len(rows)
 
 
@@ -1804,6 +1825,9 @@ class LiveIngestionPipeline:
 
         self._db: asyncpg.Pool | None = None
         self._redis: aioredis.Redis | None = None
+        # SIM-519 Part C: the browser-message publisher; None = the in-process
+        # connection_manager (see _broadcast_message).
+        self._broadcaster: Any = None
         self._http: aiohttp.ClientSession | None = None
 
         # game_pk -> MLBGameWebSocket
@@ -1899,6 +1923,9 @@ class LiveIngestionPipeline:
             await self._redis.aclose()  # type: ignore[attr-defined]
         if self._db:
             await self._db.close()
+        executor = getattr(self, "_vendor_executor", None)
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
         log.info("Pipeline stopped.")
 
     # ------------------------------------------------------------------
@@ -1929,11 +1956,17 @@ class LiveIngestionPipeline:
         entry of a postponed, suspended or made-up game first drops the odds
         provider's cached facts of that game (:func:`_odds_facts_may_be_stale`).
         """
-        today = date.today().strftime("%Y-%m-%d")
+        # SIM-519 Part C: yesterday through tomorrow in Eastern time, the
+        # league's day. The container's clock is UTC, so date.today() read
+        # tomorrow's schedule from 8 pm Eastern while tonight's games were live.
+        # Each entry is acted on by its own state; tomorrow's Preview games get
+        # their lineups and pregame odds early.
+        today = datetime.now(_EASTERN).date()
         params = {
             "sportId": 1,
             "gameTypes": GAME_TYPES,
-            "date": today,
+            "startDate": (today - timedelta(days=1)).isoformat(),
+            "endDate": (today + timedelta(days=1)).isoformat(),
             "hydrate": SCHEDULE_HYDRATE,
         }
 
@@ -1960,6 +1993,7 @@ class LiveIngestionPipeline:
                         # becomes the closing row BEFORE the watcher starts,
                         # so the live cycle's first in-play row comes after.
                         await self._mark_closing_rows(game_pk, game)
+                        await self.on_game_live(game_pk, datetime.now(UTC))
                         await self._start_watching(game_pk)
                         # Immediately fetch initial state (don't wait for first WS msg)
                         asyncio.create_task(self._refresh_game_state(game_pk))
@@ -1985,6 +2019,9 @@ class LiveIngestionPipeline:
                     # nothing from the vendor. The task upserts the game row
                     # itself before its first odds INSERT (the foreign key).
                     asyncio.create_task(self._persist_pregame_odds(game_pk, game))
+                    # SIM-519 Part B: the published lineup and the probable
+                    # pitchers, so the game can be simulated before it starts.
+                    asyncio.create_task(self._write_preview_lineup(game))
 
                 # SIM-105: skip _upsert_game_record() for games that have
                 # already transitioned to Final.  For a 15-game slate with
@@ -1996,6 +2033,85 @@ class LiveIngestionPipeline:
 
                 # Upsert every game (Preview/Live/Final) into raw.games
                 asyncio.create_task(self._upsert_game_record(game))
+                # SIM-519: a game already Final when first seen (yesterday's,
+                # in the three-day window) is upserted once, then skipped.
+                if status == "Final":
+                    self._completed_games.add(game_pk)
+
+        await self._write_heartbeat(sorted(current_live))
+
+    async def _last_seen_available(self) -> bool:
+        """SIM-519 Part G: whether ``raw.game_odds.last_seen_at`` exists (Alembic 0029), cached."""
+        known = getattr(self, "_last_seen_column", None)
+        if known is not None:
+            return bool(known)
+        try:
+            known = bool(
+                await self._db.fetchval(
+                    "SELECT 1 FROM information_schema.columns WHERE table_schema = 'raw' "
+                    "AND table_name = 'game_odds' AND column_name = 'last_seen_at'"
+                )
+            )
+        except Exception:  # noqa: BLE001 -- unknown means the plain insert
+            return False
+        self._last_seen_column = known
+        return known
+
+    async def _broadcast_message(self, game_pk: int, payload: dict) -> None:
+        """Send a browser-bound message (SIM-519 Part C).
+
+        In the app's process (``LIVE_PIPELINE_ENABLED``) the publisher is the
+        in-process ``connection_manager``; in the ``live`` container it is a
+        :class:`pipeline.live.broadcast.RedisBroadcaster`, and the app's bridge
+        forwards the message to the browsers.
+        """
+        publisher = getattr(self, "_broadcaster", None) or connection_manager
+        await publisher.broadcast(game_pk, payload)
+
+    async def _off_loop(self, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
+        """Run a synchronous vendor read on the pipeline's one worker thread.
+
+        SIM-519 Part C: a slow vendor no longer stalls the live refresh. One
+        thread keeps the provider's per-process caches single-threaded.
+        """
+        executor = getattr(self, "_vendor_executor", None)
+        if executor is None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="odds-vendor")
+            self._vendor_executor = executor
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(executor, partial(fn, *args, **kwargs))
+
+    async def on_game_live(self, game_pk: int, first_pitch_at: datetime) -> None:
+        """SIM-519 Part C: the Preview-to-Live hook, once per game.
+
+        Records ``raw.games.first_pitch_at`` (Alembic 0029; the first write
+        wins, so a restart mid-game keeps the true instant). The closing-row
+        promotion (SIM-546) runs just before it in the poll.
+        """
+        if getattr(self, "_db", None) is None:
+            return
+        try:
+            await self._db.execute(
+                "UPDATE raw.games SET first_pitch_at = COALESCE(first_pitch_at, $2) WHERE game_pk = $1",
+                int(game_pk),
+                first_pitch_at,
+            )
+        except Exception as exc:  # noqa: BLE001 -- before 0029 the column is absent
+            log.debug("first_pitch_at not recorded for game %s: %s", game_pk, exc)
+
+    async def _write_heartbeat(self, live_game_pks: list[int]) -> None:
+        """SIM-519 Part C: ``live:heartbeat`` and ``live:watching`` for /ready and the gauge."""
+        redis = getattr(self, "_redis", None)
+        if redis is None:
+            return
+        try:
+            from pipeline.live.broadcast import write_heartbeat
+
+            await write_heartbeat(redis, live_game_pks)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("heartbeat not written: %s", exc)
 
     async def _mark_closing_rows(self, game_pk: int, game: Mapping[str, Any]) -> tuple[int, int]:
         """SIM-546: promote a game's closing rows the first time the poll sees it Live.
@@ -2133,7 +2249,7 @@ class LiveIngestionPipeline:
                     "odds": _jsonable_odds(odds),
                     "resim_triggered": pa_ended,
                 }
-                await connection_manager.broadcast(game_pk, broadcast_payload)
+                await self._broadcast_message(game_pk, broadcast_payload)
 
                 if pa_ended:
                     self._last_resim_at_bat[game_pk] = completed_at_bat
@@ -2202,7 +2318,7 @@ class LiveIngestionPipeline:
         longer persists it; :meth:`_persist_game_odds_cycle` stores every
         book's row. With BettingPros the row is the graded book's moneyline.
         """
-        return self._odds_provider().get_odds(game_pk)
+        return await self._off_loop(self._odds_provider().get_odds, game_pk)
 
     # ------------------------------------------------------------------
     # SIM-555: the load guard on the live writers
@@ -2527,7 +2643,8 @@ class LiveIngestionPipeline:
             return 0
         clock[game_pk] = now
         written = 0
-        for market_type, rows in self._game_market_offers(game_pk, line_type="current"):
+        offers = await self._off_loop(self._game_market_offers, game_pk, line_type="current")
+        for market_type, rows in offers:
             kept = self._guard_rows(game_pk, rows)
             if not kept:
                 continue
@@ -2594,7 +2711,9 @@ class LiveIngestionPipeline:
             return 0
 
         clock[game_pk] = now
-        offers = self._prop_offers(game_pk, player_ids, line_type="current", roles=roles)
+        offers = await self._off_loop(
+            self._prop_offers, game_pk, player_ids, line_type="current", roles=roles
+        )
         written = await self._persist_prop_offers(game_pk, offers)
         if written:
             log.info(
@@ -2815,7 +2934,11 @@ class LiveIngestionPipeline:
         }
         status = status_map.get(gd.get("status", {}).get("abstractGameState", "Preview"), "Preview")
 
-        game_date = date.fromisoformat(gd["gameDate"][:10])
+        # SIM-519 Part C: the slate keys games on the league's official date
+        # (the local calendar day). gameDate is the UTC start: a West Coast night
+        # game's gameDate falls on the next UTC day, so a game created from it
+        # sat on the wrong slate until the nightly load corrected it.
+        game_date = date.fromisoformat((gd.get("officialDate") or gd["gameDate"])[:10])
 
         # SIM-438: supply season.  raw.games.season is INTEGER NOT NULL and is
         # half of all three composite FKs — (venue_id, season) -> raw.venues and
@@ -2856,6 +2979,94 @@ class LiveIngestionPipeline:
             gd.get("teams", {}).get("home", {}).get("team", {}).get("id", 0),
             gd.get("teams", {}).get("away", {}).get("team", {}).get("id", 0),
         )
+        await self._upsert_schedule_fields(gd)
+
+    async def _upsert_schedule_fields(self, entry: dict) -> None:
+        """SIM-519: the schedule's fields on the game row (Alembic 0029).
+
+        Start time, doubleheader code and number, the detailed state and both
+        probable pitchers. Best effort and separate from the INSERT, so a
+        database without the 0029 columns keeps every game row it gets today.
+        """
+        exists = getattr(self, "_schedule_columns_exist", None)
+        try:
+            if exists is None:
+                exists = bool(
+                    await self._db.fetchval(
+                        "SELECT 1 FROM information_schema.columns WHERE table_schema = 'raw' "
+                        "AND table_name = 'games' AND column_name = 'schedule_seen_at'"
+                    )
+                )
+                self._schedule_columns_exist = exists
+            if not exists:
+                return
+            from pipeline.mlb_schedule import parse_game
+
+            g = parse_game(entry)
+            await self._db.execute(
+                """
+                UPDATE raw.games SET
+                    start_utc                = $2,
+                    start_time_tbd           = $3,
+                    double_header            = $4,
+                    game_number              = $5,
+                    detailed_state           = $6,
+                    home_probable_pitcher_id = $7,
+                    away_probable_pitcher_id = $8,
+                    schedule_seen_at         = NOW()
+                 WHERE game_pk = $1
+                """,
+                g.game_pk,
+                g.start_utc,
+                g.start_time_tbd,
+                g.double_header[:1] or None,
+                g.game_number,
+                (g.detailed_state or None) and g.detailed_state[:40],
+                g.home.probable_pitcher.player_id if g.home.probable_pitcher else None,
+                g.away.probable_pitcher.player_id if g.away.probable_pitcher else None,
+            )
+        except Exception as exc:  # noqa: BLE001 -- never cost the game row its upsert
+            log.debug("schedule fields not written for game %s: %s", entry.get("gamePk"), exc)
+
+    async def _write_preview_lineup(self, game: dict) -> None:
+        """SIM-519 Part B: make a Preview game simulable.
+
+        The game row first and awaited (``raw.game_lineups.game_pk`` is a
+        foreign key), then the published-lineup writer
+        (:class:`pipeline.live.lineup_writer.PublishedLineupWriter`), which reads
+        the game's feed only when the schedule's lineups or probables changed.
+        """
+        try:
+            await self._upsert_game_record(game)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("lineup: game row not upserted for %s: %s", game.get("gamePk"), exc)
+            return
+        writer = getattr(self, "_lineup_writer", None)
+        if writer is None:
+            from pipeline.live.lineup_writer import PublishedLineupWriter
+
+            async def get_json(url: str) -> Any:
+                async with self._http.get(url) as resp:
+                    resp.raise_for_status()
+                    return await resp.json()
+
+            writer = PublishedLineupWriter(self._db, get_json)
+            self._lineup_writer = writer
+        source = await writer.on_preview(game)
+        if source is not None:
+            await self._on_lineup_published(int(game["gamePk"]), source)
+
+    async def _on_lineup_published(self, game_pk: int, source: str) -> None:
+        """SIM-519: tell the game page a lineup is in (the Part C bridge carries it)."""
+        broadcast = getattr(self, "_broadcast_message", None)
+        if broadcast is None:
+            return
+        try:
+            await broadcast(
+                game_pk, {"type": "lineup_published", "game_pk": game_pk, "source": source}
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("lineup_published not broadcast for %s: %s", game_pk, exc)
 
     @staticmethod
     def _odds_hash(odds: dict) -> str:
@@ -2952,7 +3163,9 @@ class LiveIngestionPipeline:
         the offer's books instead of one per book. Returns the number of rows
         sent (the dedup may insert fewer). An empty list sends nothing.
         """
-        return await insert_game_odds_rows(self._db, game_pk, rows)
+        return await insert_game_odds_rows(
+            self._db, game_pk, rows, restamp=await self._last_seen_available()
+        )
 
     @staticmethod
     def _prop_odds_hash(prop: dict) -> str:
@@ -3042,7 +3255,9 @@ class LiveIngestionPipeline:
         The same SQL and dedup as :meth:`_persist_prop_odds`. Returns the number
         of rows sent (the dedup may insert fewer). An empty list sends nothing.
         """
-        return await insert_prop_odds_rows(self._db, rows)
+        return await insert_prop_odds_rows(
+            self._db, rows, restamp=await self._last_seen_available()
+        )
 
     async def mark_closing_lines(
         self,
@@ -3150,6 +3365,11 @@ ws_router = APIRouter(prefix="/ws", tags=["live"])
 @ws_router.websocket("/games/{game_pk}")
 async def game_state_ws(websocket: WebSocket, game_pk: int) -> None:
     await connection_manager.connect(game_pk, websocket)
+    # SIM-519 Part C: in the app, the live service's messages arrive on Redis;
+    # the bridge subscribes to this game's channel while anyone watches it.
+    bridge = getattr(websocket.app.state, "live_bridge", None)
+    if bridge is not None:
+        await bridge.retain(game_pk)
     try:
         while True:
             try:
@@ -3159,11 +3379,24 @@ async def game_state_ws(websocket: WebSocket, game_pk: int) -> None:
             except TimeoutError:
                 await websocket.send_text(json.dumps({"type": "ping"}))
     except WebSocketDisconnect:
+        pass
+    finally:
         connection_manager.disconnect(game_pk, websocket)
+        if bridge is not None:
+            await bridge.release(game_pk)
 
 
-def create_app(dsn=None, redis_url=None, simulation_callback=None) -> FastAPI:
-    """SIM-104 + SIM-153: rate-limited resimulate endpoint + env-var DSN."""
+def create_app(
+    dsn=None, redis_url=None, simulation_callback=None, *, publish_to_redis: bool = False
+) -> FastAPI:
+    """SIM-104 + SIM-153: rate-limited resimulate endpoint + env-var DSN.
+
+    SIM-519 Part C: the ``live`` container runs this app (``python -m
+    pipeline.live.run_live``) with ``publish_to_redis=True``: every
+    browser-bound message goes to the game's Redis channel, which the main
+    app's bridge forwards to the browsers. ``/health`` answers with the age of
+    the last schedule poll.
+    """
     pipeline = LiveIngestionPipeline(
         dsn=dsn,
         redis_url=redis_url,
@@ -3173,12 +3406,32 @@ def create_app(dsn=None, redis_url=None, simulation_callback=None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await pipeline.start()
+        if publish_to_redis and pipeline._redis is not None:
+            from pipeline.live.broadcast import RedisBroadcaster
+
+            pipeline._broadcaster = RedisBroadcaster(pipeline._redis, default=_json_default)
         yield
         await pipeline.stop()
 
     app = FastAPI(title="MLB Live Ingestion", lifespan=lifespan)
     app.include_router(ws_router)
     app.include_router(odds_router)
+
+    @app.get("/health")
+    async def live_health(response: Response):
+        from pipeline.live.broadcast import HEARTBEAT_STALE_S, heartbeat_age_s
+
+        age = None
+        if pipeline._redis is not None:
+            try:
+                age = await heartbeat_age_s(pipeline._redis)
+            except Exception:  # noqa: BLE001
+                age = None
+        # Before the first poll completes the service is starting, not failing.
+        ok = age is not None and age <= HEARTBEAT_STALE_S
+        if not ok:
+            response.status_code = 503
+        return {"status": "ok" if ok else "stale", "heartbeat_age_s": age}
 
     @app.get("/api/pipeline/status")
     async def pipeline_status():
@@ -3228,7 +3481,7 @@ def create_app(dsn=None, redis_url=None, simulation_callback=None) -> FastAPI:
         builder = pipeline._get_or_create_builder(game_pk)  # SIM-101
         game_state = await builder.build(feed)
         await pipeline._signal_resimulation(game_pk, game_state)
-        await connection_manager.broadcast(
+        await pipeline._broadcast_message(
             game_pk,
             {
                 "type": "resim_pending",

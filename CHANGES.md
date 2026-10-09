@@ -1,3 +1,141 @@
+# BUILT — the owner's Daily Diamond design on the day slate and the game page, and the live, schedule-driven game day view in full: the slate reads the league schedule, the open card shows the real game and the book's lines, a game that has not started can be simulated, the live service runs in its own container, the nightly finals job retries a crash, one durable simulation run per game with progress; not merged, not deployed — SIM-519, 2026-10-09
+
+**Why it matters.** The day slate listed only the games our database held, with no scores, start
+times or probable pitchers. It was stale for 16 days in August because the nightly load was
+opt-in. Every game that had not started answered 503 to `/simulate`, so the main use case,
+pre-game props, could not run from the slate. Nothing ran the live service, so live cards never
+moved. On 2026-10-08 the owner made a slate design in Claude Design, "Daily Diamond MLB
+tracker" (`design/Daily Diamond v2.dc.html` in the main checkout; every number in it is
+invented by a demo generator). On 2026-10-09 the owner asked for that design on the frontend,
+with the whole live-slate epic built under it so every section shows real data.
+
+**Owner decisions, 2026-10-09.** All seven recommendations of the design
+(`docs/audit/2026-10-08-sim519-live-slate-tech-design.md` §16): D1 the schedule's records on
+the cards, D2 the live service in its own container, D3 the projected lineup built and OFF,
+D4 a run's data in Postgres, D5 run sizes 100 / 300 / 1,000 and one run at a time, D6 the
+scheduler on by default, D7 postponed games as cards. Four more for the design: the open card
+reads the league's per-game feed, cached; the card shows the book's three lines with how they
+settled AND our simulated win probability; the fonts and the 30 team logos are bundled (no call
+to an outside host at runtime); the game page stays, linked from each open card, and takes the
+new look.
+
+**What was built** (branch `claude/simulator-frontend-design-fed1a4`, pushed; not merged).
+
+- **T. The theme** (`7b82c64`). The `--sim-*` tokens keep their names and take the design's
+  values (scorecard paper, forest green, stitch red, scoreboard gold), so every page restyles at
+  once; the `--dd-*` tokens add the field and the scoreboard. Barlow, Barlow Condensed and
+  JetBrains Mono come from `@fontsource` (latin, the design's weights only). The header is the
+  design's: the stitched-ball mark, "DAILY DIAMOND", the stitch rule. `frontend/src/teams.ts`
+  maps the 30 clubs to a colour and a logo; `frontend/scripts/fetch-logos.mjs` fetched the logos
+  once into `frontend/public/logos/` (scanned: no script in any SVG). The dark mode is gone: the
+  design is a light scorecard.
+- **A. The schedule-driven slate** (`401a114`, `10a8845`). `pipeline/mlb_schedule.py` is the one
+  schedule parser and the one status mapper (`card_state_of`: the coded state first, so a
+  postponed game the league marks Final reads postponed). `api/league_feed.py` holds the app's
+  one HTTP session to the league. `GET /api/games/{date}` reads the schedule (cached 20 s for
+  today, 10 min ahead, 24 h past), merges the lineup flag, the lineup source and the newest run
+  per game in two queries, and degrades to the last good schedule, then to the stored listing,
+  saying which in `source`. Every new card field is optional. Eight recorded days pin the field
+  names (`tests/fixtures/mlb_schedule/`). The slate page is the design: the date control with a
+  month calendar, the kicker and the long date, the game / live / final tags, live first then by
+  first pitch, a 30-second poll while a game is live or the date is today (only while the tab
+  is visible), a banner when the feed is down. Each card: the state tag (Top 6th · 1 out,
+  Final/10, 10:10 PM · Game 2, PPD · Rain), the logos, colour chips, records, the score, and our
+  sim line or "Not simulated".
+- **I. The open card** (`1b0bd40`, `10a8845`; new in this build). `GET /api/games/{pk}/feed`
+  reduces the league's live feed (`pipeline/mlb_game_feed.py`) to what the card shows: the
+  linescore with the X of a home win, both box scores at the starting positions (the SIM-559
+  rule), the posted lineups and probables, and for a live game the count, runners, fielders,
+  the pitcher's pitch count and the last play. Cached 10 s live, 10 min before the game, 24 h
+  final; the last good copy on an error, else 503. `GET /api/betting/games/{pk}/card-odds` gives
+  the graded book's moneyline, run line and total from the stored rows only (never the mock),
+  and on a final game how each settled. A click opens the card in place; a live card opens by
+  default on a wide screen, every card starts closed on a phone; each open card links to the
+  game page.
+- **D. Ingestion currency** (`9843a33`). `scripts/nightly_finals.sh` loads the last three days'
+  finals (Eastern dates; Postgres only, safe while the app runs). `scripts/with_retry.sh` reruns
+  a command after exit 139 or a "Fatal Python error" (the SIM-445 crash class), up to N attempts.
+  Ofelia runs the finals job nightly at 07:00 UTC and `scripts/weekly_refresh.sh` on Sunday,
+  both wrapped; the DuckDB rebuild (`scripts/nightly_rebuild.sh`) stays disabled until SIM-524.
+  The scheduler loses its profile gate. `make ingest-catch-up DAYS=n`. `/metrics` gains
+  `baseball_sim_finals_age_hours` (read in the background, at most every 10 minutes); Grafana
+  shows it with a 36-hour threshold.
+- **B. A game that has not started can be simulated** (`7dd8b8c`). Alembic **0029** carries every
+  column of the design's §12 (tested up, down to 0028 and up again on a scratch database).
+  `pipeline/live/lineup_writer.py` writes a Preview game's posted lineup (`source = 'published'`)
+  with the loader's builder, each side's probable pitcher as P; a scratch rewrites it in one
+  transaction; an unknown player is added from the league first. The projected lineup is built
+  and OFF (`LIVE_PROJECTED_LINEUPS`, D3). The loader deletes a game's non-box rows before it
+  inserts the final box. The game row takes the official date and the schedule's fields.
+- **C. The live service** (`65201b2`). `python -m pipeline.live.run_live` runs the pipeline in the
+  new compose service `live` (1 GB cap); it waits up to 10 minutes for Postgres and serves
+  `/health` from its heartbeat. Every browser-bound message goes to the Redis channel
+  `live:game:{pk}`; the app's WebSocket endpoint holds one subscription per watched game
+  (`pipeline/live/broadcast.py`). `/ready` reports `live_service`. The poll reads yesterday to
+  tomorrow in Eastern time (it read the container's UTC date); the synchronous odds reads run on
+  one worker thread; the first Live poll records `raw.games.first_pitch_at` once. The game page
+  re-reads `/live` every 15 s while its socket is closed.
+- **E. One simulation run per game** (`7cf0f86`, `5718636`). A run is a `sim.sim_runs` row,
+  queued → running → done / failed / cancelled (`api/sim_jobs.py`). `POST /simulate` queues one
+  or returns the active run with the same key. `BatchRunner.run_job` plays the games in chunks,
+  writes progress and stops on a cancel. A done row holds the summary, every player's prop
+  distributions and the inning grids, and links its representative game in the replay file. A
+  boot marks an unfinished row `failed('restart')`. `/boxscore` and `/props` read a stored run
+  (`run_id` / `latest_run`). The game page opens with a Simulation card (sizes, Run, queue
+  position, progress, Cancel, the lineup the run used); the projections read the run.
+- **F, G, H** (`a6bb142`). The projections fold a side's placeholder relievers into one
+  "Bullpen (generic)" row and link each name to the player's page. The live odds writers
+  re-stamp `last_seen_at` on a price the book still posts; the pre-game read orders by it (A → B →
+  A reads A) and drops a current price not seen within 20 minutes. The Data Lab seasons list
+  newest first.
+- **The game page header** (`3777005`) takes the slate card's team block; `/status` carries the
+  schedule's start time, series, probables and score.
+
+**Where the build differs from the design, and why.**
+- The run row links its representative game in the replay file (`replay_run_id`) instead of
+  copying the play-by-play into Postgres. SIM-561 (2026-10-08, after the design) moved the
+  replay tables into a DuckDB file only the app writes, so the writer-lock reason for D4 is gone
+  for that data. 0029's `play_by_play` column became this link.
+- The betting edge endpoint still runs its own batch; it does not read the run yet.
+- The slate footer ("data through …") is left out: `/api/data-health/freshness` counts every
+  pitch on each call, too heavy for a page that polls. The finals-age gauge carries that signal.
+- The card's sim line uses the newest stored run of any kind; a live card labels it "pre-game".
+
+**Verification.**
+- Unit: the new suites `test_sim519_*` (schedule client 40, slate endpoint 21, game feed 16,
+  card odds 11, lineup writer 14, live bridge 9, sim jobs 12, retry wrapper 5, last-seen 8) and
+  the existing game, betting, live-pipeline and metrics suites pass. Ruff, the formatter and
+  mypy are clean on every touched file. The full unit lane passes. Four older tests pinned what
+  changed by design and were updated: the Ofelia job name, the stored-odds ORDER BY, the pre-0029
+  odds write, and the count of park-resolving call sites (`POST /simulate` adds one). In one
+  earlier full parallel run an auth test (`test_logout_returns_200`) failed and passes alone and
+  in the final run: an order dependence, not this change.
+- Playwright (Chromium; Firefox and WebKit are not installed on this host): 16 of 16, including
+  `e2e/slate.spec.ts` (every card state, the calendar, the banner, the phone layout) and
+  `e2e/simulation.spec.ts` (run, resume and cancel, the 503 countdown).
+- Live, read-only: a second app on :8010 ran this branch's code against the live database. The
+  slate for 2026-09-27 listed all 15 games with real scores and starters; 2026-10-10 showed the
+  division series game the database had never seen; game 746437's feed gave the real linescore
+  (the unplayed bottom 9th as X) and box; the card odds gave DraftKings' closing lines settled on
+  the 2–1 final; 2026-10-08's card showed BetMGM's lines settled (CLE ML, CLE −1.5 covered, over
+  7 on 14 runs). The browser check covered the slate at desktop and phone widths and the game
+  page.
+- **Not run:** the live service against the live database (it writes game rows and lineups and
+  calls the odds vendor on the owner's key), the nightly finals job (it writes Postgres), a
+  live game (none on the calendar today), and a published-lineup write (the lineups post two
+  to four hours before first pitch).
+
+**Run book** (none of it run; the owner's call).
+1. Merge the branch into `master` (it carries the SIM-519 design branch's three commits).
+2. `make migrate` — Alembic 0029 (additive; the app serves throughout).
+3. `docker compose build app`, then `docker compose up -d app live scheduler` (the new scripts and
+   the `live` entry point are in the image; `scripts/` is not mounted).
+4. `make ingest-catch-up DAYS=14`; `docker compose logs scheduler` shows the two jobs.
+5. `/ready` reads `live_service: ok`; `make live-logs` shows the schedule poll.
+6. `docker compose build nginx` and `docker compose up -d nginx` for the new frontend.
+7. On a game day, run the design's §14 live table: a live card's count and last play match
+   Gameday within 30 s; a posted lineup becomes `published` rows and `POST /simulate` runs.
+
 # CLOSED — the twelve segment and team markets on the edge endpoint and the betting card, and a closing row for every live game at first pitch: the inning grid rides in the cached summary, all fifteen markets are priced, the card shows them in four groups, the closing marker is rewritten and the schedule poll calls it, a nightly closing pass backs it up; one review per part; the first live game day not yet run — SIM-546, 2026-10-09
 
 **Why it matters.** The platform stores every sportsbook's prices for fifteen game bets, and the
@@ -446,6 +584,41 @@ top needs a scroll; showing it under the clicked row would read better. The line
 play-by-play panels stay empty: the API's replay store is off on purpose, a separate piece of
 work. A cached set lives 15 minutes, so a bundle rebuilt in that window serves the old set
 until it expires.
+
+# Design PROPOSED — the live, schedule-driven game day view: the slate from the league's schedule, a simulate path for games that have not started, the live service as its own container, the nightly finals job with a crash retry, one simulation run per game with progress, names in the projections — SIM-519, 2026-10-08
+
+**Why it matters.** The day view lists only the games our database holds, so an off day and a
+sixteen-day-stale database look the same, and a card shows no score, start time or doubleheader
+number. Worse for the product: every game that has not started answers 503 to every pricing
+endpoint, because nothing writes a lineup before a game is final. The slate would show upcoming
+games the platform cannot price. The design (`docs/audit/2026-10-08-sim519-live-slate-tech-design.md`)
+covers eight parts, each closable on its own, and asks the owner seven decisions (its §16).
+
+**What it found in the code, beyond the filing.** The Postgres sim-run write sits behind the
+DuckDB replay gate, so no run is ever stored on the default stack and the slate card's
+`sim_summary` is always null. `/boxscore` plays its 100 games serially in one thread outside the
+runner: the "five minutes per rerun" the filing measured. The live pipeline polls the machine's
+UTC date and writes the UTC date into `raw.games`, so a West Coast night game sits on the next
+day's slate until the nightly load corrects it. The nightly scheduler was opt-in and never ran;
+even when run, its second and third steps need the DuckDB write lock the app holds (SIM-524).
+
+**What it proposes, in landing order.** (D) a nightly finals job in a retry wrapper, the
+scheduler on by default, the pool rebuild left disabled until the lock ticket; (A) one schedule
+client, one status mapper, the slate endpoint reads the schedule and merges our data in two
+queries, degrades to the cache and then to the database, and shows postponed games as cards;
+(B) the live service writes the published lineup and the probable pitcher into
+`raw.game_lineups` with a `source` column, so a preview game simulates (the projected-lineup
+option waits on a ruling); (C) the live service as its own container with a Redis message
+channel to the app's WebSocket, a heartbeat, the Eastern-time poll window, the official date,
+vendor reads off the loop, and a Preview-to-Live hook for the closing-price work (SIM-546);
+(E) one run per game: a POST that returns a run id, a queue of one, real progress and cancel
+through chunked execution in the runner, the artifacts on the run row in Postgres, every panel
+reading the latest run; (F) names, grouping and one "Bullpen (generic)" row; (G) the last-seen
+stamp on odds rows (the one-book plan's leftover); (H) the seasons list newest first. One
+additive Alembic migration (0029); DuckDB unchanged. About sixteen to eighteen build days.
+
+**Not changed:** production, `BACKLOG.xlsx` (the row stays as filed; the subtitle stays at
+SIM-560).
 
 # CLOSED — every out goes on a pitcher's line: one writer at the place the out is recorded, the outs played on the game result, each play names its own pitcher for the win module, batters faced on the box line; the smoke reads the credited outs equal to the outs played in all 500 game-sims and no play changed — SIM-557, 2026-10-07
 

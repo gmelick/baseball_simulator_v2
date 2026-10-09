@@ -1,0 +1,2078 @@
+{
+ "gameData": {
+  "probablePitchers": {
+   "away": {
+    "fullName": "Joe Ryan",
+    "id": 657746,
+    "link": "/api/v1/people/657746"
+   },
+   "home": {
+    "fullName": "Kenta Maeda",
+    "id": 628317,
+    "link": "/api/v1/people/628317"
+   }
+  },
+  "status": {
+   "abstractGameCode": "F",
+   "abstractGameState": "Final",
+   "codedGameState": "F",
+   "detailedState": "Final",
+   "startTimeTBD": false,
+   "statusCode": "F"
+  },
+  "teams": {
+   "away": {
+    "abbreviation": "MIN",
+    "id": 142,
+    "teamName": "Twins"
+   },
+   "home": {
+    "abbreviation": "DET",
+    "id": 116,
+    "teamName": "Tigers"
+   }
+  }
+ },
+ "gamePk": 746489,
+ "liveData": {
+  "boxscore": {
+   "teams": {
+    "away": {
+     "batters": [
+      666397,
+      571657,
+      467793,
+      666135,
+      680777,
+      622534,
+      670242,
+      669304,
+      621439,
+      650489,
+      543877,
+      668885,
+      657746,
+      595345,
+      643377,
+      592779,
+      660896,
+      543351
+     ],
+     "battingOrder": [
+      571657,
+      467793,
+      680777,
+      622534,
+      670242,
+      621439,
+      650489,
+      543877,
+      668885
+     ],
+     "pitchers": [
+      657746,
+      595345,
+      643377,
+      592779,
+      660896,
+      543351
+     ],
+     "players": {
+      "ID467793": {
+       "allPositions": [
+        {
+         "abbreviation": "1B",
+         "code": "3",
+         "name": "First Base",
+         "type": "Infielder"
+        }
+       ],
+       "battingOrder": "200",
+       "person": {
+        "fullName": "Carlos Santana",
+        "id": 467793
+       },
+       "position": {
+        "abbreviation": "1B",
+        "code": "3",
+        "name": "First Base",
+        "type": "Infielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".098"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 6,
+         "baseOnBalls": 0,
+         "hits": 0,
+         "homeRuns": 0,
+         "rbi": 1,
+         "runs": 1,
+         "strikeOuts": 1
+        },
+        "pitching": {}
+       }
+      },
+      "ID543351": {
+       "allPositions": [
+        {
+         "abbreviation": "P",
+         "code": "1",
+         "name": "Pitcher",
+         "type": "Pitcher"
+        }
+       ],
+       "battingOrder": null,
+       "person": {
+        "fullName": "Jay Jackson",
+        "id": 543351
+       },
+       "position": {
+        "abbreviation": "P",
+        "code": "1",
+        "name": "Pitcher",
+        "type": "Pitcher"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".000"
+        },
+        "pitching": {
+         "era": "4.05"
+        }
+       },
+       "stats": {
+        "batting": {},
+        "pitching": {
+         "baseOnBalls": 0,
+         "earnedRuns": 0,
+         "hits": 1,
+         "inningsPitched": "1.0",
+         "numberOfPitches": 10,
+         "outs": 3,
+         "runs": 1,
+         "strikeOuts": 0
+        }
+       }
+      },
+      "ID543877": {
+       "allPositions": [
+        {
+         "abbreviation": "C",
+         "code": "2",
+         "name": "Catcher",
+         "type": "Catcher"
+        }
+       ],
+       "battingOrder": "800",
+       "person": {
+        "fullName": "Christian V\u00e1zquez",
+        "id": 543877
+       },
+       "position": {
+        "abbreviation": "C",
+        "code": "2",
+        "name": "Catcher",
+        "type": "Catcher"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".100"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 4,
+         "baseOnBalls": 0,
+         "hits": 0,
+         "homeRuns": 0,
+         "rbi": 0,
+         "runs": 1,
+         "strikeOuts": 2
+        },
+        "pitching": {}
+       }
+      },
+      "ID571657": {
+       "allPositions": [
+        {
+         "abbreviation": "PH",
+         "code": "11",
+         "name": "Pinch Hitter",
+         "type": "Hitter"
+        },
+        {
+         "abbreviation": "2B",
+         "code": "4",
+         "name": "Second Base",
+         "type": "Infielder"
+        },
+        {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        }
+       ],
+       "battingOrder": "101",
+       "person": {
+        "fullName": "Kyle Farmer",
+        "id": 571657
+       },
+       "position": {
+        "abbreviation": "3B",
+        "code": "5",
+        "name": "Third Base",
+        "type": "Infielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".053"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 3,
+         "baseOnBalls": 0,
+         "hits": 0,
+         "homeRuns": 0,
+         "rbi": 0,
+         "runs": 0,
+         "strikeOuts": 1
+        },
+        "pitching": {}
+       }
+      },
+      "ID592779": {
+       "allPositions": [
+        {
+         "abbreviation": "P",
+         "code": "1",
+         "name": "Pitcher",
+         "type": "Pitcher"
+        }
+       ],
+       "battingOrder": null,
+       "person": {
+        "fullName": "Brock Stewart",
+        "id": 592779
+       },
+       "position": {
+        "abbreviation": "P",
+        "code": "1",
+        "name": "Pitcher",
+        "type": "Pitcher"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".000"
+        },
+        "pitching": {
+         "era": "0.00"
+        }
+       },
+       "stats": {
+        "batting": {},
+        "pitching": {
+         "baseOnBalls": 1,
+         "earnedRuns": 0,
+         "hits": 0,
+         "inningsPitched": "1.0",
+         "numberOfPitches": 19,
+         "outs": 3,
+         "runs": 0,
+         "strikeOuts": 1
+        }
+       }
+      },
+      "ID595345": {
+       "allPositions": [
+        {
+         "abbreviation": "P",
+         "code": "1",
+         "name": "Pitcher",
+         "type": "Pitcher"
+        }
+       ],
+       "battingOrder": null,
+       "person": {
+        "fullName": "Steven Okert",
+        "id": 595345
+       },
+       "position": {
+        "abbreviation": "P",
+        "code": "1",
+        "name": "Pitcher",
+        "type": "Pitcher"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".000"
+        },
+        "pitching": {
+         "era": "1.80"
+        }
+       },
+       "stats": {
+        "batting": {},
+        "pitching": {
+         "baseOnBalls": 0,
+         "earnedRuns": 0,
+         "hits": 0,
+         "inningsPitched": "1.0",
+         "numberOfPitches": 13,
+         "outs": 3,
+         "runs": 0,
+         "strikeOuts": 2
+        }
+       }
+      },
+      "ID621439": {
+       "allPositions": [
+        {
+         "abbreviation": "PR",
+         "code": "12",
+         "name": "Pinch Runner",
+         "type": "Runner"
+        },
+        {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        }
+       ],
+       "battingOrder": "601",
+       "person": {
+        "fullName": "Byron Buxton",
+        "id": 621439
+       },
+       "position": {
+        "abbreviation": "CF",
+        "code": "8",
+        "name": "Outfielder",
+        "type": "Outfielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".209"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 2,
+         "baseOnBalls": 0,
+         "hits": 0,
+         "homeRuns": 0,
+         "rbi": 0,
+         "runs": 1,
+         "strikeOuts": 1
+        },
+        "pitching": {}
+       }
+      },
+      "ID622534": {
+       "allPositions": [
+        {
+         "abbreviation": "LF",
+         "code": "7",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        }
+       ],
+       "battingOrder": "400",
+       "person": {
+        "fullName": "Manuel Margot",
+        "id": 622534
+       },
+       "position": {
+        "abbreviation": "LF",
+        "code": "7",
+        "name": "Outfielder",
+        "type": "Outfielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".192"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 5,
+         "baseOnBalls": 1,
+         "hits": 0,
+         "homeRuns": 0,
+         "rbi": 0,
+         "runs": 1,
+         "strikeOuts": 0
+        },
+        "pitching": {}
+       }
+      },
+      "ID643377": {
+       "allPositions": [
+        {
+         "abbreviation": "P",
+         "code": "1",
+         "name": "Pitcher",
+         "type": "Pitcher"
+        }
+       ],
+       "battingOrder": null,
+       "person": {
+        "fullName": "Griffin Jax",
+        "id": 643377
+       },
+       "position": {
+        "abbreviation": "P",
+        "code": "1",
+        "name": "Pitcher",
+        "type": "Pitcher"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".000"
+        },
+        "pitching": {
+         "era": "0.00"
+        }
+       },
+       "stats": {
+        "batting": {},
+        "pitching": {
+         "baseOnBalls": 0,
+         "earnedRuns": 0,
+         "hits": 0,
+         "inningsPitched": "1.0",
+         "numberOfPitches": 11,
+         "outs": 3,
+         "runs": 0,
+         "strikeOuts": 0
+        }
+       }
+      },
+      "ID650489": {
+       "allPositions": [
+        {
+         "abbreviation": "SS",
+         "code": "6",
+         "name": "Shortstop",
+         "type": "Infielder"
+        }
+       ],
+       "battingOrder": "700",
+       "person": {
+        "fullName": "Willi Castro",
+        "id": 650489
+       },
+       "position": {
+        "abbreviation": "SS",
+        "code": "6",
+        "name": "Shortstop",
+        "type": "Infielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".121"
+        },
+        "pitching": {
+         "era": "0.00"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 4,
+         "baseOnBalls": 1,
+         "hits": 1,
+         "homeRuns": 0,
+         "rbi": 0,
+         "runs": 2,
+         "strikeOuts": 1
+        },
+        "pitching": {}
+       }
+      },
+      "ID657746": {
+       "allPositions": [
+        {
+         "abbreviation": "P",
+         "code": "1",
+         "name": "Pitcher",
+         "type": "Pitcher"
+        }
+       ],
+       "battingOrder": null,
+       "person": {
+        "fullName": "Joe Ryan",
+        "id": 657746
+       },
+       "position": {
+        "abbreviation": "P",
+        "code": "1",
+        "name": "Pitcher",
+        "type": "Pitcher"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".000"
+        },
+        "pitching": {
+         "era": "2.60"
+        }
+       },
+       "stats": {
+        "batting": {},
+        "pitching": {
+         "baseOnBalls": 1,
+         "earnedRuns": 1,
+         "hits": 6,
+         "inningsPitched": "6.0",
+         "numberOfPitches": 96,
+         "outs": 18,
+         "runs": 3,
+         "strikeOuts": 12
+        }
+       }
+      },
+      "ID660896": {
+       "allPositions": [
+        {
+         "abbreviation": "P",
+         "code": "1",
+         "name": "Pitcher",
+         "type": "Pitcher"
+        }
+       ],
+       "battingOrder": null,
+       "person": {
+        "fullName": "Jorge Alcala",
+        "id": 660896
+       },
+       "position": {
+        "abbreviation": "P",
+        "code": "1",
+        "name": "Pitcher",
+        "type": "Pitcher"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".000"
+        },
+        "pitching": {
+         "era": "0.00"
+        }
+       },
+       "stats": {
+        "batting": {},
+        "pitching": {
+         "baseOnBalls": 1,
+         "earnedRuns": 0,
+         "hits": 1,
+         "inningsPitched": "2.0",
+         "numberOfPitches": 22,
+         "outs": 6,
+         "runs": 1,
+         "strikeOuts": 2
+        }
+       }
+      },
+      "ID666135": {
+       "allPositions": [
+        {
+         "abbreviation": "DH",
+         "code": "10",
+         "name": "Designated Hitter",
+         "type": "Hitter"
+        }
+       ],
+       "battingOrder": "300",
+       "person": {
+        "fullName": "Alex Kirilloff",
+        "id": 666135
+       },
+       "position": {
+        "abbreviation": "DH",
+        "code": "10",
+        "name": "Designated Hitter",
+        "type": "Hitter"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".324"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 3,
+         "baseOnBalls": 0,
+         "hits": 1,
+         "homeRuns": 0,
+         "rbi": 0,
+         "runs": 0,
+         "strikeOuts": 1
+        },
+        "pitching": {}
+       }
+      },
+      "ID666397": {
+       "allPositions": [
+        {
+         "abbreviation": "2B",
+         "code": "4",
+         "name": "Second Base",
+         "type": "Infielder"
+        }
+       ],
+       "battingOrder": "100",
+       "person": {
+        "fullName": "Edouard Julien",
+        "id": 666397
+       },
+       "position": {
+        "abbreviation": "2B",
+        "code": "4",
+        "name": "Second Base",
+        "type": "Infielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".205"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 3,
+         "baseOnBalls": 0,
+         "hits": 0,
+         "homeRuns": 0,
+         "rbi": 0,
+         "runs": 0,
+         "strikeOuts": 2
+        },
+        "pitching": {}
+       }
+      },
+      "ID668885": {
+       "allPositions": [
+        {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        {
+         "abbreviation": "2B",
+         "code": "4",
+         "name": "Second Base",
+         "type": "Infielder"
+        }
+       ],
+       "battingOrder": "900",
+       "person": {
+        "fullName": "Austin Martin",
+        "id": 668885
+       },
+       "position": {
+        "abbreviation": "2B",
+        "code": "4",
+        "name": "Second Base",
+        "type": "Infielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".235"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 4,
+         "baseOnBalls": 1,
+         "hits": 2,
+         "homeRuns": 0,
+         "rbi": 2,
+         "runs": 2,
+         "strikeOuts": 1
+        },
+        "pitching": {}
+       }
+      },
+      "ID669304": {
+       "allPositions": [
+        {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        }
+       ],
+       "battingOrder": "600",
+       "person": {
+        "fullName": "Jose F Miranda",
+        "id": 669304
+       },
+       "position": {
+        "abbreviation": "3B",
+        "code": "5",
+        "name": "Third Base",
+        "type": "Infielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".167"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 3,
+         "baseOnBalls": 0,
+         "hits": 1,
+         "homeRuns": 0,
+         "rbi": 0,
+         "runs": 0,
+         "strikeOuts": 1
+        },
+        "pitching": {}
+       }
+      },
+      "ID670242": {
+       "allPositions": [
+        {
+         "abbreviation": "RF",
+         "code": "9",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        }
+       ],
+       "battingOrder": "500",
+       "person": {
+        "fullName": "Matt Wallner",
+        "id": 670242
+       },
+       "position": {
+        "abbreviation": "RF",
+        "code": "9",
+        "name": "Outfielder",
+        "type": "Outfielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".095"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 5,
+         "baseOnBalls": 0,
+         "hits": 1,
+         "homeRuns": 1,
+         "rbi": 3,
+         "runs": 1,
+         "strikeOuts": 1
+        },
+        "pitching": {}
+       }
+      },
+      "ID680777": {
+       "allPositions": [
+        {
+         "abbreviation": "PH",
+         "code": "11",
+         "name": "Pinch Hitter",
+         "type": "Hitter"
+        },
+        {
+         "abbreviation": "DH",
+         "code": "10",
+         "name": "Designated Hitter",
+         "type": "Hitter"
+        }
+       ],
+       "battingOrder": "301",
+       "person": {
+        "fullName": "Ryan Jeffers",
+        "id": 680777
+       },
+       "position": {
+        "abbreviation": "DH",
+        "code": "10",
+        "name": "Designated Hitter",
+        "type": "Hitter"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".188"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 3,
+         "baseOnBalls": 0,
+         "hits": 2,
+         "homeRuns": 1,
+         "rbi": 2,
+         "runs": 2,
+         "strikeOuts": 0
+        },
+        "pitching": {}
+       }
+      }
+     },
+     "team": {
+      "id": 142
+     }
+    },
+    "home": {
+     "batters": [
+      682985,
+      592192,
+      679529,
+      681481,
+      690993,
+      663837,
+      656716,
+      608348,
+      678009,
+      570482,
+      595879,
+      628317,
+      663947,
+      571946,
+      671345,
+      656638
+     ],
+     "battingOrder": [
+      682985,
+      592192,
+      679529,
+      681481,
+      690993,
+      663837,
+      656716,
+      608348,
+      595879
+     ],
+     "pitchers": [
+      628317,
+      663947,
+      571946,
+      671345,
+      656638,
+      656716
+     ],
+     "players": {
+      "ID570482": {
+       "allPositions": [
+        {
+         "abbreviation": "PH",
+         "code": "11",
+         "name": "Pinch Hitter",
+         "type": "Hitter"
+        },
+        {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        }
+       ],
+       "battingOrder": "901",
+       "person": {
+        "fullName": "Gio Urshela",
+        "id": 570482
+       },
+       "position": {
+        "abbreviation": "3B",
+        "code": "5",
+        "name": "Third Base",
+        "type": "Infielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".333"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 2,
+         "baseOnBalls": 0,
+         "hits": 0,
+         "homeRuns": 0,
+         "rbi": 0,
+         "runs": 0,
+         "strikeOuts": 0
+        },
+        "pitching": {}
+       }
+      },
+      "ID571946": {
+       "allPositions": [
+        {
+         "abbreviation": "P",
+         "code": "1",
+         "name": "Pitcher",
+         "type": "Pitcher"
+        }
+       ],
+       "battingOrder": null,
+       "person": {
+        "fullName": "Shelby Miller",
+        "id": 571946
+       },
+       "position": {
+        "abbreviation": "P",
+        "code": "1",
+        "name": "Pitcher",
+        "type": "Pitcher"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".000"
+        },
+        "pitching": {
+         "era": "1.08"
+        }
+       },
+       "stats": {
+        "batting": {},
+        "pitching": {
+         "baseOnBalls": 0,
+         "earnedRuns": 1,
+         "hits": 1,
+         "inningsPitched": "1.1",
+         "numberOfPitches": 19,
+         "outs": 4,
+         "runs": 1,
+         "strikeOuts": 2
+        }
+       }
+      },
+      "ID592192": {
+       "allPositions": [
+        {
+         "abbreviation": "LF",
+         "code": "7",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        }
+       ],
+       "battingOrder": "200",
+       "person": {
+        "fullName": "Mark Canha",
+        "id": 592192
+       },
+       "position": {
+        "abbreviation": "LF",
+        "code": "7",
+        "name": "Outfielder",
+        "type": "Outfielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".214"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 5,
+         "baseOnBalls": 1,
+         "hits": 0,
+         "homeRuns": 0,
+         "rbi": 0,
+         "runs": 1,
+         "strikeOuts": 2
+        },
+        "pitching": {}
+       }
+      },
+      "ID595879": {
+       "allPositions": [
+        {
+         "abbreviation": "PR",
+         "code": "12",
+         "name": "Pinch Runner",
+         "type": "Runner"
+        },
+        {
+         "abbreviation": "SS",
+         "code": "6",
+         "name": "Shortstop",
+         "type": "Infielder"
+        }
+       ],
+       "battingOrder": "902",
+       "person": {
+        "fullName": "Javier B\u00e1ez",
+        "id": 595879
+       },
+       "position": {
+        "abbreviation": "SS",
+        "code": "6",
+        "name": "Shortstop",
+        "type": "Infielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".132"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 1,
+         "baseOnBalls": 0,
+         "hits": 0,
+         "homeRuns": 0,
+         "rbi": 0,
+         "runs": 0,
+         "strikeOuts": 0
+        },
+        "pitching": {}
+       }
+      },
+      "ID608348": {
+       "allPositions": [
+        {
+         "abbreviation": "C",
+         "code": "2",
+         "name": "Catcher",
+         "type": "Catcher"
+        }
+       ],
+       "battingOrder": "800",
+       "person": {
+        "fullName": "Carson Kelly",
+        "id": 608348
+       },
+       "position": {
+        "abbreviation": "C",
+        "code": "2",
+        "name": "Catcher",
+        "type": "Catcher"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".214"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 4,
+         "baseOnBalls": 1,
+         "hits": 0,
+         "homeRuns": 0,
+         "rbi": 0,
+         "runs": 1,
+         "strikeOuts": 2
+        },
+        "pitching": {}
+       }
+      },
+      "ID628317": {
+       "allPositions": [
+        {
+         "abbreviation": "P",
+         "code": "1",
+         "name": "Pitcher",
+         "type": "Pitcher"
+        }
+       ],
+       "battingOrder": null,
+       "person": {
+        "fullName": "Kenta Maeda",
+        "id": 628317
+       },
+       "position": {
+        "abbreviation": "P",
+        "code": "1",
+        "name": "Pitcher",
+        "type": "Pitcher"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".000"
+        },
+        "pitching": {
+         "era": "6.00"
+        }
+       },
+       "stats": {
+        "batting": {},
+        "pitching": {
+         "baseOnBalls": 0,
+         "earnedRuns": 1,
+         "hits": 5,
+         "inningsPitched": "6.0",
+         "numberOfPitches": 87,
+         "outs": 18,
+         "runs": 2,
+         "strikeOuts": 5
+        }
+       }
+      },
+      "ID656638": {
+       "allPositions": [
+        {
+         "abbreviation": "P",
+         "code": "1",
+         "name": "Pitcher",
+         "type": "Pitcher"
+        }
+       ],
+       "battingOrder": null,
+       "person": {
+        "fullName": "Alex Lange",
+        "id": 656638
+       },
+       "position": {
+        "abbreviation": "P",
+        "code": "1",
+        "name": "Pitcher",
+        "type": "Pitcher"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".000"
+        },
+        "pitching": {
+         "era": "2.08"
+        }
+       },
+       "stats": {
+        "batting": {},
+        "pitching": {
+         "baseOnBalls": 2,
+         "earnedRuns": 0,
+         "hits": 0,
+         "inningsPitched": "0.2",
+         "numberOfPitches": 36,
+         "outs": 2,
+         "runs": 5,
+         "strikeOuts": 2
+        }
+       }
+      },
+      "ID656716": {
+       "allPositions": [
+        {
+         "abbreviation": "SS",
+         "code": "6",
+         "name": "Shortstop",
+         "type": "Infielder"
+        },
+        {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        },
+        {
+         "abbreviation": "P",
+         "code": "1",
+         "name": "Pitcher",
+         "type": "Pitcher"
+        }
+       ],
+       "battingOrder": "700",
+       "person": {
+        "fullName": "Zach McKinstry",
+        "id": 656716
+       },
+       "position": {
+        "abbreviation": "P",
+        "code": "1",
+        "name": "Pitcher",
+        "type": "Pitcher"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".261"
+        },
+        "pitching": {
+         "era": "54.00"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 5,
+         "baseOnBalls": 0,
+         "hits": 1,
+         "homeRuns": 0,
+         "rbi": 0,
+         "runs": 0,
+         "strikeOuts": 1
+        },
+        "pitching": {
+         "baseOnBalls": 1,
+         "earnedRuns": 2,
+         "hits": 1,
+         "inningsPitched": "0.1",
+         "numberOfPitches": 10,
+         "outs": 1,
+         "runs": 2,
+         "strikeOuts": 0
+        }
+       }
+      },
+      "ID663837": {
+       "allPositions": [
+        {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        },
+        {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        },
+        {
+         "abbreviation": "3B",
+         "code": "5",
+         "name": "Third Base",
+         "type": "Infielder"
+        }
+       ],
+       "battingOrder": "600",
+       "person": {
+        "fullName": "Matt Vierling",
+        "id": 663837
+       },
+       "position": {
+        "abbreviation": "3B",
+        "code": "5",
+        "name": "Third Base",
+        "type": "Infielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".294"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 5,
+         "baseOnBalls": 0,
+         "hits": 1,
+         "homeRuns": 0,
+         "rbi": 0,
+         "runs": 0,
+         "strikeOuts": 3
+        },
+        "pitching": {}
+       }
+      },
+      "ID663947": {
+       "allPositions": [
+        {
+         "abbreviation": "P",
+         "code": "1",
+         "name": "Pitcher",
+         "type": "Pitcher"
+        }
+       ],
+       "battingOrder": null,
+       "person": {
+        "fullName": "Tyler Holton",
+        "id": 663947
+       },
+       "position": {
+        "abbreviation": "P",
+        "code": "1",
+        "name": "Pitcher",
+        "type": "Pitcher"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".000"
+        },
+        "pitching": {
+         "era": "2.25"
+        }
+       },
+       "stats": {
+        "batting": {},
+        "pitching": {
+         "baseOnBalls": 0,
+         "earnedRuns": 0,
+         "hits": 0,
+         "inningsPitched": "1.2",
+         "numberOfPitches": 16,
+         "outs": 5,
+         "runs": 0,
+         "strikeOuts": 1
+        }
+       }
+      },
+      "ID671345": {
+       "allPositions": [
+        {
+         "abbreviation": "P",
+         "code": "1",
+         "name": "Pitcher",
+         "type": "Pitcher"
+        }
+       ],
+       "battingOrder": null,
+       "person": {
+        "fullName": "Jason Foley",
+        "id": 671345
+       },
+       "position": {
+        "abbreviation": "P",
+        "code": "1",
+        "name": "Pitcher",
+        "type": "Pitcher"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".000"
+        },
+        "pitching": {
+         "era": "0.00"
+        }
+       },
+       "stats": {
+        "batting": {},
+        "pitching": {
+         "baseOnBalls": 0,
+         "earnedRuns": 0,
+         "hits": 1,
+         "inningsPitched": "2.0",
+         "numberOfPitches": 21,
+         "outs": 6,
+         "runs": 1,
+         "strikeOuts": 2
+        }
+       }
+      },
+      "ID678009": {
+       "allPositions": [
+        {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        }
+       ],
+       "battingOrder": "900",
+       "person": {
+        "fullName": "Parker Meadows",
+        "id": 678009
+       },
+       "position": {
+        "abbreviation": "CF",
+        "code": "8",
+        "name": "Outfielder",
+        "type": "Outfielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".065"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 2,
+         "baseOnBalls": 0,
+         "hits": 0,
+         "homeRuns": 0,
+         "rbi": 0,
+         "runs": 0,
+         "strikeOuts": 1
+        },
+        "pitching": {}
+       }
+      },
+      "ID679529": {
+       "allPositions": [
+        {
+         "abbreviation": "1B",
+         "code": "3",
+         "name": "First Base",
+         "type": "Infielder"
+        }
+       ],
+       "battingOrder": "300",
+       "person": {
+        "fullName": "Spencer Torkelson",
+        "id": 679529
+       },
+       "position": {
+        "abbreviation": "1B",
+        "code": "3",
+        "name": "First Base",
+        "type": "Infielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".218"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 6,
+         "baseOnBalls": 0,
+         "hits": 1,
+         "homeRuns": 0,
+         "rbi": 0,
+         "runs": 2,
+         "strikeOuts": 3
+        },
+        "pitching": {}
+       }
+      },
+      "ID681481": {
+       "allPositions": [
+        {
+         "abbreviation": "RF",
+         "code": "9",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        }
+       ],
+       "battingOrder": "400",
+       "person": {
+        "fullName": "Kerry Carpenter",
+        "id": 681481
+       },
+       "position": {
+        "abbreviation": "RF",
+        "code": "9",
+        "name": "Outfielder",
+        "type": "Outfielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".281"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 4,
+         "baseOnBalls": 0,
+         "hits": 1,
+         "homeRuns": 1,
+         "rbi": 2,
+         "runs": 1,
+         "strikeOuts": 1
+        },
+        "pitching": {}
+       }
+      },
+      "ID682985": {
+       "allPositions": [
+        {
+         "abbreviation": "DH",
+         "code": "10",
+         "name": "Designated Hitter",
+         "type": "Hitter"
+        },
+        {
+         "abbreviation": "CF",
+         "code": "8",
+         "name": "Outfielder",
+         "type": "Outfielder"
+        }
+       ],
+       "battingOrder": "100",
+       "person": {
+        "fullName": "Riley Greene",
+        "id": 682985
+       },
+       "position": {
+        "abbreviation": "CF",
+        "code": "8",
+        "name": "Outfielder",
+        "type": "Outfielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".234"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 5,
+         "baseOnBalls": 1,
+         "hits": 2,
+         "homeRuns": 0,
+         "rbi": 1,
+         "runs": 0,
+         "strikeOuts": 3
+        },
+        "pitching": {}
+       }
+      },
+      "ID690993": {
+       "allPositions": [
+        {
+         "abbreviation": "2B",
+         "code": "4",
+         "name": "Second Base",
+         "type": "Infielder"
+        }
+       ],
+       "battingOrder": "500",
+       "person": {
+        "fullName": "Colt Keith",
+        "id": 690993
+       },
+       "position": {
+        "abbreviation": "2B",
+        "code": "4",
+        "name": "Second Base",
+        "type": "Infielder"
+       },
+       "seasonStats": {
+        "batting": {
+         "avg": ".239"
+        },
+        "pitching": {
+         "era": "-.--"
+        }
+       },
+       "stats": {
+        "batting": {
+         "atBats": 5,
+         "baseOnBalls": 0,
+         "hits": 2,
+         "homeRuns": 0,
+         "rbi": 2,
+         "runs": 0,
+         "strikeOuts": 1
+        },
+        "pitching": {}
+       }
+      }
+     },
+     "team": {
+      "id": 116
+     }
+    }
+   }
+  },
+  "linescore": {
+   "balls": 0,
+   "currentInning": 12,
+   "currentInningOrdinal": "12th",
+   "defense": {
+    "batter": {
+     "fullName": "Willi Castro",
+     "id": 650489,
+     "link": "/api/v1/people/650489"
+    },
+    "battingOrder": 7,
+    "catcher": {
+     "fullName": "Christian V\u00e1zquez",
+     "id": 543877,
+     "link": "/api/v1/people/543877"
+    },
+    "center": {
+     "fullName": "Byron Buxton",
+     "id": 621439,
+     "link": "/api/v1/people/621439"
+    },
+    "first": {
+     "fullName": "Carlos Santana",
+     "id": 467793,
+     "link": "/api/v1/people/467793"
+    },
+    "inHole": {
+     "fullName": "Austin Martin",
+     "id": 668885,
+     "link": "/api/v1/people/668885"
+    },
+    "left": {
+     "fullName": "Manuel Margot",
+     "id": 622534,
+     "link": "/api/v1/people/622534"
+    },
+    "onDeck": {
+     "fullName": "Christian V\u00e1zquez",
+     "id": 543877,
+     "link": "/api/v1/people/543877"
+    },
+    "pitcher": {
+     "fullName": "Jay Jackson",
+     "id": 543351,
+     "link": "/api/v1/people/543351"
+    },
+    "right": {
+     "fullName": "Matt Wallner",
+     "id": 670242,
+     "link": "/api/v1/people/670242"
+    },
+    "second": {
+     "fullName": "Austin Martin",
+     "id": 668885,
+     "link": "/api/v1/people/668885"
+    },
+    "shortstop": {
+     "fullName": "Willi Castro",
+     "id": 650489,
+     "link": "/api/v1/people/650489"
+    },
+    "team": {
+     "id": 142,
+     "link": "/api/v1/teams/142",
+     "name": "Minnesota Twins"
+    },
+    "third": {
+     "fullName": "Kyle Farmer",
+     "id": 571657,
+     "link": "/api/v1/people/571657"
+    }
+   },
+   "inningHalf": "Bottom",
+   "inningState": "Bottom",
+   "innings": [
+    {
+     "away": {
+      "errors": 1,
+      "hits": 0,
+      "leftOnBase": 0,
+      "runs": 0
+     },
+     "home": {
+      "errors": 0,
+      "hits": 1,
+      "leftOnBase": 0,
+      "runs": 2
+     },
+     "num": 1,
+     "ordinalNum": "1st"
+    },
+    {
+     "away": {
+      "errors": 0,
+      "hits": 0,
+      "leftOnBase": 0,
+      "runs": 0
+     },
+     "home": {
+      "errors": 0,
+      "hits": 0,
+      "leftOnBase": 0,
+      "runs": 0
+     },
+     "num": 2,
+     "ordinalNum": "2nd"
+    },
+    {
+     "away": {
+      "errors": 0,
+      "hits": 2,
+      "leftOnBase": 1,
+      "runs": 1
+     },
+     "home": {
+      "errors": 0,
+      "hits": 0,
+      "leftOnBase": 1,
+      "runs": 0
+     },
+     "num": 3,
+     "ordinalNum": "3rd"
+    },
+    {
+     "away": {
+      "errors": 0,
+      "hits": 2,
+      "leftOnBase": 2,
+      "runs": 0
+     },
+     "home": {
+      "errors": 0,
+      "hits": 1,
+      "leftOnBase": 1,
+      "runs": 0
+     },
+     "num": 4,
+     "ordinalNum": "4th"
+    },
+    {
+     "away": {
+      "errors": 0,
+      "hits": 1,
+      "leftOnBase": 1,
+      "runs": 1
+     },
+     "home": {
+      "errors": 1,
+      "hits": 1,
+      "leftOnBase": 1,
+      "runs": 0
+     },
+     "num": 5,
+     "ordinalNum": "5th"
+    },
+    {
+     "away": {
+      "errors": 0,
+      "hits": 0,
+      "leftOnBase": 0,
+      "runs": 0
+     },
+     "home": {
+      "errors": 0,
+      "hits": 3,
+      "leftOnBase": 2,
+      "runs": 1
+     },
+     "num": 6,
+     "ordinalNum": "6th"
+    },
+    {
+     "away": {
+      "errors": 0,
+      "hits": 0,
+      "leftOnBase": 0,
+      "runs": 0
+     },
+     "home": {
+      "errors": 0,
+      "hits": 0,
+      "leftOnBase": 0,
+      "runs": 0
+     },
+     "num": 7,
+     "ordinalNum": "7th"
+    },
+    {
+     "away": {
+      "errors": 0,
+      "hits": 1,
+      "leftOnBase": 0,
+      "runs": 1
+     },
+     "home": {
+      "errors": 0,
+      "hits": 0,
+      "leftOnBase": 0,
+      "runs": 0
+     },
+     "num": 8,
+     "ordinalNum": "8th"
+    },
+    {
+     "away": {
+      "errors": 0,
+      "hits": 0,
+      "leftOnBase": 1,
+      "runs": 0
+     },
+     "home": {
+      "errors": 0,
+      "hits": 0,
+      "leftOnBase": 1,
+      "runs": 0
+     },
+     "num": 9,
+     "ordinalNum": "9th"
+    },
+    {
+     "away": {
+      "errors": 0,
+      "hits": 0,
+      "leftOnBase": 1,
+      "runs": 0
+     },
+     "home": {
+      "errors": 0,
+      "hits": 0,
+      "leftOnBase": 1,
+      "runs": 0
+     },
+     "num": 10,
+     "ordinalNum": "10th"
+    },
+    {
+     "away": {
+      "errors": 1,
+      "hits": 1,
+      "leftOnBase": 1,
+      "runs": 1
+     },
+     "home": {
+      "errors": 0,
+      "hits": 1,
+      "leftOnBase": 2,
+      "runs": 1
+     },
+     "num": 11,
+     "ordinalNum": "11th"
+    },
+    {
+     "away": {
+      "errors": 0,
+      "hits": 1,
+      "leftOnBase": 0,
+      "runs": 7
+     },
+     "home": {
+      "errors": 1,
+      "hits": 1,
+      "leftOnBase": 1,
+      "runs": 1
+     },
+     "num": 12,
+     "ordinalNum": "12th"
+    }
+   ],
+   "isTopInning": false,
+   "offense": {
+    "batter": {
+     "fullName": "Spencer Torkelson",
+     "id": 679529,
+     "link": "/api/v1/people/679529"
+    },
+    "battingOrder": 3,
+    "inHole": {
+     "fullName": "Colt Keith",
+     "id": 690993,
+     "link": "/api/v1/people/690993"
+    },
+    "onDeck": {
+     "fullName": "Kerry Carpenter",
+     "id": 681481,
+     "link": "/api/v1/people/681481"
+    },
+    "pitcher": {
+     "fullName": "Zach McKinstry",
+     "id": 656716,
+     "link": "/api/v1/people/656716"
+    },
+    "team": {
+     "id": 116,
+     "link": "/api/v1/teams/116",
+     "name": "Detroit Tigers"
+    }
+   },
+   "outs": 3,
+   "scheduledInnings": 9,
+   "strikes": 1,
+   "teams": {
+    "away": {
+     "errors": 2,
+     "hits": 8,
+     "leftOnBase": 7,
+     "runs": 11
+    },
+    "home": {
+     "errors": 2,
+     "hits": 8,
+     "leftOnBase": 10,
+     "runs": 5
+    }
+   }
+  },
+  "plays": {
+   "allPlays": [
+    {
+     "about": {
+      "atBatIndex": 96,
+      "captivatingIndex": 33,
+      "endTime": "2024-04-13T20:21:39.884Z",
+      "halfInning": "bottom",
+      "hasOut": false,
+      "hasReview": false,
+      "inning": 12,
+      "isComplete": true,
+      "isScoringPlay": true,
+      "isTopInning": false,
+      "startTime": "2024-04-13T20:21:12.565Z"
+     },
+     "count": {
+      "balls": 0,
+      "outs": 1,
+      "strikes": 0
+     },
+     "matchup": {
+      "batter": {
+       "fullName": "Riley Greene",
+       "id": 682985,
+       "link": "/api/v1/people/682985"
+      },
+      "pitcher": {
+       "fullName": "Jay Jackson",
+       "id": 543351,
+       "link": "/api/v1/people/543351"
+      }
+     },
+     "result": {
+      "description": "Riley Greene singles on a sharp line drive to center fielder Byron Buxton. Carson Kelly scores."
+     }
+    },
+    {
+     "about": {
+      "atBatIndex": 97,
+      "captivatingIndex": 0,
+      "endTime": "2024-04-13T20:23:46.164Z",
+      "halfInning": "bottom",
+      "hasOut": true,
+      "hasReview": false,
+      "inning": 12,
+      "isComplete": true,
+      "isScoringPlay": false,
+      "isTopInning": false,
+      "startTime": "2024-04-13T20:22:02.541Z"
+     },
+     "count": {
+      "balls": 2,
+      "outs": 2,
+      "strikes": 2
+     },
+     "matchup": {
+      "batter": {
+       "fullName": "Mark Canha",
+       "id": 592192,
+       "link": "/api/v1/people/592192"
+      },
+      "pitcher": {
+       "fullName": "Jay Jackson",
+       "id": 543351,
+       "link": "/api/v1/people/543351"
+      }
+     },
+     "result": {
+      "description": "Mark Canha grounds into a force out, shortstop Willi Castro to second baseman Austin Martin. Riley Greene out at 2nd. Mark Canha to 1st."
+     }
+    },
+    {
+     "about": {
+      "atBatIndex": 98,
+      "captivatingIndex": 0,
+      "endTime": "2024-04-13T20:24:48.108Z",
+      "halfInning": "bottom",
+      "hasOut": true,
+      "hasReview": false,
+      "inning": 12,
+      "isComplete": true,
+      "isScoringPlay": false,
+      "isTopInning": false,
+      "startTime": "2024-04-13T20:24:01.754Z"
+     },
+     "count": {
+      "balls": 0,
+      "outs": 3,
+      "strikes": 1
+     },
+     "matchup": {
+      "batter": {
+       "fullName": "Spencer Torkelson",
+       "id": 679529,
+       "link": "/api/v1/people/679529"
+      },
+      "pitcher": {
+       "fullName": "Jay Jackson",
+       "id": 543351,
+       "link": "/api/v1/people/543351"
+      }
+     },
+     "result": {
+      "description": "Spencer Torkelson flies out to center fielder Byron Buxton."
+     }
+    }
+   ],
+   "currentPlay": {
+    "about": {
+     "atBatIndex": 98,
+     "captivatingIndex": 0,
+     "endTime": "2024-04-13T20:24:48.108Z",
+     "halfInning": "bottom",
+     "hasOut": true,
+     "hasReview": false,
+     "inning": 12,
+     "isComplete": true,
+     "isScoringPlay": false,
+     "isTopInning": false,
+     "startTime": "2024-04-13T20:24:01.754Z"
+    },
+    "count": {
+     "balls": 0,
+     "outs": 3,
+     "strikes": 1
+    },
+    "matchup": {
+     "batter": {
+      "fullName": "Spencer Torkelson",
+      "id": 679529,
+      "link": "/api/v1/people/679529"
+     },
+     "pitcher": {
+      "fullName": "Jay Jackson",
+      "id": 543351,
+      "link": "/api/v1/people/543351"
+     }
+    },
+    "result": {
+     "description": "Spencer Torkelson flies out to center fielder Byron Buxton."
+    }
+   }
+  }
+ }
+}

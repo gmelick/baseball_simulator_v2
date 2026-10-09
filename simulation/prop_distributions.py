@@ -101,8 +101,9 @@ RNG.  The same list of boxscores always yields the same PMFs.  Aggregation is by
 from __future__ import annotations
 
 import statistics
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -399,6 +400,48 @@ class PropDistributionSet:
             return int(player_id) in self.by_player  # type: ignore[call-overload]
         except (TypeError, ValueError):
             return False
+
+    # ------------------------------------------------------------ storage
+    def to_json(self) -> dict[str, Any]:
+        """A JSON-ready dict of the whole set (SIM-519 Part E: a run row's ``prop_set``)."""
+        return {
+            "n_iterations": int(self.n_iterations),
+            "by_player": {
+                str(pid): {
+                    prop: {
+                        "n": int(d.n),
+                        "support": [int(v) for v in d.support],
+                        "probabilities": [float(v) for v in d.probabilities],
+                        "mean": float(d.mean),
+                        "median": float(d.median),
+                        "std": float(d.std),
+                    }
+                    for prop, d in props.items()
+                }
+                for pid, props in self.by_player.items()
+            },
+        }
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> PropDistributionSet:
+        """The inverse of :meth:`to_json`."""
+        by_player: dict[int, dict[str, PropDistribution]] = {}
+        for pid_s, props in (data.get("by_player") or {}).items():
+            pid = int(pid_s)
+            by_player[pid] = {
+                prop: PropDistribution(
+                    player_id=pid,
+                    prop=str(prop),
+                    n=int(d["n"]),
+                    support=np.asarray(d["support"], dtype=np.int64),
+                    probabilities=np.asarray(d["probabilities"], dtype=np.float64),
+                    mean=float(d["mean"]),
+                    median=float(d["median"]),
+                    std=float(d["std"]),
+                )
+                for prop, d in props.items()
+            }
+        return cls(n_iterations=int(data.get("n_iterations", 0)), by_player=by_player)
 
     # ------------------------------------------------------------ builders
     @classmethod

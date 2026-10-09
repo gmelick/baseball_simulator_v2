@@ -23,7 +23,7 @@
 
 - **▶ STATE AS OF 2026-06-06 — SUPERSEDED where §2b (2026-08-16) says otherwise: data foundation rebuilt, the runs band PASSES, CI all-green.**
   - **Phases 1–6 COMPLETE and CI-green** on **Python 3.13 / numpy 2.x** (SIM-431). Frontend shipped as
-    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v32** (2026-10-08, SIM-561; was v31), Alembic head **0028** (2026-09-28; was 0027).
+    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v32** (2026-10-08, SIM-561; was v31), Alembic head **0029** (2026-10-09, SIM-519 — on the branch, not yet applied; was 0028).
   - **Calibration is LIVE, REFIT 2026-08-16 on the rebuilt data** (SIM-432/459): `/data/calibration.json`
     fitted + applied at boot; win-prob map = fitted reliability-curve. 120-game validation: win-prob
     **ECE 0.0377** (was 0.047); batter **H/HR/TB 0.066/0.024/0.060** (bettable); pitcher **BB 0.044 —
@@ -594,6 +594,21 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   loads the sim bundle. The file numbers its own runs; only `/simulate` writes a Postgres
   `sim.sim_runs` row. The page reads `/card` (linescore, run id, seed), then `/plays?run_id=`;
   the file keeps 5 runs per game.
+- **The Daily Diamond slate and the live, schedule-driven game day view (SIM-519, BUILT
+  2026-10-09 on `claude/simulator-frontend-design-fed1a4`; NOT merged, NOT deployed).** The
+  owner's Claude Design ("Daily Diamond MLB tracker") is the frontend's look: the tokens keep
+  their `--sim-*` names with the design's values, the fonts and the 30 team logos are bundled.
+  The slate reads the league schedule (`pipeline/mlb_schedule.py`, `api/league_feed.py`;
+  `source` says schedule / schedule_cached / db); each card opens in place to the real game
+  (`GET /api/games/{pk}/feed`) and the book's lines with their settlement (`GET
+  /api/betting/games/{pk}/card-odds`). A Preview game's posted lineup is written by the live
+  service (`raw.game_lineups.source = 'published'`), so it can be simulated; the projected
+  lineup is built and OFF (`LIVE_PROJECTED_LINEUPS`). The live service runs in its own compose
+  service `live` and publishes on Redis; never set `LIVE_PIPELINE_ENABLED` in the app. A
+  simulation run is a durable `sim.sim_runs` row (`POST /simulate`, `/simulate/runs/*`,
+  `api/sim_jobs.py`). The nightly finals job runs through `scripts/with_retry.sh`; the scheduler
+  starts with the stack. Alembic **0029** carries every new column. The record and the run book:
+  `CHANGES.md` 2026-10-09.
 - **Sample hundreds of games when validating ETL work, never dozens.** Two adversarial review rounds
   found four defects each, all from real payloads at scale, none from reading code. A 70-game sample
   reported "100%" on a metric that 950 games disproved.
@@ -702,7 +717,7 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   → Core sim loop (simulation/sim_loop.py) : 8-step pitch-by-pitch state machine + manager/situational
     decisions → GameSimResult                                     [Phase 4]
   → Runner + API (simulation/batch_runner.py, api/) : 100-iteration ProcessPool runner (forkserver
-    workers — SIM-430), REST + WebSocket, Redis cache, persistence (DuckDB v32 / Alembic 0028),
+    workers — SIM-430), REST + WebSocket, Redis cache, persistence (DuckDB v32 / Alembic 0029),
     betting/CLV surface, auth/rate-limit/CORS, nginx, Prometheus/Grafana   [Phase 5 — COMPLETE]
   → Frontend (frontend/) : React 18 + Vite + TypeScript, Playwright e2e   [Phase 6 — COMPLETE]
 ```
@@ -734,6 +749,12 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
 - `similarity/` — `engines/` (the 11 engines), `similarity_calibration.py`, `backtesting/` (backtester +
   walk-forward), `registry.py`.
 - `betting/` — `clv_engine.py`, `bet_signal.py`, `line_movement.py`.
+- SIM-519 (2026-10-09): `pipeline/mlb_schedule.py` (the one schedule parser and status mapper),
+  `pipeline/mlb_game_feed.py` (the league feed → the slate card's detail), `api/league_feed.py`
+  (the app's league reader), `api/sim_jobs.py` (the run-job registry),
+  `pipeline/live/lineup_writer.py` (the published-lineup writer), `pipeline/live/broadcast.py`
+  (the Redis bridge and the heartbeat), `pipeline/live/run_live.py` (the `live` service),
+  `frontend/src/components/slate/` (the Daily Diamond card), `frontend/src/teams.ts`.
 - `pipeline/` — `etl/` (historical loader + `coercion.py`, the SIM-437 shared type-coercion helpers
   imported by both ETL loaders; `boxscore_ingest.py`, the SIM-545 official box-score parser + upsert into
   `raw.game_player_stats`, which the loader calls per game), `live/live_ingestion_pipeline.py` (MLB WS + REST + odds),
@@ -755,7 +776,7 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   derived-vs-official per-player totals study), `check_file_integrity.py`.
   *(scripts/ is baked into the image; run a not-yet-rebuilt new script via
   `docker compose run --rm -v "$PWD/scripts:/app/scripts" app python scripts/<x>.py`.)*
-- `db/` — `migrations/` (Alembic, head **0028** — 0028 = the SIM-555 odds stamp column `book_line_at` on `raw.game_odds` / `raw.prop_odds`, two per-book read indexes and the two archive tables `raw.game_odds_archive` / `raw.prop_odds_archive` (2026-09-28); 0027 = the two Savant fielding landing tables `raw.savant_outs_above_average` + `raw.savant_outfield_jump` (SIM-532, 2026-09-17); 0026 = the two Savant running-game landing tables `raw.savant_basestealing` + `raw.savant_pitcher_running_game` (SIM-531, 2026-09-16); 0022 = the 15-market `raw.prop_odds` CHECK constraint,
+- `db/` — `migrations/` (Alembic, head **0029** — 0029 = the SIM-519 live slate: the schedule fields on `raw.games`, `raw.game_lineups.source` / `published_at`, the run-job columns on `sim.sim_runs` and `last_seen_at` on both odds tables (2026-10-09); 0028 = the SIM-555 odds stamp column `book_line_at` on `raw.game_odds` / `raw.prop_odds`, two per-book read indexes and the two archive tables `raw.game_odds_archive` / `raw.prop_odds_archive` (2026-09-28); 0027 = the two Savant fielding landing tables `raw.savant_outs_above_average` + `raw.savant_outfield_jump` (SIM-532, 2026-09-17); 0026 = the two Savant running-game landing tables `raw.savant_basestealing` + `raw.savant_pitcher_running_game` (SIM-531, 2026-09-16); 0022 = the 15-market `raw.prop_odds` CHECK constraint,
   0023 = `raw.game_player_stats`, 0024 = the 15-market `raw.game_odds` CHECK + `draw_ml`; all three applied to the live DB on 2026-09-12; 0025 = `raw.game_bullpen`, the MLB box's per-game bullpen listing for the SIM-427 real pen, applied 2026-09-13) + `migrations/duckdb/`
   (numbered SQL, schema **v32**; 0032 = the SIM-561 replay play stream's pitch
   context — inning, half, outs before, batter, pitcher, score after; 0031 = the
@@ -882,6 +903,8 @@ make profile-computor  # nightly: rebuild DuckDB profiles + sim pools
 make engine-artifacts  # nightly (after profile-computor): rebuild the engine-artifact bundle (SIM-486)
 make calibrate         # fit /data/calibration.json (arsenal W2 + per-engine sigmas) — SIM-406/432
 make validate-props    # SIM-407 prop-PMF / win-prob validation (add --write-calibration for the curve)
+make ingest-catch-up DAYS=14  # SIM-519: load the last N days' finals, crash-wrapped (Postgres only)
+make live-logs         # SIM-519: follow the live service's log
 ```
 
 Raw equivalents (if running Python directly, target **Python 3.13**):

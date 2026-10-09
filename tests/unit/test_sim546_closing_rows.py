@@ -946,7 +946,8 @@ def test_the_ofelia_job_runs_the_script_after_the_ingest_chain() -> None:
     .env and so holds the vendor key; a fresh job-run container would not."""
     text = (_ROOT / "deploy" / "ofelia" / "config.ini").read_text(encoding="utf-8")
     assert '[job-run "nightly-closing-lines"]' not in text
-    assert text.index('[job-run "nightly-ingest"]') < text.index(
+    # SIM-519 Part D: the finals load replaced the old ingest chain's job.
+    assert text.index('[job-run "nightly-finals"]') < text.index(
         '[job-exec "nightly-closing-lines"]'
     )
     job = text.split('[job-exec "nightly-closing-lines"]', 1)[1]
