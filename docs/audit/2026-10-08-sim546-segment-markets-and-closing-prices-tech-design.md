@@ -23,7 +23,52 @@ accuracy comparison (`scripts/clv_backtest.py`), the betting card
 
 ## 0. The short version
 
-**What the ticket asks for.** The simulation cache carries each simulated game's runs by
+**The problem.** The platform prices fifteen bets on a game. Three cover the whole game: who
+wins, the margin of victory against a spread, and the total runs. Twelve cover a slice of it:
+the first inning, the first five innings, one team's runs, or which team scores first. We store
+every sportsbook's prices for all fifteen, and our offline accuracy study grades all fifteen.
+But the live product shows three. When a user opens the betting card on a game page, the server
+simulates the game 200 times and prices the bets from those 200 outcomes. It keeps only each
+simulated game's final score. A final score answers "who won" and "how many runs in total"; it
+cannot answer "how many runs in the first five innings". The runs per inning exist while each
+game is simulated and are thrown away. The code that turns per-inning runs into prices for the
+twelve markets exists and is tested; nothing on the live path gives it data.
+
+**The second problem: closing prices.** A closing price is the last price a sportsbook posts
+before first pitch. It is the reference every bet is judged against, and the live pages (the
+edge report, line movement, closing-line value) need it. On a game day we store each book's
+current price every few minutes. At first pitch, the last stored price for each market and each
+book should be marked as that book's closing price. The code for this exists, but nothing calls
+it, and it marks one row per game instead of one per market and book (about 180 rows). So a live
+game has no closing prices. They appear only if someone runs the historical backfill the next
+morning, and that is not scheduled either. One more wrinkle: each stored price carries a
+fingerprint that stops duplicates, and the fingerprint includes whether the row is "current" or
+"closing". Marking a row closing without recomputing its fingerprint would let the morning
+backfill write the same price again as a second closing row.
+
+**The fix for the markets.** Keep the runs per inning. The simulator already knows the score at
+the end of every half-inning, so each simulated game records its runs per inning (about nine
+numbers per team). Those numbers are stored next to the final scores in the 200-game summary the
+server keeps for a minute, so a second request does not re-simulate. Nothing about how a game is
+played changes. The betting endpoint then prices all fifteen markets with the existing pricing
+code: each market's prices come from the stored sportsbook rows, or from the built-in mock
+prices when none exist, as the three markets do today. The two markets that can end in a tie
+(the first-inning and first-five moneylines) get one small new pricing helper, because a tie is
+a third outcome. The betting card shows whatever markets the server returns, in a fixed order
+with plain names, instead of knowing three markets by name.
+
+**The fix for closing prices.** Rewrite the marking step. The moment our schedule check first
+sees a game go live, it looks at each market and each book, finds the last price stored before
+that moment, checks that the book's own timestamp is not after the scheduled start plus 15
+minutes (the rule the backfill already uses), marks that row closing and recomputes its
+fingerprint, so the morning backfill's identical row is recognised as a duplicate. The rule is
+written so that running it a second time (after a restart) changes nothing. The existing
+backfill is scheduled to run each morning over the previous day's games as a safety net; where a
+book's own final snapshot differs from the last price we fetched, the backfill adds it, and
+every reader uses the latest one. And in the last 15 minutes before a game we fetch prices every
+minute instead of every ten, so the marked closing price is fresh.
+
+**The definition of done.** The simulation cache carries each simulated game's runs by
 inning. The edge endpoint returns an edge report for every one of the fifteen game markets.
 The betting card on the game page shows them. The three full-game markets do not change.
 Every live game's last price before first pitch becomes its closing row, for every market and
