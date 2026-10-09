@@ -1,10 +1,19 @@
 # Tech design — the twelve segment and team markets on the API and the game page, and every live game's closing prices (SIM-546)
 
-> **STATUS 2026-10-09 — DESIGN APPROVED; ALL FIVE DECISIONS TAKEN (§10). Nothing is built.**
-> The owner took decisions 1, 3 and 5 as recommended, chose the one extra price parameter for
-> decision 2 (§4, B4) and chose to fire the bet signals on all fifteen markets for decision 4
-> (§4, B6). The build order and the run book are in §8. The ticket is P2 in `BACKLOG.xlsx`;
-> the next free ID is SIM-560. The readable page is https://claude.ai/artifact/3192dt3Z27A8YHAZfp8MRL.
+> **STATUS 2026-10-09 — BUILT. The deploy and the first live game day check (§8) are not yet
+> run.** All five decisions are taken (§10): the owner took decisions 1, 3 and 5 as
+> recommended, chose the one extra price parameter for decision 2 (§4, B4) and chose to fire
+> the bet signals on all fifteen markets for decision 4 (§4, B6). The code of §3 to §6 is
+> built on the branch `claude/sim-546-tech-design-f4ffe8` (not merged). Each part had one
+> independent review, and every confirmed finding is fixed. The commits: Part A `1d653d1`
+> (review fixes `010d5d2`), Part B `825b50e` (`49d98ac`), Part C `ad75416` (`7a5ca8e`), Part D
+> `54c06b8` (`5e86416`); the records are the commit "docs(sim-546): build record". §13 is the
+> build record: what is built, where the build departs from this design and why (§13.2), the
+> reviews, the gates and what is not yet done. The design text from §0 to §12 is the approved
+> design, unchanged; where the build differs, §13.2 says so. The ticket stays open (P2 in
+> `BACKLOG.xlsx`) until the owner closes it after the live check. The readable page,
+> https://claude.ai/artifact/3192dt3Z27A8YHAZfp8MRL, shows the design; it does not carry the
+> build record.
 
 **Date:** 2026-10-08
 **Ticket:** SIM-546 (P2). The row asks for two things: the twelve segment and team markets on
@@ -879,3 +888,261 @@ should be short and explainable (D6).
 | `tests/unit/test_sim546_*.py` (three files) | tests 1–23 |
 | `tests/unit/test_live_pipeline_sim348.py`, `tests/unit/test_data_engineer_sim340.py` | the marker cases move to the new rule |
 | `docs/technical/api.md`, `pipeline-betting-db.md`, `scripts-frontend.md`, `CHANGES.md` | the records |
+
+---
+
+## 13. Build record (2026-10-09)
+
+### 13.1 What is built
+
+On the branch `claude/sim-546-tech-design-f4ffe8`, after the design commits (the code base is
+80e3f46). Four parts, each one commit and one commit of review fixes, in the order of §8.
+
+- **Part A, the inning grid** (`1d653d1`; review fixes `010d5d2`). `simulate_game`
+  (`simulation/sim_loop.py`) keeps two lists and the score at the start of each half. A local
+  `_close_half` appends the batting side's runs when a half rolls, when a walk-off ends the
+  game, and when the inning or pitch ceiling breaks the loop. The lists are padded to one length
+  with `None`. `GameSimResult` gains `home_by_inning` and `away_by_inning`.
+  `GameSimSummary.inning_grids` (`simulation/results.py`) is the last field, filled by
+  `from_results`. `segment_runs_from_summary` (`simulation/game_market_distributions.py`) builds
+  the `SegmentRuns`. `_sim_summary_lite_from_stored` (`api/routes/games.py`) drops
+  `inning_grids`. Tests: `tests/unit/test_sim546_inning_grid.py`, 9.
+- **Part B, the fifteen markets on /edges and /signals** (`825b50e`; review fixes `49d98ac`).
+  `api/routes/betting.py`: one side table by market kind (`_KIND_SIDE_COLUMNS`, expanded to
+  `_STORED_SIDE_COLUMNS`); the edge markets are `GAME_MARKET_TYPES`; the stored read selects
+  `draw_ml`; `_segment_quote`, `_price_segment_market` and the shared `_price_run_line` price
+  the twelve; `_parse_prices` and `_split_prices` read the `prices` document; both responses
+  gain `market_names` and `run_line_pricing_by_label`. `betting/clv_engine.py`:
+  `MarketSide.DRAW`, `samples_over_under_edge_report`, `three_way_edge_report`.
+  `pipeline/odds_provider.py`: `GAME_MARKET_NAMES`. The review fixes also touched the mock in
+  `pipeline/live/live_ingestion_pipeline.py` and one case of
+  `tests/unit/test_api_betting_sim36x.py`. Tests: `tests/unit/test_sim546_segment_edges.py`,
+  36 (tests 7 to 14 and 23 of §7, the two builders, the mock's prices).
+- **Part C, the betting card** (`ad75416`; review fixes `7a5ca8e`).
+  `frontend/src/components/games/BettingCard.tsx` and its CSS module,
+  `frontend/src/api/betting.ts`, and the check in `frontend/e2e/smoke.spec.ts`. The review fixes
+  regenerated `frontend/openapi.json` and `frontend/src/api/schema.d.ts`.
+- **Part D, the closing rows** (`54c06b8`; review fixes `5e86416`).
+  `pipeline/live/live_ingestion_pipeline.py`: `closing_candidates`, `closing_hash`,
+  `promote_closing_game_rows`, `promote_closing_prop_rows`; the two markers as wrappers; the
+  trigger `_mark_closing_rows` in `_sync_live_games`; the near-start cadence
+  (`pregame_odds_cadence_s`, `PREGAME_NEAR_START_WINDOW_S` 900 s,
+  `PREGAME_NEAR_START_CADENCE_S` 60 s). `scripts/load_historical_odds.py`: `--game-dates`.
+  New: `scripts/nightly_closing_lines.sh`. `deploy/ofelia/config.ini`: the
+  `nightly-closing-lines` job. Tests: `tests/unit/test_sim546_closing_rows.py`, 34 (tests 15
+  to 22 of §7, three restart cases, the delayed game, the stamp-bound read); the marker cases of
+  `tests/unit/test_live_pipeline_sim348.py` and `tests/unit/test_data_engineer_sim340.py` moved
+  to the new rule.
+- **The records** (the commit "docs(sim-546): build record"). `docs/technical/api.md`,
+  `pipeline-betting-db.md` (the marker rows; the "no production caller" gotcha is closed),
+  `scripts-frontend.md`, `simulation.md`; `CHANGES.md`; this status block and this section.
+
+### 13.2 Where the build departs from this design, and why
+
+Part A.
+
+1. **Test 4 pins ten (home score, away score, total pitches) triples**, not score pairs. The
+   triples are the stricter check.
+2. **A summary pickled before the grid existed reads `inning_grids` as None.**
+   `GameSimSummary.__getattr__` returns None for that one name; every other missing name still
+   raises. A2 relied on every reader using `getattr(summary, "inning_grids", None)`, but
+   `to_jsonable` reads each field with a plain `getattr`, so a cached old summary would raise in
+   `_persist_replay_artifacts`.
+3. **One missing grid makes the whole summary's grid None.** `from_results` never stores a
+   per-iteration None, because `SegmentRuns.from_inning_grids` cannot read one.
+4. **A game started later than the top of the 1st** (a caller's `initial_state`) gets a `None`
+   cell for each half it did not play, as `linescore_from_plays` gives for the same plays. A1
+   does not cover the case; no production path passes such a state.
+5. **Two tests beyond §7**: the ceiling break keeps the cell of the half in progress, and a real
+   old pickle (written without the slot) reads None.
+6. **The lite projection fills each interval's missing `half_width`** from `(high - low) / 2`
+   (`_with_half_width`). A3 says the projection rebuilds a `GameSimSummaryLite` from the stored
+   summary. It never did: `to_jsonable` writes no `half_width` (a property of the interval
+   dataclass) and the lite model requires it. So the projection returned None for every stored
+   summary, and the game card's `sim_summary` was always None. The defect is older than this
+   ticket; the review found it, and the fix is in `010d5d2`.
+
+Part B.
+
+7. **The stored read asks for fewer than fifteen markets when fewer are requested.**
+   `_stored_read_markets` names the three full-game markets always (a two-bets run line reads
+   the total and the moneyline for its margin), every requested market, and the segment total
+   of a requested segment run line, in vocabulary order. The default request reads all fifteen;
+   a full-game-only request reads the same three as before.
+8. **The `prices` document has more checks than B4's three.** A 422 also answers an unknown
+   field in an entry, a document that does not parse or is not an object, an entry that is not
+   an object, a non-finite number, and an American price of 0. For `first_inning_run` the
+   `line` is optional and ignored; the market is always priced at 0.5. A full-game market in
+   the document fills its named params (`_split_prices`).
+9. **`market_names` and `run_line_pricing_by_label` key on the report label** (`run_line` for
+   the full-game run line), and `market_names` lists only the markets priced. `markets` on the
+   response lists the priced markets in vocabulary order: `markets=total,moneyline` returns
+   `["moneyline", "total"]`.
+10. **The reference margin of a segment run line.** `_stored_reference_margin` gains a
+    `segment` argument (default `"game"`, the old behaviour). The unstored path reads the
+    segment total from the `prices` document, else from the mock.
+11. **The mock's prices for the twelve markets are valid American prices** (`49d98ac`). The
+    segment run line, total, team total and yes / no branches drew raw integers. Across games
+    745001 to 745100, 1,387 of 2,600 such prices sat inside (-100, 100); across games 745001 to
+    746000, 75 were exactly 0. A 0 makes the de-vig refuse both sides, so about 7% of games lost
+    a market on the default request. The branches now draw a probability and convert it, as
+    the three-way branch does.
+12. **Test 14 did not hold "untouched".** `test_edges_returns_numpy_free_reports_incl_run_line`
+    sent no `markets` and expected 6 reports; the default now gives 32. The case now requests
+    `markets=moneyline,total,runline`.
+
+Part C.
+
+13. **`LABEL_OF`.** `markets` holds market types and the edges carry labels; they differ only
+    on the full-game run line (`runline` against `run_line`), so the card keeps a one-entry
+    reverse map beside `SOURCE_KEY`.
+14. **`MARKET_ORDER` is gone; `MARKET_LABELS` stays as `FALLBACK_NAMES`**, the old three names
+    for an older API.
+15. **The Full game group reads Moneyline, Run line, Total, First team to score**, the
+    vocabulary order. The old card read Moneyline, Total, Run line.
+16. **The grouping (`SEGMENT_OF`), which §5 left open.** The first team to score sits under
+    Full game. All four team totals, the first-five ones included, sit under Team totals. A
+    label the table does not know goes in a last group with no sub-heading.
+17. **The heading levels.** Each sub-heading is an `h4`, each market title moved from `h4` to
+    `h5`, and each market section is a named region (its `aria-label`).
+18. **The two-bets note names a segment source** from `market_names` ("the first five total
+    margin") and keeps its old words for the full-game total and moneyline.
+19. **No `vitest`.** The frontend has none set up. The Playwright smoke carries the card checks
+    of §7: the fifteen sections, their grouped order, the four sub-headings, "Tie", "Yes", "No"
+    and the tie note, against a mocked /edges response.
+20. **The generated client types were regenerated inside the app image** (pydantic 2.13.5).
+    The host's pydantic 2.10.3 drops `additionalProperties: true` from free-form dict fields,
+    which would have turned about fifteen existing types into `Record<string, never>`.
+
+Part D.
+
+21. **The read applies the stamp rule; it follows D4, not D1.** Both reads keep a `current`
+    row only when its stamp is no later than the scheduled start plus `CLOSING_STAMP_GRACE`
+    (or it has no stamp), BEFORE they pick each key's row. So in a delayed game, a book that
+    moved its line during the delay keeps its last line inside the grace, as D4 says. D1 and
+    test 17 said only the latest row is a candidate, so a late-stamped latest row promotes
+    nothing; D4 and §9 item 3 said the opposite. The build first followed D1; the review
+    switched it to D4 (`5e86416`), and test 17 now expects the predecessor promoted. D1's
+    sentence and test 17's wording above still describe the old rule. The owner may prefer D1:
+    then remove the stamp filter from both reads and restore test 17's old expectation.
+22. **A closing row sorts first in both reads** (`(line_type = 'closing') DESC` before
+    `fetched_at DESC`). D1's "latest by `fetched_at` among current or closing" is not
+    idempotent after a restart: the restart reads up to a later instant, finds the in-play
+    `current` rows, and promoted one as a second closing row (the review reproduced it). Now a
+    key that holds a closing row is done, whatever was fetched after it.
+23. **The new hash tries four typings of the row's numbers (`closing_hash`).** Postgres stores
+    a price as INTEGER, but the BettingPros provider, which both the live cycle and the loader
+    use, hashes prices as floats (`-110.000000`, not `-110`). A hash of the row as read would
+    never equal the loader's closing hash, and fault (3) of §1.3 would come back. The function
+    keeps the typing whose hash at the row's own line type equals the stored hash, then hashes
+    it as a closing row. A row that matches no typing takes the loader's typing.
+24. **The existence check runs once per source**, keyed on (game, source, hash in a list). For
+    props it also matches the player, because the prop dedup index includes him.
+25. **The markers keep their signature** (`game_pk, first_pitch_at`) and gain an optional
+    keyword `scheduled_start=None`; with None the stamp rule is skipped. `closing_candidates`
+    handles game rows and prop rows alike.
+26. **The near-start cadence also applies past the scheduled start** while the game still waits
+    in `Preview` (a delay). D5 does not cover the case.
+27. **The nightly job is a `job-exec` in the running app container**
+    (`baseball_simulator_v2-app-1`), not D6's `job-run`. A fresh job container reads no `.env`,
+    so it would never see `ODDS_API_KEY`, and the key is a secret that cannot sit in the
+    committed ini. The command sets `ODDS_PROVIDER=bettingpros` for that one process. The script
+    exits 1 with an ERROR line when the provider is `bettingpros` and the key is missing.
+28. **Both reads break a tie on `fetched_at` with `id DESC`**, so the read is deterministic.
+
+### 13.3 The reviews
+
+Each part had one independent review after its build commit. Every confirmed finding was fixed;
+none was skipped.
+
+- **Part A** (three findings, two of them one defect). The old-pickle test deleted the slot
+  before the round trip, so the pickle carried `inning_grids = None` and the test passed without
+  testing an old pickle. It now writes the summary's state without the slot. The lite
+  projection returned None for every stored summary (§13.2 item 6).
+- **Part B** (three findings, two of them one defect). The new default broke the old edge test
+  (item 12). The mock drew invalid prices for the twelve markets (item 11). Two tests now cover
+  the mock over games 745001 to 746000 and the default request over 40 games.
+- **Part C** (two findings). The OpenAPI snapshot and the generated types lacked the two new
+  maps (item 20). The smoke checked neither the order nor "No". It now checks the four
+  sub-headings in order, the fifteen titles in grouped order, and "No".
+- **Part D** (four findings, two of them one defect). A restart mid-game could promote an
+  in-play row as a second closing row (item 22; three restart tests). A delayed game's moved
+  line got no closing row (item 21; two tests). As committed, the nightly job would have exited
+  1 every night for want of the key (item 27).
+
+### 13.4 The gates (at `7a5ca8e`)
+
+| Gate | Result |
+|---|---|
+| Unit lane, host Python 3.13 (`tests/unit`) | 5,584 collected: 5,581 passed, 3 skipped, 0 failed, with the 30-worker stress test deselected; that test alone: 1 passed |
+| Regression lane (`tests/regression`) | 33 passed |
+| `ruff check .` / `ruff format --check .` | clean / 446 files already formatted |
+| `mypy similarity/ pipeline/ api/` | no issues in 62 files |
+| Frontend `npm run build` / `npm run lint` | passed / passed, 0 warnings |
+| Playwright smoke, Chromium (`e2e/smoke.spec.ts`) | 5 passed, the new check included |
+| The three new test files, rerun with the records | 79 passed (9 + 36 + 34) |
+
+The 30-worker stress test (`test_qa_sim347.py::TestConcurrencyStress`) failed once while the
+Docker smoke ran on the same host: its 30 worker processes died with MemoryError on import. It
+passes alone. Firefox and WebKit are not installed on this host, so the Playwright smoke ran in
+Chromium only.
+
+**The ten-game smoke** (§7 says it is not needed; it ran as the cheap gate).
+`scripts/sim_stats.py --iters 50` on the first ten games of the balanced set (776151, 776142,
+776149, 745938, 824590, 746990, 823618, 746178, 824831, 822970), with the worktree's code
+mounted over the image's: 500 game-sims, every production flag on, both defenses 9 of 9 in
+every game; exit 0 in 546 s.
+
+| Channel | Per game (both teams) | Per team | Per team vs MLB 2023 |
+|---|---|---|---|
+| Runs | 9.16 | 4.58 | +3.0% |
+| Hits | 16.78 | 8.39 | +1.6% |
+| Home runs | 2.46 | 1.23 | +5.7% |
+| Doubles | 3.36 | 1.68 | +5.5% |
+| Triples | 0.26 | 0.13 | −0.9% |
+| Walks | 6.81 | 3.41 | +7.6% |
+| Strikeouts | 17.20 | 8.60 | +3.0% |
+| Stolen bases | 1.11 | 0.56 | −11.1% |
+| Caught stealing | 0.37 | 0.18 | −4.8% |
+
+Runs a game: standard deviation 4.483, standard error 0.2005. The home-win share reads 0.593
+(home 4.75 runs a game, away 4.41). The fence stage passed: 9.3% of air balls over the fence,
+0.00% passed through. The pitchers' credited outs equal the outs played, 53.25 a game, with no
+game-sim where they differ. No channel collapsed. Every mean sits within noise of the
+starting-position smoke (SIM-559) on the same ten games (runs 9.03 there, at 40 iterations).
+
+### 13.5 Not yet done
+
+1. **The deploy (§8).** The order matters. Rebuild the app image first (`docker compose build
+   app`, then `docker compose up -d app`). `betting/` and `scripts/` are baked into the image,
+   and the hot-reloaded `api/routes/betting.py` now imports new `betting/` names, so an `api/`
+   reload before the rebuild fails to import (`CLAUDE.md` §2a). Then start the scheduler
+   (`docker compose --profile scheduler up -d scheduler`). Check the vendor key without printing
+   it (`docker compose exec app sh -c 'test -n "$ODDS_API_KEY" && echo set'`). Run the nightly
+   job once by hand (`docker compose exec app env ODDS_PROVIDER=bettingpros sh
+   /app/scripts/nightly_closing_lines.sh`) and confirm it writes rows.
+2. **The first live game day check (§8).** `/edges` on a `Preview` game reads fifteen markets
+   with `stored` sources. The app log at first pitch shows "closing rows promoted: game N, K
+   game rows, M prop rows". `/edges` after first pitch reads closing rows. The next morning's
+   job log shows the loader's refusals by rule and the rows deduplicated. The §8 SQL lists the
+   (market, book) pairs with more than one closing row, and the list should be short.
+3. **A restart can still promote an in-play row for a key with no closing row.** A book that
+   first posts in play, or a key whose first promotion failed, has no closing row to end it, so
+   a restart call can take an in-play row with no stamp or a stamp inside the grace. The fix
+   bounds the read by the real first pitch from the feed (the §11 follow-on for the guard). It
+   needs a feed read in the schedule poll and is not built.
+4. **One read can slip inside the near-start window.** The inner game and prop cycles keep
+   their own 60-second clocks, stamped a few milliseconds after the pre-game gate's clock. A
+   poll that opens the gate at just over 60 s can find the inner clocks still closed, so the
+   spacing is then 90 to 120 s.
+5. **The nightly job names the app container** (`baseball_simulator_v2-app-1`, the
+   docker-compose default). A different project name or service index stops the job.
+6. **The card is not checked in Firefox, WebKit or a running stack.** Those browsers are not
+   installed on this host (`npx playwright install` is a download), and the smoke mocks /edges.
+7. **The stress test fails under host memory pressure** (§13.4). It recurs when the unit lane
+   runs beside a heavy container.
+8. **Known limits, unchanged.** The twelve markets read the raw simulated frequency, and the
+   signals fire on them (§9 item 1, decision 4). A delayed game's closing row can predate the
+   delay (§9 item 3). The follow-ons of §11 are not filed.
+9. **The close.** The branch is not merged. The row stays open in `BACKLOG.xlsx`; the owner
+   closes the ticket after the live check.
