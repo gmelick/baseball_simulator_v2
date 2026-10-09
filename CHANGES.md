@@ -31,6 +31,16 @@ can predate the delay (the guard's standing definition); the vendor's later snap
 second closing row per (market, book), which the readers resolve by the latest fetch. The
 line-movement and CLV pages for the twelve markets are a follow-on. Nothing is built.
 
+**Decisions taken 2026-10-09 (the owner).** 1: the grid from the loop. 2: one JSON query param
+(`prices`, a market-to-prices document checked against the vocabulary) hands in prices for any
+market; the design's B4 is rewritten to it and a test added. 3: the pre-game odds cadence tightens
+to 60 seconds inside 15 minutes of the start. 4: the bet signals fire on all fifteen markets (the
+design's revised recommendation was to gate them to the three full-game markets until the
+calibration layer lands; the uncalibrated-markets caveat stands on the record). 5: the nightly
+closing pass is its own scheduler job at 09:30 UTC; the run book checks the opt-in scheduler
+service is running. The player-prop prices (stored for fifteen markets, read by the accuracy
+comparison only, never by a live page) stay out of this ticket by owner decision. Ready to build.
+
 # CLOSED — every out goes on a pitcher's line: one writer at the place the out is recorded, the outs played on the game result, each play names its own pitcher for the win module, batters faced on the box line; the smoke reads the credited outs equal to the outs played in all 500 game-sims and no play changed — SIM-557, 2026-10-07
 
 **Why it matters.** A pitcher's outs on the simulated box score are his innings pitched and

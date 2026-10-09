@@ -1,7 +1,9 @@
 # Tech design — the twelve segment and team markets on the API and the game page, and every live game's closing prices (SIM-546)
 
-> **STATUS 2026-10-08 — DESIGN, PROPOSED. Nothing is built.** Five decisions wait for the
-> owner (§10). The build order and the run book are in §8. The ticket is P2 in `BACKLOG.xlsx`;
+> **STATUS 2026-10-09 — DESIGN APPROVED; ALL FIVE DECISIONS TAKEN (§10). Nothing is built.**
+> The owner took decisions 1, 3 and 5 as recommended, chose the one extra price parameter for
+> decision 2 (§4, B4) and chose to fire the bet signals on all fifteen markets for decision 4
+> (§4, B6). The build order and the run book are in §8. The ticket is P2 in `BACKLOG.xlsx`;
 > the next free ID is SIM-560. The readable page is https://claude.ai/artifact/3192dt3Z27A8YHAZfp8MRL.
 
 **Date:** 2026-10-08
@@ -51,8 +53,9 @@ the end of every half-inning, so each simulated game records its runs per inning
 numbers per team). Those numbers are stored next to the final scores in the 200-game summary the
 server keeps for a minute, so a second request does not re-simulate. Nothing about how a game is
 played changes. The betting endpoint then prices all fifteen markets with the existing pricing
-code: each market's prices come from the stored sportsbook rows, or from the built-in mock
-prices when none exist, as the three markets do today. The two markets that can end in a tie
+code: each market's prices come from the stored sportsbook rows, or from the built-in mock prices when none exist, as the three markets do today; a caller
+can also hand in its own prices for any market through one request parameter (decision 2). The
+two markets that can end in a tie
 (the first-inning and first-five moneylines) get one small new pricing helper, because a tie is
 a third outcome. The betting card shows whatever markets the server returns, in a fixed order
 with plain names, instead of knowing three markets by name.
@@ -105,8 +108,8 @@ does not re-simulate.
 - **B. The twelve markets on the edge route.** The route builds the segment run totals from the
   cached grids once per request and prices each market through the existing pricing module.
   A two-way market goes through the existing report builder; the two three-way markets get a
-  new builder with the three-way de-vig. Prices come from the stored rows (one book per row),
-  else the mock, as the three full-game markets do today.
+  new builder with the three-way de-vig. Prices come from a caller's own
+  document when one is given, else the stored rows (one book per row), else the mock.
 - **C. The betting card.** The card renders whatever markets the response carries, in the
   vocabulary's order, with display names the API supplies. No per-market branch in the card.
 - **D. The closing rows.** A rewritten marker promotes, per (market, book), the last pre-pitch
@@ -283,7 +286,7 @@ class GameSimResult:
     away_by_inning: list[int | None] | None = None
 ```
 
-Why the loop and not a recorder wrapper. The play recorder (`simulation/play_recorder.py`)
+Why the loop and not a recorder wrapper (decision 1, taken 2026-10-09). The play recorder (`simulation/play_recorder.py`)
 keeps every `PlayResult` with a deep copy of its committed state — a few hundred copies per
 game, built for the replay surface. The accuracy comparison pays that cost because it also
 needs the box score of a recorded game; the request path runs the runner's `_run_one`, which
@@ -434,14 +437,27 @@ the vocabulary, so the loader's log lines and the API say the same words. `marke
 response lists the market types priced, in vocabulary order. The default request prices all
 fifteen; `?markets=` still narrows.
 
-### B4. Prices: stored, else the mock; no new injection
+### B4. Prices: a caller's own document, else stored, else the mock (decision 2, taken 2026-10-09)
 
 The route injects prices for the three full-game markets through named query params
-(`home_ml`, `total_line`, ...). The twelve markets would need about forty more. The design
-prices the twelve from the stored rows, else the mock, with `odds_source` reading `stored` or
-`mock`; it adds no query params. The ticket's "when odds are supplied or found" is met by the
-stored rows (found) and the mock (always); an injection seam for the twelve is decision 2
-(§10). The mock already serves every market deterministically per game
+(`home_ml`, `total_line`, ...). The twelve markets would need about forty more. Instead, one new
+query param, `prices`, carries a JSON document keyed by market type:
+
+```
+?prices={"f5_total":     {"over_ml": -110, "under_ml": -110, "line": 4.5},
+         "f1_moneyline": {"home_ml": 150, "away_ml": 180, "draw_ml": 120},
+         "f5_runline":   {"home_ml": -140, "away_ml": 120, "home_line": -0.5, "away_line": 0.5}}
+```
+
+The fields per kind: a moneyline kind takes `home_ml` and `away_ml`; a three-way market those two
+and `draw_ml`; a total kind `over_ml`, `under_ml` and `line` (`first_inning_run` ignores the line,
+which is 0.5); a run line `home_ml`, `away_ml`, `home_line` and `away_line`. The document may name
+any of the fifteen markets. Three rules keep it strict, and each failure is a 422 that names the
+market and the fault: an unknown market; a missing or non-numeric field; a market named both here
+and in the named params. A market in the document is priced from it alone (`odds_source` reads
+`injected`; no stored row is read for it). A market not in it prices from the stored rows, else
+the mock, as today. The named params of the three full-game markets keep working unchanged.
+`/signals` takes the same param. The mock already serves every market deterministically per game
 (`MockOddsAPI.get_odds`: a tie price on a three-way market, an over / under pair at 0.5 on the
 yes / no market, team-sized lines on the team totals).
 
@@ -456,8 +472,9 @@ No 500 and no partial report.
 
 `/signals` changes only through the shared build: every report, including a draw side, goes to
 `bet_signals_from_edges`. The Kelly fraction reads one side's probability and price, so it is
-the same arithmetic on a three-way side. The ranked list can now name a first-five total or
-a tie; the response's `market_names` lets the card label it.
+the same arithmetic on a three-way side. The ranked list can now name a first-five total or a tie; the response's `market_names`
+lets the card label it. Decision 4, taken 2026-10-09: the signals fire on all fifteen markets;
+the §9 caveat (the twelve are uncalibrated) stands on the record.
 
 ---
 
@@ -603,7 +620,7 @@ the pre-game cadence to 60 seconds (`PROP_FETCH_CADENCE_S`, the live cadence) on
 scheduled start is within 15 minutes: `_persist_pregame_odds` reads the entry's `gameDate` and
 picks the cadence by the time to start. The extra vendor cost is bounded: 15 minutes × 15
 market calls per minute per game, under the provider's offers cache — the same rate the live
-cycle already runs for three hours per game. This is decision 3 (§10).
+cycle already runs for three hours per game. This is decision 3, taken 2026-10-09.
 
 ### D6. The nightly fallback
 
@@ -624,9 +641,11 @@ command = sh /app/scripts/nightly_closing_lines.sh
 when `ODDS_PROVIDER` is `bettingpros`, and exits 0 with one log line otherwise (the mock
 provider must never write mock closing rows into a real store). The loader gains
 `--game-dates` (one or more `YYYY-MM-DD`; `_fetch_final_games` adds `AND game_date = ANY(...)`).
-Two dates cover a late West-coast game that turns Final after midnight UTC. A separate job
-rather than a step in `nightly_ingest.sh`: a vendor outage must not stop the profile and
-artifact rebuild, and the chain's `set -e` would.
+Two dates cover a late West-coast game that turns Final after midnight UTC. A separate job rather than a step in the ingest chain (decision 5, taken 2026-10-09): a
+vendor outage must not stop the profile and artifact rebuild, and the chain's `set -e` would.
+The scheduler service is opt-in on the host (`docker compose --profile scheduler up -d
+scheduler`); the run book checks it is running, because without it neither the ingest chain nor
+this job runs.
 
 What the pass does to a game the live marker already handled: the loader's row for a book
 whose last pre-pitch price matches the promoted row deduplicates (the hash rewrite, D1). A
@@ -709,6 +728,11 @@ row and the CLV page prices it; the accuracy comparison's graded-row read is unc
     loader's `_fetch_final_games` SQL carries the date filter; the shell script exits 0 and
     writes nothing when `ODDS_PROVIDER` is unset.
 
+23. `test_prices_param` (decision 2): a document naming a first-five total and a three-way
+    market prices both as `injected` with the given prices; an unknown market, a missing field
+    and a market given both ways each return a 422 naming the fault; `/signals` accepts the same
+    document.
+
 **The lanes.** The unit and regression lanes. No acceptance lane: no channel of the simulator
 moves (test 4 is the proof). The ten-game smoke (`scripts/sim_stats.py`) is not needed for the
 same reason; it runs anyway in the run book as the cheap gate the owner's rule names.
@@ -728,11 +752,12 @@ Build in the order the dependencies run; each step leaves the suite green.
    games (the credited-outs gate it carries).
 2. **Part B** — `clv_engine.py` (`MarketSide.DRAW`, the samples builder, the three-way
    builder), `odds_provider.py` (`GAME_MARKET_NAMES`), `api/routes/betting.py` (the one market
-   table, the SQL, the builder dispatch, the response fields), tests 7–14.
+   table, the SQL, the builder dispatch, the `prices` param, the response fields), tests 7–14 and 23.
 3. **Part C** — the card, the client types, the vitest cases, the smoke check. `npm run
    build`, `npm test`, the e2e smoke.
 4. **Part D** — the two functions and helpers, the wrappers, the trigger, the cadence
-   (decision 3), the loader's `--game-dates`, the shell script, the Ofelia job, tests 15–22.
+   (decision 3), the loader's `--game-dates`, the shell script, the Ofelia job, tests 15–22; verify the
+   scheduler service runs (`docker compose ps scheduler`).
 5. **Docs** — `docs/technical/api.md` (the betting route rows), `docs/technical/pipeline-betting-db.md`
    (the marker row and its gotcha note, now closed), `docs/technical/scripts-frontend.md`
    (the loader's option and the nightly script), `CHANGES.md`, this document's build record.
@@ -794,25 +819,28 @@ should be short and explainable (D6).
 
 ---
 
-## 10. Decisions for the owner
+## 10. Decisions for the owner — ALL TAKEN 2026-10-09
 
 1. **The grid comes from the loop, not a recorder** (A1). Recommended: the loop. The
    alternative keeps `sim_loop.py` untouched and wraps each worker's machine in a lighter
    recorder; it adds an attribute-forwarding layer on every pitch for no gain.
-2. **No injected prices for the twelve markets** (B4). Recommended: stored, else the mock.
-   The alternative is one JSON query param (`segment_prices`) carrying a market → prices map,
-   validated against the vocabulary. It is cheap to add later; nothing on the game page sends
-   injected prices today.
+   **Taken: the loop.**
+2. **How a caller hands in prices for the twelve markets** (B4). Recommended: no injection
+   (stored, else the mock). The alternatives: one JSON query param carrying a market-to-prices
+   document, validated against the vocabulary; or about forty named params.
+   **Taken: the one JSON param.** B4 is written to it; test 23 pins it.
 3. **The pre-game cadence tightens to 60 seconds inside 15 minutes of the start** (D5).
    Recommended: yes. Without it the promoted closing row is up to ten minutes stale, and the
-   nightly pass then writes a second closing row on most books (§9, item 2).
-4. **The bet-signal gate fires on the twelve markets** (B6). Recommended: yes, as the ticket's
-   definition of done implies ("an edge report for every one of the fifteen"), with the §9
-   item 1 caveat shown to the owner here, not on the page. The alternative restricts
-   `/signals` to the three full-game markets until the calibration layer lands.
+   nightly pass then writes a second closing row on most books (§9, item 2). **Taken: yes.**
+4. **The bet-signal gate fires on the twelve markets** (B6). The document recommended yes. On
+   2026-10-09 the recommendation was revised to gate the signals to the three full-game markets
+   until the calibration layer lands (the project's rule that uncalibrated numbers do not reach
+   users as recommendations; the accuracy study read the simulator behind the line on every
+   segment market). **Taken: fire on all fifteen**, with the §9 item 1 caveat known.
 5. **The nightly closing pass is its own scheduler job, not a step of the ingest chain** (D6).
    Recommended: its own job at 09:30 UTC. A vendor outage then costs one morning's closing
-   rows, not the profile and artifact rebuild.
+   rows, not the profile and artifact rebuild. **Taken: its own job.** The scheduler service's
+   opt-in status joins the run book.
 
 ---
 
@@ -839,7 +867,7 @@ should be short and explainable (D6).
 | `simulation/game_market_distributions.py` | `segment_runs_from_summary` |
 | `betting/clv_engine.py` | `MarketSide.DRAW`; `samples_over_under_edge_report`; `three_way_edge_report` |
 | `pipeline/odds_provider.py` | `GAME_MARKET_NAMES` |
-| `api/routes/betting.py` | one vocabulary-driven market table; the SQL with `draw_ml` and all fifteen types; the builder dispatch; `market_names`; `run_line_pricing_by_label` |
+| `api/routes/betting.py` | one vocabulary-driven market table; the SQL with `draw_ml` and all fifteen types; the builder dispatch; the `prices` param; `market_names`; `run_line_pricing_by_label` |
 | `api/routes/games.py` | the lite projection drops `inning_grids` |
 | `api/schemas.py` | no change (the side is a string; the grids stay off the wire) |
 | `pipeline/live/live_ingestion_pipeline.py` | `closing_candidates`, `promote_closing_game_rows`, `promote_closing_prop_rows`; the two markers as wrappers; the trigger in `_sync_live_games`; the near-start cadence |
@@ -848,6 +876,6 @@ should be short and explainable (D6).
 | `deploy/ofelia/config.ini` | the second job |
 | `frontend/src/components/games/BettingCard.tsx`, `BettingCard.module.css`, `frontend/src/api/betting.ts` | the data-driven card and its types |
 | `frontend/e2e/smoke.spec.ts` | the fifteen-section check |
-| `tests/unit/test_sim546_*.py` (three files) | tests 1–22 |
+| `tests/unit/test_sim546_*.py` (three files) | tests 1–23 |
 | `tests/unit/test_live_pipeline_sim348.py`, `tests/unit/test_data_engineer_sim340.py` | the marker cases move to the new rule |
 | `docs/technical/api.md`, `pipeline-betting-db.md`, `scripts-frontend.md`, `CHANGES.md` | the records |
