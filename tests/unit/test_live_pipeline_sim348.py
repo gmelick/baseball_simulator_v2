@@ -632,6 +632,8 @@ class TestClosingLines:
         read_sql = db.fetch.await_args_list[0].args[0]
         assert "DISTINCT ON (market_type, book)" in read_sql
         assert "LIMIT 1" not in read_sql
+        # A key that holds a closing row returns it first (a restart is a no-op).
+        assert "(line_type = 'closing') DESC" in read_sql
         sql, ids, hashes = db.execute.await_args.args
         assert "raw.game_odds" in sql
         assert "closing" in sql

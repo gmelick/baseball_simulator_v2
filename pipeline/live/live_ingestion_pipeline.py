@@ -96,7 +96,7 @@ from pipeline.odds_provider import (
 
 # SIM-555: the load guard. Every writer shows it each non-empty row before the
 # row is persisted; a refused row is logged, counted and never written.
-from pipeline.odds_row_guard import RefusalTally, check_row
+from pipeline.odds_row_guard import CLOSING_STAMP_GRACE, RefusalTally, check_row
 
 # SIM-106: Type alias for the simulation callback. It MUST be an async
 # function — passing a sync function would either raise TypeError when the
@@ -447,18 +447,25 @@ async def insert_prop_odds_rows(conn: Any, rows: Sequence[Mapping[str, Any]]) ->
 # (player, prop stat, book) for props, the latest pre-pitch row from 'current'
 # to 'closing'. The rule (the design's D1):
 #
-#   * Read the latest row per key among the rows with line_type 'current' OR
-#     'closing' fetched at or before the first-pitch instant. A key whose latest
-#     row is already 'closing' is done, so a second call promotes nothing.
-#   * Promote a 'current' latest row only when the load guard keeps it as a
-#     closing row: its stamp is no later than the scheduled start plus 15
-#     minutes (a row with no stamp passes).
+#   * Read one row per key among the rows with line_type 'current' OR
+#     'closing' fetched at or before the first-pitch instant. A 'closing' row
+#     sorts first: a key that holds one is done, whatever was fetched after
+#     it. So a second call promotes nothing, even after a restart mid-game
+#     reads up to a later instant and finds in-play 'current' rows.
+#   * A key with no closing row reads its latest 'current' row whose stamp
+#     the load guard keeps as a closing row: the stamp is no later than the
+#     scheduled start plus 15 minutes (CLOSING_STAMP_GRACE; a row with no stamp
+#     passes). The read applies the rule, so in a delayed game a book that
+#     moved its line during the delay keeps its last line inside the grace
+#     (the design's D4). Promote that row when the full guard keeps it.
 #   * Rewrite the row's odds_hash to the hash of the same row with line_type
 #     'closing'. The nightly loader's identical closing row then deduplicates
 #     against it. When a row with that hash already exists under the key of the
 #     dedup index, the loader got there first, and the row stays 'current'.
 
-#: SIM-546: the latest pre-pitch game row per (market, book), current or closing.
+#: SIM-546: one pre-pitch game row per (market, book): its closing row when it
+#: has one, else its latest current row stamped no later than ``$3`` (the
+#: scheduled start plus the grace; NULL = no stamp check).
 _CLOSING_GAME_READ_SQL = """
             SELECT DISTINCT ON (market_type, book)
                    id, source, line_type, book, market_type, is_sharp_book,
@@ -469,10 +476,14 @@ _CLOSING_GAME_READ_SQL = """
             WHERE game_pk = $1
               AND line_type IN ('current', 'closing')
               AND fetched_at <= $2
-            ORDER BY market_type, book, fetched_at DESC, id DESC
+              AND (line_type = 'closing' OR $3::timestamptz IS NULL
+                   OR book_line_at IS NULL OR book_line_at <= $3::timestamptz)
+            ORDER BY market_type, book, (line_type = 'closing') DESC,
+                     fetched_at DESC, id DESC
             """
 
-#: SIM-546: the latest pre-pitch prop row per (player, prop stat, book).
+#: SIM-546: the prop analogue: one pre-pitch row per (player, prop stat, book),
+#: by the same order and the same stamp bound ``$3``.
 _CLOSING_PROP_READ_SQL = """
             SELECT DISTINCT ON (player_id, prop_stat, book)
                    id, source, line_type, player_id, prop_stat, book,
@@ -482,7 +493,10 @@ _CLOSING_PROP_READ_SQL = """
             WHERE game_pk = $1
               AND line_type IN ('current', 'closing')
               AND fetched_at <= $2
-            ORDER BY player_id, prop_stat, book, fetched_at DESC, id DESC
+              AND (line_type = 'closing' OR $3::timestamptz IS NULL
+                   OR book_line_at IS NULL OR book_line_at <= $3::timestamptz)
+            ORDER BY player_id, prop_stat, book, (line_type = 'closing') DESC,
+                     fetched_at DESC, id DESC
             """
 
 #: SIM-546: the new hashes already stored for one (game, source). The dedup
@@ -598,11 +612,13 @@ def closing_candidates(
 ) -> list[tuple[int, str]]:
     """PURE (SIM-546): the (row id, new odds_hash) of every row to promote.
 
-    ``rows`` are the latest pre-pitch row per key, 'current' or 'closing': per
-    (market_type, book) for game odds, per (player_id, prop_stat, book) for
-    props. The function picks a row when it is 'current' and the load guard
-    keeps it as a closing row with ``scheduled_start`` attached (``check_row``:
-    the stamp is no later than the start plus 15 minutes). A 'closing' row is
+    ``rows`` are the promotion's read: one pre-pitch row per key, 'current' or
+    'closing' (per (market_type, book) for game odds, per (player_id,
+    prop_stat, book) for props). The read returns a key's closing row when it
+    has one, else its latest current row stamped inside the grace. The
+    function picks a row when it is 'current' and the load guard keeps it as a
+    closing row with ``scheduled_start`` attached (``check_row``: the prices,
+    and the stamp no later than the start plus 15 minutes). A 'closing' row is
     already promoted, so its key is done. The new hash is :func:`closing_hash`.
     """
     picks: list[tuple[int, str]] = []
@@ -634,7 +650,8 @@ async def _promote_closing_rows(
 ) -> int:
     """SIM-546: one read, one existence check per source, then one update."""
     read_sql = _CLOSING_PROP_READ_SQL if is_prop else _CLOSING_GAME_READ_SQL
-    rows = [dict(r) for r in await conn.fetch(read_sql, game_pk, first_pitch_at)]
+    stamp_bound = None if scheduled_start is None else scheduled_start + CLOSING_STAMP_GRACE
+    rows = [dict(r) for r in await conn.fetch(read_sql, game_pk, first_pitch_at, stamp_bound)]
     picks = closing_candidates(rows, scheduled_start=scheduled_start)
     if not picks:
         return 0
@@ -676,7 +693,9 @@ async def promote_closing_game_rows(
     ``conn`` is an asyncpg pool or connection. ``first_pitch_at`` bounds the rows
     read (``fetched_at`` at or before it). ``scheduled_start`` feeds the load
     guard's closing-stamp rule (``None`` = no stamp check). Returns the rows
-    promoted. A second call promotes nothing (the rule above).
+    promoted. A second call promotes nothing, even one with a later
+    ``first_pitch_at`` (a restart mid-game): a key that holds a closing row is
+    done (the rule above).
     """
     return await _promote_closing_rows(
         conn, game_pk, first_pitch_at, scheduled_start=scheduled_start, is_prop=False
@@ -1981,7 +2000,11 @@ class LiveIngestionPipeline:
         The method calls :meth:`mark_closing_lines` and
         :meth:`mark_closing_prop_lines`, logs the two counts and never raises:
         a failed promotion is logged, and the nightly closing pass repairs it.
-        A restart mid-game calls it again, and the rule makes that a no-op.
+        A restart mid-game calls it again, with a later instant. A key that
+        already holds a closing row is done, so the call leaves it alone. One
+        limit: a key with no closing row yet (a book first posted in play, or a
+        failed first promotion) can then take an in-play row with no stamp or
+        a stamp inside the grace.
         Returns (game rows promoted, prop rows promoted).
         """
         first_pitch_at = datetime.now(UTC)

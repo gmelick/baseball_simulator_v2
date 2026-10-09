@@ -20,11 +20,12 @@
 # never write mock closing rows into a real store. With the real provider and
 # no ODDS_API_KEY, the job exits 1, because every vendor read would fail.
 #
-# Invoked by the Ofelia scheduler (docker-compose `scheduler` profile) as a
-# fresh container off the app image at 09:30 UTC; see deploy/ofelia/config.ini.
-# It is a separate job from nightly_ingest.sh on purpose: a vendor outage must
-# not stop the profile and artifact rebuild. Safe to run by hand:
-#   docker compose run --rm -e ODDS_PROVIDER=bettingpros app \
+# Invoked by the Ofelia scheduler (docker-compose `scheduler` profile) at 09:30
+# UTC, inside the running app container (job-exec): that container reads the
+# host's .env, where ODDS_API_KEY lives; see deploy/ofelia/config.ini. It is a
+# separate job from nightly_ingest.sh on purpose: a vendor outage must not stop
+# the profile and artifact rebuild. Safe to run by hand:
+#   docker compose exec app env ODDS_PROVIDER=bettingpros \
 #       sh /app/scripts/nightly_closing_lines.sh
 # =============================================================================
 set -eu

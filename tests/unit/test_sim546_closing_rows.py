@@ -177,15 +177,38 @@ def _slate_rows() -> list[dict[str, Any]]:
     return rows
 
 
-def _latest_per_key(rows: list[dict[str, Any]], key: tuple[str, ...]) -> list[dict[str, Any]]:
-    """The promotion's read: the latest pre-pitch current-or-closing row per key."""
+def _latest_per_key(
+    rows: list[dict[str, Any]],
+    key: tuple[str, ...],
+    *,
+    first_pitch: datetime = FIRST_PITCH,
+    stamp_bound: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """The promotion's read: one pre-pitch current-or-closing row per key.
+
+    It runs the SQL's rule: rows fetched at or before ``first_pitch``; a
+    current row stamped after ``stamp_bound`` left out (``None`` = no bound);
+    then per key a closing row first, else the latest fetch, else the highest id.
+    """
     latest: dict[tuple[Any, ...], dict[str, Any]] = {}
+
+    def _rank(row: dict[str, Any]) -> tuple[Any, ...]:
+        return (row["line_type"] == "closing", row["fetched_at"], row["id"])
+
     for row in rows:
-        if row["line_type"] not in ("current", "closing") or row["fetched_at"] > FIRST_PITCH:
+        if row["line_type"] not in ("current", "closing") or row["fetched_at"] > first_pitch:
+            continue
+        stamp = row.get("book_line_at")
+        if (
+            row["line_type"] == "current"
+            and stamp_bound is not None
+            and stamp is not None
+            and stamp > stamp_bound
+        ):
             continue
         k = tuple(row[c] for c in key)
         best = latest.get(k)
-        if best is None or (row["fetched_at"], row["id"]) > (best["fetched_at"], best["id"]):
+        if best is None or _rank(row) > _rank(best):
             latest[k] = row
     return list(latest.values())
 
@@ -208,14 +231,17 @@ class _FakeOddsDb:
 
     async def fetch(self, sql: str, *args: Any) -> list[dict[str, Any]]:
         if "DISTINCT ON" in sql:
-            game_pk, first_pitch = args
-            assert first_pitch == FIRST_PITCH
+            game_pk, first_pitch, stamp_bound = args
+            assert "(line_type = 'closing') DESC" in sql
             key = (
                 ("player_id", "prop_stat", "book")
                 if self._is_prop(sql)
                 else ("market_type", "book")
             )
-            return [dict(r) for r in _latest_per_key(self.rows, key) if r["game_pk"] == game_pk]
+            latest = _latest_per_key(
+                self.rows, key, first_pitch=first_pitch, stamp_bound=stamp_bound
+            )
+            return [dict(r) for r in latest if r["game_pk"] == game_pk]
         assert "odds_hash = ANY" in sql
         game_pk, source, hashes = args
         return [
@@ -315,27 +341,138 @@ class TestSecondCallPromotesNothing:
         assert db.updates == 1  # the second call sent no update
 
 
+class TestRestartMidGame:
+    """A restart mid-game calls the promotion again with a later instant. The
+    live cycle has written in-play 'current' rows by then; none may become a
+    second closing row."""
+
+    @pytest.mark.asyncio
+    async def test_a_restart_promotes_no_in_play_row(self) -> None:
+        closing = _game_row(
+            1,
+            "total",
+            "bp:12",
+            FIRST_PITCH - timedelta(minutes=1),
+            book_line_at=SCHEDULED_START - timedelta(minutes=2),
+        )
+        db = _FakeOddsDb([closing])
+        assert (
+            await promote_closing_game_rows(
+                db, GAME_PK, FIRST_PITCH, scheduled_start=SCHEDULED_START
+            )
+            == 1
+        )
+        in_play_stamped = _game_row(
+            2,
+            "total",
+            "bp:12",
+            FIRST_PITCH + timedelta(minutes=8),
+            step=3,
+            book_line_at=SCHEDULED_START + timedelta(minutes=12),
+        )
+        in_play_unstamped = _game_row(
+            3, "total", "bp:12", FIRST_PITCH + timedelta(minutes=9), step=4
+        )
+        db.rows.extend([in_play_stamped, in_play_unstamped])
+        n = await promote_closing_game_rows(
+            db, GAME_PK, FIRST_PITCH + timedelta(hours=2), scheduled_start=SCHEDULED_START
+        )
+        assert n == 0
+        assert [r["id"] for r in db.rows if r["line_type"] == "closing"] == [1]
+        assert db.updates == 1
+
+    @pytest.mark.asyncio
+    async def test_a_restart_minutes_later_promotes_no_moved_price(self) -> None:
+        db = _FakeOddsDb([_game_row(1, "moneyline", "bp:12", FETCHES[-1])])
+        assert await promote_closing_game_rows(db, GAME_PK, FIRST_PITCH, scheduled_start=None) == 1
+        db.rows.append(
+            _game_row(2, "moneyline", "bp:12", FIRST_PITCH + timedelta(minutes=2), step=5)
+        )
+        n = await promote_closing_game_rows(
+            db, GAME_PK, FIRST_PITCH + timedelta(minutes=7), scheduled_start=None
+        )
+        assert n == 0
+        assert [(r["id"], r["line_type"]) for r in db.rows] == [(1, "closing"), (2, "current")]
+
+    @pytest.mark.asyncio
+    async def test_a_restart_promotes_no_in_play_prop_row(self) -> None:
+        db = _FakeOddsDb([_prop_row(1, 100, "hits", "bp:12", FETCHES[-1])])
+        assert await promote_closing_prop_rows(db, GAME_PK, FIRST_PITCH, scheduled_start=None) == 1
+        db.rows.append(
+            _prop_row(2, 100, "hits", "bp:12", FIRST_PITCH + timedelta(minutes=8), step=2)
+        )
+        n = await promote_closing_prop_rows(
+            db, GAME_PK, FIRST_PITCH + timedelta(hours=1), scheduled_start=None
+        )
+        assert n == 0
+        assert [r["id"] for r in db.rows if r["line_type"] == "closing"] == [1]
+
+
 # ===========================================================================
 # Test 17 — a late stamp is refused
 # ===========================================================================
 
 
+def _delayed_pair() -> tuple[dict[str, Any], dict[str, Any]]:
+    """A book's line before a delay (stamped inside the grace) and its move during it."""
+    early = _game_row(
+        1, "total", "bp:12", FETCHES[0], book_line_at=SCHEDULED_START - timedelta(minutes=30)
+    )
+    late = _game_row(
+        2,
+        "total",
+        "bp:12",
+        FETCHES[-1],
+        step=1,
+        book_line_at=SCHEDULED_START + timedelta(minutes=20),
+    )
+    return early, late
+
+
 class TestLateStamp:
     def test_late_stamp_is_refused(self) -> None:
-        early = _game_row(
-            1, "total", "bp:12", FETCHES[0], book_line_at=SCHEDULED_START - timedelta(minutes=30)
+        """The design's D4: a row stamped 20 minutes after the scheduled start is
+        not promoted; the book's last row stamped inside the grace is."""
+        early, late = _delayed_pair()
+        # The guard alone refuses the late row.
+        assert closing_candidates([late], scheduled_start=SCHEDULED_START) == []
+        # The read leaves the late row out, so the predecessor is the candidate.
+        latest = _latest_per_key(
+            [early, late],
+            ("market_type", "book"),
+            stamp_bound=SCHEDULED_START + live.CLOSING_STAMP_GRACE,
         )
-        late = _game_row(
-            2,
-            "total",
-            "bp:12",
-            FETCHES[-1],
-            step=1,
-            book_line_at=SCHEDULED_START + timedelta(minutes=20),
+        assert [r["id"] for r in latest] == [1]
+        assert [i for i, _ in closing_candidates(latest, scheduled_start=SCHEDULED_START)] == [1]
+
+    @pytest.mark.asyncio
+    async def test_a_delayed_game_keeps_the_book_line_from_before_the_delay(self) -> None:
+        early, late = _delayed_pair()
+        db = _FakeOddsDb([early, late])
+        n = await promote_closing_game_rows(
+            db, GAME_PK, FIRST_PITCH, scheduled_start=SCHEDULED_START
         )
-        latest = _latest_per_key([early, late], ("market_type", "book"))
-        assert [r["id"] for r in latest] == [2]
-        assert closing_candidates(latest, scheduled_start=SCHEDULED_START) == []
+        assert n == 1
+        assert early["line_type"] == "closing"
+        assert late["line_type"] == "current"
+
+    @pytest.mark.asyncio
+    async def test_the_read_carries_the_stamp_bound(self) -> None:
+        db = AsyncMock()
+        db.fetch.return_value = []
+        await promote_closing_game_rows(db, GAME_PK, FIRST_PITCH, scheduled_start=SCHEDULED_START)
+        await promote_closing_prop_rows(db, GAME_PK, FIRST_PITCH, scheduled_start=None)
+        game_args = db.fetch.await_args_list[0].args
+        prop_args = db.fetch.await_args_list[1].args
+        assert game_args[1:] == (
+            GAME_PK,
+            FIRST_PITCH,
+            SCHEDULED_START + live.CLOSING_STAMP_GRACE,
+        )
+        assert prop_args[1:] == (GAME_PK, FIRST_PITCH, None)
+        for sql in (game_args[0], prop_args[0]):
+            assert "book_line_at <= $3::timestamptz" in sql
+            assert "(line_type = 'closing') DESC" in sql
 
     def test_a_stamp_inside_the_grace_and_a_row_with_no_stamp_pass(self) -> None:
         inside = _game_row(
@@ -805,17 +942,18 @@ class TestNightlyScript:
 
 
 def test_the_ofelia_job_runs_the_script_after_the_ingest_chain() -> None:
+    """The closing pass runs inside the app container, which reads the host's
+    .env and so holds the vendor key; a fresh job-run container would not."""
     text = (_ROOT / "deploy" / "ofelia" / "config.ini").read_text(encoding="utf-8")
+    assert '[job-run "nightly-closing-lines"]' not in text
     assert text.index('[job-run "nightly-ingest"]') < text.index(
-        '[job-run "nightly-closing-lines"]'
+        '[job-exec "nightly-closing-lines"]'
     )
-    job = text.split('[job-run "nightly-closing-lines"]', 1)[1]
+    job = text.split('[job-exec "nightly-closing-lines"]', 1)[1]
     assert "schedule = 0 30 9 * * *" in job
-    assert "image = baseball_simulator_v2-app" in job
-    assert "network = baseball_simulator_v2_baseball_net" in job
-    assert "BASEBALL_DB_DSN=postgresql://baseball_user:baseball_pass@db:5432/baseball_sim" in job
-    assert "command = sh /app/scripts/nightly_closing_lines.sh" in job
+    assert "container = baseball_simulator_v2-app-1" in job
+    assert "command = env ODDS_PROVIDER=bettingpros sh /app/scripts/nightly_closing_lines.sh" in job
     assert "volume" not in job
-    assert "environment = ODDS_PROVIDER=bettingpros" in job
+    assert "image =" not in job
     # The vendor key is a secret: it never sits in the committed config.
-    assert "environment = ODDS_API_KEY" not in job
+    assert "ODDS_API_KEY=" not in job
