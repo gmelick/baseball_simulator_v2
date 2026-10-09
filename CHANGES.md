@@ -446,6 +446,7 @@ top needs a scroll; showing it under the clicked row would read better. The line
 play-by-play panels stay empty: the API's replay store is off on purpose, a separate piece of
 work. A cached set lives 15 minutes, so a bundle rebuilt in that window serves the old set
 until it expires.
+
 # Design PROPOSED — the live, schedule-driven game day view: the slate from the league's schedule, a simulate path for games that have not started, the live service as its own container, the nightly finals job with a crash retry, one simulation run per game with progress, names in the projections — SIM-519, 2026-10-08
 
 **Why it matters.** The day view lists only the games our database holds, so an off day and a
