@@ -1,7 +1,7 @@
 # Tech design — the twelve segment and team markets on the API and the game page, and every live game's closing prices (SIM-546)
 
-> **STATUS 2026-10-09 — MERGED INTO `master` (000e2c3) AND DEPLOYED. The first live game day
-> check (§8) is pending.** All five decisions are taken (§10): the owner took decisions 1, 3 and 5 as
+> **STATUS 2026-10-09 — MERGED INTO `master` (000e2c3), DEPLOYED, AND CLOSED by owner decision;
+> the row is deleted from `BACKLOG.xlsx`. The first live game day check (§8) is a follow-up.** All five decisions are taken (§10): the owner took decisions 1, 3 and 5 as
 > recommended, chose the one extra price parameter for decision 2 (§4, B4) and chose to fire
 > the bet signals on all fifteen markets for decision 4 (§4, B6). The code of §3 to §6 is
 > built on the branch `claude/sim-546-tech-design-f4ffe8` (not merged). Each part had one
@@ -1159,5 +1159,6 @@ starting-position smoke (SIM-559) on the same ten games (runs 9.03 there, at 40 
 8. **Known limits, unchanged.** The twelve markets read the raw simulated frequency, and the
    signals fire on them (§9 item 1, decision 4). A delayed game's closing row can predate the
    delay (§9 item 3). The follow-ons of §11 are not filed.
-9. **The close.** The branch is not merged. The row stays open in `BACKLOG.xlsx`; the owner
-   closes the ticket after the live check.
+9. **The close — DONE 2026-10-09.** The owner closed the ticket after the deploy; the row is
+   deleted from `BACKLOG.xlsx` (next free ID unchanged, SIM-562). The branch and its worktree
+   await the session's archive before deletion.

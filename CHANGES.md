@@ -1,4 +1,4 @@
-# BUILT — the twelve segment and team markets on the edge endpoint and the betting card, and a closing row for every live game at first pitch: the inning grid rides in the cached summary, all fifteen markets are priced, the card shows them in four groups, the closing marker is rewritten and the schedule poll calls it, a nightly closing pass backs it up; one review per part; the first live game day not yet run — SIM-546, 2026-10-09
+# CLOSED — the twelve segment and team markets on the edge endpoint and the betting card, and a closing row for every live game at first pitch: the inning grid rides in the cached summary, all fifteen markets are priced, the card shows them in four groups, the closing marker is rewritten and the schedule poll calls it, a nightly closing pass backs it up; one review per part; the first live game day not yet run — SIM-546, 2026-10-09
 
 **Why it matters.** The platform stores every sportsbook's prices for fifteen game bets, and the
 accuracy comparison grades all fifteen. The live edge endpoint and the game page priced three.
@@ -149,8 +149,8 @@ recreated; `ODDS_PROVIDER=bettingpros` is set in the host `.env`, so the live od
 the real vendor; the scheduler registered both nightly jobs; the nightly closing job ran by hand
 with exit 0 over the games of 2026-10-07 and 10-08 (five games, 698 closing rows, 18 sportsbooks,
 no incomplete game). The edge endpoint on game 776151 reads all fifteen markets priced from
-stored sportsbook rows. The first live game day check is pending; the ticket row stays open
-until it.
+stored sportsbook rows. **CLOSED 2026-10-09 by owner decision; the row is deleted from `BACKLOG.xlsx`.** The first
+live game day check (the design's §8) is a follow-up, not a condition of the close.
 
 **Not yet run: the first live game day check of the design's section 8.** Nothing is deployed.
 The order matters. Rebuild the app image first (`docker compose build app`, then
