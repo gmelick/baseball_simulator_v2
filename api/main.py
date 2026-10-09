@@ -168,6 +168,14 @@ async def lifespan(app: FastAPI):
     log.info("Opening Redis cache ...")
     app.state.redis_client, app.state.similarity_cache = await open_redis_cache(redis_url)
 
+    # SIM-519 Part A: the league reader the slate (schedule) and the card detail
+    # (per-game feed) share. SLATE_SCHEDULE_ENABLED=0 leaves it off, and the
+    # slate then serves the stored listing (source "db").
+    if os.environ.get("SLATE_SCHEDULE_ENABLED", "1") != "0":
+        from api.league_feed import LeagueFeed
+
+        app.state.league_feed = LeagueFeed()
+
     # Dev-onboarding escape hatch: SIMILARITY_ENGINE_ENABLED=false skips the
     # engine build entirely so the stack can boot before the DuckDB profile
     # file exists (i.e. before the multi-hour ETL has run). When skipped,
@@ -559,6 +567,13 @@ async def lifespan(app: FastAPI):
     if getattr(app.state, "sim_runner", None) is not None:
         try:
             app.state.sim_runner.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # SIM-519: close the league reader's HTTP session.
+    if getattr(app.state, "league_feed", None) is not None:
+        try:
+            await app.state.league_feed.close()
         except Exception:  # noqa: BLE001
             pass
 

@@ -166,7 +166,10 @@ def test_games_on_date_empty_list():
     client = TestClient(app)
     resp = client.get("/api/games/2024-01-01")
     assert resp.status_code == 200
-    assert resp.json() == {"date": "2024-01-01", "count": 0, "games": []}
+    body = resp.json()
+    assert (body["date"], body["count"], body["games"]) == ("2024-01-01", 0, [])
+    # SIM-519: no league feed attached -> the stored listing, and it says so.
+    assert body["source"] == "db"
 
 
 def test_games_on_date_bad_date_is_422():

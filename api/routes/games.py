@@ -71,6 +71,7 @@ from datetime import date as _date
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal, NamedTuple
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
@@ -293,14 +294,49 @@ class GameCard(BaseModel):
     # False for scheduled games whose lineups haven't been published yet.
     # None when the caller did not include the lineup check (older code paths).
     lineup_ready: bool | None = None
+    # SIM-519 Part A: the schedule-driven card. Every field is optional, so a
+    # stored payload, a unit stub or an old mock still deserialises.
+    game_status: Literal["scheduled", "live", "final", "postponed"] | None = None
+    detailed_state: str | None = None
+    reason: str | None = None
+    start_utc: str | None = None
+    start_time_tbd: bool | None = None
+    double_header: str | None = None
+    game_number: int | None = None
+    game_type: str | None = None
+    series_description: str | None = None
+    away_score: int | None = None
+    home_score: int | None = None
+    inning: int | None = None
+    inning_half: str | None = None
+    outs: int | None = None
+    away_probable_pitcher_id: int | None = None
+    away_probable_pitcher_name: str | None = None
+    home_probable_pitcher_id: int | None = None
+    home_probable_pitcher_name: str | None = None
+    rescheduled_to: str | None = None
+    rescheduled_from: str | None = None
+    lineup_source: str | None = None
+    sim_summary: GameSimSummaryLite | None = None
+    sim_run_at: str | None = None
+    db_known: bool | None = None
 
 
 class GamesOnDateResponse(BaseModel):
-    """The ``GET /api/games/{date}`` envelope: the date echo + its game cards."""
+    """The ``GET /api/games/{date}`` envelope: the date echo + its game cards.
+
+    SIM-519 Part A: ``source`` says where the list came from -- ``schedule``
+    (the league's schedule, fresh or from the 20-second cache),
+    ``schedule_cached`` (the last good schedule after a feed error) or ``db``
+    (the stored listing). ``feed_error`` carries the error on a degraded read.
+    """
 
     date: str
     count: int
     games: list[GameCard] = Field(default_factory=list)
+    source: Literal["schedule", "schedule_cached", "db"] | None = None
+    feed_error: str | None = None
+    fetched_at: str | None = None
 
 
 class SampleGameResponse(BaseModel):
@@ -1201,47 +1237,271 @@ def _game_card(row: Any) -> GameCard:
 # ===========================================================================
 
 
+# ---------------------------------------------------------------------------
+# SIM-519 Part A -- the schedule-driven slate
+# ---------------------------------------------------------------------------
+
+#: The slate's calendar: the league keys games on the local (official) date,
+#: and "today" is today in Eastern time, where the league's day turns over.
+SLATE_TZ = ZoneInfo("America/New_York")
+
+#: The schedule cache's time to live by date class (SIM-519 §4.3).
+SLATE_TTL_PAST_S = 24 * 3600
+SLATE_TTL_TODAY_S = 20
+SLATE_TTL_FUTURE_S = 600
+#: The last good schedule of a date, served when the feed errors.
+SLATE_LAST_GOOD_TTL_S = 24 * 3600
+
+#: The stored enrichment of the schedule's games, in one query (SIM-519 §4.3).
+_SLATE_ENRICH_SQL = """
+    SELECT g.game_pk, g.status, v.city AS venue_city,
+           EXISTS(
+               SELECT 1 FROM raw.game_lineups gl WHERE gl.game_pk = g.game_pk
+           ) AS lineup_ready
+      FROM raw.games g
+      LEFT JOIN raw.venues v ON v.venue_id = g.venue_id AND v.season = g.season
+     WHERE g.game_pk = ANY($1::int[])
+"""
+
+#: The newest stored run of each of the schedule's games, in one query.
+_SLATE_RUNS_SQL = """
+    SELECT DISTINCT ON (game_pk) game_pk, run_id, n_iterations, summary, created_at
+      FROM sim.sim_runs
+     WHERE game_pk = ANY($1::int[])
+     ORDER BY game_pk, created_at DESC
+"""
+
+
+def _slate_today() -> _date:
+    return datetime.now(SLATE_TZ).date()
+
+
+def _slate_ttl(day: _date, today: _date) -> int:
+    """The schedule cache's TTL for a date: past 24 h, today 20 s, future 10 min."""
+    if day < today:
+        return SLATE_TTL_PAST_S
+    if day == today:
+        return SLATE_TTL_TODAY_S
+    return SLATE_TTL_FUTURE_S
+
+
+def _iso(v: Any) -> str | None:
+    if v is None:
+        return None
+    return v.isoformat() if hasattr(v, "isoformat") else str(v)
+
+
+def _stored_summary(run: Mapping[str, Any] | None) -> GameSimSummaryLite | None:
+    if run is None:
+        return None
+    stored = _row_get(run, "summary")
+    if isinstance(stored, str | bytes | bytearray):
+        import json
+
+        try:
+            stored = json.loads(stored)
+        except ValueError:
+            return None
+    return _sim_summary_lite_from_stored(stored)
+
+
+def _schedule_card(g: Any, enrich: Any | None, run: Any | None) -> GameCard:
+    """One schedule game + our stored data → a GameCard (D1: the schedule's records)."""
+    from pipeline.mlb_schedule import card_state
+
+    state = card_state(g)
+    played = state in ("live", "final")
+    away_pp, home_pp = g.away.probable_pitcher, g.home.probable_pitcher
+    return GameCard(
+        game_pk=g.game_pk,
+        season=g.season,
+        game_date=g.official_date.isoformat(),
+        status=g.detailed_state or (_opt_str(enrich, "status") if enrich is not None else None),
+        home_team_id=g.home.team_id or None,
+        away_team_id=g.away.team_id or None,
+        venue_id=g.venue_id,
+        home_team_name=g.home.name,
+        home_team_abbrev=g.home.abbreviation,
+        away_team_name=g.away.name,
+        away_team_abbrev=g.away.abbreviation,
+        venue_name=g.venue_name,
+        venue_city=_opt_str(enrich, "venue_city") if enrich is not None else None,
+        home_wins=g.home.wins,
+        home_losses=g.home.losses,
+        away_wins=g.away.wins,
+        away_losses=g.away.losses,
+        lineup_ready=bool(_row_get(enrich, "lineup_ready")) if enrich is not None else False,
+        game_status=state,
+        detailed_state=g.detailed_state or None,
+        reason=g.reason,
+        start_utc=_iso(g.start_utc),
+        start_time_tbd=g.start_time_tbd,
+        double_header=g.double_header,
+        game_number=g.game_number,
+        game_type=g.game_type or None,
+        series_description=g.series_description,
+        away_score=g.away.score if played else None,
+        home_score=g.home.score if played else None,
+        inning=g.inning,
+        inning_half=g.inning_half,
+        outs=g.outs,
+        away_probable_pitcher_id=away_pp.player_id if away_pp else None,
+        away_probable_pitcher_name=away_pp.name if away_pp else None,
+        home_probable_pitcher_id=home_pp.player_id if home_pp else None,
+        home_probable_pitcher_name=home_pp.name if home_pp else None,
+        rescheduled_to=_iso(g.rescheduled_to),
+        rescheduled_from=_iso(g.rescheduled_from),
+        sim_summary=_stored_summary(run),
+        sim_run_at=_iso(_row_get(run, "created_at")) if run is not None else None,
+        db_known=enrich is not None,
+    )
+
+
+async def _slate_schedule_payload(
+    request: Request, day: _date, *, use_cache: bool
+) -> tuple[Any, str, str | None]:
+    """The schedule response for ``day``, with its source and any feed error.
+
+    Order: the cache (``slate:v2:{date}``, TTL by date class), then the feed,
+    then the last good copy (``slate:last:{date}``). Returns ``(None, "db",
+    error)`` when all three miss; the caller then serves the stored listing.
+    """
+    feed = getattr(request.app.state, "league_feed", None)
+    cache = _get_sim_cache(request)
+    key, last_key = f"slate:v2:{day.isoformat()}", f"slate:last:{day.isoformat()}"
+    if use_cache and cache is not None:
+        try:
+            hit = cache.get(key)
+        except Exception:  # noqa: BLE001 -- a cache hiccup must not break the read
+            hit = None
+        if hit is not None:
+            return hit, "schedule", None
+    if feed is None:
+        return None, "db", None
+    try:
+        payload = await feed.schedule_payload(day, day)
+    except Exception as exc:  # noqa: BLE001 -- degrade, never fail (SIM-519 §4.3)
+        error = f"{type(exc).__name__}: {exc}"[:300]
+        log.warning("slate: the league schedule read failed for %s: %s", day, error)
+        last = None
+        if cache is not None:
+            try:
+                last = cache.get(last_key)
+            except Exception:  # noqa: BLE001
+                last = None
+        if last is not None:
+            return last, "schedule_cached", error
+        return None, "db", error
+    if cache is not None:
+        try:
+            cache.set(key, payload, _slate_ttl(day, _slate_today()))
+            cache.set(last_key, payload, SLATE_LAST_GOOD_TTL_S)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("slate cache write failed for %s: %s", key, exc)
+    return payload, "schedule", None
+
+
+async def _slate_merge_rows(pool: Any, pks: list[int]) -> tuple[dict[int, Any], dict[int, Any]]:
+    """The stored enrichment and the newest run per game: two queries, best effort."""
+    enrich: dict[int, Any] = {}
+    runs: dict[int, Any] = {}
+    if pool is None or not pks:
+        return enrich, runs
+    try:
+        for r in await pool.fetch(_SLATE_ENRICH_SQL, pks) or []:
+            enrich[int(_row_get(r, "game_pk"))] = r
+    except Exception as exc:  # noqa: BLE001 -- the schedule alone still makes cards
+        log.warning("slate: the stored enrichment read failed: %s", exc)
+    try:
+        for r in await pool.fetch(_SLATE_RUNS_SQL, pks) or []:
+            runs[int(_row_get(r, "game_pk"))] = r
+    except Exception as exc:  # noqa: BLE001 -- a missing run table means no sim line
+        log.warning("slate: the sim-run read failed: %s", exc)
+    return enrich, runs
+
+
+async def _slate_from_db(pool: Any, parsed: _date) -> list[GameCard]:
+    """The stored listing, each row mapped through the one status mapper."""
+    from pipeline.mlb_schedule import card_state_from_raw
+
+    rows = await pool.fetch(_GAMES_ON_DATE_SQL, parsed)
+    games = []
+    for r in rows or []:
+        card = _game_card(r)
+        card.game_status = card_state_from_raw(card.status)  # type: ignore[assignment]
+        card.db_known = True
+        games.append(card)
+    return games
+
+
 @router.get(
     "/{date}",
     response_model=GamesOnDateResponse,
     summary="Games scheduled on a date",
     description=(
-        "List the games on a date (YYYY-MM-DD) from raw.games. The result is "
-        "memoized at POOL_QUERY_TTL_S (300s) when a sim cache is attached "
-        "(SIM-359). Returns 503 if no DB pool is attached, 422 on a bad date."
+        "List the games on a date (YYYY-MM-DD). SIM-519: the league's schedule says "
+        "which games exist and what state they are in; our database adds the lineup "
+        "flag and the newest simulation run per game. The schedule is cached 20 s for "
+        "today, 10 min for a future date and 24 h for a past one. When the league feed "
+        "fails, the endpoint serves the last good schedule, else the stored listing, and "
+        "says which in `source`. 422 on a bad date; 503 when the feed is down and no "
+        "database pool is attached."
     ),
 )
 async def get_games_on_date(
     date: str,
     request: Request,
-    use_cache: bool = Query(True, description="Consult/populate the listing cache"),
+    use_cache: bool = Query(True, description="Consult/populate the schedule cache"),
 ) -> GamesOnDateResponse:
+    from pipeline.mlb_schedule import parse_schedule
+
     parsed = _parse_date(date)
+    payload, source, feed_error = await _slate_schedule_payload(
+        request, parsed, use_cache=use_cache
+    )
+    fetched_at = datetime.now(SLATE_TZ).isoformat()
+
+    if payload is not None:
+        # A suspended game appears on its resume day too; keep one card per game.
+        sched = list({g.game_pk: g for g in parse_schedule(payload)}.values())
+        pool = getattr(request.app.state, "pg_pool", None)
+        enrich, runs = await _slate_merge_rows(pool, [g.game_pk for g in sched])
+        games = [_schedule_card(g, enrich.get(g.game_pk), runs.get(g.game_pk)) for g in sched]
+        return GamesOnDateResponse(
+            date=parsed.isoformat(),
+            count=len(games),
+            games=games,
+            source=source,  # type: ignore[arg-type]
+            feed_error=feed_error,
+            fetched_at=fetched_at,
+        )
+
+    # The stored listing, memoized at POOL_QUERY_TTL_S (SIM-359).
     pool = _get_pool(request)
     cache = _get_sim_cache(request)
-    cache_key = f"games:on_date:{parsed.isoformat()}"
-
-    # ---- listing cache (POOL_QUERY_TTL_S) -- fast path ----
+    db_key = f"games:on_date:{parsed.isoformat()}"
     if use_cache and cache is not None:
         try:
-            cached = cache.get(cache_key)
+            cached = cache.get(db_key)
         except Exception:  # noqa: BLE001 -- a cache hiccup must not break the read
             cached = None
         if cached is not None:
-            return GamesOnDateResponse(**cached)
-
-    rows = await pool.fetch(_GAMES_ON_DATE_SQL, parsed)
-    games = [_game_card(r) for r in (rows or [])]
-    payload = GamesOnDateResponse(date=parsed.isoformat(), count=len(games), games=games)
-
-    # ---- listing cache write-through ----
+            return GamesOnDateResponse(**{**cached, "feed_error": feed_error})
+    games = await _slate_from_db(pool, parsed)
+    resp = GamesOnDateResponse(
+        date=parsed.isoformat(),
+        count=len(games),
+        games=games,
+        source="db",
+        feed_error=feed_error,
+        fetched_at=fetched_at,
+    )
     if use_cache and cache is not None:
         try:
-            cache.set(cache_key, payload.model_dump(), POOL_QUERY_TTL_S)
+            cache.set(db_key, resp.model_dump(), POOL_QUERY_TTL_S)
         except Exception as exc:  # noqa: BLE001
-            log.warning("listing cache write failed for %s: %s", cache_key, exc)
-
-    return payload
+            log.warning("listing cache write failed for %s: %s", db_key, exc)
+    return resp
 
 
 # ===========================================================================
