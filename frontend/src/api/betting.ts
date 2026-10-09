@@ -17,6 +17,7 @@ export type { EdgeReport }
 /** A fireable +EV recommendation (BetSignalModel, SIM-369). */
 export interface BetSignal {
   label: string
+  /** 'home' | 'away' | 'over' | 'under', or 'draw' (SIM-546: a three-way market's tie). */
   side: string
   line: number | null
   offered_american: number
@@ -50,6 +51,11 @@ export interface EdgesResponse {
   game_pk: number
   n_iterations: number
   base_seed: number | null
+  /**
+   * The market types priced, in the vocabulary order (SIM-546: up to fifteen).
+   * A type is the report label except the full-game run line: 'runline' here,
+   * 'run_line' on its edges.
+   */
   markets: string[]
   /** market → "injected" | "stored" | "mock" (where each market's prices came from). */
   odds_source: Record<string, string>
@@ -62,6 +68,16 @@ export interface EdgesResponse {
   fair_book?: Record<string, string>
   /** SIM-555: market → that book's display name (e.g. "DraftKings"). */
   fair_book_name?: Record<string, string>
+  /**
+   * SIM-546: report label → the market's plain name ("First five total"). The
+   * betting card titles its sections from it.
+   */
+  market_names?: Record<string, string>
+  /**
+   * SIM-546: report label → how that run line was priced, for every priced run
+   * line ("run_line", "f1_runline", "f5_runline").
+   */
+  run_line_pricing_by_label?: Record<string, RunLinePricing>
 }
 
 export interface SignalsResponse {
@@ -77,6 +93,10 @@ export interface SignalsResponse {
   fair_book?: Record<string, string>
   /** SIM-555: market → that book's display name. */
   fair_book_name?: Record<string, string>
+  /** SIM-546: report label → the market's plain name ("First five total"). */
+  market_names?: Record<string, string>
+  /** SIM-546: report label → how that run line was priced (every priced run line). */
+  run_line_pricing_by_label?: Record<string, RunLinePricing>
 }
 
 // --- line-movement / CLV (SIM-396) ----------------------------------------
