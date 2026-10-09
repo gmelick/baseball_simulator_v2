@@ -1,188 +1,197 @@
 /**
- * DaySummaryPage.tsx — SIM-391
+ * DaySummaryPage.tsx — the Daily Diamond day slate (SIM-391; rebuilt for SIM-519).
  *
- * The slate view: a date navigator (prev / next / today + native date picker),
- * a game-count badge, and a responsive grid of 3-state GameCards for the
- * selected date. The date lives in the URL (`/date/:date`) so a slate is
- * shareable and the browser back/forward buttons move between days; `/` falls
- * back to today.
+ * The date lives in the URL (`/date/:date`; `/` is today). One call to
+ * GET /api/games/{date} lists the day from the league's schedule. The page:
  *
- * Data: GET /api/games/{date} (one call for the whole slate). Loading, empty,
- * and error states are all handled inline.
+ *   - sorts the cards live first, then scheduled by first pitch, then final,
+ *     then postponed;
+ *   - polls the slate every 30 seconds while a game is live or the date is
+ *     today, and only while the tab is visible;
+ *   - opens a live card by default on a wide screen, and no card on a phone;
+ *   - says so when the league feed is down and the list is a stored copy.
  */
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import {
+  cardStatus,
   fetchGamesOnDate,
   GamesApiError,
   type GameCard as GameCardRow,
+  type GamesOnDateResponse,
 } from '@/api/games'
 import { GameCard } from '@/components/games/GameCard'
-import { Badge } from '@/components/ui'
+import { DatePicker } from '@/components/slate/DatePicker'
+import { SLATE_POLL_MS, sortSlate } from '@/components/slate/slate'
+import { ISO_DATE_RE, longDateLabel, relativeDayLabel, todayIso } from '@/components/slate/format'
 
 import styles from './DaySummaryPage.module.css'
 
-// ---------------------------------------------------------------------------
-// Date helpers — operate on local YYYY-MM-DD strings (no UTC drift).
-// ---------------------------------------------------------------------------
-
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
-
-function todayIso(): string {
-  const d = new Date()
-  const mm = String(d.getMonth() + 1).padStart(2, '0')
-  const dd = String(d.getDate()).padStart(2, '0')
-  return `${d.getFullYear()}-${mm}-${dd}`
-}
-
-/** Shift a YYYY-MM-DD string by `delta` days, returning a YYYY-MM-DD string. */
-function shiftIso(iso: string, delta: number): string {
-  const [y, m, d] = iso.split('-').map(Number)
-  const dt = new Date(y, m - 1, d)
-  dt.setDate(dt.getDate() + delta)
-  const mm = String(dt.getMonth() + 1).padStart(2, '0')
-  const dd = String(dt.getDate()).padStart(2, '0')
-  return `${dt.getFullYear()}-${mm}-${dd}`
-}
-
-/** Human-friendly long date for the header (e.g. "Mon, Aug 15, 2024"). */
-function prettyDate(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number)
-  const dt = new Date(y, m - 1, d)
-  return dt.toLocaleDateString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })
-}
-
-// ---------------------------------------------------------------------------
-// Fetch state machine
-// ---------------------------------------------------------------------------
+const PHONE_QUERY = '(max-width: 640px)'
 
 type LoadState =
   | { kind: 'loading' }
-  | { kind: 'ok'; games: GameCardRow[] }
+  | { kind: 'ok'; data: GamesOnDateResponse }
   | { kind: 'error'; message: string; status?: number }
+
+function usePhone(): boolean {
+  const [phone, setPhone] = useState(() => window.matchMedia?.(PHONE_QUERY).matches ?? false)
+  useEffect(() => {
+    const mq = window.matchMedia?.(PHONE_QUERY)
+    if (!mq) return
+    const on = (): void => setPhone(mq.matches)
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [])
+  return phone
+}
 
 export function DaySummaryPage(): React.ReactElement {
   const params = useParams<{ date?: string }>()
   const navigate = useNavigate()
-
-  // Validate the URL date; fall back to today for a missing/garbage value.
   const date = params.date && ISO_DATE_RE.test(params.date) ? params.date : todayIso()
+  const phone = usePhone()
 
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
+  const [tick, setTick] = useState(0)
+  // A card's open state flips its default (live cards open on a wide screen).
+  const [flipped, setFlipped] = useState<Record<number, boolean>>({})
 
+  // A new date or a new screen class resets the cards to their defaults.
+  useEffect(() => setFlipped({}), [date, phone])
+
+  // The first load of a date shows the loading state.
   useEffect(() => {
     let cancelled = false
     setState({ kind: 'loading' })
     fetchGamesOnDate(date)
-      .then((res) => {
-        if (!cancelled) setState({ kind: 'ok', games: res.games })
+      .then((data) => {
+        if (!cancelled) setState({ kind: 'ok', data })
       })
       .catch((err: unknown) => {
         if (cancelled) return
-        const status = err instanceof GamesApiError ? err.status : undefined
-        const message =
-          err instanceof Error ? err.message : 'Failed to load the slate.'
-        setState({ kind: 'error', message, status })
+        setState({
+          kind: 'error',
+          message: err instanceof Error ? err.message : 'Failed to load the slate.',
+          status: err instanceof GamesApiError ? err.status : undefined,
+        })
       })
     return () => {
       cancelled = true
     }
   }, [date])
 
-  const goToDate = useCallback(
-    (next: string) => navigate(`/date/${next}`),
-    [navigate],
-  )
+  // A refresh replaces the slate quietly; a failed refresh keeps it on screen.
+  useEffect(() => {
+    if (tick === 0) return
+    let cancelled = false
+    fetchGamesOnDate(date)
+      .then((data) => {
+        if (!cancelled) setState({ kind: 'ok', data })
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+    // The date's own load runs in the effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick])
 
-  const count = state.kind === 'ok' ? state.games.length : undefined
+  const games = useMemo(() => (state.kind === 'ok' ? sortSlate(state.data.games) : []), [state])
+  const liveCount = games.filter((g) => cardStatus(g) === 'live').length
+  const finalCount = games.filter((g) => cardStatus(g) === 'final').length
+  const isToday = date === todayIso()
+
+  // Poll while a game is live or the date is today, and only while visible.
+  useEffect(() => {
+    if (state.kind !== 'ok' || !(liveCount > 0 || isToday)) return
+    const id = window.setInterval(() => {
+      if (document.visibilityState === 'visible') setTick((t) => t + 1)
+    }, SLATE_POLL_MS)
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') setTick((t) => t + 1)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [state.kind, liveCount, isToday])
+
+  const goToDate = useCallback((next: string) => navigate(`/date/${next}`), [navigate])
+
+  const isOpen = (g: GameCardRow): boolean => {
+    const byDefault = !phone && cardStatus(g) === 'live'
+    return flipped[g.game_pk] ? !byDefault : byDefault
+  }
+
+  const source = state.kind === 'ok' ? state.data.source : null
 
   return (
     <div className={styles.page}>
       <header className={styles.header}>
-        <div className={styles.titleRow}>
-          <h1 className={styles.title}>Day Summary</h1>
-          {count != null && (
-            <Badge variant="primary" aria-label={`${count} games`}>
-              {count} {count === 1 ? 'game' : 'games'}
-            </Badge>
-          )}
+        <div>
+          <div className={styles.kicker}>{relativeDayLabel(date)}</div>
+          <h1 className={styles.title}>{longDateLabel(date)}</h1>
         </div>
-
-        <nav className={styles.dateNav} aria-label="Date navigation">
-          <button
-            type="button"
-            className={styles.navButton}
-            onClick={() => goToDate(shiftIso(date, -1))}
-            aria-label="Previous day"
-          >
-            ‹
-          </button>
-
-          <input
-            type="date"
-            className={styles.datePicker}
-            value={date}
-            onChange={(e) => {
-              if (ISO_DATE_RE.test(e.target.value)) goToDate(e.target.value)
-            }}
-            aria-label="Select date"
-          />
-
-          <button
-            type="button"
-            className={styles.navButton}
-            onClick={() => goToDate(shiftIso(date, 1))}
-            aria-label="Next day"
-          >
-            ›
-          </button>
-
-          <button
-            type="button"
-            className={styles.todayButton}
-            onClick={() => goToDate(todayIso())}
-          >
-            Today
-          </button>
-
-          <span className={styles.prettyDate}>{prettyDate(date)}</span>
-        </nav>
+        <div className={styles.headerRight}>
+          {state.kind === 'ok' && (
+            <div className={styles.tags} aria-live="polite">
+              <span className={`${styles.tag} ${styles.tagCount}`}>
+                {games.length} {games.length === 1 ? 'game' : 'games'}
+              </span>
+              {liveCount > 0 && <span className={`${styles.tag} ${styles.tagLive}`}>{liveCount} live</span>}
+              {finalCount > 0 && finalCount < games.length && (
+                <span className={`${styles.tag} ${styles.tagFinal}`}>{finalCount} final</span>
+              )}
+            </div>
+          )}
+          <DatePicker date={date} onChange={goToDate} wide={!phone} />
+        </div>
       </header>
 
-      <main>
-        {state.kind === 'loading' && (
-          <p className={styles.message} aria-busy="true">
-            Loading slate…
-          </p>
-        )}
+      {source && source !== 'schedule' && (
+        <div className={styles.banner} role="status">
+          {source === 'schedule_cached'
+            ? 'The league schedule feed is unavailable. Showing the last good copy of the schedule.'
+            : 'The league schedule feed is unavailable. Showing stored games.'}
+          {state.kind === 'ok' && state.data.feed_error && (
+            <span className={styles.bannerDetail}> ({state.data.feed_error})</span>
+          )}
+        </div>
+      )}
 
-        {state.kind === 'error' && (
-          <div className={styles.error} role="alert">
-            <p>{state.message}</p>
-            {state.status === 401 && (
-              <p className={styles.errorHint}>Your session may have expired — try refreshing.</p>
-            )}
-          </div>
-        )}
+      {state.kind === 'loading' && (
+        <p className={styles.message} aria-busy="true">
+          Loading the slate…
+        </p>
+      )}
 
-        {state.kind === 'ok' && state.games.length === 0 && (
-          <p className={styles.message}>No games scheduled on {prettyDate(date)}.</p>
-        )}
+      {state.kind === 'error' && (
+        <div className={styles.error} role="alert">
+          <p>{state.message}</p>
+          {state.status === 401 && <p className={styles.errorHint}>Your session may have expired — try refreshing.</p>}
+        </div>
+      )}
 
-        {state.kind === 'ok' && state.games.length > 0 && (
-          <div className={styles.grid}>
-            {state.games.map((game) => (
-              <GameCard key={game.game_pk} game={game} />
-            ))}
-          </div>
-        )}
-      </main>
+      {state.kind === 'ok' && games.length === 0 && (
+        <div className={styles.empty}>No MLB games on {longDateLabel(date)}.</div>
+      )}
+
+      {games.length > 0 && (
+        <div className={styles.grid}>
+          {games.map((game) => (
+            <GameCard
+              key={game.game_pk}
+              game={game}
+              open={isOpen(game)}
+              tick={tick}
+              onToggle={() => setFlipped((f) => ({ ...f, [game.game_pk]: !f[game.game_pk] }))}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }

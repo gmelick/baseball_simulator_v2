@@ -290,6 +290,217 @@
         "title": "CLVModel",
         "type": "object"
       },
+      "CardMoneyline": {
+        "properties": {
+          "away": {
+            "title": "Away",
+            "type": "number"
+          },
+          "book": {
+            "title": "Book",
+            "type": "string"
+          },
+          "home": {
+            "title": "Home",
+            "type": "number"
+          },
+          "line_type": {
+            "title": "Line Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "book",
+          "line_type",
+          "away",
+          "home"
+        ],
+        "title": "CardMoneyline",
+        "type": "object"
+      },
+      "CardOddsResponse": {
+        "description": "The book's pregame lines for one slate card (SIM-519 Part I).\n\nEach market is the graded book's row (``GRADED_BOOK_PREFERENCE``): its\nclosing row once stored, else its latest current row while the game is in\nPreview. A market with no stored row is null. Never the mock.",
+        "properties": {
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "moneyline": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CardMoneyline"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runline": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CardRunLine"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "settled": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CardSettlement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "total": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CardTotal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "game_pk"
+        ],
+        "title": "CardOddsResponse",
+        "type": "object"
+      },
+      "CardRunLine": {
+        "properties": {
+          "away": {
+            "$ref": "#/components/schemas/CardRunLineSide"
+          },
+          "book": {
+            "title": "Book",
+            "type": "string"
+          },
+          "home": {
+            "$ref": "#/components/schemas/CardRunLineSide"
+          },
+          "line_type": {
+            "title": "Line Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "book",
+          "line_type",
+          "away",
+          "home"
+        ],
+        "title": "CardRunLine",
+        "type": "object"
+      },
+      "CardRunLineSide": {
+        "properties": {
+          "line": {
+            "title": "Line",
+            "type": "number"
+          },
+          "price": {
+            "title": "Price",
+            "type": "number"
+          }
+        },
+        "required": [
+          "line",
+          "price"
+        ],
+        "title": "CardRunLineSide",
+        "type": "object"
+      },
+      "CardSettlement": {
+        "description": "How each pregame line settled on the final score.",
+        "properties": {
+          "away_score": {
+            "title": "Away Score",
+            "type": "integer"
+          },
+          "home_score": {
+            "title": "Home Score",
+            "type": "integer"
+          },
+          "moneyline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Moneyline"
+          },
+          "runline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runline"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          }
+        },
+        "required": [
+          "away_score",
+          "home_score"
+        ],
+        "title": "CardSettlement",
+        "type": "object"
+      },
+      "CardTotal": {
+        "properties": {
+          "book": {
+            "title": "Book",
+            "type": "string"
+          },
+          "line": {
+            "title": "Line",
+            "type": "number"
+          },
+          "line_type": {
+            "title": "Line Type",
+            "type": "string"
+          },
+          "over": {
+            "title": "Over",
+            "type": "number"
+          },
+          "under": {
+            "title": "Under",
+            "type": "number"
+          }
+        },
+        "required": [
+          "book",
+          "line_type",
+          "line",
+          "over",
+          "under"
+        ],
+        "title": "CardTotal",
+        "type": "object"
+      },
       "ChatTurn": {
         "properties": {
           "content": {
@@ -771,6 +982,689 @@
         "title": "EngineMetaResponse",
         "type": "object"
       },
+      "FeedBatterLine": {
+        "properties": {
+          "ab": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ab"
+          },
+          "avg": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg"
+          },
+          "batting_order": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batting Order"
+          },
+          "bb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bb"
+          },
+          "h": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "H"
+          },
+          "hr": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hr"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "is_sub": {
+            "default": false,
+            "title": "Is Sub",
+            "type": "boolean"
+          },
+          "k": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "K"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pos": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pos"
+          },
+          "r": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "R"
+          },
+          "rbi": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rbi"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "FeedBatterLine",
+        "type": "object"
+      },
+      "FeedBox": {
+        "properties": {
+          "away": {
+            "$ref": "#/components/schemas/FeedBoxSide"
+          },
+          "home": {
+            "$ref": "#/components/schemas/FeedBoxSide"
+          }
+        },
+        "title": "FeedBox",
+        "type": "object"
+      },
+      "FeedBoxSide": {
+        "properties": {
+          "batters": {
+            "items": {
+              "$ref": "#/components/schemas/FeedBatterLine"
+            },
+            "title": "Batters",
+            "type": "array"
+          },
+          "pitchers": {
+            "items": {
+              "$ref": "#/components/schemas/FeedPitcherLine"
+            },
+            "title": "Pitchers",
+            "type": "array"
+          }
+        },
+        "title": "FeedBoxSide",
+        "type": "object"
+      },
+      "FeedInning": {
+        "properties": {
+          "away": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away"
+          },
+          "home": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home"
+          },
+          "num": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num"
+          }
+        },
+        "title": "FeedInning",
+        "type": "object"
+      },
+      "FeedLinescore": {
+        "properties": {
+          "away": {
+            "$ref": "#/components/schemas/FeedTotals"
+          },
+          "current_inning": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Inning"
+          },
+          "home": {
+            "$ref": "#/components/schemas/FeedTotals"
+          },
+          "home_did_not_bat_last": {
+            "default": false,
+            "title": "Home Did Not Bat Last",
+            "type": "boolean"
+          },
+          "inning_half": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inning Half"
+          },
+          "innings": {
+            "items": {
+              "$ref": "#/components/schemas/FeedInning"
+            },
+            "title": "Innings",
+            "type": "array"
+          }
+        },
+        "title": "FeedLinescore",
+        "type": "object"
+      },
+      "FeedLineupSlot": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "order": {
+            "title": "Order",
+            "type": "integer"
+          },
+          "pos": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pos"
+          }
+        },
+        "required": [
+          "order",
+          "name"
+        ],
+        "title": "FeedLineupSlot",
+        "type": "object"
+      },
+      "FeedLineups": {
+        "properties": {
+          "away": {
+            "items": {
+              "$ref": "#/components/schemas/FeedLineupSlot"
+            },
+            "title": "Away",
+            "type": "array"
+          },
+          "away_probable_pitcher": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedPerson"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "home": {
+            "items": {
+              "$ref": "#/components/schemas/FeedLineupSlot"
+            },
+            "title": "Home",
+            "type": "array"
+          },
+          "home_probable_pitcher": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedPerson"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "FeedLineups",
+        "type": "object"
+      },
+      "FeedLive": {
+        "properties": {
+          "balls": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Balls"
+          },
+          "batter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedPerson"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fielders": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Fielders",
+            "type": "object"
+          },
+          "last_play": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Play"
+          },
+          "offense": {
+            "anyOf": [
+              {
+                "enum": [
+                  "away",
+                  "home"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offense"
+          },
+          "outs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outs"
+          },
+          "pitcher": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedPitcher"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runners": {
+            "$ref": "#/components/schemas/FeedRunners"
+          },
+          "strikes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strikes"
+          }
+        },
+        "title": "FeedLive",
+        "type": "object"
+      },
+      "FeedPerson": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "FeedPerson",
+        "type": "object"
+      },
+      "FeedPitcher": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "np": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Np"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "FeedPitcher",
+        "type": "object"
+      },
+      "FeedPitcherLine": {
+        "properties": {
+          "bb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bb"
+          },
+          "er": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Er"
+          },
+          "era": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Era"
+          },
+          "h": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "H"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ip"
+          },
+          "k": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "K"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "np": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Np"
+          },
+          "outs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outs"
+          },
+          "r": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "R"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "FeedPitcherLine",
+        "type": "object"
+      },
+      "FeedRunners": {
+        "properties": {
+          "first": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedPerson"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "second": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedPerson"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "third": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedPerson"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "FeedRunners",
+        "type": "object"
+      },
+      "FeedTotals": {
+        "properties": {
+          "errors": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errors"
+          },
+          "hits": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hits"
+          },
+          "runs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runs"
+          }
+        },
+        "title": "FeedTotals",
+        "type": "object"
+      },
       "FieldSnapshotModel": {
         "additionalProperties": false,
         "description": "Response model for :class:`simulation.snapshots.FieldSnapshot` (SIM-331).\n\nThe BaseballFieldGraphic state: 9 defensive positions + batter + baserunners\n+ count/outs/inning/half/score chrome.  ``positions`` and ``baserunners`` map\na label to an OPTIONAL :class:`PlayerRefModel` (``None`` == unassigned slot /\nempty bag).  ``occupied_bases`` / ``runners_on`` mirror the source's derived\nproperties for consumer convenience.",
@@ -888,6 +1782,39 @@
             ],
             "title": "Away Losses"
           },
+          "away_probable_pitcher_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Probable Pitcher Id"
+          },
+          "away_probable_pitcher_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Probable Pitcher Name"
+          },
+          "away_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Score"
+          },
           "away_team_abbrev": {
             "anyOf": [
               {
@@ -932,13 +1859,85 @@
             ],
             "title": "Away Wins"
           },
+          "db_known": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Db Known"
+          },
+          "detailed_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detailed State"
+          },
+          "double_header": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Double Header"
+          },
           "game_date": {
             "title": "Game Date",
             "type": "string"
           },
+          "game_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Game Number"
+          },
           "game_pk": {
             "title": "Game Pk",
             "type": "integer"
+          },
+          "game_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "scheduled",
+                  "live",
+                  "final",
+                  "postponed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Game Status"
+          },
+          "game_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Game Type"
           },
           "home_losses": {
             "anyOf": [
@@ -950,6 +1949,39 @@
               }
             ],
             "title": "Home Losses"
+          },
+          "home_probable_pitcher_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Probable Pitcher Id"
+          },
+          "home_probable_pitcher_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Probable Pitcher Name"
+          },
+          "home_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Score"
           },
           "home_team_abbrev": {
             "anyOf": [
@@ -995,6 +2027,28 @@
             ],
             "title": "Home Wins"
           },
+          "inning": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inning"
+          },
+          "inning_half": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inning Half"
+          },
           "lineup_ready": {
             "anyOf": [
               {
@@ -1006,9 +2060,129 @@
             ],
             "title": "Lineup Ready"
           },
+          "lineup_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lineup Source"
+          },
+          "n_innings": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "N Innings"
+          },
+          "outs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outs"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "rescheduled_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rescheduled From"
+          },
+          "rescheduled_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rescheduled To"
+          },
           "season": {
             "title": "Season",
             "type": "integer"
+          },
+          "series_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Series Description"
+          },
+          "sim_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sim Run At"
+          },
+          "sim_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GameSimSummaryLite"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start_time_tbd": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Time Tbd"
+          },
+          "start_utc": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Utc"
           },
           "status": {
             "anyOf": [
@@ -1315,6 +2489,101 @@
         "title": "GameCardResponse",
         "type": "object"
       },
+      "GameFeedCardModel": {
+        "description": "``GET /api/games/{game_pk}/feed``: the real game behind a slate card.\n\n``linescore`` and ``box`` are set on a live or final game; ``live`` on a\nlive game only; ``lineups`` carries the posted batting orders (empty until\nthe league posts them) and the probable pitchers. ``source`` is ``feed``\n(fresh or cached) or ``feed_cached`` (the last good copy after an error).",
+        "properties": {
+          "box": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedBox"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "detailed_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detailed State"
+          },
+          "feed_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feed Error"
+          },
+          "game_pk": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Game Pk"
+          },
+          "linescore": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedLinescore"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lineups": {
+            "$ref": "#/components/schemas/FeedLineups"
+          },
+          "live": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedLive"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "default": "feed",
+            "enum": [
+              "feed",
+              "feed_cached"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "scheduled",
+              "live",
+              "final",
+              "postponed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "GameFeedCardModel",
+        "type": "object"
+      },
       "GameSimSummaryLite": {
         "additionalProperties": false,
         "description": "A raw-array-FREE projection of :class:`simulation.results.GameSimSummary`.\n\nIdentical to :class:`GameSimSummaryModel` minus the three large\nper-iteration score arrays -- the right shape for a list / index endpoint\nthat wants the aggregates (win %, means, CIs) but not the full distribution.\nBuild via :meth:`from_dataclass`.",
@@ -1548,7 +2817,7 @@
         "type": "object"
       },
       "GamesOnDateResponse": {
-        "description": "The ``GET /api/games/{date}`` envelope: the date echo + its game cards.",
+        "description": "The ``GET /api/games/{date}`` envelope: the date echo + its game cards.\n\nSIM-519 Part A: ``source`` says where the list came from -- ``schedule``\n(the league's schedule, fresh or from the 20-second cache),\n``schedule_cached`` (the last good schedule after a feed error) or ``db``\n(the stored listing). ``feed_error`` carries the error on a degraded read.",
         "properties": {
           "count": {
             "title": "Count",
@@ -1558,12 +2827,50 @@
             "title": "Date",
             "type": "string"
           },
+          "feed_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feed Error"
+          },
+          "fetched_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fetched At"
+          },
           "games": {
             "items": {
               "$ref": "#/components/schemas/GameCard"
             },
             "title": "Games",
             "type": "array"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "schedule",
+                  "schedule_cached",
+                  "db"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
           }
         },
         "required": [
@@ -3356,7 +4663,6 @@
             "type": "integer"
           },
           "extra": {
-            "additionalProperties": true,
             "default": {},
             "title": "Extra",
             "type": "object"
@@ -3419,7 +4725,6 @@
             "type": "array"
           },
           "subject": {
-            "additionalProperties": true,
             "title": "Subject",
             "type": "object"
           }
@@ -3443,7 +4748,6 @@
             "type": "array"
           },
           "diagnostic": {
-            "additionalProperties": true,
             "title": "Diagnostic",
             "type": "object"
           },
@@ -3491,7 +4795,6 @@
             "type": "array"
           },
           "subject": {
-            "additionalProperties": true,
             "title": "Subject",
             "type": "object"
           },
@@ -4178,7 +5481,6 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response By Season Api Analytics By Season Get",
@@ -4259,7 +5561,6 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Count State Api Analytics Count State Get",
@@ -4380,7 +5681,6 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Batter Leaderboard Api Analytics Leaderboard Batters Get",
@@ -4463,7 +5763,6 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Pitcher Leaderboard Api Analytics Leaderboard Pitchers Get",
@@ -4555,7 +5854,6 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Pa Outcomes Api Analytics Pa Outcomes Get",
@@ -4647,7 +5945,6 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Pitch Type Mix Api Analytics Pitch Type Mix Get",
@@ -4739,7 +6036,6 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Velo Distribution Api Analytics Velo Distribution Get",
@@ -4814,7 +6110,6 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Zone Api Analytics Zone Get",
@@ -4900,6 +6195,49 @@
         "summary": "Whether the AI assistant is configured",
         "tags": [
           "data-lab"
+        ]
+      }
+    },
+    "/api/betting/games/{game_pk}/card-odds": {
+      "get": {
+        "description": "The graded book's moneyline, run line and total for one game, from the stored rows only (never the mock): the closing row once stored, else the latest current row while the game is in Preview. On a final game `settled` says how each line settled. 404 when the game has no stored row for any of the three.",
+        "operationId": "get_card_odds_api_betting_games__game_pk__card_odds_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardOddsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The book's pregame lines for a slate card (SIM-519 Part I)",
+        "tags": [
+          "betting"
         ]
       }
     },
@@ -5699,7 +7037,7 @@
     },
     "/api/games/{date}": {
       "get": {
-        "description": "List the games on a date (YYYY-MM-DD) from raw.games. The result is memoized at POOL_QUERY_TTL_S (300s) when a sim cache is attached (SIM-359). Returns 503 if no DB pool is attached, 422 on a bad date.",
+        "description": "List the games on a date (YYYY-MM-DD). SIM-519: the league's schedule says which games exist and what state they are in; our database adds the lineup flag and the newest simulation run per game. The schedule is cached 20 s for today, 10 min for a future date and 24 h for a past one. When the league feed fails, the endpoint serves the last good schedule, else the stored listing, and says which in `source`. 422 on a bad date; 503 when the feed is down and no database pool is attached.",
         "operationId": "get_games_on_date_api_games__date__get",
         "parameters": [
           {
@@ -5712,13 +7050,13 @@
             }
           },
           {
-            "description": "Consult/populate the listing cache",
+            "description": "Consult/populate the schedule cache",
             "in": "query",
             "name": "use_cache",
             "required": false,
             "schema": {
               "default": true,
-              "description": "Consult/populate the listing cache",
+              "description": "Consult/populate the schedule cache",
               "title": "Use Cache",
               "type": "boolean"
             }
@@ -5908,6 +7246,59 @@
           }
         },
         "summary": "Winning/losing/save pitcher decisions for a simulated game",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/feed": {
+      "get": {
+        "description": "The league's live feed for one game, reduced to what the Daily Diamond card shows: the linescore, both box scores, the posted lineups and probable pitchers, and for a live game the count, runners, fielders, the pitcher's pitch count and the last play. Cached 10 s while live, 10 min before the game and 24 h once final. On a league error the last good copy is served (`source = feed_cached`); with none, 503 with Retry-After.",
+        "operationId": "get_game_feed_api_games__game_pk__feed_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "use_cache",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Use Cache",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameFeedCardModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The real game behind a slate card (SIM-519 Part I)",
         "tags": [
           "games"
         ]
@@ -6612,7 +8003,6 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "additionalProperties": true,
                     "type": "object"
                   },
                   "title": "Response Get Todays Odds Api Odds Today All Get",
@@ -6649,7 +8039,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get Game Odds Api Odds  Game Pk  Get",
                   "type": "object"
                 }
@@ -7323,7 +8712,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Login Auth Login Post",
                   "type": "object"
                 }
@@ -7357,7 +8745,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Logout Auth Logout Post",
                   "type": "object"
                 }
@@ -7402,7 +8789,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Health Health Get",
                   "type": "object"
                 }

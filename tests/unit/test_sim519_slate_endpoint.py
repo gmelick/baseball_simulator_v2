@@ -122,6 +122,7 @@ def test_schedule_cards_merge_our_data_per_game() -> None:
     assert k["game_status"] == "final"
     assert k["away_score"] is not None and k["home_score"] is not None
     assert k["start_utc"].endswith("+00:00")
+    assert k["n_innings"] >= 9
     # A schedule game with no stored row is still a card.
     unknown = cards[pks[2]]
     assert unknown["db_known"] is False and unknown["lineup_ready"] is False

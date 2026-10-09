@@ -11,15 +11,27 @@
  * Keep them in sync when those models change.
  */
 
-/** The 3-state status enum the UI cares about (server maps 8 raw values → these). */
+/** The card states. Since SIM-519 the server maps the league's status. */
 export type GameStatus = 'scheduled' | 'live' | 'final' | 'postponed'
 
-/** One game row from GET /api/games/{date} (SIM-383 enriched). */
+/** The array-free sim summary a card carries (GameSimSummaryLite). */
+export interface SimSummaryLite {
+  n_iterations: number
+  home_win_pct: number
+  away_win_pct: number
+  home_score_mean: number
+  away_score_mean: number
+  simulated_at: string
+}
+
+/** One game from GET /api/games/{date}. SIM-519: the league's schedule says
+ *  which games exist and their state; our database adds the lineup flag and
+ *  the newest sim run. Every SIM-519 field is optional (an old mock omits it). */
 export interface GameCard {
   game_pk: number
   season: number
   game_date: string
-  /** Raw `raw.games.status` (e.g. "Final", "Preview"); null on sparse rows. */
+  /** The league's detailed state, else the stored `raw.games.status`. */
   status: string | null
   home_team_id: number | null
   away_team_id: number | null
@@ -35,6 +47,35 @@ export interface GameCard {
   home_losses: number | null
   away_wins: number | null
   away_losses: number | null
+  lineup_ready?: boolean | null
+  // SIM-519 Part A
+  game_status?: GameStatus | null
+  detailed_state?: string | null
+  reason?: string | null
+  /** ISO-8601 UTC first pitch; null when TBD. */
+  start_utc?: string | null
+  start_time_tbd?: boolean | null
+  /** N (none), Y (straight) or S (split). */
+  double_header?: string | null
+  game_number?: number | null
+  game_type?: string | null
+  series_description?: string | null
+  away_score?: number | null
+  home_score?: number | null
+  inning?: number | null
+  inning_half?: string | null
+  outs?: number | null
+  n_innings?: number | null
+  away_probable_pitcher_id?: number | null
+  away_probable_pitcher_name?: string | null
+  home_probable_pitcher_id?: number | null
+  home_probable_pitcher_name?: string | null
+  rescheduled_to?: string | null
+  rescheduled_from?: string | null
+  lineup_source?: string | null
+  sim_summary?: SimSummaryLite | null
+  sim_run_at?: string | null
+  db_known?: boolean | null
 }
 
 /** Envelope from GET /api/games/{date}. */
@@ -42,28 +83,122 @@ export interface GamesOnDateResponse {
   date: string
   count: number
   games: GameCard[]
+  /** schedule (fresh or cached), schedule_cached (last good copy) or db. */
+  source?: 'schedule' | 'schedule_cached' | 'db' | null
+  feed_error?: string | null
+  fetched_at?: string | null
 }
 
-/** Map a raw `raw.games.status` value → the 3-state UI status.
- *  Mirrors the server's `_RAW_STATUS_TO_GAME_STATUS` (api/routes/games.py).
- *  The list endpoint returns the raw status; the aggregate `/status` endpoint
- *  returns the already-mapped value. */
-export function rawStatusToGameStatus(raw: string | null | undefined): GameStatus {
-  switch (raw) {
-    case 'Live':
-      return 'live'
-    case 'Final':
-      return 'final'
-    case 'Postponed':
-    case 'Suspended':
-    case 'Cancelled':
-      return 'postponed'
-    case 'Preview':
-    case 'Warmup':
-    case 'Pre-Game':
-    default:
-      return 'scheduled'
+/** The card state of a row: the server's `game_status`, else a map of the
+ *  stored status for an old payload that predates SIM-519. */
+export function cardStatus(game: Pick<GameCard, 'game_status' | 'status'>): GameStatus {
+  if (game.game_status) return game.game_status
+  const raw = game.status ?? ''
+  if (raw === 'Live' || raw === 'In Progress') return 'live'
+  if (raw === 'Final' || raw === 'Game Over') return 'final'
+  if (/^(Postponed|Suspended|Cancelled)/.test(raw)) return 'postponed'
+  return 'scheduled'
+}
+
+// ---------------------------------------------------------------------------
+// The card detail (GET /{game_pk}/feed — GameFeedCardModel, SIM-519 Part I)
+// ---------------------------------------------------------------------------
+
+export interface FeedPerson {
+  id: number
+  name: string
+}
+
+export interface FeedInning {
+  num: number | null
+  away: number | null
+  home: number | null
+}
+
+export interface FeedTotals {
+  runs: number | null
+  hits: number | null
+  errors: number | null
+}
+
+export interface FeedLinescore {
+  innings: FeedInning[]
+  away: FeedTotals
+  home: FeedTotals
+  home_did_not_bat_last: boolean
+  current_inning: number | null
+  inning_half: string | null
+}
+
+export interface FeedLineupSlot {
+  order: number
+  id: number | null
+  name: string
+  pos: string | null
+}
+
+export interface FeedBatterLine {
+  id: number | null
+  name: string
+  pos: string | null
+  batting_order: number | null
+  is_sub: boolean
+  ab: number | null
+  r: number | null
+  h: number | null
+  rbi: number | null
+  bb: number | null
+  k: number | null
+  hr: number | null
+  avg: string | null
+}
+
+export interface FeedPitcherLine {
+  id: number | null
+  name: string
+  outs: number | null
+  ip: string | null
+  h: number | null
+  r: number | null
+  er: number | null
+  bb: number | null
+  k: number | null
+  np: number | null
+  era: string | null
+}
+
+export interface FeedBoxSide {
+  batters: FeedBatterLine[]
+  pitchers: FeedPitcherLine[]
+}
+
+export interface FeedLive {
+  balls: number | null
+  strikes: number | null
+  outs: number | null
+  offense: 'away' | 'home' | null
+  runners: { first: FeedPerson | null; second: FeedPerson | null; third: FeedPerson | null }
+  batter: FeedPerson | null
+  pitcher: (FeedPerson & { np: number | null }) | null
+  fielders: Record<string, string | null>
+  last_play: string | null
+}
+
+export interface GameFeedCard {
+  game_pk: number | null
+  status: GameStatus
+  detailed_state: string | null
+  linescore: FeedLinescore | null
+  lineups: {
+    away: FeedLineupSlot[]
+    home: FeedLineupSlot[]
+    away_probable_pitcher: FeedPerson | null
+    home_probable_pitcher: FeedPerson | null
   }
+  box: { away: FeedBoxSide; home: FeedBoxSide } | null
+  live: FeedLive | null
+  source: 'feed' | 'feed_cached'
+  feed_error: string | null
 }
 
 /** Aggregate card from GET /api/games/{game_pk}/status (SIM-384). */
@@ -329,7 +464,7 @@ export class GamesApiError extends Error {
   }
 }
 
-async function getJson<T>(url: string): Promise<T> {
+export async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { credentials: 'include' })
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { detail?: string }
@@ -355,6 +490,11 @@ async function postJson<T>(url: string, payload: unknown): Promise<T> {
 /** GET /api/games/{date} — the slate for a YYYY-MM-DD date. */
 export function fetchGamesOnDate(date: string): Promise<GamesOnDateResponse> {
   return getJson<GamesOnDateResponse>(`/api/games/${encodeURIComponent(date)}`)
+}
+
+/** GET /api/games/{game_pk}/feed — the real game behind a slate card (SIM-519 Part I). */
+export function fetchGameFeed(gamePk: number): Promise<GameFeedCard> {
+  return getJson<GameFeedCard>(`/api/games/${gamePk}/feed`)
 }
 
 /** GET /api/games/{game_pk}/status — one game's aggregate card. */

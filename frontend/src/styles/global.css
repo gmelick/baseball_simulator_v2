@@ -175,6 +175,7 @@ button {
 }
 
 .app-header__title {
+  white-space: nowrap;
   font-family: var(--dd-font-display);
   font-weight: 800;
   font-size: 26px;
@@ -237,11 +238,27 @@ button {
   }
 
   .app-header__title {
-    font-size: 21px;
+    font-size: 20px;
+  }
+
+  .app-header__logo {
+    width: 24px;
+    height: 24px;
   }
 
   .app-header__left {
-    gap: var(--sim-space-3);
+    flex-wrap: wrap;
+    gap: var(--sim-space-1) var(--sim-space-3);
+  }
+
+  .app-header__nav {
+    flex-wrap: wrap;
+    gap: var(--sim-space-1) var(--sim-space-3);
+  }
+
+  .app-header__nav a,
+  .app-header__logout {
+    font-size: 15px;
   }
 }
 

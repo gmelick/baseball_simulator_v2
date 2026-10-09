@@ -3,6 +3,11 @@ import { fileURLToPath, URL } from 'node:url'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
+// The backend the dev server proxies to. API_TARGET points it at another
+// app, e.g. a worktree's app on :8010 (SIM-519).
+const API = process.env.API_TARGET ?? 'http://localhost:8000'
+const WS = API.replace(/^http/, 'ws')
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
@@ -28,25 +33,25 @@ export default defineConfig({
     // the frontend dev server has no CORS issues in development.
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: API,
         changeOrigin: true,
       },
       // SIM-389: auth endpoints — proxy /auth/* so the browser's httpOnly
       // cookie is set by the Vite dev origin (localhost:5173), not :8000.
       // Subsequent requests from the frontend include the cookie automatically.
       '/auth': {
-        target: 'http://localhost:8000',
+        target: API,
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://localhost:8000',
+        target: WS,
         ws: true,
         changeOrigin: true,
       },
-      '/health': 'http://localhost:8000',
-      '/ready': 'http://localhost:8000',
-      '/docs': 'http://localhost:8000',
-      '/openapi.json': 'http://localhost:8000',
+      '/health': API,
+      '/ready': API,
+      '/docs': API,
+      '/openapi.json': API,
     },
   },
 })

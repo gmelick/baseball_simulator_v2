@@ -191,6 +191,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/betting/games/{game_pk}/card-odds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The book's pregame lines for a slate card (SIM-519 Part I)
+         * @description The graded book's moneyline, run line and total for one game, from the stored rows only (never the mock): the closing row once stored, else the latest current row while the game is in Preview. On a final game `settled` says how each line settled. 404 when the game has no stored row for any of the three.
+         */
+        get: operations["get_card_odds_api_betting_games__game_pk__card_odds_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/betting/games/{game_pk}/clv": {
         parameters: {
             query?: never;
@@ -300,7 +320,7 @@ export interface paths {
         };
         /**
          * Games scheduled on a date
-         * @description List the games on a date (YYYY-MM-DD) from raw.games. The result is memoized at POOL_QUERY_TTL_S (300s) when a sim cache is attached (SIM-359). Returns 503 if no DB pool is attached, 422 on a bad date.
+         * @description List the games on a date (YYYY-MM-DD). SIM-519: the league's schedule says which games exist and what state they are in; our database adds the lineup flag and the newest simulation run per game. The schedule is cached 20 s for today, 10 min for a future date and 24 h for a past one. When the league feed fails, the endpoint serves the last good schedule, else the stored listing, and says which in `source`. 422 on a bad date; 503 when the feed is down and no database pool is attached.
          */
         get: operations["get_games_on_date_api_games__date__get"];
         put?: never;
@@ -363,6 +383,26 @@ export interface paths {
          * @description Return the persisted W/L/Save pitcher decisions (SIM-364) for the game's most-recent persisted run -- derived at record time from the recorded PlayResult stream by /simulate and served from the DuckDB game-card store. All three pitcher ids are null on a tie / no-decision. numpy-free JSON. 404 if no card has been persisted, 503 if no replay store is wired.
          */
         get: operations["get_game_decisions_api_games__game_pk__decisions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/games/{game_pk}/feed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The real game behind a slate card (SIM-519 Part I)
+         * @description The league's live feed for one game, reduced to what the Daily Diamond card shows: the linescore, both box scores, the posted lineups and probable pitchers, and for a live game the count, runners, fielders, the pitcher's pitch count and the last play. Cached 10 s while live, 10 min before the game and 24 h once final. On a league error the last good copy is served (`source = feed_cached`); with none, 503 with Retry-After.
+         */
+        get: operations["get_game_feed_api_games__game_pk__feed_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1016,6 +1056,78 @@ export interface components {
             /** Entry Fair Prob */
             entry_fair_prob: number;
         };
+        /** CardMoneyline */
+        CardMoneyline: {
+            /** Away */
+            away: number;
+            /** Book */
+            book: string;
+            /** Home */
+            home: number;
+            /** Line Type */
+            line_type: string;
+        };
+        /**
+         * CardOddsResponse
+         * @description The book's pregame lines for one slate card (SIM-519 Part I).
+         *
+         *     Each market is the graded book's row (``GRADED_BOOK_PREFERENCE``): its
+         *     closing row once stored, else its latest current row while the game is in
+         *     Preview. A market with no stored row is null. Never the mock.
+         */
+        CardOddsResponse: {
+            /** Game Pk */
+            game_pk: number;
+            moneyline?: components["schemas"]["CardMoneyline"] | null;
+            runline?: components["schemas"]["CardRunLine"] | null;
+            settled?: components["schemas"]["CardSettlement"] | null;
+            total?: components["schemas"]["CardTotal"] | null;
+        };
+        /** CardRunLine */
+        CardRunLine: {
+            away: components["schemas"]["CardRunLineSide"];
+            /** Book */
+            book: string;
+            home: components["schemas"]["CardRunLineSide"];
+            /** Line Type */
+            line_type: string;
+        };
+        /** CardRunLineSide */
+        CardRunLineSide: {
+            /** Line */
+            line: number;
+            /** Price */
+            price: number;
+        };
+        /**
+         * CardSettlement
+         * @description How each pregame line settled on the final score.
+         */
+        CardSettlement: {
+            /** Away Score */
+            away_score: number;
+            /** Home Score */
+            home_score: number;
+            /** Moneyline */
+            moneyline?: string | null;
+            /** Runline */
+            runline?: string | null;
+            /** Total */
+            total?: string | null;
+        };
+        /** CardTotal */
+        CardTotal: {
+            /** Book */
+            book: string;
+            /** Line */
+            line: number;
+            /** Line Type */
+            line_type: string;
+            /** Over */
+            over: number;
+            /** Under */
+            under: number;
+        };
         /** ChatTurn */
         ChatTurn: {
             /** Content */
@@ -1266,6 +1378,171 @@ export interface components {
             /** Supports Vs Hand */
             supports_vs_hand: boolean;
         };
+        /** FeedBatterLine */
+        FeedBatterLine: {
+            /** Ab */
+            ab?: number | null;
+            /** Avg */
+            avg?: string | null;
+            /** Batting Order */
+            batting_order?: number | null;
+            /** Bb */
+            bb?: number | null;
+            /** H */
+            h?: number | null;
+            /** Hr */
+            hr?: number | null;
+            /** Id */
+            id?: number | null;
+            /**
+             * Is Sub
+             * @default false
+             */
+            is_sub: boolean;
+            /** K */
+            k?: number | null;
+            /** Name */
+            name: string;
+            /** Pos */
+            pos?: string | null;
+            /** R */
+            r?: number | null;
+            /** Rbi */
+            rbi?: number | null;
+        };
+        /** FeedBox */
+        FeedBox: {
+            away?: components["schemas"]["FeedBoxSide"];
+            home?: components["schemas"]["FeedBoxSide"];
+        };
+        /** FeedBoxSide */
+        FeedBoxSide: {
+            /** Batters */
+            batters?: components["schemas"]["FeedBatterLine"][];
+            /** Pitchers */
+            pitchers?: components["schemas"]["FeedPitcherLine"][];
+        };
+        /** FeedInning */
+        FeedInning: {
+            /** Away */
+            away?: number | null;
+            /** Home */
+            home?: number | null;
+            /** Num */
+            num?: number | null;
+        };
+        /** FeedLinescore */
+        FeedLinescore: {
+            away?: components["schemas"]["FeedTotals"];
+            /** Current Inning */
+            current_inning?: number | null;
+            home?: components["schemas"]["FeedTotals"];
+            /**
+             * Home Did Not Bat Last
+             * @default false
+             */
+            home_did_not_bat_last: boolean;
+            /** Inning Half */
+            inning_half?: string | null;
+            /** Innings */
+            innings?: components["schemas"]["FeedInning"][];
+        };
+        /** FeedLineupSlot */
+        FeedLineupSlot: {
+            /** Id */
+            id?: number | null;
+            /** Name */
+            name: string;
+            /** Order */
+            order: number;
+            /** Pos */
+            pos?: string | null;
+        };
+        /** FeedLineups */
+        FeedLineups: {
+            /** Away */
+            away?: components["schemas"]["FeedLineupSlot"][];
+            away_probable_pitcher?: components["schemas"]["FeedPerson"] | null;
+            /** Home */
+            home?: components["schemas"]["FeedLineupSlot"][];
+            home_probable_pitcher?: components["schemas"]["FeedPerson"] | null;
+        };
+        /** FeedLive */
+        FeedLive: {
+            /** Balls */
+            balls?: number | null;
+            batter?: components["schemas"]["FeedPerson"] | null;
+            /** Fielders */
+            fielders?: {
+                [key: string]: string | null;
+            };
+            /** Last Play */
+            last_play?: string | null;
+            /** Offense */
+            offense?: ("away" | "home") | null;
+            /** Outs */
+            outs?: number | null;
+            pitcher?: components["schemas"]["FeedPitcher"] | null;
+            runners?: components["schemas"]["FeedRunners"];
+            /** Strikes */
+            strikes?: number | null;
+        };
+        /** FeedPerson */
+        FeedPerson: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+        };
+        /** FeedPitcher */
+        FeedPitcher: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Np */
+            np?: number | null;
+        };
+        /** FeedPitcherLine */
+        FeedPitcherLine: {
+            /** Bb */
+            bb?: number | null;
+            /** Er */
+            er?: number | null;
+            /** Era */
+            era?: string | null;
+            /** H */
+            h?: number | null;
+            /** Id */
+            id?: number | null;
+            /** Ip */
+            ip?: string | null;
+            /** K */
+            k?: number | null;
+            /** Name */
+            name: string;
+            /** Np */
+            np?: number | null;
+            /** Outs */
+            outs?: number | null;
+            /** R */
+            r?: number | null;
+        };
+        /** FeedRunners */
+        FeedRunners: {
+            first?: components["schemas"]["FeedPerson"] | null;
+            second?: components["schemas"]["FeedPerson"] | null;
+            third?: components["schemas"]["FeedPerson"] | null;
+        };
+        /** FeedTotals */
+        FeedTotals: {
+            /** Errors */
+            errors?: number | null;
+            /** Hits */
+            hits?: number | null;
+            /** Runs */
+            runs?: number | null;
+        };
         /**
          * FieldSnapshotModel
          * @description Response model for :class:`simulation.snapshots.FieldSnapshot` (SIM-331).
@@ -1323,6 +1600,12 @@ export interface components {
         GameCard: {
             /** Away Losses */
             away_losses?: number | null;
+            /** Away Probable Pitcher Id */
+            away_probable_pitcher_id?: number | null;
+            /** Away Probable Pitcher Name */
+            away_probable_pitcher_name?: string | null;
+            /** Away Score */
+            away_score?: number | null;
             /** Away Team Abbrev */
             away_team_abbrev?: string | null;
             /** Away Team Id */
@@ -1331,12 +1614,30 @@ export interface components {
             away_team_name?: string | null;
             /** Away Wins */
             away_wins?: number | null;
+            /** Db Known */
+            db_known?: boolean | null;
+            /** Detailed State */
+            detailed_state?: string | null;
+            /** Double Header */
+            double_header?: string | null;
             /** Game Date */
             game_date: string;
+            /** Game Number */
+            game_number?: number | null;
             /** Game Pk */
             game_pk: number;
+            /** Game Status */
+            game_status?: ("scheduled" | "live" | "final" | "postponed") | null;
+            /** Game Type */
+            game_type?: string | null;
             /** Home Losses */
             home_losses?: number | null;
+            /** Home Probable Pitcher Id */
+            home_probable_pitcher_id?: number | null;
+            /** Home Probable Pitcher Name */
+            home_probable_pitcher_name?: string | null;
+            /** Home Score */
+            home_score?: number | null;
             /** Home Team Abbrev */
             home_team_abbrev?: string | null;
             /** Home Team Id */
@@ -1345,10 +1646,35 @@ export interface components {
             home_team_name?: string | null;
             /** Home Wins */
             home_wins?: number | null;
+            /** Inning */
+            inning?: number | null;
+            /** Inning Half */
+            inning_half?: string | null;
             /** Lineup Ready */
             lineup_ready?: boolean | null;
+            /** Lineup Source */
+            lineup_source?: string | null;
+            /** N Innings */
+            n_innings?: number | null;
+            /** Outs */
+            outs?: number | null;
+            /** Reason */
+            reason?: string | null;
+            /** Rescheduled From */
+            rescheduled_from?: string | null;
+            /** Rescheduled To */
+            rescheduled_to?: string | null;
             /** Season */
             season: number;
+            /** Series Description */
+            series_description?: string | null;
+            /** Sim Run At */
+            sim_run_at?: string | null;
+            sim_summary?: components["schemas"]["GameSimSummaryLite"] | null;
+            /** Start Time Tbd */
+            start_time_tbd?: boolean | null;
+            /** Start Utc */
+            start_utc?: string | null;
             /** Status */
             status?: string | null;
             /** Venue City */
@@ -1428,6 +1754,38 @@ export interface components {
             linescore: components["schemas"]["LinescoreModel"];
             /** Run Id */
             run_id?: number | null;
+        };
+        /**
+         * GameFeedCardModel
+         * @description ``GET /api/games/{game_pk}/feed``: the real game behind a slate card.
+         *
+         *     ``linescore`` and ``box`` are set on a live or final game; ``live`` on a
+         *     live game only; ``lineups`` carries the posted batting orders (empty until
+         *     the league posts them) and the probable pitchers. ``source`` is ``feed``
+         *     (fresh or cached) or ``feed_cached`` (the last good copy after an error).
+         */
+        GameFeedCardModel: {
+            box?: components["schemas"]["FeedBox"] | null;
+            /** Detailed State */
+            detailed_state?: string | null;
+            /** Feed Error */
+            feed_error?: string | null;
+            /** Game Pk */
+            game_pk?: number | null;
+            linescore?: components["schemas"]["FeedLinescore"] | null;
+            lineups?: components["schemas"]["FeedLineups"];
+            live?: components["schemas"]["FeedLive"] | null;
+            /**
+             * Source
+             * @default feed
+             * @enum {string}
+             */
+            source: "feed" | "feed_cached";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "scheduled" | "live" | "final" | "postponed";
         };
         /**
          * GameSimSummaryLite
@@ -1537,14 +1895,25 @@ export interface components {
         /**
          * GamesOnDateResponse
          * @description The ``GET /api/games/{date}`` envelope: the date echo + its game cards.
+         *
+         *     SIM-519 Part A: ``source`` says where the list came from -- ``schedule``
+         *     (the league's schedule, fresh or from the 20-second cache),
+         *     ``schedule_cached`` (the last good schedule after a feed error) or ``db``
+         *     (the stored listing). ``feed_error`` carries the error on a degraded read.
          */
         GamesOnDateResponse: {
             /** Count */
             count: number;
             /** Date */
             date: string;
+            /** Feed Error */
+            feed_error?: string | null;
+            /** Fetched At */
+            fetched_at?: string | null;
             /** Games */
             games?: components["schemas"]["GameCard"][];
+            /** Source */
+            source?: ("schedule" | "schedule_cached" | "db") | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -2292,9 +2661,7 @@ export interface components {
              * Extra
              * @default {}
              */
-            extra: {
-                [key: string]: unknown;
-            };
+            extra: Record<string, never>;
             /** Name */
             name: string;
             /** Sample */
@@ -2321,18 +2688,14 @@ export interface components {
             /** Sub Scores Meta */
             sub_scores_meta: components["schemas"]["SubScoreMeta"][];
             /** Subject */
-            subject: {
-                [key: string]: unknown;
-            };
+            subject: Record<string, never>;
         };
         /** SimQueryResponse */
         SimQueryResponse: {
             /** Bins */
             bins: components["schemas"]["SimBin"][];
             /** Diagnostic */
-            diagnostic: {
-                [key: string]: unknown;
-            };
+            diagnostic: Record<string, never>;
             /** Engine */
             engine: string;
             /** Method */
@@ -2357,9 +2720,7 @@ export interface components {
             /** Sub Scores Meta */
             sub_scores_meta: components["schemas"]["SubScoreMeta"][];
             /** Subject */
-            subject: {
-                [key: string]: unknown;
-            };
+            subject: Record<string, never>;
             /** Top N */
             top_n: components["schemas"]["SimMember"][];
         };
@@ -2700,9 +3061,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": Record<string, never>[];
                 };
             };
         };
@@ -2727,9 +3086,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": Record<string, never>[];
                 };
             };
             /** @description Validation Error */
@@ -2784,9 +3141,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": Record<string, never>[];
                 };
             };
             /** @description Validation Error */
@@ -2820,9 +3175,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": Record<string, never>[];
                 };
             };
             /** @description Validation Error */
@@ -2856,9 +3209,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": Record<string, never>[];
                 };
             };
             /** @description Validation Error */
@@ -2892,9 +3243,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": Record<string, never>[];
                 };
             };
             /** @description Validation Error */
@@ -2928,9 +3277,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": Record<string, never>[];
                 };
             };
             /** @description Validation Error */
@@ -2963,9 +3310,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": Record<string, never>[];
                 };
             };
             /** @description Validation Error */
@@ -3028,6 +3373,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AssistantStatus"];
+                };
+            };
+        };
+    };
+    get_card_odds_api_betting_games__game_pk__card_odds_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                game_pk: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CardOddsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -3255,7 +3631,7 @@ export interface operations {
     get_games_on_date_api_games__date__get: {
         parameters: {
             query?: {
-                /** @description Consult/populate the listing cache */
+                /** @description Consult/populate the schedule cache */
                 use_cache?: boolean;
             };
             header?: never;
@@ -3371,6 +3747,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PitcherDecisionsModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_game_feed_api_games__game_pk__feed_get: {
+        parameters: {
+            query?: {
+                use_cache?: boolean;
+            };
+            header?: never;
+            path: {
+                game_pk: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GameFeedCardModel"];
                 };
             };
             /** @description Validation Error */
@@ -3723,9 +4132,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": Record<string, never>[];
                 };
             };
         };
@@ -3747,9 +4154,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -4103,9 +4508,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -4134,9 +4537,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": Record<string, never>;
                 };
             };
         };
@@ -4176,9 +4577,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": Record<string, never>;
                 };
             };
         };

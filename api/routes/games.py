@@ -310,6 +310,7 @@ class GameCard(BaseModel):
     inning: int | None = None
     inning_half: str | None = None
     outs: int | None = None
+    n_innings: int | None = None
     away_probable_pitcher_id: int | None = None
     away_probable_pitcher_name: str | None = None
     home_probable_pitcher_id: int | None = None
@@ -1345,6 +1346,7 @@ def _schedule_card(g: Any, enrich: Any | None, run: Any | None) -> GameCard:
         inning=g.inning,
         inning_half=g.inning_half,
         outs=g.outs,
+        n_innings=g.n_innings if played else None,
         away_probable_pitcher_id=away_pp.player_id if away_pp else None,
         away_probable_pitcher_name=away_pp.name if away_pp else None,
         home_probable_pitcher_id=home_pp.player_id if home_pp else None,

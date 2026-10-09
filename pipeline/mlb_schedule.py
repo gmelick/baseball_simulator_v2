@@ -122,6 +122,7 @@ class ScheduleGame:
     inning: int | None
     inning_half: str | None
     outs: int | None
+    n_innings: int | None
     rescheduled_to: date | None
     rescheduled_from: date | None
     resumed_from: date | None
@@ -232,6 +233,8 @@ def parse_game(entry: Mapping[str, Any]) -> ScheduleGame:
         inning=_int(linescore.get("currentInning")) if live else None,
         inning_half=(linescore.get("inningHalf") or linescore.get("inningState")) if live else None,
         outs=_int(linescore.get("outs")) if live else None,
+        # The innings played so far ("Final/10" on an extra-inning card).
+        n_innings=len(linescore.get("innings") or []) or None,
         rescheduled_to=_date(entry.get("rescheduleGameDate") or entry.get("rescheduleDate")),
         rescheduled_from=_date(entry.get("rescheduledFrom")),
         resumed_from=_date(entry.get("resumedFrom")),

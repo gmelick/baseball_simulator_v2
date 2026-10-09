@@ -1,0 +1,57 @@
+.team {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  color: var(--sim-color-text);
+}
+
+.home {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.dim {
+  color: var(--sim-gray-600);
+}
+
+.logo {
+  width: 52px;
+  height: 52px;
+  margin-bottom: 2px;
+  object-fit: contain;
+}
+
+.dim .logo,
+.dim .chip {
+  opacity: 0.55;
+}
+
+.chip {
+  width: 48px;
+  height: 30px;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  color: var(--sim-gray-100);
+  font-family: var(--sim-font-mono);
+  font-weight: 700;
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+}
+
+.name {
+  font-family: var(--dd-font-display);
+  font-weight: 700;
+  font-size: 21px;
+  line-height: 1.05;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.record {
+  font-family: var(--sim-font-mono);
+  font-size: 11.5px;
+  color: var(--sim-color-text-muted);
+}
