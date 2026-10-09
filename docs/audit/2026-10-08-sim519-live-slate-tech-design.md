@@ -350,10 +350,18 @@ entry carries both sides' lineups, the live service:
    Run button).
 
 When the game ends and the nightly loader writes the final box, the loader's write is the
-authority. Build-time check: the per-game load path must delete the game's `published` rows
-before it inserts (the reload path already deletes and re-inserts a game in one transaction;
-confirm the first-load path does the same, or add the delete). The `source` column makes the
-rule testable: after a final load, no `published` row remains for the game.
+authority. **The loader must delete the game's `published` and `projected` rows before its
+insert; today it does not.** The table has a unique slot
+(`uq_game_lineup_slot` on `game_pk, team_id, player_id, sequence`, migration 0001), and the
+first-load path inserts with `ON CONFLICT ... DO NOTHING`
+(`etl_historical_loader.py:3001-3005`) and never deletes. Under that rule a pre-game row would
+win over the final box's row for the same player, and a player scratched after the last
+pre-game poll would stay in the lineup beside the real starter. Only the reload path
+(`reload_game`) deletes a game before it re-inserts. The build adds one statement to the
+first-load path, inside its transaction: `DELETE FROM raw.game_lineups WHERE game_pk = $1 AND
+source <> 'box'`. The `source` column makes the rule testable: after a final load, no
+`published` row remains for the game, and the game's rows equal what a load with no pre-game
+rows produces.
 
 ### 5.3 What the simulator then does with a preview game
 
@@ -834,7 +842,11 @@ A decision changes the build; none changes the order of work.
   upserts) before the game row, or the upsert fails silently as it did before SIM-438. A unit
   test covers the order.
 - **Two writers of the lineup table.** The `source` column and the delete-before-insert rule
-  keep them apart; the build-time check in §5.2 confirms the first-load path deletes.
+  keep them apart. The delete is a required change to the loader's first-load path (§5.2):
+  its insert skips a row that already exists, so without the delete a pre-game row would
+  outlive the final box. The stored rows of every finished game are not touched by the
+  build: the new column defaults to `box`, and the delete removes only rows the live service
+  wrote.
 - **The vendor behind the live service.** The pre-game odds cycle reads the vendor every ten
   minutes per game. With the provider's retries off (the one-book ruling), a vendor outage
   costs that pass only.
