@@ -560,7 +560,9 @@ class _StubPool:
 
     @property
     def status_calls(self):
-        return [(sql, args) for sql, args in self.calls if "FROM raw.games" in sql]
+        # The game's status read (the edge route also reads the final's grid
+        # to grade the bets, a separate query).
+        return [(sql, args) for sql, args in self.calls if "SELECT status FROM raw.games" in sql]
 
 
 def _state() -> GameState:

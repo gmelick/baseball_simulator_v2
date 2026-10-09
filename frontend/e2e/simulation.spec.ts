@@ -46,7 +46,7 @@ async function mockGamePage(page: Page): Promise<void> {
       }),
     }),
   )
-  for (const sub of ['linescore', 'plays', 'live', 'card']) {
+  for (const sub of ['linescore', 'plays', 'live', 'card', 'feed']) {
     await page.route(`**/api/games/${PK}/${sub}**`, (route) =>
       route.fulfill({ status: 404, contentType: 'application/json', body: '{"detail":"none"}' }),
     )
@@ -99,6 +99,8 @@ test('Run queues, the bar fills, and the projections read the finished run', asy
   await expect(card.getByText('40 / 100 games')).toBeVisible()
   await expect(card.getByText(/100 games · .* published lineup · generic bullpen/)).toBeVisible()
   await expect(card.getByRole('button', { name: 'Re-run' })).toBeVisible()
+  // The Projections panel starts collapsed; the run's projections load behind it.
+  await page.getByRole('button', { name: 'Projections', exact: true }).click()
   await expect(page.getByText('Rafael Devers')).toBeVisible()
   expect(boxscoreUrl).toContain('run_id=7')
 })

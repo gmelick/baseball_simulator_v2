@@ -1306,6 +1306,15 @@ _SLATE_RUNS_SQL = """
      ORDER BY game_pk, created_at DESC
 """
 
+#: The same, the game's own finished simulation only (Alembic 0030: not a
+#: what-if run, and a run with a summary).
+_SLATE_PREGAME_RUNS_SQL = """
+    SELECT DISTINCT ON (game_pk) game_pk, run_id, n_iterations, summary, created_at
+      FROM sim.sim_runs
+     WHERE game_pk = ANY($1::int[]) AND kind = 'pregame' AND summary IS NOT NULL
+     ORDER BY game_pk, created_at DESC
+"""
+
 
 def _slate_today() -> _date:
     return datetime.now(SLATE_TZ).date()
@@ -1451,11 +1460,13 @@ async def _slate_merge_rows(pool: Any, pks: list[int]) -> tuple[dict[int, Any], 
             break
         except Exception as exc:  # noqa: BLE001 -- before 0029, the plain read; else no enrichment
             log.warning("slate: the stored enrichment read failed: %s", exc)
-    try:
-        for r in await pool.fetch(_SLATE_RUNS_SQL, pks) or []:
-            runs[int(_row_get(r, "game_pk"))] = r
-    except Exception as exc:  # noqa: BLE001 -- a missing run table means no sim line
-        log.warning("slate: the sim-run read failed: %s", exc)
+    for sql in (_SLATE_PREGAME_RUNS_SQL, _SLATE_RUNS_SQL):
+        try:
+            for r in await pool.fetch(sql, pks) or []:
+                runs[int(_row_get(r, "game_pk"))] = r
+            break
+        except Exception as exc:  # noqa: BLE001 -- before 0030 the plain read; no table = no sim line
+            log.warning("slate: the sim-run read failed: %s", exc)
     return enrich, runs
 
 
@@ -1787,6 +1798,71 @@ class GameFeedCardModel(BaseModel):
     feed_error: str | None = None
 
 
+async def _league_game_payload(
+    request: Request, game_pk: int, *, use_cache: bool = True
+) -> tuple[Any, str, str | None]:
+    """The league's raw feed of one game, cached; ``(payload, source, error)``.
+
+    One cached copy serves the slate card (``/feed``), the real play-by-play
+    (``/feed/plays``) and the what-if state (``/feed/state``). The TTL follows
+    the game's state (10 s live, 10 min before the game, 24 h final). On a league
+    error the last good copy is served (``source = feed_cached``); with none the
+    payload is None.
+    """
+    from pipeline.mlb_game_feed import feed_state
+
+    feed = getattr(request.app.state, "league_feed", None)
+    cache = _get_sim_cache(request)
+    key, last_key = f"feed:raw:v1:{game_pk}", f"feed:rawlast:v1:{game_pk}"
+    if use_cache and cache is not None:
+        try:
+            hit = cache.get(key)
+        except Exception:  # noqa: BLE001 -- a cache hiccup must not break the read
+            hit = None
+        if hit is not None:
+            return hit, "feed", None
+    error: str | None = None
+    if feed is None:
+        error = "no league feed attached"
+    else:
+        try:
+            payload = await feed.game_feed_payload(int(game_pk))
+        except Exception as exc:  # noqa: BLE001 -- degrade to the last good copy
+            error = f"{type(exc).__name__}: {exc}"[:300]
+            log.warning("feed: the league read failed for %s: %s", game_pk, error)
+        else:
+            if cache is not None:
+                try:
+                    state = feed_state((payload.get("gameData") or {}).get("status") or {})
+                    cache.set(key, payload, FEED_TTL_BY_STATE_S.get(state, 60))
+                    cache.set(last_key, payload, FEED_LAST_GOOD_TTL_S)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("feed cache write failed for %s: %s", key, exc)
+            return payload, "feed", None
+    last = None
+    if cache is not None:
+        try:
+            last = cache.get(last_key)
+        except Exception:  # noqa: BLE001
+            last = None
+    if last is not None:
+        return last, "feed_cached", error
+    return None, "none", error
+
+
+def _feed_unavailable(game_pk: int, error: str | None) -> Any:
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": f"the league feed for game {game_pk} is unavailable",
+            "feed_error": error,
+        },
+        headers={"Retry-After": "30"},
+    )
+
+
 @router.get(
     "/{game_pk}/feed",
     response_model=GameFeedCardModel,
@@ -1801,57 +1877,238 @@ class GameFeedCardModel(BaseModel):
     ),
 )
 async def get_game_feed(game_pk: int, request: Request, use_cache: bool = Query(True)) -> Any:
-    from fastapi.responses import JSONResponse
-
     from pipeline.mlb_game_feed import parse_game_feed
 
-    feed = getattr(request.app.state, "league_feed", None)
-    cache = _get_sim_cache(request)
-    key, last_key = f"feed:v1:{game_pk}", f"feed:last:{game_pk}"
-    if use_cache and cache is not None:
-        try:
-            hit = cache.get(key)
-        except Exception:  # noqa: BLE001 -- a cache hiccup must not break the read
-            hit = None
-        if hit is not None:
-            return GameFeedCardModel(**hit)
+    payload, source, error = await _league_game_payload(request, game_pk, use_cache=use_cache)
+    if payload is None:
+        return _feed_unavailable(game_pk, error)
+    try:
+        card = GameFeedCardModel(**parse_game_feed(payload))
+    except Exception as exc:  # noqa: BLE001 -- a malformed feed is a league error
+        log.warning("feed: the league feed for %s did not parse: %s", game_pk, exc)
+        return _feed_unavailable(game_pk, f"{type(exc).__name__}: {exc}"[:300])
+    if source == "feed_cached":
+        card.source = "feed_cached"
+        card.feed_error = error
+    return card
 
-    error: str | None = None
-    if feed is None:
-        error = "no league feed attached"
-    else:
-        try:
-            parsed = parse_game_feed(await feed.game_feed_payload(int(game_pk)))
-            card = GameFeedCardModel(**parsed)
-        except Exception as exc:  # noqa: BLE001 -- degrade to the last good copy
-            error = f"{type(exc).__name__}: {exc}"[:300]
-            log.warning("feed: the league read failed for %s: %s", game_pk, error)
-        else:
-            if cache is not None:
-                try:
-                    dumped = card.model_dump()
-                    cache.set(key, dumped, FEED_TTL_BY_STATE_S.get(card.status, 60))
-                    cache.set(last_key, dumped, FEED_LAST_GOOD_TTL_S)
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("feed cache write failed for %s: %s", key, exc)
-            return card
 
-    last = None
-    if cache is not None:
-        try:
-            last = cache.get(last_key)
-        except Exception:  # noqa: BLE001
-            last = None
-    if last is not None:
-        return GameFeedCardModel(**{**last, "source": "feed_cached", "feed_error": error})
-    return JSONResponse(
-        status_code=503,
-        content={
-            "detail": f"the league feed for game {game_pk} is unavailable",
-            "feed_error": error,
-        },
-        headers={"Retry-After": "30"},
+class RealPlayRunners(BaseModel):
+    first: int | None = None
+    second: int | None = None
+    third: int | None = None
+
+
+class RealPitch(BaseModel):
+    call: str | None = None
+    type: str | None = None
+    speed: float | None = None
+
+
+class RealPlay(BaseModel):
+    at_bat: int
+    inning: int
+    half: Literal["top", "bottom"]
+    batter_id: int | None = None
+    pitcher_id: int | None = None
+    event: str | None = None
+    event_type: str | None = None
+    description: str | None = None
+    rbi: int = 0
+    batter_finished: bool = True
+    outs_before: int = 0
+    outs_after: int = 0
+    away_score_before: int = 0
+    home_score_before: int = 0
+    away_score_after: int = 0
+    home_score_after: int = 0
+    runners: RealPlayRunners = Field(default_factory=RealPlayRunners)
+    pitches: list[RealPitch] = Field(default_factory=list)
+    is_complete: bool = True
+
+
+class RealPlaysModel(BaseModel):
+    """``GET /api/games/{game_pk}/feed/plays``: the real game's plate appearances."""
+
+    game_pk: int
+    status: Literal["scheduled", "live", "final", "postponed"]
+    plays: list[RealPlay] = Field(default_factory=list)
+    names: dict[str, str] = Field(default_factory=dict)
+    source: Literal["feed", "feed_cached"] = "feed"
+
+
+@router.get(
+    "/{game_pk}/feed/plays",
+    response_model=RealPlaysModel,
+    summary="The real game's play-by-play",
+    description=(
+        "Every plate appearance of the real game from the league feed (the same cached "
+        "copy as /feed): inning, half, batter, pitcher, the event and its description, "
+        "outs and score before and after, the runners at its start, and its pitches. "
+        "503 with Retry-After when the feed is unavailable."
+    ),
+)
+async def get_real_plays(game_pk: int, request: Request) -> Any:
+    from pipeline.mlb_game_feed import feed_state, parse_plays
+
+    payload, source, error = await _league_game_payload(request, game_pk)
+    if payload is None:
+        return _feed_unavailable(game_pk, error)
+    parsed = parse_plays(payload)
+    return RealPlaysModel(
+        game_pk=int(game_pk),
+        status=feed_state((payload.get("gameData") or {}).get("status") or {}),  # type: ignore[arg-type]
+        plays=[RealPlay(**p) for p in parsed["plays"]],
+        names={str(k): v for k, v in parsed["names"].items()},
+        source="feed_cached" if source == "feed_cached" else "feed",
     )
+
+
+class PlayerOption(BaseModel):
+    id: int
+    name: str
+    position: str | None = None
+    bats: str | None = None
+    throws: str | None = None
+
+
+class LineupSpot(BaseModel):
+    slot: int
+    id: int
+    name: str
+    position: str | None = None
+
+
+class SideState(BaseModel):
+    lineup: list[LineupSpot]
+    pitcher: PlayerOption
+    defense: dict[str, PlayerOption]
+    bench: list[PlayerOption] = Field(default_factory=list)
+    bullpen: list[PlayerOption] = Field(default_factory=list)
+    used: list[PlayerOption] = Field(default_factory=list)
+
+
+class PaStateModel(BaseModel):
+    """``GET /api/games/{game_pk}/feed/state``: the game at the start of a plate
+    appearance (``at_bat`` omitted = first pitch), for the what-if panel. ``live``
+    has the shape of the slate's field, so the page draws it with ``CardField``."""
+
+    game_pk: int
+    at_bat: int | None = None
+    inning: int
+    half: Literal["top", "bottom"]
+    outs: int
+    away_score: int
+    home_score: int
+    batting_side: Literal["away", "home"]
+    live: FeedLive
+    away: SideState
+    home: SideState
+
+
+def _option(ss: Mapping[str, Any], pid: int, position: str | None = None) -> PlayerOption:
+    return PlayerOption(
+        id=int(pid),
+        name=str((ss.get("names") or {}).get(str(pid), f"Player {pid}")),
+        position=position,
+        bats=(ss.get("bat_hands") or {}).get(str(pid)),
+        throws=(ss.get("throw_hands") or {}).get(str(pid)),
+    )
+
+
+def _pa_state_model(game_pk: int, ss: Mapping[str, Any]) -> PaStateModel:
+    sides: dict[str, SideState] = {}
+    for side in ("away", "home"):
+        defense = ss[f"{side}_defense"]
+        pos_of = {int(v): k for k, v in defense.items()}
+        sides[side] = SideState(
+            lineup=[
+                LineupSpot(
+                    slot=i,
+                    id=int(pid),
+                    name=_option(ss, pid).name,
+                    position=pos_of.get(int(pid), "DH"),
+                )
+                for i, pid in enumerate(ss[f"{side}_lineup"])
+            ],
+            pitcher=_option(ss, ss[f"{side}_pitcher"], "P"),
+            defense={pos: _option(ss, pid, pos) for pos, pid in defense.items()},
+            bench=[_option(ss, p) for p in ss["eligible"][side]["hitters"]],
+            bullpen=[_option(ss, p, "P") for p in ss["eligible"][side]["pitchers"]],
+            used=[_option(ss, p) for p in ss["used"][side]],
+        )
+    batting = ss["batting_side"]
+    fielding = "home" if batting == "away" else "away"
+    due = ss[f"{batting}_lineup"][ss[f"{batting}_slot"]]
+    pitcher = int(ss[f"{fielding}_pitcher"])
+
+    def person(pid: Any) -> FeedPerson | None:
+        return None if pid is None else FeedPerson(id=int(pid), name=_option(ss, pid).name)
+
+    live = FeedLive(
+        balls=0,
+        strikes=0,
+        outs=int(ss["outs"]),
+        offense=batting,  # type: ignore[arg-type]
+        runners=FeedRunners(
+            **{b: person(ss["runners"].get(b)) for b in ("first", "second", "third")}
+        ),
+        batter=person(due),
+        pitcher=FeedPitcher(
+            id=pitcher,
+            name=_option(ss, pitcher).name,
+            np=int((ss.get("pitch_counts") or {}).get(str(pitcher), 0)),
+        ),
+        fielders={pos: _option(ss, pid).name for pos, pid in ss[f"{fielding}_defense"].items()},
+        last_play=None,
+    )
+    return PaStateModel(
+        game_pk=int(game_pk),
+        at_bat=ss.get("at_bat"),
+        inning=int(ss["inning"]),
+        half=ss["half"],
+        outs=int(ss["outs"]),
+        away_score=int(ss["away_score"]),
+        home_score=int(ss["home_score"]),
+        batting_side=batting,
+        live=live,
+        away=sides["away"],
+        home=sides["home"],
+    )
+
+
+async def _start_state(request: Request, game_pk: int, at_bat: int | None) -> dict[str, Any]:
+    """The start state at a plate appearance, or an HTTP error."""
+    from pipeline.mlb_game_feed import PlateAppearanceNotFound, state_at_pa
+
+    payload, _source, error = await _league_game_payload(request, game_pk)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"the league feed for game {game_pk} is unavailable: {error}",
+            headers={"Retry-After": "30"},
+        )
+    try:
+        return state_at_pa(payload, at_bat)
+    except PlateAppearanceNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get(
+    "/{game_pk}/feed/state",
+    response_model=PaStateModel,
+    summary="The real game at the start of a plate appearance (the what-if)",
+    description=(
+        "The game as it stood at the start of plate appearance `at_bat` (the feed's "
+        "atBatIndex; omitted = first pitch): inning, half, outs, score, runners, both "
+        "lineups with positions, each side's pitcher and defense, and the bench and "
+        "bullpen still available. 404 for an unknown plate appearance."
+    ),
+)
+async def get_pa_state(
+    game_pk: int, request: Request, at_bat: int | None = Query(None, ge=0)
+) -> PaStateModel:
+    return _pa_state_model(game_pk, await _start_state(request, game_pk, at_bat))
 
 
 async def _schedule_game_for(request: Request, game_date: Any, game_pk: int) -> Any:
@@ -2236,6 +2493,159 @@ async def _stored_prop_set(
             detail={"detail": "no simulation run for this game", "hint": "POST /simulate"},
         )
     return PropDistributionSet.from_json(row["prop_set"]), row
+
+
+# ---------------------------------------------------------------------------
+# The game page's "what if": simulate the rest of the game from a plate appearance
+# ---------------------------------------------------------------------------
+
+
+class WhatIfChanges(BaseModel):
+    pinch_hit: list[dict[str, Any]] = Field(default_factory=list)
+    pitcher: dict[str, Any] | None = None
+    pinch_run: list[dict[str, Any]] = Field(default_factory=list)
+    defense: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class WhatIfRequest(BaseModel):
+    at_bat: int | None = Field(None, ge=0)
+    changes: WhatIfChanges = Field(default_factory=WhatIfChanges)
+    n_iterations: int = Field(100, ge=10, le=1000)
+
+
+class WhatIfStarted(BaseModel):
+    game_pk: int
+    at_bat: int | None = None
+    base_run_id: int
+    change_run_id: int
+    base_seed: int
+    changes: list[str] = Field(default_factory=list)
+
+
+@router.post(
+    "/{game_pk}/what-if",
+    response_model=WhatIfStarted,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Simulate the rest of the game from a plate appearance, with managerial changes",
+    dependencies=[Depends(require_auth)],
+    description=(
+        "Builds the real game's state at the start of `at_bat` (or first pitch), applies "
+        "the changes (pinch-hit, reliever, pinch-run, defense), and queues TWO runs with "
+        "the same seed and N: as the game really stood, and with the changes. Poll "
+        "GET /what-if/{base_run_id}/{change_run_id}. 422 for an illegal change."
+    ),
+)
+async def start_what_if(game_pk: int, request: Request, body: WhatIfRequest) -> WhatIfStarted:
+    from simulation.whatif import IllegalChange, apply_changes, describe_changes
+
+    jobs = _get_sim_jobs(request)
+    base_ss = await _start_state(request, game_pk, body.at_bat)
+    changes = body.changes.model_dump(exclude_none=True)
+    try:
+        changed_ss = apply_changes(base_ss, changes)
+    except IllegalChange as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    pool = _get_pool(request)
+    state = await _resolve_state_or_error(pool, game_pk)
+    factory_ref = resolve_factory_ref(request)
+    kwargs = await _resolved_sim_kwargs(request, pool, state, game_pk)
+    runner = _build_runner(request)
+    seed = secrets.randbelow(2**31 - 1)
+
+    def strip(ss: Mapping[str, Any]) -> dict[str, Any]:
+        # Only the simulator's keys travel to the workers.
+        return {
+            k: v
+            for k, v in ss.items()
+            if k not in ("eligible", "used", "names", "batting_side", "at_bat")
+        }
+
+    runs = []
+    for kind, ss in (("whatif_base", base_ss), ("whatif_change", changed_ss)):
+        spec = GameSpec(
+            machine_factory=factory_ref, sim_kwargs={**kwargs, "start_state": strip(ss)}
+        )
+        try:
+            run, _existing = await jobs.submit(
+                game_pk=int(game_pk),
+                spec=spec,
+                runner=runner,
+                n_iterations=body.n_iterations,
+                base_seed=seed,
+                bullpen_source=getattr(state, "bullpen_source", None),
+                kind=kind,
+                start_at_bat=body.at_bat,
+                changes=changes if kind == "whatif_change" else None,
+            )
+        except Exception as exc:
+            if "does not exist" in str(exc) and "column" in str(exc):
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="what-if runs need database migration 0030 (make migrate)",
+                ) from exc
+            raise
+        runs.append(int(run["run_id"]))
+    return WhatIfStarted(
+        game_pk=int(game_pk),
+        at_bat=body.at_bat,
+        base_run_id=runs[0],
+        change_run_id=runs[1],
+        base_seed=seed,
+        changes=describe_changes(changes, base_ss.get("names") or {}),
+    )
+
+
+class WhatIfResult(BaseModel):
+    game_pk: int
+    base: SimRunModel
+    change: SimRunModel
+    real_final: dict[str, int] | None = None
+    start_score: dict[str, int] | None = None
+
+
+@router.get(
+    "/{game_pk}/what-if/{base_run_id}/{change_run_id}",
+    response_model=WhatIfResult,
+    summary="A what-if's two runs and the real final",
+)
+async def get_what_if(
+    game_pk: int, base_run_id: int, change_run_id: int, request: Request
+) -> WhatIfResult:
+    jobs = _get_sim_jobs(request)
+    base = await jobs.get(int(game_pk), int(base_run_id))
+    change = await jobs.get(int(game_pk), int(change_run_id))
+    if base is None or change is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="what-if run not found")
+    real_final = None
+    start_score = None
+    payload, _source, _error = await _league_game_payload(request, game_pk)
+    if payload is not None:
+        from pipeline.mlb_game_feed import parse_game_feed
+
+        card = parse_game_feed(payload)
+        ls = card.get("linescore") or {}
+        if card.get("status") == "final" and ls:
+            real_final = {
+                "away": int(ls["away"]["runs"] or 0),
+                "home": int(ls["home"]["runs"] or 0),
+            }
+        at_bat = base.get("start_at_bat")
+        if at_bat is not None or base.get("kind") == "whatif_base":
+            from pipeline.mlb_game_feed import PlateAppearanceNotFound, state_at_pa
+
+            try:
+                ss = state_at_pa(payload, at_bat)
+                start_score = {"away": int(ss["away_score"]), "home": int(ss["home_score"])}
+            except PlateAppearanceNotFound:
+                start_score = None
+    return WhatIfResult(
+        game_pk=int(game_pk),
+        base=_run_model(base),
+        change=_run_model(change),
+        real_final=real_final,
+        start_score=start_score,
+    )
 
 
 # ===========================================================================

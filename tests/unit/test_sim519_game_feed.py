@@ -30,7 +30,9 @@ def _load(name: str) -> dict:
 
 def _as_live(name: str) -> dict:
     feed = copy.deepcopy(_load(name))
-    feed["gameData"]["status"].update(abstractGameState="Live", codedGameState="I", detailedState="In Progress")
+    feed["gameData"]["status"].update(
+        abstractGameState="Live", codedGameState="I", detailedState="In Progress"
+    )
     return feed
 
 
@@ -71,7 +73,10 @@ def test_home_win_marks_the_unplayed_half() -> None:
 
 
 def test_extra_innings_final_did_bat_last() -> None:
-    assert parse_game_feed(_load("final_extra_2024-04-13"))["linescore"]["home_did_not_bat_last"] is False
+    assert (
+        parse_game_feed(_load("final_extra_2024-04-13"))["linescore"]["home_did_not_bat_last"]
+        is False
+    )
 
 
 def test_box_positions_are_starting_positions() -> None:
@@ -91,7 +96,9 @@ def test_preview_has_no_linescore_or_box() -> None:
 
 def test_preview_with_a_posted_lineup() -> None:
     feed = copy.deepcopy(_load("final_home_win_2024-08-15"))
-    feed["gameData"]["status"].update(abstractGameState="Preview", codedGameState="P", detailedState="Pre-Game")
+    feed["gameData"]["status"].update(
+        abstractGameState="Preview", codedGameState="P", detailedState="Pre-Game"
+    )
     card = parse_game_feed(feed)
     assert card["status"] == "scheduled"
     lineup = card["lineups"]["home"]
@@ -130,7 +137,9 @@ def test_live_batting_side_from_the_offense_team() -> None:
 
 def test_postponed_feed() -> None:
     feed = copy.deepcopy(_load("preview_2026-10-10"))
-    feed["gameData"]["status"].update(abstractGameState="Final", codedGameState="D", detailedState="Postponed")
+    feed["gameData"]["status"].update(
+        abstractGameState="Final", codedGameState="D", detailedState="Postponed"
+    )
     card = parse_game_feed(feed)
     assert card["status"] == "postponed"
     assert card["linescore"] is None
@@ -186,7 +195,7 @@ def test_ttl_by_state() -> None:
 def test_error_serves_the_last_good_copy() -> None:
     cache = InMemoryCache()
     _client(_Feed(_as_live("final_home_win_2024-08-15")), cache).get("/api/games/746437/feed")
-    cache._store.pop("feed:v1:746437")  # noqa: SLF001 -- the 10-second TTL ran out
+    cache._store.pop("feed:raw:v1:746437")  # noqa: SLF001 -- the 10-second TTL ran out
     body = _client(_Feed(error=TimeoutError("slow")), cache).get("/api/games/746437/feed").json()
     assert body["source"] == "feed_cached"
     assert "TimeoutError" in body["feed_error"]

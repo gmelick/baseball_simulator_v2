@@ -33,7 +33,9 @@ class _PubSub:
         if self in self.redis.subs:
             self.redis.subs.remove(self)
 
-    async def get_message(self, ignore_subscribe_messages: bool = True, timeout: float = 1.0) -> dict | None:
+    async def get_message(
+        self, ignore_subscribe_messages: bool = True, timeout: float = 1.0
+    ) -> dict | None:
         try:
             return await asyncio.wait_for(self.queue.get(), timeout=timeout)
         except TimeoutError:

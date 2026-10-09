@@ -118,7 +118,10 @@ function errorText(err: unknown): string {
 // Section frame
 // ---------------------------------------------------------------------------
 
-function Section({ title, children }: { title: string; children: React.ReactNode }): React.ReactElement {
+/** The team names the card's sections read (the slate card or the game page's status card). */
+export type TeamLabels = Pick<GameCard, 'away_team_abbrev' | 'away_team_name' | 'home_team_abbrev' | 'home_team_name'>
+
+export function Section({ title, children }: { title: string; children: React.ReactNode }): React.ReactElement {
   return (
     <section className={styles.section} aria-label={title}>
       <h3 className={styles.sectionTitle}>
@@ -130,7 +133,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-const teamLabel = (game: GameCard, side: 'away' | 'home'): string => {
+const teamLabel = (game: TeamLabels, side: 'away' | 'home'): string => {
   const abbr = side === 'away' ? game.away_team_abbrev : game.home_team_abbrev
   const name = side === 'away' ? game.away_team_name : game.home_team_name
   return [abbr, name].filter(Boolean).join(' ') || (side === 'away' ? 'Away' : 'Home')
@@ -202,12 +205,12 @@ function Lineups({ game, feed, loading }: { game: GameCard; feed: GameFeedCard |
 // Linescore
 // ---------------------------------------------------------------------------
 
-function Linescore({
+export function Linescore({
   game,
   ls,
   liveOffense,
 }: {
-  game: GameCard
+  game: TeamLabels
   ls: FeedLinescore
   liveOffense: 'away' | 'home' | null
 }): React.ReactElement {
@@ -298,7 +301,7 @@ function Dots({ label, value, max, on }: { label: string; value: number; max: nu
   )
 }
 
-function OnTheField({ game, feed }: { game: GameCard; feed: GameFeedCard }): React.ReactElement | null {
+export function OnTheField({ game, feed }: { game: TeamLabels; feed: GameFeedCard }): React.ReactElement | null {
   const live = feed.live
   if (!live) return null
   const balls = Math.min(live.balls ?? 0, 3)
@@ -338,7 +341,7 @@ function OnTheField({ game, feed }: { game: GameCard; feed: GameFeedCard }): Rea
 const BAT_COLS = ['AB', 'R', 'H', 'RBI', 'BB', 'K', 'HR', 'AVG'] as const
 const PIT_COLS = ['IP', 'H', 'R', 'ER', 'BB', 'K', 'NP', 'ERA'] as const
 
-function BoxScore({ game, feed }: { game: GameCard; feed: GameFeedCard }): React.ReactElement | null {
+export function BoxScore({ game, feed }: { game: TeamLabels; feed: GameFeedCard }): React.ReactElement | null {
   const offense = feed.live?.offense ?? null
   const [tab, setTab] = useState<'away' | 'home' | null>(null)
   if (!feed.box) return null

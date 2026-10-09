@@ -44,14 +44,15 @@ TERMINAL = ("done", "failed", "cancelled")
 _RUN_COLUMNS = """
     run_id, game_pk, status, n_iterations, progress_done, base_seed, summary,
     requested_at, started_at, finished_at, error, lineup_source, bullpen_source,
-    replay_run_id, created_at
+    replay_run_id, created_at, kind, start_at_bat
 """
 
 _SQL_INSERT = f"""
     INSERT INTO sim.sim_runs (
         game_pk, n_iterations, base_seed, summary, status, requested_at,
-        spec_key, requested_by, lineup_source, bullpen_source
-    ) VALUES ($1, $2, $3, NULL, 'queued', NOW(), $4, $5, $6, $7)
+        spec_key, requested_by, lineup_source, bullpen_source,
+        kind, start_at_bat, changes
+    ) VALUES ($1, $2, $3, NULL, 'queued', NOW(), $4, $5, $6, $7, $8, $9, $10::jsonb)
     RETURNING {_RUN_COLUMNS}
 """
 _SQL_ACTIVE_BY_KEY = f"""
@@ -61,12 +62,12 @@ _SQL_ACTIVE_BY_KEY = f"""
 """
 _SQL_BY_ID = f"SELECT {_RUN_COLUMNS} FROM sim.sim_runs WHERE run_id = $1 AND game_pk = $2"
 _SQL_LATEST = f"""
-    SELECT {_RUN_COLUMNS} FROM sim.sim_runs WHERE game_pk = $1
+    SELECT {_RUN_COLUMNS} FROM sim.sim_runs WHERE game_pk = $1 AND kind = 'pregame'
      ORDER BY created_at DESC, run_id DESC LIMIT 1
 """
 _SQL_LATEST_DONE_PROPS = """
     SELECT run_id, prop_set, n_iterations, base_seed FROM sim.sim_runs
-     WHERE game_pk = $1 AND status = 'done' AND prop_set IS NOT NULL
+     WHERE game_pk = $1 AND status = 'done' AND prop_set IS NOT NULL AND kind = 'pregame'
      ORDER BY created_at DESC, run_id DESC LIMIT 1
 """
 _SQL_PROPS_BY_ID = """
@@ -234,12 +235,18 @@ class SimJobRegistry:
         bullpen_source: str | None = None,
         requested_by: str | None = None,
         record_game: RecordGame | None = None,
+        kind: str = "pregame",
+        start_at_bat: int | None = None,
+        changes: Mapping[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Queue a run, or return the active run with the same key.
 
-        Returns ``(run, existing)``.
+        ``kind`` is ``pregame`` (the game's simulation from first pitch) or
+        ``whatif_base`` / ``whatif_change`` (the game page's what-if pair, from
+        plate appearance ``start_at_bat``). The game's "latest run" reads only
+        see ``pregame`` runs. Returns ``(run, existing)``.
         """
-        key = spec_key(runner._cache_key(spec, base_seed, int(n_iterations)))
+        key = spec_key(f"{kind}:" + runner._cache_key(spec, base_seed, int(n_iterations)))
         held = await self._fetchrow(_SQL_ACTIVE_BY_KEY, key)
         if held is not None:
             return self._with_position(row_dict(held)) or {}, True
@@ -253,6 +260,9 @@ class SimJobRegistry:
                 requested_by,
                 lineup_source,
                 bullpen_source,
+                kind,
+                start_at_bat,
+                json.dumps(changes) if changes is not None else None,
             )
         except Exception as exc:  # the unique index: another process queued it first
             if "uq_sim_runs_active_spec" not in str(exc):

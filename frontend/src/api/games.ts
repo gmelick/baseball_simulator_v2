@@ -396,6 +396,8 @@ export interface EdgeReport {
   price_book?: string | null
   /** SIM-555: that book's display name (e.g. "FanDuel"). */
   price_book_name?: string | null
+  /** How this side settled on the real final; null before the game is final. */
+  result?: 'won' | 'lost' | 'push' | null
 }
 
 export interface PropEdge {
@@ -431,45 +433,6 @@ export interface PropEdgeQuery {
 // ---------------------------------------------------------------------------
 // Roster override (POST /{game_pk}/simulate/with_override — SIM-358/388)
 // ---------------------------------------------------------------------------
-
-export interface SubstitutionSlot {
-  /** 1-indexed lineup slot (1–9). */
-  batting_order: number
-  player_id: number
-  side: 'home' | 'away'
-}
-
-export interface RosterOverride {
-  home_lineup?: number[] | null
-  away_lineup?: number[] | null
-  /** Targeted single-player substitutions (SIM-388). */
-  substitutions?: SubstitutionSlot[] | null
-  pitcher_id?: number | null
-  bat_hand?: string | null
-  description?: string | null
-}
-
-export interface MetricDelta {
-  metric: string
-  baseline: number
-  override: number
-  /** override − baseline. */
-  delta: number
-}
-
-export interface OverrideDelta {
-  metrics: Record<string, MetricDelta>
-  description: string | null
-}
-
-export interface WithOverrideResponse {
-  game_pk: number
-  n_iterations: number
-  base_seed: number | null
-  baseline: Record<string, unknown>
-  override: Record<string, unknown>
-  delta: OverrideDelta
-}
 
 /** Raised for any non-2xx games-API response, carrying the HTTP status. */
 export class GamesApiError extends Error {
@@ -517,6 +480,126 @@ export function fetchGamesOnDate(date: string): Promise<GamesOnDateResponse> {
   return getJson<GamesOnDateResponse>(`/api/games/${encodeURIComponent(date)}`)
 }
 
+// ---------------------------------------------------------------------------
+// The real game's plays and the "what if" (the game page)
+// ---------------------------------------------------------------------------
+
+export interface RealPlay {
+  at_bat: number
+  inning: number
+  half: 'top' | 'bottom'
+  batter_id: number | null
+  pitcher_id: number | null
+  event: string | null
+  event_type: string | null
+  description: string | null
+  rbi: number
+  batter_finished: boolean
+  outs_before: number
+  outs_after: number
+  away_score_before: number
+  home_score_before: number
+  away_score_after: number
+  home_score_after: number
+  runners: { first: number | null; second: number | null; third: number | null }
+  pitches: Array<{ call: string | null; type: string | null; speed: number | null }>
+  is_complete: boolean
+}
+
+export interface RealPlays {
+  game_pk: number
+  status: GameStatus
+  plays: RealPlay[]
+  names: Record<string, string>
+  source: 'feed' | 'feed_cached'
+}
+
+export interface PlayerOption {
+  id: number
+  name: string
+  position: string | null
+  bats: string | null
+  throws: string | null
+}
+
+export interface SideState {
+  lineup: Array<{ slot: number; id: number; name: string; position: string | null }>
+  pitcher: PlayerOption
+  defense: Record<string, PlayerOption>
+  bench: PlayerOption[]
+  bullpen: PlayerOption[]
+  used: PlayerOption[]
+}
+
+export interface PaState {
+  game_pk: number
+  at_bat: number | null
+  inning: number
+  half: 'top' | 'bottom'
+  outs: number
+  away_score: number
+  home_score: number
+  batting_side: 'away' | 'home'
+  live: FeedLive
+  away: SideState
+  home: SideState
+}
+
+export interface WhatIfChanges {
+  /** `side` only before first pitch (either side's lineup); otherwise the side at bat. */
+  pinch_hit: Array<{ slot: number; player_id: number; side?: 'away' | 'home' }>
+  /** `side` only before first pitch (either starter); otherwise the fielding side. */
+  pitcher?: { player_id: number; side?: 'away' | 'home' } | null
+  pinch_run: Array<{ base: 'first' | 'second' | 'third'; player_id: number }>
+  defense: Array<{ side: 'away' | 'home'; position: string; player_id: number }>
+}
+
+export interface WhatIfStarted {
+  game_pk: number
+  at_bat: number | null
+  base_run_id: number
+  change_run_id: number
+  base_seed: number
+  changes: string[]
+}
+
+export interface WhatIfResult {
+  game_pk: number
+  base: SimRun
+  change: SimRun
+  real_final: { away: number; home: number } | null
+  start_score: { away: number; home: number } | null
+}
+
+/** GET /api/games/{game_pk}/feed/plays — the real game's plate appearances. */
+export function fetchRealPlays(gamePk: number): Promise<RealPlays> {
+  return getJson<RealPlays>(`/api/games/${gamePk}/feed/plays`)
+}
+
+/** GET /api/games/{game_pk}/feed/state — the game at the start of a plate appearance (null = first pitch). */
+export function fetchPaState(gamePk: number, atBat: number | null): Promise<PaState> {
+  return getJson<PaState>(`/api/games/${gamePk}/feed/state${atBat == null ? '' : `?at_bat=${atBat}`}`)
+}
+
+/** POST /api/games/{game_pk}/what-if — queue the two runs (as it stood, with the changes). */
+export function startWhatIf(
+  gamePk: number,
+  atBat: number | null,
+  changes: WhatIfChanges,
+  nIterations = 100,
+): Promise<WhatIfStarted> {
+  return postJson<WhatIfStarted>(`/api/games/${gamePk}/what-if`, {
+    at_bat: atBat,
+    changes,
+    n_iterations: nIterations,
+  })
+}
+
+/** GET /api/games/{game_pk}/what-if/{base}/{change} — both runs and the real final. */
+export function fetchWhatIf(gamePk: number, baseRunId: number, changeRunId: number): Promise<WhatIfResult> {
+  return getJson<WhatIfResult>(`/api/games/${gamePk}/what-if/${baseRunId}/${changeRunId}`)
+}
+
 /** GET /api/games/{game_pk}/feed — the real game behind a slate card (SIM-519 Part I). */
 export function fetchGameFeed(gamePk: number): Promise<GameFeedCard> {
   return getJson<GameFeedCard>(`/api/games/${gamePk}/feed`)
@@ -556,22 +639,6 @@ export function fetchReplayCard(gamePk: number): Promise<ReplayCard> {
 /** GET /api/games/{game_pk}/live — live in-progress state (404 when not live). */
 export function fetchLiveState(gamePk: number): Promise<LiveState> {
   return getJson<LiveState>(`/api/games/${gamePk}/live`)
-}
-
-/** POST /api/games/{game_pk}/simulate/with_override — baseline-vs-override diff (SIM-358/388). */
-export function postWithOverride(
-  gamePk: number,
-  override: RosterOverride,
-  opts: { nIterations?: number; baseSeed?: number } = {},
-): Promise<WithOverrideResponse> {
-  const params = new URLSearchParams()
-  if (opts.nIterations != null) params.set('n_iterations', String(opts.nIterations))
-  if (opts.baseSeed != null) params.set('base_seed', String(opts.baseSeed))
-  const qs = params.toString()
-  return postJson<WithOverrideResponse>(
-    `/api/games/${gamePk}/simulate/with_override${qs ? `?${qs}` : ''}`,
-    override,
-  )
 }
 
 /** POST /api/games/{game_pk}/sample-game — simulate and store one game (SIM-561).

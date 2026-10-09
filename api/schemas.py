@@ -1111,6 +1111,10 @@ class EdgeReportModel(_ApiModel):
     #: SIM-555: that book's display name ("FanDuel").
     price_book_name: str | None = None
 
+    #: How this side settled on the real final: "won", "lost" or "push"; None
+    #: before the game is final.
+    result: str | None = None
+
     @classmethod
     def from_dataclass(cls, report: Any, *, price_book: str | None = None) -> EdgeReportModel:
         """Build from a :class:`betting.clv_engine.EdgeReport`.

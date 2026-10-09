@@ -3374,6 +3374,7 @@ def simulate_game(
     manager_profiles: Mapping[Any, dict[str, float]] | None = None,
     manager_league_profile: dict[str, float] | None = None,
     max_innings: int = _MAX_INNINGS,
+    start_state: Mapping[str, Any] | None = None,
 ) -> GameSimResult:
     """Drive the SIM-316 :class:`StateMachine` to a completed game (SIM-320).
 
@@ -3501,6 +3502,12 @@ def simulate_game(
     state = initial_state
     if seed is not None and state.seed is None:
         state.seed = seed
+    # The "what if" (simulation/start_state.py): start at a plate appearance of
+    # the real game. Plain data applied to this iteration's own fresh state.
+    if start_state:
+        from simulation.start_state import apply_start_state
+
+        apply_start_state(state, start_state)
 
     # --- A game needs a batting order on each side (SIM-552) -----------------
     # The loop rotates the batter through the lineup.  It seats a batter who
@@ -3573,6 +3580,11 @@ def simulate_game(
         )
     if manager_league_profile:
         state.manager_league_profile = dict(manager_league_profile)
+    # The start state's pen (the arms not yet used) wins over the game's pen.
+    if start_state:
+        from simulation.start_state import apply_start_bullpen
+
+        apply_start_bullpen(state, start_state)
 
     # --- The game loop -------------------------------------------------------
     total_pitches = 0
@@ -3593,6 +3605,10 @@ def simulate_game(
     # ghost runner is seeded exactly once, at the start of each extra half.
     half_inning_open = False
     cur_inning, cur_half = state.inning, state.half
+    # A start state is the real game: an extra half already has its runner on
+    # second (or has moved him), so the first half is never seeded again.
+    if start_state:
+        half_inning_open = True
 
     # --- SIM-546: the inning grid --------------------------------------------
     # One run cell per inning for each team. The loop reads the score at the
@@ -3609,6 +3625,12 @@ def simulate_game(
     if state.half == Half.BOTTOM:
         away_by_inning.append(None)
     half_start_home, half_start_away = state.home_score, state.away_score
+    # A start state carries the real runs of every completed half and the score
+    # when the current half began, so the grid sums to the final score.
+    if start_state:
+        from simulation.start_state import start_grid
+
+        away_by_inning, home_by_inning, half_start_away, half_start_home = start_grid(start_state)
 
     def _close_half(half: Half) -> None:
         """Write the runs of the half that just ended into its team's list."""

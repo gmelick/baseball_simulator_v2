@@ -13,6 +13,12 @@
  * "no data yet", not an error). Per-player projections (SIM-394) and the
  * betting card (SIM-395) mount into the marked slots in later tickets.
  *
+ * The game page (2026-10-09): a live or final game opens with the REAL game (the
+ * league feed's linescore and box score, and its play-by-play); "What if from
+ * here" on a play opens the what-if panel at that plate appearance (a preview game
+ * opens it at first pitch). The simulation sections follow; Projections and
+ * Betting are collapsible and start collapsed.
+ *
  * SIM-561: the linescore and the play-by-play show ONE simulated game. The
  * "Simulate a game" button stores a new one (POST /sample-game), and loading
  * projections stores the projections' first game; either one reloads both. The
@@ -24,24 +30,29 @@ import { Link, useParams } from 'react-router-dom'
 
 import {
   fetchGameCard,
+  fetchGameFeed,
   fetchLiveState,
+  fetchRealPlays,
   fetchPlays,
   fetchReplayCard,
   GamesApiError,
   postSampleGame,
   type GameCardAggregate,
+  type GameFeedCard,
   type LiveState,
+  type RealPlays,
   type PlayByPlay,
   type ReplayCard,
 } from '@/api/games'
-import { BaseballFieldGraphic, LinescoreGraphic } from '@/components/graphics'
+import { LinescoreGraphic } from '@/components/graphics'
+import { ActualPlayByPlay } from '@/components/games/ActualPlayByPlay'
 import { BettingCard } from '@/components/games/BettingCard'
 import { BoxscorePanel } from '@/components/games/BoxscorePanel'
 import { SimulationCard } from '@/components/games/SimulationCard'
+import { WhatIfPanel } from '@/components/games/WhatIfPanel'
+import { BoxScore, Linescore, OnTheField } from '@/components/slate/CardDetail'
 import { TeamBlock } from '@/components/slate/TeamBlock'
 import { localStartTime, shortName } from '@/components/slate/format'
-import { LineMovementPanel } from '@/components/games/LineMovementPanel'
-import { OverridePanelV2 } from '@/components/games/OverridePanelV2'
 import { PlayByPlayList } from '@/components/games/PlayByPlayList'
 import { Badge, Card, Panel } from '@/components/ui'
 import { useGameSocket } from '@/hooks/useGameSocket'
@@ -113,6 +124,20 @@ export function GamePage(): React.ReactElement {
     () => (isLive ? fetchLiveState(gamePk) : Promise.resolve(null as unknown as LiveState)),
     [gamePk, isLive, livePoll],
   )
+  // The real game: the league feed (linescore, box score, live field) and its
+  // plays, for a live or final game; re-read on the live poll.
+  const isFinal = card.data?.game_status === 'final'
+  const realFeed = useOptionalResource<GameFeedCard | null>(
+    () => (isLive || isFinal ? fetchGameFeed(gamePk) : Promise.resolve(null)),
+    [gamePk, isLive, isFinal, livePoll],
+  )
+  const realPlays = useOptionalResource<RealPlays | null>(
+    () => (isLive || isFinal ? fetchRealPlays(gamePk) : Promise.resolve(null)),
+    [gamePk, isLive, isFinal, livePoll],
+  )
+  // The what-if's plate appearance: undefined = closed, null = first pitch.
+  const [whatIfAt, setWhatIfAt] = useState<number | null | undefined>(undefined)
+
   // SIM-561: a newly stored simulated game bumps the version, which reloads the
   // card; the card's run id then loads that run's plays.
   const [replayVersion, setReplayVersion] = useState(0)
@@ -152,10 +177,12 @@ export function GamePage(): React.ReactElement {
   const socket = useGameSocket(gamePk, isLive)
 
   useEffect(() => {
-    if (!isLive || socket.status !== 'closed') return
+    if (!isLive) return
+    // The socket carries the score; the real box score and plays are re-read
+    // every 15 s while live (and /live too, for when the socket is closed).
     const id = window.setInterval(() => setLivePoll((n) => n + 1), LIVE_POLL_MS)
     return () => window.clearInterval(id)
-  }, [isLive, socket.status])
+  }, [isLive])
 
   if (!valid) {
     return (
@@ -177,10 +204,6 @@ export function GamePage(): React.ReactElement {
   const homeScore =
     wsState?.home_score ?? live.data?.home_score ?? c?.home_score ?? c?.home_score_final ?? null
 
-  // Baserunner state for the field graphic (WS first, then REST live).
-  const on1 = wsState?.on_1b ?? live.data?.on_1b ?? null
-  const on2 = wsState?.on_2b ?? live.data?.on_2b ?? null
-  const on3 = wsState?.on_3b ?? live.data?.on_3b ?? null
   const inning = wsState?.inning ?? live.data?.inning ?? null
   const half = wsState?.half ?? live.data?.half ?? null
   const outs = wsState?.outs ?? live.data?.outs ?? null
@@ -281,99 +304,139 @@ export function GamePage(): React.ReactElement {
         </div>
       )}
 
-      {/* Main grid */}
-      <div className={styles.grid}>
-        <div className={styles.leftCol}>
-          <SimulationCard
-            gamePk={gamePk}
-            onDone={(run) => {
-              setRunId(run.run_id)
-              // The run stored its representative game in the replay file.
-              showStoredGame()
-            }}
-          />
-
-          <Card title="Simulated game" headerActions={simButton}>
-            {ls ? (
-              <>
-                <LinescoreGraphic
-                  away={{
-                    name: awayShort,
-                    byInning: ls.away_by_inning,
-                    runs: ls.away_runs,
-                    hits: ls.away_hits,
-                    errors: ls.away_errors,
-                  }}
-                  home={{
-                    name: homeShort,
-                    byInning: ls.home_by_inning,
-                    runs: ls.home_runs,
-                    hits: ls.home_hits,
-                    errors: ls.home_errors,
-                  }}
-                />
-                <p className={styles.caption}>
-                  One simulated game{replaySeed != null ? ` (seed ${replaySeed})` : ''}, not the
-                  real result. Its play-by-play is on the right.
-                </p>
-              </>
-            ) : (
-              <p className={styles.muted}>
-                No simulated game yet. Press “Simulate a game”, or load projections below.
-              </p>
-            )}
-            {simError && (
-              <p className={styles.error} role="alert">
-                {simError}
-              </p>
-            )}
-          </Card>
-
-          {isLive && (
-            <Card title="On the field">
-              <BaseballFieldGraphic
-                onFirst={on1 != null}
-                onSecond={on2 != null}
-                onThird={on3 != null}
+      {/* The real game, above every simulation (a live or final game). */}
+      {(isLive || isFinal) && c && (
+        <section className={styles.realGame} aria-label="The game" data-testid="real-game">
+          <div className={styles.realMain}>
+            <h2 className={styles.sectionTitle}>The game</h2>
+            {realFeed.data?.linescore ? (
+              <Linescore
+                game={c}
+                ls={realFeed.data.linescore}
+                liveOffense={realFeed.data.live?.offense ?? null}
               />
+            ) : (
+              <p className={styles.muted}>{realFeed.error ?? 'Loading the game…'}</p>
+            )}
+            {isLive && realFeed.data?.live && <OnTheField game={c} feed={realFeed.data} />}
+            {realFeed.data?.box && <BoxScore game={c} feed={realFeed.data} />}
+          </div>
+          <div className={styles.realSide}>
+            <Card title="Play-by-play" count={realPlays.data?.plays.length}>
+              {realPlays.error ? (
+                <p className={styles.muted}>{realPlays.error}</p>
+              ) : (
+                <ActualPlayByPlay
+                  plays={realPlays.data?.plays ?? []}
+                  names={realPlays.data?.names ?? {}}
+                  awayLabel={awayShort}
+                  homeLabel={homeShort}
+                  newestFirst={isLive}
+                  selectedAtBat={whatIfAt ?? null}
+                  onWhatIf={(atBat) => setWhatIfAt(atBat)}
+                />
+              )}
             </Card>
+          </div>
+        </section>
+      )}
+
+      {/* The what-if: from a play (live or final), or from first pitch. */}
+      {c && c.game_status !== 'postponed' && (
+        whatIfAt !== undefined || (!isLive && !isFinal) ? (
+          <WhatIfPanel
+            key={whatIfAt ?? 'first-pitch'}
+            gamePk={gamePk}
+            atBat={whatIfAt ?? null}
+            awayAbbr={awayShort}
+            homeAbbr={homeShort}
+            onClose={isLive || isFinal ? () => setWhatIfAt(undefined) : undefined}
+          />
+        ) : (
+          <p className={styles.whatIfHint}>
+            Press “What if from here” on a play to change the hitter, the pitcher, a runner or
+            the defense and simulate the rest of the game, or{' '}
+            <button type="button" className={styles.linkButton} onClick={() => setWhatIfAt(null)}>
+              start from first pitch
+            </button>
+            .
+          </p>
+        )
+      )}
+
+      {/* The simulation of the game from first pitch. */}
+      <div className={styles.simColumn}>
+        <SimulationCard
+          gamePk={gamePk}
+          onDone={(run) => {
+            setRunId(run.run_id)
+            // The run stored its representative game in the replay file.
+            showStoredGame()
+          }}
+        />
+
+        <Card title="Simulated game" headerActions={simButton}>
+          {ls ? (
+            <>
+              <LinescoreGraphic
+                away={{
+                  name: awayShort,
+                  byInning: ls.away_by_inning,
+                  runs: ls.away_runs,
+                  hits: ls.away_hits,
+                  errors: ls.away_errors,
+                }}
+                home={{
+                  name: homeShort,
+                  byInning: ls.home_by_inning,
+                  runs: ls.home_runs,
+                  hits: ls.home_hits,
+                  errors: ls.home_errors,
+                }}
+              />
+              <p className={styles.caption}>
+                One simulated game{replaySeed != null ? ` (seed ${replaySeed})` : ''}, not the real
+                result.
+              </p>
+              <details className={styles.simPlays} data-testid="sim-plays">
+                <summary>
+                  Its play-by-play ({plays.data?.n_plate_appearances ?? 0} plate appearances)
+                </summary>
+                <PlayByPlayList
+                  key={plays.data?.run_id ?? 'none'}
+                  entries={plays.data?.entries ?? []}
+                  names={plays.data?.names}
+                  awayLabel={awayShort}
+                  homeLabel={homeShort}
+                  emptyText="No plays stored for this simulated game."
+                />
+              </details>
+            </>
+          ) : (
+            <p className={styles.muted}>
+              No simulated game yet. Press “Simulate a game”, or run a simulation above.
+            </p>
           )}
+          {simError && (
+            <p className={styles.error} role="alert">
+              {simError}
+            </p>
+          )}
+        </Card>
 
-          <Panel label="Projections">
-            <BoxscorePanel
-              gamePk={gamePk}
-              awayLabel={away}
-              homeLabel={home}
-              onLoaded={showStoredGame}
-              runId={runId}
-            />
-          </Panel>
+        <Panel label="Projections" collapsible defaultOpen={false} storageKey="gamepage.projections">
+          <BoxscorePanel
+            gamePk={gamePk}
+            awayLabel={away}
+            homeLabel={home}
+            onLoaded={showStoredGame}
+            runId={runId}
+          />
+        </Panel>
 
-          <Panel label="Betting">
-            <BettingCard gamePk={gamePk} />
-          </Panel>
-
-          <Panel label="Line movement / CLV">
-            <LineMovementPanel gamePk={gamePk} />
-          </Panel>
-
-          <Panel label="Managerial override">
-            <OverridePanelV2 gamePk={gamePk} />
-          </Panel>
-        </div>
-
-        <div className={styles.rightCol}>
-          <Card title="Play-by-play" count={plays.data?.n_plate_appearances}>
-            <PlayByPlayList
-              key={plays.data?.run_id ?? 'none'}
-              entries={plays.data?.entries ?? []}
-              names={plays.data?.names}
-              awayLabel={awayShort}
-              homeLabel={homeShort}
-              emptyText="No simulated game yet. Press “Simulate a game” on the left."
-            />
-          </Card>
-        </div>
+        <Panel label="Betting" collapsible defaultOpen={false} storageKey="gamepage.betting">
+          <BettingCard gamePk={gamePk} />
+        </Panel>
       </div>
     </div>
   )

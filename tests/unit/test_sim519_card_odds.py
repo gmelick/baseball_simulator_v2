@@ -13,7 +13,13 @@ from api.routes.betting import router as betting_router
 GAME = 745001
 
 
-def _row(book: str, market: str, line_type: str = "closing", fetched: str = "2024-08-15T22:00:00+00:00", **cols):
+def _row(
+    book: str,
+    market: str,
+    line_type: str = "closing",
+    fetched: str = "2024-08-15T22:00:00+00:00",
+    **cols,
+):
     base = {
         "market_type": market,
         "book": book,
@@ -67,7 +73,13 @@ class _Pool:
             allowed = set(args[3])
             return [r for r in self.odds_rows if r["line_type"] in allowed]
         if "home_score_final" in sql:
-            return [{"status": self.status, "home_score_final": self.home, "away_score_final": self.away}]
+            return [
+                {
+                    "status": self.status,
+                    "home_score_final": self.home,
+                    "away_score_final": self.away,
+                }
+            ]
         return [{"status": self.status}]
 
 
@@ -90,7 +102,12 @@ FULL = [
 
 def test_the_graded_book_wins() -> None:
     body = _client(_Pool(FULL, status="Preview")).get(f"/api/betting/games/{GAME}/card-odds").json()
-    assert body["moneyline"] == {"book": "DraftKings", "line_type": "closing", "away": 125.0, "home": -145.0}
+    assert body["moneyline"] == {
+        "book": "DraftKings",
+        "line_type": "closing",
+        "away": 125.0,
+        "home": -145.0,
+    }
     assert body["runline"]["home"] == {"line": -1.5, "price": 135.0}
     assert body["runline"]["away"] == {"line": 1.5, "price": -160.0}
     assert body["total"]["line"] == 8.5
@@ -116,7 +133,9 @@ def test_a_preview_game_reads_its_current_line() -> None:
 
 def test_a_final_game_ignores_current_rows() -> None:
     rows = [_ml("bp:12", -120, 100, line_type="current")]
-    resp = _client(_Pool(rows, status="Final", away=3, home=5)).get(f"/api/betting/games/{GAME}/card-odds")
+    resp = _client(_Pool(rows, status="Final", away=3, home=5)).get(
+        f"/api/betting/games/{GAME}/card-odds"
+    )
     assert resp.status_code == 404
 
 
@@ -135,9 +154,11 @@ def test_no_rows_is_404_never_the_mock() -> None:
     ],
 )
 def test_settlement(away: int, home: int, ml: str, rl: str, total: str) -> None:
-    body = _client(_Pool(FULL, status="Final", away=away, home=home)).get(
-        f"/api/betting/games/{GAME}/card-odds"
-    ).json()
+    body = (
+        _client(_Pool(FULL, status="Final", away=away, home=home))
+        .get(f"/api/betting/games/{GAME}/card-odds")
+        .json()
+    )
     assert body["settled"] == {
         "away_score": away,
         "home_score": home,

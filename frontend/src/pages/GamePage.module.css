@@ -166,3 +166,68 @@
   margin-top: 6px;
   white-space: nowrap;
 }
+
+/* The real game: the linescore and box score beside the real play-by-play. */
+.realGame {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: var(--sim-space-4);
+  margin-bottom: var(--sim-space-4);
+}
+
+.realMain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-3);
+  min-width: 0;
+}
+
+.realSide {
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .realGame {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.sectionTitle {
+  font-family: var(--dd-font-display);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.whatIfHint {
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-text-muted);
+  margin-bottom: var(--sim-space-4);
+}
+
+.linkButton {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--sim-color-interactive);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.simColumn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sim-space-4);
+}
+
+.simPlays {
+  margin-top: var(--sim-space-3);
+}
+
+.simPlays summary {
+  cursor: pointer;
+  font-size: var(--sim-text-sm);
+  color: var(--sim-color-interactive);
+  margin-bottom: var(--sim-space-2);
+}
