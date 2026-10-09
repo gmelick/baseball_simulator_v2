@@ -65,6 +65,18 @@ the routes (a full what-if run on the synthetic bundle); 21 on the grading. Play
 21 pass): a new `e2e/gamepage.spec.ts` checks the real game first, the collapsed and remembered
 panels, a reliever what-if with the result table, and the graded and no-line markets.
 
+**Merged and deployed 2026-10-09** (master `8f44df8`; Alembic 0030 applied to the live database;
+the app, live and nginx images rebuilt). **The live check** on game 824381 (ATH 0–1 CLE, final)
+found two defects, both fixed and redeployed the same hour. (1) The box score lists every player
+who appeared under `batters`, so relievers were offered as pinch hitters and defensive
+replacements; a pitcher is now a bench bat only when he held a batting-order spot. (2) A market
+with no stored line was graded against its invented line; it now shows no grade. After the
+fixes: the real linescore and box score read first; "What if" at the top of the 7th (1 out,
+Walton vs Williams) shows the real field and pitch count (84); Cade Smith in for Gavin Williams
+ran both 100-game runs in 17 s and 29 s and showed the table with the real final. On game 849832
+(9–5, stored lines on all fifteen markets) the grades match the final: the away moneyline won,
+the over 7 won, the away −1.5 covered.
+
 # BUILT — the owner's Daily Diamond design on the day slate and the game page, and the live, schedule-driven game day view in full: the slate reads the league schedule, the open card shows the real game and the book's lines, a game that has not started can be simulated, the live service runs in its own container, the nightly finals job retries a crash, one durable simulation run per game with progress; MERGED (e3aae8e) and DEPLOYED the same day; the game-day live check is pending — SIM-519, 2026-10-09
 
 **Why it matters.** The day slate listed only the games our database held, with no scores, start
