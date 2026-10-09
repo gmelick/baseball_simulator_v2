@@ -1264,6 +1264,24 @@ _SLATE_ENRICH_SQL = """
      WHERE g.game_pk = ANY($1::int[])
 """
 
+#: The same, with the source of the lineup the simulator would read (Alembic
+#: 0029, SIM-519 Part B): the final box first, then a published, then a
+#: projected lineup.
+_SLATE_ENRICH_SOURCE_SQL = """
+    SELECT g.game_pk, g.status, v.city AS venue_city,
+           ls.source IS NOT NULL AS lineup_ready,
+           ls.source AS lineup_source
+      FROM raw.games g
+      LEFT JOIN raw.venues v ON v.venue_id = g.venue_id AND v.season = g.season
+      LEFT JOIN LATERAL (
+            SELECT CASE WHEN bool_or(gl.source = 'box') THEN 'box'
+                        WHEN bool_or(gl.source = 'published') THEN 'published'
+                        WHEN bool_or(gl.source = 'projected') THEN 'projected' END AS source
+              FROM raw.game_lineups gl WHERE gl.game_pk = g.game_pk
+      ) ls ON TRUE
+     WHERE g.game_pk = ANY($1::int[])
+"""
+
 #: The newest stored run of each of the schedule's games, in one query.
 _SLATE_RUNS_SQL = """
     SELECT DISTINCT ON (game_pk) game_pk, run_id, n_iterations, summary, created_at
@@ -1332,6 +1350,7 @@ def _schedule_card(g: Any, enrich: Any | None, run: Any | None) -> GameCard:
         away_wins=g.away.wins,
         away_losses=g.away.losses,
         lineup_ready=bool(_row_get(enrich, "lineup_ready")) if enrich is not None else False,
+        lineup_source=_opt_str(enrich, "lineup_source") if enrich is not None else None,
         game_status=state,
         detailed_state=g.detailed_state or None,
         reason=g.reason,
@@ -1409,11 +1428,13 @@ async def _slate_merge_rows(pool: Any, pks: list[int]) -> tuple[dict[int, Any], 
     runs: dict[int, Any] = {}
     if pool is None or not pks:
         return enrich, runs
-    try:
-        for r in await pool.fetch(_SLATE_ENRICH_SQL, pks) or []:
-            enrich[int(_row_get(r, "game_pk"))] = r
-    except Exception as exc:  # noqa: BLE001 -- the schedule alone still makes cards
-        log.warning("slate: the stored enrichment read failed: %s", exc)
+    for sql in (_SLATE_ENRICH_SOURCE_SQL, _SLATE_ENRICH_SQL):
+        try:
+            for r in await pool.fetch(sql, pks) or []:
+                enrich[int(_row_get(r, "game_pk"))] = r
+            break
+        except Exception as exc:  # noqa: BLE001 -- before 0029, the plain read; else no enrichment
+            log.warning("slate: the stored enrichment read failed: %s", exc)
     try:
         for r in await pool.fetch(_SLATE_RUNS_SQL, pks) or []:
             runs[int(_row_get(r, "game_pk"))] = r

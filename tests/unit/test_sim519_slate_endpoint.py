@@ -43,7 +43,16 @@ class _Feed:
 class _Pool:
     """Answers the enrichment and the run queries; the stored listing for the db path."""
 
-    def __init__(self, *, enrich=(), runs=(), listing=(), fail_runs: bool = False):
+    def __init__(
+        self,
+        *,
+        enrich=(),
+        runs=(),
+        listing=(),
+        fail_runs: bool = False,
+        no_source_column: bool = False,
+    ):
+        self.no_source_column = no_source_column
         self.enrich = list(enrich)
         self.runs = list(runs)
         self.listing = list(listing)
@@ -57,6 +66,8 @@ class _Pool:
                 raise RuntimeError("relation sim.sim_runs does not exist")
             return self.runs
         if "ANY($1::int[])" in sql:
+            if "lineup_source" in sql and self.no_source_column:
+                raise RuntimeError('column "source" does not exist')
             return self.enrich
         return self.listing
 
@@ -291,3 +302,40 @@ def test_the_old_mock_envelope_still_validates() -> None:
     }
     resp = games_mod.GamesOnDateResponse(**old)
     assert resp.games[0].game_status is None
+
+
+def test_lineup_source_rides_on_the_card() -> None:
+    sched = _payload("normal_2024-08-15")
+    pk = sched["dates"][0]["games"][0]["gamePk"]
+    pool = _Pool(
+        enrich=[
+            {
+                "game_pk": pk,
+                "status": "Preview",
+                "venue_city": "X",
+                "lineup_ready": True,
+                "lineup_source": "published",
+            }
+        ]
+    )
+    card = next(
+        g
+        for g in _app(feed=_Feed(sched), pool=pool).get("/api/games/2024-08-15").json()["games"]
+        if g["game_pk"] == pk
+    )
+    assert card["lineup_source"] == "published"
+
+
+def test_before_0029_the_plain_enrichment_read_serves() -> None:
+    sched = _payload("normal_2024-08-15")
+    pk = sched["dates"][0]["games"][0]["gamePk"]
+    pool = _Pool(
+        enrich=[{"game_pk": pk, "status": "Final", "venue_city": "X", "lineup_ready": True}],
+        no_source_column=True,
+    )
+    card = next(
+        g
+        for g in _app(feed=_Feed(sched), pool=pool).get("/api/games/2024-08-15").json()["games"]
+        if g["game_pk"] == pk
+    )
+    assert card["lineup_ready"] is True and card["lineup_source"] is None

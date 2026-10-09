@@ -1985,6 +1985,9 @@ class LiveIngestionPipeline:
                     # nothing from the vendor. The task upserts the game row
                     # itself before its first odds INSERT (the foreign key).
                     asyncio.create_task(self._persist_pregame_odds(game_pk, game))
+                    # SIM-519 Part B: the published lineup and the probable
+                    # pitchers, so the game can be simulated before it starts.
+                    asyncio.create_task(self._write_preview_lineup(game))
 
                 # SIM-105: skip _upsert_game_record() for games that have
                 # already transitioned to Final.  For a 15-game slate with
@@ -2815,7 +2818,11 @@ class LiveIngestionPipeline:
         }
         status = status_map.get(gd.get("status", {}).get("abstractGameState", "Preview"), "Preview")
 
-        game_date = date.fromisoformat(gd["gameDate"][:10])
+        # SIM-519 Part C: the slate keys games on the league's official date
+        # (the local calendar day). gameDate is the UTC start: a West Coast night
+        # game's gameDate falls on the next UTC day, so a game created from it
+        # sat on the wrong slate until the nightly load corrected it.
+        game_date = date.fromisoformat((gd.get("officialDate") or gd["gameDate"])[:10])
 
         # SIM-438: supply season.  raw.games.season is INTEGER NOT NULL and is
         # half of all three composite FKs — (venue_id, season) -> raw.venues and
@@ -2856,6 +2863,92 @@ class LiveIngestionPipeline:
             gd.get("teams", {}).get("home", {}).get("team", {}).get("id", 0),
             gd.get("teams", {}).get("away", {}).get("team", {}).get("id", 0),
         )
+        await self._upsert_schedule_fields(gd)
+
+    async def _upsert_schedule_fields(self, entry: dict) -> None:
+        """SIM-519: the schedule's fields on the game row (Alembic 0029).
+
+        Start time, doubleheader code and number, the detailed state and both
+        probable pitchers. Best effort and separate from the INSERT, so a
+        database without the 0029 columns keeps every game row it gets today.
+        """
+        exists = getattr(self, "_schedule_columns_exist", None)
+        try:
+            if exists is None:
+                exists = bool(
+                    await self._db.fetchval(
+                        "SELECT 1 FROM information_schema.columns WHERE table_schema = 'raw' "
+                        "AND table_name = 'games' AND column_name = 'schedule_seen_at'"
+                    )
+                )
+                self._schedule_columns_exist = exists
+            if not exists:
+                return
+            from pipeline.mlb_schedule import parse_game
+
+            g = parse_game(entry)
+            await self._db.execute(
+                """
+                UPDATE raw.games SET
+                    start_utc                = $2,
+                    start_time_tbd           = $3,
+                    double_header            = $4,
+                    game_number              = $5,
+                    detailed_state           = $6,
+                    home_probable_pitcher_id = $7,
+                    away_probable_pitcher_id = $8,
+                    schedule_seen_at         = NOW()
+                 WHERE game_pk = $1
+                """,
+                g.game_pk,
+                g.start_utc,
+                g.start_time_tbd,
+                g.double_header[:1] or None,
+                g.game_number,
+                (g.detailed_state or None) and g.detailed_state[:40],
+                g.home.probable_pitcher.player_id if g.home.probable_pitcher else None,
+                g.away.probable_pitcher.player_id if g.away.probable_pitcher else None,
+            )
+        except Exception as exc:  # noqa: BLE001 -- never cost the game row its upsert
+            log.debug("schedule fields not written for game %s: %s", entry.get("gamePk"), exc)
+
+    async def _write_preview_lineup(self, game: dict) -> None:
+        """SIM-519 Part B: make a Preview game simulable.
+
+        The game row first and awaited (``raw.game_lineups.game_pk`` is a
+        foreign key), then the published-lineup writer
+        (:class:`pipeline.live.lineup_writer.PublishedLineupWriter`), which reads
+        the game's feed only when the schedule's lineups or probables changed.
+        """
+        try:
+            await self._upsert_game_record(game)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("lineup: game row not upserted for %s: %s", game.get("gamePk"), exc)
+            return
+        writer = getattr(self, "_lineup_writer", None)
+        if writer is None:
+            from pipeline.live.lineup_writer import PublishedLineupWriter
+
+            async def get_json(url: str) -> Any:
+                async with self._http.get(url) as resp:
+                    resp.raise_for_status()
+                    return await resp.json()
+
+            writer = PublishedLineupWriter(self._db, get_json)
+            self._lineup_writer = writer
+        source = await writer.on_preview(game)
+        if source is not None:
+            await self._on_lineup_published(int(game["gamePk"]), source)
+
+    async def _on_lineup_published(self, game_pk: int, source: str) -> None:
+        """SIM-519: tell the game page a lineup is in (the Part C bridge carries it)."""
+        broadcast = getattr(self, "_broadcast_message", None)
+        if broadcast is None:
+            return
+        try:
+            await broadcast(game_pk, {"type": "lineup_published", "game_pk": game_pk, "source": source})
+        except Exception as exc:  # noqa: BLE001
+            log.debug("lineup_published not broadcast for %s: %s", game_pk, exc)
 
     @staticmethod
     def _odds_hash(odds: dict) -> str:
