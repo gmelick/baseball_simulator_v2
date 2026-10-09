@@ -446,6 +446,40 @@ top needs a scroll; showing it under the clicked row would read better. The line
 play-by-play panels stay empty: the API's replay store is off on purpose, a separate piece of
 work. A cached set lives 15 minutes, so a bundle rebuilt in that window serves the old set
 until it expires.
+# Design PROPOSED — the live, schedule-driven game day view: the slate from the league's schedule, a simulate path for games that have not started, the live service as its own container, the nightly finals job with a crash retry, one simulation run per game with progress, names in the projections — SIM-519, 2026-10-08
+
+**Why it matters.** The day view lists only the games our database holds, so an off day and a
+sixteen-day-stale database look the same, and a card shows no score, start time or doubleheader
+number. Worse for the product: every game that has not started answers 503 to every pricing
+endpoint, because nothing writes a lineup before a game is final. The slate would show upcoming
+games the platform cannot price. The design (`docs/audit/2026-10-08-sim519-live-slate-tech-design.md`)
+covers eight parts, each closable on its own, and asks the owner seven decisions (its §16).
+
+**What it found in the code, beyond the filing.** The Postgres sim-run write sits behind the
+DuckDB replay gate, so no run is ever stored on the default stack and the slate card's
+`sim_summary` is always null. `/boxscore` plays its 100 games serially in one thread outside the
+runner: the "five minutes per rerun" the filing measured. The live pipeline polls the machine's
+UTC date and writes the UTC date into `raw.games`, so a West Coast night game sits on the next
+day's slate until the nightly load corrects it. The nightly scheduler was opt-in and never ran;
+even when run, its second and third steps need the DuckDB write lock the app holds (SIM-524).
+
+**What it proposes, in landing order.** (D) a nightly finals job in a retry wrapper, the
+scheduler on by default, the pool rebuild left disabled until the lock ticket; (A) one schedule
+client, one status mapper, the slate endpoint reads the schedule and merges our data in two
+queries, degrades to the cache and then to the database, and shows postponed games as cards;
+(B) the live service writes the published lineup and the probable pitcher into
+`raw.game_lineups` with a `source` column, so a preview game simulates (the projected-lineup
+option waits on a ruling); (C) the live service as its own container with a Redis message
+channel to the app's WebSocket, a heartbeat, the Eastern-time poll window, the official date,
+vendor reads off the loop, and a Preview-to-Live hook for the closing-price work (SIM-546);
+(E) one run per game: a POST that returns a run id, a queue of one, real progress and cancel
+through chunked execution in the runner, the artifacts on the run row in Postgres, every panel
+reading the latest run; (F) names, grouping and one "Bullpen (generic)" row; (G) the last-seen
+stamp on odds rows (the one-book plan's leftover); (H) the seasons list newest first. One
+additive Alembic migration (0029); DuckDB unchanged. About sixteen to eighteen build days.
+
+**Not changed:** production, `BACKLOG.xlsx` (the row stays as filed; the subtitle stays at
+SIM-560).
 
 # CLOSED — every out goes on a pitcher's line: one writer at the place the out is recorded, the outs played on the game result, each play names its own pitcher for the win module, batters faced on the box line; the smoke reads the credited outs equal to the outs played in all 500 game-sims and no play changed — SIM-557, 2026-10-07
 
