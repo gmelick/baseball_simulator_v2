@@ -141,6 +141,17 @@ stores are mock rows, which every reader filters out. The first-pitch promotion 
 mock rows until `ODDS_PROVIDER=bettingpros` is set in the app's environment; the nightly closing
 job names the provider itself and works without it (the container holds the vendor key).
 
+**Merged and deployed 2026-10-09.** Master `000e2c3` (the branch first took in the game-page work
+of 2026-10-08, `e5caf42`; the merged tree read 5,634 unit tests passed, regression 33, lint and
+types clean, the frontend built). The app image and the nginx image (which bakes the frontend)
+were rebuilt from the merged branch before the recreate; the app, nginx and the scheduler are
+recreated; `ODDS_PROVIDER=bettingpros` is set in the host `.env`, so the live odds cycle now reads
+the real vendor; the scheduler registered both nightly jobs; the nightly closing job ran by hand
+with exit 0 over the games of 2026-10-07 and 10-08 (five games, 698 closing rows, 18 sportsbooks,
+no incomplete game). The edge endpoint on game 776151 reads all fifteen markets priced from
+stored sportsbook rows. The first live game day check is pending; the ticket row stays open
+until it.
+
 **Not yet run: the first live game day check of the design's section 8.** Nothing is deployed.
 The order matters. Rebuild the app image first (`docker compose build app`, then
 `docker compose up -d app`): `betting/` and `scripts/` are baked into the image, and the

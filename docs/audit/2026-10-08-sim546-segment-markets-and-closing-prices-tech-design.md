@@ -1,7 +1,7 @@
 # Tech design — the twelve segment and team markets on the API and the game page, and every live game's closing prices (SIM-546)
 
-> **STATUS 2026-10-09 — BUILT. The deploy and the first live game day check (§8) are not yet
-> run.** All five decisions are taken (§10): the owner took decisions 1, 3 and 5 as
+> **STATUS 2026-10-09 — MERGED INTO `master` (000e2c3) AND DEPLOYED. The first live game day
+> check (§8) is pending.** All five decisions are taken (§10): the owner took decisions 1, 3 and 5 as
 > recommended, chose the one extra price parameter for decision 2 (§4, B4) and chose to fire
 > the bet signals on all fifteen markets for decision 4 (§4, B6). The code of §3 to §6 is
 > built on the branch `claude/sim-546-tech-design-f4ffe8` (not merged). Each part had one
@@ -1113,7 +1113,18 @@ starting-position smoke (SIM-559) on the same ten games (runs 9.03 there, at 40 
 
 ### 13.5 Not yet done
 
-1. **The deploy (§8).** The order matters. Rebuild the app image first (`docker compose build
+1. **The deploy (§8) — DONE 2026-10-09.** Merged as `000e2c3` after the branch took in `master`
+   (the game-page work of 2026-10-08; merge commit `e5caf42`, the generated API types regenerated
+   inside the app image). Both images were rebuilt from the merged branch BEFORE the recreate: the
+   app image, and the nginx image, which bakes the frontend build (the `frontend/dist` folder on
+   disk is a July leftover; nginx does not mount it). The app, nginx and the scheduler were
+   recreated; `ODDS_PROVIDER=bettingpros` is set in the host `.env`; the scheduler registered both
+   jobs; the nightly closing job ran by hand with exit 0 over the games of 2026-10-07 and 10-08
+   (five games, 698 closing rows across 18 sportsbooks and the blend, 455 of them on the segment
+   markets; no incomplete game). Two notes: from Git Bash, `docker compose exec ... sh
+   /app/scripts/...` needs `MSYS_NO_PATHCONV=1` (the path is otherwise rewritten to
+   `C:/Program Files/Git/app/...`); the post-deploy `/edges` call on game 776151 read all fifteen
+   markets `stored` from real books in 24 s at 20 iterations. The order was: Rebuild the app image first (`docker compose build
    app`, then `docker compose up -d app`). `betting/` and `scripts/` are baked into the image,
    and the hot-reloaded `api/routes/betting.py` now imports new `betting/` names, so an `api/`
    reload before the rebuild fails to import (`CLAUDE.md` §2a). Then start the scheduler
