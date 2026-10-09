@@ -428,8 +428,21 @@ def _roster(payload: Mapping[str, Any], side: str) -> dict[str, Any]:
             starters[order // 100 - 1] = pid
             positions[pid] = _position(p) or "DH"
     pitchers = [int(x) for x in box.get("pitchers") or []]
-    hitters = [int(x) for x in (box.get("batters") or []) + (box.get("bench") or [])]
     arms = [int(x) for x in (box.get("pitchers") or []) + (box.get("bullpen") or [])]
+    # The box's `batters` lists every player who appeared, relievers included. A
+    # pitcher is a hitter only when he held a batting-order spot (a two-way player,
+    # or a pitcher who pinch-hit); otherwise he is an arm, never a bench bat.
+    batted = {
+        pid
+        for p in players.values()
+        if (pid := _pid(p.get("person"))) is not None and _int(p.get("battingOrder")) is not None
+    }
+    arm_set = set(arms)
+    hitters = [
+        int(x)
+        for x in (box.get("batters") or []) + (box.get("bench") or [])
+        if int(x) not in arm_set or int(x) in batted
+    ]
     return {
         "starters": starters,
         "positions": positions,
