@@ -119,7 +119,12 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
   const load = (): void => {
     setLoading(true)
     setError(null)
-    Promise.all([fetchEdges(gamePk, 200), fetchSignals(gamePk, 200)])
+    // In sequence, not in parallel: each request runs the same 200-game batch,
+    // and the runner caches it (60 s). Fired together, both missed the cache and
+    // ran two batches on one worker pool (45 s alone became ~100 s each), past
+    // nginx's 120 s limit: a 504. Fired in turn, /signals reads /edges' batch.
+    fetchEdges(gamePk, 200)
+      .then(async (e) => [e, await fetchSignals(gamePk, 200)] as const)
       .then(([e, s]) => {
         setEdges(e)
         setSignals(s)

@@ -302,3 +302,25 @@ test('the betting card renders all fifteen game markets with a tie side', async 
   await expect(card.getByText('No', { exact: true })).toBeVisible()
   await expect(card.getByText(/A tie is a priced outcome/).first()).toBeVisible()
 })
+
+test('the betting card asks for the signals only after the edges answer', async ({ page }) => {
+  // Fired together, the two requests ran two 200-game batches at once and hit
+  // nginx's 120 s limit (504). In turn, /signals reads the batch /edges cached.
+  await mockAuthed(page)
+  await mockGame(page)
+  await mockBetting(page)
+  const order: string[] = []
+  page.on('request', (r) => {
+    if (r.url().includes('/edges')) order.push('edges-request')
+    if (r.url().includes('/signals')) order.push('signals-request')
+  })
+  page.on('requestfinished', (r) => {
+    if (r.url().includes('/edges')) order.push('edges-done')
+  })
+  await page.goto('/game/745001')
+  const card = page.getByRole('region', { name: 'Betting' })
+  await card.getByRole('button', { name: 'Load betting' }).click()
+  await expect(card.locator('section')).toHaveCount(15)
+  expect(order.indexOf('edges-done')).toBeGreaterThanOrEqual(0)
+  expect(order.indexOf('signals-request')).toBeGreaterThan(order.indexOf('edges-done'))
+})
