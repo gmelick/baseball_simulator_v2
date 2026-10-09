@@ -922,8 +922,12 @@ class MockOddsAPI:
         elif kind == "runline":
             spread = mrng.choice([-0.5, 0.5])
             result["home_spread"], result["away_spread"] = spread, -spread
-            result["home_spread_ml"] = mrng.randint(-130, 115)
-            result["away_spread_ml"] = mrng.randint(-130, 115)
+            # SIM-546: every mock price is a valid American price. A raw
+            # integer draw put about half of them inside (-100, 100) and
+            # some at 0, which the de-vig refuses for both sides.
+            p_home = mrng.uniform(0.40, 0.60)
+            result["home_spread_ml"] = MockOddsAPI._prob_to_american(p_home * (1 + vig / 2))
+            result["away_spread_ml"] = MockOddsAPI._prob_to_american((1.0 - p_home) * (1 + vig / 2))
         elif kind == "total":
             # The line scales with the slice of the game and the side.
             if canonical.startswith("f1_"):
@@ -935,12 +939,14 @@ class MockOddsAPI:
             else:  # a full-game team total
                 line = mrng.choice([3.5, 4.0, 4.5, 5.0])
             result["total_line"] = line
-            result["over_ml"] = mrng.randint(-140, 120)
-            result["under_ml"] = mrng.randint(-140, 120)
+            p_over = mrng.uniform(0.40, 0.60)
+            result["over_ml"] = MockOddsAPI._prob_to_american(p_over * (1 + vig / 2))
+            result["under_ml"] = MockOddsAPI._prob_to_american((1.0 - p_over) * (1 + vig / 2))
         elif kind == "yes_no":
             result["total_line"] = 0.5
-            result["over_ml"] = mrng.randint(-125, 110)
-            result["under_ml"] = mrng.randint(-125, 110)
+            p_yes = mrng.uniform(0.40, 0.60)
+            result["over_ml"] = MockOddsAPI._prob_to_american(p_yes * (1 + vig / 2))
+            result["under_ml"] = MockOddsAPI._prob_to_american((1.0 - p_yes) * (1 + vig / 2))
         return result
 
     @staticmethod

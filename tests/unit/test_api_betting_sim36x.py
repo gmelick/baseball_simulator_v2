@@ -163,13 +163,17 @@ def test_edges_returns_numpy_free_reports_incl_run_line(patch_resolver):
     # iteration on one side (a degenerate 0/1 sim prob that carries no priceable
     # edge and is skipped). The moneyline prices are NOT injected, so that market
     # still exercises the mock-odds path.
+    # SIM-546: the twelve segment and team markets. The default request now
+    # prices all fifteen game markets (test_sim546_segment_edges.py covers
+    # it), so this case names the three full-game markets it was written for.
     resp = client.get(
-        "/api/betting/games/745001/edges?n_iterations=120&base_seed=7&total_line=1.5&run_line=-0.5"
+        "/api/betting/games/745001/edges?n_iterations=120&base_seed=7&total_line=1.5"
+        "&run_line=-0.5&markets=moneyline,total,runline"
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["game_pk"] == 745001
-    # All three markets default -> 6 reports (both sides each).
+    # The three full-game markets -> 6 reports (both sides each).
     labels = {e["label"] for e in body["edges"]}
     assert "moneyline" in labels
     assert "total" in labels

@@ -264,6 +264,36 @@ def test_edges_default_prices_fifteen_markets_from_the_mock(client_for):
     json.dumps(body)
 
 
+def test_the_mock_draws_valid_american_prices():
+    """Every mock price of the twelve markets is at least 100 in size.
+
+    A price inside (-100, 100) is not an American price, and a 0 makes the
+    de-vig refuse both sides of its market."""
+    columns = ("home_ml", "away_ml", "draw_ml", "home_spread_ml", "away_spread_ml")
+    columns += ("over_ml", "under_ml")
+    for game_pk in range(745_001, 746_001):
+        for market in GAME_MARKET_TYPES:
+            odds = MockOddsAPI.get_odds(game_pk, market_type=market)
+            for column in columns:
+                price = odds[column]
+                if price is not None:
+                    assert abs(price) >= 100, (game_pk, market, column, price)
+
+
+def test_the_default_request_prices_every_side_on_many_games(client_for):
+    """Over many games, the default request gives every market all its sides."""
+    client = client_for()
+    for game_pk in range(745_001, 745_041):
+        body = client.get(f"/api/betting/games/{game_pk}/edges?n_iterations=400").json()
+        counts: dict[str, int] = {}
+        for e in body["edges"]:
+            counts[e["label"]] = counts.get(e["label"], 0) + 1
+        for market in GAME_MARKET_TYPES:
+            expected = 3 if GAME_MARKET_KIND[market] == "three_way" else 2
+            label = betting_routes._report_label(market)
+            assert counts.get(label) == expected, (game_pk, market)
+
+
 def test_the_segment_reports_read_the_segment_runs(client_for):
     body = client_for().get(_edges_url("&markets=f5_total,first_to_score")).json()
     f5 = _by(body, "f5_total")
