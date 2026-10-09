@@ -409,6 +409,8 @@ export interface PropEdgeQuery {
   betSide?: 'over' | 'under'
   nIterations?: number
   baseSeed?: number
+  /** SIM-519: read this stored run instead of running a batch. */
+  runId?: number | null
 }
 
 // ---------------------------------------------------------------------------
@@ -457,11 +459,19 @@ export interface WithOverrideResponse {
 /** Raised for any non-2xx games-API response, carrying the HTTP status. */
 export class GamesApiError extends Error {
   readonly status: number
-  constructor(status: number, message: string) {
+  /** Seconds from a Retry-After header (a 503 for an unpublished lineup). */
+  readonly retryAfter: number | null
+  constructor(status: number, message: string, retryAfter: number | null = null) {
     super(message)
     this.name = 'GamesApiError'
     this.status = status
+    this.retryAfter = retryAfter
   }
+}
+
+function retryAfterOf(res: Response): number | null {
+  const v = Number(res.headers.get('Retry-After'))
+  return Number.isFinite(v) && v > 0 ? v : null
 }
 
 export async function getJson<T>(url: string): Promise<T> {
@@ -482,7 +492,7 @@ async function postJson<T>(url: string, payload: unknown): Promise<T> {
   })
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { detail?: string }
-    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
+    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`, retryAfterOf(res))
   }
   return res.json() as Promise<T>
 }
@@ -563,12 +573,69 @@ export function fetchBoxscore(
   gamePk: number,
   nIterations?: number,
   baseSeed?: number,
+  runId?: number | null,
 ): Promise<BoxscoreCard> {
   const params = new URLSearchParams()
-  if (nIterations != null) params.set('n_iterations', String(nIterations))
-  if (baseSeed != null) params.set('base_seed', String(baseSeed))
+  if (runId != null) params.set('run_id', String(runId))
+  else {
+    if (nIterations != null) params.set('n_iterations', String(nIterations))
+    if (baseSeed != null) params.set('base_seed', String(baseSeed))
+  }
   const qs = params.toString()
   return getJson<BoxscoreCard>(`/api/games/${gamePk}/boxscore${qs ? `?${qs}` : ''}`)
+}
+
+// ---------------------------------------------------------------------------
+// One simulation run per game (SIM-519 Part E)
+// ---------------------------------------------------------------------------
+
+export type SimRunStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+
+export interface SimRun {
+  run_id: number
+  game_pk: number
+  status: SimRunStatus
+  n_iterations: number
+  progress_done: number
+  base_seed: number | null
+  position_in_queue: number | null
+  existing: boolean
+  requested_at: string | null
+  started_at: string | null
+  finished_at: string | null
+  error: string | null
+  lineup_source: string | null
+  bullpen_source: string | null
+  replay_run_id: number | null
+  summary: SimSummaryLite | null
+}
+
+/** POST /api/games/{game_pk}/simulate — queue a run (or get the active one). */
+export function startSimRun(gamePk: number, nIterations: number): Promise<SimRun> {
+  return postJson<SimRun>(`/api/games/${gamePk}/simulate`, { n_iterations: nIterations })
+}
+
+/** GET /api/games/{game_pk}/simulate/runs/latest — 404 when the game has none. */
+export function fetchLatestRun(gamePk: number): Promise<SimRun> {
+  return getJson<SimRun>(`/api/games/${gamePk}/simulate/runs/latest`)
+}
+
+/** GET /api/games/{game_pk}/simulate/runs/{run_id}. */
+export function fetchSimRun(gamePk: number, runId: number): Promise<SimRun> {
+  return getJson<SimRun>(`/api/games/${gamePk}/simulate/runs/${runId}`)
+}
+
+/** DELETE /api/games/{game_pk}/simulate/runs/{run_id} — cancel. */
+export async function cancelSimRun(gamePk: number, runId: number): Promise<SimRun> {
+  const res = await fetch(`/api/games/${gamePk}/simulate/runs/${runId}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  })
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { detail?: string }
+    throw new GamesApiError(res.status, body.detail ?? `Request failed (${res.status}).`)
+  }
+  return res.json() as Promise<SimRun>
 }
 
 /** GET /api/games/{game_pk}/props/{player_id}/{prop} — full PMF (+ optional
@@ -584,8 +651,11 @@ export function fetchPropEdge(
   if (q.overMl != null) params.set('over_ml', String(q.overMl))
   if (q.underMl != null) params.set('under_ml', String(q.underMl))
   if (q.betSide != null) params.set('bet_side', q.betSide)
-  if (q.nIterations != null) params.set('n_iterations', String(q.nIterations))
-  if (q.baseSeed != null) params.set('base_seed', String(q.baseSeed))
+  if (q.runId != null) params.set('run_id', String(q.runId))
+  else {
+    if (q.nIterations != null) params.set('n_iterations', String(q.nIterations))
+    if (q.baseSeed != null) params.set('base_seed', String(q.baseSeed))
+  }
   const qs = params.toString()
   return getJson<PropEdge>(
     `/api/games/${gamePk}/props/${playerId}/${encodeURIComponent(prop)}${qs ? `?${qs}` : ''}`,

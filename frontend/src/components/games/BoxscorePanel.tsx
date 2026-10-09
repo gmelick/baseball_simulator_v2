@@ -16,6 +16,9 @@
  *
  * SIM-561: the API stores the run's first game for the linescore and the
  * play-by-play; `onLoaded` tells the page, which reloads both.
+ *
+ * SIM-519 Part E: the panel reads the game's stored run (`runId`, from the
+ * Simulation card) and runs no batch of its own; each click reads the same run.
  */
 import React, { useEffect, useState } from 'react'
 
@@ -63,6 +66,8 @@ export interface BoxscorePanelProps {
   homeLabel?: string
   /** Called once the card loads; the API stored the run's first game (SIM-561). */
   onLoaded?: () => void
+  /** SIM-519 Part E: the stored run to read; null shows the "run a simulation" prompt. */
+  runId?: number | null
 }
 
 interface Selection {
@@ -130,6 +135,7 @@ export function BoxscorePanel({
   awayLabel = 'Away',
   homeLabel = 'Home',
   onLoaded,
+  runId = null,
 }: BoxscorePanelProps): React.ReactElement {
   const [box, setBox] = useState<BoxscoreCard | null>(null)
   const [loading, setLoading] = useState(false)
@@ -154,6 +160,22 @@ export function BoxscorePanel({
       .finally(() => setLoading(false))
   }
 
+  // SIM-519 Part E: a new stored run replaces the card.
+  useEffect(() => {
+    if (runId == null) return
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    setSelection(null)
+    fetchBoxscore(gamePk, undefined, undefined, runId)
+      .then((b) => !cancelled && setBox(b))
+      .catch((err: unknown) => !cancelled && setError(err instanceof Error ? err.message : 'Failed to load projections.'))
+      .finally(() => !cancelled && setLoading(false))
+    return () => {
+      cancelled = true
+    }
+  }, [gamePk, runId])
+
   // Fetch the selected prop's distribution (re-runs when the line changes). The
   // card's seed and N make the server read the cached run, not simulate again.
   const runSeed = box?.base_seed ?? undefined
@@ -171,6 +193,7 @@ export function BoxscorePanel({
       line,
       baseSeed: runSeed,
       nIterations: runGames,
+      runId,
     })
       .then((d) => !cancelled && setDist(d))
       .catch(() => !cancelled && setDist(null))
@@ -178,13 +201,21 @@ export function BoxscorePanel({
     return () => {
       cancelled = true
     }
-  }, [gamePk, selection, lineInput, runSeed, runGames])
+  }, [gamePk, selection, lineInput, runSeed, runGames, runId])
 
   if (!box) {
+    if (runId != null || loading) {
+      return (
+        <div className={styles.gate}>
+          <p aria-busy={loading}>{loading ? 'Loading the run…' : error ?? ''}</p>
+        </div>
+      )
+    }
     return (
       <div className={styles.gate}>
+        <p>Run a simulation above to see each player's projections.</p>
         <button type="button" className={styles.loadButton} onClick={loadBoxscore} disabled={loading}>
-          {loading ? `Simulating ${N_GAMES} games…` : 'Load projections'}
+          Quick look ({N_GAMES} games, not stored)
         </button>
         {error && <p className={styles.error} role="alert">{error}</p>}
       </div>

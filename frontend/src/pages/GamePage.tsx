@@ -37,6 +37,7 @@ import {
 import { BaseballFieldGraphic, LinescoreGraphic } from '@/components/graphics'
 import { BettingCard } from '@/components/games/BettingCard'
 import { BoxscorePanel } from '@/components/games/BoxscorePanel'
+import { SimulationCard } from '@/components/games/SimulationCard'
 import { LineMovementPanel } from '@/components/games/LineMovementPanel'
 import { OverridePanelV2 } from '@/components/games/OverridePanelV2'
 import { PlayByPlayList } from '@/components/games/PlayByPlayList'
@@ -113,6 +114,8 @@ export function GamePage(): React.ReactElement {
   // SIM-561: a newly stored simulated game bumps the version, which reloads the
   // card; the card's run id then loads that run's plays.
   const [replayVersion, setReplayVersion] = useState(0)
+  // SIM-519 Part E: the game's newest done run; the projections read it.
+  const [runId, setRunId] = useState<number | null>(null)
   const [simulating, setSimulating] = useState(false)
   const [simError, setSimError] = useState<string | null>(null)
   const replay = useOptionalResource<ReplayCard>(
@@ -245,6 +248,15 @@ export function GamePage(): React.ReactElement {
       {/* Main grid */}
       <div className={styles.grid}>
         <div className={styles.leftCol}>
+          <SimulationCard
+            gamePk={gamePk}
+            onDone={(run) => {
+              setRunId(run.run_id)
+              // The run stored its representative game in the replay file.
+              showStoredGame()
+            }}
+          />
+
           <Card title="Simulated game" headerActions={simButton}>
             {ls ? (
               <>
@@ -297,6 +309,7 @@ export function GamePage(): React.ReactElement {
               awayLabel={away}
               homeLabel={home}
               onLoaded={showStoredGame}
+              runId={runId}
             />
           </Panel>
 
