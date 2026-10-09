@@ -588,36 +588,101 @@ class TestPersistOdds:
 # ===========================================================================
 
 
+def _closing_game_row(row_id: int, market: str, book: str, *, line_type: str = "current") -> dict:
+    """SIM-546: one stored game row as the closing promotion reads it."""
+    row = {
+        "id": row_id,
+        "source": "bettingpros",
+        "line_type": line_type,
+        "book": book,
+        "market_type": market,
+        "is_sharp_book": False,
+        "book_line_at": None,
+        "home_ml": -120,
+        "away_ml": 110,
+        "draw_ml": None,
+        "home_spread": None,
+        "home_spread_ml": None,
+        "away_spread": None,
+        "away_spread_ml": None,
+        "total_line": None,
+        "over_ml": None,
+        "under_ml": None,
+    }
+    row["odds_hash"] = LiveIngestionPipeline._odds_hash(row)
+    return row
+
+
 class TestClosingLines:
+    """SIM-546 rewrote the marker: one candidate per (market, book), the hash
+    rewritten to the closing hash, and a second call promotes nothing."""
+
     @pytest.mark.asyncio
-    async def test_mark_closing_lines_returns_update_count(self) -> None:
+    async def test_mark_closing_lines_promotes_one_row_per_market_and_book(self) -> None:
         db = AsyncMock()
-        db.execute.return_value = "UPDATE 1"
+        rows = [
+            _closing_game_row(1, "moneyline", "bp:12"),
+            _closing_game_row(2, "moneyline", "bp:10"),
+        ]
+        db.fetch.side_effect = [rows, []]  # the read, then the existence check
+        db.execute.return_value = "UPDATE 2"
         pipeline = _bare_pipeline(_db=db)
         n = await pipeline.mark_closing_lines(745000, datetime(2024, 8, 15, tzinfo=UTC))
-        assert n == 1
-        sql = db.execute.await_args.args[0]
+        assert n == 2
+        read_sql = db.fetch.await_args_list[0].args[0]
+        assert "DISTINCT ON (market_type, book)" in read_sql
+        assert "LIMIT 1" not in read_sql
+        sql, ids, hashes = db.execute.await_args.args
         assert "raw.game_odds" in sql
         assert "closing" in sql
+        assert ids == [1, 2]
+        assert hashes == [
+            LiveIngestionPipeline._odds_hash({**row, "line_type": "closing"}) for row in rows
+        ]
 
     @pytest.mark.asyncio
     async def test_mark_closing_lines_zero_when_no_rows(self) -> None:
         db = AsyncMock()
-        db.execute.return_value = "UPDATE 0"
+        db.fetch.return_value = []
         pipeline = _bare_pipeline(_db=db)
         n = await pipeline.mark_closing_lines(745000, datetime(2024, 8, 15, tzinfo=UTC))
         assert n == 0
+        db.execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_mark_closing_lines_second_call_promotes_nothing(self) -> None:
+        db = AsyncMock()
+        db.fetch.return_value = [_closing_game_row(1, "moneyline", "bp:12", line_type="closing")]
+        pipeline = _bare_pipeline(_db=db)
+        n = await pipeline.mark_closing_lines(745000, datetime(2024, 8, 15, tzinfo=UTC))
+        assert n == 0
+        db.execute.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_mark_closing_prop_lines_returns_update_count(self) -> None:
         db = AsyncMock()
-        db.execute.return_value = "UPDATE 28"
+        prop = {
+            "id": 7,
+            "source": "bettingpros",
+            "line_type": "current",
+            "player_id": 100,
+            "prop_stat": "hits",
+            "book": "bp:12",
+            "is_sharp_book": False,
+            "book_line_at": None,
+            "line": 0.5,
+            "over_ml": -200,
+            "under_ml": 160,
+        }
+        prop["odds_hash"] = LiveIngestionPipeline._prop_odds_hash(prop)
+        db.fetch.side_effect = [[prop], []]
+        db.execute.return_value = "UPDATE 1"
         pipeline = _bare_pipeline(_db=db)
         n = await pipeline.mark_closing_prop_lines(745000, datetime(2024, 8, 15, tzinfo=UTC))
-        assert n == 28
+        assert n == 1
+        assert "DISTINCT ON (player_id, prop_stat, book)" in db.fetch.await_args_list[0].args[0]
         sql = db.execute.await_args.args[0]
         assert "raw.prop_odds" in sql
-        assert "DISTINCT ON" in sql
 
 
 # ===========================================================================
