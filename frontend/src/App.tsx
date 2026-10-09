@@ -56,40 +56,27 @@ function AppShell(): React.ReactElement {
           Skip to content
         </a>
         <header className="app-header">
-          <div className="app-header__left">
-            <Link
-              to="/"
-              className="app-header__brand"
-              style={{ textDecoration: 'none', color: 'inherit', display: 'flex', alignItems: 'center', gap: 'var(--sim-space-2)' }}
-            >
-              <span className="app-header__logo" aria-hidden="true">⚾</span>
-              <span className="app-header__title">MLB Sim Platform</span>
-            </Link>
-            <nav className="app-header__nav" aria-label="Primary navigation">
-              <NavLink to="/" end>
-                Games
-              </NavLink>
-              <NavLink to="/lab">Data Lab</NavLink>
-              <NavLink to="/similarity">Similarity</NavLink>
+          <div className="app-header__bar">
+            <div className="app-header__left">
+              <Link to="/" className="app-header__brand">
+                <span className="app-header__logo" aria-hidden="true" />
+                <span className="app-header__title">Daily Diamond</span>
+              </Link>
+              <nav className="app-header__nav" aria-label="Primary navigation">
+                <NavLink to="/" end>
+                  Games
+                </NavLink>
+                <NavLink to="/lab">Data Lab</NavLink>
+                <NavLink to="/similarity">Similarity</NavLink>
+              </nav>
+            </div>
+            <nav className="app-header__nav" aria-label="Utility navigation">
+              <button type="button" className="app-header__logout" onClick={logout} aria-label="Log out">
+                Log out
+              </button>
             </nav>
           </div>
-          <nav className="app-header__nav" aria-label="Utility navigation">
-            <button
-              onClick={logout}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: 'rgba(255,255,255,0.7)',
-                cursor: 'pointer',
-                fontFamily: 'var(--sim-font-sans)',
-                fontSize: 'var(--sim-text-sm)',
-                padding: '0 var(--sim-space-2)',
-              }}
-              aria-label="Log out"
-            >
-              Log out
-            </button>
-          </nav>
+          <div className="app-header__stitch" aria-hidden="true" />
         </header>
 
         <main className="app-main" id="main-content">

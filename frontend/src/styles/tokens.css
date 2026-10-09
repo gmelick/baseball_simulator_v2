@@ -2,8 +2,9 @@
  * Design system tokens — SIM-380
  *
  * All values are CSS custom properties so components never hard-code colors,
- * spacing, or type ramp values. Dark-mode overrides go in a
- * `@media (prefers-color-scheme: dark)` block at the bottom.
+ * spacing, or type ramp values. The palette is the Daily Diamond design
+ * (SIM-519 Part T): scorecard paper, forest green, stitch red. The page has no
+ * dark mode. The --dd-* tokens hold the design's field and scoreboard colours.
  *
  * Naming convention: --sim-{category}-{scale/modifier}
  */
@@ -13,88 +14,103 @@
    * Color palette — Semantic tokens built on a base scale
    * ========================================================================= */
 
-  /* Neutrals (gray scale: 50 → 950) */
-  --sim-gray-50:  #f8fafc;
-  --sim-gray-100: #f1f5f9;
-  --sim-gray-200: #e2e8f0;
-  --sim-gray-300: #cbd5e1;
-  --sim-gray-400: #94a3b8;
-  --sim-gray-500: #64748b;
-  --sim-gray-600: #475569;
-  --sim-gray-700: #334155;
-  --sim-gray-800: #1e293b;
-  --sim-gray-900: #0f172a;
-  --sim-gray-950: #020617;
+  /* Neutrals: warm scorecard paper → field ink (Daily Diamond, SIM-519 Part T) */
+  --sim-gray-50:  #fbf9f3;   /* card paper */
+  --sim-gray-100: #f3eee2;   /* chalk */
+  --sim-gray-200: #ece6d7;   /* table header band */
+  --sim-gray-300: #ddd5c2;   /* rules */
+  --sim-gray-400: #a9b2ab;
+  --sim-gray-500: #8a948d;
+  --sim-gray-600: #7b857e;
+  --sim-gray-700: #5d6a62;   /* muted text */
+  --sim-gray-800: #2e3a33;
+  --sim-gray-900: #1f2a24;   /* ink */
+  --sim-gray-950: #141c18;
 
-  /* Brand / primary: deep navy — official baseball feel */
-  --sim-primary-50:  #eff6ff;
-  --sim-primary-100: #dbeafe;
-  --sim-primary-200: #bfdbfe;
-  --sim-primary-300: #93c5fd;
-  --sim-primary-400: #60a5fa;
-  --sim-primary-500: #3b82f6;
-  --sim-primary-600: #1a6bff;   /* main interactive / CTA */
-  --sim-primary-700: #1d4ed8;
-  --sim-primary-800: #1e3a5f;   /* navy headers */
-  --sim-primary-900: #0f2a4a;   /* deepest navy */
+  /* Brand / primary: forest green, the header and the selected state */
+  --sim-primary-50:  #eef3ef;
+  --sim-primary-100: #d7e4dc;
+  --sim-primary-200: #a9c2b4;
+  --sim-primary-300: #6b8f7c;
+  --sim-primary-400: #3d6553;
+  --sim-primary-500: #2e5946;
+  --sim-primary-600: #24493a;   /* main interactive / CTA */
+  --sim-primary-700: #1b3a2d;
+  --sim-primary-800: #1a3a2c;
+  --sim-primary-900: #13291f;
 
-  /* Success / win — green */
-  --sim-success-100: #dcfce7;
-  --sim-success-500: #22c55e;
-  --sim-success-700: #15803d;
+  /* Success / win: grass */
+  --sim-success-100: #d7ead2;
+  --sim-success-500: #2f7d4f;
+  --sim-success-700: #1d4a2a;
 
-  /* Danger / loss — red */
-  --sim-danger-100:  #fee2e2;
-  --sim-danger-500:  #ef4444;
-  --sim-danger-700:  #b91c1c;
+  /* Danger / loss: stitch red */
+  --sim-danger-50:   #fbefec;
+  --sim-danger-100:  #f8e1dc;
+  --sim-danger-200:  #efc2b9;
+  --sim-danger-500:  #c4473c;
+  --sim-danger-700:  #9c2b22;
 
-  /* Warning / override amber */
-  --sim-warning-100: #fef3c7;
-  --sim-warning-500: #f59e0b;
-  --sim-warning-700: #b45309;
+  /* Warning / override: scoreboard gold */
+  --sim-warning-100: #fbf2cc;
+  --sim-warning-500: #d9a520;
+  --sim-warning-700: #8a6512;
 
-  /* Info / live-game pulse — electric blue */
-  --sim-info-100: #dbeafe;
-  --sim-info-500: #3b82f6;
-  --sim-info-700: #1d4ed8;
+  /* Info / live game: the live tag is stitch red */
+  --sim-info-100: #f8e1dc;
+  --sim-info-500: #b8332a;
+  --sim-info-700: #9c2b22;
+
+  /* Daily Diamond extras: the field, the scoreboard, the display face */
+  --dd-paper:        #f1ecdf;   /* page background */
+  --dd-red:          #b8332a;
+  --dd-stitch:       #c4473c;
+  --dd-gold:         #f4e19a;   /* scoreboard highlight */
+  --dd-board:        #24493a;   /* linescore board */
+  --dd-board-rule:   #3d6553;
+  --dd-board-muted:  #a9c2b4;
+  --dd-grass-dark:   #3e7a4b;
+  --dd-grass:        #74b26f;
+  --dd-grass-light:  #82bf7c;
+  --dd-dirt:         #c9945e;
+  --dd-track:        #b98450;
+  --dd-line:         #f6f2e6;
+  --dd-font-display: 'Barlow Condensed', 'Arial Narrow', sans-serif;
 
   /* =========================================================================
    * Semantic color tokens — map palette → intent
    * ========================================================================= */
 
   /* Surface hierarchy */
-  --sim-color-bg:           var(--sim-gray-50);
-  --sim-color-surface:      #ffffff;
-  --sim-color-surface-alt:  var(--sim-gray-100);
-  --sim-color-border:       var(--sim-gray-200);
-  --sim-color-border-strong: var(--sim-gray-300);
+  --sim-color-bg:           var(--dd-paper);
+  --sim-color-surface:      var(--sim-gray-50);
+  --sim-color-surface-alt:  var(--sim-gray-200);
+  --sim-color-border:       var(--sim-gray-300);
+  --sim-color-border-strong: var(--sim-gray-900);
 
   /* Text */
   --sim-color-text:         var(--sim-gray-900);
-  --sim-color-text-muted:   var(--sim-gray-500);
-  --sim-color-text-inverse: #ffffff;
+  --sim-color-text-muted:   var(--sim-gray-700);
+  --sim-color-text-inverse: var(--sim-gray-100);
 
   /* Interactive */
   --sim-color-interactive:  var(--sim-primary-600);
-  --sim-color-interactive-hover: var(--sim-primary-700);
+  --sim-color-interactive-hover: var(--dd-red);
 
   /* Status */
   --sim-color-win:       var(--sim-success-500);
   --sim-color-loss:      var(--sim-danger-500);
   --sim-color-override:  var(--sim-warning-500);
-  --sim-color-live:      var(--sim-info-500);
-  --sim-color-final:     var(--sim-gray-500);
-  --sim-color-scheduled: var(--sim-gray-400);
+  --sim-color-live:      var(--dd-red);
+  --sim-color-final:     var(--sim-gray-700);
+  --sim-color-scheduled: var(--sim-success-500);
 
   /* =========================================================================
    * Typography
    * ========================================================================= */
 
-  --sim-font-sans:  -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-                    'Helvetica Neue', Arial, 'Noto Sans', sans-serif,
-                    'Apple Color Emoji', 'Segoe UI Emoji';
-  --sim-font-mono:  ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-                    'Liberation Mono', 'Courier New', monospace;
+  --sim-font-sans:  'Barlow', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --sim-font-mono:  'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /* Font sizes (typographic scale: 12–48) */
   --sim-text-xs:   0.75rem;   /* 12px */
@@ -185,21 +201,8 @@
    * ========================================================================= */
 
   --sim-header-height: 56px;
-  --sim-max-width: 1280px;
+  --sim-max-width: 1480px;
   --sim-sidebar-width: 280px;
 }
 
-/* ============================================================================
- * Dark mode overrides
- * ========================================================================== */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --sim-color-bg:           var(--sim-gray-950);
-    --sim-color-surface:      var(--sim-gray-900);
-    --sim-color-surface-alt:  var(--sim-gray-800);
-    --sim-color-border:       var(--sim-gray-700);
-    --sim-color-border-strong: var(--sim-gray-600);
-    --sim-color-text:         var(--sim-gray-50);
-    --sim-color-text-muted:   var(--sim-gray-400);
-  }
-}
+/* No dark mode: the Daily Diamond design is a light scorecard (owner design, 2026-10-08). */

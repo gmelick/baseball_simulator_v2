@@ -5,12 +5,15 @@
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: var(--sim-space-1);
-  padding: var(--sim-space-0p5) var(--sim-space-2);
-  border-radius: var(--sim-radius-full);
-  font-size: var(--sim-text-xs);
-  font-weight: var(--sim-font-medium);
-  line-height: 1.5;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-family: var(--sim-font-mono);
+  font-size: 11px;
+  font-weight: var(--sim-font-bold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1.4;
   white-space: nowrap;
   vertical-align: middle;
 }
@@ -47,31 +50,31 @@
   color: var(--sim-info-700);
 }
 
-/* LIVE — electric blue bg, white text */
+/* LIVE — the design's live tag: pale red, dark red text, a red dot */
 .variant-live {
-  background: var(--sim-color-live);
-  color: #fff;
+  background: var(--sim-danger-100);
+  color: var(--sim-danger-700);
 }
+.variant-live .dot { background: var(--dd-red); }
 
-/* FINAL — muted gray */
+/* FINAL — the table band, ink text */
 .variant-final {
   background: var(--sim-gray-200);
-  color: var(--sim-gray-600);
+  color: var(--sim-gray-900);
 }
 
-/* SCHEDULED — outlined */
+/* SCHEDULED — grass */
 .variant-scheduled {
-  background: transparent;
-  color: var(--sim-gray-500);
-  border: 1px solid var(--sim-gray-300);
+  background: var(--sim-success-100);
+  color: var(--sim-success-700);
 }
 
 /* ---------- Pulse dot ---------- */
 
 .dot {
   display: inline-block;
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: var(--sim-radius-full);
   background: currentColor;
   flex-shrink: 0;
