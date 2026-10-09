@@ -48,6 +48,8 @@ def apply_changes(start: Mapping[str, Any], changes: Mapping[str, Any]) -> dict[
     ss: dict[str, Any] = copy.deepcopy(dict(start))
     batting = ss["batting_side"]
     fielding = _other(batting)
+    # Before first pitch either side may change its lineup or its starter.
+    pregame = ss.get("at_bat") is None
     eligible = {
         s: {k: list(v) for k, v in (ss.get("eligible") or {}).get(s, {}).items()}
         for s in ("away", "home")
@@ -73,7 +75,7 @@ def apply_changes(start: Mapping[str, Any], changes: Mapping[str, Any]) -> dict[
                 defense[pos] = new
 
     def bring_in_pitcher(side: str, pid: int) -> None:
-        if side != fielding:
+        if side != fielding and not pregame:
             raise IllegalChange(
                 "only the fielding side can change pitchers before this plate appearance"
             )
@@ -87,7 +89,7 @@ def apply_changes(start: Mapping[str, Any], changes: Mapping[str, Any]) -> dict[
 
     for move in changes.get("pinch_hit") or []:
         side = str(move.get("side") or batting)
-        if side != batting:
+        if side != batting and not pregame:
             raise IllegalChange("a pinch hitter bats for the side at bat")
         slot = int(move["slot"])
         if not 0 <= slot < 9:

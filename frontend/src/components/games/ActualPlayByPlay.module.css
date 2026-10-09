@@ -1,0 +1,122 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 720px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.empty {
+  font-size: 13px;
+  color: var(--sim-color-text-muted);
+}
+
+.halfTitle {
+  font-family: var(--sim-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--sim-color-text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--sim-gray-300);
+  margin-bottom: 4px;
+}
+
+.halfTeam {
+  margin-left: auto;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.plays {
+  list-style: none;
+}
+
+.play {
+  padding: 6px 6px 8px;
+  border-bottom: 1px dotted var(--sim-gray-300);
+  border-radius: 6px;
+}
+
+.scoring {
+  border-left: 3px solid var(--dd-red);
+  padding-left: 8px;
+}
+
+.selected {
+  background: var(--dd-gold);
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.matchup {
+  font-size: 13px;
+}
+
+.event {
+  font-family: var(--sim-font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--sim-color-text-muted);
+}
+
+.whatIf {
+  margin-left: auto;
+  border: 1px solid var(--sim-primary-300);
+  background: transparent;
+  color: var(--sim-primary-600);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-family: var(--sim-font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.whatIf:hover {
+  background: var(--sim-primary-600);
+  color: var(--sim-gray-100);
+}
+
+.desc {
+  font-size: 12.5px;
+  line-height: 1.35;
+  margin-top: 2px;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin-top: 3px;
+  font-family: var(--sim-font-mono);
+  font-size: 11px;
+  color: var(--sim-color-text-muted);
+}
+
+.score {
+  color: var(--dd-red);
+  font-weight: 700;
+}
+
+.pitches summary {
+  cursor: pointer;
+}
+
+.pitches ol {
+  margin: 4px 0 0 18px;
+  font-size: 11px;
+}

@@ -157,3 +157,16 @@
   color: var(--sim-color-text-muted);
   border-bottom: 1px solid var(--sim-color-border);
 }
+
+/* The game page: how each side settled on the real final. */
+.final {
+  font-family: var(--sim-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+
+.result_won { box-shadow: inset 3px 0 0 var(--sim-success-500); }
+.result_lost { opacity: 0.75; }
+.result_push { box-shadow: inset 3px 0 0 var(--sim-gray-500); }

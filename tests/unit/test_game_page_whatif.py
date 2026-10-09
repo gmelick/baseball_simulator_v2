@@ -443,3 +443,31 @@ def test_a_what_if_runs_both_versions(client) -> None:
     assert body["start_score"] == {"away": 0, "home": 1}
     # The game was 0-1 in the top of the 8th: every simulated final keeps those runs.
     assert body["base"]["summary"]["home_score_mean"] >= 1.0
+
+
+def test_before_first_pitch_either_side_changes_its_lineup_and_starter() -> None:
+    st = state_at_pa(FEED, None)
+    arm = st["eligible"]["away"]["pitchers"][0]
+    hitter = st["eligible"]["home"]["hitters"][0]
+    out = apply_changes(
+        st,
+        {
+            "pitcher": {"side": "away", "player_id": arm},
+            "pinch_hit": [{"side": "home", "slot": 2, "player_id": hitter}],
+        },
+    )
+    assert out["away_pitcher"] == arm and out["home_lineup"][2] == hitter
+    mid = state_at_pa(FEED, 40)
+    with pytest.raises(IllegalChange):
+        apply_changes(
+            mid,
+            {
+                "pinch_hit": [
+                    {
+                        "side": "home" if mid["batting_side"] == "away" else "away",
+                        "slot": 0,
+                        "player_id": 1,
+                    }
+                ]
+            },
+        )

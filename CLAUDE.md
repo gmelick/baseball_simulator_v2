@@ -23,7 +23,7 @@
 
 - **▶ STATE AS OF 2026-06-06 — SUPERSEDED where §2b (2026-08-16) says otherwise: data foundation rebuilt, the runs band PASSES, CI all-green.**
   - **Phases 1–6 COMPLETE and CI-green** on **Python 3.13 / numpy 2.x** (SIM-431). Frontend shipped as
-    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v32** (2026-10-08, SIM-561; was v31), Alembic head **0029** (2026-10-09, SIM-519 — applied to the live database the same day; was 0028).
+    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v32** (2026-10-08, SIM-561; was v31), Alembic head **0030** (2026-10-09, the game page review, SIM-562 — the what-if run columns on `sim.sim_runs`; was 0029, SIM-519).
   - **Calibration is LIVE, REFIT 2026-08-16 on the rebuilt data** (SIM-432/459): `/data/calibration.json`
     fitted + applied at boot; win-prob map = fitted reliability-curve. 120-game validation: win-prob
     **ECE 0.0377** (was 0.047); batter **H/HR/TB 0.066/0.024/0.060** (bettable); pitcher **BB 0.044 —
@@ -609,6 +609,22 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   `api/sim_jobs.py`). The nightly finals job runs through `scripts/with_retry.sh`; the scheduler
   starts with the stack. Alembic **0029** carries every new column. The record and the run book:
   `CHANGES.md` 2026-10-09.
+- **The game page opens with the real game and runs a "what if" from any play (SIM-562,
+  2026-10-09).** A live or final game shows the league feed's linescore, box score and
+  play-by-play above every simulation (`GET /feed/plays`). "What if from here" on a play reads
+  the game at the start of that plate appearance (`GET /feed/state?at_bat=`,
+  `pipeline/mlb_game_feed.state_at_pa`: the lineups, the defense, the runners, the score, the
+  pitch counts, the bench and the pen as they stood) and draws it on the slate's field. The user
+  stages a pinch hitter, a reliever, a pinch runner or a defensive change
+  (`simulation/whatif.apply_changes`; before first pitch, either side's lineup and starter), and
+  `POST /what-if` queues TWO runs of 100 from that spot with the same seed, as it stood and with
+  the changes (`sim.sim_runs.kind` = `whatif_base` / `whatif_change`, Alembic **0030**). The loop
+  takes the spot as the plain-data sim-kwarg `start_state` (`simulation/start_state.py`); the
+  real runs before it are spliced into each game's inning grid. Every "latest run" read takes
+  only `kind = 'pregame'`. The Betting card grades each side on the real final (`result`,
+  `final` on `/edges`) and shows no price on a market with no stored line. Projections and
+  Betting are collapsible and start collapsed; the Line movement and Managerial override boxes
+  are gone (the `/simulate/with_override` endpoint stays). The record: `CHANGES.md` 2026-10-09.
 - **Sample hundreds of games when validating ETL work, never dozens.** Two adversarial review rounds
   found four defects each, all from real payloads at scale, none from reading code. A 70-game sample
   reported "100%" on a metric that 950 games disproved.
@@ -717,7 +733,7 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   → Core sim loop (simulation/sim_loop.py) : 8-step pitch-by-pitch state machine + manager/situational
     decisions → GameSimResult                                     [Phase 4]
   → Runner + API (simulation/batch_runner.py, api/) : 100-iteration ProcessPool runner (forkserver
-    workers — SIM-430), REST + WebSocket, Redis cache, persistence (DuckDB v32 / Alembic 0029),
+    workers — SIM-430), REST + WebSocket, Redis cache, persistence (DuckDB v32 / Alembic 0030),
     betting/CLV surface, auth/rate-limit/CORS, nginx, Prometheus/Grafana   [Phase 5 — COMPLETE]
   → Frontend (frontend/) : React 18 + Vite + TypeScript, Playwright e2e   [Phase 6 — COMPLETE]
 ```
@@ -731,7 +747,7 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   helpers, all gated `SIM_MANAGER`), `full_pool_sampler.py` (SIM-423 full-pool similarity sampler:
   count-bucket CDFs over the pitch-draw cell index, the actor score-matrix factors, the
   fielding draw with the fence stage, the pickoff, steal and advancement draws; reads the SIM-430 dense
-  `pitcher_sim_matrix` fast path), `synthetic_bundle.py` (SIM-486: the in-memory bundle every
+  `pitcher_sim_matrix` fast path), `start_state.py` + `whatif.py` (SIM-562: a game started from a real plate appearance, and the managerial changes applied to that spot), `synthetic_bundle.py` (SIM-486: the in-memory bundle every
   no-DB test and the batch runner's no-DB factory draw from — the same loop, the same sampler),
   `game_market_distributions.py` (SIM-421, 2026-09-12: per-iteration segment runs from the
   linescore and the probability of every game market the book posts — first-inning / first-five
@@ -776,7 +792,7 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   derived-vs-official per-player totals study), `check_file_integrity.py`.
   *(scripts/ is baked into the image; run a not-yet-rebuilt new script via
   `docker compose run --rm -v "$PWD/scripts:/app/scripts" app python scripts/<x>.py`.)*
-- `db/` — `migrations/` (Alembic, head **0029** — 0029 = the SIM-519 live slate: the schedule fields on `raw.games`, `raw.game_lineups.source` / `published_at`, the run-job columns on `sim.sim_runs` and `last_seen_at` on both odds tables (2026-10-09); 0028 = the SIM-555 odds stamp column `book_line_at` on `raw.game_odds` / `raw.prop_odds`, two per-book read indexes and the two archive tables `raw.game_odds_archive` / `raw.prop_odds_archive` (2026-09-28); 0027 = the two Savant fielding landing tables `raw.savant_outs_above_average` + `raw.savant_outfield_jump` (SIM-532, 2026-09-17); 0026 = the two Savant running-game landing tables `raw.savant_basestealing` + `raw.savant_pitcher_running_game` (SIM-531, 2026-09-16); 0022 = the 15-market `raw.prop_odds` CHECK constraint,
+- `db/` — `migrations/` (Alembic, head **0030** — 0030 = the what-if runs: `kind`, `start_at_bat` and `changes` on `sim.sim_runs` (SIM-562, 2026-10-09); 0029 = the SIM-519 live slate: the schedule fields on `raw.games`, `raw.game_lineups.source` / `published_at`, the run-job columns on `sim.sim_runs` and `last_seen_at` on both odds tables (2026-10-09); 0028 = the SIM-555 odds stamp column `book_line_at` on `raw.game_odds` / `raw.prop_odds`, two per-book read indexes and the two archive tables `raw.game_odds_archive` / `raw.prop_odds_archive` (2026-09-28); 0027 = the two Savant fielding landing tables `raw.savant_outs_above_average` + `raw.savant_outfield_jump` (SIM-532, 2026-09-17); 0026 = the two Savant running-game landing tables `raw.savant_basestealing` + `raw.savant_pitcher_running_game` (SIM-531, 2026-09-16); 0022 = the 15-market `raw.prop_odds` CHECK constraint,
   0023 = `raw.game_player_stats`, 0024 = the 15-market `raw.game_odds` CHECK + `draw_ml`; all three applied to the live DB on 2026-09-12; 0025 = `raw.game_bullpen`, the MLB box's per-game bullpen listing for the SIM-427 real pen, applied 2026-09-13) + `migrations/duckdb/`
   (numbered SQL, schema **v32**; 0032 = the SIM-561 replay play stream's pitch
   context — inning, half, outs before, batter, pitcher, score after; 0031 = the

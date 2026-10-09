@@ -1,3 +1,70 @@
+# BUILT — the game page opens with the real game, a "what if" runs from any play, the bets are graded on the real final; the Line movement and Managerial override boxes are gone — SIM-562, 2026-10-09
+
+**Why it matters.** The owner reviewed the deployed game page on 2026-10-09. The page showed
+only simulations: a user could not see what really happened in a finished game, and the
+Managerial override box changed a lineup only before the game. The Betting box showed what the
+sim predicted but not how the bet settled. It also showed invented "mock" prices for a game with
+no stored line, which read as real odds.
+
+**The odds question.** The stored odds ARE connected. `/edges` reads `raw.game_odds` and falls
+back to the mock only when a game has no stored line. Game 822678 had none; 2,043 of the 2,453
+finals of 2026 have closing lines. The change: a market with no stored line now shows the sim's
+probability and its fair price with the badge "no stored line", never a price, a fair line or an
+edge.
+
+**Owner decisions, 2026-10-09.** A pinch runner is the only baserunner change. Projections and
+Betting start collapsed, and the browser remembers an opened panel. The what-if shows the run
+with the change against the run without it, plus the real final. Where a change can start:
+first pitch before a game; any play so far in a live game; any play in a final game.
+
+**What was built** (branch `claude/game-page-actual-and-what-if`).
+
+- **The real plays and the state at each plate appearance** (`pipeline/mlb_game_feed.py`).
+  `parse_plays` reads every plate appearance of the league feed (the request now adds
+  `hydrate=alignment`): batter, pitcher, result, RBI, outs and score before and after, the
+  runners, the pitches. `state_at_pa` rebuilds the game at the start of one plate appearance:
+  inning, half, outs, score, the runners, both lineups after every substitution, each side's
+  pitcher and defense (from the first pitch's alignment), the pitch counts, the batters faced,
+  the bench and the pen minus the players already used. A plate appearance that a caught
+  stealing or a pickoff ended stays open, so the batter comes back up (`finished_flags`).
+  Checked on 99 games of 2026: all 7,564 plate appearances give the real batter, the pitcher at
+  the first pitch, the score, the outs, the inning grid and the defense.
+- **Two routes** (`api/routes/games.py`), sharing `/feed`'s cache and fallback: `GET
+  /feed/plays` and `GET /feed/state?at_bat=` (absent = first pitch).
+- **Simulating from a plate appearance.** `simulate_game(start_state=...)` takes the spot as a
+  plain-data sim-kwarg and applies it to each game's fresh state (`simulation/start_state.py`).
+  The ghost runner of extra innings is not placed mid-half. The pen on the state is kept. The
+  real runs of every half before the spot are spliced into each game's inning grid, so the
+  linescore and the segment markets sum to the final score.
+- **The changes** (`simulation/whatif.py`, `apply_changes`): a pinch hitter in a lineup slot, a
+  reliever (pitch count 0, out of the pen), a pinch runner (who takes the runner's slot), a
+  defensive change. Only bench and pen players qualify, and nobody re-enters; an illegal change
+  is a 422 with the reason. Before first pitch either side's lineup and starter can change.
+- **The what-if run.** `POST /what-if` queues TWO runs of 100 from the spot with one seed: as it
+  stood (`whatif_base`) and with the changes (`whatif_change`). `GET /what-if/{base}/{change}`
+  returns both, the score at the start and the real final. Alembic **0030** adds `kind`,
+  `start_at_bat` and `changes` to `sim.sim_runs`; every "latest run" read (the Simulation card,
+  the slate's sim line, the projections) takes only `kind = 'pregame'`. Round-tripped in a
+  scratch database (upgrade, downgrade to 0029, upgrade).
+- **Graded bets** (`api/routes/betting.py`). On a final game each `EdgeReport` carries `result`
+  (won / lost / push) at its own line, from `market_outcome` over the official inning grid, else
+  the feed's linescore when the nightly load has not stored the game; the response carries
+  `final`. On a three-way market a tie means the tie side won.
+- **The game page** (`frontend/src/pages/GamePage.tsx`). The order: the header; "The game" (the
+  slate's linescore and box score, the field when live) beside the real play-by-play; the
+  what-if panel; the Simulation card; the simulated game (its play-by-play folded inside);
+  Projections and Betting, collapsible (`Panel` gained `collapsible`, `defaultOpen`,
+  `storageKey`). The what-if panel (`WhatIfPanel.tsx`) draws the spot on the slate's field,
+  stages the changes, polls both runs and shows win %, the expected final and the runs from here,
+  with the difference and the real final. Deleted: `LineMovementPanel`, `LineMovementChart`,
+  `OverridePanelV2`, `OverrideDeltaView`, `fetchLineMovement`, `postWithOverride`. The
+  `/simulate/with_override` and `/line-movement` endpoints stay for API callers.
+
+**Tests.** 47 new unit tests on the plays, the state, the changes, simulating from a spot and
+the routes (a full what-if run on the synthetic bundle); 21 on the grading. Playwright (Chromium,
+21 pass): a new `e2e/gamepage.spec.ts` checks the real game first, the collapsed and remembered
+panels, a reliever what-if with the result table, and the graded and no-line markets.
+
 # BUILT — the owner's Daily Diamond design on the day slate and the game page, and the live, schedule-driven game day view in full: the slate reads the league schedule, the open card shows the real game and the book's lines, a game that has not started can be simulated, the live service runs in its own container, the nightly finals job retries a crash, one durable simulation run per game with progress; MERGED (e3aae8e) and DEPLOYED the same day; the game-day live check is pending — SIM-519, 2026-10-09
 
 **Why it matters.** The day slate listed only the games our database held, with no scores, start

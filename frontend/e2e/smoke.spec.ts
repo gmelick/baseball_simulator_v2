@@ -103,12 +103,9 @@ async function mockGame(page: Page): Promise<void> {
       route.fulfill({ status: 404, contentType: 'application/json', body: '{"detail":"none"}' }),
     )
   }
-  await page.route('**/api/betting/games/745001/line-movement**', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ game_pk: 745001, market_type: 'moneyline', book: null, count: 0, series: [] }),
-    }),
+  // The real game's feed, plays and plate-appearance state: none here.
+  await page.route('**/api/games/745001/feed**', (route) =>
+    route.fulfill({ status: 404, contentType: 'application/json', body: '{"detail":"none"}' }),
   )
 }
 
@@ -266,6 +263,8 @@ test('the betting card renders all fifteen game markets with a tie side', async 
   await page.goto('/game/745001')
 
   const card = page.getByRole('region', { name: 'Betting' })
+  // The Betting panel starts collapsed.
+  await card.getByRole('button', { name: 'Betting', exact: true }).click()
   await card.getByRole('button', { name: 'Load betting' }).click()
 
   // SIM-546: one section per market, titled from market_names.
@@ -319,6 +318,8 @@ test('the betting card asks for the signals only after the edges answer', async 
   })
   await page.goto('/game/745001')
   const card = page.getByRole('region', { name: 'Betting' })
+  // The Betting panel starts collapsed.
+  await card.getByRole('button', { name: 'Betting', exact: true }).click()
   await card.getByRole('button', { name: 'Load betting' }).click()
   await expect(card.locator('section')).toHaveCount(15)
   expect(order.indexOf('edges-done')).toBeGreaterThanOrEqual(0)
