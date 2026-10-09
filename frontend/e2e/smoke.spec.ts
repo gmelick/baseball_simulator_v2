@@ -257,14 +257,37 @@ test('the betting card renders all fifteen game markets with a tie side', async 
   const card = page.getByRole('region', { name: 'Betting' })
   await card.getByRole('button', { name: 'Load betting' }).click()
 
-  // SIM-546: one section per market, under the four sub-headings, titled from market_names.
+  // SIM-546: one section per market, titled from market_names.
   await expect(card.locator('section')).toHaveCount(15)
-  for (const heading of ['Full game', 'First five innings', 'First inning', 'Team totals']) {
-    await expect(card.getByRole('heading', { name: heading, exact: true })).toBeVisible()
-  }
-  await expect(card.getByRole('heading', { name: 'First five total', exact: true })).toBeVisible()
+  // The four sub-headings, in the card's order.
+  await expect(card.locator('h4')).toHaveText([
+    'Full game',
+    'First five innings',
+    'First inning',
+    'Team totals',
+  ])
+  // The sections, grouped under their sub-headings. The mock lists the markets in
+  // the vocabulary order, so this order holds only when the card groups them.
+  await expect(card.locator('section h5')).toHaveText([
+    'Moneyline',
+    'Run line',
+    'Total',
+    'First team to score',
+    'First five moneyline',
+    'First five total',
+    'First five run line',
+    'First inning moneyline',
+    'First inning total',
+    'First inning run line',
+    'A run in the first inning',
+    'Home team total',
+    'Away team total',
+    'Home team first five total',
+    'Away team first five total',
+  ])
   // A three-way market's third side reads "Tie"; the yes / no market's read "Yes" / "No".
   await expect(card.getByText('Tie', { exact: true }).first()).toBeVisible()
   await expect(card.getByText('Yes', { exact: true })).toBeVisible()
+  await expect(card.getByText('No', { exact: true })).toBeVisible()
   await expect(card.getByText(/A tie is a priced outcome/).first()).toBeVisible()
 })
