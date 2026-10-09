@@ -510,16 +510,17 @@ services:
     networks:
       - baseball_net
 
-  # Nightly data-ingestion scheduler (Ofelia, docker-native cron). Opt-in via
-  # the `scheduler` profile so it never starts on a plain `make dev`:
-  #   docker compose --profile scheduler up -d scheduler
-  # Runs scripts/nightly_ingest.sh (refresh current-season games → profiles →
-  # FAISS tiles) as a fresh app-image container at 07:00 UTC; see
-  # deploy/ofelia/config.ini. Requires the app image to be built first
-  # (docker compose build app) so the script is present.
+  # Nightly data scheduler (Ofelia, docker-native cron). It starts with the
+  # stack (SIM-519 D6). Jobs (deploy/ofelia/config.ini): the three-day finals
+  # load nightly at 07:00 UTC and the season sweep on Sunday, both as fresh
+  # app-image containers through scripts/with_retry.sh; the SIM-546 closing
+  # pass inside the app container. Requires the app image to be built first
+  # (docker compose build app) so the scripts are present.
   scheduler:
     image: mcuadros/ofelia:latest
-    profiles: ["scheduler"]
+    # SIM-519 Part D (decision D6): no profile gate — the scheduler starts with
+    # the stack. Its jobs are in deploy/ofelia/config.ini; the DuckDB rebuild
+    # job stays disabled there until SIM-524.
     restart: unless-stopped
     command: daemon --config=/etc/ofelia/config.ini
     depends_on:

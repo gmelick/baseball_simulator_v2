@@ -12,7 +12,7 @@
 
 .PHONY: help dev down build migrate test test-unit test-integration test-regression lint \
         type-check format shell logs clean nuke profile-computor engine-artifacts calibrate \
-        validate-props load-historical-odds
+        validate-props load-historical-odds ingest-catch-up
 
 # Default target — show help.
 ##
@@ -65,6 +65,12 @@ migrate: _require_env_file
 # (SIM-422) materializes the bundle the full-pool sampler reads.  The bundle
 # build MUST run AFTER the profile computor (scripts/nightly_ingest.sh runs
 # the chain).
+
+## SIM-519 Part D: load the final games of the last DAYS days (default 3) by
+## hand, through the crash wrapper. Postgres only; safe while the app runs.
+##   make ingest-catch-up DAYS=14
+ingest-catch-up: _require_env_file
+	docker compose run --rm -e DAYS=$(or $(DAYS),3) app sh /app/scripts/with_retry.sh 6 sh /app/scripts/nightly_finals.sh
 
 ## Nightly: rebuild DuckDB player profiles + sim pools from Postgres.
 profile-computor: _require_env_file

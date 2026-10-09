@@ -130,6 +130,33 @@
           "legendFormat": "{{version}}"
         }
       ]
+    },
+    {
+      "id": 6,
+      "title": "Finals age (hours since the newest final game loaded)",
+      "description": "SIM-519 Part D: hours since the newest final game of the current season in raw.games. Red past 36 hours in season: the nightly finals job did not run. Off-season it grows on its own.",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 36 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        { "expr": "baseball_sim_finals_age_hours", "refId": "A" }
+      ]
     }
   ]
 }
