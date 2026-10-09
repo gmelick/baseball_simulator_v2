@@ -1,0 +1,76 @@
+{
+ "gameData": {
+  "probablePitchers": {},
+  "status": {
+   "abstractGameCode": "P",
+   "abstractGameState": "Preview",
+   "codedGameState": "S",
+   "detailedState": "Scheduled",
+   "startTimeTBD": false,
+   "statusCode": "S"
+  },
+  "teams": {
+   "away": {
+    "abbreviation": "CWS",
+    "id": 145,
+    "teamName": "White Sox"
+   },
+   "home": {
+    "abbreviation": "CLE",
+    "id": 114,
+    "teamName": "Guardians"
+   }
+  }
+ },
+ "gamePk": 849831,
+ "liveData": {
+  "boxscore": {
+   "teams": {
+    "away": {
+     "batters": [],
+     "battingOrder": [],
+     "pitchers": [],
+     "players": {},
+     "team": {
+      "id": 145
+     }
+    },
+    "home": {
+     "batters": [],
+     "battingOrder": [],
+     "pitchers": [],
+     "players": {},
+     "team": {
+      "id": 114
+     }
+    }
+   }
+  },
+  "linescore": {
+   "defense": {
+    "team": {
+     "id": 145,
+     "link": "/api/v1/teams/145",
+     "name": "Chicago White Sox"
+    }
+   },
+   "innings": [],
+   "offense": {
+    "team": {
+     "id": 114,
+     "link": "/api/v1/teams/114",
+     "name": "Cleveland Guardians"
+    }
+   },
+   "scheduledInnings": 9,
+   "teams": {
+    "away": {},
+    "home": {}
+   }
+  },
+  "plays": {
+   "allPlays": [],
+   "currentPlay": null
+  }
+ }
+}

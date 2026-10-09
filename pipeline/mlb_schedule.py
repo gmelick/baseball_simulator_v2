@@ -260,22 +260,28 @@ def parse_schedule(payload: Mapping[str, Any]) -> list[ScheduleGame]:
 # ---------------------------------------------------------------------------
 
 
-def card_state(game: ScheduleGame) -> str:
-    """The card state of a game: scheduled, live, final or postponed.
+def card_state_of(abstract_state: str, coded_state: str, detailed_state: str) -> str:
+    """The card state of the league's three status fields.
 
     The coded state is read first, because the league marks a postponed game
-    ``abstractGameState = "Final"``.
+    ``abstractGameState = "Final"``. The schedule and the per-game feed carry
+    the same three fields, so both read their state here.
     """
-    if game.coded_state in _POSTPONED_CODES or game.detailed_state.startswith(_POSTPONED_PREFIXES):
+    if coded_state in _POSTPONED_CODES or detailed_state.startswith(_POSTPONED_PREFIXES):
         return POSTPONED
-    state = _ABSTRACT_TO_CARD.get(game.abstract_state)
+    state = _ABSTRACT_TO_CARD.get(abstract_state)
     if state is None:
-        key = f"{game.abstract_state}/{game.coded_state}/{game.detailed_state}"
+        key = f"{abstract_state}/{coded_state}/{detailed_state}"
         if key not in _unknown_states_logged:
             _unknown_states_logged.add(key)
-            log.warning("unknown schedule state %s; the card shows it as scheduled", key)
+            log.warning("unknown league state %s; the card shows it as scheduled", key)
         return SCHEDULED
     return state
+
+
+def card_state(game: ScheduleGame) -> str:
+    """The card state of a schedule game: scheduled, live, final or postponed."""
+    return card_state_of(game.abstract_state, game.coded_state, game.detailed_state)
 
 
 def card_state_from_raw(raw_status: str | None) -> str:

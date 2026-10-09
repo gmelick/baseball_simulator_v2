@@ -1590,6 +1590,205 @@ async def get_game_status_card(
 
 
 # ---------------------------------------------------------------------------
+# SIM-519 Part I — the card detail: the league's per-game feed, cached
+# ---------------------------------------------------------------------------
+
+#: The feed cache's time to live by card state (SIM-519 Part I).
+FEED_TTL_BY_STATE_S = {"live": 10, "scheduled": 600, "final": 24 * 3600, "postponed": 24 * 3600}
+#: The last good feed of a game, served when the league read fails.
+FEED_LAST_GOOD_TTL_S = 24 * 3600
+
+
+class FeedPerson(BaseModel):
+    id: int
+    name: str
+
+
+class FeedPitcher(FeedPerson):
+    np: int | None = None
+
+
+class FeedInning(BaseModel):
+    num: int | None = None
+    away: int | None = None
+    home: int | None = None
+
+
+class FeedTotals(BaseModel):
+    runs: int | None = None
+    hits: int | None = None
+    errors: int | None = None
+
+
+class FeedLinescore(BaseModel):
+    innings: list[FeedInning] = Field(default_factory=list)
+    away: FeedTotals = Field(default_factory=FeedTotals)
+    home: FeedTotals = Field(default_factory=FeedTotals)
+    home_did_not_bat_last: bool = False
+    current_inning: int | None = None
+    inning_half: str | None = None
+
+
+class FeedLineupSlot(BaseModel):
+    order: int
+    id: int | None = None
+    name: str
+    pos: str | None = None
+
+
+class FeedLineups(BaseModel):
+    away: list[FeedLineupSlot] = Field(default_factory=list)
+    home: list[FeedLineupSlot] = Field(default_factory=list)
+    away_probable_pitcher: FeedPerson | None = None
+    home_probable_pitcher: FeedPerson | None = None
+
+
+class FeedBatterLine(BaseModel):
+    id: int | None = None
+    name: str
+    pos: str | None = None
+    batting_order: int | None = None
+    is_sub: bool = False
+    ab: int | None = None
+    r: int | None = None
+    h: int | None = None
+    rbi: int | None = None
+    bb: int | None = None
+    k: int | None = None
+    hr: int | None = None
+    avg: str | None = None
+
+
+class FeedPitcherLine(BaseModel):
+    id: int | None = None
+    name: str
+    outs: int | None = None
+    ip: str | None = None
+    h: int | None = None
+    r: int | None = None
+    er: int | None = None
+    bb: int | None = None
+    k: int | None = None
+    np: int | None = None
+    era: str | None = None
+
+
+class FeedBoxSide(BaseModel):
+    batters: list[FeedBatterLine] = Field(default_factory=list)
+    pitchers: list[FeedPitcherLine] = Field(default_factory=list)
+
+
+class FeedBox(BaseModel):
+    away: FeedBoxSide = Field(default_factory=FeedBoxSide)
+    home: FeedBoxSide = Field(default_factory=FeedBoxSide)
+
+
+class FeedRunners(BaseModel):
+    first: FeedPerson | None = None
+    second: FeedPerson | None = None
+    third: FeedPerson | None = None
+
+
+class FeedLive(BaseModel):
+    balls: int | None = None
+    strikes: int | None = None
+    outs: int | None = None
+    offense: Literal["away", "home"] | None = None
+    runners: FeedRunners = Field(default_factory=FeedRunners)
+    batter: FeedPerson | None = None
+    pitcher: FeedPitcher | None = None
+    fielders: dict[str, str | None] = Field(default_factory=dict)
+    last_play: str | None = None
+
+
+class GameFeedCardModel(BaseModel):
+    """``GET /api/games/{game_pk}/feed``: the real game behind a slate card.
+
+    ``linescore`` and ``box`` are set on a live or final game; ``live`` on a
+    live game only; ``lineups`` carries the posted batting orders (empty until
+    the league posts them) and the probable pitchers. ``source`` is ``feed``
+    (fresh or cached) or ``feed_cached`` (the last good copy after an error).
+    """
+
+    game_pk: int | None = None
+    status: Literal["scheduled", "live", "final", "postponed"]
+    detailed_state: str | None = None
+    linescore: FeedLinescore | None = None
+    lineups: FeedLineups = Field(default_factory=FeedLineups)
+    box: FeedBox | None = None
+    live: FeedLive | None = None
+    source: Literal["feed", "feed_cached"] = "feed"
+    feed_error: str | None = None
+
+
+@router.get(
+    "/{game_pk}/feed",
+    response_model=GameFeedCardModel,
+    summary="The real game behind a slate card (SIM-519 Part I)",
+    description=(
+        "The league's live feed for one game, reduced to what the Daily Diamond card "
+        "shows: the linescore, both box scores, the posted lineups and probable "
+        "pitchers, and for a live game the count, runners, fielders, the pitcher's "
+        "pitch count and the last play. Cached 10 s while live, 10 min before the "
+        "game and 24 h once final. On a league error the last good copy is served "
+        "(`source = feed_cached`); with none, 503 with Retry-After."
+    ),
+)
+async def get_game_feed(game_pk: int, request: Request, use_cache: bool = Query(True)) -> Any:
+    from fastapi.responses import JSONResponse
+
+    from pipeline.mlb_game_feed import parse_game_feed
+
+    feed = getattr(request.app.state, "league_feed", None)
+    cache = _get_sim_cache(request)
+    key, last_key = f"feed:v1:{game_pk}", f"feed:last:{game_pk}"
+    if use_cache and cache is not None:
+        try:
+            hit = cache.get(key)
+        except Exception:  # noqa: BLE001 -- a cache hiccup must not break the read
+            hit = None
+        if hit is not None:
+            return GameFeedCardModel(**hit)
+
+    error: str | None = None
+    if feed is None:
+        error = "no league feed attached"
+    else:
+        try:
+            parsed = parse_game_feed(await feed.game_feed_payload(int(game_pk)))
+            card = GameFeedCardModel(**parsed)
+        except Exception as exc:  # noqa: BLE001 -- degrade to the last good copy
+            error = f"{type(exc).__name__}: {exc}"[:300]
+            log.warning("feed: the league read failed for %s: %s", game_pk, error)
+        else:
+            if cache is not None:
+                try:
+                    dumped = card.model_dump()
+                    cache.set(key, dumped, FEED_TTL_BY_STATE_S.get(card.status, 60))
+                    cache.set(last_key, dumped, FEED_LAST_GOOD_TTL_S)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("feed cache write failed for %s: %s", key, exc)
+            return card
+
+    last = None
+    if cache is not None:
+        try:
+            last = cache.get(last_key)
+        except Exception:  # noqa: BLE001
+            last = None
+    if last is not None:
+        return GameFeedCardModel(**{**last, "source": "feed_cached", "feed_error": error})
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": f"the league feed for game {game_pk} is unavailable",
+            "feed_error": error,
+        },
+        headers={"Retry-After": "30"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # SIM-386 — Live in-progress game-state read path
 # ---------------------------------------------------------------------------
 
