@@ -48,7 +48,7 @@ factory so a full game records with NO DuckDB / FAISS / Postgres.
 from __future__ import annotations
 
 import copy
-from typing import Any
+from typing import Any, NamedTuple
 
 from simulation.batch_runner import (
     GameSpec,
@@ -56,6 +56,7 @@ from simulation.batch_runner import (
 )
 from simulation.game_state import PlayResult
 from simulation.sim_loop import GameSimResult, StateMachine, simulate_game
+from simulation.snapshots import PitchContext
 
 #: The default machine factory dotted-ref: the picklable, no-DB rng-driven
 #: factory from the batch runner, so :func:`record_game_plays` runs a whole game
@@ -98,12 +99,14 @@ class RecordingMachine:
     """
 
     #: The names stored on the wrapper itself (everything else delegates).
-    _OWN_ATTRS = frozenset({"_inner", "recorded_plays"})
+    _OWN_ATTRS = frozenset({"_inner", "recorded_plays", "recorded_contexts"})
 
     def __init__(self, inner: StateMachine) -> None:
-        # Bypass __setattr__'s delegation for the two wrapper-owned attributes.
+        # Bypass __setattr__'s delegation for the wrapper-owned attributes.
         object.__setattr__(self, "_inner", inner)
         object.__setattr__(self, "recorded_plays", [])
+        # SIM-561: the state before each step, one per recorded play.
+        object.__setattr__(self, "recorded_contexts", [])
 
     def step_pitch(self, state: Any, **kwargs: Any) -> PlayResult:
         """Delegate one pitch to the wrapped machine, recording its result.
@@ -113,9 +116,11 @@ class RecordingMachine:
         captures the returned ``PlayResult`` in order, and returns it unchanged
         -- ``simulate_game`` cannot tell it was wrapped.
         """
+        context = PitchContext.from_state(state)
         result = self._inner.step_pitch(state, **kwargs)
         _snapshot_next_state(result)
         self.recorded_plays.append(result)
+        self.recorded_contexts.append(context)
         return result
 
     def __getattr__(self, name: str) -> Any:
@@ -149,12 +154,26 @@ class RecordingStateMachine(StateMachine):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.recorded_plays: list[PlayResult] = []
+        self.recorded_contexts: list[PitchContext] = []  # SIM-561
 
     def step_pitch(self, state: Any, **kwargs: Any) -> PlayResult:  # type: ignore[override]
+        context = PitchContext.from_state(state)
         result = super().step_pitch(state, **kwargs)
         _snapshot_next_state(result)
         self.recorded_plays.append(result)
+        self.recorded_contexts.append(context)
         return result
+
+
+class RecordedGame(NamedTuple):
+    """One recorded game (SIM-561): the result, its plays, and the state before each.
+
+    ``contexts`` pairs one-to-one with ``plays`` (a no-pitch result included).
+    """
+
+    result: GameSimResult
+    plays: list[PlayResult]
+    contexts: list[PitchContext]
 
 
 def record_game_plays(
@@ -165,6 +184,21 @@ def record_game_plays(
 ) -> tuple[GameSimResult, list[PlayResult]]:
     """Simulate ONE game and return ``(GameSimResult, ordered list[PlayResult])``.
 
+    The two-value form of :func:`record_game`; see it for the details.
+    """
+    recorded = record_game(factory_ref=factory_ref, seed=seed, sim_kwargs=sim_kwargs)
+    return recorded.result, recorded.plays
+
+
+def record_game(
+    *,
+    factory_ref: str = DEFAULT_FACTORY_REF,
+    seed: int | None = None,
+    sim_kwargs: dict[str, Any] | None = None,
+) -> RecordedGame:
+    """Simulate ONE game and return it as a :class:`RecordedGame`.
+
+    The result, the ordered plays and the state before each play (SIM-561).
     Builds the per-game :class:`~simulation.sim_loop.StateMachine` via the dotted
     ``factory_ref`` (the SIM-332 ``"module.path:callable"`` convention; defaults
     to the no-DB rng factory so this runs with no DuckDB / Postgres), wraps it in
@@ -200,12 +234,33 @@ def record_game_plays(
 
     passthrough = {k: v for k, v in kwargs.items() if not k.startswith("_")}
     result = simulate_game(recorder, seed=seed, **passthrough)
-    return result, list(recorder.recorded_plays)
+    return RecordedGame(
+        result=result,
+        plays=list(recorder.recorded_plays),
+        contexts=list(recorder.recorded_contexts),
+    )
+
+
+def record_spec(spec: GameSpec, seed: int | None) -> RecordedGame:
+    """:func:`record_game` for a :class:`GameSpec` -- the worker pool's unit of work.
+
+    SIM-561: the API records its replay game on the warm worker pool
+    (:meth:`simulation.batch_runner.BatchRunner.record_game`), so the API process
+    never loads the sim bundle.  Module-level, so it pickles by reference.
+    """
+    return record_game(
+        factory_ref=spec.machine_factory or DEFAULT_FACTORY_REF,
+        seed=seed,
+        sim_kwargs=spec.sim_kwargs,
+    )
 
 
 __all__ = [
     "DEFAULT_FACTORY_REF",
     "RecordingMachine",
     "RecordingStateMachine",
+    "RecordedGame",
+    "record_game",
     "record_game_plays",
+    "record_spec",
 ]

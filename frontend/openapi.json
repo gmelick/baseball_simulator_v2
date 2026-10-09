@@ -156,6 +156,17 @@
         "additionalProperties": false,
         "description": "Response model for the SIM-366 per-player boxscore-average card.\n\nThe boxscore-card payload for one Monte-Carlo run: every player's prop\n**means** (the 100-iteration boxscore average) keyed\n``str(player_id) -> BoxscoreCardRowModel`` (JSON object keys must be strings).\nBuilt from a :class:`simulation.prop_distributions.PropDistributionSet` via\n:meth:`from_prop_set`, iterating ``by_player`` and reading each\n:attr:`PropDistribution.mean` -- so the card is the means-only projection of\nthe full PMF set (a consumer that needs the full PMF reads the heavier\n:class:`PropDistributionSetModel` instead).  numpy-free.",
         "properties": {
+          "base_seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Seed"
+          },
           "n_iterations": {
             "title": "N Iterations",
             "type": "integer"
@@ -178,6 +189,17 @@
         "additionalProperties": false,
         "description": "One player's row in the SIM-366 boxscore card.\n\nA compact per-player payload exposing that player's prop **means** over a\nMonte-Carlo run -- for a batter the H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means,\nfor a pitcher the K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's\nother lines) -- as a ``{prop_name -> mean}`` map.  Built from a\n:class:`simulation.prop_distributions.PropDistribution` map (one player's\n``by_player`` entry), reading each :attr:`PropDistribution.mean`.  numpy-free\n(plain floats).",
         "properties": {
+          "lineup_slot": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lineup Slot"
+          },
           "means": {
             "additionalProperties": {
               "type": "number"
@@ -185,9 +207,36 @@
             "title": "Means",
             "type": "object"
           },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
           "player_id": {
             "title": "Player Id",
             "type": "integer"
+          },
+          "side": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Side"
+          },
+          "starting_pitcher": {
+            "default": false,
+            "title": "Starting Pitcher",
+            "type": "boolean"
           }
         },
         "required": [
@@ -1225,6 +1274,17 @@
       "GameCardResponse": {
         "description": "The combined ``GET /api/games/{game_pk}/card`` envelope (SIM-362/364).\n\nCarries both derived loop outputs for the game's most-recent persisted run:\nthe per-inning :class:`~api.schemas.LinescoreModel` (R/H/E grid) and the\n:class:`~api.schemas.PitcherDecisionsModel` (W/L/Save).",
         "properties": {
+          "base_seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Seed"
+          },
           "decisions": {
             "$ref": "#/components/schemas/PitcherDecisionsModel"
           },
@@ -1234,6 +1294,17 @@
           },
           "linescore": {
             "$ref": "#/components/schemas/LinescoreModel"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
           }
         },
         "required": [
@@ -2397,6 +2468,28 @@
             "title": "At Bat",
             "type": "integer"
           },
+          "away_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Score"
+          },
+          "batter_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batter Id"
+          },
           "canonical_event": {
             "anyOf": [
               {
@@ -2430,6 +2523,39 @@
             ],
             "title": "Exit Velo"
           },
+          "half": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Half"
+          },
+          "home_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Score"
+          },
+          "inning": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inning"
+          },
           "is_contact": {
             "title": "Is Contact",
             "type": "boolean"
@@ -2449,6 +2575,17 @@
             ],
             "title": "Launch Angle"
           },
+          "outs_before": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outs Before"
+          },
           "outs_recorded": {
             "default": 0,
             "title": "Outs Recorded",
@@ -2461,6 +2598,17 @@
           "pitch_outcome": {
             "title": "Pitch Outcome",
             "type": "string"
+          },
+          "pitcher_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pitcher Id"
           },
           "runs": {
             "default": 0.0,
@@ -2503,6 +2651,17 @@
         "additionalProperties": false,
         "description": "Response model for :class:`simulation.snapshots.PlayByPlay` (SIM-331).\n\nThe GET /api/games/{game_pk}/plays collection -- pitch-level entries plus the\nsource's derived counts (``n_pitches`` / ``n_plate_appearances``).",
         "properties": {
+          "base_seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Seed"
+          },
           "entries": {
             "items": {
               "$ref": "#/components/schemas/PlayByPlayEntryModel"
@@ -2519,6 +2678,13 @@
             "default": 0,
             "title": "N Plate Appearances",
             "type": "integer"
+          },
+          "names": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Names",
+            "type": "object"
           },
           "page_limit": {
             "anyOf": [
@@ -2552,6 +2718,17 @@
               }
             ],
             "title": "Returned Entries"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
           },
           "total_entries": {
             "anyOf": [
@@ -2948,6 +3125,30 @@
           "away_line"
         ],
         "title": "RunLinePricingModel",
+        "type": "object"
+      },
+      "SampleGameResponse": {
+        "description": "The ``POST /api/games/{game_pk}/sample-game`` envelope (SIM-561).\n\nThe stored game's run id and seed.  The page then reads the game through\n/linescore, /decisions and /plays, which serve this run until a newer one.",
+        "properties": {
+          "base_seed": {
+            "title": "Base Seed",
+            "type": "integer"
+          },
+          "game_pk": {
+            "title": "Game Pk",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "game_pk",
+          "run_id",
+          "base_seed"
+        ],
+        "title": "SampleGameResponse",
         "type": "object"
       },
       "SchemaInfo": {
@@ -5553,7 +5754,7 @@
     },
     "/api/games/{game_pk}/boxscore": {
       "get": {
-        "description": "Resolve the game's lineup, run an N-iteration boxscore batch, and return each player's prop MEANS as a boxscore card (SIM-366): for a batter the H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means, for a pitcher the K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's other lines) -- the means-only projection of the run's PropDistributionSet (SIM-329). numpy-free JSON (SIM-350). 503 if no DB pool is attached or the game's lineup is not yet usable (Retry-After); 404 if the game is unknown.",
+        "description": "Resolve the game's lineup, run an N-iteration boxscore batch, and return each player's prop MEANS as a boxscore card (SIM-366): for a batter the H/HR/RBI/TB/1B/2B/3B/R/SB/HRR means, for a pitcher the K/BB/ER/OUTS/H_ALLOWED means (SIM-421 added the market's other lines) -- the means-only projection of the run's PropDistributionSet (SIM-329). Each row also carries the player's name, side, batting-order slot and starting-pitcher flag (SIM-560). The games run on the worker pool, and a seeded run is cached, so /props with the same seed and N reads this run. With the replay store on, the run's first game is stored for /linescore and /plays (SIM-561). numpy-free JSON (SIM-350). 503 if no DB pool is attached or the game's lineup is not yet usable (Retry-After); 404 if the game is unknown.",
         "operationId": "get_game_boxscore_api_games__game_pk__boxscore_get",
         "parameters": [
           {
@@ -5800,7 +6001,7 @@
     },
     "/api/games/{game_pk}/plays": {
       "get": {
-        "description": "Return the persisted pitch-level play-by-play (one entry per pitch, the resolved PA event on the terminal pitch) for the game's most-recent persisted run -- the durable backing populated by /simulate (SIM-357). Served straight from the DuckDB play-stream store (SIM-356); numpy-free JSON (SIM-350). SIM-415: optional ``limit``/``offset`` page the entries (a full game is ~300 pitches); ``n_pitches``/``n_plate_appearances`` stay full-game totals and ``total_entries``/``page_*`` describe the slice. Omitting ``limit`` returns the whole stream (unchanged shape). 404 if nothing has been persisted for the game, 503 if no replay store is wired.",
+        "description": "Return the persisted pitch-level play-by-play (one entry per pitch, the resolved PA event on the terminal pitch) for the game's most-recent persisted run -- the durable backing populated by /simulate (SIM-357). Served straight from the DuckDB play-stream store (SIM-356); numpy-free JSON (SIM-350). SIM-415: optional ``limit``/``offset`` page the entries (a full game is ~300 pitches); ``n_pitches``/``n_plate_appearances`` stay full-game totals and ``total_entries``/``page_*`` describe the slice. Omitting ``limit`` returns the whole stream (unchanged shape). SIM-561: the entries come from the newest stored run only (``run_id``), each carries its inning, half, outs, batter, pitcher and the score after it, and ``names`` maps every batter and pitcher id to a name. 404 if nothing has been persisted for the game, 503 if no replay store is wired.",
         "operationId": "get_game_plays_api_games__game_pk__plays_get",
         "parameters": [
           {
@@ -5843,6 +6044,24 @@
               "minimum": 0,
               "title": "Offset",
               "type": "integer"
+            }
+          },
+          {
+            "description": "SIM-561: the stored run to read; omit for the newest",
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "SIM-561: the stored run to read; omit for the newest",
+              "title": "Run Id"
             }
           }
         ],
@@ -6028,6 +6247,67 @@
           }
         },
         "summary": "Player prop PMF + optional edge report (SIM-390)",
+        "tags": [
+          "games"
+        ]
+      }
+    },
+    "/api/games/{game_pk}/sample-game": {
+      "post": {
+        "description": "Resolve the game's lineup, simulate ONE game at ``base_seed`` (a random seed when omitted), and store it in the replay file: its play-by-play, per-pitch states, linescore and pitcher decisions (SIM-561). /linescore, /decisions, /card, /plays and /state then serve this game. Returns the stored run's id and seed. 503 if the replay store is off or the lineup is not yet usable (Retry-After); 404 if the game is unknown; 500 if the game could not be stored (the app log says why).",
+        "operationId": "simulate_sample_game_api_games__game_pk__sample_game_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "game_pk",
+            "required": true,
+            "schema": {
+              "title": "Game Pk",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The game's seed; random when omitted",
+            "in": "query",
+            "name": "base_seed",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The game's seed; random when omitted",
+              "title": "Base Seed"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SampleGameResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Simulate and store one game for the game page",
         "tags": [
           "games"
         ]

@@ -378,7 +378,15 @@ class TestTheReplayBuilder:
         import api.routes.games as games_mod
 
         game, plays = _recorded_game_with_a_no_pitch()
-        monkeypatch.setattr(games_mod, "record_game_plays", lambda **_kw: (game, plays))
+        from simulation.play_recorder import RecordedGame
+        from simulation.snapshots import PitchContext
+
+        # SIM-561: the builder reads record_game, which adds the state before
+        # each step; one context per result, no-pitch results included.
+        contexts = [PitchContext(inning=1, half="top", outs=0, batter_id=None) for _ in plays]
+        monkeypatch.setattr(
+            games_mod, "record_game", lambda **_kw: RecordedGame(game, plays, contexts)
+        )
         seen: dict[str, int] = {}
         real_ls, real_dec = games_mod.linescore_from_plays, games_mod.decisions_from_plays
 
@@ -396,7 +404,7 @@ class TestTheReplayBuilder:
         return plays, seen, built
 
     def test_the_play_by_play_holds_thrown_pitches_only(self, monkeypatch):
-        plays, _seen, (pbp, snapshots, _ls, _dec) = self._build(monkeypatch)
+        plays, _seen, (pbp, snapshots, _ls, _dec, _result) = self._build(monkeypatch)
         assert pbp.n_pitches == len(_thrown(plays))
         assert len(snapshots) == pbp.n_pitches
 
@@ -407,7 +415,7 @@ class TestTheReplayBuilder:
         from api.serialization import to_jsonable
         from simulation.snapshots import StateAtPitch
 
-        plays, _seen, (pbp, snapshots, _ls, _dec) = self._build(monkeypatch)
+        plays, _seen, (pbp, snapshots, _ls, _dec, _result) = self._build(monkeypatch)
         for play, entry, snap in zip(_thrown(plays), pbp.entries, snapshots, strict=True):
             want = StateAtPitch.from_game_state(
                 play.next_state, at_bat=entry.at_bat, pitch=entry.pitch, sequence=entry.sequence

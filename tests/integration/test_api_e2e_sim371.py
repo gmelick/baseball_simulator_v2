@@ -30,8 +30,9 @@ and attaches the app.state contract the routes read:
     (for /line-movement + /clv); ``fetchval`` stands in as the SIM-356 sim-run
     history INSERT ... RETURNING run_id conn so a real cross-store run_id flows
     into the DuckDB play-stream / state / card writes.
-  * ``sim_duckdb``       -- a REAL in-memory DuckDB with migrations 0008 (play
-    stream), 0009 (state snapshots) and 0010 (game card) applied, so the SIM-357
+  * ``replay_duckdb``    -- a REAL in-memory DuckDB with migrations 0008 (play
+    stream), 0009 (state snapshots), 0010 (game card) and 0032 (the pitch
+    context, SIM-561) applied, so the SIM-357
     /plays + /state and SIM-362/364 /linescore + /decisions + /card reads serve
     the persisted run.
   * ``sim_factory_ref``  -- the no-DB ``rng_driven_machine_factory`` so the
@@ -93,6 +94,8 @@ DUCK_MIGRATIONS = (
     REPO_ROOT / "db" / "migrations" / "duckdb" / "0008_sim356_play_stream.sql",
     REPO_ROOT / "db" / "migrations" / "duckdb" / "0009_sim357_state_snapshots.sql",
     REPO_ROOT / "db" / "migrations" / "duckdb" / "0010_sim362_364_game_card.sql",
+    # SIM-561: the pitch context columns on the play stream.
+    REPO_ROOT / "db" / "migrations" / "duckdb" / "0032_sim561_play_stream_context.sql",
 )
 
 # The no-DB, picklable rng factory -- the production factory ref is swapped to
@@ -271,7 +274,7 @@ def _build_e2e_app(*, pool, duck, cache=None) -> FastAPI:
     app.include_router(betting_router)
     app.include_router(ws_router)
     app.state.pg_pool = pool
-    app.state.sim_duckdb = duck
+    app.state.replay_duckdb = duck  # SIM-561: the replay store's own handle
     app.state.sim_cache = cache  # None => each runner picks its own backend
     app.state.sim_factory_ref = NO_DB_FACTORY_REF  # the testability seam
     return app
@@ -624,9 +627,9 @@ class TestHistoricalReplayE2E:
 
         # Two seeded runs with caching OFF so we exercise the REAL recompute +
         # re-persist path both times (a cache hit would trivially match). Each
-        # run persists under its own SIM-356 run_id (the fake pool issues a fresh
-        # one per call), so the two streams coexist in the store -- we compare
-        # them PER RUN below rather than via the accumulating by-game /plays read.
+        # run persists under its own replay run id (SIM-561: the replay file
+        # numbers its runs), so the two streams coexist in the store -- we
+        # compare them PER RUN below.
         a = client.get(f"/api/games/{game_pk}/simulate?n_iterations=5&base_seed=7&use_cache=false")
         b = client.get(f"/api/games/{game_pk}/simulate?n_iterations=5&base_seed=7&use_cache=false")
 
@@ -637,11 +640,17 @@ class TestHistoricalReplayE2E:
 
         # The persisted representative game (recorded at seed=base_seed) replays
         # identically across the two runs. Read each run's stream by its own
-        # run_id from the store directly (the by-game /plays read returns the
-        # UNION across runs, which is the documented endpoint behaviour).
+        # run_id from the store directly.
         from db import sim_store
 
-        run_id_a, run_id_b = pool.run_ids_issued[-2], pool.run_ids_issued[-1]
+        run_ids = [
+            r[0]
+            for r in duck_con.execute(
+                "SELECT run_id FROM sim.game_cards WHERE game_pk = ? ORDER BY run_id",
+                [game_pk],
+            ).fetchall()
+        ]
+        run_id_a, run_id_b = run_ids[-2], run_ids[-1]
         assert run_id_a != run_id_b
         stream_a = sim_store.load_play_stream(duck_con, game_pk=game_pk, run_id=run_id_a)
         stream_b = sim_store.load_play_stream(duck_con, game_pk=game_pk, run_id=run_id_b)

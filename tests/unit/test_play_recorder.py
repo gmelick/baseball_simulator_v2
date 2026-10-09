@@ -22,14 +22,14 @@ Owned by Backend Developer (SIM-355).
 
 from __future__ import annotations
 
-from simulation.game_state import PlayResult
+from simulation.game_state import GameState, PlayResult
 from simulation.play_recorder import (
     DEFAULT_FACTORY_REF,
     RecordingMachine,
     RecordingStateMachine,
     record_game_plays,
 )
-from simulation.snapshots import PlayByPlay
+from simulation.snapshots import PitchContext, PlayByPlay
 
 SIM_KWARGS = {
     "season": 2024,
@@ -128,13 +128,17 @@ class _DummyMachine:
 def test_recording_machine_records_and_returns_verbatim():
     inner = _DummyMachine()
     rec = RecordingMachine(inner)
-    r1 = rec.step_pitch("state")
-    r2 = rec.step_pitch("state")
+    state = GameState(pitcher_id=1, bat_hand="R", season=2024)
+    state.batter_id = 7
+    r1 = rec.step_pitch(state)
+    r2 = rec.step_pitch(state)
     # The wrapper returns exactly what the inner machine returned.
     assert r1.tag == 1 and r2.tag == 2
     # ...and recorded them in order.
     assert rec.recorded_plays == [r1, r2]
     assert inner._calls == 2
+    # SIM-561: one state-before-the-pitch per recorded play.
+    assert rec.recorded_contexts == [PitchContext(1, "top", 0, 7)] * 2
 
 
 def test_recording_machine_delegates_attribute_reads():

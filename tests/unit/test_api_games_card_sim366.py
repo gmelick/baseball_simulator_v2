@@ -38,7 +38,6 @@ Owned by Backend Developer (SIM-366 + 362/363/364 API exposure).
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -57,11 +56,6 @@ from simulation.game_state import GameState, Half, PlayResult
 from simulation.linescore import linescore_from_plays
 from simulation.pitcher_decisions import decisions_from_plays
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DUCK_0008 = REPO_ROOT / "db" / "migrations" / "duckdb" / "0008_sim356_play_stream.sql"
-DUCK_0009 = REPO_ROOT / "db" / "migrations" / "duckdb" / "0009_sim357_state_snapshots.sql"
-DUCK_0010 = REPO_ROOT / "db" / "migrations" / "duckdb" / "0010_sim362_364_game_card.sql"
-
 NO_DB_FACTORY_REF = "simulation.batch_runner:rng_driven_machine_factory"
 
 
@@ -76,18 +70,11 @@ def _fresh_duckdb():
     import duckdb
 
     con = duckdb.connect(":memory:")
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS migration_history (
-            migration_id VARCHAR PRIMARY KEY,
-            applied_at   TIMESTAMP NOT NULL DEFAULT now(),
-            description  VARCHAR NOT NULL
-        )
-        """
-    )
-    con.execute(DUCK_0008.read_text())
-    con.execute(DUCK_0009.read_text())
-    con.execute(DUCK_0010.read_text())
+    # SIM-561: the app's own schema setup for the replay file (0008, 0009,
+    # 0010 and 0032), so the test and the app read one source.
+    from db.sim_store import ensure_replay_schema
+
+    ensure_replay_schema(con)
     return con
 
 
@@ -348,7 +335,7 @@ def _build_app(*, pool, duck=None, factory_ref=NO_DB_FACTORY_REF) -> FastAPI:
     app.state.pg_pool = pool
     app.state.sim_cache = None
     app.state.sim_factory_ref = factory_ref
-    app.state.sim_duckdb = duck
+    app.state.replay_duckdb = duck
     return app
 
 

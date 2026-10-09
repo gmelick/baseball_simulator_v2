@@ -3,9 +3,11 @@ test_api_plays_pagination_sim415.py
 ===================================
 Unit tests for SIM-415 pagination on GET /api/games/{game_pk}/plays.
 
-The endpoint reads ``app.state.sim_duckdb`` + ``sim_store.load_play_stream``;
-both are stubbed (a sentinel connection + a monkeypatched loader returning
-canned play rows) so no live DuckDB is needed.
+The endpoint reads ``app.state.replay_duckdb`` (SIM-561) through a cursor, finds
+the newest complete run (``sim_store.load_game_card``) and loads its stream
+(``sim_store.load_play_stream``); all three are stubbed (a connection whose
+cursor does nothing + a store returning run 1 and canned play rows) so no live
+DuckDB is needed.
 """
 
 from __future__ import annotations
@@ -45,22 +47,44 @@ def _canned_rows(n: int) -> list[dict]:
     return rows
 
 
+class _StubCursor:
+    def close(self) -> None:
+        pass
+
+
+class _StubCon:
+    """A replay connection whose cursor the stubbed store never touches."""
+
+    def cursor(self) -> _StubCursor:
+        return _StubCursor()
+
+
 def _build_app(monkeypatch, *, n_rows: int = 30) -> FastAPI:
     rows = _canned_rows(n_rows)
 
-    def _fake_load(con, *, game_pk):  # matches sim_store.load_play_stream signature
+    def _fake_load(con, *, game_pk, run_id=None):  # sim_store.load_play_stream
         return rows
+
+    def _fake_card(con, *, game_pk, run_id=None):  # sim_store.load_game_card
+        return {"run_id": 1, "game_pk": game_pk, "base_seed": None}
 
     monkeypatch.setattr(
         games_mod,
         "sim_store",
-        type("_FakeStore", (), {"load_play_stream": staticmethod(_fake_load)})(),
+        type(
+            "_FakeStore",
+            (),
+            {
+                "load_play_stream": staticmethod(_fake_load),
+                "load_game_card": staticmethod(_fake_card),
+            },
+        )(),
     )
     app = FastAPI()
     app.include_router(games_router)
     app.state.pg_pool = object()
     app.state.sim_cache = None
-    app.state.sim_duckdb = object()  # non-None sentinel → endpoint proceeds
+    app.state.replay_duckdb = _StubCon()  # non-None → the endpoint proceeds
     return app
 
 

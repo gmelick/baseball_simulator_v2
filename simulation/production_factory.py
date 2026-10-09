@@ -609,10 +609,27 @@ def _default_bullpen_for_spec(spec: GameSpec) -> dict[int, list[int]]:
     # Synthetic, deterministic, collision-avoiding ids (negative so they never
     # alias a real player id in the pool — a pulled arm degrades to a league-flat
     # draw, which is valid per the SIM-427 note).
-    base = 9_000_000
+    base = _PLACEHOLDER_ID_BASE
     away_pen = [-(base + away_starter * 10 + i) for i in range(1, 7)]
     home_pen = [-(base + home_starter * 10 + i) for i in range(1, 7)]
     return {0: away_pen, 1: home_pen}
+
+
+#: The id base of the placeholder pen: arm ``i`` (1-6) of the side whose starter
+#: is ``s`` gets the id ``-(base + s * 10 + i)``.
+_PLACEHOLDER_ID_BASE = 9_000_000
+
+
+def placeholder_reliever_number(player_id: int) -> int | None:
+    """The 1-6 number of a placeholder arm, read from its id; None for a real id.
+
+    SIM-561: the game page names a placeholder arm "Generic reliever N".
+    """
+    offset = -int(player_id) - _PLACEHOLDER_ID_BASE
+    if offset < 1:  # a real id, or a negative id below the placeholder range
+        return None
+    n = offset % 10
+    return n if 1 <= n <= 6 else None
 
 
 #: Injectable bullpen builder (the no-DB test seam).  A test swaps this to assert
@@ -690,6 +707,7 @@ def production_machine_factory(seed: int | None, spec: GameSpec) -> StateMachine
 
 
 __all__ = [
+    "placeholder_reliever_number",
     "production_machine_factory",
     "set_bullpen_builder",
     "warm_worker_cache",

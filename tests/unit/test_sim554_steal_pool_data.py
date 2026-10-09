@@ -307,7 +307,7 @@ class TestMigration0031:
 
     def test_the_version_file_equals_the_newest_migration(self):
         newest = max(int(p.name[:4]) for p in MIGRATIONS.glob("[0-9][0-9][0-9][0-9]_*.sql"))
-        assert newest == 31
+        assert newest == 32  # SIM-561 (0032) came after this ticket's 0031
         assert int(VERSION_FILE.read_text(encoding="utf-8").strip()) == newest
 
 

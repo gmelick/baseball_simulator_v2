@@ -355,17 +355,22 @@ async def lifespan(app: FastAPI):
         )
 
     # ----------------------------------------------------------------
-    # Phase 5 (SIM-357): replay-persistence DuckDB connection.
+    # Phase 5 (SIM-357) / SIM-561: the replay store -- a DuckDB file of its own.
     #
-    # Gated behind REPLAY_PERSISTENCE_ENABLED (default FALSE). When enabled,
-    # open a writable DuckDB connection (the sim.play_stream / sim.state_snapshots
-    # store, schema v9) and attach it as app.state.sim_duckdb so /simulate can
-    # persist a representative game's play-by-play + per-pitch snapshots and
-    # /plays + /state/{at_bat}/{pitch} can serve them. Best-effort: a failure to
-    # open never blocks boot — the replay endpoints simply return 503 and
-    # /simulate's persistence step skips silently. Default-off avoids DuckDB's
-    # single-writer constraint clashing with the read-only similarity engine
-    # until the deployment wires a dedicated replay DuckDB file.
+    # Gated behind REPLAY_PERSISTENCE_ENABLED (default FALSE; docker-compose sets
+    # it). When enabled, open the replay file (REPLAY_DUCKDB_PATH, default
+    # /data/replay.duckdb) WRITABLE, create its tables (db.sim_store
+    # ensure_replay_schema: DuckDB 0008, 0009, 0010, 0032) and attach it as
+    # app.state.replay_duckdb. /simulate, /boxscore and POST /sample-game store a
+    # game there; /plays, /state, /linescore, /decisions and /card read it.
+    #
+    # SIM-561: before this, the flag opened the ANALYTICS file writable as
+    # app.state.sim_duckdb. That file holds no replay tables, and the write lock
+    # would block the nightly rebuilds and every read-only script. Only the app
+    # opens the replay file, and the analytics connection stays read-only.
+    #
+    # Best-effort: a failure to open never blocks boot — the replay reads return
+    # 503 and the stores skip.
     # ----------------------------------------------------------------
     replay_enabled = os.environ.get("REPLAY_PERSISTENCE_ENABLED", "false").strip().lower() not in (
         "0",
@@ -375,17 +380,20 @@ async def lifespan(app: FastAPI):
     )
 
     if replay_enabled:
+        replay_path = os.environ.get("REPLAY_DUCKDB_PATH", "/data/replay.duckdb")
         try:
-            import duckdb
+            from db.sim_store import open_replay_store
 
-            duckdb_path = os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb")
-            log.info("Opening replay-persistence DuckDB at %s ...", duckdb_path)
-            app.state.sim_duckdb = await asyncio.to_thread(duckdb.connect, duckdb_path)
+            log.info("SIM-561: opening the replay store at %s ...", replay_path)
+            app.state.replay_duckdb = await asyncio.to_thread(open_replay_store, replay_path)
+            log.info("SIM-561: replay store OPEN at %s.", replay_path)
         except Exception as exc:  # noqa: BLE001
             log.warning(
-                "REPLAY_PERSISTENCE_ENABLED but DuckDB open failed (%s); "
-                "/plays + /state will return 503 and /simulate persistence is skipped.",
+                "REPLAY_PERSISTENCE_ENABLED but the replay store at %s did not open (%s: %s); "
+                "the replay reads return 503 and the stores skip.",
+                replay_path,
                 type(exc).__name__,
+                exc,
             )
 
     # ----------------------------------------------------------------
@@ -401,50 +409,32 @@ async def lifespan(app: FastAPI):
     # derived.park_factors; 35 for 2024 factor_type='R', from 0.8724 to 1.1339).
     #
     # THE DECISION. Reading park factors is a READ. Replay persistence is a WRITE.
-    # We open the read-only source on its own rather than switching
-    # REPLAY_PERSISTENCE_ENABLED on, because that flag opens a WRITABLE connection
-    # (the write lock the comment above says the default-off state exists to avoid)
-    # and because the replay tables sim.play_stream / sim.state_snapshots are not in
-    # the file — turning it on would move /plays, /state, /linescore and /card from
-    # a clean 503 to a 500 on a missing table. The full reasoning, with the queries
-    # that measured it, is in simulation/sim_kwargs.py.
-    #
-    # SKIPPED when replay already opened a connection: DuckDB will not give the same
-    # process a second handle on a file it already holds writable, and in that case
-    # the routes already pass a live connection, so the fallback is not needed.
+    # We open the read-only source on its own. The full reasoning, with the
+    # queries that measured it, is in simulation/sim_kwargs.py. Since SIM-561 the
+    # replay store is a different file (above), so this source always opens here.
     # ----------------------------------------------------------------
     from simulation.sim_kwargs import (
-        ParkFactorSource,
         close_park_factor_source,
         prime_park_factor_source,
     )
 
-    if getattr(app.state, "sim_duckdb", None) is not None:
-        app.state.park_factor_source = ParkFactorSource(
-            available=True,
-            path=os.environ.get("BASEBALL_DUCKDB_PATH", "/data/baseball_sim.duckdb"),
-            n_rows=-1,
-            detail="served by the replay-persistence connection (app.state.sim_duckdb)",
+    park_source = await asyncio.to_thread(prime_park_factor_source)
+    app.state.park_factor_source = park_source
+    if park_source.available:
+        log.info(
+            "SIM-453: park-factor source OPEN (read-only) at %s — %d rows in "
+            "derived.park_factors. SIM_PARK_FACTOR has real factors to act on.",
+            park_source.path,
+            park_source.n_rows,
         )
-        log.info("SIM-453: park factors read through the replay-persistence DuckDB connection.")
     else:
-        park_source = await asyncio.to_thread(prime_park_factor_source)
-        app.state.park_factor_source = park_source
-        if park_source.available:
-            log.info(
-                "SIM-453: park-factor source OPEN (read-only) at %s — %d rows in "
-                "derived.park_factors. SIM_PARK_FACTOR has real factors to act on.",
-                park_source.path,
-                park_source.n_rows,
-            )
-        else:
-            log.warning(
-                "SIM-453: park-factor source UNAVAILABLE at %s — %s. Every /simulate "
-                "runs PARK-BLIND at a neutral 1.0, and every response carries "
-                "X-Park-Factor-Source: unavailable. This is reported, not hidden.",
-                park_source.path,
-                park_source.detail,
-            )
+        log.warning(
+            "SIM-453: park-factor source UNAVAILABLE at %s — %s. Every /simulate "
+            "runs PARK-BLIND at a neutral 1.0, and every response carries "
+            "X-Park-Factor-Source: unavailable. This is reported, not hidden.",
+            park_source.path,
+            park_source.detail,
+        )
 
     # ----------------------------------------------------------------
     # Phase 5 (SIM-360): the long-lived, persistent BatchRunner.
@@ -591,10 +581,10 @@ async def lifespan(app: FastAPI):
     if hasattr(app.state, "pipeline"):
         await app.state.pipeline.stop()
 
-    # Phase 5 (SIM-357): close the replay-persistence DuckDB connection.
-    if getattr(app.state, "sim_duckdb", None) is not None:
+    # Phase 5 (SIM-357) / SIM-561: close the replay store.
+    if getattr(app.state, "replay_duckdb", None) is not None:
         try:
-            app.state.sim_duckdb.close()
+            app.state.replay_duckdb.close()
         except Exception:  # noqa: BLE001
             pass
 

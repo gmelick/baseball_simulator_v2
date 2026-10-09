@@ -196,6 +196,33 @@ class FieldSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class PitchContext:
+    """The game state just before one pitch (SIM-561).
+
+    The play recorder captures one per step, from the state it hands the
+    machine.  The batter, inning and outs are right at that moment: the loop
+    points the state at the next batter, and rolls the half-inning, at the end
+    of the step that ends the plate appearance.
+    """
+
+    inning: int
+    half: str  # 'top' or 'bottom'
+    outs: int
+    batter_id: int | None
+
+    @classmethod
+    def from_state(cls, state: GameState) -> PitchContext:
+        """Read the context off a live :class:`GameState`."""
+        batter = getattr(state, "batter_id", None)
+        return cls(
+            inning=int(state.inning),
+            half="top" if state.half == Half.TOP else "bottom",
+            outs=int(state.outs),
+            batter_id=None if batter is None else int(batter),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class PlayByPlayEntry:
     """One pitch in the play-by-play scroll (GET .../plays), pitch-level.
 
@@ -224,6 +251,17 @@ class PlayByPlayEntry:
     runs: float = 0.0
     canonical_event: str | None = None
 
+    # SIM-561: who, when and the score. The inning, half, outs and batter are
+    # the state BEFORE the pitch; the pitcher is the arm that threw it; the
+    # score is AFTER it. None when the stream was recorded without a context.
+    inning: int | None = None
+    half: str | None = None
+    outs_before: int | None = None
+    batter_id: int | None = None
+    pitcher_id: int | None = None
+    away_score: int | None = None
+    home_score: int | None = None
+
     @classmethod
     def from_play_result(
         cls,
@@ -232,8 +270,15 @@ class PlayByPlayEntry:
         sequence: int,
         at_bat: int,
         pitch: int,
+        context: PitchContext | None = None,
     ) -> PlayByPlayEntry:
-        """Build one entry from a PlayResult + its position indices."""
+        """Build one entry from a PlayResult + its position indices.
+
+        ``context`` is the state before the pitch (SIM-561).  The pitcher and the
+        score come from the result itself, so they fill without a context.
+        """
+        ns = result.next_state
+        pitcher = getattr(result, "pitcher_id", None)
         return cls(
             sequence=int(sequence),
             at_bat=int(at_bat),
@@ -249,6 +294,13 @@ class PlayByPlayEntry:
             spray_angle=result.spray_angle,
             runs=float(result.runs),
             canonical_event=result.canonical_event,
+            inning=None if context is None else context.inning,
+            half=None if context is None else context.half,
+            outs_before=None if context is None else context.outs,
+            batter_id=None if context is None else context.batter_id,
+            pitcher_id=None if pitcher is None else int(pitcher),
+            away_score=None if ns is None else int(ns.away_score),
+            home_score=None if ns is None else int(ns.home_score),
         )
 
 
@@ -285,6 +337,7 @@ class PlayByPlay:
     def from_play_results(
         cls,
         results: Sequence[PlayResult],
+        contexts: Sequence[PitchContext] | None = None,
     ) -> PlayByPlay:
         """Build a PlayByPlay from a flat, ordered sequence of pitches.
 
@@ -305,11 +358,19 @@ class PlayByPlay:
         pitches. That pickoff voids the plate appearance and rolls the half.
         When the voided PA already holds pitches, the next thrown pitch starts a
         new at-bat, by the same rule.
+
+        SIM-561: ``contexts`` is the play recorder's state-before-each-step list,
+        one per result (no-pitch results included).  Each entry takes its own.
         """
+        if contexts is not None and len(contexts) != len(results):
+            raise ValueError(
+                f"{len(contexts)} contexts for {len(results)} results: the recorder "
+                "captures one per step"
+            )
         entries: list[PlayByPlayEntry] = []
         at_bat = 0
         pitch_in_pa = 0
-        for res in results:
+        for i, res in enumerate(results):
             if res.pitch_outcome == NO_PITCH:
                 if pitch_in_pa > 0:
                     at_bat += 1
@@ -318,7 +379,11 @@ class PlayByPlay:
             pitch_in_pa += 1
             entries.append(
                 PlayByPlayEntry.from_play_result(
-                    res, sequence=len(entries), at_bat=at_bat, pitch=pitch_in_pa
+                    res,
+                    sequence=len(entries),
+                    at_bat=at_bat,
+                    pitch=pitch_in_pa,
+                    context=None if contexts is None else contexts[i],
                 )
             )
             ns = res.next_state
@@ -451,6 +516,7 @@ __all__ = [
     "OVERRIDE_METRIC_FIELDS",
     "PlayerRef",
     "FieldSnapshot",
+    "PitchContext",
     "PlayByPlayEntry",
     "PlayByPlay",
     "thrown_pitches",

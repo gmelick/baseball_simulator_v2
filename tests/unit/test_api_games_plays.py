@@ -33,7 +33,6 @@ Owned by Backend Developer (SIM-357).
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -43,10 +42,6 @@ import api.routes.games as games_mod
 from api.routes.games import router as games_router
 from db import sim_store
 from simulation.game_state import GameState
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DUCK_0008 = REPO_ROOT / "db" / "migrations" / "duckdb" / "0008_sim356_play_stream.sql"
-DUCK_0009 = REPO_ROOT / "db" / "migrations" / "duckdb" / "0009_sim357_state_snapshots.sql"
 
 # The no-DB, picklable rng factory -- the production factory ref is swapped to
 # this so /simulate (and the recorded representative game) run with no sampler.
@@ -64,17 +59,11 @@ def _fresh_duckdb():
     import duckdb
 
     con = duckdb.connect(":memory:")
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS migration_history (
-            migration_id VARCHAR PRIMARY KEY,
-            applied_at   TIMESTAMP NOT NULL DEFAULT now(),
-            description  VARCHAR NOT NULL
-        )
-        """
-    )
-    con.execute(DUCK_0008.read_text())
-    con.execute(DUCK_0009.read_text())
+    # SIM-561: the app's own schema setup for the replay file (0008, 0009,
+    # 0010 and 0032), so the test and the app read one source.
+    from db.sim_store import ensure_replay_schema
+
+    ensure_replay_schema(con)
     return con
 
 
@@ -130,7 +119,7 @@ def _build_app(*, pool, duck=None, factory_ref=NO_DB_FACTORY_REF) -> FastAPI:
     app.state.pg_pool = pool
     app.state.sim_cache = None
     app.state.sim_factory_ref = factory_ref
-    app.state.sim_duckdb = duck  # the SIM-357 replay store (None => skip persist)
+    app.state.replay_duckdb = duck  # the SIM-357/561 replay store (None => skip persist)
     return app
 
 
@@ -328,8 +317,8 @@ class TestPersistenceIsBestEffort:
 
     def test_simulate_ok_when_history_pool_store_raises(self, patch_resolver, duck_con):
         """A pg pool whose fetchval raises (sim-run history write fails) must NOT
-        break /simulate, and the DuckDB play-stream still persists (synthetic
-        run_id) so /plays works."""
+        break /simulate, and the DuckDB play-stream still persists so /plays
+        works (SIM-561: the replay file numbers its own runs)."""
 
         class _AngryPool(_FakePool):
             async def fetchval(self, sql, *args):
@@ -340,7 +329,7 @@ class TestPersistenceIsBestEffort:
 
         sim = client.get("/api/games/745099/simulate?n_iterations=2&base_seed=5")
         assert sim.status_code == 200, sim.text
-        # The DuckDB stream still persisted under the synthetic run_id fallback.
+        # The replay stream still persisted, under the replay file's own run id.
         plays = client.get("/api/games/745099/plays")
         assert plays.status_code == 200, plays.text
         assert plays.json()["n_pitches"] >= 1

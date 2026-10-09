@@ -23,7 +23,7 @@
 
 - **▶ STATE AS OF 2026-06-06 — SUPERSEDED where §2b (2026-08-16) says otherwise: data foundation rebuilt, the runs band PASSES, CI all-green.**
   - **Phases 1–6 COMPLETE and CI-green** on **Python 3.13 / numpy 2.x** (SIM-431). Frontend shipped as
-    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v31**, Alembic head **0028** (2026-09-28; was 0027).
+    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v32** (2026-10-08, SIM-561; was v31), Alembic head **0028** (2026-09-28; was 0027).
   - **Calibration is LIVE, REFIT 2026-08-16 on the rebuilt data** (SIM-432/459): `/data/calibration.json`
     fitted + applied at boot; win-prob map = fitted reliability-curve. 120-game validation: win-prob
     **ECE 0.0377** (was 0.047); batter **H/HR/TB 0.066/0.024/0.060** (bettable); pitcher **BB 0.044 —
@@ -581,6 +581,19 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   reads, no channel moved beyond noise (every power is 1). `scripts/sim523_game_set.py` reads the
   starters from the box now (89 of 90 before). Plan and run book:
   `docs/audit/2026-10-06-sim559-starting-position-plan.md`. Next free ID SIM-560.
+- **The game page reviews a simulated game (SIM-560 + SIM-561, CLOSED 2026-10-08).** "Load
+  projections" runs its 100 games on the worker pool (`BatchRunner.run_prop_set`, 33-36 s; it
+  replayed them one by one in the API process, about 150 s), a click on a stat reads the cached
+  seeded run (0.1 s), and the panel names each player by team. The linescore and play-by-play
+  panels show ONE simulated game: the "Simulate a game" button (`POST /sample-game`, about 5 s)
+  or the projections' first game. The replay tables live in a file of their own,
+  `/data/replay.duckdb` (`REPLAY_DUCKDB_PATH`, `REPLAY_PERSISTENCE_ENABLED=1` in compose), which
+  only the app opens writable; the analytics file stays read-only, so the rebuilds and scripts
+  are not blocked. DuckDB 0032 (schema v32) adds each replayed pitch's inning, half, outs,
+  batter, pitcher and score; the API records the game on a worker, so its own process never
+  loads the sim bundle. The file numbers its own runs; only `/simulate` writes a Postgres
+  `sim.sim_runs` row. The page reads `/card` (linescore, run id, seed), then `/plays?run_id=`;
+  the file keeps 5 runs per game.
 - **Sample hundreds of games when validating ETL work, never dozens.** Two adversarial review rounds
   found four defects each, all from real payloads at scale, none from reading code. A 70-game sample
   reported "100%" on a metric that 950 games disproved.
@@ -592,6 +605,10 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   `scripts/` are picked up by the running container only after `docker compose build app` +
   `docker compose up -d app` (recreate).  Edits to the mounted dirs are picked up by
   `docker compose restart app` alone.
+- **The app holds `/data/replay.duckdb` writable (SIM-561).** No other process can open it
+  while the app runs, even read-only; read a stored game through the API (`/plays`,
+  `/linescore`). Stop the app to inspect the file. A host-side edit to a mounted `api/`
+  file DID trigger the reload on 2026-10-08; the reload closes and reopens the file cleanly.
 - **`betting/` is NOT mounted either, and the app hot-reloads `api/`.** An edit to a
   mounted `api/` file that imports a NEW `betting/` name breaks the reload: the app
   fails to import until the image is rebuilt (a ten-minute outage on 2026-09-25).
@@ -685,7 +702,7 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   → Core sim loop (simulation/sim_loop.py) : 8-step pitch-by-pitch state machine + manager/situational
     decisions → GameSimResult                                     [Phase 4]
   → Runner + API (simulation/batch_runner.py, api/) : 100-iteration ProcessPool runner (forkserver
-    workers — SIM-430), REST + WebSocket, Redis cache, persistence (DuckDB v31 / Alembic 0028),
+    workers — SIM-430), REST + WebSocket, Redis cache, persistence (DuckDB v32 / Alembic 0028),
     betting/CLV surface, auth/rate-limit/CORS, nginx, Prometheus/Grafana   [Phase 5 — COMPLETE]
   → Frontend (frontend/) : React 18 + Vite + TypeScript, Playwright e2e   [Phase 6 — COMPLETE]
 ```
@@ -740,8 +757,9 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
   `docker compose run --rm -v "$PWD/scripts:/app/scripts" app python scripts/<x>.py`.)*
 - `db/` — `migrations/` (Alembic, head **0028** — 0028 = the SIM-555 odds stamp column `book_line_at` on `raw.game_odds` / `raw.prop_odds`, two per-book read indexes and the two archive tables `raw.game_odds_archive` / `raw.prop_odds_archive` (2026-09-28); 0027 = the two Savant fielding landing tables `raw.savant_outs_above_average` + `raw.savant_outfield_jump` (SIM-532, 2026-09-17); 0026 = the two Savant running-game landing tables `raw.savant_basestealing` + `raw.savant_pitcher_running_game` (SIM-531, 2026-09-16); 0022 = the 15-market `raw.prop_odds` CHECK constraint,
   0023 = `raw.game_player_stats`, 0024 = the 15-market `raw.game_odds` CHECK + `draw_ml`; all three applied to the live DB on 2026-09-12; 0025 = `raw.game_bullpen`, the MLB box's per-game bullpen listing for the SIM-427 real pen, applied 2026-09-13) + `migrations/duckdb/`
-  (numbered SQL, schema **v31**; 0031 = the SIM-554 steal pool's `pitch_class` and
-  `is_pickoff_row` columns) +
+  (numbered SQL, schema **v32**; 0032 = the SIM-561 replay play stream's pitch
+  context — inning, half, outs before, batter, pitcher, score after; 0031 = the
+  SIM-554 steal pool's `pitch_class` and `is_pickoff_row` columns) +
   `schemas/duckdb_schema_version.txt`.
 - `tests/` — `unit/`, `regression/` (engine invariant gate), `integration/` (E2E TestClient),
   `performance/` (pytest-benchmark). `conftest.py` has shared fixtures + the event-loop guard.

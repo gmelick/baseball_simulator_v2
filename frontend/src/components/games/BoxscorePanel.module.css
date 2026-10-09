@@ -36,6 +36,29 @@
   margin-bottom: var(--sim-space-3);
 }
 
+/* SIM-560: one section per team — batters in batting order, then pitchers. */
+.team + .team {
+  margin-top: var(--sim-space-4);
+  padding-top: var(--sim-space-3);
+  border-top: 1px solid var(--sim-color-border);
+}
+
+.teamName {
+  margin: 0 0 var(--sim-space-2);
+  font-size: var(--sim-text-sm);
+  font-weight: var(--sim-font-semibold);
+  color: var(--sim-color-text);
+}
+
+.groupLabel {
+  margin: var(--sim-space-2) 0 var(--sim-space-1p5);
+  font-size: var(--sim-text-xs);
+  font-weight: var(--sim-font-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sim-color-text-muted);
+}
+
 .playerList {
   list-style: none;
   margin: 0;
@@ -45,18 +68,31 @@
   gap: var(--sim-space-2);
 }
 
+/* The marker (slot / SP / RP) in a narrow first column; the name above its
+   chips in the second, so wrapped chips stay under the name. */
 .playerRow {
-  display: flex;
-  align-items: center;
-  gap: var(--sim-space-3);
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  column-gap: var(--sim-space-2);
+  row-gap: var(--sim-space-1);
+  align-items: baseline;
 }
 
-.playerId {
+.marker {
+  font-size: var(--sim-text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--sim-color-text-muted);
+  text-align: right;
+}
+
+.playerName {
   font-size: var(--sim-text-sm);
   font-weight: var(--sim-font-medium);
   color: var(--sim-color-text);
-  min-width: 92px;
+}
+
+.playerRow .chips {
+  grid-column: 2;
 }
 
 .chips {
