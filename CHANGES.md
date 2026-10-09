@@ -1,4 +1,4 @@
-# BUILT — the owner's Daily Diamond design on the day slate and the game page, and the live, schedule-driven game day view in full: the slate reads the league schedule, the open card shows the real game and the book's lines, a game that has not started can be simulated, the live service runs in its own container, the nightly finals job retries a crash, one durable simulation run per game with progress; not merged, not deployed — SIM-519, 2026-10-09
+# BUILT — the owner's Daily Diamond design on the day slate and the game page, and the live, schedule-driven game day view in full: the slate reads the league schedule, the open card shows the real game and the book's lines, a game that has not started can be simulated, the live service runs in its own container, the nightly finals job retries a crash, one durable simulation run per game with progress; MERGED (e3aae8e) and DEPLOYED the same day; the game-day live check is pending — SIM-519, 2026-10-09
 
 **Why it matters.** The day slate listed only the games our database held, with no scores, start
 times or probable pitchers. It was stale for 16 days in August because the nightly load was
@@ -125,7 +125,16 @@ new look.
   live game (none on the calendar today), and a published-lineup write (the lineups post two
   to four hours before first pitch).
 
-**Run book** (none of it run; the owner's call).
+**Deployed 2026-10-09** (the owner's go). Merged into `master` (`e3aae8e`) and pushed. Alembic
+0029 applied (`alembic current` = 0029). The app image rebuilt; `app`, `live` and `scheduler` up;
+the scheduler restarted to load its three jobs (nightly-finals, weekly-refresh,
+nightly-closing-lines). The 14-day finals catch-up ran: 69 games, all already loaded, none failed.
+The nginx image rebuilt. `/ready` reads postgres ok, live_service ok; the app built 11 of 11
+engines. Within seconds the live service stored tomorrow's division series odds (143 game-market
+rows, 39 prop rows). `http://localhost` serves the new slate. Still pending: the game-day check
+(step 7 below).
+
+**Run book** (steps 1 to 6 ran 2026-10-09).
 1. Merge the branch into `master` (it carries the SIM-519 design branch's three commits).
 2. `make migrate` — Alembic 0029 (additive; the app serves throughout).
 3. `docker compose build app`, then `docker compose up -d app live scheduler` (the new scripts and

@@ -23,7 +23,7 @@
 
 - **▶ STATE AS OF 2026-06-06 — SUPERSEDED where §2b (2026-08-16) says otherwise: data foundation rebuilt, the runs band PASSES, CI all-green.**
   - **Phases 1–6 COMPLETE and CI-green** on **Python 3.13 / numpy 2.x** (SIM-431). Frontend shipped as
-    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v32** (2026-10-08, SIM-561; was v31), Alembic head **0029** (2026-10-09, SIM-519 — on the branch, not yet applied; was 0028).
+    **React 18 + Vite + TypeScript** (SIM-378 / ADR-001). DuckDB schema **v32** (2026-10-08, SIM-561; was v31), Alembic head **0029** (2026-10-09, SIM-519 — applied to the live database the same day; was 0028).
   - **Calibration is LIVE, REFIT 2026-08-16 on the rebuilt data** (SIM-432/459): `/data/calibration.json`
     fitted + applied at boot; win-prob map = fitted reliability-curve. 120-game validation: win-prob
     **ECE 0.0377** (was 0.047); batter **H/HR/TB 0.066/0.024/0.060** (bettable); pitcher **BB 0.044 —
@@ -594,8 +594,8 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   loads the sim bundle. The file numbers its own runs; only `/simulate` writes a Postgres
   `sim.sim_runs` row. The page reads `/card` (linescore, run id, seed), then `/plays?run_id=`;
   the file keeps 5 runs per game.
-- **The Daily Diamond slate and the live, schedule-driven game day view (SIM-519, BUILT
-  2026-10-09 on `claude/simulator-frontend-design-fed1a4`; NOT merged, NOT deployed).** The
+- **The Daily Diamond slate and the live, schedule-driven game day view (SIM-519, BUILT,
+  MERGED and DEPLOYED 2026-10-09; the game-day live check is pending).** The
   owner's Claude Design ("Daily Diamond MLB tracker") is the frontend's look: the tokens keep
   their `--sim-*` names with the design's values, the fonts and the 30 team logos are bundled.
   The slate reads the league schedule (`pipeline/mlb_schedule.py`, `api/league_feed.py`;
