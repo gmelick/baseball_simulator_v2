@@ -307,6 +307,7 @@ test('the Betting card grades each side on the real final and marks a market wit
   await expect(ml.locator('[data-result="lost"]')).toContainText('Home')
   const total = card.getByRole('region', { name: 'Total' })
   await expect(total.getByText('no stored line')).toBeVisible()
-  // No invented price on a market with no stored line.
+  // No invented price, and no grade against an invented line.
   await expect(total.getByText('+999')).toHaveCount(0)
+  await expect(total.locator('[data-result]')).toHaveCount(0)
 })

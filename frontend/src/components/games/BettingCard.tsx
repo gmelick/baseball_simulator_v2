@@ -222,20 +222,22 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
         <div className={styles.sides}>
           {sides.map((e) => {
             const signal = signalByKey.get(`${e.label}:${e.side}`)
+            // A market with no stored line has an invented line: no grade on it.
+            const result = noLine ? null : e.result
             return (
               <div
                 key={e.side}
                 className={`${styles.side} ${e.positive_edge && !noLine ? styles.favored : ''} ${
-                  e.result ? styles[`result_${e.result}`] : ''
+                  result ? styles[`result_${result}`] : ''
                 }`}
-                data-result={e.result ?? undefined}
+                data-result={result ?? undefined}
               >
                 <div className={styles.sideTop}>
                   <span className={styles.sideName}>{sideLabel(e.label, e.side, e.line)}</span>
                   {!noLine && <span className={styles.price}>{fmtAmerican(e.offered_american)}</span>}
-                  {e.result && (
-                    <Badge variant={e.result === 'won' ? 'success' : e.result === 'lost' ? 'danger' : 'default'}>
-                      {e.result}
+                  {result && (
+                    <Badge variant={result === 'won' ? 'success' : result === 'lost' ? 'danger' : 'default'}>
+                      {result}
                     </Badge>
                   )}
                 </div>
@@ -281,7 +283,7 @@ export function BettingCard({ gamePk }: BettingCardProps): React.ReactElement {
       {anyNoLine && (
         <p className={styles.note}>
           Markets marked “no stored line” have no sportsbook price stored for this game, so
-          they show only the simulation&apos;s probability and its fair price.
+          they show only the simulation&apos;s probability and its fair price, and no result.
         </p>
       )}
       {grouped.map((g) => (
