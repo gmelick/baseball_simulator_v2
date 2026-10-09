@@ -133,6 +133,16 @@ def test_used_arms_leave_the_pen() -> None:
     assert _name_id("Cade Smith") not in st["bullpen"]["home"]  # on the mound
 
 
+def test_a_reliever_is_never_a_bench_bat() -> None:
+    # The box lists every player who appeared under `batters`, relievers included.
+    for at_bat in (None, 44):
+        st = state_at_pa(FEED, at_bat)
+        for side in ("away", "home"):
+            hitters = set(st["eligible"][side]["hitters"])
+            assert not hitters & set(st["eligible"][side]["pitchers"])
+    assert _name_id("Hunter Gaddis") not in state_at_pa(FEED, 44)["eligible"]["home"]["hitters"]
+
+
 def test_first_pitch() -> None:
     st = state_at_pa(FEED, None)
     assert (st["inning"], st["half"], st["outs"]) == (1, "top", 0)

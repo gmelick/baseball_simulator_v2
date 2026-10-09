@@ -213,6 +213,7 @@ export function WhatIfPanel({ gamePk, atBat, awayAbbr, homeAbbr, onClose }: What
               key={`p-${side}`}
               title={pregame ? `${abbr(side)} starting pitcher` : 'New pitcher'}
               label={`Replace ${sideSt(side).pitcher.name} with`}
+              hand="throws"
               options={available(sideSt(side).bullpen)}
               onStage={(player) =>
                 stage({
@@ -233,6 +234,7 @@ export function WhatIfPanel({ gamePk, atBat, awayAbbr, homeAbbr, onClose }: What
                 key={`pr-${base}`}
                 title={`Pinch-run at ${base}`}
                 label={`For ${state.live.runners[base]?.name}`}
+                hand="bats"
                 options={available(sideSt(batting).bench)}
                 onStage={(player) =>
                   stage({
@@ -301,11 +303,14 @@ export function WhatIfPanel({ gamePk, atBat, awayAbbr, homeAbbr, onClose }: What
 function PickControl({
   title,
   label,
+  hand,
   options,
   onStage,
 }: {
   title: string
   label: string
+  /** The hand each choice shows: a pitcher's throwing hand, a runner's batting side. */
+  hand: 'throws' | 'bats'
   options: PlayerOption[]
   onStage: (p: PlayerOption) => void
 }): React.ReactElement {
@@ -321,7 +326,7 @@ function PickControl({
           {options.map((o) => (
             <option key={o.id} value={o.id}>
               {o.name}
-              {o.throws ? ` (${o.throws}HP)` : o.bats ? ` (bats ${o.bats})` : ''}
+              {hand === 'throws' ? (o.throws ? ` (${o.throws}HP)` : '') : o.bats ? ` (bats ${o.bats})` : ''}
             </option>
           ))}
         </select>
