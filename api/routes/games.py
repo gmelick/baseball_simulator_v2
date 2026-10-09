@@ -501,6 +501,23 @@ _GAME_CARD_SQL = f"""
 """
 
 
+def _with_half_width(ci: Any) -> Any:
+    """A stored interval dict with ``half_width`` filled from its bounds.
+
+    SIM-546 review: the stored JSON lacks the field (see
+    ``_sim_summary_lite_from_stored``). A value that is not such a dict
+    passes through unchanged, and the model then rejects it.
+    """
+    if (
+        isinstance(ci, dict)
+        and "half_width" not in ci
+        and isinstance(ci.get("low"), (int, float))
+        and isinstance(ci.get("high"), (int, float))
+    ):
+        return {**ci, "half_width": (ci["high"] - ci["low"]) / 2.0}
+    return ci
+
+
 def _sim_summary_lite_from_stored(summary: dict | None) -> GameSimSummaryLite | None:
     """Build a ``GameSimSummaryLite`` from a stored (JSONB) summary dict.
 
@@ -511,12 +528,18 @@ def _sim_summary_lite_from_stored(summary: dict | None) -> GameSimSummaryLite | 
     ``_ApiModel`` uses ``extra="forbid"``.  Returns ``None`` on any failure
     (missing keys, type errors, unknown format) so callers never see an
     exception from a sim-history read.
+
+    SIM-546 review: the stored summary carries no ``half_width`` on its
+    intervals. ``half_width`` is a property of the interval dataclass, and
+    ``to_jsonable`` writes fields only. The lite model requires it, so the
+    projection fills it from ``(high - low) / 2`` on each ``*_ci`` dict that
+    lacks it. Without the fill every stored summary read None.
     """
     if not summary:
         return None
     try:
         lite_dict = {
-            k: v
+            k: _with_half_width(v) if k.endswith("_ci") else v
             for k, v in summary.items()
             if k not in ("home_scores", "away_scores", "total_scores", "inning_grids")
         }

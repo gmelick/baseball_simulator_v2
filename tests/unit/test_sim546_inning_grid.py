@@ -17,13 +17,14 @@ The games run on the no-DB synthetic bundle through ``record_game_plays``.
 
 from __future__ import annotations
 
+import io
 import pickle
 from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
 
-from api.routes.games import _sim_summary_lite_from_stored
+from api.routes.games import _sim_summary_lite_from_stored, _with_half_width
 from api.schemas import GameSimSummaryLite
 from api.serialization import to_jsonable
 from simulation.game_market_distributions import SegmentRuns, segment_runs_from_summary
@@ -192,15 +193,35 @@ def test_summary_carries_grids_and_tolerates_their_absence(recorded_games):
 def test_a_summary_pickled_before_the_grid_reads_none():
     """A summary cached by the old code restores with the grid slot unset.
 
-    Deleting the slot before the round trip gives the same state the old
-    pickle restores to. The summary then reads None, and ``to_jsonable``
-    (the stored summary) does not raise.
+    The test builds the old pickle's state by hand. A slotted dataclass
+    pickles a ``(None, slot_state)`` pair; the old code's slot state has no
+    ``inning_grids`` key. Restoring that state leaves the slot unset, as a
+    real old cache entry does. The summary then reads None, and
+    ``to_jsonable`` (the stored summary) does not raise.
     """
     summary = GameSimSummary.from_results(
         [_result([1, 0], [0, 0])], simulated_at=datetime(2026, 10, 9, tzinfo=UTC)
     )
-    del summary.inning_grids
-    restored = pickle.loads(pickle.dumps(summary))
+    reduced = summary.__reduce_ex__(pickle.HIGHEST_PROTOCOL)
+    _dict_state, slot_state = reduced[2]
+    assert "inning_grids" in slot_state
+    old_state = (None, {k: v for k, v in slot_state.items() if k != "inning_grids"})
+
+    class _OldCodePickler(pickle.Pickler):
+        """Writes the summary with the old code's state: no grid key."""
+
+        def reducer_override(self, obj):
+            if obj is summary:
+                return (reduced[0], reduced[1], old_state)
+            return NotImplemented
+
+    buffer = io.BytesIO()
+    _OldCodePickler(buffer, pickle.HIGHEST_PROTOCOL).dump(summary)
+    restored = pickle.loads(buffer.getvalue())
+    assert type(restored) is GameSimSummary
+    # The slot is unset: only the fallback reads it as None.
+    with pytest.raises(AttributeError):
+        object.__getattribute__(restored, "inning_grids")
     assert restored.inning_grids is None
     assert getattr(restored, "inning_grids", "missing") is None
     assert segment_runs_from_summary(restored) is None
@@ -229,18 +250,22 @@ def test_lite_projection_drops_the_grids(recorded_games):
     results = [recorded_games[seed][0] for seed in SEEDS]
     stored = to_jsonable(GameSimSummary.from_results(results))
     assert "inning_grids" in stored
-    # ``to_jsonable`` writes no ``half_width`` on an interval, and the lite
-    # model requires one (a gap older than the grid, outside this test).
-    # Add it, as the stored summaries of the existing card tests carry it.
-    for key, value in stored.items():
-        if key.endswith("_ci"):
-            value["half_width"] = (value["high"] - value["low"]) / 2.0
-    # The grid is an unknown field to the lite model, which forbids extras.
-    with pytest.raises(ValidationError):
-        GameSimSummaryLite.model_validate(
-            {k: v for k, v in stored.items() if not k.endswith("_scores")}
-        )
+    # ``to_jsonable`` writes no ``half_width`` on an interval. The projection
+    # fills it, so the test reads the dict exactly as production stores it.
+    assert all("half_width" not in v for k, v in stored.items() if k.endswith("_ci"))
+    # The grid is an unknown field to the lite model, which forbids extras:
+    # with every interval width filled, the grid alone fails validation.
+    with_widths = {
+        k: _with_half_width(v) if k.endswith("_ci") else v
+        for k, v in stored.items()
+        if not k.endswith("_scores")
+    }
+    with pytest.raises(ValidationError, match="inning_grids"):
+        GameSimSummaryLite.model_validate(with_widths)
     lite = _sim_summary_lite_from_stored(stored)
     assert lite is not None
     assert lite.n_iterations == len(SEEDS)
     assert "inning_grids" not in lite.model_dump()
+    # The filled interval width equals the dataclass property.
+    expected = GameSimSummary.from_results(results).home_win_ci.half_width
+    assert lite.home_win_ci.half_width == pytest.approx(expected)
