@@ -1510,6 +1510,9 @@ class EdgesResponse(BaseModel):
     n_iterations: int
     base_seed: int | None = None
     markets: list[str] = Field(default_factory=list)
+    #: The real final ({away, home}) once the game is over; each edge's
+    #: ``result`` then says how its side settled.
+    final: dict[str, int] | None = None
     odds_source: dict[str, str] = Field(default_factory=dict)
     edges: list[EdgeReportModel] = Field(default_factory=list)
     #: SIM-549: how the run line was priced (None when it was not requested).
@@ -1646,6 +1649,94 @@ def _pricing_models(built: _EdgeBuild) -> dict[str, RunLinePricingModel]:
     }
 
 
+# ===========================================================================
+# The game page: how each bet settled
+# ===========================================================================
+
+#: The real final's grid (``raw.games.inning_scores``) of a final game.
+_SQL_FINAL_GRID = """
+    SELECT inning_scores, status, home_score_final, away_score_final
+      FROM raw.games WHERE game_pk = $1
+"""
+
+#: A report's label -> its market type (``run_line`` -> ``runline``).
+_MARKET_OF_LABEL: dict[str, str] = {_report_label(m): m for m in GAME_MARKET_TYPES}
+
+
+async def _actual_result(request: Request, game_pk: int) -> tuple[Any, dict[str, int]] | None:
+    """The real final as a one-game ``SegmentRuns`` and its score, or None.
+
+    The stored grid when the nightly load has the game; else the league feed's
+    linescore (a game that ended today). None before the game is final.
+    """
+    from simulation.game_market_distributions import SegmentRuns
+
+    pool = getattr(request.app.state, "pg_pool", None)
+    if pool is not None:
+        try:
+            rows = await pool.fetch(_SQL_FINAL_GRID, int(game_pk))
+        except Exception as exc:  # noqa: BLE001 -- the feed is the fallback
+            log.warning("grading: the stored final read failed for %s: %s", game_pk, exc)
+            rows = []
+        for raw in rows or []:
+            row = raw if isinstance(raw, Mapping) else dict(raw)
+            grid = row.get("inning_scores")
+            if isinstance(grid, str | bytes | bytearray):
+                grid = json.loads(grid)
+            if row.get("status") == "Final" and isinstance(grid, Mapping) and grid.get("home"):
+                final = {
+                    "away": int(row.get("away_score_final") or sum(v or 0 for v in grid["away"])),
+                    "home": int(row.get("home_score_final") or sum(v or 0 for v in grid["home"])),
+                }
+                return SegmentRuns.from_official_grid(dict(grid)), final
+    try:
+        from api.routes.games import _league_game_payload
+        from pipeline.mlb_game_feed import parse_game_feed
+
+        payload, _source, _err = await _league_game_payload(request, int(game_pk))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("grading: the league feed read failed for %s: %s", game_pk, exc)
+        return None
+    if payload is None:
+        return None
+    card = parse_game_feed(payload)
+    ls = card.get("linescore") or {}
+    if card.get("status") != "final" or not ls.get("innings"):
+        return None
+    grid = {
+        "away": [i.get("away") for i in ls["innings"]],
+        "home": [i.get("home") for i in ls["innings"]],
+    }
+    final = {"away": int(ls["away"]["runs"] or 0), "home": int(ls["home"]["runs"] or 0)}
+    return SegmentRuns.from_official_grid(grid), final
+
+
+def _grade(actual: Any, label: str, side: str, line: float | None) -> str | None:
+    """(pure) "won" / "lost" / "push" for one side of one market on the real final."""
+    from simulation.game_market_distributions import market_outcome
+
+    market = _MARKET_OF_LABEL.get(label)
+    if market is None:
+        return None
+    kind = GAME_MARKET_KIND[market]
+    try:
+        if kind == "three_way":
+            margin = int(actual.segment_margin(GAME_MARKET_SEGMENT[market])[0])
+            won = {"home": margin > 0, "away": margin < 0, "draw": margin == 0}.get(side)
+            return None if won is None else ("won" if won else "lost")
+        if kind == "runline":
+            o = market_outcome(actual, market, line=line, side=side)
+            return "push" if o is None else ("won" if o == 1 else "lost")
+        o = market_outcome(actual, market, line=line)
+        if o is None:
+            return "push"
+        reference = side in ("home", "over")
+        return "won" if (o == 1) == reference else "lost"
+    except (ValueError, KeyError, IndexError) as exc:
+        log.warning("grading: %s %s could not be graded: %s", label, side, exc)
+        return None
+
+
 @router.get(
     "/games/{game_pk}/edges",
     response_model=EdgesResponse,
@@ -1732,18 +1823,25 @@ async def get_game_edges(
     )
     priced = _priced_markets(requested, built)
 
+    # The game page: each side graded once the game is final.
+    actual = await _actual_result(request, int(game_pk))
+    edges = []
+    for r in built.reports:
+        model = EdgeReportModel.from_dataclass(
+            r, price_book=built.price_book.get((r.label, _side_value(r.side)))
+        )
+        if actual is not None:
+            model.result = _grade(actual[0], model.label, model.side, model.line)
+        edges.append(model)
+
     return EdgesResponse(
         game_pk=int(game_pk),
         n_iterations=int(summary.n_iterations),
         base_seed=base_seed,
         markets=priced,
         odds_source=built.odds_source,
-        edges=[
-            EdgeReportModel.from_dataclass(
-                r, price_book=built.price_book.get((r.label, _side_value(r.side)))
-            )
-            for r in built.reports
-        ],
+        final=None if actual is None else actual[1],
+        edges=edges,
         run_line_pricing=(
             None
             if built.run_line_pricing is None
