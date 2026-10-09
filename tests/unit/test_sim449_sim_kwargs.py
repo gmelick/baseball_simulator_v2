@@ -538,8 +538,9 @@ async def test_the_pre_fix_and_post_fix_kwargs_actually_differ(monkeypatch):
 #: adding a call site of either kind is a deliberate edit here, not silent drift.
 _SIM_KWARGS_CALL_SITES: dict[str, dict[str, int]] = {
     # The routes -> _resolved_sim_kwargs -> build_sim_kwargs. No bare call at all.
-    # SIM-561 added the sample-game route (5 -> 6).
-    "api/routes/games.py": {"bare": 0, "resolving": 6},
+    # SIM-561 added the sample-game route (5 -> 6); SIM-519 the run job's
+    # POST /simulate (6 -> 7).
+    "api/routes/games.py": {"bare": 0, "resolving": 7},
     # _summary_and_winprob -> _resolved_sim_kwargs.
     "api/routes/betting.py": {"bare": 0, "resolving": 1},
     # _score_one_game resolves; _collect_game_results builds in the worker thread.

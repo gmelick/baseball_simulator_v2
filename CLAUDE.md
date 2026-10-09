@@ -594,6 +594,21 @@ active, `scripts/sim478_lane.txt`, reads four bands red — see the §2b grade b
   loads the sim bundle. The file numbers its own runs; only `/simulate` writes a Postgres
   `sim.sim_runs` row. The page reads `/card` (linescore, run id, seed), then `/plays?run_id=`;
   the file keeps 5 runs per game.
+- **The Daily Diamond slate and the live, schedule-driven game day view (SIM-519, BUILT
+  2026-10-09 on `claude/simulator-frontend-design-fed1a4`; NOT merged, NOT deployed).** The
+  owner's Claude Design ("Daily Diamond MLB tracker") is the frontend's look: the tokens keep
+  their `--sim-*` names with the design's values, the fonts and the 30 team logos are bundled.
+  The slate reads the league schedule (`pipeline/mlb_schedule.py`, `api/league_feed.py`;
+  `source` says schedule / schedule_cached / db); each card opens in place to the real game
+  (`GET /api/games/{pk}/feed`) and the book's lines with their settlement (`GET
+  /api/betting/games/{pk}/card-odds`). A Preview game's posted lineup is written by the live
+  service (`raw.game_lineups.source = 'published'`), so it can be simulated; the projected
+  lineup is built and OFF (`LIVE_PROJECTED_LINEUPS`). The live service runs in its own compose
+  service `live` and publishes on Redis; never set `LIVE_PIPELINE_ENABLED` in the app. A
+  simulation run is a durable `sim.sim_runs` row (`POST /simulate`, `/simulate/runs/*`,
+  `api/sim_jobs.py`). The nightly finals job runs through `scripts/with_retry.sh`; the scheduler
+  starts with the stack. Alembic **0029** carries every new column. The record and the run book:
+  `CHANGES.md` 2026-10-09.
 - **Sample hundreds of games when validating ETL work, never dozens.** Two adversarial review rounds
   found four defects each, all from real payloads at scale, none from reading code. A 70-game sample
   reported "100%" on a metric that 950 games disproved.
@@ -734,6 +749,12 @@ Data sources (MLB Stats API REST+WS · Statcast/pybaseball)
 - `similarity/` — `engines/` (the 11 engines), `similarity_calibration.py`, `backtesting/` (backtester +
   walk-forward), `registry.py`.
 - `betting/` — `clv_engine.py`, `bet_signal.py`, `line_movement.py`.
+- SIM-519 (2026-10-09): `pipeline/mlb_schedule.py` (the one schedule parser and status mapper),
+  `pipeline/mlb_game_feed.py` (the league feed → the slate card's detail), `api/league_feed.py`
+  (the app's league reader), `api/sim_jobs.py` (the run-job registry),
+  `pipeline/live/lineup_writer.py` (the published-lineup writer), `pipeline/live/broadcast.py`
+  (the Redis bridge and the heartbeat), `pipeline/live/run_live.py` (the `live` service),
+  `frontend/src/components/slate/` (the Daily Diamond card), `frontend/src/teams.ts`.
 - `pipeline/` — `etl/` (historical loader + `coercion.py`, the SIM-437 shared type-coercion helpers
   imported by both ETL loaders; `boxscore_ingest.py`, the SIM-545 official box-score parser + upsert into
   `raw.game_player_stats`, which the loader calls per game), `live/live_ingestion_pipeline.py` (MLB WS + REST + odds),
@@ -882,6 +903,8 @@ make profile-computor  # nightly: rebuild DuckDB profiles + sim pools
 make engine-artifacts  # nightly (after profile-computor): rebuild the engine-artifact bundle (SIM-486)
 make calibrate         # fit /data/calibration.json (arsenal W2 + per-engine sigmas) — SIM-406/432
 make validate-props    # SIM-407 prop-PMF / win-prob validation (add --write-calibration for the curve)
+make ingest-catch-up DAYS=14  # SIM-519: load the last N days' finals, crash-wrapped (Postgres only)
+make live-logs         # SIM-519: follow the live service's log
 ```
 
 Raw equivalents (if running Python directly, target **Python 3.13**):
